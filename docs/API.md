@@ -47,7 +47,7 @@ ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx statu
 | POST | `/api/projects` | `{ name, repo?, defaultBranch?, accountSlug?, model? }` |
 | PATCH | `/api/projects/:id` | partial update |
 | DELETE | `/api/projects/:id` | also removes its cards |
-| PATCH | `/api/projects/:id/order` | `{ order }` — sidebar position |
+| PATCH | `/api/projects/:id/order` | `{ position }` — sidebar position |
 | GET | `/api/projects/:id/cards` | `{ cards: Card[] }` |
 | POST | `/api/cards` | `{ projectId, title, branch?, accountSlug?, model?, resumeSessionId? }` |
 | GET | `/api/cards/:id` | `{ card }` |

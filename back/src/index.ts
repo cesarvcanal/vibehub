@@ -13,6 +13,7 @@ import { settingsRoutes } from "./routes/settings.js";
 import { githubRoutes } from "./routes/github.js";
 import { runnerRoutes } from "./routes/runner.js";
 import { boardRoutes } from "./routes/board.js";
+import { sessionRoutes } from "./routes/session.js";
 
 /**
  * The vibehub server: one process serving the API, the websocket terminals, and (in production) the
@@ -36,6 +37,7 @@ export async function buildServer() {
   await app.register(githubRoutes);
   await app.register(runnerRoutes);
   await app.register(boardRoutes);
+  await app.register(sessionRoutes);
 
   const staticDir = process.env.VIBEHUB_STATIC_DIR
     ? resolve(process.env.VIBEHUB_STATIC_DIR)

@@ -197,7 +197,8 @@ export type ProjectPatch = Partial<NewProject> & { position?: number };
  * the contract), while the resulting value is read back on the entity as `position`.
  */
 export interface ReorderBody {
-  order: number;
+  /** Target index in the sidebar (0-based). Matches `Project.position`. */
+  position: number;
 }
 
 export interface Card {

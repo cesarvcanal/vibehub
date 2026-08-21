@@ -236,7 +236,8 @@ export async function setMcpSecret(mcp: McpServer, name: string, value: string, 
   }
   if (!value) throw new Error("value is required");
   await secretSet(mcpSecretKey(mcp.id, name), value);
-  logger.info({ audit: true, action: "mcp.secret", mcp: mcp.name, name, by }, "MCP secret stored in the vault");
+  // `variable`, not `name`: pino reserves `name` for the logger's own name and would swallow it.
+  logger.info({ audit: true, action: "mcp.secret", mcp: mcp.name, variable: name, by }, "MCP secret stored in the vault");
 }
 
 /** Same as {@link setMcpSecret}, addressing the MCP by id (what the HTTP route has in hand). */
