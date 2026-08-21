@@ -6,6 +6,7 @@ import { setAccountToken, removeAccountToken, accountsTokenStatus } from "../ser
 import { applyMcpsEverywhere, setMcpSecretById, mcpSecretsStatus } from "../services/mcp/mcp.js";
 import { brainView, setBrainText, resetBrain, applyBrainEverywhere } from "../services/brain/brain.js";
 import { importSessions, type ImportInput } from "../services/import/import.js";
+import { transcribeCardAudio, transcribeStatus, setTranscribeKeys, AUDIO_MAX_BYTES } from "../services/transcribe/transcribe.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -189,6 +190,44 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       return await reply.code(code).send(body);
     }
   });
+
+  /* ------------------------------------------------------------- voice input */
+
+  app.get("/api/transcribe", { preHandler: requireSession }, async (_req, reply) => {
+    return await reply.send(await transcribeStatus());
+  });
+
+  /** Stores the operator's keys. Values never come back — only whether each one is set. */
+  app.post<{ Body: { openaiKey?: string; anthropicKey?: string } }>(
+    "/api/transcribe/keys", { preHandler: requireSession },
+    async (req, reply) => {
+      try {
+        return await reply.send(await setTranscribeKeys(req.body ?? {}));
+      } catch (err) {
+        const { code, body } = fail(err);
+        return await reply.code(code).send(body);
+      }
+    },
+  );
+
+  /**
+   * A recording from the composer's microphone: JSON `{ base64, mimeType }`, same shape as the image
+   * upload. Its own bodyLimit — 20 MB of audio is ~1.4x that in base64 plus the envelope.
+   */
+  app.post<{ Params: { id: string }; Body: { base64?: string; mimeType?: string } }>(
+    "/api/cards/:id/transcribe",
+    { preHandler: requireSession, bodyLimit: Math.ceil(AUDIO_MAX_BYTES * 1.4) },
+    async (req, reply) => {
+      try {
+        const out = await transcribeCardAudio(req.params.id, req.body?.base64 ?? "", req.body?.mimeType ?? "audio/webm");
+        return await reply.send(out);
+      } catch (err) {
+        const message = (err as Error).message;
+        const code = /not found/i.test(message) ? 404 : /not configured/i.test(message) ? 503 : 400;
+        return await reply.code(code).send({ error: message });
+      }
+    },
+  );
 
   /* ----------------------------------------------------------------- import */
 

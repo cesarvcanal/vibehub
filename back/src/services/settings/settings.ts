@@ -24,6 +24,8 @@ export interface Settings {
   defaultAccountLabel: string | null;
   /** Set once the wizard has been completed, so it stops hijacking the router. */
   setupCompletedAt: string | null;
+  /** ISO 639-1 hint for voice transcription ("pt", "en"…). Null = let Whisper detect. */
+  transcribeLanguage: string | null;
 }
 
 interface SettingsDoc { settings: Settings }
@@ -33,6 +35,7 @@ const DEFAULTS: Settings = {
   autonomous: true,
   defaultAccountLabel: null,
   setupCompletedAt: null,
+  transcribeLanguage: null,
 };
 
 const store = new JsonStore<SettingsDoc>(
@@ -58,6 +61,7 @@ export interface SettingsPatch {
   git?: Partial<GitIdentitySettings>;
   autonomous?: boolean;
   defaultAccountLabel?: string | null;
+  transcribeLanguage?: string | null;
 }
 
 /** Validates and applies a partial update. Unknown fields are ignored, not merged blindly. */
@@ -70,6 +74,11 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
   if (patch.autonomous !== undefined && typeof patch.autonomous !== "boolean") {
     throw new Error("autonomous must be a boolean");
   }
+  if (patch.transcribeLanguage !== undefined && patch.transcribeLanguage !== null) {
+    if (!/^[a-z]{2}$/.test(String(patch.transcribeLanguage).trim())) {
+      throw new Error("transcribeLanguage must be a two-letter ISO 639-1 code, or null");
+    }
+  }
   return await store.mutate((doc) => {
     if (git?.name !== undefined) doc.settings.git.name = String(git.name).trim();
     if (git?.email !== undefined) doc.settings.git.email = String(git.email).trim();
@@ -77,6 +86,9 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
     if (patch.defaultAccountLabel !== undefined) {
       const label = patch.defaultAccountLabel === null ? null : String(patch.defaultAccountLabel).trim();
       doc.settings.defaultAccountLabel = label === "" ? null : label;
+    }
+    if (patch.transcribeLanguage !== undefined) {
+      doc.settings.transcribeLanguage = patch.transcribeLanguage === null ? null : String(patch.transcribeLanguage).trim();
     }
     return doc.settings;
   });

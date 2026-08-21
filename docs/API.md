@@ -19,7 +19,7 @@ ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx statu
 | Method | Path | Body / notes |
 |---|---|---|
 | GET | `/api/settings` | `{ git: { name, email }, autonomous, defaultAccountLabel, setupCompletedAt, runner: { kind, container, host, image, baseDir }, publicUrl }` |
-| PATCH | `/api/settings` | `{ git?, autonomous?, defaultAccountLabel? }` |
+| PATCH | `/api/settings` | `{ git?, autonomous?, defaultAccountLabel?, transcribeLanguage? }` |
 | POST | `/api/settings/setup-complete` | stamps the install as set up so the wizard stops taking over |
 
 ## GitHub
@@ -86,6 +86,9 @@ ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx statu
 | POST | `/api/brain` | `{ text }` — save it |
 | DELETE | `/api/brain` | back to the built-in default |
 | POST | `/api/brain/apply` | push it into every profile |
+| GET | `/api/transcribe` | `{ available, proofread, language }` — voice input status (keys are never returned) |
+| POST | `/api/transcribe/keys` | `{ openaiKey?, anthropicKey? }` — empty string clears; Whisper transcribes, Claude proofreads against the brain |
+| POST | `/api/cards/:id/transcribe` | `{ base64, mimeType }` → `{ text, proofread }`; 503 when voice input is not configured |
 | POST | `/api/import` | `{ items: [{ repo, title, sessionId, branch?, column? }], stageDir? }` — adopt staged Claude sessions as cards |
 | GET | `/api/cards/:id/paths` | where the card maps to inside the runner (debugging an import) |
 
