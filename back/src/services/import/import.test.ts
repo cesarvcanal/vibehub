@@ -52,7 +52,7 @@ function defaultHost(script: string) {
 
 const UUID_A = "11111111-1111-4111-8111-111111111111";
 const UUID_B = "22222222-2222-4222-8222-222222222222";
-const REPO = "acme/api-space";
+const REPO = "acme/checkout-api";
 
 beforeEach(async () => {
   vi.clearAllMocks();
@@ -83,11 +83,11 @@ describe("pure path derivation", () => {
 
   it("normalizeRepoKey / projectRepoKey: match on the full name or on the clone URL", async () => {
     const { mod } = await fresh();
-    expect(mod.normalizeRepoKey("Acme/API-Space.git")).toBe("acme/api-space");
+    expect(mod.normalizeRepoKey("Acme/Checkout-API.git")).toBe("acme/checkout-api");
     expect(mod.normalizeRepoKey("  acme/api  ")).toBe("acme/api");
     expect(mod.projectRepoKey({ repoFullName: "Acme/Api" })).toBe("acme/api");
-    expect(mod.projectRepoKey({ cloneUrl: "https://github.com/acme/api-space.git" })).toBe("acme/api-space");
-    expect(mod.projectRepoKey({ cloneUrl: "git@github.com:acme/api-space.git" })).toBe("acme/api-space");
+    expect(mod.projectRepoKey({ cloneUrl: "https://github.com/acme/checkout-api.git" })).toBe("acme/checkout-api");
+    expect(mod.projectRepoKey({ cloneUrl: "git@github.com:acme/checkout-api.git" })).toBe("acme/checkout-api");
     expect(mod.projectRepoKey({})).toBeUndefined();
     expect(mod.projectRepoKey({ cloneUrl: "https://example.test/thing" })).toBeUndefined();
   });
@@ -141,8 +141,8 @@ describe("importSessions", () => {
 
     const [project] = await reg.listProjects();
     expect(project!.repoFullName).toBe(REPO);
-    expect(project!.cloneUrl).toBe("https://github.com/acme/api-space.git");
-    expect(project!.name).toBe("api-space");
+    expect(project!.cloneUrl).toBe("https://github.com/acme/checkout-api.git");
+    expect(project!.name).toBe("checkout-api");
 
     const [card] = await reg.listCards(project!.id);
     expect(card!.resumeSessionId).toBe(UUID_A);
@@ -166,7 +166,7 @@ describe("importSessions", () => {
   it("seeds into the ACCOUNT profile when the card inherits one", async () => {
     const { mod, reg } = await fresh();
     const account = await reg.createAccount({ name: "Work" });
-    const created = await reg.createProject({ name: "api-space", repoFullName: REPO, defaultAccountSlug: account.slug });
+    const created = await reg.createProject({ name: "checkout-api", repoFullName: REPO, defaultAccountSlug: account.slug });
     const out = await mod.importSessions({ items: [{ repo: REPO, title: "a", sessionId: UUID_A }] }, cardCwd);
     expect(out.results[0]!.projectId).toBe(created.id);
     expect(out.results[0]!.destPath).toContain("/root/.claude-profiles/work/projects/");
@@ -174,8 +174,8 @@ describe("importSessions", () => {
 
   it("reuses a project that matches the repo instead of creating a second one", async () => {
     const { mod, reg } = await fresh();
-    const existing = await reg.createProject({ name: "api-space", repoFullName: REPO });
-    const out = await mod.importSessions({ items: [{ repo: "Acme/API-Space.git", title: "t", sessionId: UUID_A }] }, cardCwd);
+    const existing = await reg.createProject({ name: "checkout-api", repoFullName: REPO });
+    const out = await mod.importSessions({ items: [{ repo: "Acme/Checkout-API.git", title: "t", sessionId: UUID_A }] }, cardCwd);
     expect(out.results[0]!.projectId).toBe(existing.id);
     expect((await reg.listProjects()).length).toBe(1);
   });
