@@ -3,7 +3,7 @@ import { requireSession } from "../auth/session.js";
 import * as registry from "../services/board/registry.js";
 import { cardWorkPaths } from "../services/board/workspace.js";
 import { setAccountToken, removeAccountToken, accountsTokenStatus } from "../services/accounts/token.js";
-import { applyMcpsEverywhere, setMcpSecretById } from "../services/mcp/mcp.js";
+import { applyMcpsEverywhere, setMcpSecretById, mcpSecretsStatus } from "../services/mcp/mcp.js";
 import { brainView, setBrainText, resetBrain, applyBrainEverywhere } from "../services/brain/brain.js";
 import { importSessions, type ImportInput } from "../services/import/import.js";
 
@@ -67,6 +67,16 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       }
     },
   );
+
+  /**
+   * Which declared env vars / headers already have a value in the vault. Names and booleans only —
+   * the values themselves never leave the server.
+   */
+  app.get("/api/mcps/secrets", { preHandler: requireSession }, async (_req, reply) => {
+    const mcps = await registry.listMcps();
+    const entries = await Promise.all(mcps.map(async (mcp) => [mcp.id, await mcpSecretsStatus(mcp)] as const));
+    return await reply.send({ byMcp: Object.fromEntries(entries) });
+  });
 
   app.post("/api/mcps/apply", { preHandler: requireSession }, async (_req, reply) => {
     try {

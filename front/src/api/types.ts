@@ -111,6 +111,10 @@ export interface Settings {
   git: GitIdentity;
   /** Let cards keep running without asking for confirmation on every tool call. */
   autonomous: boolean;
+  /** Display name of the built-in default Claude profile. */
+  defaultAccountLabel: string | null;
+  /** Set once the wizard finished, so it stops taking over the router. */
+  setupCompletedAt: string | null;
   runner: RunnerSettings;
   /** Externally reachable base URL, when the install has one. */
   publicUrl?: string;
@@ -120,7 +124,7 @@ export interface Settings {
 export interface SettingsPatch {
   git?: Partial<GitIdentity>;
   autonomous?: boolean;
-  defaultAccountLabel?: string;
+  defaultAccountLabel?: string | null;
   runner?: Partial<RunnerSettings>;
 }
 
@@ -167,35 +171,30 @@ export interface Project {
   id: string;
   name: string;
   /** `owner/repo`, when the project is backed by a GitHub repository. */
-  repo?: string;
+  repoFullName?: string;
   cloneUrl?: string;
   /** Branch new card worktrees start from. */
-  defaultBranch?: string;
+  baseBranch: string;
   /** Claude account cards inherit. Absent = the runner's default profile. */
-  accountSlug?: string;
-  /** Claude model cards inherit. Absent = the account default. */
-  model?: string;
+  defaultAccountSlug?: string;
   /** Position in the sidebar, smallest first. */
-  position?: number;
+  position: number;
   createdAt: number;
   updatedAt?: number;
 }
 
 export interface NewProject {
   name: string;
-  repo?: string;
-  defaultBranch?: string;
-  accountSlug?: string;
-  model?: string;
+  repoFullName?: string;
+  cloneUrl?: string;
+  baseBranch?: string;
+  defaultAccountSlug?: string;
 }
 
 /** `PATCH /api/projects/:id` */
 export type ProjectPatch = Partial<NewProject> & { position?: number };
 
-/**
- * `PATCH /api/projects/:id/order` — the sidebar reorder route. Its body key is `order` (that is
- * the contract), while the resulting value is read back on the entity as `position`.
- */
+/** `PATCH /api/projects/:id/order` — the sidebar reorder route. */
 export interface ReorderBody {
   /** Target index in the sidebar (0-based). Matches `Project.position`. */
   position: number;
@@ -212,10 +211,10 @@ export interface Card {
   branch?: string;
   /** Branch the worktree was cut from. */
   base?: string;
-  /** tmux session name inside the runner. */
-  session?: string;
-  /** Worktree directory slug inside the runner. */
-  worktree?: string;
+  /** tmux session name inside the runner. Derived by the server — never user input. */
+  tmuxSession: string;
+  /** Worktree directory slug inside the runner. Derived by the server. */
+  worktreeSlug: string;
   /** Live hook status. Absent/null = no running Claude process. */
   status?: CardStatus | null;
   statusAt?: number;
@@ -223,7 +222,13 @@ export interface Card {
   model?: string;
   /** Claude session id this card resumes. */
   resumeSessionId?: string;
+  /** First time the card's terminal was opened — presence means "attach instantly". */
   openedAt?: number;
+  /**
+   * Workspace pre-provisioned in the background at creation (clone/worktree/session already exist)
+   * without the card ever being opened. Also allows an instant attach.
+   */
+  preparedAt?: number;
   pausedAt?: number | null;
   createdAt: number;
   updatedAt?: number;
@@ -232,6 +237,7 @@ export interface Card {
 export interface NewCard {
   projectId: string;
   title: string;
+  /** Optional fields go through the same validation an edit uses. */
   branch?: string;
   accountSlug?: string;
   model?: string;
@@ -245,6 +251,10 @@ export interface CardPatch {
   position?: number;
   accountSlug?: string | null;
   model?: string | null;
+  /** null clears it (back to the derived `card/<worktreeSlug>`). */
+  branch?: string | null;
+  base?: string;
+  resumeSessionId?: string | null;
 }
 
 export interface RestartAllResult {
@@ -265,7 +275,8 @@ export interface UploadResult {
  */
 export interface Account {
   slug: string;
-  label: string;
+  /** Display name. The slug is derived from it and is what the profile directory is called. */
+  name: string;
   /** A long-lived token is in the vault. The value itself never comes back. */
   hasToken?: boolean;
   createdAt?: number;
@@ -284,23 +295,28 @@ export type McpTransport = "stdio" | "http" | "sse";
 export interface Mcp {
   id: string;
   name: string;
-  transport?: McpTransport;
+  kind: McpTransport;
   command?: string;
   args?: string[];
   url?: string;
-  /** Names of the environment variables this MCP takes. Values live in the vault. */
-  env?: string[];
-  /** Which of those names already have a value stored. */
-  secrets?: Record<string, boolean>;
+  /** Names of the environment variables this MCP takes (stdio). Values live in the vault. */
+  envKeys?: string[];
+  /** Names of the headers this MCP takes (http/sse). Values live in the vault. */
+  headerKeys?: string[];
   createdAt?: number;
 }
 
 export interface NewMcp {
   name: string;
-  command: string;
+  kind: McpTransport;
+  /** stdio: the executable and its arguments. */
+  command?: string;
   args?: string[];
-  env?: string[];
-  secrets?: Record<string, string>;
+  /** http/sse: the endpoint. */
+  url?: string;
+  /** Names only — values are stored one at a time through `POST /api/mcps/:id/secret`. */
+  envKeys?: string[];
+  headerKeys?: string[];
 }
 
 /** `GET /api/brain` — the shared CLAUDE.md planted into every card worktree. */
@@ -308,6 +324,8 @@ export interface Brain {
   text: string;
   /** What the server ships when nobody has customised it. */
   defaultText: string;
+  /** Absent while nothing has been saved. */
+  updatedAt?: string;
 }
 
 /** `POST /api/import` — adopt Claude Code sessions that already exist on disk. */

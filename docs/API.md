@@ -18,7 +18,7 @@ ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx statu
 
 | Method | Path | Body / notes |
 |---|---|---|
-| GET | `/api/settings` | `{ git: { name, email }, autonomous, runner: { kind, container, host, image }, publicUrl }` |
+| GET | `/api/settings` | `{ git: { name, email }, autonomous, defaultAccountLabel, setupCompletedAt, runner: { kind, container, host, image, baseDir }, publicUrl }` |
 | PATCH | `/api/settings` | `{ git?, autonomous?, defaultAccountLabel? }` |
 | POST | `/api/settings/setup-complete` | stamps the install as set up so the wizard stops taking over |
 
@@ -47,12 +47,12 @@ ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx statu
 | Method | Path | Body / notes |
 |---|---|---|
 | GET | `/api/projects` | `{ projects: Project[] }` |
-| POST | `/api/projects` | `{ name, repo?, defaultBranch?, accountSlug?, model? }` |
+| POST | `/api/projects` | `{ name, repoFullName?, cloneUrl?, baseBranch?, defaultAccountSlug? }` |
 | PATCH | `/api/projects/:id` | partial update |
 | DELETE | `/api/projects/:id` | also removes its cards |
 | PATCH | `/api/projects/:id/order` | `{ position }` — sidebar position |
 | GET | `/api/projects/:id/cards` | `{ cards: Card[] }` |
-| POST | `/api/cards` | `{ projectId, title, branch?, accountSlug?, model?, resumeSessionId? }` |
+| POST | `/api/cards` | `{ projectId, title }` plus any editable field (`branch`, `accountSlug`, `model`, `resumeSessionId`), applied through the same validation an edit uses |
 | GET | `/api/cards/:id` | `{ card }` |
 | PATCH | `/api/cards/:id` | `{ title?, column?, accountSlug?, model? }` — moving to `done` is always manual |
 | DELETE | `/api/cards/:id` | kills the session and drops the worktree |
@@ -60,7 +60,7 @@ ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx statu
 | POST | `/api/cards/:id/pause` | kills tmux, clears status, back to backlog |
 | POST | `/api/cards/:id/restart` | fresh Claude process in the same worktree |
 | POST | `/api/cards/restart-all` | `{ restarted, skipped }` |
-| POST | `/api/cards/:id/upload` | multipart image → `{ path }` inside the runner |
+| POST | `/api/cards/:id/upload` | `{ name, content }` with bare base64 → `{ path }` inside the runner (10 MB cap) |
 | POST/DELETE | `/api/cards/:id/browser` | start/stop the card's live browser |
 | WS | `/api/cards/:id/terminal` | xterm bridge (`?shell=1` for a plain shell in the same worktree) |
 | WS | `/api/cards/:id/vnc` | noVNC bridge for the card browser |
@@ -70,13 +70,14 @@ ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx statu
 | Method | Path | Body / notes |
 |---|---|---|
 | GET | `/api/accounts` | `{ accounts: Account[], defaultLabel }` |
-| POST | `/api/accounts` | `{ label }` → creates a profile directory slug |
+| POST | `/api/accounts` | `{ name }` → creates the account; the profile directory slug is derived from it |
 | DELETE | `/api/accounts/:slug` | |
 | GET | `/api/accounts/tokens` | `{ bySlug, defaultHasToken }` — which accounts have a long-lived token |
 | POST | `/api/accounts/:slug/token` | `{ token }` — long-lived Claude token, stored in the vault, planted in every runner profile |
 | DELETE | `/api/accounts/:slug/token` | |
-| GET | `/api/mcps` | `{ mcps: Mcp[] }` |
-| POST | `/api/mcps` | `{ name, command, args?, env?, secrets? }` |
+| GET | `/api/mcps` | `{ mcps: Mcp[] }` — `{ id, name, kind: "stdio"\|"http"\|"sse", command?, args?, url?, envKeys?, headerKeys? }` |
+| POST | `/api/mcps` | `{ name, kind, command?, args?, url?, envKeys?, headerKeys? }` — names only; values go in one at a time |
+| GET | `/api/mcps/secrets` | `{ byMcp: { [mcpId]: { [name]: boolean } } }` — which declared secrets already have a value |
 | DELETE | `/api/mcps/:id` | |
 | POST | `/api/mcps/:id/secret` | `{ key, value }` |
 | POST | `/api/mcps/apply` | re-injects every MCP into every profile |

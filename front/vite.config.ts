@@ -26,5 +26,8 @@ export default defineConfig({
   build: {
     outDir: "dist",
     sourcemap: true,
+    // vibehub is a developer tool opened in a current browser, and the noVNC client it lazy-loads
+    // for the card browser ships top-level await — which esbuild only emits from es2022 onwards.
+    target: "es2022",
   },
 });

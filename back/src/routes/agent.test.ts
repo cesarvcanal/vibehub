@@ -108,6 +108,17 @@ describe("mcps", () => {
     expect(res.json()).toEqual({ ok: true, runners: 1, mcps: 3 });
   });
 
+  it("reports which declared secrets already have a value, without the values", async () => {
+    const created = await app.inject({
+      method: "POST", url: "/api/mcps", headers: { cookie },
+      payload: { name: "playwright", kind: "stdio", command: "npx", envKeys: ["API_TOKEN"] },
+    });
+    const id = created.json().mcp.id as string;
+    const res = await app.inject({ method: "GET", url: "/api/mcps/secrets", headers: { cookie } });
+    expect(res.json()).toEqual({ byMcp: { [id]: { API_TOKEN: false } } });
+    expect(res.body).not.toContain("value");
+  });
+
   it("404s a secret for an unknown MCP", async () => {
     setMcpSecretById.mockRejectedValueOnce(new Error("MCP not found"));
     const res = await app.inject({
