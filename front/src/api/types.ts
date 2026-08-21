@@ -65,6 +65,11 @@ export interface RunnerStatus {
   container: string;
   /** Host the Docker daemon lives on — empty/undefined means this machine. */
   host?: string;
+  /**
+   * `WS /api/runner/terminal` is available — a shell inside the runner container, which is where
+   * `claude` and `gh` get signed in by hand. Absent on a server that predates the route.
+   */
+  terminal?: boolean;
   /** Free-form explanation for whatever is currently wrong. */
   detail?: string;
 }
@@ -115,9 +120,18 @@ export interface Settings {
   defaultAccountLabel: string | null;
   /** Set once the wizard finished, so it stops taking over the router. */
   setupCompletedAt: string | null;
+  /** ISO 639-1 hint for voice transcription, or null to let Whisper detect. */
+  transcribeLanguage?: string | null;
   runner: RunnerSettings;
   /** Externally reachable base URL, when the install has one. */
   publicUrl?: string;
+}
+
+/** `GET /api/transcribe` — voice input status. Key values never come back. */
+export interface TranscribeStatus {
+  available: boolean;
+  proofread: boolean;
+  language: string | null;
 }
 
 /** `PATCH /api/settings` — partial, only the keys you send are touched. */
@@ -125,6 +139,7 @@ export interface SettingsPatch {
   git?: Partial<GitIdentity>;
   autonomous?: boolean;
   defaultAccountLabel?: string | null;
+  transcribeLanguage?: string | null;
   runner?: Partial<RunnerSettings>;
 }
 

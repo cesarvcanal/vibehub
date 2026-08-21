@@ -1,10 +1,11 @@
 import * as React from "react";
 import { Link, Outlet, useNavigate } from "react-router-dom";
-import { Columns3, LogOut, UserRound } from "lucide-react";
+import { Columns3, LogOut, Settings2, UserRound } from "lucide-react";
 import { useAuth } from "@/providers/auth";
 import { Paths } from "@/lib/paths";
 import { Logo } from "@/components/Logo";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { SettingsDialog } from "@/features/settings/SettingsDialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -38,6 +39,7 @@ function useHeaderHeight(ref: React.RefObject<HTMLElement>) {
 
 /** The chrome around every signed-in screen: the brand bar, then the page fills the rest. */
 export function AppLayout() {
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const headerRef = React.useRef<HTMLElement>(null);
@@ -81,6 +83,10 @@ export function AppLayout() {
               <DropdownMenuContent align="end">
                 <DropdownMenuLabel>Signed in</DropdownMenuLabel>
                 <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => setSettingsOpen(true)}>
+                  <Settings2 />
+                  Settings
+                </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => void onSignOut()}>
                   <LogOut />
                   Sign out
@@ -96,6 +102,7 @@ export function AppLayout() {
           <Outlet />
         </div>
       </main>
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </div>
   );
 }
