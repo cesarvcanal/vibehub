@@ -319,3 +319,40 @@ describe("applyMcpsEverywhere", () => {
     await expect(mod.applyMcpsEverywhere()).rejects.toThrow("host command timed out");
   });
 });
+
+describe("built-in maestro server", () => {
+  it("is injected into every card, pointed at this install, with the runner token", async () => {
+    const { mod, vault } = await fresh();
+    await vault.secretSet("VIBEHUB_RUNNER_TOKEN", "runner-token-123");
+    const injections = await mod.resolveMcpInjections();
+    const builtin = injections.find((i) => i.name === mod.BUILTIN_MAESTRO_NAME);
+    expect(builtin).toBeDefined();
+    const parsed = JSON.parse(builtin!.json) as { type: string; url: string; headers: Record<string, string> };
+    expect(parsed.type).toBe("http");
+    expect(parsed.url.endsWith("/mcp")).toBe(true);
+    expect(parsed.headers.Authorization).toBe("Bearer runner-token-123");
+  });
+
+  it("is skipped while the runner has no token — a broken server is worse than none", async () => {
+    const { mod } = await fresh();
+    expect(await mod.builtinMaestroInjection()).toBeUndefined();
+    expect((await mod.resolveMcpInjections()).some((i) => i.name === mod.BUILTIN_MAESTRO_NAME)).toBe(false);
+  });
+
+  it("cannot be shadowed by a user-registered MCP with the same name", async () => {
+    const { mod, reg, vault } = await fresh();
+    await vault.secretSet("VIBEHUB_RUNNER_TOKEN", "runner-token-123");
+    await reg.createMcp({ name: mod.BUILTIN_MAESTRO_NAME, kind: "stdio", command: "npx" });
+    const injections = await mod.resolveMcpInjections();
+    const matching = injections.filter((i) => i.name === mod.BUILTIN_MAESTRO_NAME);
+    expect(matching).toHaveLength(1);
+    expect(JSON.parse(matching[0]!.json).type).toBe("http"); // the built-in one won
+  });
+
+  it("comes first, so a card has the board available before anything else", async () => {
+    const { mod, reg, vault } = await fresh();
+    await vault.secretSet("VIBEHUB_RUNNER_TOKEN", "runner-token-123");
+    await reg.createMcp({ name: "playwright", kind: "stdio", command: "npx" });
+    expect((await mod.resolveMcpInjections())[0]?.name).toBe(mod.BUILTIN_MAESTRO_NAME);
+  });
+});

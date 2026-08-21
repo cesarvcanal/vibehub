@@ -10,6 +10,9 @@ let cookie = "";
 
 const RUNNER_TOKEN = "runner-token-abcdef";
 
+/** The status hook's only side effect on the runner: the deferred restart of a flagged card. */
+const restartCard = vi.fn(async (id: string) => ({ id }));
+
 async function boot(): Promise<FastifyInstance> {
   vi.resetModules();
   const env = await import("../config/env.js");
@@ -26,6 +29,10 @@ async function boot(): Promise<FastifyInstance> {
       container: "vibehub-runner", host: "this machine",
     })),
   }));
+  vi.doMock("../services/board/workspace.js", async () => {
+    const actual = await vi.importActual<typeof import("../services/board/workspace.js")>("../services/board/workspace.js");
+    return { ...actual, restartCard };
+  });
   const { buildServer } = await import("../index.js");
   const server = await buildServer();
   await server.ready();
@@ -53,6 +60,7 @@ async function makeCard(projectId: string, title = "first card"): Promise<string
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "vibehub-board-routes-"));
+  vi.clearAllMocks();
   app = await boot();
   cookie = await signIn();
 });
@@ -228,6 +236,61 @@ describe("status callback", () => {
     expect(current.column).toBe("working");
   });
 
+  it("carries out a PENDING restart once the flagged card goes idle", async () => {
+    const projectId = await makeProject();
+    const card = await makeCard(projectId);
+    const reg = await import("../services/board/registry.js");
+    await reg.applyOpenTerminal(card); // live session
+    await postStatus(card, "working", RUNNER_TOKEN);
+    // the brain was saved while Claude was busy on this card
+    await reg.markRestartPending(card, "brain");
+
+    // still working: the flag stays and nothing is restarted mid-task
+    await postStatus(card, "working", RUNNER_TOKEN);
+    expect(restartCard).not.toHaveBeenCalled();
+    expect((await reg.getCard(card))?.restartPendingAt).toBeGreaterThan(0);
+
+    // Claude finished -> the restart happens now, and the flag is cleared
+    expect((await postStatus(card, "waiting", RUNNER_TOKEN)).statusCode).toBe(200);
+    expect(restartCard).toHaveBeenCalledTimes(1);
+    expect(restartCard).toHaveBeenCalledWith(card);
+    expect((await reg.getCard(card))?.restartPendingAt).toBeNull();
+
+    // idempotent: a second idle report has nothing left to do
+    await postStatus(card, "waiting", RUNNER_TOKEN);
+    expect(restartCard).toHaveBeenCalledTimes(1);
+  });
+
+  it("a PAUSE BEATS a pending restart: the card goes to sleep instead of restarting", async () => {
+    const projectId = await makeProject();
+    const card = await makeCard(projectId);
+    const reg = await import("../services/board/registry.js");
+    await reg.applyOpenTerminal(card);
+    await postStatus(card, "working", RUNNER_TOKEN);
+    await reg.pauseCard(card); // pending pause: still working, session alive
+    await reg.markRestartPending(card, "mcp");
+
+    expect((await postStatus(card, "waiting", RUNNER_TOKEN)).statusCode).toBe(200);
+    expect(restartCard).not.toHaveBeenCalled();
+    const after = await reg.getCard(card);
+    expect(after?.pausedAt).toBeGreaterThan(0); // the pause happened
+    expect(after?.restartPendingAt).toBeNull(); // the restart was dropped
+  });
+
+  it("a failing restart does not turn the fire-and-forget hook into an error", async () => {
+    const projectId = await makeProject();
+    const card = await makeCard(projectId);
+    const reg = await import("../services/board/registry.js");
+    await reg.applyOpenTerminal(card);
+    await postStatus(card, "working", RUNNER_TOKEN);
+    await reg.markRestartPending(card, "brain");
+
+    restartCard.mockRejectedValueOnce(new Error("the runner is not running") as never);
+    const res = await postStatus(card, "waiting", RUNNER_TOKEN);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, applied: true });
+  });
+
   it("400s an unknown status value", async () => {
     const projectId = await makeProject();
     const card = await makeCard(projectId);
@@ -241,7 +304,7 @@ describe("status callback", () => {
   });
 });
 
-describe("accounts and mcps", () => {
+describe("accounts", () => {
   it("creates an account and refuses to delete it while a project points at it", async () => {
     const created = await app.inject({
       method: "POST", url: "/api/accounts", headers: { cookie }, payload: { name: "Work Account" },
@@ -254,31 +317,11 @@ describe("accounts and mcps", () => {
     const res = await app.inject({ method: "DELETE", url: `/api/accounts/${slug}`, headers: { cookie } });
     expect(res.statusCode).toBe(400);
   });
-
-  it("round-trips an MCP server", async () => {
-    const created = await app.inject({
-      method: "POST", url: "/api/mcps", headers: { cookie },
-      payload: { name: "playwright", kind: "stdio", command: "npx", args: ["playwright-mcp"] },
-    });
-    expect(created.statusCode).toBe(200);
-    const list = await app.inject({ method: "GET", url: "/api/mcps", headers: { cookie } });
-    expect(list.json().mcps).toHaveLength(1);
-    await app.inject({ method: "DELETE", url: `/api/mcps/${created.json().mcp.id}`, headers: { cookie } });
-    expect((await app.inject({ method: "GET", url: "/api/mcps", headers: { cookie } })).json().mcps).toHaveLength(0);
-  });
-
-  it("rejects an MCP name with shell metacharacters", async () => {
-    const res = await app.inject({
-      method: "POST", url: "/api/mcps", headers: { cookie },
-      payload: { name: "bad; rm -rf /", kind: "stdio", command: "npx" },
-    });
-    expect(res.statusCode).toBe(400);
-  });
 });
 
 describe("board routes require a session", () => {
   it("401s every board route without a cookie", async () => {
-    for (const url of ["/api/projects", "/api/cards", "/api/accounts", "/api/mcps"]) {
+    for (const url of ["/api/projects", "/api/cards", "/api/accounts"]) {
       expect((await app.inject({ method: "GET", url })).statusCode, url).toBe(401);
     }
   });

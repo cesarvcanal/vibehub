@@ -1,7 +1,8 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Loader2, Plug, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, Loader2, Pencil, Plug, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,7 +17,15 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { apiErrorMessage } from "@/lib/apiError";
 import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
-import { MCPS_KEY, boardApi, mcpSecretNames, mcpTransport } from "@/features/board/api";
+import {
+  MCPS_KEY,
+  MCP_SECRETS_KEY,
+  boardApi,
+  mcpSecretStatus,
+  mcpTransport,
+  type BoardMcp,
+} from "@/features/board/api";
+import { applyOutcomeMessage } from "@/features/board/lib/applyOutcome";
 import type { McpTransport } from "@/api/types";
 
 /**
@@ -30,6 +39,16 @@ import type { McpTransport } from "@/api/types";
  * "Apply" re-injects everything. Claude only reads its MCP configuration at start-up, so the switch
  * next to it also restarts the idle terminals — the server skips any card that is mid-turn rather
  * than interrupting work.
+ *
+ * Each server says whether it is actually USABLE: green when every name it declares has a value in
+ * the vault, amber naming the ones that do not. A declared-but-empty header is an MCP that will
+ * start and fail at the first call, and a row of neutral grey badges is exactly how that goes
+ * unnoticed until an agent is already stuck on it.
+ *
+ * The pencil edits those values in place. Every field starts EMPTY — the browser never receives a
+ * stored value — and only what you fill in is written, so a blank field keeps whatever is already
+ * in the vault. That is what makes rotating one header a two-field edit instead of deleting the
+ * server and building it again from scratch.
  */
 
 /** Splits a command's arguments on whitespace. There is no shell involved on the other end. */
@@ -58,9 +77,20 @@ export function McpManager() {
   const [url, setUrl] = React.useState("");
   const [secrets, setSecrets] = React.useState<SecretDraft[]>([]);
 
+  // Which server's inline value editor is expanded. Only one at a time — two open editors of
+  // password fields is a way to paste a token into the wrong one.
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+
   const { data: mcps, isLoading } = useQuery({
     queryKey: MCPS_KEY,
     queryFn: boardApi.listMcps,
+    enabled: open,
+  });
+
+  // Booleans only: which declared names already have a value. Values never leave the server.
+  const { data: secretStatus } = useQuery({
+    queryKey: MCP_SECRETS_KEY,
+    queryFn: boardApi.mcpSecrets,
     enabled: open,
   });
 
@@ -94,6 +124,7 @@ export function McpManager() {
     },
     onSuccess: (mcp) => {
       void queryClient.invalidateQueries({ queryKey: MCPS_KEY });
+      void queryClient.invalidateQueries({ queryKey: MCP_SECRETS_KEY });
       reset();
       toast.success(`“${mcp.name}” added. Apply to inject it into the runner profiles.`);
     },
@@ -104,6 +135,7 @@ export function McpManager() {
     mutationFn: (id: string) => boardApi.deleteMcp(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: MCPS_KEY });
+      void queryClient.invalidateQueries({ queryKey: MCP_SECRETS_KEY });
       toast.success("Removed. It leaves the profiles on the next apply.");
     },
     onError: (error) => toast.error(apiErrorMessage(error, "Could not remove the MCP server")),
@@ -115,11 +147,14 @@ export function McpManager() {
       if (!restartIdle) return { applied, restarted: null };
       return { applied, restarted: await boardApi.restartAllCards() };
     },
-    onSuccess: ({ restarted }) => {
+    onSuccess: ({ applied, restarted }) => {
+      // A server that defers busy terminals reports it here; an older one just says how many it
+      // restarted. Either way, never claim more than the response actually said.
+      const deferred = applyOutcomeMessage(applied as { pending?: number }, "MCP servers");
       toast.success(
         restarted
           ? `Applied. ${restarted.restarted} terminal(s) restarted, ${restarted.skipped} left working.`
-          : "Applied to every profile in the runner.",
+          : deferred,
       );
     },
     onError: (error) => toast.error(apiErrorMessage(error, "Could not apply the MCP servers")),
@@ -134,7 +169,13 @@ export function McpManager() {
         <Plug /> MCP
       </Button>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (!next) setEditingId(null);
+        }}
+      >
         <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
           <DialogHeader>
             <DialogTitle>MCP servers</DialogTitle>
@@ -150,43 +191,18 @@ export function McpManager() {
             </div>
           ) : (
             <div className="divide-y divide-border/60 rounded-md border border-border/60">
-              {(mcps ?? []).map((mcp) => {
-                const keys = mcpSecretNames(mcp);
-                return (
-                  <div key={mcp.id} className="flex items-start gap-2.5 px-3 py-2">
-                    <div className="min-w-0 flex-1 space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate text-sm font-medium">{mcp.name}</span>
-                        <Badge tone="muted" className="font-mono">
-                          {mcpTransport(mcp)}
-                        </Badge>
-                      </div>
-                      <div className="truncate font-mono text-[11px] text-muted-foreground">
-                        {mcp.url ?? [mcp.command, ...(mcp.args ?? [])].filter(Boolean).join(" ")}
-                      </div>
-                      {keys.length ? (
-                        <div className="flex flex-wrap gap-1 pt-0.5">
-                          {keys.map((key) => (
-                            <Badge key={key} tone="muted" className="font-mono">
-                              {key}
-                            </Badge>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
-                      aria-label={`Remove ${mcp.name}`}
-                      disabled={deleteMutation.isPending}
-                      onClick={() => deleteMutation.mutate(mcp.id)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                );
-              })}
+              {(mcps ?? []).map((mcp) => (
+                <McpRow
+                  key={mcp.id}
+                  mcp={mcp}
+                  status={secretStatus?.[mcp.id]}
+                  disabled={deleteMutation.isPending}
+                  editing={editingId === mcp.id}
+                  onToggleEdit={() => setEditingId((current) => (current === mcp.id ? null : mcp.id))}
+                  onDoneEditing={() => setEditingId(null)}
+                  onDelete={() => deleteMutation.mutate(mcp.id)}
+                />
+              ))}
               {(mcps ?? []).length === 0 ? (
                 <p className="px-3 py-2 text-sm text-muted-foreground">No MCP servers yet.</p>
               ) : null}
@@ -342,5 +358,185 @@ export function McpManager() {
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+/**
+ * One configured server. The name and target, then — when it declares any secrets — a line saying
+ * in one colour whether it can actually run: green for "every value is in the vault", amber naming
+ * the ones still empty.
+ */
+function McpRow({
+  mcp,
+  status,
+  disabled,
+  editing,
+  onToggleEdit,
+  onDoneEditing,
+  onDelete,
+}: {
+  mcp: BoardMcp;
+  /** `{ [name]: hasValue }` for this server, from `GET /api/mcps/secrets`. */
+  status: Record<string, boolean> | undefined;
+  disabled: boolean;
+  editing: boolean;
+  onToggleEdit: () => void;
+  onDoneEditing: () => void;
+  onDelete: () => void;
+}) {
+  const { names, missing, none, ready } = mcpSecretStatus(mcp, status);
+  const target = mcp.url ?? [mcp.command, ...(mcp.args ?? [])].filter(Boolean).join(" ");
+
+  return (
+    <div>
+      <div className="flex items-start gap-2.5 px-3 py-2">
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate text-sm font-medium">{mcp.name}</span>
+            <Badge tone="muted" className="font-mono">
+              {mcpTransport(mcp)}
+            </Badge>
+          </div>
+          <div title={target} className="truncate font-mono text-[11px] text-muted-foreground">
+            {target}
+          </div>
+          {none ? null : (
+            <div
+              className={cn(
+                "flex items-center gap-1 pt-0.5 text-[11px]",
+                ready ? "text-emerald-400" : "text-amber-500",
+              )}
+            >
+              {ready ? (
+                <Check className="h-3 w-3 shrink-0" />
+              ) : (
+                <AlertTriangle className="h-3 w-3 shrink-0" />
+              )}
+              <span className="truncate font-mono">
+                {ready
+                  ? `${names.length} secret${names.length === 1 ? "" : "s"} configured`
+                  : `missing a value: ${missing.join(", ")}`}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {none ? null : (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+            aria-label={`Edit values for ${mcp.name}`}
+            title="Edit the stored values"
+            aria-pressed={editing}
+            disabled={disabled}
+            onClick={onToggleEdit}
+          >
+            <Pencil className="h-4 w-4" />
+          </Button>
+        )}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+          aria-label={`Remove ${mcp.name}`}
+          disabled={disabled}
+          onClick={onDelete}
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      </div>
+
+      {editing && !none ? (
+        <McpSecretEditor mcp={mcp} names={names} status={status} onDone={onDoneEditing} />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Edit the stored values of one server, in place.
+ *
+ * Every field starts empty and stays a password field: the browser is never sent a stored value, so
+ * there is nothing here to read back. Only what you actually type is written — a blank field keeps
+ * what is already in the vault, which is what makes this the way to rotate ONE header without
+ * touching the others or recreating the server.
+ */
+function McpSecretEditor({
+  mcp,
+  names,
+  status,
+  onDone,
+}: {
+  mcp: BoardMcp;
+  names: string[];
+  status: Record<string, boolean> | undefined;
+  onDone: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [values, setValues] = React.useState<Record<string, string>>({});
+  const filled = names.filter((name) => (values[name] ?? "").length > 0);
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      // One route per value: the server only accepts a name the shape already declared.
+      for (const name of filled) await boardApi.setMcpSecret(mcp.id, name, values[name] as string);
+      return filled.length;
+    },
+    onSuccess: (count) => {
+      void queryClient.invalidateQueries({ queryKey: MCP_SECRETS_KEY });
+      toast.success(
+        `${count} value${count === 1 ? "" : "s"} updated on “${mcp.name}”. Apply to push it into the runner.`,
+      );
+      onDone();
+    },
+    onError: (error) => toast.error(apiErrorMessage(error, "Could not save the values")),
+  });
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-border/60 bg-muted/20 px-3 py-2.5">
+      <p className="text-[11px] text-muted-foreground">
+        Fill in only what you want to (re)set — an empty field keeps the value already in the vault.
+      </p>
+      {names.map((name) => {
+        const stored = Boolean(status?.[name]);
+        return (
+          <div key={name} className="flex items-center gap-2">
+            <span
+              title={name}
+              className={cn(
+                "w-28 shrink-0 truncate font-mono text-[11px]",
+                stored ? "text-muted-foreground" : "text-amber-500",
+              )}
+            >
+              {name}
+            </span>
+            <Input
+              type="password"
+              autoComplete="off"
+              aria-label={`New value for ${name}`}
+              placeholder={stored ? "configured — type to replace" : "missing — set a value"}
+              value={values[name] ?? ""}
+              onChange={(e) => setValues((prev) => ({ ...prev, [name]: e.target.value }))}
+              className="font-mono"
+            />
+          </div>
+        );
+      })}
+      <div className="flex items-center justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" onClick={onDone} disabled={saveMutation.isPending}>
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          disabled={saveMutation.isPending || filled.length === 0}
+          onClick={() => saveMutation.mutate()}
+        >
+          {saveMutation.isPending ? <Loader2 className="animate-spin" /> : null}
+          Save values
+        </Button>
+      </div>
+    </div>
   );
 }

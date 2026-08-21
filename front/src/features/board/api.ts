@@ -2,11 +2,15 @@ import { del, get, patch, post } from "@/lib/api";
 import type {
   Account,
   AccountsResponse,
+  Brain,
+  BrainApplyResult,
+  BrainWriteResult,
   Card,
   CardColumn,
   GithubRepo,
   GithubState,
   Mcp,
+  McpSecretsResponse,
   McpTransport,
   NewCard,
   Project,
@@ -81,7 +85,36 @@ export function mcpTransport(m: BoardMcp): McpTransport {
 
 /** Names of the secrets an MCP declares (env vars for stdio, headers for http/sse). */
 export function mcpSecretNames(m: BoardMcp): string[] {
-  return m.envKeys ?? m.headerKeys ?? [];
+  return [...(m.envKeys ?? []), ...(m.headerKeys ?? [])];
+}
+
+/**
+ * Whether an MCP is ready to be injected: every name it declares has a value in the vault.
+ *
+ * The status map comes from `GET /api/mcps/secrets` and is booleans only — the values never leave
+ * the server. A name the map has not heard of counts as MISSING, not as fine: an MCP that will
+ * start without its token is exactly the thing this badge exists to catch, and the safe default
+ * for "unknown" is the one that makes you look.
+ */
+export interface McpSecretStatus {
+  /** Names the MCP declares, in declaration order. */
+  names: string[];
+  /** The ones with no value in the vault. */
+  missing: string[];
+  /** Declares nothing — there is no status to show at all. */
+  none: boolean;
+  /** Declares at least one name and every one of them has a value. */
+  ready: boolean;
+}
+
+export function mcpSecretStatus(
+  m: BoardMcp,
+  /** This MCP's entry from `GET /api/mcps/secrets` — `{ [name]: hasValue }`. */
+  stored: Record<string, boolean> | undefined,
+): McpSecretStatus {
+  const names = mcpSecretNames(m);
+  const missing = names.filter((name) => !stored?.[name]);
+  return { names, missing, none: names.length === 0, ready: names.length > 0 && missing.length === 0 };
 }
 
 /* ------------------------------------------------------------- query keys */
@@ -90,8 +123,12 @@ export const PROJECTS_KEY = ["board", "projects"] as const;
 export const ACCOUNTS_KEY = ["board", "accounts"] as const;
 export const ACCOUNT_TOKENS_KEY = ["board", "accounts", "tokens"] as const;
 export const MCPS_KEY = ["board", "mcps"] as const;
+export const MCP_SECRETS_KEY = ["board", "mcps", "secrets"] as const;
+export const BRAIN_KEY = ["board", "brain"] as const;
 export const RUNNER_KEY = ["board", "runner"] as const;
 export const GITHUB_KEY = ["board", "github"] as const;
+/** Prefix matching EVERY project's card list — for invalidating the whole board at once. */
+export const CARDS_PREFIX_KEY = ["board", "cards"] as const;
 export const cardsKey = (projectId: string) => ["board", "cards", projectId] as const;
 export const cardKey = (cardId: string) => ["board", "card", cardId] as const;
 export const githubReposKey = (q: string) => ["board", "github", "repos", q] as const;
@@ -233,7 +270,23 @@ export const boardApi = {
   setMcpSecret: (id: string, key: string, value: string) =>
     post<unknown>(`/mcps/${encodeURIComponent(id)}/secret`, { key, value }),
 
+  /** Which declared names already have a value. Booleans only — no value ever comes back. */
+  mcpSecrets: () =>
+    get<McpSecretsResponse>("/mcps/secrets").then((r) => (r?.byMcp ?? {}) as Record<string, Record<string, boolean>>),
+
   applyMcps: () => post<{ runners?: number; mcps?: number }>("/mcps/apply"),
+
+  /* brain — the shared CLAUDE.md every card's profile gets */
+  brain: () => get<Brain>("/brain"),
+
+  /** Saves AND pushes: the response says how many terminals restarted and how many were deferred. */
+  saveBrain: (text: string) => post<BrainWriteResult>("/brain", { text }),
+
+  /** Back to the text the server ships with. Same push, same report. */
+  resetBrain: () => del<BrainWriteResult>("/brain"),
+
+  /** Manual re-push, for when a runner was down when the text was saved. */
+  applyBrain: () => post<BrainApplyResult>("/brain/apply"),
 
   /* runner & github */
   runner: () => get<RunnerStatus & { provisioning?: boolean }>("/runner"),

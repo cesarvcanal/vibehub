@@ -230,6 +230,14 @@ export interface Card {
    */
   preparedAt?: number;
   pausedAt?: number | null;
+  /**
+   * The shared brain or the MCP set changed while this card was mid-turn. Claude only reads either
+   * one at start-up, so the server defers the restart instead of interrupting work: the card picks
+   * the new configuration up the moment it goes idle. Absent/null = nothing pending.
+   */
+  restartPendingAt?: number | null;
+  /** Which write scheduled the deferred restart. */
+  restartReason?: "brain" | "mcp";
   createdAt: number;
   updatedAt?: number;
 }
@@ -326,6 +334,40 @@ export interface Brain {
   defaultText: string;
   /** Absent while nothing has been saved. */
   updatedAt?: string;
+}
+
+/**
+ * What a write to the brain or to the MCP set reports back.
+ *
+ * Saving does not only persist: the server pushes the new text into every runner profile and
+ * restarts the terminals it can. A card that is mid-turn is NOT interrupted — it is flagged
+ * instead, and picks the change up when it finishes. So the three numbers are the whole story:
+ * whether the push happened at all, how many restarted now, how many will restart later.
+ */
+export interface ApplyOutcome {
+  /** The push into the runner profiles succeeded. False = saved but not live anywhere yet. */
+  applied?: boolean;
+  /** Idle terminals restarted immediately. */
+  restarted?: number;
+  /** Busy terminals flagged to restart when their current turn ends. */
+  pending?: number;
+}
+
+/** `POST /api/brain` / `DELETE /api/brain` — the saved view plus what the push achieved. */
+export type BrainWriteResult = Brain & ApplyOutcome;
+
+/** `POST /api/brain/apply` — the manual re-push. */
+export interface BrainApplyResult extends ApplyOutcome {
+  /** Runner profiles the text was written into. */
+  runners?: number;
+}
+
+/**
+ * `GET /api/mcps/secrets` — which declared env vars / headers already have a value in the vault.
+ * Booleans only: the values themselves never leave the server.
+ */
+export interface McpSecretsResponse {
+  byMcp: Record<string, Record<string, boolean>>;
 }
 
 /** `POST /api/import` — adopt Claude Code sessions that already exist on disk. */

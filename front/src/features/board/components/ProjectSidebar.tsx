@@ -1,9 +1,10 @@
 import * as React from "react";
-import { ChevronDown, ChevronUp, FolderGit2, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, FolderGit2, LayoutGrid, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { projectBaseBranch, projectRepo, type BoardProject } from "@/features/board/api";
+import { ALL_PROJECTS } from "@/features/board/lib/board";
 
 /**
  * Selected-row accent: a hairline down the left edge and a whisper of tint. Used for the selected
@@ -85,6 +86,24 @@ export function ProjectSidebar({
       </div>
 
       <div className="min-h-0 flex-1 divide-y divide-border/60 overflow-y-auto">
+        {/* The overview. Listed with the projects rather than tucked into a menu: "which agent
+            needs me" is a question you ask as often as you open any single project. */}
+        {projects.length > 1 ? (
+          <button
+            type="button"
+            aria-current={selectedId === ALL_PROJECTS ? "true" : undefined}
+            onClick={() => onSelect(ALL_PROJECTS)}
+            className={cn(
+              "flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors",
+              selectedId === ALL_PROJECTS
+                ? `${SELECTED_ROW} text-foreground`
+                : "text-muted-foreground hover:bg-card/60 hover:text-foreground",
+            )}
+          >
+            <LayoutGrid className="h-3.5 w-3.5 shrink-0 opacity-70" />
+            <span className="truncate">All projects</span>
+          </button>
+        ) : null}
         {projects.map((project, index) => (
           <ProjectRow
             key={project.id}

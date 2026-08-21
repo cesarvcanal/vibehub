@@ -39,6 +39,15 @@ export const BOARD_COLUMNS: readonly BoardColumn[] = ["backlog", "waiting", "wor
 export type CardStatus = "working" | "waiting";
 
 /**
+ * REASON a session restart is PENDING on a card: the shared brain or the MCP servers were edited
+ * while the card was `working`. It is only a LABEL (so the UI can tell the two apart in a badge);
+ * the restart mechanics are identical either way. See `restartPendingAt` on the card and
+ * `shouldRestartOnStatus`.
+ */
+export type RestartReason = "brain" | "mcp";
+export const RESTART_REASONS: readonly RestartReason[] = ["brain", "mcp"] as const;
+
+/**
  * Claude models a card may pin. When set, the session exports `ANTHROPIC_DEFAULT_MODEL=<id>`.
  * Unset = whatever the account defaults to (no env var at all). These ids end up in a shell
  * environment, so they are never taken raw: they are checked against this whitelist first.
@@ -137,6 +146,17 @@ export interface Card {
    * same conversation.
    */
   pausedAt?: number | null;
+  /**
+   * PENDING brain/MCP update: when the brain or the MCP servers are saved while Claude is WORKING on
+   * this card, we do not restart right away (that would interrupt the task in flight) — we stamp the
+   * moment here and the status hook restarts the session once the card goes idle
+   * (shouldRestartOnStatus). The restart is what makes Claude re-read the brain and the MCPs, which
+   * are only read at startup, while `claude -c` resumes the same conversation.
+   * Null/absent = nothing pending. It mirrors the PENDING pause (`pausedAt`), but a PAUSE BEATS it.
+   */
+  restartPendingAt?: number | null;
+  /** Where the pending restart came from — a label for the badge only: "brain" | "mcp". */
+  restartReason?: RestartReason;
   /**
    * IMPORTED Claude session (migrating from another environment): the uuid of a conversation whose
    * transcript already lives in the runner profile. Present = the session starts with
@@ -401,6 +421,25 @@ export function shouldEndSessionOnStatus(
   liveSession: boolean,
 ): boolean {
   return newStatus !== "working" && currentColumn === "paused" && liveSession;
+}
+
+/**
+ * PURE restart decision for a PENDING brain/MCP update when a hook STATUS arrives: carry the restart
+ * out once Claude finishes — `newStatus` stops being `working`, the card HAS a pending restart, and it
+ * still has a live session. It mirrors `shouldEndSessionOnStatus`; the side effect (restartCard)
+ * belongs to the hook ROUTE, not here.
+ *
+ * A PAUSE BEATS IT: when a pending pause is also due, the route takes the shouldEndSessionOnStatus
+ * branch (ending the session) and never reaches the restart — restarting something that is about to
+ * sleep is wasted work — and applyCardStatus already drops the pending flag in that case. Idempotent
+ * by construction: once the session is gone (liveSession=false) it returns false. PURE.
+ */
+export function shouldRestartOnStatus(
+  newStatus: CardStatus,
+  hasPending: boolean,
+  liveSession: boolean,
+): boolean {
+  return newStatus !== "working" && hasPending && liveSession;
 }
 
 // ---------------------------------------------------------------------------
@@ -855,6 +894,11 @@ export async function applyCardStatus(cardId: string, status: CardStatus): Promi
         card.pausedAt = Date.now();
         card.status = null;
         card.statusAt = undefined;
+        // A PAUSE BEATS the pending restart: the card is going to sleep, so restarting it buys
+        // nothing. Drop the flag (the hook route ends the session for the pause and must not go on
+        // to restart it afterwards).
+        card.restartPendingAt = null;
+        card.restartReason = undefined;
       }
       card.updatedAt = Date.now();
       return card;
@@ -869,6 +913,14 @@ export async function applyCardStatus(cardId: string, status: CardStatus): Promi
       target = columnAfterStatus(card.column, status);
     }
     if (target !== card.column) placeCard(doc.cards, card, target);
+    // PENDING brain/MCP update carried out: Claude went idle (status != working) — the flag is cleared
+    // HERE, while the side effect (restartCard) belongs to the hook ROUTE (shouldRestartOnStatus),
+    // mirroring how the pending pause is split. A card that is still `working` keeps the flag: the
+    // task goes on and the restart waits for it to finish.
+    if (status !== "working" && card.restartPendingAt) {
+      card.restartPendingAt = null;
+      card.restartReason = undefined;
+    }
     card.updatedAt = Date.now();
     return card;
   });
@@ -916,6 +968,24 @@ export async function markPrepared(cardId: string): Promise<Card | undefined> {
     if (!card) return undefined;
     if (card.preparedAt) return card;
     card.preparedAt = Date.now();
+    card.updatedAt = Date.now();
+    return card;
+  });
+}
+
+/**
+ * Stamps a PENDING brain/MCP update on a card — the staggered restart marks the card here instead of
+ * restarting it on the spot when Claude is `working`, so the task in flight is never interrupted. The
+ * status hook carries the restart out later, once the card goes idle (shouldRestartOnStatus). It does
+ * not validate the status: the caller (restartStaggered) already picked only `working` cards with a
+ * live session. Unknown card -> undefined.
+ */
+export async function markRestartPending(cardId: string, reason: RestartReason): Promise<Card | undefined> {
+  return store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    if (!card) return undefined;
+    card.restartPendingAt = Date.now();
+    card.restartReason = reason;
     card.updatedAt = Date.now();
     return card;
   });

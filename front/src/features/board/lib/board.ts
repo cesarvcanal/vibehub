@@ -135,13 +135,34 @@ export function statusDot(status: CardStatus | null | undefined): StatusDot | nu
 }
 
 /**
+ * Which of the two live columns a card in the sidebar is sorted under. `waiting` first: it is the
+ * column that is asking something of you.
+ */
+const ACTIVE_RANK: Record<"waiting" | "working", number> = { waiting: 0, working: 1 };
+
+/**
  * Split for the narrow card list beside an open terminal: ACTIVE cards (the mirrored columns, the
- * ones with a dot) are always visible, most recently touched first; the rest hide behind "show
- * more" — paused first, then backlog. Finished cards never appear.
+ * ones with a dot) are always visible; the rest hide behind "show more" — paused first, then
+ * backlog. Finished cards never appear.
+ *
+ * The active ones group by STATUS before recency: every `waiting` card sits above every `working`
+ * card, and only inside a group does the most recently touched win. Sorting by recency alone let a
+ * card that had just gone green jump ahead of an older amber one — pushing the card that is blocked
+ * on you down the list exactly when it started needing you. Grouping comes first, not alongside.
  */
 export function splitSidebarCards(cards: BoardCard[]): { active: BoardCard[]; idle: BoardCard[] } {
   const rank: Record<CardColumn, number> = { working: 0, waiting: 1, paused: 2, backlog: 3, done: 99 };
-  const active = sortByRecency(cards.filter((c) => c.column === "working" || c.column === "waiting"));
+  const active = cards
+    .filter((c): c is BoardCard & { column: "waiting" | "working" } =>
+      c.column === "working" || c.column === "waiting",
+    )
+    .sort(
+      (a, b) =>
+        ACTIVE_RANK[a.column] - ACTIVE_RANK[b.column] ||
+        lastActivity(b) - lastActivity(a) ||
+        a.createdAt - b.createdAt ||
+        a.id.localeCompare(b.id),
+    );
   const idle = cards
     .filter((c) => c.column === "paused" || c.column === "backlog")
     .sort(
@@ -164,6 +185,20 @@ export interface BoardLocation {
 
 export const PROJECT_PARAM = "project";
 export const CARD_PARAM = "card";
+
+/**
+ * The "no single project" selection: the aggregated board across every project.
+ *
+ * It is a real, addressable choice rather than the absence of one — `?project=` empty still means
+ * "nothing picked yet", which is what lets a first visit land on a project instead of on the
+ * overview. `*` cannot collide with a server-generated id.
+ */
+export const ALL_PROJECTS = "*";
+
+/** True when the location points at the aggregated board rather than at one project. */
+export function isAllProjects(projectId: string | null): boolean {
+  return projectId === ALL_PROJECTS;
+}
 
 /**
  * Reads the location out of the URL's query string. It lives in the URL — not in component state —

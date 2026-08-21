@@ -30,6 +30,10 @@ and you get:
   per project or per card.
 - **Your MCP servers, everywhere.** Register them once; every profile gets them injected.
 - **A live browser per card**, when the agent needs to look at what it built.
+- **Terminals that can coordinate each other.** vibehub registers itself as an MCP server inside every
+  card, so an agent can list the other cards, delegate a task to one, and read back what it answered.
+  They are real parallel terminals — separate processes, separate context, separate branches — not
+  sub-agents sharing one context window.
 
 It runs on a VPS, a homelab box, or your laptop. The state is a directory of JSON files and one
 encrypted vault — no database to operate.

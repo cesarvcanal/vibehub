@@ -26,6 +26,7 @@ import {
   hasLiveSession,
   shouldEndSessionOnMove,
   shouldEndSessionOnStatus,
+  shouldRestartOnStatus,
   sortProjects,
   normalizeProjectPositions,
   placeProject,
@@ -274,6 +275,16 @@ describe("pause decisions (hasLiveSession / shouldEndSessionOnMove / shouldEndSe
     expect(shouldEndSessionOnStatus("working", "paused", true)).toBe(false);
     expect(shouldEndSessionOnStatus("waiting", "paused", false)).toBe(false);
     expect(shouldEndSessionOnStatus("waiting", "working", true)).toBe(false);
+  });
+
+  it("shouldRestartOnStatus: only with a pending flag, a live session, and once Claude stopped working", () => {
+    expect(shouldRestartOnStatus("waiting", true, true)).toBe(true);
+    // still working: the task goes on, the restart waits for it to finish
+    expect(shouldRestartOnStatus("working", true, true)).toBe(false);
+    // nothing pending: an ordinary status report restarts nothing
+    expect(shouldRestartOnStatus("waiting", false, true)).toBe(false);
+    // idempotent by construction: the session is already gone
+    expect(shouldRestartOnStatus("waiting", true, false)).toBe(false);
   });
 
   it("reactivatesOnActivity: only working, and only on paused/done", () => {
@@ -703,6 +714,74 @@ describe("board registry (persisted)", () => {
       expect((await reg.updateCard(card.id, { model: "" })).model).toBeUndefined();
       await expect(reg.updateCard(card.id, { model: "claude-opus-5; rm -rf /" })).rejects.toThrow(/invalid model/);
       await expect(reg.updateCard(card.id, { model: "gpt-4" })).rejects.toThrow(/invalid model/);
+    });
+  });
+
+  describe("pending brain/MCP restart (markRestartPending / applyCardStatus)", () => {
+    async function openWorkingCard(title = "busy") {
+      const p = await seedProject();
+      const card = await reg.createCard({ projectId: p.id, title });
+      await reg.applyOpenTerminal(card.id);
+      await reg.applyCardStatus(card.id, "working");
+      return card;
+    }
+
+    it("markRestartPending stamps the moment and the reason, and survives a reload", async () => {
+      const card = await openWorkingCard();
+      const flagged = await reg.markRestartPending(card.id, "brain");
+      expect(flagged?.restartPendingAt).toBeGreaterThan(0);
+      expect(flagged?.restartReason).toBe("brain");
+      expect((await reg.getCard(card.id))?.restartReason).toBe("brain");
+      expect(await reg.markRestartPending("nope", "mcp")).toBeUndefined();
+    });
+
+    it("a card still WORKING keeps the flag — the restart waits for the task to finish", async () => {
+      const card = await openWorkingCard();
+      await reg.markRestartPending(card.id, "mcp");
+      const stillWorking = await reg.applyCardStatus(card.id, "working");
+      expect(stillWorking?.restartPendingAt).toBeGreaterThan(0);
+      expect(shouldRestartOnStatus("working", true, hasLiveSession(stillWorking!))).toBe(false);
+    });
+
+    it("going IDLE clears the flag — and that is the moment the hook route restarts the session", async () => {
+      const card = await openWorkingCard();
+      await reg.markRestartPending(card.id, "brain");
+      const before = await reg.getCard(card.id);
+      // the decision is taken on the state BEFORE the status is applied
+      expect(shouldRestartOnStatus("waiting", Boolean(before?.restartPendingAt), hasLiveSession(before!))).toBe(true);
+      const idle = await reg.applyCardStatus(card.id, "waiting");
+      expect(idle?.column).toBe("waiting");
+      expect(idle?.restartPendingAt).toBeNull();
+      expect(idle?.restartReason).toBeUndefined();
+      // idempotent: a second idle report has nothing left to carry out
+      const again = await reg.getCard(card.id);
+      expect(shouldRestartOnStatus("waiting", Boolean(again?.restartPendingAt), hasLiveSession(again!))).toBe(false);
+    });
+
+    it("a PAUSE BEATS a pending restart: the pause is carried out and the flag is dropped", async () => {
+      const card = await openWorkingCard();
+      await reg.pauseCard(card.id); // pending pause: still working, session alive, no pausedAt
+      await reg.markRestartPending(card.id, "mcp");
+      const before = await reg.getCard(card.id);
+      expect(before?.column).toBe("paused");
+      expect(shouldEndSessionOnStatus("waiting", before!.column, hasLiveSession(before!))).toBe(true);
+
+      const finished = await reg.applyCardStatus(card.id, "waiting");
+      expect(finished?.pausedAt).toBeGreaterThan(0); // the pause happened
+      expect(finished?.restartPendingAt).toBeNull(); // the restart did not
+      expect(finished?.restartReason).toBeUndefined();
+      // and the session is gone, so nothing can restart it afterwards
+      expect(shouldRestartOnStatus("waiting", Boolean(finished?.restartPendingAt), hasLiveSession(finished!))).toBe(false);
+    });
+
+    it("a card that stays WORKING while paused keeps both pendings alive", async () => {
+      const card = await openWorkingCard();
+      await reg.pauseCard(card.id);
+      await reg.markRestartPending(card.id, "brain");
+      const stillBusy = await reg.applyCardStatus(card.id, "working");
+      expect(stillBusy?.column).toBe("paused");
+      expect(stillBusy?.pausedAt ?? null).toBeNull();
+      expect(stillBusy?.restartPendingAt).toBeGreaterThan(0);
     });
   });
 

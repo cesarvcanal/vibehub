@@ -87,3 +87,24 @@ ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx statu
 | POST | `/api/brain/apply` | push it into every profile |
 | POST | `/api/import` | `{ items: [{ repo, title, sessionId, branch?, column? }], stageDir? }` — adopt staged Claude sessions as cards |
 | GET | `/api/cards/:id/paths` | where the card maps to inside the runner (debugging an import) |
+
+## MCP — the board, from inside a card
+
+| Method | Path | Body / notes |
+|---|---|---|
+| POST | `/mcp` | **Bearer = the runner's service token** (a browser session also works). MCP streamable HTTP, stateless. |
+| GET | `/mcp` | 405 — this endpoint is POST-only. |
+
+vibehub registers itself as an MCP server in every card's profile, so the agent running in a card can
+coordinate the other cards. They are real parallel terminals, not sub-agents: each keeps its own
+context, worktree and branch.
+
+| Tool | What it does |
+|---|---|
+| `vibehub_list_terminals` | lists the cards with their situation (`working`, `waiting`, `paused`, `done`, `no session`); `project` filters |
+| `vibehub_send_to_terminal` | types an instruction at another card's prompt and submits it |
+| `vibehub_read_terminal` | reads that card's last assistant answers, stripped to text |
+
+The instruction travels over stdin inside a quoted heredoc and is typed with `tmux send-keys -l`, so
+an instruction that contains the word "Enter" is text, not a keystroke. Reading is a read-only tail
+of the newest transcript.

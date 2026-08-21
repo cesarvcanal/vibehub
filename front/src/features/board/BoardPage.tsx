@@ -13,8 +13,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { AccountsManager } from "@/features/board/components/AccountsManager";
-import { CardListSidebar } from "@/features/board/components/CardListSidebar";
+import { AllProjectsBoard } from "@/features/board/components/AllProjectsBoard";
+import { BrainManager } from "@/features/board/components/BrainManager";
+import { CardListNav, CardListSidebar } from "@/features/board/components/CardListSidebar";
 import { CardTerminalView } from "@/features/board/components/CardTerminalView";
 import { KanbanBoard } from "@/features/board/components/KanbanBoard";
 import { McpManager } from "@/features/board/components/McpManager";
@@ -22,7 +25,13 @@ import { NewCardDialog } from "@/features/board/components/NewCardDialog";
 import { ProjectFormDialog } from "@/features/board/components/ProjectFormDialog";
 import { ProjectSidebar } from "@/features/board/components/ProjectSidebar";
 import { RunnerBanner } from "@/features/board/components/RunnerBanner";
-import { moveProjectLocal, readLocation, sortProjects, writeLocation } from "@/features/board/lib/board";
+import {
+  isAllProjects,
+  moveProjectLocal,
+  readLocation,
+  sortProjects,
+  writeLocation,
+} from "@/features/board/lib/board";
 import { FOCUS_CHROME_PX, focusHeight } from "@/features/board/lib/focusMode";
 import {
   attachLeaveFocusShortcut,
@@ -61,6 +70,8 @@ export function BoardPage() {
   const projects = React.useMemo(() => sortProjects(projectList ?? []), [projectList]);
 
   const selected = projects.find((p) => p.id === projectId) ?? null;
+  // An explicit choice, not the absence of one: the aggregated board across every project.
+  const allProjects = isAllProjects(projectId);
 
   const go = React.useCallback(
     (nextProjectId: string | null, nextCardId: string | null = null) => {
@@ -78,6 +89,8 @@ export function BoardPage() {
    */
   React.useEffect(() => {
     if (!projectList) return;
+    // "All projects" is a destination, not a missing project — never reconcile it away.
+    if (isAllProjects(projectId)) return;
     if (projectId && projects.some((p) => p.id === projectId)) return;
     const fallback = projects[0]?.id ?? null;
     if (fallback !== projectId) go(fallback);
@@ -87,6 +100,8 @@ export function BoardPage() {
 
   const [newProjectOpen, setNewProjectOpen] = React.useState(false);
   const [newCardOpen, setNewCardOpen] = React.useState(false);
+  // The navigation drawer, for screens where the card list column is hidden.
+  const [menuOpen, setMenuOpen] = React.useState(false);
   const [deleteTarget, setDeleteTarget] = React.useState<BoardProject | null>(null);
 
   const { data: accountsData } = useQuery({ queryKey: ACCOUNTS_KEY, queryFn: boardApi.listAccounts });
@@ -95,7 +110,7 @@ export function BoardPage() {
     mutationFn: (input: NewCard) => boardApi.createCard(input),
     onSuccess: (card) => {
       void queryClient.invalidateQueries({ queryKey: cardsKey(card.projectId) });
-      setNewCardOpen(false);
+      // The dialog already closed itself on submit — several cards can be queued up back to back.
       // Created from inside a terminal: go straight to the new one. From the board, let it land in
       // the backlog — you are looking at the board precisely to decide what to do next.
       if (cardId) go(card.projectId, card.id);
@@ -154,6 +169,16 @@ export function BoardPage() {
 
   useDocumentTitle(boardTitle(inFocus ? null : selected?.name));
 
+  /** The install-wide managers. Same set on either board — they are not about one project. */
+  const headerExtra = (
+    <>
+      <RunnerBanner />
+      <AccountsManager />
+      <BrainManager />
+      <McpManager />
+    </>
+  );
+
   const newCardDialog = selected ? (
     <NewCardDialog
       open={newCardOpen}
@@ -164,7 +189,6 @@ export function BoardPage() {
       inheritedAccount={projectAccountSlug(selected)}
       defaultBranch={projectBaseBranch(selected)}
       onSubmit={(input) => createCardMutation.mutate(input)}
-      pending={createCardMutation.isPending}
     />
   ) : null;
 
@@ -184,6 +208,31 @@ export function BoardPage() {
           onOpenCard={(id) => go(selected.id, id)}
           onNewCard={() => setNewCardOpen(true)}
         />
+
+        {/* Same list, as a drawer, on the screens where the column above is hidden. Every action
+            closes it: on a phone the drawer covers the terminal you just asked to see. */}
+        <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
+          <SheetContent side="left" className="w-72 lg:hidden">
+            <SheetTitle className="sr-only">Cards</SheetTitle>
+            <CardListNav
+              project={selected}
+              activeCardId={cardId}
+              onBack={() => {
+                setMenuOpen(false);
+                go(selected.id);
+              }}
+              onOpenCard={(id) => {
+                setMenuOpen(false);
+                go(selected.id, id);
+              }}
+              onNewCard={() => {
+                setMenuOpen(false);
+                setNewCardOpen(true);
+              }}
+            />
+          </SheetContent>
+        </Sheet>
+
         {/* Keyed by card: switching cards tears the socket down and opens the next one cleanly. */}
         <CardTerminalView
           key={cardId}
@@ -191,6 +240,7 @@ export function BoardPage() {
           cardId={cardId}
           onBack={() => go(selected.id)}
           onNewCard={() => setNewCardOpen(true)}
+          onOpenMenu={() => setMenuOpen(true)}
         />
         {newCardDialog}
       </div>
@@ -236,20 +286,21 @@ export function BoardPage() {
           />
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {selected ? (
+            {selected && !allProjects ? (
               <KanbanBoard
                 project={selected}
                 onOpenCard={(card) => go(selected.id, card.id)}
                 onNewCard={() => setNewCardOpen(true)}
-                headerExtra={
-                  <>
-                    <RunnerBanner />
-                    <AccountsManager />
-                    <McpManager />
-                  </>
-                }
+                headerExtra={headerExtra}
               />
-            ) : null}
+            ) : (
+              // No project selected is not a dead end: show every project's cards on one board.
+              <AllProjectsBoard
+                projects={projects}
+                onOpenCard={(card) => go(card.projectId, card.id)}
+                headerExtra={headerExtra}
+              />
+            )}
           </div>
         </div>
       )}

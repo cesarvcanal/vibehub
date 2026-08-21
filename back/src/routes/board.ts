@@ -2,14 +2,16 @@ import { timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { requireSession } from "../auth/session.js";
 import * as registry from "../services/board/registry.js";
+import { restartCard } from "../services/board/workspace.js";
 import { runnerToken } from "../runtime/runner.js";
 import { logger } from "../utils/logger.js";
 
 /**
- * BOARD — projects, cards, and the public status callback the runner's Claude hooks fire.
+ * BOARD — projects, cards, accounts, and the public status callback the runner's Claude hooks fire.
  *
- * Session lifecycle routes (open/pause/restart/upload/browser) live in `routes/session.ts`; this
- * file is the board's data surface.
+ * Session lifecycle routes (open/pause/restart/upload/browser) live in `routes/session.ts` and the
+ * agent's own configuration (tokens, MCP servers, brain) in `routes/agent.ts`; this file is the
+ * board's data surface.
  */
 
 function badRequest(err: unknown): { code: number; body: { error: string } } {
@@ -133,7 +135,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  /* ------------------------------------------------------- accounts and MCPs */
+  /* ---------------------------------------------------------------- accounts */
 
   app.get("/api/accounts", { preHandler: requireSession }, async (_req, reply) => {
     const [accounts, config] = await Promise.all([registry.listAccounts(), registry.getConfig()]);
@@ -152,28 +154,6 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
   app.delete<{ Params: { slug: string } }>("/api/accounts/:slug", { preHandler: requireSession }, async (req, reply) => {
     try {
       return await reply.send({ account: await registry.removeAccount(req.params.slug) });
-    } catch (err) {
-      const { code, body } = badRequest(err);
-      return await reply.code(code).send(body);
-    }
-  });
-
-  app.get("/api/mcps", { preHandler: requireSession }, async (_req, reply) => {
-    return await reply.send({ mcps: await registry.listMcps() });
-  });
-
-  app.post<{ Body: registry.CreateMcpInput }>("/api/mcps", { preHandler: requireSession }, async (req, reply) => {
-    try {
-      return await reply.send({ mcp: await registry.createMcp(req.body ?? ({} as registry.CreateMcpInput)) });
-    } catch (err) {
-      const { code, body } = badRequest(err);
-      return await reply.code(code).send(body);
-    }
-  });
-
-  app.delete<{ Params: { id: string } }>("/api/mcps/:id", { preHandler: requireSession }, async (req, reply) => {
-    try {
-      return await reply.send({ mcp: await registry.removeMcp(req.params.id) });
     } catch (err) {
       const { code, body } = badRequest(err);
       return await reply.code(code).send(body);
@@ -202,7 +182,37 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
     if (status !== "working" && status !== "waiting") {
       return await reply.code(400).send({ error: "status must be 'working' or 'waiting'" });
     }
+    // State BEFORE the status is applied: it is what decides whether this is the moment to carry out
+    // a PENDING RESTART (a card flagged while the brain/MCPs changed under a working Claude).
+    // SNAPSHOT the primitives — `getCard` hands back the LIVE cached card, so applyCardStatus mutates
+    // that very object and reading these fields afterwards would always show the post-status state.
+    const before = await registry.getCard(String(body.card ?? ""));
+    const wasPending = Boolean(before?.restartPendingAt);
+    const wasLive = before ? registry.hasLiveSession(before) : false;
+    const wasColumn = before?.column;
+    const pendingReason = before?.restartReason;
     const card = await registry.applyCardStatus(String(body.card ?? ""), status);
+    // A PAUSE BEATS the pending restart: a card whose PENDING PAUSE is due now is going to sleep, so
+    // restarting it would be wasted work — applyCardStatus already dropped the flag in that case.
+    const pausing = wasColumn ? registry.shouldEndSessionOnStatus(status, wasColumn, wasLive) : false;
+    if (card && !pausing && registry.shouldRestartOnStatus(status, wasPending, wasLive)) {
+      // PENDING RESTART (brain/MCP): the card was `working` when the brain/MCPs changed; now Claude has
+      // finished (status != working), so restart the session to re-read them at startup (`claude -c`
+      // resumes the SAME conversation). applyCardStatus has already cleared the flag.
+      try {
+        await restartCard(card.id);
+        logger.info(
+          { audit: true, action: "card.restart.pending", card: card.worktreeSlug, reason: pendingReason },
+          "pending restart carried out — Claude finished and the session was restarted to re-read the brain/MCPs",
+        );
+      } catch (err) {
+        // The hook is fire-and-forget: a restart that fails must never turn into an error for it.
+        logger.warn(
+          { card: card.worktreeSlug, detail: (err as Error).message },
+          "pending restart failed (best-effort) — the card keeps running with the old brain/MCPs",
+        );
+      }
+    }
     return await reply.send({ ok: true, applied: Boolean(card) });
   });
 }

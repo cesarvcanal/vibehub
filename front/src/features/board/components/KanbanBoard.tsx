@@ -99,6 +99,20 @@ export function KanbanBoard({
     onError: (error) => toast.error(apiErrorMessage(error, "Could not pause the card")),
   });
 
+  /**
+   * Restart: kills and recreates the session, same conversation. It is how a card picks up a new
+   * brain or a new MCP without waiting to go idle, and — before this — the board had no way to ask
+   * for it at all; you had to open the card first.
+   */
+  const restartMutation = useMutation({
+    mutationFn: (id: string) => boardApi.restartCard(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: boardKey });
+      toast.success("Restarted — same conversation, fresh configuration.");
+    },
+    onError: (error) => toast.error(apiErrorMessage(error, "Could not restart the card")),
+  });
+
   const deleteMutation = useMutation({
     mutationFn: (id: string) => boardApi.deleteCard(id),
     onSuccess: () => {
@@ -166,6 +180,7 @@ export function KanbanBoard({
                   onOpen={onOpenCard}
                   onDone={finish}
                   onPause={(c) => pauseMutation.mutate(c.id)}
+                  onRestart={(c) => restartMutation.mutate(c.id)}
                   onDelete={setDeleteTarget}
                   onDragStart={setDragging}
                   onDragEnd={() => setDragging(null)}

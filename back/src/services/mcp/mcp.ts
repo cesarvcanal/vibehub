@@ -5,6 +5,7 @@ import { listMcps, getMcp, listAccounts, type McpServer } from "../board/registr
 import {
   CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, DEFAULT_ACCOUNT_SLUG, accountConfigDir, profileDirFor,
 } from "../accounts/profiles.js";
+import { runnerToken } from "../../runtime/runner.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -185,10 +186,37 @@ export async function resolveMcpSecrets(mcp: McpServer): Promise<Record<string, 
   return out;
 }
 
-/** Every registered MCP as a resolved injection (name + JSON). */
+/**
+ * The built-in MCP every card gets: vibehub itself.
+ *
+ * This is what turns a terminal into a maestro — it can list the other cards, delegate to them and
+ * read their answers. It is not registered by the user and has no vault entry: the endpoint is
+ * derived from `publicUrl` (the same address the status hooks already post to, so it is reachable
+ * from inside the runner by construction) and the credential is the runner's own service token.
+ *
+ * Returns undefined when there is no token yet — a runner that was never provisioned has nothing to
+ * authenticate with, and injecting a broken server would just make every card start with an error.
+ */
+export async function builtinMaestroInjection(): Promise<McpInjection | undefined> {
+  const token = await runnerToken();
+  if (!token) return undefined;
+  const url = `${config.publicUrl.replace(/\/+$/, "")}/mcp`;
+  return {
+    name: BUILTIN_MAESTRO_NAME,
+    json: JSON.stringify({ type: "http", url, headers: { Authorization: `Bearer ${token}` } }),
+  };
+}
+
+/** Reserved name of the built-in server, so a user-registered MCP cannot shadow it. */
+export const BUILTIN_MAESTRO_NAME = "vibehub";
+
+/** Every registered MCP as a resolved injection (name + JSON), plus the built-in vibehub server. */
 export async function resolveMcpInjections(): Promise<McpInjection[]> {
   const out: McpInjection[] = [];
+  const builtin = await builtinMaestroInjection();
+  if (builtin) out.push(builtin);
   for (const mcp of await listMcps()) {
+    if (mcp.name === BUILTIN_MAESTRO_NAME) continue; // never let a registration shadow the built-in
     out.push({ name: mcp.name, json: mcpServerJson(mcp, await resolveMcpSecrets(mcp)) });
   }
   return out;

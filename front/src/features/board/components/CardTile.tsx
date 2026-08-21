@@ -1,18 +1,18 @@
-import { Check, Pause, Trash2 } from "lucide-react";
+import { Check, Pause, RotateCw, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { statusDot } from "@/features/board/lib/board";
+import {
+  ContextMenu,
+  useContextMenuPoint,
+  type ContextMenuItem,
+} from "@/features/board/components/ContextMenu";
 import type { BoardCard } from "@/features/board/api";
 
 const DOT_TONE: Record<"ok" | "warn", string> = {
   ok: "bg-emerald-400",
   warn: "bg-amber-400",
-};
-
-const DOT_TEXT: Record<"ok" | "warn", string> = {
-  ok: "text-emerald-400/90",
-  warn: "text-amber-400/90",
 };
 
 /**
@@ -23,6 +23,15 @@ const DOT_TEXT: Record<"ok" | "warn", string> = {
  * The actions are inline rather than behind a menu — with a dozen cards on screen, "pause this one"
  * should be one click, not two. They stay invisible until the card is hovered or focused so the
  * board reads as a list of titles, and each one stops the click from bubbling up into "open".
+ *
+ * RIGHT-CLICK opens the same three session actions the open card's bar has — Pause · Restart ·
+ * Finish, in that order. Restart lives only here and in an open card: it is an action on a live
+ * session, not on the card record, which is why it is not one of the always-on inline icons.
+ *
+ * The card says as little as it can. It carries no line repeating its own column ("Working" under a
+ * card sitting in the Working column is a word that has already been read), and speaks up only when
+ * something is true that the position and the dot cannot show: a pause that is waiting for the turn
+ * to end, or a configuration change that will land at the next restart.
  */
 export function CardTile({
   card,
@@ -30,6 +39,7 @@ export function CardTile({
   onOpen,
   onDone,
   onPause,
+  onRestart,
   onDelete,
   onDragStart,
   onDragEnd,
@@ -41,6 +51,8 @@ export function CardTile({
   onOpen: (card: BoardCard) => void;
   onDone?: (card: BoardCard) => void;
   onPause?: (card: BoardCard) => void;
+  /** Kills and recreates the session — same conversation, fresh brain/MCP configuration. */
+  onRestart?: (card: BoardCard) => void;
   onDelete?: (card: BoardCard) => void;
   onDragStart?: (card: BoardCard) => void;
   onDragEnd?: () => void;
@@ -54,8 +66,30 @@ export function CardTile({
    * current turn finishes, so the card is on its way there rather than already parked.
    */
   const pausingWhenIdle = !paused && card.column === "paused" && Boolean(card.openedAt);
+  /**
+   * The brain or the MCP set changed while this card was mid-turn. Claude reads either one only at
+   * start-up, so the server flagged the card instead of interrupting it — it restarts itself the
+   * moment the turn ends. Not shown when a pending pause already owns the line: the pause wins on
+   * the server, so its text is the one that is true.
+   */
+  const updatePending = !paused && !pausingWhenIdle && Boolean(card.restartPendingAt);
   const canPause = Boolean(card.openedAt) && !paused;
+  // Same precondition: there is only a session to restart once the card has been opened.
+  const canRestart = canPause;
   const draggable = Boolean(onDragStart);
+
+  const contextItems: ContextMenuItem[] = [
+    ...(onPause && canPause
+      ? [{ key: "pause", label: "Pause", icon: Pause, onSelect: () => onPause(card) }]
+      : []),
+    ...(onRestart && canRestart
+      ? [{ key: "restart", label: "Restart", icon: RotateCw, onSelect: () => onRestart(card) }]
+      : []),
+    ...(onDone && card.column !== "done"
+      ? [{ key: "finish", label: "Finish", icon: Check, onSelect: () => onDone(card) }]
+      : []),
+  ];
+  const { point, openAt, close } = useContextMenuPoint();
 
   return (
     <div
@@ -71,6 +105,7 @@ export function CardTile({
           onOpen(card);
         }
       }}
+      onContextMenu={contextItems.length > 0 ? openAt : undefined}
       onDragStart={
         draggable
           ? (e) => {
@@ -108,11 +143,11 @@ export function CardTile({
           {card.title}
         </div>
 
-        {/* Only say something the dot does not already say. */}
+        {/* Only ever a line the column header and the dot cannot already tell you. */}
         {pausingWhenIdle ? (
           <div className="mt-0.5 text-[11px] text-muted-foreground/80">Pausing when idle…</div>
-        ) : !paused && dot ? (
-          <div className={cn("mt-0.5 text-[11px]", DOT_TEXT[dot.tone])}>{dot.label}</div>
+        ) : updatePending ? (
+          <div className="mt-0.5 text-[11px] text-muted-foreground/80">Updating when it finishes…</div>
         ) : null}
 
         <div className="mt-1 flex flex-wrap gap-1">
@@ -166,6 +201,8 @@ export function CardTile({
           </TileAction>
         ) : null}
       </div>
+
+      <ContextMenu point={point} items={contextItems} ariaLabel={`Actions for ${card.title}`} onClose={close} />
     </div>
   );
 }

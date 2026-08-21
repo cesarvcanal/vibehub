@@ -7,6 +7,7 @@ import {
   Check,
   GitBranch,
   Loader2,
+  Menu,
   MonitorPlay,
   Pause,
   RotateCw,
@@ -62,11 +63,18 @@ export function CardTerminalView({
   cardId,
   onBack,
   onNewCard,
+  onOpenMenu,
 }: {
   project: BoardProject;
   cardId: string;
   onBack: () => void;
   onNewCard: () => void;
+  /**
+   * Opens the navigation drawer. Only rendered on narrow screens, where the card list beside the
+   * terminal is hidden and going "back to the board" is otherwise the only way to reach another
+   * card — which is a long way round when the whole point is hopping between agents.
+   */
+  onOpenMenu?: () => void;
 }) {
   const queryClient = useQueryClient();
   const boardKey = cardsKey(project.id);
@@ -268,6 +276,17 @@ export function CardTerminalView({
         className="flex min-h-[2rem] min-w-0 shrink-0 items-center gap-3 border-b border-border/60 pb-1.5"
       >
         <div className="flex min-w-0 flex-1 items-center gap-2">
+          {onOpenMenu ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0 text-muted-foreground lg:hidden"
+              aria-label="Open the card list"
+              onClick={onOpenMenu}
+            >
+              <Menu className="h-4 w-4" />
+            </Button>
+          ) : null}
           <Button
             variant="ghost"
             size="sm"

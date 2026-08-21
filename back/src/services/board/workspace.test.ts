@@ -42,6 +42,15 @@ vi.mock("../../runtime/host.js", async (orig) => ({
 }));
 vi.mock("../github/client.js", () => ({ gitAuthHeader: vi.fn() }));
 
+/**
+ * FAULT INJECTION for the staggered restart, opt-in per test (`fresh({ flakyRegistry: true })`): the
+ * registry stays the REAL module — same JsonStore, so the cards a test creates are the cards the
+ * workspace sees — with two exports wrapped so ONE card id can be made to blow up on each half of the
+ * sweep. Empty id = nobody fails, which is why the wrapper is inert for every other test.
+ */
+let failGetCardFor = "";
+let failMarkPendingFor = "";
+
 let dir = "";
 let runScript: ReturnType<typeof vi.fn>;
 let ptyCommand: ReturnType<typeof vi.fn>;
@@ -49,7 +58,7 @@ let reg: typeof import("./registry.js");
 let ws: typeof import("./workspace.js");
 let host: typeof import("../../runtime/host.js");
 
-async function fresh() {
+async function fresh(opts: { flakyRegistry?: boolean } = {}) {
   vi.resetModules();
   const env = await import("../../config/env.js");
   env.config.dataDir = dir;
@@ -64,6 +73,20 @@ async function fresh() {
   } as unknown as import("../../runtime/host.js").HostExecutor);
   const gh = await import("../github/client.js");
   vi.mocked(gh.gitAuthHeader).mockResolvedValue(AUTH_HEADER);
+  if (opts.flakyRegistry) {
+    vi.doMock("./registry.js", async () => {
+      const actual = await vi.importActual<typeof import("./registry.js")>("./registry.js");
+      return {
+        ...actual,
+        getCard: async (id: string) =>
+          id && id === failGetCardFor ? Promise.reject(new Error("the board is unreadable")) : actual.getCard(id),
+        markRestartPending: async (id: string, reason: import("./registry.js").RestartReason) =>
+          id && id === failMarkPendingFor
+            ? Promise.reject(new Error("the board is unwritable"))
+            : actual.markRestartPending(id, reason),
+      };
+    });
+  }
   reg = await import("./registry.js");
   ws = await import("./workspace.js");
 }
@@ -78,6 +101,10 @@ beforeEach(async () => {
   await fresh();
 });
 afterEach(async () => {
+  // The flaky-registry mock is opt-in: drop it so the next test gets the real module back.
+  vi.doUnmock("./registry.js");
+  failGetCardFor = "";
+  failMarkPendingFor = "";
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -669,6 +696,89 @@ describe("restart (single and all) — a working card is protected", () => {
     await ws.openCard(c2.id);
     runScript.mockRejectedValue(new Error("host is down"));
     expect(await ws.restartAllCards()).toEqual({ restarted: 2, skipped: 0 });
+  });
+
+  it("restartStaggered: idle cards restart NOW, working cards are FLAGGED instead of interrupted", async () => {
+    const p = await reg.createProject({ name: "x" });
+    const idle = await reg.createCard({ projectId: p.id, title: "idle" });
+    const busy = await reg.createCard({ projectId: p.id, title: "busy" });
+    const untouched = await reg.createCard({ projectId: p.id, title: "never opened" });
+    await ws.openCard(idle.id);
+    await ws.openCard(busy.id);
+    await reg.applyCardStatus(idle.id, "waiting");
+    await reg.applyCardStatus(busy.id, "working");
+    runScript.mockClear();
+
+    expect(await ws.restartStaggered("brain", "tester")).toEqual({ restarted: 1, pending: 1 });
+
+    // the idle one had its session killed right away (it reopens with `claude -c`, re-reading the brain)
+    expect(runScript).toHaveBeenCalledTimes(1);
+    expect(scriptAt(0)).toContain(`tmux kill-session -t '${idle.tmuxSession}'`);
+    expect(scriptAt(0)).not.toContain(busy.tmuxSession);
+    // ...and the board was NOT touched for it: no flag, no column change
+    const idleAfter = await reg.getCard(idle.id);
+    expect(idleAfter?.restartPendingAt ?? null).toBeNull();
+    expect(idleAfter?.column).toBe("waiting");
+
+    // the working one was flagged, never interrupted
+    const busyAfter = await reg.getCard(busy.id);
+    expect(busyAfter?.restartPendingAt).toBeGreaterThan(0);
+    expect(busyAfter?.restartReason).toBe("brain");
+    expect(busyAfter?.status).toBe("working");
+
+    // a card that was never opened has no session and no conversation — it is left out entirely
+    expect((await reg.getCard(untouched.id))?.restartPendingAt ?? null).toBeNull();
+  });
+
+  it("restartStaggered: a PAUSED card is neither restarted nor flagged (no live session)", async () => {
+    const p = await reg.createProject({ name: "x" });
+    const parked = await reg.createCard({ projectId: p.id, title: "parked" });
+    await ws.openCard(parked.id);
+    await ws.pauseCard(parked.id);
+    runScript.mockClear();
+
+    expect(await ws.restartStaggered("mcp")).toEqual({ restarted: 0, pending: 0 });
+    expect(runScript).not.toHaveBeenCalled();
+    expect((await reg.getCard(parked.id))?.restartPendingAt ?? null).toBeNull();
+  });
+
+  it("restartStaggered: the reason is recorded per card so the badge can tell brain from MCP", async () => {
+    const p = await reg.createProject({ name: "x" });
+    const busy = await reg.createCard({ projectId: p.id, title: "busy" });
+    await ws.openCard(busy.id);
+    await reg.applyCardStatus(busy.id, "working");
+
+    await ws.restartStaggered("mcp");
+    expect((await reg.getCard(busy.id))?.restartReason).toBe("mcp");
+    // a later brain save on the SAME pending card just relabels it — one flag serves both reasons
+    await ws.restartStaggered("brain");
+    expect((await reg.getCard(busy.id))?.restartReason).toBe("brain");
+  });
+
+  it("restartStaggered: one card failing does not abort the sweep (Promise.allSettled)", async () => {
+    await fresh({ flakyRegistry: true });
+    const p = await reg.createProject({ name: "x" });
+    const doomedIdle = await reg.createCard({ projectId: p.id, title: "doomed idle" });
+    const goodIdle = await reg.createCard({ projectId: p.id, title: "good idle" });
+    const doomedBusy = await reg.createCard({ projectId: p.id, title: "doomed busy" });
+    const goodBusy = await reg.createCard({ projectId: p.id, title: "good busy" });
+    for (const c of [doomedIdle, goodIdle, doomedBusy, goodBusy]) await ws.openCard(c.id);
+    await reg.applyCardStatus(doomedBusy.id, "working");
+    await reg.applyCardStatus(goodBusy.id, "working");
+    runScript.mockClear();
+
+    // One card blows up on EACH half of the sweep: the idle half (restartCard reads the board) and
+    // the working half (markRestartPending writes to it).
+    failGetCardFor = doomedIdle.id;
+    failMarkPendingFor = doomedBusy.id;
+    const out = await ws.restartStaggered("brain", "tester");
+
+    // The sweep RESOLVES rather than rejecting, and the healthy cards were served.
+    expect(out).toEqual({ restarted: 2, pending: 2 });
+    expect(runScript).toHaveBeenCalledTimes(1);
+    expect(scriptAt(0)).toContain(`tmux kill-session -t '${goodIdle.tmuxSession}'`);
+    expect((await reg.getCard(goodBusy.id))?.restartPendingAt).toBeGreaterThan(0);
+    expect((await reg.getCard(doomedBusy.id))?.restartPendingAt ?? null).toBeNull();
   });
 
   it("killCardSession: uses the session FROM THE BOARD and swallows a dead host", async () => {

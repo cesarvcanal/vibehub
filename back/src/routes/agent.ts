@@ -1,11 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { requireSession } from "../auth/session.js";
 import * as registry from "../services/board/registry.js";
-import { cardWorkPaths } from "../services/board/workspace.js";
+import { cardWorkPaths, restartStaggered } from "../services/board/workspace.js";
 import { setAccountToken, removeAccountToken, accountsTokenStatus } from "../services/accounts/token.js";
 import { applyMcpsEverywhere, setMcpSecretById, mcpSecretsStatus } from "../services/mcp/mcp.js";
 import { brainView, setBrainText, resetBrain, applyBrainEverywhere } from "../services/brain/brain.js";
 import { importSessions, type ImportInput } from "../services/import/import.js";
+import { logger } from "../utils/logger.js";
 
 /**
  * AGENT CONFIGURATION — the things that shape how Claude runs inside the runner rather than what the
@@ -20,6 +21,41 @@ function fail(err: unknown): { code: number; body: { error: string } } {
   // malformed request — the UI shows those differently.
   if (/runner/i.test(message)) return { code: 502, body: { error: message } };
   return { code: 400, body: { error: message } };
+}
+
+/** What every auto-applying save reports back, so the UI can say what actually happened. */
+interface AutoApplyResult {
+  applied: boolean;
+  restarted: number;
+  pending: number;
+}
+
+/**
+ * AUTO-APPLY on a brain/MCP save: rewrite the file inside the runner and run the STAGGERED restart
+ * (idle cards restart now; working cards get a pending restart instead of being interrupted).
+ * Without this the change is invisible until somebody restarts each card by hand, because Claude
+ * only reads the brain and the MCPs when a session starts.
+ *
+ * It is BEST-EFFORT ON PURPOSE — the save has ALREADY been persisted before we get here, so a runner
+ * that is down, an unreachable vault or an MCP secret that has not been filled in yet (applyMcps is
+ * fail-closed) must NOT fail the save nor make the edit disappear; it only lands in the log, and the
+ * explicit "apply now" button stays as the path that fails loudly.
+ */
+async function autoApply(
+  reason: "brain" | "mcp",
+  apply: () => Promise<unknown>,
+): Promise<AutoApplyResult> {
+  try {
+    await apply();
+    const { restarted, pending } = await restartStaggered(reason);
+    return { applied: true, restarted, pending };
+  } catch (err) {
+    logger.warn(
+      { action: "agent.autoApply", reason, detail: (err as Error).message },
+      "auto-apply failed (the save is persisted; use \"apply now\" to force it)",
+    );
+    return { applied: false, restarted: 0, pending: 0 };
+  }
 }
 
 export async function agentRoutes(app: FastifyInstance): Promise<void> {
@@ -55,12 +91,42 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
 
   /* ------------------------------------------------------------ MCP servers */
 
+  app.get("/api/mcps", { preHandler: requireSession }, async (_req, reply) => {
+    return await reply.send({ mcps: await registry.listMcps() });
+  });
+
+  app.post<{ Body: registry.CreateMcpInput }>("/api/mcps", { preHandler: requireSession }, async (req, reply) => {
+    try {
+      const mcp = await registry.createMcp(req.body ?? ({} as registry.CreateMcpInput));
+      // Auto-applied on save (best-effort): an MCP whose secret is still missing is a silent no-op
+      // (applyMcpsEverywhere is fail-closed) — the value arrives later through the secret route,
+      // which applies again.
+      return await reply.send({ mcp, ...(await autoApply("mcp", applyMcpsEverywhere)) });
+    } catch (err) {
+      const { code, body } = fail(err);
+      return await reply.code(code).send(body);
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/mcps/:id", { preHandler: requireSession }, async (req, reply) => {
+    try {
+      const mcp = await registry.removeMcp(req.params.id);
+      // Auto-applied on save (best-effort): drops the MCP from the runner right away + staggered restart.
+      return await reply.send({ mcp, ...(await autoApply("mcp", applyMcpsEverywhere)) });
+    } catch (err) {
+      const { code, body } = fail(err);
+      return await reply.code(code).send(body);
+    }
+  });
+
   app.post<{ Params: { id: string }; Body: { key?: string; value?: string } }>(
     "/api/mcps/:id/secret", { preHandler: requireSession },
     async (req, reply) => {
       try {
         await setMcpSecretById(req.params.id, req.body?.key ?? "", req.body?.value ?? "");
-        return await reply.send({ ok: true });
+        // Auto-applied on save (best-effort): this is the moment the MCP becomes usable, so inject it
+        // into the runner + staggered restart. The value itself is never logged.
+        return await reply.send({ ok: true, ...(await autoApply("mcp", applyMcpsEverywhere)) });
       } catch (err) {
         const { code, body } = fail(err);
         return await reply.code(code).send(body);
@@ -93,18 +159,26 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     return await reply.send(await brainView());
   });
 
+  /**
+   * PERSISTS and AUTO-APPLIES: besides saving, it rewrites the brain inside the runner and runs the
+   * staggered restart — best-effort, so the save never fails because of the apply (see autoApply).
+   * "Apply now" remains the manual force.
+   */
   app.post<{ Body: { text?: string } }>("/api/brain", { preHandler: requireSession }, async (req, reply) => {
     try {
-      return await reply.send(await setBrainText(req.body?.text ?? ""));
+      const saved = await setBrainText(req.body?.text ?? "");
+      return await reply.send({ ...saved, ...(await autoApply("brain", applyBrainEverywhere)) });
     } catch (err) {
       const { code, body } = fail(err);
       return await reply.code(code).send(body);
     }
   });
 
+  /** Back to the seed text — the same auto-apply as a save, since the runner content changes too. */
   app.delete("/api/brain", { preHandler: requireSession }, async (_req, reply) => {
     await resetBrain();
-    return await reply.send(await brainView());
+    const effect = await autoApply("brain", applyBrainEverywhere);
+    return await reply.send({ ...(await brainView()), ...effect });
   });
 
   app.post("/api/brain/apply", { preHandler: requireSession }, async (_req, reply) => {

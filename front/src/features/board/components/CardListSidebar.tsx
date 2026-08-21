@@ -16,8 +16,45 @@ import { boardApi, cardsKey, type BoardCard, type BoardProject } from "@/feature
  *
  * This is also the component that keeps the board query alive while a card is open, which is why
  * the terminal view can read the card straight from the cache instead of fetching it again.
+ *
+ * The content is separated from its frame because the same list has to appear in two places: as the
+ * permanent column on a wide screen, and inside the mobile drawer, where the column is hidden. One
+ * implementation, two frames — a second copy would be the one that drifts.
  */
 export function CardListSidebar({
+  project,
+  activeCardId,
+  onBack,
+  onOpenCard,
+  onNewCard,
+}: {
+  project: BoardProject;
+  activeCardId: string;
+  onBack: () => void;
+  onOpenCard: (cardId: string) => void;
+  onNewCard: () => void;
+}) {
+  return (
+    <aside
+      aria-label="Cards"
+      className="hidden w-56 shrink-0 flex-col overflow-hidden rounded-lg border border-border/60 bg-card/30 lg:flex"
+    >
+      <CardListNav
+        project={project}
+        activeCardId={activeCardId}
+        onBack={onBack}
+        onOpenCard={onOpenCard}
+        onNewCard={onNewCard}
+      />
+    </aside>
+  );
+}
+
+/**
+ * The list itself, with no frame of its own — rendered inside the desktop `<aside>` above and
+ * inside the mobile drawer.
+ */
+export function CardListNav({
   project,
   activeCardId,
   onBack,
@@ -50,10 +87,7 @@ export function CardListSidebar({
       : active;
 
   return (
-    <aside
-      aria-label="Cards"
-      className="hidden w-56 shrink-0 flex-col overflow-hidden rounded-lg border border-border/60 bg-card/30 lg:flex"
-    >
+    <>
       <button
         type="button"
         onClick={onBack}
@@ -116,7 +150,7 @@ export function CardListSidebar({
           <p className="px-3 py-2 text-[11px] text-muted-foreground/60">No active cards.</p>
         ) : null}
       </div>
-    </aside>
+    </>
   );
 }
 

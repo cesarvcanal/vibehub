@@ -1,5 +1,4 @@
 import * as React from "react";
-import { Loader2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -22,6 +21,12 @@ export const SELECT_CLASS =
  * New card. The title is the only thing that matters — the branch, worktree and tmux session are
  * derived from it inside the runner. Account, model and branch are folded away under "Options"
  * because the answer is almost always "whatever the project uses".
+ *
+ * Submitting fires the creation and closes IMMEDIATELY rather than waiting for the server. Creating
+ * a card can mean cloning a repository, and blocking the dialog on that turned "spin up four cards"
+ * into four separate waits — the whole point of a board of agents is that you queue work up faster
+ * than it completes. The request still runs; a failure arrives as a toast, which is readable
+ * whether or not the dialog is still on screen.
  */
 export function NewCardDialog({
   open,
@@ -32,7 +37,6 @@ export function NewCardDialog({
   inheritedAccount,
   defaultBranch,
   onSubmit,
-  pending = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -44,8 +48,8 @@ export function NewCardDialog({
   inheritedAccount?: string;
   /** Branch the project cuts worktrees from — shown as the placeholder. */
   defaultBranch?: string;
+  /** Fired and forgotten — the dialog does not wait for it. */
   onSubmit: (input: NewCard) => void;
-  pending?: boolean;
 }) {
   const [title, setTitle] = React.useState("");
   const [account, setAccount] = React.useState("");
@@ -64,7 +68,7 @@ export function NewCardDialog({
   function submit(event: React.FormEvent) {
     event.preventDefault();
     const trimmed = title.trim();
-    if (!trimmed || pending) return;
+    if (!trimmed) return;
     onSubmit({
       projectId,
       title: trimmed,
@@ -72,6 +76,9 @@ export function NewCardDialog({
       ...(model ? { model } : {}),
       ...(branch.trim() ? { branch: branch.trim() } : {}),
     });
+    // Close on submit, not on success: the next card can be typed while this one is still cloning.
+    reset();
+    onOpenChange(false);
   }
 
   return (
@@ -164,11 +171,10 @@ export function NewCardDialog({
           ) : null}
 
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={pending}>
+            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={pending || !title.trim()}>
-              {pending ? <Loader2 className="animate-spin" /> : null}
+            <Button type="submit" disabled={!title.trim()}>
               Create card
             </Button>
           </DialogFooter>

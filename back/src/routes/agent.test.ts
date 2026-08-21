@@ -102,6 +102,60 @@ describe("account tokens", () => {
 });
 
 describe("mcps", () => {
+  it("round-trips an MCP server", async () => {
+    const created = await app.inject({
+      method: "POST", url: "/api/mcps", headers: { cookie },
+      payload: { name: "playwright", kind: "stdio", command: "npx", args: ["playwright-mcp"] },
+    });
+    expect(created.statusCode).toBe(200);
+    const list = await app.inject({ method: "GET", url: "/api/mcps", headers: { cookie } });
+    expect(list.json().mcps).toHaveLength(1);
+    await app.inject({ method: "DELETE", url: `/api/mcps/${created.json().mcp.id}`, headers: { cookie } });
+    expect((await app.inject({ method: "GET", url: "/api/mcps", headers: { cookie } })).json().mcps).toHaveLength(0);
+  });
+
+  it("rejects an MCP name with shell metacharacters", async () => {
+    const res = await app.inject({
+      method: "POST", url: "/api/mcps", headers: { cookie },
+      payload: { name: "bad; rm -rf /", kind: "stdio", command: "npx" },
+    });
+    expect(res.statusCode).toBe(400);
+    // a rejected write never reaches the runner
+    expect(applyMcpsEverywhere).not.toHaveBeenCalled();
+  });
+
+  it("AUTO-APPLIES on every MCP write: create, delete and secret", async () => {
+    const created = await app.inject({
+      method: "POST", url: "/api/mcps", headers: { cookie },
+      payload: { name: "playwright", kind: "stdio", command: "npx", envKeys: ["API_TOKEN"] },
+    });
+    expect(created.json()).toMatchObject({ applied: true, restarted: 0, pending: 0 });
+    const id = created.json().mcp.id as string;
+
+    // the secret is the moment the MCP becomes usable — it applies again
+    const secret = await app.inject({
+      method: "POST", url: `/api/mcps/${id}/secret`, headers: { cookie }, payload: { key: "API_TOKEN", value: "v" },
+    });
+    expect(secret.json()).toEqual({ ok: true, applied: true, restarted: 0, pending: 0 });
+    expect(secret.body).not.toContain("\"v\"");
+
+    const removed = await app.inject({ method: "DELETE", url: `/api/mcps/${id}`, headers: { cookie } });
+    expect(removed.json()).toMatchObject({ applied: true, restarted: 0, pending: 0 });
+    expect(applyMcpsEverywhere).toHaveBeenCalledTimes(3);
+  });
+
+  it("an MCP save SURVIVES an unreachable runner — the write is persisted, applied is false", async () => {
+    applyMcpsEverywhere.mockRejectedValueOnce(new Error("the runner is not running"));
+    const res = await app.inject({
+      method: "POST", url: "/api/mcps", headers: { cookie },
+      payload: { name: "playwright", kind: "stdio", command: "npx" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ applied: false, restarted: 0, pending: 0 });
+    // the MCP is really there: the apply is best-effort, the save is not
+    expect((await app.inject({ method: "GET", url: "/api/mcps", headers: { cookie } })).json().mcps).toHaveLength(1);
+  });
+
   it("applies every MCP to every profile", async () => {
     applyMcpsEverywhere.mockResolvedValueOnce({ runners: 1, mcps: 3 });
     const res = await app.inject({ method: "POST", url: "/api/mcps/apply", headers: { cookie } });
@@ -153,6 +207,38 @@ describe("brain", () => {
       .not.toContain("House rules");
   });
 
+  it("AUTO-APPLIES on save and on reset, reporting what the staggered restart did", async () => {
+    const saved = await app.inject({
+      method: "POST", url: "/api/brain", headers: { cookie }, payload: { text: "# House rules" },
+    });
+    expect(saved.json()).toMatchObject({ applied: true, restarted: 0, pending: 0 });
+    expect(saved.json().text).toContain("House rules");
+
+    const reset = await app.inject({ method: "DELETE", url: "/api/brain", headers: { cookie } });
+    expect(reset.json()).toMatchObject({ applied: true, restarted: 0, pending: 0 });
+    expect(applyBrainEverywhere).toHaveBeenCalledTimes(2);
+  });
+
+  it("a brain save SURVIVES an unreachable runner — the text is persisted, applied is false", async () => {
+    applyBrainEverywhere.mockRejectedValueOnce(new Error("the runner is not provisioned"));
+    const res = await app.inject({
+      method: "POST", url: "/api/brain", headers: { cookie }, payload: { text: "# Offline rules" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ applied: false, restarted: 0, pending: 0 });
+    // the edit did NOT disappear: "apply now" stays as the path that fails loudly
+    expect((await app.inject({ method: "GET", url: "/api/brain", headers: { cookie } })).json().text)
+      .toContain("Offline rules");
+  });
+
+  it("an INVALID brain text is still a 400 — the auto-apply never runs", async () => {
+    const res = await app.inject({
+      method: "POST", url: "/api/brain", headers: { cookie }, payload: { text: "   " },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(applyBrainEverywhere).not.toHaveBeenCalled();
+  });
+
   it("pushes the brain into every profile", async () => {
     applyBrainEverywhere.mockResolvedValueOnce({ runners: 1, bytes: 120 });
     const res = await app.inject({ method: "POST", url: "/api/brain/apply", headers: { cookie } });
@@ -183,7 +269,8 @@ describe("import", () => {
 
 describe("agent routes require a session", () => {
   it("401s without a cookie", async () => {
-    for (const [method, url] of [["GET", "/api/brain"], ["POST", "/api/mcps/apply"], ["POST", "/api/import"]] as const) {
+    for (const [method, url] of [["GET", "/api/brain"], ["GET", "/api/mcps"], ["POST", "/api/mcps"],
+      ["POST", "/api/mcps/apply"], ["POST", "/api/import"]] as const) {
       expect((await app.inject({ method, url })).statusCode, url).toBe(401);
     }
   });

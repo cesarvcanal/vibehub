@@ -5,7 +5,8 @@ import { gitAuthHeader } from "../github/client.js";
 import {
   getCard, getProject, applyOpenTerminal, markPrepared, pauseCard as registryPauseCard,
   listAllCards, assertBranchName, assertSessionId, effectiveAccountSlug, isValidModel, hasLiveSession,
-  type Card, type Project,
+  markRestartPending,
+  type Card, type Project, type RestartReason,
 } from "./registry.js";
 import { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir, profileDirFor, oauthTokenPath } from "../accounts/profiles.js";
 import { resolveAccountToken, writeTokenLines } from "../accounts/token.js";
@@ -768,6 +769,35 @@ export async function restartAllCards(by?: string): Promise<{ restarted: number;
     "restart all — idle sessions ended in the runner (working cards preserved)",
   );
   return { restarted, skipped };
+}
+
+/**
+ * STAGGERED RESTART after the brain/MCPs have been APPLIED to the runner (called by the save that
+ * auto-applies, in routes/agent.ts). Rewriting the files is not enough: Claude only re-reads the brain
+ * and the MCPs when a session STARTS. So every card with a live session is staggered, precisely so the
+ * change never gets in the way of somebody working:
+ *  - IDLE (status != "working", via `cardsToRestart`) -> `restartCard` NOW: it reopens with
+ *    `claude -c`, already reading the new brain/MCPs, and resumes the SAME conversation.
+ *  - WORKING -> `markRestartPending`: NOT interrupted; the status hook (POST /api/runner/status)
+ *    restarts the card once it goes idle (shouldRestartOnStatus). One single flag serves both reasons
+ *    (brain and MCP) — `reason` is only the badge label.
+ * Best-effort per card (Promise.allSettled): a dead host or a card that vanished mid-sweep must not
+ * take the rest down. Returns {restarted (idle cards restarted now), pending (working cards flagged)}.
+ */
+export async function restartStaggered(
+  reason: RestartReason,
+  by?: string,
+): Promise<{ restarted: number; pending: number }> {
+  const live = (await listAllCards()).filter(hasLiveSession);
+  const idle = cardsToRestart(live); // live session and NOT working
+  const working = live.filter((c) => c.status === "working"); // live session AND working
+  await Promise.allSettled(idle.map((c) => restartCard(c.id, by)));
+  await Promise.allSettled(working.map((c) => markRestartPending(c.id, reason)));
+  logger.info(
+    { audit: true, action: "card.restartStaggered", reason, restarted: idle.length, pending: working.length, by },
+    "staggered restart after applying the brain/MCPs — idle cards restarted now, working cards flagged as pending",
+  );
+  return { restarted: idle.length, pending: working.length };
 }
 
 /**
