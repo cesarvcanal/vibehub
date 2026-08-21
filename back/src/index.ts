@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, join } from "node:path";
+import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
@@ -46,17 +47,23 @@ export async function buildServer() {
     : resolve(dirname(fileURLToPath(import.meta.url)), "..", "public");
 
   // In production the API also serves the built UI, so one container is the whole product. In dev
-  // the Vite server owns the UI and this directory simply does not exist.
-  try {
+  // the Vite server owns the UI and this directory simply does not exist. Check for it explicitly:
+  // @fastify/static accepts a missing root without complaining, and every non-API request would
+  // then 404 through sendFile with no explanation of why.
+  const hasBuiltUi = existsSync(join(staticDir, "index.html"));
+  if (hasBuiltUi) {
     await app.register(fastifyStatic, { root: staticDir, wildcard: false });
-    app.setNotFoundHandler(async (req, reply) => {
-      if (req.url.startsWith("/api")) return await reply.code(404).send({ error: "not found" });
-      // Client-side routing: any non-API path renders the app.
-      return await reply.sendFile("index.html");
-    });
-  } catch {
-    logger.info({ staticDir }, "no built UI found — API only (this is normal in development)");
+  } else {
+    logger.info({ staticDir }, "no built UI found — serving the API only (normal in development)");
   }
+
+  app.setNotFoundHandler(async (req, reply) => {
+    if (req.url.startsWith("/api") || !hasBuiltUi) {
+      return await reply.code(404).send({ error: "not found" });
+    }
+    // Client-side routing: any other path renders the app and lets the router decide.
+    return await reply.sendFile("index.html");
+  });
 
   return app;
 }
