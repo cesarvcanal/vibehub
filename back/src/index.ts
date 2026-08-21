@@ -65,8 +65,13 @@ export async function buildServer() {
     logger.info({ staticDir }, "no built UI found — serving the API only (normal in development)");
   }
 
+  // Paths that are API surface, so an unknown one answers JSON instead of quietly rendering the UI.
+  // `/mcp` lives outside `/api` because MCP clients expect a root-level endpoint — without this, a
+  // build that lost the route would hand an MCP client a page of HTML and a 200.
+  const isApiPath = (url: string): boolean => url.startsWith("/api") || url.startsWith("/mcp");
+
   app.setNotFoundHandler(async (req, reply) => {
-    if (req.url.startsWith("/api") || !hasBuiltUi) {
+    if (isApiPath(req.url) || !hasBuiltUi) {
       return await reply.code(404).send({ error: "not found" });
     }
     // Client-side routing: any other path renders the app and lets the router decide.
