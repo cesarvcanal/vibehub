@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import type { ILink, ILinkProvider } from "@xterm/xterm";
-import { XTerminal } from "@/features/board/components/XTerminal";
+import * as React from "react";
+import userEvent from "@testing-library/user-event";
+import { XTerminal, type XTerminalHandle } from "@/features/board/components/XTerminal";
 
 /* ------------------------------------------------------------ xterm stubs */
 
@@ -457,5 +459,34 @@ describe("XTerminal — clipboard and images", () => {
     term().element?.dispatchEvent(event);
 
     await waitFor(() => expect(term().pasted).toContain("/work/.uploads/c1/dropped.png "));
+  });
+});
+
+describe("XTerminal — handle and zoom control", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("exposes sendText that writes to the open socket", () => {
+    const ref = React.createRef<XTerminalHandle>();
+    render(<XTerminal ref={ref} wsPath="/api/cards/c1/terminal" />);
+    const socket = FakeSocket.instances[FakeSocket.instances.length - 1];
+    socket?.accept();
+    ref.current?.sendText("hello\r");
+    expect(socket?.sent).toContain("hello\r");
+  });
+
+  it("renders the zoom control on request and it drives the font size", async () => {
+    render(<XTerminal wsPath="/api/cards/c1/terminal" zoomControl />);
+    const control = screen.getByTestId("terminal-zoom");
+    expect(control).toHaveTextContent("13");
+    await userEvent.click(screen.getByRole("button", { name: "Larger text" }));
+    expect(term().options.fontSize).toBe(14);
+    expect(control).toHaveTextContent("14");
+    await userEvent.click(screen.getByRole("button", { name: "Reset text size" }));
+    expect(term().options.fontSize).toBe(13);
+  });
+
+  it("does not render the control unless asked", () => {
+    render(<XTerminal wsPath="/api/cards/c1/terminal" />);
+    expect(screen.queryByTestId("terminal-zoom")).toBeNull();
   });
 });

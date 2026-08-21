@@ -20,6 +20,8 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { XTerminal } from "@/features/board/components/XTerminal";
 import { VncPanel } from "@/features/board/components/VncPanel";
+import { TerminalComposer } from "@/features/board/components/TerminalComposer";
+import type { XTerminalHandle } from "@/features/board/components/XTerminal";
 import { nextPosition, statusDot } from "@/features/board/lib/board";
 import { boardTitle, useDocumentTitle } from "@/features/board/lib/documentTitle";
 import type { ConnectionState } from "@/features/board/lib/reconnect";
@@ -199,6 +201,7 @@ export function CardTerminalView({
   const [editingTitle, setEditingTitle] = React.useState<string | null>(null);
   const [shellOpen, setShellOpen] = React.useState(false);
   const [browserOpen, setBrowserOpen] = React.useState(false);
+  const termRef = React.useRef<XTerminalHandle | null>(null);
   const [connection, setConnection] = React.useState<ConnectionState>("connecting");
 
   const dot = statusDot(card?.status);
@@ -439,11 +442,21 @@ export function CardTerminalView({
         >
           <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
             <XTerminal
+              ref={termRef}
+              zoomControl
               wsPath={`/api/cards/${encodeURIComponent(cardId)}/terminal`}
               reconnectKey={reconnectKey}
               onStatus={setConnection}
               onUploadImage={uploadImage}
               ariaLabel={`Terminal for ${card?.title ?? "card"}`}
+            />
+            {/* Compose here, send when ready — the field accumulates until Enter or Send. */}
+            <TerminalComposer
+              onSend={(text) => {
+                termRef.current?.sendText(text);
+                termRef.current?.focus();
+              }}
+              onUploadImage={uploadImage}
             />
             {shellOpen ? (
               <div className="flex h-[35%] min-h-[160px] shrink-0 flex-col gap-1">

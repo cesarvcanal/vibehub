@@ -9,8 +9,9 @@ import { reconnectDelay, type ConnectionState } from "@/features/board/lib/recon
 import { findUrls, offsetsToRange } from "@/features/board/lib/links";
 import {
   applyZoom, readTerminalFontSize, writeTerminalFontSize, writeClipboard, zoomActionFromKey,
-  TERMINAL_FONT_DEFAULT,
+  TERMINAL_FONT_DEFAULT, TERMINAL_FONT_MIN, TERMINAL_FONT_MAX, type ZoomAction,
 } from "@/features/board/lib/terminalZoom";
+import { Minus, Plus } from "lucide-react";
 
 /**
  * A live terminal: an xterm bound to a vibehub websocket.
@@ -31,9 +32,19 @@ import {
  *    the runner emits is what you see.
  */
 
+/** What a parent can ask the terminal to do without reaching into xterm. */
+export interface XTerminalHandle {
+  /** Types text into the session as if it came from the keyboard (a composer, a transcription). */
+  sendText(text: string): void;
+  focus(): void;
+  zoom(action: ZoomAction): void;
+}
+
 export interface XTerminalProps {
   /** Websocket path, e.g. `/api/cards/<id>/terminal`. */
   wsPath: string;
+  /** Show the "− 13 +" zoom control in the top-right corner of the frame. */
+  zoomControl?: boolean;
   /**
    * Change this to force a full reconnect (a model or account switch kills the session server-side;
    * the reattach recreates it with the new environment, in the same conversation).
@@ -121,17 +132,63 @@ function imageFilesFrom(list: FileList | null | undefined, items?: DataTransferI
   return out;
 }
 
-export function XTerminal({
-  wsPath,
-  reconnectKey = "",
-  onStatus,
-  onUploadImage,
-  className,
-  ariaLabel = "Terminal",
-}: XTerminalProps) {
+export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(function XTerminal(
+  {
+    wsPath,
+    zoomControl = false,
+    reconnectKey = "",
+    onStatus,
+    onUploadImage,
+    className,
+    ariaLabel = "Terminal",
+  },
+  ref,
+) {
   // The element xterm is opened on. It carries no styling of its own — see note 1 at the top.
   const hostRef = React.useRef<HTMLDivElement | null>(null);
   const termRef = React.useRef<Terminal | null>(null);
+  const socketRef = React.useRef<WebSocket | null>(null);
+  const fitRef = React.useRef<FitAddon | null>(null);
+  // Mirrors term.options.fontSize so the zoom control can render it; the terminal is the truth.
+  const [fontSize, setFontSize] = React.useState<number>(() => readTerminalFontSize(TERMINAL_FONT_DEFAULT));
+
+  /** Applies a font size to the live terminal, persists it, and refits — the one zoom path. */
+  const applyFontSize = React.useCallback((size: number) => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.fontSize = size;
+    writeTerminalFontSize(size);
+    setFontSize(size);
+    // The cell box changed, so the pty has to hear about the new geometry.
+    try {
+      fitRef.current?.fit();
+    } catch {
+      /* the element may be detached mid-teardown */
+    }
+  }, []);
+
+  const zoom = React.useCallback(
+    (action: ZoomAction) => {
+      const current = Number(termRef.current?.options.fontSize ?? TERMINAL_FONT_DEFAULT);
+      applyFontSize(applyZoom(current, action));
+    },
+    [applyFontSize],
+  );
+
+  React.useImperativeHandle(
+    ref,
+    () => ({
+      sendText(text: string) {
+        const socket = socketRef.current;
+        if (socket?.readyState === WebSocket.OPEN) socket.send(text);
+      },
+      focus() {
+        termRef.current?.focus();
+      },
+      zoom,
+    }),
+    [zoom],
+  );
   const uploadRef = React.useRef<XTerminalProps["onUploadImage"]>(onUploadImage);
   uploadRef.current = onUploadImage;
   const statusRef = React.useRef<XTerminalProps["onStatus"]>(onStatus);
@@ -159,6 +216,7 @@ export function XTerminal({
     termRef.current = term;
 
     const fit = new FitAddon();
+    fitRef.current = fit;
     term.loadAddon(fit);
     term.open(host);
 
@@ -211,15 +269,7 @@ export function XTerminal({
       const action = zoomActionFromKey(event);
       if (!action) return true;
       event.preventDefault();
-      const size = applyZoom(term.options.fontSize ?? TERMINAL_FONT_DEFAULT, action);
-      term.options.fontSize = size;
-      writeTerminalFontSize(size);
-      // The cell box changed, so the pty has to hear about the new geometry.
-      try {
-        fit.fit();
-      } catch {
-        /* the element may be detached mid-teardown */
-      }
+      zoom(action);
       return false;
     };
     // Guarded: a stub Terminal (tests, future adapters) may not implement it, and a missing zoom
@@ -253,6 +303,7 @@ export function XTerminal({
         return;
       }
       socket = next;
+      socketRef.current = next;
       next.binaryType = "arraybuffer";
       next.onopen = () => {
         attempt = 0;
@@ -274,6 +325,7 @@ export function XTerminal({
       };
       next.onclose = () => {
         if (socket === next) socket = null;
+        if (socketRef.current === next) socketRef.current = null;
         if (disposed) return;
         scheduleRetry();
       };
@@ -385,8 +437,11 @@ export function XTerminal({
       }
       term.dispose();
       termRef.current = null;
+      fitRef.current = null;
+      socketRef.current = null;
     };
-  }, [wsPath, reconnectKey]);
+    // `zoom` is stable (useCallback over refs); listing it keeps the lint honest without re-running.
+  }, [wsPath, reconnectKey, zoom]);
 
   return (
     // OUTER frame: all the padding, border and rounding live here.
@@ -400,8 +455,45 @@ export function XTerminal({
     >
       {/* INNER host: nothing but the terminal. Padding here would cost a row — see note 1. */}
       <div ref={hostRef} role="application" aria-label={ariaLabel} className="h-full w-full" />
+      {zoomControl ? (
+        // Sits over the top-right corner, out of the way of the prompt; the keyboard shortcuts
+        // (Cmd/Ctrl +/−/0) do the same thing without showing anything.
+        <div
+          data-testid="terminal-zoom"
+          className="absolute right-3 top-2 flex items-center gap-0.5 rounded-md border border-border/60 bg-background/80 px-1 py-0.5 font-mono text-[11px] text-muted-foreground backdrop-blur"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            aria-label="Smaller text"
+            disabled={fontSize <= TERMINAL_FONT_MIN}
+            onClick={() => zoom("out")}
+            className="flex h-5 w-5 items-center justify-center rounded hover:bg-accent hover:text-foreground disabled:opacity-40"
+          >
+            <Minus className="h-3 w-3" />
+          </button>
+          <button
+            type="button"
+            aria-label="Reset text size"
+            title="Reset (Cmd/Ctrl 0)"
+            onClick={() => zoom("reset")}
+            className="min-w-[1.5rem] rounded px-1 text-center tabular-nums hover:bg-accent hover:text-foreground"
+          >
+            {fontSize}
+          </button>
+          <button
+            type="button"
+            aria-label="Larger text"
+            disabled={fontSize >= TERMINAL_FONT_MAX}
+            onClick={() => zoom("in")}
+            className="flex h-5 w-5 items-center justify-center rounded hover:bg-accent hover:text-foreground disabled:opacity-40"
+          >
+            <Plus className="h-3 w-3" />
+          </button>
+        </div>
+      ) : null}
     </div>
   );
-}
+});
 
 export default XTerminal;
