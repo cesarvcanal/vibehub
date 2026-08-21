@@ -82,6 +82,7 @@ function serve() {
         defaultLabel: "Main",
       });
     }
+    if (url === "/transcribe") return Promise.resolve({ available: false, proofread: false, language: null });
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
 }
@@ -147,6 +148,7 @@ describe("CardTerminalView — instant open", () => {
     mockGet.mockImplementation((url: string) => {
       if (url === "/cards/c1") return Promise.resolve({ card: card({ openedAt: 10 }) });
       if (url === "/accounts") return Promise.resolve({ accounts: [], defaultLabel: "" });
+      if (url === "/transcribe") return Promise.resolve({ available: false, proofread: false, language: null });
       if (url === "/auth/me") return Promise.resolve({ user: { id: "1", username: "operator" } });
       if (url === "/setup/state") return Promise.reject(new Error("not needed"));
       return Promise.reject(new Error(`unexpected GET ${url}`));
@@ -241,6 +243,26 @@ describe("CardTerminalView — the card bar", () => {
     );
   });
 
+  it("names what the empty options actually mean", async () => {
+    renderWithCache([card({ openedAt: 10 })]);
+    // The install renamed its built-in profile "Main"; showing the raw slug would be a lie.
+    expect(await screen.findByRole("option", { name: "Main (default)" })).toBeInTheDocument();
+    // The server never says which model an account's plan gives it, so the label says that rather
+    // than inventing a name.
+    expect(screen.getByRole("option", { name: "Default model" })).toBeInTheDocument();
+  });
+
+  it("falls back to the profile's own slug when nobody has renamed it", async () => {
+    mockGet.mockImplementation((url: string) => {
+      // "" is what the server sends for "never named" — an empty pill would be worse than a slug.
+      if (url === "/accounts") return Promise.resolve({ accounts: [], defaultLabel: "" });
+      if (url === "/transcribe") return Promise.resolve({ available: false, proofread: false, language: null });
+      return Promise.resolve({});
+    });
+    renderWithCache([card({ openedAt: 10 })]);
+    expect(await screen.findByRole("option", { name: "default (default)" })).toBeInTheDocument();
+  });
+
   it("clears the account back to inherited with the empty option", async () => {
     mockPatch.mockResolvedValue({ card: card({ openedAt: 10 }) });
     const user = userEvent.setup();
@@ -288,8 +310,18 @@ describe("CardTerminalView — extra panes", () => {
   it("shows where the card lives in the runner", async () => {
     renderWithCache([card({ openedAt: 10 })]);
     expect(await screen.findByText(/card\/fix-the-totals-abcd/)).toHaveTextContent(
-      /from dev · card-abcdef12/,
+      "card/fix-the-totals-abcd · base dev · tmux card-abcdef12",
     );
+  });
+
+  it("keeps the footer to the two panes that belong to THIS card", async () => {
+    renderWithCache([card({ openedAt: 10 })]);
+    await screen.findByTestId("xterm");
+    // "New card" lives on the board's chrome and in ⌘K; a third copy here only competed with the
+    // controls that are actually about the card you are looking at.
+    expect(screen.queryByRole("button", { name: /new card/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /browser/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /shell/i })).toBeInTheDocument();
   });
 });
 

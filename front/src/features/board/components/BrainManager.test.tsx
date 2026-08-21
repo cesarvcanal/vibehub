@@ -50,11 +50,18 @@ beforeEach(() => {
 
 describe("formatBrainStamp", () => {
   it("says the default is in use when nothing has ever been saved", () => {
-    expect(formatBrainStamp(undefined)).toMatch(/built-in default/i);
+    expect(formatBrainStamp(undefined)).toBe("using the built-in default (never saved)");
   });
 
-  it("stamps a real save with its time", () => {
-    expect(formatBrainStamp("2026-08-20T12:00:00.000Z")).toMatch(/^saved /);
+  it("stamps a real save with a date everyone reads the same way", () => {
+    // Written out rather than localised: the same install must read identically for everyone.
+    const at = new Date(2026, 7, 20, 9, 5, 3).toISOString();
+    expect(formatBrainStamp(at)).toBe("saved 20/08/2026 09:05:03");
+  });
+
+  it("names the author when there is one", () => {
+    const at = new Date(2026, 7, 20, 9, 5, 3).toISOString();
+    expect(formatBrainStamp(at, "cesar")).toBe("saved 20/08/2026 09:05:03 by cesar");
   });
 
   it("does not render Invalid Date when the server sends something unparseable", () => {
@@ -139,7 +146,22 @@ describe("BrainManager", () => {
     );
   });
 
-  it("applies to every runner and restarts the idle terminals when the switch is on", async () => {
+  it("refuses to save an empty brain rather than letting the server reject it", async () => {
+    const user = await openDialog();
+    const textarea = screen.getByLabelText("Brain text");
+    await waitFor(() => expect((textarea as HTMLTextAreaElement).value).toBe(BRAIN.text));
+
+    await user.clear(textarea);
+    // Changed, so "dirty" — and still not saveable: an empty brain is not a brain.
+    expect((screen.getByRole("button", { name: /save/i }) as HTMLButtonElement).disabled).toBe(true);
+    await user.type(textarea, "   ");
+    expect((screen.getByRole("button", { name: /save/i }) as HTMLButtonElement).disabled).toBe(true);
+
+    await user.type(textarea, "rules");
+    expect((screen.getByRole("button", { name: /save/i }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("applies to every runner and restarts the idle terminals only when asked", async () => {
     mockPost.mockImplementation((url: string) =>
       url === "/brain/apply"
         ? Promise.resolve({ ok: true, runners: 3 })
@@ -147,9 +169,9 @@ describe("BrainManager", () => {
     );
     const user = await openDialog();
 
+    await user.click(screen.getByRole("checkbox", { name: "Restart idle terminals" }));
     await user.click(screen.getByRole("button", { name: /apply everywhere/i }));
     await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/brain/apply"));
-    // The switch defaults to on: a brain nobody re-reads is a brain that changed nothing.
     await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/cards/restart-all"));
     await waitFor(() =>
       expect(toast.success).toHaveBeenCalledWith(
@@ -158,11 +180,13 @@ describe("BrainManager", () => {
     );
   });
 
-  it("leaves running terminals alone when the restart switch is off", async () => {
+  it("leaves running terminals alone by default — restarting is opt-in", async () => {
     mockPost.mockResolvedValue({ ok: true, runners: 1 });
     const user = await openDialog();
 
-    await user.click(screen.getByRole("switch", { name: "Restart idle terminals" }));
+    // Writing the file is one thing; restarting somebody's terminals to make it take effect is a
+    // bigger act than this button admits to, so it is a deliberate tick.
+    expect((screen.getByRole("checkbox", { name: "Restart idle terminals" }) as HTMLInputElement).checked).toBe(false);
     await user.click(screen.getByRole("button", { name: /apply everywhere/i }));
 
     await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/brain/apply"));

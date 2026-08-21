@@ -1,11 +1,13 @@
 /**
- * Terminal zoom and clipboard, kept out of the component so they are testable in jsdom (a real
- * xterm does not open there).
+ * Terminal keyboard rules and clipboard, kept out of the component so they are testable in jsdom (a
+ * real xterm does not open there).
  *
- * Both exist because of things people actually hit:
+ * They exist because of things people actually hit:
  *  - **Zoom.** A terminal is where you read for hours. 13px on a 4K panel and 13px on a laptop are
  *    not the same thing, and the size you like is a per-person, per-screen decision — so it is a
  *    control, and it persists.
+ *  - **Shift+Enter.** Everyone expects it to break the line, and xterm sends a plain `\r` for it —
+ *    which the agent reads as "send". See `shiftEnterSequence`.
  *  - **Clipboard.** `navigator.clipboard` only exists in a secure context (https or localhost). A
  *    self-hosted install reached over plain http on a LAN — which is a normal way to run this —
  *    silently refuses every copy: the selection highlights, and nothing lands on the clipboard.
@@ -44,6 +46,27 @@ export function zoomActionFromKey(e: KeyboardEvent): ZoomAction | null {
   if (k === "-" || k === "_") return "out";
   if (k === "0") return "reset";
   return null;
+}
+
+/**
+ * What iTerm sends for Option+Enter: ESC then CR. Claude Code reads it as "insert a newline in the
+ * prompt" — unlike a bare `\r`, which submits.
+ */
+export const META_ENTER_SEQUENCE = "\x1b\r";
+
+/**
+ * Shift+Enter (and Alt/Option+Enter) must INSERT a newline, not send. PURE.
+ *
+ * xterm sends a plain `\r` for both Enter and Shift+Enter, and the agent on the other end treats
+ * `\r` as submit — so holding Shift does nothing and a multi-line prompt is impossible. Returns the
+ * sequence to write to the socket instead, or null to let the key take its normal course: bare
+ * Enter still submits, and Ctrl/Cmd+Enter is not ours to intercept.
+ */
+export function shiftEnterSequence(e: KeyboardEvent): string | null {
+  if (e.type !== "keydown" || e.key !== "Enter") return null;
+  if (e.ctrlKey || e.metaKey) return null;
+  if (!e.shiftKey && !e.altKey) return null;
+  return META_ENTER_SEQUENCE;
 }
 
 /** Applies a zoom action to a size. PURE. */

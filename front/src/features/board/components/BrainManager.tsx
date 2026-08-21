@@ -10,7 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Switch } from "@/components/ui/switch";
+import { useAuth } from "@/providers/auth";
 import { apiErrorMessage } from "@/lib/apiError";
 import { applyOutcomeMessage } from "@/features/board/lib/applyOutcome";
 import { BRAIN_KEY, CARDS_PREFIX_KEY, boardApi } from "@/features/board/api";
@@ -30,12 +30,22 @@ import { BRAIN_KEY, CARDS_PREFIX_KEY, boardApi } from "@/features/board/api";
  * both numbers, because a deferred restart is invisible otherwise.
  */
 
-/** Human stamp for the saved-at time. `undefined` = nobody has ever customised it. */
-export function formatBrainStamp(updatedAt: string | undefined): string {
-  if (!updatedAt) return "using the built-in default — never saved";
+/**
+ * Who last changed the house rules, and when. PURE.
+ *
+ * Written out as `dd/mm/yyyy hh:mm:ss` rather than through `toLocaleString`, so the same install
+ * reads the same way for everyone looking at it and a test can assert the string instead of the
+ * browser's locale. `undefined` means nobody has ever saved: the seed text is what is running.
+ */
+export function formatBrainStamp(updatedAt: string | undefined, by?: string): string {
+  if (!updatedAt) return "using the built-in default (never saved)";
   const at = new Date(updatedAt);
   if (Number.isNaN(at.getTime())) return "saved";
-  return `saved ${at.toLocaleString()}`;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const when =
+    `${pad(at.getDate())}/${pad(at.getMonth() + 1)}/${at.getFullYear()} ` +
+    `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`;
+  return by ? `saved ${when} by ${by}` : `saved ${when}`;
 }
 
 export function BrainManager() {
@@ -44,7 +54,13 @@ export function BrainManager() {
   // null = "the user has not typed in this opening yet", which is what lets the seeding effect below
   // run exactly once per open instead of fighting the editor.
   const [text, setText] = React.useState<string | null>(null);
-  const [restartIdle, setRestartIdle] = React.useState(true);
+  // OFF by default: "apply everywhere" writes the file, and restarting terminals to make it take
+  // effect is a bigger act than the button admits to. Opt in.
+  const [restartIdle, setRestartIdle] = React.useState(false);
+  // Whoever is signed in — the server does not always record an author, and an unattributed change
+  // to the rules every card obeys is worse than a best guess that is right in a single-operator
+  // install (which is almost all of them).
+  const { user } = useAuth();
 
   const { data: brain, isLoading } = useQuery({
     queryKey: BRAIN_KEY,
@@ -112,8 +128,16 @@ export function BrainManager() {
 
   return (
     <>
-      <Button variant="outline" size="sm" className="h-8" onClick={() => setOpen(true)}>
-        <Brain /> Brain
+      {/* Icon only, beside Accounts and MCP: three settings that share one quiet corner. */}
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-7 w-7 text-muted-foreground hover:text-foreground"
+        aria-label="Brain"
+        title="Brain — instructions every card gets"
+        onClick={() => setOpen(true)}
+      >
+        <Brain className="h-4 w-4" />
       </Button>
 
       <Dialog
@@ -146,20 +170,25 @@ export function BrainManager() {
                 spellCheck={false}
                 value={text ?? ""}
                 onChange={(e) => setText(e.target.value)}
-                className="h-[50vh] w-full resize-y rounded-md border border-input bg-background/60 p-3 font-mono text-xs leading-relaxed outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="h-[55vh] w-full resize-y rounded-md border border-input bg-background p-3 font-mono text-xs leading-relaxed outline-none focus-visible:ring-1 focus-visible:ring-ring"
               />
 
               <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-border/60 pt-3">
                 <span className="truncate text-[11px] text-muted-foreground">
-                  {formatBrainStamp(brain?.updatedAt)}
+                  {formatBrainStamp(brain?.updatedAt, brain?.by ?? user?.username)}
                 </span>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Switch
-                      checked={restartIdle}
-                      onCheckedChange={setRestartIdle}
+                  <label
+                    className="flex items-center gap-1.5 text-xs text-muted-foreground"
+                    title="Restarts only the terminals that are idle — a card mid-turn is never interrupted"
+                  >
+                    <input
+                      type="checkbox"
+                      className="h-3.5 w-3.5 accent-primary"
                       aria-label="Restart idle terminals"
+                      checked={restartIdle}
+                      onChange={(e) => setRestartIdle(e.target.checked)}
                     />
                     Restart idle terminals
                   </label>
@@ -192,7 +221,9 @@ export function BrainManager() {
                   <Button
                     type="button"
                     size="sm"
-                    disabled={busy || !dirty}
+                    // An empty brain is not a brain: the server rejects it, and pressing Save only
+                    // to be told so is a round trip that teaches nothing.
+                    disabled={busy || !dirty || !(text ?? "").trim()}
                     onClick={() => saveMutation.mutate()}
                   >
                     {saveMutation.isPending ? <Loader2 className="animate-spin" /> : <Save />}

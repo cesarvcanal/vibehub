@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  continuesLine,
   findUrls,
   joinRows,
   logicalLine,
@@ -8,6 +9,34 @@ import {
 } from "@/features/board/lib/links";
 
 const row = (text: string, wrapped = false): BufferRow => ({ text, wrapped });
+
+describe("continuesLine", () => {
+  it("always joins a soft wrap — xterm already told us", () => {
+    expect(continuesLine(row("short"), row("tail", true))).toBe(true);
+  });
+
+  it("joins a HARD wrap: a row full to the last column, resumed by a non-space", () => {
+    // The ink TUI broke at the margin with a real newline, so `wrapped` is false.
+    expect(continuesLine(row("0123456789"), row("abc"), 10)).toBe(true);
+  });
+
+  it("does not join when the previous row stopped short of the margin", () => {
+    expect(continuesLine(row("012345678"), row("abc"), 10)).toBe(false);
+  });
+
+  it("does not join when the previous row ends in whitespace — that is a finished line", () => {
+    expect(continuesLine({ text: "012345678 ", wrapped: false }, row("abc"), 10)).toBe(false);
+  });
+
+  it("does not join an indented line printed under a full one", () => {
+    expect(continuesLine(row("0123456789"), { text: "  indented", wrapped: false }, 10)).toBe(false);
+    expect(continuesLine(row("0123456789"), row(""), 10)).toBe(false);
+  });
+
+  it("without a width, only soft wraps count — the stock, TUI-blind behaviour", () => {
+    expect(continuesLine(row("0123456789"), row("abc"))).toBe(false);
+  });
+});
 
 describe("logicalLine", () => {
   it("glues continuation rows onto the row that started the line", () => {
@@ -28,6 +57,23 @@ describe("logicalLine", () => {
   it("is null outside the buffer", () => {
     expect(logicalLine([row("a")], 5)).toBeNull();
     expect(logicalLine([row("a")], -1)).toBeNull();
+  });
+
+  it("rebuilds a HARD-wrapped sign-in URL — the three-row case that used to give three dead links", () => {
+    // 20 columns, exactly how Claude Code prints its OAuth URL: real newlines at the margin.
+    const rows = [
+      row("Open this link to a"),
+      row("https://claude.ai/oa"),
+      row("uth/authorize?code=a"),
+      row("bc123"),
+      row("Paste the code here"),
+    ];
+    const line = logicalLine(rows, 2, 20);
+    expect(line?.startRow).toBe(1);
+    expect(line?.endRow).toBe(3);
+    expect(findUrls(line?.text ?? "").map((u) => u.url)).toEqual([
+      "https://claude.ai/oauth/authorize?code=abc123",
+    ]);
   });
 });
 

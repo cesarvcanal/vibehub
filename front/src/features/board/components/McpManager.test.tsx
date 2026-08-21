@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { McpManager, splitArgs } from "@/features/board/components/McpManager";
 import { renderApp } from "@/test/render";
 import { get, post } from "@/lib/api";
+import { toast } from "sonner";
 import type { BoardMcp } from "@/features/board/api";
 
 vi.mock("@/lib/api", () => ({
@@ -153,6 +154,21 @@ describe("McpManager — editing values in place", () => {
     expect(screen.queryByLabelText("New value for ROOT")).not.toBeInTheDocument();
   });
 
+  it("says what the save actually DID — the server applies on the way through", async () => {
+    mockPost.mockResolvedValue({ ok: true, applied: true, restarted: 1, pending: 2 });
+    const user = await openDialog();
+    await user.click(screen.getByRole("button", { name: "Edit values for files" }));
+    await user.type(screen.getByLabelText("New value for TOKEN"), "sk-new");
+    await user.click(screen.getByRole("button", { name: "Save values" }));
+
+    // A deferred restart is invisible otherwise, and "Saved." is what makes someone save twice.
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith(
+        "1 value on “files” saved — applied to 1 terminal, 2 will update when they finish.",
+      ),
+    );
+  });
+
   it("re-reads the status after saving, so the amber line turns green", async () => {
     mockPost.mockResolvedValue({ ok: true });
     const user = await openDialog();
@@ -165,23 +181,71 @@ describe("McpManager — editing values in place", () => {
 });
 
 describe("McpManager — apply", () => {
-  it("restarts the idle terminals alongside the injection by default", async () => {
+  it("injects without touching running terminals by default", async () => {
+    mockPost.mockResolvedValue({ ok: true });
+    const user = await openDialog();
+
+    // Restarting somebody's terminals is a bigger act than "apply" admits to, so it is opt-in.
+    const restart = within(screen.getByRole("dialog")).getByRole("checkbox", {
+      name: "Restart idle terminals",
+    }) as HTMLInputElement;
+    expect(restart.checked).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "Apply now" }));
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/mcps/apply"));
+    expect(mockPost).not.toHaveBeenCalledWith("/cards/restart-all");
+  });
+
+  it("restarts the idle terminals alongside the injection when that is ticked", async () => {
     mockPost.mockResolvedValue({ ok: true, restarted: 2, skipped: 1 });
     const user = await openDialog();
 
-    await user.click(screen.getByRole("button", { name: "Apply" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("checkbox", { name: "Restart idle terminals" }));
+    await user.click(screen.getByRole("button", { name: "Apply now" }));
     await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/mcps/apply"));
     await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/cards/restart-all"));
   });
 
-  it("injects without touching running terminals when the switch is off", async () => {
-    mockPost.mockResolvedValue({ ok: true });
+  it("has nothing to force when nothing is configured", async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/mcps") return Promise.resolve({ mcps: [] });
+      if (url === "/mcps/secrets") return Promise.resolve({ byMcp: {} });
+      return Promise.resolve({});
+    });
+    const user = userEvent.setup();
+    renderApp(<McpManager />);
+    await user.click(screen.getByRole("button", { name: "MCP" }));
+
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Apply now" }) as HTMLButtonElement).disabled).toBe(true),
+    );
+  });
+});
+
+describe("McpManager — adding a server", () => {
+  it("drops the declared names when the transport changes", async () => {
     const user = await openDialog();
+    await user.click(screen.getByRole("button", { name: /add mcp server/i }));
 
-    await user.click(within(screen.getByRole("dialog")).getByRole("switch", { name: "Restart idle terminals" }));
-    await user.click(screen.getByRole("button", { name: "Apply" }));
+    await user.click(screen.getByRole("button", { name: /add variable/i }));
+    await user.type(screen.getByLabelText("Name 1"), "ROOT");
+    expect((screen.getByLabelText("Name 1") as HTMLInputElement).value).toBe("ROOT");
 
-    await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/mcps/apply"));
-    expect(mockPost).not.toHaveBeenCalledWith("/cards/restart-all");
+    // stdio takes environment variables; http/sse take headers. Carrying ROOT over into a header
+    // list produces a server that starts and then fails at its first call.
+    await user.selectOptions(screen.getByLabelText("Transport"), "http");
+    expect(screen.queryByLabelText("Name 1")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /add header/i })).toBeInTheDocument();
+  });
+
+  it("asks for the shape with placeholders rather than a stack of headings", async () => {
+    const user = await openDialog();
+    await user.click(screen.getByRole("button", { name: /add mcp server/i }));
+
+    expect((screen.getByLabelText("MCP name") as HTMLInputElement).placeholder).toMatch(/^Name /);
+    expect((screen.getByLabelText("Command") as HTMLInputElement).placeholder).toMatch(/^Command /);
+
+    await user.selectOptions(screen.getByLabelText("Transport"), "sse");
+    expect((screen.getByLabelText("URL") as HTMLInputElement).placeholder).toBe("https://example.com/mcp");
   });
 });

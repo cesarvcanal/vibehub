@@ -12,9 +12,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
 import { apiErrorMessage } from "@/lib/apiError";
 import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
 import {
@@ -26,7 +23,7 @@ import {
   type BoardMcp,
 } from "@/features/board/api";
 import { applyOutcomeMessage } from "@/features/board/lib/applyOutcome";
-import type { McpTransport } from "@/api/types";
+import type { ApplyOutcome, McpTransport } from "@/api/types";
 
 /**
  * MCP servers.
@@ -68,7 +65,9 @@ export function McpManager() {
   const queryClient = useQueryClient();
   const [open, setOpen] = React.useState(false);
   const [creating, setCreating] = React.useState(false);
-  const [restartIdle, setRestartIdle] = React.useState(true);
+  // OFF by default: injecting the configuration is one thing, restarting somebody's terminals to
+  // make it take effect is a bigger act than the button admits to. Opt in.
+  const [restartIdle, setRestartIdle] = React.useState(false);
 
   const [name, setName] = React.useState("");
   const [transport, setTransport] = React.useState<McpTransport>("stdio");
@@ -165,8 +164,17 @@ export function McpManager() {
 
   return (
     <>
-      <Button variant="outline" size="sm" className="h-8" onClick={() => setOpen(true)}>
-        <Plug /> MCP
+      {/* Icon only, beside Accounts and Brain: three settings sharing one quiet corner of a board
+          full of live work. */}
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-7 w-7 text-muted-foreground hover:text-foreground"
+        aria-label="MCP"
+        title="MCP servers"
+        onClick={() => setOpen(true)}
+      >
+        <Plug className="h-4 w-4" />
       </Button>
 
       <Dialog
@@ -217,70 +225,63 @@ export function McpManager() {
                 if (canCreate && !createMutation.isPending) createMutation.mutate();
               }}
             >
+              {/* Placeholders, not labels. Every field here is one line and self-evident from its
+                  example, and a stack of headings above a stack of boxes doubles the height of a
+                  form whose whole job is to be filled in once. */}
               <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]">
-                <div className="space-y-1.5">
-                  <Label htmlFor="mcp-name">Name</Label>
-                  <Input
-                    id="mcp-name"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="filesystem"
-                    className="font-mono"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="mcp-transport">Transport</Label>
-                  <select
-                    id="mcp-transport"
-                    className={SELECT_CLASS}
-                    value={transport}
-                    onChange={(e) => setTransport(e.target.value as McpTransport)}
-                  >
-                    <option value="stdio">stdio</option>
-                    <option value="http">http</option>
-                    <option value="sse">sse</option>
-                  </select>
-                </div>
+                <Input
+                  aria-label="MCP name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Name (e.g. filesystem)"
+                  className="font-mono"
+                />
+                <select
+                  aria-label="Transport"
+                  className={SELECT_CLASS}
+                  value={transport}
+                  onChange={(e) => {
+                    // The pairs mean different things either side of this switch — environment
+                    // variables for stdio, HTTP headers for the rest. Carrying `ROOT` over into a
+                    // header list produces a server that starts and fails at its first call.
+                    setTransport(e.target.value as McpTransport);
+                    setSecrets([]);
+                  }}
+                >
+                  <option value="stdio">stdio</option>
+                  <option value="http">http</option>
+                  <option value="sse">sse</option>
+                </select>
               </div>
 
               {transport === "stdio" ? (
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="mcp-command">Command</Label>
-                    <Input
-                      id="mcp-command"
-                      value={command}
-                      onChange={(e) => setCommand(e.target.value)}
-                      placeholder="npx"
-                      className="font-mono"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="mcp-args">Arguments</Label>
-                    <Input
-                      id="mcp-args"
-                      value={args}
-                      onChange={(e) => setArgs(e.target.value)}
-                      placeholder="-y @modelcontextprotocol/server-filesystem /work"
-                      className="font-mono"
-                    />
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-1.5">
-                  <Label htmlFor="mcp-url">URL</Label>
                   <Input
-                    id="mcp-url"
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                    placeholder="https://example.com/mcp"
+                    aria-label="Command"
+                    value={command}
+                    onChange={(e) => setCommand(e.target.value)}
+                    placeholder="Command (e.g. npx)"
+                    className="font-mono"
+                  />
+                  <Input
+                    aria-label="Arguments"
+                    value={args}
+                    onChange={(e) => setArgs(e.target.value)}
+                    placeholder="Arguments, space separated"
                     className="font-mono"
                   />
                 </div>
+              ) : (
+                <Input
+                  aria-label="URL"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="https://example.com/mcp"
+                  className="font-mono"
+                />
               )}
 
               <div className="space-y-1.5">
-                <Label>{transport === "stdio" ? "Environment variables" : "Headers"}</Label>
                 {secrets.map((secret, index) => (
                   <div key={index} className="flex items-center gap-2">
                     <Input
@@ -291,7 +292,7 @@ export function McpManager() {
                           prev.map((s, i) => (i === index ? { ...s, key: e.target.value } : s)),
                         )
                       }
-                      placeholder={transport === "stdio" ? "API_TOKEN" : "Authorization"}
+                      placeholder={transport === "stdio" ? "API_TOKEN" : "Header (e.g. Authorization)"}
                       className="font-mono"
                     />
                     <Input
@@ -304,7 +305,7 @@ export function McpManager() {
                           prev.map((s, i) => (i === index ? { ...s, value: e.target.value } : s)),
                         )
                       }
-                      placeholder="value"
+                      placeholder="value (goes to the vault)"
                       className="font-mono"
                     />
                     <Button
@@ -346,13 +347,30 @@ export function McpManager() {
           )}
 
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-3">
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Switch checked={restartIdle} onCheckedChange={setRestartIdle} aria-label="Restart idle terminals" />
+            <label
+              className="flex items-center gap-1.5 text-xs text-muted-foreground"
+              title="Restarts only the terminals that are idle — a card mid-turn is never interrupted"
+            >
+              <input
+                type="checkbox"
+                className="h-3.5 w-3.5 accent-primary"
+                aria-label="Restart idle terminals"
+                checked={restartIdle}
+                onChange={(e) => setRestartIdle(e.target.checked)}
+              />
               Restart idle terminals
             </label>
-            <Button size="sm" disabled={applyMutation.isPending} onClick={() => applyMutation.mutate()}>
+            {/* Outline, not primary: saving already applied. This is the manual force for when a
+                runner was unreachable at the time — and with nothing configured there is literally
+                nothing to inject. */}
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={applyMutation.isPending || (mcps ?? []).length === 0}
+              onClick={() => applyMutation.mutate()}
+            >
               {applyMutation.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-              Apply
+              Apply now
             </Button>
           </div>
         </DialogContent>
@@ -393,9 +411,9 @@ function McpRow({
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex items-center gap-2">
             <span className="truncate text-sm font-medium">{mcp.name}</span>
-            <Badge tone="muted" className="font-mono">
+            <span className="rounded bg-muted px-1.5 font-mono text-[10px] uppercase text-muted-foreground">
               {mcpTransport(mcp)}
-            </Badge>
+            </span>
           </div>
           <div title={target} className="truncate font-mono text-[11px] text-muted-foreground">
             {target}
@@ -479,14 +497,17 @@ function McpSecretEditor({
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      // One route per value: the server only accepts a name the shape already declared.
-      for (const name of filled) await boardApi.setMcpSecret(mcp.id, name, values[name] as string);
-      return filled.length;
+      // One route per value: the server only accepts a name the shape already declared. Each write
+      // also APPLIES — a server whose token has just arrived is exactly the one that was failing —
+      // so the last outcome is what the toast reports.
+      let outcome: ApplyOutcome | undefined;
+      for (const name of filled) outcome = await boardApi.setMcpSecret(mcp.id, name, values[name] as string);
+      return { count: filled.length, outcome };
     },
-    onSuccess: (count) => {
+    onSuccess: ({ count, outcome }) => {
       void queryClient.invalidateQueries({ queryKey: MCP_SECRETS_KEY });
       toast.success(
-        `${count} value${count === 1 ? "" : "s"} updated on “${mcp.name}”. Apply to push it into the runner.`,
+        applyOutcomeMessage(outcome, `${count} value${count === 1 ? "" : "s"} on “${mcp.name}”`),
       );
       onDone();
     },

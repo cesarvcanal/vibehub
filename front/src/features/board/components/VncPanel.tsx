@@ -1,5 +1,5 @@
 import * as React from "react";
-import { AlertTriangle, Loader2, MonitorPlay, Plug, X } from "lucide-react";
+import { AlertTriangle, Loader2, MonitorPlay, Plug } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { wsUrl } from "@/lib/ws";
 import { apiErrorMessage } from "@/lib/apiError";
@@ -27,7 +27,7 @@ const STATE_LABEL: Record<State, { text: string; className: string }> = {
   starting: { text: "starting…", className: "text-amber-400" },
   connecting: { text: "connecting…", className: "text-amber-400" },
   live: { text: "live", className: "text-emerald-400" },
-  error: { text: "error", className: "text-destructive" },
+  error: { text: "error", className: "text-red-400" },
   closed: { text: "closed", className: "text-muted-foreground" },
 };
 
@@ -103,22 +103,24 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
   return (
     <div className="flex min-h-[220px] min-w-0 flex-1 flex-col gap-1">
       <div className="flex items-center justify-between">
-        <span className="inline-flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-          <MonitorPlay className="h-3.5 w-3.5" /> Browser
+        <span className="inline-flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          <MonitorPlay className="h-3.5 w-3.5" /> Browser · card Chromium
         </span>
         <div className="flex items-center gap-2">
           <span role="status" className={`font-mono text-[10px] uppercase tracking-wider ${label.className}`}>
             {label.text}
           </span>
+          {/* A word, not an ✕. Closing this pane also KILLS the Chromium in the runner and gives the
+              RAM back — that is a disconnection, and an icon that usually means "hide" undersells it. */}
           <Button
             variant="ghost"
-            size="icon"
-            className="h-6 w-6 text-muted-foreground"
-            aria-label="Close browser"
+            size="sm"
+            className="h-6 px-2 text-xs text-muted-foreground"
+            aria-label="Disconnect browser"
             title="Disconnect and stop the browser in the runner"
             onClick={close}
           >
-            <X className="h-3.5 w-3.5" />
+            Disconnect
           </Button>
         </div>
       </div>

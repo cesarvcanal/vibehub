@@ -60,6 +60,36 @@ describe("NewCardDialog", () => {
     expect(title.value).toBe("");
   });
 
+  it("clears the form on Cancel too, so an abandoned draft does not come back", async () => {
+    const { user, onOpenChange } = setup();
+    const title = screen.getByLabelText("Title") as HTMLInputElement;
+    await user.type(title, "thought better of it");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    // Cancel used to call onOpenChange directly and skip the reset in the Dialog's own handler.
+    expect(title.value).toBe("");
+  });
+
+  it("clears the options too, so a branch typed and abandoned cannot ride along next time", async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    await user.type(screen.getByLabelText("Branch"), "feat/oops");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    // The disclosure closes with them: reopening starts from "whatever the project uses".
+    expect(screen.queryByLabelText("Branch")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    expect((screen.getByLabelText("Branch") as HTMLInputElement).value).toBe("");
+  });
+
+  it("keeps the options folded away until they are asked for", () => {
+    setup();
+    // The answer is almost always "whatever the project uses"; a card is meant to be type-and-go.
+    expect(screen.queryByLabelText("Claude account")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Options" })).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("refuses an empty or whitespace-only title without closing", async () => {
     const { user, onSubmit, onOpenChange } = setup();
     expect((screen.getByRole("button", { name: "Create card" }) as HTMLButtonElement).disabled).toBe(true);

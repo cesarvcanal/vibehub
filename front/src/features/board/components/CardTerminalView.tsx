@@ -17,7 +17,6 @@ import {
 import { cn } from "@/lib/utils";
 import { apiErrorMessage } from "@/lib/apiError";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { XTerminal } from "@/features/board/components/XTerminal";
 import { VncPanel } from "@/features/board/components/VncPanel";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
@@ -36,6 +35,7 @@ import {
   cardSession,
   cardWorktree,
   cardsKey,
+  defaultAccountLabelOr,
   projectAccountSlug,
   type BoardCard,
   type BoardProject,
@@ -44,10 +44,15 @@ import type { CardColumn } from "@/api/types";
 
 /** Small, quiet select in the card bar — configuration, not a call to action. */
 const PILL =
-  "h-6 max-w-[9rem] shrink-0 truncate rounded-full border border-border/60 bg-muted/40 px-2 text-[11px] text-muted-foreground transition-colors hover:border-border hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
+  "h-6 max-w-[10rem] shrink-0 truncate rounded-full border border-border/60 bg-muted/40 px-2 text-[11px] text-muted-foreground transition-colors hover:border-border hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
 
 /**
- * One card, full screen: a thin bar and a terminal.
+ * One card's terminal — the middle column of the board screen, between the card list and nothing.
+ *
+ * The bar above it is three zones of deliberately different weight: IDENTITY on the left (the dot
+ * and the editable title, the only thing in prominent type), ACTIONS grouped in the middle, and
+ * CONFIGURATION at the far end in the quietest form the page has — pills and a two-pixel dot. That
+ * ordering is the whole design: the title is what you are looking at, the model is not.
  *
  * ## Instant open
  *
@@ -64,13 +69,17 @@ export function CardTerminalView({
   project,
   cardId,
   onBack,
-  onNewCard,
   onOpenMenu,
 }: {
   project: BoardProject;
   cardId: string;
   onBack: () => void;
-  onNewCard: () => void;
+  /**
+   * Accepted so the page can keep passing it, but no longer rendered here: "New card" lives on the
+   * board's own chrome and in ⌘K, and a second copy in this footer only competed with Browser and
+   * Shell — the two things that belong to THIS card.
+   */
+  onNewCard?: () => void;
   /**
    * Opens the navigation drawer. Only rendered on narrow screens, where the card list beside the
    * terminal is hidden and going "back to the board" is otherwise the only way to reach another
@@ -194,7 +203,9 @@ export function CardTerminalView({
 
   const { data: accountsData } = useQuery({ queryKey: ACCOUNTS_KEY, queryFn: boardApi.listAccounts });
   const accounts = accountsData?.accounts ?? [];
-  const inheritedAccount = projectAccountSlug(project) ?? accountsData?.defaultLabel ?? "default";
+  // What the empty option stands for: the project's account if it pins one, otherwise the install's
+  // name for the runner's built-in profile.
+  const inheritedAccount = projectAccountSlug(project) ?? defaultAccountLabelOr(accountsData?.defaultLabel);
 
   /* ------------------------------------------------------------------ state */
 
@@ -248,6 +259,10 @@ export function CardTerminalView({
    * An image pasted or dropped on the terminal is uploaded and its path is typed into the prompt.
    * The path is absolute and inside the runner: that is the only form the agent can actually read,
    * since uploads land outside the card's worktree.
+   *
+   * There is no success toast. The path appearing in the prompt IS the confirmation, and a toast
+   * on top of it was two notifications for one event — only "uploading" and a failure say anything
+   * the screen does not already show.
    */
   const uploadImage = React.useCallback(
     async (file: File): Promise<string | null> => {
@@ -259,7 +274,6 @@ export function CardTerminalView({
       const pending = toast.loading("Uploading image…");
       try {
         const { path } = await boardApi.uploadCardImage(cardId, file);
-        toast.success("Image attached", { description: file.name });
         return path;
       } catch (error) {
         toast.error(apiErrorMessage(error, "Could not upload the image"));
@@ -272,11 +286,11 @@ export function CardTerminalView({
   );
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col gap-1.5">
+    <div className="flex h-full min-w-0 flex-1 flex-col">
       {/* The card bar: identity on the left, actions in the middle, configuration at the far end. */}
       <div
         data-testid="card-bar"
-        className="flex min-h-[2rem] min-w-0 shrink-0 items-center gap-3 border-b border-border/60 pb-1.5"
+        className="flex min-h-[2.25rem] min-w-0 shrink-0 items-center gap-3 border-b border-border/60 pb-1.5"
       >
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {onOpenMenu ? (
@@ -290,13 +304,15 @@ export function CardTerminalView({
               <Menu className="h-4 w-4" />
             </Button>
           ) : null}
+          {/* Narrow screens only: from `lg` up the board is a permanent column beside this one, so
+              a button whose whole job is "go back to it" is a control pointing at what you can see. */}
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 shrink-0 px-2 text-muted-foreground"
+            className="h-7 shrink-0 px-2 text-muted-foreground lg:hidden"
             onClick={onBack}
           >
-            <ArrowLeft /> Board
+            <ArrowLeft className="mr-1.5 h-4 w-4" /> Board
           </Button>
           {dot ? (
             <span
@@ -306,7 +322,7 @@ export function CardTerminalView({
               className={cn(
                 "inline-block h-2.5 w-2.5 shrink-0 rounded-full",
                 dot.tone === "ok" ? "bg-emerald-400" : "bg-amber-400",
-                dot.live && "motion-safe:animate-[vh-pulse_1.6s_ease-in-out_infinite]",
+                dot.live && "dot-live",
               )}
             />
           ) : null}
@@ -314,6 +330,9 @@ export function CardTerminalView({
             <input
               aria-label="Card title"
               autoFocus
+              // Select-all on focus: renaming almost always means replacing, and having to clear the
+              // old title first is a keystroke tax on the common case.
+              onFocus={(e) => e.currentTarget.select()}
               value={editingTitle}
               onChange={(e) => setEditingTitle(e.target.value)}
               onKeyDown={(e) => {
@@ -321,7 +340,7 @@ export function CardTerminalView({
                 else if (e.key === "Escape") setEditingTitle(null);
               }}
               onBlur={saveTitle}
-              className="h-7 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-sm font-semibold focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="h-7 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-base font-semibold focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             />
           ) : (
             <button
@@ -331,7 +350,7 @@ export function CardTerminalView({
               onClick={() => card && setEditingTitle(card.title)}
               className="min-w-0 truncate rounded px-1 text-left hover:bg-card/60 disabled:cursor-default disabled:hover:bg-transparent"
             >
-              <h2 className="truncate text-sm font-semibold tracking-tight">
+              <h2 className="truncate text-base font-semibold tracking-tight">
                 {card?.title ?? "Opening card…"}
               </h2>
             </button>
@@ -346,7 +365,7 @@ export function CardTerminalView({
                 label="Pause"
                 hint="Ends the session in the runner — zero usage while parked. Reopening resumes the same conversation."
                 busy={pauseMutation.isPending}
-                icon={<Pause className="h-3.5 w-3.5" />}
+                icon={<Pause className="mr-1 h-3.5 w-3.5" />}
                 onClick={() => pauseMutation.mutate()}
               />
             ) : null}
@@ -355,7 +374,7 @@ export function CardTerminalView({
                 label="Restart"
                 hint="Kills and recreates the Claude process in the same worktree. The conversation is resumed and MCPs, brain and model are re-read."
                 busy={restartMutation.isPending}
-                icon={<RotateCw className="h-3.5 w-3.5" />}
+                icon={<RotateCw className="mr-1 h-3.5 w-3.5" />}
                 onClick={askRestart}
               />
             ) : null}
@@ -364,7 +383,7 @@ export function CardTerminalView({
                 label="Done"
                 hint="Moves the card to Done and returns to the board"
                 busy={moveMutation.isPending}
-                icon={<Check className="h-3.5 w-3.5" />}
+                icon={<Check className="mr-1 h-3.5 w-3.5" />}
                 onClick={() => card && finish(card)}
               />
             ) : null}
@@ -381,6 +400,8 @@ export function CardTerminalView({
               disabled={modelMutation.isPending}
               onChange={(e) => modelMutation.mutate(e.target.value || null)}
             >
+              {/* No model of its own = whatever the account's plan gives it. The server does not
+                  publish which one that is, so the label says what it means rather than guessing. */}
               <option value="">Default model</option>
               {CLAUDE_MODELS.map((m) => (
                 <option key={m.id} value={m.id}>
@@ -398,7 +419,7 @@ export function CardTerminalView({
               disabled={accountMutation.isPending}
               onChange={(e) => accountMutation.mutate(e.target.value || null)}
             >
-              <option value="">{inheritedAccount} (inherited)</option>
+              <option value="">{inheritedAccount} (default)</option>
               {accounts.map((a) => (
                 <option key={a.slug} value={a.slug}>
                   {accountLabel(a)}
@@ -436,11 +457,13 @@ export function CardTerminalView({
           </p>
         </div>
       ) : (
+        // Terminal LEFT, browser RIGHT, half each. Chromium is landscape and a browser stacked under
+        // a terminal wastes the width; on a narrow screen the two stack instead.
         <div
           data-testid="card-workarea"
-          className={cn("flex min-h-0 flex-1 flex-col gap-2", browserOpen && "lg:flex-row")}
+          className={cn("flex min-h-0 flex-1 flex-col", browserOpen && "lg:flex-row lg:gap-2")}
         >
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <XTerminal
               ref={termRef}
               zoomControl
@@ -452,6 +475,8 @@ export function CardTerminalView({
             />
             {/* Compose here, send when ready — the field accumulates until Enter or Send. */}
             <TerminalComposer
+              className="mt-1.5"
+              cardId={cardId}
               onSend={(text) => {
                 termRef.current?.sendText(text);
                 termRef.current?.focus();
@@ -459,16 +484,17 @@ export function CardTerminalView({
               onUploadImage={uploadImage}
             />
             {shellOpen ? (
-              <div className="flex h-[35%] min-h-[160px] shrink-0 flex-col gap-1">
+              <div className="flex h-[35%] min-h-[180px] shrink-0 flex-col gap-1">
                 <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                    Shell · same worktree
+                  <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    Shell · bash in the worktree
                   </span>
                   <Button
                     variant="ghost"
                     size="icon"
                     className="h-6 w-6 text-muted-foreground"
                     aria-label="Close shell"
+                    title="Close shell"
                     onClick={() => setShellOpen(false)}
                   >
                     <X className="h-3.5 w-3.5" />
@@ -491,45 +517,47 @@ export function CardTerminalView({
       )}
 
       {/* Footer: where this card lives in the runner, and the two extra panes. */}
-      <div className="flex h-7 shrink-0 items-center gap-3 overflow-hidden font-mono text-[11px] text-muted-foreground">
+      <div className="flex h-7 shrink-0 items-center gap-3 overflow-hidden pt-0.5 font-mono text-xs text-muted-foreground">
         {card ? (
           <span className="inline-flex min-w-0 items-center gap-1.5 truncate">
             <GitBranch className="h-3.5 w-3.5 shrink-0" />
-            {card.branch ?? `card/${cardWorktree(card) ?? ""}`}
-            {card.base ? ` · from ${card.base}` : ""}
-            {cardSession(card) ? ` · ${cardSession(card)}` : ""}
+            card/{cardWorktree(card) ?? ""} · base {card.base} · tmux {cardSession(card) ?? ""}
           </span>
         ) : null}
         <span className="flex-1" />
-        <Button variant="ghost" size="sm" className="h-6 px-2 text-[11px]" onClick={onNewCard}>
-          New card
-          <span className="kbd ml-1">⌘K</span>
-        </Button>
         <Button
           variant={browserOpen ? "secondary" : "outline"}
           size="sm"
-          className="h-6 px-2 text-[11px]"
+          className="h-6 px-2 text-xs"
           disabled={!showTerminal}
           aria-pressed={browserOpen}
           onClick={() => setBrowserOpen((v) => !v)}
         >
-          <MonitorPlay className="h-3.5 w-3.5" /> Browser
+          <MonitorPlay className="mr-1 h-3.5 w-3.5" /> Browser
         </Button>
         <Button
           variant={shellOpen ? "secondary" : "outline"}
           size="sm"
-          className="h-6 px-2 text-[11px]"
+          className="h-6 px-2 text-xs"
           disabled={!showTerminal}
           aria-pressed={shellOpen}
           onClick={() => setShellOpen((v) => !v)}
         >
-          <TerminalSquare className="h-3.5 w-3.5" /> Shell
+          <TerminalSquare className="mr-1 h-3.5 w-3.5" /> Shell
         </Button>
       </div>
     </div>
   );
 }
 
+/**
+ * One action in the bar's middle zone.
+ *
+ * The explanation is a NATIVE `title`, not a tooltip component: this sits two pixels from a live
+ * terminal, and a floating panel that appears on hover is something you dismiss, not something you
+ * read. And no spinner — the button is disabled while the request is in flight, which is the same
+ * information without the label jumping.
+ */
 function BarAction({
   label,
   hint,
@@ -544,34 +572,31 @@ function BarAction({
   onClick: () => void;
 }) {
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 shrink-0 px-2 text-[11px] text-muted-foreground hover:text-foreground"
-          disabled={busy}
-          onClick={onClick}
-        >
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : icon}
-          {label}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-xs">{hint}</TooltipContent>
-    </Tooltip>
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-6 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground"
+      title={hint}
+      disabled={busy}
+      onClick={onClick}
+    >
+      {icon}
+      {label}
+    </Button>
   );
 }
 
 /**
  * Connection state, as a dot. Reconnection is automatic, so there is nothing to press — the only
- * thing worth showing is whether bytes are flowing.
+ * thing worth showing is whether bytes are flowing, and the words go in the title where they do not
+ * compete with the card's name.
  */
 function ConnectionIndicator({ state }: { state: ConnectionState }) {
   const spec =
     state === "open"
-      ? { className: "bg-emerald-400", label: "connected" }
+      ? { className: "bg-emerald-500", label: "connected" }
       : state === "reconnecting"
-        ? { className: "bg-amber-400 motion-safe:animate-[vh-pulse_1s_ease-in-out_infinite]", label: "reconnecting" }
+        ? { className: "bg-amber-500 dot-live", label: "reconnecting" }
         : state === "connecting"
           ? { className: "bg-muted-foreground/60", label: "connecting" }
           : { className: "bg-destructive", label: "disconnected" };

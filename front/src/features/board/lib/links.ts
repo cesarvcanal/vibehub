@@ -8,10 +8,23 @@
  *  - rows that merely follow each other are glued together, so a URL at the end of one line
  *    absorbs whatever the next line starts with.
  *
- * Both fall out of one rule: rebuild the LOGICAL line before matching. A continuation row (xterm's
- * `isWrapped`) is glued on with nothing between it and its predecessor, and every other row ends
- * with a REAL newline that the matcher cannot cross. Everything below is pure so the rule can be
- * tested without a terminal.
+ * Both fall out of one rule: rebuild the LOGICAL line before matching. A continuation row is glued
+ * on with nothing between it and its predecessor, and every other row ends with a REAL newline that
+ * the matcher cannot cross.
+ *
+ * ## Two kinds of continuation
+ *
+ * There are two, and only handling the first is why Claude's sign-in URL used to arrive as three
+ * dead links:
+ *
+ *  - **Soft wrap** — xterm ran out of columns and set `isWrapped` on the next row. Free to detect.
+ *  - **Hard wrap** — an ink TUI (which is what Claude Code is) measures the width itself and emits
+ *    a REAL newline at the margin. `isWrapped` is false and there is no flag to read, so the only
+ *    evidence is the shape: the previous row runs to the very last column with no space at its end,
+ *    and the next row starts with a non-space. That is what `continuesLine` looks for, and it needs
+ *    the terminal's width to do it.
+ *
+ * Everything below is pure so the rule can be tested without a terminal.
  */
 
 export interface BufferRow {
@@ -19,6 +32,28 @@ export interface BufferRow {
   text: string;
   /** True when this row is the continuation of the row above (the line wrapped). */
   wrapped: boolean;
+}
+
+/**
+ * Does `current` continue `previous`? PURE.
+ *
+ * `cols` is the terminal width. Leave it out and only soft wraps count — which is the stock
+ * behaviour, and wrong for a TUI. Pass it and a full, space-free row followed by a row that does
+ * not start with a space is treated as the hard wrap it is.
+ *
+ * The "starts with a non-space" half matters: a wrapped URL never resumes with whitespace, whereas
+ * an indented log line printed straight after a line that happened to fill the width does — and
+ * gluing those two together is exactly the bogus link this avoids.
+ */
+export function continuesLine(previous: BufferRow, current: BufferRow, cols?: number): boolean {
+  if (current.wrapped) return true;
+  if (!cols || cols <= 0) return false;
+  return (
+    previous.text.length >= cols &&
+    !/\s$/.test(previous.text) &&
+    current.text.length > 0 &&
+    !/^\s/.test(current.text)
+  );
 }
 
 export interface LogicalLine {
@@ -32,14 +67,21 @@ export interface LogicalLine {
 
 /**
  * The complete logical line containing buffer row `row`: walk up while rows are continuations,
- * then down while the next row is one.
+ * then down while the next row is one. `cols` enables hard-wrap detection — see `continuesLine`.
  */
-export function logicalLine(rows: BufferRow[], row: number): LogicalLine | null {
+export function logicalLine(rows: BufferRow[], row: number, cols?: number): LogicalLine | null {
   if (row < 0 || row >= rows.length) return null;
   let start = row;
-  while (start > 0 && rows[start]?.wrapped) start -= 1;
+  while (start > 0 && continuesLine(rows[start - 1] as BufferRow, rows[start] as BufferRow, cols)) {
+    start -= 1;
+  }
   let end = start;
-  while (end + 1 < rows.length && rows[end + 1]?.wrapped) end += 1;
+  while (
+    end + 1 < rows.length &&
+    continuesLine(rows[end] as BufferRow, rows[end + 1] as BufferRow, cols)
+  ) {
+    end += 1;
+  }
   let text = "";
   for (let y = start; y <= end; y += 1) {
     text += rows[y]?.text ?? "";
@@ -51,10 +93,11 @@ export function logicalLine(rows: BufferRow[], row: number): LogicalLine | null 
  * Joins a whole buffer into text a matcher can run over: continuation rows glued on, every other
  * boundary a real newline. This is the join the stock addon gets wrong.
  */
-export function joinRows(rows: BufferRow[]): string {
+export function joinRows(rows: BufferRow[], cols?: number): string {
   let out = "";
   rows.forEach((row, i) => {
-    if (i > 0 && !row.wrapped) out += "\n";
+    const previous = rows[i - 1];
+    if (i > 0 && !(previous && continuesLine(previous, row, cols))) out += "\n";
     out += row.text;
   });
   return out;

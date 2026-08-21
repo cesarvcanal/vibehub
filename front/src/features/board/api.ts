@@ -2,6 +2,7 @@ import { del, get, patch, post } from "@/lib/api";
 import type {
   Account,
   AccountsResponse,
+  ApplyOutcome,
   Brain,
   BrainApplyResult,
   BrainWriteResult,
@@ -33,6 +34,13 @@ export type BoardProject = Project;
 export type BoardCard = Card;
 export type BoardAccount = Account;
 export type BoardMcp = Mcp;
+
+/**
+ * The brain as the screen needs it: the stored view plus WHO saved it, when the server records that.
+ * A shared instruction file that every terminal in the install obeys is not the kind of thing that
+ * should have changed anonymously.
+ */
+export type BoardBrain = Brain & { by?: string };
 
 /* -------------------------------------------------------------- accessors */
 
@@ -76,6 +84,17 @@ export function cardOpensInstantly(c: BoardCard | undefined | null): boolean {
 /** Display name of an account. */
 export function accountLabel(a: BoardAccount): string {
   return a.name || a.slug;
+}
+
+/**
+ * What to call the runner's built-in profile.
+ *
+ * The install can rename it (`defaultAccountLabel` in settings, which `GET /api/accounts` echoes as
+ * `defaultLabel`); until somebody does, it is addressed by its slug. The blank check matters: the
+ * server sends `""` for "never named", and `??` would happily show an empty pill.
+ */
+export function defaultAccountLabelOr(label: string | null | undefined): string {
+  return (label ?? "").trim() || DEFAULT_ACCOUNT_SLUG;
 }
 
 /** Transport of an MCP server. */
@@ -125,6 +144,7 @@ export const ACCOUNT_TOKENS_KEY = ["board", "accounts", "tokens"] as const;
 export const MCPS_KEY = ["board", "mcps"] as const;
 export const MCP_SECRETS_KEY = ["board", "mcps", "secrets"] as const;
 export const BRAIN_KEY = ["board", "brain"] as const;
+export const TRANSCRIBE_KEY = ["board", "transcribe"] as const;
 export const RUNNER_KEY = ["board", "runner"] as const;
 export const GITHUB_KEY = ["board", "github"] as const;
 /** Prefix matching EVERY project's card list — for invalidating the whole board at once. */
@@ -146,6 +166,22 @@ export interface NewProjectInput {
   defaultBranch?: string;
   /** Claude account the project's cards inherit. */
   accountSlug?: string;
+}
+
+/** `GET /api/transcribe` — what voice input can do on THIS install. */
+export interface TranscribeStatus {
+  /** An OpenAI key is stored; without one the microphone has nothing to talk to. */
+  available: boolean;
+  /** A Claude key is stored too, so transcriptions get proofread before they come back. */
+  proofread: boolean;
+  /** ISO 639-1 hint sent to the recogniser, or null for auto-detect. */
+  language: string | null;
+}
+
+/** `POST /api/cards/:id/transcribe` */
+export interface Transcription {
+  text: string;
+  proofread: boolean;
 }
 
 export interface CardPatchInput {
@@ -267,8 +303,13 @@ export const boardApi = {
 
   deleteMcp: (id: string) => del<unknown>(`/mcps/${encodeURIComponent(id)}`),
 
+  /**
+   * Stores one value in the vault — and the server APPLIES it on the way through, because an MCP
+   * whose token has just arrived is precisely the one that was failing at its first call. The
+   * outcome comes back so the toast can say what actually happened.
+   */
   setMcpSecret: (id: string, key: string, value: string) =>
-    post<unknown>(`/mcps/${encodeURIComponent(id)}/secret`, { key, value }),
+    post<ApplyOutcome & { ok?: true }>(`/mcps/${encodeURIComponent(id)}/secret`, { key, value }),
 
   /** Which declared names already have a value. Booleans only — no value ever comes back. */
   mcpSecrets: () =>
@@ -277,7 +318,7 @@ export const boardApi = {
   applyMcps: () => post<{ runners?: number; mcps?: number }>("/mcps/apply"),
 
   /* brain — the shared CLAUDE.md every card's profile gets */
-  brain: () => get<Brain>("/brain"),
+  brain: () => get<BoardBrain>("/brain"),
 
   /** Saves AND pushes: the response says how many terminals restarted and how many were deferred. */
   saveBrain: (text: string) => post<BrainWriteResult>("/brain", { text }),
@@ -287,6 +328,25 @@ export const boardApi = {
 
   /** Manual re-push, for when a runner was down when the text was saved. */
   applyBrain: () => post<BrainApplyResult>("/brain/apply"),
+
+  /* voice input */
+
+  /** Whether the install can transcribe at all. Cheap, so the composer can ask on mount. */
+  transcribeStatus: () =>
+    get<TranscribeStatus>("/transcribe").then((r) => ({
+      available: Boolean(r?.available),
+      proofread: Boolean(r?.proofread),
+      language: r?.language ?? null,
+    })),
+
+  /** Sends a recording and gets the text back. Same JSON-with-base64 shape as the image upload. */
+  transcribeCardAudio: async (id: string, blob: Blob): Promise<Transcription> => {
+    const base64 = await blobToBase64(blob);
+    return await post<Transcription>(`/cards/${encodeURIComponent(id)}/transcribe`, {
+      base64,
+      mimeType: blob.type || "audio/webm",
+    });
+  },
 
   /* runner & github */
   runner: () => get<RunnerStatus & { provisioning?: boolean }>("/runner"),
@@ -313,18 +373,24 @@ export function splitRepo(fullName: string | undefined): { owner: string | null;
   return { owner, repo };
 }
 
-/** File -> bare base64 (no `data:` prefix), which is what the upload route wants. */
-export function fileToBase64(file: File): Promise<string> {
+/** Blob -> bare base64 (no `data:` prefix), which is what the upload routes want. */
+export function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result).split(",", 2)[1] ?? "");
     reader.onerror = () => reject(reader.error ?? new Error("could not read the file"));
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(blob);
   });
 }
 
+/** A `File` is a `Blob`; kept as its own name because that is what the call sites read like. */
+export const fileToBase64 = blobToBase64;
+
 /** The runner rejects an image over 10 MB; catching it here saves a pointless round trip. */
 export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
+/** And a recording over 20 MB — about 40 minutes of Opus, far past the recorder's own 5-minute cap. */
+export const AUDIO_MAX_BYTES = 20 * 1024 * 1024;
 
 /**
  * Claude models a card can be pinned to. Mirrors the server's list; absent on a card means "the

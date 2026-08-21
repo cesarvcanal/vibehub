@@ -19,10 +19,15 @@ import {
   DEFAULT_ACCOUNT_SLUG,
   accountLabel,
   boardApi,
+  defaultAccountLabelOr,
 } from "@/features/board/api";
 
-/** Fallback name for the runner's built-in profile when nobody has renamed it. */
-export const DEFAULT_ACCOUNT_FALLBACK = "Default account";
+/**
+ * Where the runner's built-in profile actually lives. Shown verbatim under the default row for the
+ * same reason every other row shows its slug: this list is about directories in a container, and
+ * "built-in profile" is a phrase you cannot `ls`.
+ */
+export const DEFAULT_PROFILE_PATH = "/root/.claude";
 
 interface TokenTarget {
   slug: string;
@@ -169,8 +174,17 @@ export function AccountsManager() {
 
   return (
     <>
-      <Button variant="outline" size="sm" className="h-8" onClick={() => setOpen(true)}>
-        <Users /> Accounts
+      {/* Icon only, and quiet: this is a setting you open twice a month, sitting next to a board
+          full of live work. A bordered, labelled button there reads as an action. */}
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-7 w-7 text-muted-foreground hover:text-foreground"
+        aria-label="Claude accounts"
+        title="Claude accounts"
+        onClick={() => setOpen(true)}
+      >
+        <Users className="h-4 w-4" />
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
@@ -195,7 +209,7 @@ export function AccountsManager() {
                   <Input
                     aria-label="Default account name"
                     className="h-7 text-sm"
-                    placeholder={DEFAULT_ACCOUNT_FALLBACK}
+                    placeholder={DEFAULT_ACCOUNT_SLUG}
                     value={labelValue}
                     onChange={(e) => setLabelDraft(e.target.value)}
                     onBlur={saveLabel}
@@ -205,12 +219,13 @@ export function AccountsManager() {
                     }}
                   />
                   <div className="truncate font-mono text-[11px] text-muted-foreground">
-                    built-in profile{tokens?.defaultHasToken ? " · token stored" : ""}
+                    {DEFAULT_PROFILE_PATH}
+                    {tokens?.defaultHasToken ? " · token stored" : ""}
                   </div>
                 </div>
                 {tokenButton({
                   slug: DEFAULT_ACCOUNT_SLUG,
-                  name: savedLabel || DEFAULT_ACCOUNT_FALLBACK,
+                  name: defaultAccountLabelOr(savedLabel),
                   hasToken: Boolean(tokens?.defaultHasToken),
                 })}
               </div>

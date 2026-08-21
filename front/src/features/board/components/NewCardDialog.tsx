@@ -65,6 +65,17 @@ export function NewCardDialog({
     setShowOptions(false);
   }, []);
 
+  /**
+   * The one way out that is not a submit. Cancel used to call `onOpenChange` directly, skipping the
+   * reset in the Dialog's own handler — so a title you thought better of was still sitting there
+   * the next time you opened it, and the fastest way to create a card was to accidentally create
+   * the wrong one.
+   */
+  const close = React.useCallback(() => {
+    reset();
+    onOpenChange(false);
+  }, [reset, onOpenChange]);
+
   function submit(event: React.FormEvent) {
     event.preventDefault();
     const trimmed = title.trim();
@@ -85,7 +96,10 @@ export function NewCardDialog({
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!next) reset();
+        if (!next) {
+          close();
+          return;
+        }
         onOpenChange(next);
       }}
     >
@@ -171,7 +185,7 @@ export function NewCardDialog({
           ) : null}
 
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+            <Button type="button" variant="ghost" onClick={close}>
               Cancel
             </Button>
             <Button type="submit" disabled={!title.trim()}>

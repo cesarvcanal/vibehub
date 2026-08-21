@@ -152,7 +152,7 @@ export function ProjectFormDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
+      <DialogContent className="max-h-[85vh] max-w-md overflow-y-auto">
         <DialogHeader>
           <DialogTitle>New project</DialogTitle>
           <DialogDescription>
@@ -162,6 +162,20 @@ export function ProjectFormDialog({
         </DialogHeader>
 
         <form onSubmit={submit} className="space-y-4">
+          {/* Name first, and focused. It is the only required field, it is the one thing only a
+              person can decide, and picking a repository below FILLS IT IN — so the form reads as
+              "here is what I am calling it, here is where the code is", not as a quiz. */}
+          <div className="space-y-1.5">
+            <Label htmlFor="project-name">Name</Label>
+            <Input
+              id="project-name"
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. billing-service"
+            />
+          </div>
+
           {connected ? (
             <div className="space-y-1.5">
               <Label htmlFor="project-repo-search">Repository</Label>
@@ -213,16 +227,6 @@ export function ProjectFormDialog({
               </p>
             </div>
           )}
-
-          <div className="space-y-1.5">
-            <Label htmlFor="project-name">Name</Label>
-            <Input
-              id="project-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. billing-service"
-            />
-          </div>
 
           {repo || cloneUrl.trim() ? (
             <div className="space-y-1.5">
@@ -283,7 +287,12 @@ export function ProjectFormDialog({
             <Button
               type="button"
               variant="ghost"
-              onClick={() => onOpenChange(false)}
+              // Resets on the way out, like the Dialog's own close — otherwise an abandoned repo
+              // choice is still selected the next time this opens.
+              onClick={() => {
+                reset();
+                onOpenChange(false);
+              }}
               disabled={createMutation.isPending}
             >
               Cancel
