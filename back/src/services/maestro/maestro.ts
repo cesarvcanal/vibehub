@@ -202,6 +202,24 @@ export async function listTerminals(project?: string): Promise<TerminalSummary[]
   );
 }
 
+/**
+ * A tmux session can disappear underneath the board — the runner restarted, someone killed it —
+ * while the card still looks live (it was opened and never paused). tmux then answers with its own
+ * wording ("no server running", "can't find session"), which tells a coordinating agent nothing
+ * about what to do. Translate it into the action that fixes it: open the card, which recreates the
+ * session through the same attach-or-create the terminal uses. PURE.
+ */
+export function sessionGoneError(err: unknown, title: string): Error {
+  const detail = (err as Error)?.message ?? String(err);
+  if (/no server running|can't find session|session not found/i.test(detail)) {
+    return new Error(
+      `the terminal for card "${title}" is gone in the runner (the session died or the runner restarted) — ` +
+      "open the card to recreate it, then send the instruction again",
+    );
+  }
+  return err instanceof Error ? err : new Error(detail);
+}
+
 export interface SendResult {
   sent: true;
   cardId: string;
@@ -228,10 +246,14 @@ export async function sendToTerminal(cardId: string, text: string, by?: string):
   const project = await getProject(card.projectId);
   if (!project) throw new Error("project for this card not found");
 
-  await hostExecutor().runScript(
-    buildSendKeysScript(config.runner.container, card.tmuxSession, instruction),
-    { timeoutMs: 30_000 },
-  );
+  try {
+    await hostExecutor().runScript(
+      buildSendKeysScript(config.runner.container, card.tmuxSession, instruction),
+      { timeoutMs: 30_000 },
+    );
+  } catch (err) {
+    throw sessionGoneError(err, card.title);
+  }
   logger.info(
     {
       audit: true, action: "maestro.send", card: card.worktreeSlug, session: card.tmuxSession,
