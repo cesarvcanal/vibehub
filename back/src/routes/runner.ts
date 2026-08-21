@@ -1,7 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
+import pty from "node-pty";
 import { requireSession } from "../auth/session.js";
 import { provisionRunner, runnerStatus, startRunner } from "../runtime/runner.js";
+import { hostExecutor, shQuote } from "../runtime/host.js";
+import { config } from "../config/env.js";
+import { bridgePty } from "./session.js";
 import { getSettings } from "../services/settings/settings.js";
 import { isFreshInstall } from "../auth/users.js";
 import * as github from "../services/github/client.js";
@@ -32,7 +36,27 @@ function broadcast(chunk: string): void {
 
 export async function runnerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/runner", { preHandler: requireSession }, async (_req, reply) => {
-    return await reply.send({ ...(await runnerStatus()), provisioning: provisioning !== null });
+    return await reply.send({ ...(await runnerStatus()), provisioning: provisioning !== null, terminal: true });
+  });
+
+  /**
+   * A shell INSIDE the runner container itself — not a card. This is where you run `claude` and
+   * `/login` once per account, `gh auth login`, or poke at /work when something looks off. The
+   * command is fixed: container name from config, shell picked with `command -v` (a failing `exec`
+   * would take the shell down with it — the `||` would never run).
+   */
+  app.get("/api/runner/terminal", { websocket: true, preHandler: requireSession }, (socket) => {
+    const pick = "if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh";
+    const line = `docker exec -it ${shQuote(config.runner.container)} env LANG=C.UTF-8 LC_ALL=C.UTF-8 sh -c ${shQuote(pick)}`;
+    const { file, args } = hostExecutor().ptyCommand(line);
+    const term = pty.spawn(file, args, {
+      name: "xterm-256color",
+      cols: 120,
+      rows: 30,
+      env: { ...process.env, LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TERM: "xterm-256color" },
+    });
+    logger.info({ container: config.runner.container }, "runner shell attached");
+    bridgePty(socket, term, "runner-shell");
   });
 
   app.post("/api/runner/provision", { preHandler: requireSession }, async (_req, reply) => {

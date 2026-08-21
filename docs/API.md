@@ -36,10 +36,11 @@ ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx statu
 
 | Method | Path | Body / notes |
 |---|---|---|
-| GET | `/api/runner` | `RunnerStatus` = `{ running, exists, claudeInstalled, dockerReachable, container, host, detail? }` |
+| GET | `/api/runner` | `RunnerStatus` = `{ running, exists, claudeInstalled, dockerReachable, container, host, detail?, provisioning, terminal: true }` |
 | POST | `/api/runner/provision` | `{ ok: true }` — idempotent; long-running |
 | WS | `/api/runner/logs` | provisioning output, with the last run buffered for late subscribers |
 | POST | `/api/runner/start` | starts a stopped container |
+| WS | `/api/runner/terminal` | a shell inside the runner container itself — where you run `claude` / `gh auth login` once |
 | POST | `/api/runner/status` | **public, `x-vibehub-token`** — `{ card, status: "working" \| "waiting" }`, the Claude hook callback |
 
 ## Projects & cards

@@ -67,7 +67,7 @@ export function parseTerminalFrame(raw: string): { type: "resize"; cols: number;
 const KEEPALIVE_MS = 25_000;
 
 /** Wires a pty to a websocket: output out, keystrokes and resizes in, both sides closing together. */
-function bridgePty(socket: WebSocket, term: IPty, label: string): void {
+export function bridgePty(socket: WebSocket, term: IPty, label: string): void {
   disableNagle(socket);
   const keepalive = setInterval(() => {
     // Proxies drop an idle websocket; a protocol ping keeps the terminal alive while you read.
