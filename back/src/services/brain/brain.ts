@@ -38,9 +38,17 @@ export const DEFAULT_BRAIN = `# Working inside a vibehub card
   directory.
 - The terminal is **disposable**. It can be closed at any moment, so anything worth keeping belongs
   in a commit, a pull request, or a note somewhere durable — never only in the scrollback.
-- \`git\` and \`gh\` are already authenticated. You may clone any other repository the account can
-  reach if a task spans more than one; put it in a subdirectory of your working directory and treat
-  each repository as its own delivery.
+- \`git\` and \`gh\` are already authenticated.
+
+## The card's repository is a starting point, not a fence
+
+A card points at one repository (or none), but that is **organisation, not a boundary**. The
+credential in this runner reaches every repository the connected account can reach.
+
+- If the task spans another repository, **clone it alongside** — a subdirectory of your working
+  directory, say \`./_repos/<name>\` — branch there, and treat each repository as its own delivery.
+- One pull request per repository you touched. The delivery rules above apply in each of them.
+- You do not need to ask for a repository to be "added". You already have the access: clone it.
 
 ## How to work
 
