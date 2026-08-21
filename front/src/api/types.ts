@@ -175,8 +175,8 @@ export interface Project {
   accountSlug?: string;
   /** Claude model cards inherit. Absent = the account default. */
   model?: string;
-  /** Position in the sidebar. */
-  order?: number;
+  /** Position in the sidebar, smallest first. */
+  position?: number;
   createdAt: number;
   updatedAt?: number;
 }
@@ -190,7 +190,15 @@ export interface NewProject {
 }
 
 /** `PATCH /api/projects/:id` */
-export type ProjectPatch = Partial<NewProject> & { order?: number };
+export type ProjectPatch = Partial<NewProject> & { position?: number };
+
+/**
+ * `PATCH /api/projects/:id/order` — the sidebar reorder route. Its body key is `order` (that is
+ * the contract), while the resulting value is read back on the entity as `position`.
+ */
+export interface ReorderBody {
+  order: number;
+}
 
 export interface Card {
   id: string;
@@ -198,7 +206,7 @@ export interface Card {
   title: string;
   column: CardColumn;
   /** Position inside the column, smallest first. */
-  order?: number;
+  position?: number;
   /** Branch the card's worktree is on. */
   branch?: string;
   /** Branch the worktree was cut from. */
@@ -233,7 +241,7 @@ export interface NewCard {
 export interface CardPatch {
   title?: string;
   column?: CardColumn;
-  order?: number;
+  position?: number;
   accountSlug?: string | null;
   model?: string | null;
 }

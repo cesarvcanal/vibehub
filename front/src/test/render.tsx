@@ -28,7 +28,10 @@ export function renderApp(ui: ReactElement, options: RenderAppOptions = {}) {
   function Wrapper({ children }: { children: ReactNode }) {
     return (
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={[route]}>
+        <MemoryRouter
+          initialEntries={[route]}
+          future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+        >
           <AuthProvider>
             <TooltipProvider>{children}</TooltipProvider>
           </AuthProvider>

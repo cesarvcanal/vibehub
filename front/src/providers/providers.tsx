@@ -12,7 +12,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <QueryProvider>
-      <BrowserRouter>
+      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <AuthProvider>
           <TooltipProvider delayDuration={200} skipDelayDuration={300}>
             {children}

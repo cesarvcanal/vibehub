@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { setUnauthorizedHandler } from "@/lib/api";
-import { useAuth, ME_KEY } from "@/providers/auth";
+import { useAuth } from "@/providers/auth";
 import { Paths } from "@/lib/paths";
 
 /**
