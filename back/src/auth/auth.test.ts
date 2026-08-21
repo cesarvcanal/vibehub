@@ -20,47 +20,47 @@ describe("users", () => {
   it("reports a fresh install before anyone signs up", async () => {
     const { users } = await fresh();
     expect(await users.isFreshInstall()).toBe(true);
-    await users.createUser("cesar", "supersecret");
+    await users.createUser("ada", "supersecret");
     expect(await users.isFreshInstall()).toBe(false);
   });
 
   it("verifies the right password and rejects the wrong one", async () => {
     const { users } = await fresh();
-    const created = await users.createUser("cesar", "supersecret");
-    expect((await users.verifyCredentials("cesar", "supersecret"))?.id).toBe(created.id);
-    expect(await users.verifyCredentials("cesar", "nope-nope-nope")).toBeNull();
+    const created = await users.createUser("ada", "supersecret");
+    expect((await users.verifyCredentials("ada", "supersecret"))?.id).toBe(created.id);
+    expect(await users.verifyCredentials("ada", "nope-nope-nope")).toBeNull();
   });
 
   it("returns null for an unknown user without leaking existence", async () => {
     const { users } = await fresh();
-    await users.createUser("cesar", "supersecret");
+    await users.createUser("ada", "supersecret");
     expect(await users.verifyCredentials("ghost", "supersecret")).toBeNull();
   });
 
   it("never stores the password itself", async () => {
     const { users } = await fresh();
-    const user = await users.createUser("cesar", "supersecret");
+    const user = await users.createUser("ada", "supersecret");
     expect(JSON.stringify(user)).not.toContain("supersecret");
   });
 
   it("refuses duplicate usernames", async () => {
     const { users } = await fresh();
-    await users.createUser("cesar", "supersecret");
-    await expect(users.createUser("CESAR", "othersecret")).rejects.toThrow(/already exists/);
+    await users.createUser("ada", "supersecret");
+    await expect(users.createUser("ADA", "othersecret")).rejects.toThrow(/already exists/);
   });
 
   it("validates username and password shape", async () => {
     const { users } = await fresh();
     await expect(users.createUser("a", "supersecret")).rejects.toThrow(/username/);
-    await expect(users.createUser("cesar", "short")).rejects.toThrow(/at least 8/);
+    await expect(users.createUser("ada", "short")).rejects.toThrow(/at least 8/);
   });
 
   it("changes a password and invalidates the old one", async () => {
     const { users } = await fresh();
-    const user = await users.createUser("cesar", "supersecret");
+    const user = await users.createUser("ada", "supersecret");
     await users.changePassword(user.id, "brand-new-secret");
-    expect(await users.verifyCredentials("cesar", "supersecret")).toBeNull();
-    expect(await users.verifyCredentials("cesar", "brand-new-secret")).not.toBeNull();
+    expect(await users.verifyCredentials("ada", "supersecret")).toBeNull();
+    expect(await users.verifyCredentials("ada", "brand-new-secret")).not.toBeNull();
   });
 });
 
