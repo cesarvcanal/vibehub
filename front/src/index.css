@@ -1,0 +1,218 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * vibehub is a developer tool that lives next to a terminal, so the surface is dark by default,
+ * dense, and monospace-leaning. Every colour is a CSS variable so the palette can flip:
+ *   :root                          -> the dark default (what most people see)
+ *   @media (prefers-color-scheme: light) -> a light palette for people whose OS asks for it
+ *   [data-theme="dark|light"]      -> an explicit choice always wins over the OS
+ */
+@layer base {
+  :root {
+    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+    --background: 225 16% 6%;
+    --foreground: 210 14% 94%;
+    --card: 225 15% 8.5%;
+    --card-foreground: 210 14% 94%;
+    --popover: 225 16% 7%;
+    --popover-foreground: 210 14% 94%;
+    --primary: 190 92% 52%;
+    --primary-foreground: 225 40% 6%;
+    --secondary: 225 11% 14%;
+    --secondary-foreground: 210 14% 94%;
+    --muted: 225 11% 13%;
+    --muted-foreground: 220 8% 58%;
+    --accent: 225 11% 15%;
+    --accent-foreground: 210 14% 94%;
+    --destructive: 0 72% 55%;
+    --destructive-foreground: 210 16% 98%;
+    --success: 158 74% 44%;
+    --warning: 38 92% 55%;
+    --border: 224 10% 16%;
+    --input: 224 10% 17%;
+    --ring: 190 92% 52%;
+    --radius: 0.4rem;
+
+    --grid-line: 224 10% 16% / 0.5;
+    --glow-a: 190 92% 52% / 0.08;
+    --glow-b: 265 70% 60% / 0.06;
+
+    color-scheme: dark;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --background: 220 24% 97%;
+      --foreground: 224 30% 12%;
+      --card: 0 0% 100%;
+      --card-foreground: 224 30% 12%;
+      --popover: 0 0% 100%;
+      --popover-foreground: 224 30% 12%;
+      --primary: 196 88% 38%;
+      --primary-foreground: 0 0% 100%;
+      --secondary: 220 18% 92%;
+      --secondary-foreground: 224 30% 12%;
+      --muted: 220 18% 93%;
+      --muted-foreground: 224 10% 42%;
+      --accent: 220 18% 90%;
+      --accent-foreground: 224 30% 12%;
+      --destructive: 0 70% 46%;
+      --destructive-foreground: 0 0% 100%;
+      --success: 158 68% 32%;
+      --warning: 32 88% 42%;
+      --border: 220 16% 85%;
+      --input: 220 16% 84%;
+      --ring: 196 88% 38%;
+
+      --grid-line: 220 16% 82% / 0.55;
+      --glow-a: 196 88% 45% / 0.07;
+      --glow-b: 265 60% 55% / 0.05;
+
+      color-scheme: light;
+    }
+  }
+
+  /* Explicit choice beats the OS, in both directions. */
+  :root[data-theme="light"] {
+    --background: 220 24% 97%;
+    --foreground: 224 30% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 224 30% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 224 30% 12%;
+    --primary: 196 88% 38%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 18% 92%;
+    --secondary-foreground: 224 30% 12%;
+    --muted: 220 18% 93%;
+    --muted-foreground: 224 10% 42%;
+    --accent: 220 18% 90%;
+    --accent-foreground: 224 30% 12%;
+    --destructive: 0 70% 46%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 158 68% 32%;
+    --warning: 32 88% 42%;
+    --border: 220 16% 85%;
+    --input: 220 16% 84%;
+    --ring: 196 88% 38%;
+
+    --grid-line: 220 16% 82% / 0.55;
+    --glow-a: 196 88% 45% / 0.07;
+    --glow-b: 265 60% 55% / 0.05;
+
+    color-scheme: light;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: var(--font-sans);
+    /* A faint technical grid + two soft lights: terminal-adjacent, not flat black. */
+    background-image:
+      radial-gradient(46rem 28rem at 82% -10%, hsl(var(--glow-a)), transparent 62%),
+      radial-gradient(40rem 26rem at -8% -6%, hsl(var(--glow-b)), transparent 60%),
+      linear-gradient(hsl(var(--grid-line)) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--grid-line)) 1px, transparent 1px);
+    background-size: auto, auto, 32px 32px, 32px 32px;
+    background-attachment: fixed;
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.3);
+  }
+
+  /* Keyboard users get a visible, consistent ring everywhere. */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.5);
+  }
+}
+
+@layer utilities {
+  .font-mono {
+    font-family: var(--font-mono);
+  }
+
+  /* Slightly lifted glass panel — the default container for a pane of the app. */
+  .panel {
+    @apply rounded-lg border border-border/80 bg-card/70 backdrop-blur-sm;
+  }
+
+  /* A hairline of light along the top edge of a card. */
+  .hairline::before {
+    content: "";
+    position: absolute;
+    inset-inline: 1rem;
+    top: 0;
+    height: 1px;
+    background-image: linear-gradient(
+      90deg,
+      transparent,
+      hsl(var(--primary) / 0.7),
+      transparent
+    );
+  }
+
+  /* Log/terminal output surface. */
+  .terminal-surface {
+    @apply rounded-md border border-border bg-[hsl(225_18%_4%)] text-[hsl(210_14%_88%)];
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+
+  .kbd {
+    @apply inline-flex h-5 min-w-5 items-center justify-center rounded border border-border bg-muted px-1 text-[10px] font-medium text-muted-foreground;
+    font-family: var(--font-mono);
+  }
+}
+
+@keyframes vh-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
