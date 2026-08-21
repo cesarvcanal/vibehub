@@ -8,37 +8,59 @@
  *   :root                          -> dark, always: a terminal product is dark by default, whatever
  *                                     the OS says (the same rule the panel it came from follows)
  *   [data-theme="light"]           -> light only as an explicit choice from the toolbar
+ *
+ * The dark values are the control-room palette shared with the private panel this was extracted
+ * from: near-black blue-grey surfaces, a single blue accent, and a 0.7rem radius.
  */
 @layer base {
   :root {
-    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --font-brand: "Inter", system-ui, sans-serif;
+    --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
-    --background: 225 16% 6%;
-    --foreground: 210 14% 94%;
-    --card: 225 15% 8.5%;
-    --card-foreground: 210 14% 94%;
-    --popover: 225 16% 7%;
-    --popover-foreground: 210 14% 94%;
-    --primary: 190 92% 52%;
-    --primary-foreground: 225 40% 6%;
-    --secondary: 225 11% 14%;
-    --secondary-foreground: 210 14% 94%;
-    --muted: 225 11% 13%;
-    --muted-foreground: 220 8% 58%;
-    --accent: 225 11% 15%;
-    --accent-foreground: 210 14% 94%;
-    --destructive: 0 72% 55%;
+    /* Brand ramp — cyan -> aqua -> blue -> indigo -> purple -> magenta. */
+    --brand-cyan: #38f5ff;
+    --brand-aqua: #20d6ff;
+    --brand-blue: #168bff;
+    --brand-indigo: #3555ff;
+    --brand-purple: #8b2cff;
+    --brand-magenta: #d71cff;
+    --brand-gradient: linear-gradient(
+      135deg,
+      #38f5ff 0%,
+      #20d6ff 22%,
+      #168bff 48%,
+      #3555ff 70%,
+      #8b2cff 88%,
+      #d71cff 100%
+    );
+    --brand-glow: 0 0 24px rgba(32, 214, 255, 0.28), 0 0 48px rgba(139, 44, 255, 0.22);
+
+    --background: 222 18% 5%;
+    --foreground: 210 16% 96%;
+    --card: 222 16% 7.5%;
+    --card-foreground: 210 16% 96%;
+    --popover: 222 18% 6%;
+    --popover-foreground: 210 16% 96%;
+    --primary: 205 90% 55%;
+    --primary-foreground: 222 40% 6%;
+    --secondary: 222 12% 13%;
+    --secondary-foreground: 210 16% 96%;
+    --muted: 222 12% 12%;
+    --muted-foreground: 218 9% 60%;
+    --accent: 222 12% 14%;
+    --accent-foreground: 210 16% 96%;
+    --destructive: 0 72% 52%;
     --destructive-foreground: 210 16% 98%;
     --success: 158 74% 44%;
     --warning: 38 92% 55%;
-    --border: 224 10% 16%;
-    --input: 224 10% 17%;
-    --ring: 190 92% 52%;
-    --radius: 0.4rem;
+    --border: 220 10% 15%;
+    --input: 220 10% 16%;
+    --ring: 205 90% 55%;
+    --radius: 0.7rem;
 
-    --grid-line: 224 10% 16% / 0.5;
-    --glow-a: 190 92% 52% / 0.08;
+    --grid-line: 220 10% 15% / 0.45;
+    --glow-a: 205 90% 55% / 0.09;
     --glow-b: 265 70% 60% / 0.06;
 
     color-scheme: dark;
@@ -51,7 +73,7 @@
     --card-foreground: 224 30% 12%;
     --popover: 0 0% 100%;
     --popover-foreground: 224 30% 12%;
-    --primary: 196 88% 38%;
+    --primary: 205 88% 40%;
     --primary-foreground: 0 0% 100%;
     --secondary: 220 18% 92%;
     --secondary-foreground: 224 30% 12%;
@@ -65,10 +87,10 @@
     --warning: 32 88% 42%;
     --border: 220 16% 85%;
     --input: 220 16% 84%;
-    --ring: 196 88% 38%;
+    --ring: 205 88% 40%;
 
     --grid-line: 220 16% 82% / 0.55;
-    --glow-a: 196 88% 45% / 0.07;
+    --glow-a: 205 88% 45% / 0.07;
     --glow-b: 265 60% 55% / 0.05;
 
     color-scheme: light;
@@ -89,13 +111,14 @@
   body {
     @apply bg-background text-foreground antialiased;
     font-family: var(--font-sans);
+    font-feature-settings: "ss01", "cv01";
     /* A faint technical grid + two soft lights: terminal-adjacent, not flat black. */
     background-image:
-      radial-gradient(46rem 28rem at 82% -10%, hsl(var(--glow-a)), transparent 62%),
-      radial-gradient(40rem 26rem at -8% -6%, hsl(var(--glow-b)), transparent 60%),
+      radial-gradient(48rem 30rem at 78% -8%, hsl(var(--glow-a)), transparent 60%),
+      radial-gradient(42rem 28rem at -6% -4%, hsl(var(--glow-b)), transparent 58%),
       linear-gradient(hsl(var(--grid-line)) 1px, transparent 1px),
       linear-gradient(90deg, hsl(var(--grid-line)) 1px, transparent 1px);
-    background-size: auto, auto, 32px 32px, 32px 32px;
+    background-size: auto, auto, 34px 34px, 34px 34px;
     background-attachment: fixed;
   }
 
@@ -128,31 +151,120 @@
 @layer utilities {
   .font-mono {
     font-family: var(--font-mono);
+    font-feature-settings: normal;
   }
 
   /* Slightly lifted glass panel — the default container for a pane of the app. */
   .panel {
-    @apply rounded-lg border border-border/80 bg-card/70 backdrop-blur-sm;
+    @apply rounded-xl border border-border/80 bg-card/70 backdrop-blur-sm;
+  }
+
+  /* Halo behind a live/healthy dot. Green: the brand blue is reserved for interaction. */
+  .dot-live {
+    box-shadow: 0 0 0 3px hsl(160 84% 45% / 0.22);
   }
 
   /* A hairline of light along the top edge of a card. */
   .hairline::before {
     content: "";
     position: absolute;
-    inset-inline: 1rem;
+    inset-inline: 1.25rem;
     top: 0;
     height: 1px;
     background-image: linear-gradient(
       90deg,
       transparent,
-      hsl(var(--primary) / 0.7),
+      hsl(190 92% 60% / 0.9),
+      hsl(212 90% 60% / 0.9),
+      hsl(265 72% 62% / 0.9),
       transparent
     );
   }
 
+  /* Brand gradient as a fill (mark tiles, accent bars). */
+  .brand-gradient {
+    background-image: linear-gradient(135deg, hsl(190 92% 55%), hsl(212 90% 56%), hsl(265 72% 60%));
+  }
+
+  /* Brand gradient clipped to text — the accent half of the wordmark. */
+  .brand-gradient-text {
+    background: var(--brand-gradient);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Brand halo. */
+  .brand-glow {
+    box-shadow: var(--brand-glow);
+  }
+
+  /*
+   * Header navigation pills. One bordered group holds the destinations, another the actions, so
+   * the top bar reads as a single system instead of two button styles. No `focus:outline-none`
+   * here on purpose: the global `:focus-visible` ring is the keyboard affordance.
+   */
+  .nav-pill-group {
+    @apply flex flex-wrap items-center gap-1 rounded-xl border border-border/70 bg-card/50 p-1;
+  }
+  .nav-pill {
+    @apply inline-flex shrink-0 items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium text-muted-foreground transition-all hover:bg-accent/60 hover:text-foreground;
+  }
+  /* Compound selector on purpose: it has to outrank `.nav-pill` regardless of emitted order. */
+  .nav-pill.nav-pill-active {
+    @apply bg-primary/15 text-primary shadow-sm ring-1 ring-primary/30 hover:bg-primary/15 hover:text-primary;
+  }
+  .nav-pill-divider {
+    @apply mx-1 h-5 w-px shrink-0 bg-border/70;
+  }
+
+  /* Children rise in sequence instead of popping in all at once. */
+  .stagger > * {
+    opacity: 0;
+    animation: rise 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+  .stagger > *:nth-child(1) {
+    animation-delay: 0.02s;
+  }
+  .stagger > *:nth-child(2) {
+    animation-delay: 0.06s;
+  }
+  .stagger > *:nth-child(3) {
+    animation-delay: 0.1s;
+  }
+  .stagger > *:nth-child(4) {
+    animation-delay: 0.14s;
+  }
+  .stagger > *:nth-child(5) {
+    animation-delay: 0.18s;
+  }
+  .stagger > *:nth-child(6) {
+    animation-delay: 0.22s;
+  }
+  .stagger > *:nth-child(7) {
+    animation-delay: 0.26s;
+  }
+  .stagger > *:nth-child(8) {
+    animation-delay: 0.3s;
+  }
+
+  /* Skeleton with a light sweeping through it — used instead of a centred spinner. */
+  .shimmer {
+    position: relative;
+    overflow: hidden;
+  }
+  .shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, hsl(210 16% 96% / 0.06), transparent);
+    animation: shimmer 1.6s ease-in-out infinite;
+  }
+
   /* Log/terminal output surface. */
   .terminal-surface {
-    @apply rounded-md border border-border bg-[hsl(225_18%_4%)] text-[hsl(210_14%_88%)];
+    @apply rounded-md border border-border bg-[hsl(222_20%_4%)] text-[hsl(210_16%_90%)];
     font-family: var(--font-mono);
     font-size: 12px;
     line-height: 1.55;
@@ -161,6 +273,45 @@
   .kbd {
     @apply inline-flex h-5 min-w-5 items-center justify-center rounded border border-border bg-muted px-1 text-[10px] font-medium text-muted-foreground;
     font-family: var(--font-mono);
+  }
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes soft-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 hsl(205 90% 55% / 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 6px hsl(205 90% 55% / 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 hsl(205 90% 55% / 0);
   }
 }
 

@@ -16,8 +16,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
         <AuthProvider>
           <TooltipProvider delayDuration={200} skipDelayDuration={300}>
             {children}
-            {/* Inherits the page palette instead of forcing its own light card. */}
-            <Toaster theme="system" position="bottom-right" richColors closeButton />
+            {/* Dark to match the shell — the light palette is an explicit opt-in, not the default. */}
+            <Toaster position="top-right" richColors theme="dark" />
           </TooltipProvider>
         </AuthProvider>
       </BrowserRouter>
