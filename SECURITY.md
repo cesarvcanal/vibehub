@@ -25,6 +25,14 @@ reach the runner get there in a deliberately narrow way:
 - The **runner service token** is written host-side into the `/root` bind mount at mode 600. The
   status hook reads it from that file at call time, so it is never baked into `settings.json`.
 
+**Cards can reach each other.** vibehub registers itself as an MCP server inside every card, so an
+agent can list the other cards, type an instruction into one, and read its answers. That is the
+feature — one terminal coordinating the others — but it means the trust boundary is the *install*,
+not the card: an agent that goes wrong, or a repository that talks it into something, can act
+through any other terminal on the board. The credential behind it is the runner service token, and
+anything holding that token has the same reach. If you need two workloads that must not touch each
+other, run two installs.
+
 **Autonomy is a choice.** By default the agent runs without permission prompts inside the runner
 (`bypassPermissions` + `IS_SANDBOX=1`), because the container is the sandbox. The setup wizard asks,
 and you can turn it off in Settings — the agent then prompts, and cards land in `waiting` until you
