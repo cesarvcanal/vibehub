@@ -1,0 +1,16 @@
+name: Feature request
+description: Suggest something vibehub should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that vibehub makes hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind
+      description: Optional — a rough shape is enough.

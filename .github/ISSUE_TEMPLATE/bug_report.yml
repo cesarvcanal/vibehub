@@ -1,0 +1,27 @@
+name: Bug report
+description: Something in vibehub does not work
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Image tag or commit you are running.
+  - type: dropdown
+    id: runner
+    attributes:
+      label: Runner location
+      options: ["local (Docker socket)", "ssh (remote host)"]
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: "`docker compose logs vibehub`, and the provisioning log if the runner is involved. Redact tokens."
+      render: shell
