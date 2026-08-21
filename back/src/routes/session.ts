@@ -18,6 +18,32 @@ import { logger } from "../utils/logger.js";
  * has been opened before connects instantly and the /open call becomes background work.
  */
 
+/** A `ws` WebSocket, under which lives the raw TCP socket (`_socket`). */
+interface RawSocketHolder {
+  _socket?: { setNoDelay?: (on: boolean) => void };
+}
+
+/**
+ * Turns Nagle's algorithm off (TCP_NODELAY) on the TCP socket under the WebSocket.
+ *
+ * Echoing ONE keystroke is a tiny packet (a byte plus the WS frame). With Nagle on it can sit in
+ * the server for up to ~40ms (Nagle × delayed-ACK) before leaving for the browser — which is
+ * exactly the lag you feel while typing in an interactive terminal. Node leaves Nagle ON by default
+ * on HTTP server sockets, so the terminal path has to ask for NODELAY explicitly.
+ *
+ * Idempotent, and safe on a socket with no `_socket` (adapters and tests). Returns true if applied.
+ */
+export function disableNagle(socket: unknown): boolean {
+  const raw = (socket as RawSocketHolder | null)?._socket;
+  if (!raw || typeof raw.setNoDelay !== "function") return false;
+  try {
+    raw.setNoDelay(true);
+    return true;
+  } catch {
+    return false; // the socket is already closing
+  }
+}
+
 /** Terminal geometry the runner will accept: an integer between 10 and 500. */
 export function isValidTermSize(n: unknown): n is number {
   return typeof n === "number" && Number.isInteger(n) && n >= 10 && n <= 500;
@@ -42,6 +68,7 @@ const KEEPALIVE_MS = 25_000;
 
 /** Wires a pty to a websocket: output out, keystrokes and resizes in, both sides closing together. */
 function bridgePty(socket: WebSocket, term: IPty, label: string): void {
+  disableNagle(socket);
   const keepalive = setInterval(() => {
     // Proxies drop an idle websocket; a protocol ping keeps the terminal alive while you read.
     try { socket.ping?.(); } catch { /* the close handler cleans up */ }
@@ -209,6 +236,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
         socket.close();
         return;
       }
+      disableNagle(socket);
       const child = spawn(bridge.command.file, bridge.command.args, { stdio: ["pipe", "pipe", "ignore"] });
       child.stdout.on("data", (chunk: Buffer) => {
         try { socket.send(chunk); } catch { child.kill(); }

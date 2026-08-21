@@ -33,7 +33,9 @@ export function CardListSidebar({
   const { data: cards } = useQuery({
     queryKey: cardsKey(project.id),
     queryFn: () => boardApi.listCards(project.id),
-    refetchInterval: 5_000,
+    // 2s, not 5s: the dot is the one thing on screen that has to feel live. A card that just went
+    // amber is a card asking for you, and three extra seconds of green reads as "still busy".
+    refetchInterval: 2_000,
   });
 
   const [showMore, setShowMore] = React.useState(false);

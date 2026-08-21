@@ -169,3 +169,19 @@ describe("session routes require a session", () => {
     }
   });
 });
+
+describe("terminal transport tuning", () => {
+  it("turns Nagle off on the socket under the websocket — a 1-byte echo must not wait ~40ms", async () => {
+    const { disableNagle } = await import("./session.js");
+    const setNoDelay = vi.fn();
+    expect(disableNagle({ _socket: { setNoDelay } })).toBe(true);
+    expect(setNoDelay).toHaveBeenCalledWith(true);
+  });
+
+  it("survives a socket with no raw handle (adapters, tests) instead of throwing", async () => {
+    const { disableNagle } = await import("./session.js");
+    expect(disableNagle({})).toBe(false);
+    expect(disableNagle(null)).toBe(false);
+    expect(disableNagle({ _socket: { setNoDelay: () => { throw new Error("closing"); } } })).toBe(false);
+  });
+});

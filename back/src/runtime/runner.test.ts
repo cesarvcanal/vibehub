@@ -32,14 +32,23 @@ describe("hookCommand", () => {
   it("times out fast — a hook must never hang the agent", () => {
     expect(hookCommand("waiting")).toContain("-m 3");
   });
+
+  it("never fails the hook — a lost telemetry POST must not print an error inside the card", () => {
+    expect(hookCommand("working").trimEnd().endsWith("|| true")).toBe(true);
+  });
 });
 
 describe("runnerSettingsJson", () => {
-  it("wires every hook that can mean 'waiting for the human'", () => {
+  it("wires every hook that can mean 'waiting for the human' or 'back to work'", () => {
     const settings = JSON.parse(runnerSettingsJson()) as { hooks: Record<string, unknown> };
     expect(Object.keys(settings.hooks).sort()).toEqual(
-      ["Notification", "PermissionRequest", "SessionStart", "Stop", "StopFailure", "UserPromptSubmit"],
+      ["Notification", "PermissionRequest", "PreToolUse", "SessionStart", "Stop", "StopFailure", "UserPromptSubmit"],
     );
+  });
+
+  it("returns a card to working when the agent resumes on its own (PreToolUse), not just on a prompt", () => {
+    const s = JSON.parse(runnerSettingsJson()) as { hooks: Record<string, [{ hooks: [{ command: string }] }]> };
+    expect(s.hooks.PreToolUse?.[0].hooks[0].command).toContain('\\"working\\"');
   });
   it("marks a fresh session as waiting, not working", () => {
     const s = JSON.parse(runnerSettingsJson()) as { hooks: Record<string, [{ hooks: [{ command: string }] }]> };

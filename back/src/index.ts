@@ -30,7 +30,13 @@ export async function buildServer() {
 
   await app.register(cookie);
   await app.register(cors, { origin: true, credentials: true });
-  await app.register(websocket, { options: { maxPayload: 16 * 1024 * 1024 } });
+  // Terminals and the VNC bridge. perMessageDeflate is OFF on purpose: a terminal sends MANY tiny
+  // frames (one keystroke, one echo) and per-message compression only adds latency and CPU at that
+  // size — there is nothing to compress in a single byte. It is also the `ws` default, but stated
+  // here so it cannot come back by accident. TCP_NODELAY for the same path is set in the route.
+  await app.register(websocket, {
+    options: { maxPayload: 16 * 1024 * 1024, perMessageDeflate: false },
+  });
 
   app.get("/api/health", async () => ({ ok: true, version: "0.1.0" }));
 

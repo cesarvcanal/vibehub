@@ -56,7 +56,9 @@ export function KanbanBoard({
   const { data: cards, isLoading } = useQuery({
     queryKey: boardKey,
     queryFn: () => boardApi.listCards(project.id),
-    refetchInterval: 5_000,
+    // 2s, not 5s: the dot is the one thing on screen that has to feel live. A card that just went
+    // amber is a card asking for you, and three extra seconds of green reads as "still busy".
+    refetchInterval: 2_000,
   });
 
   const { data: accountsData } = useQuery({ queryKey: ACCOUNTS_KEY, queryFn: boardApi.listAccounts });

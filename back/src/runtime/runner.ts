@@ -31,7 +31,7 @@ export function statusUrl(): string {
 export function hookCommand(status: "working" | "waiting"): string {
   return (
     `curl -s -m 3 -X POST "$VIBEHUB_STATUS_URL" -H "x-vibehub-token: $(cat /root/.vibehub-token)"` +
-    ` -H "content-type: application/json" -d "{\\"card\\":\\"$VIBEHUB_CARD_ID\\",\\"status\\":\\"${status}\\"}"`
+    ` -H "content-type: application/json" -d "{\\"card\\":\\"$VIBEHUB_CARD_ID\\",\\"status\\":\\"${status}\\"}" || true`
   );
 }
 
@@ -52,6 +52,12 @@ export interface RunnerSettingsOpts {
  * sat idle at the prompt, having never fired a hook (the others only fire after a prompt). A new
  * session means "waiting for the human" (SessionStart); Notification is what Claude emits when it
  * goes idle waiting for input or permission.
+ *
+ * PreToolUse → working comes from a second production bug: after a Notification (an idle nudge, a
+ * retry), a session can resume ON ITS OWN — auto mode, a loop — without ever passing through
+ * UserPromptSubmit. Since that was the only hook returning the card to "working", the dot stayed
+ * AMBER while the agent was visibly running tools. PreToolUse fires on every tool call, so the
+ * status is corrected at the first real action after a resume.
  */
 export function runnerSettingsJson(opts: RunnerSettingsOpts = { autonomous: true }): string {
   const hook = (status: "working" | "waiting") => [{ hooks: [{ type: "command", command: hookCommand(status) }] }];
@@ -66,6 +72,7 @@ export function runnerSettingsJson(opts: RunnerSettingsOpts = { autonomous: true
       hooks: {
         SessionStart: hook("waiting"),
         UserPromptSubmit: hook("working"),
+        PreToolUse: hook("working"),
         Stop: hook("waiting"),
         PermissionRequest: hook("waiting"),
         StopFailure: hook("waiting"),
