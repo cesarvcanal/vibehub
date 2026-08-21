@@ -770,41 +770,52 @@ export async function updateCard(id: string, patch: UpdateCardInput): Promise<Ca
   return store.mutate((doc) => {
     const card = doc.cards.find((c) => c.id === id);
     if (!card) throw new Error("card not found");
+
+    // VALIDATE EVERYTHING FIRST, then apply. A patch is all-or-nothing: the document lives in a
+    // cache shared with the next mutation, so a half-applied patch whose last field throws would
+    // survive in memory and get persisted by whatever writes next.
+    const next: Partial<Card> = {};
     if (patch.title !== undefined) {
       const title = String(patch.title).trim();
       if (!title) throw new Error("title cannot be empty");
-      card.title = title;
+      next.title = title;
     }
+    let move: { column: BoardColumn; position?: number } | undefined;
     if (patch.column !== undefined || patch.position !== undefined) {
       const column = patch.column ?? card.column;
       if (!BOARD_COLUMNS.includes(column)) throw new Error(`invalid column: ${String(patch.column)}`);
       if (patch.position !== undefined && (!Number.isInteger(patch.position) || patch.position < 0)) {
         throw new Error("invalid position (expected an integer >= 0)");
       }
-      placeCard(doc.cards, card, column, patch.position);
+      move = { column, position: patch.position };
     }
     // accountSlug: null = CLEAR (inherit from the project); a string must be an account that EXISTS.
     // Switching accounts on a live session is handled by the caller (kill-session) — this is the record only.
     if (patch.accountSlug !== undefined) {
-      card.accountSlug = patch.accountSlug === null ? undefined : requireAccountSlug(doc, patch.accountSlug);
+      next.accountSlug = patch.accountSlug === null ? undefined : requireAccountSlug(doc, patch.accountSlug);
     }
     // model: null/"" = CLEAR (back to the account default); a string must be whitelisted.
     if (patch.model !== undefined) {
-      card.model = patch.model === null || !String(patch.model).trim() ? undefined : assertModel(patch.model);
+      next.model = patch.model === null || !String(patch.model).trim() ? undefined : assertModel(patch.model);
     }
     // Imported session / own branch: validated here (uuid / assertBranchName) because both become
     // argv or script content in the runner and must never pass through raw. null clears.
     if (patch.resumeSessionId !== undefined) {
-      card.resumeSessionId = patch.resumeSessionId === null ? undefined : assertSessionId(patch.resumeSessionId);
+      next.resumeSessionId = patch.resumeSessionId === null ? undefined : assertSessionId(patch.resumeSessionId);
     }
     if (patch.branch !== undefined) {
-      card.branch = patch.branch === null || !String(patch.branch).trim() ? undefined : assertBranchName(patch.branch);
+      next.branch = patch.branch === null || !String(patch.branch).trim() ? undefined : assertBranchName(patch.branch);
     }
     // base: the label of the base branch the NEXT open/worktree uses (it does not touch an existing
     // worktree or tmux session). Validated here — it becomes argv/script in the runner. There is no
     // `null`: the base is always required (inherited from the project at creation), so fixing it is
     // always a string.
-    if (patch.base !== undefined) card.base = assertBranchName(patch.base);
+    if (patch.base !== undefined) next.base = assertBranchName(patch.base);
+
+    // Nothing below this line can throw. (Object.assign copies keys explicitly set to `undefined`
+    // too, which is exactly how a field gets cleared.)
+    Object.assign(card, next);
+    if (move) placeCard(doc.cards, card, move.column, move.position);
     card.updatedAt = Date.now();
     return card;
   });
