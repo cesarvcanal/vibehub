@@ -235,7 +235,7 @@ describe("XTerminal — zoom", () => {
 
   it("Cmd/Ctrl + grows the font, persists it, and swallows the key so the page does not zoom", () => {
     render(<XTerminal wsPath="/api/cards/c1/terminal" />);
-    const before = term().options.fontSize ?? 13;
+    const before = Number(term().options.fontSize ?? 13);
     const event = new KeyboardEvent("keydown", { key: "=", metaKey: true, cancelable: true });
     const handled = term().keyHandler?.(event);
     expect(handled).toBe(false);
