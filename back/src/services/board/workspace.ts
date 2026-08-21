@@ -11,6 +11,7 @@ import { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir, profileDirFo
 import { resolveAccountToken, writeTokenLines } from "../accounts/token.js";
 import { cardCdpEndpoint } from "../browser/ports.js";
 import { mcpInjectLines, resolveMcpInjections, type McpInjection } from "../mcp/mcp.js";
+import { brainInjectLines, resolveBrainText } from "../brain/brain.js";
 import { logger } from "../../utils/logger.js";
 
 export { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir };
@@ -175,6 +176,12 @@ export interface OpenScriptOpts {
   oauthToken?: string;
   /** Managed MCPs (JSON already resolved) to inject into the card's effective profile. */
   mcps?: McpInjection[];
+  /**
+   * The BRAIN (global instructions, markdown) to seed as CLAUDE.md at the root of the card's
+   * effective profile. Idempotent by signature (a `.brain-<sig>` marker): the open only rewrites it
+   * when the text changed.
+   */
+  brain?: string;
   /** Present = the project has a repository: clone/fetch/worktree before tmux. */
   repo?: {
     dir: string;
@@ -265,6 +272,9 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
   if (opts.oauthToken) inner.push(...writeTokenLines(profileDir, opts.oauthToken));
   // Managed MCPs into the card's effective profile (remove-before + add-json, JSON in a heredoc).
   if (opts.mcps?.length) inner.push(...mcpInjectLines([opts.accountConfigDir], opts.mcps));
+  // The brain (global CLAUDE.md) seeded into the card's effective profile — idempotent by signature,
+  // so reopening a card rewrites nothing; new text is picked up on the next open.
+  if (opts.brain) inner.push(...brainInjectLines([opts.accountConfigDir], opts.brain));
   inner.push(
     // With no tty (bash -s through docker exec -i), `new-session -A` on an existing session becomes
     // an attach and exits with "open terminal failed" — the guard creates the session ONLY when it
@@ -491,6 +501,14 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
     } catch (e) {
       logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "managed MCPs not injected on open (continuing)");
     }
+    // The brain (global CLAUDE.md): BEST-EFFORT on open (malformed text must not stop a card from
+    // opening — the UI's save is the path that validates and fails loudly).
+    let brain: string | undefined;
+    try {
+      brain = await resolveBrainText();
+    } catch (e) {
+      logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "brain not seeded on open (continuing)");
+    }
 
     const script = buildOpenScript({
       containerName: config.runner.container,
@@ -504,6 +522,7 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
       model: card.model,
       oauthToken,
       mcps,
+      brain,
       repo,
     });
     try {

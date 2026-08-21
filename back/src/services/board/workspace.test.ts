@@ -831,6 +831,35 @@ describe("managed MCPs injected on open (into the card's effective profile)", ()
   });
 });
 
+describe("the brain (global CLAUDE.md) seeded on open", () => {
+  it("written into the card's effective profile, before tmux, behind an idempotency marker", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    const script = scriptAt(0);
+    expect(script).toContain("cat > '/root/.claude/CLAUDE.md'");
+    // guarded by the signature marker: reopening rewrites nothing
+    expect(script).toMatch(/if \[ ! -f '\/root\/\.claude\/\.brain-[0-9a-f]+' \]; then/);
+    expect(script.indexOf("CLAUDE.md")).toBeLessThan(script.indexOf("tmux new-session"));
+  });
+
+  it("an account card gets the brain in ITS profile, not the default one", async () => {
+    await reg.createAccount({ name: "Personal" });
+    const { card } = await seed();
+    await reg.updateCard(card.id, { accountSlug: "personal" });
+    await ws.openCard(card.id);
+    expect(scriptAt(0)).toContain("cat > '/root/.claude-profiles/personal/CLAUDE.md'");
+    expect(scriptAt(0)).not.toContain("'/root/.claude/CLAUDE.md'");
+  });
+
+  it("a broken brain does not block the open (best-effort, like the MCPs)", async () => {
+    const brain = await import("../brain/brain.js");
+    vi.spyOn(brain, "resolveBrainText").mockRejectedValue(new Error("brain is corrupt"));
+    const { card } = await seed();
+    expect((await ws.openCard(card.id)).column).toBe("waiting");
+    expect(scriptAt(0)).not.toContain("CLAUDE.md");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Pre-provisioning and the per-card lock
 // ---------------------------------------------------------------------------
