@@ -38,6 +38,7 @@ class FakeTerminal {
     this.cols = cols;
     this.rows = rows;
   }
+  keyHandler: ((e: KeyboardEvent) => boolean) | null = null;
   open(element: HTMLElement): void {
     this.element = element;
   }
@@ -65,6 +66,9 @@ class FakeTerminal {
   registerLinkProvider(provider: ILinkProvider) {
     this.linkProvider = provider;
     return { dispose: () => {} };
+  }
+  attachCustomKeyEventHandler(handler: (e: KeyboardEvent) => boolean): void {
+    this.keyHandler = handler;
   }
 
   get buffer() {
@@ -217,6 +221,41 @@ describe("XTerminal — mounting", () => {
   it("labels the terminal for screen readers", () => {
     render(<XTerminal wsPath="/api/cards/c1/terminal" ariaLabel="Terminal for a card" />);
     expect(screen.getByRole("application", { name: "Terminal for a card" })).toBeInTheDocument();
+  });
+});
+
+describe("XTerminal — zoom", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("starts at the size the reader last chose", () => {
+    localStorage.setItem("vibehub.terminalFontSize", "17");
+    render(<XTerminal wsPath="/api/cards/c1/terminal" />);
+    expect(term().options.fontSize).toBe(17);
+  });
+
+  it("Cmd/Ctrl + grows the font, persists it, and swallows the key so the page does not zoom", () => {
+    render(<XTerminal wsPath="/api/cards/c1/terminal" />);
+    const before = term().options.fontSize ?? 13;
+    const event = new KeyboardEvent("keydown", { key: "=", metaKey: true, cancelable: true });
+    const handled = term().keyHandler?.(event);
+    expect(handled).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(term().options.fontSize).toBe(before + 1);
+    expect(localStorage.getItem("vibehub.terminalFontSize")).toBe(String(before + 1));
+  });
+
+  it("Cmd/Ctrl 0 goes back to the default", () => {
+    localStorage.setItem("vibehub.terminalFontSize", "19");
+    render(<XTerminal wsPath="/api/cards/c1/terminal" />);
+    term().keyHandler?.(new KeyboardEvent("keydown", { key: "0", ctrlKey: true, cancelable: true }));
+    expect(term().options.fontSize).toBe(13);
+  });
+
+  it("lets every other key through to the terminal", () => {
+    render(<XTerminal wsPath="/api/cards/c1/terminal" />);
+    const size = term().options.fontSize;
+    expect(term().keyHandler?.(new KeyboardEvent("keydown", { key: "c", ctrlKey: true }))).toBe(true);
+    expect(term().options.fontSize).toBe(size);
   });
 });
 

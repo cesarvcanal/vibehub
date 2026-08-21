@@ -7,6 +7,10 @@ import { wsUrl } from "@/lib/ws";
 import { fitDimensions, resizeFrame } from "@/features/board/lib/focusMode";
 import { reconnectDelay, type ConnectionState } from "@/features/board/lib/reconnect";
 import { findUrls, offsetsToRange } from "@/features/board/lib/links";
+import {
+  applyZoom, readTerminalFontSize, writeTerminalFontSize, writeClipboard, zoomActionFromKey,
+  TERMINAL_FONT_DEFAULT,
+} from "@/features/board/lib/terminalZoom";
 
 /**
  * A live terminal: an xterm bound to a vibehub websocket.
@@ -143,7 +147,9 @@ export function XTerminal({
       cursorBlink: true,
       fontFamily:
         'var(--font-mono), ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace',
-      fontSize: 13,
+      // Restored from the last session: how big a terminal should be is about the reader and the
+      // screen, not about this card.
+      fontSize: readTerminalFontSize(TERMINAL_FONT_DEFAULT),
       lineHeight: 1.2,
       scrollback: 10_000,
       // Truecolor: never re-tint what the agent printed. See note 3 at the top.
@@ -191,10 +197,34 @@ export function XTerminal({
     const selection = term.onSelectionChange(() => {
       const text = term.getSelection();
       if (!text) return;
-      // Best effort: a browser may refuse without a user gesture or outside a secure context, and
-      // a failed copy must never surface as an error in the middle of someone's work.
-      void navigator?.clipboard?.writeText?.(text).catch(() => undefined);
+      // The Clipboard API only exists in a secure context, and a plain-http LAN install is a normal
+      // way to run this — writeClipboard falls back to execCommand before giving up, and says so
+      // in the console if both refuse.
+      writeClipboard(text);
     });
+
+    /* ------------------------------------------------------------------ zoom */
+
+    // Cmd/Ctrl +/-/0 resizes the terminal font. Handled here, before xterm sees the key, so the
+    // browser does not zoom the whole page instead — which would break the fit and the geometry.
+    const onZoomKey = (event: KeyboardEvent): boolean => {
+      const action = zoomActionFromKey(event);
+      if (!action) return true;
+      event.preventDefault();
+      const size = applyZoom(term.options.fontSize ?? TERMINAL_FONT_DEFAULT, action);
+      term.options.fontSize = size;
+      writeTerminalFontSize(size);
+      // The cell box changed, so the pty has to hear about the new geometry.
+      try {
+        fit.fit();
+      } catch {
+        /* the element may be detached mid-teardown */
+      }
+      return false;
+    };
+    // Guarded: a stub Terminal (tests, future adapters) may not implement it, and a missing zoom
+    // shortcut must never take the whole terminal down with it.
+    term.attachCustomKeyEventHandler?.(onZoomKey);
 
     /* ------------------------------------------------------------- websocket */
 
