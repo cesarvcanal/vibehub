@@ -1,6 +1,11 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import { runnerStatus } from "../../runtime/runner.js";
+import {
+  listProjects, createProject, listCards, createCard, updateCard,
+  effectiveAccountSlug, assertSessionId,
+  BOARD_COLUMNS, type BoardColumn, type Card, type Project,
+} from "../board/registry.js";
 import { profileDirFor } from "../mcp/mcp.js";
 import { logger } from "../../utils/logger.js";
 
@@ -10,21 +15,27 @@ import { logger } from "../../utils/logger.js";
  * back up where it was left.
  *
  * The delicate part is SEEDING the transcript. `claude --resume <id>` looks for the file at
- * `<profile>/projects/<sanitized-cwd>/<id>.jsonl` INSIDE the runner. The transcripts have already
- * been copied into a STAGING directory in the runner (default /work/import); importing MOVES each
- * one into the card's directory. The name of that `projects` directory is DETERMINISTIC from the
- * card's cwd and does NOT depend on the worktree existing yet — so we do not pre-provision anything
- * (no clone): we derive the path and seed straight into it. Cloning and creating the worktree is
- * what opening the card does, idempotently, later.
+ * `<profile>/projects/<sanitized-cwd>/<id>.jsonl` INSIDE the runner. The `.jsonl` files have already
+ * been copied into a STAGING directory there (default `/work/import`); importing copies each one
+ * into the card's directory. The name of that `projects` directory is DETERMINISTIC from the card's
+ * cwd and does NOT depend on the worktree existing yet — so nothing is pre-provisioned here (no
+ * clone): the path is derived and seeded straight away. Creating the clone and the worktree is what
+ * opening the card does, idempotently, later.
  *
- * SECURITY INVARIANT: no raw input reaches a shell. `stageDir` is validated (assertSafeRemotePath)
- * and shell-quoted; `sessionId` is validated as a uuid (assertSessionId) BEFORE it is interpolated
- * into a path; the destination is DERIVED from the board and validated too. No transcript content
- * is ever logged.
+ * SECURITY INVARIANT: no raw input reaches a shell. `stageDir` is validated
+ * (`assertSafeRemotePath`) and shell-quoted; `sessionId` is validated as a uuid BEFORE it is
+ * interpolated into a path — it is the only field of an import item that reaches the runner at all.
+ * The destination is DERIVED from the board and validated too. No transcript content is ever logged:
+ * a transcript is a whole conversation.
  */
 
 /** Default staging directory inside the runner, where the .jsonl files were placed. */
 export const DEFAULT_STAGE_DIR = "/work/import";
+
+/** Column an imported card lands in: it was started elsewhere, so it is dormant, not brand new. */
+export const IMPORT_COLUMN: BoardColumn = (BOARD_COLUMNS as readonly string[]).includes("paused")
+  ? ("paused" as BoardColumn)
+  : "backlog";
 
 /** Heredoc delimiters and stdout markers — reserved words, never derived from input. */
 const SEED_DELIM = "VIBEHUB_IMPORT";
@@ -34,26 +45,13 @@ const MARK_MISSING = "VIBEHUB_IMPORT_MISSING";
 const MARK_PRESENT = "VIBEHUB_IMPORT_PRESENT";
 const MARK_ABSENT = "VIBEHUB_IMPORT_ABSENT";
 
-/**
- * A Claude session id is a uuid. This is NOT cosmetic validation: the value becomes part of a file
- * path that is shell-quoted into a script, and it is the only field of an import item that reaches
- * the runner at all. Reject anything that is not a uuid.
- */
-export function assertSessionId(value: string): string {
-  const v = String(value ?? "").trim().toLowerCase();
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v)) {
-    throw new Error(`invalid session id: '${value}' (expected a uuid)`);
-  }
-  return v;
-}
-
 /** Canonical repo key: lowercase owner/repo, no trailing .git. PURE. */
 export function normalizeRepoKey(full: string): string {
   return String(full ?? "").trim().replace(/\.git$/i, "").toLowerCase();
 }
 
 /** Canonical repo key of a project, from its full name or its clone URL. undefined = no repo. PURE. */
-export function projectRepoKey(project: { repoFullName?: string | null; cloneUrl?: string | null }): string | undefined {
+export function projectRepoKey(project: Pick<Project, "repoFullName" | "cloneUrl">): string | undefined {
   const full = project.repoFullName?.trim();
   if (full) return normalizeRepoKey(full);
   const url = project.cloneUrl?.trim();
@@ -64,8 +62,9 @@ export function projectRepoKey(project: { repoFullName?: string | null; cloneUrl
 
 /**
  * Name of Claude Code's `projects` directory for a given cwd: every character that is not
- * [A-Za-z0-9] becomes '-'. This is the SAME rule `claude --resume` uses to find a session's
- * transcript, which is why it is pure and directly tested. PURE.
+ * [A-Za-z0-9] becomes '-'. This is the SAME rule `claude --resume` uses to locate a session's
+ * transcript, which is why it is pure and directly tested — get it wrong and the card opens on an
+ * empty conversation with no error anywhere. PURE.
  */
 export function claudeProjectsDirName(cwd: string): string {
   return cwd.replace(/[^A-Za-z0-9]/g, "-");
@@ -77,10 +76,10 @@ export function seedDestDir(profileDir: string, cwd: string): string {
 }
 
 /**
- * Script (host → `docker exec -i <container> bash -s`) that seeds ONE transcript: when the source
+ * Script (host -> `docker exec -i <container> bash -s`) that seeds ONE transcript: when the source
  * exists it creates the destination and copies over it (idempotent); when it does not, it prints
- * MARK_MISSING and does NOT fail — the caller tells the two apart by reading stdout, so one missing
- * file produces a per-item error instead of aborting the batch. Paths are DERIVED, validated and
+ * MARK_MISSING and does NOT fail — the caller tells the two apart by reading stdout, so a missing
+ * file becomes a per-item error instead of aborting the batch. Paths are DERIVED, validated and
  * shell-quoted. PURE.
  */
 export function buildImportSeedScript(containerName: string, srcPath: string, destDir: string): string {
@@ -98,11 +97,11 @@ export function buildImportSeedScript(containerName: string, srcPath: string, de
 }
 
 /**
- * Script (host → `docker exec -i <container> bash -s`) that ASKS whether a transcript is ALREADY at
+ * Script (host -> `docker exec -i <container> bash -s`) that ASKS whether a transcript is ALREADY at
  * its destination: prints MARK_PRESENT when `<destPath>` exists, MARK_ABSENT otherwise. Read-only —
- * it is what makes re-running an import decide between re-seeding (a previous run created the card
- * but the seed failed, leaving an orphan card with no conversation) and genuinely skipping. The
- * path is DERIVED, validated and shell-quoted. PURE.
+ * it is what lets a re-run tell "already imported, skip" apart from "a previous run created the card
+ * but the seed failed", which leaves an orphan card whose terminal would open on nothing. The path
+ * is DERIVED, validated and shell-quoted. PURE.
  */
 export function buildTranscriptExistsScript(containerName: string, destPath: string): string {
   assertSafeRemotePath(destPath);
@@ -118,40 +117,15 @@ export function buildTranscriptExistsScript(containerName: string, destPath: str
 
 /* -------------------------------------------------------------------------------------------- */
 
-/** The little the import needs to know about a project. Structural: the real Project satisfies it. */
-export interface ImportProject {
-  id: string;
-  repoFullName?: string | null;
-  cloneUrl?: string | null;
-}
-
-/** The little the import needs to know about a card. */
-export interface ImportCard {
-  id: string;
-  resumeSessionId?: string | null;
-}
-
 /**
- * Everything the import needs from the board, injected rather than imported.
+ * How the import learns a card's working directory inside the runner.
  *
- * The board document is another module's concern and its write API is wider than what belongs in an
- * importer's blast radius; taking exactly these six operations keeps the coupling honest and lets
- * this module be tested against an in-memory board with no mocking of someone else's file.
+ * Deriving it belongs to the workspace module (it is the same path the terminal opens in, and the
+ * two must never drift), but that module owns the runner-side clone/worktree lifecycle and is not
+ * something an importer should be able to reach into. So it comes in as one function: the route
+ * hands over the workspace's derivation, and the tests hand over a stub.
  */
-export interface ImportBoard {
-  listProjects(): Promise<ImportProject[]>;
-  createProject(input: { name: string; repoFullName: string; cloneUrl: string }): Promise<ImportProject>;
-  listCards(projectId: string): Promise<ImportCard[]>;
-  createCard(input: { projectId: string; title: string }): Promise<ImportCard>;
-  updateCard(
-    id: string,
-    patch: { resumeSessionId?: string; branch?: string | null; column?: string },
-  ): Promise<ImportCard>;
-  /** Working directory of the card's worktree inside the runner — the cwd its terminal opens in. */
-  cardCwd(project: ImportProject, card: ImportCard): string;
-  /** Slug of the Claude account the card runs under (undefined/"default" = the default profile). */
-  accountSlugFor(card: ImportCard, project: ImportProject): string | undefined;
-}
+export type CardCwdResolver = (project: Project, card: Card) => string;
 
 export interface ImportItem {
   /** "owner/repo". */
@@ -161,8 +135,8 @@ export interface ImportItem {
   sessionId: string;
   /** Branch for the card's worktree (optional). */
   branch?: string;
-  /** Target board column (optional; the board's own default applies when omitted). */
-  column?: string;
+  /** Target column (optional; defaults to IMPORT_COLUMN). */
+  column?: BoardColumn;
 }
 
 export interface ImportInput {
@@ -195,13 +169,18 @@ export interface ImportResult {
 /**
  * Imports each item, sequentially, with a try/catch PER ITEM — one bad transcript never takes the
  * rest of the batch down. Idempotent by (project, sessionId): importing twice does not duplicate a
- * card.
+ * card, and a second run re-seeds only the cards whose transcript never made it.
  *
- * Redesign note: the original checked "is a runner provisioned on this project's server?" once per
- * item, because each project could live on a different host. vibehub has one runner, so the check
- * happens ONCE, up front, and fails the whole call — there is no partial answer to give.
+ * Redesign note: the original asked "is a runner provisioned on THIS project's server?" once per
+ * item, because every project could live on a different host. vibehub has one runner, so the check
+ * happens ONCE, up front, and fails the whole call — with a single runner there is no partial answer
+ * to give, and finding out per item would just repeat the same failure N times.
  */
-export async function importSessions(input: ImportInput, board: ImportBoard, by?: string): Promise<ImportResult> {
+export async function importSessions(
+  input: ImportInput,
+  cardCwd: CardCwdResolver,
+  by?: string,
+): Promise<ImportResult> {
   const stageDir = (input.stageDir ?? DEFAULT_STAGE_DIR).trim();
   assertSafeRemotePath(stageDir);
 
@@ -217,9 +196,10 @@ export async function importSessions(input: ImportInput, board: ImportBoard, by?
 
   const host = hostExecutor();
 
-  // Project cache by repo key — several items from the same repo must share one project.
-  const projectCache = new Map<string, ImportProject>();
-  for (const p of await board.listProjects()) {
+  // Project cache by repo key — several items from the same repo must share ONE project, including
+  // items that create it during this very run.
+  const projectCache = new Map<string, Project>();
+  for (const p of await listProjects()) {
     const key = projectRepoKey(p);
     if (key && !projectCache.has(key)) projectCache.set(key, p);
   }
@@ -230,12 +210,12 @@ export async function importSessions(input: ImportInput, board: ImportBoard, by?
     try {
       const repoKey = normalizeRepoKey(item.repo);
       if (!repoKey) throw new Error("repo is required (owner/repo)");
-      if (!/^[\w.-]+\/[\w.-]+$/.test(repoKey)) throw new Error(`invalid repo '${item.repo}' (expected owner/repo)`);
 
-      // a) Project: reuse the one matching this repo, otherwise create it.
+      // a) Project: reuse the one matching this repo, otherwise create it. `createProject` validates
+      //    the repo name and the clone URL, so a hostile "owner/repo" never gets past here.
       let project = projectCache.get(repoKey);
       if (!project) {
-        project = await board.createProject({
+        project = await createProject({
           name: repoKey.split("/")[1] ?? repoKey,
           repoFullName: item.repo.trim(),
           cloneUrl: `https://github.com/${repoKey}.git`,
@@ -247,33 +227,31 @@ export async function importSessions(input: ImportInput, board: ImportBoard, by?
       const sessionId = assertSessionId(item.sessionId);
 
       // b) Card: reuse the one already carrying this session id, otherwise create and patch it.
-      const existing = (await board.listCards(project.id)).find((c) => c.resumeSessionId === sessionId);
-      let card: ImportCard;
+      const existing = (await listCards(project.id)).find((c) => c.resumeSessionId === sessionId);
+      let card: Card;
       if (existing) {
         card = existing;
       } else {
-        card = await board.createCard({ projectId: project.id, title: item.title });
-        await board.updateCard(card.id, {
+        card = await createCard({ projectId: project.id, title: item.title });
+        card = await updateCard(card.id, {
           resumeSessionId: sessionId,
           branch: item.branch ?? null,
-          ...(item.column ? { column: item.column } : {}),
+          column: item.column ?? IMPORT_COLUMN,
         });
       }
       r.cardId = card.id;
 
       // c) Destination: the `projects` directory of the card's EFFECTIVE profile, derived from the
       //    cwd its terminal will open in.
-      const cwd = board.cardCwd(project, card);
-      const profileDir = profileDirFor(board.accountSlugFor(card, project));
+      const cwd = cardCwd(project, card);
+      const profileDir = profileDirFor(effectiveAccountSlug(card, project));
       assertSafeRemotePath(profileDir);
       const destDir = seedDestDir(profileDir, cwd);
       const destPath = `${destDir}/${sessionId}.jsonl`;
       const srcPath = `${stageDir}/${sessionId}.jsonl`;
 
       // d) REAL idempotency: when the card already existed, only re-seed if the transcript is NOT at
-      //    the destination (a previous attempt created the card but the seed failed → orphan card
-      //    with no conversation). If it is there, this is a genuine skip. A new card goes straight
-      //    to the seed.
+      //    the destination. If it is there, this is a genuine skip. A new card goes straight to (e).
       if (existing) {
         const check = await host.runScript(buildTranscriptExistsScript(container, destPath), { timeoutMs: 30_000 });
         if (check.stdout.includes(MARK_PRESENT)) {
@@ -284,7 +262,7 @@ export async function importSessions(input: ImportInput, board: ImportBoard, by?
         if (!check.stdout.includes(MARK_ABSENT)) {
           throw new Error("transcript check did not confirm (no PRESENT/ABSENT marker)");
         }
-        // ABSENT → fall through and re-seed the orphan card.
+        // ABSENT -> fall through and re-seed the orphan card.
       }
 
       // e) Seed: copy from staging into the card's directory in the runner.
