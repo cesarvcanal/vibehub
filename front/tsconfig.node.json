@@ -14,6 +14,5 @@
     "composite": true,
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo"
   },
-  "include": ["vite.config.ts", "vitest.config.ts", "tailwind.config.js", "postcss.config.js"],
-  "allowJs": true
+  "include": ["vite.config.ts", "vitest.config.ts"]
 }

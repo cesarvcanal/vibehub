@@ -1,0 +1,45 @@
+# vibehub — one command to run it on a laptop or a VPS:
+#
+#   docker compose up -d
+#
+# Then open http://localhost:3010 and follow the setup wizard.
+#
+# What the mounts are for:
+#   /var/run/docker.sock  vibehub creates and manages the runner container through it. If you would
+#                         rather keep the socket out of the container, set VIBEHUB_RUNNER_KIND=ssh
+#                         and point it at a host instead (see .env.example).
+#   vibehub-data          your board, settings and encrypted vault. Back this up.
+#   /opt/vibehub/runner   the runner's persistent /root and /work. Lives on the HOST, because the
+#                         path is what the host's Docker daemon binds — not a path inside this
+#                         container.
+
+services:
+  vibehub:
+    build: .
+    image: ghcr.io/cesarvcanal/vibehub:latest
+    container_name: vibehub
+    restart: unless-stopped
+    ports:
+      - "3010:3010"
+    environment:
+      # How the runner reaches vibehub back (status hooks). On a server, use the address the runner
+      # can actually resolve — a LAN/VPN IP or an internal hostname.
+      VIBEHUB_PUBLIC_URL: "${VIBEHUB_PUBLIC_URL:-http://vibehub:3010}"
+      VIBEHUB_RUNNER_KIND: "${VIBEHUB_RUNNER_KIND:-local}"
+      VIBEHUB_RUNNER_BASE_DIR: "${VIBEHUB_RUNNER_BASE_DIR:-/opt/vibehub/runner}"
+      # Plain http on a LAN install: cookies cannot be Secure or nobody can log in.
+      VIBEHUB_INSECURE_COOKIES: "${VIBEHUB_INSECURE_COOKIES:-1}"
+      # Set this to pin the vault key instead of letting vibehub generate one into the data volume.
+      VIBEHUB_SECRET_KEY: "${VIBEHUB_SECRET_KEY:-}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - vibehub-data:/data
+    networks:
+      - vibehub
+
+networks:
+  vibehub:
+    name: vibehub
+
+volumes:
+  vibehub-data:
