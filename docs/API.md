@@ -11,6 +11,7 @@ ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx statu
 | POST | `/api/setup/owner` | **public, only while `fresh`** — `{ username, password }` → creates the owner and signs in. |
 | POST | `/api/auth/login` | **public** — `{ username, password }` → sets the session cookie. |
 | POST | `/api/auth/logout` | — |
+| POST | `/api/auth/password` | `{ password }` — change your own password |
 | GET | `/api/auth/me` | `{ user: { id, username } }` |
 
 ## Settings
@@ -19,6 +20,7 @@ ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx statu
 |---|---|---|
 | GET | `/api/settings` | `{ git: { name, email }, autonomous, runner: { kind, container, host, image }, publicUrl }` |
 | PATCH | `/api/settings` | `{ git?, autonomous?, defaultAccountLabel? }` |
+| POST | `/api/settings/setup-complete` | stamps the install as set up so the wizard stops taking over |
 
 ## GitHub
 
@@ -35,7 +37,8 @@ ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx statu
 | Method | Path | Body / notes |
 |---|---|---|
 | GET | `/api/runner` | `RunnerStatus` = `{ running, exists, claudeInstalled, dockerReachable, container, host, detail? }` |
-| POST | `/api/runner/provision` | `{ ok: true }` — idempotent; logs stream over `WS /api/runner/logs` |
+| POST | `/api/runner/provision` | `{ ok: true }` — idempotent; long-running |
+| WS | `/api/runner/logs` | provisioning output, with the last run buffered for late subscribers |
 | POST | `/api/runner/start` | starts a stopped container |
 | POST | `/api/runner/status` | **public, `x-vibehub-token`** — `{ card, status: "working" \| "waiting" }`, the Claude hook callback |
 
