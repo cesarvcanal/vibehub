@@ -1,6 +1,7 @@
 /**
- * Theme is dark by default and follows `prefers-color-scheme` when nobody has chosen.
- * A stored choice pins `data-theme` on <html>, which beats the media query in index.css.
+ * Dark by default — "system" means dark here, not the OS preference: a board of terminals reads as a
+ * dark product, and the light palette exists only as an explicit choice. A stored choice pins
+ * `data-theme` on <html>.
  */
 export type ThemeChoice = "system" | "dark" | "light";
 

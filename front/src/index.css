@@ -5,9 +5,9 @@
 /*
  * vibehub is a developer tool that lives next to a terminal, so the surface is dark by default,
  * dense, and monospace-leaning. Every colour is a CSS variable so the palette can flip:
- *   :root                          -> the dark default (what most people see)
- *   @media (prefers-color-scheme: light) -> a light palette for people whose OS asks for it
- *   [data-theme="dark|light"]      -> an explicit choice always wins over the OS
+ *   :root                          -> dark, always: a terminal product is dark by default, whatever
+ *                                     the OS says (the same rule the panel it came from follows)
+ *   [data-theme="light"]           -> light only as an explicit choice from the toolbar
  */
 @layer base {
   :root {
@@ -44,39 +44,6 @@
     color-scheme: dark;
   }
 
-  @media (prefers-color-scheme: light) {
-    :root:not([data-theme="dark"]) {
-      --background: 220 24% 97%;
-      --foreground: 224 30% 12%;
-      --card: 0 0% 100%;
-      --card-foreground: 224 30% 12%;
-      --popover: 0 0% 100%;
-      --popover-foreground: 224 30% 12%;
-      --primary: 196 88% 38%;
-      --primary-foreground: 0 0% 100%;
-      --secondary: 220 18% 92%;
-      --secondary-foreground: 224 30% 12%;
-      --muted: 220 18% 93%;
-      --muted-foreground: 224 10% 42%;
-      --accent: 220 18% 90%;
-      --accent-foreground: 224 30% 12%;
-      --destructive: 0 70% 46%;
-      --destructive-foreground: 0 0% 100%;
-      --success: 158 68% 32%;
-      --warning: 32 88% 42%;
-      --border: 220 16% 85%;
-      --input: 220 16% 84%;
-      --ring: 196 88% 38%;
-
-      --grid-line: 220 16% 82% / 0.55;
-      --glow-a: 196 88% 45% / 0.07;
-      --glow-b: 265 60% 55% / 0.05;
-
-      color-scheme: light;
-    }
-  }
-
-  /* Explicit choice beats the OS, in both directions. */
   :root[data-theme="light"] {
     --background: 220 24% 97%;
     --foreground: 224 30% 12%;
