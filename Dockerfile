@@ -17,6 +17,10 @@ COPY back back
 COPY front front
 RUN npm --prefix back run build && npm --prefix front run build
 
+# Drop dev dependencies but KEEP the compiled native modules (node-pty). The runtime image has no
+# toolchain, so it cannot rebuild them — pruning here is what lets it stay slim.
+RUN npm --prefix back prune --omit=dev
+
 FROM node:24-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
@@ -27,8 +31,7 @@ RUN apt-get update -qq \
  && rm -rf /var/lib/apt/lists/*
 
 COPY back/package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
-
+COPY --from=build /src/back/node_modules ./node_modules
 COPY --from=build /src/back/dist ./dist
 COPY --from=build /src/front/dist ./public
 
