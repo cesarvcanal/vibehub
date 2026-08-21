@@ -36,6 +36,14 @@ encrypted vault — no database to operate.
 
 ## Install
 
+One line, on a laptop or a fresh VPS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cesarvcanal/vibehub/main/scripts/install.sh | bash
+```
+
+Or from source:
+
 ```bash
 git clone https://github.com/cesarvcanal/vibehub.git
 cd vibehub
