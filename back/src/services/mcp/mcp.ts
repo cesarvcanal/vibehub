@@ -1,7 +1,10 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import { secretGet, secretSet, secretDelete, secretList } from "../../secrets/vault.js";
-import { listMcps, getMcp, listAccounts, assertAccountSlug, type McpServer } from "../board/registry.js";
+import { listMcps, getMcp, listAccounts, type McpServer } from "../board/registry.js";
+import {
+  CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, DEFAULT_ACCOUNT_SLUG, accountConfigDir, profileDirFor,
+} from "../accounts/profiles.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -22,14 +25,10 @@ import { logger } from "../../utils/logger.js";
  * reads); an account profile runs with CLAUDE_CONFIG_DIR=<profile dir>.
  */
 
-/** Root of the per-ACCOUNT Claude profiles in the runner (the default account is /root/.claude). */
-export const CLAUDE_PROFILES_DIR = "/root/.claude-profiles";
-
-/** Profile directory of the runner's DEFAULT Claude account. */
-export const DEFAULT_CLAUDE_DIR = "/root/.claude";
-
-/** Slug the token/MCP routes accept to address the default account (which has no board record). */
-export const DEFAULT_ACCOUNT_SLUG = "default";
+// Turning "which account" into "which directory" belongs to ONE module — re-exported here so the
+// MCP routes keep a single import, but never redefined: two copies of a path-safety rule is how a
+// profile directory quietly drifts apart from the one the token was planted in.
+export { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, DEFAULT_ACCOUNT_SLUG, accountConfigDir, profileDirFor };
 
 /** Heredoc delimiters — reserved words, never derived from user input. */
 const OUTER_DELIM = "VIBEHUB_MCP";
@@ -195,11 +194,6 @@ export async function resolveMcpInjections(): Promise<McpInjection[]> {
   return out;
 }
 
-/** CLAUDE_CONFIG_DIR of an account's profile. The slug is re-validated — never raw input. PURE. */
-export function accountConfigDir(slug: string): string {
-  return `${CLAUDE_PROFILES_DIR}/${assertAccountSlug(slug)}`;
-}
-
 /** Every profile in the runner: the default one plus each registered account. */
 export async function allProfiles(): Promise<McpProfile[]> {
   const accounts = await listAccounts();
@@ -218,11 +212,6 @@ export function profileForSlug(slug: string | undefined): McpProfile {
 /** Physical directory of a profile — the default one is /root/.claude. PURE. */
 export function profileDirOf(profile: McpProfile): string {
   return profile ?? DEFAULT_CLAUDE_DIR;
-}
-
-/** Directory of the EFFECTIVE profile of an account slug (undefined/"default" -> /root/.claude). PURE. */
-export function profileDirFor(slug: string | undefined): string {
-  return profileDirOf(profileForSlug(slug));
 }
 
 /**

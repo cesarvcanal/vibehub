@@ -1,7 +1,8 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config, dataPath } from "../../config/env.js";
 import { JsonStore } from "../../store/jsonStore.js";
-import { allProfiles, DEFAULT_CLAUDE_DIR, type McpProfile } from "../mcp/mcp.js";
+import { allProfiles, type McpProfile } from "../mcp/mcp.js";
+import { DEFAULT_CLAUDE_DIR } from "../accounts/profiles.js";
 import { logger } from "../../utils/logger.js";
 
 /**

@@ -6,7 +6,7 @@ import {
   effectiveAccountSlug, assertSessionId,
   BOARD_COLUMNS, type BoardColumn, type Card, type Project,
 } from "../board/registry.js";
-import { profileDirFor } from "../mcp/mcp.js";
+import { profileDirFor } from "../accounts/profiles.js";
 import { logger } from "../../utils/logger.js";
 
 /**
