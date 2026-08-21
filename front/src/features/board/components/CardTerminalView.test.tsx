@@ -292,3 +292,37 @@ describe("CardTerminalView — extra panes", () => {
     );
   });
 });
+
+describe("CardTerminalView — narrow screens", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    serve();
+    mockPost.mockResolvedValue({ card: card({ openedAt: 10 }) });
+  });
+
+  it("offers a menu button that asks the page to open the card list", async () => {
+    const user = userEvent.setup();
+    const onOpenMenu = vi.fn();
+    renderApp(
+      <CardTerminalView
+        project={project}
+        cardId="c1"
+        onBack={vi.fn()}
+        onNewCard={vi.fn()}
+        onOpenMenu={onOpenMenu}
+      />,
+    );
+
+    const button = await screen.findByRole("button", { name: "Open the card list" });
+    // Only on narrow screens: the real list is a permanent column from `lg` up.
+    expect(button.className).toContain("lg:hidden");
+    await user.click(button);
+    expect(onOpenMenu).toHaveBeenCalled();
+  });
+
+  it("renders no menu button when the page does not offer a drawer", async () => {
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    await screen.findByTestId("card-bar");
+    expect(screen.queryByRole("button", { name: "Open the card list" })).not.toBeInTheDocument();
+  });
+});

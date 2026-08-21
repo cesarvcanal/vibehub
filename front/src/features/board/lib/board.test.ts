@@ -11,6 +11,8 @@ import {
   sortByRecency,
   sortCards,
   sortProjects,
+  ALL_PROJECTS,
+  isAllProjects,
   splitSidebarCards,
   statusDot,
   writeLocation,
@@ -153,13 +155,69 @@ describe("splitSidebarCards", () => {
       card({ id: "waiting", column: "waiting", statusAt: 1 }),
       card({ id: "working", column: "working", statusAt: 2 }),
     ]);
-    expect(active.map((c) => c.id)).toEqual(["working", "waiting"]);
+    expect(active.map((c) => c.id)).toEqual(["waiting", "working"]);
     expect(idle.map((c) => c.id)).toEqual(["paused", "backlog"]);
   });
 
   it("never lists a finished card", () => {
     const { active, idle } = splitSidebarCards([card({ id: "done", column: "done" })]);
     expect([...active, ...idle]).toEqual([]);
+  });
+
+  it("puts every waiting card above every working one, however recent the working one is", () => {
+    // The regression this rule exists for: `fresh` went green a moment ago, `stale` has been
+    // waiting for a human since forever. Recency alone would bury the one that needs an answer.
+    const { active } = splitSidebarCards([
+      card({ id: "fresh", column: "working", statusAt: 9_000 }),
+      card({ id: "stale", column: "waiting", statusAt: 10 }),
+    ]);
+    expect(active.map((c) => c.id)).toEqual(["stale", "fresh"]);
+  });
+
+  it("orders by recency inside each group", () => {
+    const { active } = splitSidebarCards([
+      card({ id: "waiting-old", column: "waiting", statusAt: 10 }),
+      card({ id: "working-old", column: "working", statusAt: 20 }),
+      card({ id: "waiting-new", column: "waiting", statusAt: 30 }),
+      card({ id: "working-new", column: "working", statusAt: 40 }),
+    ]);
+    expect(active.map((c) => c.id)).toEqual([
+      "waiting-new",
+      "waiting-old",
+      "working-new",
+      "working-old",
+    ]);
+  });
+
+  it("breaks a tie stably, so an idle board never reshuffles between polls", () => {
+    const cards = [
+      card({ id: "b", column: "waiting", statusAt: 5, createdAt: 1 }),
+      card({ id: "a", column: "waiting", statusAt: 5, createdAt: 1 }),
+    ];
+    expect(splitSidebarCards(cards).active.map((c) => c.id)).toEqual(["a", "b"]);
+    expect(splitSidebarCards([...cards].reverse()).active.map((c) => c.id)).toEqual(["a", "b"]);
+  });
+
+  it("does not mutate the list it is given", () => {
+    const cards = [
+      card({ id: "working", column: "working", statusAt: 2 }),
+      card({ id: "waiting", column: "waiting", statusAt: 1 }),
+    ];
+    splitSidebarCards(cards);
+    expect(cards.map((c) => c.id)).toEqual(["working", "waiting"]);
+  });
+});
+
+describe("isAllProjects", () => {
+  it("recognises the aggregated-board selection and nothing else", () => {
+    expect(isAllProjects(ALL_PROJECTS)).toBe(true);
+    // "nothing selected yet" is NOT the overview — it is the state that redirects to a project.
+    expect(isAllProjects(null)).toBe(false);
+    expect(isAllProjects("p1")).toBe(false);
+  });
+
+  it("uses a sentinel no server-generated id can collide with", () => {
+    expect(ALL_PROJECTS).toBe("*");
   });
 });
 

@@ -28,7 +28,18 @@ vi.mock("sonner", () => ({
 // The terminal is exercised in its own file; here it only has to be a mountable placeholder so the
 // board's routing can be asserted without a WebSocket or a canvas.
 vi.mock("@/features/board/components/CardTerminalView", () => ({
-  CardTerminalView: ({ cardId }: { cardId: string }) => <div data-testid="terminal">{cardId}</div>,
+  CardTerminalView: ({ cardId, onOpenMenu }: { cardId: string; onOpenMenu?: () => void }) => (
+    <div data-testid="terminal">
+      {cardId}
+      {/* The real bar owns this button (see CardTerminalView.test); here it stands in for it, so
+          the page's drawer wiring can be exercised without a canvas or a WebSocket. */}
+      {onOpenMenu ? (
+        <button type="button" onClick={onOpenMenu}>
+          Open the card list
+        </button>
+      ) : null}
+    </div>
+  ),
 }));
 
 const mockGet = vi.mocked(get);
@@ -74,6 +85,22 @@ const cards: BoardCard[] = [
   },
 ];
 
+/** The other project's cards, so nothing is listed twice on the aggregated board. */
+const gatewayCards: BoardCard[] = [
+  {
+    id: "c4",
+    projectId: "p2",
+    title: "rotate the key",
+    column: "waiting",
+    position: 0,
+    tmuxSession: "card-c4",
+    worktreeSlug: "rotate-the-key-c4",
+    status: "waiting",
+    openedAt: 8,
+    createdAt: 4,
+  },
+];
+
 function serve(overrides: { cards?: BoardCard[]; projects?: BoardProject[] } = {}) {
   mockGet.mockImplementation((url: string) => {
     if (url === "/auth/me") return Promise.resolve({ user: { id: "1", username: "operator" } });
@@ -85,6 +112,8 @@ function serve(overrides: { cards?: BoardCard[]; projects?: BoardProject[] } = {
       });
     }
     if (url === "/projects") return Promise.resolve({ projects: overrides.projects ?? projects });
+    // Per project: the aggregated board is only meaningful when the projects differ.
+    if (url === "/projects/p2/cards") return Promise.resolve({ cards: overrides.cards ?? gatewayCards });
     if (url.endsWith("/cards")) return Promise.resolve({ cards: overrides.cards ?? cards });
     if (url === "/accounts") {
       return Promise.resolve({
@@ -94,6 +123,8 @@ function serve(overrides: { cards?: BoardCard[]; projects?: BoardProject[] } = {
     }
     if (url === "/accounts/tokens") return Promise.resolve({ bySlug: {}, defaultHasToken: false });
     if (url === "/mcps") return Promise.resolve({ mcps: [] });
+    if (url === "/mcps/secrets") return Promise.resolve({ byMcp: {} });
+    if (url === "/brain") return Promise.resolve({ text: "# rules", defaultText: "# rules" });
     if (url === "/runner") {
       return Promise.resolve({
         running: true,
@@ -287,5 +318,116 @@ describe("BoardPage — keyboard", () => {
     await screen.findByTestId("terminal");
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByTestId("terminal")).not.toBeInTheDocument());
+  });
+});
+
+describe("BoardPage — the install-wide managers", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    serve();
+  });
+
+  it("puts the brain within reach of the board, beside accounts and MCP", async () => {
+    // The route has existed with no way to reach it; a shared CLAUDE.md nobody can edit is a
+    // feature that does not exist.
+    renderApp(<BoardPage />);
+    expect(await screen.findByRole("button", { name: "Brain" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /accounts/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "MCP" })).toBeInTheDocument();
+  });
+
+  it("opens the brain editor from the board", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />);
+    await user.click(await screen.findByRole("button", { name: "Brain" }));
+    expect(await screen.findByLabelText("Brain text")).toBeInTheDocument();
+    await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/brain"));
+  });
+});
+
+describe("BoardPage — the aggregated board", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    serve();
+  });
+
+  it("offers 'All projects' in the sidebar once there is more than one", async () => {
+    renderApp(<BoardPage />);
+    expect(await screen.findByRole("button", { name: "All projects" })).toBeInTheDocument();
+  });
+
+  it("hides it when there is only one project — there is nothing to aggregate", async () => {
+    serve({ projects: [projects[0] as BoardProject] });
+    renderApp(<BoardPage />);
+    await screen.findByRole("heading", { name: "billing" });
+    expect(screen.queryByRole("button", { name: "All projects" })).not.toBeInTheDocument();
+  });
+
+  it("shows every project's cards on one board when it is chosen", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />);
+    await user.click(await screen.findByRole("button", { name: "All projects" }));
+    expect(await screen.findByRole("heading", { name: "All projects" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "billing" })).not.toBeInTheDocument();
+  });
+
+  it("survives a refresh — the choice lives in the URL like any other", async () => {
+    renderApp(<BoardPage />, { route: "/?project=*" });
+    expect(await screen.findByRole("heading", { name: "All projects" })).toBeInTheDocument();
+  });
+
+  it("still redirects a URL that names a project which is gone", async () => {
+    // The sentinel must not turn the reconciler off for real ids.
+    renderApp(<BoardPage />, { route: "/?project=deleted" });
+    expect(await screen.findByRole("heading", { name: "billing" })).toBeInTheDocument();
+  });
+
+  it("merges both projects' cards and opens one into its OWN project", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=*" });
+
+    // One card from each project, on one board.
+    expect(await screen.findByRole("button", { name: "chase the flake" })).toBeInTheDocument();
+    const other = await screen.findByRole("button", { name: "rotate the key" });
+
+    await user.click(other);
+    expect(await screen.findByTestId("terminal")).toHaveTextContent("c4");
+  });
+});
+
+describe("BoardPage — narrow screens", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    serve();
+  });
+
+  it("offers a menu button in an open card, since the card list column is hidden", async () => {
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    expect(await screen.findByRole("button", { name: "Open the card list" })).toBeInTheDocument();
+  });
+
+  it("opens the card list as a drawer and switches card from inside it", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+
+    await user.click(await screen.findByRole("button", { name: "Open the card list" }));
+    const drawer = await screen.findByRole("dialog");
+    await user.click(within(drawer).getByRole("button", { name: /waiting on review/ }));
+
+    // The drawer covers the terminal it just navigated to, so it has to get out of the way.
+    await waitFor(() => expect(screen.getByTestId("terminal")).toHaveTextContent("c3"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("goes back to the board from inside the drawer", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+
+    await user.click(await screen.findByRole("button", { name: "Open the card list" }));
+    const drawer = await screen.findByRole("dialog");
+    await user.click(within(drawer).getByRole("button", { name: /back to board/i }));
+
+    expect(await screen.findByRole("heading", { name: "billing" })).toBeInTheDocument();
+    expect(screen.queryByTestId("terminal")).not.toBeInTheDocument();
   });
 });

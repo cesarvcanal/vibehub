@@ -286,21 +286,23 @@ export function BoardPage() {
           />
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {selected && !allProjects ? (
+            {allProjects ? (
+              // Explicitly chosen from the sidebar. Never the transient "still reconciling the URL"
+              // state — that one redirects to a project, and flashing the overview on every cold
+              // load would be worse than the blank moment it replaces.
+              <AllProjectsBoard
+                projects={projects}
+                onOpenCard={(card) => go(card.projectId, card.id)}
+                headerExtra={headerExtra}
+              />
+            ) : selected ? (
               <KanbanBoard
                 project={selected}
                 onOpenCard={(card) => go(selected.id, card.id)}
                 onNewCard={() => setNewCardOpen(true)}
                 headerExtra={headerExtra}
               />
-            ) : (
-              // No project selected is not a dead end: show every project's cards on one board.
-              <AllProjectsBoard
-                projects={projects}
-                onOpenCard={(card) => go(card.projectId, card.id)}
-                headerExtra={headerExtra}
-              />
-            )}
+            ) : null}
           </div>
         </div>
       )}

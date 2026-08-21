@@ -27,7 +27,9 @@ export function applyOutcomeMessage(outcome: ApplyOutcome | undefined, subject: 
 
   const now = `applied to ${restarted} ${plural(restarted, "terminal")}`;
   if (pending === 0) return `${subject} saved — ${now}.`;
-  return `${subject} saved — ${now}, ${pending} will update when ${plural(pending, "it", "they")} finish.`;
+  // Subject and verb agree together: "it finishes" / "they finish".
+  const later = pending === 1 ? "it finishes" : "they finish";
+  return `${subject} saved — ${now}, ${pending} will update when ${later}.`;
 }
 
 function countOf(value: number | undefined): number {
