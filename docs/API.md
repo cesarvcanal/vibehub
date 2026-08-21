@@ -69,6 +69,7 @@ ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx statu
 | GET | `/api/accounts` | `{ accounts: Account[], defaultLabel }` |
 | POST | `/api/accounts` | `{ label }` → creates a profile directory slug |
 | DELETE | `/api/accounts/:slug` | |
+| GET | `/api/accounts/tokens` | `{ bySlug, defaultHasToken }` — which accounts have a long-lived token |
 | POST | `/api/accounts/:slug/token` | `{ token }` — long-lived Claude token, stored in the vault, planted in every runner profile |
 | DELETE | `/api/accounts/:slug/token` | |
 | GET | `/api/mcps` | `{ mcps: Mcp[] }` |
@@ -76,6 +77,9 @@ ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx statu
 | DELETE | `/api/mcps/:id` | |
 | POST | `/api/mcps/:id/secret` | `{ key, value }` |
 | POST | `/api/mcps/apply` | re-injects every MCP into every profile |
-| GET | `/api/brain` | `{ text, defaultText }` — shared CLAUDE.md planted in each card |
-| POST | `/api/brain/apply` | `{ text }` |
-| POST | `/api/import` | `{ sessions: [...] }` — adopt existing Claude Code sessions as cards |
+| GET | `/api/brain` | `{ text, ... }` — shared CLAUDE.md planted in each card |
+| POST | `/api/brain` | `{ text }` — save it |
+| DELETE | `/api/brain` | back to the built-in default |
+| POST | `/api/brain/apply` | push it into every profile |
+| POST | `/api/import` | `{ items: [{ repo, title, sessionId, branch?, column? }], stageDir? }` — adopt staged Claude sessions as cards |
+| GET | `/api/cards/:id/paths` | where the card maps to inside the runner (debugging an import) |
