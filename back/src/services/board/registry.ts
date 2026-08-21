@@ -230,7 +230,7 @@ export function resetForTesting(): void {
 export function kebab(s: string): string {
   const base = String(s ?? "")
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
@@ -267,7 +267,7 @@ export function assertAccountSlug(slug: string): string {
 export function accountSlugFor(name: string): string {
   const base = String(name ?? "")
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
