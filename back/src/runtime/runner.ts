@@ -15,6 +15,9 @@ import { logger } from "../utils/logger.js";
  * Nothing here knows whether Docker is local or across an SSH hop — that is the host executor's job.
  */
 
+/** Where the service token lives inside the runner. /root is a bind mount, so it persists. */
+export const RUNNER_TOKEN_FILE = "/root/.vibehub-token";
+
 /** Vault key holding the service token the runner uses to report card status back to vibehub. */
 export const RUNNER_TOKEN_KEY = "VIBEHUB_RUNNER_TOKEN";
 
@@ -120,11 +123,17 @@ export function buildRunScript(opts: { container: string; image: string; baseDir
 }
 
 /**
- * Setup script, run on the HOST: writes the service token into the /root bind mount (host side, so
- * it survives a container recreate) and installs everything INSIDE the container through
- * `docker exec -i ... bash -s` with a nested heredoc. Idempotent. PURE.
+ * Setup script: installs everything INSIDE the runner through `docker exec -i ... bash -s`, and
+ * plants the service token there too. Idempotent. PURE.
  *
- * The token goes through the script body over STDIN — never argv, which is world-readable in `ps`.
+ * The token is written through the SAME `docker exec`, not by the outer shell, because the outer
+ * shell is not necessarily the Docker host: with `VIBEHUB_RUNNER_KIND=local` vibehub itself runs in
+ * a container and only reaches Docker through the mounted socket, so a plain `printf > path` there
+ * writes into vibehub's own filesystem — which is exactly where the token silently went the first
+ * time, leaving every status hook and the maestro MCP unauthenticated. Writing it inside the runner
+ * still survives a container recreate: /root is a bind mount on the host.
+ *
+ * The token travels over STDIN — never argv, which is world-readable in `ps`.
  */
 export function buildSetupScript(opts: {
   container: string;
@@ -137,11 +146,11 @@ export function buildSetupScript(opts: {
   return [
     "set -e",
     "umask 077",
-    `mkdir -p ${shQuote(`${baseDir}/root`)} ${shQuote(`${baseDir}/work/scratch`)}`,
-    `printf '%s' ${shQuote(token)} > ${shQuote(`${baseDir}/root/.vibehub-token`)}`,
-    `chmod 600 ${shQuote(`${baseDir}/root/.vibehub-token`)}`,
     `docker exec -i ${shQuote(container)} bash -s <<'VIBEHUB_SETUP'`,
     "set -e",
+    "umask 077",
+    `printf '%s' ${shQuote(token)} > ${shQuote(RUNNER_TOKEN_FILE)}`,
+    `chmod 600 ${shQuote(RUNNER_TOKEN_FILE)}`,
     "export DEBIAN_FRONTEND=noninteractive",
     "apt-get update -qq",
     // tmux/git/ripgrep/curl = the card terminal. xvfb/x11vnc/novnc/websockify/socat = the card's

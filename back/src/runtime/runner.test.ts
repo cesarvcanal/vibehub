@@ -105,10 +105,23 @@ describe("buildSetupScript", () => {
     git: { name: "Ada Lovelace", email: "ada@example.com" },
   };
 
-  it("plants the token host-side at 600 so a container recreate does not lose it", () => {
+  it("plants the token INSIDE the runner at 600 — /root is a bind mount, so it persists", () => {
     const script = buildSetupScript(base);
-    expect(script).toContain("/opt/vibehub/runner/root/.vibehub-token");
+    const lines = script.split("\n");
+    const dockerAt = lines.findIndex((l) => l.startsWith("docker exec"));
+    const tokenAt = lines.findIndex((l) => l.includes(".vibehub-token"));
+    expect(dockerAt).toBeGreaterThanOrEqual(0);
+    // The token write must happen AFTER entering the container. With RUNNER_KIND=local the outer
+    // shell is vibehub's own container, so writing there lands in the wrong filesystem.
+    expect(tokenAt).toBeGreaterThan(dockerAt);
+    expect(script).toContain("/root/.vibehub-token");
     expect(script).toContain("chmod 600");
+  });
+
+  it("never writes the token into the outer shell's filesystem", () => {
+    const script = buildSetupScript(base);
+    const outer = script.split("\n").slice(0, script.split("\n").findIndex((l) => l.startsWith("docker exec")));
+    expect(outer.join("\n")).not.toContain("vibehub-token");
   });
   it("never passes the token as an argument to docker", () => {
     const script = buildSetupScript(base);
