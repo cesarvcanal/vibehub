@@ -6,3 +6,6 @@ coverage/
 .env
 .env.local
 .DS_Store
+
+# Private to this install: migration tooling from the old panel (never published).
+back/scripts/migrate/
