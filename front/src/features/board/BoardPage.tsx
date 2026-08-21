@@ -2,7 +2,7 @@ import * as React from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Code2, Loader2, Plus } from "lucide-react";
+import { Code2, Loader2, Menu, Plus } from "lucide-react";
 import { apiErrorMessage } from "@/lib/apiError";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,11 +13,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { AccountsManager } from "@/features/board/components/AccountsManager";
 import { AllProjectsBoard } from "@/features/board/components/AllProjectsBoard";
 import { BrainManager } from "@/features/board/components/BrainManager";
-import { CardListNav, CardListSidebar } from "@/features/board/components/CardListSidebar";
 import { CardTerminalView } from "@/features/board/components/CardTerminalView";
 import { KanbanBoard } from "@/features/board/components/KanbanBoard";
 import { McpManager } from "@/features/board/components/McpManager";
@@ -25,19 +23,12 @@ import { NewCardDialog } from "@/features/board/components/NewCardDialog";
 import { ProjectFormDialog } from "@/features/board/components/ProjectFormDialog";
 import { ProjectSidebar } from "@/features/board/components/ProjectSidebar";
 import { RunnerBanner } from "@/features/board/components/RunnerBanner";
-import {
-  isAllProjects,
-  moveProjectLocal,
-  readLocation,
-  sortProjects,
-  writeLocation,
-} from "@/features/board/lib/board";
-import { FOCUS_CHROME_PX, focusHeight } from "@/features/board/lib/focusMode";
+import { moveProjectLocal, readLocation, sortProjects, writeLocation } from "@/features/board/lib/board";
+import { cardViewHeight } from "@/features/board/lib/focusMode";
 import {
   attachLeaveFocusShortcut,
   attachNewCardShortcut,
 } from "@/features/board/lib/newCardShortcut";
-import { boardTitle, useDocumentTitle } from "@/features/board/lib/documentTitle";
 import {
   ACCOUNTS_KEY,
   PROJECTS_KEY,
@@ -52,10 +43,14 @@ import type { NewCard } from "@/api/types";
 /**
  * The board.
  *
- * Two views, one screen: the kanban of the selected project, and — when a card is open — that
- * card's terminal filling the window with a narrow card list beside it. Which one you get is read
- * from the URL (`?project=…&card=…`), never from component state, so a refresh, a second tab and a
- * pasted link all land in exactly the same place, including inside a terminal.
+ * ONE frame, two middles. The app header and the sidebar are the page; opening a card does not take
+ * the screen over, it swaps the kanban for that card's terminal and leaves everything else exactly
+ * where it was. Nothing moves under the cursor, and the list you use to reach the next agent is
+ * still there while you read this one.
+ *
+ * Where you are lives in the URL (`?project=…&card=…`), never in component state, so a refresh, a
+ * second tab and a pasted link all land in the same place, including inside a terminal. NO project
+ * is a destination too: it is the aggregated board across everything.
  */
 export function BoardPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -70,8 +65,6 @@ export function BoardPage() {
   const projects = React.useMemo(() => sortProjects(projectList ?? []), [projectList]);
 
   const selected = projects.find((p) => p.id === projectId) ?? null;
-  // An explicit choice, not the absence of one: the aggregated board across every project.
-  const allProjects = isAllProjects(projectId);
 
   const go = React.useCallback(
     (nextProjectId: string | null, nextCardId: string | null = null) => {
@@ -82,27 +75,37 @@ export function BoardPage() {
     [setSearchParams],
   );
 
+  // Clicking a project selects it; clicking the selected one deselects it (the aggregated board).
+  const selectProject = (id: string) => go(id === selected?.id ? null : id);
+  // Clicking a card opens it; clicking the one already open closes it (back to that project's board).
+  const openCard = (nextProjectId: string, nextCardId: string) =>
+    go(nextProjectId, projectId === nextProjectId && cardId === nextCardId ? null : nextCardId);
+
   /**
-   * Keep the URL honest. A link to a project that has since been deleted (or a stale bookmark)
-   * falls back to the first project rather than showing an empty screen with no way out. Nothing
-   * happens while the list is still loading — that is not "missing", it is "not known yet".
+   * Keep the URL honest. A project id that no longer exists — deleted, or a stale bookmark — falls
+   * back to the AGGREGATED board rather than to some arbitrary first project: showing someone
+   * else's board because the one they asked for is gone is a lie, and "everything" is the honest
+   * answer. Nothing happens while the list is still loading: that is not "missing", it is "not
+   * known yet".
    */
   React.useEffect(() => {
     if (!projectList) return;
-    // "All projects" is a destination, not a missing project — never reconcile it away.
-    if (isAllProjects(projectId)) return;
-    if (projectId && projects.some((p) => p.id === projectId)) return;
-    const fallback = projects[0]?.id ?? null;
-    if (fallback !== projectId) go(fallback);
+    if (!projectId) return;
+    if (projects.some((p) => p.id === projectId)) return;
+    go(null);
   }, [projectList, projects, projectId, go]);
 
   /* --------------------------------------------------------------- dialogs */
 
   const [newProjectOpen, setNewProjectOpen] = React.useState(false);
-  const [newCardOpen, setNewCardOpen] = React.useState(false);
-  // The navigation drawer, for screens where the card list column is hidden.
-  const [menuOpen, setMenuOpen] = React.useState(false);
   const [deleteTarget, setDeleteTarget] = React.useState<BoardProject | null>(null);
+  // Which project a new card belongs to. Set from any row's `+`, or from the shortcut.
+  const [newCardProject, setNewCardProject] = React.useState<BoardProject | null>(null);
+  // The drawer, on screens where the sidebar is not part of the page.
+  const [menuOpen, setMenuOpen] = React.useState(false);
+  // Any navigation closes it: on a phone the drawer covers the thing it just navigated to.
+  const location = `${projectId ?? ""}:${cardId ?? ""}`;
+  React.useEffect(() => setMenuOpen(false), [location]);
 
   const { data: accountsData } = useQuery({ queryKey: ACCOUNTS_KEY, queryFn: boardApi.listAccounts });
 
@@ -122,8 +125,6 @@ export function BoardPage() {
     mutationFn: (id: string) => boardApi.deleteProject(id),
     onSuccess: (_result, id) => {
       void queryClient.invalidateQueries({ queryKey: PROJECTS_KEY });
-      // The URL may still be pointing at what was just deleted; the reconciling effect above will
-      // move it on, but clearing it here avoids a flash of an empty board.
       if (projectId === id) go(null);
       toast.success("Project deleted.");
     },
@@ -156,162 +157,91 @@ export function BoardPage() {
   React.useEffect(
     () =>
       attachNewCardShortcut(() => {
-        if (selectedRef.current) setNewCardOpen(true);
+        if (selectedRef.current) setNewCardProject(selectedRef.current);
       }),
     [],
   );
 
-  const inFocus = Boolean(selected && cardId);
+  const cardOpen = Boolean(selected && cardId);
   React.useEffect(() => {
-    if (!inFocus) return;
+    if (!cardOpen) return;
     return attachLeaveFocusShortcut(() => go(selectedRef.current?.id ?? null));
-  }, [inFocus, go]);
+  }, [cardOpen, go]);
 
-  useDocumentTitle(boardTitle(inFocus ? null : selected?.name));
+  /* ------------------------------------------------------------- the parts */
 
-  /** The install-wide managers. Same set on either board — they are not about one project. */
+  /** The install-wide managers, then the runner chip — which sits next to the New card button. */
   const headerExtra = (
     <>
-      <RunnerBanner />
       <AccountsManager />
-      <BrainManager />
       <McpManager />
+      <BrainManager />
+      <RunnerBanner />
     </>
   );
 
-  const newCardDialog = selected ? (
-    <NewCardDialog
-      open={newCardOpen}
-      onOpenChange={setNewCardOpen}
-      projectId={selected.id}
-      accounts={accountsData?.accounts ?? []}
-      defaultAccountLabel={accountsData?.defaultLabel || "the runner default"}
-      inheritedAccount={projectAccountSlug(selected)}
-      defaultBranch={projectBaseBranch(selected)}
-      onSubmit={(input) => createCardMutation.mutate(input)}
+  /** The same managers minus the runner: the aggregated board has no single runner to report on. */
+  const aggregateHeaderExtra = (
+    <>
+      <AccountsManager />
+      <McpManager />
+      <BrainManager />
+    </>
+  );
+
+  const sidebar = (
+    <ProjectSidebar
+      projects={projects}
+      selectedProjectId={selected?.id ?? null}
+      selectedCardId={selected ? cardId : null}
+      mobileOpen={menuOpen}
+      onCloseMobile={() => setMenuOpen(false)}
+      onSelectProject={selectProject}
+      onOpenCard={openCard}
+      onReorder={(id, position) => reorderMutation.mutate({ id, position })}
+      onNewProject={() => setNewProjectOpen(true)}
+      onNewCard={setNewCardProject}
+      onDeleteProject={setDeleteTarget}
     />
-  ) : null;
+  );
 
-  /* ------------------------------------------------------------ focus mode */
+  /**
+   * The drawer's handle, below `lg`. It is the FIRST child of both trees on purpose: React
+   * reconciles by type and position, so if the two branches diverged before the sidebar, the
+   * sidebar would unmount and remount — losing its scroll and restarting its poll — every time you
+   * opened or closed a card.
+   */
+  const menuButton = (
+    <button
+      type="button"
+      onClick={() => setMenuOpen(true)}
+      aria-label="Open the projects and cards"
+      className="mb-1 flex items-center gap-2 self-start rounded-lg border border-border/60 bg-card/50 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground lg:hidden"
+    >
+      <Menu className="h-4 w-4" /> Projects
+    </button>
+  );
 
-  if (selected && cardId) {
-    return (
-      <div
-        data-testid="focus-layout"
-        className="flex min-h-[420px] items-stretch gap-2 px-1.5 py-1.5"
-        style={{ height: focusHeight(FOCUS_CHROME_PX) }}
-      >
-        <CardListSidebar
-          project={selected}
-          activeCardId={cardId}
-          onBack={() => go(selected.id)}
-          onOpenCard={(id) => go(selected.id, id)}
-          onNewCard={() => setNewCardOpen(true)}
-        />
-
-        {/* Same list, as a drawer, on the screens where the column above is hidden. Every action
-            closes it: on a phone the drawer covers the terminal you just asked to see. */}
-        <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-          <SheetContent side="left" className="w-72 lg:hidden">
-            <SheetTitle className="sr-only">Cards</SheetTitle>
-            <CardListNav
-              project={selected}
-              activeCardId={cardId}
-              onBack={() => {
-                setMenuOpen(false);
-                go(selected.id);
-              }}
-              onOpenCard={(id) => {
-                setMenuOpen(false);
-                go(selected.id, id);
-              }}
-              onNewCard={() => {
-                setMenuOpen(false);
-                setNewCardOpen(true);
-              }}
-            />
-          </SheetContent>
-        </Sheet>
-
-        {/* Keyed by card: switching cards tears the socket down and opens the next one cleanly. */}
-        <CardTerminalView
-          key={cardId}
-          project={selected}
-          cardId={cardId}
-          onBack={() => go(selected.id)}
-          onNewCard={() => setNewCardOpen(true)}
-          onOpenMenu={() => setMenuOpen(true)}
-        />
-        {newCardDialog}
-      </div>
-    );
-  }
-
-  /* ----------------------------------------------------------------- board */
-
-  return (
-    <div className="flex min-h-0 flex-col gap-4 px-4 py-4">
-      {isLoading ? (
-        <div className="flex justify-center py-16">
-          <Loader2 className="h-7 w-7 animate-spin text-muted-foreground" />
-        </div>
-      ) : projects.length === 0 ? (
-        <div className="mx-auto mt-10 flex max-w-md flex-col items-center gap-3 rounded-lg border border-border/80 bg-card/70 p-10 text-center backdrop-blur-sm">
-          <div className="grid h-11 w-11 place-items-center rounded-xl bg-primary/10 text-primary">
-            <Code2 className="h-5 w-5" />
-          </div>
-          <div>
-            <p className="font-medium">No projects yet</p>
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              Point a project at a repository and every card becomes a Claude terminal in its own
-              worktree.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            <Button onClick={() => setNewProjectOpen(true)}>
-              <Plus /> Create the first project
-            </Button>
-            <RunnerBanner />
-          </div>
-        </div>
-      ) : (
-        <div className="flex min-h-0 flex-col gap-4 lg:flex-row lg:items-stretch">
-          <ProjectSidebar
-            projects={projects}
-            selectedId={selected?.id ?? null}
-            onSelect={(id) => go(id)}
-            onReorder={(id, position) => reorderMutation.mutate({ id, position })}
-            onNewProject={() => setNewProjectOpen(true)}
-            onDeleteProject={setDeleteTarget}
-          />
-
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {allProjects ? (
-              // Explicitly chosen from the sidebar. Never the transient "still reconciling the URL"
-              // state — that one redirects to a project, and flashing the overview on every cold
-              // load would be worse than the blank moment it replaces.
-              <AllProjectsBoard
-                projects={projects}
-                onOpenCard={(card) => go(card.projectId, card.id)}
-                headerExtra={headerExtra}
-              />
-            ) : selected ? (
-              <KanbanBoard
-                project={selected}
-                onOpenCard={(card) => go(selected.id, card.id)}
-                onNewCard={() => setNewCardOpen(true)}
-                headerExtra={headerExtra}
-              />
-            ) : null}
-          </div>
-        </div>
-      )}
-
+  const dialogs = (
+    <>
       <ProjectFormDialog
         open={newProjectOpen}
         onOpenChange={setNewProjectOpen}
         onCreated={(project) => go(project.id)}
       />
+
+      {newCardProject ? (
+        <NewCardDialog
+          open
+          onOpenChange={(next) => !next && setNewCardProject(null)}
+          projectId={newCardProject.id}
+          accounts={accountsData?.accounts ?? []}
+          defaultAccountLabel={accountsData?.defaultLabel || "the runner default"}
+          inheritedAccount={projectAccountSlug(newCardProject)}
+          defaultBranch={projectBaseBranch(newCardProject)}
+          onSubmit={(input) => createCardMutation.mutate(input)}
+        />
+      ) : null}
 
       <Dialog open={Boolean(deleteTarget)} onOpenChange={(next) => !next && setDeleteTarget(null)}>
         <DialogContent className="max-w-md">
@@ -341,8 +271,91 @@ export function BoardPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </>
+  );
 
-      {newCardDialog}
+  /* --------------------------------------------------------- the card view */
+
+  if (selected && cardId) {
+    return (
+      <div className="space-y-5">
+        <div
+          data-testid="card-layout"
+          className="flex min-h-[420px] flex-col gap-4 lg:flex-row lg:items-stretch"
+          style={{ height: cardViewHeight() }}
+        >
+          {menuButton}
+          {sidebar}
+          {/* Keyed by card: switching cards tears the socket down and opens the next one cleanly. */}
+          <CardTerminalView
+            key={cardId}
+            project={selected}
+            cardId={cardId}
+            onBack={() => go(selected.id)}
+            onNewCard={() => setNewCardProject(selected)}
+            onOpenMenu={() => setMenuOpen(true)}
+          />
+        </div>
+        {dialogs}
+      </div>
+    );
+  }
+
+  /* ------------------------------------------------------------- the board */
+
+  return (
+    <div className="space-y-5">
+      {isLoading ? (
+        <div className="flex justify-center py-12">
+          <Loader2 className="h-7 w-7 animate-spin text-muted-foreground" />
+        </div>
+      ) : projects.length === 0 ? (
+        <div className="panel flex flex-col items-center gap-3 py-12 text-center">
+          <div className="grid h-11 w-11 place-items-center rounded-xl bg-primary/10 text-primary">
+            <Code2 className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="font-medium">No projects yet</p>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              Point a project at a repository and every card becomes a Claude terminal in its own
+              worktree.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <Button onClick={() => setNewProjectOpen(true)}>
+              <Plus /> Create the first project
+            </Button>
+            <RunnerBanner />
+          </div>
+        </div>
+      ) : (
+        // `lg:items-start` — the sidebar is as tall as its own content here, not as tall as the
+        // board beside it.
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+          {menuButton}
+          {sidebar}
+
+          <div className="min-w-0 flex-1">
+            {selected ? (
+              <KanbanBoard
+                project={selected}
+                onOpenCard={(card) => go(selected.id, card.id)}
+                onNewCard={() => setNewCardProject(selected)}
+                headerExtra={headerExtra}
+              />
+            ) : (
+              // Nothing selected: every project's cards at once. Opening one goes to ITS project.
+              <AllProjectsBoard
+                projects={projects}
+                onOpenCard={(card) => go(card.projectId, card.id)}
+                headerExtra={aggregateHeaderExtra}
+              />
+            )}
+          </div>
+        </div>
+      )}
+
+      {dialogs}
     </div>
   );
 }

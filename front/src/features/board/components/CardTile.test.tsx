@@ -33,7 +33,7 @@ describe("CardTile — what the card says", () => {
   it("does not repeat the column it is sitting in", () => {
     // "Working" under a card in the Working column is a word that has already been read.
     renderApp(<CardTile card={card({ status: "working" })} onOpen={vi.fn()} />);
-    const tile = screen.getByRole("button", { name: "fix the totals" });
+    const tile = screen.getByRole("link", { name: "fix the totals" });
     expect(within(tile).queryByText("Working")).not.toBeInTheDocument();
     expect(within(tile).queryByText("Waiting for you")).not.toBeInTheDocument();
   });
@@ -77,7 +77,7 @@ describe("CardTile — right-click", () => {
     const user = userEvent.setup();
     renderApp(<CardTile card={card({ openedAt: 5 })} onOpen={vi.fn()} {...handlers()} />);
 
-    await user.pointer({ keys: "[MouseRight]", target: screen.getByRole("button", { name: "fix the totals" }) });
+    await user.pointer({ keys: "[MouseRight]", target: screen.getByRole("link", { name: "fix the totals" }) });
     const items = within(screen.getByRole("menu")).getAllByRole("menuitem");
     expect(items.map((i) => i.textContent)).toEqual(["Pause", "Restart", "Finish"]);
   });
@@ -88,7 +88,7 @@ describe("CardTile — right-click", () => {
     const h = handlers();
     renderApp(<CardTile card={card({ openedAt: 5 })} onOpen={onOpen} {...h} />);
 
-    await user.pointer({ keys: "[MouseRight]", target: screen.getByRole("button", { name: "fix the totals" }) });
+    await user.pointer({ keys: "[MouseRight]", target: screen.getByRole("link", { name: "fix the totals" }) });
     await user.click(screen.getByRole("menuitem", { name: "Restart" }));
 
     expect(h.onRestart).toHaveBeenCalledWith(expect.objectContaining({ id: "c1" }));
@@ -99,7 +99,7 @@ describe("CardTile — right-click", () => {
   it("closes after choosing", async () => {
     const user = userEvent.setup();
     renderApp(<CardTile card={card({ openedAt: 5 })} onOpen={vi.fn()} {...handlers()} />);
-    await user.pointer({ keys: "[MouseRight]", target: screen.getByRole("button", { name: "fix the totals" }) });
+    await user.pointer({ keys: "[MouseRight]", target: screen.getByRole("link", { name: "fix the totals" }) });
     await user.click(screen.getByRole("menuitem", { name: "Pause" }));
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
@@ -107,7 +107,7 @@ describe("CardTile — right-click", () => {
   it("closes on Escape", async () => {
     const user = userEvent.setup();
     renderApp(<CardTile card={card({ openedAt: 5 })} onOpen={vi.fn()} {...handlers()} />);
-    await user.pointer({ keys: "[MouseRight]", target: screen.getByRole("button", { name: "fix the totals" }) });
+    await user.pointer({ keys: "[MouseRight]", target: screen.getByRole("link", { name: "fix the totals" }) });
     expect(screen.getByRole("menu")).toBeInTheDocument();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
@@ -117,7 +117,7 @@ describe("CardTile — right-click", () => {
     const user = userEvent.setup();
     renderApp(<CardTile card={card({ column: "backlog" })} onOpen={vi.fn()} {...handlers()} />);
 
-    await user.pointer({ keys: "[MouseRight]", target: screen.getByRole("button", { name: "fix the totals" }) });
+    await user.pointer({ keys: "[MouseRight]", target: screen.getByRole("link", { name: "fix the totals" }) });
     const items = within(screen.getByRole("menu")).getAllByRole("menuitem");
     expect(items.map((i) => i.textContent)).toEqual(["Finish"]);
   });
@@ -126,7 +126,7 @@ describe("CardTile — right-click", () => {
     const user = userEvent.setup();
     renderApp(<CardTile card={card({ column: "done", openedAt: 5 })} onOpen={vi.fn()} {...handlers()} />);
 
-    await user.pointer({ keys: "[MouseRight]", target: screen.getByRole("button", { name: "fix the totals" }) });
+    await user.pointer({ keys: "[MouseRight]", target: screen.getByRole("link", { name: "fix the totals" }) });
     const items = within(screen.getByRole("menu")).getAllByRole("menuitem");
     expect(items.map((i) => i.textContent)).toEqual(["Pause", "Restart"]);
   });
@@ -135,7 +135,100 @@ describe("CardTile — right-click", () => {
     const user = userEvent.setup();
     // A read-only tile: no handlers at all, so suppressing the native menu would give nothing back.
     renderApp(<CardTile card={card({ column: "done" })} onOpen={vi.fn()} />);
-    await user.pointer({ keys: "[MouseRight]", target: screen.getByRole("button", { name: "fix the totals" }) });
+    await user.pointer({ keys: "[MouseRight]", target: screen.getByRole("link", { name: "fix the totals" }) });
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+});
+
+describe("CardTile — the card is a link", () => {
+  it("carries the href of its own card, so the browser's habits work", () => {
+    renderApp(<CardTile card={card()} onOpen={vi.fn()} />);
+    expect(screen.getByRole("link", { name: "fix the totals" })).toHaveAttribute(
+      "href",
+      "?project=p1&card=c1",
+    );
+  });
+
+  it("handles a plain click itself", async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    renderApp(<CardTile card={card()} onOpen={onOpen} />);
+    await user.click(screen.getByRole("link", { name: "fix the totals" }));
+    expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ id: "c1" }));
+  });
+
+  it("gets out of the way of a modified click — that one belongs to the browser", async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    renderApp(<CardTile card={card()} onOpen={onOpen} />);
+
+    const tile = screen.getByRole("link", { name: "fix the totals" });
+    // Cmd-click (and Ctrl/Shift/middle): the router must not intercept it, or "open in a new tab"
+    // would silently navigate this one instead.
+    await user.keyboard("{Meta>}");
+    await user.click(tile);
+    await user.keyboard("{/Meta}");
+
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+});
+
+describe("CardTile — the ⋯ menu", () => {
+  it("offers card management, in order, behind one trigger", async () => {
+    const user = userEvent.setup();
+    renderApp(
+      <CardTile
+        card={card({ openedAt: 5 })}
+        onOpen={vi.fn()}
+        onDone={vi.fn()}
+        onPause={vi.fn()}
+        onAccount={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Actions for fix the totals" }));
+    const items = await screen.findAllByRole("menuitem");
+    expect(items.map((i) => i.textContent)).toEqual([
+      "Finish (move to Done)",
+      "Pause (ends the session)",
+      "Claude account…",
+      "Delete card",
+    ]);
+  });
+
+  it("runs an action without also opening the card", async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    const onDelete = vi.fn();
+    renderApp(<CardTile card={card()} onOpen={onOpen} onDelete={onDelete} />);
+
+    await user.click(screen.getByRole("button", { name: "Actions for fix the totals" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Delete card" }));
+
+    expect(onDelete).toHaveBeenCalledWith(expect.objectContaining({ id: "c1" }));
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("has no trigger at all where the board offers no actions", () => {
+    renderApp(<CardTile card={card()} onOpen={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: /Actions for/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("CardTile — the chips", () => {
+  it("shows the card's OWN account and never the one it merely inherits", () => {
+    renderApp(<CardTile card={card({ accountSlug: "personal" })} onOpen={vi.fn()} />);
+    expect(screen.getByText("personal")).toBeInTheDocument();
+  });
+
+  it("says nothing about the model — that is a setting, not news", () => {
+    renderApp(<CardTile card={card({ model: "claude-opus-5" })} onOpen={vi.fn()} />);
+    expect(screen.queryByText(/opus/i)).not.toBeInTheDocument();
+  });
+
+  it("renders no dot placeholder for a card the runner has said nothing about", () => {
+    renderApp(<CardTile card={card({ status: undefined, column: "backlog" })} onOpen={vi.fn()} />);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 });

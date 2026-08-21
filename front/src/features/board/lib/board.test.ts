@@ -11,8 +11,8 @@ import {
   sortByRecency,
   sortCards,
   sortProjects,
-  ALL_PROJECTS,
-  isAllProjects,
+  cardHref,
+  locationHref,
   splitSidebarCards,
   statusDot,
   writeLocation,
@@ -208,16 +208,18 @@ describe("splitSidebarCards", () => {
   });
 });
 
-describe("isAllProjects", () => {
-  it("recognises the aggregated-board selection and nothing else", () => {
-    expect(isAllProjects(ALL_PROJECTS)).toBe(true);
-    // "nothing selected yet" is NOT the overview — it is the state that redirects to a project.
-    expect(isAllProjects(null)).toBe(false);
-    expect(isAllProjects("p1")).toBe(false);
+describe("locationHref", () => {
+  it("is a relative query string, so every card is a real link", () => {
+    expect(cardHref("p1", "c2")).toBe("?project=p1&card=c2");
+    expect(locationHref({ projectId: "p1", cardId: null })).toBe("?project=p1");
   });
 
-  it("uses a sentinel no server-generated id can collide with", () => {
-    expect(ALL_PROJECTS).toBe("*");
+  it("is the aggregated board when nothing is selected", () => {
+    expect(locationHref({ projectId: null, cardId: null })).toBe("?");
+  });
+
+  it("escapes an id rather than pasting it in raw", () => {
+    expect(cardHref("a b", "c/d")).toBe("?project=a+b&card=c%2Fd");
   });
 });
 

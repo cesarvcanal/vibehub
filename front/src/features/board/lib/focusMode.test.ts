@@ -1,29 +1,27 @@
 import { describe, expect, it } from "vitest";
 import {
-  FOCUS_CHROME_PX,
-  FOCUS_PAD_PX,
-  HEADER_PX,
+  CARD_MAIN_PADDING_PX,
   TERM_MAX,
   TERM_MIN,
+  cardViewHeight,
   clampTermSize,
   fitDimensions,
-  focusHeight,
   isValidTermSize,
   resizeFrame,
 } from "@/features/board/lib/focusMode";
 
-describe("focus chrome", () => {
-  it("counts the header once and the padding twice", () => {
-    expect(FOCUS_CHROME_PX).toBe(HEADER_PX + FOCUS_PAD_PX * 2);
-  });
-
-  it("renders a css height that subtracts exactly that", () => {
-    expect(focusHeight()).toBe(`calc(100vh - ${FOCUS_CHROME_PX}px)`);
-    expect(focusHeight(0)).toBe("calc(100vh - 0px)");
+describe("cardViewHeight", () => {
+  it("subtracts the MEASURED header, not a guessed one", () => {
+    // The header is not a constant — it wraps on a phone — so the shell publishes its real height
+    // and the card view reads it. The fallback only covers the frame before the first measurement.
+    expect(cardViewHeight()).toBe(
+      `calc(100vh - var(--app-header-h, 64px) - ${CARD_MAIN_PADDING_PX}px)`,
+    );
+    expect(cardViewHeight(0)).toBe("calc(100vh - var(--app-header-h, 64px) - 0px)");
   });
 
   it("never produces a negative subtraction", () => {
-    expect(focusHeight(-20)).toBe("calc(100vh - 0px)");
+    expect(cardViewHeight(-20)).toBe("calc(100vh - var(--app-header-h, 64px) - 0px)");
   });
 });
 

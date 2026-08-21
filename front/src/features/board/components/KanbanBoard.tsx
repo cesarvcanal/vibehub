@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { CardTile } from "@/features/board/components/CardTile";
 import { COLUMNS, groupByColumn, moveCardLocal, nextPosition } from "@/features/board/lib/board";
 import { boardTitle, useDocumentTitle } from "@/features/board/lib/documentTitle";
@@ -37,6 +38,10 @@ import type { CardColumn } from "@/api/types";
  *
  * Moving to Done is always a manual act. It gets an undo toast rather than a confirmation dialog:
  * finishing a card is cheap to reverse, and a modal for it would be noise fifty times a day.
+ * Deleting keeps its dialog — uncommitted work in the worktree does not come back.
+ *
+ * The header says how many cards there are and nothing else. The project's NAME is not repeated
+ * here: the sidebar beside it is showing which project is selected, in the same eyeful.
  */
 export function KanbanBoard({
   project,
@@ -61,16 +66,17 @@ export function KanbanBoard({
     refetchInterval: 2_000,
   });
 
-  const { data: accountsData } = useQuery({ queryKey: ACCOUNTS_KEY, queryFn: boardApi.listAccounts });
-  const inheritedAccount = React.useMemo(() => {
-    const slug = projectAccountSlug(project);
-    if (!slug) return undefined;
-    const account = accountsData?.accounts.find((a) => a.slug === slug);
-    return account ? accountLabel(account) : slug;
-  }, [project, accountsData]);
-
   const [dragging, setDragging] = React.useState<BoardCard | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<BoardCard | null>(null);
+  // Switching a card's Claude account: the target card, plus the choice ("" = inherit).
+  const [accountTarget, setAccountTarget] = React.useState<BoardCard | null>(null);
+  const [accountChoice, setAccountChoice] = React.useState("");
+
+  const { data: accountsData } = useQuery({
+    queryKey: ACCOUNTS_KEY,
+    queryFn: boardApi.listAccounts,
+    enabled: Boolean(accountTarget),
+  });
 
   const moveMutation = useMutation({
     mutationFn: ({ id, column, position }: { id: string; column: CardColumn; position: number }) =>
@@ -108,7 +114,7 @@ export function KanbanBoard({
     mutationFn: (id: string) => boardApi.restartCard(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: boardKey });
-      toast.success("Restarted — same conversation, fresh configuration.");
+      toast.success("Restarting the terminal… the conversation resumes on the next open.");
     },
     onError: (error) => toast.error(apiErrorMessage(error, "Could not restart the card")),
   });
@@ -120,6 +126,22 @@ export function KanbanBoard({
       toast.success("Card deleted.");
     },
     onError: (error) => toast.error(apiErrorMessage(error, "Could not delete the card")),
+  });
+
+  /**
+   * Switching the account PATCHes `accountSlug` ("" from the form becomes null = inherit). The
+   * server kills the tmux session when the value actually changes; the next open recreates it with
+   * the new profile's `CLAUDE_CONFIG_DIR`.
+   */
+  const accountMutation = useMutation({
+    mutationFn: ({ id, accountSlug }: { id: string; accountSlug: string | null }) =>
+      boardApi.patchCard(id, { accountSlug }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: boardKey });
+      setAccountTarget(null);
+      toast.success("Account switched — the Claude session restarts on the next open.");
+    },
+    onError: (error) => toast.error(apiErrorMessage(error, "Could not switch the card's account")),
   });
 
   const groups = groupByColumn(cards ?? []);
@@ -135,33 +157,43 @@ export function KanbanBoard({
   function finish(card: BoardCard) {
     const previous = { column: card.column, position: card.position ?? 0 };
     moveMutation.mutate({ id: card.id, column: "done", position: nextPosition(cards ?? [], "done") });
-    toast.success(`“${card.title}” finished.`, {
+    toast.success(`“${card.title}” finished — stopped following the terminal.`, {
       action: { label: "Undo", onClick: () => moveMutation.mutate({ id: card.id, ...previous }) },
     });
   }
 
+  /** Restarting a card mid-turn throws away what it is in the middle of. Ask first. */
+  function restart(card: BoardCard) {
+    if (
+      card.status === "working" &&
+      !window.confirm("Claude is working — restarting will interrupt it. Continue?")
+    ) {
+      return;
+    }
+    restartMutation.mutate(card.id);
+  }
+
+  const inheritedSlug = projectAccountSlug(project);
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
+    <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="mr-auto min-w-0">
-          <h1 className="truncate text-sm font-semibold tracking-tight">{project.name}</h1>
-          <p className="truncate font-mono text-[11px] text-muted-foreground">
-            {total} {total === 1 ? "card" : "cards"}
-          </p>
-        </div>
+        <span className="mr-auto text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          {total} {total === 1 ? "card" : "cards"}
+        </span>
         {headerExtra}
-        <Button size="sm" className="h-8" onClick={onNewCard}>
-          <Plus /> New card
-          <span className="kbd ml-1">⌘K</span>
+        <Button size="sm" className="h-9 gap-0" title="New card (⌘K or Ctrl+T)" onClick={onNewCard}>
+          <Plus className="mr-1.5 h-4 w-4" /> New card
         </Button>
       </div>
 
       {isLoading ? (
-        <div className="flex flex-1 items-center justify-center py-12">
+        <div className="flex justify-center py-12">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
       ) : (
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
+        // Five equal columns side by side from `xl`; two at `md`; one on a phone.
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
           {COLUMNS.map((column) => (
             <ColumnZone
               key={column.key}
@@ -176,11 +208,14 @@ export function KanbanBoard({
                 <CardTile
                   key={card.id}
                   card={card}
-                  accountLabel={card.accountSlug ?? inheritedAccount}
                   onOpen={onOpenCard}
                   onDone={finish}
                   onPause={(c) => pauseMutation.mutate(c.id)}
-                  onRestart={(c) => restartMutation.mutate(c.id)}
+                  onRestart={restart}
+                  onAccount={(c) => {
+                    setAccountChoice(c.accountSlug ?? "");
+                    setAccountTarget(c);
+                  }}
                   onDelete={setDeleteTarget}
                   onDragStart={setDragging}
                   onDragEnd={() => setDragging(null)}
@@ -193,6 +228,60 @@ export function KanbanBoard({
           ))}
         </div>
       )}
+
+      {/* The card's Claude account. A dialog rather than a submenu: switching it ends the session
+          that is running, which is not something to do by brushing past a menu item. */}
+      <Dialog open={Boolean(accountTarget)} onOpenChange={(next) => !next && setAccountTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Claude account for “{accountTarget?.title}”</DialogTitle>
+            <DialogDescription>
+              Switching the account restarts this card's Claude session — the work in the worktree
+              stays.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label htmlFor="card-account">Account</Label>
+            <select
+              id="card-account"
+              value={accountChoice}
+              onChange={(e) => setAccountChoice(e.target.value)}
+              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <option value="">
+                {inheritedSlug
+                  ? `Default (inherits “${inheritedSlug}” from the project)`
+                  : `Default (${accountsData?.defaultLabel || "the runner's account"})`}
+              </option>
+              {(accountsData?.accounts ?? []).map((account) => (
+                <option key={account.slug} value={account.slug}>
+                  {accountLabel(account)} ({account.slug})
+                </option>
+              ))}
+            </select>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setAccountTarget(null)}
+              disabled={accountMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={accountMutation.isPending || accountChoice === (accountTarget?.accountSlug ?? "")}
+              onClick={() => {
+                if (accountTarget) {
+                  accountMutation.mutate({ id: accountTarget.id, accountSlug: accountChoice || null });
+                }
+              }}
+            >
+              {accountMutation.isPending ? <Loader2 className="animate-spin" /> : null}
+              Switch account
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={Boolean(deleteTarget)} onOpenChange={(next) => !next && setDeleteTarget(null)}>
         <DialogContent className="max-w-md">
@@ -239,7 +328,14 @@ const COLUMN_TONE: Record<CardColumn, { border: string; bg: string; title: strin
   done: { border: "border-border/50", bg: "bg-card/30", title: "text-muted-foreground/60" },
 };
 
-/** A column: a header plus a drop zone that lights up when a card from elsewhere hovers it. */
+/**
+ * A column: a header plus a drop zone that lights up when a card from elsewhere hovers it.
+ *
+ * It grows to the useful height of the viewport once the columns sit side by side, so an EMPTY
+ * column is still a target you can hit — a 40px strip is not somewhere anyone can drop a card. The
+ * column itself never scrolls: the page does, so a long Backlog pushes the page down instead of
+ * hiding its own cards behind an inner scrollbar nobody notices.
+ */
 export function ColumnZone({
   column,
   label,
@@ -296,7 +392,7 @@ export function ColumnZone({
           : undefined
       }
       className={cn(
-        "flex min-h-40 min-w-0 flex-col gap-2 overflow-y-auto rounded-xl border p-2 backdrop-blur-sm transition-colors",
+        "flex min-h-40 min-w-0 flex-col gap-2 rounded-xl border p-2 backdrop-blur-sm transition-colors md:min-h-[calc(100vh-19rem)]",
         tone.border,
         active && over ? "bg-primary/10 ring-2 ring-primary/40" : tone.bg,
       )}

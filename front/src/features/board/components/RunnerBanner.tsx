@@ -1,26 +1,39 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, ChevronDown, Loader2, Play, Server } from "lucide-react";
+import { AlertTriangle, ChevronDown, Loader2, Play, Server, TerminalSquare } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { apiErrorMessage } from "@/lib/apiError";
 import { LogBox } from "@/features/setup/LogBox";
 import { useRunnerLogs } from "@/features/setup/useRunnerLogs";
+import { XTerminal } from "@/features/board/components/XTerminal";
 import { RUNNER_KEY, boardApi } from "@/features/board/api";
 import type { RunnerStatus } from "@/api/types";
 
 /**
- * The runner's state, above the board.
+ * The runner's state, in the board's header row.
  *
- * When everything is up this is a single quiet chip — a healthy runner does not deserve a banner.
- * The banner only appears for states that need a decision: no container, a stopped container, or a
- * container without `claude` in it. Provisioning is slow and fails in interesting ways, so it
- * streams its real output (`WS /api/runner/logs`) instead of showing a spinner.
+ * When everything is up this is a single QUIET chip — neutral, not green: a healthy runner is the
+ * normal case, and painting the normal case in a status colour trains the eye to ignore colour. The
+ * one thing tinted is the dot itself. The full banner only appears for states that need a decision:
+ * no container, a stopped container, or a container without `claude` in it. Provisioning is slow
+ * and fails in interesting ways, so it streams its real output (`WS /api/runner/logs`) instead of
+ * showing a spinner.
+ *
+ * The chip also opens the runner's OWN shell (`WS /api/runner/terminal`) — the place where `claude`
+ * and `gh` are signed in once, by hand. Without it that first login has no home in the UI at all,
+ * and it is exactly the thing a fresh install needs. The control only exists when the server says
+ * the route is there (`terminal: true`).
+ *
+ * The component renders inside the header's flex-wrap row, so its block pieces use `w-full` plus an
+ * order: the action banner breaks onto its own line ABOVE the header (`order-first`) and the open
+ * terminal onto its own line BELOW it (`order-last`); the chip itself stays inline.
  */
 export function RunnerBanner() {
   const queryClient = useQueryClient();
   const [showLogs, setShowLogs] = React.useState(false);
+  const [shellOpen, setShellOpen] = React.useState(false);
 
   const { data: runner, isLoading } = useQuery({
     queryKey: RUNNER_KEY,
@@ -61,9 +74,12 @@ export function RunnerBanner() {
 
   if (isLoading) {
     return (
-      <Badge tone="muted" className="h-8 px-2.5">
+      <span
+        title="Checking the runner…"
+        className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border/60 bg-card/40 px-2.5 text-[11px] font-medium text-muted-foreground"
+      >
         <Loader2 className="h-3.5 w-3.5 animate-spin" /> runner
-      </Badge>
+      </span>
     );
   }
 
@@ -71,13 +87,47 @@ export function RunnerBanner() {
   // that surface reports it with the real error.
   if (!runner) return null;
 
+  // The runner container is up and can host a shell. `terminal` is what the server answers when the
+  // websocket route exists; an older server simply does not offer the button.
+  const canShell = Boolean(runner.running && runner.terminal);
+  const shell =
+    shellOpen && canShell ? (
+      <XTerminal
+        wsPath="/api/runner/terminal"
+        ariaLabel="Runner shell"
+        className="h-72"
+      />
+    ) : null;
+
   const ready = runner.running && runner.claudeInstalled;
   if (ready && !showLogs) {
     return (
-      <Badge tone="ok" className="h-8 px-2.5" title={runnerTitle(runner)}>
-        <span className="inline-block h-2 w-2 rounded-full bg-emerald-400 motion-safe:animate-[vh-pulse_2s_ease-in-out_infinite]" />
-        runner
-      </Badge>
+      <>
+        <span
+          title={runnerTitle(runner)}
+          className={cn(
+            "inline-flex h-9 items-center gap-2 rounded-md border border-border/60 bg-card/40 text-[11px] font-medium text-muted-foreground",
+            canShell ? "pl-2.5 pr-1" : "px-2.5",
+          )}
+        >
+          <span className="inline-block h-2 w-2 rounded-full bg-emerald-400 dot-live" />
+          runner
+          {canShell ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              aria-label={shellOpen ? "Close the runner's shell" : "Open the runner's shell"}
+              title={shellOpen ? "Close the runner's shell" : "Open the runner's shell"}
+              aria-expanded={shellOpen}
+              onClick={() => setShellOpen((v) => !v)}
+            >
+              <TerminalSquare className="h-4 w-4" />
+            </Button>
+          ) : null}
+        </span>
+        {shell ? <div className="order-last w-full">{shell}</div> : null}
+      </>
     );
   }
 
@@ -95,6 +145,13 @@ export function RunnerBanner() {
             <Button size="sm" variant="outline" disabled={startMutation.isPending} onClick={() => startMutation.mutate()}>
               {startMutation.isPending ? <Loader2 className="animate-spin" /> : <Play />}
               Start
+            </Button>
+          ) : null}
+          {/* Signing `claude` in is done HERE, by hand, in the runner's own shell. */}
+          {canShell ? (
+            <Button size="sm" variant="outline" aria-expanded={shellOpen} onClick={() => setShellOpen((v) => !v)}>
+              <TerminalSquare />
+              {shellOpen ? "Close the shell" : "Open the runner's shell"}
             </Button>
           ) : null}
           <Button
@@ -116,6 +173,7 @@ export function RunnerBanner() {
           </Button>
         </div>
       </div>
+      {shell}
       {showLogs || provisioning ? <LogBox lines={lines} empty="No output yet." /> : null}
     </div>
   );
@@ -126,7 +184,7 @@ function runnerTitle(runner: RunnerStatus): string {
   return `${runner.container}${where} — running, claude installed`;
 }
 
-function describe(runner: RunnerStatus, provisioning: boolean): { icon: React.ReactNode; message: string } {
+function describe(runner: RunnerStatus, provisioning: boolean): { icon: React.ReactNode; message: React.ReactNode } {
   const warn = <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />;
   if (provisioning) {
     return { icon: <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />, message: "Provisioning the runner…" };
@@ -150,7 +208,12 @@ function describe(runner: RunnerStatus, provisioning: boolean): { icon: React.Re
   }
   return {
     icon: warn,
-    message:
-      "The runner is up but `claude` is not installed in it. Reprovision, or install it from a shell and run `claude` once to sign in.",
+    message: (
+      <>
+        The runner is up but <span className="font-mono">claude</span> is not installed in it.
+        Reprovision, or open the runner's shell and run <span className="font-mono">claude</span> once
+        to sign in.
+      </>
+    ),
   };
 }

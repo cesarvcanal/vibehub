@@ -24,8 +24,12 @@ import type { CardColumn } from "@/api/types";
  * here is already moved when you open that project.
  *
  * Dragging works across columns and routes by `card.projectId`: positions are per-project, so both
- * the PATCH and the optimistic update land in the owning project's cache. Anything that needs a
- * confirmation — deleting — stays on the project board, which is where that context lives.
+ * the PATCH and the optimistic update land in the owning project's cache.
+ *
+ * The cards here are OPEN-ONLY: no `⋯` menu, no right-click actions. This view answers one question
+ * — who needs me — and acting on a card is done where its context is, which is its own project's
+ * board or its terminal. For the same reason there is no runner chip (there is no single runner to
+ * report on) and no New card button (there is no project for it to belong to).
  */
 export function AllProjectsBoard({
   projects,
@@ -37,7 +41,8 @@ export function AllProjectsBoard({
   headerExtra?: React.ReactNode;
 }) {
   const queryClient = useQueryClient();
-  useDocumentTitle(boardTitle("All projects"));
+  // The aggregated board is not one project, so the tab is just the app.
+  useDocumentTitle(boardTitle());
 
   const results = useQueries({
     queries: projects.map((project) => ({
@@ -86,24 +91,6 @@ export function AllProjectsBoard({
       queryClient.invalidateQueries({ queryKey: cardsKey(vars.projectId) }),
   });
 
-  const pauseMutation = useMutation({
-    mutationFn: (card: BoardCard) => boardApi.pauseCard(card.id),
-    onSuccess: (_data, card) => {
-      void queryClient.invalidateQueries({ queryKey: cardsKey(card.projectId) });
-      toast.success("Paused — reopening the card resumes the same conversation.");
-    },
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not pause the card")),
-  });
-
-  const restartMutation = useMutation({
-    mutationFn: (card: BoardCard) => boardApi.restartCard(card.id),
-    onSuccess: (_data, card) => {
-      void queryClient.invalidateQueries({ queryKey: cardsKey(card.projectId) });
-      toast.success("Restarted — same conversation, fresh configuration.");
-    },
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not restart the card")),
-  });
-
   function dropOn(column: CardColumn) {
     const card = dragging;
     setDragging(null);
@@ -117,40 +104,24 @@ export function AllProjectsBoard({
     });
   }
 
-  function finish(card: BoardCard) {
-    const previous = { column: card.column, position: card.position ?? 0 };
-    const vars = { id: card.id, projectId: card.projectId };
-    moveMutation.mutate({
-      ...vars,
-      column: "done" as CardColumn,
-      position: nextPosition(byProject.get(card.projectId) ?? [], "done"),
-    });
-    toast.success(`“${card.title}” finished.`, {
-      action: { label: "Undo", onClick: () => moveMutation.mutate({ ...vars, ...previous }) },
-    });
-  }
-
   const groups = groupByColumn(cards);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
+    <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="mr-auto min-w-0">
-          <h1 className="truncate text-sm font-semibold tracking-tight">All projects</h1>
-          <p className="truncate font-mono text-[11px] text-muted-foreground">
-            {cards.length} {cards.length === 1 ? "card" : "cards"} · {projects.length}{" "}
-            {projects.length === 1 ? "project" : "projects"}
-          </p>
-        </div>
+        <span className="mr-auto text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          {cards.length} {cards.length === 1 ? "card" : "cards"} · {projects.length}{" "}
+          {projects.length === 1 ? "project" : "projects"}
+        </span>
         {headerExtra}
       </div>
 
       {isLoading ? (
-        <div className="flex flex-1 items-center justify-center py-12">
+        <div className="flex justify-center py-12">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
       ) : (
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
           {COLUMNS.map((column) => (
             <ColumnZone
               key={column.key}
@@ -167,9 +138,6 @@ export function AllProjectsBoard({
                   card={card}
                   projectLabel={projectName.get(card.projectId)}
                   onOpen={onOpenCard}
-                  onDone={finish}
-                  onPause={(c) => pauseMutation.mutate(c)}
-                  onRestart={(c) => restartMutation.mutate(c)}
                   onDragStart={setDragging}
                   onDragEnd={() => setDragging(null)}
                 />

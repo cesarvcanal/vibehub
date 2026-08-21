@@ -177,7 +177,14 @@ export function splitSidebarCards(cards: BoardCard[]): { active: BoardCard[]; id
 
 /* ------------------------------------------------------------- deep links */
 
-/** Where the board is pointing. Both null = the empty state / no project selected. */
+/**
+ * Where the board is pointing.
+ *
+ * NO project is a destination, not an accident: it is the aggregated board across every project.
+ * That is what makes the sidebar's second click meaningful — clicking the selected project again
+ * deselects it and you are looking at every agent at once, which is the question you actually have
+ * ("who needs me"), not "which of my projects has someone who needs me".
+ */
 export interface BoardLocation {
   projectId: string | null;
   cardId: string | null;
@@ -185,20 +192,6 @@ export interface BoardLocation {
 
 export const PROJECT_PARAM = "project";
 export const CARD_PARAM = "card";
-
-/**
- * The "no single project" selection: the aggregated board across every project.
- *
- * It is a real, addressable choice rather than the absence of one — `?project=` empty still means
- * "nothing picked yet", which is what lets a first visit land on a project instead of on the
- * overview. `*` cannot collide with a server-generated id.
- */
-export const ALL_PROJECTS = "*";
-
-/** True when the location points at the aggregated board rather than at one project. */
-export function isAllProjects(projectId: string | null): boolean {
-  return projectId === ALL_PROJECTS;
-}
 
 /**
  * Reads the location out of the URL's query string. It lives in the URL — not in component state —
@@ -224,4 +217,22 @@ export function writeLocation(location: BoardLocation): URLSearchParams {
 /** True when the two locations point at the same thing — used to avoid pointless history entries. */
 export function sameLocation(a: BoardLocation, b: BoardLocation): boolean {
   return a.projectId === b.projectId && a.cardId === b.cardId;
+}
+
+/**
+ * The href of a location, relative to the current path.
+ *
+ * Every card on the board and every card row in the sidebar is a REAL link built from this, so the
+ * browser's own habits keep working: middle-click and Cmd/Ctrl/Shift-click open the card in another
+ * tab, hovering shows where it goes, and "copy link address" produces something that can be pasted.
+ * A plain left click is still intercepted (see `isNewTabClick`) and handled by the router.
+ */
+export function locationHref(location: BoardLocation): string {
+  const query = writeLocation(location).toString();
+  return query ? `?${query}` : "?";
+}
+
+/** Shorthand for the two ids a card link always carries. */
+export function cardHref(projectId: string, cardId: string): string {
+  return locationHref({ projectId, cardId });
 }

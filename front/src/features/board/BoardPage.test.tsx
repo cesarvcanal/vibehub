@@ -139,32 +139,49 @@ function serve(overrides: { cards?: BoardCard[]; projects?: BoardProject[] } = {
   });
 }
 
+/** The one sidebar — the same element on the board and beside an open card. */
+function sidebar() {
+  return screen.getByRole("navigation", { name: /projects/i });
+}
+
+/**
+ * Opens a card's `⋯` menu from the board. The column is named because the same card also has a row
+ * in the sidebar — two links with the same name, deliberately.
+ */
+async function openTileMenu(
+  user: ReturnType<typeof userEvent.setup>,
+  column: string,
+  title: string,
+) {
+  const tile = within(screen.getByRole("region", { name: column })).getByRole("link", { name: title });
+  await user.click(within(tile).getByRole("button", { name: `Actions for ${title}` }));
+}
+
 describe("BoardPage — the board", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     serve();
   });
 
-  it("lists the projects in sidebar order and selects the first one", async () => {
-    renderApp(<BoardPage />);
-    const sidebar = await screen.findByRole("navigation", { name: /projects/i });
-    const rows = Array.from(sidebar.querySelectorAll("[data-project-row]")).map(
+  it("lists every project in sidebar order, on the board as well as beside a card", async () => {
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    await screen.findByRole("region", { name: "Backlog" });
+    const rows = Array.from(sidebar().querySelectorAll("[data-project-row]")).map(
       (row) => row.textContent ?? "",
     );
     expect(rows[0]).toContain("billing");
     expect(rows[1]).toContain("gateway");
-    expect(await screen.findByRole("heading", { name: "billing" })).toBeInTheDocument();
   });
 
   it("renders the five columns, waiting before working", async () => {
-    renderApp(<BoardPage />);
+    renderApp(<BoardPage />, { route: "/?project=p1" });
     await screen.findByRole("region", { name: "Backlog" });
     const labels = screen.getAllByRole("region").map((r) => r.getAttribute("data-column"));
     expect(labels).toEqual(["backlog", "waiting", "working", "paused", "done"]);
   });
 
   it("puts each card in the column the server put it in", async () => {
-    renderApp(<BoardPage />);
+    renderApp(<BoardPage />, { route: "/?project=p1" });
     const working = await screen.findByRole("region", { name: "Working" });
     expect(within(working).getByText("chase the flake")).toBeInTheDocument();
     const waiting = screen.getByRole("region", { name: "Waiting" });
@@ -173,28 +190,38 @@ describe("BoardPage — the board", () => {
     expect(within(backlog).getByText("fix the totals")).toBeInTheDocument();
   });
 
+  it("counts the cards instead of repeating the project's name", async () => {
+    // The sidebar beside it already says which project is selected, in the same eyeful.
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    expect(await screen.findByText("3 cards")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "billing" })).not.toBeInTheDocument();
+  });
+
   it("shows a status dot only for the cards the runner reported on", async () => {
-    renderApp(<BoardPage />);
-    await screen.findByText("chase the flake");
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    await screen.findByRole("region", { name: "Working" });
     expect(screen.getByRole("status", { name: "Working" })).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "Waiting for you" })).toBeInTheDocument();
-    // The backlog card has no status, so it must have no dot at all.
+    // The backlog card has no status, so it must have no dot at all — not even a placeholder.
     expect(screen.queryAllByRole("status", { name: /working|waiting for you/i })).toHaveLength(2);
   });
 
-  it("shows the account and model chips of a card", async () => {
-    renderApp(<BoardPage />);
-    await screen.findByText("chase the flake");
+  it("shows the card's own account and no model chip", async () => {
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    await screen.findByRole("region", { name: "Working" });
     expect(screen.getByText("personal")).toBeInTheDocument();
-    expect(screen.getByText("opus")).toBeInTheDocument();
+    expect(screen.queryByText("opus")).not.toBeInTheDocument();
   });
 
-  it("moves a card with a PATCH when it is finished", async () => {
+  it("moves a card with a PATCH when it is finished from the ⋯ menu", async () => {
     mockPatch.mockResolvedValue({ card: { ...cards[0]!, column: "done" } });
     const user = userEvent.setup();
-    renderApp(<BoardPage />);
-    await screen.findByText("fix the totals");
-    await user.click(screen.getByRole("button", { name: "Finish fix the totals" }));
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    await screen.findByRole("region", { name: "Backlog" });
+
+    await openTileMenu(user, "Backlog", "fix the totals");
+    await user.click(await screen.findByRole("menuitem", { name: "Finish (move to Done)" }));
+
     await waitFor(() =>
       expect(mockPatch).toHaveBeenCalledWith("/cards/c1", { column: "done", position: 0 }),
     );
@@ -203,44 +230,52 @@ describe("BoardPage — the board", () => {
   it("pauses a card that has a session", async () => {
     mockPost.mockResolvedValue({ card: { ...cards[1]!, column: "paused" } });
     const user = userEvent.setup();
-    renderApp(<BoardPage />);
-    await screen.findByText("chase the flake");
-    await user.click(screen.getByRole("button", { name: "Pause chase the flake" }));
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    await screen.findByRole("region", { name: "Working" });
+
+    await openTileMenu(user, "Working", "chase the flake");
+    await user.click(await screen.findByRole("menuitem", { name: "Pause (ends the session)" }));
+
     await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/cards/c2/pause"));
   });
 
   it("offers no pause on a card that was never opened", async () => {
-    renderApp(<BoardPage />);
-    await screen.findByText("fix the totals");
-    expect(screen.queryByRole("button", { name: "Pause fix the totals" })).not.toBeInTheDocument();
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    await screen.findByRole("region", { name: "Backlog" });
+
+    await openTileMenu(user, "Backlog", "fix the totals");
+    const items = await screen.findAllByRole("menuitem");
+    expect(items.map((i) => i.textContent)).not.toContain("Pause (ends the session)");
   });
 
   it("asks before deleting, because uncommitted work in the worktree is lost", async () => {
     const user = userEvent.setup();
-    renderApp(<BoardPage />);
-    await screen.findByText("fix the totals");
-    await user.click(screen.getByRole("button", { name: "Delete fix the totals" }));
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    await screen.findByRole("region", { name: "Backlog" });
+
+    await openTileMenu(user, "Backlog", "fix the totals");
+    await user.click(await screen.findByRole("menuitem", { name: "Delete card" }));
+
     expect(await screen.findByRole("dialog")).toHaveTextContent(/Delete “fix the totals”\?/);
   });
 
-  it("reorders a project with the keyboard-reachable buttons", async () => {
-    mockPatch.mockResolvedValue({ projects });
+  it("switches a card's Claude account from a dialog, saying what it costs", async () => {
+    mockPatch.mockResolvedValue({ card: cards[1]! });
     const user = userEvent.setup();
-    renderApp(<BoardPage />);
-    await screen.findByRole("heading", { name: "billing" });
-    await user.click(screen.getByRole("button", { name: "Move gateway up" }));
-    await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/projects/p2/order", { position: 0 }));
-  });
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    await screen.findByRole("region", { name: "Working" });
 
-  it("asks before deleting a project, then deletes it", async () => {
-    mockDel.mockResolvedValue({ ok: true });
-    const user = userEvent.setup();
-    renderApp(<BoardPage />);
-    await screen.findByRole("heading", { name: "billing" });
-    await user.click(screen.getByRole("button", { name: "Delete project gateway" }));
-    expect(await screen.findByRole("dialog")).toHaveTextContent(/Delete “gateway”\?/);
-    await user.click(screen.getByRole("button", { name: /delete project/i }));
-    await waitFor(() => expect(mockDel).toHaveBeenCalledWith("/projects/p2"));
+    await openTileMenu(user, "Working", "chase the flake");
+    await user.click(await screen.findByRole("menuitem", { name: "Claude account…" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(/Claude account for “chase the flake”/);
+    expect(dialog).toHaveTextContent(/restarts this card's Claude session/);
+
+    await user.selectOptions(within(dialog).getByLabelText("Account"), "");
+    await user.click(within(dialog).getByRole("button", { name: "Switch account" }));
+    await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/cards/c2", { accountSlug: null }));
   });
 
   it("invites you to create the first project when there are none", async () => {
@@ -250,35 +285,242 @@ describe("BoardPage — the board", () => {
   });
 });
 
-describe("BoardPage — deep links", () => {
+describe("BoardPage — the sidebar", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     serve();
   });
 
-  it("opens the terminal for the card named in the URL", async () => {
+  it("unfolds the selected project's cards, and only that project's", async () => {
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+
+    // The active cards of the selected project, right under its row.
+    expect(await within(nav).findByRole("link", { name: "chase the flake" })).toBeInTheDocument();
+    expect(within(nav).getByRole("link", { name: "waiting on review" })).toBeInTheDocument();
+    // The backlog one hides behind "show more"; finished cards never appear at all.
+    expect(within(nav).queryByRole("link", { name: "fix the totals" })).not.toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: "show more (1)" })).toBeInTheDocument();
+  });
+
+  it("reveals the idle cards, then puts them away again", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+
+    await user.click(await within(nav).findByRole("button", { name: "show more (1)" }));
+    expect(within(nav).getByRole("link", { name: "fix the totals" })).toBeInTheDocument();
+
+    await user.click(within(nav).getByRole("button", { name: "show less" }));
+    expect(within(nav).queryByRole("link", { name: "fix the totals" })).not.toBeInTheDocument();
+  });
+
+  it("deselects the project when its row is clicked a second time", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+    await within(nav).findByRole("link", { name: "chase the flake" });
+
+    await user.click(within(nav).getByRole("button", { name: "billing" }));
+
+    // Deselected: the aggregated board, the cards folded away, and no board of its own.
+    expect(await screen.findByText(/4 cards · 2 projects/)).toBeInTheDocument();
+    expect(within(nav).queryByRole("link", { name: "chase the flake" })).not.toBeInTheDocument();
+  });
+
+  it("jumps straight to another project's board from wherever you are", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    await screen.findByTestId("terminal");
+
+    await user.click(within(sidebar()).getByRole("button", { name: "gateway" }));
+
+    await waitFor(() => expect(screen.queryByTestId("terminal")).not.toBeInTheDocument());
+    expect(await screen.findByRole("region", { name: "Waiting" })).toBeInTheDocument();
+  });
+
+  it("closes the card when its own row is clicked again, one level at a time", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+    await screen.findByTestId("terminal");
+
+    await user.click(await within(nav).findByRole("link", { name: "chase the flake" }));
+
+    await waitFor(() => expect(screen.queryByTestId("terminal")).not.toBeInTheDocument());
+    expect(await screen.findByRole("region", { name: "Backlog" })).toBeInTheDocument();
+  });
+
+  it("has no 'back to board' row — the card's own row is the way out", async () => {
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    await screen.findByTestId("terminal");
+    expect(within(sidebar()).queryByText(/back to board/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps the whole project list beside an open card, not just its cards", async () => {
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    await screen.findByTestId("terminal");
+    expect(within(sidebar()).getByRole("button", { name: "gateway" })).toBeInTheDocument();
+  });
+
+  it("renames a card in place on a double-click", async () => {
+    mockPatch.mockResolvedValue({ card: { ...cards[1]!, title: "chase the other flake" } });
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+
+    await user.dblClick(await within(nav).findByRole("link", { name: "chase the flake" }));
+    const input = await screen.findByLabelText("Rename card");
+    await user.clear(input);
+    await user.type(input, "chase the other flake{Enter}");
+
+    await waitFor(() =>
+      expect(mockPatch).toHaveBeenCalledWith("/cards/c2", { title: "chase the other flake" }),
+    );
+  });
+
+  it("abandons a rename on Escape", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+
+    await user.dblClick(await within(nav).findByRole("link", { name: "chase the flake" }));
+    await user.type(await screen.findByLabelText("Rename card"), "nonsense{Escape}");
+
+    await waitFor(() => expect(screen.queryByLabelText("Rename card")).not.toBeInTheDocument());
+    expect(mockPatch).not.toHaveBeenCalled();
+  });
+
+  it("offers the session actions on a card row's right-click", async () => {
+    mockPost.mockResolvedValue({ card: cards[1]! });
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+    const row = await within(nav).findByRole("link", { name: "chase the flake" });
+
+    await user.pointer({ keys: "[MouseRight]", target: row });
+    const menu = await screen.findByRole("menu", { name: "Actions for chase the flake" });
+    expect(within(menu).getAllByRole("menuitem").map((i) => i.textContent)).toEqual([
+      "Pause",
+      "Restart",
+      "Finish",
+    ]);
+  });
+
+  it("reorders a project from its right-click menu", async () => {
+    mockPatch.mockResolvedValue({ projects });
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+
+    await user.pointer({ keys: "[MouseRight]", target: within(nav).getByRole("button", { name: "gateway" }) });
+    await user.click(await screen.findByRole("menuitem", { name: "Move up" }));
+
+    await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/projects/p2/order", { position: 0 }));
+  });
+
+  it("asks before deleting a project, from the same menu", async () => {
+    mockDel.mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+
+    await user.pointer({ keys: "[MouseRight]", target: within(nav).getByRole("button", { name: "gateway" }) });
+    await user.click(await screen.findByRole("menuitem", { name: "Delete project…" }));
+
+    expect(await screen.findByRole("dialog")).toHaveTextContent(/Delete “gateway”\?/);
+    await user.click(screen.getByRole("button", { name: /delete project/i }));
+    await waitFor(() => expect(mockDel).toHaveBeenCalledWith("/projects/p2"));
+  });
+
+  it("keeps a `+` on every row, whether or not the project is selected", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+
+    // The row that is NOT selected still offers it — writing down the next task should not
+    // require selecting the project first.
+    await user.click(within(nav).getByRole("button", { name: "New card in gateway" }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent(/New card/);
+  });
+
+  it("renders a context menu into the body, above the blurred columns", async () => {
+    // The columns carry `backdrop-blur`, which makes them the containing block of any `fixed`
+    // descendant: rendered in place, the panel would be positioned against the column instead of
+    // the viewport and would open near the click rather than at it.
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    await screen.findByRole("region", { name: "Working" });
+
+    const board = screen.getByRole("region", { name: "Working" });
+    await user.pointer({ keys: "[MouseRight]", target: within(board).getByRole("link", { name: "chase the flake" }) });
+
+    const menu = await screen.findByRole("menu", { name: "Actions for chase the flake" });
+    expect(menu.parentElement).toBe(document.body);
+  });
+});
+
+describe("BoardPage — one frame, two middles", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    serve();
+  });
+
+  it("opens the terminal for the card named in the URL, keeping the sidebar", async () => {
     renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
     expect(await screen.findByTestId("terminal")).toHaveTextContent("c2");
-    expect(screen.getByTestId("focus-layout")).toBeInTheDocument();
+    expect(screen.getByTestId("card-layout")).toBeInTheDocument();
+    expect(sidebar()).toBeInTheDocument();
   });
 
   it("shows the project's board when the URL names only a project", async () => {
     renderApp(<BoardPage />, { route: "/?project=p2" });
-    expect(await screen.findByRole("heading", { name: "gateway" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Waiting" })).toBeInTheDocument();
     expect(screen.queryByTestId("terminal")).not.toBeInTheDocument();
   });
 
-  it("falls back to the first project when the URL names one that is gone", async () => {
+  it("falls back to the AGGREGATED board when the URL names a project that is gone", async () => {
+    // Showing someone else's board because the one you asked for was deleted is a lie; everything
+    // at once is the honest answer.
     renderApp(<BoardPage />, { route: "/?project=deleted&card=c9" });
-    expect(await screen.findByRole("heading", { name: "billing" })).toBeInTheDocument();
+    expect(await screen.findByText(/4 cards · 2 projects/)).toBeInTheDocument();
     expect(screen.queryByTestId("terminal")).not.toBeInTheDocument();
   });
 
   it("opening a card puts it in the URL, so a refresh lands in the same place", async () => {
     const user = userEvent.setup();
     renderApp(<BoardPage />, { route: "/?project=p1" });
-    await user.click(await screen.findByRole("button", { name: "chase the flake" }));
+    const working = await screen.findByRole("region", { name: "Working" });
+    await user.click(within(working).getByRole("link", { name: "chase the flake" }));
     expect(await screen.findByTestId("terminal")).toHaveTextContent("c2");
+  });
+
+  it("gives every card a real href, so it can be opened in another tab", async () => {
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    const working = await screen.findByRole("region", { name: "Working" });
+    expect(within(working).getByRole("link", { name: "chase the flake" })).toHaveAttribute(
+      "href",
+      "?project=p1&card=c2",
+    );
+  });
+});
+
+describe("BoardPage — the tab title", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    serve();
+  });
+
+  it("leads with the project on a board", async () => {
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    await screen.findByRole("region", { name: "Backlog" });
+    await waitFor(() => expect(document.title).toBe("billing · vibehub"));
+  });
+
+  it("is just the app on the aggregated board", async () => {
+    renderApp(<BoardPage />);
+    await screen.findByText(/4 cards · 2 projects/);
+    await waitFor(() => expect(document.title).toBe("vibehub"));
   });
 });
 
@@ -291,8 +533,16 @@ describe("BoardPage — keyboard", () => {
   it("opens the new-card dialog on Cmd+K", async () => {
     const user = userEvent.setup();
     renderApp(<BoardPage />, { route: "/?project=p1" });
-    await screen.findByText("fix the totals");
+    await screen.findByRole("region", { name: "Backlog" });
     await user.keyboard("{Meta>}k{/Meta}");
+    expect(await screen.findByRole("dialog")).toHaveTextContent(/New card/);
+  });
+
+  it("opens it on Ctrl+T as well — the one the browser leaves alone", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    await screen.findByRole("region", { name: "Backlog" });
+    await user.keyboard("{Control>}t{/Control}");
     expect(await screen.findByRole("dialog")).toHaveTextContent(/New card/);
   });
 
@@ -300,7 +550,7 @@ describe("BoardPage — keyboard", () => {
     mockPost.mockResolvedValue({ card: { ...cards[0]!, id: "new" } });
     const user = userEvent.setup();
     renderApp(<BoardPage />, { route: "/?project=p1" });
-    await screen.findByText("fix the totals");
+    await screen.findByRole("region", { name: "Backlog" });
     await user.keyboard("{Meta>}k{/Meta}");
     await user.type(await screen.findByLabelText("Title"), "write the migration");
     await user.click(screen.getByRole("button", { name: /create card/i }));
@@ -312,7 +562,7 @@ describe("BoardPage — keyboard", () => {
     );
   });
 
-  it("leaves focus mode on Escape", async () => {
+  it("leaves an open card on Escape", async () => {
     const user = userEvent.setup();
     renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
     await screen.findByTestId("terminal");
@@ -330,7 +580,7 @@ describe("BoardPage — the install-wide managers", () => {
   it("puts the brain within reach of the board, beside accounts and MCP", async () => {
     // The route has existed with no way to reach it; a shared CLAUDE.md nobody can edit is a
     // feature that does not exist.
-    renderApp(<BoardPage />);
+    renderApp(<BoardPage />, { route: "/?project=p1" });
     expect(await screen.findByRole("button", { name: "Brain" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /accounts/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "MCP" })).toBeInTheDocument();
@@ -338,7 +588,7 @@ describe("BoardPage — the install-wide managers", () => {
 
   it("opens the brain editor from the board", async () => {
     const user = userEvent.setup();
-    renderApp(<BoardPage />);
+    renderApp(<BoardPage />, { route: "/?project=p1" });
     await user.click(await screen.findByRole("button", { name: "Brain" }));
     expect(await screen.findByLabelText("Brain text")).toBeInTheDocument();
     await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/brain"));
@@ -351,47 +601,36 @@ describe("BoardPage — the aggregated board", () => {
     serve();
   });
 
-  it("offers 'All projects' in the sidebar once there is more than one", async () => {
+  it("is where you land with nothing selected", async () => {
     renderApp(<BoardPage />);
-    expect(await screen.findByRole("button", { name: "All projects" })).toBeInTheDocument();
+    expect(await screen.findByText(/4 cards · 2 projects/)).toBeInTheDocument();
   });
 
-  it("hides it when there is only one project — there is nothing to aggregate", async () => {
-    serve({ projects: [projects[0] as BoardProject] });
-    renderApp(<BoardPage />);
-    await screen.findByRole("heading", { name: "billing" });
+  it("has no 'All projects' row to hunt for — the second click on a project is the way in", async () => {
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    await screen.findByRole("region", { name: "Backlog" });
     expect(screen.queryByRole("button", { name: "All projects" })).not.toBeInTheDocument();
-  });
-
-  it("shows every project's cards on one board when it is chosen", async () => {
-    const user = userEvent.setup();
-    renderApp(<BoardPage />);
-    await user.click(await screen.findByRole("button", { name: "All projects" }));
-    expect(await screen.findByRole("heading", { name: "All projects" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "billing" })).not.toBeInTheDocument();
-  });
-
-  it("survives a refresh — the choice lives in the URL like any other", async () => {
-    renderApp(<BoardPage />, { route: "/?project=*" });
-    expect(await screen.findByRole("heading", { name: "All projects" })).toBeInTheDocument();
-  });
-
-  it("still redirects a URL that names a project which is gone", async () => {
-    // The sentinel must not turn the reconciler off for real ids.
-    renderApp(<BoardPage />, { route: "/?project=deleted" });
-    expect(await screen.findByRole("heading", { name: "billing" })).toBeInTheDocument();
   });
 
   it("merges both projects' cards and opens one into its OWN project", async () => {
     const user = userEvent.setup();
-    renderApp(<BoardPage />, { route: "/?project=*" });
+    renderApp(<BoardPage />);
 
     // One card from each project, on one board.
-    expect(await screen.findByRole("button", { name: "chase the flake" })).toBeInTheDocument();
-    const other = await screen.findByRole("button", { name: "rotate the key" });
+    const waiting = await screen.findByRole("region", { name: "Waiting" });
+    expect(within(waiting).getByRole("link", { name: "waiting on review" })).toBeInTheDocument();
+    const other = within(waiting).getByRole("link", { name: "rotate the key" });
 
     await user.click(other);
     expect(await screen.findByTestId("terminal")).toHaveTextContent("c4");
+  });
+
+  it("keeps the managers but drops the runner chip and the New card button", async () => {
+    // There is no single runner to report on here, and no project for a new card to belong to.
+    renderApp(<BoardPage />);
+    expect(await screen.findByRole("button", { name: "Brain" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /New card$/ })).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/running, claude installed/)).not.toBeInTheDocument();
   });
 });
 
@@ -401,33 +640,27 @@ describe("BoardPage — narrow screens", () => {
     serve();
   });
 
-  it("offers a menu button in an open card, since the card list column is hidden", async () => {
+  it("offers the same drawer handle on the board and beside an open card", async () => {
+    const { unmount } = renderApp(<BoardPage />, { route: "/?project=p1" });
+    expect(await screen.findByRole("button", { name: "Open the projects and cards" })).toBeInTheDocument();
+    unmount();
+
     renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
-    expect(await screen.findByRole("button", { name: "Open the card list" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Open the projects and cards" })).toBeInTheDocument();
   });
 
-  it("opens the card list as a drawer and switches card from inside it", async () => {
+  it("opens the sidebar as a drawer and closes it again on navigation", async () => {
     const user = userEvent.setup();
     renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    await screen.findByTestId("terminal");
 
-    await user.click(await screen.findByRole("button", { name: "Open the card list" }));
-    const drawer = await screen.findByRole("dialog");
-    await user.click(within(drawer).getByRole("button", { name: /waiting on review/ }));
+    await user.click(screen.getByRole("button", { name: "Open the projects and cards" }));
+    expect(screen.getByTestId("sidebar-backdrop")).toBeInTheDocument();
+
+    await user.click(await within(sidebar()).findByRole("link", { name: "waiting on review" }));
 
     // The drawer covers the terminal it just navigated to, so it has to get out of the way.
     await waitFor(() => expect(screen.getByTestId("terminal")).toHaveTextContent("c3"));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-  });
-
-  it("goes back to the board from inside the drawer", async () => {
-    const user = userEvent.setup();
-    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
-
-    await user.click(await screen.findByRole("button", { name: "Open the card list" }));
-    const drawer = await screen.findByRole("dialog");
-    await user.click(within(drawer).getByRole("button", { name: /back to board/i }));
-
-    expect(await screen.findByRole("heading", { name: "billing" })).toBeInTheDocument();
-    expect(screen.queryByTestId("terminal")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId("sidebar-backdrop")).not.toBeInTheDocument());
   });
 });

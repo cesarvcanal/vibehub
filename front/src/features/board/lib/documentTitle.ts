@@ -10,15 +10,19 @@ export const BASE_TITLE = "vibehub";
 
 /**
  * Tab title for a board context:
- *  - project + card -> "<card> · <project>"  (the terminal view — the card is what you are looking for)
+ *  - project + card -> "<project> · <card>"  (the card view)
  *  - project only   -> "<project> · vibehub" (the project's board)
- *  - neither        -> BASE_TITLE
+ *  - neither        -> BASE_TITLE            (the aggregated board)
  * Blank strings count as absent.
+ *
+ * The PROJECT leads. Tabs are truncated from the right, so the half that survives has to be the one
+ * that tells two tabs apart — and with several cards open per project it is the project name that
+ * groups them, while the card name is what you read once the tab is already narrow enough to hover.
  */
 export function boardTitle(project?: string | null, card?: string | null): string {
   const p = project?.trim();
   const c = card?.trim();
-  if (p && c) return `${c} · ${p}`;
+  if (p && c) return `${p} · ${c}`;
   if (p) return `${p} · ${BASE_TITLE}`;
   return BASE_TITLE;
 }

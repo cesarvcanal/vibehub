@@ -15,21 +15,25 @@ function combo(key: string, modifiers: Partial<Omit<Combo, "key">> = {}): Combo 
 }
 
 describe("isNewCardShortcut", () => {
-  it("accepts Cmd+K and Ctrl+K", () => {
+  it("accepts Cmd+K and Ctrl+T", () => {
     expect(isNewCardShortcut(combo("k", { metaKey: true }))).toBe(true);
-    expect(isNewCardShortcut(combo("k", { ctrlKey: true }))).toBe(true);
     expect(isNewCardShortcut(combo("K", { metaKey: true }))).toBe(true);
+    expect(isNewCardShortcut(combo("t", { ctrlKey: true }))).toBe(true);
+    expect(isNewCardShortcut(combo("T", { ctrlKey: true }))).toBe(true);
   });
 
-  it("rejects a bare k, extra modifiers, and both modifiers at once", () => {
+  it("rejects a bare key, extra modifiers, and both modifiers at once", () => {
     expect(isNewCardShortcut(combo("k"))).toBe(false);
     expect(isNewCardShortcut(combo("k", { metaKey: true, shiftKey: true }))).toBe(false);
     expect(isNewCardShortcut(combo("k", { metaKey: true, altKey: true }))).toBe(false);
     expect(isNewCardShortcut(combo("k", { metaKey: true, ctrlKey: true }))).toBe(false);
+    expect(isNewCardShortcut(combo("t", { ctrlKey: true, metaKey: true }))).toBe(false);
   });
 
-  it("rejects other keys", () => {
+  it("rejects the halves that belong to the browser or to nothing", () => {
+    // Cmd+T never reaches the page (Chrome opens a tab), and Ctrl+K is not one of ours.
     expect(isNewCardShortcut(combo("t", { metaKey: true }))).toBe(false);
+    expect(isNewCardShortcut(combo("k", { ctrlKey: true }))).toBe(false);
     expect(isNewCardShortcut(combo("n", { ctrlKey: true }))).toBe(false);
   });
 });

@@ -1,24 +1,28 @@
 /**
- * Focus mode geometry — the numbers the terminal view and the terminal itself agree on.
+ * Terminal geometry — the numbers the card view and the terminal itself agree on.
  *
  * A terminal is the one widget that cannot be "roughly" sized: half a row short and the agent's
  * last line is invisible, half a row long and the pane scrolls forever. So the height is computed,
  * not guessed, and everything that eats vertical space is named here rather than being sprinkled
  * across class names.
+ *
+ * Opening a card does NOT take the screen over: the app header and the sidebar stay exactly where
+ * they were and only the middle of the page swaps the kanban for the terminal. So the only chrome
+ * to subtract is the header — measured live by the shell and published as `--app-header-h`, because
+ * it is not a constant (it wraps to two lines on a phone) — plus the vertical padding of `main`.
  */
 
-/** The app shell's sticky header (`h-11` in AppLayout). */
-export const HEADER_PX = 44;
+/** Vertical padding of the page's `main` (`py-7`, top and bottom). */
+export const CARD_MAIN_PADDING_PX = 56;
 
-/** Vertical padding the focus layout puts around itself, top and bottom. */
-export const FOCUS_PAD_PX = 6;
-
-/** Total chrome above and below the focus view. */
-export const FOCUS_CHROME_PX = HEADER_PX + FOCUS_PAD_PX * 2;
-
-/** CSS height for the focus view: the viewport minus everything that is not the view. */
-export function focusHeight(chrome: number = FOCUS_CHROME_PX): string {
-  return `calc(100vh - ${Math.max(0, Math.round(chrome))}px)`;
+/**
+ * CSS height of the card view's row: the viewport minus the app header and the page padding.
+ *
+ * The fallback in the `var()` matters — it is what applies for the one frame before the shell has
+ * measured its own header, and on any screen where that measurement never lands.
+ */
+export function cardViewHeight(padding: number = CARD_MAIN_PADDING_PX): string {
+  return `calc(100vh - var(--app-header-h, 64px) - ${Math.max(0, Math.round(padding))}px)`;
 }
 
 /**

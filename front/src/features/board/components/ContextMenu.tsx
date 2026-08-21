@@ -1,4 +1,5 @@
 import * as React from "react";
+import { createPortal } from "react-dom";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -18,6 +19,12 @@ import {
  * It closes on anything that could move the anchor out from under it: a click elsewhere, Escape,
  * a scroll, a resize. A fixed panel positioned against a point that has since moved is worse than
  * no panel, so the cheap answer — close — is the right one.
+ *
+ * It renders through a PORTAL onto `document.body`, which is not a detail: the columns of the board
+ * carry `backdrop-blur`, and a filtered element becomes the containing block for its `position:
+ * fixed` descendants. Left inside the card, the panel would be positioned against the column
+ * instead of the viewport — the clamped coordinates would be measured from the wrong origin and the
+ * menu would open somewhere near, but not at, the click.
  */
 
 export interface ContextMenuItem {
@@ -94,14 +101,15 @@ export function ContextMenu({
     { width: MENU_WIDTH, height: items.length * ROW_HEIGHT + PANEL_PADDING },
   );
 
-  return (
+  const panel = (
     <div
       ref={menuRef}
       role="menu"
       aria-label={ariaLabel}
       style={{ left, top }}
-      // The panel is `fixed`, but it is still a DOM child of the card that renders it — without
-      // stopping propagation, choosing an item would also bubble up and "open" the card.
+      // React portals keep the REACT tree intact even though the DOM node moved, so an event still
+      // bubbles to the card that rendered the menu — without stopping it, choosing an item would
+      // also "open" the card underneath.
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => e.stopPropagation()}
       className="fixed z-50 flex w-56 max-w-[calc(100vw-1rem)] flex-col rounded-lg border border-border bg-popover p-1 shadow-2xl"
@@ -132,4 +140,6 @@ export function ContextMenu({
       })}
     </div>
   );
+
+  return createPortal(panel, document.body);
 }

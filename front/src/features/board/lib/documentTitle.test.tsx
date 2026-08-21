@@ -3,8 +3,8 @@ import { render, cleanup } from "@testing-library/react";
 import { BASE_TITLE, boardTitle, useDocumentTitle } from "@/features/board/lib/documentTitle";
 
 describe("boardTitle", () => {
-  it("leads with the card, because that is what you are looking for in a tab strip", () => {
-    expect(boardTitle("billing", "fix the totals")).toBe("fix the totals · billing");
+  it("leads with the PROJECT, which is what groups a tab strip full of cards", () => {
+    expect(boardTitle("billing", "fix the totals")).toBe("billing · fix the totals");
   });
 
   it("falls back to the project, then to the app", () => {
@@ -14,7 +14,7 @@ describe("boardTitle", () => {
   });
 
   it("trims, and treats blank as absent", () => {
-    expect(boardTitle("  billing  ", "  fix  ")).toBe("fix · billing");
+    expect(boardTitle("  billing  ", "  fix  ")).toBe("billing · fix");
     expect(boardTitle("   ")).toBe(BASE_TITLE);
   });
 });

@@ -7,13 +7,21 @@
  * search box is not "new card".
  */
 
-/** Cmd+K (mac) or Ctrl+K. Nothing else: Cmd+T and friends never reach the page in a browser. */
+/**
+ * Cmd+K (mac) or Ctrl+T — and only those two.
+ *
+ * Cmd+T is the one people ask for and the one that cannot be had: Chrome reserves Cmd+T / Cmd+N /
+ * Cmd+Shift+T and the keydown never reaches the page at all. Ctrl+T is free on macOS (where the
+ * browser's "new tab" is Cmd+T) and is the closest thing to the muscle memory being asked for.
+ */
 export function isNewCardShortcut(
   e: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">,
 ): boolean {
   if (e.altKey || e.shiftKey) return false;
-  if (e.key.toLowerCase() !== "k") return false;
-  return e.metaKey !== e.ctrlKey; // exactly one of them, never both
+  const key = e.key.toLowerCase();
+  if (key === "k") return e.metaKey && !e.ctrlKey;
+  if (key === "t") return e.ctrlKey && !e.metaKey;
+  return false;
 }
 
 /** Escape with no modifiers — leaves focus mode. */

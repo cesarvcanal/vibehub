@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AllProjectsBoard } from "@/features/board/components/AllProjectsBoard";
 import { renderApp } from "@/test/render";
-import { get, patch, post } from "@/lib/api";
+import { get, patch } from "@/lib/api";
 import type { BoardCard, BoardProject } from "@/features/board/api";
 
 vi.mock("@/lib/api", () => ({
@@ -27,7 +27,6 @@ vi.mock("sonner", () => ({
 
 const mockGet = vi.mocked(get);
 const mockPatch = vi.mocked(patch);
-const mockPost = vi.mocked(post);
 
 const projects: BoardProject[] = [
   { id: "p1", name: "billing", baseBranch: "dev", position: 0, createdAt: 1 },
@@ -88,9 +87,9 @@ describe("AllProjectsBoard", () => {
 
   it("labels each card with the project it belongs to", async () => {
     renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} />);
-    const tile = await screen.findByRole("button", { name: "rotate the key" });
+    const tile = await screen.findByRole("link", { name: "rotate the key" });
     expect(within(tile).getByText("gateway")).toBeInTheDocument();
-    const other = screen.getByRole("button", { name: "chase the flake" });
+    const other = screen.getByRole("link", { name: "chase the flake" });
     expect(within(other).getByText("billing")).toBeInTheDocument();
   });
 
@@ -104,7 +103,7 @@ describe("AllProjectsBoard", () => {
     const user = userEvent.setup();
     renderApp(<AllProjectsBoard projects={projects} onOpenCard={onOpenCard} />);
 
-    await user.click(await screen.findByRole("button", { name: "rotate the key" }));
+    await user.click(await screen.findByRole("link", { name: "rotate the key" }));
     expect(onOpenCard).toHaveBeenCalledWith(expect.objectContaining({ id: "c3", projectId: "p2" }));
   });
 
@@ -112,7 +111,7 @@ describe("AllProjectsBoard", () => {
     mockPatch.mockResolvedValue({ card: { ...byProject.p2![0], column: "done" } });
     renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} />);
 
-    const tile = await screen.findByRole("button", { name: "rotate the key" });
+    const tile = await screen.findByRole("link", { name: "rotate the key" });
     const done = screen.getByRole("region", { name: "Done" });
 
     dragTo(tile, done);
@@ -128,7 +127,7 @@ describe("AllProjectsBoard", () => {
     mockPatch.mockResolvedValue({ card: byProject.p2![0] });
     renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} />);
 
-    const tile = await screen.findByRole("button", { name: "rotate the key" });
+    const tile = await screen.findByRole("link", { name: "rotate the key" });
     dragTo(tile, screen.getByRole("region", { name: "Backlog" }));
 
     await waitFor(() =>
@@ -138,21 +137,22 @@ describe("AllProjectsBoard", () => {
 
   it("does not PATCH when a card is dropped back on its own column", async () => {
     renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} />);
-    const tile = await screen.findByRole("button", { name: "rotate the key" });
+    const tile = await screen.findByRole("link", { name: "rotate the key" });
     dragTo(tile, screen.getByRole("region", { name: "Waiting" }));
     await waitFor(() => expect(mockPatch).not.toHaveBeenCalled());
   });
 
-  it("offers Pause and Restart on right-click for a card with a live session", async () => {
-    mockPost.mockResolvedValue({ card: byProject.p2![0] });
+  it("is open-only: no ⋯ menu and no right-click actions", async () => {
+    // Acting on a card is done where its context is — its own project's board, or its terminal.
+    // This view answers one question, "who needs me", and every extra control dilutes it.
     const user = userEvent.setup();
     renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} />);
 
-    await user.pointer({ keys: "[MouseRight]", target: await screen.findByRole("button", { name: "rotate the key" }) });
-    const menu = await screen.findByRole("menu", { name: "Actions for rotate the key" });
-    await user.click(within(menu).getByRole("menuitem", { name: "Restart" }));
+    const tile = await screen.findByRole("link", { name: "rotate the key" });
+    expect(within(tile).queryByRole("button", { name: /Actions for/ })).not.toBeInTheDocument();
 
-    await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/cards/c3/restart"));
+    await user.pointer({ keys: "[MouseRight]", target: tile });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
   it("shows an empty column rather than collapsing it", async () => {
