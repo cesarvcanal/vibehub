@@ -14,6 +14,7 @@ import {
   type ContextMenuItem,
 } from "@/features/board/components/ContextMenu";
 import type { BoardCard } from "@/features/board/api";
+import { useT } from "@/i18n";
 
 /**
  * One card on the board: a status dot and a title, and nothing else it can avoid saying.
@@ -60,6 +61,7 @@ export function CardTile({
   /** Owning project's name — only shown where cards from several projects are mixed. */
   projectLabel?: string;
 }) {
+  const t = useT();
   const dot = statusDot(card.status);
   const paused = Boolean(card.pausedAt);
   /**
@@ -82,27 +84,27 @@ export function CardTile({
   /** The `⋯` menu: card management. Each item exists only where the board offers the handler. */
   const menuItems: ContextMenuItem[] = [
     ...(onDone && card.column !== "done"
-      ? [{ key: "finish", label: "Finish (move to Done)", icon: Check, onSelect: () => onDone(card) }]
+      ? [{ key: "finish", label: t("card.finishToDone"), icon: Check, onSelect: () => onDone(card) }]
       : []),
     ...(onPause && canPause
-      ? [{ key: "pause", label: "Pause (ends the session)", icon: Pause, onSelect: () => onPause(card) }]
+      ? [{ key: "pause", label: t("card.pauseEndsSession"), icon: Pause, onSelect: () => onPause(card) }]
       : []),
-    ...(onAccount ? [{ key: "account", label: "Claude account…", icon: Users, onSelect: () => onAccount(card) }] : []),
+    ...(onAccount ? [{ key: "account", label: t("card.claudeAccountMenu"), icon: Users, onSelect: () => onAccount(card) }] : []),
     ...(onDelete
-      ? [{ key: "delete", label: "Delete card", icon: Trash2, danger: true, onSelect: () => onDelete(card) }]
+      ? [{ key: "delete", label: t("card.deleteCard"), icon: Trash2, danger: true, onSelect: () => onDelete(card) }]
       : []),
   ];
 
   /** Right-click: the three live-session actions, in that order. Independent of the `⋯` menu. */
   const contextItems: ContextMenuItem[] = [
     ...(onPause && canPause
-      ? [{ key: "pause", label: "Pause", icon: Pause, onSelect: () => onPause(card) }]
+      ? [{ key: "pause", label: t("card.pause"), icon: Pause, onSelect: () => onPause(card) }]
       : []),
     ...(onRestart && canRestart
-      ? [{ key: "restart", label: "Restart", icon: RotateCw, onSelect: () => onRestart(card) }]
+      ? [{ key: "restart", label: t("card.restart"), icon: RotateCw, onSelect: () => onRestart(card) }]
       : []),
     ...(onDone && card.column !== "done"
-      ? [{ key: "finish", label: "Finish", icon: Check, onSelect: () => onDone(card) }]
+      ? [{ key: "finish", label: t("card.finish"), icon: Check, onSelect: () => onDone(card) }]
       : []),
   ];
   const { point, openAt, close } = useContextMenuPoint();
@@ -146,7 +148,7 @@ export function CardTile({
       {/* No dot and no pause icon means no element at all: an empty 12px box in front of every
           backlog title is a column of nothing, indented for no reason. */}
       {paused ? (
-        <span title="Paused" className="mt-1 inline-flex shrink-0 text-muted-foreground/70">
+        <span title={t("status.paused")} className="mt-1 inline-flex shrink-0 text-muted-foreground/70">
           <Pause aria-hidden className="h-3 w-3" />
         </span>
       ) : dot ? (
@@ -171,24 +173,24 @@ export function CardTile({
         {/* Only ever a line the column header and the dot cannot already tell you. */}
         {pausingWhenIdle ? (
           <div
-            title="The session ends as soon as the current turn finishes — nothing is interrupted."
+            title={t("card.pausingWhenIdleHint")}
             className="mt-0.5 text-[11px] text-muted-foreground/80"
           >
-            Pausing when idle…
+            {t("card.pausingWhenIdle")}
           </div>
         ) : updatePending ? (
           <div
-            title="The brain or the MCP set changed while it was working — it restarts once it goes idle, without interrupting."
+            title={t("card.updatingWhenFinishesHint")}
             className="mt-0.5 text-[11px] text-muted-foreground/80"
           >
-            Updating when it finishes…
+            {t("card.updatingWhenFinishes")}
           </div>
         ) : null}
 
         {/* The owning project, only where cards from several projects share a column. */}
         {projectLabel ? (
           <span
-            title={`Project: ${projectLabel}`}
+            title={t("card.projectChip", { name: projectLabel })}
             className="mr-1 mt-1 inline-flex max-w-full items-center truncate rounded border border-primary/30 bg-primary/10 px-1 py-px text-[10px] font-medium text-primary"
           >
             {projectLabel}
@@ -198,7 +200,7 @@ export function CardTile({
         {/* The card's OWN account. An inherited one is not worth a chip on every card. */}
         {card.accountSlug ? (
           <span
-            title="This card's Claude account"
+            title={t("card.ownAccount")}
             className="mt-1 inline-flex max-w-full items-center truncate rounded border border-border/60 bg-muted/40 px-1 py-px font-mono text-[10px] text-muted-foreground"
           >
             {card.accountSlug}
@@ -223,11 +225,16 @@ export function CardTile({
           }}
           className="shrink-0 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 [&:has([aria-expanded=true])]:opacity-100"
         >
-          <ActionsMenu ariaLabel={`Actions for ${card.title}`} items={menuItems} />
+          <ActionsMenu ariaLabel={t("card.actionsFor", { title: card.title })} items={menuItems} />
         </span>
       ) : null}
 
-      <ContextMenu point={point} items={contextItems} ariaLabel={`Actions for ${card.title}`} onClose={close} />
+      <ContextMenu
+        point={point}
+        items={contextItems}
+        ariaLabel={t("card.actionsFor", { title: card.title })}
+        onClose={close}
+      />
     </a>
   );
 }

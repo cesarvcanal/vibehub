@@ -1,12 +1,14 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 import { SETUP_STEPS, stepStates, type SetupStepId } from "@/features/setup/steps";
+import { useT } from "@/i18n";
 
 /** The numbered rail down the side. Shows where you are without pretending to be clickable. */
 export function StepRail({ current }: { current: SetupStepId }) {
+  const t = useT();
   const states = stepStates(current);
   return (
-    <ol className="space-y-1" aria-label="Setup steps">
+    <ol className="space-y-1" aria-label={t("setup.rail")}>
       {SETUP_STEPS.map((step, idx) => {
         const state = states[step.id];
         return (

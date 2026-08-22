@@ -20,6 +20,7 @@ import type {
   RunnerStatus,
   UploadResult,
 } from "@/api/types";
+import { t } from "@/i18n";
 
 /**
  * The board's data layer: query keys plus one function per route.
@@ -482,8 +483,13 @@ export const DEFAULT_ACCOUNT_SLUG = "default";
  */
 export const IMPLICIT_MODEL = CLAUDE_MODELS[0] as { id: string; label: string };
 
-/** Title on the model pill for the one case where the answer is an assumption, not a reading. */
-export const IMPLICIT_MODEL_TITLE = "Claude Code's default until the first reply";
+/**
+ * Title on the model pill for the one case where the answer is an assumption, not a reading. A
+ * function, not a constant: it is copy, and copy follows the language the operator picked.
+ */
+export function implicitModelTitle(): string {
+  return t("cardView.implicitModelTitle");
+}
 
 export interface ModelInUse {
   /** Value the select carries — always a real model id, never the empty "inherit" option. */
@@ -509,7 +515,7 @@ export function modelInUse(
   if (pinned) return { id: pinned, label: modelLabelFor(pinned, null) };
   const live = session?.model?.trim();
   if (live) return { id: live, label: modelLabelFor(live, session?.modelLabel ?? null) };
-  return { id: IMPLICIT_MODEL.id, label: IMPLICIT_MODEL.label, title: IMPLICIT_MODEL_TITLE };
+  return { id: IMPLICIT_MODEL.id, label: IMPLICIT_MODEL.label, title: implicitModelTitle() };
 }
 
 /** Whitelist label for a model id, the server's own label, or the raw id. PURE. */

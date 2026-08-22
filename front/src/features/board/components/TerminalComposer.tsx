@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { apiErrorMessage } from "@/lib/apiError";
 import { AUDIO_MAX_BYTES, TRANSCRIBE_KEY, boardApi } from "@/features/board/api";
+import { t as translate, useT } from "@/i18n";
 
 /**
  * A text field under the terminal: write (or speak, or paste, or drop an image) HERE, review, then
@@ -110,6 +111,7 @@ export function TerminalComposer({
   placeholder,
   className,
 }: TerminalComposerProps) {
+  const t = useT();
   const [text, setText] = React.useState("");
   const ref = React.useRef<HTMLTextAreaElement | null>(null);
 
@@ -231,19 +233,19 @@ export function TerminalComposer({
     if (!id) return;
     if (blob.size === 0) return; // the browser gave us nothing — say nothing
     if (blob.size > AUDIO_MAX_BYTES) {
-      toast.error("That recording is over 20 MB.");
+      toast.error(translate("composer.recordingTooBig"));
       return;
     }
     // Recognition takes seconds, and a composer that just sits there looks broken.
-    const pending = toast.loading("Transcribing…");
+    const pending = toast.loading(translate("composer.transcribing"));
     try {
       const { text: spoken } = await boardApi.transcribeCardAudio(id, blob);
       // Appended, never sent: voice is the least reliable input there is, and the whole point of
       // this field is that you read it before the agent does.
       if (spoken) appendRef.current(spoken);
-      else toast.error("Nothing was said in that recording.");
+      else toast.error(translate("composer.nothingSaid"));
     } catch (error) {
-      toast.error(apiErrorMessage(error, "Could not transcribe that recording"));
+      toast.error(apiErrorMessage(error, translate("composer.transcribeError")));
     } finally {
       toast.dismiss(pending);
     }
@@ -252,7 +254,7 @@ export function TerminalComposer({
   const startRecording = React.useCallback(async () => {
     if (recording !== "idle" || !cardRef.current) return;
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      toast.error("This browser cannot record audio.");
+      toast.error(translate("composer.cannotRecord"));
       return;
     }
     try {
@@ -286,7 +288,7 @@ export function TerminalComposer({
       setRecording("recording");
       capTimerRef.current = setTimeout(finishRecording, AUDIO_MAX_RECORD_MS);
     } catch {
-      toast.error("Could not reach the microphone — is permission blocked?");
+      toast.error(translate("composer.micBlocked"));
       stopTracks();
       stopVisualiser();
     }
@@ -339,9 +341,9 @@ export function TerminalComposer({
           e.preventDefault();
           upload(imageFiles(e.dataTransfer));
         }}
-        placeholder={placeholder ?? ""}
+        placeholder={placeholder ?? t("composer.placeholder")}
         rows={3}
-        aria-label="Message to the terminal"
+        aria-label={t("composer.aria")}
         className="max-h-48 min-h-24 flex-1 resize-none overflow-y-auto rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
       />
 
@@ -357,7 +359,7 @@ export function TerminalComposer({
       ) : null}
 
       <Button type="button" size="sm" disabled={!text.trim()} onClick={send}>
-        Send
+        {t("composer.send")}
       </Button>
     </div>
   );
@@ -385,6 +387,7 @@ function VoiceControl({
   onFinish: () => void;
   onCancel: () => void;
 }) {
+  const t = useT();
   if (state === "processing") {
     return (
       <div
@@ -393,7 +396,7 @@ function VoiceControl({
         className="flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-card/60 px-3 text-muted-foreground"
       >
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        <span className="text-[11px]">transcribing…</span>
+        <span className="text-[11px]">{t("composer.transcribingShort")}</span>
       </div>
     );
   }
@@ -404,8 +407,8 @@ function VoiceControl({
         <button
           type="button"
           data-testid="composer-mic-cancel"
-          aria-label="Discard recording"
-          title="Discard — nothing is transcribed and nothing is written"
+          aria-label={t("composer.discard")}
+          title={t("composer.discardHint")}
           onClick={onCancel}
           className="flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
@@ -423,8 +426,8 @@ function VoiceControl({
         <button
           type="button"
           data-testid="composer-mic-finish"
-          aria-label="Finish recording"
-          title="Finish — transcribes into the field; nothing is sent until you press Enter"
+          aria-label={t("composer.finish")}
+          title={t("composer.finishHint")}
           onClick={onFinish}
           className="flex h-6 w-6 items-center justify-center rounded-full bg-destructive text-destructive-foreground transition-opacity hover:opacity-90"
         >
@@ -440,12 +443,8 @@ function VoiceControl({
       variant="outline"
       size="icon"
       data-testid="composer-mic"
-      aria-label="Record a message"
-      title={
-        available
-          ? "Record a message — it is transcribed into the field, not sent"
-          : "Voice input is not configured — add an OpenAI key in Settings"
-      }
+      aria-label={t("composer.record")}
+      title={available ? t("composer.recordHint") : t("composer.voiceUnavailable")}
       className="h-9 w-9 shrink-0 text-muted-foreground"
       disabled={!available}
       onClick={onStart}

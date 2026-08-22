@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   IMPLICIT_MODEL,
-  IMPLICIT_MODEL_TITLE,
+  implicitModelTitle,
   accountInUseName,
   cardRunnerHint,
   mcpSecretNames,
@@ -110,7 +110,7 @@ describe("modelInUse", () => {
     expect(modelInUse(null, null)).toEqual({
       id: IMPLICIT_MODEL.id,
       label: IMPLICIT_MODEL.label,
-      title: IMPLICIT_MODEL_TITLE,
+      title: implicitModelTitle(),
     });
     expect(IMPLICIT_MODEL.label).toBe("Fable");
   });

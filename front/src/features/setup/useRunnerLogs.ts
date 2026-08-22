@@ -1,5 +1,6 @@
 import * as React from "react";
 import { wsUrl } from "@/lib/ws";
+import { t } from "@/i18n";
 
 export interface LogLine {
   id: number;
@@ -57,7 +58,7 @@ export function useRunnerLogs(enabled: boolean) {
           const parsed = JSON.parse(raw) as { line?: string; error?: string; done?: boolean };
           if (parsed.error) return append(parsed.error, true);
           if (typeof parsed.line === "string") return append(parsed.line);
-          if (parsed.done) return append("— provisioning finished —");
+          if (parsed.done) return append(t("log.finished"));
           return;
         } catch {
           /* not JSON after all: fall through and print it raw */

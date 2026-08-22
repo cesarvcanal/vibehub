@@ -42,6 +42,7 @@ import {
   type BoardProject,
 } from "@/features/board/api";
 import type { CardColumn } from "@/api/types";
+import { t as translate, useT } from "@/i18n";
 
 /** Small, quiet select in the card bar — configuration, not a call to action. */
 const PILL =
@@ -88,6 +89,7 @@ export function CardTerminalView({
    */
   onOpenMenu?: () => void;
 }) {
+  const t = useT();
   const queryClient = useQueryClient();
   const boardKey = cardsKey(project.id);
 
@@ -133,7 +135,7 @@ export function CardTerminalView({
     onSuccess: mirror,
     onError: (error) => {
       // In instant mode the terminal is already on screen, so a failed open is a warning, not a wall.
-      if (instant) toast.error(apiErrorMessage(error, "Could not refresh the card in the runner"));
+      if (instant) toast.error(apiErrorMessage(error, translate("cardView.refreshError")));
     },
   });
 
@@ -152,23 +154,23 @@ export function CardTerminalView({
   const titleMutation = useMutation({
     mutationFn: (title: string) => boardApi.patchCard(cardId, { title }),
     onSuccess: mirror,
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not rename the card")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardRenameError"))),
   });
 
   const pauseMutation = useMutation({
     mutationFn: () => boardApi.pauseCard(cardId),
     onSuccess: (updated) => {
       mirror(updated);
-      toast.success("Paused — reopening the card resumes the same conversation.");
+      toast.success(translate("toast.cardPaused"));
       onBack();
     },
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not pause the card")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardPauseError"))),
   });
 
   const moveMutation = useMutation({
     mutationFn: (patch: { column: CardColumn; position: number }) => boardApi.patchCard(cardId, patch),
     onSuccess: mirror,
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not move the card")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardMoveError"))),
   });
 
   const [reconnectNonce, setReconnectNonce] = React.useState(0);
@@ -178,9 +180,9 @@ export function CardTerminalView({
       mirror(updated);
       // Only bump AFTER the server confirms, so the reattach cannot race the session being killed.
       setReconnectNonce((n) => n + 1);
-      toast.success("Restarting — the conversation is resumed.");
+      toast.success(translate("cardView.restarting"));
     },
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not restart the terminal")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("cardView.restartError"))),
   });
 
   const accountMutation = useMutation({
@@ -189,9 +191,9 @@ export function CardTerminalView({
       mirror(updated);
       // The pill shows what is in USE, so it has to re-read the session the switch just changed.
       void queryClient.invalidateQueries({ queryKey: cardSessionKey(updated.id) });
-      toast.success("Account switched — the conversation continues.");
+      toast.success(translate("cardView.accountSwitched"));
     },
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not switch the account")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("cardView.accountSwitchError"))),
   });
 
   const modelMutation = useMutation({
@@ -199,10 +201,11 @@ export function CardTerminalView({
     onSuccess: (updated) => {
       mirror(updated);
       void queryClient.invalidateQueries({ queryKey: cardSessionKey(updated.id) });
-      const label = CLAUDE_MODELS.find((m) => m.id === updated.model)?.label ?? "the account default";
-      toast.success(`Switched to ${label} — the conversation continues.`);
+      const label =
+        CLAUDE_MODELS.find((m) => m.id === updated.model)?.label ?? translate("cardView.accountDefault");
+      toast.success(translate("cardView.modelSwitched", { label }));
     },
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not switch the model")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("cardView.modelSwitchError"))),
   });
 
   /**
@@ -261,8 +264,8 @@ export function CardTerminalView({
   function finish(target: BoardCard) {
     const previous = { column: target.column, position: target.position ?? 0 };
     moveMutation.mutate({ column: "done", position: nextPosition(cards ?? [], "done") });
-    toast.success(`“${target.title}” finished.`, {
-      action: { label: "Undo", onClick: () => moveMutation.mutate(previous) },
+    toast.success(translate("toast.cardFinishedShort", { title: target.title }), {
+      action: { label: translate("common.undo"), onClick: () => moveMutation.mutate(previous) },
     });
     onBack();
   }
@@ -270,7 +273,7 @@ export function CardTerminalView({
   function askRestart() {
     if (
       card?.status === "working" &&
-      !window.confirm("The agent is working — restarting interrupts it. Continue?")
+      !window.confirm(translate("confirm.restartWorkingAgent"))
     ) {
       return;
     }
@@ -290,15 +293,15 @@ export function CardTerminalView({
     async (file: File): Promise<string | null> => {
       if (!file.type.startsWith("image/")) return null;
       if (file.size > UPLOAD_MAX_BYTES) {
-        toast.error("That image is over 10 MB.");
+        toast.error(translate("cardView.imageTooBig"));
         return null;
       }
-      const pending = toast.loading("Uploading image…");
+      const pending = toast.loading(translate("cardView.uploadingImage"));
       try {
         const { path } = await boardApi.uploadCardImage(cardId, file);
         return path;
       } catch (error) {
-        toast.error(apiErrorMessage(error, "Could not upload the image"));
+        toast.error(apiErrorMessage(error, translate("cardView.uploadError")));
         return null;
       } finally {
         toast.dismiss(pending);
@@ -320,7 +323,7 @@ export function CardTerminalView({
               variant="ghost"
               size="icon"
               className="h-7 w-7 shrink-0 text-muted-foreground lg:hidden"
-              aria-label="Open the card list"
+              aria-label={t("cardView.openCardList")}
               onClick={onOpenMenu}
             >
               <Menu className="h-4 w-4" />
@@ -334,7 +337,7 @@ export function CardTerminalView({
             className="h-7 shrink-0 px-2 text-muted-foreground lg:hidden"
             onClick={onBack}
           >
-            <ArrowLeft className="mr-1.5 h-4 w-4" /> Board
+            <ArrowLeft className="mr-1.5 h-4 w-4" /> {t("cardView.board")}
           </Button>
           {dot ? (
             <span
@@ -350,7 +353,7 @@ export function CardTerminalView({
           ) : null}
           {editingTitle !== null ? (
             <input
-              aria-label="Card title"
+              aria-label={t("cardView.cardTitle")}
               autoFocus
               // Select-all on focus: renaming almost always means replacing, and having to clear the
               // old title first is a keystroke tax on the common case.
@@ -367,13 +370,15 @@ export function CardTerminalView({
           ) : (
             <button
               type="button"
-              title={card ? `Click to rename\n${cardRunnerHint(card)}` : "Click to rename"}
+              title={
+                card ? `${t("cardView.clickToRename")}\n${cardRunnerHint(card)}` : t("cardView.clickToRename")
+              }
               disabled={!card}
               onClick={() => card && setEditingTitle(card.title)}
               className="min-w-0 truncate rounded px-1 text-left hover:bg-card/60 disabled:cursor-default disabled:hover:bg-transparent"
             >
               <h2 className="truncate text-base font-semibold tracking-tight">
-                {card?.title ?? "Opening card…"}
+                {card?.title ?? t("cardView.opening")}
               </h2>
             </button>
           )}
@@ -384,8 +389,8 @@ export function CardTerminalView({
           <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-border/50 bg-card/40 p-0.5">
             {hasLiveSession ? (
               <BarAction
-                label="Pause"
-                hint="Ends the session in the runner — zero usage while parked. Reopening resumes the same conversation."
+                label={t("cardView.pause")}
+                hint={t("cardView.pauseHint")}
                 busy={pauseMutation.isPending}
                 icon={<Pause className="mr-1 h-3.5 w-3.5" />}
                 onClick={() => pauseMutation.mutate()}
@@ -393,8 +398,8 @@ export function CardTerminalView({
             ) : null}
             {hasLiveSession ? (
               <BarAction
-                label="Restart"
-                hint="Kills and recreates the Claude process in the same worktree. The conversation is resumed and MCPs, brain and model are re-read."
+                label={t("cardView.restart")}
+                hint={t("cardView.restartHint")}
                 busy={restartMutation.isPending}
                 icon={<RotateCw className="mr-1 h-3.5 w-3.5" />}
                 onClick={askRestart}
@@ -402,8 +407,8 @@ export function CardTerminalView({
             ) : null}
             {canFinish ? (
               <BarAction
-                label="Done"
-                hint="Moves the card to Done and returns to the board"
+                label={t("cardView.done")}
+                hint={t("cardView.doneHint")}
                 busy={moveMutation.isPending}
                 icon={<Check className="mr-1 h-3.5 w-3.5" />}
                 onClick={() => card && finish(card)}
@@ -416,14 +421,14 @@ export function CardTerminalView({
           {/* The two extra panes of THIS card. They were a footer row; a footer row costs a line of
               terminal, and these are configuration-weight controls that belong beside the pills. */}
           <PaneToggle
-            label="Browser"
+            label={t("cardView.browser")}
             open={browserOpen}
             disabled={!showTerminal}
             icon={<MonitorPlay className="h-3.5 w-3.5" />}
             onClick={() => setBrowserOpen((v) => !v)}
           />
           <PaneToggle
-            label="Shell"
+            label={t("cardView.shell")}
             open={shellOpen}
             disabled={!showTerminal}
             icon={<TerminalSquare className="h-3.5 w-3.5" />}
@@ -431,8 +436,8 @@ export function CardTerminalView({
           />
           {card ? (
             <select
-              aria-label="Model"
-              title={model.title ?? "Model in use for this session"}
+              aria-label={t("cardView.model")}
+              title={model.title ?? t("cardView.modelInUse")}
               className={PILL}
               value={model.id}
               disabled={modelMutation.isPending}
@@ -447,13 +452,13 @@ export function CardTerminalView({
               {modelUnlisted ? <option value={model.id}>{model.label}</option> : null}
               {/* Last, and the only option that is not a model: it clears the pin and lets the
                   account decide again. */}
-              <option value="">Use account default</option>
+              <option value="">{t("cardView.useAccountDefault")}</option>
             </select>
           ) : null}
           {card ? (
             <select
-              aria-label="Claude account"
-              title="Switch account — the session restarts on the same conversation"
+              aria-label={t("cardView.claudeAccount")}
+              title={t("cardView.switchAccountHint")}
               className={PILL}
               value={card.accountSlug ?? ""}
               disabled={accountMutation.isPending}
@@ -477,24 +482,23 @@ export function CardTerminalView({
         <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <div className="space-y-2">
-            <p>{apiErrorMessage(openMutation.error, "Could not prepare this card in the runner")}</p>
+            <p>{apiErrorMessage(openMutation.error, t("cardView.prepareError"))}</p>
             <Button size="sm" variant="outline" onClick={() => openMutation.mutate()}>
-              Try again
+              {t("common.tryAgain")}
             </Button>
           </div>
         </div>
       ) : undecided ? (
         <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" /> Loading the card…
+          <Loader2 className="h-4 w-4 animate-spin" /> {t("cardView.loadingCard")}
         </div>
       ) : !showTerminal ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
           <div className="flex items-center gap-2">
-            <Loader2 className="h-4 w-4 animate-spin" /> Preparing the worktree and session…
+            <Loader2 className="h-4 w-4 animate-spin" /> {t("cardView.preparing")}
           </div>
           <p className="max-w-md text-center text-xs opacity-70">
-            The first card in a project clones the whole repository into the runner, which can take a
-            few minutes. Every card after that opens in seconds.
+            {t("cardView.firstCardNote")}
           </p>
         </div>
       ) : (
@@ -512,7 +516,7 @@ export function CardTerminalView({
               reconnectKey={reconnectKey}
               onStatus={setConnection}
               onUploadImage={uploadImage}
-              ariaLabel={`Terminal for ${card?.title ?? "card"}`}
+              ariaLabel={t("cardView.terminalFor", { title: card?.title ?? t("cardView.cardFallback") })}
             />
             {/* Compose here, send when ready — the field accumulates until Enter or Send. */}
             <TerminalComposer
@@ -528,14 +532,14 @@ export function CardTerminalView({
               <div className="flex h-[35%] min-h-[180px] shrink-0 flex-col gap-1">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                    Shell · bash in the worktree
+                    {t("cardView.shellHeader")}
                   </span>
                   <Button
                     variant="ghost"
                     size="icon"
                     className="h-6 w-6 text-muted-foreground"
-                    aria-label="Close shell"
-                    title="Close shell"
+                    aria-label={t("cardView.closeShell")}
+                    title={t("cardView.closeShell")}
                     onClick={() => setShellOpen(false)}
                   >
                     <X className="h-3.5 w-3.5" />
@@ -544,7 +548,7 @@ export function CardTerminalView({
                 {/* A separate tmux session on the server; closing this pane only drops the socket. */}
                 <XTerminal
                   wsPath={`/api/cards/${encodeURIComponent(cardId)}/terminal?shell=1`}
-                  ariaLabel="Shell"
+                  ariaLabel={t("cardView.shellAria")}
                 />
               </div>
             ) : null}
@@ -586,7 +590,11 @@ function PaneToggle({
       aria-pressed={open}
       disabled={disabled}
       onClick={onClick}
-      title={open ? `Close the ${label.toLowerCase()}` : `Open the ${label.toLowerCase()}`}
+          title={
+        open
+          ? translate("cardView.closePane", { label: label.toLowerCase() })
+          : translate("cardView.openPane", { label: label.toLowerCase() })
+      }
       className={cn(
         "inline-flex h-6 shrink-0 items-center gap-1 rounded-full border px-2 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
         open
@@ -642,19 +650,21 @@ function BarAction({
  * compete with the card's name.
  */
 function ConnectionIndicator({ state }: { state: ConnectionState }) {
+  const t = useT();
   const spec =
     state === "open"
-      ? { className: "bg-emerald-500", label: "connected" }
+      ? { className: "bg-emerald-500", label: t("conn.connected") }
       : state === "reconnecting"
-        ? { className: "bg-amber-500 dot-live", label: "reconnecting" }
+        ? { className: "bg-amber-500 dot-live", label: t("conn.reconnecting") }
         : state === "connecting"
-          ? { className: "bg-muted-foreground/60", label: "connecting" }
-          : { className: "bg-destructive", label: "disconnected" };
+          ? { className: "bg-muted-foreground/60", label: t("conn.connecting") }
+          : { className: "bg-destructive", label: t("conn.disconnected") };
+  const label = t("cardView.terminalState", { state: spec.label });
   return (
     <span
       role="status"
-      aria-label={`Terminal ${spec.label}`}
-      title={`Terminal ${spec.label}`}
+      aria-label={label}
+      title={label}
       className="inline-flex shrink-0 items-center"
     >
       <span className={cn("inline-block h-2 w-2 rounded-full", spec.className)} />

@@ -1,4 +1,5 @@
 import type { SetupState } from "@/api/types";
+import { t } from "@/i18n";
 
 /**
  * The first-run wizard, as data.
@@ -18,34 +19,30 @@ export interface SetupStepMeta {
   optional?: boolean;
 }
 
+/**
+ * Title and reason are GETTERS, not baked strings: the wizard is the one screen you might switch the
+ * language on halfway through, and a frozen array would keep showing the language you started in.
+ */
+function meta(id: SetupStepId, optional = false): SetupStepMeta {
+  return {
+    id,
+    ...(optional ? { optional: true } : {}),
+    get title() {
+      return t(`setup.step.${id}.title`);
+    },
+    get why() {
+      return t(`setup.step.${id}.why`);
+    },
+  };
+}
+
 export const SETUP_STEPS: readonly SetupStepMeta[] = [
-  {
-    id: "owner",
-    title: "Create the owner account",
-    why: "vibehub hands out live shells, so it can never be open to whoever finds the port. This first account owns the install and is the only way in.",
-  },
-  {
-    id: "runner",
-    title: "Choose where the runner lives",
-    why: "Agents run inside a Docker container called the runner — not on your laptop and not in this web process. Pick the Docker daemon it should be built on.",
-  },
-  {
-    id: "github",
-    title: "Connect GitHub",
-    why: "A token lets vibehub list your repositories and clone them into card worktrees. Skip it and you can still point projects at any git URL by hand.",
-    optional: true,
-  },
-  {
-    id: "claude",
-    title: "Sign in to Claude",
-    why: "The runner needs its own Claude login — the agents authenticate as you, inside the container, not through this browser.",
-  },
-  {
-    id: "done",
-    title: "You're set",
-    why: "Everything the board needs is in place.",
-  },
-] as const;
+  meta("owner"),
+  meta("runner"),
+  meta("github", true),
+  meta("claude"),
+  meta("done"),
+];
 
 /** Local, non-server decisions the wizard has to remember while it is open. */
 export interface WizardOverrides {

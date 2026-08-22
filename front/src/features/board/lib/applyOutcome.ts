@@ -1,4 +1,5 @@
 import type { ApplyOutcome } from "@/api/types";
+import { t } from "@/i18n";
 
 /**
  * The one sentence that explains what a brain/MCP write actually did.
@@ -17,25 +18,20 @@ export function applyOutcomeMessage(outcome: ApplyOutcome | undefined, subject: 
   // `applied === false` is the server telling us the push itself failed (a runner was down). The
   // text is saved either way, so say so, and point at the manual re-push rather than at an error.
   if (outcome?.applied === false) {
-    return `${subject} saved, but it could not be pushed to the runner — use “Apply everywhere”.`;
+    return t("applyOutcome.notPushed", { subject });
   }
 
   // No counts at all: an older server, or nothing running. Do not invent a number.
   if (outcome?.restarted === undefined && outcome?.pending === undefined) {
-    return `${subject} saved and applied.`;
+    return t("applyOutcome.savedApplied", { subject });
   }
 
-  const now = `applied to ${restarted} ${plural(restarted, "terminal")}`;
-  if (pending === 0) return `${subject} saved — ${now}.`;
+  const now = t("applyOutcome.now", { n: restarted });
+  if (pending === 0) return t("applyOutcome.saved", { subject, now });
   // Subject and verb agree together: "it finishes" / "they finish".
-  const later = pending === 1 ? "it finishes" : "they finish";
-  return `${subject} saved — ${now}, ${pending} will update when ${later}.`;
+  return t("applyOutcome.savedPending", { subject, now, pending, n: pending });
 }
 
 function countOf(value: number | undefined): number {
   return Number.isFinite(value) ? (value as number) : 0;
-}
-
-function plural(n: number, one: string, many = `${one}s`): string {
-  return n === 1 ? one : many;
 }

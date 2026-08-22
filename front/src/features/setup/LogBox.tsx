@@ -1,17 +1,19 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n";
 import type { LogLine } from "@/features/setup/useRunnerLogs";
 
 /** Auto-scrolling output pane. Sticks to the bottom unless you scroll up to read something. */
 export function LogBox({
   lines,
-  empty = "Waiting for output…",
+  empty,
   className,
 }: {
   lines: LogLine[];
   empty?: string;
   className?: string;
 }) {
+  const t = useT();
   const ref = React.useRef<HTMLDivElement>(null);
   const pinned = React.useRef(true);
 
@@ -32,11 +34,11 @@ export function LogBox({
       onScroll={onScroll}
       role="log"
       aria-live="polite"
-      aria-label="Provisioning output"
+      aria-label={t("log.aria")}
       className={cn("terminal-surface h-56 overflow-auto p-3", className)}
     >
       {lines.length === 0 ? (
-        <p className="text-muted-foreground">{empty}</p>
+        <p className="text-muted-foreground">{empty ?? t("log.waiting")}</p>
       ) : (
         lines.map((line) => (
           <div

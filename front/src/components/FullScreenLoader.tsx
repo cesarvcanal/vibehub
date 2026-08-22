@@ -1,10 +1,12 @@
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n";
 
 /**
  * Shown while we still do not know whether there is a session or whether the install is fresh.
  * Deliberately quiet — a spinner that flashes for 80ms is worse than a calm placeholder.
  */
-export function FullScreenLoader({ label = "Loading" }: { label?: string }) {
+export function FullScreenLoader({ label }: { label?: string }) {
+  const t = useT();
   return (
     <div
       role="status"
@@ -16,7 +18,7 @@ export function FullScreenLoader({ label = "Loading" }: { label?: string }) {
           className={cn("inline-block h-2 w-2 rounded-full bg-primary")}
           style={{ animation: "vh-pulse 1.2s ease-in-out infinite" }}
         />
-        {label}
+        {label ?? t("common.loading")}
       </div>
     </div>
   );

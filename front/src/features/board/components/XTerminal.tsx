@@ -13,6 +13,7 @@ import {
   zoomActionFromKey, TERMINAL_FONT_DEFAULT, TERMINAL_FONT_MIN, TERMINAL_FONT_MAX, type ZoomAction,
 } from "@/features/board/lib/terminalZoom";
 import { Minus, Plus } from "lucide-react";
+import { useT } from "@/i18n";
 
 /**
  * A live terminal: an xterm bound to a vibehub websocket.
@@ -41,6 +42,9 @@ import { Minus, Plus } from "lucide-react";
 /** What a parent can ask the terminal to do without reaching into xterm. */
 /** Must match the face index.css loads from Google Fonts — see the fontFamily note below. */
 export const TERMINAL_FONT_FAMILY = '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace';
+
+/** Gap between a pasted body and its Enter — enough for the TUI's paste detector to settle. */
+export const SUBMIT_AFTER_PASTE_MS = 120;
 
 export interface XTerminalHandle {
   /** Types text into the session as if it came from the keyboard (a composer, a transcription). */
@@ -178,10 +182,11 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
     onUploadImage,
     localEcho = true,
     className,
-    ariaLabel = "Terminal",
+    ariaLabel,
   },
   ref,
 ) {
+  const t = useT();
   // The element xterm is opened on. It carries no styling of its own — see note 1 at the top.
   const hostRef = React.useRef<HTMLDivElement | null>(null);
   const termRef = React.useRef<Terminal | null>(null);
@@ -218,7 +223,19 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
     () => ({
       sendText(text: string) {
         const socket = socketRef.current;
-        if (socket?.readyState === WebSocket.OPEN) socket.send(text);
+        if (socket?.readyState !== WebSocket.OPEN) return;
+        // A chunk of text arriving in one burst with a trailing "\r" is read by Claude Code's TUI
+        // as a PASTE — it shows "paste again to expand" and swallows the newline, so the person has
+        // to press Enter a second time. Send the body, let the paste detector settle, then send
+        // the Enter on its own so it is a keystroke, not part of the paste.
+        if (text.length > 1 && text.endsWith("\r")) {
+          socket.send(text.slice(0, -1));
+          setTimeout(() => {
+            if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send("\r");
+          }, SUBMIT_AFTER_PASTE_MS);
+          return;
+        }
+        socket.send(text);
       },
       focus() {
         termRef.current?.focus();
@@ -485,6 +502,11 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
       }, delay);
     };
 
+    // Any resize — the ResizeObserver's fit, a zoom refit, a fonts-loaded refit — must reach the
+    // pty, or the session keeps drawing for the old geometry (the terminal shrinks into a corner
+    // after Cmd+−). Subscribing here covers every path instead of remembering to call it in each.
+    const resized = term.onResize(({ cols, rows }) => sendResize(cols, rows));
+
     const input = term.onData((data) => {
       // Paint first, then send — the prediction is discarded the moment the server disagrees.
       echo.key(data);
@@ -586,6 +608,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
       host.removeEventListener("drop", onDrop);
       observer?.disconnect();
       input.dispose();
+      resized.dispose();
       selection.dispose();
       linkProvider?.dispose();
       if (socket) {
@@ -634,7 +657,12 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
       onClick={() => termRef.current?.focus()}
     >
       {/* INNER host: nothing but the terminal. Padding here would cost a row — see note 1. */}
-      <div ref={hostRef} role="application" aria-label={ariaLabel} className="h-full w-full" />
+      <div
+        ref={hostRef}
+        role="application"
+        aria-label={ariaLabel ?? t("terminal.aria")}
+        className="h-full w-full"
+      />
       {zoomControl ? (
         // Out of the way until you want it: the corner of a terminal is content, and a permanent
         // widget sitting on the agent's output is noise. Hover or tab to it and it appears; the
@@ -646,8 +674,8 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
         >
           <button
             type="button"
-            aria-label="Smaller text"
-            title="Smaller text (Cmd/Ctrl −)"
+            aria-label={t("terminal.smaller")}
+            title={t("terminal.smallerHint")}
             disabled={fontSize <= TERMINAL_FONT_MIN}
             onClick={() => zoom("out")}
             className="flex h-5 w-5 items-center justify-center rounded hover:bg-accent hover:text-foreground disabled:opacity-40"
@@ -656,8 +684,8 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
           </button>
           <button
             type="button"
-            aria-label="Reset text size"
-            title="Reset the text size (Cmd/Ctrl 0)"
+            aria-label={t("terminal.reset")}
+            title={t("terminal.resetHint")}
             onClick={() => zoom("reset")}
             className="flex h-5 min-w-[1.5rem] items-center justify-center rounded px-1 font-mono text-[10px] tabular-nums hover:bg-accent hover:text-foreground"
           >
@@ -665,8 +693,8 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
           </button>
           <button
             type="button"
-            aria-label="Larger text"
-            title="Larger text (Cmd/Ctrl +)"
+            aria-label={t("terminal.larger")}
+            title={t("terminal.largerHint")}
             disabled={fontSize >= TERMINAL_FONT_MAX}
             onClick={() => zoom("in")}
             className="flex h-5 w-5 items-center justify-center rounded hover:bg-accent hover:text-foreground disabled:opacity-40"

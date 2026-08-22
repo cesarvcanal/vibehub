@@ -11,20 +11,11 @@ import { useRunnerLogs } from "@/features/setup/useRunnerLogs";
 import { StepError, StepFrame } from "@/features/setup/StepFrame";
 import type { SetupStepMeta } from "@/features/setup/steps";
 import type { RunnerKind, RunnerStatus, SetupState } from "@/api/types";
+import { useT } from "@/i18n";
 
-const CHOICES: { kind: RunnerKind; title: string; blurb: string }[] = [
-  {
-    kind: "local",
-    title: "This machine's Docker",
-    blurb:
-      "The runner is built on the same Docker daemon that this server can reach. Nothing else to configure.",
-  },
-  {
-    kind: "ssh",
-    title: "A remote host over SSH",
-    blurb:
-      "Keep the web UI small and put the heavy container on another box. vibehub drives its Docker over an SSH connection.",
-  },
+const CHOICES: { kind: RunnerKind; titleKey: string; blurbKey: string }[] = [
+  { kind: "local", titleKey: "setup.runner.local.title", blurbKey: "setup.runner.local.blurb" },
+  { kind: "ssh", titleKey: "setup.runner.ssh.title", blurbKey: "setup.runner.ssh.blurb" },
 ];
 
 /**
@@ -40,6 +31,7 @@ export function RunnerStep({
   runner: RunnerStatus | undefined;
   onDone: () => Promise<void>;
 }) {
+  const t = useT();
   const [kind, setKind] = React.useState<RunnerKind>("local");
   const [host, setHost] = React.useState("");
   const [user, setUser] = React.useState("root");
@@ -63,22 +55,21 @@ export function RunnerStep({
             ? { kind, host: host.trim(), user: user.trim(), keyPath: keyPath.trim() || undefined }
             : { kind },
       });
-      append("Settings saved. Provisioning the runner…");
+      append(t("setup.runner.saved"));
       await post("/runner/provision");
       // Provisioning is idempotent and reports through the socket; confirm with a fresh read so
       // the UI never claims success the server would not.
       const state = await get<SetupState>("/setup/state");
       if (state.steps?.runner) {
-        append("Runner is up.");
+        append(t("setup.runner.up"));
         await onDone();
         return;
       }
       setError(
-        state.runner?.detail ??
-          "The runner did not come up. Check the output above and try again.",
+        state.runner?.detail ?? t("setup.runner.didNotComeUp"),
       );
     } catch (err) {
-      setError(apiErrorMessage(err, "Provisioning failed"));
+      setError(apiErrorMessage(err, t("setup.runner.failed")));
     } finally {
       setProvisioning(false);
     }
@@ -91,14 +82,14 @@ export function RunnerStep({
       footer={
         <>
           <Button type="button" onClick={onProvision} disabled={!canProvision}>
-            {provisioning ? "Provisioning…" : "Provision the runner"}
+            {provisioning ? t("setup.runner.provisioning") : t("setup.runner.provision")}
           </Button>
-          {runner ? <RunnerBadges runner={runner} /> : null}
+          {runner ? <RunnerBadges runner={runner} t={t} /> : null}
         </>
       }
     >
       <fieldset className="grid gap-3 sm:grid-cols-2" disabled={provisioning}>
-        <legend className="sr-only">Runner location</legend>
+        <legend className="sr-only">{t("setup.runner.legend")}</legend>
         {CHOICES.map((choice) => {
           const selected = kind === choice.kind;
           return (
@@ -120,9 +111,9 @@ export function RunnerStep({
                   checked={selected}
                   onChange={() => setKind(choice.kind)}
                 />
-                <span className="text-sm font-medium">{choice.title}</span>
+                <span className="text-sm font-medium">{t(choice.titleKey)}</span>
               </span>
-              <span className="text-xs leading-relaxed text-muted-foreground">{choice.blurb}</span>
+              <span className="text-xs leading-relaxed text-muted-foreground">{t(choice.blurbKey)}</span>
             </label>
           );
         })}
@@ -131,7 +122,7 @@ export function RunnerStep({
       {needsSsh ? (
         <div className="grid gap-4 sm:max-w-lg sm:grid-cols-2">
           <div className="space-y-1.5">
-            <Label htmlFor="runner-host">Host</Label>
+            <Label htmlFor="runner-host">{t("setup.runner.host")}</Label>
             <Input
               id="runner-host"
               placeholder="10.0.0.20"
@@ -143,7 +134,7 @@ export function RunnerStep({
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="runner-user">SSH user</Label>
+            <Label htmlFor="runner-user">{t("setup.runner.user")}</Label>
             <Input
               id="runner-user"
               spellCheck={false}
@@ -154,7 +145,7 @@ export function RunnerStep({
             />
           </div>
           <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="runner-key">Private key path</Label>
+            <Label htmlFor="runner-key">{t("setup.runner.keyPath")}</Label>
             <Input
               id="runner-key"
               placeholder="~/.ssh/id_ed25519"
@@ -166,7 +157,7 @@ export function RunnerStep({
               aria-describedby="runner-key-hint"
             />
             <p id="runner-key-hint" className="text-xs text-muted-foreground">
-              Path on this server, not on your laptop. Leave blank to use the default SSH agent.
+              {t("setup.runner.keyHint")}
             </p>
           </div>
         </div>
@@ -174,16 +165,16 @@ export function RunnerStep({
 
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <Label>Provisioning output</Label>
+          <Label>{t("setup.runner.output")}</Label>
           <span className="font-mono text-[11px] text-muted-foreground">
             {connection === "open"
-              ? "streaming"
+              ? t("setup.runner.streaming")
               : connection === "connecting"
-                ? "connecting…"
-                : "idle"}
+                ? t("setup.runner.connecting")
+                : t("setup.runner.idle")}
           </span>
         </div>
-        <LogBox lines={lines} empty="Output appears here once provisioning starts." />
+        <LogBox lines={lines} empty={t("setup.runner.logEmpty")} />
       </div>
 
       <StepError message={error} />
@@ -191,14 +182,18 @@ export function RunnerStep({
   );
 }
 
-function RunnerBadges({ runner }: { runner: RunnerStatus }) {
+function RunnerBadges({ runner, t }: { runner: RunnerStatus; t: (key: string) => string }) {
   return (
     <span className="flex flex-wrap items-center gap-1.5">
       <Badge tone={runner.dockerReachable ? "ok" : "critical"}>
-        docker {runner.dockerReachable ? "reachable" : "unreachable"}
+        {runner.dockerReachable ? t("setup.runner.badge.dockerOk") : t("setup.runner.badge.dockerBad")}
       </Badge>
       <Badge tone={runner.running ? "ok" : runner.exists ? "warn" : "muted"}>
-        {runner.running ? "running" : runner.exists ? "stopped" : "no container"}
+        {runner.running
+          ? t("setup.runner.badge.running")
+          : runner.exists
+            ? t("setup.runner.badge.stopped")
+            : t("setup.runner.badge.noContainer")}
       </Badge>
       {runner.container ? <Badge tone="muted">{runner.container}</Badge> : null}
     </span>

@@ -6,11 +6,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StepError, StepFrame } from "@/features/setup/StepFrame";
 import type { SetupStepMeta } from "@/features/setup/steps";
+import { useT } from "@/i18n";
 
 const MIN_PASSWORD = 8;
 
 /** Step 1 — creates the first account. `POST /api/setup/owner` also signs you in. */
 export function OwnerStep({ meta, onDone }: { meta: SetupStepMeta; onDone: () => Promise<void> }) {
+  const t = useT();
   const [username, setUsername] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [confirm, setConfirm] = React.useState("");
@@ -31,7 +33,7 @@ export function OwnerStep({ meta, onDone }: { meta: SetupStepMeta; onDone: () =>
       await post("/setup/owner", { username: username.trim(), password });
       await onDone();
     } catch (err) {
-      setError(apiErrorMessage(err, "Could not create the account"));
+      setError(apiErrorMessage(err, t("setup.owner.error")));
     } finally {
       setBusy(false);
     }
@@ -44,13 +46,13 @@ export function OwnerStep({ meta, onDone }: { meta: SetupStepMeta; onDone: () =>
         why={meta.why}
         footer={
           <Button type="submit" disabled={!canSubmit}>
-            {busy ? "Creating…" : "Create account and continue"}
+            {busy ? t("setup.owner.creating") : t("setup.owner.submit")}
           </Button>
         }
       >
         <div className="grid gap-4 sm:max-w-md">
           <div className="space-y-1.5">
-            <Label htmlFor="owner-username">Username</Label>
+            <Label htmlFor="owner-username">{t("setup.owner.username")}</Label>
             <Input
               id="owner-username"
               autoComplete="username"
@@ -64,7 +66,7 @@ export function OwnerStep({ meta, onDone }: { meta: SetupStepMeta; onDone: () =>
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="owner-password">Password</Label>
+            <Label htmlFor="owner-password">{t("setup.owner.password")}</Label>
             <Input
               id="owner-password"
               type="password"
@@ -76,11 +78,13 @@ export function OwnerStep({ meta, onDone }: { meta: SetupStepMeta; onDone: () =>
               aria-describedby="owner-password-hint"
             />
             <p id="owner-password-hint" className="text-xs text-muted-foreground">
-              {tooShort ? `At least ${MIN_PASSWORD} characters.` : `${MIN_PASSWORD} characters or more.`}
+              {tooShort
+                ? t("setup.owner.tooShort", { n: MIN_PASSWORD })
+                : t("setup.owner.hint", { n: MIN_PASSWORD })}
             </p>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="owner-confirm">Confirm password</Label>
+            <Label htmlFor="owner-confirm">{t("setup.owner.confirm")}</Label>
             <Input
               id="owner-confirm"
               type="password"
@@ -90,7 +94,7 @@ export function OwnerStep({ meta, onDone }: { meta: SetupStepMeta; onDone: () =>
               onChange={(e) => setConfirm(e.target.value)}
               disabled={busy}
             />
-            {mismatch ? <p className="text-xs text-destructive">The passwords do not match.</p> : null}
+            {mismatch ? <p className="text-xs text-destructive">{t("setup.owner.mismatch")}</p> : null}
           </div>
         </div>
         <StepError message={error} />

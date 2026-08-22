@@ -5,10 +5,18 @@ import { Loader2 } from "lucide-react";
 import { apiErrorMessage } from "@/lib/apiError";
 import { CardTile } from "@/features/board/components/CardTile";
 import { ColumnZone } from "@/features/board/components/KanbanBoard";
-import { COLUMNS, groupByColumn, moveCardLocal, nextPosition } from "@/features/board/lib/board";
+import {
+  COLUMNS,
+  columnHint,
+  columnLabel,
+  groupByColumn,
+  moveCardLocal,
+  nextPosition,
+} from "@/features/board/lib/board";
 import { boardTitle, useDocumentTitle } from "@/features/board/lib/documentTitle";
 import { boardApi, cardsKey, type BoardCard, type BoardProject } from "@/features/board/api";
 import type { CardColumn } from "@/api/types";
+import { t as translate, useT } from "@/i18n";
 
 /**
  * Every project's cards on one board.
@@ -40,6 +48,7 @@ export function AllProjectsBoard({
   onOpenCard: (card: BoardCard) => void;
   headerExtra?: React.ReactNode;
 }) {
+  const t = useT();
   const queryClient = useQueryClient();
   // The aggregated board is not one project, so the tab is just the app.
   useDocumentTitle(boardTitle());
@@ -85,7 +94,7 @@ export function AllProjectsBoard({
     },
     onError: (error, _vars, context) => {
       if (context?.previous) queryClient.setQueryData(context.key, context.previous);
-      toast.error(apiErrorMessage(error, "Could not move the card"));
+      toast.error(apiErrorMessage(error, translate("toast.cardMoveError")));
     },
     onSettled: (_data, _error, vars) =>
       queryClient.invalidateQueries({ queryKey: cardsKey(vars.projectId) }),
@@ -110,8 +119,7 @@ export function AllProjectsBoard({
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className="mr-auto text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-          {cards.length} {cards.length === 1 ? "card" : "cards"} · {projects.length}{" "}
-          {projects.length === 1 ? "project" : "projects"}
+          {t("board.cards", { n: cards.length })} · {t("board.projects", { n: projects.length })}
         </span>
         {headerExtra}
       </div>
@@ -126,8 +134,8 @@ export function AllProjectsBoard({
             <ColumnZone
               key={column.key}
               column={column.key}
-              label={column.label}
-              hint={column.hint}
+              label={columnLabel(column.key)}
+              hint={columnHint(column.key)}
               count={groups[column.key].length}
               active={Boolean(dragging) && dragging?.column !== column.key}
               onDrop={() => dropOn(column.key)}
@@ -143,7 +151,7 @@ export function AllProjectsBoard({
                 />
               ))}
               {groups[column.key].length === 0 ? (
-                <p className="px-1 py-2 text-center text-[11px] text-muted-foreground/60">empty</p>
+                <p className="px-1 py-2 text-center text-[11px] text-muted-foreground/60">{t("board.empty")}</p>
               ) : null}
             </ColumnZone>
           ))}

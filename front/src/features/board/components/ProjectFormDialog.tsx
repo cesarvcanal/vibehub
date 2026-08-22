@@ -28,6 +28,7 @@ import {
   splitRepo,
   type BoardProject,
 } from "@/features/board/api";
+import { t as translate, useT } from "@/i18n";
 
 /**
  * New project — or, with `project` given, editing an existing one.
@@ -56,6 +57,7 @@ export function ProjectFormDialog({
   /** Editing an existing project instead of creating one. */
   project?: BoardProject;
 }) {
+  const t = useT();
   const queryClient = useQueryClient();
   const [name, setName] = React.useState("");
   const [repo, setRepo] = React.useState("");
@@ -158,13 +160,22 @@ export function ProjectFormDialog({
     },
     onSuccess: (saved) => {
       void queryClient.invalidateQueries({ queryKey: PROJECTS_KEY });
-      toast.success(project ? `Project “${saved.name}” saved.` : `Project “${saved.name}” created.`);
+      toast.success(
+        project
+          ? translate("toast.projectSaved", { name: saved.name })
+          : translate("toast.projectCreated", { name: saved.name }),
+      );
       reset();
       onOpenChange(false);
       onCreated?.(saved);
     },
     onError: (error) =>
-      toast.error(apiErrorMessage(error, project ? "Could not save the project" : "Could not create the project")),
+      toast.error(
+        apiErrorMessage(
+          error,
+          project ? translate("toast.projectSaveError") : translate("toast.projectCreateError"),
+        ),
+      ),
   });
 
   function pickRepo(fullName: string) {
@@ -194,10 +205,9 @@ export function ProjectFormDialog({
     >
       <DialogContent className="max-h-[85vh] max-w-md overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{project ? "Project settings" : "New project"}</DialogTitle>
+          <DialogTitle>{project ? t("project.settingsTitle") : t("project.newTitle")}</DialogTitle>
           <DialogDescription>
-            A project groups cards. Each card gets its own worktree and its own Claude terminal
-            inside the runner.
+            {t("project.description")}
           </DialogDescription>
         </DialogHeader>
 
@@ -206,13 +216,13 @@ export function ProjectFormDialog({
               person can decide, and picking a repository below FILLS IT IN — so the form reads as
               "here is what I am calling it, here is where the code is", not as a quiz. */}
           <div className="space-y-1.5">
-            <Label htmlFor="project-name">Name</Label>
+            <Label htmlFor="project-name">{t("project.name")}</Label>
             <Input
               id="project-name"
               autoFocus
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. billing-service"
+              placeholder={t("project.namePlaceholder")}
             />
           </div>
 
@@ -220,10 +230,10 @@ export function ProjectFormDialog({
               than one — otherwise the answer is forced and the field is noise. */}
           {connections.length > 1 ? (
             <div className="space-y-1.5">
-              <Label htmlFor="project-connection">Account</Label>
+              <Label htmlFor="project-connection">{t("project.account")}</Label>
               <select
                 id="project-connection"
-                aria-label="GitHub account"
+                aria-label={t("project.githubAccount")}
                 className={SELECT_CLASS}
                 value={activeConnection}
                 onChange={(e) => {
@@ -242,49 +252,51 @@ export function ProjectFormDialog({
                 ))}
               </select>
               <p className="text-[11px] text-muted-foreground">
-                Which GitHub account this project's repository belongs to.
+                {t("project.connectionHint")}
               </p>
             </div>
           ) : null}
 
           {connected ? (
             <div className="space-y-1.5">
-              <Label htmlFor="project-repo-search">Repository</Label>
+              <Label htmlFor="project-repo-search">{t("project.repository")}</Label>
               <div className="relative">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   id="project-repo-search"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search your repositories…"
+                  placeholder={t("project.searchRepos")}
                   className="pl-8"
                   autoComplete="off"
                 />
               </div>
               <select
-                aria-label="Repository"
+                aria-label={t("project.repository")}
                 className={SELECT_CLASS}
                 value={repo}
                 onChange={(e) => pickRepo(e.target.value)}
                 size={1}
               >
                 <option value="">
-                  {reposLoading ? "Loading repositories…" : "No repository (scratch directory)"}
+                  {reposLoading ? t("project.loadingRepos") : t("project.noRepo")}
                 </option>
                 {(repos ?? []).map((r) => (
                   <option key={r.fullName} value={r.fullName}>
                     {r.fullName}
-                    {r.private ? " · private" : ""}
+                    {r.private ? t("project.private") : ""}
                   </option>
                 ))}
               </select>
               {!reposLoading && debounced && (repos?.length ?? 0) === 0 ? (
-                <p className="text-[11px] text-muted-foreground">Nothing matched “{debounced}”.</p>
+                <p className="text-[11px] text-muted-foreground">
+                  {t("project.nothingMatched", { q: debounced })}
+                </p>
               ) : null}
             </div>
           ) : (
             <div className="space-y-1.5">
-              <Label htmlFor="project-clone-url">Clone URL</Label>
+              <Label htmlFor="project-clone-url">{t("project.cloneUrl")}</Label>
               <Input
                 id="project-clone-url"
                 value={cloneUrl}
@@ -293,16 +305,14 @@ export function ProjectFormDialog({
                 className="font-mono"
               />
               <p className="text-[11px] leading-relaxed text-muted-foreground">
-                No GitHub account is connected, so there is nothing to pick from. Add one in Settings
-                — it is a pasted token, not a login — or paste a clone URL here, or leave it empty
-                and the cards open in a scratch directory.
+                {t("project.noGithubHint")}
               </p>
             </div>
           )}
 
           {repo || cloneUrl.trim() ? (
             <div className="space-y-1.5">
-              <Label htmlFor="project-branch">Base branch</Label>
+              <Label htmlFor="project-branch">{t("project.baseBranch")}</Label>
               {branches?.length ? (
                 <select
                   id="project-branch"
@@ -326,20 +336,20 @@ export function ProjectFormDialog({
                 />
               )}
               <p className="text-[11px] text-muted-foreground">
-                Every card's worktree is cut from this branch.
+                {t("project.branchHint")}
               </p>
             </div>
           ) : null}
 
           <div className="space-y-1.5">
-            <Label htmlFor="project-account">Default Claude account</Label>
+            <Label htmlFor="project-account">{t("project.defaultAccount")}</Label>
             <select
               id="project-account"
               className={SELECT_CLASS}
               value={account}
               onChange={(e) => setAccount(e.target.value)}
             >
-              <option value="">Runner default</option>
+              <option value="">{t("project.runnerDefault")}</option>
               {accounts.map((a) => (
                 <option key={a.slug} value={a.slug}>
                   {accountLabel(a)}
@@ -367,11 +377,11 @@ export function ProjectFormDialog({
               }}
               disabled={createMutation.isPending}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button type="submit" disabled={createMutation.isPending || !name.trim()}>
               {createMutation.isPending ? <Loader2 className="animate-spin" /> : null}
-              {project ? "Save project" : "Create project"}
+              {project ? t("project.save") : t("project.create")}
             </Button>
           </DialogFooter>
         </form>

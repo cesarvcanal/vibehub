@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import type { ILink, ILinkProvider } from "@xterm/xterm";
 import * as React from "react";
 import userEvent from "@testing-library/user-event";
-import { XTerminal, type XTerminalHandle } from "@/features/board/components/XTerminal";
+import { XTerminal, SUBMIT_AFTER_PASTE_MS, type XTerminalHandle } from "@/features/board/components/XTerminal";
 
 /* ------------------------------------------------------------ xterm stubs */
 
@@ -42,6 +42,16 @@ class FakeTerminal {
     this.rows = rows;
   }
   keyHandler: ((e: KeyboardEvent) => boolean) | null = null;
+  resizeHandlers: ((size: { cols: number; rows: number }) => void)[] = [];
+  onResize(handler: (size: { cols: number; rows: number }) => void) {
+    this.resizeHandlers.push(handler);
+    return { dispose: () => {} };
+  }
+  emitResize(cols: number, rows: number): void {
+    this.cols = cols;
+    this.rows = rows;
+    for (const h of this.resizeHandlers) h({ cols, rows });
+  }
   open(element: HTMLElement): void {
     this.element = element;
   }
@@ -673,10 +683,10 @@ describe("XTerminal — handle and zoom control", () => {
   it("exposes sendText that writes to the open socket", async () => {
     const ref = React.createRef<XTerminalHandle>();
     render(<XTerminal ref={ref} wsPath="/api/cards/c1/terminal" />);
-    const ws = await socket();
-    ws.accept();
-    ref.current?.sendText("hello\r");
-    expect(ws.sent).toContain("hello\r");
+    const s = await socket();
+    s.accept();
+    ref.current?.sendText("hello");
+    expect(s.sent).toContain("hello");
   });
 
   it("renders the zoom control on request and it drives the font size", async () => {
@@ -712,5 +722,45 @@ describe("XTerminal — font measurement", () => {
     const family = String(term().options.fontFamily);
     expect(family).not.toContain("var(");
     expect(family).toContain("JetBrains Mono");
+  });
+});
+
+describe("XTerminal — submit and resize plumbing", () => {
+  it("sends a composed message as body first, then Enter on its own — never as one paste", async () => {
+    vi.useFakeTimers();
+    try {
+      const ref = React.createRef<XTerminalHandle>();
+      render(<XTerminal ref={ref} wsPath="/api/cards/c1/terminal" />);
+      await tickToConnect();
+      const s = FakeSocket.instances[0]!;
+      s.accept();
+      ref.current?.sendText("run the tests\r");
+      expect(s.sent).toContain("run the tests");
+      expect(s.sent).not.toContain("run the tests\r");
+      expect(s.sent).not.toContain("\r");
+      vi.advanceTimersByTime(SUBMIT_AFTER_PASTE_MS + 1);
+      expect(s.sent[s.sent.length - 1]).toBe("\r");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a bare Enter goes through untouched", async () => {
+    const ref = React.createRef<XTerminalHandle>();
+    render(<XTerminal ref={ref} wsPath="/api/cards/c1/terminal" />);
+    const s = await socket();
+    s.accept();
+    ref.current?.sendText("\r");
+    expect(s.sent).toContain("\r");
+  });
+
+  it("tells the pty about every resize, including a zoom refit", async () => {
+    render(<XTerminal wsPath="/api/cards/c1/terminal" zoomControl />);
+    const s = await socket();
+    s.accept();
+    const before = s.sent.length;
+    term().emitResize(100, 40);
+    const frames = s.sent.slice(before).filter((m) => m.startsWith("{"));
+    expect(frames.map((f) => JSON.parse(f))).toContainEqual({ type: "resize", cols: 100, rows: 40 });
   });
 });

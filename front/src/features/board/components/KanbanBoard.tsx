@@ -15,7 +15,14 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { CardTile } from "@/features/board/components/CardTile";
-import { COLUMNS, groupByColumn, moveCardLocal, nextPosition } from "@/features/board/lib/board";
+import {
+  COLUMNS,
+  columnHint,
+  columnLabel,
+  groupByColumn,
+  moveCardLocal,
+  nextPosition,
+} from "@/features/board/lib/board";
 import { boardTitle, useDocumentTitle } from "@/features/board/lib/documentTitle";
 import {
   ACCOUNTS_KEY,
@@ -27,6 +34,7 @@ import {
   type BoardProject,
 } from "@/features/board/api";
 import type { CardColumn } from "@/api/types";
+import { t as translate, useT } from "@/i18n";
 
 /**
  * The board of one project.
@@ -54,6 +62,7 @@ export function KanbanBoard({
   onNewCard: () => void;
   headerExtra?: React.ReactNode;
 }) {
+  const t = useT();
   const queryClient = useQueryClient();
   const boardKey = cardsKey(project.id);
   useDocumentTitle(boardTitle(project.name));
@@ -91,7 +100,7 @@ export function KanbanBoard({
     },
     onError: (error, _vars, context) => {
       if (context?.previous) queryClient.setQueryData(boardKey, context.previous);
-      toast.error(apiErrorMessage(error, "Could not move the card"));
+      toast.error(apiErrorMessage(error, translate("toast.cardMoveError")));
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: boardKey }),
   });
@@ -100,9 +109,9 @@ export function KanbanBoard({
     mutationFn: (id: string) => boardApi.pauseCard(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: boardKey });
-      toast.success("Paused — reopening the card resumes the same conversation.");
+      toast.success(translate("toast.cardPaused"));
     },
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not pause the card")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardPauseError"))),
   });
 
   /**
@@ -114,18 +123,18 @@ export function KanbanBoard({
     mutationFn: (id: string) => boardApi.restartCard(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: boardKey });
-      toast.success("Restarting the terminal… the conversation resumes on the next open.");
+      toast.success(translate("toast.cardRestarting"));
     },
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not restart the card")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardRestartError"))),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => boardApi.deleteCard(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: boardKey });
-      toast.success("Card deleted.");
+      toast.success(translate("toast.cardDeleted"));
     },
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not delete the card")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardDeleteError"))),
   });
 
   /**
@@ -139,9 +148,9 @@ export function KanbanBoard({
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: boardKey });
       setAccountTarget(null);
-      toast.success("Account switched — the Claude session restarts on the next open.");
+      toast.success(translate("toast.cardAccountSwitched"));
     },
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not switch the card's account")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardAccountSwitchError"))),
   });
 
   const groups = groupByColumn(cards ?? []);
@@ -157,8 +166,11 @@ export function KanbanBoard({
   function finish(card: BoardCard) {
     const previous = { column: card.column, position: card.position ?? 0 };
     moveMutation.mutate({ id: card.id, column: "done", position: nextPosition(cards ?? [], "done") });
-    toast.success(`“${card.title}” finished — stopped following the terminal.`, {
-      action: { label: "Undo", onClick: () => moveMutation.mutate({ id: card.id, ...previous }) },
+    toast.success(translate("toast.cardFinished", { title: card.title }), {
+      action: {
+        label: translate("common.undo"),
+        onClick: () => moveMutation.mutate({ id: card.id, ...previous }),
+      },
     });
   }
 
@@ -166,7 +178,7 @@ export function KanbanBoard({
   function restart(card: BoardCard) {
     if (
       card.status === "working" &&
-      !window.confirm("Claude is working — restarting will interrupt it. Continue?")
+      !window.confirm(translate("confirm.restartWorking"))
     ) {
       return;
     }
@@ -179,11 +191,11 @@ export function KanbanBoard({
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className="mr-auto text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-          {total} {total === 1 ? "card" : "cards"}
+          {t("board.cards", { n: total })}
         </span>
         {headerExtra}
-        <Button size="sm" className="h-9 gap-0" title="New card (⌘K or Ctrl+T)" onClick={onNewCard}>
-          <Plus className="mr-1.5 h-4 w-4" /> New card
+        <Button size="sm" className="h-9 gap-0" title={t("board.newCardHint")} onClick={onNewCard}>
+          <Plus className="mr-1.5 h-4 w-4" /> {t("board.newCard")}
         </Button>
       </div>
 
@@ -198,8 +210,8 @@ export function KanbanBoard({
             <ColumnZone
               key={column.key}
               column={column.key}
-              label={column.label}
-              hint={column.hint}
+              label={columnLabel(column.key)}
+              hint={columnHint(column.key)}
               count={groups[column.key].length}
               active={Boolean(dragging) && dragging?.column !== column.key}
               onDrop={() => dropOn(column.key)}
@@ -222,7 +234,7 @@ export function KanbanBoard({
                 />
               ))}
               {groups[column.key].length === 0 ? (
-                <p className="px-1 py-2 text-center text-[11px] text-muted-foreground/60">empty</p>
+                <p className="px-1 py-2 text-center text-[11px] text-muted-foreground/60">{t("board.empty")}</p>
               ) : null}
             </ColumnZone>
           ))}
@@ -234,14 +246,13 @@ export function KanbanBoard({
       <Dialog open={Boolean(accountTarget)} onOpenChange={(next) => !next && setAccountTarget(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Claude account for “{accountTarget?.title}”</DialogTitle>
+            <DialogTitle>{t("kanban.accountDialog.title", { title: accountTarget?.title })}</DialogTitle>
             <DialogDescription>
-              Switching the account restarts this card's Claude session — the work in the worktree
-              stays.
+              {t("kanban.accountDialog.body")}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
-            <Label htmlFor="card-account">Account</Label>
+            <Label htmlFor="card-account">{t("kanban.accountDialog.label")}</Label>
             <select
               id="card-account"
               value={accountChoice}
@@ -250,8 +261,10 @@ export function KanbanBoard({
             >
               <option value="">
                 {inheritedSlug
-                  ? `Default (inherits “${inheritedSlug}” from the project)`
-                  : `Default (${accountsData?.defaultLabel || "the runner's account"})`}
+                  ? t("kanban.accountDialog.inherit", { slug: inheritedSlug })
+                  : t("kanban.accountDialog.default", {
+                      label: accountsData?.defaultLabel || t("kanban.accountDialog.runnerAccount"),
+                    })}
               </option>
               {(accountsData?.accounts ?? []).map((account) => (
                 <option key={account.slug} value={account.slug}>
@@ -266,7 +279,7 @@ export function KanbanBoard({
               onClick={() => setAccountTarget(null)}
               disabled={accountMutation.isPending}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               disabled={accountMutation.isPending || accountChoice === (accountTarget?.accountSlug ?? "")}
@@ -277,7 +290,7 @@ export function KanbanBoard({
               }}
             >
               {accountMutation.isPending ? <Loader2 className="animate-spin" /> : null}
-              Switch account
+              {t("kanban.accountDialog.switch")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -286,15 +299,14 @@ export function KanbanBoard({
       <Dialog open={Boolean(deleteTarget)} onOpenChange={(next) => !next && setDeleteTarget(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Delete “{deleteTarget?.title}”?</DialogTitle>
+            <DialogTitle>{t("kanban.deleteCard.title", { title: deleteTarget?.title })}</DialogTitle>
             <DialogDescription>
-              The session is killed and the worktree is dropped. The branch and any commits stay in
-              the repository — only uncommitted work in the worktree is lost.
+              {t("kanban.deleteCard.body")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setDeleteTarget(null)} disabled={deleteMutation.isPending}>
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               variant="destructive"
@@ -305,7 +317,7 @@ export function KanbanBoard({
               }}
             >
               {deleteMutation.isPending ? <Loader2 className="animate-spin" /> : null}
-              Delete
+              {t("common.delete")}
             </Button>
           </DialogFooter>
         </DialogContent>

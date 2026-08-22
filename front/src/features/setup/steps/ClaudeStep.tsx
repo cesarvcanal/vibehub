@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { StepError, StepFrame } from "@/features/setup/StepFrame";
 import type { SetupStepMeta } from "@/features/setup/steps";
 import type { SetupState } from "@/api/types";
+import { useT } from "@/i18n";
 
 /**
  * Step 4 — the sign-in itself happens inside the runner, not here. This step explains how and
@@ -19,6 +20,7 @@ export function ClaudeStep({
   container: string | undefined;
   onDone: () => Promise<void>;
 }) {
+  const t = useT();
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const name = container || "vibehub-runner";
@@ -32,9 +34,9 @@ export function ClaudeStep({
         await onDone();
         return;
       }
-      setError("Still not signed in. Finish `claude` in the runner, then check again.");
+      setError(t("setup.claude.stillNot"));
     } catch (err) {
-      setError(apiErrorMessage(err, "Could not read the setup state"));
+      setError(apiErrorMessage(err, t("setup.claude.readError")));
     } finally {
       setBusy(false);
     }
@@ -46,7 +48,7 @@ export function ClaudeStep({
       why={meta.why}
       footer={
         <Button type="button" onClick={recheck} disabled={busy}>
-          {busy ? "Checking…" : "I've signed in — check again"}
+          {busy ? t("common.checking") : t("setup.claude.checkAgain")}
         </Button>
       }
     >
@@ -54,27 +56,24 @@ export function ClaudeStep({
         <li className="flex gap-3">
           <span className="kbd mt-0.5">1</span>
           <span>
-            Open a shell in the runner:
+            {t("setup.claude.step1")}
             <code className="terminal-surface mt-1.5 block px-3 py-2">docker exec -it {name} claude</code>
           </span>
         </li>
         <li className="flex gap-3">
           <span className="kbd mt-0.5">2</span>
           <span>
-            Follow the browser prompt it prints. The login is stored inside the container, so it
-            survives restarts and every card reuses it.
+            {t("setup.claude.step2")}
           </span>
         </li>
         <li className="flex gap-3">
           <span className="kbd mt-0.5">3</span>
-          <span>Come back here and check again.</span>
+          <span>{t("setup.claude.step3")}</span>
         </li>
       </ol>
 
       <p className="max-w-prose rounded border border-border bg-card/40 p-3 text-sm leading-relaxed text-muted-foreground">
-        Running more than one Claude login? Later, each account on the Accounts screen gets its own
-        isolated profile inside the runner, and you can paste a long-lived token per account instead
-        of doing the browser dance again.
+        {t("setup.claude.note")}
       </p>
 
       <StepError message={error} />

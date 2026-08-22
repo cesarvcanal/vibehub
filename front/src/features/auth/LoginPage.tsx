@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Logo } from "@/components/Logo";
+import { useT } from "@/i18n";
 
 interface LocationState {
   from?: { pathname?: string };
@@ -17,6 +18,7 @@ export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { refreshSession, refreshSetup } = useAuth();
+  const t = useT();
 
   const [username, setUsername] = React.useState("");
   const [password, setPassword] = React.useState("");
@@ -36,7 +38,7 @@ export function LoginPage() {
       await Promise.all([refreshSession(), refreshSetup()]);
       navigate(from, { replace: true });
     } catch (err) {
-      setError(apiErrorMessage(err, "Invalid username or password"));
+      setError(apiErrorMessage(err, t("auth.invalidCredentials")));
       setBusy(false);
     }
   }
@@ -47,16 +49,16 @@ export function LoginPage() {
         <div className="mb-8 flex flex-col items-start gap-3">
           <Logo />
           <div>
-            <h1 className="text-lg font-semibold tracking-tight">Sign in</h1>
+            <h1 className="text-lg font-semibold tracking-tight">{t("auth.title")}</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              This install is private. Only accounts created here can reach the board.
+              {t("auth.subtitle")}
             </p>
           </div>
         </div>
 
         <form onSubmit={onSubmit} noValidate className="panel space-y-4 p-5">
           <div className="space-y-1.5">
-            <Label htmlFor="username">Username</Label>
+            <Label htmlFor="username">{t("auth.username")}</Label>
             <Input
               id="username"
               name="username"
@@ -72,7 +74,7 @@ export function LoginPage() {
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="password">Password</Label>
+            <Label htmlFor="password">{t("auth.password")}</Label>
             <Input
               id="password"
               name="password"
@@ -95,13 +97,12 @@ export function LoginPage() {
           ) : null}
 
           <Button type="submit" className="w-full" disabled={!canSubmit}>
-            {busy ? "Signing in…" : "Sign in"}
+            {busy ? t("auth.signingIn") : t("auth.signIn")}
           </Button>
         </form>
 
         <p className="mt-4 text-xs text-muted-foreground">
-          Forgot the password? There is no reset by email — recover it from the server, where the
-          data directory lives.
+          {t("auth.forgot")}
         </p>
       </div>
     </main>

@@ -1,5 +1,6 @@
 import type { CardColumn, CardStatus } from "@/api/types";
 import type { BoardCard, BoardProject } from "@/features/board/api";
+import { t } from "@/i18n";
 
 /**
  * The kanban's pure logic — grouping, ordering, the status dot and the deep link. No React, no
@@ -14,9 +15,6 @@ import type { BoardCard, BoardProject } from "@/features/board/api";
 
 export interface ColumnMeta {
   key: CardColumn;
-  label: string;
-  /** One line explaining who moves cards into this column. Shown as the column's title tooltip. */
-  hint: string;
 }
 
 /**
@@ -28,12 +26,26 @@ export interface ColumnMeta {
  * ones you should see first.
  */
 export const COLUMNS: readonly ColumnMeta[] = [
-  { key: "backlog", label: "Backlog", hint: "Not started. Opening a card moves it out of here." },
-  { key: "paused", label: "Paused", hint: "Session killed on request — reopening resumes it." },
-  { key: "waiting", label: "Waiting", hint: "The agent is waiting for you. Moved here by the runner." },
-  { key: "working", label: "Working", hint: "The agent is working. Moved here by the runner." },
-  { key: "done", label: "Done", hint: "Finished. Always a manual move." },
+  { key: "backlog" },
+  { key: "paused" },
+  { key: "waiting" },
+  { key: "working" },
+  { key: "done" },
 ] as const;
+
+/**
+ * The column's heading, in the active language. Resolved at RENDER time rather than baked into the
+ * array above, so switching the language in Settings relabels the board where it stands instead of
+ * waiting for a reload.
+ */
+export function columnLabel(key: CardColumn): string {
+  return t(`column.${key}`);
+}
+
+/** One line explaining who moves cards into this column. Shown as the column's title tooltip. */
+export function columnHint(key: CardColumn): string {
+  return t(`column.${key}.hint`);
+}
 
 /** Cards ordered inside a column: by position, then creation, then id. Stable across refetches. */
 export function sortCards(cards: BoardCard[]): BoardCard[] {
@@ -133,8 +145,8 @@ export interface StatusDot {
  * inventing a state the agent never claimed is worse than showing nothing.
  */
 export function statusDot(status: CardStatus | null | undefined): StatusDot | null {
-  if (status === "working") return { tone: "ok", label: "Working", live: true };
-  if (status === "waiting") return { tone: "warn", label: "Waiting for you", live: false };
+  if (status === "working") return { tone: "ok", label: t("status.working"), live: true };
+  if (status === "waiting") return { tone: "warn", label: t("status.waitingForYou"), live: false };
   return null;
 }
 

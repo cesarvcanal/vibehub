@@ -14,6 +14,7 @@ import { useAuth } from "@/providers/auth";
 import { apiErrorMessage } from "@/lib/apiError";
 import { applyOutcomeMessage } from "@/features/board/lib/applyOutcome";
 import { BRAIN_KEY, CARDS_PREFIX_KEY, boardApi } from "@/features/board/api";
+import { t as translate, useT } from "@/i18n";
 
 /**
  * The brain: one shared CLAUDE.md, planted at the root of every Claude profile in the runner.
@@ -38,17 +39,18 @@ import { BRAIN_KEY, CARDS_PREFIX_KEY, boardApi } from "@/features/board/api";
  * browser's locale. `undefined` means nobody has ever saved: the seed text is what is running.
  */
 export function formatBrainStamp(updatedAt: string | undefined, by?: string): string {
-  if (!updatedAt) return "using the built-in default (never saved)";
+  if (!updatedAt) return translate("brain.stampNever");
   const at = new Date(updatedAt);
-  if (Number.isNaN(at.getTime())) return "saved";
+  if (Number.isNaN(at.getTime())) return translate("brain.stampSaved");
   const pad = (n: number) => String(n).padStart(2, "0");
   const when =
     `${pad(at.getDate())}/${pad(at.getMonth() + 1)}/${at.getFullYear()} ` +
     `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`;
-  return by ? `saved ${when} by ${by}` : `saved ${when}`;
+  return by ? translate("brain.stampBy", { when, by }) : translate("brain.stampAt", { when });
 }
 
 export function BrainManager() {
+  const t = useT();
   const queryClient = useQueryClient();
   const [open, setOpen] = React.useState(false);
   // null = "the user has not typed in this opening yet", which is what lets the seeding effect below
@@ -83,9 +85,9 @@ export function BrainManager() {
     onSuccess: (result) => {
       refreshBoards();
       setText(result.text);
-      toast.success(applyOutcomeMessage(result, "Brain"));
+      toast.success(applyOutcomeMessage(result, translate("brain.subject")));
     },
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not save the brain")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.brainSaveError"))),
   });
 
   // Back to the text the server ships with. Same route family as a save, so it reports the same
@@ -95,9 +97,9 @@ export function BrainManager() {
     onSuccess: (result) => {
       refreshBoards();
       setText(result.text);
-      toast.success(applyOutcomeMessage(result, "Brain reset to the default —"));
+      toast.success(applyOutcomeMessage(result, translate("brain.resetSubject")));
     },
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not reset the brain")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.brainResetError"))),
   });
 
   /**
@@ -112,14 +114,18 @@ export function BrainManager() {
       return { applied, restarted: await boardApi.restartAllCards() };
     },
     onSuccess: ({ applied, restarted }) => {
-      const where = `Applied to ${applied.runners ?? 0} profile(s)`;
+      const where = translate("brain.appliedTo", { n: applied.runners ?? 0 });
       toast.success(
         restarted
-          ? `${where}. ${restarted.restarted} terminal(s) restarted, ${restarted.skipped} left working.`
-          : `${where}.`,
+          ? translate("brain.appliedRestarted", {
+              where,
+              restarted: restarted.restarted,
+              skipped: restarted.skipped,
+            })
+          : translate("brain.appliedPlain", { where }),
       );
     },
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not apply the brain")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.brainApplyError"))),
   });
 
   const busy = saveMutation.isPending || resetMutation.isPending;
@@ -133,8 +139,8 @@ export function BrainManager() {
         variant="ghost"
         size="icon"
         className="h-7 w-7 text-muted-foreground hover:text-foreground"
-        aria-label="Brain"
-        title="Brain — instructions every card gets"
+        aria-label={t("brain.aria")}
+        title={t("brain.buttonTitle")}
         onClick={() => setOpen(true)}
       >
         <Brain className="h-4 w-4" />
@@ -151,11 +157,9 @@ export function BrainManager() {
       >
         <DialogContent className="max-h-[90vh] max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Brain — instructions every card gets</DialogTitle>
+            <DialogTitle>{t("brain.title")}</DialogTitle>
             <DialogDescription>
-              One CLAUDE.md, written at the root of every Claude profile in the runner, so it loads
-              in every terminal in every directory. Saving pushes it everywhere: idle terminals
-              restart now, busy ones pick it up when they finish.
+              {t("brain.description")}
             </DialogDescription>
           </DialogHeader>
 
@@ -166,7 +170,7 @@ export function BrainManager() {
           ) : (
             <>
               <textarea
-                aria-label="Brain text"
+                aria-label={t("brain.textAria")}
                 spellCheck={false}
                 value={text ?? ""}
                 onChange={(e) => setText(e.target.value)}
@@ -181,16 +185,16 @@ export function BrainManager() {
                 <div className="flex flex-wrap items-center gap-2">
                   <label
                     className="flex items-center gap-1.5 text-xs text-muted-foreground"
-                    title="Restarts only the terminals that are idle — a card mid-turn is never interrupted"
+                    title={t("brain.restartIdleHint")}
                   >
                     <input
                       type="checkbox"
                       className="h-3.5 w-3.5 accent-primary"
-                      aria-label="Restart idle terminals"
+                      aria-label={t("brain.restartIdle")}
                       checked={restartIdle}
                       onChange={(e) => setRestartIdle(e.target.checked)}
                     />
-                    Restart idle terminals
+                    {t("brain.restartIdle")}
                   </label>
 
                   <Button
@@ -199,11 +203,11 @@ export function BrainManager() {
                     size="sm"
                     // Nothing to reset to when the text already IS the default.
                     disabled={busy || isDefault}
-                    title="Replace the text with the one vibehub ships with"
+                    title={t("brain.resetTitle")}
                     onClick={() => resetMutation.mutate()}
                   >
                     {resetMutation.isPending ? <Loader2 className="animate-spin" /> : <RotateCcw />}
-                    Reset to default
+                    {t("brain.reset")}
                   </Button>
 
                   <Button
@@ -211,11 +215,11 @@ export function BrainManager() {
                     variant="outline"
                     size="sm"
                     disabled={applyMutation.isPending}
-                    title="Rewrite it in every runner profile, without saving a new text"
+                    title={t("brain.applyTitle")}
                     onClick={() => applyMutation.mutate()}
                   >
                     {applyMutation.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                    Apply everywhere
+                    {t("brain.applyEverywhere")}
                   </Button>
 
                   <Button
@@ -227,7 +231,7 @@ export function BrainManager() {
                     onClick={() => saveMutation.mutate()}
                   >
                     {saveMutation.isPending ? <Loader2 className="animate-spin" /> : <Save />}
-                    Save
+                    {t("common.save")}
                   </Button>
                 </div>
               </div>

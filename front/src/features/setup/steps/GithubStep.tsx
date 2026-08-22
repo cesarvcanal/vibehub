@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { StepError, StepFrame } from "@/features/setup/StepFrame";
 import type { SetupStepMeta } from "@/features/setup/steps";
 import type { GithubConnection, GithubState } from "@/api/types";
+import { useT } from "@/i18n";
 
 /**
  * Step 3 — optional. Paste a token, we validate it against GitHub and show who it belongs to.
@@ -25,6 +26,7 @@ export function GithubStep({
   onDone: () => Promise<void>;
   onSkip: () => void;
 }) {
+  const t = useT();
   const [label, setLabel] = React.useState("");
   const [token, setToken] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
@@ -50,9 +52,9 @@ export function GithubStep({
         await onDone();
         return;
       }
-      setError("GitHub did not accept that token.");
+      setError(t("setup.github.rejected"));
     } catch (err) {
-      setError(apiErrorMessage(err, "Could not store the token"));
+      setError(apiErrorMessage(err, t("setup.github.storeError")));
     } finally {
       setBusy(false);
     }
@@ -66,18 +68,18 @@ export function GithubStep({
         footer={
           <>
             <Button type="submit" disabled={!canSubmit}>
-              {busy ? "Checking…" : "Connect"}
+              {busy ? t("common.checking") : t("common.connect")}
             </Button>
             <Button type="button" variant="ghost" onClick={onSkip} disabled={busy}>
-              Skip for now
+              {t("setup.github.skip")}
             </Button>
           </>
         }
       >
         <div className="space-y-3 sm:max-w-lg">
           <p className="text-xs leading-relaxed text-muted-foreground">
-            <strong className="font-medium text-foreground">Paste a token — no login needed.</strong>{" "}
-            Fine-grained PAT with Contents read/write on the repos you want, or a classic token with{" "}
+            <strong className="font-medium text-foreground">{t("github.pasteToken")}</strong>
+            {t("github.pasteTokenRest")}
             <span className="font-mono">repo</span>.{" "}
             <a
               href="https://github.com/settings/tokens"
@@ -90,12 +92,12 @@ export function GithubStep({
           </p>
 
           <div className="space-y-1.5">
-            <Label htmlFor="github-label">Account name</Label>
+            <Label htmlFor="github-label">{t("github.accountName")}</Label>
             <Input
               id="github-label"
               autoComplete="off"
               spellCheck={false}
-              placeholder="personal"
+              placeholder={t("github.accountNamePlaceholder")}
               maxLength={40}
               value={label}
               onChange={(e) => setLabel(e.target.value)}
@@ -103,18 +105,18 @@ export function GithubStep({
               aria-describedby="github-label-hint"
             />
             <p id="github-label-hint" className="text-xs text-muted-foreground">
-              What to call this account. You can add more later in Settings — one per GitHub identity.
+              {t("setup.github.labelHint")}
             </p>
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="github-token">Access token</Label>
+            <Label htmlFor="github-token">{t("github.accessToken")}</Label>
             <Input
               id="github-token"
               type="password"
               autoComplete="off"
               spellCheck={false}
-              placeholder="github_pat_… or ghp_…"
+              placeholder={t("github.tokenPlaceholder")}
               className="font-mono"
               value={token}
               onChange={(e) => setToken(e.target.value)}
@@ -122,17 +124,16 @@ export function GithubStep({
               aria-describedby="github-token-hint"
             />
             <p id="github-token-hint" className="text-xs leading-relaxed text-muted-foreground">
-              Stored in this server's vault and never sent back to the browser — it only leaves as an
-              ephemeral clone credential.
+              {t("setup.github.tokenHint")}
             </p>
           </div>
         </div>
 
         {resolved ? (
           <p className="flex items-center gap-2 text-sm">
-            <Badge tone="ok">connected</Badge>
+            <Badge tone="ok">{t("setup.github.connected")}</Badge>
             <span className="text-muted-foreground">
-              signed in as <span className="font-mono text-foreground">{resolved.login}</span>
+              {t("setup.github.signedInAs")} <span className="font-mono text-foreground">{resolved.login}</span>
               {resolved.scopes?.length ? ` · ${resolved.scopes.join(", ")}` : ""}
             </span>
           </p>

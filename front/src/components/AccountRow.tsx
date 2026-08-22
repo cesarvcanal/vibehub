@@ -6,6 +6,7 @@ import { useAuth } from "@/providers/auth";
 import { Paths } from "@/lib/paths";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { SettingsDialog } from "@/features/settings/SettingsDialog";
+import { useT } from "@/i18n";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,6 +26,7 @@ import {
  */
 export function AccountRow({ className }: { className?: string }) {
   const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const t = useT();
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
 
@@ -35,7 +37,7 @@ export function AccountRow({ className }: { className?: string }) {
 
   return (
     <div
-      aria-label="Account"
+      aria-label={t("account.group")}
       role="group"
       className={cn(
         "flex shrink-0 items-center gap-1 border-t border-border/60 px-2 py-1.5",
@@ -47,18 +49,18 @@ export function AccountRow({ className }: { className?: string }) {
       <DropdownMenu>
         <DropdownMenuTrigger className="nav-pill min-w-0 max-w-[9rem] gap-1.5 px-2 py-1 text-xs">
           <UserRound className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate">{user?.username ?? "account"}</span>
+          <span className="truncate">{user?.username ?? t("account.fallback")}</span>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" side="top">
-          <DropdownMenuLabel>Signed in</DropdownMenuLabel>
+          <DropdownMenuLabel>{t("account.signedIn")}</DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => setSettingsOpen(true)}>
             <Settings2 />
-            Settings
+            {t("account.settings")}
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => void onSignOut()}>
             <LogOut />
-            Sign out
+            {t("account.signOut")}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

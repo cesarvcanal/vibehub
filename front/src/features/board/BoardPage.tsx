@@ -39,6 +39,7 @@ import {
   type BoardProject,
 } from "@/features/board/api";
 import type { NewCard } from "@/api/types";
+import { t as translate, useT } from "@/i18n";
 
 /**
  * The board.
@@ -54,6 +55,7 @@ import type { NewCard } from "@/api/types";
  * is a destination too: it is the aggregated board across everything.
  */
 export function BoardPage() {
+  const t = useT();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
 
@@ -119,7 +121,7 @@ export function BoardPage() {
       // the backlog — you are looking at the board precisely to decide what to do next.
       if (cardId) go(card.projectId, card.id);
     },
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not create the card")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardCreateError"))),
   });
 
   const deleteProjectMutation = useMutation({
@@ -127,9 +129,9 @@ export function BoardPage() {
     onSuccess: (_result, id) => {
       void queryClient.invalidateQueries({ queryKey: PROJECTS_KEY });
       if (projectId === id) go(null);
-      toast.success("Project deleted.");
+      toast.success(translate("toast.projectDeleted"));
     },
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not delete the project")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.projectDeleteError"))),
     onSettled: () => setDeleteTarget(null),
   });
 
@@ -144,7 +146,7 @@ export function BoardPage() {
     },
     onError: (error, _vars, context) => {
       if (context?.previous) queryClient.setQueryData(PROJECTS_KEY, context.previous);
-      toast.error(apiErrorMessage(error, "Could not reorder the projects"));
+      toast.error(apiErrorMessage(error, translate("toast.projectReorderError")));
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: PROJECTS_KEY }),
   });
@@ -216,10 +218,10 @@ export function BoardPage() {
     <button
       type="button"
       onClick={() => setMenuOpen(true)}
-      aria-label="Open the projects and cards"
+      aria-label={t("board.openMenu")}
       className="mb-1 flex items-center gap-2 self-start rounded-lg border border-border/60 bg-card/50 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground lg:hidden"
     >
-      <Menu className="h-4 w-4" /> Projects
+      <Menu className="h-4 w-4" /> {t("board.projectsButton")}
     </button>
   );
 
@@ -237,7 +239,7 @@ export function BoardPage() {
           onOpenChange={(next) => !next && setNewCardProject(null)}
           projectId={newCardProject.id}
           accounts={accountsData?.accounts ?? []}
-          defaultAccountLabel={accountsData?.defaultLabel || "the runner default"}
+          defaultAccountLabel={accountsData?.defaultLabel || t("board.defaultAccountFallback")}
           inheritedAccount={projectAccountSlug(newCardProject)}
           defaultBranch={projectBaseBranch(newCardProject)}
           onSubmit={(input) => createCardMutation.mutate(input)}
@@ -247,10 +249,9 @@ export function BoardPage() {
       <Dialog open={Boolean(deleteTarget)} onOpenChange={(next) => !next && setDeleteTarget(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Delete “{deleteTarget?.name}”?</DialogTitle>
+            <DialogTitle>{t("board.deleteProject.title", { name: deleteTarget?.name })}</DialogTitle>
             <DialogDescription>
-              Every card in this project goes with it: their sessions are killed and their worktrees
-              are dropped. Branches and commits stay in the repository.
+              {t("board.deleteProject.body")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -259,7 +260,7 @@ export function BoardPage() {
               onClick={() => setDeleteTarget(null)}
               disabled={deleteProjectMutation.isPending}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               variant="destructive"
@@ -267,7 +268,7 @@ export function BoardPage() {
               onClick={() => deleteTarget && deleteProjectMutation.mutate(deleteTarget.id)}
             >
               {deleteProjectMutation.isPending ? <Loader2 className="animate-spin" /> : null}
-              Delete project
+              {t("board.deleteProject.confirm")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -316,15 +317,14 @@ export function BoardPage() {
             <Code2 className="h-5 w-5" />
           </div>
           <div>
-            <p className="font-medium">No projects yet</p>
+            <p className="font-medium">{t("board.noProjects")}</p>
             <p className="text-sm leading-relaxed text-muted-foreground">
-              Point a project at a repository and every card becomes a Claude terminal in its own
-              worktree.
+              {t("board.noProjectsBody")}
             </p>
           </div>
           <div className="flex flex-wrap items-center justify-center gap-2">
             <Button onClick={() => setNewProjectOpen(true)}>
-              <Plus /> Create the first project
+              <Plus /> {t("board.createFirstProject")}
             </Button>
             <RunnerBanner />
           </div>

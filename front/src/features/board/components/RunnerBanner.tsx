@@ -10,6 +10,7 @@ import { useRunnerLogs } from "@/features/setup/useRunnerLogs";
 import { XTerminal } from "@/features/board/components/XTerminal";
 import { RUNNER_KEY, boardApi } from "@/features/board/api";
 import type { RunnerStatus } from "@/api/types";
+import { t as translate, useT } from "@/i18n";
 
 /**
  * The runner's state, in the board's header row.
@@ -31,6 +32,7 @@ import type { RunnerStatus } from "@/api/types";
  * terminal onto its own line BELOW it (`order-last`); the chip itself stays inline.
  */
 export function RunnerBanner() {
+  const t = useT();
   const queryClient = useQueryClient();
   const [showLogs, setShowLogs] = React.useState(false);
   const [shellOpen, setShellOpen] = React.useState(false);
@@ -53,15 +55,15 @@ export function RunnerBanner() {
   const provisionMutation = useMutation({
     mutationFn: () => boardApi.provisionRunner(),
     onMutate: () => setShowLogs(true),
-    onSuccess: () => toast.message("Provisioning the runner — the output is below."),
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not start provisioning")),
+    onSuccess: () => toast.message(translate("runner.provisioningToast")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("runner.provisionStartError"))),
     onSettled: refresh,
   });
 
   const startMutation = useMutation({
     mutationFn: () => boardApi.startRunner(),
-    onSuccess: () => toast.success("Runner started."),
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not start the runner")),
+    onSuccess: () => toast.success(translate("runner.started")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("runner.startError"))),
     onSettled: refresh,
   });
 
@@ -75,10 +77,10 @@ export function RunnerBanner() {
   if (isLoading) {
     return (
       <span
-        title="Checking the runner…"
+        title={t("runner.checking")}
         className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border/60 bg-card/40 px-2.5 text-[11px] font-medium text-muted-foreground"
       >
-        <Loader2 className="h-3.5 w-3.5 animate-spin" /> runner
+        <Loader2 className="h-3.5 w-3.5 animate-spin" /> {t("runner.chip")}
       </span>
     );
   }
@@ -97,20 +99,20 @@ export function RunnerBanner() {
       <div data-testid="runner-shell" className="flex h-[40vh] min-h-[220px] flex-col gap-1">
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            Runner shell
+            {t("runner.shellHeader")}
           </span>
           <Button
             variant="ghost"
             size="icon"
             className="h-6 w-6 text-muted-foreground"
-            aria-label="Close the runner shell"
-            title="Close the runner shell"
+            aria-label={t("runner.closeShell")}
+            title={t("runner.closeShell")}
             onClick={() => setShellOpen(false)}
           >
             <X className="h-3.5 w-3.5" />
           </Button>
         </div>
-        <XTerminal wsPath="/api/runner/terminal" ariaLabel="Runner shell" />
+        <XTerminal wsPath="/api/runner/terminal" ariaLabel={t("runner.shellHeader")} />
       </div>
     ) : null;
 
@@ -126,14 +128,14 @@ export function RunnerBanner() {
           )}
         >
           <span className="inline-block h-2 w-2 rounded-full bg-emerald-400 dot-live" />
-          runner
+          {t("runner.chip")}
           {canShell ? (
             <Button
               variant="ghost"
               size="icon"
               className="h-7 w-7"
-              aria-label={shellOpen ? "Close the runner's shell" : "Open the runner's shell"}
-              title={shellOpen ? "Close the runner's shell" : "Open the runner's shell"}
+              aria-label={shellOpen ? t("runner.closeOwnShell") : t("runner.openOwnShell")}
+              title={shellOpen ? t("runner.closeOwnShell") : t("runner.openOwnShell")}
               aria-expanded={shellOpen}
               onClick={() => setShellOpen((v) => !v)}
             >
@@ -159,14 +161,14 @@ export function RunnerBanner() {
           {runner.exists && !runner.running ? (
             <Button size="sm" variant="outline" disabled={startMutation.isPending} onClick={() => startMutation.mutate()}>
               {startMutation.isPending ? <Loader2 className="animate-spin" /> : <Play />}
-              Start
+              {t("runner.start")}
             </Button>
           ) : null}
           {/* Signing `claude` in is done HERE, by hand, in the runner's own shell. */}
           {canShell ? (
             <Button size="sm" variant="outline" aria-expanded={shellOpen} onClick={() => setShellOpen((v) => !v)}>
               <TerminalSquare />
-              {shellOpen ? "Close the shell" : "Open the runner's shell"}
+              {shellOpen ? t("runner.closeShellShort") : t("runner.openOwnShell")}
             </Button>
           ) : null}
           <Button
@@ -176,7 +178,7 @@ export function RunnerBanner() {
             aria-expanded={showLogs}
           >
             <ChevronDown className={showLogs ? "rotate-180 transition-transform" : "transition-transform"} />
-            Logs
+            {t("runner.logs")}
           </Button>
           <Button
             size="sm"
@@ -184,50 +186,57 @@ export function RunnerBanner() {
             onClick={() => provisionMutation.mutate()}
           >
             {provisionMutation.isPending || provisioning ? <Loader2 className="animate-spin" /> : null}
-            {runner.exists ? "Reprovision" : "Provision runner"}
+            {runner.exists ? t("runner.reprovision") : t("runner.provision")}
           </Button>
         </div>
       </div>
       {shell}
-      {showLogs || provisioning ? <LogBox lines={lines} empty="No output yet." /> : null}
+      {showLogs || provisioning ? <LogBox lines={lines} empty={t("runner.noOutput")} /> : null}
     </div>
   );
 }
 
 function runnerTitle(runner: RunnerStatus): string {
-  const where = runner.host ? ` on ${runner.host}` : "";
-  return `${runner.container}${where} — running, claude installed`;
+  const where = runner.host ? translate("runner.onHost", { host: runner.host }) : "";
+  return translate("runner.titleOk", { container: runner.container, where });
 }
 
 function describe(runner: RunnerStatus, provisioning: boolean): { icon: React.ReactNode; message: React.ReactNode } {
   const warn = <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />;
   if (provisioning) {
-    return { icon: <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />, message: "Provisioning the runner…" };
+    return {
+      icon: <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />,
+      message: translate("runner.provisioningMsg"),
+    };
   }
   if (!runner.dockerReachable) {
     return {
       icon: warn,
       message:
         runner.detail ??
-        `The Docker daemon${runner.host ? ` on ${runner.host}` : ""} did not answer, so nothing can be provisioned yet.`,
+        translate("runner.dockerNoAnswer", {
+          where: runner.host ? translate("runner.onHost", { host: runner.host }) : "",
+        }),
     };
   }
   if (!runner.exists) {
     return {
       icon: <Server className="mt-0.5 h-4 w-4 shrink-0" />,
-      message: `There is no ${runner.container} container yet — cards need it to open a terminal.`,
+      message: translate("runner.noContainer", { container: runner.container }),
     };
   }
   if (!runner.running) {
-    return { icon: warn, message: `${runner.container} exists but is stopped.` };
+    return { icon: warn, message: translate("runner.stopped", { container: runner.container }) };
   }
   return {
     icon: warn,
     message: (
       <>
-        The runner is up but <span className="font-mono">claude</span> is not installed in it.
-        Reprovision, or open the runner's shell and run <span className="font-mono">claude</span> once
-        to sign in.
+        {translate("runner.claudeMissing1")}
+        <span className="font-mono">claude</span>
+        {translate("runner.claudeMissing2")}
+        <span className="font-mono">claude</span>
+        {translate("runner.claudeMissing3")}
       </>
     ),
   };

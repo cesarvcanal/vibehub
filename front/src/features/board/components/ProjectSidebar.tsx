@@ -22,6 +22,7 @@ import {
   type BoardCard,
   type BoardProject,
 } from "@/features/board/api";
+import { t as translate, useT } from "@/i18n";
 
 /**
  * The ONE sidebar.
@@ -59,7 +60,8 @@ export const SELECTED_ROW =
 function projectHint(project: BoardProject): string {
   const repo = projectRepo(project);
   const branch = projectBaseBranch(project);
-  return `${project.name}\n${repo ? `${repo}${branch ? ` · ${branch}` : ""}` : "no repository"}`;
+  const where = repo ? `${repo}${branch ? ` · ${branch}` : ""}` : translate("sidebar.noRepository");
+  return `${project.name}\n${where}`;
 }
 
 export function ProjectSidebar({
@@ -92,6 +94,7 @@ export function ProjectSidebar({
   onNewCard: (project: BoardProject) => void;
   onDeleteProject: (project: BoardProject) => void;
 }) {
+  const t = useT();
   const [draggingId, setDraggingId] = React.useState<string | null>(null);
   const [dropAt, setDropAt] = React.useState<{ index: number; below: boolean } | null>(null);
 
@@ -131,7 +134,7 @@ export function ProjectSidebar({
       ) : null}
 
       <nav
-        aria-label="Projects"
+        aria-label={t("sidebar.projects")}
         className={cn(
           "panel fixed inset-y-0 left-0 z-40 flex w-72 max-w-[85vw] shrink-0 flex-col overflow-hidden shadow-2xl transition-transform duration-200 ease-out",
           // The gutter is `p-3`, so a full-height column is the viewport minus 1.5rem. Sticky, not
@@ -147,15 +150,15 @@ export function ProjectSidebar({
 
         <div className="flex shrink-0 items-center justify-between border-b border-border/60 py-1 pl-3 pr-1.5">
           <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-            {projects.length} {projects.length === 1 ? "project" : "projects"}
+            {t("board.projects", { n: projects.length })}
           </span>
           {/* Creating a project belongs on the list of projects, not in the page header. */}
           <Button
             variant="ghost"
             size="icon"
             className="h-7 w-7 text-muted-foreground hover:text-foreground"
-            aria-label="New project"
-            title="New project"
+            aria-label={t("sidebar.newProject")}
+            title={t("sidebar.newProject")}
             onClick={onNewProject}
           >
             <Plus className="h-4 w-4" />
@@ -195,7 +198,7 @@ export function ProjectSidebar({
             );
           })}
           {projects.length === 0 ? (
-            <p className="px-3 py-3 text-xs text-muted-foreground">No projects yet.</p>
+            <p className="px-3 py-3 text-xs text-muted-foreground">{t("sidebar.noProjects")}</p>
           ) : null}
         </div>
 
@@ -254,6 +257,7 @@ function ProjectRow({
   onHover: (index: number, below: boolean) => void;
   onDrop: (index: number, below: boolean) => void;
 }) {
+  const t = useT();
   const queryClient = useQueryClient();
   const boardKey = cardsKey(project.id);
 
@@ -297,7 +301,7 @@ function ProjectRow({
   const renameMutation = useMutation({
     mutationFn: ({ id, title }: { id: string; title: string }) => boardApi.patchCard(id, { title }),
     onSuccess: mirror,
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not rename the card")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardRenameError"))),
   });
 
   function saveRename(card: BoardCard) {
@@ -313,30 +317,30 @@ function ProjectRow({
     mutationFn: (id: string) => boardApi.pauseCard(id),
     onSuccess: (updated) => {
       mirror(updated);
-      toast.success("Paused — reopening the card resumes the same conversation.");
+      toast.success(translate("toast.cardPaused"));
       // Pausing the card you are looking at takes you up one level, exactly like clicking its row.
       if (updated.id === activeCardId) onOpenCard(updated.id);
     },
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not pause the card")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardPauseError"))),
   });
 
   const restartMutation = useMutation({
     mutationFn: (id: string) => boardApi.restartCard(id),
-    onSuccess: () => toast.success("Restarting the terminal… the conversation resumes on the next open."),
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not restart the card")),
+    onSuccess: () => toast.success(translate("toast.cardRestarting")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardRestartError"))),
   });
 
   const moveMutation = useMutation({
     mutationFn: ({ id, column, position }: { id: string; column: BoardCard["column"]; position: number }) =>
       boardApi.patchCard(id, { column, position }),
     onSuccess: mirror,
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not move the card")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardMoveError"))),
   });
 
   function restart(card: BoardCard) {
     if (
       card.status === "working" &&
-      !window.confirm("Claude is working — restarting will interrupt it. Continue?")
+      !window.confirm(translate("confirm.restartWorking"))
     ) {
       return;
     }
@@ -350,8 +354,11 @@ function ProjectRow({
       column: "done",
       position: nextPosition(cards ?? [], "done"),
     });
-    toast.success(`“${card.title}” finished — stopped following the terminal.`, {
-      action: { label: "Undo", onClick: () => moveMutation.mutate({ id: card.id, ...previous }) },
+    toast.success(translate("toast.cardFinished", { title: card.title }), {
+      action: {
+        label: translate("common.undo"),
+        onClick: () => moveMutation.mutate({ id: card.id, ...previous }),
+      },
     });
     if (card.id === activeCardId) onOpenCard(card.id);
   }
@@ -359,10 +366,10 @@ function ProjectRow({
   /* --------------------------------------------------------- the row itself */
 
   const projectMenu: ContextMenuItem[] = [
-    { key: "new-card", label: "New card", icon: Plus, onSelect: onNewCard },
-    ...(first ? [] : [{ key: "up", label: "Move up", icon: ChevronUp, onSelect: () => onStep(-1) }]),
-    ...(last ? [] : [{ key: "down", label: "Move down", icon: ChevronDown, onSelect: () => onStep(1) }]),
-    { key: "delete", label: "Delete project…", icon: Trash2, danger: true, onSelect: onDelete },
+    { key: "new-card", label: t("board.newCard"), icon: Plus, onSelect: onNewCard },
+    ...(first ? [] : [{ key: "up", label: t("sidebar.moveUp"), icon: ChevronUp, onSelect: () => onStep(-1) }]),
+    ...(last ? [] : [{ key: "down", label: t("sidebar.moveDown"), icon: ChevronDown, onSelect: () => onStep(1) }]),
+    { key: "delete", label: t("sidebar.deleteProject"), icon: Trash2, danger: true, onSelect: onDelete },
   ];
   const { point, openAt, close } = useContextMenuPoint();
 
@@ -376,7 +383,7 @@ function ProjectRow({
     editingId === card.id ? (
       <input
         key={card.id}
-        aria-label="Rename card"
+        aria-label={t("sidebar.renameCard")}
         autoFocus
         onFocus={(e) => e.currentTarget.select()}
         value={draft}
@@ -474,8 +481,8 @@ function ProjectRow({
           variant="ghost"
           size="icon"
           className="mr-1.5 h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
-          aria-label={`New card in ${project.name}`}
-          title="New card (⌘K on the selected project)"
+          aria-label={t("sidebar.newCardIn", { name: project.name })}
+          title={t("sidebar.newCardHint")}
           onClick={onNewCard}
         >
           <Plus className="h-3.5 w-3.5" />
@@ -496,11 +503,11 @@ function ProjectRow({
               onClick={() => setShowMore((v) => !v)}
               className="w-full py-1.5 pl-9 pr-3 text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground/80 transition-colors hover:bg-card/60 hover:text-foreground"
             >
-              {showMore ? "show less" : `show more (${idle.length})`}
+              {showMore ? t("sidebar.showLess") : t("sidebar.showMore", { n: idle.length })}
             </button>
           ) : null}
           {listed.length === 0 && idle.length === 0 ? (
-            <p className="py-1.5 pl-9 pr-3 text-[11px] text-muted-foreground/60">No active cards</p>
+            <p className="py-1.5 pl-9 pr-3 text-[11px] text-muted-foreground/60">{t("sidebar.noActiveCards")}</p>
           ) : null}
         </div>
       ) : null}
@@ -508,7 +515,7 @@ function ProjectRow({
       <ContextMenu
         point={point}
         items={projectMenu}
-        ariaLabel={`Actions for ${project.name}`}
+        ariaLabel={t("sidebar.actionsForProject", { name: project.name })}
         onClose={close}
       />
     </div>
@@ -540,15 +547,18 @@ function SidebarCard({
   onRestart: (card: BoardCard) => void;
   onFinish: (card: BoardCard) => void;
 }) {
+  const t = useT();
   const dot = statusDot(card.status);
   const paused = Boolean(card.pausedAt);
   const canPause = Boolean(card.openedAt) && !paused;
 
   const items: ContextMenuItem[] = [
-    ...(canPause ? [{ key: "pause", label: "Pause", icon: Pause, onSelect: () => onPause(card) }] : []),
-    ...(canPause ? [{ key: "restart", label: "Restart", icon: RotateCw, onSelect: () => onRestart(card) }] : []),
+    ...(canPause ? [{ key: "pause", label: t("card.pause"), icon: Pause, onSelect: () => onPause(card) }] : []),
+    ...(canPause
+      ? [{ key: "restart", label: t("card.restart"), icon: RotateCw, onSelect: () => onRestart(card) }]
+      : []),
     ...(card.column !== "done"
-      ? [{ key: "finish", label: "Finish", icon: Check, onSelect: () => onFinish(card) }]
+      ? [{ key: "finish", label: t("card.finish"), icon: Check, onSelect: () => onFinish(card) }]
       : []),
   ];
   const { point, openAt, close } = useContextMenuPoint();
@@ -579,7 +589,7 @@ function SidebarCard({
         )}
       >
         <span
-          title={paused ? "Paused" : dot?.label}
+          title={paused ? t("status.paused") : dot?.label}
           className="inline-flex h-2 w-2 shrink-0 items-center justify-center"
         >
           {paused ? (
@@ -596,7 +606,12 @@ function SidebarCard({
         </span>
         <span className="truncate">{card.title}</span>
       </a>
-      <ContextMenu point={point} items={items} ariaLabel={`Actions for ${card.title}`} onClose={close} />
+      <ContextMenu
+        point={point}
+        items={items}
+        ariaLabel={t("card.actionsFor", { title: card.title })}
+        onClose={close}
+      />
     </>
   );
 }

@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CLAUDE_MODELS, accountLabel, type BoardAccount } from "@/features/board/api";
 import type { NewCard } from "@/api/types";
+import { useT } from "@/i18n";
 
 /** The native select, styled like the rest of the form controls. */
 export const SELECT_CLASS =
@@ -51,6 +52,7 @@ export function NewCardDialog({
   /** Fired and forgotten — the dialog does not wait for it. */
   onSubmit: (input: NewCard) => void;
 }) {
+  const t = useT();
   const [title, setTitle] = React.useState("");
   const [account, setAccount] = React.useState("");
   const [model, setModel] = React.useState("");
@@ -105,22 +107,21 @@ export function NewCardDialog({
     >
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>New card</DialogTitle>
+          <DialogTitle>{t("newCard.title")}</DialogTitle>
           <DialogDescription>
-            Just the task. The branch, worktree and terminal session are derived from the title
-            inside the runner.
+            {t("newCard.description")}
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="new-card-title">Title</Label>
+            <Label htmlFor="new-card-title">{t("newCard.titleLabel")}</Label>
             <Input
               id="new-card-title"
               autoFocus
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="e.g. fix the totals on the closing screen"
+              placeholder={t("newCard.titlePlaceholder")}
             />
           </div>
 
@@ -130,13 +131,13 @@ export function NewCardDialog({
             aria-expanded={showOptions}
             className="text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
           >
-            {showOptions ? "Hide options" : "Options"}
+            {showOptions ? t("newCard.hideOptions") : t("newCard.options")}
           </button>
 
           {showOptions ? (
             <div className="space-y-4 rounded-md border border-border/60 bg-card/40 p-3">
               <div className="space-y-1.5">
-                <Label htmlFor="new-card-account">Claude account</Label>
+                <Label htmlFor="new-card-account">{t("newCard.account")}</Label>
                 <select
                   id="new-card-account"
                   className={SELECT_CLASS}
@@ -144,7 +145,7 @@ export function NewCardDialog({
                   onChange={(e) => setAccount(e.target.value)}
                 >
                   <option value="">
-                    Inherit ({inheritedAccount ?? defaultAccountLabel})
+                    {t("newCard.inherit", { name: inheritedAccount ?? defaultAccountLabel })}
                   </option>
                   {accounts.map((a) => (
                     <option key={a.slug} value={a.slug}>
@@ -155,14 +156,14 @@ export function NewCardDialog({
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="new-card-model">Model</Label>
+                <Label htmlFor="new-card-model">{t("newCard.model")}</Label>
                 <select
                   id="new-card-model"
                   className={SELECT_CLASS}
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
                 >
-                  <option value="">Account default</option>
+                  <option value="">{t("newCard.accountDefault")}</option>
                   {CLAUDE_MODELS.map((m) => (
                     <option key={m.id} value={m.id}>
                       {m.label}
@@ -172,12 +173,16 @@ export function NewCardDialog({
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="new-card-branch">Branch</Label>
+                <Label htmlFor="new-card-branch">{t("newCard.branch")}</Label>
                 <Input
                   id="new-card-branch"
                   value={branch}
                   onChange={(e) => setBranch(e.target.value)}
-                  placeholder={defaultBranch ? `derived from the title (base ${defaultBranch})` : "derived from the title"}
+                  placeholder={
+                    defaultBranch
+                      ? t("newCard.branchPlaceholderBase", { branch: defaultBranch })
+                      : t("newCard.branchPlaceholder")
+                  }
                   className="font-mono"
                 />
               </div>
@@ -186,10 +191,10 @@ export function NewCardDialog({
 
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={close}>
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button type="submit" disabled={!title.trim()}>
-              Create card
+              {t("newCard.create")}
             </Button>
           </DialogFooter>
         </form>

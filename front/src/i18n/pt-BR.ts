@@ -1,0 +1,634 @@
+/**
+ * Português (Brasil).
+ *
+ * Registro: direto e informal-profissional, do jeito que um dev brasileiro fala no dia a dia —
+ * "Pausar", "Reiniciar", "Concluir", "Aplicar agora". Nomes de produto e termos técnicos ficam como
+ * são (vibehub, GitHub, Claude, MCP, tmux, worktree, Shell, branch, token, runner): traduzir isso
+ * não ajuda ninguém a achar o comando no terminal.
+ *
+ * Uma chave que faltar aqui cai no inglês de `en.ts` — nunca na chave crua.
+ */
+export const ptBR: Record<string, string> = {
+  /* ------------------------------------------------------------------ comum */
+  "common.cancel": "Cancelar",
+  "common.delete": "Excluir",
+  "common.save": "Salvar",
+  "common.add": "Adicionar",
+  "common.remove": "Remover",
+  "common.close": "Fechar",
+  "common.connect": "Conectar",
+  "common.tryAgain": "Tentar de novo",
+  "common.undo": "Desfazer",
+  "common.loading": "Carregando",
+  "common.checkingSession": "Verificando a sessão",
+  "common.checking": "Verificando…",
+  "common.saving": "Salvando…",
+
+  /* ------------------------------------------------------------ erros da API */
+  "error.generic": "Algo deu errado",
+  "apiError.notFound": "não encontrado",
+  "apiError.notAuthenticated": "não autenticado",
+  "apiError.invalidCredentials": "usuário ou senha inválidos",
+  "apiError.runnerUnreachable": "o runner está inacessível",
+  "apiError.forbidden": "sem permissão",
+  "apiError.unauthorized": "não autorizado",
+  "apiError.networkError": "erro de rede",
+  "apiError.internalServerError": "erro interno do servidor",
+  "apiError.badRequest": "requisição inválida",
+  "apiError.conflict": "conflito",
+  "apiError.alreadyExists": "já existe",
+  "apiError.missingFields": "faltam campos",
+  "apiError.invalidToken": "token inválido",
+  "apiError.dockerUnreachable": "o docker está inacessível",
+  "apiError.setupAlreadyDone": "a configuração já foi feita",
+  "apiError.couldNotReadFile": "não deu pra ler o arquivo",
+
+  /* ------------------------------------------------------------------ login */
+  "auth.title": "Entrar",
+  "auth.subtitle": "Esta instalação é privada. Só contas criadas aqui chegam ao board.",
+  "auth.username": "Usuário",
+  "auth.password": "Senha",
+  "auth.signingIn": "Entrando…",
+  "auth.signIn": "Entrar",
+  "auth.invalidCredentials": "Usuário ou senha inválidos",
+  "auth.forgot":
+    "Esqueceu a senha? Não tem recuperação por e-mail — recupere pelo servidor, onde fica o diretório de dados.",
+
+  /* ----------------------------------------------------------------- conta */
+  "account.group": "Conta",
+  "account.fallback": "conta",
+  "account.signedIn": "Conectado como",
+  "account.settings": "Configurações",
+  "account.signOut": "Sair",
+
+  /* ------------------------------------------------------------------- tema */
+  "theme.system": "Sistema",
+  "theme.dark": "Escuro",
+  "theme.light": "Claro",
+  "theme.labelSystem": "Tema: seguir o sistema",
+  "theme.labelDark": "Tema: escuro",
+  "theme.labelLight": "Tema: claro",
+
+  /* ---------------------------------------------------------- configuração */
+  "setup.readingState": "Lendo o estado da configuração",
+  "setup.firstRun": "configuração inicial",
+  "setup.rail": "Etapas da configuração",
+  "setup.githubSkipped": "GitHub pulado — dá pra conectar depois em Configurações.",
+
+  "setup.step.owner.title": "Criar a conta dona",
+  "setup.step.owner.why":
+    "O vibehub entrega shells ao vivo, então ele não pode ficar aberto pra quem achar a porta. Esta primeira conta é dona da instalação e é a única forma de entrar.",
+  "setup.step.runner.title": "Escolher onde o runner vai rodar",
+  "setup.step.runner.why":
+    "Os agentes rodam dentro de um container Docker chamado runner — não na sua máquina e não neste processo web. Escolha o daemon Docker em que ele será construído.",
+  "setup.step.github.title": "Conectar o GitHub",
+  "setup.step.github.why":
+    "Um token deixa o vibehub listar seus repositórios e cloná-los nos worktrees dos cards. Pulando isso, dá pra apontar os projetos pra qualquer URL git na mão.",
+  "setup.step.claude.title": "Entrar no Claude",
+  "setup.step.claude.why":
+    "O runner precisa do login próprio no Claude — os agentes autenticam como você, dentro do container, não por este navegador.",
+  "setup.step.done.title": "Tudo pronto",
+  "setup.step.done.why": "Tudo que o board precisa já está no lugar.",
+
+  "setup.owner.username": "Usuário",
+  "setup.owner.password": "Senha",
+  "setup.owner.confirm": "Confirmar a senha",
+  "setup.owner.tooShort": "No mínimo {n} caracteres.",
+  "setup.owner.hint": "{n} caracteres ou mais.",
+  "setup.owner.mismatch": "As senhas não conferem.",
+  "setup.owner.creating": "Criando…",
+  "setup.owner.submit": "Criar a conta e continuar",
+  "setup.owner.error": "Não deu pra criar a conta",
+
+  "setup.runner.local.title": "O Docker desta máquina",
+  "setup.runner.local.blurb":
+    "O runner é construído no mesmo daemon Docker que este servidor alcança. Não tem mais nada pra configurar.",
+  "setup.runner.ssh.title": "Um host remoto via SSH",
+  "setup.runner.ssh.blurb":
+    "Deixe a interface web leve e ponha o container pesado em outra máquina. O vibehub controla o Docker dela por SSH.",
+  "setup.runner.legend": "Onde fica o runner",
+  "setup.runner.host": "Host",
+  "setup.runner.user": "Usuário SSH",
+  "setup.runner.keyPath": "Caminho da chave privada",
+  "setup.runner.keyHint":
+    "Caminho neste servidor, não na sua máquina. Deixe em branco pra usar o agente SSH padrão.",
+  "setup.runner.output": "Saída do provisionamento",
+  "setup.runner.streaming": "transmitindo",
+  "setup.runner.connecting": "conectando…",
+  "setup.runner.idle": "parado",
+  "setup.runner.logEmpty": "A saída aparece aqui assim que o provisionamento começar.",
+  "setup.runner.provisioning": "Provisionando…",
+  "setup.runner.provision": "Provisionar o runner",
+  "setup.runner.saved": "Configurações salvas. Provisionando o runner…",
+  "setup.runner.up": "Runner no ar.",
+  "setup.runner.didNotComeUp": "O runner não subiu. Confira a saída acima e tente de novo.",
+  "setup.runner.failed": "Falha no provisionamento",
+  "setup.runner.badge.dockerOk": "docker acessível",
+  "setup.runner.badge.dockerBad": "docker inacessível",
+  "setup.runner.badge.running": "rodando",
+  "setup.runner.badge.stopped": "parado",
+  "setup.runner.badge.noContainer": "sem container",
+
+  "setup.claude.stillNot":
+    "Ainda não está logado. Termine o `claude` no runner e confira de novo.",
+  "setup.claude.readError": "Não deu pra ler o estado da configuração",
+  "setup.claude.checkAgain": "Já entrei — conferir de novo",
+  "setup.claude.step1": "Abra um shell no runner:",
+  "setup.claude.step2":
+    "Siga o link que ele imprime no navegador. O login fica guardado dentro do container, então sobrevive a reinícios e todo card reaproveita ele.",
+  "setup.claude.step3": "Volte aqui e confira de novo.",
+  "setup.claude.note":
+    "Usa mais de um login do Claude? Depois, cada conta na tela de Contas ganha um perfil isolado dentro do runner, e dá pra colar um token de longa duração por conta em vez de repetir a dança do navegador.",
+
+  "setup.github.rejected": "O GitHub não aceitou esse token.",
+  "setup.github.storeError": "Não deu pra guardar o token",
+  "setup.github.skip": "Pular por enquanto",
+  "setup.github.labelHint":
+    "Como chamar esta conta. Dá pra adicionar mais depois em Configurações — uma por identidade do GitHub.",
+  "setup.github.tokenHint":
+    "Guardado no cofre deste servidor e nunca devolvido ao navegador — ele só sai como credencial efêmera de clone.",
+  "setup.github.connected": "conectado",
+  "setup.github.signedInAs": "logado como",
+
+  "setup.done.goToBoard": "Ir para o board",
+  "setup.done.body":
+    "Crie um projeto apontando pra um repositório e adicione um card. Cada card ganha o próprio worktree do git e o próprio terminal do Claude ao vivo dentro do runner — o board é só onde você acompanha.",
+
+  /* ----------------------------------------------------------------- github */
+  "github.pasteToken": "Cole um token — não precisa logar.",
+  "github.pasteTokenRest":
+    " PAT fine-grained com Contents de leitura/escrita nos repos que você quiser, ou um token classic com ",
+  "github.accountName": "Nome da conta",
+  "github.accountNamePlaceholder": "pessoal",
+  "github.accessToken": "Token de acesso",
+  "github.tokenPlaceholder": "github_pat_… ou ghp_…",
+
+  /* ------------------------------------------------------------ caixa de log */
+  "log.waiting": "Esperando a saída…",
+  "log.aria": "Saída do provisionamento",
+  "log.finished": "— provisionamento concluído —",
+
+  /* ---------------------------------------------------------------- colunas */
+  "column.backlog": "Backlog",
+  "column.paused": "Pausados",
+  "column.waiting": "Aguardando",
+  "column.working": "Trabalhando",
+  "column.done": "Feito",
+  "column.backlog.hint": "Ainda não começou. Abrir um card tira ele daqui.",
+  "column.paused.hint": "Sessão encerrada a pedido — reabrir retoma.",
+  "column.waiting.hint": "O agente está esperando você. Movido pra cá pelo runner.",
+  "column.working.hint": "O agente está trabalhando. Movido pra cá pelo runner.",
+  "column.done.hint": "Concluído. Sempre um movimento manual.",
+
+  "status.working": "Trabalhando",
+  "status.waitingForYou": "Aguardando você",
+  "status.paused": "Pausado",
+
+  /* ------------------------------------------------------------------ board */
+  "board.newCard": "Novo card",
+  "board.newCardHint": "Novo card (⌘K ou Ctrl+T)",
+  "board.cards.one": "{n} card",
+  "board.cards.other": "{n} cards",
+  "board.projects.one": "{n} projeto",
+  "board.projects.other": "{n} projetos",
+  "board.empty": "vazio",
+  "board.noProjects": "Nenhum projeto ainda",
+  "board.noProjectsBody":
+    "Aponte um projeto pra um repositório e cada card vira um terminal do Claude no próprio worktree.",
+  "board.createFirstProject": "Criar o primeiro projeto",
+  "board.openMenu": "Abrir os projetos e cards",
+  "board.projectsButton": "Projetos",
+  "board.defaultAccountFallback": "o padrão do runner",
+  "board.deleteProject.title": "Excluir “{name}”?",
+  "board.deleteProject.body":
+    "Todo card deste projeto vai junto: as sessões são encerradas e os worktrees, descartados. As branches e os commits continuam no repositório.",
+  "board.deleteProject.confirm": "Excluir projeto",
+
+  "kanban.accountDialog.title": "Conta Claude do card “{title}”",
+  "kanban.accountDialog.body":
+    "Trocar a conta reinicia a sessão do Claude deste card — o trabalho no worktree fica.",
+  "kanban.accountDialog.label": "Conta",
+  "kanban.accountDialog.inherit": "Padrão (herda “{slug}” do projeto)",
+  "kanban.accountDialog.default": "Padrão ({label})",
+  "kanban.accountDialog.runnerAccount": "a conta do runner",
+  "kanban.accountDialog.switch": "Trocar conta",
+  "kanban.deleteCard.title": "Excluir “{title}”?",
+  "kanban.deleteCard.body":
+    "A sessão é encerrada e o worktree é descartado. A branch e os commits continuam no repositório — só se perde o que não foi commitado no worktree.",
+
+  /* -------------------------------------------------------------- card tile */
+  "card.finishToDone": "Concluir (mover pra Feito)",
+  "card.pauseEndsSession": "Pausar (encerra a sessão)",
+  "card.claudeAccountMenu": "Conta Claude…",
+  "card.deleteCard": "Excluir card",
+  "card.pause": "Pausar",
+  "card.restart": "Reiniciar",
+  "card.finish": "Concluir",
+  "card.pausingWhenIdle": "Pausando quando ficar livre…",
+  "card.pausingWhenIdleHint":
+    "A sessão encerra assim que o turno atual terminar — nada é interrompido.",
+  "card.updatingWhenFinishes": "Atualizando quando terminar…",
+  "card.updatingWhenFinishesHint":
+    "O cérebro ou o conjunto de MCPs mudou enquanto ele trabalhava — reinicia sozinho quando ficar livre, sem interromper.",
+  "card.projectChip": "Projeto: {name}",
+  "card.ownAccount": "A conta Claude deste card",
+  "card.actionsFor": "Ações de {title}",
+
+  /* ---------------------------------------------------------------- sidebar */
+  "sidebar.projects": "Projetos",
+  "sidebar.newProject": "Novo projeto",
+  "sidebar.newCardIn": "Novo card em {name}",
+  "sidebar.newCardHint": "Novo card (⌘K no projeto selecionado)",
+  "sidebar.noProjects": "Nenhum projeto ainda.",
+  "sidebar.noRepository": "sem repositório",
+  "sidebar.renameCard": "Renomear card",
+  "sidebar.showLess": "mostrar menos",
+  "sidebar.showMore": "mostrar mais ({n})",
+  "sidebar.noActiveCards": "Nenhum card ativo",
+  "sidebar.moveUp": "Mover pra cima",
+  "sidebar.moveDown": "Mover pra baixo",
+  "sidebar.deleteProject": "Excluir projeto…",
+  "sidebar.actionsForProject": "Ações de {name}",
+
+  /* ---------------------------------------------------------- tela do card */
+  "cardView.refreshError": "Não deu pra atualizar o card no runner",
+  "cardView.restarting": "Reiniciando — a conversa continua de onde parou.",
+  "cardView.restartError": "Não deu pra reiniciar o terminal",
+  "cardView.accountSwitched": "Conta trocada — a conversa continua.",
+  "cardView.accountSwitchError": "Não deu pra trocar a conta",
+  "cardView.modelSwitched": "Trocado pro {label} — a conversa continua.",
+  "cardView.modelSwitchError": "Não deu pra trocar o modelo",
+  "cardView.accountDefault": "o padrão da conta",
+  "cardView.imageTooBig": "Essa imagem passa de 10 MB.",
+  "cardView.uploadingImage": "Enviando a imagem…",
+  "cardView.uploadError": "Não deu pra enviar a imagem",
+  "cardView.openCardList": "Abrir a lista de cards",
+  "cardView.board": "Board",
+  "cardView.cardTitle": "Título do card",
+  "cardView.clickToRename": "Clique pra renomear",
+  "cardView.opening": "Abrindo o card…",
+  "cardView.pause": "Pausar",
+  "cardView.pauseHint":
+    "Encerra a sessão no runner — zero consumo enquanto está parado. Reabrir retoma a mesma conversa.",
+  "cardView.restart": "Reiniciar",
+  "cardView.restartHint":
+    "Mata e recria o processo do Claude no mesmo worktree. A conversa é retomada e os MCPs, o cérebro e o modelo são relidos.",
+  "cardView.done": "Concluir",
+  "cardView.doneHint": "Move o card pra Feito e volta pro board",
+  "cardView.browser": "Navegador",
+  "cardView.shell": "Shell",
+  "cardView.openPane": "Abrir o {label}",
+  "cardView.closePane": "Fechar o {label}",
+  "cardView.model": "Modelo",
+  "cardView.modelInUse": "Modelo em uso nesta sessão",
+  "cardView.useAccountDefault": "Usar o padrão da conta",
+  "cardView.claudeAccount": "Conta Claude",
+  "cardView.switchAccountHint": "Trocar de conta — a sessão reinicia na mesma conversa",
+  "cardView.prepareError": "Não deu pra preparar este card no runner",
+  "cardView.loadingCard": "Carregando o card…",
+  "cardView.preparing": "Preparando o worktree e a sessão…",
+  "cardView.firstCardNote":
+    "O primeiro card de um projeto clona o repositório inteiro dentro do runner, e isso pode levar alguns minutos. Todo card depois desse abre em segundos.",
+  "cardView.terminalFor": "Terminal de {title}",
+  "cardView.cardFallback": "card",
+  "cardView.shellHeader": "Shell · bash no worktree",
+  "cardView.closeShell": "Fechar o shell",
+  "cardView.shellAria": "Shell",
+  "cardView.terminalState": "Terminal {state}",
+  "cardView.implicitModelTitle": "O padrão do Claude Code até a primeira resposta",
+
+  "conn.connected": "conectado",
+  "conn.reconnecting": "reconectando",
+  "conn.connecting": "conectando",
+  "conn.disconnected": "desconectado",
+
+  /* --------------------------------------------------------------- composer */
+  "composer.placeholder": "",
+  "composer.aria": "Escreva aqui — Enter envia, Shift+Enter quebra linha",
+  "composer.send": "Enviar",
+  "composer.recordingTooBig": "Essa gravação passa de 20 MB.",
+  "composer.transcribing": "Transcrevendo…",
+  "composer.nothingSaid": "Não foi dito nada nessa gravação.",
+  "composer.transcribeError": "Não deu pra transcrever essa gravação",
+  "composer.cannotRecord": "Este navegador não grava áudio.",
+  "composer.micBlocked": "Não deu pra acessar o microfone — a permissão está bloqueada?",
+  "composer.transcribingShort": "transcrevendo…",
+  "composer.discard": "Descartar a gravação",
+  "composer.discardHint": "Descartar — nada é transcrito e nada é escrito",
+  "composer.finish": "Concluir a gravação",
+  "composer.finishHint":
+    "Concluir — transcreve no campo; nada é enviado até você apertar Enter",
+  "composer.record": "Gravar uma mensagem",
+  "composer.recordHint": "Gravar uma mensagem — ela é transcrita no campo, não enviada",
+  "composer.voiceUnavailable":
+    "Entrada por voz não configurada — adicione uma chave da OpenAI em Configurações",
+
+  /* --------------------------------------------------------------- terminal */
+  "terminal.aria": "Terminal",
+  "terminal.smaller": "Texto menor",
+  "terminal.smallerHint": "Texto menor (Cmd/Ctrl −)",
+  "terminal.reset": "Restaurar o tamanho do texto",
+  "terminal.resetHint": "Restaurar o tamanho do texto (Cmd/Ctrl 0)",
+  "terminal.larger": "Texto maior",
+  "terminal.largerHint": "Texto maior (Cmd/Ctrl +)",
+
+  /* ------------------------------------------------------------ faixa do runner */
+  "runner.checking": "Verificando o runner…",
+  "runner.chip": "runner",
+  "runner.shellHeader": "Shell do runner",
+  "runner.closeShell": "Fechar o shell do runner",
+  "runner.openOwnShell": "Abrir o shell do runner",
+  "runner.closeOwnShell": "Fechar o shell do runner",
+  "runner.closeShellShort": "Fechar o shell",
+  "runner.start": "Iniciar",
+  "runner.logs": "Logs",
+  "runner.reprovision": "Reprovisionar",
+  "runner.provision": "Provisionar o runner",
+  "runner.noOutput": "Nenhuma saída ainda.",
+  "runner.provisioningToast": "Provisionando o runner — a saída está logo abaixo.",
+  "runner.provisionStartError": "Não deu pra iniciar o provisionamento",
+  "runner.started": "Runner iniciado.",
+  "runner.startError": "Não deu pra iniciar o runner",
+  "runner.titleOk": "{container}{where} — rodando, claude instalado",
+  "runner.onHost": " em {host}",
+  "runner.provisioningMsg": "Provisionando o runner…",
+  "runner.dockerNoAnswer":
+    "O daemon do Docker{where} não respondeu, então nada pode ser provisionado ainda.",
+  "runner.noContainer":
+    "Ainda não existe o container {container} — os cards precisam dele pra abrir um terminal.",
+  "runner.stopped": "{container} existe, mas está parado.",
+  "runner.claudeMissing1": "O runner está no ar, mas o ",
+  "runner.claudeMissing2":
+    " não está instalado nele. Reprovisione, ou abra o shell do runner e rode ",
+  "runner.claudeMissing3": " uma vez pra logar.",
+
+  /* -------------------------------------------------------------------- vnc */
+  "vnc.state.idle": "desligado",
+  "vnc.state.starting": "iniciando…",
+  "vnc.state.connecting": "conectando…",
+  "vnc.state.live": "ao vivo",
+  "vnc.state.error": "erro",
+  "vnc.state.closed": "fechado",
+  "vnc.header": "Navegador · Chromium do card",
+  "vnc.disconnect": "Desconectar",
+  "vnc.disconnectAria": "Desconectar o navegador",
+  "vnc.disconnectHint": "Desconectar e parar o navegador no runner",
+  "vnc.startError": "Não deu pra iniciar o navegador do card",
+  "vnc.loadError": "Não deu pra carregar o cliente VNC",
+  "vnc.dropped": "A conexão com o navegador caiu.",
+  "vnc.starting": "Iniciando o navegador no runner…",
+  "vnc.connecting": "Conectando…",
+  "vnc.intro":
+    "O Chromium do próprio card, ao vivo. Você pode assumir o teclado — digitar uma senha, resolver um captcha — sem expulsar o agente, que dirige esse mesmo navegador.",
+
+  /* ------------------------------------------------------------- novo card */
+  "newCard.title": "Novo card",
+  "newCard.description":
+    "Só a tarefa. A branch, o worktree e a sessão do terminal saem do título, dentro do runner.",
+  "newCard.titleLabel": "Título",
+  "newCard.titlePlaceholder": "ex.: corrigir os totais na tela de fechamento",
+  "newCard.hideOptions": "Ocultar opções",
+  "newCard.options": "Opções",
+  "newCard.account": "Conta Claude",
+  "newCard.inherit": "Herdar ({name})",
+  "newCard.model": "Modelo",
+  "newCard.accountDefault": "Padrão da conta",
+  "newCard.branch": "Branch",
+  "newCard.branchPlaceholderBase": "derivada do título (base {branch})",
+  "newCard.branchPlaceholder": "derivada do título",
+  "newCard.create": "Criar card",
+
+  /* ---------------------------------------------------------------- projeto */
+  "project.settingsTitle": "Configurações do projeto",
+  "project.newTitle": "Novo projeto",
+  "project.description":
+    "Um projeto agrupa cards. Cada card ganha o próprio worktree e o próprio terminal do Claude dentro do runner.",
+  "project.name": "Nome",
+  "project.namePlaceholder": "ex.: billing-service",
+  "project.account": "Conta",
+  "project.githubAccount": "Conta do GitHub",
+  "project.connectionHint": "De qual conta do GitHub é o repositório deste projeto.",
+  "project.repository": "Repositório",
+  "project.searchRepos": "Buscar nos seus repositórios…",
+  "project.loadingRepos": "Carregando os repositórios…",
+  "project.noRepo": "Sem repositório (diretório avulso)",
+  "project.private": " · privado",
+  "project.nothingMatched": "Nada bateu com “{q}”.",
+  "project.cloneUrl": "URL de clone",
+  "project.noGithubHint":
+    "Nenhuma conta do GitHub está conectada, então não tem de onde escolher. Adicione uma em Configurações — é um token colado, não um login — ou cole uma URL de clone aqui, ou deixe vazio e os cards abrem num diretório avulso.",
+  "project.baseBranch": "Branch base",
+  "project.branchHint": "O worktree de todo card é cortado dessa branch.",
+  "project.defaultAccount": "Conta Claude padrão",
+  "project.runnerDefault": "Padrão do runner",
+  "project.save": "Salvar projeto",
+  "project.create": "Criar projeto",
+
+  /* ---------------------------------------------------------- configurações */
+  "settings.title": "Configurações",
+  "settings.description":
+    "As escolhas desta instalação. Segredos ficam guardados no cofre e nunca são mostrados de novo.",
+  "settings.language": "Idioma",
+  "settings.languageLabel": "Idioma da interface",
+  "settings.languageHint": "Vale na hora, neste navegador.",
+  "settings.git": "Identidade do Git",
+  "settings.gitHint": "Como o runner assina os commits, em todo card.",
+  "settings.name": "Nome",
+  "settings.email": "E-mail",
+  "settings.agent": "Agente",
+  "settings.autonomous": "Rodar sem pedir permissão",
+  "settings.autonomousHint":
+    "O runner é um container isolado — ele alcança só o que você conectou. Desligado = o Claude pergunta, e o card espera.",
+  "settings.defaultLabel": "Nome da conta padrão",
+  "settings.defaultLabelHint":
+    "Como o perfil embutido (/root/.claude) aparece nos seletores.",
+  "settings.voice": "Entrada por voz",
+  "settings.transcribeLanguage": "Idioma da transcrição",
+  "settings.transcribePlaceholder": "auto (ou um código de duas letras: pt, en, es…)",
+  "settings.githubAccounts": "Contas do GitHub",
+  "settings.githubHint":
+    "Adicione uma conta por identidade do GitHub — a sua pessoal e a da sua organização, por exemplo. Cada projeto escolhe com qual clona; o token só sai do cofre como credencial efêmera de clone.",
+  "settings.noConnection":
+    "Nenhuma conta conectada ainda. Os projetos não conseguem escolher um repositório enquanto não tiver uma.",
+  "settings.addAccount": "Adicionar conta",
+  "settings.accountLabel": "Nome da conta",
+  "settings.accountLabelPlaceholder": "pessoal, org acme…",
+  "settings.githubToken": "Token do GitHub",
+  "settings.removeAccount": "Remover {label}",
+  "settings.fineGrained": " · fine-grained",
+  "settings.tokenNotUsable": "token inutilizável",
+  "settings.voiceKeys": "Chaves de voz",
+  "settings.voiceHint1": "O Whisper (OpenAI) transcreve as gravações do campo de mensagem",
+  "settings.keyStored": " — chave guardada",
+  "settings.noKey": " — sem chave, microfone indisponível",
+  "settings.voiceHint2":
+    "Uma chave do Claude adiciona uma revisão que usa o cérebro como glossário",
+  "settings.notStored": " — não guardada",
+  "settings.openaiKey": "Chave da API da OpenAI",
+  "settings.openaiReplace": "Chave da OpenAI (cole pra substituir)",
+  "settings.openaiPlaceholder": "Chave da OpenAI (sk-…)",
+  "settings.anthropicKey": "Chave da API da Anthropic",
+  "settings.anthropicReplace": "Chave da Anthropic (cole pra substituir)",
+  "settings.anthropicPlaceholder": "Chave da Anthropic (sk-ant-…), opcional",
+  "settings.removeKeys": "Remover as chaves",
+  "settings.saveKeys": "Salvar as chaves",
+
+  /* ----------------------------------------------------------------- contas */
+  "accounts.aria": "Contas Claude",
+  "accounts.title": "Contas Claude",
+  "accounts.description1":
+    "Cada conta é um login separado do Claude dentro do runner. Abra um card nela e rode",
+  "accounts.description2":
+    "uma vez — ou cole um token de longa duração e pule a dança do navegador em todo lugar.",
+  "accounts.defaultName": "Nome da conta padrão",
+  "accounts.tokenStoredSuffix": " · token guardado",
+  "accounts.tokenFor": "Token de longa duração — {name}",
+  "accounts.tokenStored": "Token guardado",
+  "accounts.pasteToken": "Cole um token de longa duração",
+  "accounts.deleteAccount": "Excluir a conta {label}",
+  "accounts.none": "Sem contas extras — todo card usa o perfil embutido do runner.",
+  "accounts.nameAria": "Nome da conta",
+  "accounts.namePlaceholder": "Nome da conta (ex.: Pessoal)",
+  "accounts.tokenDialogBody1": "No terminal de qualquer card rode",
+  "accounts.tokenDialogBody2":
+    " e cole o resultado aqui. Ele fica guardado no cofre deste servidor e nunca volta pro navegador.",
+  "accounts.tokenAlready": "Já tem um token guardado. Colar um novo substitui.",
+  "accounts.tokenAria": "Token de longa duração",
+  "accounts.removeToken": "Remover o token",
+  "accounts.saveToken": "Salvar o token",
+
+  /* ---------------------------------------------------------------- cérebro */
+  "brain.aria": "Cérebro",
+  "brain.buttonTitle": "Cérebro — instruções que todo card recebe",
+  "brain.title": "Cérebro — instruções que todo card recebe",
+  "brain.description":
+    "Um CLAUDE.md, escrito na raiz de todo perfil do Claude no runner, então ele carrega em todo terminal e em todo diretório. Salvar empurra pra todo lugar: os terminais livres reiniciam agora, os ocupados pegam quando terminarem.",
+  "brain.textAria": "Texto do cérebro",
+  "brain.restartIdle": "Reiniciar os terminais livres",
+  "brain.restartIdleHint":
+    "Reinicia só os terminais que estão livres — um card no meio de um turno nunca é interrompido",
+  "brain.resetTitle": "Substituir o texto pelo que vem com o vibehub",
+  "brain.reset": "Restaurar o padrão",
+  "brain.applyTitle": "Reescrever em todo perfil do runner, sem salvar um texto novo",
+  "brain.applyEverywhere": "Aplicar em todo lugar",
+  "brain.subject": "Cérebro",
+  "brain.resetSubject": "Cérebro restaurado pro padrão —",
+  "brain.stampNever": "usando o padrão embutido (nunca salvo)",
+  "brain.stampSaved": "salvo",
+  "brain.stampBy": "salvo em {when} por {by}",
+  "brain.stampAt": "salvo em {when}",
+  "brain.appliedTo": "Aplicado a {n} perfil(is)",
+  "brain.appliedRestarted":
+    "{where}. {restarted} terminal(is) reiniciado(s), {skipped} seguem trabalhando.",
+  "brain.appliedPlain": "{where}.",
+
+  /* ------------------------------------------------------ resultado do apply */
+  "applyOutcome.notPushed":
+    "{subject} — salvo, mas não deu pra empurrar pro runner. Use “Aplicar em todo lugar”.",
+  "applyOutcome.savedApplied": "{subject} — salvo e aplicado.",
+  "applyOutcome.saved": "{subject} — salvo, {now}.",
+  "applyOutcome.savedPending.one":
+    "{subject} — salvo, {now}, {pending} atualiza quando terminar.",
+  "applyOutcome.savedPending.other":
+    "{subject} — salvo, {now}, {pending} atualizam quando terminarem.",
+  "applyOutcome.now.one": "aplicado a {n} terminal",
+  "applyOutcome.now.other": "aplicado a {n} terminais",
+
+  /* -------------------------------------------------------------------- mcp */
+  "mcp.aria": "MCP",
+  "mcp.buttonTitle": "Servidores MCP",
+  "mcp.title": "Servidores MCP",
+  "mcp.description":
+    "Injetados em todo perfil do Claude no runner, então trocar a conta de um card nunca perde uma conexão. Os valores secretos ficam no cofre deste servidor, nunca no navegador.",
+  "mcp.none": "Nenhum servidor MCP ainda.",
+  "mcp.nameAria": "Nome do MCP",
+  "mcp.namePlaceholder": "Nome (ex.: filesystem)",
+  "mcp.transport": "Transporte",
+  "mcp.command": "Comando",
+  "mcp.commandPlaceholder": "Comando (ex.: npx)",
+  "mcp.args": "Argumentos",
+  "mcp.argsPlaceholder": "Argumentos, separados por espaço",
+  "mcp.entryName": "Nome {n}",
+  "mcp.entryValue": "Valor {n}",
+  "mcp.envPlaceholder": "API_TOKEN",
+  "mcp.headerPlaceholder": "Header (ex.: Authorization)",
+  "mcp.valuePlaceholder": "valor (vai pro cofre)",
+  "mcp.removeEntry": "Remover a entrada {n}",
+  "mcp.addVariable": "variável",
+  "mcp.addHeader": "header",
+  "mcp.addWhat": "Adicionar {what}",
+  "mcp.addServer": "Adicionar servidor",
+  "mcp.addMcpServer": "Adicionar servidor MCP",
+  "mcp.restartIdle": "Reiniciar os terminais livres",
+  "mcp.restartIdleHint":
+    "Reinicia só os terminais que estão livres — um card no meio de um turno nunca é interrompido",
+  "mcp.applyNow": "Aplicar agora",
+  "mcp.secretsConfigured.one": "{n} segredo configurado",
+  "mcp.secretsConfigured.other": "{n} segredos configurados",
+  "mcp.missingValue": "falta um valor: {names}",
+  "mcp.editValues": "Editar os valores de {name}",
+  "mcp.editValuesTitle": "Editar os valores guardados",
+  "mcp.removeServer": "Remover {name}",
+  "mcp.editorHint":
+    "Preencha só o que quiser (re)definir — um campo vazio mantém o valor que já está no cofre.",
+  "mcp.newValueFor": "Novo valor para {name}",
+  "mcp.configuredReplace": "configurado — digite pra substituir",
+  "mcp.missingSet": "faltando — defina um valor",
+  "mcp.saveValues": "Salvar os valores",
+  "mcp.subject": "Configuração MCP",
+  "mcp.valuesSubject.one": "{n} valor em “{name}”",
+  "mcp.valuesSubject.other": "{n} valores em “{name}”",
+
+  /* --------------------------------------------------------------- avisos */
+  "toast.cardCreateError": "Não deu pra criar o card",
+  "toast.projectDeleted": "Projeto excluído.",
+  "toast.projectDeleteError": "Não deu pra excluir o projeto",
+  "toast.projectReorderError": "Não deu pra reordenar os projetos",
+  "toast.cardMoveError": "Não deu pra mover o card",
+  "toast.cardPaused": "Pausado — reabrir o card retoma a mesma conversa.",
+  "toast.cardPauseError": "Não deu pra pausar o card",
+  "toast.cardRestarting": "Reiniciando o terminal… a conversa retoma na próxima abertura.",
+  "toast.cardRestartError": "Não deu pra reiniciar o card",
+  "toast.cardDeleted": "Card excluído.",
+  "toast.cardDeleteError": "Não deu pra excluir o card",
+  "toast.cardAccountSwitched":
+    "Conta trocada — a sessão do Claude reinicia na próxima abertura.",
+  "toast.cardAccountSwitchError": "Não deu pra trocar a conta do card",
+  "toast.cardFinished": "“{title}” concluído — parei de acompanhar o terminal.",
+  "toast.cardFinishedShort": "“{title}” concluído.",
+  "toast.cardRenameError": "Não deu pra renomear o card",
+  "toast.projectSaved": "Projeto “{name}” salvo.",
+  "toast.projectCreated": "Projeto “{name}” criado.",
+  "toast.projectSaveError": "Não deu pra salvar o projeto",
+  "toast.projectCreateError": "Não deu pra criar o projeto",
+  "toast.settingsSaved": "Configurações salvas.",
+  "toast.githubAdded": "{label} ({login}) adicionada.",
+  "toast.githubRemoved": "Conta removida.",
+  "toast.voiceKeysUpdated": "Chaves de voz atualizadas.",
+  "toast.defaultAccountRenamed": "Conta padrão renomeada.",
+  "toast.defaultAccountRenameError": "Não deu pra renomear a conta padrão",
+  "toast.accountCreated": "Conta “{name}” criada ({slug}).",
+  "toast.accountCreateError": "Não deu pra criar a conta",
+  "toast.accountDeleted": "Conta excluída.",
+  "toast.accountInUse": "Essa conta ainda está em uso — mova os cards dela primeiro",
+  "toast.tokenStored": "Token guardado no cofre e plantado nos perfis do runner.",
+  "toast.tokenStoreError": "Não deu pra guardar o token",
+  "toast.tokenRemoved": "Token removido.",
+  "toast.tokenRemoveError": "Não deu pra remover o token",
+  "toast.brainSaveError": "Não deu pra salvar o cérebro",
+  "toast.brainResetError": "Não deu pra restaurar o cérebro",
+  "toast.brainApplyError": "Não deu pra aplicar o cérebro",
+  "toast.mcpAdded": "“{name}” adicionado. Aplique pra injetar nos perfis do runner.",
+  "toast.mcpAddError": "Não deu pra adicionar o servidor MCP",
+  "toast.mcpRemoved": "Removido. Ele sai dos perfis no próximo apply.",
+  "toast.mcpRemoveError": "Não deu pra remover o servidor MCP",
+  "toast.mcpApplied":
+    "Aplicado. {restarted} terminal(is) reiniciado(s), {skipped} seguem trabalhando.",
+  "toast.mcpApplyError": "Não deu pra aplicar os servidores MCP",
+  "toast.mcpValuesSaveError": "Não deu pra salvar os valores",
+
+  /* ------------------------------------------------------------ confirmações */
+  "confirm.restartWorking": "O Claude está trabalhando — reiniciar vai interromper. Continuar?",
+  "confirm.restartWorkingAgent":
+    "O agente está trabalhando — reiniciar interrompe. Continuar?",
+};

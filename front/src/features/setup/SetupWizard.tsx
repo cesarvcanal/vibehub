@@ -18,6 +18,7 @@ import {
   type SetupStepId,
   type WizardOverrides,
 } from "@/features/setup/steps";
+import { t as translate, useT } from "@/i18n";
 
 function metaFor(id: SetupStepId) {
   // SETUP_STEPS covers every SetupStepId, so this always resolves; the fallback keeps TS honest
@@ -35,6 +36,7 @@ function metaFor(id: SetupStepId) {
 export function SetupWizard() {
   const navigate = useNavigate();
   const { setup, isLoading, refreshSetup, refreshSession } = useAuth();
+  const t = useT();
   const [overrides, setOverrides] = React.useState<WizardOverrides>({});
 
   const step = currentStep(setup, overrides);
@@ -47,14 +49,14 @@ export function SetupWizard() {
 
   const skipGithub = React.useCallback(() => {
     setOverrides((prev) => ({ ...prev, githubSkipped: true }));
-    toast("GitHub skipped — you can connect it later from Settings.");
+    toast(translate("setup.githubSkipped"));
   }, []);
 
   const finish = React.useCallback(() => {
     navigate(Paths.BOARD, { replace: true });
   }, [navigate]);
 
-  if (isLoading && !setup) return <FullScreenLoader label="Reading setup state" />;
+  if (isLoading && !setup) return <FullScreenLoader label={t("setup.readingState")} />;
 
   // Somebody navigated here on a finished install: send them where they meant to go.
   if (!shouldRunWizard(setup)) return <Navigate to={Paths.BOARD} replace />;
@@ -63,7 +65,7 @@ export function SetupWizard() {
     <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col px-6 py-10">
       <header className="mb-8 flex items-baseline justify-between gap-4">
         <Logo />
-        <p className="font-mono text-xs text-muted-foreground">first-run setup</p>
+        <p className="font-mono text-xs text-muted-foreground">{t("setup.firstRun")}</p>
       </header>
 
       <div className="grid flex-1 gap-8 md:grid-cols-[15rem_minmax(0,1fr)]">

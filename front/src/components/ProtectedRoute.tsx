@@ -2,6 +2,7 @@ import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/providers/auth";
 import { FullScreenLoader } from "@/components/FullScreenLoader";
 import { Paths } from "@/lib/paths";
+import { useT } from "@/i18n";
 
 /**
  * Gate for everything behind a session.
@@ -12,8 +13,9 @@ import { Paths } from "@/lib/paths";
 export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isFresh, isLoading } = useAuth();
   const location = useLocation();
+  const t = useT();
 
-  if (isLoading) return <FullScreenLoader label="Checking session" />;
+  if (isLoading) return <FullScreenLoader label={t("common.checkingSession")} />;
   if (isFresh) return <Navigate to={Paths.SETUP} replace />;
   if (!isAuthenticated) return <Navigate to={Paths.LOGIN} state={{ from: location }} replace />;
 

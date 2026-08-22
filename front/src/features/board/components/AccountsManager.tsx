@@ -21,6 +21,7 @@ import {
   boardApi,
   defaultAccountLabelOr,
 } from "@/features/board/api";
+import { t as translate, useT } from "@/i18n";
 
 /**
  * Where the runner's built-in profile actually lives. Shown verbatim under the default row for the
@@ -47,6 +48,7 @@ interface TokenTarget {
  * comes back, so the UI only ever knows whether one is stored.
  */
 export function AccountsManager() {
+  const t = useT();
   const queryClient = useQueryClient();
   const [open, setOpen] = React.useState(false);
   const [name, setName] = React.useState("");
@@ -81,9 +83,9 @@ export function AccountsManager() {
     onSuccess: () => {
       setLabelDraft(null);
       invalidate();
-      toast.success("Default account renamed.");
+      toast.success(translate("toast.defaultAccountRenamed"));
     },
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not rename the default account")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.defaultAccountRenameError"))),
   });
 
   const createMutation = useMutation({
@@ -91,20 +93,20 @@ export function AccountsManager() {
     onSuccess: (account) => {
       invalidate();
       setName("");
-      toast.success(`Account “${accountLabel(account)}” created (${account.slug}).`);
+      toast.success(translate("toast.accountCreated", { name: accountLabel(account), slug: account.slug }));
     },
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not create the account")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.accountCreateError"))),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (slug: string) => boardApi.deleteAccount(slug),
     onSuccess: () => {
       invalidate();
-      toast.success("Account deleted.");
+      toast.success(translate("toast.accountDeleted"));
     },
     // The server refuses while a card or project still points at it, and says how many.
     onError: (error) =>
-      toast.error(apiErrorMessage(error, "That account is still in use — move its cards first")),
+      toast.error(apiErrorMessage(error, translate("toast.accountInUse"))),
   });
 
   const tokenMutation = useMutation({
@@ -113,9 +115,9 @@ export function AccountsManager() {
       void queryClient.invalidateQueries({ queryKey: ACCOUNT_TOKENS_KEY });
       setToken("");
       setTokenTarget(null);
-      toast.success("Token stored in the vault and planted in the runner profiles.");
+      toast.success(translate("toast.tokenStored"));
     },
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not store the token")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.tokenStoreError"))),
   });
 
   const tokenDeleteMutation = useMutation({
@@ -123,9 +125,9 @@ export function AccountsManager() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ACCOUNT_TOKENS_KEY });
       setTokenTarget(null);
-      toast.success("Token removed.");
+      toast.success(translate("toast.tokenRemoved"));
     },
-    onError: (error) => toast.error(apiErrorMessage(error, "Could not remove the token")),
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.tokenRemoveError"))),
   });
 
   function saveLabel() {
@@ -159,7 +161,7 @@ export function AccountsManager() {
               ? "h-7 w-7 shrink-0 text-emerald-400 hover:text-emerald-300"
               : "h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
           }
-          aria-label={`Long-lived token — ${target.name}`}
+          aria-label={t("accounts.tokenFor", { name: target.name })}
           onClick={() => {
             setToken("");
             setTokenTarget(target);
@@ -168,7 +170,9 @@ export function AccountsManager() {
           <KeyRound className="h-4 w-4" />
         </Button>
       </TooltipTrigger>
-      <TooltipContent>{target.hasToken ? "Token stored" : "Paste a long-lived token"}</TooltipContent>
+      <TooltipContent>
+        {target.hasToken ? t("accounts.tokenStored") : t("accounts.pasteToken")}
+      </TooltipContent>
     </Tooltip>
   );
 
@@ -180,8 +184,8 @@ export function AccountsManager() {
         variant="ghost"
         size="icon"
         className="h-7 w-7 text-muted-foreground hover:text-foreground"
-        aria-label="Claude accounts"
-        title="Claude accounts"
+        aria-label={t("accounts.aria")}
+        title={t("accounts.aria")}
         onClick={() => setOpen(true)}
       >
         <Users className="h-4 w-4" />
@@ -190,11 +194,10 @@ export function AccountsManager() {
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Claude accounts</DialogTitle>
+            <DialogTitle>{t("accounts.title")}</DialogTitle>
             <DialogDescription>
-              Each account is a separate Claude login inside the runner. Open a card on it and run
-              <span className="font-mono"> /login</span> once — or paste a long-lived token and skip
-              the browser dance everywhere.
+              {t("accounts.description1")}
+              <span className="font-mono"> /login</span> {t("accounts.description2")}
             </DialogDescription>
           </DialogHeader>
 
@@ -207,7 +210,7 @@ export function AccountsManager() {
               <div className="flex items-center gap-2.5 px-3 py-2">
                 <div className="min-w-0 flex-1 space-y-1.5">
                   <Input
-                    aria-label="Default account name"
+                    aria-label={t("accounts.defaultName")}
                     className="h-7 text-sm"
                     placeholder={DEFAULT_ACCOUNT_SLUG}
                     value={labelValue}
@@ -220,7 +223,7 @@ export function AccountsManager() {
                   />
                   <div className="truncate font-mono text-[11px] text-muted-foreground">
                     {DEFAULT_PROFILE_PATH}
-                    {tokens?.defaultHasToken ? " · token stored" : ""}
+                    {tokens?.defaultHasToken ? t("accounts.tokenStoredSuffix") : ""}
                   </div>
                 </div>
                 {tokenButton({
@@ -241,7 +244,7 @@ export function AccountsManager() {
                       </div>
                       <div className="truncate font-mono text-[11px] text-muted-foreground">
                         {account.slug}
-                        {hasToken ? " · token stored" : ""}
+                        {hasToken ? t("accounts.tokenStoredSuffix") : ""}
                       </div>
                     </div>
                     {tokenButton({ slug: account.slug, name: label, hasToken })}
@@ -249,7 +252,7 @@ export function AccountsManager() {
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
-                      aria-label={`Delete account ${label}`}
+                      aria-label={t("accounts.deleteAccount", { label })}
                       disabled={deleteMutation.isPending}
                       onClick={() => deleteMutation.mutate(account.slug)}
                     >
@@ -261,7 +264,7 @@ export function AccountsManager() {
 
               {accounts.length === 0 ? (
                 <p className="px-3 py-2 text-sm text-muted-foreground">
-                  No extra accounts — every card uses the runner's built-in profile.
+                  {t("accounts.none")}
                 </p>
               ) : null}
             </div>
@@ -269,14 +272,14 @@ export function AccountsManager() {
 
           <form onSubmit={submitAccount} className="flex items-center gap-2">
             <Input
-              aria-label="Account name"
-              placeholder="Account name (e.g. Personal)"
+              aria-label={t("accounts.nameAria")}
+              placeholder={t("accounts.namePlaceholder")}
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
             <Button type="submit" size="sm" disabled={createMutation.isPending || !name.trim()}>
               {createMutation.isPending ? <Loader2 className="animate-spin" /> : <Plus />}
-              Add
+              {t("common.add")}
             </Button>
           </form>
         </DialogContent>
@@ -285,15 +288,15 @@ export function AccountsManager() {
       <Dialog open={Boolean(tokenTarget)} onOpenChange={(next) => !next && setTokenTarget(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Long-lived token — {tokenTarget?.name}</DialogTitle>
+            <DialogTitle>{t("accounts.tokenFor", { name: tokenTarget?.name })}</DialogTitle>
             <DialogDescription>
-              In any card's terminal run <code className="font-mono">claude setup-token</code>, then
-              paste it here. It is stored in this server's vault and never sent back to the browser.
+              {t("accounts.tokenDialogBody1")} <code className="font-mono">claude setup-token</code>
+              {t("accounts.tokenDialogBody2")}
             </DialogDescription>
           </DialogHeader>
 
           {tokenTarget?.hasToken ? (
-            <p className="text-xs text-emerald-400">A token is stored. Pasting a new one replaces it.</p>
+            <p className="text-xs text-emerald-400">{t("accounts.tokenAlready")}</p>
           ) : null}
 
           <form onSubmit={submitToken} className="flex flex-col gap-3">
@@ -301,7 +304,7 @@ export function AccountsManager() {
               type="password"
               autoComplete="off"
               spellCheck={false}
-              aria-label="Long-lived token"
+              aria-label={t("accounts.tokenAria")}
               placeholder="sk-ant-oat01-…"
               className="font-mono"
               value={token}
@@ -317,14 +320,14 @@ export function AccountsManager() {
                   disabled={tokenDeleteMutation.isPending}
                   onClick={() => tokenTarget && tokenDeleteMutation.mutate(tokenTarget.slug)}
                 >
-                  Remove token
+                  {t("accounts.removeToken")}
                 </Button>
               ) : (
                 <span />
               )}
               <Button type="submit" size="sm" disabled={tokenMutation.isPending || !token.trim()}>
                 {tokenMutation.isPending ? <Loader2 className="animate-spin" /> : null}
-                Save token
+                {t("accounts.saveToken")}
               </Button>
             </div>
           </form>
