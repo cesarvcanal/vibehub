@@ -3,6 +3,7 @@ import { requireSession } from "../auth/session.js";
 import * as registry from "../services/board/registry.js";
 import { cardWorkPaths, restartStaggered } from "../services/board/workspace.js";
 import { setAccountToken, removeAccountToken, accountsTokenStatus } from "../services/accounts/token.js";
+import { allAccountsUsage } from "../services/accounts/usage.js";
 import { applyMcpsEverywhere, setMcpSecretById, mcpSecretsStatus } from "../services/mcp/mcp.js";
 import { brainView, setBrainText, resetBrain, applyBrainEverywhere } from "../services/brain/brain.js";
 import { importSessions, type ImportInput } from "../services/import/import.js";
@@ -64,6 +65,15 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/api/accounts/tokens", { preHandler: requireSession }, async (_req, reply) => {
     return await reply.send(await accountsTokenStatus());
+  });
+
+  /**
+   * PLAN USAGE per account. Never fails: the service turns a runner that is down, a profile with no
+   * interactive login and a throttled endpoint into a per-account `error`, because this feeds a
+   * widget that must not be able to break the board.
+   */
+  app.get("/api/accounts/usage", { preHandler: requireSession }, async (_req, reply) => {
+    return await reply.send(await allAccountsUsage());
   });
 
   app.post<{ Params: { slug: string }; Body: { token?: string } }>(

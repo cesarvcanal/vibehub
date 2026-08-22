@@ -401,3 +401,21 @@ describe("unknown api routes", () => {
     expect(res.json()).toEqual({ error: "not found" });
   });
 });
+
+describe("default account label", () => {
+  it("a label saved through settings shows up on the accounts screen — the two documents must not drift", async () => {
+    const cookie = await signUp(app);
+    await app.inject({
+      method: "PATCH", url: "/api/settings", headers: { cookie },
+      payload: { defaultAccountLabel: "ada@example.com" },
+    });
+    const accounts = (await app.inject({ method: "GET", url: "/api/accounts", headers: { cookie } })).json();
+    expect(accounts.defaultLabel).toBe("ada@example.com");
+    const clearedSettings = await app.inject({
+      method: "PATCH", url: "/api/settings", headers: { cookie }, payload: { defaultAccountLabel: null },
+    });
+    expect(clearedSettings.json().defaultAccountLabel).toBeNull();
+    const cleared = (await app.inject({ method: "GET", url: "/api/accounts", headers: { cookie } })).json();
+    expect(cleared.defaultLabel).toBeNull();
+  });
+});

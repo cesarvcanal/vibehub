@@ -15,6 +15,7 @@ const applyMcpsEverywhere = vi.fn();
 const setMcpSecretById = vi.fn();
 const applyBrainEverywhere = vi.fn();
 const importSessions = vi.fn();
+const allAccountsUsage = vi.fn();
 
 async function boot(): Promise<FastifyInstance> {
   vi.resetModules();
@@ -45,6 +46,7 @@ async function boot(): Promise<FastifyInstance> {
     return { ...actual, applyBrainEverywhere };
   });
   vi.doMock("../services/import/import.js", () => ({ importSessions }));
+  vi.doMock("../services/accounts/usage.js", () => ({ allAccountsUsage }));
   const { buildServer } = await import("../index.js");
   const server = await buildServer();
   await server.ready();
@@ -98,6 +100,31 @@ describe("account tokens", () => {
       method: "POST", url: "/api/accounts/work/token", headers: { cookie }, payload: { token: "sk-ant-secret" },
     });
     expect(res.body).not.toContain("sk-ant-secret");
+  });
+});
+
+describe("account usage", () => {
+  it("reports the plan usage per account, session-protected", async () => {
+    const body = {
+      bySlug: {
+        default: {
+          available: true,
+          fiveHour: { utilization: 31, resetsAt: "2026-08-22T18:00:00Z" },
+          sevenDay: { utilization: 12, resetsAt: "2026-08-27T00:00:00Z" },
+          sevenDayOpus: { utilization: 74, resetsAt: "2026-08-27T00:00:00Z" },
+          fetchedAt: 1,
+        },
+        tech: { available: false, error: "no_credentials", fetchedAt: 1 },
+      },
+      fetchedAt: 1,
+    };
+    allAccountsUsage.mockResolvedValueOnce(body);
+    const res = await app.inject({ method: "GET", url: "/api/accounts/usage", headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual(body);
+
+    // No session, no numbers — this says how much of a paid plan is left.
+    expect((await app.inject({ method: "GET", url: "/api/accounts/usage" })).statusCode).toBe(401);
   });
 });
 
