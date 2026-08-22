@@ -7,11 +7,13 @@ import {
   TerminalComposer,
   appendFragment,
   barHeights,
+  formatElapsed,
   imageFiles,
   levelFromTimeDomain,
   pickAudioMimeType,
 } from "./TerminalComposer";
 import { get, post } from "@/lib/api";
+import { MOBILE_QUERY } from "@/lib/useIsMobile";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -303,5 +305,79 @@ describe("TerminalComposer — voice input", () => {
     await waitFor(() => expect(screen.getByTestId("composer-mic")).toBeInTheDocument());
     expect(mockPost).not.toHaveBeenCalled();
     expect(screen.getByRole("textbox")).toHaveValue("");
+  });
+});
+
+describe("formatElapsed", () => {
+  it("is m:ss, with the seconds always padded", () => {
+    expect(formatElapsed(0)).toBe("0:00");
+    expect(formatElapsed(4_200)).toBe("0:04");
+    expect(formatElapsed(65_000)).toBe("1:05");
+    expect(formatElapsed(600_000)).toBe("10:00");
+  });
+
+  it("never goes negative on a clock that jumped backwards", () => {
+    expect(formatElapsed(-5_000)).toBe("0:00");
+  });
+});
+
+/**
+ * The phone composer.
+ *
+ * Two reports in one: the keyboard zoomed the page in and would not zoom back out, and the two
+ * buttons were too small to hit. The first is a font size — iOS Safari zooms any focused field
+ * under 16px — and the second is a target size, so both are asserted as classes rather than as
+ * pixels, which jsdom does not have.
+ */
+describe("TerminalComposer — on a phone", () => {
+  const originalMatchMedia = window.matchMedia;
+
+  function setViewport(mobile: boolean): void {
+    window.matchMedia = ((query: string) => ({
+      matches: query === MOBILE_QUERY ? mobile : false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+  }
+
+  beforeEach(() => {
+    mockGet.mockResolvedValue({ available: true });
+    setViewport(true);
+  });
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+  });
+
+  it("writes at 16px below md, which is what stops iOS zooming the page on focus", () => {
+    renderComposer(<TerminalComposer onSend={vi.fn()} />);
+    const field = screen.getByRole("textbox", { name: "Message to the terminal" });
+    expect(field.className).toContain("text-base");
+    // …and the desktop keeps the 14px it always had.
+    expect(field.className).toContain("md:text-sm");
+  });
+
+  it("gives send and the microphone 44px targets on a phone, 36px on a desktop", async () => {
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
+    const send = screen.getByTestId("composer-send");
+    expect(send.className).toContain("h-11");
+    expect(send.className).toContain("md:h-9");
+    const mic = await screen.findByTestId("composer-mic");
+    expect(mic.className).toContain("h-11");
+    expect(mic.className).toContain("md:h-9");
+  });
+
+  it("keeps Send unavailable until there is something to send", async () => {
+    const user = userEvent.setup();
+    renderComposer(<TerminalComposer onSend={vi.fn()} />);
+    const send = screen.getByTestId("composer-send");
+    expect(send).toBeDisabled();
+    await user.type(screen.getByRole("textbox", { name: "Message to the terminal" }), "hi");
+    expect(send).toBeEnabled();
   });
 });

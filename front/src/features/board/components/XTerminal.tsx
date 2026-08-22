@@ -46,6 +46,8 @@ export const TERMINAL_FONT_FAMILY = '"JetBrains Mono", ui-monospace, "SF Mono", 
 /** Gap between a pasted body and its Enter — enough for the TUI's paste detector to settle. */
 export const SUBMIT_AFTER_PASTE_MS = 120;
 
+
+
 export interface XTerminalHandle {
   /** Types text into the session as if it came from the keyboard (a composer, a transcription). */
   sendText(text: string): void;

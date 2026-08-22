@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/lib/useIsMobile";
 import { apiErrorMessage } from "@/lib/apiError";
 import { Button } from "@/components/ui/button";
 import {
@@ -110,6 +111,7 @@ export function CardTerminalView({
   onOpenMenu?: () => void;
 }) {
   const t = useT();
+  const isMobile = useIsMobile();
   const queryClient = useQueryClient();
   const boardKey = cardsKey(project.id);
 
@@ -354,35 +356,54 @@ export function CardTerminalView({
     [cardId],
   );
 
-  return (
-    <div className="flex h-full min-w-0 flex-1 flex-col">
-      {/* The card bar: identity on the left, actions in the middle, configuration at the far end. */}
-      <div
-        data-testid="card-bar"
-        className="flex min-h-[2.25rem] min-w-0 shrink-0 items-center gap-3 border-b border-border/60 pb-1.5"
-      >
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          {onOpenMenu ? (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 shrink-0 text-muted-foreground lg:hidden"
-              aria-label={t("cardView.openCardList")}
-              onClick={onOpenMenu}
-            >
-              <Menu className="h-4 w-4" />
-            </Button>
-          ) : null}
-          {/* Narrow screens only: from `lg` up the board is a permanent column beside this one, so
-              a button whose whole job is "go back to it" is a control pointing at what you can see. */}
+  /**
+   * A phone opens this screen as a FIXED page: the document must not scroll, because the thing that
+   * should scroll is the terminal's own viewport, and a scrollable document steals the touch. The
+   * class goes on `<html>` while the card is open and comes off when it closes or the window grows.
+   */
+  React.useEffect(() => {
+    if (!isMobile || typeof document === "undefined") return;
+    const root = document.documentElement;
+    root.classList.add("card-view-locked");
+    return () => root.classList.remove("card-view-locked");
+  }, [isMobile]);
+
+  /**
+   * IDENTITY: back, the menu handle, the status dot, the title, the project. What this screen IS.
+   *
+   * The back arrow is the first thing in the bar on EVERY width. On a phone the only other way out
+   * was opening the drawer and tapping the card you are already looking at; on a desktop the board
+   * is beside you, but an arrow where every other app puts one costs nothing and the Escape
+   * shortcut is unchanged.
+   */
+  const identity = (
+    <>
+      <Tooltip>
+        <TooltipTrigger asChild>
           <Button
             variant="ghost"
-            size="sm"
-            className="h-7 shrink-0 px-2 text-muted-foreground lg:hidden"
+            size="icon"
+            data-testid="card-back"
+            className="h-9 w-9 shrink-0 text-muted-foreground md:h-7 md:w-7"
+            aria-label={t("cardView.back")}
             onClick={onBack}
           >
-            <ArrowLeft className="mr-1.5 h-4 w-4" /> {t("cardView.board")}
+            <ArrowLeft className="h-4 w-4" />
           </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{t("cardView.back")}</TooltipContent>
+      </Tooltip>
+      {onOpenMenu ? (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-9 w-9 shrink-0 text-muted-foreground md:h-7 md:w-7 lg:hidden"
+          aria-label={t("cardView.openCardList")}
+          onClick={onOpenMenu}
+        >
+          <Menu className="h-4 w-4" />
+        </Button>
+      ) : null}
           {dot ? (
             <span
               role="status"
@@ -426,9 +447,21 @@ export function CardTerminalView({
               </h2>
             </button>
           )}
-          <span className="shrink-0 truncate text-xs text-muted-foreground/80">· {project.name}</span>
-        </div>
+          <span className="min-w-0 max-w-[40%] truncate text-xs text-muted-foreground/80 md:max-w-none md:shrink-0">
+        · {project.name}
+      </span>
+    </>
+  );
 
+  /**
+   * ACTIONS and CONFIGURATION: what you can DO to this card, then what it is talking to.
+   *
+   * One row on a desktop, and on a phone the second row — a strip that scrolls sideways. Nothing
+   * wraps and nothing is absolutely positioned, which is the whole fix: the old single row put
+   * Pause, Board, Restart and the project name on top of each other at 390px.
+   */
+  const actions = (
+    <>
         {hasLiveSession || canFinish ? (
           <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-border/50 bg-card/40 p-0.5">
             {hasLiveSession ? (
@@ -584,7 +617,36 @@ export function CardTerminalView({
           ) : null}
           {showTerminal ? <ConnectionIndicator state={connection} /> : null}
         </div>
-      </div>
+    </>
+  );
+
+  return (
+    <div className="flex h-full min-w-0 flex-1 flex-col">
+      {/* The card bar. One row from `md` up; two rows on a phone, where one row overlapped itself. */}
+      {isMobile ? (
+        <div
+          data-testid="card-bar"
+          className="flex min-w-0 shrink-0 flex-col gap-1.5 border-b border-border/60 pb-1.5"
+        >
+          <div data-testid="card-bar-identity" className="flex min-w-0 items-center gap-2">
+            {identity}
+          </div>
+          <div
+            data-testid="card-bar-actions"
+            className="-mx-0.5 flex min-w-0 items-center gap-1.5 overflow-x-auto whitespace-nowrap px-0.5 pb-0.5"
+          >
+            {actions}
+          </div>
+        </div>
+      ) : (
+        <div
+          data-testid="card-bar"
+          className="flex min-h-[2.25rem] min-w-0 shrink-0 items-center gap-3 border-b border-border/60 pb-1.5"
+        >
+          <div className="flex min-w-0 flex-1 items-center gap-2">{identity}</div>
+          {actions}
+        </div>
+      )}
 
       {/* Body */}
       {!instant && openMutation.isError ? (

@@ -334,3 +334,53 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------------------------------------------------------------- the phone card view */
+
+/*
+ * A card open on a phone is a FIXED screen, not a document.
+ *
+ * The bug this fixes was inverted scrolling: dragging inside the terminal moved the page, and
+ * dragging outside it moved nothing useful — because the page itself was scrollable and xterm's
+ * viewport never got the touch. Locking the document is what hands the gesture to the terminal.
+ *
+ * The class is set by the card view while it is open below `md` and removed when it closes, so the
+ * board behind it scrolls exactly as it always did.
+ */
+html.card-view-locked,
+html.card-view-locked body {
+  overflow: hidden;
+  overscroll-behavior: none;
+  /* No rubber-banding the whole page when the terminal reaches its top or bottom. */
+  overscroll-behavior-y: none;
+}
+
+/*
+ * xterm's scrollback lives in `.xterm-viewport`, an `overflow-y: auto` div the addon owns — the
+ * renderer (DOM, canvas or WebGL) draws into a sibling and never scrolls anything. So the touch
+ * gesture has to be given to THAT element: `pan-y` tells the browser this is a vertical scroller
+ * and stops it treating the drag as a page pan, and `contain` keeps the gesture from escaping to
+ * the document once the buffer hits an end.
+ */
+.xterm .xterm-viewport {
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* The mic, while it is recording: a red ring that breathes, so the state is visible at arm's length. */
+@keyframes rec-ring {
+  0% {
+    box-shadow: 0 0 0 0 hsl(var(--destructive) / 0.55);
+  }
+  70% {
+    box-shadow: 0 0 0 8px hsl(var(--destructive) / 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 hsl(var(--destructive) / 0);
+  }
+}
+
+.rec-ring {
+  animation: rec-ring 1.6s ease-out infinite;
+}

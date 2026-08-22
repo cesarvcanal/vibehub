@@ -269,7 +269,7 @@ export const ptBR: Record<string, string> = {
   "cardView.uploadingImage": "Enviando a imagem…",
   "cardView.uploadError": "Não deu pra enviar a imagem",
   "cardView.openCardList": "Abrir a lista de cards",
-  "cardView.board": "Board",
+  "cardView.back": "Voltar ao quadro",
   "cardView.cardTitle": "Título do card",
   "cardView.clickToRename": "Clique pra renomear",
   "cardView.opening": "Abrindo o card…",
@@ -483,9 +483,9 @@ export const ptBR: Record<string, string> = {
   "accounts.aria": "Contas Claude",
   "accounts.title": "Contas Claude",
   "accounts.description1":
-    "Cada conta é um login separado do Claude dentro do runner. Abra um card nela e rode",
+    "Os cards já usam o token guardado de cada conta — não precisa de login pra trabalhar.",
   "accounts.description2":
-    "uma vez — ou cole um token de longa duração e pule a dança do navegador em todo lugar.",
+    "“Fazer login” é só pra ler o uso e o saldo do plano (as barras): opcional, uma vez por conta.",
   "accounts.defaultName": "Nome da conta padrão",
   "accounts.tokenStoredSuffix": " · token guardado",
   "accounts.signIn": "Fazer login",

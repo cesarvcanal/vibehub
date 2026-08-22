@@ -25,6 +25,7 @@ import { ProjectSidebar } from "@/features/board/components/ProjectSidebar";
 import { RunnerBanner } from "@/features/board/components/RunnerBanner";
 import { moveProjectLocal, readLocation, sortProjects, writeLocation } from "@/features/board/lib/board";
 import { cardViewHeight } from "@/features/board/lib/focusMode";
+import { useIsMobile } from "@/lib/useIsMobile";
 import {
   attachLeaveFocusShortcut,
   attachNewCardShortcut,
@@ -56,6 +57,8 @@ import { t as translate, useT } from "@/i18n";
  */
 export function BoardPage() {
   const t = useT();
+  // Only used for the card view's height unit: `dvh` on a phone, `vh` everywhere else.
+  const isMobile = useIsMobile();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
 
@@ -284,7 +287,7 @@ export function BoardPage() {
         <div
           data-testid="card-layout"
           className="flex min-h-[420px] flex-col gap-3 lg:flex-row lg:items-stretch"
-          style={{ height: cardViewHeight() }}
+          style={{ height: cardViewHeight(undefined, isMobile) }}
         >
           {menuButton}
           {sidebar}

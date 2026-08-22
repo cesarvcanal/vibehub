@@ -3,7 +3,11 @@ import { render, screen, waitFor } from "@testing-library/react";
 import type { ILink, ILinkProvider } from "@xterm/xterm";
 import * as React from "react";
 import userEvent from "@testing-library/user-event";
-import { XTerminal, SUBMIT_AFTER_PASTE_MS, type XTerminalHandle } from "@/features/board/components/XTerminal";
+import {
+  XTerminal,
+  SUBMIT_AFTER_PASTE_MS,
+  type XTerminalHandle,
+} from "@/features/board/components/XTerminal";
 
 /* ------------------------------------------------------------ xterm stubs */
 
@@ -505,6 +509,10 @@ describe("XTerminal — the websocket", () => {
     view.rerender(<XTerminal wsPath="/api/cards/c1/terminal" reconnectKey="b" />);
     await waitFor(() => expect(FakeSocket.instances).toHaveLength(2));
   });
+
+
+
+
 });
 
 describe("XTerminal — local echo", () => {

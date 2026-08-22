@@ -21,8 +21,17 @@ export const CARD_MAIN_PADDING_PX = 24;
  * Nothing is measured any more because there is nothing left to measure: the header is gone, so
  * the terminal owns the full height of the page and the only constant is the gutter around it.
  */
-export function cardViewHeight(padding: number = CARD_MAIN_PADDING_PX): string {
-  return `calc(100vh - ${Math.max(0, Math.round(padding))}px)`;
+export function cardViewHeight(
+  padding: number = CARD_MAIN_PADDING_PX,
+  mobile = false,
+): string {
+  // `dvh` on a phone, and only there: `100vh` on iOS Safari is the height of the window WITHOUT the
+  // browser chrome, so with the keyboard up the card view is taller than what you can see and the
+  // composer is pushed off the bottom. `100dvh` is the height that is actually visible right now,
+  // which is what a screen with a keyboard on it needs. Desktop keeps `vh` — nothing there changes
+  // under a keyboard, and `dvh` would be a layout change nobody asked for.
+  const unit = mobile ? "dvh" : "vh";
+  return `calc(100${unit} - ${Math.max(0, Math.round(padding))}px)`;
 }
 
 /**

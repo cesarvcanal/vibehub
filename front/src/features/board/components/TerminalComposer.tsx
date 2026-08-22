@@ -1,9 +1,10 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, Loader2, Mic, X } from "lucide-react";
+import { Check, Loader2, Mic, Send, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/lib/useIsMobile";
 import { apiErrorMessage } from "@/lib/apiError";
 import { AUDIO_MAX_BYTES, TRANSCRIBE_KEY, boardApi } from "@/features/board/api";
 import { t as translate, useT } from "@/i18n";
@@ -102,6 +103,13 @@ export function barHeights(level: number, gains: readonly number[] = BAR_GAINS):
   return gains.map((g) => Math.max(BAR_FLOOR, Math.min(1, level * g)));
 }
 
+/** `m:ss` for a recording's elapsed time. Minutes are not padded; seconds always are. PURE. */
+export function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const seconds = total % 60;
+  return `${Math.floor(total / 60)}:${String(seconds).padStart(2, "0")}`;
+}
+
 type RecordingState = "idle" | "recording" | "processing";
 
 export function TerminalComposer({
@@ -112,6 +120,7 @@ export function TerminalComposer({
   className,
 }: TerminalComposerProps) {
   const t = useT();
+  const isMobile = useIsMobile();
   const [text, setText] = React.useState("");
   const ref = React.useRef<HTMLTextAreaElement | null>(null);
 
@@ -148,6 +157,12 @@ export function TerminalComposer({
   const canRecord = Boolean(cardId && voice?.available);
 
   const [recording, setRecording] = React.useState<RecordingState>("idle");
+  /**
+   * How long the current recording has been running. Without it a phone recording is a red button
+   * and nothing else — you cannot tell a five-second thought from a two-minute one you forgot to
+   * stop, and the five-minute cap arrives as a surprise.
+   */
+  const [elapsedMs, setElapsedMs] = React.useState(0);
   const [levels, setLevels] = React.useState<number[]>(() => barHeights(0));
   const recorderRef = React.useRef<MediaRecorder | null>(null);
   const streamRef = React.useRef<MediaStream | null>(null);
@@ -294,6 +309,17 @@ export function TerminalComposer({
     }
   }, [recording, startVisualiser, stopTracks, stopVisualiser, transcribe, finishRecording]);
 
+  React.useEffect(() => {
+    if (recording !== "recording") {
+      setElapsedMs(0);
+      return;
+    }
+    const started = Date.now();
+    setElapsedMs(0);
+    const id = setInterval(() => setElapsedMs(Date.now() - started), 250);
+    return () => clearInterval(id);
+  }, [recording]);
+
   // Leaving the card mid-recording must not leave the microphone light on, and must not fire a
   // transcription into a screen that is gone: this cancels, it does not finish.
   React.useEffect(() => {
@@ -318,48 +344,95 @@ export function TerminalComposer({
     if (el.scrollHeight > 0) el.style.height = `${el.scrollHeight}px`;
   }, [text]);
 
+  const recordingNow = recording === "recording";
+
   return (
-    <div data-testid="terminal-composer" className={cn("flex shrink-0 items-end gap-2", className)}>
-      <textarea
-        ref={ref}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
+    <div
+      data-testid="terminal-composer"
+      className={cn("flex shrink-0 items-end gap-2", className)}
+    >
+      <div className="relative min-w-0 flex-1">
+        <textarea
+          ref={ref}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
+          onPaste={(e) => {
+            const files = imageFiles(e.clipboardData);
+            if (files.length === 0) return; // plain text: the textarea's own paste
             e.preventDefault();
-            send();
-          }
-        }}
-        onPaste={(e) => {
-          const files = imageFiles(e.clipboardData);
-          if (files.length === 0) return; // plain text: the textarea's own paste
-          e.preventDefault();
-          upload(files);
-        }}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          e.preventDefault();
-          upload(imageFiles(e.dataTransfer));
-        }}
-        placeholder={placeholder ?? t("composer.placeholder")}
-        rows={3}
-        aria-label={t("composer.aria")}
-        className="max-h-48 min-h-24 flex-1 resize-none overflow-y-auto rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
-      />
+            upload(files);
+          }}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            upload(imageFiles(e.dataTransfer));
+          }}
+          placeholder={placeholder ?? t("composer.placeholder")}
+          rows={3}
+          aria-label={t("composer.aria")}
+          /*
+           * `text-base` below `md` is not a type choice, it is the iOS keyboard fix: Safari zooms
+           * the page in on any focused field under 16px and never zooms back out, which is exactly
+           * the "everything goes strange when I open the keyboard" the owner hit. The desktop keeps
+           * the 14px it always had.
+           */
+          className="max-h-48 min-h-24 w-full resize-none overflow-y-auto rounded-md border border-border bg-card px-3 py-2 text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 md:text-sm"
+        />
+        {/* While recording with nothing typed, the empty field is where the voice goes: the bars
+            live there rather than crowding a 44px button. They vanish the moment there is text. */}
+        {recordingNow && !text ? (
+          <div
+            data-testid="composer-field-bars"
+            aria-hidden
+            className="pointer-events-none absolute left-3 top-3 flex items-end gap-[3px]"
+          >
+            {levels.map((level, i) => (
+              <span
+                key={i}
+                className="w-[3px] rounded-full bg-destructive"
+                style={{ height: `${4 + level * 14}px` }}
+              />
+            ))}
+          </div>
+        ) : null}
+      </div>
 
       {cardId ? (
         <VoiceControl
           state={recording}
           available={canRecord}
           levels={levels}
+          mobile={isMobile}
+          elapsed={formatElapsed(elapsedMs)}
           onStart={() => void startRecording()}
           onFinish={finishRecording}
           onCancel={cancelRecording}
         />
       ) : null}
 
-      <Button type="button" size="sm" disabled={!text.trim()} onClick={send}>
-        {t("composer.send")}
+      {/*
+        44x44 on a phone (the smallest target a thumb hits reliably) and an icon instead of a word,
+        because "Send"/"Enviar" next to a microphone at that size is two buttons of different widths
+        for two actions of equal weight. The desktop keeps the labelled button it always had.
+      */}
+      <Button
+        type="button"
+        size="sm"
+        data-testid="composer-send"
+        aria-label={t("composer.send")}
+        title={t("composer.send")}
+        disabled={!text.trim()}
+        onClick={send}
+        className="h-11 w-11 shrink-0 rounded-full p-0 md:h-9 md:w-auto md:rounded-md md:px-3"
+      >
+        <Send className="h-4 w-4 md:hidden" />
+        <span className="hidden md:inline">{t("composer.send")}</span>
       </Button>
     </div>
   );
@@ -376,6 +449,8 @@ function VoiceControl({
   state,
   available,
   levels,
+  mobile,
+  elapsed,
   onStart,
   onFinish,
   onCancel,
@@ -383,6 +458,10 @@ function VoiceControl({
   state: RecordingState;
   available: boolean;
   levels: number[];
+  /** A phone: 44px targets, and the level bars move into the field instead of into the button. */
+  mobile: boolean;
+  /** `m:ss` since the recording started. */
+  elapsed: string;
   onStart: () => void;
   onFinish: () => void;
   onCancel: () => void;
@@ -393,7 +472,10 @@ function VoiceControl({
       <div
         data-testid="composer-mic-processing"
         role="status"
-        className="flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-card/60 px-3 text-muted-foreground"
+        className={cn(
+          "flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-card/60 px-3 text-muted-foreground",
+          mobile ? "h-11 rounded-full" : "h-9",
+        )}
       >
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
         <span className="text-[11px]">{t("composer.transcribingShort")}</span>
@@ -403,35 +485,58 @@ function VoiceControl({
 
   if (state === "recording") {
     return (
-      <div className="flex h-9 shrink-0 items-center gap-1 rounded-md border border-destructive/50 bg-card/80 px-1">
+      <div
+        data-testid="composer-mic-recording"
+        className={cn(
+          "flex shrink-0 items-center gap-1 border border-destructive/50 bg-card/80",
+          // Recording is the one state worth seeing from across the room: red, and a ring that
+          // breathes. On a phone the whole strip is 44 tall so the two exits stay thumb-sized.
+          mobile ? "rec-ring h-11 gap-1.5 rounded-full px-1.5" : "h-9 rounded-md px-1",
+        )}
+      >
         <button
           type="button"
           data-testid="composer-mic-cancel"
           aria-label={t("composer.discard")}
           title={t("composer.discardHint")}
           onClick={onCancel}
-          className="flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className={cn(
+            "flex items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+            mobile ? "h-9 w-9" : "h-6 w-6",
+          )}
         >
-          <X className="h-3.5 w-3.5" />
+          <X className={mobile ? "h-4 w-4" : "h-3.5 w-3.5"} />
         </button>
-        <div data-testid="composer-mic-bars" aria-hidden className="flex h-6 items-end gap-[3px] px-1">
-          {levels.map((level, i) => (
-            <span
-              key={i}
-              className="w-[3px] rounded-full bg-destructive"
-              style={{ height: `${4 + level * 12}px` }}
-            />
-          ))}
-        </div>
+        {mobile ? (
+          <span
+            data-testid="composer-mic-elapsed"
+            className="min-w-[2.5rem] text-center font-mono text-[13px] tabular-nums text-destructive"
+          >
+            {elapsed}
+          </span>
+        ) : (
+          <div data-testid="composer-mic-bars" aria-hidden className="flex h-6 items-end gap-[3px] px-1">
+            {levels.map((level, i) => (
+              <span
+                key={i}
+                className="w-[3px] rounded-full bg-destructive"
+                style={{ height: `${4 + level * 12}px` }}
+              />
+            ))}
+          </div>
+        )}
         <button
           type="button"
           data-testid="composer-mic-finish"
           aria-label={t("composer.finish")}
           title={t("composer.finishHint")}
           onClick={onFinish}
-          className="flex h-6 w-6 items-center justify-center rounded-full bg-destructive text-destructive-foreground transition-opacity hover:opacity-90"
+          className={cn(
+            "flex items-center justify-center rounded-full bg-destructive text-destructive-foreground transition-opacity hover:opacity-90",
+            mobile ? "h-9 w-9" : "h-6 w-6",
+          )}
         >
-          <Check className="h-3.5 w-3.5" />
+          <Check className={mobile ? "h-4 w-4" : "h-3.5 w-3.5"} />
         </button>
       </div>
     );
@@ -445,7 +550,7 @@ function VoiceControl({
       data-testid="composer-mic"
       aria-label={t("composer.record")}
       title={available ? t("composer.recordHint") : t("composer.voiceUnavailable")}
-      className="h-9 w-9 shrink-0 text-muted-foreground"
+      className="h-11 w-11 shrink-0 rounded-full text-muted-foreground md:h-9 md:w-9 md:rounded-md"
       disabled={!available}
       onClick={onStart}
     >

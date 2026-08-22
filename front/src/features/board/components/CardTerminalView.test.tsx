@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient } from "@tanstack/react-query";
@@ -6,6 +6,7 @@ import { CardTerminalView } from "@/features/board/components/CardTerminalView";
 import { renderApp, testQueryClient } from "@/test/render";
 import { get, patch, post } from "@/lib/api";
 import { cardsKey, type BoardCard, type BoardProject } from "@/features/board/api";
+import { MOBILE_QUERY } from "@/lib/useIsMobile";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -555,5 +556,105 @@ describe("CardTerminalView — narrow screens", () => {
     renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
     await screen.findByTestId("card-bar");
     expect(screen.queryByRole("button", { name: "Open the card list" })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The phone.
+ *
+ * Four separate reports, one screen: no way back except the drawer, a bar whose controls sat on top
+ * of each other at 390px, a page that scrolled while the terminal did not, and a keyboard that
+ * zoomed everything. What is asserted here is the STRUCTURE those fixes depend on — two rows on a
+ * phone, one row on a desktop, and an arrow that goes back from either.
+ */
+describe("CardTerminalView — the phone", () => {
+  const originalMatchMedia = window.matchMedia;
+
+  /** Drives the media query the view reads. `true` = a phone-width viewport. */
+  function setViewport(mobile: boolean): void {
+    window.matchMedia = ((query: string) => ({
+      matches: query === MOBILE_QUERY ? mobile : false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+  }
+
+  beforeEach(() => {
+    serve();
+    mockPost.mockResolvedValue({ card: card({ openedAt: 10 }) });
+    setViewport(false);
+  });
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+    document.documentElement.classList.remove("card-view-locked");
+  });
+
+  it("goes back to the board from the arrow, on a phone and on a desktop alike", async () => {
+    for (const mobile of [true, false]) {
+      setViewport(mobile);
+      const user = userEvent.setup();
+      const onBack = vi.fn();
+      const { unmount } = renderApp(
+        <CardTerminalView project={project} cardId="c1" onBack={onBack} onNewCard={vi.fn()} />,
+      );
+
+      await user.click(await screen.findByTestId("card-back"));
+      expect(onBack).toHaveBeenCalledTimes(1);
+      unmount();
+    }
+  });
+
+  it("splits the bar into identity and a scrolling action strip on a phone", async () => {
+    setViewport(true);
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+
+    const identity = await screen.findByTestId("card-bar-identity");
+    const actions = screen.getByTestId("card-bar-actions");
+
+    // Row one is who you are looking at; row two is everything you can do to it.
+    expect(within(identity).getByTestId("card-back")).toBeInTheDocument();
+    expect(within(identity).getByRole("heading", { name: "fix the totals" })).toBeInTheDocument();
+    expect(within(actions).getByRole("button", { name: "Pause" })).toBeInTheDocument();
+    expect(within(actions).getByRole("button", { name: "Browser" })).toBeInTheDocument();
+    // Sideways, never wrapped: a wrapped row is what stacked on itself in the first place.
+    expect(actions.className).toContain("overflow-x-auto");
+    expect(actions.className).toContain("whitespace-nowrap");
+    expect(screen.getByTestId("card-bar").className).toContain("flex-col");
+  });
+
+  it("leaves the desktop bar as the single row it has always been", async () => {
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+
+    const bar = await screen.findByTestId("card-bar");
+    expect(screen.queryByTestId("card-bar-identity")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("card-bar-actions")).not.toBeInTheDocument();
+    expect(bar.className).toContain("items-center");
+    expect(bar.className).not.toContain("flex-col");
+  });
+
+  it("locks the page while a card is open on a phone, and unlocks it on the way out", async () => {
+    setViewport(true);
+    const { unmount } = renderApp(
+      <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />,
+    );
+
+    await screen.findByTestId("card-bar");
+    // The document must not scroll: the scroller is xterm's own viewport, and a scrollable page
+    // eats the touch before the terminal ever sees it.
+    expect(document.documentElement.classList.contains("card-view-locked")).toBe(true);
+    unmount();
+    expect(document.documentElement.classList.contains("card-view-locked")).toBe(false);
+  });
+
+  it("never locks the page on a desktop, where the board behind still scrolls", async () => {
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    await screen.findByTestId("card-bar");
+    expect(document.documentElement.classList.contains("card-view-locked")).toBe(false);
   });
 });

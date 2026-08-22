@@ -268,7 +268,7 @@ export const en: Record<string, string> = {
   "cardView.uploadingImage": "Uploading image…",
   "cardView.uploadError": "Could not upload the image",
   "cardView.openCardList": "Open the card list",
-  "cardView.board": "Board",
+  "cardView.back": "Back to the board",
   "cardView.cardTitle": "Card title",
   "cardView.clickToRename": "Click to rename",
   "cardView.opening": "Opening card…",
@@ -478,9 +478,9 @@ export const en: Record<string, string> = {
   "accounts.aria": "Claude accounts",
   "accounts.title": "Claude accounts",
   "accounts.description1":
-    "Each account is a separate Claude login inside the runner. Open a card on it and run",
+    "Cards already use each account's stored token — no login is needed to work.",
   "accounts.description2":
-    "once — or paste a long-lived token and skip the browser dance everywhere.",
+    "“Sign in” is only for reading plan usage (the bars): optional, once per account.",
   "accounts.defaultName": "Default account name",
   "accounts.tokenStoredSuffix": " · token stored",
   "accounts.signIn": "Sign in",

@@ -2,7 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      `maximum-scale=1` is not a "no pinch zoom" decision, it is the iOS keyboard fix: Safari zooms
+      the whole page when a focused field has a font smaller than 16px, and it never zooms back out.
+      Every field in the card view is 16px on a phone, and this stops the reflow that made the
+      terminal unreadable the moment the keyboard came up. `viewport-fit=cover` lets the layout run
+      under the home indicator, which is what `100dvh` measures against.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
+    />
     <meta name="color-scheme" content="dark light" />
     <title>vibehub</title>
     <meta

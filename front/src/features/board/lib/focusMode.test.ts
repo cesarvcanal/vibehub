@@ -22,6 +22,12 @@ describe("cardViewHeight", () => {
   it("never produces a negative subtraction", () => {
     expect(cardViewHeight(-20)).toBe("calc(100vh - 0px)");
   });
+
+  it("measures a phone in `dvh`, which is the height that survives the keyboard", () => {
+    expect(cardViewHeight(CARD_MAIN_PADDING_PX, true)).toBe(`calc(100dvh - ${CARD_MAIN_PADDING_PX}px)`);
+    // The desktop is untouched: nothing there changes height under a keyboard.
+    expect(cardViewHeight(CARD_MAIN_PADDING_PX, false)).toBe(`calc(100vh - ${CARD_MAIN_PADDING_PX}px)`);
+  });
 });
 
 describe("terminal sizes", () => {
