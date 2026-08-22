@@ -75,7 +75,7 @@ describe("mcpSecretStatus", () => {
 /* --------------------------------------------------------------- the pills */
 
 function session(overrides: Partial<CardSessionInfo> = {}): CardSessionInfo {
-  return { model: null, modelLabel: null, account: { slug: null, name: "" }, ...overrides };
+  return { model: null, modelLabel: null, account: { slug: null, name: "" }, situation: "waiting", ...overrides };
 }
 
 /**

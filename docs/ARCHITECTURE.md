@@ -75,6 +75,25 @@ Two deliberate exceptions:
   prompt) brings it back to `working`. Idle reports never do this, so a `done` card stays done while
   the session merely exists.
 
+## Two ways to read one session
+
+A card is one `claude` process in one tmux session. The board shows it either way, switched by hand
+from the card bar on every screen size:
+
+- **Terminal** — an xterm attached to the pty. Everything works here, including what only the TUI
+  can do: permission prompts, plan approval, `/login`, `/model`. The cost is that it ships a
+  REPAINTING SCREEN — an idle spinner is thousands of frames an hour, and a phone rasterises each.
+- **Chat** — the same session read from the transcript Claude Code already writes
+  (`~/.claude/projects/<cwd>/<id>.jsonl`). The server follows the newest file with one `tail -F`,
+  parses each line into an event (user message, assistant message, or a collapsed tool line) and
+  pushes it over `WS /api/cards/:id/chat`. Sending goes through the maestro's `tmux send-keys`, so a
+  message written in the chat lands at the same prompt the terminal types into.
+
+Switching to chat UNMOUNTS the terminal, which closes its websocket — that is the point. What chat
+cannot show is anything drawn only on the screen, so when the agent goes quiet mid-turn the view
+says so and offers the terminal instead of pretending. The choice is remembered per card and per
+device (localStorage), never inferred from the width of the screen.
+
 ## State
 
 No database. Under `VIBEHUB_DATA_DIR`:

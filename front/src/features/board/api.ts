@@ -228,7 +228,15 @@ export interface CardSessionInfo {
   modelLabel: string | null;
   /** The account the session is really using. */
   account: { slug: string | null; name: string };
+  /**
+   * What the terminal is doing right now. The chat needs it: with no card list beside it (a phone
+   * has none) this poll is the only thing that says "the agent is still working".
+   */
+  situation: CardSituation;
 }
+
+/** A terminal's current situation, as the server words it. */
+export type CardSituation = "working" | "waiting" | "paused" | "done" | "no session";
 
 /** One metered plan window: how much is gone, and when it empties again. */
 export interface UsageWindow {
@@ -331,6 +339,8 @@ export const boardApi = {
         model: r?.model ?? null,
         modelLabel: r?.modelLabel ?? null,
         account: { slug: r?.account?.slug ?? null, name: r?.account?.name ?? "" },
+        // A server that predates the field simply never looks busy — better than looking stuck.
+        situation: r?.situation ?? "waiting",
       }),
     ),
 
@@ -343,6 +353,16 @@ export const boardApi = {
     const content = await fileToBase64(file);
     return await post<UploadResult>(`/cards/${encodeURIComponent(id)}/upload`, { name: file.name, content });
   },
+
+  /**
+   * Sends a chat message: the server types it at the prompt of the SAME tmux session the terminal
+   * is attached to. There is no separate chat conversation to keep in sync — there is one session.
+   */
+  sendCardChat: (id: string, text: string) => post<{ ok: true }>(`/cards/${encodeURIComponent(id)}/chat`, { text }),
+
+  /** Presses one whitelisted key in that session — `escape` is the chat's Stop button. */
+  sendCardChatKey: (id: string, key: "escape" | "interrupt") =>
+    post<{ sent: true }>(`/cards/${encodeURIComponent(id)}/chat/key`, { key }),
 
   startCardBrowser: (id: string) => post<unknown>(`/cards/${encodeURIComponent(id)}/browser`),
   stopCardBrowser: (id: string) => del<unknown>(`/cards/${encodeURIComponent(id)}/browser`),
