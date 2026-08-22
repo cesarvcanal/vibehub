@@ -426,25 +426,44 @@ function runnerUnreachable(err: unknown): Error {
 }
 
 /**
- * In-memory LOCK per card: the pre-provisioning (on creation) and the open (on click) run the SAME
- * script in the runner — two `git clone` calls into the same directory in parallel break the clone.
- * Every call queues behind the card's previous one and runs when it has finished (success or
- * error); since the script is idempotent, an open that waited for a prepare only pays for the
- * verification (tenths of a second, not seconds). One backend process = a Map is enough (no other
- * process touches this runner).
+ * In-memory LOCK, keyed by the CLONE the script is going to touch: the pre-provisioning (on
+ * creation) and the open (on click) run the SAME script in the runner, and everything it does to a
+ * repository — `git clone` into the directory, `fetch --prune`, `worktree add` — is a write to ONE
+ * shared clone under /work. Two of those at once do not merely race: a second clone into a
+ * half-populated directory dies with "destination path already exists", and a fetch that overlaps
+ * another fetch or a worktree add dies on `index.lock`/`cannot lock ref`. `set -e` then fails the
+ * whole script, so what the user sees is a card that refuses to open — and, because the clone that
+ * came first carries on, the same card opening fine a couple of minutes later.
+ *
+ * A per-CARD key would not cover that: the cards that collide are DIFFERENT cards of the SAME
+ * project, which is exactly what creating two cards in a row does. So the key is the clone
+ * directory, and cards with no repository (scratch projects, which touch nothing shared) fall back
+ * to their own id and never queue behind anyone.
+ *
+ * The cost is small: the script is idempotent, so a card that waited for a neighbour's clone only
+ * pays for the verification (tenths of a second, no network — the fetch only runs when the worktree
+ * is missing). One backend process = a Map is enough (no other process touches this runner).
  */
-const cardLocks = new Map<string, Promise<unknown>>();
+const provisionLocks = new Map<string, Promise<unknown>>();
 
-async function withCardLock<T>(cardId: string, fn: () => Promise<T>): Promise<T> {
-  const previous = cardLocks.get(cardId) ?? Promise.resolve();
+async function withProvisionLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const previous = provisionLocks.get(key) ?? Promise.resolve();
   const run = previous.then(fn, fn);
   const tail = run.then(() => undefined, () => undefined);
-  cardLocks.set(cardId, tail);
+  provisionLocks.set(key, tail);
   try {
     return await run;
   } finally {
-    if (cardLocks.get(cardId) === tail) cardLocks.delete(cardId);
+    if (provisionLocks.get(key) === tail) provisionLocks.delete(key);
   }
+}
+
+/**
+ * The lock key for a card: the project's clone directory when it has a repository (shared with
+ * every other card of that project), the card itself otherwise. PURE.
+ */
+export function provisionLockKey(project: Project, card: Card): string {
+  return cardWorkPaths(project, card).repoDir ?? `card:${card.id}`;
 }
 
 /** Result of provisioning: the loaded card/project and the effective account (for the audit line). */
@@ -462,7 +481,15 @@ interface ProvisionResult {
  * provisioning.
  */
 async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
-  return withCardLock(cardId, async () => {
+  // The KEY is resolved before the queue is entered (it names the clone this script will write to);
+  // the card and the project are read AGAIN inside, because what matters to the script is the state
+  // in force after whoever was ahead in the queue has finished.
+  const pending = await getCard(cardId);
+  if (!pending) throw new Error("card not found");
+  const pendingProject = await getProject(pending.projectId);
+  if (!pendingProject) throw new Error("project for this card not found");
+
+  return withProvisionLock(provisionLockKey(pendingProject, pending), async () => {
     const card = await getCard(cardId);
     if (!card) throw new Error("card not found");
     const project = await getProject(card.projectId);
