@@ -274,3 +274,48 @@ describe("sessionGoneError", () => {
     await expect(maestro.sendToTerminal(c.id, "hello")).rejects.toThrow(/open the card/i);
   });
 });
+
+describe("session introspection", () => {
+  const line = (obj: unknown) => JSON.stringify(obj);
+
+  it("reads the model of the LAST assistant turn", async () => {
+    const { maestro } = await load();
+    const jsonl = [
+      line({ type: "assistant", message: { model: "claude-sonnet-5", content: [] } }),
+      line({ type: "user", message: { content: "x" } }),
+      line({ type: "assistant", message: { model: "claude-opus-5", content: [] } }),
+    ].join("\n");
+    expect(maestro.parseLastModel(jsonl)).toBe("claude-opus-5");
+    expect(maestro.parseLastModel("")).toBeNull();
+    expect(maestro.parseLastModel('{"type":"assi')).toBeNull();
+  });
+
+  it("maps model ids to the names the UI shows, and passes unknown ids through", async () => {
+    const { maestro } = await load();
+    expect(maestro.modelLabelFor("claude-opus-5")).toBe("Opus");
+    expect(maestro.modelLabelFor("claude-fable-5")).toBe("Fable");
+    expect(maestro.modelLabelFor("claude-haiku-4-5-20251001")).toBe("Haiku");
+    expect(maestro.modelLabelFor("gpt-x")).toBe("gpt-x");
+    expect(maestro.modelLabelFor(null)).toBeNull();
+  });
+
+  it("reports the effective account name and the live model; tolerates no transcript", async () => {
+    const { maestro, registry } = await load();
+    const acct = await registry.createAccount({ name: "Tech" });
+    const p = await registry.createProject({ name: "billing", defaultAccountSlug: acct.slug });
+    const c = await registry.createCard({ projectId: p.id, title: "x" });
+    runScript.mockResolvedValueOnce({ stdout: line({ type: "assistant", message: { model: "claude-opus-5", content: [] } }), stderr: "" });
+    const info = await maestro.sessionInfo(c.id);
+    expect(info).toEqual({ model: "claude-opus-5", modelLabel: "Opus", account: { slug: acct.slug, name: "Tech" } });
+    runScript.mockRejectedValueOnce(new Error("runner down"));
+    expect((await maestro.sessionInfo(c.id)).model).toBeNull();
+  });
+
+  it("falls back to the default account label when nothing is set", async () => {
+    const { maestro, registry } = await load();
+    await registry.setDefaultAccountLabel("principal");
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "x" });
+    expect((await maestro.sessionInfo(c.id)).account).toEqual({ slug: null, name: "principal" });
+  });
+});

@@ -2,6 +2,7 @@ import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.
 import { config } from "../../config/env.js";
 import {
   listProjects, listAllCards, getCard, getProject, hasLiveSession, effectiveAccountSlug,
+  listAccounts, getConfig,
   type Card, type Project, type BoardColumn, type CardStatus,
 } from "../board/registry.js";
 import { cardWorkPaths } from "../board/workspace.js";
@@ -297,4 +298,78 @@ export async function readTerminal(cardId: string, last = 3): Promise<ReadResult
     "card transcript read (last assistant answers)",
   );
   return { cardId: card.id, title: card.title, situation: terminalSituation(card), answers };
+}
+
+/* ----------------------------------------------------------- session introspection */
+
+/** Model ids Claude Code writes into transcripts, mapped to the names the UI shows. PURE. */
+export function modelLabelFor(model: string | null | undefined): string | null {
+  if (!model) return null;
+  const m = model.toLowerCase();
+  if (m.includes("fable")) return "Fable";
+  if (m.includes("opus")) return "Opus";
+  if (m.includes("sonnet")) return "Sonnet";
+  if (m.includes("haiku")) return "Haiku";
+  return model;
+}
+
+/**
+ * The model of the LAST assistant turn in a transcript — what the session is actually using right
+ * now, whatever the card or the account says it should be. Malformed lines are skipped. PURE.
+ */
+export function parseLastModel(jsonl: string): string | null {
+  let last: string | null = null;
+  for (const line of jsonl.split(/\r?\n/)) {
+    const s = line.trim();
+    if (!s) continue;
+    let obj: unknown;
+    try {
+      obj = JSON.parse(s);
+    } catch {
+      continue;
+    }
+    if (!obj || typeof obj !== "object" || (obj as { type?: unknown }).type !== "assistant") continue;
+    const model = (obj as { message?: { model?: unknown } }).message?.model;
+    if (typeof model === "string" && model) last = model;
+  }
+  return last;
+}
+
+export interface SessionInfo {
+  /** Raw model id from the transcript, or null before the first reply. */
+  model: string | null;
+  modelLabel: string | null;
+  /** The EFFECTIVE account (card → project → default) with its display name. */
+  account: { slug: string | null; name: string };
+}
+
+/** What a card's session is really running with. Read-only; tolerates a missing transcript. */
+export async function sessionInfo(cardId: string): Promise<SessionInfo> {
+  const card = await getCard(cardId);
+  if (!card) throw new Error("card not found");
+  const project = await getProject(card.projectId);
+  if (!project) throw new Error("project for this card not found");
+
+  const slug = effectiveAccountSlug(card, project);
+  const accounts = await listAccounts();
+  const config = await getConfig();
+  const name = slug ? (accounts.find((a) => a.slug === slug)?.name ?? slug) : (config.defaultAccountLabel ?? "default");
+
+  let model: string | null = null;
+  try {
+    const profileDir = profileDirFor(slug);
+    const { cwd } = cardWorkPaths(project, card);
+    const { stdout } = await hostExecutor().runScript(
+      buildReadTranscriptScript(config_runner_container(), seedDestDir(profileDir, cwd), 200),
+      { timeoutMs: 15_000 },
+    );
+    model = parseLastModel(stdout);
+  } catch {
+    model = null; // runner unreachable or no transcript yet — the UI shows the default
+  }
+  return { model, modelLabel: modelLabelFor(model), account: { slug: slug ?? null, name } };
+}
+
+function config_runner_container(): string {
+  return config.runner.container;
 }

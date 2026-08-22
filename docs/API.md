@@ -90,6 +90,7 @@ ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx statu
 | POST | `/api/transcribe/keys` | `{ openaiKey?, anthropicKey? }` — empty string clears; Whisper transcribes, Claude proofreads against the brain |
 | POST | `/api/cards/:id/transcribe` | `{ base64, mimeType }` → `{ text, proofread }`; 503 when voice input is not configured |
 | POST | `/api/import` | `{ items: [{ repo, title, sessionId, branch?, column? }], stageDir? }` — adopt staged Claude sessions as cards |
+| GET | `/api/cards/:id/session` | `{ model, modelLabel, account: { slug, name } }` — what the session is REALLY using: model from the last assistant turn, effective account |
 | GET | `/api/cards/:id/paths` | where the card maps to inside the runner (debugging an import) |
 
 ## MCP — the board, from inside a card
