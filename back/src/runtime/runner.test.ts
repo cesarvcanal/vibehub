@@ -90,6 +90,22 @@ describe("buildRunScript", () => {
     expect(script).toContain("sleep infinity");
     expect(script).toContain("--restart unless-stopped");
   });
+  it("joins the configured network on create AND on an existing container — a fresh compose install must reach `vibehub:3010`", () => {
+    const script = buildRunScript({ ...opts, network: "vibehub" });
+    expect(script).toContain("--network 'vibehub'");
+    expect(script).toContain("docker network connect 'vibehub' 'vibehub-runner'");
+  });
+
+  it("stays on the default bridge when no network is configured", () => {
+    const script = buildRunScript(opts);
+    expect(script).not.toContain("--network");
+    expect(script).not.toContain("network connect");
+  });
+
+  it("rejects a network name that is not a docker identifier", () => {
+    expect(() => buildRunScript({ ...opts, network: "x; rm -rf /" })).toThrow(/invalid docker network/);
+  });
+
   it("quotes a hostile container name into a single argument", () => {
     const script = buildRunScript({ ...opts, container: "a'; rm -rf /; '" });
     expect(script).toContain(`'a'\\''; rm -rf /; '\\'''`);

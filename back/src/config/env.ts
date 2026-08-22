@@ -43,6 +43,12 @@ export interface VibehubConfig {
     image: string;
     /** Host directory holding the runner's persistent volumes (/root and /work bind mounts). */
     baseDir: string;
+    /**
+     * Docker network to attach the runner to. Under docker-compose this is the compose network, so
+     * the runner can reach vibehub by service name (`http://vibehub:3010`) for status hooks and
+     * the built-in MCP. Empty = the daemon's default bridge (then publicUrl must be a host address).
+     */
+    network: string;
   };
   /** Master key for the local vault. Empty = generated once into <dataDir>/master.key (mode 600). */
   secretKey: string;
@@ -66,6 +72,7 @@ export const config: VibehubConfig = {
     container: str("VIBEHUB_RUNNER_CONTAINER", "vibehub-runner"),
     image: str("VIBEHUB_RUNNER_IMAGE", "node:24-bookworm"),
     baseDir: str("VIBEHUB_RUNNER_BASE_DIR", "/opt/vibehub/runner"),
+    network: str("VIBEHUB_RUNNER_NETWORK", ""),
   },
   secretKey: str("VIBEHUB_SECRET_KEY", ""),
   sessionSecret: str("VIBEHUB_SESSION_SECRET", ""),

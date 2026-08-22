@@ -57,8 +57,10 @@ docker compose up -d
 Open `http://localhost:3010` and follow the wizard: create the owner account, choose where the
 runner lives, connect GitHub, sign in to Claude. It provisions the runner container for you.
 
-Running it on a server? Set `VIBEHUB_PUBLIC_URL` to an address the runner can reach and put it
-behind your own TLS. See [`.env.example`](.env.example) for every knob.
+Running it on a server? Put it behind your own TLS. Running it outside docker-compose (your own
+orchestration, a remote Docker host)? Set `VIBEHUB_PUBLIC_URL` to an address the runner can route
+to — the status hooks and the built-in MCP post back to it. See [`.env.example`](.env.example)
+for every knob.
 
 ### Requirements
 
@@ -96,7 +98,8 @@ Everything is an environment variable with a working default. The ones that matt
 |---|---|---|
 | `VIBEHUB_PUBLIC_URL` | `http://127.0.0.1:3010` | Where the runner posts card status. Must be reachable **from the runner**. |
 | `VIBEHUB_RUNNER_KIND` | `local` | `local` (Docker socket) or `ssh` (remote Docker host). |
-| `VIBEHUB_RUNNER_BASE_DIR` | `/opt/vibehub/runner` | Host path for the runner's persistent `/root` and `/work`. |
+| `VIBEHUB_RUNNER_BASE_DIR` | `/opt/vibehub/runner` | Host path for the runner's persistent `/root` and `/work` (macOS: use a path under `$HOME`). |
+| `VIBEHUB_RUNNER_NETWORK` | `vibehub` (compose) | Docker network the runner joins, so `http://vibehub:3010` resolves from inside it. |
 | `VIBEHUB_DATA_DIR` | `data` | Board, settings, users, encrypted vault. **Back this up.** |
 | `VIBEHUB_SECRET_KEY` | generated | Vault master key. Lose it and the stored tokens are gone. |
 | `VIBEHUB_INSECURE_COOKIES` | `0` | Set to `1` when serving over plain http. |

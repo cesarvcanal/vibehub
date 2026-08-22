@@ -25,7 +25,12 @@ mkdir -p "$DIR"
 cd "$DIR"
 
 # The runner's persistent /root and /work live on the host, outside any container's lifetime.
-RUNNER_BASE="${VIBEHUB_RUNNER_BASE_DIR:-/opt/vibehub/runner}"
+# macOS Docker Desktop only shares a few roots (/Users, /tmp, …) — /opt is not one of them.
+if [ "$(uname -s)" = "Darwin" ]; then
+  RUNNER_BASE="${VIBEHUB_RUNNER_BASE_DIR:-$HOME/.vibehub/runner}"
+else
+  RUNNER_BASE="${VIBEHUB_RUNNER_BASE_DIR:-/opt/vibehub/runner}"
+fi
 if ! mkdir -p "$RUNNER_BASE" 2>/dev/null; then
   say "Cannot create $RUNNER_BASE without privileges — trying with sudo"
   sudo mkdir -p "$RUNNER_BASE"
@@ -44,6 +49,7 @@ services:
       VIBEHUB_PUBLIC_URL: "\${VIBEHUB_PUBLIC_URL:-http://vibehub:3010}"
       VIBEHUB_RUNNER_KIND: "local"
       VIBEHUB_RUNNER_BASE_DIR: "${RUNNER_BASE}"
+      VIBEHUB_RUNNER_NETWORK: "vibehub"
       VIBEHUB_INSECURE_COOKIES: "\${VIBEHUB_INSECURE_COOKIES:-1}"
       VIBEHUB_SECRET_KEY: "\${VIBEHUB_SECRET_KEY:-}"
     volumes:

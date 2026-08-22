@@ -97,16 +97,26 @@ export interface GitIdentity {
  * exists it is started (not recreated — recreating would wipe anything installed in the image
  * layer), otherwise it is created. PURE.
  */
-export function buildRunScript(opts: { container: string; image: string; baseDir: string }): string {
-  const { container, image, baseDir } = opts;
+export function buildRunScript(opts: { container: string; image: string; baseDir: string; network?: string }): string {
+  const { container, image, baseDir, network = "" } = opts;
+  if (network && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(network)) {
+    throw new Error(`invalid docker network name: '${network}'`);
+  }
   return [
     "set -e",
     `mkdir -p ${shQuote(`${baseDir}/root`)} ${shQuote(`${baseDir}/work/scratch`)}`,
     `if [ -n "$(docker ps -aq -f name=^${container}$)" ]; then`,
     `  docker start ${shQuote(container)} >/dev/null 2>&1 || true`,
+    // A runner created before the network was configured (or by an older version) is attached in
+    // place: `network connect` is a no-op when already joined, so re-provisioning stays idempotent.
+    ...(network ? [`  docker network connect ${shQuote(network)} ${shQuote(container)} >/dev/null 2>&1 || true`] : []),
     "else",
     `  docker run -d --name ${shQuote(container)} \\`,
     "    --restart unless-stopped \\",
+    // The compose network, so `http://vibehub:3010` resolves from inside the runner. Without this
+    // the runner lands on the default bridge, the status hooks post into the void, and a fresh
+    // install looks alive while no card ever changes column.
+    ...(network ? [`    --network ${shQuote(network)} \\`] : []),
     // The tmux server is started by a non-interactive `docker exec`, which does not read .profile,
     // and decides UTF-8 from the environment it is born into. Without these, accented characters
     // degrade to "_" in the web terminal.
@@ -199,9 +209,9 @@ export interface ProvisionOpts {
  */
 export async function provisionRunner(opts: ProvisionOpts): Promise<void> {
   const host = hostExecutor();
-  const { container, image, baseDir } = config.runner;
+  const { container, image, baseDir, network } = config.runner;
   const token = await ensureRunnerToken();
-  await host.runScript(buildRunScript({ container, image, baseDir }), { timeoutMs: 300_000, onChunk: opts.onChunk });
+  await host.runScript(buildRunScript({ container, image, baseDir, network }), { timeoutMs: 300_000, onChunk: opts.onChunk });
   await host.runScript(
     buildSetupScript({
       container,

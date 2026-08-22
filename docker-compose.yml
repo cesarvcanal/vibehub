@@ -11,7 +11,8 @@
 #   vibehub-data          your board, settings and encrypted vault. Back this up.
 #   /opt/vibehub/runner   the runner's persistent /root and /work. Lives on the HOST, because the
 #                         path is what the host's Docker daemon binds — not a path inside this
-#                         container.
+#                         container. On macOS with Docker Desktop, /opt is not shared by default:
+#                         set VIBEHUB_RUNNER_BASE_DIR=$HOME/.vibehub/runner (the installer does).
 
 services:
   vibehub:
@@ -27,6 +28,9 @@ services:
       VIBEHUB_PUBLIC_URL: "${VIBEHUB_PUBLIC_URL:-http://vibehub:3010}"
       VIBEHUB_RUNNER_KIND: "${VIBEHUB_RUNNER_KIND:-local}"
       VIBEHUB_RUNNER_BASE_DIR: "${VIBEHUB_RUNNER_BASE_DIR:-/opt/vibehub/runner}"
+      # The runner joins this network, which is what makes "http://vibehub:3010" resolve from
+      # inside it (status hooks, the built-in MCP). Must match the network name below.
+      VIBEHUB_RUNNER_NETWORK: "${VIBEHUB_RUNNER_NETWORK:-vibehub}"
       # Plain http on a LAN install: cookies cannot be Secure or nobody can log in.
       VIBEHUB_INSECURE_COOKIES: "${VIBEHUB_INSECURE_COOKIES:-1}"
       # Set this to pin the vault key instead of letting vibehub generate one into the data volume.
