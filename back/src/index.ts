@@ -20,6 +20,7 @@ import { mcpRoutes } from "./routes/mcp.js";
 import { cardSessionRoutes } from "./routes/cardSession.js";
 import { chatRoutes } from "./routes/chat.js";
 import { accountLoginRoutes } from "./routes/accountLogin.js";
+import { sweepIdleCards } from "./services/board/workspace.js";
 
 /**
  * The vibehub server: one process serving the API, the websocket terminals, and (in production) the
@@ -87,10 +88,33 @@ export async function buildServer() {
   return app;
 }
 
+/**
+ * How often the idle sweep runs. Not the threshold — that is `idleHibernateMinutes` in settings and
+ * is measured in hours; this is only the resolution at which we notice, and five minutes of extra
+ * life on a terminal nobody has touched since lunch costs nothing.
+ *
+ * It lives in `main()` rather than in `buildServer()` on purpose: tests build the server and must
+ * not inherit a timer that kills sessions underneath them.
+ */
+const IDLE_SWEEP_MS = 5 * 60_000;
+
+function startIdleSweep(): NodeJS.Timeout {
+  const timer = setInterval(() => {
+    void sweepIdleCards().catch((err: unknown) => {
+      // Best-effort by design: a runner that is down means the sweep waits five more minutes.
+      logger.warn({ err }, "idle sweep failed — no card was hibernated this pass");
+    });
+  }, IDLE_SWEEP_MS);
+  // The sweep must never be the reason the process stays alive.
+  timer.unref?.();
+  return timer;
+}
+
 async function main(): Promise<void> {
   await mkdir(config.dataDir, { recursive: true });
   const app = await buildServer();
   await app.listen({ port: config.port, host: config.host });
+  startIdleSweep();
   logger.info(
     { port: config.port, dataDir: config.dataDir, runner: config.runner.kind },
     `vibehub listening on http://${config.host}:${config.port}`,

@@ -53,6 +53,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [autonomous, setAutonomous] = React.useState(true);
   const [defaultLabel, setDefaultLabel] = React.useState("");
   const [language, setLanguage] = React.useState("");
+  // Kept as a STRING: the field has to be clearable while you retype it, and "" is not 0.
+  const [idleHibernate, setIdleHibernate] = React.useState("");
   const [githubLabel, setGithubLabel] = React.useState("");
   const [githubToken, setGithubToken] = React.useState("");
   const [openaiKey, setOpenaiKey] = React.useState("");
@@ -68,6 +70,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     setAutonomous(settings.data.autonomous);
     setDefaultLabel(settings.data.defaultAccountLabel ?? "");
     setLanguage(settings.data.transcribeLanguage ?? "");
+    setIdleHibernate(String(settings.data.idleHibernateMinutes ?? 180));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, settings.data]);
 
@@ -130,6 +133,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       autonomous,
       defaultAccountLabel: defaultLabel.trim() || null,
       transcribeLanguage: language.trim() || null,
+      // A blank field is not "never" — it is a field being typed in. Leave the stored value alone.
+      ...(idleHibernate.trim() === "" ? {} : { idleHibernateMinutes: Number(idleHibernate.trim()) }),
     });
   };
 
@@ -202,6 +207,24 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               </div>
               <Switch id="settings-autonomous" checked={autonomous} onCheckedChange={setAutonomous} />
             </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="settings-idle-hibernate">{t("settings.idleHibernate")}</Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  id="settings-idle-hibernate"
+                  type="number"
+                  min={0}
+                  max={10080}
+                  step={5}
+                  value={idleHibernate}
+                  onChange={(e) => setIdleHibernate(e.target.value)}
+                  className="w-28 font-mono"
+                />
+                <span className="text-sm text-muted-foreground">{t("settings.idleHibernateUnit")}</span>
+              </div>
+              <p className="text-xs text-muted-foreground">{t("settings.idleHibernateHint")}</p>
+            </div>
+
             <div className="space-y-1.5">
               <Label htmlFor="settings-default-label">{t("settings.defaultLabel")}</Label>
               <Input

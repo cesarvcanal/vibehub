@@ -668,6 +668,77 @@ describe("restart (single and all) — a working card is protected", () => {
     expect(ws.cardsToRestart(cards).map((c) => c.id)).toEqual(["a", "b"]);
   });
 
+  it("cardsToHibernate (PURE): idle live sessions older than the threshold, never a working one", () => {
+    const now = 1_700_000_000_000; // a real epoch: the threshold is measured against real stamps
+    const old = now - 4 * 60 * 60_000; // four hours ago
+    const recent = now - 60_000;
+    const cards = [
+      { id: "a", openedAt: old, pausedAt: null, status: "waiting" as const, statusAt: old }, // cold → in
+      { id: "b", openedAt: old, pausedAt: null, status: null, statusAt: undefined }, // opened, never spoke → in
+      { id: "c", openedAt: old, pausedAt: null, status: "waiting" as const, statusAt: recent }, // just spoke → out
+      { id: "d", openedAt: old, pausedAt: null, status: "working" as const, statusAt: old }, // busy → OUT
+      { id: "e", openedAt: undefined, pausedAt: null, status: null, statusAt: undefined }, // never opened → out
+      { id: "f", openedAt: old, pausedAt: old, status: null, statusAt: undefined }, // paused → out
+      { id: "g", openedAt: old, pausedAt: null, hibernatedAt: old, status: null, statusAt: undefined }, // already cold → out
+    ];
+    const threeHours = 3 * 60 * 60_000;
+    expect(ws.cardsToHibernate(cards, now, threeHours).map((c) => c.id)).toEqual(["a", "b"]);
+    // 0 (or less) is how the setting spells "never".
+    expect(ws.cardsToHibernate(cards, now, 0)).toEqual([]);
+  });
+
+  it("hibernateCard: kills BOTH sessions and leaves the card in its column", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "waiting");
+    const before = await reg.getCard(card.id);
+    runScript.mockClear();
+
+    const cold = await ws.hibernateCard(card.id, "tester");
+    expect(cold?.hibernatedAt).toBeGreaterThan(0);
+    expect(cold?.column).toBe(before?.column);
+    expect(cold?.position).toBe(before?.position);
+    expect(runScript).toHaveBeenCalledTimes(1);
+    expect(scriptAt(0)).toContain(`tmux kill-session -t '${card.tmuxSession}'`);
+    expect(scriptAt(0)).toContain(`${card.tmuxSession}-sh`);
+
+    // Nothing to hibernate = nothing happens, and no script is run.
+    runScript.mockClear();
+    expect(await ws.hibernateCard(card.id)).toBeUndefined();
+    expect(await ws.hibernateCard("nope")).toBeUndefined();
+    expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("sweepIdleCards: hibernates the silent ones, spares the working one, and honours 0 = off", async () => {
+    const p = await reg.createProject({ name: "x" });
+    const cold = await reg.createCard({ projectId: p.id, title: "cold" });
+    const busy = await reg.createCard({ projectId: p.id, title: "busy" });
+    await ws.openCard(cold.id);
+    await ws.openCard(busy.id);
+    await reg.applyCardStatus(cold.id, "waiting");
+    await reg.applyCardStatus(busy.id, "working");
+
+    const settings = await import("../settings/settings.js");
+    await settings.updateSettings({ idleHibernateMinutes: 180 });
+
+    // Nothing is old enough yet.
+    expect(await ws.sweepIdleCards(Date.now())).toBe(0);
+
+    // Four hours later, the idle one goes cold and the working one does not.
+    runScript.mockClear();
+    const later = Date.now() + 4 * 60 * 60_000;
+    expect(await ws.sweepIdleCards(later)).toBe(1);
+    expect((await reg.getCard(cold.id))?.hibernatedAt).toBeGreaterThan(0);
+    expect((await reg.getCard(busy.id))?.hibernatedAt ?? null).toBeNull();
+    expect(lastScript()).toContain(`tmux kill-session -t '${cold.tmuxSession}'`);
+
+    // Turned off: even a card that has been silent for days is left alone.
+    await settings.updateSettings({ idleHibernateMinutes: 0 });
+    await ws.openCard(cold.id);
+    expect(await ws.sweepIdleCards(later + 24 * 60 * 60_000)).toBe(0);
+    expect((await reg.getCard(cold.id))?.hibernatedAt ?? null).toBeNull();
+  });
+
   it("restartCard: kills ONLY the claude session (not -sh) and does NOT touch the board", async () => {
     const { card } = await seed();
     await ws.openCard(card.id);

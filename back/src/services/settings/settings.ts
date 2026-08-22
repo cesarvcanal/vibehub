@@ -26,6 +26,15 @@ export interface Settings {
   setupCompletedAt: string | null;
   /** ISO 639-1 hint for voice transcription ("pt", "en"…). Null = let Whisper detect. */
   transcribeLanguage: string | null;
+  /**
+   * MINUTES a card's terminal may sit idle before it is HIBERNATED: the session is killed and the
+   * card stays exactly where it is on the board, marked cold. 0 turns the sweep off entirely.
+   *
+   * The default is three hours — long enough to survive a lunch and an afternoon of context
+   * switching, short enough that what you abandoned yesterday is not still holding a Claude process
+   * and pretending to be live work.
+   */
+  idleHibernateMinutes: number;
 }
 
 interface SettingsDoc { settings: Settings }
@@ -36,6 +45,7 @@ const DEFAULTS: Settings = {
   defaultAccountLabel: null,
   setupCompletedAt: null,
   transcribeLanguage: null,
+  idleHibernateMinutes: 180,
 };
 
 const store = new JsonStore<SettingsDoc>(
@@ -62,6 +72,7 @@ export interface SettingsPatch {
   autonomous?: boolean;
   defaultAccountLabel?: string | null;
   transcribeLanguage?: string | null;
+  idleHibernateMinutes?: number;
 }
 
 /** Validates and applies a partial update. Unknown fields are ignored, not merged blindly. */
@@ -79,6 +90,14 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
       throw new Error("transcribeLanguage must be a two-letter ISO 639-1 code, or null");
     }
   }
+  if (patch.idleHibernateMinutes !== undefined) {
+    const minutes = Number(patch.idleHibernateMinutes);
+    // A week is the ceiling: past that the setting is not "hibernate late", it is "never", and
+    // "never" already has a spelling (0).
+    if (!Number.isInteger(minutes) || minutes < 0 || minutes > 7 * 24 * 60) {
+      throw new Error("idleHibernateMinutes must be a whole number of minutes between 0 and 10080");
+    }
+  }
   return await store.mutate((doc) => {
     if (git?.name !== undefined) doc.settings.git.name = String(git.name).trim();
     if (git?.email !== undefined) doc.settings.git.email = String(git.email).trim();
@@ -89,6 +108,9 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
     }
     if (patch.transcribeLanguage !== undefined) {
       doc.settings.transcribeLanguage = patch.transcribeLanguage === null ? null : String(patch.transcribeLanguage).trim();
+    }
+    if (patch.idleHibernateMinutes !== undefined) {
+      doc.settings.idleHibernateMinutes = Number(patch.idleHibernateMinutes);
     }
     return doc.settings;
   });

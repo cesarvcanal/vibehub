@@ -4,10 +4,12 @@ import { statusUrl } from "../../runtime/runner.js";
 import { gitAuthHeaderFor, tokenFor } from "../github/client.js";
 import {
   getCard, getProject, applyOpenTerminal, markPrepared, pauseCard as registryPauseCard,
+  hibernateCard as registryHibernateCard,
   listAllCards, assertBranchName, assertSessionId, effectiveAccountSlug, isValidModel, hasLiveSession,
   markRestartPending,
   type Card, type Project, type RestartReason,
 } from "./registry.js";
+import { getSettings } from "../settings/settings.js";
 import { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir, profileDirFor, oauthTokenPath } from "../accounts/profiles.js";
 import { resolveAccountToken, writeTokenLines, ghTokenPath, writeGhTokenLines, removeGhTokenLines } from "../accounts/token.js";
 import { cardCdpEndpoint } from "../browser/ports.js";
@@ -801,6 +803,77 @@ export async function pauseCard(cardId: string, by?: string): Promise<Card> {
     );
   }
   return card;
+}
+
+/**
+ * HIBERNATES the card (the idle sweep, and POST /api/cards/:id/hibernate): the board goes first
+ * (`registryHibernateCard` refuses anything that is not an IDLE live session and answers undefined),
+ * then both tmux sessions die — Claude and the Shell — so the card stops costing a process.
+ *
+ * It is deliberately NOT a pause: the column and the position are untouched. A card you abandoned in
+ * "Waiting" stays in Waiting, where you left it, and only loses its dot. Reopening it is enough to
+ * bring it back — the attach recreates the session with `claude -c`, in the same conversation.
+ *
+ * Returns the card when it hibernated, or undefined when there was nothing to hibernate (never
+ * opened, already paused/hibernated, or `working`, which is a task in flight).
+ */
+export async function hibernateCard(cardId: string, by?: string): Promise<Card | undefined> {
+  const card = await registryHibernateCard(cardId);
+  if (!card) return undefined;
+  await killCardSession(card, { includeShell: true });
+  logger.info(
+    { audit: true, action: "card.hibernate", card: card.worktreeSlug, session: card.tmuxSession, by },
+    "card hibernated — tmux sessions ended in the runner, the card stayed where it was on the board",
+  );
+  return card;
+}
+
+/**
+ * When a card was last ALIVE: the newest of the last hook report and the first open. Not `updatedAt`
+ * — renaming a card or dragging it between columns is something a HUMAN did to the board, not a sign
+ * that the conversation is warm, and counting it would keep a dead terminal looking busy. PURE.
+ */
+export function lastActivityAt(card: Pick<Card, "statusAt" | "openedAt">): number {
+  return Math.max(card.statusAt ?? 0, card.openedAt ?? 0);
+}
+
+/**
+ * PURE selection for the idle sweep: live sessions that are NOT `working` and whose last sign of
+ * life is older than `idleMs`. `working` is excluded whatever the clock says — a long task is not an
+ * abandoned one, and the hooks stop talking while Claude thinks.
+ *
+ * `idleMs <= 0` selects NOTHING: that is how the setting spells "never hibernate". PURE/testable.
+ */
+export function cardsToHibernate<T extends Pick<Card, "openedAt" | "pausedAt" | "hibernatedAt" | "status" | "statusAt">>(
+  cards: T[],
+  now: number,
+  idleMs: number,
+): T[] {
+  if (!(idleMs > 0)) return [];
+  return cards.filter(
+    (c) => hasLiveSession(c) && c.status !== "working" && now - lastActivityAt(c) >= idleMs,
+  );
+}
+
+/**
+ * THE IDLE SWEEP (a timer in `index.ts`, every few minutes): hibernates every card whose terminal has
+ * been silent for longer than `idleHibernateMinutes`. Best-effort per card — a runner that is down
+ * must not stop the rest — and it reads the setting on EVERY pass, so changing it takes effect at the
+ * next sweep instead of at the next restart. Returns how many cards went cold.
+ */
+export async function sweepIdleCards(now: number = Date.now()): Promise<number> {
+  const { idleHibernateMinutes } = await getSettings();
+  const idleMs = Math.max(0, Number(idleHibernateMinutes) || 0) * 60_000;
+  if (idleMs <= 0) return 0;
+  const target = cardsToHibernate(await listAllCards(), now, idleMs);
+  if (target.length === 0) return 0;
+  const results = await Promise.allSettled(target.map((c) => hibernateCard(c.id, "idle-sweep")));
+  const hibernated = results.filter((r) => r.status === "fulfilled" && r.value).length;
+  logger.info(
+    { audit: true, action: "card.sweepIdle", idleMinutes: idleHibernateMinutes, candidates: target.length, hibernated },
+    "idle sweep — terminals with no sign of life were hibernated (columns untouched)",
+  );
+  return hibernated;
 }
 
 /**

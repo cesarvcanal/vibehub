@@ -122,6 +122,8 @@ export interface Settings {
   setupCompletedAt: string | null;
   /** ISO 639-1 hint for voice transcription, or null to let Whisper detect. */
   transcribeLanguage?: string | null;
+  /** Minutes a terminal may sit idle before it is hibernated. 0 = never. */
+  idleHibernateMinutes?: number;
   runner: RunnerSettings;
   /** Externally reachable base URL, when the install has one. */
   publicUrl?: string;
@@ -140,6 +142,7 @@ export interface SettingsPatch {
   autonomous?: boolean;
   defaultAccountLabel?: string | null;
   transcribeLanguage?: string | null;
+  idleHibernateMinutes?: number;
   runner?: Partial<RunnerSettings>;
 }
 
@@ -264,6 +267,12 @@ export interface Card {
    */
   preparedAt?: number;
   pausedAt?: number | null;
+  /**
+   * HIBERNATED: the session was killed for having sat idle, and nothing else changed — the card is
+   * in the same column, in the same place, with no dot. It is the "gone cold" mark, not a move.
+   * Opening the card clears it (the session comes back with `claude -c`, same conversation).
+   */
+  hibernatedAt?: number | null;
   /**
    * The shared brain, the MCP set, or this card's own model/account (`config`) changed while it was
    * mid-turn. Claude only reads any of them at start-up, so the server defers the restart instead of

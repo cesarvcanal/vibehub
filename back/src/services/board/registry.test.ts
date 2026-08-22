@@ -259,10 +259,13 @@ describe("THE MIRROR RULE (columnAfterStatus / columnAfterOpen — pure)", () =>
 });
 
 describe("pause decisions (hasLiveSession / shouldEndSessionOnMove / shouldEndSessionOnStatus — pure)", () => {
-  it("hasLiveSession: only with openedAt and without pausedAt", () => {
+  it("hasLiveSession: only with openedAt, without pausedAt and without hibernatedAt", () => {
     expect(hasLiveSession({ openedAt: 1 })).toBe(true);
     expect(hasLiveSession({ openedAt: 1, pausedAt: null })).toBe(true);
     expect(hasLiveSession({ openedAt: 1, pausedAt: 2 })).toBe(false);
+    // hibernated = the sweep killed the session; the card only stayed where it was.
+    expect(hasLiveSession({ openedAt: 1, hibernatedAt: 2 })).toBe(false);
+    expect(hasLiveSession({ openedAt: 1, hibernatedAt: null })).toBe(true);
     expect(hasLiveSession({})).toBe(false);
   });
 
@@ -908,6 +911,85 @@ describe("board registry (persisted)", () => {
       expect(resumed?.column).toBe("waiting");
       expect(resumed?.pausedAt).toBeNull();
       expect(resumed?.openedAt).toBe(opened?.openedAt);
+    });
+  });
+
+  describe("hibernation (hibernateCard) — the session goes, the card does not move", () => {
+    it("stamps hibernatedAt and clears the dot WITHOUT touching the column or the position", async () => {
+      const p = await seedProject();
+      const first = await reg.createCard({ projectId: p.id, title: "first" });
+      const card = await reg.createCard({ projectId: p.id, title: "cold" });
+      await reg.applyOpenTerminal(first.id);
+      await reg.applyOpenTerminal(card.id);
+      await reg.applyCardStatus(card.id, "waiting");
+      const before = await reg.getCard(card.id);
+
+      const cold = await reg.hibernateCard(card.id);
+      expect(cold?.hibernatedAt).toBeGreaterThan(0);
+      expect(cold?.status).toBeNull();
+      expect(cold?.statusAt).toBeUndefined();
+      // THE point of hibernating rather than pausing: nothing about the board changed.
+      expect(cold?.column).toBe(before?.column);
+      expect(cold?.position).toBe(before?.position);
+      expect(cold?.openedAt).toBe(before?.openedAt);
+      expect(hasLiveSession(cold!)).toBe(false);
+      // and the card that was NOT hibernated keeps its own place
+      expect((await reg.getCard(first.id))?.position).toBe(before?.position === 0 ? 1 : 0);
+    });
+
+    it("refuses a WORKING card, a never-opened one, a paused one, one already cold and an unknown id", async () => {
+      const p = await seedProject();
+      const working = await reg.createCard({ projectId: p.id, title: "working" });
+      const fresh = await reg.createCard({ projectId: p.id, title: "never opened" });
+      const paused = await reg.createCard({ projectId: p.id, title: "paused" });
+      const twice = await reg.createCard({ projectId: p.id, title: "twice" });
+      await reg.applyOpenTerminal(working.id);
+      await reg.applyCardStatus(working.id, "working");
+      await reg.applyOpenTerminal(paused.id);
+      await reg.pauseCard(paused.id);
+      await reg.applyOpenTerminal(twice.id);
+      await reg.hibernateCard(twice.id);
+
+      // Claude mid-task is the one thing the sweep must never interrupt.
+      expect(await reg.hibernateCard(working.id)).toBeUndefined();
+      expect(await reg.hibernateCard(fresh.id)).toBeUndefined();
+      expect(await reg.hibernateCard(paused.id)).toBeUndefined();
+      expect(await reg.hibernateCard(twice.id)).toBeUndefined();
+      expect(await reg.hibernateCard("nope")).toBeUndefined();
+      expect((await reg.getCard(working.id))?.status).toBe("working");
+    });
+
+    it("a pending brain/MCP restart is dropped: there is no session left to restart", async () => {
+      const p = await seedProject();
+      const card = await reg.createCard({ projectId: p.id, title: "a" });
+      await reg.applyOpenTerminal(card.id);
+      await reg.markRestartPending(card.id, "brain");
+      const cold = await reg.hibernateCard(card.id);
+      expect(cold?.restartPendingAt).toBeNull();
+      expect(cold?.restartReason).toBeUndefined();
+    });
+
+    it("opening it wakes it up: hibernatedAt is cleared and openedAt is kept", async () => {
+      const p = await seedProject();
+      const card = await reg.createCard({ projectId: p.id, title: "a" });
+      const opened = await reg.applyOpenTerminal(card.id);
+      await reg.hibernateCard(card.id);
+      const woken = await reg.applyOpenTerminal(card.id);
+      expect(woken?.hibernatedAt).toBeNull();
+      expect(woken?.openedAt).toBe(opened?.openedAt);
+      expect(hasLiveSession(woken!)).toBe(true);
+    });
+
+    it("a status hook wakes it up too — a hook means a session exists again", async () => {
+      const p = await seedProject();
+      const card = await reg.createCard({ projectId: p.id, title: "a" });
+      await reg.applyOpenTerminal(card.id);
+      await reg.hibernateCard(card.id);
+      const alive = await reg.applyCardStatus(card.id, "working");
+      expect(alive?.hibernatedAt).toBeNull();
+      expect(alive?.status).toBe("working");
+      expect(alive?.column).toBe("working");
+      expect(hasLiveSession(alive!)).toBe(true);
     });
   });
 

@@ -1,7 +1,9 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, ChevronDown, ChevronUp, FolderGit2, Pause, Pencil, Plus, RotateCw, Trash2 } from "lucide-react";
+import {
+  Check, ChevronDown, ChevronUp, FolderGit2, Moon, Pause, Pencil, Plus, RotateCw, Trash2,
+} from "lucide-react";
 import { cn, isNewTabClick } from "@/lib/utils";
 import { apiErrorMessage } from "@/lib/apiError";
 import { Button } from "@/components/ui/button";
@@ -13,7 +15,15 @@ import {
 } from "@/features/board/components/ContextMenu";
 import { Logo } from "@/components/Logo";
 import { AccountRow } from "@/components/AccountRow";
-import { cardHref, nextPosition, splitSidebarCards, statusDot } from "@/features/board/lib/board";
+import {
+  SELECTED_ROW,
+  cardDot,
+  cardHref,
+  dotClass,
+  nextPosition,
+  splitSidebarCards,
+} from "@/features/board/lib/board";
+import { RecentCards } from "@/features/board/components/RecentCards";
 import {
   boardApi,
   cardRunnerHint,
@@ -49,13 +59,6 @@ import { t as translate, useT } from "@/i18n";
  * copy and a mobile copy — the expanded project owns the poll that keeps every dot on screen fresh,
  * and two of those would be two of everything.
  */
-
-/**
- * Selected-row accent: a hairline down the left edge and a whisper of tint. Used for the selected
- * project and for the card that is open, so "this is the one" always looks the same.
- */
-export const SELECTED_ROW =
-  "relative bg-primary/[0.06] before:absolute before:inset-y-1 before:left-0 before:z-10 before:w-[3px] before:rounded-r-full before:bg-primary/70 before:content-['']";
 
 /** Name on the row, repository in the tooltip: the repo was noise on a list you read by name. */
 function projectHint(project: BoardProject): string {
@@ -148,6 +151,10 @@ export function ProjectSidebar({
         <div className="flex shrink-0 items-center border-b border-border/60 px-3 py-2.5">
           <Logo size="side" />
         </div>
+
+        {/* Where you just were, above what you own. It hides itself when there is nothing to
+            go back to, so a fresh install still opens on the project list. */}
+        <RecentCards projects={projects} activeCardId={selectedCardId} onOpenCard={onOpenCard} />
 
         <div className="flex shrink-0 items-center justify-between border-b border-border/60 py-1 pl-3 pr-1.5">
           <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -331,6 +338,15 @@ function ProjectRow({
     onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardRestartError"))),
   });
 
+  const hibernateMutation = useMutation({
+    mutationFn: (id: string) => boardApi.hibernateCard(id),
+    onSuccess: (updated) => {
+      mirror(updated);
+      toast.success(translate("toast.cardHibernated"));
+    },
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardHibernateError"))),
+  });
+
   const moveMutation = useMutation({
     mutationFn: ({ id, column, position }: { id: string; column: BoardCard["column"]; position: number }) =>
       boardApi.patchCard(id, { column, position }),
@@ -408,6 +424,7 @@ function ProjectRow({
         }}
         onPause={(c) => pauseMutation.mutate(c.id)}
         onRestart={restart}
+        onHibernate={(c) => hibernateMutation.mutate(c.id)}
         onFinish={finish}
       />
     );
@@ -543,6 +560,7 @@ function SidebarCard({
   onRename,
   onPause,
   onRestart,
+  onHibernate,
   onFinish,
 }: {
   card: BoardCard;
@@ -551,18 +569,24 @@ function SidebarCard({
   onRename: () => void;
   onPause: (card: BoardCard) => void;
   onRestart: (card: BoardCard) => void;
+  onHibernate: (card: BoardCard) => void;
   onFinish: (card: BoardCard) => void;
 }) {
   const t = useT();
-  const dot = statusDot(card.status);
+  const dot = cardDot(card);
   const paused = Boolean(card.pausedAt);
-  const canPause = Boolean(card.openedAt) && !paused;
+  const canPause = Boolean(card.openedAt) && !paused && !card.hibernatedAt;
 
   const items: ContextMenuItem[] = [
     { key: "rename", label: t("card.rename"), icon: Pencil, onSelect: onRename },
     ...(canPause ? [{ key: "pause", label: t("card.pause"), icon: Pause, onSelect: () => onPause(card) }] : []),
     ...(canPause
       ? [{ key: "restart", label: t("card.restart"), icon: RotateCw, onSelect: () => onRestart(card) }]
+      : []),
+    // Only where there is a session to close. It does the idle sweep's job on demand: the terminal
+    // goes, the card does not move.
+    ...(canPause
+      ? [{ key: "hibernate", label: t("card.hibernate"), icon: Moon, onSelect: () => onHibernate(card) }]
       : []),
     ...(card.column !== "done"
       ? [{ key: "finish", label: t("card.finish"), icon: Check, onSelect: () => onFinish(card) }]
@@ -608,11 +632,7 @@ function SidebarCard({
             <Pause aria-hidden className="h-2.5 w-2.5 text-muted-foreground/70" />
           ) : dot ? (
             <span
-              className={cn(
-                "inline-block h-2 w-2 rounded-full",
-                dot.tone === "ok" ? "bg-emerald-400" : "bg-amber-400",
-                dot.live && "dot-live",
-              )}
+              className={cn("inline-block h-2 w-2 rounded-full", dotClass(dot.tone), dot.live && "dot-live")}
             />
           ) : null}
         </span>

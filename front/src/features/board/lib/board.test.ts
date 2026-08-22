@@ -11,8 +11,11 @@ import {
   sortByRecency,
   sortCards,
   sortProjects,
+  cardDot,
   cardHref,
+  dotClass,
   locationHref,
+  recentCards,
   splitSidebarCards,
   statusDot,
   writeLocation,
@@ -129,6 +132,54 @@ describe("statusDot", () => {
   it("shows NO dot when the runner has reported nothing", () => {
     expect(statusDot(null)).toBeNull();
     expect(statusDot(undefined)).toBeNull();
+  });
+});
+
+describe("cardDot", () => {
+  it("is the status dot for a card with a session", () => {
+    expect(cardDot(card({ id: "a", status: "working" }))?.tone).toBe("ok");
+    expect(cardDot(card({ id: "a", status: "waiting" }))?.tone).toBe("warn");
+    expect(cardDot(card({ id: "a" }))).toBeNull();
+  });
+
+  it("goes grey and still once the card is hibernated, whatever the last status said", () => {
+    const dot = cardDot(card({ id: "a", status: "waiting", hibernatedAt: 5 }));
+    expect(dot?.tone).toBe("cold");
+    expect(dot?.live).toBe(false);
+    // A green dot on a card with no process behind it would be a lie.
+    expect(cardDot(card({ id: "a", status: "working", hibernatedAt: 5 }))?.tone).toBe("cold");
+  });
+
+  it("gives each tone its own colour", () => {
+    const classes = (["ok", "warn", "cold"] as const).map(dotClass);
+    expect(new Set(classes).size).toBe(3);
+  });
+});
+
+describe("recentCards", () => {
+  it("is the conversations you have actually been in, newest first", () => {
+    const recent = recentCards([
+      card({ id: "never-opened", column: "backlog" }),
+      card({ id: "oldest", column: "waiting", openedAt: 10 }),
+      card({ id: "newest", column: "working", openedAt: 5, statusAt: 90 }),
+      card({ id: "middle", column: "paused", openedAt: 50 }),
+    ]);
+    expect(recent.map((c) => c.id)).toEqual(["newest", "middle", "oldest"]);
+  });
+
+  it("drops what you finished, keeps what merely went cold", () => {
+    const recent = recentCards([
+      card({ id: "done", column: "done", openedAt: 99 }),
+      card({ id: "hibernated", column: "waiting", openedAt: 10, hibernatedAt: 20 }),
+    ]);
+    expect(recent.map((c) => c.id)).toEqual(["hibernated"]);
+  });
+
+  it("stops at the limit — it is a glance, not a second board", () => {
+    const many = Array.from({ length: 9 }, (_, i) => card({ id: `c${i}`, column: "waiting", openedAt: i + 1 }));
+    expect(recentCards(many)).toHaveLength(5);
+    expect(recentCards(many, 2).map((c) => c.id)).toEqual(["c8", "c7"]);
+    expect(recentCards(many, 0)).toEqual([]);
   });
 });
 

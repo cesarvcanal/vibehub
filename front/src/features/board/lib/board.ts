@@ -133,8 +133,8 @@ export function moveProjectLocal(projects: BoardProject[], id: string, toIndex: 
 }
 
 export interface StatusDot {
-  /** Green = the agent is working; amber = it needs you. */
-  tone: "ok" | "warn";
+  /** Green = the agent is working; amber = it needs you; grey = the terminal went cold. */
+  tone: "ok" | "warn" | "cold";
   label: string;
   /** Pulses — reserved for "something is happening right now". */
   live: boolean;
@@ -148,6 +148,52 @@ export function statusDot(status: CardStatus | null | undefined): StatusDot | nu
   if (status === "working") return { tone: "ok", label: t("status.working"), live: true };
   if (status === "waiting") return { tone: "warn", label: t("status.waitingForYou"), live: false };
   return null;
+}
+
+/**
+ * The dot on a CARD, which is the status dot plus the one thing a status cannot say: the session is
+ * gone. A hibernated card kept its column and its place on the board on purpose — the only thing
+ * that changed is that nothing is running behind it — so the grey dot is the whole signal, and it
+ * beats the last status because that status describes a process that no longer exists.
+ */
+export function cardDot(
+  card: Pick<BoardCard, "status" | "hibernatedAt">,
+): StatusDot | null {
+  if (card.hibernatedAt) return { tone: "cold", label: t("status.hibernated"), live: false };
+  return statusDot(card.status);
+}
+
+/**
+ * Selected-row accent: a hairline down the left edge and a whisper of tint. Used by the selected
+ * project, the card that is open and the recent list, so "this is the one" always looks the same.
+ */
+export const SELECTED_ROW =
+  "relative bg-primary/[0.06] before:absolute before:inset-y-1 before:left-0 before:z-10 before:w-[3px] before:rounded-r-full before:bg-primary/70 before:content-['']";
+
+/** Tailwind background for a dot tone. One place, so every dot in the app is the same colour. */
+export function dotClass(tone: StatusDot["tone"]): string {
+  if (tone === "ok") return "bg-emerald-400";
+  if (tone === "warn") return "bg-amber-400";
+  return "bg-muted-foreground/50";
+}
+
+/** How many conversations the "Recent" list carries. Five: a glance, not a second board. */
+export const RECENT_LIMIT = 5;
+
+/**
+ * The last conversations you were in, newest first, across EVERY project.
+ *
+ * The question it answers is "where was I", so it only counts cards that have actually been opened
+ * (`openedAt`) — a backlog card nobody has talked to is not a conversation — and it drops the ones
+ * filed under `done`, which are the conversations you deliberately ended. Paused and hibernated ones
+ * stay: they are exactly the thread you might want to pick back up, and their icon says so.
+ *
+ * Ordering is `lastActivity` (the last hook report, or the first open), so the card whose agent just
+ * spoke rises to the top on the next poll. PURE.
+ */
+export function recentCards(cards: BoardCard[], limit: number = RECENT_LIMIT): BoardCard[] {
+  const started = cards.filter((c) => Boolean(c.openedAt) && c.column !== "done");
+  return sortByRecency(started).slice(0, Math.max(0, limit));
 }
 
 /**

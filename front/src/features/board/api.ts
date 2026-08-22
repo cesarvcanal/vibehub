@@ -168,6 +168,13 @@ export const RUNNER_KEY = ["board", "runner"] as const;
 export const GITHUB_KEY = ["board", "github"] as const;
 /** Prefix matching EVERY project's card list — for invalidating the whole board at once. */
 export const CARDS_PREFIX_KEY = ["board", "cards"] as const;
+/**
+ * Every card in the install, in ONE request — what the "Recent" list reads.
+ *
+ * It sits UNDER the cards prefix so invalidating the board invalidates it too, and the `@` keeps it
+ * out of the project-id namespace: no project can ever be called `@all`.
+ */
+export const ALL_CARDS_KEY = ["board", "cards", "@all"] as const;
 export const cardsKey = (projectId: string) => ["board", "cards", projectId] as const;
 export const cardKey = (cardId: string) => ["board", "card", cardId] as const;
 export const cardSessionKey = (cardId: string) => ["board", "card", cardId, "session"] as const;
@@ -319,6 +326,12 @@ export const boardApi = {
   listCards: (projectId: string) =>
     get<{ cards: BoardCard[] }>(`/projects/${encodeURIComponent(projectId)}/cards`).then((r) => r.cards ?? []),
 
+  /**
+   * Every card, from every project, in one request. The per-project lists stay the board's source;
+   * this exists for the views that cut ACROSS projects, where N polls would be N times the work.
+   */
+  listAllCards: () => get<{ cards: BoardCard[] }>("/cards").then((r) => r.cards ?? []),
+
   /** Light read of one card — it does NOT touch the runner, so a deep link can decide how to open. */
   getCard: (id: string) => get<{ card: BoardCard }>(`/cards/${encodeURIComponent(id)}`).then((r) => r.card),
 
@@ -346,6 +359,10 @@ export const boardApi = {
 
   restartCard: (id: string) =>
     post<{ card: BoardCard }>(`/cards/${encodeURIComponent(id)}/restart`).then((r) => r.card),
+
+  /** Kills the session and leaves the card where it is — the manual version of the idle sweep. */
+  hibernateCard: (id: string) =>
+    post<{ card: BoardCard }>(`/cards/${encodeURIComponent(id)}/hibernate`).then((r) => r.card),
 
   restartAllCards: () => post<RestartAllResult>("/cards/restart-all"),
 

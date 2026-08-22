@@ -94,6 +94,18 @@ cannot show is anything drawn only on the screen, so when the agent goes quiet m
 says so and offers the terminal instead of pretending. The choice is remembered per card and per
 device (localStorage), never inferred from the width of the screen.
 
+## Hibernation — the third thing a session can be
+
+Pausing MOVES a card (to `paused`); hibernating does not move it at all. A sweep every five minutes
+kills the tmux session of every card that has had no sign of life for longer than
+`idleHibernateMinutes` (default 180, `0` = off) and stamps `hibernatedAt`. The column, the position
+and the conversation are untouched — the card simply loses its dot and goes grey, which is how the
+board tells "what I am working on now" apart from "what I walked away from".
+
+A `working` card is never hibernated, whatever the clock says: the hooks go quiet while Claude
+thinks, and a long task is not an abandoned one. Waking up is opening the card (or any hook report):
+`hibernatedAt` is cleared and the attach recreates the session with `claude -c`, same conversation.
+
 ## State
 
 No database. Under `VIBEHUB_DATA_DIR`:
@@ -101,7 +113,7 @@ No database. Under `VIBEHUB_DATA_DIR`:
 | File | Holds |
 |---|---|
 | `board.json` | projects, cards, accounts, MCP servers |
-| `settings.json` | git identity, autonomy, setup stamp |
+| `settings.json` | git identity, autonomy, setup stamp, idle-hibernation threshold |
 | `users.json` | local accounts (scrypt hashes) |
 | `secrets.enc` | AES-256-GCM vault: GitHub token, Claude tokens, MCP secrets, runner token |
 | `master.key` | vault key, generated on first boot unless `VIBEHUB_SECRET_KEY` is set |
