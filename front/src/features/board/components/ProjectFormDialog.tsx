@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { patch } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { apiErrorMessage } from "@/lib/apiError";
 import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
 import {
@@ -28,6 +29,7 @@ import {
   splitRepo,
   type BoardProject,
 } from "@/features/board/api";
+import type { GithubConnection } from "@/api/types";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -44,6 +46,12 @@ import { t as translate, useT } from "@/i18n";
  * nothing to decide, so the field is not shown at all.
  *
  * A project with no repository is valid: its cards open in a scratch directory.
+ *
+ * CONNECTING AN ACCOUNT HAPPENS HERE. With nothing connected there is no repository picker, and a
+ * line of prose pointing at Settings is a dead end at the exact moment somebody is trying to create
+ * their first project — they came to pick a repository, so this is where the token goes in. The
+ * same form is one click away ("+ account") once there IS a connection, because a second account is
+ * added for the same reason: the repo you want is not in the list.
  */
 export function ProjectFormDialog({
   open,
@@ -67,6 +75,9 @@ export function ProjectFormDialog({
   const [connection, setConnection] = React.useState("");
   const [search, setSearch] = React.useState("");
   const [debounced, setDebounced] = React.useState("");
+  // Only meaningful when something IS connected: with nothing connected the form is the empty
+  // state itself and is always on screen.
+  const [connecting, setConnecting] = React.useState(false);
 
   // The search box hits the server, so give the typist a beat before asking GitHub.
   React.useEffect(() => {
@@ -125,6 +136,7 @@ export function ProjectFormDialog({
     setConnection(project?.githubConnectionId ?? "");
     setSearch("");
     setDebounced("");
+    setConnecting(false);
     applied.current = project?.repoFullName ?? null;
   }, [project]);
 
@@ -178,6 +190,15 @@ export function ProjectFormDialog({
       ),
   });
 
+  /** A freshly connected account becomes the one this project reads through. */
+  function applyConnection(added: GithubConnection) {
+    setConnection(added.id);
+    setRepo("");
+    setBranch("");
+    applied.current = null;
+    setConnecting(false);
+  }
+
   function pickRepo(fullName: string) {
     setRepo(fullName);
     applied.current = null;
@@ -230,7 +251,10 @@ export function ProjectFormDialog({
               than one — otherwise the answer is forced and the field is noise. */}
           {connections.length > 1 ? (
             <div className="space-y-1.5">
-              <Label htmlFor="project-connection">{t("project.account")}</Label>
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="project-connection">{t("project.account")}</Label>
+                <AddAccountLink open={connecting} onToggle={() => setConnecting((v) => !v)} />
+              </div>
               <select
                 id="project-connection"
                 aria-label={t("project.githubAccount")}
@@ -257,9 +281,20 @@ export function ProjectFormDialog({
             </div>
           ) : null}
 
+          {/* Adding an account when there already is one: the link lives next to the account select
+              when there is one to sit beside, and next to the repository label otherwise. */}
+          {connected && connecting ? (
+            <GithubConnectBox onConnected={applyConnection} onCancel={() => setConnecting(false)} />
+          ) : null}
+
           {connected ? (
             <div className="space-y-1.5">
-              <Label htmlFor="project-repo-search">{t("project.repository")}</Label>
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="project-repo-search">{t("project.repository")}</Label>
+                {connections.length > 1 ? null : (
+                  <AddAccountLink open={connecting} onToggle={() => setConnecting((v) => !v)} />
+                )}
+              </div>
               <div className="relative">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -295,18 +330,23 @@ export function ProjectFormDialog({
               ) : null}
             </div>
           ) : (
-            <div className="space-y-1.5">
-              <Label htmlFor="project-clone-url">{t("project.cloneUrl")}</Label>
-              <Input
-                id="project-clone-url"
-                value={cloneUrl}
-                onChange={(e) => setCloneUrl(e.target.value)}
-                placeholder="https://github.com/org/repo.git"
-                className="font-mono"
-              />
-              <p className="text-[11px] leading-relaxed text-muted-foreground">
-                {t("project.noGithubHint")}
-              </p>
+            <div className="space-y-3">
+              {/* THE empty state. Not a sentence pointing somewhere else: the thing that is missing,
+                  and the form that supplies it, in the place where it was missed. */}
+              <GithubConnectBox onConnected={applyConnection} />
+              <div className="space-y-1.5">
+                <Label htmlFor="project-clone-url">{t("project.cloneUrl")}</Label>
+                <Input
+                  id="project-clone-url"
+                  value={cloneUrl}
+                  onChange={(e) => setCloneUrl(e.target.value)}
+                  placeholder="https://github.com/org/repo.git"
+                  className="font-mono"
+                />
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  {t("project.noGithubHint")}
+                </p>
+              </div>
             </div>
           )}
 
@@ -387,5 +427,131 @@ export function ProjectFormDialog({
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+
+/** The "+ account" affordance. A link, not a button: it opens a form, it does not save anything. */
+function AddAccountLink({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  const t = useT();
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="text-[11px] font-medium text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
+    >
+      {open ? t("common.cancel") : t("github.addAccount")}
+    </button>
+  );
+}
+
+/**
+ * Connecting a GitHub account without leaving the dialog: a name, a token, one button.
+ *
+ * It is NOT a `<form>` — it is rendered inside the project form, and a nested form is invalid HTML
+ * that browsers resolve by ignoring the inner one. So the button is a plain button and Enter in
+ * either field submits this box explicitly, which also stops Enter from creating a half-filled
+ * project while somebody is pasting a token.
+ *
+ * The error is shown INLINE rather than as a toast: a bad token is a correction to make in the
+ * field right above it, and a toast that vanishes takes the reason with it.
+ */
+function GithubConnectBox({
+  onConnected,
+  onCancel,
+}: {
+  onConnected: (connection: GithubConnection) => void;
+  onCancel?: () => void;
+}) {
+  const t = useT();
+  const queryClient = useQueryClient();
+  const [label, setLabel] = React.useState("");
+  const [token, setToken] = React.useState("");
+
+  const connect = useMutation({
+    mutationFn: () => boardApi.addGithubConnection(label.trim(), token.trim()),
+    onSuccess: (connection) => {
+      // The whole `["board", "github", …]` subtree: the connection list AND every repo/branch query
+      // read through it, so the picker below appears already filled.
+      void queryClient.invalidateQueries({ queryKey: GITHUB_KEY });
+      setLabel("");
+      setToken("");
+      toast.success(
+        translate("toast.githubAdded", {
+          label: connection.label || connection.login,
+          login: connection.login,
+        }),
+      );
+      onConnected(connection);
+    },
+  });
+
+  const canSubmit = Boolean(token.trim()) && !connect.isPending;
+  function submit() {
+    if (canSubmit) connect.mutate();
+  }
+
+  return (
+    <div className="space-y-2 rounded-lg border border-border/70 bg-muted/20 p-3" data-testid="github-connect">
+      <p className="text-xs font-semibold">{t("github.connectTitle")}</p>
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        <strong className="font-medium text-foreground">{t("github.pasteToken")}</strong>
+        {t("github.pasteTokenRest")}
+        <span className="font-mono">repo</span>.{" "}
+        <a
+          href="https://github.com/settings/tokens"
+          target="_blank"
+          rel="noreferrer noopener"
+          className="underline underline-offset-2 hover:text-foreground"
+        >
+          github.com/settings/tokens
+        </a>
+      </p>
+      <Input
+        aria-label={t("github.accountName")}
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            submit();
+          }
+        }}
+        placeholder={t("github.accountNamePlaceholder")}
+        autoComplete="off"
+        maxLength={40}
+      />
+      <Input
+        aria-label={t("github.accessToken")}
+        type="password"
+        value={token}
+        onChange={(e) => setToken(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            submit();
+          }
+        }}
+        placeholder={t("github.tokenPlaceholder")}
+        autoComplete="off"
+        className={cn("font-mono", connect.isError && "border-destructive")}
+      />
+      {connect.isError ? (
+        <p role="alert" className="text-[11px] leading-relaxed text-destructive">
+          {apiErrorMessage(connect.error, translate("github.connectFailed"))}
+        </p>
+      ) : null}
+      <div className="flex justify-end gap-2">
+        {onCancel ? (
+          <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={connect.isPending}>
+            {t("common.cancel")}
+          </Button>
+        ) : null}
+        <Button type="button" variant="outline" size="sm" disabled={!canSubmit} onClick={submit}>
+          {connect.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+          {t("github.connect")}
+        </Button>
+      </div>
+    </div>
   );
 }

@@ -41,9 +41,13 @@ const REPOS: Record<string, GithubRepo[]> = {
 /** Records every `/github/repos` request so a test can assert which account was read through. */
 const reposCalls: (string | undefined)[] = [];
 
+/** The connections the fake server currently reports. `serve` sets it; connecting appends to it. */
+let served: GithubConnection[] = [];
+
 function serve(connections: GithubConnection[]): void {
+  served = connections;
   get.mockImplementation(async (url: string, config?: { params?: Record<string, string> }) => {
-    if (url === "/github") return { connections };
+    if (url === "/github") return { connections: served };
     if (url === "/github/repos") {
       const connection = config?.params?.connection;
       reposCalls.push(connection);
@@ -144,11 +148,107 @@ describe("ProjectFormDialog — GitHub account picker", () => {
     );
   });
 
-  it("points at Settings, and says it is a token, when no account is connected", async () => {
+  it("offers the connect form, not a pointer to Settings, when no account is connected", async () => {
     serve([]);
     renderApp(<ProjectFormDialog open onOpenChange={() => {}} />);
-    expect(await screen.findByLabelText("Clone URL")).toBeInTheDocument();
-    expect(screen.getByText(/pasted token, not a login/i)).toBeInTheDocument();
+    const box = await screen.findByTestId("github-connect");
+    expect(within(box).getByText("Connect a GitHub account")).toBeInTheDocument();
+    expect(within(box).getByText(/Paste a token — no login needed\./)).toBeInTheDocument();
+    expect(within(box).getByRole("link", { name: "github.com/settings/tokens" })).toHaveAttribute(
+      "href",
+      "https://github.com/settings/tokens",
+    );
+    expect(within(box).getByLabelText("Account name")).toBeInTheDocument();
+    expect(within(box).getByLabelText("Access token")).toBeInTheDocument();
+    // the clone URL escape hatch is still there for a repository that is not on GitHub
+    expect(screen.getByLabelText("Clone URL")).toBeInTheDocument();
+  });
+});
+
+describe("ProjectFormDialog — connecting an account from inside the dialog", () => {
+  beforeEach(() => serve([]));
+
+  it("posts the token and reveals the repository picker in place", async () => {
+    post.mockImplementation(async (url: string, body: { label: string; token: string }) => {
+      if (url !== "/github/connections") return {};
+      const connection = { ...PERSONAL, label: body.label };
+      served = [connection];
+      return { connection };
+    });
+
+    renderApp(<ProjectFormDialog open onOpenChange={() => {}} />);
+    const box = await screen.findByTestId("github-connect");
+    expect(screen.queryByLabelText("Repository")).toBeNull();
+
+    await userEvent.type(within(box).getByLabelText("Account name"), "personal");
+    await userEvent.type(within(box).getByLabelText("Access token"), "ghp_secret");
+    await userEvent.click(within(box).getByRole("button", { name: "Connect" }));
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/github/connections", { label: "personal", token: "ghp_secret" }),
+    );
+    // the picker appears where the empty state was, already reading through the new account
+    await waitFor(() => expect(repoSelect()).toBeInTheDocument());
+    await waitFor(() => expect(reposCalls).toContain("OCTOCAT"));
+    await waitFor(() =>
+      expect(within(repoSelect()).getByRole("option", { name: /octocat\/hello/ })).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId("github-connect")).toBeNull();
+  });
+
+  it("shows the server's refusal inline, and keeps the form up to fix it", async () => {
+    post.mockRejectedValue(new Error("bad credentials"));
+    renderApp(<ProjectFormDialog open onOpenChange={() => {}} />);
+    const box = await screen.findByTestId("github-connect");
+
+    await userEvent.type(within(box).getByLabelText("Access token"), "ghp_wrong");
+    await userEvent.click(within(box).getByRole("button", { name: "Connect" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/bad credentials|did not accept/i);
+    expect(screen.getByTestId("github-connect")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Repository")).toBeNull();
+  });
+
+  it("cannot be submitted without a token — the name is optional", async () => {
+    renderApp(<ProjectFormDialog open onOpenChange={() => {}} />);
+    const box = await screen.findByTestId("github-connect");
+    expect(within(box).getByRole("button", { name: "Connect" })).toBeDisabled();
+    await userEvent.type(within(box).getByLabelText("Access token"), "ghp_x");
+    expect(within(box).getByRole("button", { name: "Connect" })).toBeEnabled();
+  });
+
+  it("offers the same form behind “+ account” once an account exists", async () => {
+    serve([PERSONAL]);
+    renderApp(<ProjectFormDialog open onOpenChange={() => {}} />);
+    await waitFor(() => expect(repoSelect()).toBeInTheDocument());
+    expect(screen.queryByTestId("github-connect")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "+ account" }));
+    expect(await screen.findByTestId("github-connect")).toBeInTheDocument();
+    // and the repository picker stays put — adding an account does not replace the form
+    expect(repoSelect()).toBeInTheDocument();
+  });
+
+  it("selects the account just added, so the picker reads through it", async () => {
+    serve([PERSONAL]);
+    post.mockImplementation(async (url: string) => {
+      if (url !== "/github/connections") return {};
+      served = [PERSONAL, ORG];
+      return { connection: ORG };
+    });
+
+    renderApp(<ProjectFormDialog open onOpenChange={() => {}} />);
+    await waitFor(() => expect(repoSelect()).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: "+ account" }));
+    const box = await screen.findByTestId("github-connect");
+    await userEvent.type(within(box).getByLabelText("Access token"), "ghp_org");
+    await userEvent.click(within(box).getByRole("button", { name: "Connect" }));
+
+    await waitFor(() => expect(screen.getByLabelText("GitHub account")).toHaveValue("ACME_INC"));
+    await waitFor(() =>
+      expect(within(repoSelect()).getByRole("option", { name: /acme-inc\/erp-aux/ })).toBeInTheDocument(),
+    );
   });
 });
 

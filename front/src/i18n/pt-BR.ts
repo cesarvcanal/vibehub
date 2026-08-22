@@ -162,6 +162,10 @@ export const ptBR: Record<string, string> = {
   "github.accountNamePlaceholder": "pessoal",
   "github.accessToken": "Token de acesso",
   "github.tokenPlaceholder": "github_pat_… ou ghp_…",
+  "github.connectTitle": "Conectar uma conta do GitHub",
+  "github.connect": "Conectar",
+  "github.addAccount": "+ conta",
+  "github.connectFailed": "O GitHub não aceitou esse token.",
 
   /* ------------------------------------------------------------ caixa de log */
   "log.waiting": "Esperando a saída…",
@@ -192,6 +196,8 @@ export const ptBR: Record<string, string> = {
   "board.projects.one": "{n} projeto",
   "board.projects.other": "{n} projetos",
   "board.empty": "vazio",
+  "board.showMore": "Ver mais ({n})",
+  "board.showLess": "Ver menos",
   "board.noProjects": "Nenhum projeto ainda",
   "board.noProjectsBody":
     "Aponte um projeto pra um repositório e cada card vira um terminal do Claude no próprio worktree.",
@@ -416,7 +422,7 @@ export const ptBR: Record<string, string> = {
   "project.nothingMatched": "Nada bateu com “{q}”.",
   "project.cloneUrl": "URL de clone",
   "project.noGithubHint":
-    "Nenhuma conta do GitHub está conectada, então não tem de onde escolher. Adicione uma em Configurações — é um token colado, não um login — ou cole uma URL de clone aqui, ou deixe vazio e os cards abrem num diretório avulso.",
+    "Ou cole uma URL de clone de um repositório que não está no GitHub — ou deixe vazio, e os cards deste projeto abrem num diretório avulso.",
   "project.baseBranch": "Branch base",
   "project.branchHint": "O worktree de todo card é cortado dessa branch.",
   "project.defaultAccount": "Conta Claude padrão",

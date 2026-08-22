@@ -1,8 +1,9 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Loader2, Plus } from "lucide-react";
+import { ChevronDown, ChevronUp, Loader2, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/lib/useIsMobile";
 import { apiErrorMessage } from "@/lib/apiError";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,13 +17,18 @@ import {
 import { Label } from "@/components/ui/label";
 import { CardTile } from "@/features/board/components/CardTile";
 import {
-  COLUMNS,
   columnHint,
   columnLabel,
   groupByColumn,
   moveCardLocal,
   nextPosition,
 } from "@/features/board/lib/board";
+import {
+  MOBILE_COLUMNS,
+  hiddenCount,
+  useExpandedColumns,
+  visibleColumns,
+} from "@/features/board/lib/mobileColumns";
 import { boardTitle, useDocumentTitle } from "@/features/board/lib/documentTitle";
 import {
   ACCOUNTS_KEY,
@@ -64,6 +70,8 @@ export function KanbanBoard({
 }) {
   const t = useT();
   const queryClient = useQueryClient();
+  const isMobile = useIsMobile();
+  const [expanded, setExpanded] = useExpandedColumns();
   const boardKey = cardsKey(project.id);
   useDocumentTitle(boardTitle(project.name));
 
@@ -204,39 +212,49 @@ export function KanbanBoard({
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
       ) : (
-        // Five equal columns side by side from `xl`; two at `md`; one on a phone.
+        // Five equal columns side by side from `xl`; two at `md`; on a phone, Waiting and Working
+        // with the rest behind "show more" (see `visibleColumns`).
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
-          {COLUMNS.map((column) => (
-            <ColumnZone
-              key={column.key}
-              column={column.key}
-              label={columnLabel(column.key)}
-              hint={columnHint(column.key)}
-              count={groups[column.key].length}
-              active={Boolean(dragging) && dragging?.column !== column.key}
-              onDrop={() => dropOn(column.key)}
-            >
-              {groups[column.key].map((card) => (
-                <CardTile
-                  key={card.id}
-                  card={card}
-                  onOpen={onOpenCard}
-                  onDone={finish}
-                  onPause={(c) => pauseMutation.mutate(c.id)}
-                  onRestart={restart}
-                  onAccount={(c) => {
-                    setAccountChoice(c.accountSlug ?? "");
-                    setAccountTarget(c);
-                  }}
-                  onDelete={setDeleteTarget}
-                  onDragStart={setDragging}
-                  onDragEnd={() => setDragging(null)}
+          {visibleColumns(isMobile, expanded).map((column, index) => (
+            <React.Fragment key={column.key}>
+              <ColumnZone
+                column={column.key}
+                label={columnLabel(column.key)}
+                hint={columnHint(column.key)}
+                count={groups[column.key].length}
+                active={Boolean(dragging) && dragging?.column !== column.key}
+                onDrop={() => dropOn(column.key)}
+              >
+                {groups[column.key].map((card) => (
+                  <CardTile
+                    key={card.id}
+                    card={card}
+                    onOpen={onOpenCard}
+                    onDone={finish}
+                    onPause={(c) => pauseMutation.mutate(c.id)}
+                    onRestart={restart}
+                    onAccount={(c) => {
+                      setAccountChoice(c.accountSlug ?? "");
+                      setAccountTarget(c);
+                    }}
+                    onDelete={setDeleteTarget}
+                    onDragStart={setDragging}
+                    onDragEnd={() => setDragging(null)}
+                  />
+                ))}
+                {groups[column.key].length === 0 ? (
+                  <p className="px-1 py-2 text-center text-[11px] text-muted-foreground/60">{t("board.empty")}</p>
+                ) : null}
+              </ColumnZone>
+              {/* Sits between the two live columns and the rest, which is where the choice is. */}
+              {isMobile && index === MOBILE_COLUMNS.length - 1 ? (
+                <MoreColumnsToggle
+                  expanded={expanded}
+                  count={hiddenCount(groups)}
+                  onToggle={() => setExpanded(!expanded)}
                 />
-              ))}
-              {groups[column.key].length === 0 ? (
-                <p className="px-1 py-2 text-center text-[11px] text-muted-foreground/60">{t("board.empty")}</p>
               ) : null}
-            </ColumnZone>
+            </React.Fragment>
           ))}
         </div>
       )}
@@ -415,5 +433,37 @@ export function ColumnZone({
       </header>
       {children}
     </section>
+  );
+}
+
+
+/**
+ * The phone board's "show more" — the one control that reveals Paused, Backlog and Done.
+ *
+ * Full width and inside the grid, so it reads as the seam between the two columns you came for and
+ * the three you asked for, rather than as a header action. The count is on the button because a
+ * disclosure with nothing behind it is worth knowing about BEFORE tapping it.
+ */
+export function MoreColumnsToggle({
+  expanded,
+  count,
+  onToggle,
+}: {
+  expanded: boolean;
+  count: number;
+  onToggle: () => void;
+}) {
+  const t = useT();
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      className="w-full justify-center gap-1.5 text-xs"
+      aria-expanded={expanded}
+      onClick={onToggle}
+    >
+      {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+      {expanded ? t("board.showLess") : t("board.showMore", { n: count })}
+    </Button>
   );
 }

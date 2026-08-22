@@ -161,6 +161,10 @@ export const en: Record<string, string> = {
   "github.accountNamePlaceholder": "personal",
   "github.accessToken": "Access token",
   "github.tokenPlaceholder": "github_pat_… or ghp_…",
+  "github.connectTitle": "Connect a GitHub account",
+  "github.connect": "Connect",
+  "github.addAccount": "+ account",
+  "github.connectFailed": "GitHub did not accept that token.",
 
   /* ---------------------------------------------------------------- log box */
   "log.waiting": "Waiting for output…",
@@ -191,6 +195,8 @@ export const en: Record<string, string> = {
   "board.projects.one": "{n} project",
   "board.projects.other": "{n} projects",
   "board.empty": "empty",
+  "board.showMore": "Show more ({n})",
+  "board.showLess": "Show less",
   "board.noProjects": "No projects yet",
   "board.noProjectsBody":
     "Point a project at a repository and every card becomes a Claude terminal in its own worktree.",
@@ -412,7 +418,7 @@ export const en: Record<string, string> = {
   "project.nothingMatched": "Nothing matched “{q}”.",
   "project.cloneUrl": "Clone URL",
   "project.noGithubHint":
-    "No GitHub account is connected, so there is nothing to pick from. Add one in Settings — it is a pasted token, not a login — or paste a clone URL here, or leave it empty and the cards open in a scratch directory.",
+    "Or paste a clone URL for a repository that is not on GitHub — or leave it empty, and this project's cards open in a scratch directory.",
   "project.baseBranch": "Base branch",
   "project.branchHint": "Every card's worktree is cut from this branch.",
   "project.defaultAccount": "Default Claude account",
