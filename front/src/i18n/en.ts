@@ -262,6 +262,8 @@ export const en: Record<string, string> = {
   "sidebar.moveDown": "Move down",
   "sidebar.deleteProject": "Delete project…",
   "sidebar.actionsForProject": "Actions for {name}",
+  "sidebar.expandProject": "Show {name}'s cards",
+  "sidebar.collapseProject": "Hide {name}'s cards",
 
   /* ----------------------------------------------------------- card view */
   "cardView.refreshError": "Could not refresh the card in the runner",

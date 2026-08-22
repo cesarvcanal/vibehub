@@ -263,6 +263,8 @@ export const ptBR: Record<string, string> = {
   "sidebar.moveDown": "Mover pra baixo",
   "sidebar.deleteProject": "Excluir projeto…",
   "sidebar.actionsForProject": "Ações de {name}",
+  "sidebar.expandProject": "Mostrar os cards de {name}",
+  "sidebar.collapseProject": "Ocultar os cards de {name}",
 
   /* ---------------------------------------------------------- tela do card */
   "cardView.refreshError": "Não deu pra atualizar o card no runner",
