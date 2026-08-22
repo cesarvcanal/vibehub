@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NewCardDialog } from "@/features/board/components/NewCardDialog";
 import { renderApp } from "@/test/render";
@@ -8,7 +8,17 @@ import { renderApp } from "@/test/render";
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
   setUnauthorizedHandler: vi.fn(),
-  get: vi.fn().mockResolvedValue({}),
+  get: vi.fn().mockImplementation((url: string) =>
+    url === "/accounts/usage"
+      ? Promise.resolve({
+          bySlug: {
+            default: { available: true, fiveHour: { utilization: 8, resetsAt: null }, fetchedAt: 1 },
+            personal: { available: true, fiveHour: { utilization: 91.4, resetsAt: null }, fetchedAt: 1 },
+          },
+          fetchedAt: 1,
+        })
+      : Promise.resolve({}),
+  ),
   post: vi.fn(),
   patch: vi.fn(),
   del: vi.fn(),
@@ -122,6 +132,21 @@ describe("NewCardDialog", () => {
       model: "claude-opus-5",
       branch: "feat/totals",
     });
+  });
+
+  it("puts each account's plan usage in the select, so the choice is informed", async () => {
+    // The whole point: the owner burned an account's limit because picking one was a name in a list
+    // with no number attached.
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Options" }));
+
+    const select = screen.getByLabelText("Claude account") as HTMLSelectElement;
+    await waitFor(() =>
+      expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
+        "Inherit (the runner default) — 8%",
+        "Personal — 91%",
+      ]),
+    );
   });
 
   it("omits the optional fields entirely when they are left alone", async () => {

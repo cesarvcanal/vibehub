@@ -483,6 +483,12 @@ export const en: Record<string, string> = {
     "once — or paste a long-lived token and skip the browser dance everywhere.",
   "accounts.defaultName": "Default account name",
   "accounts.tokenStoredSuffix": " · token stored",
+  "accounts.signIn": "Sign in",
+  "accounts.signInFor": "Sign in — {name}",
+  "accounts.signInHint": "Log this profile into Claude, from here",
+  "accounts.loginHelp":
+    "Cmd-click the link, authorise with the right account and paste the code here. Close when you are done.",
+  "accounts.loginTerminalAria": "Claude login terminal — {name}",
   "accounts.tokenFor": "Long-lived token — {name}",
   "accounts.tokenStored": "Token stored",
   "accounts.pasteToken": "Paste a long-lived token",
@@ -497,6 +503,22 @@ export const en: Record<string, string> = {
   "accounts.tokenAria": "Long-lived token",
   "accounts.removeToken": "Remove token",
   "accounts.saveToken": "Save token",
+
+  /* -------------------------------------------------------- plan usage */
+  "usage.fiveHour": "5h session",
+  "usage.sevenDay": "Week",
+  "usage.sevenDayOpus": "Week — top model",
+  "usage.underAMinute": "<1m",
+  "usage.resetsIn": "resets in {time}",
+  "usage.stale": "data from {n} min ago",
+  "usage.loading": "reading usage…",
+  "usage.title": "Plan usage — {name}",
+  "usage.error.noCredentials":
+    "Account with no interactive login on the runner — open the runner shell and run CLAUDE_CONFIG_DIR={path} claude, then /login, once.",
+  "usage.error.rateLimited": "usage API limit — trying again in {n} min",
+  "usage.error.unauthorized":
+    "the stored login cannot read the usage — run /login again in {path}",
+  "usage.error.unreachable": "could not read the usage right now",
 
   /* ------------------------------------------------------------------ brain */
   "brain.aria": "Brain",

@@ -10,7 +10,16 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { CLAUDE_MODELS, accountLabel, type BoardAccount } from "@/features/board/api";
+import { useQuery } from "@tanstack/react-query";
+import {
+  ACCOUNT_USAGE_KEY,
+  CLAUDE_MODELS,
+  DEFAULT_ACCOUNT_SLUG,
+  accountLabel,
+  boardApi,
+  type BoardAccount,
+} from "@/features/board/api";
+import { pillPercent } from "@/features/board/lib/usage";
 import type { NewCard } from "@/api/types";
 import { useT } from "@/i18n";
 
@@ -58,6 +67,25 @@ export function NewCardDialog({
   const [model, setModel] = React.useState("");
   const [branch, setBranch] = React.useState("");
   const [showOptions, setShowOptions] = React.useState(false);
+
+  /**
+   * Plan usage, so the account choice is INFORMED rather than a name picked from a list. Read only
+   * while the dialog is open, and no harder than the server caches it — picking the account is
+   * exactly the moment the number matters, and exactly the moment it was missing.
+   */
+  const { data: usage } = useQuery({
+    queryKey: ACCOUNT_USAGE_KEY,
+    queryFn: boardApi.accountsUsage,
+    enabled: open,
+    staleTime: 55_000,
+    retry: false,
+  });
+
+  /** `Tech — 31%`, or just the name when that account has no numbers to show. PURE-ish. */
+  const withPercent = (label: string, slug: string) => {
+    const percent = pillPercent(usage?.bySlug?.[slug]);
+    return percent ? `${label} — ${percent}` : label;
+  };
 
   const reset = React.useCallback(() => {
     setTitle("");
@@ -145,11 +173,14 @@ export function NewCardDialog({
                   onChange={(e) => setAccount(e.target.value)}
                 >
                   <option value="">
-                    {t("newCard.inherit", { name: inheritedAccount ?? defaultAccountLabel })}
+                    {withPercent(
+                      t("newCard.inherit", { name: inheritedAccount ?? defaultAccountLabel }),
+                      inheritedAccount ?? DEFAULT_ACCOUNT_SLUG,
+                    )}
                   </option>
                   {accounts.map((a) => (
                     <option key={a.slug} value={a.slug}>
-                      {accountLabel(a)}
+                      {withPercent(accountLabel(a), a.slug)}
                     </option>
                   ))}
                 </select>

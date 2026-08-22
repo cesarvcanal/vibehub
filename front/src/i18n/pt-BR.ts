@@ -488,6 +488,12 @@ export const ptBR: Record<string, string> = {
     "uma vez — ou cole um token de longa duração e pule a dança do navegador em todo lugar.",
   "accounts.defaultName": "Nome da conta padrão",
   "accounts.tokenStoredSuffix": " · token guardado",
+  "accounts.signIn": "Fazer login",
+  "accounts.signInFor": "Fazer login — {name}",
+  "accounts.signInHint": "Fazer o login deste perfil no Claude, por aqui",
+  "accounts.loginHelp":
+    "Clique no link com Cmd, autorize com a conta certa e cole o código aqui. Quando terminar, feche.",
+  "accounts.loginTerminalAria": "Terminal de login do Claude — {name}",
   "accounts.tokenFor": "Token de longa duração — {name}",
   "accounts.tokenStored": "Token guardado",
   "accounts.pasteToken": "Cole um token de longa duração",
@@ -502,6 +508,22 @@ export const ptBR: Record<string, string> = {
   "accounts.tokenAria": "Token de longa duração",
   "accounts.removeToken": "Remover o token",
   "accounts.saveToken": "Salvar o token",
+
+  /* -------------------------------------------------------- uso do plano */
+  "usage.fiveHour": "Sessão 5h",
+  "usage.sevenDay": "Semana",
+  "usage.sevenDayOpus": "Semana — modelo forte",
+  "usage.underAMinute": "<1m",
+  "usage.resetsIn": "reinicia em {time}",
+  "usage.stale": "dado de {n} min atrás",
+  "usage.loading": "lendo o uso…",
+  "usage.title": "Uso do plano — {name}",
+  "usage.error.noCredentials":
+    "Conta sem login interativo no runner — abra o shell do runner e rode CLAUDE_CONFIG_DIR={path} claude e /login uma vez.",
+  "usage.error.rateLimited": "limite da API de uso — tentando de novo em {n} min",
+  "usage.error.unauthorized":
+    "o login guardado não consegue ler o uso — rode /login de novo em {path}",
+  "usage.error.unreachable": "não deu pra ler o uso agora",
 
   /* ---------------------------------------------------------------- cérebro */
   "brain.aria": "Cérebro",

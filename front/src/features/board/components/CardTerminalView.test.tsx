@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient } from "@tanstack/react-query";
 import { CardTerminalView } from "@/features/board/components/CardTerminalView";
@@ -83,6 +83,21 @@ function serve() {
       });
     }
     if (url === "/transcribe") return Promise.resolve({ available: false, proofread: false, language: null });
+    if (url === "/accounts/usage") {
+      return Promise.resolve({
+        bySlug: {
+          default: {
+            available: true,
+            fiveHour: { utilization: 31, resetsAt: null },
+            sevenDay: { utilization: 12, resetsAt: null },
+            sevenDayOpus: { utilization: 74, resetsAt: null },
+            fetchedAt: 1,
+          },
+          personal: { available: false, error: "no_credentials", fetchedAt: 1 },
+        },
+        fetchedAt: 1,
+      });
+    }
     // Nothing has answered yet: the route says so with nulls rather than inventing a model.
     if (url === "/cards/c1/session") {
       return Promise.resolve({ model: null, modelLabel: null, account: { slug: null, name: "" } });
@@ -253,65 +268,132 @@ describe("CardTerminalView — the card bar", () => {
     expect(screen.queryByRole("button", { name: /restart/i })).not.toBeInTheDocument();
   });
 
+  /** Opens one of the two bar menus and hands back its items. */
+  async function openMenu(user: ReturnType<typeof userEvent.setup>, label: string) {
+    await user.click(await screen.findByLabelText(label));
+    return within(await screen.findByRole("menu")).getAllByRole("menuitemcheckbox");
+  }
+
   it("switching the model reconnects the terminal on the same conversation", async () => {
     mockPatch.mockResolvedValue({ card: card({ openedAt: 10, model: "claude-sonnet-5" }) });
     const user = userEvent.setup();
     renderWithCache([card({ openedAt: 10 })]);
 
     const before = (await screen.findByTestId("xterm")).getAttribute("data-reconnect");
-    await user.selectOptions(screen.getByLabelText("Model"), "claude-sonnet-5");
+    await openMenu(user, "Model");
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Sonnet" }));
     await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/cards/c1", { model: "claude-sonnet-5" }));
     await waitFor(() =>
       expect(screen.getByTestId("xterm").getAttribute("data-reconnect")).not.toBe(before),
     );
   });
 
-  it("shows the model the SESSION is really running, even though the card pins none", async () => {
+  it("the model menu is the FIXED list — the trigger is what names the model in use", async () => {
     serveSession({ model: "claude-opus-5", modelLabel: "Opus" });
+    const user = userEvent.setup();
     renderWithCache([card({ openedAt: 10, model: undefined })]);
 
-    const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
-    await waitFor(() => expect(select.value).toBe("claude-opus-5"));
+    // The pill answers "what am I talking to".
+    await waitFor(() => expect(screen.getByLabelText("Model")).toHaveTextContent("Opus"));
+
+    const items = await openMenu(user, "Model");
+    expect(items.map((i) => i.textContent)).toEqual(["Fable", "Opus", "Sonnet", "Haiku"]);
     // "Default model" was the one answer nobody wants: the question is which model is answering.
-    expect(screen.queryByRole("option", { name: "Default model" })).not.toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Use account default" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Default model" })).not.toBeInTheDocument();
+    // The check marks the model IN USE, even though the card pins none…
+    expect(screen.getByRole("menuitemcheckbox", { name: "Opus" })).toHaveAttribute("aria-checked", "true");
+    // …and clearing the pin is an ACTION, so it carries no competing check.
+    expect(screen.getByRole("menuitem", { name: "Use account default" })).toBeInTheDocument();
   });
 
   it("names a model the whitelist has never heard of from the server's own label", async () => {
     serveSession({ model: "claude-experimental-9", modelLabel: "Experimental" });
     renderWithCache([card({ openedAt: 10 })]);
-
-    const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
-    await waitFor(() => expect(select.value).toBe("claude-experimental-9"));
-    expect(screen.getByRole("option", { name: "Experimental" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("Model")).toHaveTextContent("Experimental"));
   });
 
   it("assumes Claude Code's own default until the first reply, and says so in the title", async () => {
     renderWithCache([card({ openedAt: 10 })]);
 
-    const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
-    expect(select.value).toBe("claude-fable-5");
-    expect(select).toHaveAttribute("title", "Claude Code's default until the first reply");
+    const pill = await screen.findByLabelText("Model");
+    expect(pill).toHaveTextContent("Fable");
+    expect(pill).toHaveAttribute("title", "Claude Code's default until the first reply");
   });
 
   it("the card's own pin wins over the transcript — that is what the next session starts on", async () => {
     serveSession({ model: "claude-opus-5", modelLabel: "Opus" });
     mockPost.mockResolvedValue({ card: card({ openedAt: 10, model: "claude-haiku-4-5" }) });
+    const user = userEvent.setup();
     renderWithCache([card({ openedAt: 10, model: "claude-haiku-4-5" })]);
 
-    const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
-    expect(select.value).toBe("claude-haiku-4-5");
+    expect(await screen.findByLabelText("Model")).toHaveTextContent("Haiku");
+    await openMenu(user, "Model");
+    expect(screen.getByRole("menuitemcheckbox", { name: "Haiku" })).toHaveAttribute("aria-checked", "true");
   });
 
-  it("names the account in USE, with no (default) or (inherited) suffix", async () => {
+  it("names the account in USE on the pill, with no (default) or (inherited) suffix", async () => {
     serveSession({ account: { slug: null, name: "Main" } });
     renderWithCache([card({ openedAt: 10 })]);
 
-    const select = (await screen.findByLabelText("Claude account")) as HTMLSelectElement;
-    await waitFor(() => expect(screen.getByRole("option", { name: "Main" })).toBeInTheDocument());
-    expect(select.value).toBe("");
-    expect(screen.queryByRole("option", { name: /\(default\)/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: /inherited/i })).not.toBeInTheDocument();
+    const pill = await screen.findByLabelText("Claude account");
+    await waitFor(() => expect(pill).toHaveTextContent("Main"));
+    expect(pill.textContent).not.toMatch(/\(default\)/);
+    expect(pill.textContent).not.toMatch(/inherited/i);
+  });
+
+  it("the account menu is one EXPLICIT row per account, the built-in profile first", async () => {
+    serveSession({ account: { slug: null, name: "Main" } });
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10 })]);
+
+    const items = await openMenu(user, "Claude account");
+    // Two accounts, two rows, each named for itself — never for whatever is in use right now.
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent("Main");
+    expect(items[1]).toHaveTextContent("Personal");
+    expect(items[0]).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("keeps both labels distinct after switching account — the menu never renames itself", async () => {
+    // The bug this pins: the first row used to be labelled with the account IN USE, so switching to
+    // "Personal" made the menu show "Personal" twice, and switching back flipped the labels again.
+    serveSession({ account: { slug: "personal", name: "Personal" } });
+    mockPost.mockResolvedValue({ card: card({ openedAt: 10, accountSlug: "personal" }) });
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10, accountSlug: "personal" })]);
+
+    await waitFor(() => expect(screen.getByLabelText("Claude account")).toHaveTextContent("Personal"));
+    const items = await openMenu(user, "Claude account");
+    expect(items[0]).toHaveTextContent("Main");
+    expect(items[1]).toHaveTextContent("Personal");
+    expect(items[1]).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("lists the install's OWN names: the default profile's label, then each account", async () => {
+    // The exact bug the owner hit: with the built-in profile signed in as cesarvcanal@gmail.com and
+    // one account "tech", the first row was labelled with whatever was in use — so he saw
+    // "tech / ✓ tech", and picking one renamed the other.
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/accounts") {
+        return Promise.resolve({
+          accounts: [{ slug: "tech", name: "tech", createdAt: 1 }],
+          defaultLabel: "cesarvcanal@gmail.com",
+        });
+      }
+      if (url === "/cards/c1/session") {
+        return Promise.resolve({ model: null, modelLabel: null, account: { slug: "tech", name: "tech" } });
+      }
+      if (url === "/transcribe") return Promise.resolve({ available: false, proofread: false, language: null });
+      return Promise.resolve({});
+    });
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10 })]);
+
+    const items = await openMenu(user, "Claude account");
+    expect(items.map((i) => i.textContent)).toEqual(["cesarvcanal@gmail.com", "tech"]);
+    // The check follows the account the SESSION is signed in to, not the card's (absent) pin.
+    expect(items[1]).toHaveAttribute("aria-checked", "true");
+    expect(items[0]).toHaveAttribute("aria-checked", "false");
   });
 
   it("falls back to the profile's own slug when the session says nothing and nobody renamed it", async () => {
@@ -322,15 +404,66 @@ describe("CardTerminalView — the card bar", () => {
       return Promise.resolve({});
     });
     renderWithCache([card({ openedAt: 10 })]);
-    expect(await screen.findByRole("option", { name: "default" })).toBeInTheDocument();
+    expect(await screen.findByLabelText("Claude account")).toHaveTextContent("default");
   });
 
-  it("clears the account back to inherited with the empty option", async () => {
+  it("choosing the built-in profile clears the card's pin", async () => {
     mockPatch.mockResolvedValue({ card: card({ openedAt: 10 }) });
     const user = userEvent.setup();
     renderWithCache([card({ openedAt: 10, accountSlug: "personal" })]);
-    await user.selectOptions(await screen.findByLabelText("Claude account"), "");
+
+    await openMenu(user, "Claude account");
+    await user.click(screen.getByRole("menuitemcheckbox", { name: /Main/ }));
     await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/cards/c1", { accountSlug: null }));
+  });
+
+  it("choosing a named account pins it", async () => {
+    mockPatch.mockResolvedValue({ card: card({ openedAt: 10, accountSlug: "personal" }) });
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10 })]);
+
+    await openMenu(user, "Claude account");
+    await user.click(screen.getByRole("menuitemcheckbox", { name: /Personal/ }));
+    await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/cards/c1", { accountSlug: "personal" }));
+  });
+});
+
+describe("CardTerminalView — the account pill knows how much plan is left", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    serve();
+    mockPost.mockResolvedValue({ card: card({ openedAt: 10 }) });
+  });
+
+  it("appends the 5-hour utilization of the account IN USE", async () => {
+    serveSession({ account: { slug: null, name: "Main" } });
+    renderWithCache([card({ openedAt: 10 })]);
+    await waitFor(() => expect(screen.getByLabelText("Claude account")).toHaveTextContent("31%"));
+  });
+
+  it("shows the percentage of each account in the menu, so the choice is informed", async () => {
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10 })]);
+    await user.click(await screen.findByLabelText("Claude account"));
+    const rows = within(await screen.findByRole("menu")).getAllByRole("menuitemcheckbox");
+    expect(rows[0]).toHaveTextContent("31%");
+    // The account with no interactive login has no number to show — and no fake one either.
+    expect(rows[1].textContent).not.toMatch(/%/);
+  });
+
+  it("says what to do about an account that never logged in, instead of a blank bar", async () => {
+    serveSession({ account: { slug: "personal", name: "Personal" } });
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10, accountSlug: "personal" })]);
+
+    // The pill carries no percentage at all for that account…
+    await waitFor(() => expect(screen.getByLabelText("Claude account")).toHaveTextContent("Personal"));
+    expect(screen.getByLabelText("Claude account").textContent).not.toMatch(/%/);
+
+    // …and the tooltip says the command that fixes it, naming the profile directory.
+    await user.hover(screen.getByLabelText("Claude account"));
+    const tip = await screen.findAllByText(/no interactive login on the runner/i);
+    expect(tip[0]).toHaveTextContent("/root/.claude-profiles/personal");
   });
 });
 

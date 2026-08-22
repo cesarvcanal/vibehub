@@ -16,6 +16,15 @@ import {
 import { cn } from "@/lib/utils";
 import { apiErrorMessage } from "@/lib/apiError";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { XTerminal } from "@/features/board/components/XTerminal";
 import { VncPanel } from "@/features/board/components/VncPanel";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
@@ -25,7 +34,10 @@ import { boardTitle, useDocumentTitle } from "@/features/board/lib/documentTitle
 import type { ConnectionState } from "@/features/board/lib/reconnect";
 import {
   ACCOUNTS_KEY,
+  ACCOUNT_USAGE_KEY,
   CLAUDE_MODELS,
+  DEFAULT_ACCOUNT_SLUG,
+  accountInUseSlug,
   UPLOAD_MAX_BYTES,
   accountInUseName,
   accountLabel,
@@ -41,10 +53,18 @@ import {
   type BoardCard,
   type BoardProject,
 } from "@/features/board/api";
+import { AccountUsageBars, useMinuteTick } from "@/features/board/components/AccountUsageBars";
+import { pillPercent } from "@/features/board/lib/usage";
 import type { CardColumn } from "@/api/types";
 import { t as translate, useT } from "@/i18n";
 
-/** Small, quiet select in the card bar — configuration, not a call to action. */
+/**
+ * Small, quiet pill in the card bar — configuration, not a call to action.
+ *
+ * These were native `<select>`s. A native menu on macOS opens OVER the control, anchored on the
+ * checked row, so clicking a pill at the top of the bar drops a list on top of where you clicked;
+ * a menu that opens BELOW the trigger is the whole reason these are Radix menus now.
+ */
 const PILL =
   "h-6 max-w-[10rem] shrink-0 truncate rounded-full border border-border/60 bg-muted/40 px-2 text-[11px] text-muted-foreground transition-colors hover:border-border hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
 
@@ -231,6 +251,30 @@ export function CardTerminalView({
   const model = modelInUse(card, session);
   const modelUnlisted = !CLAUDE_MODELS.some((m) => m.id === model.id);
   const accountName = accountInUseName(card, session, accounts, inheritedAccount);
+  const defaultAccountName = defaultAccountLabelOr(accountsData?.defaultLabel);
+
+  /**
+   * PLAN USAGE, polled while a card is open. This is the number that decides whether opening a card
+   * on this account is a good idea, and the owner hit a limit precisely because it lived nowhere.
+   * 60s, matching the server's cache: the usage endpoint throttles by caller, so a tighter poll
+   * would only earn a back-off.
+   */
+  const { data: usageData } = useQuery({
+    queryKey: ACCOUNT_USAGE_KEY,
+    queryFn: boardApi.accountsUsage,
+    enabled: Boolean(card),
+    refetchInterval: 60_000,
+    staleTime: 55_000,
+    retry: false,
+  });
+  const usageBySlug = usageData?.bySlug ?? {};
+  const inUseSlug = accountInUseSlug(card, session, projectAccountSlug(project));
+  const inUseUsage = usageBySlug[inUseSlug];
+  const usagePercent = pillPercent(inUseUsage);
+  const now = useMinuteTick();
+
+  /** The percentage of ONE account, for the menu rows — absent when that account has no numbers. */
+  const menuPercent = (slug: string) => pillPercent(usageBySlug[slug]);
 
   /* ------------------------------------------------------------------ state */
 
@@ -435,43 +479,108 @@ export function CardTerminalView({
             onClick={() => setShellOpen((v) => !v)}
           />
           {card ? (
-            <select
-              aria-label={t("cardView.model")}
-              title={model.title ?? t("cardView.modelInUse")}
-              className={PILL}
-              value={model.id}
-              disabled={modelMutation.isPending}
-              onChange={(e) => modelMutation.mutate(e.target.value || null)}
-            >
-              {CLAUDE_MODELS.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-              {/* A model the whitelist has never heard of — the transcript is still the truth. */}
-              {modelUnlisted ? <option value={model.id}>{model.label}</option> : null}
-              {/* Last, and the only option that is not a model: it clears the pin and lets the
-                  account decide again. */}
-              <option value="">{t("cardView.useAccountDefault")}</option>
-            </select>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={t("cardView.model")}
+                  title={model.title ?? t("cardView.modelInUse")}
+                  className={PILL}
+                  disabled={modelMutation.isPending}
+                >
+                  {model.label}
+                </button>
+              </DropdownMenuTrigger>
+              {/* Below the trigger, aligned to its right edge — never over the thing you clicked. */}
+              <DropdownMenuContent side="bottom" align="end">
+                {/* The FIXED list, always in the same order with the same labels. The trigger is
+                    where "what am I talking to" is answered; a menu whose rows are recomputed from
+                    the live session shuffles its own labels while you read it. */}
+                {CLAUDE_MODELS.map((m) => (
+                  <DropdownMenuCheckboxItem
+                    key={m.id}
+                    checked={model.id === m.id}
+                    onSelect={() => modelMutation.mutate(m.id)}
+                  >
+                    {m.label}
+                  </DropdownMenuCheckboxItem>
+                ))}
+                {/* A model the whitelist has never heard of — the transcript is still the truth. */}
+                {modelUnlisted ? (
+                  <DropdownMenuCheckboxItem checked onSelect={() => modelMutation.mutate(model.id)}>
+                    {model.label}
+                  </DropdownMenuCheckboxItem>
+                ) : null}
+                <DropdownMenuSeparator />
+                {/* The only row that is not a model, and the only one that is an ACTION rather than
+                    a state: it clears the card's pin and lets the account decide again. A check
+                    here would compete with the one marking the model actually in use. */}
+                <DropdownMenuItem onSelect={() => modelMutation.mutate(null)}>
+                  {t("cardView.useAccountDefault")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           ) : null}
           {card ? (
-            <select
-              aria-label={t("cardView.claudeAccount")}
-              title={t("cardView.switchAccountHint")}
-              className={PILL}
-              value={card.accountSlug ?? ""}
-              disabled={accountMutation.isPending}
-              onChange={(e) => accountMutation.mutate(e.target.value || null)}
-            >
-              {/* No suffix: the pill names the account that is signed in, not where it came from. */}
-              <option value="">{accountName}</option>
-              {accounts.map((a) => (
-                <option key={a.slug} value={a.slug}>
-                  {accountLabel(a)}
-                </option>
-              ))}
-            </select>
+            <DropdownMenu>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label={t("cardView.claudeAccount")}
+                      className={PILL}
+                      disabled={accountMutation.isPending}
+                    >
+                      {/* The pill names the account that is SIGNED IN, plus how much of its 5-hour
+                          window is gone — the one number that stops a card mid-turn. */}
+                      {accountName}
+                      {usagePercent ? (
+                        <span className="ml-1 font-mono tabular-nums opacity-70">· {usagePercent}</span>
+                      ) : null}
+                    </button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-[15rem] space-y-1.5">
+                  <p className="text-[11px] font-medium">{t("usage.title", { name: accountName })}</p>
+                  <AccountUsageBars slug={inUseSlug} usage={inUseUsage} now={now} />
+                  <p className="text-[10px] text-muted-foreground">{t("cardView.switchAccountHint")}</p>
+                </TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent side="bottom" align="end">
+                {/* EXPLICIT rows, one per account, each under its OWN name — the bug this replaces
+                    labelled the first row with whatever account was IN USE, so picking "tech" made
+                    the menu show "default" and picking default renamed it to "tech". The built-in
+                    profile is first, under the install's name for it; choosing it clears the pin.
+                    The check follows the EFFECTIVE account (card → project → built-in), which is
+                    the one the session is really signed in to. */}
+                <DropdownMenuCheckboxItem
+                  checked={inUseSlug === DEFAULT_ACCOUNT_SLUG}
+                  onSelect={() => accountMutation.mutate(null)}
+                >
+                  <span className="truncate">{defaultAccountName}</span>
+                  {menuPercent(DEFAULT_ACCOUNT_SLUG) ? (
+                    <span className="ml-2 font-mono text-[11px] tabular-nums text-muted-foreground">
+                      {menuPercent(DEFAULT_ACCOUNT_SLUG)}
+                    </span>
+                  ) : null}
+                </DropdownMenuCheckboxItem>
+                {accounts.map((a) => (
+                  <DropdownMenuCheckboxItem
+                    key={a.slug}
+                    checked={inUseSlug === a.slug}
+                    onSelect={() => accountMutation.mutate(a.slug)}
+                  >
+                    <span className="truncate">{accountLabel(a)}</span>
+                    {menuPercent(a.slug) ? (
+                      <span className="ml-2 font-mono text-[11px] tabular-nums text-muted-foreground">
+                        {menuPercent(a.slug)}
+                      </span>
+                    ) : null}
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
           ) : null}
           {showTerminal ? <ConnectionIndicator state={connection} /> : null}
         </div>

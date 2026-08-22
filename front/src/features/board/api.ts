@@ -159,6 +159,7 @@ export function mcpSecretStatus(
 export const PROJECTS_KEY = ["board", "projects"] as const;
 export const ACCOUNTS_KEY = ["board", "accounts"] as const;
 export const ACCOUNT_TOKENS_KEY = ["board", "accounts", "tokens"] as const;
+export const ACCOUNT_USAGE_KEY = ["board", "accounts", "usage"] as const;
 export const MCPS_KEY = ["board", "mcps"] as const;
 export const MCP_SECRETS_KEY = ["board", "mcps", "secrets"] as const;
 export const BRAIN_KEY = ["board", "brain"] as const;
@@ -227,6 +228,41 @@ export interface CardSessionInfo {
   modelLabel: string | null;
   /** The account the session is really using. */
   account: { slug: string | null; name: string };
+}
+
+/** One metered plan window: how much is gone, and when it empties again. */
+export interface UsageWindow {
+  /** 0..100 percent of the window consumed. */
+  utilization: number;
+  /** ISO instant it resets, or null when the server did not say. */
+  resetsAt: string | null;
+}
+
+/** Why an account has no numbers. Each one gets its OWN sentence — that is the point of the split. */
+export type UsageError = "no_credentials" | "rate_limited" | "unauthorized" | "unreachable";
+
+/**
+ * Plan usage of one account. `available` is the only branch the UI needs: with it, three bars;
+ * without it, the sentence for `error`.
+ */
+export interface AccountUsage {
+  available: boolean;
+  fiveHour?: UsageWindow;
+  sevenDay?: UsageWindow;
+  sevenDayOpus?: UsageWindow;
+  /** When the numbers were READ (not when they were served) — what makes `stale` legible. */
+  fetchedAt: number;
+  /** true = the last good reading, served while the server is backed off the usage endpoint. */
+  stale?: boolean;
+  /** Epoch ms the back-off lifts. */
+  retryAt?: number;
+  error?: UsageError;
+}
+
+export interface AccountsUsageResponse {
+  /** Keyed by account slug, with `default` for the runner's built-in profile. */
+  bySlug: Record<string, AccountUsage>;
+  fetchedAt: number;
 }
 
 export interface CardPatchInput {
@@ -323,6 +359,12 @@ export const boardApi = {
       bySlug: r?.bySlug ?? {},
       defaultHasToken: Boolean(r?.defaultHasToken),
     })),
+
+  /** Plan usage per account. Never rejects for a single account: failures arrive as `error`. */
+  accountsUsage: () =>
+    get<Partial<AccountsUsageResponse>>("/accounts/usage").then(
+      (r): AccountsUsageResponse => ({ bySlug: r?.bySlug ?? {}, fetchedAt: r?.fetchedAt ?? 0 }),
+    ),
 
   createAccount: (label: string) =>
     post<{ account: BoardAccount }>("/accounts", { name: label }).then((r) => r.account),
@@ -544,4 +586,28 @@ export function accountInUseName(
     return match ? accountLabel(match) : pinned;
   }
   return inherited;
+}
+
+/**
+ * The account slug whose usage the pill must show — the EFFECTIVE one, as a key into `bySlug`.
+ *
+ * Once the session route has answered, it is the truth (a null slug there means the built-in
+ * profile, which is keyed `default`); before that, the card's pin, then the project's, then the
+ * default. Mirrors `accountInUseName`, but answers with a key instead of a label. PURE.
+ */
+export function accountInUseSlug(
+  card: { accountSlug?: string | null } | null | undefined,
+  session: CardSessionInfo | null | undefined,
+  projectDefaultSlug?: string | null,
+): string {
+  if (session) return session.account.slug?.trim() || DEFAULT_ACCOUNT_SLUG;
+  return card?.accountSlug?.trim() || projectDefaultSlug?.trim() || DEFAULT_ACCOUNT_SLUG;
+}
+
+/**
+ * Where an account's Claude profile lives inside the runner. Shown verbatim in the accounts list,
+ * and quoted in the "log in once" instruction — a path you can paste is worth more than a noun. PURE.
+ */
+export function profilePathFor(slug: string): string {
+  return slug === DEFAULT_ACCOUNT_SLUG ? "/root/.claude" : `/root/.claude-profiles/${slug}`;
 }
