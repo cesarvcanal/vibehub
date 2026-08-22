@@ -7,7 +7,7 @@ import {
   hibernateCard as registryHibernateCard,
   listAllCards, assertBranchName, assertSessionId, effectiveAccountSlug, isValidModel, hasLiveSession,
   markRestartPending,
-  type Card, type Project, type RestartReason,
+  type Card, type CardStatus, type Project, type RestartReason,
 } from "./registry.js";
 import { getSettings } from "../settings/settings.js";
 import { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir, profileDirFor, oauthTokenPath } from "../accounts/profiles.js";
@@ -786,23 +786,129 @@ export async function killCardSession(card: Card, opts: { includeShell?: boolean
   }
 }
 
+/* ------------------------------------------------------------------ probe */
+
+/**
+ * What the runner says about a card's tmux session RIGHT NOW:
+ *  - `busy`: Claude is generating (the pane footer carries its "esc to interrupt" hint);
+ *  - `idle`: the session is there but nothing is running — a prompt, a menu (the "Resume from
+ *    summary" screen), a permission dialog, or a bare shell after Claude exited;
+ *  - `gone`: no such tmux session (the runner restarted, or something killed it);
+ *  - `unknown`: the runner could not be reached — the caller decides what to do with that.
+ */
+export type SessionState = "busy" | "idle" | "gone" | "unknown";
+
+/**
+ * The marker Claude Code prints in the pane footer WHILE it is generating ("· esc to interrupt ·").
+ * It is absent from every idle screen — the plain prompt, the resume menu, a permission question —
+ * which is exactly the distinction the board needs and the status hooks cannot always give it: a
+ * card parked on the resume menu never fires a Stop hook, so its dot stays green forever.
+ */
+const BUSY_MARKER = "esc to interrupt";
+
+/** How many lines of the pane bottom to look at: the footer, not the conversation. PURE. */
+const PANE_TAIL_LINES = 12;
+
+/** true = this pane capture shows Claude actually generating. PURE/testable. */
+export function paneLooksBusy(pane: string): boolean {
+  const lines = String(pane ?? "").split("\n");
+  return lines
+    .slice(-PANE_TAIL_LINES)
+    .some((line) => line.toLowerCase().includes(BUSY_MARKER));
+}
+
+/** Parses one `<session> <state>` line of the probe output. PURE. */
+export function parseProbeOutput(stdout: string): Map<string, SessionState> {
+  const out = new Map<string, SessionState>();
+  for (const line of String(stdout ?? "").split("\n")) {
+    const m = /^(\S+) (busy|idle|gone)$/.exec(line.trim());
+    if (m?.[1] && m[2]) out.set(m[1], m[2] as SessionState);
+  }
+  return out;
+}
+
+/**
+ * Script that asks the runner what each tmux session is DOING: `gone` when tmux does not know it,
+ * `busy` when the bottom of the pane carries Claude's "esc to interrupt" footer, `idle` otherwise.
+ * Read-only (has-session + capture-pane) — it never touches the session. Session names come from
+ * the BOARD (derived from the card id) and are shell-quoted on top of that. PURE/testable.
+ */
+export function buildSessionProbeScript(containerName: string, sessions: string[]): string {
+  const inner =
+    'for s in "$@"; do ' +
+    'if tmux has-session -t "$s" 2>/dev/null; then ' +
+    `if tmux capture-pane -p -t "$s" 2>/dev/null | tail -n ${PANE_TAIL_LINES} | grep -qi ${shQuote(BUSY_MARKER)}; then ` +
+    'echo "$s busy"; else echo "$s idle"; fi; ' +
+    'else echo "$s gone"; fi; done';
+  return `docker exec ${shQuote(containerName)} sh -c ${shQuote(inner)} _ ${sessions.map(shQuote).join(" ")}`;
+}
+
+/**
+ * PROBES several sessions in ONE round trip to the runner. A host/runner failure is NOT an error
+ * here: every session comes back `unknown` and the caller keeps the conservative behaviour (a card
+ * the board believes is working stays a PENDING pause instead of being cut off).
+ */
+export async function probeSessions(sessions: string[]): Promise<Map<string, SessionState>> {
+  const names = sessions.filter((s) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(s));
+  if (names.length === 0) return new Map();
+  try {
+    const { stdout } = await hostExecutor().runScript(
+      buildSessionProbeScript(config.runner.container, names),
+      { timeoutMs: 30_000 },
+    );
+    return parseProbeOutput(stdout);
+  } catch (e) {
+    logger.warn({ detail: (e as Error).message, sessions: names.length }, "session probe failed (treated as unknown)");
+    return new Map();
+  }
+}
+
+/** The state of ONE card's session, `unknown` when the runner could not answer. */
+export async function probeCardSession(card: Pick<Card, "tmuxSession">): Promise<SessionState> {
+  return (await probeSessions([card.tmuxSession])).get(card.tmuxSession) ?? "unknown";
+}
+
+/**
+ * PURE decision: does this pause have to take effect RIGHT NOW, ignoring the dot the board is
+ * showing? Yes whenever the runner CONTRADICTS a `working` dot — the session is idle (parked on a
+ * menu, a permission prompt or a bare shell) or gone. `busy` and `unknown` keep the polite
+ * behaviour: let Claude finish and pause afterwards. PURE/testable.
+ */
+export function pauseMustBeEffective(status: CardStatus | null | undefined, state: SessionState): boolean {
+  if (status !== "working") return true; // idle by the board's own reckoning
+  return state === "idle" || state === "gone";
+}
+
 /**
  * PAUSES the card (POST /api/cards/:id/pause and the drag into the "paused" column): the board goes
  * first (registryPauseCard — a card that does not exist or was never opened THROWS before the host
  * is touched), and the tmux session only dies NOW if the pause was EFFECTIVE (idle card → `pausedAt`
  * stamped): both sessions are killed (claude and shell), the Claude process dies, zero consumption.
- * A `working` card is a PENDING pause (registryPauseCard does not stamp `pausedAt`): the session
- * stays ALIVE and the status hook ends it when Claude finishes — "let it finish, then pause", so
- * work in progress is never interrupted. Resuming is just opening the card: the attach recreates the
- * session with `claude -c` and comes back to the same conversation.
+ * A card that is GENUINELY working is a PENDING pause (registryPauseCard does not stamp `pausedAt`):
+ * the session stays ALIVE and the status hook ends it when Claude finishes — "let it finish, then
+ * pause", so work in progress is never interrupted. "Genuinely" is decided by the RUNNER, not by the
+ * dot: a card whose session is parked on a menu or is gone gets paused for real right away
+ * (pauseMustBeEffective), because its dot would never turn amber and the pause would never land.
+ * Resuming is just opening the card (see `resumeCard`): the attach recreates the session with
+ * `claude -c` and comes back to the same conversation.
  */
 export async function pauseCard(cardId: string, by?: string): Promise<Card> {
-  const card = await registryPauseCard(cardId);
+  // The DOT can be a lie. A card parked on Claude's "Resume from summary" screen, on a permission
+  // question, or one whose session died, never fires the Stop hook that would turn its green dot
+  // amber — and a pending pause on such a card would wait forever, keeping a live session inside a
+  // column that means "not running". So before deciding, ASK THE RUNNER what that session is doing;
+  // only a genuinely busy Claude earns the polite "let it finish" treatment.
+  const before = await getCard(cardId);
+  let effective = false;
+  if (before?.status === "working" && hasLiveSession(before)) {
+    effective = pauseMustBeEffective(before.status, await probeCardSession(before));
+  }
+  const card = await registryPauseCard(cardId, { effective });
   if (card.pausedAt) {
     // EFFECTIVE pause (the card was idle): end the sessions right away.
     await killCardSession(card, { includeShell: true });
     logger.info(
-      { audit: true, action: "card.pause", card: card.worktreeSlug, session: card.tmuxSession, by },
+      { audit: true, action: "card.pause", card: card.worktreeSlug, session: card.tmuxSession, forced: effective, by },
       "card paused — tmux sessions ended in the runner",
     );
   } else {
@@ -812,6 +918,25 @@ export async function pauseCard(cardId: string, by?: string): Promise<Card> {
       "card moved to paused as a pending pause — the session runs until Claude finishes",
     );
   }
+  return card;
+}
+
+/**
+ * RESUMES a paused card — the drag OUT of the "paused" column, and anything else that means "work
+ * on this again". It is exactly an open (the workspace script is idempotent: the clone and the
+ * worktree are already there, so it only recreates the tmux session with `claude -c`, back in the
+ * same conversation) and `applyOpenTerminal` clears `pausedAt`, which is what makes the card live
+ * again for the board, for restart-all and for the maestro.
+ *
+ * It does NOT force a column: the caller has already moved the card where the user dropped it, and
+ * `columnAfterOpen` leaves every column except `backlog`/`paused` alone.
+ */
+export async function resumeCard(cardId: string, by?: string): Promise<Card> {
+  const card = await openCard(cardId, by);
+  logger.info(
+    { audit: true, action: "card.resume", card: card.worktreeSlug, session: card.tmuxSession, by },
+    "card resumed — the tmux session is back in the runner",
+  );
   return card;
 }
 
@@ -836,6 +961,88 @@ export async function hibernateCard(cardId: string, by?: string): Promise<Card |
     "card hibernated — tmux sessions ended in the runner, the card stayed where it was on the board",
   );
   return card;
+}
+
+/**
+ * PURE selection of the PENDING pauses the runner contradicts: cards sitting in `paused` with a
+ * session still alive whose probe says `idle` or `gone`. `busy` (Claude really is generating) and
+ * `unknown` (the runner did not answer) are left alone — the pause stays pending, which is the
+ * conservative side of the trade. PURE/testable.
+ */
+export function overduePauses<T extends Pick<Card, "tmuxSession">>(
+  pending: T[],
+  states: Map<string, SessionState>,
+): T[] {
+  return pending.filter((c) => {
+    const state = states.get(c.tmuxSession) ?? "unknown";
+    return state === "idle" || state === "gone";
+  });
+}
+
+/**
+ * RECONCILES the pending pauses — the loop the status hooks cannot close on their own.
+ *
+ * A pending pause is carried out by the Stop hook (applyCardStatus). But a session can stop being
+ * busy WITHOUT ever firing that hook: Claude parked on the "Resume from summary" menu, on a
+ * permission question nobody answered, killed by a restart, or gone with the runner. Those cards sit
+ * in `paused` — the column that means "not running" — with a live session and a green dot, forever.
+ *
+ * So every tick this asks the runner about them in ONE round trip and finishes the pause for the
+ * ones that are no longer working: stamps `pausedAt`, clears the dot, kills both tmux sessions.
+ * Best-effort by construction (a runner that is down answers `unknown` and nothing is touched).
+ * Returns how many pauses it carried out.
+ */
+export async function reconcilePausedCards(): Promise<number> {
+  const pending = (await listAllCards()).filter((c) => c.column === "paused" && hasLiveSession(c));
+  if (pending.length === 0) return 0;
+  const states = await probeSessions(pending.map((c) => c.tmuxSession));
+  const overdue = overduePauses(pending, states);
+  for (const card of overdue) {
+    try {
+      const paused = await registryPauseCard(card.id, { effective: true });
+      if (paused.pausedAt) await killCardSession(paused, { includeShell: true });
+      logger.info(
+        {
+          audit: true, action: "card.pause.reconciled", card: card.worktreeSlug,
+          session: card.tmuxSession, state: states.get(card.tmuxSession),
+        },
+        "pending pause carried out by the reconciler — the session was not working any more",
+      );
+    } catch (e) {
+      logger.warn(
+        { card: card.worktreeSlug, detail: (e as Error).message },
+        "could not carry out a pending pause (best-effort, will retry next tick)",
+      );
+    }
+  }
+  return overdue.length;
+}
+
+/** How often the reconciler looks at the pending pauses. */
+export const PAUSE_RECONCILE_MS = 60_000;
+
+/**
+ * Starts the pending-pause reconciler and returns the function that stops it. The timer is
+ * `unref`'d so it never keeps the process (or a test run) alive, and one tick never overlaps the
+ * next. Called from the server's entry point — not from `buildServer`, so importing the app in a
+ * test does not start background work.
+ */
+export function startPauseReconciler(intervalMs: number = PAUSE_RECONCILE_MS): () => void {
+  let running = false;
+  const tick = async (): Promise<void> => {
+    if (running) return;
+    running = true;
+    try {
+      await reconcilePausedCards();
+    } catch (e) {
+      logger.warn({ detail: (e as Error).message }, "pause reconciler tick failed (continuing)");
+    } finally {
+      running = false;
+    }
+  };
+  const timer = setInterval(() => void tick(), intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
 }
 
 /**

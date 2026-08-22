@@ -622,17 +622,59 @@ describe("pause / resume (the session dies; reopening returns to the SAME conver
     expect((await reg.getCard(card.id))?.pausedAt).toBe(paused.pausedAt);
   });
 
-  it("pauseCard: a WORKING card is a PENDING pause — it moves, the session STAYS ALIVE, no pausedAt", async () => {
+  it("pauseCard: a card the runner confirms is BUSY is a PENDING pause — it moves, the session STAYS ALIVE", async () => {
     const { card } = await seed();
     await ws.openCard(card.id);
     await reg.applyCardStatus(card.id, "working"); // Claude is busy
     runScript.mockClear();
+    // The runner agrees: that pane is generating right now.
+    runScript.mockResolvedValue({ stdout: `${card.tmuxSession} busy\n`, stderr: "" });
 
     const pending = await ws.pauseCard(card.id, "tester");
     expect(pending.column).toBe("paused");
     expect(pending.pausedAt ?? null).toBeNull();
     expect(pending.status).toBe("working");
-    expect(runScript).not.toHaveBeenCalled();
+    // ONE call: the read-only probe. Nothing was killed.
+    expect(runScript).toHaveBeenCalledTimes(1);
+    expect(scriptAt(0)).toContain("capture-pane");
+    expect(scriptAt(0)).not.toContain("kill-session");
+  });
+
+  it("pauseCard: a `working` dot the runner CONTRADICTS (idle pane) pauses for real, right away", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    runScript.mockClear();
+    // The card is parked on a menu / a prompt: the dot is stale and no Stop hook is ever coming.
+    runScript.mockResolvedValue({ stdout: `${card.tmuxSession} idle\n`, stderr: "" });
+
+    const paused = await ws.pauseCard(card.id, "tester");
+    expect(paused.pausedAt).toBeTypeOf("number");
+    expect(paused.status).toBeNull();
+    expect(runScript).toHaveBeenCalledTimes(2); // probe, then the kill
+    expect(scriptAt(1)).toContain(`tmux kill-session -t '${card.tmuxSession}'`);
+    expect(scriptAt(1)).toContain(`tmux kill-session -t '${card.tmuxSession}-sh'`);
+  });
+
+  it("pauseCard: a session that is GONE pauses for real; an unreachable runner keeps the pause pending", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    runScript.mockClear();
+    runScript.mockResolvedValue({ stdout: `${card.tmuxSession} gone\n`, stderr: "" });
+    expect((await ws.pauseCard(card.id)).pausedAt).toBeTypeOf("number");
+
+    // A second card, this time with a runner that does not answer: the probe is `unknown`, so the
+    // polite behaviour wins — never cut a Claude off because Docker had a bad second.
+    const other = await reg.createCard({ projectId: card.projectId, title: "other" });
+    runScript.mockResolvedValue({ stdout: "", stderr: "" });
+    await ws.openCard(other.id);
+    await reg.applyCardStatus(other.id, "working");
+    runScript.mockClear();
+    runScript.mockRejectedValue(new Error("host is down"));
+    const pending = await ws.pauseCard(other.id);
+    expect(pending.pausedAt ?? null).toBeNull();
+    expect(pending.column).toBe("paused");
   });
 
   it("pauseCard: a card never opened / unknown THROWS and nothing runs; a dead host does not undo the pause", async () => {
@@ -1257,6 +1299,176 @@ describe("pre-provisioning (prepareCard) and the per-clone lock", () => {
     expect(order).toEqual(["start", "end", "start", "end"]);
     expect(a.openedAt).toBe(b.openedAt);
     expect(b.column).toBe("waiting");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Probing the runner: what a session is REALLY doing
+// ---------------------------------------------------------------------------
+
+/**
+ * The board's dot comes from the Claude hooks, and the hooks do not fire for every way a session
+ * can go quiet: parked on the "Resume from summary" menu, on a permission question nobody answered,
+ * or killed. A card in `paused` that keeps a live session is exactly the bug this closes — Paused
+ * means "not running".
+ */
+describe("session probe (busy / idle / gone) and the pending-pause reconciler", () => {
+  /** The footer Claude Code prints WHILE it generates — the marker the probe keys on. */
+  const BUSY_PANE = [
+    "● Running the tests",
+    "✶ Thundering… (1m 8s · ↓ 3.6k tokens)",
+    "❯ ",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← for agents",
+  ].join("\n");
+  /** The same card one second later, with nothing running. */
+  const IDLE_PANE = [
+    "● OK",
+    "❯ ",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents",
+  ].join("\n");
+  /** The screen a resumed card sits on until somebody answers it — no hook ever fires here. */
+  const RESUME_MENU = [
+    "  This session is 13h 56m old and 327.8k tokens.",
+    "  ❯ 1. Resume from summary (recommended)",
+    "    2. Resume full session as-is",
+    "  Enter to confirm · Esc to cancel",
+  ].join("\n");
+
+  it("paneLooksBusy: only the 'esc to interrupt' footer counts as working", () => {
+    expect(ws.paneLooksBusy(BUSY_PANE)).toBe(true);
+    expect(ws.paneLooksBusy(IDLE_PANE)).toBe(false);
+    expect(ws.paneLooksBusy(RESUME_MENU)).toBe(false);
+    expect(ws.paneLooksBusy("")).toBe(false);
+    // The marker in the SCROLLBACK is not the footer: only the bottom of the pane is the status line.
+    expect(ws.paneLooksBusy(["esc to interrupt", ...Array(30).fill("output")].join("\n"))).toBe(false);
+  });
+
+  it("buildSessionProbeScript: read-only, session names quoted, one round trip for every card", () => {
+    const script = ws.buildSessionProbeScript(CONTAINER, ["card-aaaa1111", "card-bbbb2222"]);
+    expect(script).toContain(`docker exec '${CONTAINER}'`);
+    expect(script).toContain("has-session");
+    expect(script).toContain("capture-pane");
+    expect(script).toContain("'card-aaaa1111' 'card-bbbb2222'");
+    // Nothing here may change the session.
+    expect(script).not.toContain("kill-session");
+    expect(script).not.toContain("send-keys");
+  });
+
+  it("parseProbeOutput: reads the states and ignores anything else on stdout", () => {
+    const states = ws.parseProbeOutput("card-a busy\ncard-b idle\ncard-c gone\nsome noise\n");
+    expect([...states]).toEqual([["card-a", "busy"], ["card-b", "idle"], ["card-c", "gone"]]);
+  });
+
+  it("probeSessions: a runner that is down answers nothing — every card is `unknown`, never `idle`", async () => {
+    runScript.mockRejectedValue(new Error("host is down"));
+    expect(await ws.probeSessions(["card-aaaa1111"])).toEqual(new Map());
+    expect(await ws.probeCardSession({ tmuxSession: "card-aaaa1111" })).toBe("unknown");
+  });
+
+  it("pauseMustBeEffective: the runner only ever gets to CONTRADICT a working dot", () => {
+    expect(ws.pauseMustBeEffective("waiting", "busy")).toBe(true); // idle by the board's own reckoning
+    expect(ws.pauseMustBeEffective(null, "unknown")).toBe(true);
+    expect(ws.pauseMustBeEffective("working", "busy")).toBe(false);
+    expect(ws.pauseMustBeEffective("working", "unknown")).toBe(false);
+    expect(ws.pauseMustBeEffective("working", "idle")).toBe(true);
+    expect(ws.pauseMustBeEffective("working", "gone")).toBe(true);
+  });
+
+  it("overduePauses: `idle` and `gone` are overdue; `busy` and a missing answer are left alone", () => {
+    const cards = [{ tmuxSession: "a" }, { tmuxSession: "b" }, { tmuxSession: "c" }, { tmuxSession: "d" }];
+    const states = new Map<string, ws.SessionState>([
+      ["a", "idle"], ["b", "busy"], ["c", "gone"],
+    ]);
+    expect(ws.overduePauses(cards, states).map((c) => c.tmuxSession)).toEqual(["a", "c"]);
+  });
+
+  it("reconcilePausedCards: a pending pause whose Claude went quiet is carried out (stamp + both sessions killed)", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    // The user drags it into Paused while Claude is genuinely busy: a pending pause.
+    runScript.mockResolvedValue({ stdout: `${card.tmuxSession} busy\n`, stderr: "" });
+    await ws.pauseCard(card.id);
+    expect((await reg.getCard(card.id))?.pausedAt ?? null).toBeNull();
+
+    // Later, Claude stops without ever firing a Stop hook (it is sitting on the resume menu).
+    runScript.mockClear();
+    runScript.mockResolvedValue({ stdout: `${card.tmuxSession} idle\n`, stderr: "" });
+    expect(await ws.reconcilePausedCards()).toBe(1);
+
+    const done = await reg.getCard(card.id);
+    expect(done?.pausedAt).toBeTypeOf("number");
+    expect(done?.status).toBeNull();
+    expect(done?.column).toBe("paused");
+    expect(lastScript()).toContain(`tmux kill-session -t '${card.tmuxSession}'`);
+    expect(lastScript()).toContain(`tmux kill-session -t '${card.tmuxSession}-sh'`);
+
+    // Idempotent: the card has no live session any more, so the next tick has nothing to do.
+    runScript.mockClear();
+    expect(await ws.reconcilePausedCards()).toBe(0);
+    expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("reconcilePausedCards: a card that is really working is NOT cut off, and cards outside Paused are never touched", async () => {
+    const { project, card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    runScript.mockResolvedValue({ stdout: `${card.tmuxSession} busy\n`, stderr: "" });
+    await ws.pauseCard(card.id); // pending
+
+    // A second card, working, in the `working` column: none of the reconciler's business.
+    const other = await reg.createCard({ projectId: project.id, title: "still going" });
+    runScript.mockResolvedValue({ stdout: "", stderr: "" });
+    await ws.openCard(other.id);
+    await reg.applyCardStatus(other.id, "working");
+
+    runScript.mockClear();
+    runScript.mockResolvedValue({ stdout: `${card.tmuxSession} busy\n`, stderr: "" });
+    expect(await ws.reconcilePausedCards()).toBe(0);
+    // Only the pending pause was probed — and only with a read-only command.
+    expect(runScript).toHaveBeenCalledTimes(1);
+    expect(scriptAt(0)).toContain(card.tmuxSession);
+    expect(scriptAt(0)).not.toContain(other.tmuxSession);
+    expect((await reg.getCard(other.id))?.pausedAt ?? null).toBeNull();
+    expect((await reg.getCard(other.id))?.column).toBe("working");
+  });
+
+  it("startPauseReconciler: ticks on the interval and stops when told to", async () => {
+    vi.useFakeTimers();
+    try {
+      const { card } = await seed();
+      await ws.openCard(card.id);
+      await reg.applyCardStatus(card.id, "working");
+      runScript.mockResolvedValue({ stdout: `${card.tmuxSession} busy\n`, stderr: "" });
+      await ws.pauseCard(card.id);
+
+      runScript.mockClear();
+      runScript.mockResolvedValue({ stdout: `${card.tmuxSession} gone\n`, stderr: "" });
+      const stop = ws.startPauseReconciler(1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect((await reg.getCard(card.id))?.pausedAt).toBeTypeOf("number");
+
+      stop();
+      runScript.mockClear();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(runScript).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resumeCard: a paused card comes back with its session and its conversation", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await ws.pauseCard(card.id);
+    expect((await reg.getCard(card.id))?.pausedAt).toBeTypeOf("number");
+
+    runScript.mockClear();
+    const resumed = await ws.resumeCard(card.id, "drag out of Paused");
+    expect(resumed.pausedAt).toBeNull();
+    expect(resumed.openedAt).toBeTypeOf("number");
+    // Same conversation: the session is recreated with `claude -c`.
+    expect(lastScript()).toContain(sq(CLAUDE_C));
   });
 });
 

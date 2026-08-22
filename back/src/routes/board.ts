@@ -2,7 +2,9 @@ import { timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { requireSession } from "../auth/session.js";
 import * as registry from "../services/board/registry.js";
-import { prepareCard, restartCard, applySessionChange } from "../services/board/workspace.js";
+import {
+  applySessionChange, killCardSession, pauseCard, prepareCard, restartCard, resumeCard,
+} from "../services/board/workspace.js";
 import { runnerToken } from "../runtime/runner.js";
 import { logger } from "../utils/logger.js";
 
@@ -140,16 +142,47 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
     return await reply.send({ card });
   });
 
+  /**
+   * Editing a card — including the DRAG between columns, which is the only way most moves happen.
+   *
+   * A column is not just a label: `paused` means "this card is not running". So moving INTO it
+   * really pauses (and, when the runner says the session is not working, kills it right there), and
+   * moving a paused card back into a live column really resumes it. Without that, dragging a card
+   * to Paused only repainted it while its Claude went on burning the plan, and dragging it back left
+   * a card that looked alive with no session behind it.
+   */
   app.patch<{ Params: { id: string }; Body: registry.UpdateCardInput }>(
     "/api/cards/:id", { preHandler: requireSession },
     async (req, reply) => {
+      // SNAPSHOT before the write. `getCard` hands back the LIVE cached record and `updateCard`
+      // mutates that very object, so a "before" that is not copied is really the "after": both
+      // things that compare the two — which column the card came from, and whether the model or the
+      // account changed — would always answer "nothing moved".
+      const live = await registry.getCard(req.params.id);
+      const before = live ? { ...live } : undefined;
+      const move = before ? registry.cardMoveEffect(before, req.body ?? {}) : "none";
       try {
-        // The card BEFORE the edit: the model and the account only reach Claude when the process
-        // starts, so a switch has to be carried into the live session (applySessionChange) instead
-        // of just being recorded. `session` tells the screen which of the two happened.
-        const before = await registry.getCard(req.params.id);
         const card = await registry.updateCard(req.params.id, req.body ?? {});
+        // The model and the account only reach Claude when the process starts, so a switch has to be
+        // carried into the live session (applySessionChange) instead of just being recorded.
+        // `session` tells the screen which of the two happened.
         const session = await applySessionChange(before, card);
+        if (move === "pause") {
+          // The pause decides for itself whether it takes effect now or waits for Claude to finish;
+          // either way the card comes back with the truth in it.
+          return await reply.send({ card: await pauseCard(card.id, "drag to Paused"), session });
+        }
+        if (move === "resume") {
+          // Recreating the session takes a round trip to the runner. The move itself already
+          // happened, so answer now and let the poll pick the session up — a drag must never sit
+          // there waiting on Docker.
+          void resumeCard(card.id, "drag out of Paused").catch((err: unknown) => {
+            logger.warn(
+              { card: card.worktreeSlug, detail: (err as Error).message },
+              "could not resume the card dragged out of Paused (opening it will do it)",
+            );
+          });
+        }
         return await reply.send({ card, session });
       } catch (err) {
         const { code, body } = badRequest(err);
@@ -218,6 +251,18 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
     // A PAUSE BEATS the pending restart: a card whose PENDING PAUSE is due now is going to sleep, so
     // restarting it would be wasted work — applyCardStatus already dropped the flag in that case.
     const pausing = wasColumn ? registry.shouldEndSessionOnStatus(status, wasColumn, wasLive) : false;
+    if (card && pausing) {
+      // The PENDING PAUSE is due: the card was dragged into Paused while Claude was working, and
+      // Claude has just finished. applyCardStatus stamped `pausedAt` — which is the board saying
+      // "this session is dead" — so it has to actually die, here. Without this the card looked
+      // parked while its tmux session (and the shell beside it) stayed resident in the runner.
+      // Best-effort: killCardSession never throws, and a hook must not fail over the runner.
+      await killCardSession(card, { includeShell: true });
+      logger.info(
+        { audit: true, action: "card.pause.due", card: card.worktreeSlug, session: card.tmuxSession },
+        "pending pause carried out — Claude finished and the tmux sessions were ended",
+      );
+    }
     if (card && !pausing && registry.shouldRestartOnStatus(status, wasPending, wasLive)) {
       // PENDING RESTART (brain/MCP): the card was `working` when the brain/MCPs changed; now Claude has
       // finished (status != working), so restart the session to re-read them at startup (`claude -c`

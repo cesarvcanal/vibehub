@@ -14,6 +14,17 @@ const RUNNER_TOKEN = "runner-token-abcdef";
 const restartCard = vi.fn(async (id: string) => ({ id }));
 /** Creating a card kicks the workspace off in the BACKGROUND — the runner is not part of this suite. */
 const prepareCard = vi.fn(async (id: string) => ({ id }));
+/** Session side effects of a DRAG between columns. The pause still writes the board for real, so
+ *  the response the route sends back is the honest one. */
+const pauseCard = vi.fn(async (id: string) => (await registry()).pauseCard(id, { effective: true }));
+const resumeCard = vi.fn(async (id: string) => ({ id }));
+/** Ending the tmux sessions of a card — what a pause that comes DUE has to do in the runner. */
+const killCardSession = vi.fn(async () => undefined);
+
+/** The registry the running app is using (same module instance — boot() resets the graph first). */
+async function registry(): Promise<typeof import("../services/board/registry.js")> {
+  return await import("../services/board/registry.js");
+}
 
 async function boot(): Promise<FastifyInstance> {
   vi.resetModules();
@@ -33,7 +44,7 @@ async function boot(): Promise<FastifyInstance> {
   }));
   vi.doMock("../services/board/workspace.js", async () => {
     const actual = await vi.importActual<typeof import("../services/board/workspace.js")>("../services/board/workspace.js");
-    return { ...actual, restartCard, prepareCard };
+    return { ...actual, restartCard, prepareCard, pauseCard, resumeCard, killCardSession };
   });
   const { buildServer } = await import("../index.js");
   const server = await buildServer();
@@ -164,6 +175,77 @@ describe("cards", () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it("creating a card PRE-PROVISIONS its workspace in the background (instant first open)", async () => {
+    const projectId = await makeProject();
+    const id = await makeCard(projectId, "brand new");
+    // The response does not wait for the runner...
+    expect(prepareCard).toHaveBeenCalledWith(id, expect.any(String));
+    // ...and a failing prepare never turns into a failed creation.
+    prepareCard.mockRejectedValueOnce(new Error("docker is down"));
+    const res = await app.inject({
+      method: "POST", url: "/api/cards", headers: { cookie }, payload: { projectId, title: "another" },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("dragging a card INTO Paused really pauses it (the session is not left running)", async () => {
+    const projectId = await makeProject();
+    const id = await makeCard(projectId);
+    await (await registry()).applyOpenTerminal(id);
+
+    const res = await app.inject({
+      method: "PATCH", url: `/api/cards/${id}`, headers: { cookie }, payload: { column: "paused", position: 0 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(pauseCard).toHaveBeenCalledWith(id, expect.any(String));
+    expect(res.json().card.column).toBe("paused");
+    expect(res.json().card.pausedAt).toBeTypeOf("number");
+  });
+
+  it("dragging a card that never ran into Paused just moves it — there is nothing to end", async () => {
+    const projectId = await makeProject();
+    const id = await makeCard(projectId);
+    const res = await app.inject({
+      method: "PATCH", url: `/api/cards/${id}`, headers: { cookie }, payload: { column: "paused" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().card.column).toBe("paused");
+    expect(pauseCard).not.toHaveBeenCalled();
+  });
+
+  it("dragging a paused card back to Waiting RESUMES it; Backlog and Done leave it dormant", async () => {
+    const projectId = await makeProject();
+    const id = await makeCard(projectId);
+    const reg = await registry();
+    await reg.applyOpenTerminal(id);
+    await reg.pauseCard(id);
+
+    const res = await app.inject({
+      method: "PATCH", url: `/api/cards/${id}`, headers: { cookie }, payload: { column: "waiting", position: 0 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().card.column).toBe("waiting");
+    expect(resumeCard).toHaveBeenCalledWith(id, expect.any(String));
+
+    // Back to paused, then dropped in the backlog: a card parked there stays parked.
+    await reg.pauseCard(id);
+    resumeCard.mockClear();
+    await app.inject({
+      method: "PATCH", url: `/api/cards/${id}`, headers: { cookie }, payload: { column: "backlog" },
+    });
+    expect(resumeCard).not.toHaveBeenCalled();
+  });
+
+  it("a rename or a move between live columns touches no session at all", async () => {
+    const projectId = await makeProject();
+    const id = await makeCard(projectId);
+    await (await registry()).applyOpenTerminal(id);
+    await app.inject({ method: "PATCH", url: `/api/cards/${id}`, headers: { cookie }, payload: { title: "renamed" } });
+    await app.inject({ method: "PATCH", url: `/api/cards/${id}`, headers: { cookie }, payload: { column: "working" } });
+    expect(pauseCard).not.toHaveBeenCalled();
+    expect(resumeCard).not.toHaveBeenCalled();
+  });
+
   it("lists cards per project", async () => {
     const a = await makeProject("a");
     const b = await makeProject("b");
@@ -277,6 +359,31 @@ describe("status callback", () => {
     const after = await reg.getCard(card);
     expect(after?.pausedAt).toBeGreaterThan(0); // the pause happened
     expect(after?.restartPendingAt).toBeNull(); // the restart was dropped
+    // ...and `pausedAt` means the session is DEAD, so it really was ended — Claude's and the shell's.
+    expect(killCardSession).toHaveBeenCalledWith(
+      expect.objectContaining({ id: card }),
+      { includeShell: true },
+    );
+  });
+
+  it("a pending pause that comes DUE ends the tmux sessions — a parked card is not left resident", async () => {
+    const projectId = await makeProject();
+    const card = await makeCard(projectId);
+    const reg = await import("../services/board/registry.js");
+    await reg.applyOpenTerminal(card);
+    await postStatus(card, "working", RUNNER_TOKEN);
+    await reg.pauseCard(card); // dragged into Paused while Claude was really working
+    expect(killCardSession).not.toHaveBeenCalled();
+
+    // Claude finishes: the Stop hook is what carries the pause out.
+    expect((await postStatus(card, "waiting", RUNNER_TOKEN)).statusCode).toBe(200);
+    expect(killCardSession).toHaveBeenCalledTimes(1);
+    expect((await reg.getCard(card))?.pausedAt).toBeGreaterThan(0);
+
+    // Idempotent: a later hook on a card with no session left kills nothing again.
+    killCardSession.mockClear();
+    expect((await postStatus(card, "waiting", RUNNER_TOKEN)).statusCode).toBe(200);
+    expect(killCardSession).not.toHaveBeenCalled();
   });
 
   it("a failing restart does not turn the fire-and-forget hook into an error", async () => {

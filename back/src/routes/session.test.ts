@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
-import { parseTerminalFrame, isValidTermSize } from "./session.js";
+import { parseTerminalFrame, isValidTermSize, needsProvisioning } from "./session.js";
 
 describe("terminal frames", () => {
   it("treats plain keystrokes as data", () => {
@@ -39,6 +39,8 @@ let app: FastifyInstance;
 let cookie = "";
 
 const openCard = vi.fn();
+/** Card creation pre-provisions in the background; these tests have no runner to do it in. */
+const prepareCard = vi.fn(async () => undefined);
 const pauseCard = vi.fn();
 const restartCard = vi.fn();
 const hibernateCard = vi.fn();
@@ -69,7 +71,8 @@ async function boot(): Promise<FastifyInstance> {
     );
     return {
       ...actual,
-      openCard, pauseCard, restartCard, hibernateCard, restartAllCards, dropCardWorkspace, uploadCardImage,
+      openCard, prepareCard, pauseCard, restartCard, hibernateCard, restartAllCards, dropCardWorkspace,
+      uploadCardImage,
     };
   });
   const { buildServer } = await import("../index.js");
@@ -184,6 +187,21 @@ describe("card lifecycle routes", () => {
       method: "POST", url: `/api/cards/${id}/upload`, headers: { cookie }, payload: { name: "x", content: "!!!" },
     });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+/**
+ * The websocket is the fast path: it attaches with `tmux new-session -A` and does not wait for
+ * anything. That is only safe once the card HAS a workspace — otherwise tmux creates the session in
+ * whatever directory it can, and what you get is a terminal with no Claude in it.
+ */
+describe("attaching a terminal to a card that has no workspace yet", () => {
+  it("needsProvisioning: only a card that was never opened AND never prepared", () => {
+    expect(needsProvisioning({ openedAt: undefined, preparedAt: undefined })).toBe(true);
+    expect(needsProvisioning({ openedAt: 1, preparedAt: undefined })).toBe(false);
+    // Pre-provisioned at creation: the worktree and the session are already there.
+    expect(needsProvisioning({ openedAt: undefined, preparedAt: 1 })).toBe(false);
+    expect(needsProvisioning({ openedAt: 1, preparedAt: 1 })).toBe(false);
   });
 });
 

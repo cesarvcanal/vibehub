@@ -56,6 +56,13 @@ connection #1 (label = its login) and the secret moves to `GITHUB_TOKEN_<id>`. I
 | WS | `/api/runner/terminal` | a shell inside the runner container itself — where you run `claude` / `gh auth login` once |
 | POST | `/api/runner/status` | **public, `x-vibehub-token`** — `{ card, status: "working" \| "waiting" }`, the Claude hook callback |
 
+The dot a card shows comes from those hooks, and they do not fire for every way a session goes
+quiet — Claude parked on a menu or on a permission question is idle without a Stop hook. So the
+server also **reconciles pending pauses every 60s**: for each card sitting in `paused` with a live
+session it asks the runner what that tmux session is doing (`tmux capture-pane`, read-only) and
+finishes the pause for the ones that are no longer generating. A card in Paused is never left
+running.
+
 ## Projects & cards
 
 | Method | Path | Body / notes |
@@ -67,12 +74,12 @@ connection #1 (label = its login) and the secret moves to `GITHUB_TOKEN_<id>`. I
 | PATCH | `/api/projects/:id/order` | `{ position }` — sidebar position |
 | GET | `/api/projects/:id/cards` | `{ cards: Card[] }` |
 | GET | `/api/cards` | `{ cards: Card[] }` — every card in the install, for the views that cut across projects (the sidebar's Recent list) |
-| POST | `/api/cards` | `{ projectId, title }` plus any editable field (`branch`, `accountSlug`, `model`, `resumeSessionId`), applied through the same validation an edit uses |
+| POST | `/api/cards` | `{ projectId, title }` plus any editable field (`branch`, `accountSlug`, `model`, `resumeSessionId`), applied through the same validation an edit uses. Answers immediately and **pre-provisions the workspace in the background** (clone, worktree, tmux), so the first open is instant |
 | GET | `/api/cards/:id` | `{ card }` |
-| PATCH | `/api/cards/:id` | `{ title?, column?, accountSlug?, model? }` — moving to `done` is always manual |
+| PATCH | `/api/cards/:id` | `{ title?, column?, accountSlug?, model? }` — moving to `done` is always manual. A column is not just a label: moving **into `paused` pauses the card for real** (same rules as the pause route) and moving a paused card into `waiting`/`working` **resumes it** (the session comes back in the background) |
 | DELETE | `/api/cards/:id` | kills the session and drops the worktree |
-| POST | `/api/cards/:id/open` | attach-or-create the tmux session; returns the card |
-| POST | `/api/cards/:id/pause` | kills tmux, clears status, back to backlog |
+| POST | `/api/cards/:id/open` | attach-or-create the tmux session; returns the card. Also resumes a paused or hibernated one |
+| POST | `/api/cards/:id/pause` | moves the card to `paused` and ends its tmux sessions. A card that is REALLY working (the runner is asked, not the dot) becomes a *pending* pause: the session lives until Claude finishes. A stale `working` dot — a card parked on Claude's "Resume from summary" screen never fires a Stop hook — does not defer anything: it is paused on the spot |
 | POST | `/api/cards/:id/hibernate` | kills tmux and stamps `hibernatedAt` — the card KEEPS its column and position and loses its dot; a card with nothing to hibernate (never opened, already cold, or `working`) comes back unchanged |
 | POST | `/api/cards/:id/restart` | fresh Claude process in the same worktree |
 | POST | `/api/cards/restart-all` | `{ restarted, skipped }` |

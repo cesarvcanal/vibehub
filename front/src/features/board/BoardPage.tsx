@@ -34,9 +34,11 @@ import {
   ACCOUNTS_KEY,
   PROJECTS_KEY,
   boardApi,
+  cardKey,
   cardsKey,
   projectAccountSlug,
   projectBaseBranch,
+  type BoardCard,
   type BoardProject,
 } from "@/features/board/api";
 import type { NewCard } from "@/api/types";
@@ -118,6 +120,14 @@ export function BoardPage() {
   const createCardMutation = useMutation({
     mutationFn: (input: NewCard) => boardApi.createCard(input),
     onSuccess: (card) => {
+      // WRITE IT INTO THE CACHE FIRST. Invalidating alone means the card only shows up after a
+      // round trip, and in that gap the sidebar has no row for the card the user just named — you
+      // click where it should be, nothing is there, and if you land in it anyway the terminal opens
+      // against a workspace nobody has admitted exists yet. Insert it, then let the poll confirm.
+      queryClient.setQueryData<BoardCard[]>(cardsKey(card.projectId), (previous) =>
+        previous ? (previous.some((c) => c.id === card.id) ? previous : [...previous, card]) : previous,
+      );
+      queryClient.setQueryData(cardKey(card.id), card);
       void queryClient.invalidateQueries({ queryKey: cardsKey(card.projectId) });
       // The dialog already closed itself on submit — several cards can be queued up back to back.
       // Created from inside a terminal: go straight to the new one. From the board, let it land in
