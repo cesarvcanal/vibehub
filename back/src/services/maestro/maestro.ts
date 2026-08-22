@@ -305,7 +305,7 @@ export async function readTerminal(cardId: string, last = 3): Promise<ReadResult
 /** Model ids Claude Code writes into transcripts, mapped to the names the UI shows. PURE. */
 export function modelLabelFor(model: string | null | undefined): string | null {
   if (!model) return null;
-  const m = model.toLowerCase();
+  const m = model.toLowerCase(); // full ids ("claude-opus-5") and the aliases settings.json uses ("opus")
   if (m.includes("fable")) return "Fable";
   if (m.includes("opus")) return "Opus";
   if (m.includes("sonnet")) return "Sonnet";
@@ -318,7 +318,13 @@ export function modelLabelFor(model: string | null | undefined): string | null {
  * now, whatever the card or the account says it should be. Malformed lines are skipped. PURE.
  */
 export function parseLastModel(jsonl: string): string | null {
-  let last: string | null = null;
+  return parseLastTurn(jsonl).model;
+}
+
+/** The last assistant turn's model and WHEN it happened (epoch ms, 0 when unknown). PURE. */
+export function parseLastTurn(jsonl: string): { model: string | null; at: number } {
+  let model: string | null = null;
+  let at = 0;
   for (const line of jsonl.split(/\r?\n/)) {
     const s = line.trim();
     if (!s) continue;
@@ -329,10 +335,68 @@ export function parseLastModel(jsonl: string): string | null {
       continue;
     }
     if (!obj || typeof obj !== "object" || (obj as { type?: unknown }).type !== "assistant") continue;
-    const model = (obj as { message?: { model?: unknown } }).message?.model;
-    if (typeof model === "string" && model) last = model;
+    const m = (obj as { message?: { model?: unknown } }).message?.model;
+    // Claude Code logs a "<synthetic>" assistant turn for its own notices (rate limit, errors) — it
+    // is not a model the session is running, so it must not replace the real one.
+    if (typeof m === "string" && m && !m.startsWith("<")) {
+      model = m;
+      const ts = (obj as { timestamp?: unknown }).timestamp;
+      at = typeof ts === "string" ? Date.parse(ts) || 0 : typeof ts === "number" ? ts : 0;
+    }
   }
-  return last;
+  return { model, at };
+}
+
+/**
+ * Which signal wins: `/model` + Enter writes the profile's settings.json AND switches the running
+ * session, so a settings write NEWER than the last reply is the truth until the next reply lands.
+ * Otherwise the last reply is. PURE.
+ */
+export function pickModel(
+  lastTurn: { model: string | null; at: number },
+  settings: { model: string | null; at: number },
+): string | null {
+  if (settings.model && settings.at >= lastTurn.at) return settings.model;
+  return lastTurn.model ?? settings.model;
+}
+
+/**
+ * Read-only: the newest transcript tail PLUS the profile's settings.json model and its mtime, in
+ * one round trip. Output is two sections separated by a marker line. PURE.
+ */
+export function buildReadSessionScript(containerName: string, transcriptDir: string, profileDir: string, tailLines: number): string {
+  assertSafeRemotePath(transcriptDir);
+  assertSafeRemotePath(profileDir);
+  const n = Math.max(1, Math.min(5000, Math.floor(tailLines) || TAIL_LINES));
+  const inner =
+    `f=$(ls -1t "$1"/*.jsonl 2>/dev/null | head -1); [ -n "$f" ] && tail -n ${n} "$f" || true; ` +
+    `echo "${SESSION_MARKER}"; ` +
+    `s="$2/settings.json"; if [ -f "$s" ]; then stat -c %Y "$s"; cat "$s"; fi`;
+  return `docker exec ${shQuote(containerName)} sh -c ${shQuote(inner)} _ ${shQuote(transcriptDir)} ${shQuote(profileDir)}`;
+}
+
+export const SESSION_MARKER = "__VIBEHUB_SETTINGS__";
+
+/** Splits the script output into the transcript tail and the settings model/mtime. PURE. */
+export function parseSessionOutput(stdout: string): {
+  transcript: string;
+  settings: { model: string | null; at: number };
+} {
+  const idx = stdout.indexOf(SESSION_MARKER);
+  if (idx < 0) return { transcript: stdout, settings: { model: null, at: 0 } };
+  const transcript = stdout.slice(0, idx);
+  const rest = stdout.slice(idx + SESSION_MARKER.length).trim();
+  if (!rest) return { transcript, settings: { model: null, at: 0 } };
+  const nl = rest.indexOf("\n");
+  const mtime = Number.parseInt(nl < 0 ? rest : rest.slice(0, nl), 10);
+  let model: string | null = null;
+  try {
+    const json = JSON.parse(nl < 0 ? "{}" : rest.slice(nl + 1)) as { model?: unknown };
+    if (typeof json.model === "string" && json.model) model = json.model;
+  } catch {
+    /* unreadable settings — ignore */
+  }
+  return { transcript, settings: { model, at: Number.isFinite(mtime) ? mtime * 1000 : 0 } };
 }
 
 export interface SessionInfo {
@@ -360,10 +424,11 @@ export async function sessionInfo(cardId: string): Promise<SessionInfo> {
     const profileDir = profileDirFor(slug);
     const { cwd } = cardWorkPaths(project, card);
     const { stdout } = await hostExecutor().runScript(
-      buildReadTranscriptScript(config_runner_container(), seedDestDir(profileDir, cwd), 200),
+      buildReadSessionScript(config_runner_container(), seedDestDir(profileDir, cwd), profileDir, 200),
       { timeoutMs: 15_000 },
     );
-    model = parseLastModel(stdout);
+    const { transcript, settings } = parseSessionOutput(stdout);
+    model = pickModel(parseLastTurn(transcript), settings);
   } catch {
     model = null; // runner unreachable or no transcript yet — the UI shows the default
   }

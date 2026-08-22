@@ -319,3 +319,38 @@ describe("session introspection", () => {
     expect((await maestro.sessionInfo(c.id)).account).toEqual({ slug: null, name: "principal" });
   });
 });
+
+describe("model signals", () => {
+  it("ignores Claude Code's <synthetic> notices when reading the model in use", async () => {
+    const { maestro } = await load();
+    const line = (obj: unknown) => JSON.stringify(obj);
+    const jsonl = [
+      line({ type: "assistant", timestamp: "2026-08-22T03:00:00Z", message: { model: "claude-fable-5", content: [] } }),
+      line({ type: "assistant", timestamp: "2026-08-22T03:05:00Z", message: { model: "<synthetic>", content: [] } }),
+    ].join("\n");
+    expect(maestro.parseLastTurn(jsonl)).toEqual({ model: "claude-fable-5", at: Date.parse("2026-08-22T03:00:00Z") });
+  });
+
+  it("a /model choice newer than the last reply wins; an older one loses", async () => {
+    const { maestro } = await load();
+    const turn = { model: "claude-sonnet-5", at: 1000 };
+    expect(maestro.pickModel(turn, { model: "fable", at: 2000 })).toBe("fable");
+    expect(maestro.pickModel(turn, { model: "fable", at: 500 })).toBe("claude-sonnet-5");
+    expect(maestro.pickModel({ model: null, at: 0 }, { model: "opus", at: 0 })).toBe("opus");
+    expect(maestro.pickModel({ model: null, at: 0 }, { model: null, at: 0 })).toBeNull();
+  });
+
+  it("splits the session script output into transcript and settings", async () => {
+    const { maestro } = await load();
+    const out = maestro.parseSessionOutput('{"type":"assistant"}\n' + maestro.SESSION_MARKER + "\n1787370000\n{\"model\":\"fable\"}");
+    expect(out.transcript.trim()).toBe('{"type":"assistant"}');
+    expect(out.settings).toEqual({ model: "fable", at: 1787370000000 });
+    expect(maestro.parseSessionOutput("only transcript").settings).toEqual({ model: null, at: 0 });
+  });
+
+  it("labels the aliases settings.json uses", async () => {
+    const { maestro } = await load();
+    expect(maestro.modelLabelFor("fable")).toBe("Fable");
+    expect(maestro.modelLabelFor("sonnet")).toBe("Sonnet");
+  });
+});

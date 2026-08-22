@@ -217,7 +217,7 @@ export function CardTerminalView({
   const { data: session } = useQuery({
     queryKey: cardSessionKey(cardId),
     queryFn: () => boardApi.cardSessionInfo(cardId),
-    refetchInterval: 10_000,
+    refetchInterval: 5_000,
     retry: false,
   });
 
