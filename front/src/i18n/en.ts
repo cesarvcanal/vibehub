@@ -350,6 +350,7 @@ export const en: Record<string, string> = {
   "terminal.resetHint": "Reset the text size (Cmd/Ctrl 0)",
   "terminal.larger": "Larger text",
   "terminal.largerHint": "Larger text (Cmd/Ctrl +)",
+  "terminal.jumpToLatest": "Jump to latest",
 
   /* ----------------------------------------------------------- runner banner */
   "runner.checking": "Checking the runner…",
