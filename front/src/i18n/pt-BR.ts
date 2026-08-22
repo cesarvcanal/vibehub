@@ -337,6 +337,7 @@ export const ptBR: Record<string, string> = {
   "terminal.resetHint": "Restaurar o tamanho do texto (Cmd/Ctrl 0)",
   "terminal.larger": "Texto maior",
   "terminal.largerHint": "Texto maior (Cmd/Ctrl +)",
+  "terminal.jumpToLatest": "Ir pro fim",
 
   /* ------------------------------------------------------------ faixa do runner */
   "runner.checking": "Verificando o runner…",

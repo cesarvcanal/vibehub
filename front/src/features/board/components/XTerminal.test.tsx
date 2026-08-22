@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ILink, ILinkProvider } from "@xterm/xterm";
 import * as React from "react";
 import userEvent from "@testing-library/user-event";
@@ -34,6 +34,8 @@ class FakeTerminal {
   private selectionHandlers: (() => void)[] = [];
   private lines: FakeLine[] = [];
   viewportY = 0;
+  baseY = 0;
+  private scrollHandlers: ((y: number) => void)[] = [];
 
   constructor(options: Record<string, unknown>) {
     this.options = options;
@@ -65,6 +67,21 @@ class FakeTerminal {
   scrolled: number[] = [];
   scrollLines(amount: number): void {
     this.scrolled.push(amount);
+    const next = Math.max(0, Math.min(this.baseY, this.viewportY + amount));
+    if (next !== this.viewportY) {
+      this.viewportY = next;
+      for (const h of this.scrollHandlers) h(this.viewportY);
+    }
+  }
+  scrollToBottom(): void {
+    if (this.viewportY !== this.baseY) {
+      this.viewportY = this.baseY;
+      for (const h of this.scrollHandlers) h(this.viewportY);
+    }
+  }
+  onScroll(handler: (y: number) => void) {
+    this.scrollHandlers.push(handler);
+    return { dispose: () => {} };
   }
   dispose(): void {
     this.disposed = true;
@@ -104,6 +121,7 @@ class FakeTerminal {
       active: {
         length: lines.length,
         viewportY,
+        baseY: this.baseY,
         getLine: (index: number) => {
           const line = lines[index];
           if (!line) return undefined;
@@ -119,6 +137,11 @@ class FakeTerminal {
   /* test helpers */
   setLines(lines: FakeLine[]): void {
     this.lines = lines;
+  }
+  /** Give the buffer `depth` rows of scrollback and start pinned to the bottom. */
+  setScrollback(depth: number): void {
+    this.baseY = depth;
+    this.viewportY = depth;
   }
   type(data: string): void {
     for (const handler of this.dataHandlers) handler(data);
@@ -866,5 +889,62 @@ describe("XTerminal — touch scrolling", () => {
     touch(frame, "touchend");
     touch(frame, "touchmove", 200);
     expect(t.scrolled).toEqual([]);
+  });
+});
+
+describe("XTerminal — wheel scrolling (local, off the network)", () => {
+  /** Dispatches a wheel with the deltas the handler reads. */
+  function wheel(target: HTMLElement, deltaY: number, deltaMode = 0): WheelEvent {
+    const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY, deltaMode });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  async function ready(depth: number): Promise<{ frame: HTMLElement; t: FakeTerminal }> {
+    render(<XTerminal wsPath="/api/cards/c1/terminal" />);
+    (await socket()).accept();
+    const t = term();
+    Object.defineProperty(t.element!, "clientWidth", { value: 800, configurable: true });
+    Object.defineProperty(t.element!, "clientHeight", { value: 600, configurable: true });
+    observeResize(); // 600px over 30 rows -> a 20px row
+    t.setScrollback(depth); // rows of history above the fold; pinned to the bottom
+    return { frame: screen.getByTestId("terminal-frame"), t };
+  }
+
+  it("scrolls the LOCAL buffer by rows and keeps the wheel off the pty", async () => {
+    const { frame, t } = await ready(500);
+
+    const event = wheel(frame, -40); // 40px up over a 20px row = two rows towards older output
+    expect(t.scrolled).toEqual([-2]);
+    // Taken over: the page must not scroll and xterm must not forward it to the app as a mouse event.
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("respects a line-mode wheel (deltaMode 1) as whole rows", async () => {
+    const { frame, t } = await ready(500);
+    wheel(frame, -3, 1);
+    expect(t.scrolled).toEqual([-3]);
+  });
+
+  it("does nothing — and yields the wheel — when there is no local scrollback", async () => {
+    const { frame, t } = await ready(0); // baseY 0: an alternate-screen program owns the view
+    const event = wheel(frame, -40);
+    expect(t.scrolled).toEqual([]);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("shows 'jump to latest' once you leave the bottom, and hides it back at the bottom", async () => {
+    const { frame, t } = await ready(500);
+
+    expect(screen.queryByTestId("terminal-jump-bottom")).not.toBeInTheDocument();
+
+    wheel(frame, -100); // five rows up
+    await waitFor(() => expect(screen.getByTestId("terminal-jump-bottom")).toBeInTheDocument());
+
+    act(() => screen.getByTestId("terminal-jump-bottom").click());
+    expect(t.viewportY).toBe(t.baseY); // scrollToBottom pinned it again
+    await waitFor(() => expect(screen.queryByTestId("terminal-jump-bottom")).not.toBeInTheDocument());
   });
 });
