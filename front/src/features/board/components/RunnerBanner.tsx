@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, ChevronDown, Loader2, Play, Server, TerminalSquare } from "lucide-react";
+import { AlertTriangle, ChevronDown, Loader2, Play, Server, TerminalSquare, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { apiErrorMessage } from "@/lib/apiError";
@@ -90,13 +90,28 @@ export function RunnerBanner() {
   // The runner container is up and can host a shell. `terminal` is what the server answers when the
   // websocket route exists; an older server simply does not offer the button.
   const canShell = Boolean(runner.running && runner.terminal);
+  // A terminal that appears with no name and no way out is a mystery box: it gets a header row
+  // saying what it is and a close button, and a height worth typing in.
   const shell =
     shellOpen && canShell ? (
-      <XTerminal
-        wsPath="/api/runner/terminal"
-        ariaLabel="Runner shell"
-        className="h-72"
-      />
+      <div data-testid="runner-shell" className="flex h-[40vh] min-h-[220px] flex-col gap-1">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Runner shell
+          </span>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 text-muted-foreground"
+            aria-label="Close the runner shell"
+            title="Close the runner shell"
+            onClick={() => setShellOpen(false)}
+          >
+            <X className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+        <XTerminal wsPath="/api/runner/terminal" ariaLabel="Runner shell" />
+      </div>
     ) : null;
 
   const ready = runner.running && runner.claudeInstalled;

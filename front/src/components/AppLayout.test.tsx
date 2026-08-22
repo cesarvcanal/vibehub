@@ -30,62 +30,28 @@ describe("AppLayout", () => {
     vi.restoreAllMocks();
   });
 
-  it("publishes the real header height as --app-header-h", () => {
-    // jsdom lays nothing out, so offsetHeight is 0 unless we say otherwise. The point of the test
-    // is that whatever the header actually measures is what lands in the variable — the open card
-    // sizes itself off it with calc(100vh - var(--app-header-h) - 56px).
-    const height = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(72);
-
+  it("has no top header at all — the page belongs to the content column", () => {
     renderApp(<AppLayout />);
 
-    expect(document.documentElement.style.getPropertyValue("--app-header-h")).toBe("72px");
-    height.mockRestore();
+    // The three things the header carried moved into the sidebar (brand, account) or were dropped
+    // (a nav bar with one destination). What it cost was terminal height.
+    expect(screen.queryByRole("banner")).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Sections" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Board" })).not.toBeInTheDocument();
   });
 
-  it("re-publishes the height when the header resizes", () => {
-    let measured = 64;
-    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(() => measured);
-
-    // Capture the observer callback so the test can play the part of the browser.
-    let notify: (() => void) | undefined;
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        constructor(cb: () => void) {
-          notify = cb;
-        }
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-
+  it("publishes a zero header height, so no stale calc() reserves space for chrome that is gone", () => {
     renderApp(<AppLayout />);
-    expect(document.documentElement.style.getPropertyValue("--app-header-h")).toBe("64px");
-
-    // The nav wrapped to a second row: the card has to shrink to match.
-    measured = 104;
-    notify?.();
-    expect(document.documentElement.style.getPropertyValue("--app-header-h")).toBe("104px");
-
-    vi.unstubAllGlobals();
+    expect(document.documentElement.style.getPropertyValue("--app-header-h")).toBe("0px");
   });
 
-  it("renders the brand lockup and the destination pill group", async () => {
-    renderApp(<AppLayout />);
+  it("gives the route the full screen with one small even gutter", () => {
+    const { container } = renderApp(<AppLayout />);
 
-    const board = await screen.findByRole("link", { name: "Board" });
-    expect(board).toHaveClass("nav-pill", "nav-pill-active");
-    expect(board).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("navigation", { name: "Sections" })).toContainElement(board);
-  });
-
-  it("puts the signed-in account and the theme toggle in the actions group", async () => {
-    renderApp(<AppLayout />);
-
-    const actions = screen.getByRole("navigation", { name: "Account" });
-    expect(actions).toHaveClass("nav-pill-group");
-    expect(await screen.findByRole("button", { name: "cesar" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^Theme:/ })).toBeInTheDocument();
+    const shell = container.firstElementChild as HTMLElement;
+    expect(shell.className).toContain("h-screen");
+    const gutter = container.querySelector("main > div") as HTMLElement;
+    expect(gutter.className).toContain("p-3");
+    expect(gutter.className).not.toContain("py-7");
   });
 });

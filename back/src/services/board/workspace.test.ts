@@ -40,7 +40,7 @@ vi.mock("../../runtime/host.js", async (orig) => ({
   ...(await orig<typeof import("../../runtime/host.js")>()),
   hostExecutor: vi.fn(),
 }));
-vi.mock("../github/client.js", () => ({ gitAuthHeader: vi.fn() }));
+vi.mock("../github/client.js", () => ({ gitAuthHeaderFor: vi.fn() }));
 
 /**
  * FAULT INJECTION for the staggered restart, opt-in per test (`fresh({ flakyRegistry: true })`): the
@@ -72,7 +72,7 @@ async function fresh(opts: { flakyRegistry?: boolean } = {}) {
     kind: "local", label: "this machine", runScript, ptyCommand, writeFile: vi.fn(),
   } as unknown as import("../../runtime/host.js").HostExecutor);
   const gh = await import("../github/client.js");
-  vi.mocked(gh.gitAuthHeader).mockResolvedValue(AUTH_HEADER);
+  vi.mocked(gh.gitAuthHeaderFor).mockResolvedValue(AUTH_HEADER);
   if (opts.flakyRegistry) {
     vi.doMock("./registry.js", async () => {
       const actual = await vi.importActual<typeof import("./registry.js")>("./registry.js");
@@ -297,9 +297,9 @@ describe("openCard", () => {
     expect(scriptAt(0).match(/fetch --prune/g)).toHaveLength(1);
   });
 
-  it("GitHub not connected (gitAuthHeader throws) → carries on with NO credential (public repo)", async () => {
+  it("GitHub not connected (gitAuthHeaderFor throws) → carries on with NO credential (public repo)", async () => {
     const gh = await import("../github/client.js");
-    vi.mocked(gh.gitAuthHeader).mockRejectedValue(new Error("GitHub is not connected"));
+    vi.mocked(gh.gitAuthHeaderFor).mockRejectedValue(new Error("GitHub is not connected"));
     const { card } = await seed();
     await ws.openCard(card.id);
     const script = scriptAt(0);

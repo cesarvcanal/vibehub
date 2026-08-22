@@ -102,7 +102,8 @@ export async function runnerRoutes(app: FastifyInstance): Promise<void> {
     const fresh = await isFreshInstall();
     const settings = fresh ? null : await getSettings();
     const runner = fresh ? null : await runnerStatus();
-    const gh = fresh ? { connected: false } : await github.state();
+    // "GitHub done" = at least one account connected. The wizard step is optional either way.
+    const githubConnected = fresh ? false : (await github.state()).connections.length > 0;
     return await reply.send({
       fresh,
       completed: Boolean(settings?.setupCompletedAt),
@@ -110,7 +111,7 @@ export async function runnerRoutes(app: FastifyInstance): Promise<void> {
         owner: !fresh,
         runner: Boolean(runner?.running),
         claude: Boolean(runner?.claudeInstalled),
-        github: gh.connected,
+        github: githubConnected,
       },
       runner: runner ?? { running: false, exists: false, claudeInstalled: false, dockerReachable: false },
     });

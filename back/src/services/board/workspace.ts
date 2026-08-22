@@ -1,7 +1,7 @@
 import { hostExecutor, shQuote, assertSafeRemotePath, HostExecError } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import { statusUrl } from "../../runtime/runner.js";
-import { gitAuthHeader } from "../github/client.js";
+import { gitAuthHeaderFor } from "../github/client.js";
 import {
   getCard, getProject, applyOpenTerminal, markPrepared, pauseCard as registryPauseCard,
   listAllCards, assertBranchName, assertSessionId, effectiveAccountSlug, isValidModel, hasLiveSession,
@@ -474,11 +474,12 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
     if (cloneUrl && paths.repoDir) {
       // Private repository: an EPHEMERAL credential (http header) built in the backend — it travels
       // over STDIN inside the script, never in argv, and is NEVER embedded in the remote URL (no
-      // token in .git/config inside the runner). GitHub not connected = no header (a public repo
-      // clones without a credential).
+      // token in .git/config inside the runner). The credential is the one of THIS PROJECT's GitHub
+      // account (`githubConnectionId`; absent = the first connected account). GitHub not connected =
+      // no header (a public repo clones without a credential).
       let authHeader: string | undefined;
       try {
-        authHeader = await gitAuthHeader();
+        authHeader = await gitAuthHeaderFor(project);
       } catch {
         /* no GitHub integration → public repository */
       }

@@ -20,14 +20,18 @@ export interface ColumnMeta {
 }
 
 /**
- * The five columns in reading order. "Waiting" sits left of "Working" on purpose: the cards that
- * need a human are the ones you should see first.
+ * The five columns in reading order: Backlog · Paused · Waiting · Working · Done.
+ *
+ * The order is a life cycle read left to right — not yet started, parked, then the two live
+ * columns, then finished. "Paused" sits next to "Backlog" because a parked card is work that has
+ * not resumed yet; "Waiting" sits left of "Working" because the cards that need a human are the
+ * ones you should see first.
  */
 export const COLUMNS: readonly ColumnMeta[] = [
   { key: "backlog", label: "Backlog", hint: "Not started. Opening a card moves it out of here." },
+  { key: "paused", label: "Paused", hint: "Session killed on request — reopening resumes it." },
   { key: "waiting", label: "Waiting", hint: "The agent is waiting for you. Moved here by the runner." },
   { key: "working", label: "Working", hint: "The agent is working. Moved here by the runner." },
-  { key: "paused", label: "Paused", hint: "Session killed on request — reopening resumes it." },
   { key: "done", label: "Done", hint: "Finished. Always a manual move." },
 ] as const;
 

@@ -83,7 +83,30 @@ function serve() {
       });
     }
     if (url === "/transcribe") return Promise.resolve({ available: false, proofread: false, language: null });
+    // Nothing has answered yet: the route says so with nulls rather than inventing a model.
+    if (url === "/cards/c1/session") {
+      return Promise.resolve({ model: null, modelLabel: null, account: { slug: null, name: "" } });
+    }
     return Promise.reject(new Error(`unexpected GET ${url}`));
+  });
+}
+
+/** Serves the session route with a live reading, on top of the usual fixtures. */
+function serveSession(info: {
+  model?: string | null;
+  modelLabel?: string | null;
+  account?: { slug: string | null; name: string };
+}) {
+  const base = mockGet.getMockImplementation();
+  mockGet.mockImplementation((url: string, ...rest: unknown[]) => {
+    if (url === "/cards/c1/session") {
+      return Promise.resolve({
+        model: info.model ?? null,
+        modelLabel: info.modelLabel ?? null,
+        account: info.account ?? { slug: null, name: "" },
+      });
+    }
+    return (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest);
   });
 }
 
@@ -243,16 +266,55 @@ describe("CardTerminalView — the card bar", () => {
     );
   });
 
-  it("names what the empty options actually mean", async () => {
-    renderWithCache([card({ openedAt: 10 })]);
-    // The install renamed its built-in profile "Main"; showing the raw slug would be a lie.
-    expect(await screen.findByRole("option", { name: "Main (default)" })).toBeInTheDocument();
-    // The server never says which model an account's plan gives it, so the label says that rather
-    // than inventing a name.
-    expect(screen.getByRole("option", { name: "Default model" })).toBeInTheDocument();
+  it("shows the model the SESSION is really running, even though the card pins none", async () => {
+    serveSession({ model: "claude-opus-5", modelLabel: "Opus" });
+    renderWithCache([card({ openedAt: 10, model: undefined })]);
+
+    const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+    await waitFor(() => expect(select.value).toBe("claude-opus-5"));
+    // "Default model" was the one answer nobody wants: the question is which model is answering.
+    expect(screen.queryByRole("option", { name: "Default model" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Use account default" })).toBeInTheDocument();
   });
 
-  it("falls back to the profile's own slug when nobody has renamed it", async () => {
+  it("names a model the whitelist has never heard of from the server's own label", async () => {
+    serveSession({ model: "claude-experimental-9", modelLabel: "Experimental" });
+    renderWithCache([card({ openedAt: 10 })]);
+
+    const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+    await waitFor(() => expect(select.value).toBe("claude-experimental-9"));
+    expect(screen.getByRole("option", { name: "Experimental" })).toBeInTheDocument();
+  });
+
+  it("assumes Claude Code's own default until the first reply, and says so in the title", async () => {
+    renderWithCache([card({ openedAt: 10 })]);
+
+    const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+    expect(select.value).toBe("claude-fable-5");
+    expect(select).toHaveAttribute("title", "Claude Code's default until the first reply");
+  });
+
+  it("the card's own pin wins over the transcript — that is what the next session starts on", async () => {
+    serveSession({ model: "claude-opus-5", modelLabel: "Opus" });
+    mockPost.mockResolvedValue({ card: card({ openedAt: 10, model: "claude-haiku-4-5" }) });
+    renderWithCache([card({ openedAt: 10, model: "claude-haiku-4-5" })]);
+
+    const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+    expect(select.value).toBe("claude-haiku-4-5");
+  });
+
+  it("names the account in USE, with no (default) or (inherited) suffix", async () => {
+    serveSession({ account: { slug: null, name: "Main" } });
+    renderWithCache([card({ openedAt: 10 })]);
+
+    const select = (await screen.findByLabelText("Claude account")) as HTMLSelectElement;
+    await waitFor(() => expect(screen.getByRole("option", { name: "Main" })).toBeInTheDocument());
+    expect(select.value).toBe("");
+    expect(screen.queryByRole("option", { name: /\(default\)/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /inherited/i })).not.toBeInTheDocument();
+  });
+
+  it("falls back to the profile's own slug when the session says nothing and nobody renamed it", async () => {
     mockGet.mockImplementation((url: string) => {
       // "" is what the server sends for "never named" — an empty pill would be worse than a slug.
       if (url === "/accounts") return Promise.resolve({ accounts: [], defaultLabel: "" });
@@ -260,7 +322,7 @@ describe("CardTerminalView — the card bar", () => {
       return Promise.resolve({});
     });
     renderWithCache([card({ openedAt: 10 })]);
-    expect(await screen.findByRole("option", { name: "default (default)" })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "default" })).toBeInTheDocument();
   });
 
   it("clears the account back to inherited with the empty option", async () => {
@@ -307,21 +369,25 @@ describe("CardTerminalView — extra panes", () => {
     expect(await screen.findByTestId("vnc")).toHaveTextContent("c1");
   });
 
-  it("shows where the card lives in the runner", async () => {
+  it("keeps where the card lives in the runner in the title's tooltip, not in a footer row", async () => {
     renderWithCache([card({ openedAt: 10 })]);
-    expect(await screen.findByText(/card\/fix-the-totals-abcd/)).toHaveTextContent(
+    // The footer line cost a row of terminal height to say three things you need roughly never.
+    expect(screen.queryByText(/card\/fix-the-totals-abcd/)).not.toBeInTheDocument();
+    const title = await screen.findByRole("button", { name: /fix the totals/ });
+    expect(title.getAttribute("title")).toContain(
       "card/fix-the-totals-abcd · base dev · tmux card-abcdef12",
     );
   });
 
-  it("keeps the footer to the two panes that belong to THIS card", async () => {
+  it("puts Browser and Shell in the card bar, and keeps New card out of it", async () => {
     renderWithCache([card({ openedAt: 10 })]);
     await screen.findByTestId("xterm");
     // "New card" lives on the board's chrome and in ⌘K; a third copy here only competed with the
     // controls that are actually about the card you are looking at.
     expect(screen.queryByRole("button", { name: /new card/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /browser/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /shell/i })).toBeInTheDocument();
+    const bar = screen.getByTestId("card-bar");
+    expect(bar).toContainElement(screen.getByRole("button", { name: /browser/i }));
+    expect(bar).toContainElement(screen.getByRole("button", { name: /shell/i }));
   });
 });
 

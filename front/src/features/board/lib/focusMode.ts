@@ -6,23 +6,23 @@
  * not guessed, and everything that eats vertical space is named here rather than being sprinkled
  * across class names.
  *
- * Opening a card does NOT take the screen over: the app header and the sidebar stay exactly where
- * they were and only the middle of the page swaps the kanban for the terminal. So the only chrome
- * to subtract is the header — measured live by the shell and published as `--app-header-h`, because
- * it is not a constant (it wraps to two lines on a phone) — plus the vertical padding of `main`.
+ * Opening a card does NOT take the screen over: the sidebar stays exactly where it was and only
+ * the middle of the page swaps the kanban for the terminal. There is no top header any more — the
+ * page is a sidebar plus the content column, which starts at the very top of the viewport — so the
+ * only thing left to subtract is the shell's own gutter.
  */
 
-/** Vertical padding of the page's `main` (`py-7`, top and bottom). */
-export const CARD_MAIN_PADDING_PX = 56;
+/** Vertical gutter of the app shell (`p-3`, top and bottom). */
+export const CARD_MAIN_PADDING_PX = 24;
 
 /**
- * CSS height of the card view's row: the viewport minus the app header and the page padding.
+ * CSS height of the card view's row: the whole viewport minus the shell's gutter.
  *
- * The fallback in the `var()` matters — it is what applies for the one frame before the shell has
- * measured its own header, and on any screen where that measurement never lands.
+ * Nothing is measured any more because there is nothing left to measure: the header is gone, so
+ * the terminal owns the full height of the page and the only constant is the gutter around it.
  */
 export function cardViewHeight(padding: number = CARD_MAIN_PADDING_PX): string {
-  return `calc(100vh - var(--app-header-h, 64px) - ${Math.max(0, Math.round(padding))}px)`;
+  return `calc(100vh - ${Math.max(0, Math.round(padding))}px)`;
 }
 
 /**

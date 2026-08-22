@@ -43,10 +43,11 @@ import type { NewCard } from "@/api/types";
 /**
  * The board.
  *
- * ONE frame, two middles. The app header and the sidebar are the page; opening a card does not take
- * the screen over, it swaps the kanban for that card's terminal and leaves everything else exactly
- * where it was. Nothing moves under the cursor, and the list you use to reach the next agent is
- * still there while you read this one.
+ * ONE frame, two middles. The sidebar IS the page's chrome — brand at its top, account row at its
+ * bottom, everything else in between — and the column beside it runs from the very top of the
+ * viewport to the bottom. Opening a card does not take the screen over, it swaps the kanban for
+ * that card's terminal and leaves everything else exactly where it was. Nothing moves under the
+ * cursor, and the list you use to reach the next agent is still there while you read this one.
  *
  * Where you are lives in the URL (`?project=…&card=…`), never in component state, so a refresh, a
  * second tab and a pasted link all land in the same place, including inside a terminal. NO project
@@ -278,10 +279,10 @@ export function BoardPage() {
 
   if (selected && cardId) {
     return (
-      <div className="space-y-5">
+      <div className="h-full">
         <div
           data-testid="card-layout"
-          className="flex min-h-[420px] flex-col gap-4 lg:flex-row lg:items-stretch"
+          className="flex min-h-[420px] flex-col gap-3 lg:flex-row lg:items-stretch"
           style={{ height: cardViewHeight() }}
         >
           {menuButton}
@@ -331,7 +332,7 @@ export function BoardPage() {
       ) : (
         // `lg:items-start` — the sidebar is as tall as its own content here, not as tall as the
         // board beside it.
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
           {menuButton}
           {sidebar}
 

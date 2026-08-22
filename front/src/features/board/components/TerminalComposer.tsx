@@ -29,6 +29,11 @@ export interface TerminalComposerProps {
   onUploadImage?: (file: File) => Promise<string | null>;
   /** The card recordings are transcribed against. Omit and there is no microphone at all. */
   cardId?: string;
+  /**
+   * Empty by default, and that is the point: the field sits under a terminal that is already full
+   * of words, and a grey sentence explaining what a text box is competes with the agent's output
+   * every second of the day. The `aria-label` still says what it is, for anyone who needs telling.
+   */
   placeholder?: string;
   className?: string;
 }
@@ -299,11 +304,17 @@ export function TerminalComposer({
     };
   }, [clearCap, stopTracks, stopVisualiser]);
 
-  const hint =
-    placeholder ??
-    (canRecord
-      ? "Write or record — Enter sends, Shift+Enter for a new line"
-      : "Write here — Enter sends, Shift+Enter for a new line");
+  /**
+   * Grow with the text, up to `max-h-48`. The field starts at three lines because that is roughly
+   * what a dictated thought is, and shrinking back down when the text is deleted matters as much
+   * as growing: a box stuck at ten lines is ten lines stolen from the terminal.
+   */
+  React.useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    if (el.scrollHeight > 0) el.style.height = `${el.scrollHeight}px`;
+  }, [text]);
 
   return (
     <div data-testid="terminal-composer" className={cn("flex shrink-0 items-end gap-2", className)}>
@@ -328,10 +339,10 @@ export function TerminalComposer({
           e.preventDefault();
           upload(imageFiles(e.dataTransfer));
         }}
-        placeholder={hint}
-        rows={1}
+        placeholder={placeholder ?? ""}
+        rows={3}
         aria-label="Message to the terminal"
-        className="max-h-32 min-h-9 flex-1 resize-none rounded-md border border-border/60 bg-card/50 px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+        className="max-h-48 min-h-24 flex-1 resize-none overflow-y-auto rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
       />
 
       {cardId ? (

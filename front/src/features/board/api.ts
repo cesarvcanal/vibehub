@@ -8,6 +8,7 @@ import type {
   BrainWriteResult,
   Card,
   CardColumn,
+  GithubConnection,
   GithubRepo,
   GithubState,
   Mcp,
@@ -67,6 +68,22 @@ export function cardWorktree(c: BoardCard | undefined): string | undefined {
 /** tmux session name of a card inside the runner. */
 export function cardSession(c: BoardCard | undefined): string | undefined {
   return c?.tmuxSession;
+}
+
+/**
+ * Where a card lives inside the runner, as one line: worktree, base branch, tmux session.
+ *
+ * It is a TOOLTIP, not a row. This used to be a permanent footer under every terminal, which spent
+ * a line of height on three strings you need roughly never — and the one thing this screen is short
+ * of is height. Empty pieces are dropped rather than printed as blanks.
+ */
+export function cardRunnerHint(c: BoardCard | undefined): string {
+  if (!c) return "";
+  const worktree = cardWorktree(c);
+  const session = cardSession(c);
+  return [worktree ? `card/${worktree}` : "", c.base ? `base ${c.base}` : "", session ? `tmux ${session}` : ""]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 /**
@@ -151,9 +168,12 @@ export const GITHUB_KEY = ["board", "github"] as const;
 export const CARDS_PREFIX_KEY = ["board", "cards"] as const;
 export const cardsKey = (projectId: string) => ["board", "cards", projectId] as const;
 export const cardKey = (cardId: string) => ["board", "card", cardId] as const;
-export const githubReposKey = (q: string) => ["board", "github", "repos", q] as const;
-export const githubBranchesKey = (owner: string, repo: string) =>
-  ["board", "github", "branches", owner, repo] as const;
+export const cardSessionKey = (cardId: string) => ["board", "card", cardId, "session"] as const;
+/** The repo/branch caches are keyed by CONNECTION too — the same name means a different repo per account. */
+export const githubReposKey = (connection: string, q: string) =>
+  ["board", "github", "repos", connection, q] as const;
+export const githubBranchesKey = (connection: string, owner: string, repo: string) =>
+  ["board", "github", "branches", connection, owner, repo] as const;
 
 /* ---------------------------------------------------------------- inputs */
 
@@ -166,6 +186,8 @@ export interface NewProjectInput {
   defaultBranch?: string;
   /** Claude account the project's cards inherit. */
   accountSlug?: string;
+  /** GitHub account the repository is cloned with. Absent = the first connection. */
+  githubConnectionId?: string | null;
 }
 
 /** `GET /api/transcribe` — what voice input can do on THIS install. */
@@ -182,6 +204,28 @@ export interface TranscribeStatus {
 export interface Transcription {
   text: string;
   proofread: boolean;
+}
+
+/**
+ * `GET /api/cards/:id/session` — what the card is ACTUALLY running right now.
+ *
+ * The card record only says what was PINNED (`model`, `accountSlug`), and most cards pin nothing:
+ * they inherit. So the pills used to read "Default model" and "Main (default)", which is the one
+ * thing nobody wants from them — the question is always "which model is answering me", never
+ * "did somebody type a model into this card".
+ *
+ * `model` is read from the live session transcript (the last assistant turn), so it is the truth
+ * and not a guess; `account` is the effective account after card -> project -> default, already
+ * resolved to a display name. A card whose agent has not answered yet has no turn to read, and the
+ * route says so with nulls rather than inventing one.
+ */
+export interface CardSessionInfo {
+  /** Model id from the last assistant turn, or null while the session has not answered yet. */
+  model: string | null;
+  /** Display name for that model when the server knows one. */
+  modelLabel: string | null;
+  /** The account the session is really using. */
+  account: { slug: string | null; name: string };
 }
 
 export interface CardPatchInput {
@@ -207,6 +251,7 @@ export const boardApi = {
       cloneUrl: input.cloneUrl,
       baseBranch: input.defaultBranch,
       defaultAccountSlug: input.accountSlug,
+      githubConnectionId: input.githubConnectionId,
     }).then((r) => r.project),
 
   deleteProject: (id: string) => del<{ ok: true }>(`/projects/${encodeURIComponent(id)}`),
@@ -241,6 +286,16 @@ export const boardApi = {
     post<{ card: BoardCard }>(`/cards/${encodeURIComponent(id)}/restart`).then((r) => r.card),
 
   restartAllCards: () => post<RestartAllResult>("/cards/restart-all"),
+
+  /** What the card's live session is running — the model in the transcript and the real account. */
+  cardSessionInfo: (id: string) =>
+    get<Partial<CardSessionInfo>>(`/cards/${encodeURIComponent(id)}/session`).then(
+      (r): CardSessionInfo => ({
+        model: r?.model ?? null,
+        modelLabel: r?.modelLabel ?? null,
+        account: { slug: r?.account?.slug ?? null, name: r?.account?.name ?? "" },
+      }),
+    ),
 
   /**
    * Uploads an image so the agent can read it. The running server takes JSON `{ name, content }`
@@ -353,14 +408,29 @@ export const boardApi = {
   provisionRunner: () => post<{ ok: true }>("/runner/provision"),
   startRunner: () => post<RunnerStatus>("/runner/start"),
 
-  github: () => get<GithubState>("/github"),
-  githubRepos: (q: string) =>
-    get<{ repos: GithubRepo[] }>("/github/repos", { params: q ? { q } : undefined }).then((r) =>
-      Array.isArray(r?.repos) ? r.repos : [],
-    ),
-  githubBranches: (owner: string, repo: string) =>
+  /** Every connected GitHub account, in connection order. The first is what a project defaults to. */
+  github: () =>
+    get<GithubState>("/github").then((r) => ({
+      connections: Array.isArray(r?.connections) ? r.connections : [],
+    })),
+
+  /** Adds an account: a pasted token, never an OAuth redirect. */
+  addGithubConnection: (label: string, token: string) =>
+    post<{ connection: GithubConnection }>("/github/connections", { label, token }).then((r) => r.connection),
+
+  /** Removes an account. The server refuses (409) while a project still points at it. */
+  removeGithubConnection: (id: string) =>
+    del<{ ok: true }>(`/github/connections/${encodeURIComponent(id)}`),
+
+  githubRepos: (connection: string, q: string) =>
+    get<{ repos: GithubRepo[] }>("/github/repos", {
+      params: { ...(connection ? { connection } : {}), ...(q ? { q } : {}) },
+    }).then((r) => (Array.isArray(r?.repos) ? r.repos : [])),
+
+  githubBranches: (connection: string, owner: string, repo: string) =>
     get<{ branches: string[] }>(
       `/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches`,
+      { params: connection ? { connection } : undefined },
     ).then((r) => (Array.isArray(r?.branches) ? r.branches : [])),
 };
 
@@ -405,3 +475,67 @@ export const CLAUDE_MODELS: readonly { id: string; label: string }[] = [
 
 /** Slug the token routes use to address the built-in profile, which has no account record. */
 export const DEFAULT_ACCOUNT_SLUG = "default";
+
+/**
+ * What Claude Code starts on when nothing has pinned a model and nothing has answered yet. It is
+ * the first entry of the whitelist rather than a second constant, so the two cannot drift apart.
+ */
+export const IMPLICIT_MODEL = CLAUDE_MODELS[0] as { id: string; label: string };
+
+/** Title on the model pill for the one case where the answer is an assumption, not a reading. */
+export const IMPLICIT_MODEL_TITLE = "Claude Code's default until the first reply";
+
+export interface ModelInUse {
+  /** Value the select carries — always a real model id, never the empty "inherit" option. */
+  id: string;
+  label: string;
+  /** Set only while the label is the assumed default rather than something observed. */
+  title?: string;
+}
+
+/**
+ * The model the pill must SHOW: what is in use, whether or not it was chosen here.
+ *
+ * Order of truth: the card's own pin (that is what the next session will start with), then the
+ * model the live transcript reports, then — with nothing to read at all — the model Claude Code
+ * boots on, flagged in the title as the assumption it is. There is no "Default model" outcome:
+ * "whatever the account gives you" is not an answer to "which model am I talking to". PURE.
+ */
+export function modelInUse(
+  card: { model?: string | null } | null | undefined,
+  session: CardSessionInfo | null | undefined,
+): ModelInUse {
+  const pinned = card?.model?.trim();
+  if (pinned) return { id: pinned, label: modelLabelFor(pinned, null) };
+  const live = session?.model?.trim();
+  if (live) return { id: live, label: modelLabelFor(live, session?.modelLabel ?? null) };
+  return { id: IMPLICIT_MODEL.id, label: IMPLICIT_MODEL.label, title: IMPLICIT_MODEL_TITLE };
+}
+
+/** Whitelist label for a model id, the server's own label, or the raw id. PURE. */
+export function modelLabelFor(id: string, serverLabel: string | null): string {
+  const known = CLAUDE_MODELS.find((m) => m.id === id)?.label;
+  if (known) return known;
+  return (serverLabel ?? "").trim() || id;
+}
+
+/**
+ * The account NAME the pill must show — the effective one, with no "(default)" or "(inherited)"
+ * suffix attached. Which account it came from is not the question; which one is signed in is. PURE.
+ */
+export function accountInUseName(
+  card: { accountSlug?: string | null } | null | undefined,
+  session: CardSessionInfo | null | undefined,
+  accounts: readonly BoardAccount[],
+  /** What the card inherits when it pins nothing: the project's account, or the install default. */
+  inherited: string,
+): string {
+  const live = session?.account?.name?.trim();
+  if (live) return live;
+  const pinned = card?.accountSlug?.trim();
+  if (pinned) {
+    const match = accounts.find((a) => a.slug === pinned);
+    return match ? accountLabel(match) : pinned;
+  }
+  return inherited;
+}

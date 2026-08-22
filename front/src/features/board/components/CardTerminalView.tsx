@@ -5,7 +5,6 @@ import {
   AlertTriangle,
   ArrowLeft,
   Check,
-  GitBranch,
   Loader2,
   Menu,
   MonitorPlay,
@@ -28,14 +27,16 @@ import {
   ACCOUNTS_KEY,
   CLAUDE_MODELS,
   UPLOAD_MAX_BYTES,
+  accountInUseName,
   accountLabel,
   boardApi,
   cardKey,
   cardOpensInstantly,
-  cardSession,
-  cardWorktree,
+  cardRunnerHint,
+  cardSessionKey,
   cardsKey,
   defaultAccountLabelOr,
+  modelInUse,
   projectAccountSlug,
   type BoardCard,
   type BoardProject,
@@ -186,6 +187,8 @@ export function CardTerminalView({
     mutationFn: (accountSlug: string | null) => boardApi.patchCard(cardId, { accountSlug }),
     onSuccess: (updated) => {
       mirror(updated);
+      // The pill shows what is in USE, so it has to re-read the session the switch just changed.
+      void queryClient.invalidateQueries({ queryKey: cardSessionKey(updated.id) });
       toast.success("Account switched — the conversation continues.");
     },
     onError: (error) => toast.error(apiErrorMessage(error, "Could not switch the account")),
@@ -195,10 +198,24 @@ export function CardTerminalView({
     mutationFn: (model: string | null) => boardApi.patchCard(cardId, { model }),
     onSuccess: (updated) => {
       mirror(updated);
+      void queryClient.invalidateQueries({ queryKey: cardSessionKey(updated.id) });
       const label = CLAUDE_MODELS.find((m) => m.id === updated.model)?.label ?? "the account default";
       toast.success(`Switched to ${label} — the conversation continues.`);
     },
     onError: (error) => toast.error(apiErrorMessage(error, "Could not switch the model")),
+  });
+
+  /**
+   * What the session is REALLY running. Polled while the card is open, because the model can change
+   * underneath us — the first reply is what reveals it, and `/model` inside the terminal changes it
+   * without anything on this screen being touched. A server that does not offer the route yet
+   * simply leaves the pills on their fallbacks, so this never retries into a wall.
+   */
+  const { data: session } = useQuery({
+    queryKey: cardSessionKey(cardId),
+    queryFn: () => boardApi.cardSessionInfo(cardId),
+    refetchInterval: 10_000,
+    retry: false,
   });
 
   const { data: accountsData } = useQuery({ queryKey: ACCOUNTS_KEY, queryFn: boardApi.listAccounts });
@@ -206,6 +223,11 @@ export function CardTerminalView({
   // What the empty option stands for: the project's account if it pins one, otherwise the install's
   // name for the runner's built-in profile.
   const inheritedAccount = projectAccountSlug(project) ?? defaultAccountLabelOr(accountsData?.defaultLabel);
+
+  // The two pills answer "what am I talking to", never "what was typed into this card".
+  const model = modelInUse(card, session);
+  const modelUnlisted = !CLAUDE_MODELS.some((m) => m.id === model.id);
+  const accountName = accountInUseName(card, session, accounts, inheritedAccount);
 
   /* ------------------------------------------------------------------ state */
 
@@ -345,7 +367,7 @@ export function CardTerminalView({
           ) : (
             <button
               type="button"
-              title="Click to rename"
+              title={card ? `Click to rename\n${cardRunnerHint(card)}` : "Click to rename"}
               disabled={!card}
               onClick={() => card && setEditingTitle(card.title)}
               className="min-w-0 truncate rounded px-1 text-left hover:bg-card/60 disabled:cursor-default disabled:hover:bg-transparent"
@@ -391,23 +413,41 @@ export function CardTerminalView({
         ) : null}
 
         <div className="flex shrink-0 items-center gap-1.5">
+          {/* The two extra panes of THIS card. They were a footer row; a footer row costs a line of
+              terminal, and these are configuration-weight controls that belong beside the pills. */}
+          <PaneToggle
+            label="Browser"
+            open={browserOpen}
+            disabled={!showTerminal}
+            icon={<MonitorPlay className="h-3.5 w-3.5" />}
+            onClick={() => setBrowserOpen((v) => !v)}
+          />
+          <PaneToggle
+            label="Shell"
+            open={shellOpen}
+            disabled={!showTerminal}
+            icon={<TerminalSquare className="h-3.5 w-3.5" />}
+            onClick={() => setShellOpen((v) => !v)}
+          />
           {card ? (
             <select
               aria-label="Model"
-              title="Model for this session (default = the account's)"
+              title={model.title ?? "Model in use for this session"}
               className={PILL}
-              value={card.model ?? ""}
+              value={model.id}
               disabled={modelMutation.isPending}
               onChange={(e) => modelMutation.mutate(e.target.value || null)}
             >
-              {/* No model of its own = whatever the account's plan gives it. The server does not
-                  publish which one that is, so the label says what it means rather than guessing. */}
-              <option value="">Default model</option>
               {CLAUDE_MODELS.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.label}
                 </option>
               ))}
+              {/* A model the whitelist has never heard of — the transcript is still the truth. */}
+              {modelUnlisted ? <option value={model.id}>{model.label}</option> : null}
+              {/* Last, and the only option that is not a model: it clears the pin and lets the
+                  account decide again. */}
+              <option value="">Use account default</option>
             </select>
           ) : null}
           {card ? (
@@ -419,7 +459,8 @@ export function CardTerminalView({
               disabled={accountMutation.isPending}
               onChange={(e) => accountMutation.mutate(e.target.value || null)}
             >
-              <option value="">{inheritedAccount} (default)</option>
+              {/* No suffix: the pill names the account that is signed in, not where it came from. */}
+              <option value="">{accountName}</option>
               {accounts.map((a) => (
                 <option key={a.slug} value={a.slug}>
                   {accountLabel(a)}
@@ -516,37 +557,46 @@ export function CardTerminalView({
         </div>
       )}
 
-      {/* Footer: where this card lives in the runner, and the two extra panes. */}
-      <div className="flex h-7 shrink-0 items-center gap-3 overflow-hidden pt-0.5 font-mono text-xs text-muted-foreground">
-        {card ? (
-          <span className="inline-flex min-w-0 items-center gap-1.5 truncate">
-            <GitBranch className="h-3.5 w-3.5 shrink-0" />
-            card/{cardWorktree(card) ?? ""} · base {card.base} · tmux {cardSession(card) ?? ""}
-          </span>
-        ) : null}
-        <span className="flex-1" />
-        <Button
-          variant={browserOpen ? "secondary" : "outline"}
-          size="sm"
-          className="h-6 px-2 text-xs"
-          disabled={!showTerminal}
-          aria-pressed={browserOpen}
-          onClick={() => setBrowserOpen((v) => !v)}
-        >
-          <MonitorPlay className="mr-1 h-3.5 w-3.5" /> Browser
-        </Button>
-        <Button
-          variant={shellOpen ? "secondary" : "outline"}
-          size="sm"
-          className="h-6 px-2 text-xs"
-          disabled={!showTerminal}
-          aria-pressed={shellOpen}
-          onClick={() => setShellOpen((v) => !v)}
-        >
-          <TerminalSquare className="mr-1 h-3.5 w-3.5" /> Shell
-        </Button>
-      </div>
     </div>
+  );
+}
+
+/**
+ * Browser / Shell in the card bar: an icon and a word, pressed or not.
+ *
+ * Deliberately the same quiet weight as the pills next to it. These open a pane; they are not the
+ * thing you came here to do, and the terminal below is.
+ */
+function PaneToggle({
+  label,
+  open,
+  disabled,
+  icon,
+  onClick,
+}: {
+  label: string;
+  open: boolean;
+  disabled: boolean;
+  icon: React.ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={open}
+      disabled={disabled}
+      onClick={onClick}
+      title={open ? `Close the ${label.toLowerCase()}` : `Open the ${label.toLowerCase()}`}
+      className={cn(
+        "inline-flex h-6 shrink-0 items-center gap-1 rounded-full border px-2 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+        open
+          ? "border-primary/40 bg-primary/15 text-primary"
+          : "border-border/60 bg-muted/40 text-muted-foreground hover:border-border hover:text-foreground",
+      )}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
 

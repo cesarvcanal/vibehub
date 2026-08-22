@@ -10,9 +10,12 @@ import {
   useContextMenuPoint,
   type ContextMenuItem,
 } from "@/features/board/components/ContextMenu";
+import { Logo } from "@/components/Logo";
+import { AccountRow } from "@/components/AccountRow";
 import { cardHref, nextPosition, splitSidebarCards, statusDot } from "@/features/board/lib/board";
 import {
   boardApi,
+  cardRunnerHint,
   cardsKey,
   projectBaseBranch,
   projectRepo,
@@ -33,6 +36,11 @@ import {
  * aggregated board — which is why there is no "All projects" row to hunt for. Clicking a card opens
  * its terminal; clicking the card that is already open closes it and puts the board back. Every
  * click moves exactly one level, in or out, which is why there is no "back to board" button either.
+ *
+ * It is also the app's only chrome: the brand sits at the TOP of the panel and the account row
+ * (theme, settings, sign out) at its BOTTOM. There is no page header any more — that band of
+ * height belongs to the terminal — so this column carries both, pinned to the full height of the
+ * viewport, which is what keeps the bottom row visible however long the project list gets.
  *
  * Below `lg` the same component becomes a drawer: `fixed`, pushed off-screen with a transform, slid
  * in by the "Projects" button in the page. It is deliberately ONE instance rather than a desktop
@@ -126,11 +134,18 @@ export function ProjectSidebar({
         aria-label="Projects"
         className={cn(
           "panel fixed inset-y-0 left-0 z-40 flex w-72 max-w-[85vw] shrink-0 flex-col overflow-hidden shadow-2xl transition-transform duration-200 ease-out",
-          "lg:static lg:z-auto lg:w-64 lg:max-w-none lg:translate-x-0 lg:shadow-none lg:transition-none",
+          // The gutter is `p-3`, so a full-height column is the viewport minus 1.5rem. Sticky, not
+          // just tall: the account row at the bottom must stay on screen while the board scrolls.
+          "lg:sticky lg:top-0 lg:z-auto lg:h-[calc(100vh-1.5rem)] lg:w-64 lg:max-w-none lg:translate-x-0 lg:shadow-none lg:transition-none",
           mobileOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >
-        <div className="flex items-center justify-between border-b border-border/60 py-1 pl-3 pr-1.5">
+        {/* The brand, at the top of the panel — inside it, so it never eats into the terminal. */}
+        <div className="flex shrink-0 items-center border-b border-border/60 px-3 py-2.5">
+          <Logo size="side" />
+        </div>
+
+        <div className="flex shrink-0 items-center justify-between border-b border-border/60 py-1 pl-3 pr-1.5">
           <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
             {projects.length} {projects.length === 1 ? "project" : "projects"}
           </span>
@@ -183,6 +198,8 @@ export function ProjectSidebar({
             <p className="px-3 py-3 text-xs text-muted-foreground">No projects yet.</p>
           ) : null}
         </div>
+
+        <AccountRow />
       </nav>
     </>
   );
@@ -540,7 +557,10 @@ function SidebarCard({
     <>
       <a
         href={cardHref(card.projectId, card.id)}
-        title={card.title}
+        // Name first, then where it lives in the runner — the worktree, the base branch and the
+        // tmux session used to be a footer line under the terminal, which is height this app does
+        // not have to spare for something you look at once a day.
+        title={`${card.title}\n${cardRunnerHint(card)}`}
         aria-current={active ? "true" : undefined}
         onClick={(e) => {
           if (isNewTabClick(e)) return;

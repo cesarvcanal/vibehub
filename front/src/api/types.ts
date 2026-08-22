@@ -145,14 +145,29 @@ export interface SettingsPatch {
 
 /* ---------------------------------------------------------------- github */
 
-/** `GET /api/github` */
-export interface GithubState {
-  connected: boolean;
-  /** GitHub login the stored token resolves to. */
-  login?: string;
+/**
+ * A GitHub ACCOUNT vibehub can clone as. There is no OAuth: a connection is a token somebody pasted
+ * (a fine-grained PAT with Contents read/write, or a classic token with `repo`). The token itself
+ * never comes back from the server — only this identity does.
+ */
+export interface GithubConnection {
+  id: string;
+  /** What the human called it ("personal", "acme org"). */
+  label: string;
+  /** GitHub login the token resolves to. */
+  login: string;
+  /** OAuth scopes, when GitHub reports them (classic tokens only). */
   scopes?: string[];
-  /** Why the stored token is not usable. */
+  createdAt: number;
+  /** The stored token still works — a live check the server did while answering. */
+  ok?: boolean;
+  /** Why it does not (revoked, expired). */
   error?: string;
+}
+
+/** `GET /api/github` — every account, in connection order. The first one is the default. */
+export interface GithubState {
+  connections: GithubConnection[];
 }
 
 export interface GithubRepo {
@@ -192,6 +207,8 @@ export interface Project {
   baseBranch: string;
   /** Claude account cards inherit. Absent = the runner's default profile. */
   defaultAccountSlug?: string;
+  /** GitHub account this repository is cloned with. Absent = the first connection. */
+  githubConnectionId?: string;
   /** Position in the sidebar, smallest first. */
   position: number;
   createdAt: number;
@@ -204,6 +221,8 @@ export interface NewProject {
   cloneUrl?: string;
   baseBranch?: string;
   defaultAccountSlug?: string;
+  /** GitHub account the repository belongs to. Absent = the first connection. */
+  githubConnectionId?: string | null;
 }
 
 /** `PATCH /api/projects/:id` */

@@ -11,17 +11,16 @@ import {
 } from "@/features/board/lib/focusMode";
 
 describe("cardViewHeight", () => {
-  it("subtracts the MEASURED header, not a guessed one", () => {
-    // The header is not a constant — it wraps on a phone — so the shell publishes its real height
-    // and the card view reads it. The fallback only covers the frame before the first measurement.
-    expect(cardViewHeight()).toBe(
-      `calc(100vh - var(--app-header-h, 64px) - ${CARD_MAIN_PADDING_PX}px)`,
-    );
-    expect(cardViewHeight(0)).toBe("calc(100vh - var(--app-header-h, 64px) - 0px)");
+  it("is the whole viewport minus the shell's gutter — there is no header left to subtract", () => {
+    // The top header is gone: the terminal runs from the very top of the page, so the only chrome
+    // between it and the viewport is the app shell's `p-3`.
+    expect(CARD_MAIN_PADDING_PX).toBe(24);
+    expect(cardViewHeight()).toBe(`calc(100vh - ${CARD_MAIN_PADDING_PX}px)`);
+    expect(cardViewHeight(0)).toBe("calc(100vh - 0px)");
   });
 
   it("never produces a negative subtraction", () => {
-    expect(cardViewHeight(-20)).toBe("calc(100vh - var(--app-header-h, 64px) - 0px)");
+    expect(cardViewHeight(-20)).toBe("calc(100vh - 0px)");
   });
 });
 

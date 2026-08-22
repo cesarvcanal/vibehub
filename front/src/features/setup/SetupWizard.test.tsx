@@ -311,6 +311,18 @@ describe("SetupWizard — runner step", () => {
 describe("SetupWizard — GitHub step", () => {
   beforeEach(() => vi.resetAllMocks());
 
+  it("says out loud that connecting means PASTING a token, not logging in", async () => {
+    serve(partial({ owner: true, runner: true }));
+    renderApp(<SetupWizard />, { route: "/setup" });
+
+    await screen.findByRole("heading", { name: "Connect GitHub", level: 2 });
+    expect(screen.getByText(/Paste a token — no login needed/i)).toBeInTheDocument();
+    expect(screen.getByText(/Fine-grained PAT with Contents read\/write/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /github.com\/settings\/tokens/i })).toHaveAttribute(
+      "href", "https://github.com/settings/tokens",
+    );
+  });
+
   it("is skippable and moves on to Claude", async () => {
     const user = userEvent.setup();
     serve(partial({ owner: true, runner: true }));
@@ -330,7 +342,11 @@ describe("SetupWizard — GitHub step", () => {
     mockGet.mockImplementation((url: string) => {
       if (url === "/setup/state") return Promise.resolve(state);
       if (url === "/auth/me") return Promise.resolve({ user: { id: "1", username: "operator" } });
-      if (url === "/github") return Promise.resolve({ connected: true, login: "octo-dev" });
+      if (url === "/github") {
+        return Promise.resolve({
+          connections: [{ id: "OCTO_DEV", label: "personal", login: "octo-dev", createdAt: 1, ok: true }],
+        });
+      }
       return Promise.reject(new Error(`unexpected GET ${url}`));
     });
     mockPost.mockImplementation((url: string) => {
@@ -343,11 +359,12 @@ describe("SetupWizard — GitHub step", () => {
 
     renderApp(<SetupWizard />, { route: "/setup" });
     await screen.findByRole("heading", { name: "Connect GitHub", level: 2 });
-    await user.type(screen.getByLabelText("Personal access token"), "ghp_example_token");
+    await user.type(screen.getByLabelText("Account name"), "personal");
+    await user.type(screen.getByLabelText("Access token"), "ghp_example_token");
     await user.click(screen.getByRole("button", { name: "Connect" }));
 
     await waitFor(() =>
-      expect(mockPost).toHaveBeenCalledWith("/github/token", { token: "ghp_example_token" }),
+      expect(mockPost).toHaveBeenCalledWith("/github/token", { token: "ghp_example_token", label: "personal" }),
     );
     expect(
       await screen.findByRole("heading", { name: "Sign in to Claude", level: 2 }),
@@ -361,7 +378,7 @@ describe("SetupWizard — GitHub step", () => {
 
     renderApp(<SetupWizard />, { route: "/setup" });
     await screen.findByRole("heading", { name: "Connect GitHub", level: 2 });
-    await user.type(screen.getByLabelText("Personal access token"), "ghp_nope");
+    await user.type(screen.getByLabelText("Access token"), "ghp_nope");
     await user.click(screen.getByRole("button", { name: "Connect" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("bad credentials");

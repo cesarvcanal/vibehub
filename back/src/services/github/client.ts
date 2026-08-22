@@ -1,19 +1,43 @@
 import { secretGet, secretSet, secretDelete } from "../../secrets/vault.js";
 import { logger } from "../../utils/logger.js";
+import {
+  addGithubConnection,
+  clearGithubConnections,
+  getGithubConnection,
+  listGithubConnections,
+  removeGithubConnection,
+  updateGithubConnection,
+  type GithubConnection,
+  type Project,
+} from "../board/registry.js";
 
 /**
  * GITHUB — vibehub talks to GitHub for exactly three things: listing the repos you can work on,
  * listing their branches, and handing an EPHEMERAL credential to `git clone/fetch` inside the
  * runner.
  *
- * The token is stored in the local vault and never written to disk inside the runner. In
- * particular it never lands in `/work/<repo>/.git/config`, which any process in the container can
- * read — including the agent itself, which routinely processes untrusted repository content and has
- * network egress. The credential travels per-command, as an http header, through stdin.
+ * MULTIPLE ACCOUNTS. A personal account and an org account are the normal case, so the unit here is
+ * a CONNECTION: an identity in the board document (`githubConnections`) plus one token in the vault
+ * under `GITHUB_TOKEN_<ID>`. A project names the connection it clones with; a project that names
+ * none uses the first one, which is exactly how a single-account install behaves.
+ *
+ * There is no OAuth flow: you PASTE a token (a fine-grained PAT with Contents read/write, or a
+ * classic token with `repo`). That is the whole login story, and the UI says so.
+ *
+ * The tokens never leave this process except as an http header. In particular they never land in
+ * `/work/<repo>/.git/config`, which any process in the container can read — including the agent
+ * itself, which routinely processes untrusted repository content and has network egress. The
+ * credential travels per-command, as an http header, through stdin.
  */
 
+/** Where the SINGLE token used to live, before connections existed. Migrated away on first load. */
 export const GITHUB_TOKEN_KEY = "GITHUB_TOKEN";
 const API = "https://api.github.com";
+
+/** Vault key holding the token of a connection. The id is validated by the registry. */
+export function tokenKeyFor(connectionId: string): string {
+  return `${GITHUB_TOKEN_KEY}_${connectionId}`;
+}
 
 export interface GithubIdentity {
   login: string;
@@ -23,12 +47,16 @@ export interface GithubIdentity {
   scopes: string[];
 }
 
-export interface GithubState {
-  connected: boolean;
-  login?: string;
-  scopes?: string[];
-  /** Set when a stored token stopped working (revoked, expired) — the UI shows "reconnect". */
+/** A connection plus the result of checking its token against GitHub right now. */
+export interface GithubConnectionState extends GithubConnection {
+  /** The stored token still works. */
+  ok: boolean;
+  /** Why it does not (revoked, expired, network) — the UI shows "reconnect". */
   error?: string;
+}
+
+export interface GithubState {
+  connections: GithubConnectionState[];
 }
 
 export interface GithubRepo {
@@ -51,17 +79,66 @@ async function githubFetch(path: string, token: string): Promise<Response> {
   });
 }
 
-/** Reads the stored token, or undefined when GitHub was never connected. */
-export async function storedToken(): Promise<string | undefined> {
-  return await secretGet(GITHUB_TOKEN_KEY);
+// ---------------------------------------------------------------------------
+// Migration: the pre-connections single token
+// ---------------------------------------------------------------------------
+
+let migration: Promise<void> | null = null;
+
+/**
+ * MIGRATION — an install from before multiple accounts has one token under `GITHUB_TOKEN` and no
+ * connections. Turn it into connection #1 and MOVE the secret to `GITHUB_TOKEN_<ID>`.
+ *
+ * Idempotent by construction: it only fires when the old key exists AND the list is empty, and the
+ * move deletes the old key, so a second run is a no-op. Serialized through a module promise so two
+ * concurrent requests cannot both migrate.
+ *
+ * The identity comes from GitHub when reachable; when it is not (offline, dead token) the token is
+ * STILL migrated — losing a stored credential because a network call failed would be the worse bug.
+ */
+export async function migrateLegacyToken(): Promise<void> {
+  if (!migration) {
+    migration = (async () => {
+      const legacy = await secretGet(GITHUB_TOKEN_KEY);
+      if (!legacy) return;
+      if ((await listGithubConnections()).length > 0) return;
+      let login = "";
+      let scopes: string[] = [];
+      try {
+        const identity = await identify(legacy);
+        login = identity.login;
+        scopes = identity.scopes;
+      } catch (err) {
+        logger.warn({ err: (err as Error).message }, "migrating the GitHub token without a live identity check");
+      }
+      const connection = await addGithubConnection({
+        login: login || "github",
+        label: login || "GitHub",
+        scopes,
+      });
+      await secretSet(tokenKeyFor(connection.id), legacy);
+      await secretDelete(GITHUB_TOKEN_KEY);
+      logger.info(
+        { audit: true, action: "github.migrate", id: connection.id, login: connection.login },
+        "migrated the single GitHub token into a connection",
+      );
+    })().catch((err) => {
+      // A failed migration must not poison every later call — retry on the next one.
+      migration = null;
+      throw err;
+    });
+  }
+  return await migration;
 }
 
-/** The stored token, or a clear error telling the user to connect GitHub first. */
-export async function requireToken(): Promise<string> {
-  const token = await storedToken();
-  if (!token) throw new Error("GitHub is not connected — add a token in Settings");
-  return token;
+/** Tests and hot-reload only. */
+export function resetMigrationForTesting(): void {
+  migration = null;
 }
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
 
 /** Checks a token against the API and returns who it belongs to. Throws when it is not usable. */
 export async function identify(token: string): Promise<GithubIdentity> {
@@ -78,39 +155,151 @@ export async function identify(token: string): Promise<GithubIdentity> {
   };
 }
 
-/** Validates a token, then stores it. Returns the identity so the wizard can show who connected. */
-export async function connect(token: string): Promise<GithubIdentity> {
+// ---------------------------------------------------------------------------
+// Connections
+// ---------------------------------------------------------------------------
+
+export async function listConnections(): Promise<GithubConnection[]> {
+  await migrateLegacyToken();
+  return await listGithubConnections();
+}
+
+/**
+ * Adds an account: validate the pasted token against GitHub, record the identity, store the secret.
+ * Returns the connection AND the identity, because the caller (the wizard) uses the email to seed
+ * the git identity of a fresh install.
+ */
+export async function connect(
+  label: string,
+  token: string,
+): Promise<{ connection: GithubConnection; identity: GithubIdentity }> {
+  await migrateLegacyToken();
   const clean = String(token ?? "").trim();
   if (!clean) throw new Error("token cannot be empty");
   const identity = await identify(clean);
-  await secretSet(GITHUB_TOKEN_KEY, clean);
-  logger.info({ audit: true, action: "github.connect", login: identity.login }, "GitHub connected");
-  return identity;
+  const connection = await addGithubConnection({
+    login: identity.login,
+    label: String(label ?? "").trim() || identity.login,
+    scopes: identity.scopes,
+  });
+  await secretSet(tokenKeyFor(connection.id), clean);
+  logger.info(
+    { audit: true, action: "github.connect", id: connection.id, login: identity.login },
+    "GitHub account connected",
+  );
+  return { connection, identity };
 }
 
+/**
+ * BACKWARD COMPATIBILITY for the setup wizard's `POST /api/github/token`: create the first
+ * connection, or replace the token of the one that already exists. An install that never had more
+ * than one account keeps behaving exactly as before.
+ */
+export async function connectOrReplaceFirst(
+  token: string,
+  label?: string,
+): Promise<{ connection: GithubConnection; identity: GithubIdentity }> {
+  await migrateLegacyToken();
+  const clean = String(token ?? "").trim();
+  if (!clean) throw new Error("token cannot be empty");
+  const existing = (await listGithubConnections())[0];
+  if (!existing) return await connect(label ?? "", clean);
+  const identity = await identify(clean);
+  await secretSet(tokenKeyFor(existing.id), clean);
+  const connection = await updateGithubConnection(existing.id, {
+    login: identity.login,
+    scopes: identity.scopes,
+    ...(label?.trim() ? { label: label.trim() } : {}),
+  });
+  logger.info(
+    { audit: true, action: "github.replace", id: connection.id, login: identity.login },
+    "GitHub token replaced",
+  );
+  return { connection, identity };
+}
+
+/** Removes one account. THROWS while a project still points at it (the registry decides). */
+export async function removeConnection(id: string): Promise<GithubConnection> {
+  await migrateLegacyToken();
+  const removed = await removeGithubConnection(id);
+  await secretDelete(tokenKeyFor(removed.id));
+  logger.info({ audit: true, action: "github.remove", id: removed.id }, "GitHub account removed");
+  return removed;
+}
+
+/** Forgets EVERY account — the "disconnect GitHub" button. */
 export async function disconnect(): Promise<void> {
+  await migrateLegacyToken();
+  const gone = await clearGithubConnections();
+  for (const c of gone) await secretDelete(tokenKeyFor(c.id));
   await secretDelete(GITHUB_TOKEN_KEY);
-  logger.info({ audit: true, action: "github.disconnect" }, "GitHub disconnected");
+  logger.info({ audit: true, action: "github.disconnect", count: gone.length }, "GitHub disconnected");
 }
 
-/** Connection state for the UI. Never throws: a dead token is a state, not a crash. */
+/** State for the UI: every connection with a live identity check. Never throws — a dead token is a state. */
 export async function state(): Promise<GithubState> {
-  const token = await storedToken();
-  if (!token) return { connected: false };
-  try {
-    const identity = await identify(token);
-    return { connected: true, login: identity.login, scopes: identity.scopes };
-  } catch (err) {
-    return { connected: false, error: (err as Error).message };
-  }
+  const connections = await listConnections();
+  const checked = await Promise.all(
+    connections.map(async (c): Promise<GithubConnectionState> => {
+      const token = await secretGet(tokenKeyFor(c.id));
+      if (!token) return { ...c, ok: false, error: "no token stored for this account — paste it again" };
+      try {
+        const identity = await identify(token);
+        return { ...c, login: identity.login, scopes: identity.scopes, ok: true };
+      } catch (err) {
+        return { ...c, ok: false, error: (err as Error).message };
+      }
+    }),
+  );
+  return { connections: checked };
 }
+
+// ---------------------------------------------------------------------------
+// Credential resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * The connection a request means: the one it named, or — when it named none — the first stored
+ * account. THROWS with a message the UI can show verbatim when there is nothing to fall back to.
+ */
+export async function resolveConnection(connectionId?: string | null): Promise<GithubConnection> {
+  const connections = await listConnections();
+  if (connections.length === 0) throw new Error("GitHub is not connected — paste a token in Settings");
+  const wanted = String(connectionId ?? "").trim();
+  if (!wanted) return connections[0]!;
+  const found = connections.find((c) => c.id === wanted);
+  if (!found) throw new Error(`GitHub account '${wanted}' does not exist — pick another one in Settings`);
+  return found;
+}
+
+/** The token behind a connection. THROWS when the account exists but its secret is gone. */
+export async function tokenFor(connectionId?: string | null): Promise<string> {
+  const connection = await resolveConnection(connectionId);
+  const token = await secretGet(tokenKeyFor(connection.id));
+  if (!token) throw new Error(`no token stored for the GitHub account '${connection.label}' — paste it again`);
+  return token;
+}
+
+/**
+ * The header git uses to authenticate a single clone/fetch OF THIS PROJECT. Built fresh per command
+ * and passed via `GIT_CONFIG_*` so it lives only in that process's environment — never in a config
+ * file, never in argv, never persisted in the runner.
+ */
+export async function gitAuthHeaderFor(project: Pick<Project, "githubConnectionId">): Promise<string> {
+  const token = await tokenFor(project?.githubConnectionId);
+  return `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
+}
+
+// ---------------------------------------------------------------------------
+// Repos and branches
+// ---------------------------------------------------------------------------
 
 /**
  * Repositories the token can push to, newest first. `q` filters client-side on full name so typing
  * in the picker stays instant and does not burn search API quota.
  */
-export async function listRepos(q = "", limit = 100): Promise<GithubRepo[]> {
-  const token = await requireToken();
+export async function listRepos(connectionId?: string | null, q = "", limit = 100): Promise<GithubRepo[]> {
+  const token = await tokenFor(connectionId);
   const repos: GithubRepo[] = [];
   const perPage = 100;
   for (let page = 1; page <= 5 && repos.length < limit; page += 1) {
@@ -138,10 +327,10 @@ export async function listRepos(q = "", limit = 100): Promise<GithubRepo[]> {
 }
 
 /** Branch names of a repository, default branch first. */
-export async function listBranches(owner: string, repo: string): Promise<string[]> {
+export async function listBranches(connectionId: string | null | undefined, owner: string, repo: string): Promise<string[]> {
   assertRepoPart(owner, "owner");
   assertRepoPart(repo, "repository");
-  const token = await requireToken();
+  const token = await tokenFor(connectionId);
   const [branchesRes, repoRes] = await Promise.all([
     githubFetch(`/repos/${owner}/${repo}/branches?per_page=100`, token),
     githubFetch(`/repos/${owner}/${repo}`, token),
@@ -158,16 +347,6 @@ export function assertRepoPart(value: string, what: string): string {
   const v = String(value ?? "").trim();
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(v)) throw new Error(`invalid ${what}: '${value}'`);
   return v;
-}
-
-/**
- * The header git uses to authenticate a single clone/fetch. Built fresh per command and passed via
- * `GIT_CONFIG_*` so it lives only in that process's environment — never in a config file, never in
- * argv, never persisted in the runner.
- */
-export async function gitAuthHeader(): Promise<string> {
-  const token = await requireToken();
-  return `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
 }
 
 /** Splits "owner/repo" into its parts, validating both. */

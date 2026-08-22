@@ -39,8 +39,10 @@ function project(overrides: Partial<BoardProject> & { id: string }): BoardProjec
 }
 
 describe("columns", () => {
-  it("puts waiting to the left of working, so what needs a human reads first", () => {
-    expect(COLUMNS.map((c) => c.key)).toEqual(["backlog", "waiting", "working", "paused", "done"]);
+  it("reads as a life cycle: backlog, paused, then the two live columns, then done", () => {
+    // Paused sits next to Backlog because a parked card is work that has not resumed; Waiting sits
+    // left of Working because what needs a human should be read first.
+    expect(COLUMNS.map((c) => c.key)).toEqual(["backlog", "paused", "waiting", "working", "done"]);
   });
 });
 

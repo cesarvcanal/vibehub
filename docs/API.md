@@ -24,13 +24,26 @@ ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx statu
 
 ## GitHub
 
+There is no OAuth flow: a connection is a **pasted token** — a fine-grained PAT with Contents
+read/write on the repositories you want, or a classic token with `repo`.
+
+vibehub holds **several accounts** (a personal one and an org one is the usual pair). A connection is
+`{ id, label, login, scopes?, createdAt }`; the token itself lives in the vault under
+`GITHUB_TOKEN_<id>` and is never returned by any route. A project names the connection it clones
+with through `githubConnectionId`; a project that names none uses the **first** connection.
+
+An install from before multiple accounts is migrated on first read: its single `GITHUB_TOKEN` becomes
+connection #1 (label = its login) and the secret moves to `GITHUB_TOKEN_<id>`. Idempotent.
+
 | Method | Path | Body / notes |
 |---|---|---|
-| GET | `/api/github` | `{ connected, login?, scopes?, error? }` |
-| POST | `/api/github/token` | `{ token }` → validates against the API, stores in the vault |
-| DELETE | `/api/github` | forgets the token |
-| GET | `/api/github/repos?q=` | `{ repos: [{ fullName, cloneUrl, private, defaultBranch, updatedAt }] }` |
-| GET | `/api/github/repos/:owner/:repo/branches` | `{ branches: string[] }` |
+| GET | `/api/github` | `{ connections: [{ id, label, login, scopes?, createdAt, ok, error? }] }` — `ok` is a live check of the stored token |
+| POST | `/api/github/connections` | `{ label, token }` → validates against the API, stores it → `201 { connection }` |
+| DELETE | `/api/github/connections/:id` | `{ ok: true }`; **409** while a project still points at it, 404 when unknown |
+| POST | `/api/github/token` | `{ token, label? }` → creates the FIRST connection or replaces its token (the setup wizard) → `{ connected: true, id, login, scopes }` |
+| DELETE | `/api/github` | forgets every account |
+| GET | `/api/github/repos?connection=&q=` | `{ repos: [{ fullName, cloneUrl, private, defaultBranch, updatedAt, description }] }` — `connection` defaults to the first |
+| GET | `/api/github/repos/:owner/:repo/branches?connection=` | `{ branches: string[] }` |
 
 ## Runner
 
@@ -48,7 +61,7 @@ ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx statu
 | Method | Path | Body / notes |
 |---|---|---|
 | GET | `/api/projects` | `{ projects: Project[] }` |
-| POST | `/api/projects` | `{ name, repoFullName?, cloneUrl?, baseBranch?, defaultAccountSlug? }` |
+| POST | `/api/projects` | `{ name, repoFullName?, cloneUrl?, baseBranch?, defaultAccountSlug?, githubConnectionId? }` — `githubConnectionId` must name an existing GitHub connection; absent = the first |
 | PATCH | `/api/projects/:id` | partial update |
 | DELETE | `/api/projects/:id` | also removes its cards |
 | PATCH | `/api/projects/:id/order` | `{ position }` — sidebar position |

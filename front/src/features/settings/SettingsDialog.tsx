@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { get, patch, post, del } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
-import type { Settings, SettingsPatch, GithubState, TranscribeStatus } from "@/api/types";
+import type { Settings, SettingsPatch, GithubConnection, GithubState, TranscribeStatus } from "@/api/types";
 
 /**
  * The install's own settings — the handful of things the wizard asked once and you may want to
@@ -36,11 +36,14 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const github = useQuery({ queryKey: GITHUB_KEY, queryFn: () => get<GithubState>("/github"), enabled: open });
   const voice = useQuery({ queryKey: TRANSCRIBE_KEY, queryFn: () => get<TranscribeStatus>("/transcribe"), enabled: open });
 
+  const connections = github.data?.connections ?? [];
+
   const [name, setName] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [autonomous, setAutonomous] = React.useState(true);
   const [defaultLabel, setDefaultLabel] = React.useState("");
   const [language, setLanguage] = React.useState("");
+  const [githubLabel, setGithubLabel] = React.useState("");
   const [githubToken, setGithubToken] = React.useState("");
   const [openaiKey, setOpenaiKey] = React.useState("");
   const [anthropicKey, setAnthropicKey] = React.useState("");
@@ -66,22 +69,28 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     onError: (e) => toast.error(apiErrorMessage(e)),
   });
 
-  const connectGithub = useMutation({
-    mutationFn: (token: string) => post<GithubState>("/github/token", { token }),
-    onSuccess: (state) => {
+  const addGithub = useMutation({
+    mutationFn: (body: { label: string; token: string }) =>
+      post<{ connection: GithubConnection }>("/github/connections", body),
+    onSuccess: (result) => {
       setGithubToken("");
+      setGithubLabel("");
       void qc.invalidateQueries({ queryKey: GITHUB_KEY });
+      void qc.invalidateQueries({ queryKey: ["board", "github"] });
       void qc.invalidateQueries({ queryKey: SETTINGS_KEY });
-      toast.success(`GitHub connected as ${state.login ?? "unknown"}.`);
+      toast.success(`Added ${result.connection.label} (${result.connection.login}).`);
     },
     onError: (e) => toast.error(apiErrorMessage(e)),
   });
 
-  const disconnectGithub = useMutation({
-    mutationFn: () => del<{ ok: true }>("/github"),
+  // The server REFUSES (409) while a project still points at the account — the message names how
+  // many, which is exactly what the person needs to go and fix, so it is shown verbatim.
+  const removeGithub = useMutation({
+    mutationFn: (id: string) => del<{ ok: true }>(`/github/connections/${encodeURIComponent(id)}`),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: GITHUB_KEY });
-      toast.success("GitHub disconnected.");
+      void qc.invalidateQueries({ queryKey: ["board", "github"] });
+      toast.success("Account removed.");
     },
     onError: (e) => toast.error(apiErrorMessage(e)),
   });
@@ -180,37 +189,87 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
         </form>
 
         <section className="space-y-3 border-t border-border/60 pt-4" data-testid="settings-github">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">GitHub</h3>
-          <p className="text-xs text-muted-foreground">
-            {github.data?.connected
-              ? `Connected as ${github.data.login}. The token only leaves the vault as an ephemeral clone credential.`
-              : github.data?.error
-                ? `Stored token is not usable: ${github.data.error}`
-                : "Not connected. A token lets projects pick a repository and lets the runner clone it."}
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">GitHub accounts</h3>
+          {/* The one thing people ask first: there is no "Sign in with GitHub" here. You paste a
+              token. Saying it plainly, above the field, is cheaper than a support conversation. */}
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            <strong className="font-medium text-foreground">Paste a token — no login needed.</strong>{" "}
+            Fine-grained PAT with Contents read/write on the repos you want, or a classic token with{" "}
+            <span className="font-mono">repo</span>.{" "}
+            <a
+              href="https://github.com/settings/tokens"
+              target="_blank"
+              rel="noreferrer noopener"
+              className="underline underline-offset-2 hover:text-foreground"
+            >
+              github.com/settings/tokens
+            </a>
           </p>
-          <div className="flex gap-2">
+          <p className="text-xs text-muted-foreground">
+            Add one account per GitHub identity — your personal one and your organization's, say. Each
+            project picks which one it clones with; the token only leaves the vault as an ephemeral
+            clone credential.
+          </p>
+
+          {connections.length > 0 ? (
+            <ul className="divide-y divide-border/60 rounded-md border border-border/60" data-testid="github-connections">
+              {connections.map((c) => (
+                <li key={c.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{c.label}</p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      <span className="font-mono">{c.login}</span>
+                      {c.scopes?.length ? ` · ${c.scopes.join(", ")}` : " · fine-grained"}
+                      {c.ok === false ? ` · ${c.error ?? "token not usable"}` : ""}
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    aria-label={`Remove ${c.label}`}
+                    disabled={removeGithub.isPending}
+                    onClick={() => removeGithub.mutate(c.id)}
+                  >
+                    Remove
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              No account connected yet. Projects cannot pick a repository until there is one.
+            </p>
+          )}
+
+          <div className="space-y-2 rounded-md border border-dashed border-border/60 p-3">
+            <p className="text-xs font-medium">Add account</p>
+            <Input
+              aria-label="Account label"
+              value={githubLabel}
+              onChange={(e) => setGithubLabel(e.target.value)}
+              placeholder="personal, acme org…"
+              autoComplete="off"
+              maxLength={40}
+            />
             <Input
               aria-label="GitHub token"
               type="password"
               value={githubToken}
               onChange={(e) => setGithubToken(e.target.value)}
-              placeholder={github.data?.connected ? "Paste a new token to replace it" : "ghp_… or github_pat_…"}
+              placeholder="github_pat_… or ghp_…"
               autoComplete="off"
               className="font-mono"
             />
-            <Button
-              type="button"
-              variant="outline"
-              disabled={!githubToken.trim() || connectGithub.isPending}
-              onClick={() => connectGithub.mutate(githubToken.trim())}
-            >
-              {github.data?.connected ? "Replace" : "Connect"}
-            </Button>
-            {github.data?.connected ? (
-              <Button type="button" variant="ghost" disabled={disconnectGithub.isPending} onClick={() => disconnectGithub.mutate()}>
-                Disconnect
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!githubToken.trim() || addGithub.isPending}
+                onClick={() => addGithub.mutate({ label: githubLabel.trim(), token: githubToken.trim() })}
+              >
+                {addGithub.isPending ? "Checking…" : "Add account"}
               </Button>
-            ) : null}
+            </div>
           </div>
         </section>
 

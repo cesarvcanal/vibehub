@@ -161,10 +161,25 @@ describe("TerminalComposer", () => {
   it("offers no microphone at all when there is no card to transcribe against", async () => {
     renderComposer(<TerminalComposer onSend={vi.fn()} />);
     expect(screen.queryByTestId("composer-mic")).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox")).toHaveAttribute(
-      "placeholder",
-      "Write here — Enter sends, Shift+Enter for a new line",
-    );
+  });
+
+  it("says nothing in the placeholder — the label is for screen readers, not for the screen", () => {
+    renderComposer(<TerminalComposer onSend={vi.fn()} />);
+    const box = screen.getByRole("textbox");
+    // A grey sentence explaining what a text box is competes with the agent's output all day.
+    expect(box).toHaveAttribute("placeholder", "");
+    expect(box).toHaveAccessibleName("Message to the terminal");
+  });
+
+  it("opens at about three lines and grows no further than max-h-48", () => {
+    renderComposer(<TerminalComposer onSend={vi.fn()} />);
+    const box = screen.getByRole("textbox");
+    expect(box).toHaveAttribute("rows", "3");
+    expect(box.className).toContain("min-h-24");
+    expect(box.className).toContain("max-h-48");
+    // Solid, not a wash: the field is where you write, and it should look like a field.
+    expect(box.className).toContain("bg-card");
+    expect(box.className).not.toContain("bg-card/50");
   });
 });
 
@@ -233,15 +248,11 @@ describe("TerminalComposer — voice input", () => {
     );
   });
 
-  it("invites recording in the placeholder once it is configured", async () => {
+  it("keeps the placeholder empty even once recording is configured", async () => {
     serveVoice(true);
     renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
-    await waitFor(() =>
-      expect(screen.getByRole("textbox")).toHaveAttribute(
-        "placeholder",
-        "Write or record — Enter sends, Shift+Enter for a new line",
-      ),
-    );
+    await screen.findByTestId("composer-mic");
+    expect(screen.getByRole("textbox")).toHaveAttribute("placeholder", "");
   });
 
   it("transcribes a finished recording INTO the field, and sends nothing", async () => {

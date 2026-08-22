@@ -31,6 +31,9 @@ import {
   normalizeProjectPositions,
   placeProject,
   normalizeMcpInput,
+  githubConnectionIdFor,
+  assertGithubConnectionId,
+  sanitizeConnectionLabel,
   type BoardColumn,
   type Project,
 } from "./registry.js";
@@ -388,6 +391,36 @@ describe("normalizeMcpInput (pure)", () => {
   });
 });
 
+describe("GitHub connection ids (pure)", () => {
+  it("derives an UPPER_SNAKE id from a login", () => {
+    expect(githubConnectionIdFor("octocat")).toBe("OCTOCAT");
+    expect(githubConnectionIdFor("acme-inc")).toBe("ACME_INC");
+    expect(githubConnectionIdFor("césar.canal")).toBe("CESAR_CANAL");
+  });
+
+  it("falls back to a random id when the login derives nothing usable", () => {
+    // a vault key must start with a letter, so a leading digit cannot be kept
+    expect(githubConnectionIdFor("42")).toMatch(/^GH[0-9A-F]{10}$/);
+    expect(githubConnectionIdFor("")).toMatch(/^GH[0-9A-F]{10}$/);
+    expect(githubConnectionIdFor("...")).toMatch(/^GH[0-9A-F]{10}$/);
+  });
+
+  it("only accepts ids that are safe as a vault key", () => {
+    expect(assertGithubConnectionId(" OCTOCAT ")).toBe("OCTOCAT");
+    expect(() => assertGithubConnectionId("octocat")).toThrow(/invalid GitHub connection id/);
+    expect(() => assertGithubConnectionId("../../etc")).toThrow(/invalid GitHub connection id/);
+    expect(() => assertGithubConnectionId("1ABC")).toThrow(/invalid GitHub connection id/);
+    expect(() => assertGithubConnectionId("A".repeat(25))).toThrow(/invalid GitHub connection id/);
+  });
+
+  it("labels fall back to the login and are capped", () => {
+    expect(sanitizeConnectionLabel("  personal ", "octocat")).toBe("personal");
+    expect(sanitizeConnectionLabel("", "octocat")).toBe("octocat");
+    expect(sanitizeConnectionLabel(null, "")).toBe("GitHub");
+    expect(sanitizeConnectionLabel("x".repeat(80), "octocat")).toHaveLength(LABEL_MAX);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Registry on disk
 // ---------------------------------------------------------------------------
@@ -421,7 +454,9 @@ describe("board registry (persisted)", () => {
     const file = join(dir, "board.json");
     expect((await stat(file)).mode & 0o777).toBe(0o600);
     const doc = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
-    expect(Object.keys(doc).sort()).toEqual(["accounts", "cards", "config", "mcps", "projects"]);
+    expect(Object.keys(doc).sort()).toEqual([
+      "accounts", "cards", "config", "githubConnections", "mcps", "projects",
+    ]);
   });
 
   it("createProject: default base branch 'dev', validated repo/clone/branch", async () => {
@@ -1034,6 +1069,70 @@ describe("board registry (persisted)", () => {
       expect((await reg.removeMcp(mcp.id)).id).toBe(mcp.id);
       expect(await reg.listMcps()).toEqual([]);
       await expect(reg.removeMcp(mcp.id)).rejects.toThrow(/MCP not found/);
+    });
+  });
+  describe("GitHub connections", () => {
+    async function connect(label: string, login: string) {
+      return await reg.addGithubConnection({ label, login });
+    }
+
+    it("stores accounts in connection order and keeps ids unique per login", async () => {
+      const personal = await connect("personal", "octocat");
+      const org = await connect("acme org", "acme-inc");
+      const second = await connect("fine-grained", "octocat");
+      expect((await reg.listGithubConnections()).map((c) => c.id)).toEqual([personal.id, org.id, second.id]);
+      expect(second.id).toBe("OCTOCAT_2");
+      expect(await reg.getGithubConnection(org.id)).toMatchObject({ label: "acme org", login: "acme-inc" });
+    });
+
+    it("requires a login", async () => {
+      await expect(reg.addGithubConnection({ login: "  " })).rejects.toThrow(/login is required/);
+    });
+
+    it("refreshes an identity when the token behind it is replaced", async () => {
+      const c = await connect("personal", "octocat");
+      const next = await reg.updateGithubConnection(c.id, { login: "octocat-renamed", scopes: ["repo"] });
+      expect(next).toMatchObject({ id: c.id, login: "octocat-renamed", scopes: ["repo"], label: "personal" });
+      await expect(reg.updateGithubConnection("GONE", {})).rejects.toThrow(/not found/);
+    });
+
+    it("a project may point at a connection, and a dangling id is refused", async () => {
+      const org = await connect("acme org", "acme-inc");
+      const project = await seedProject({ githubConnectionId: org.id });
+      expect(project.githubConnectionId).toBe(org.id);
+      await expect(seedProject({ name: "ghost", githubConnectionId: "GHOST" })).rejects.toThrow(/does not exist/);
+      await expect(seedProject({ name: "bad", githubConnectionId: "nope" })).rejects.toThrow(
+        /invalid GitHub connection id/,
+      );
+    });
+
+    it("a project can be moved between accounts and back to the default", async () => {
+      const personal = await connect("personal", "octocat");
+      const org = await connect("acme org", "acme-inc");
+      const project = await seedProject({ githubConnectionId: personal.id });
+      expect((await reg.updateProject(project.id, { githubConnectionId: org.id })).githubConnectionId).toBe(org.id);
+      expect((await reg.updateProject(project.id, { githubConnectionId: null })).githubConnectionId).toBeUndefined();
+      await expect(reg.updateProject(project.id, { githubConnectionId: "GHOST" })).rejects.toThrow(/does not exist/);
+    });
+
+    it("REFUSES to remove an account a project still points at", async () => {
+      const org = await connect("acme org", "acme-inc");
+      const project = await seedProject({ githubConnectionId: org.id });
+      expect(await reg.projectsUsingGithubConnection(org.id)).toHaveLength(1);
+      await expect(reg.removeGithubConnection(org.id)).rejects.toThrow(/in use by 1 project/);
+
+      await reg.updateProject(project.id, { githubConnectionId: null });
+      expect(await reg.removeGithubConnection(org.id)).toMatchObject({ id: org.id });
+      expect(await reg.listGithubConnections()).toEqual([]);
+      await expect(reg.removeGithubConnection(org.id)).rejects.toThrow(/not found/);
+    });
+
+    it("clearing every account also drops the references projects held", async () => {
+      const org = await connect("acme org", "acme-inc");
+      const project = await seedProject({ githubConnectionId: org.id });
+      expect(await reg.clearGithubConnections()).toHaveLength(1);
+      expect(await reg.listGithubConnections()).toEqual([]);
+      expect((await reg.getProject(project.id))!.githubConnectionId).toBeUndefined();
     });
   });
 });

@@ -24,7 +24,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   get.mockImplementation(async (url: string) => {
     if (url === "/settings") return SETTINGS;
-    if (url === "/github") return { connected: false };
+    if (url === "/github") return { connections: [] };
     if (url === "/transcribe") return { available: false, proofread: false, language: "pt" };
     throw new Error(`unexpected ${url}`);
   });
@@ -59,13 +59,83 @@ describe("SettingsDialog", () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith("/transcribe/keys", { openaiKey: "sk-openai-123" }));
   });
 
-  it("connects GitHub with the pasted token and clears the field", async () => {
-    post.mockResolvedValue({ connected: true, login: "octocat" });
+});
+
+describe("SettingsDialog — GitHub accounts", () => {
+  const CONNECTIONS = [
+    { id: "OCTOCAT", label: "personal", login: "octocat", scopes: ["repo"], createdAt: 1, ok: true },
+    { id: "ACME_INC", label: "acme org", login: "acme-inc", createdAt: 2, ok: true },
+  ];
+
+  function serveConnections(connections: unknown[]): void {
+    get.mockImplementation(async (url: string) => {
+      if (url === "/settings") return SETTINGS;
+      if (url === "/github") return { connections };
+      if (url === "/transcribe") return { available: false, proofread: false, language: "pt" };
+      throw new Error(`unexpected ${url}`);
+    });
+  }
+
+  it("says out loud that connecting means PASTING a token, not logging in", async () => {
     renderApp(<SettingsDialog open onOpenChange={() => {}} />);
-    const field = await screen.findByLabelText("GitHub token");
-    await userEvent.type(field, "ghp_abc");
-    await userEvent.click(screen.getByRole("button", { name: "Connect" }));
-    await waitFor(() => expect(post).toHaveBeenCalledWith("/github/token", { token: "ghp_abc" }));
-    await waitFor(() => expect(field).toHaveValue(""));
+    expect(await screen.findByText(/Paste a token — no login needed/i)).toBeInTheDocument();
+    expect(screen.getByText(/Fine-grained PAT with Contents read\/write/i)).toBeInTheDocument();
+    expect(screen.getByText(/classic token with/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /github.com\/settings\/tokens/i })).toHaveAttribute(
+      "href", "https://github.com/settings/tokens",
+    );
+  });
+
+  it("lists every connected account with its login and scopes", async () => {
+    serveConnections(CONNECTIONS);
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    const list = await screen.findByTestId("github-connections");
+    expect(list).toHaveTextContent("personal");
+    expect(list).toHaveTextContent("octocat");
+    expect(list).toHaveTextContent("repo");
+    expect(list).toHaveTextContent("acme org");
+    // a fine-grained token reports no scopes — say so rather than leaving a blank
+    expect(list).toHaveTextContent("fine-grained");
+  });
+
+  it("surfaces an account whose token stopped working", async () => {
+    serveConnections([{ ...CONNECTIONS[0], ok: false, error: "GitHub rejected this token (401)" }]);
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    expect(await screen.findByText(/GitHub rejected this token \(401\)/)).toBeInTheDocument();
+  });
+
+  it("adds an account with a label and a pasted token, then clears both fields", async () => {
+    post.mockResolvedValue({ connection: { id: "OCTOCAT", label: "personal", login: "octocat", createdAt: 1 } });
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    const label = await screen.findByLabelText("Account label");
+    const token = screen.getByLabelText("GitHub token");
+    await userEvent.type(label, "personal");
+    await userEvent.type(token, "ghp_abc");
+    await userEvent.click(screen.getByRole("button", { name: "Add account" }));
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/github/connections", { label: "personal", token: "ghp_abc" }),
+    );
+    await waitFor(() => expect(token).toHaveValue(""));
+    expect(label).toHaveValue("");
+  });
+
+  it("will not add an account without a token", async () => {
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    expect(await screen.findByRole("button", { name: "Add account" })).toBeDisabled();
+  });
+
+  it("removes the account the button belongs to", async () => {
+    serveConnections(CONNECTIONS);
+    del.mockResolvedValue({ ok: true });
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Remove acme org" }));
+    await waitFor(() => expect(del).toHaveBeenCalledWith("/github/connections/ACME_INC"));
+  });
+
+  it("never renders a stored token", async () => {
+    serveConnections(CONNECTIONS);
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    await screen.findByTestId("github-connections");
+    expect(screen.queryByDisplayValue(/ghp_/)).toBeNull();
   });
 });

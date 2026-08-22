@@ -173,11 +173,11 @@ describe("BoardPage — the board", () => {
     expect(rows[1]).toContain("gateway");
   });
 
-  it("renders the five columns, waiting before working", async () => {
+  it("renders the five columns as a life cycle: backlog, paused, waiting, working, done", async () => {
     renderApp(<BoardPage />, { route: "/?project=p1" });
     await screen.findByRole("region", { name: "Backlog" });
     const labels = screen.getAllByRole("region").map((r) => r.getAttribute("data-column"));
-    expect(labels).toEqual(["backlog", "waiting", "working", "paused", "done"]);
+    expect(labels).toEqual(["backlog", "paused", "waiting", "working", "done"]);
   });
 
   it("puts each card in the column the server put it in", async () => {

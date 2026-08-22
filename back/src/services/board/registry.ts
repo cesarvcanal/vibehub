@@ -99,6 +99,13 @@ export interface Project {
   /** Default Claude account for this project's cards. Absent = the runner's default account. */
   defaultAccountSlug?: string;
   /**
+   * GitHub CONNECTION (account) this project's repository belongs to — see {@link GithubConnection}.
+   * Absent = the first connection in the list, which is what an install with a single account has.
+   * Validated against the existing connections on create/update: a dangling id would make every
+   * clone of this project fail with a credential that does not exist.
+   */
+  githubConnectionId?: string;
+  /**
    * Position of the project in the sidebar (0..n-1, normalized). Projects written by older versions
    * may not carry the field — `listProjects` falls back to `createdAt` and normalizes on first load.
    */
@@ -198,6 +205,63 @@ export interface McpServer {
 }
 
 /**
+ * A GITHUB ACCOUNT vibehub can authenticate as — a personal account and an organization account are
+ * the usual pair. Only the IDENTITY lives here; the token itself lives in the vault under
+ * `GITHUB_TOKEN_<ID>` and is resolved per git command (see `services/github/client.ts`).
+ *
+ * A project points at one of these through `Project.githubConnectionId`; absent means "the first
+ * one", which is exactly the behaviour of an install that only ever connected a single account.
+ */
+export interface GithubConnection {
+  /** [A-Z][A-Z0-9_]{0,23} — it becomes part of a vault key, so it is never raw input. */
+  id: string;
+  /** What the human calls it ("personal", "acme org"). Display only. */
+  label: string;
+  /** GitHub login the token resolved to when it was stored. */
+  login: string;
+  /** OAuth scopes GitHub reported (classic tokens only — fine-grained tokens report none). */
+  scopes?: string[];
+  createdAt: number;
+}
+
+const CONNECTION_ID_RE = /^[A-Z][A-Z0-9_]{0,23}$/;
+
+/** Validates a connection id ([A-Z][A-Z0-9_]{0,23}) — it becomes a vault key. THROWS otherwise. PURE. */
+export function assertGithubConnectionId(id: string): string {
+  const v = String(id ?? "").trim();
+  if (!CONNECTION_ID_RE.test(v)) {
+    throw new Error(`invalid GitHub connection id (expected [A-Z][A-Z0-9_]{0,23}): '${id}'`);
+  }
+  return v;
+}
+
+/** A random connection id — the fallback when a seed does not derive a usable one. */
+export function randomGithubConnectionId(): string {
+  return `GH${randomUUID().replace(/-/g, "").slice(0, 10).toUpperCase()}`;
+}
+
+/**
+ * Derives a connection id from a seed (the GitHub login, usually): upper snake, max 24 chars. Falls
+ * back to a random id when the seed derives nothing usable (starts with a digit, is empty, …). PURE.
+ */
+export function githubConnectionIdFor(seed: string): string {
+  const base = String(seed ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 24)
+    .replace(/_+$/, "");
+  return CONNECTION_ID_RE.test(base) ? base : randomGithubConnectionId();
+}
+
+/** Display label for a connection: trimmed, at most LABEL_MAX. Empty falls back to the login. PURE. */
+export function sanitizeConnectionLabel(label: string | null | undefined, login: string): string {
+  return String(label ?? "").trim().slice(0, LABEL_MAX) || String(login ?? "").trim() || "GitHub";
+}
+
+/**
  * Global board configuration (a single key in the document). Today it only holds the LABEL of the
  * default account (`~/.claude`, which has no record): the UI shows this instead of "default" in
  * dropdowns and chips. Empty/absent = the UI falls back to its own wording. Display only — it never
@@ -220,11 +284,13 @@ export interface BoardDoc {
   projects: Project[];
   cards: Card[];
   mcps: McpServer[];
+  /** GitHub accounts vibehub can clone as. Older documents have none — the field is filled on load. */
+  githubConnections: GithubConnection[];
 }
 
 const store = new JsonStore<BoardDoc>(
   dataPath("board.json"),
-  () => ({ config: {}, accounts: [], projects: [], cards: [], mcps: [] }),
+  () => ({ config: {}, accounts: [], projects: [], cards: [], mcps: [], githubConnections: [] }),
   (raw) => {
     const doc = raw as Partial<BoardDoc> | null;
     return {
@@ -233,6 +299,7 @@ const store = new JsonStore<BoardDoc>(
       projects: Array.isArray(doc?.projects) ? doc.projects : [],
       cards: Array.isArray(doc?.cards) ? doc.cards : [],
       mcps: Array.isArray(doc?.mcps) ? doc.mcps : [],
+      githubConnections: Array.isArray(doc?.githubConnections) ? doc.githubConnections : [],
     };
   },
 );
@@ -528,6 +595,123 @@ function requireAccountSlug(doc: BoardDoc, slug: string): string {
   return v;
 }
 
+/** Same idea for a GitHub connection: the id must be shaped AND must exist in this document. */
+function requireGithubConnectionId(doc: BoardDoc, id: string): string {
+  const v = assertGithubConnectionId(id);
+  if (!doc.githubConnections.some((c) => c.id === v)) {
+    throw new Error(`GitHub connection '${v}' does not exist`);
+  }
+  return v;
+}
+
+// ---------------------------------------------------------------------------
+// GitHub connections
+// ---------------------------------------------------------------------------
+
+/** Every stored GitHub account, in the order they were connected (the first one is the default). */
+export async function listGithubConnections(): Promise<GithubConnection[]> {
+  return (await store.load()).githubConnections;
+}
+
+export async function getGithubConnection(id: string): Promise<GithubConnection | undefined> {
+  return (await store.load()).githubConnections.find((c) => c.id === id);
+}
+
+export interface AddGithubConnectionInput {
+  /** Preferred id. Absent = derived from the login. Made unique against what is already stored. */
+  id?: string;
+  label?: string;
+  login: string;
+  scopes?: string[];
+}
+
+/**
+ * Registers a GitHub account. The id is derived from the login when none is given, and de-duplicated
+ * with a numeric suffix — two tokens for the same login are a legitimate thing to have (a personal
+ * token and a fine-grained one scoped to an org's repos).
+ *
+ * This only records the IDENTITY; storing the token under `GITHUB_TOKEN_<id>` is the caller's job
+ * (services/github/client.ts), which is also the only place that ever holds the secret.
+ */
+export async function addGithubConnection(input: AddGithubConnectionInput): Promise<GithubConnection> {
+  const login = String(input.login ?? "").trim();
+  if (!login) throw new Error("login is required");
+  const wanted = input.id ? assertGithubConnectionId(input.id) : githubConnectionIdFor(login);
+  return store.mutate((doc) => {
+    let id = wanted;
+    for (let n = 2; doc.githubConnections.some((c) => c.id === id); n += 1) {
+      const suffix = `_${n}`;
+      id = `${wanted.slice(0, 24 - suffix.length)}${suffix}`;
+    }
+    const connection: GithubConnection = {
+      id,
+      label: sanitizeConnectionLabel(input.label, login),
+      login,
+      ...(input.scopes?.length ? { scopes: input.scopes } : {}),
+      createdAt: Date.now(),
+    };
+    doc.githubConnections.push(connection);
+    return connection;
+  });
+}
+
+/** Refreshes the identity of an existing connection (a token was replaced). */
+export async function updateGithubConnection(
+  id: string,
+  patch: { label?: string; login?: string; scopes?: string[] },
+): Promise<GithubConnection> {
+  const v = assertGithubConnectionId(id);
+  return store.mutate((doc) => {
+    const idx = doc.githubConnections.findIndex((c) => c.id === v);
+    if (idx < 0) throw new Error("GitHub connection not found");
+    const current = doc.githubConnections[idx]!;
+    const login = patch.login?.trim() || current.login;
+    const next: GithubConnection = {
+      ...current,
+      login,
+      label: patch.label !== undefined ? sanitizeConnectionLabel(patch.label, login) : current.label,
+      ...(patch.scopes !== undefined ? { scopes: patch.scopes.length ? patch.scopes : undefined } : {}),
+    };
+    doc.githubConnections[idx] = next;
+    return next;
+  });
+}
+
+/** Projects that explicitly point at this connection — what makes a removal unsafe. */
+export async function projectsUsingGithubConnection(id: string): Promise<Project[]> {
+  return (await store.load()).projects.filter((p) => p.githubConnectionId === id);
+}
+
+/**
+ * Removes a GitHub account. REFUSES while any project still points at it — dropping it blindly would
+ * leave projects with a credential that no longer exists and every clone would fail at open time.
+ */
+export async function removeGithubConnection(id: string): Promise<GithubConnection> {
+  const v = assertGithubConnectionId(id);
+  return store.mutate((doc) => {
+    const found = doc.githubConnections.find((c) => c.id === v);
+    if (!found) throw new Error("GitHub connection not found");
+    const used = doc.projects.filter((p) => p.githubConnectionId === v);
+    if (used.length > 0) {
+      throw new Error(
+        `GitHub account '${found.label}' is in use by ${used.length} project(s) — point them at another account first`,
+      );
+    }
+    doc.githubConnections = doc.githubConnections.filter((c) => c.id !== v);
+    return found;
+  });
+}
+
+/** Drops EVERY connection (the "disconnect GitHub" button) and reports which ids went. */
+export async function clearGithubConnections(): Promise<GithubConnection[]> {
+  return store.mutate((doc) => {
+    const gone = doc.githubConnections;
+    doc.githubConnections = [];
+    for (const p of doc.projects) delete p.githubConnectionId;
+    return gone;
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Global config
 // ---------------------------------------------------------------------------
@@ -617,6 +801,8 @@ export interface CreateProjectInput {
   baseBranch?: string;
   /** Default Claude account for the cards. Absent/empty = the runner's default account. */
   defaultAccountSlug?: string;
+  /** GitHub account the repository belongs to. Absent/empty = the first connection. */
+  githubConnectionId?: string;
 }
 
 export async function createProject(input: CreateProjectInput): Promise<Project> {
@@ -636,6 +822,9 @@ export async function createProject(input: CreateProjectInput): Promise<Project>
       // Whether the account exists can only be checked with the document at hand — hence in here.
       defaultAccountSlug: input.defaultAccountSlug?.trim()
         ? requireAccountSlug(doc, input.defaultAccountSlug)
+        : undefined,
+      githubConnectionId: input.githubConnectionId?.trim()
+        ? requireGithubConnectionId(doc, input.githubConnectionId)
         : undefined,
       // Goes to the END of the sidebar (after normalization the existing ones are 0..n-1, so the new one is n).
       position: doc.projects.length,
@@ -668,6 +857,8 @@ export interface UpdateProjectInput {
   baseBranch?: string;
   /** null or "" = CLEAR (back to the runner's default account); a string = an existing account. */
   defaultAccountSlug?: string | null;
+  /** null or "" = CLEAR (back to the first connection); a string = an existing connection. */
+  githubConnectionId?: string | null;
 }
 
 export async function updateProject(id: string, patch: UpdateProjectInput): Promise<Project> {
@@ -693,6 +884,12 @@ export async function updateProject(id: string, patch: UpdateProjectInput): Prom
     if (patch.defaultAccountSlug !== undefined) {
       next.defaultAccountSlug = patch.defaultAccountSlug?.trim()
         ? requireAccountSlug(doc, patch.defaultAccountSlug)
+        : undefined;
+    }
+    // githubConnectionId: null or "" = CLEAR (back to the first connection); a string must exist.
+    if (patch.githubConnectionId !== undefined) {
+      next.githubConnectionId = patch.githubConnectionId?.trim()
+        ? requireGithubConnectionId(doc, patch.githubConnectionId)
         : undefined;
     }
     doc.projects[idx] = next;
