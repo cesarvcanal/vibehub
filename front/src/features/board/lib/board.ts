@@ -95,6 +95,11 @@ export function nextPosition(cards: BoardCard[], column: CardColumn): number {
 /**
  * Applies a move locally so the card does not snap back while the PATCH is in flight. The refetch
  * that follows re-synchronises with the server, which stays the authority on the final position.
+ *
+ * It RENUMBERS the destination column exactly the way the server does (take the card out, splice it
+ * in at `position`, number 0..n-1), because a reorder INSIDE a column is nothing but the numbers:
+ * writing the new position on one card and leaving its neighbour with the same number leaves the
+ * order down to the createdAt tie-break, and the card visibly bounces back for a poll.
  */
 export function moveCardLocal(
   cards: BoardCard[],
@@ -102,7 +107,65 @@ export function moveCardLocal(
   column: CardColumn,
   position: number,
 ): BoardCard[] {
-  return cards.map((c) => (c.id === id ? { ...c, column, position, updatedAt: Date.now() } : c));
+  const moved = cards.find((c) => c.id === id);
+  if (!moved) return cards;
+  const from = moved.column;
+  // Every card is COPIED, not just the moved one: the renumbering below writes `position` in place,
+  // and the array it is given is a query cache nobody is allowed to mutate.
+  const next = cards.map((c) => (c.id === id ? { ...c, column, updatedAt: Date.now() } : { ...c }));
+  renumberColumn(next, moved.projectId, column, id, position);
+  if (from !== column) renumberColumn(next, moved.projectId, from, null, 0);
+  return next;
+}
+
+/**
+ * Numbers one column 0..n-1 IN PLACE (on the copies made above), optionally splicing `id` in at
+ * `at` first. Mirrors `placeCard` on the server so the optimistic board and the answer agree.
+ */
+function renumberColumn(
+  cards: BoardCard[],
+  projectId: string,
+  column: CardColumn,
+  id: string | null,
+  at: number,
+): void {
+  const inColumn = cards.filter((c) => c.projectId === projectId && c.column === column);
+  const moved = id ? inColumn.find((c) => c.id === id) : undefined;
+  const rest = sortCards(inColumn.filter((c) => c.id !== moved?.id));
+  if (moved) rest.splice(Math.max(0, Math.min(Math.trunc(at), rest.length)), 0, moved);
+  rest.forEach((c, i) => {
+    c.position = i;
+  });
+}
+
+/**
+ * Turns a gap index (0..n, in the FULL list) into the `position` the server expects — the index
+ * AFTER the moved item has been taken out. Dropping something back where it already is, on either
+ * side of itself, answers `from`, which every caller reads as "nothing to do". PURE.
+ *
+ * Shared by the two lists that reorder by dragging: the projects in the sidebar and the cards in a
+ * column. Both send the same kind of index, so they cannot be allowed to compute it differently.
+ */
+export function gapToPosition(gap: number, from: number): number {
+  if (gap === from || gap === from + 1) return from;
+  return gap > from ? gap - 1 : gap;
+}
+
+/** Is the pointer in the BOTTOM half of the row it is over (drop after, rather than before)? PURE. */
+export function isBelowMidpoint(pointerY: number, rectTop: number, rectHeight: number): boolean {
+  return pointerY >= rectTop + rectHeight / 2;
+}
+
+/**
+ * The `position` a drop lands on, or `null` when the drop changes nothing.
+ *
+ * `from` is the card's index in the DESTINATION column, or -1 when it is arriving from another one
+ * — the case where every gap is a real move and the index needs no correction, only clamping.
+ */
+export function dropPosition(gap: number, from: number, length: number): number | null {
+  if (from < 0) return Math.max(0, Math.min(Math.trunc(gap), length));
+  const at = gapToPosition(gap, from);
+  return at === from ? null : at;
 }
 
 /**

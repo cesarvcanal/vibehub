@@ -20,6 +20,8 @@ import {
   cardDot,
   cardHref,
   dotClass,
+  gapToPosition,
+  isBelowMidpoint,
   nextPosition,
   splitSidebarCards,
 } from "@/features/board/lib/board";
@@ -654,18 +656,7 @@ function SidebarCard({
 
 /* ------------------------------------------------------------- drag maths */
 
-/** Is the pointer in the BOTTOM half of the row it is over (drop after, rather than before)? PURE. */
-export function isBelowMidpoint(pointerY: number, rectTop: number, rectHeight: number): boolean {
-  return pointerY >= rectTop + rectHeight / 2;
-}
-
-/**
- * Turns a gap index (0..n, in the FULL list) into the `position` the server expects — the index
- * after the moved item has been taken out. Dropping a row back where it already is, on either side
- * of itself, is a no-op.
- */
-export function gapToPosition(gap: number, from: number): number {
-  if (gap === from || gap === from + 1) return from;
-  return gap > from ? gap - 1 : gap;
-}
+// The maths of dropping between two rows is the same here and on the kanban, so it lives in
+// `lib/board` and both read it from there. Re-exported because this is where it was first written.
+export { gapToPosition, isBelowMidpoint };
 

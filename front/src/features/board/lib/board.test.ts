@@ -3,6 +3,7 @@ import {
   COLUMNS,
   groupByColumn,
   lastActivity,
+  dropPosition,
   moveCardLocal,
   moveProjectLocal,
   nextPosition,
@@ -109,14 +110,61 @@ describe("moveCardLocal", () => {
   it("moves only the card it was asked to move", () => {
     const cards = [card({ id: "a" }), card({ id: "b" })];
     const next = moveCardLocal(cards, "a", "done", 3);
-    expect(next.find((c) => c.id === "a")).toMatchObject({ column: "done", position: 3 });
+    // Clamped to the end of an empty column, exactly as the server clamps it.
+    expect(next.find((c) => c.id === "a")).toMatchObject({ column: "done", position: 0 });
     expect(next.find((c) => c.id === "b")).toMatchObject({ column: "backlog" });
   });
 
+  it("renumbers the column it lands in, so a reorder holds until the refetch", () => {
+    const cards = [
+      card({ id: "a", position: 0 }),
+      card({ id: "b", position: 1 }),
+      card({ id: "c", position: 2 }),
+    ];
+    // Third card to the top of its own column.
+    const next = sortCards(moveCardLocal(cards, "c", "backlog", 0));
+    expect(next.map((c) => c.id)).toEqual(["c", "a", "b"]);
+    expect(next.map((c) => c.position)).toEqual([0, 1, 2]);
+  });
+
+  it("closes the gap left behind in the column it came from", () => {
+    const cards = [
+      card({ id: "a", position: 0 }),
+      card({ id: "b", position: 1 }),
+      card({ id: "c", position: 2 }),
+    ];
+    const next = moveCardLocal(cards, "a", "done", 0);
+    expect(next.filter((c) => c.column === "backlog").map((c) => c.position)).toEqual([0, 1]);
+  });
+
   it("leaves the input untouched", () => {
-    const cards = [card({ id: "a" })];
-    moveCardLocal(cards, "a", "done", 1);
+    const cards = [card({ id: "a" }), card({ id: "b", position: 1 })];
+    moveCardLocal(cards, "b", "backlog", 0);
+    expect(cards.map((c) => c.position)).toEqual([0, 1]);
     expect(cards[0]?.column).toBe("backlog");
+  });
+});
+
+describe("dropPosition", () => {
+  it("is the gap itself for a card arriving from another column", () => {
+    expect(dropPosition(0, -1, 3)).toBe(0);
+    expect(dropPosition(2, -1, 3)).toBe(2);
+  });
+
+  it("clamps a gap past the end of the destination", () => {
+    expect(dropPosition(9, -1, 3)).toBe(3);
+  });
+
+  it("discounts the card's own slot when it is already in the column", () => {
+    // [a, b, c], dragging c (index 2) to the very top.
+    expect(dropPosition(0, 2, 3)).toBe(0);
+    // ...and dragging a (index 0) to the very bottom.
+    expect(dropPosition(3, 0, 3)).toBe(2);
+  });
+
+  it("answers null for the two gaps either side of the card itself", () => {
+    expect(dropPosition(1, 1, 3)).toBeNull();
+    expect(dropPosition(2, 1, 3)).toBeNull();
   });
 });
 
