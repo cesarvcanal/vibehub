@@ -265,13 +265,14 @@ export interface Card {
   preparedAt?: number;
   pausedAt?: number | null;
   /**
-   * The shared brain or the MCP set changed while this card was mid-turn. Claude only reads either
-   * one at start-up, so the server defers the restart instead of interrupting work: the card picks
-   * the new configuration up the moment it goes idle. Absent/null = nothing pending.
+   * The shared brain, the MCP set, or this card's own model/account (`config`) changed while it was
+   * mid-turn. Claude only reads any of them at start-up, so the server defers the restart instead of
+   * interrupting work: the card picks the new configuration up the moment it goes idle. Absent/null
+   * = nothing pending.
    */
   restartPendingAt?: number | null;
   /** Which write scheduled the deferred restart. */
-  restartReason?: "brain" | "mcp";
+  restartReason?: "brain" | "mcp" | "config";
   createdAt: number;
   updatedAt?: number;
 }

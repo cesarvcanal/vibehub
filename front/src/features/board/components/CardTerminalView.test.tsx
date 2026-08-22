@@ -17,6 +17,8 @@ vi.mock("@/lib/api", () => ({
   del: vi.fn(),
 }));
 
+import { toast } from "sonner";
+
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), {
     success: vi.fn(),
@@ -276,7 +278,7 @@ describe("CardTerminalView — the card bar", () => {
   }
 
   it("switching the model reconnects the terminal on the same conversation", async () => {
-    mockPatch.mockResolvedValue({ card: card({ openedAt: 10, model: "claude-sonnet-5" }) });
+    mockPatch.mockResolvedValue({ card: card({ openedAt: 10, model: "claude-sonnet-5" }), session: "restarted" });
     const user = userEvent.setup();
     renderWithCache([card({ openedAt: 10 })]);
 
@@ -321,15 +323,42 @@ describe("CardTerminalView — the card bar", () => {
     expect(pill).toHaveAttribute("title", "Claude Code's default until the first reply");
   });
 
-  it("the card's own pin wins over the transcript — that is what the next session starts on", async () => {
-    serveSession({ model: "claude-opus-5", modelLabel: "Opus" });
-    mockPost.mockResolvedValue({ card: card({ openedAt: 10, model: "claude-haiku-4-5" }) });
+  it("the SESSION wins over the card's pin — the bar is about the conversation on screen", async () => {
+    // The bug: the card pinned Opus, so the bar said Opus, while every reply came from Fable. A pin
+    // only reaches Claude when the process starts; the server weighs the two and answers with the
+    // one that is actually talking.
+    serveSession({ model: "claude-fable-5", modelLabel: "Fable" });
     const user = userEvent.setup();
-    renderWithCache([card({ openedAt: 10, model: "claude-haiku-4-5" })]);
+    renderWithCache([card({ openedAt: 10, model: "claude-opus-5" })]);
 
-    expect(await screen.findByLabelText("Model")).toHaveTextContent("Haiku");
+    expect(await screen.findByLabelText("Model")).toHaveTextContent("Fable");
     await openMenu(user, "Model");
-    expect(screen.getByRole("menuitemcheckbox", { name: "Haiku" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("menuitemcheckbox", { name: "Fable" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("an alias or a dated id ticks the row it belongs to instead of growing a second one", async () => {
+    // settings.json stores "opus": the menu used to show Fable/Opus/Sonnet/Haiku AND a second,
+    // checked "Opus" underneath, because the id matched no row exactly.
+    serveSession({ model: "opus", modelLabel: "Opus" });
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10 })]);
+
+    await waitFor(() => expect(screen.getByLabelText("Model")).toHaveTextContent("Opus"));
+    const items = await openMenu(user, "Model");
+    expect(items.map((i) => i.textContent)).toEqual(["Fable", "Opus", "Sonnet", "Haiku"]);
+    expect(screen.getByRole("menuitemcheckbox", { name: "Opus" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("a switch the server could not apply yet says so instead of promising the conversation continues", async () => {
+    mockPatch.mockResolvedValue({ card: card({ openedAt: 10, model: "claude-opus-5" }), session: "pending" });
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10 })]);
+
+    await openMenu(user, "Model");
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Opus" }));
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/takes effect the moment Claude finishes/i)),
+    );
   });
 
   it("names the account in USE on the pill, with no (default) or (inherited) suffix", async () => {
