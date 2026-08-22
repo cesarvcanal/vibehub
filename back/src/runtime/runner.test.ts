@@ -170,4 +170,10 @@ describe("buildSetupScript", () => {
     expect(script).toContain("tmux-256color");
     expect(script).toContain("status off");
   });
+
+  it("sizes a tmux window to the LATEST client, not the smallest — a second tab must not leave a dead band", () => {
+    const script = buildSetupScript(base);
+    expect(script).toContain("window-size latest");
+    expect(script).toContain("aggressive-resize on");
+  });
 });

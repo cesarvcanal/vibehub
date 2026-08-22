@@ -176,7 +176,10 @@ export function buildSetupScript(opts: {
     "grep -q C.UTF-8 /root/.bashrc 2>/dev/null || printf 'export LANG=C.UTF-8\\nexport LC_ALL=C.UTF-8\\n' >> /root/.bashrc",
     // tmux: truecolor (otherwise Claude's orange degrades to ANSI red), focus events, scrollback,
     // and no status bar — vibehub already shows card state, the green bar was just noise.
-    "printf 'set -g default-terminal \"tmux-256color\"\\nset -ga terminal-overrides \",xterm*:Tc\"\\nset -g focus-events on\\nset -g history-limit 50000\\nset -g status off\\n' > /root/.tmux.conf",
+    // window-size latest: a session may have two clients at once (a second tab, the phone). tmux's
+    // default sizes the window to the SMALLEST of them, which shows up as a dead band of empty space
+    // at the bottom of the big one. Size to whoever touched it last instead.
+    "printf 'set -g default-terminal \"tmux-256color\"\\nset -ga terminal-overrides \",xterm*:Tc\"\\nset -g focus-events on\\nset -g history-limit 50000\\nset -g status off\\nset -g window-size latest\\nset -g aggressive-resize on\\n' > /root/.tmux.conf",
     `git config --global user.name ${shQuote(git.name)}`,
     `git config --global user.email ${shQuote(git.email)}`,
     "git config --global --add safe.directory '*'",
