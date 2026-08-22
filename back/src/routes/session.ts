@@ -3,10 +3,11 @@ import type { IPty } from "node-pty";
 import pty from "node-pty";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
-import { requireSession } from "../auth/session.js";
+import { requireSession, sessionUserId } from "../auth/session.js";
 import * as registry from "../services/board/registry.js";
 import * as workspace from "../services/board/workspace.js";
 import * as browser from "../services/browser/browser.js";
+import * as outbox from "../services/board/outbox.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -43,6 +44,13 @@ export function disableNagle(socket: unknown): boolean {
     return false; // the socket is already closing
   }
 }
+
+/**
+ * How long after a terminal attaches the outbox is flushed. Claude Code has to boot and draw its
+ * prompt before a `send-keys` means anything; three seconds is the gap between "the session exists"
+ * and "the agent is listening".
+ */
+export const OUTBOX_ATTACH_DELAY_MS = 3_000;
 
 /** Terminal geometry the runner will accept: an integer between 10 and 500. */
 export function isValidTermSize(n: unknown): n is number {
@@ -192,6 +200,50 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  /* --------------------------------------------------------------- messages */
+
+  /**
+   * The composer's Enter. It does NOT type into the websocket any more: the message is handed to
+   * the OUTBOX, which delivers it to a RUNNING Claude or keeps it queued until there is one. A
+   * card whose agent has exited (the pane fell back to `exec bash`) or whose session does not exist
+   * yet used to swallow whatever you sent it — see services/board/outbox.ts.
+   */
+  app.post<{ Params: { id: string }; Body: { text?: string } }>(
+    "/api/cards/:id/messages", { preHandler: requireSession },
+    async (req, reply) => {
+      try {
+        const by = (await sessionUserId(req)) ?? undefined;
+        return await reply.send(await outbox.queueMessage(req.params.id, String(req.body?.text ?? ""), by));
+      } catch (err) {
+        const message = (err as Error).message;
+        return await reply.code(/not found/i.test(message) ? 404 : 400).send({ error: message });
+      }
+    },
+  );
+
+  /** What is still waiting for this card, and whether the agent is up to receive it. */
+  app.get<{ Params: { id: string } }>(
+    "/api/cards/:id/messages", { preHandler: requireSession },
+    async (req, reply) => {
+      try {
+        return await reply.send(await outbox.outboxStatus(req.params.id));
+      } catch (err) {
+        const message = (err as Error).message;
+        return await reply.code(/not found/i.test(message) ? 404 : 502).send({ error: message });
+      }
+    },
+  );
+
+  /** Gives up on a queued message (the ✕ on a pending chip). */
+  app.delete<{ Params: { id: string; messageId: string } }>(
+    "/api/cards/:id/messages/:messageId", { preHandler: requireSession },
+    async (req, reply) => {
+      const removed = await outbox.cancelMessage(req.params.id, req.params.messageId);
+      if (!removed) return await reply.code(404).send({ error: "message not found" });
+      return await reply.send({ ok: true });
+    },
+  );
+
   /* ---------------------------------------------------------------- browser */
 
   app.post<{ Params: { id: string } }>("/api/cards/:id/browser", { preHandler: requireSession }, async (req, reply) => {
@@ -260,6 +312,15 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       });
       logger.info({ card: card.worktreeSlug, shell }, "terminal attached");
       bridgePty(socket, term, card.worktreeSlug);
+
+      // A terminal attaching is the moment a dead session comes back: `tmux new-session -A`
+      // recreates it with Claude inside, so anything queued for this card can go now. Delayed, and
+      // fire-and-forget — the agent needs a moment to reach its prompt, and the socket must not
+      // wait on a docker exec either way.
+      if (!shell) {
+        const flush = setTimeout(() => void outbox.flushCard(card.id), OUTBOX_ATTACH_DELAY_MS);
+        socket.on("close", () => clearTimeout(flush));
+      }
 
       // Writing into a paused or finished card revives it — the same rule a status hook follows,
       // applied here because the websocket is how a human actually shows up.

@@ -353,6 +353,23 @@ export const ptBR: Record<string, string> = {
   "composer.recordHint": "Gravar uma mensagem — ela é transcrita no campo, não enviada",
   "composer.voiceUnavailable":
     "Entrada por voz não configurada — adicione uma chave da OpenAI em Configurações",
+  "composer.pastedImage": "imagem colada",
+  "composer.uploadFailed": "falhou",
+  "composer.removeImage": "Tirar {name} da mensagem",
+  "composer.sendingAfterUpload": "enviando assim que a imagem subir…",
+
+  /* ----------------------------------------------------------------- outbox */
+  "outbox.waitingSession.one":
+    "1 mensagem na fila — abra o card pra subir o terminal e ela vai sozinha",
+  "outbox.waitingSession.other":
+    "{n} mensagens na fila — abra o card pra subir o terminal e elas vão sozinhas",
+  "outbox.waitingAgent.one": "1 mensagem na fila — o Claude não está rodando nesse terminal",
+  "outbox.waitingAgent.other": "{n} mensagens na fila — o Claude não está rodando nesse terminal",
+  "outbox.waitingDelivery.one": "1 mensagem na fila — entregando…",
+  "outbox.waitingDelivery.other": "{n} mensagens na fila — entregando…",
+  "outbox.cancel": "Tirar essa mensagem da fila",
+  "outbox.cancelError": "Não deu pra tirar essa mensagem da fila",
+  "outbox.sendError": "Não deu pra enviar — a mensagem continua no campo",
 
   /* --------------------------------------------------------------- terminal */
   "terminal.aria": "Terminal",

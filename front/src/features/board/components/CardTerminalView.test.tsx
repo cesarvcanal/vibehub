@@ -113,6 +113,10 @@ function serve() {
     if (url === "/cards/c1/session") {
       return Promise.resolve({ model: null, modelLabel: null, account: { slug: null, name: "" } });
     }
+    // The outbox: empty, which is the normal state and renders nothing at all.
+    if (/^\/cards\/[^/]+\/messages$/.test(url)) {
+      return Promise.resolve({ pending: [], agent: "running" });
+    }
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
 }
@@ -208,6 +212,74 @@ describe("CardTerminalView — instant open", () => {
     // No cache seed at all: this is a refresh or a pasted link.
     renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
     expect(await screen.findByTestId("xterm")).toBeInTheDocument();
+  });
+});
+
+describe("CardTerminalView — composing a message", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    serve();
+  });
+
+  it("hands Enter to the card's OUTBOX rather than typing it into the socket", async () => {
+    mockPost.mockResolvedValue({ delivered: true, pending: [], agent: "running" });
+    renderWithCache([card({ openedAt: 10 })]);
+    await screen.findByTestId("xterm");
+
+    await userEvent.type(screen.getByTestId("terminal-composer").querySelector("textarea") as HTMLTextAreaElement, "run the tests{Enter}");
+
+    await waitFor(() =>
+      expect(mockPost).toHaveBeenCalledWith("/cards/c1/messages", { text: "run the tests" }),
+    );
+  });
+
+  it("shows what could not be delivered, with the reason", async () => {
+    mockPost.mockResolvedValue({
+      delivered: false,
+      pending: [{ id: "m1", text: "run the tests", createdAt: 1, attempts: 0 }],
+      agent: "shell",
+    });
+    renderWithCache([card({ openedAt: 10 })]);
+    await screen.findByTestId("xterm");
+
+    await userEvent.type(screen.getByTestId("terminal-composer").querySelector("textarea") as HTMLTextAreaElement, "run the tests{Enter}");
+
+    // The message left the field and is visibly waiting instead of having vanished into a shell.
+    expect(await screen.findByTestId("card-outbox")).toHaveTextContent(/run the tests/);
+  });
+
+  it("lets you write while the card is still being prepared — it queues", async () => {
+    let resolveOpen: (value: unknown) => void = () => {};
+    mockPost.mockImplementation((url: string) => {
+      if (url === "/cards/c1/messages") {
+        return Promise.resolve({
+          delivered: false,
+          pending: [{ id: "m1", text: "start with the schema", createdAt: 1, attempts: 0 }],
+          agent: "none",
+        });
+      }
+      return new Promise((resolve) => (resolveOpen = resolve));
+    });
+
+    renderWithCache([card({ column: "backlog" })]);
+    await screen.findByText(/Preparing the worktree and session/i);
+
+    const box = screen.getByTestId("terminal-composer").querySelector("textarea") as HTMLTextAreaElement;
+    await userEvent.type(box, "start with the schema{Enter}");
+
+    await waitFor(() =>
+      expect(mockPost).toHaveBeenCalledWith("/cards/c1/messages", { text: "start with the schema" }),
+    );
+    expect(await screen.findByTestId("card-outbox")).toHaveTextContent(/start with the schema/);
+    resolveOpen({ card: card({ openedAt: 10 }) });
+  });
+
+  it("the COMPOSER takes the keyboard when the card opens, not the terminal", async () => {
+    mockPost.mockResolvedValue({ card: card({ openedAt: 10 }) });
+    renderWithCache([card({ openedAt: 10 })]);
+    await screen.findByTestId("xterm");
+    const box = screen.getByTestId("terminal-composer").querySelector("textarea");
+    await waitFor(() => expect(document.activeElement).toBe(box));
   });
 });
 

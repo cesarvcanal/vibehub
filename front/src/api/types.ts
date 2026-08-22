@@ -319,6 +319,32 @@ export interface UploadResult {
   path: string;
 }
 
+/* --------------------------------------------------------------- outbox */
+
+/** What the agent's pane is running — see the server's services/board/outbox.ts. */
+export type AgentState = "running" | "shell" | "none";
+
+/** A composed message the server accepted but could not deliver yet. */
+export interface OutboxMessage {
+  id: string;
+  text: string;
+  createdAt: number;
+  /** Failed delivery attempts. > 0 = it is not merely waiting, it is struggling. */
+  attempts: number;
+  lastError?: string;
+}
+
+/** `GET /api/cards/:id/messages` and the answer to a `POST`. */
+export interface OutboxStatus {
+  pending: OutboxMessage[];
+  agent: AgentState;
+}
+
+export interface QueueMessageResult extends OutboxStatus {
+  /** true = it went straight into the agent's prompt; false = it is waiting in `pending`. */
+  delivered: boolean;
+}
+
 /* ------------------------------------------------- accounts, mcps, brain */
 
 /**

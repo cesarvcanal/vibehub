@@ -7,10 +7,15 @@ import {
   TerminalComposer,
   appendFragment,
   barHeights,
+  composeMessage,
   formatElapsed,
   imageFiles,
+  isEmptyDraft,
   levelFromTimeDomain,
+  loadDraft,
   pickAudioMimeType,
+  resetDraftsForTesting,
+  saveDraft,
 } from "./TerminalComposer";
 import { get, post } from "@/lib/api";
 import { MOBILE_QUERY } from "@/lib/useIsMobile";
@@ -36,6 +41,10 @@ vi.mock("sonner", () => ({
 
 const mockGet = vi.mocked(get);
 const mockPost = vi.mocked(post);
+
+// Drafts survive an unmount ON PURPOSE (that is the feature), so they also survive a test. Every
+// test starts from an empty field.
+beforeEach(() => resetDraftsForTesting());
 
 /** The composer only needs a query cache; the rest of the shell is not its business. */
 function renderComposer(ui: ReactElement) {
@@ -63,6 +72,60 @@ describe("imageFiles", () => {
     const data = { items: [], files: [png, txt] } as unknown as DataTransfer;
     expect(imageFiles(data)).toEqual([png]);
     expect(imageFiles(null)).toEqual([]);
+  });
+});
+
+describe("composeMessage", () => {
+  const ready = { id: "a", name: "shot.png", path: "/work/.uploads/c/shot.png", status: "ready" as const };
+
+  it("puts the paths after the words, so the sentence still reads like one", () => {
+    expect(composeMessage("look at this", [ready])).toBe("look at this /work/.uploads/c/shot.png");
+    expect(composeMessage("  ", [ready])).toBe("/work/.uploads/c/shot.png");
+  });
+
+  it("leaves out what did not upload — a failed image is not part of the message", () => {
+    const failed = { id: "b", name: "x.png", status: "error" as const };
+    const flying = { id: "c", name: "y.png", status: "uploading" as const };
+    expect(composeMessage("hi", [failed, flying])).toBe("hi");
+  });
+});
+
+describe("isEmptyDraft", () => {
+  it("is empty only when there is neither a word nor an image worth sending", () => {
+    expect(isEmptyDraft("   ", [])).toBe(true);
+    expect(isEmptyDraft("   ", [{ id: "a", name: "x.png", status: "error" }])).toBe(true);
+    expect(isEmptyDraft("hi", [])).toBe(false);
+    expect(isEmptyDraft("", [{ id: "a", name: "x.png", status: "uploading" }])).toBe(false);
+  });
+});
+
+describe("drafts", () => {
+  beforeEach(() => resetDraftsForTesting());
+
+  it("remembers a card's unsent field and gives it back", () => {
+    saveDraft("card-1", "half a thought", []);
+    expect(loadDraft("card-1").text).toBe("half a thought");
+    expect(loadDraft("card-2").text).toBe("");
+  });
+
+  it("only stores the images that finished — a blob preview cannot survive a reload", () => {
+    saveDraft("card-1", "with images", [
+      { id: "a", name: "done.png", path: "/work/.uploads/c/done.png", previewUrl: "blob:x", status: "ready" },
+      { id: "b", name: "flying.png", previewUrl: "blob:y", status: "uploading" },
+    ]);
+    const stored = JSON.parse(localStorage.getItem("vibehub.composerDrafts") ?? "{}") as Record<
+      string,
+      { attachments: { name: string }[] }
+    >;
+    expect(stored["card-1"]?.attachments.map((a) => a.name)).toEqual(["done.png"]);
+    // In this session the live draft still has both, previews included.
+    expect(loadDraft("card-1").attachments).toHaveLength(2);
+  });
+
+  it("an empty field is not a draft — it clears the card instead of storing nothing", () => {
+    saveDraft("card-1", "something", []);
+    saveDraft("card-1", "   ", []);
+    expect(loadDraft("card-1").text).toBe("");
   });
 });
 
@@ -106,12 +169,12 @@ describe("TerminalComposer", () => {
     mockGet.mockResolvedValue({ available: false, proofread: false, language: null });
   });
 
-  it("sends on Enter with a carriage return and clears the field", async () => {
+  it("sends the message on Enter — the text, not a keystroke — and clears the field", async () => {
     const onSend = vi.fn();
     renderComposer(<TerminalComposer onSend={onSend} />);
     const box = screen.getByRole("textbox", { name: /enter sends/i });
     await userEvent.type(box, "run the tests{Enter}");
-    expect(onSend).toHaveBeenCalledWith("run the tests\r");
+    expect(onSend).toHaveBeenCalledWith("run the tests");
     expect(box).toHaveValue("");
   });
 
@@ -142,7 +205,7 @@ describe("TerminalComposer", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("a pasted image is uploaded and its path accumulates — nothing is sent by itself", async () => {
+  it("a pasted image shows up AS AN IMAGE, not as a path in the field", async () => {
     const onSend = vi.fn();
     const onUploadImage = vi.fn(async () => "/work/.uploads/c1/shot.png");
     renderComposer(<TerminalComposer onSend={onSend} onUploadImage={onUploadImage} />);
@@ -150,9 +213,99 @@ describe("TerminalComposer", () => {
     await userEvent.type(box, "look at this");
     const png = new File(["x"], "shot.png", { type: "image/png" });
     fireEvent.paste(box, { clipboardData: { items: [], files: [png] } });
-    await waitFor(() => expect(box).toHaveValue("look at this /work/.uploads/c1/shot.png"));
+
+    // The thumbnail is there in the same beat as the paste — the upload runs behind it.
+    expect(await screen.findByTestId("composer-attachment")).toBeInTheDocument();
     expect(onUploadImage).toHaveBeenCalledWith(png);
+    // What was typed is untouched: the runner path is not copy for a human to read.
+    expect(box).toHaveValue("look at this");
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("the path only exists at send time, appended to the message", async () => {
+    const onSend = vi.fn();
+    const onUploadImage = vi.fn(async () => "/work/.uploads/c1/shot.png");
+    renderComposer(<TerminalComposer onSend={onSend} onUploadImage={onUploadImage} />);
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "look at this");
+    fireEvent.paste(box, {
+      clipboardData: { items: [], files: [new File(["x"], "shot.png", { type: "image/png" })] },
+    });
+    await screen.findByTestId("composer-attachment");
+    await waitFor(() =>
+      expect(screen.getByTestId("composer-attachment").dataset.status).toBe("ready"),
+    );
+
+    await userEvent.type(box, "{Enter}");
+    expect(onSend).toHaveBeenCalledWith("look at this /work/.uploads/c1/shot.png");
+    // Sent means gone: the field AND the strip are empty again.
+    expect(box).toHaveValue("");
+    expect(screen.queryByTestId("composer-attachment")).not.toBeInTheDocument();
+  });
+
+  it("Enter during an upload waits for the image instead of sending half the message", async () => {
+    const onSend = vi.fn();
+    let land = (_path: string | null): void => undefined;
+    const onUploadImage = vi.fn(() => new Promise<string | null>((resolve) => (land = resolve)));
+    renderComposer(<TerminalComposer onSend={onSend} onUploadImage={onUploadImage} />);
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "here");
+    fireEvent.paste(box, {
+      clipboardData: { items: [], files: [new File(["x"], "shot.png", { type: "image/png" })] },
+    });
+    await screen.findByTestId("composer-attachment");
+
+    await userEvent.type(box, "{Enter}");
+    expect(onSend).not.toHaveBeenCalled(); // the image is still flying
+    expect(screen.getByTestId("composer-waiting-upload")).toBeInTheDocument();
+
+    land("/work/.uploads/c1/shot.png");
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("here /work/.uploads/c1/shot.png"));
+  });
+
+  it("an image that failed to upload can be dropped, and never joins the message", async () => {
+    const onSend = vi.fn();
+    const onUploadImage = vi.fn(async () => null);
+    renderComposer(<TerminalComposer onSend={onSend} onUploadImage={onUploadImage} />);
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "look");
+    fireEvent.paste(box, {
+      clipboardData: { items: [], files: [new File(["x"], "shot.png", { type: "image/png" })] },
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("composer-attachment").dataset.status).toBe("error"),
+    );
+
+    await userEvent.type(box, "{Enter}");
+    expect(onSend).toHaveBeenCalledWith("look");
+
+    fireEvent.paste(box, {
+      clipboardData: { items: [], files: [new File(["x"], "again.png", { type: "image/png" })] },
+    });
+    await screen.findByTestId("composer-attachment");
+    await userEvent.click(screen.getByTestId("composer-attachment-remove"));
+    expect(screen.queryByTestId("composer-attachment")).not.toBeInTheDocument();
+  });
+
+  it("keeps the message in the field when the send is refused", async () => {
+    const onSend = vi.fn().mockRejectedValue(new Error("no runner"));
+    renderComposer(<TerminalComposer onSend={onSend} />);
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "do not lose me{Enter}");
+    await waitFor(() => expect(onSend).toHaveBeenCalled());
+    expect(box).toHaveValue("do not lose me");
+  });
+
+  it("keeps a half-written message per card while you look at another one", async () => {
+    const { rerender } = renderComposer(<TerminalComposer onSend={vi.fn()} cardId="card-a" />);
+    await userEvent.type(screen.getByRole("textbox"), "half a thought");
+
+    rerender(<TerminalComposer onSend={vi.fn()} cardId="card-b" />);
+    expect(screen.getByRole("textbox")).toHaveValue(""); // another card, another field
+
+    await userEvent.type(screen.getByRole("textbox"), "something else");
+    rerender(<TerminalComposer onSend={vi.fn()} cardId="card-a" />);
+    await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("half a thought"));
   });
 
   it("a pasted plain text goes through the textarea's own paste", async () => {
@@ -376,8 +529,9 @@ describe("TerminalComposer — on a phone", () => {
   it("centres the microphone against the field instead of hanging it off the bottom", () => {
     renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
     // The field grows with the text; a bottom-aligned 48px circle drifts away from it as it does.
-    expect(screen.getByTestId("terminal-composer").className).toContain("items-center");
-    expect(screen.getByTestId("terminal-composer").className).not.toContain("items-end");
+    // (The composer's own box is a column now — the attachments sit above this row.)
+    expect(screen.getByTestId("composer-row").className).toContain("items-center");
+    expect(screen.getByTestId("composer-row").className).not.toContain("items-end");
   });
 
   it("still sends on Enter, which is now the only way", async () => {
@@ -385,6 +539,6 @@ describe("TerminalComposer — on a phone", () => {
     const onSend = vi.fn();
     renderComposer(<TerminalComposer onSend={onSend} />);
     await user.type(screen.getByRole("textbox"), "deploy{Enter}");
-    expect(onSend).toHaveBeenCalledWith("deploy\r");
+    expect(onSend).toHaveBeenCalledWith("deploy");
   });
 });

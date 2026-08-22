@@ -351,6 +351,21 @@ export const en: Record<string, string> = {
   "composer.record": "Record a message",
   "composer.recordHint": "Record a message — it is transcribed into the field, not sent",
   "composer.voiceUnavailable": "Voice input is not configured — add an OpenAI key in Settings",
+  "composer.pastedImage": "pasted image",
+  "composer.uploadFailed": "failed",
+  "composer.removeImage": "Remove {name} from the message",
+  "composer.sendingAfterUpload": "sending as soon as the image lands…",
+
+  /* ----------------------------------------------------------------- outbox */
+  "outbox.waitingSession.one": "1 message queued — open the card and it goes on its own",
+  "outbox.waitingSession.other": "{n} messages queued — open the card and they go on their own",
+  "outbox.waitingAgent.one": "1 message queued — Claude is not running in that terminal",
+  "outbox.waitingAgent.other": "{n} messages queued — Claude is not running in that terminal",
+  "outbox.waitingDelivery.one": "1 message queued — delivering…",
+  "outbox.waitingDelivery.other": "{n} messages queued — delivering…",
+  "outbox.cancel": "Drop this message from the queue",
+  "outbox.cancelError": "Could not drop that message from the queue",
+  "outbox.sendError": "Could not send — the message is still in the field",
 
   /* --------------------------------------------------------------- terminal */
   "terminal.aria": "Terminal",

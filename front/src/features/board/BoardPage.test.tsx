@@ -135,6 +135,10 @@ function serve(overrides: { cards?: BoardCard[]; projects?: BoardProject[] } = {
       });
     }
     if (url === "/github") return Promise.resolve({ connected: true, login: "operator" });
+    if (/^\/cards\/[^/]+\/messages$/.test(url)) return Promise.resolve({ pending: [], agent: "running" });
+    if (/^\/cards\/[^/]+\/session$/.test(url)) {
+      return Promise.resolve({ model: null, modelLabel: null, account: { slug: null, name: "" } });
+    }
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
 }
