@@ -39,6 +39,9 @@ import { Minus, Plus } from "lucide-react";
  */
 
 /** What a parent can ask the terminal to do without reaching into xterm. */
+/** Must match the face index.css loads from Google Fonts — see the fontFamily note below. */
+export const TERMINAL_FONT_FAMILY = '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace';
+
 export interface XTerminalHandle {
   /** Types text into the session as if it came from the keyboard (a composer, a transcription). */
   sendText(text: string): void;
@@ -239,8 +242,11 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
       allowProposedApi: true,
       convertEol: false,
       cursorBlink: true,
-      fontFamily:
-        'var(--font-mono), ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace',
+      // A LITERAL family list, never a CSS variable: xterm measures cells with canvas `ctx.font`,
+      // which cannot resolve `var(--font-mono)` — the whole string is rejected, the canvas falls
+      // back to its default face for measuring, and every glyph is then drawn into a cell sized for
+      // a different font: wide letter-spacing, squashed height, and a zoom that changes nothing.
+      fontFamily: TERMINAL_FONT_FAMILY,
       // Restored from the last session: how big a terminal should be is about the reader and the
       // screen, not about this card.
       fontSize: readTerminalFontSize(TERMINAL_FONT_DEFAULT),
@@ -258,6 +264,23 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
     fitRef.current = fit;
     term.loadAddon(fit);
     term.open(host);
+
+    // The webfont may land after the first measurement; xterm only re-measures when a font option
+    // changes, so nudge it (assigning the same family still triggers a re-measure) and refit.
+    const onFontsLoaded = (): void => {
+      if (termRef.current !== term) return;
+      term.options.fontFamily = TERMINAL_FONT_FAMILY;
+      try {
+        fit.fit();
+      } catch {
+        /* not measurable yet */
+      }
+    };
+    const fonts = typeof document !== "undefined" ? (document as Document & { fonts?: FontFaceSet }).fonts : undefined;
+    if (fonts) {
+      void fonts.ready.then(onFontsLoaded).catch(() => undefined);
+      fonts.addEventListener?.("loadingdone", onFontsLoaded);
+    }
 
     /* ------------------------------------------------------------- renderer */
 
@@ -591,6 +614,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
       } catch {
         /* already disposing */
       }
+      fonts?.removeEventListener?.("loadingdone", onFontsLoaded);
       termRef.current = null;
       fitRef.current = null;
       socketRef.current = null;

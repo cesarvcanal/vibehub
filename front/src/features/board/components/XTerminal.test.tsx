@@ -705,3 +705,12 @@ describe("XTerminal — handle and zoom control", () => {
     expect(screen.queryByTestId("terminal-zoom")).toBeNull();
   });
 });
+
+describe("XTerminal — font measurement", () => {
+  it("hands xterm a literal font family — a CSS variable would break canvas measurement", () => {
+    render(<XTerminal wsPath="/api/cards/c1/terminal" />);
+    const family = String(term().options.fontFamily);
+    expect(family).not.toContain("var(");
+    expect(family).toContain("JetBrains Mono");
+  });
+});
