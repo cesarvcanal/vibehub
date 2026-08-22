@@ -18,6 +18,7 @@ import { sessionRoutes } from "./routes/session.js";
 import { agentRoutes } from "./routes/agent.js";
 import { mcpRoutes } from "./routes/mcp.js";
 import { cardSessionRoutes } from "./routes/cardSession.js";
+import { chatRoutes } from "./routes/chat.js";
 import { accountLoginRoutes } from "./routes/accountLogin.js";
 
 /**
@@ -52,6 +53,7 @@ export async function buildServer() {
   await app.register(agentRoutes);
   await app.register(mcpRoutes);
   await app.register(cardSessionRoutes);
+  await app.register(chatRoutes);
   await app.register(accountLoginRoutes);
 
   const staticDir = process.env.VIBEHUB_STATIC_DIR

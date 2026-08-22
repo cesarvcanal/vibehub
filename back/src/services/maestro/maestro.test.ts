@@ -138,6 +138,9 @@ describe("buildSendKeysScript", () => {
     const script = maestro.buildSendKeysScript("c", "s", "press Enter twice");
     expect(script).toContain("send-keys -t \"$1\" -l --");
     expect(script).toContain('tmux send-keys -t "$1" Enter'); // the real submit, separate
+    // ...and after the TUI's paste window, or the Enter is swallowed INTO the paste and the
+    // message sits there typed but unsent.
+    expect(script).toContain("sleep 0.15");
   });
 
   it("refuses text that would close the heredoc early", async () => {
@@ -306,7 +309,13 @@ describe("session introspection", () => {
     const c = await registry.createCard({ projectId: p.id, title: "x" });
     runScript.mockResolvedValueOnce({ stdout: line({ type: "assistant", message: { model: "claude-opus-5", content: [] } }), stderr: "" });
     const info = await maestro.sessionInfo(c.id);
-    expect(info).toEqual({ model: "claude-opus-5", modelLabel: "Opus", account: { slug: acct.slug, name: "Tech" } });
+    expect(info).toEqual({
+      model: "claude-opus-5",
+      modelLabel: "Opus",
+      account: { slug: acct.slug, name: "Tech" },
+      // A card that was never opened has no session for the chat to be waiting on.
+      situation: "no session",
+    });
     runScript.mockRejectedValueOnce(new Error("runner down"));
     expect((await maestro.sessionInfo(c.id)).model).toBeNull();
   });
