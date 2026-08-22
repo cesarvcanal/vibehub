@@ -87,8 +87,10 @@ connection #1 (label = its login) and the secret moves to `GITHUB_TOKEN_<id>`. I
 | POST | `/api/accounts` | `{ name }` → creates the account; the profile directory slug is derived from it |
 | DELETE | `/api/accounts/:slug` | |
 | GET | `/api/accounts/tokens` | `{ bySlug, defaultHasToken }` — which accounts have a long-lived token |
+| GET | `/api/accounts/usage` | `{ bySlug: { <slug>: AccountUsage }, fetchedAt }` — plan usage per account (see below) |
 | POST | `/api/accounts/:slug/token` | `{ token }` — long-lived Claude token, stored in the vault, planted in every runner profile |
 | DELETE | `/api/accounts/:slug/token` | |
+| WS | `/api/accounts/:slug/login-terminal` | interactive `claude /login` terminal for that profile (`default` = the built-in one) — writes the refreshable credentials the usage meter reads |
 | GET | `/api/mcps` | `{ mcps: Mcp[] }` — `{ id, name, kind: "stdio"\|"http"\|"sse", command?, args?, url?, envKeys?, headerKeys? }` |
 | POST | `/api/mcps` | `{ name, kind, command?, args?, url?, envKeys?, headerKeys? }` — names only; values go in one at a time |
 | GET | `/api/mcps/secrets` | `{ byMcp: { [mcpId]: { [name]: boolean } } }` — which declared secrets already have a value |
@@ -105,6 +107,46 @@ connection #1 (label = its login) and the secret moves to `GITHUB_TOKEN_<id>`. I
 | POST | `/api/import` | `{ items: [{ repo, title, sessionId, branch?, column? }], stageDir? }` — adopt staged Claude sessions as cards |
 | GET | `/api/cards/:id/session` | `{ model, modelLabel, account: { slug, name } }` — what the session is REALLY using: model from the last assistant turn, effective account |
 | GET | `/api/cards/:id/paths` | where the card maps to inside the runner (debugging an import) |
+
+### `AccountUsage` — how much of the plan is gone
+
+`GET /api/accounts/usage` answers `{ bySlug, fetchedAt }`, with one entry per account plus `default`
+for the runner's built-in profile:
+
+```jsonc
+{
+  "bySlug": {
+    "default": {
+      "available": true,
+      "fiveHour":     { "utilization": 31, "resetsAt": "2026-08-22T18:00:00Z" },
+      "sevenDay":     { "utilization": 12, "resetsAt": "2026-08-27T00:00:00Z" },
+      "sevenDayOpus": { "utilization": 74, "resetsAt": "2026-08-27T00:00:00Z" },
+      "fetchedAt": 1755880000000
+    },
+    "tech": { "available": false, "error": "no_credentials", "fetchedAt": 1755880000000 }
+  },
+  "fetchedAt": 1755880000000
+}
+```
+
+`utilization` is a percentage (0..100) of the plan window; `resetsAt` is when it empties again.
+`stale: true` means the numbers are the last good reading, served while the endpoint is backed off —
+`fetchedAt` says how old they are, and `retryAt` when the next call will be attempted.
+
+The route NEVER fails: everything that can go wrong becomes a per-account `error`.
+
+| `error` | Meaning | What fixes it |
+|---|---|---|
+| `no_credentials` | the profile has no `claudeAiOauth` block — an account set up only with a long-lived `setup-token` never logged in interactively | open the runner shell and run `CLAUDE_CONFIG_DIR=<profile> claude`, then `/login`, once |
+| `rate_limited` | the usage endpoint is throttling **vibehub** (it throttles by caller, not by account) | nothing — the service backs off 2min → 30min and keeps serving the last good value |
+| `unauthorized` | there is a token, but it cannot read usage (missing `user:profile` scope, or expired) | log in again in that profile |
+| `unreachable` | the runner is down, or the endpoint answered something else | check the runner |
+
+Numbers come from `GET https://api.anthropic.com/api/oauth/usage` with the profile's **Claude Code
+access token**, read read-only out of `<profile>/.credentials.json` in the runner, used for one call
+and dropped. The token is never logged, never returned and never stored on the vibehub side. The
+long-lived `setup-token` in the vault is NOT accepted by that endpoint and is never used here.
+Readings are cached 60s per account and the accounts are polled in series.
 
 ## MCP — the board, from inside a card
 
