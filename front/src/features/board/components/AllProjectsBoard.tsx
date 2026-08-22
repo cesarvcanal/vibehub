@@ -49,10 +49,13 @@ export function AllProjectsBoard({
   projects,
   onOpenCard,
   headerExtra,
+  headerLead,
 }: {
   projects: BoardProject[];
   onOpenCard: (card: BoardCard) => void;
   headerExtra?: React.ReactNode;
+  /** Rendered FIRST in the header row — where the phone's drawer handle lives. */
+  headerLead?: React.ReactNode;
 }) {
   const t = useT();
   const queryClient = useQueryClient();
@@ -126,6 +129,7 @@ export function AllProjectsBoard({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
+        {headerLead}
         <span className="mr-auto text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
           {t("board.cards", { n: cards.length })} · {t("board.projects", { n: projects.length })}
         </span>

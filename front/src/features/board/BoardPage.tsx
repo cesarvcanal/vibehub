@@ -212,19 +212,22 @@ export function BoardPage() {
   );
 
   /**
-   * The drawer's handle, below `lg`. It is the FIRST child of both trees on purpose: React
-   * reconciles by type and position, so if the two branches diverged before the sidebar, the
-   * sidebar would unmount and remount — losing its scroll and restarting its poll — every time you
-   * opened or closed a card.
+   * The drawer's handle, below `lg`.
+   *
+   * It used to be a labelled row of its own above everything, and on a phone that row was a whole
+   * line of height spent on a button — with a second handle already sitting in the card bar doing
+   * the same job. So it moved INTO the board's header row, beside the card count, as an icon: one
+   * handle per screen, no line of its own, and the card view has its own in the bar.
    */
   const menuButton = (
     <button
       type="button"
       onClick={() => setMenuOpen(true)}
       aria-label={t("board.openMenu")}
-      className="mb-1 flex items-center gap-2 self-start rounded-lg border border-border/60 bg-card/50 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground lg:hidden"
+      title={t("board.projectsButton")}
+      className="-ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:hidden"
     >
-      <Menu className="h-4 w-4" /> {t("board.projectsButton")}
+      <Menu className="h-4 w-4" />
     </button>
   );
 
@@ -289,7 +292,9 @@ export function BoardPage() {
           className="flex min-h-[420px] flex-col gap-3 lg:flex-row lg:items-stretch"
           style={{ height: cardViewHeight(undefined, isMobile) }}
         >
-          {menuButton}
+          {/* The handle is the card bar's, not the page's — see `menuButton`. The slot stays so
+              React keeps reconciling the sidebar against the sidebar across the two branches. */}
+          {null}
           {sidebar}
           {/* Keyed by card: switching cards tears the socket down and opens the next one cleanly. */}
           <CardTerminalView
@@ -336,7 +341,7 @@ export function BoardPage() {
         // `lg:items-start` — the sidebar is as tall as its own content here, not as tall as the
         // board beside it.
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
-          {menuButton}
+          {null}
           {sidebar}
 
           <div className="min-w-0 flex-1">
@@ -346,6 +351,7 @@ export function BoardPage() {
                 onOpenCard={(card) => go(selected.id, card.id)}
                 onNewCard={() => setNewCardProject(selected)}
                 headerExtra={headerExtra}
+                headerLead={menuButton}
               />
             ) : (
               // Nothing selected: every project's cards at once. Opening one goes to ITS project.
@@ -353,6 +359,7 @@ export function BoardPage() {
                 projects={projects}
                 onOpenCard={(card) => go(card.projectId, card.id)}
                 headerExtra={aggregateHeaderExtra}
+                headerLead={menuButton}
               />
             )}
           </div>

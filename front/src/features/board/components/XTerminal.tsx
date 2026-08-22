@@ -191,6 +191,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
   const t = useT();
   // The element xterm is opened on. It carries no styling of its own — see note 1 at the top.
   const hostRef = React.useRef<HTMLDivElement | null>(null);
+  const frameRef = React.useRef<HTMLDivElement | null>(null);
   const termRef = React.useRef<Terminal | null>(null);
   const socketRef = React.useRef<WebSocket | null>(null);
   const fitRef = React.useRef<FitAddon | null>(null);
@@ -582,6 +583,79 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
     host.addEventListener("dragover", onDragOver);
     host.addEventListener("drop", onDrop);
 
+    /* --------------------------------------------------------- touch scrolling */
+
+    /**
+     * Scrolling the scrollback with a FINGER.
+     *
+     * xterm does not do this. Its `.xterm-viewport` is a real `overflow-y: auto` div, which is why
+     * `touch-action: pan-y` looked like it should be enough — but the renderer (canvas or WebGL)
+     * covers it, swallows the gesture, and the viewport never sees a drag. On a desktop the wheel
+     * handler hides the problem; on a phone the result is a terminal whose history is unreachable,
+     * which is exactly what the owner hit.
+     *
+     * So the gesture is translated by hand: pixels of drag become ROWS, and rows go to
+     * `scrollLines`. The convention is the one every touch surface uses — the CONTENT FOLLOWS THE
+     * FINGER. Drag down and older output comes into view (`scrollLines` with a NEGATIVE count);
+     * drag up and you return towards the prompt.
+     *
+     * Capture phase on the OUTER frame, because the canvas below it is what would otherwise eat the
+     * event, and `preventDefault` so the drag scrolls the buffer instead of the page.
+     */
+    let touchY: number | null = null;
+    // Fractional rows left over between moves. Without it a slow drag is a sequence of sub-row
+    // deltas that each truncate to zero, and the terminal never moves at all.
+    let touchCarry = 0;
+
+    /** One row's height in pixels, from the fit measurement, with the live box as the fallback. */
+    const rowHeight = (): number => {
+      if (cell && cell.height > 0) return cell.height;
+      const rows = term.rows > 0 ? term.rows : 1;
+      const measured = host.clientHeight / rows;
+      return measured > 0 ? measured : 0;
+    };
+
+    const onTouchStart = (event: TouchEvent): void => {
+      // Two fingers is a pinch/zoom, and hijacking it would break the browser's own gestures.
+      if (event.touches.length !== 1) {
+        touchY = null;
+        return;
+      }
+      touchY = event.touches[0]?.clientY ?? null;
+      touchCarry = 0;
+    };
+
+    const onTouchMove = (event: TouchEvent): void => {
+      if (touchY === null || event.touches.length !== 1) return;
+      const y = event.touches[0]?.clientY;
+      if (typeof y !== "number") return;
+      const height = rowHeight();
+      if (height <= 0) return; // nothing measured yet: let the browser have the gesture
+      // Claimed either way, even on the frames that do not add up to a whole row — releasing it
+      // mid-drag hands the rest of the gesture to the page and the terminal jumps.
+      event.preventDefault();
+      touchCarry += (y - touchY) / height;
+      touchY = y;
+      const rows = Math.trunc(touchCarry);
+      if (rows === 0) return;
+      touchCarry -= rows;
+      // NEGATIVE is towards older output, which is where a downward drag goes.
+      term.scrollLines?.(-rows);
+    };
+
+    const endTouch = (): void => {
+      touchY = null;
+      touchCarry = 0;
+    };
+
+    // `passive: false` is what makes `preventDefault` legal on a touchmove — without it the browser
+    // ignores it and scrolls the page anyway.
+    const frame = frameRef.current ?? host;
+    frame.addEventListener("touchstart", onTouchStart, { capture: true, passive: true });
+    frame.addEventListener("touchmove", onTouchMove, { capture: true, passive: false });
+    frame.addEventListener("touchend", endTouch, { capture: true, passive: true });
+    frame.addEventListener("touchcancel", endTouch, { capture: true, passive: true });
+
     /* --------------------------------------------------- open after a real fit */
 
     // TWO frames, then a backstop. On the first frame the surrounding chrome (the card bar, the
@@ -608,6 +682,10 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
       host.removeEventListener("paste", onPaste, true);
       host.removeEventListener("dragover", onDragOver);
       host.removeEventListener("drop", onDrop);
+      frame.removeEventListener("touchstart", onTouchStart, true);
+      frame.removeEventListener("touchmove", onTouchMove, true);
+      frame.removeEventListener("touchend", endTouch, true);
+      frame.removeEventListener("touchcancel", endTouch, true);
       observer?.disconnect();
       input.dispose();
       resized.dispose();
@@ -651,6 +729,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
     // OUTER frame: all the padding, border and rounding live here. `group` is what reveals the zoom
     // control on hover.
     <div
+      ref={frameRef}
       data-testid="terminal-frame"
       className={cn(
         "group relative min-h-0 flex-1 overflow-hidden rounded-md border border-border/60 bg-[#0b0f14] p-2",

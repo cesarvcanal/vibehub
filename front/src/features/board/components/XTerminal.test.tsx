@@ -62,6 +62,10 @@ class FakeTerminal {
   focus(): void {
     this.focused += 1;
   }
+  scrolled: number[] = [];
+  scrollLines(amount: number): void {
+    this.scrolled.push(amount);
+  }
   dispose(): void {
     this.disposed = true;
   }
@@ -770,5 +774,97 @@ describe("XTerminal — submit and resize plumbing", () => {
     term().emitResize(100, 40);
     const frames = s.sent.slice(before).filter((m) => m.startsWith("{"));
     expect(frames.map((f) => JSON.parse(f))).toContainEqual({ type: "resize", cols: 100, rows: 40 });
+  });
+});
+
+/**
+ * The finger.
+ *
+ * `.xterm-viewport` is a real scroller, so `touch-action: pan-y` on it LOOKS like the whole fix —
+ * but the renderer's canvas sits on top and eats the drag, and the owner could not reach a single
+ * line of older output on his phone. The gesture is therefore translated by hand, and the
+ * convention asserted here is the one every touch surface uses: the content follows the finger.
+ */
+describe("XTerminal — touch scrolling", () => {
+  /** Dispatches a touch with the one property the handler reads. */
+  function touch(target: HTMLElement, type: string, ...clientYs: number[]): Event {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "touches", {
+      value: clientYs.map((clientY) => ({ clientY })),
+      configurable: true,
+    });
+    target.dispatchEvent(event);
+    return event;
+  }
+
+  /** A rendered terminal whose rows are a known 20px tall, plus its outer frame. */
+  async function ready(): Promise<{ frame: HTMLElement; t: FakeTerminal }> {
+    render(<XTerminal wsPath="/api/cards/c1/terminal" />);
+    (await socket()).accept();
+    const t = term();
+    Object.defineProperty(t.element!, "clientWidth", { value: 800, configurable: true });
+    Object.defineProperty(t.element!, "clientHeight", { value: 600, configurable: true });
+    observeResize(); // 600px over 30 rows -> a 20px row
+    return { frame: screen.getByTestId("terminal-frame"), t };
+  }
+
+  it("drags the buffer with the finger: down reveals OLDER output", async () => {
+    const { frame, t } = await ready();
+
+    touch(frame, "touchstart", 100);
+    touch(frame, "touchmove", 160); // 60px down over a 20px row = three rows
+
+    // Negative is towards the top of the scrollback — the older output the owner could not reach.
+    expect(t.scrolled).toEqual([-3]);
+    expect(t.scrolled[0]).toBeLessThan(0);
+  });
+
+  it("goes the other way on the way back, towards the prompt", async () => {
+    const { frame, t } = await ready();
+
+    touch(frame, "touchstart", 200);
+    touch(frame, "touchmove", 140);
+
+    expect(t.scrolled).toEqual([3]);
+  });
+
+  it("accumulates a slow drag instead of truncating every move to nothing", async () => {
+    const { frame, t } = await ready();
+
+    touch(frame, "touchstart", 100);
+    // Four moves of 8px: each is less than half a row, and together they are one and a half.
+    for (const y of [108, 116, 124, 132]) touch(frame, "touchmove", y);
+
+    expect(t.scrolled).toEqual([-1]);
+  });
+
+  it("claims the gesture so the page cannot scroll underneath it", async () => {
+    const { frame } = await ready();
+
+    touch(frame, "touchstart", 100);
+    const move = touch(frame, "touchmove", 130);
+    expect(move.defaultPrevented).toBe(true);
+  });
+
+  it("leaves a two-finger gesture to the browser — that is a pinch, not a scroll", async () => {
+    const { frame, t } = await ready();
+
+    touch(frame, "touchstart", 100, 300);
+    const move = touch(frame, "touchmove", 160, 360);
+
+    expect(t.scrolled).toEqual([]);
+    expect(move.defaultPrevented).toBe(false);
+  });
+
+  it("ignores a move that never started, and forgets the drag once the finger lifts", async () => {
+    const { frame, t } = await ready();
+
+    touch(frame, "touchmove", 160);
+    expect(t.scrolled).toEqual([]);
+
+    touch(frame, "touchstart", 100);
+    touch(frame, "touchend");
+    touch(frame, "touchmove", 200);
+    expect(t.scrolled).toEqual([]);
   });
 });

@@ -640,13 +640,18 @@ describe("BoardPage — narrow screens", () => {
     serve();
   });
 
-  it("offers the same drawer handle on the board and beside an open card", async () => {
+  it("offers one drawer handle per screen: in the board's header row, and in the card bar", async () => {
     const { unmount } = renderApp(<BoardPage />, { route: "/?project=p1" });
-    expect(await screen.findByRole("button", { name: "Open the projects and cards" })).toBeInTheDocument();
+    // On the board it sits INSIDE the header row next to the card count, not on a line of its own.
+    const handle = await screen.findByRole("button", { name: "Open the projects and cards" });
+    expect(handle.className).toContain("lg:hidden");
     unmount();
 
+    // Beside an open card the card bar carries its own, and the page adds nothing above it: that
+    // row was a whole line of a phone's height spent on a second button for the same drawer.
     renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
-    expect(await screen.findByRole("button", { name: "Open the projects and cards" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Open the card list" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open the projects and cards" })).not.toBeInTheDocument();
   });
 
   it("opens the sidebar as a drawer and closes it again on navigation", async () => {
@@ -654,7 +659,7 @@ describe("BoardPage — narrow screens", () => {
     renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
     await screen.findByTestId("terminal");
 
-    await user.click(screen.getByRole("button", { name: "Open the projects and cards" }));
+    await user.click(screen.getByRole("button", { name: "Open the card list" }));
     expect(screen.getByTestId("sidebar-backdrop")).toBeInTheDocument();
 
     await user.click(await within(sidebar()).findByRole("link", { name: "waiting on review" }));

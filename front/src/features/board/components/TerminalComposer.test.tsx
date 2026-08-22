@@ -109,7 +109,7 @@ describe("TerminalComposer", () => {
   it("sends on Enter with a carriage return and clears the field", async () => {
     const onSend = vi.fn();
     renderComposer(<TerminalComposer onSend={onSend} />);
-    const box = screen.getByRole("textbox", { name: /message to the terminal/i });
+    const box = screen.getByRole("textbox", { name: /enter sends/i });
     await userEvent.type(box, "run the tests{Enter}");
     expect(onSend).toHaveBeenCalledWith("run the tests\r");
     expect(box).toHaveValue("");
@@ -118,18 +118,21 @@ describe("TerminalComposer", () => {
   it("Shift+Enter breaks the line instead of sending", async () => {
     const onSend = vi.fn();
     renderComposer(<TerminalComposer onSend={onSend} />);
-    const box = screen.getByRole("textbox", { name: /message to the terminal/i });
+    const box = screen.getByRole("textbox", { name: /enter sends/i });
     await userEvent.type(box, "first{Shift>}{Enter}{/Shift}second");
     expect(onSend).not.toHaveBeenCalled();
     expect(box).toHaveValue("first\nsecond");
   });
 
-  it("the Send button is disabled while the field is blank", async () => {
+  it("has no Send button at all — Enter is the only way, and the field keeps the width", () => {
     renderComposer(<TerminalComposer onSend={vi.fn()} />);
-    const button = screen.getByRole("button", { name: "Send" });
-    expect(button).toBeDisabled();
-    await userEvent.type(screen.getByRole("textbox"), "x");
-    expect(button).toBeEnabled();
+    expect(screen.queryByTestId("composer-send")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /send|enviar/i })).not.toBeInTheDocument();
+  });
+
+  it("says how to send in the label, since there is no longer a button that says it", () => {
+    renderComposer(<TerminalComposer onSend={vi.fn()} />);
+    expect(screen.getByRole("textbox")).toHaveAccessibleName(/Enter sends/i);
   });
 
   it("never sends whitespace", async () => {
@@ -170,7 +173,7 @@ describe("TerminalComposer", () => {
     const box = screen.getByRole("textbox");
     // A grey sentence explaining what a text box is competes with the agent's output all day.
     expect(box).toHaveAttribute("placeholder", "");
-    expect(box).toHaveAccessibleName("Message to the terminal");
+    expect(box).toHaveAccessibleName("Write here — Enter sends, Shift+Enter starts a new line");
   });
 
   it("opens at about three lines and grows no further than max-h-48", () => {
@@ -356,28 +359,32 @@ describe("TerminalComposer — on a phone", () => {
 
   it("writes at 16px below md, which is what stops iOS zooming the page on focus", () => {
     renderComposer(<TerminalComposer onSend={vi.fn()} />);
-    const field = screen.getByRole("textbox", { name: "Message to the terminal" });
+    const field = screen.getByRole("textbox", { name: "Write here — Enter sends, Shift+Enter starts a new line" });
     expect(field.className).toContain("text-base");
     // …and the desktop keeps the 14px it always had.
     expect(field.className).toContain("md:text-sm");
   });
 
-  it("gives send and the microphone 44px targets on a phone, 36px on a desktop", async () => {
+  it("gives the microphone a 48px target on a phone and 36px on a desktop", async () => {
     renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
-    const send = screen.getByTestId("composer-send");
-    expect(send.className).toContain("h-11");
-    expect(send.className).toContain("md:h-9");
     const mic = await screen.findByTestId("composer-mic");
-    expect(mic.className).toContain("h-11");
+    expect(mic.className).toContain("h-12");
+    expect(mic.className).toContain("w-12");
     expect(mic.className).toContain("md:h-9");
   });
 
-  it("keeps Send unavailable until there is something to send", async () => {
+  it("centres the microphone against the field instead of hanging it off the bottom", () => {
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
+    // The field grows with the text; a bottom-aligned 48px circle drifts away from it as it does.
+    expect(screen.getByTestId("terminal-composer").className).toContain("items-center");
+    expect(screen.getByTestId("terminal-composer").className).not.toContain("items-end");
+  });
+
+  it("still sends on Enter, which is now the only way", async () => {
     const user = userEvent.setup();
-    renderComposer(<TerminalComposer onSend={vi.fn()} />);
-    const send = screen.getByTestId("composer-send");
-    expect(send).toBeDisabled();
-    await user.type(screen.getByRole("textbox", { name: "Message to the terminal" }), "hi");
-    expect(send).toBeEnabled();
+    const onSend = vi.fn();
+    renderComposer(<TerminalComposer onSend={onSend} />);
+    await user.type(screen.getByRole("textbox"), "deploy{Enter}");
+    expect(onSend).toHaveBeenCalledWith("deploy\r");
   });
 });

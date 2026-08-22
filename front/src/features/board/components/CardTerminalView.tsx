@@ -8,6 +8,7 @@ import {
   Loader2,
   Menu,
   MonitorPlay,
+  MoreHorizontal,
   Pause,
   RotateCw,
   TerminalSquare,
@@ -22,6 +23,7 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -368,6 +370,74 @@ export function CardTerminalView({
     return () => root.classList.remove("card-view-locked");
   }, [isMobile]);
 
+  /** The model rows, shared by the desktop pill and the phone's overflow menu. */
+  const modelItems = (
+    <>
+                {/* The FIXED list, always in the same order with the same labels. The trigger is
+                    where "what am I talking to" is answered; a menu whose rows are recomputed from
+                    the live session shuffles its own labels while you read it. */}
+                {CLAUDE_MODELS.map((m) => (
+                  <DropdownMenuCheckboxItem
+                    key={m.id}
+                    checked={model.id === m.id}
+                    onSelect={() => modelMutation.mutate(m.id)}
+                  >
+                    {m.label}
+                  </DropdownMenuCheckboxItem>
+                ))}
+                {/* A model the whitelist has never heard of — the transcript is still the truth. */}
+                {modelUnlisted ? (
+                  <DropdownMenuCheckboxItem checked onSelect={() => modelMutation.mutate(model.id)}>
+                    {model.label}
+                  </DropdownMenuCheckboxItem>
+                ) : null}
+                <DropdownMenuSeparator />
+                {/* The only row that is not a model, and the only one that is an ACTION rather than
+                    a state: it clears the card's pin and lets the account decide again. A check
+                    here would compete with the one marking the model actually in use. */}
+                <DropdownMenuItem onSelect={() => modelMutation.mutate(null)}>
+                  {t("cardView.useAccountDefault")}
+                </DropdownMenuItem>
+    </>
+  );
+
+  /** The account rows, likewise shared. */
+  const accountItems = (
+    <>
+                {/* EXPLICIT rows, one per account, each under its OWN name — the bug this replaces
+                    labelled the first row with whatever account was IN USE, so picking "tech" made
+                    the menu show "default" and picking default renamed it to "tech". The built-in
+                    profile is first, under the install's name for it; choosing it clears the pin.
+                    The check follows the EFFECTIVE account (card → project → built-in), which is
+                    the one the session is really signed in to. */}
+                <DropdownMenuCheckboxItem
+                  checked={inUseSlug === DEFAULT_ACCOUNT_SLUG}
+                  onSelect={() => accountMutation.mutate(null)}
+                >
+                  <span className="truncate">{defaultAccountName}</span>
+                  {menuPercent(DEFAULT_ACCOUNT_SLUG) ? (
+                    <span className="ml-2 font-mono text-[11px] tabular-nums text-muted-foreground">
+                      {menuPercent(DEFAULT_ACCOUNT_SLUG)}
+                    </span>
+                  ) : null}
+                </DropdownMenuCheckboxItem>
+                {accounts.map((a) => (
+                  <DropdownMenuCheckboxItem
+                    key={a.slug}
+                    checked={inUseSlug === a.slug}
+                    onSelect={() => accountMutation.mutate(a.slug)}
+                  >
+                    <span className="truncate">{accountLabel(a)}</span>
+                    {menuPercent(a.slug) ? (
+                      <span className="ml-2 font-mono text-[11px] tabular-nums text-muted-foreground">
+                        {menuPercent(a.slug)}
+                      </span>
+                    ) : null}
+                  </DropdownMenuCheckboxItem>
+                ))}
+    </>
+  );
+
   /**
    * IDENTITY: back, the menu handle, the status dot, the title, the project. What this screen IS.
    *
@@ -447,7 +517,7 @@ export function CardTerminalView({
               </h2>
             </button>
           )}
-          <span className="min-w-0 max-w-[40%] truncate text-xs text-muted-foreground/80 md:max-w-none md:shrink-0">
+          <span className="hidden min-w-0 truncate text-xs text-muted-foreground/80 md:inline md:shrink-0">
         · {project.name}
       </span>
     </>
@@ -526,31 +596,7 @@ export function CardTerminalView({
               </DropdownMenuTrigger>
               {/* Below the trigger, aligned to its right edge — never over the thing you clicked. */}
               <DropdownMenuContent side="bottom" align="end">
-                {/* The FIXED list, always in the same order with the same labels. The trigger is
-                    where "what am I talking to" is answered; a menu whose rows are recomputed from
-                    the live session shuffles its own labels while you read it. */}
-                {CLAUDE_MODELS.map((m) => (
-                  <DropdownMenuCheckboxItem
-                    key={m.id}
-                    checked={model.id === m.id}
-                    onSelect={() => modelMutation.mutate(m.id)}
-                  >
-                    {m.label}
-                  </DropdownMenuCheckboxItem>
-                ))}
-                {/* A model the whitelist has never heard of — the transcript is still the truth. */}
-                {modelUnlisted ? (
-                  <DropdownMenuCheckboxItem checked onSelect={() => modelMutation.mutate(model.id)}>
-                    {model.label}
-                  </DropdownMenuCheckboxItem>
-                ) : null}
-                <DropdownMenuSeparator />
-                {/* The only row that is not a model, and the only one that is an ACTION rather than
-                    a state: it clears the card's pin and lets the account decide again. A check
-                    here would compete with the one marking the model actually in use. */}
-                <DropdownMenuItem onSelect={() => modelMutation.mutate(null)}>
-                  {t("cardView.useAccountDefault")}
-                </DropdownMenuItem>
+                {modelItems}
               </DropdownMenuContent>
             </DropdownMenu>
           ) : null}
@@ -581,43 +627,98 @@ export function CardTerminalView({
                 </TooltipContent>
               </Tooltip>
               <DropdownMenuContent side="bottom" align="end">
-                {/* EXPLICIT rows, one per account, each under its OWN name — the bug this replaces
-                    labelled the first row with whatever account was IN USE, so picking "tech" made
-                    the menu show "default" and picking default renamed it to "tech". The built-in
-                    profile is first, under the install's name for it; choosing it clears the pin.
-                    The check follows the EFFECTIVE account (card → project → built-in), which is
-                    the one the session is really signed in to. */}
-                <DropdownMenuCheckboxItem
-                  checked={inUseSlug === DEFAULT_ACCOUNT_SLUG}
-                  onSelect={() => accountMutation.mutate(null)}
-                >
-                  <span className="truncate">{defaultAccountName}</span>
-                  {menuPercent(DEFAULT_ACCOUNT_SLUG) ? (
-                    <span className="ml-2 font-mono text-[11px] tabular-nums text-muted-foreground">
-                      {menuPercent(DEFAULT_ACCOUNT_SLUG)}
-                    </span>
-                  ) : null}
-                </DropdownMenuCheckboxItem>
-                {accounts.map((a) => (
-                  <DropdownMenuCheckboxItem
-                    key={a.slug}
-                    checked={inUseSlug === a.slug}
-                    onSelect={() => accountMutation.mutate(a.slug)}
-                  >
-                    <span className="truncate">{accountLabel(a)}</span>
-                    {menuPercent(a.slug) ? (
-                      <span className="ml-2 font-mono text-[11px] tabular-nums text-muted-foreground">
-                        {menuPercent(a.slug)}
-                      </span>
-                    ) : null}
-                  </DropdownMenuCheckboxItem>
-                ))}
+                {accountItems}
               </DropdownMenuContent>
             </DropdownMenu>
           ) : null}
           {showTerminal ? <ConnectionIndicator state={connection} /> : null}
         </div>
     </>
+  );
+
+  /**
+   * The PHONE's second row.
+   *
+   * The first attempt was the desktop's controls in a strip that scrolled sideways, and the owner's
+   * verdict was the right one: a row you have to scroll to find a button in is not simpler than a
+   * row that overlaps, it is just quieter about it. So the three things you actually press mid-task
+   * — pause, restart, done — are icons at full size, and everything that is CONFIGURATION goes
+   * behind one `⋯`. Nothing scrolls, nothing wraps, nothing is hidden off the edge.
+   */
+  const mobileActions = (
+    <div data-testid="card-bar-actions" className="flex min-w-0 items-center gap-1.5">
+      {hasLiveSession ? (
+        <IconAction
+          label={t("cardView.pause")}
+          hint={t("cardView.pauseHint")}
+          busy={pauseMutation.isPending}
+          icon={<Pause className="h-4 w-4" />}
+          onClick={() => pauseMutation.mutate()}
+        />
+      ) : null}
+      {hasLiveSession ? (
+        <IconAction
+          label={t("cardView.restart")}
+          hint={t("cardView.restartHint")}
+          busy={restartMutation.isPending}
+          icon={<RotateCw className="h-4 w-4" />}
+          onClick={askRestart}
+        />
+      ) : null}
+      {canFinish ? (
+        <IconAction
+          label={t("cardView.done")}
+          hint={t("cardView.doneHint")}
+          busy={moveMutation.isPending}
+          icon={<Check className="h-4 w-4" />}
+          onClick={() => card && finish(card)}
+        />
+      ) : null}
+
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        {showTerminal ? <ConnectionIndicator state={connection} /> : null}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              data-testid="card-bar-more"
+              aria-label={t("cardView.more")}
+              title={t("cardView.more")}
+              className="h-9 w-9 shrink-0 rounded-md border border-border/50 bg-card/40 text-muted-foreground"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent side="bottom" align="end" className="max-h-[70vh] overflow-y-auto">
+            <DropdownMenuCheckboxItem
+              checked={browserOpen}
+              disabled={!showTerminal}
+              onSelect={() => setBrowserOpen((v) => !v)}
+            >
+              {t("cardView.browser")}
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem
+              checked={shellOpen}
+              disabled={!showTerminal}
+              onSelect={() => setShellOpen((v) => !v)}
+            >
+              {t("cardView.shell")}
+            </DropdownMenuCheckboxItem>
+            {card ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>{t("cardView.model")}</DropdownMenuLabel>
+                {modelItems}
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>{t("cardView.claudeAccount")}</DropdownMenuLabel>
+                {accountItems}
+              </>
+            ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </div>
   );
 
   return (
@@ -631,12 +732,7 @@ export function CardTerminalView({
           <div data-testid="card-bar-identity" className="flex min-w-0 items-center gap-2">
             {identity}
           </div>
-          <div
-            data-testid="card-bar-actions"
-            className="-mx-0.5 flex min-w-0 items-center gap-1.5 overflow-x-auto whitespace-nowrap px-0.5 pb-0.5"
-          >
-            {actions}
-          </div>
+          {mobileActions}
         </div>
       ) : (
         <div
@@ -776,6 +872,39 @@ function PaneToggle({
       {icon}
       {label}
     </button>
+  );
+}
+
+/**
+ * One action in the PHONE's row: the icon, at a size a thumb can hit, and the word in the label
+ * rather than beside it. Three of these fit a 390px screen with room for the overflow menu; three
+ * labelled buttons did not, which is how they ended up on top of each other.
+ */
+function IconAction({
+  label,
+  hint,
+  icon,
+  busy,
+  onClick,
+}: {
+  label: string;
+  hint: string;
+  icon: React.ReactNode;
+  busy: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      aria-label={label}
+      title={hint}
+      className="h-9 w-9 shrink-0 rounded-md border border-border/50 bg-card/40 text-muted-foreground"
+      disabled={busy}
+      onClick={onClick}
+    >
+      {icon}
+    </Button>
   );
 }
 

@@ -610,22 +610,54 @@ describe("CardTerminalView — the phone", () => {
     }
   });
 
-  it("splits the bar into identity and a scrolling action strip on a phone", async () => {
+  it("splits the bar into identity and a row of icons on a phone", async () => {
     setViewport(true);
     renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
 
     const identity = await screen.findByTestId("card-bar-identity");
     const actions = screen.getByTestId("card-bar-actions");
 
-    // Row one is who you are looking at; row two is everything you can do to it.
+    // Row one is who you are looking at: back, the dot, the title. Nothing else.
     expect(within(identity).getByTestId("card-back")).toBeInTheDocument();
     expect(within(identity).getByRole("heading", { name: "fix the totals" })).toBeInTheDocument();
+
+    // Row two is the three things you press mid-task, as icons, plus one overflow menu.
     expect(within(actions).getByRole("button", { name: "Pause" })).toBeInTheDocument();
-    expect(within(actions).getByRole("button", { name: "Browser" })).toBeInTheDocument();
-    // Sideways, never wrapped: a wrapped row is what stacked on itself in the first place.
-    expect(actions.className).toContain("overflow-x-auto");
-    expect(actions.className).toContain("whitespace-nowrap");
+    expect(within(actions).getByRole("button", { name: "Restart" })).toBeInTheDocument();
+    expect(within(actions).getByRole("button", { name: "Done" })).toBeInTheDocument();
+    expect(within(actions).getByTestId("card-bar-more")).toBeInTheDocument();
+
+    // Nothing scrolls sideways: a row you have to scroll to find a button in is not simpler.
+    expect(actions.className).not.toContain("overflow-x-auto");
     expect(screen.getByTestId("card-bar").className).toContain("flex-col");
+    // Browser, Shell and the two pills are behind the menu, not in the row.
+    expect(within(actions).queryByRole("button", { name: "Browser" })).not.toBeInTheDocument();
+    expect(within(actions).queryByRole("button", { name: "Claude account" })).not.toBeInTheDocument();
+  });
+
+  it("keeps Browser, Shell, the model and the account behind the one overflow menu", async () => {
+    setViewport(true);
+    const user = userEvent.setup();
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+
+    await user.click(await screen.findByTestId("card-bar-more"));
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByRole("menuitemcheckbox", { name: "Browser" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitemcheckbox", { name: "Shell" })).toBeInTheDocument();
+    // The SAME rows the desktop pill offers, under a heading rather than in a second menu.
+    expect(within(menu).getByText("Model")).toBeInTheDocument();
+    expect(within(menu).getByText("Claude account")).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitemcheckbox", { name: /Sonnet/ })).toBeInTheDocument();
+  });
+
+  it("opens the browser pane from the overflow menu", async () => {
+    setViewport(true);
+    const user = userEvent.setup();
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+
+    await user.click(await screen.findByTestId("card-bar-more"));
+    await user.click(await screen.findByRole("menuitemcheckbox", { name: "Browser" }));
+    expect(await screen.findByTestId("vnc")).toBeInTheDocument();
   });
 
   it("leaves the desktop bar as the single row it has always been", async () => {

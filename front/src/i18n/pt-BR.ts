@@ -285,6 +285,7 @@ export const ptBR: Record<string, string> = {
   "cardView.shell": "Shell",
   "cardView.openPane": "Abrir o {label}",
   "cardView.closePane": "Fechar o {label}",
+  "cardView.more": "Mais",
   "cardView.model": "Modelo",
   "cardView.modelInUse": "Modelo em uso nesta sessão",
   "cardView.useAccountDefault": "Usar o padrão da conta",
@@ -311,7 +312,6 @@ export const ptBR: Record<string, string> = {
   /* --------------------------------------------------------------- composer */
   "composer.placeholder": "",
   "composer.aria": "Escreva aqui — Enter envia, Shift+Enter quebra linha",
-  "composer.send": "Enviar",
   "composer.recordingTooBig": "Essa gravação passa de 20 MB.",
   "composer.transcribing": "Transcrevendo…",
   "composer.nothingSaid": "Não foi dito nada nessa gravação.",

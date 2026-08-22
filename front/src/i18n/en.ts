@@ -284,6 +284,7 @@ export const en: Record<string, string> = {
   "cardView.shell": "Shell",
   "cardView.openPane": "Open the {label}",
   "cardView.closePane": "Close the {label}",
+  "cardView.more": "More",
   "cardView.model": "Model",
   "cardView.modelInUse": "Model in use for this session",
   "cardView.useAccountDefault": "Use account default",
@@ -309,8 +310,7 @@ export const en: Record<string, string> = {
 
   /* --------------------------------------------------------------- composer */
   "composer.placeholder": "",
-  "composer.aria": "Message to the terminal",
-  "composer.send": "Send",
+  "composer.aria": "Write here — Enter sends, Shift+Enter starts a new line",
   "composer.recordingTooBig": "That recording is over 20 MB.",
   "composer.transcribing": "Transcribing…",
   "composer.nothingSaid": "Nothing was said in that recording.",

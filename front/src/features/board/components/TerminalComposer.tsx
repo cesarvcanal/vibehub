@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, Loader2, Mic, Send, X } from "lucide-react";
+import { Check, Loader2, Mic, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/lib/useIsMobile";
@@ -15,8 +15,13 @@ import { t as translate, useT } from "@/i18n";
  *
  * Raw xterm is a poor place to compose anything longer than a command — on a phone keyboard it is
  * hopeless, and even on a desktop a pasted image path or a transcription wants a look before it
- * goes. So input ACCUMULATES in this field and only reaches the session when you confirm: Enter or
- * the Send button. Shift+Enter breaks the line, like the terminal itself.
+ * goes. So input ACCUMULATES in this field and only reaches the session when you confirm: ENTER.
+ * Shift+Enter breaks the line, like the terminal itself.
+ *
+ * There is no Send button. It was a third control competing for a phone's width with the field and
+ * the microphone, to do what Enter already does on every keyboard including the on-screen one — so
+ * the field took the width back and the promise moved into the `aria-label`, where the people who
+ * need telling actually read it.
  *
  * Everything that arrives from somewhere other than the keyboard lands the same way — appended, not
  * sent. A pasted or dropped IMAGE is uploaded and its runner path appended; a RECORDING is
@@ -349,7 +354,7 @@ export function TerminalComposer({
   return (
     <div
       data-testid="terminal-composer"
-      className={cn("flex shrink-0 items-end gap-2", className)}
+      className={cn("flex shrink-0 items-center gap-2", className)}
     >
       <div className="relative min-w-0 flex-1">
         <textarea
@@ -385,7 +390,7 @@ export function TerminalComposer({
           className="max-h-48 min-h-24 w-full resize-none overflow-y-auto rounded-md border border-border bg-card px-3 py-2 text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 md:text-sm"
         />
         {/* While recording with nothing typed, the empty field is where the voice goes: the bars
-            live there rather than crowding a 44px button. They vanish the moment there is text. */}
+            live there rather than crowding the microphone. They vanish the moment there is text. */}
         {recordingNow && !text ? (
           <div
             data-testid="composer-field-bars"
@@ -416,24 +421,6 @@ export function TerminalComposer({
         />
       ) : null}
 
-      {/*
-        44x44 on a phone (the smallest target a thumb hits reliably) and an icon instead of a word,
-        because "Send"/"Enviar" next to a microphone at that size is two buttons of different widths
-        for two actions of equal weight. The desktop keeps the labelled button it always had.
-      */}
-      <Button
-        type="button"
-        size="sm"
-        data-testid="composer-send"
-        aria-label={t("composer.send")}
-        title={t("composer.send")}
-        disabled={!text.trim()}
-        onClick={send}
-        className="h-11 w-11 shrink-0 rounded-full p-0 md:h-9 md:w-auto md:rounded-md md:px-3"
-      >
-        <Send className="h-4 w-4 md:hidden" />
-        <span className="hidden md:inline">{t("composer.send")}</span>
-      </Button>
     </div>
   );
 }
@@ -458,7 +445,7 @@ function VoiceControl({
   state: RecordingState;
   available: boolean;
   levels: number[];
-  /** A phone: 44px targets, and the level bars move into the field instead of into the button. */
+  /** A phone: 48px targets, and the level bars move into the field instead of into the button. */
   mobile: boolean;
   /** `m:ss` since the recording started. */
   elapsed: string;
@@ -474,7 +461,7 @@ function VoiceControl({
         role="status"
         className={cn(
           "flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-card/60 px-3 text-muted-foreground",
-          mobile ? "h-11 rounded-full" : "h-9",
+          mobile ? "h-12 rounded-full" : "h-9",
         )}
       >
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -491,7 +478,7 @@ function VoiceControl({
           "flex shrink-0 items-center gap-1 border border-destructive/50 bg-card/80",
           // Recording is the one state worth seeing from across the room: red, and a ring that
           // breathes. On a phone the whole strip is 44 tall so the two exits stay thumb-sized.
-          mobile ? "rec-ring h-11 gap-1.5 rounded-full px-1.5" : "h-9 rounded-md px-1",
+          mobile ? "rec-ring h-12 gap-1.5 rounded-full px-2" : "h-9 rounded-md px-1",
         )}
       >
         <button
@@ -502,7 +489,7 @@ function VoiceControl({
           onClick={onCancel}
           className={cn(
             "flex items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-            mobile ? "h-9 w-9" : "h-6 w-6",
+            mobile ? "h-10 w-10" : "h-6 w-6",
           )}
         >
           <X className={mobile ? "h-4 w-4" : "h-3.5 w-3.5"} />
@@ -533,7 +520,7 @@ function VoiceControl({
           onClick={onFinish}
           className={cn(
             "flex items-center justify-center rounded-full bg-destructive text-destructive-foreground transition-opacity hover:opacity-90",
-            mobile ? "h-9 w-9" : "h-6 w-6",
+            mobile ? "h-10 w-10" : "h-6 w-6",
           )}
         >
           <Check className={mobile ? "h-4 w-4" : "h-3.5 w-3.5"} />
@@ -550,7 +537,7 @@ function VoiceControl({
       data-testid="composer-mic"
       aria-label={t("composer.record")}
       title={available ? t("composer.recordHint") : t("composer.voiceUnavailable")}
-      className="h-11 w-11 shrink-0 rounded-full text-muted-foreground md:h-9 md:w-9 md:rounded-md"
+      className="h-12 w-12 shrink-0 rounded-full text-muted-foreground md:h-9 md:w-9 md:rounded-md"
       disabled={!available}
       onClick={onStart}
     >
