@@ -227,6 +227,7 @@ export const en: Record<string, string> = {
   "card.claudeAccountMenu": "Claude account…",
   "card.deleteCard": "Delete card",
   "card.pause": "Pause",
+  "card.rename": "Rename",
   "card.restart": "Restart",
   "card.finish": "Finish",
   "card.pausingWhenIdle": "Pausing when idle…",

@@ -228,6 +228,7 @@ export const ptBR: Record<string, string> = {
   "card.claudeAccountMenu": "Conta Claude…",
   "card.deleteCard": "Excluir card",
   "card.pause": "Pausar",
+  "card.rename": "Renomear",
   "card.restart": "Reiniciar",
   "card.finish": "Concluir",
   "card.pausingWhenIdle": "Pausando quando ficar livre…",

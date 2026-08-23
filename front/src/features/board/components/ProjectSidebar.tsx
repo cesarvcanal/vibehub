@@ -1,13 +1,14 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, ChevronDown, ChevronUp, FolderGit2, Pause, Plus, RotateCw, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, FolderGit2, Pause, Pencil, Plus, RotateCw, Trash2 } from "lucide-react";
 import { cn, isNewTabClick } from "@/lib/utils";
 import { apiErrorMessage } from "@/lib/apiError";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
   useContextMenuPoint,
+  useLongPress,
   type ContextMenuItem,
 } from "@/features/board/components/ContextMenu";
 import { Logo } from "@/components/Logo";
@@ -527,8 +528,13 @@ function ProjectRow({
  *
  * A real link, so the browser's habits work (Cmd/Ctrl/Shift-click, middle-click, "copy link"). A
  * plain click opens it — or closes it, when it is the card already open, which the parent decides
- * by comparing ids. Double-click renames it in place; right-click offers the three things worth
- * doing to a live session, for ANY card in the list rather than only the open one.
+ * by comparing ids. Right-click (long-press on a touch screen) offers renaming plus the three
+ * things worth doing to a live session, for ANY card in the list rather than only the open one.
+ *
+ * Renaming is a MENU item and not a double-click, because the first click of that double-click is
+ * a real click: it opens another card, or — on the card already open — closes it, tearing the
+ * terminal down before the rename box even appears. A gesture whose first half navigates cannot be
+ * the way to edit a name.
  */
 function SidebarCard({
   card,
@@ -553,6 +559,7 @@ function SidebarCard({
   const canPause = Boolean(card.openedAt) && !paused;
 
   const items: ContextMenuItem[] = [
+    { key: "rename", label: t("card.rename"), icon: Pencil, onSelect: onRename },
     ...(canPause ? [{ key: "pause", label: t("card.pause"), icon: Pause, onSelect: () => onPause(card) }] : []),
     ...(canPause
       ? [{ key: "restart", label: t("card.restart"), icon: RotateCw, onSelect: () => onRestart(card) }]
@@ -561,7 +568,8 @@ function SidebarCard({
       ? [{ key: "finish", label: t("card.finish"), icon: Check, onSelect: () => onFinish(card) }]
       : []),
   ];
-  const { point, openAt, close } = useContextMenuPoint();
+  const { point, openAt, openAtPoint, close } = useContextMenuPoint();
+  const longPress = useLongPress(openAtPoint);
 
   return (
     <>
@@ -575,14 +583,18 @@ function SidebarCard({
         onClick={(e) => {
           if (isNewTabClick(e)) return;
           e.preventDefault();
-          // The first click of a double-click also lands here; renaming owns the second one.
+          // A long-press opened the menu over this row; the click it ends with is not a choice.
+          if (longPress.swallowClick()) return;
+          // A stray double-click would otherwise open and immediately close the card again.
           if (e.detail > 1) return;
           onOpen();
         }}
-        onDoubleClick={onRename}
-        onContextMenu={items.length > 0 ? openAt : undefined}
+        onContextMenu={openAt}
+        {...longPress.handlers}
         className={cn(
-          "flex w-full items-center gap-2 py-1.5 pl-9 pr-3 text-left text-sm transition-colors",
+          // `touch-callout` off: on iOS a long press on a link raises the browser's own preview,
+          // which would cover the menu that same press is here to open.
+          "flex w-full items-center gap-2 py-1.5 pl-9 pr-3 text-left text-sm transition-colors [-webkit-touch-callout:none]",
           active
             ? `${SELECTED_ROW} text-foreground`
             : "text-muted-foreground hover:bg-card/60 hover:text-foreground",
