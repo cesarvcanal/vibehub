@@ -15,7 +15,9 @@ import type {
   McpSecretsResponse,
   McpTransport,
   NewCard,
+  OutboxStatus,
   Project,
+  QueueMessageResult,
   RestartAllResult,
   RunnerStatus,
   UploadResult,
@@ -178,6 +180,8 @@ export const ALL_CARDS_KEY = ["board", "cards", "@all"] as const;
 export const cardsKey = (projectId: string) => ["board", "cards", projectId] as const;
 export const cardKey = (cardId: string) => ["board", "card", cardId] as const;
 export const cardSessionKey = (cardId: string) => ["board", "card", cardId, "session"] as const;
+/** The card's outbox: what was composed and has not reached the agent yet. */
+export const cardMessagesKey = (cardId: string) => ["board", "card", cardId, "messages"] as const;
 /** The repo/branch caches are keyed by CONNECTION too — the same name means a different repo per account. */
 export const githubReposKey = (connection: string, q: string) =>
   ["board", "github", "repos", connection, q] as const;
@@ -397,6 +401,33 @@ export const boardApi = {
   /** Presses one whitelisted key in that session — `escape` is the chat's Stop button. */
   sendCardChatKey: (id: string, key: "escape" | "interrupt") =>
     post<{ sent: true }>(`/cards/${encodeURIComponent(id)}/chat/key`, { key }),
+
+  /**
+   * Hands a composed message to the card's OUTBOX. It is delivered to a RUNNING Claude, or it waits
+   * there until one exists — which is why this is a POST to the server and not a write into the
+   * terminal websocket: a socket types into whatever the pane happens to be, including a bare shell
+   * where the message simply disappears.
+   */
+  sendCardMessage: (id: string, text: string) =>
+    post<Partial<QueueMessageResult>>(`/cards/${encodeURIComponent(id)}/messages`, { text }).then(
+      (r): QueueMessageResult => ({
+        delivered: Boolean(r?.delivered),
+        pending: Array.isArray(r?.pending) ? r.pending : [],
+        agent: r?.agent ?? "none",
+      }),
+    ),
+
+  /** What is still queued for this card, and whether the agent is up to take it. */
+  cardMessages: (id: string) =>
+    get<Partial<OutboxStatus>>(`/cards/${encodeURIComponent(id)}/messages`).then(
+      (r): OutboxStatus => ({
+        pending: Array.isArray(r?.pending) ? r.pending : [],
+        agent: r?.agent ?? "none",
+      }),
+    ),
+
+  cancelCardMessage: (id: string, messageId: string) =>
+    del<{ ok: true }>(`/cards/${encodeURIComponent(id)}/messages/${encodeURIComponent(messageId)}`),
 
   startCardBrowser: (id: string) => post<unknown>(`/cards/${encodeURIComponent(id)}/browser`),
   stopCardBrowser: (id: string) => del<unknown>(`/cards/${encodeURIComponent(id)}/browser`),

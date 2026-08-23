@@ -440,6 +440,16 @@ describe("XTerminal — the websocket", () => {
     expect(term().focused).toBe(before + 2);
   });
 
+  it("leaves the keyboard alone when the terminal is not the input", async () => {
+    // A card's composer owns the keyboard: a reconnect that yanks focus out of it swallows whatever
+    // was being typed at that moment.
+    render(<XTerminal wsPath="/api/cards/c1/terminal" autoFocus={false} />);
+    const ws = await socket();
+    const before = term().focused;
+    ws.accept();
+    expect(term().focused).toBe(before);
+  });
+
   it("sends a resize frame as soon as it is connected", async () => {
     render(<XTerminal wsPath="/api/cards/c1/terminal" />);
     const ws = await socket();

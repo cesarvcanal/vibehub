@@ -21,6 +21,7 @@ import { cardSessionRoutes } from "./routes/cardSession.js";
 import { chatRoutes } from "./routes/chat.js";
 import { accountLoginRoutes } from "./routes/accountLogin.js";
 import { startPauseReconciler, sweepIdleCards } from "./services/board/workspace.js";
+import { startOutboxFlusher } from "./services/board/outbox.js";
 
 /**
  * The vibehub server: one process serving the API, the websocket terminals, and (in production) the
@@ -113,6 +114,9 @@ function startIdleSweep(): NodeJS.Timeout {
 async function main(): Promise<void> {
   await mkdir(config.dataDir, { recursive: true });
   const app = await buildServer();
+  // The outbox backstop. Started HERE and not in buildServer(): tests build servers by the dozen
+  // and none of them wants a timer poking at a runner.
+  startOutboxFlusher();
   await app.listen({ port: config.port, host: config.host });
   startIdleSweep();
   // Pending pauses are normally closed by the Stop hook, but a session can go quiet without ever

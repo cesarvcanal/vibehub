@@ -119,6 +119,7 @@ No database. Under `VIBEHUB_DATA_DIR`:
 | File | Holds |
 |---|---|
 | `board.json` | projects, cards, accounts, MCP servers |
+| `outbox.json` | messages composed for a card that its agent has not received yet |
 | `settings.json` | git identity, autonomy, setup stamp, idle-hibernation threshold |
 | `users.json` | local accounts (scrypt hashes) |
 | `secrets.enc` | AES-256-GCM vault: GitHub token, Claude tokens, MCP secrets, runner token |
@@ -127,6 +128,22 @@ No database. Under `VIBEHUB_DATA_DIR`:
 
 Every write is atomic (tmp + rename) at mode 600, and mutations are serialized per document — the
 status hooks are frequent and concurrent, and a lost update there would silently corrupt the board.
+
+## The outbox
+
+A card's terminal runs `claude; exec bash`, so a pane whose Claude exited is still attached and
+still accepting keystrokes — into a SHELL. Typing a composed message into that moment executed it as
+a command; typing one into a card that was never opened wrote it to nothing.
+
+So the composer no longer writes into the terminal websocket. It POSTs to the card's outbox
+(`services/board/outbox.ts`), which probes what the pane is really running
+(`tmux list-panes -F '#{pane_current_command}'`) and either delivers with `send-keys` — the same
+path the maestro uses — or keeps the message in `outbox.json` until it can. A flush is attempted on
+enqueue, when a terminal attaches, when a status hook reports the agent went idle, and on a slow
+ticker as the backstop.
+
+Delivery is at-least-once (deliver, then remove): a crash between the two repeats a message, which
+is visible, while the alternative loses one silently.
 
 ## Credentials
 

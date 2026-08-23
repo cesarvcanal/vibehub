@@ -73,6 +73,12 @@ export interface XTerminalProps {
   onUploadImage?: (file: File) => Promise<string | null>;
   /** Optimistic local echo. On by default — see `lib/localEcho.ts` for what it will and will not do. */
   localEcho?: boolean;
+  /**
+   * Take the keyboard when the socket opens. True for a terminal that IS the input (the runner
+   * console, the shell pane); FALSE for a card terminal, where the composer under it is where you
+   * write and a terminal that steals focus on every reconnect swallows the message being typed.
+   */
+  autoFocus?: boolean;
   className?: string;
   ariaLabel?: string;
 }
@@ -183,6 +189,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
     onStatus,
     onUploadImage,
     localEcho = true,
+    autoFocus = true,
     className,
     ariaLabel,
   },
@@ -257,6 +264,8 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
   statusRef.current = onStatus;
   const echoEnabledRef = React.useRef(localEcho);
   echoEnabledRef.current = localEcho;
+  const autoFocusRef = React.useRef(autoFocus);
+  autoFocusRef.current = autoFocus;
 
   React.useEffect(() => {
     const host = hostRef.current;
@@ -472,8 +481,10 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
         attempt = 0;
         setStatus("open");
         // Focus on EVERY open, reconnects included: a session that comes back and does not take the
-        // keyboard leaves you typing into nothing without any sign of why.
-        term.focus();
+        // keyboard leaves you typing into nothing without any sign of why. Unless the terminal is
+        // NOT the input — a card's composer owns the keyboard, and a reconnect must not yank it out
+        // from under a half-typed message.
+        if (autoFocusRef.current) term.focus();
         echo.reset();
         sendResize();
       };

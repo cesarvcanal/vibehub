@@ -33,7 +33,7 @@ import { XTerminal } from "@/features/board/components/XTerminal";
 import { ChatView } from "@/features/board/components/ChatView";
 import { VncPanel } from "@/features/board/components/VncPanel";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
-import type { XTerminalHandle } from "@/features/board/components/XTerminal";
+import { CardOutbox } from "@/features/board/components/CardOutbox";
 import { nextPosition, statusDot } from "@/features/board/lib/board";
 import { boardTitle, useDocumentTitle } from "@/features/board/lib/documentTitle";
 import type { ConnectionState } from "@/features/board/lib/reconnect";
@@ -49,6 +49,7 @@ import {
   accountLabel,
   boardApi,
   cardKey,
+  cardMessagesKey,
   cardOpensInstantly,
   cardRunnerHint,
   cardSessionKey,
@@ -305,7 +306,6 @@ export function CardTerminalView({
   const [editingTitle, setEditingTitle] = React.useState<string | null>(null);
   const [shellOpen, setShellOpen] = React.useState(false);
   const [browserOpen, setBrowserOpen] = React.useState(false);
-  const termRef = React.useRef<XTerminalHandle | null>(null);
   const [connection, setConnection] = React.useState<ConnectionState>("connecting");
 
   /**
@@ -376,22 +376,22 @@ export function CardTerminalView({
   }
 
   /**
-   * An image pasted or dropped on the terminal is uploaded and its path is typed into the prompt.
-   * The path is absolute and inside the runner: that is the only form the agent can actually read,
-   * since uploads land outside the card's worktree.
+   * Uploads an image so the agent can read it, and answers with its path inside the runner — the
+   * only form Claude can open, since uploads land outside the card's worktree.
    *
-   * There is no success toast. The path appearing in the prompt IS the confirmation, and a toast
-   * on top of it was two notifications for one event — only "uploading" and a failure say anything
-   * the screen does not already show.
+   * `progress` decides whether the WAIT is announced, and that is the whole difference between the
+   * two call sites: the composer already draws a spinner over the thumbnail it just showed you, so
+   * a toast there is a second notification for one event. A drop on the raw terminal has no such
+   * picture, and needs the toast. A failure always speaks.
    */
-  const uploadImage = React.useCallback(
-    async (file: File): Promise<string | null> => {
+  const uploadImageWith = React.useCallback(
+    async (file: File, progress: boolean): Promise<string | null> => {
       if (!file.type.startsWith("image/")) return null;
       if (file.size > UPLOAD_MAX_BYTES) {
         toast.error(translate("cardView.imageTooBig"));
         return null;
       }
-      const pending = toast.loading(translate("cardView.uploadingImage"));
+      const pending = progress ? toast.loading(translate("cardView.uploadingImage")) : null;
       try {
         const { path } = await boardApi.uploadCardImage(cardId, file);
         return path;
@@ -399,10 +399,46 @@ export function CardTerminalView({
         toast.error(apiErrorMessage(error, translate("cardView.uploadError")));
         return null;
       } finally {
-        toast.dismiss(pending);
+        if (pending !== null) toast.dismiss(pending);
       }
     },
     [cardId],
+  );
+
+  /** Dropped on the terminal: the path is typed at the prompt, and the wait gets a toast. */
+  const uploadImage = React.useCallback(
+    (file: File) => uploadImageWith(file, true),
+    [uploadImageWith],
+  );
+
+  /** Pasted into the composer: the thumbnail and its spinner are the whole story already. */
+  const uploadAttachment = React.useCallback(
+    (file: File) => uploadImageWith(file, false),
+    [uploadImageWith],
+  );
+
+  /**
+   * ENTER in the composer. The message does NOT go down the websocket any more: it is handed to the
+   * card's outbox on the server, which delivers it to a RUNNING Claude or holds it until there is
+   * one. A terminal socket types into whatever the pane happens to be — including the bare shell a
+   * card falls back to when Claude exits, where the message is executed and lost.
+   *
+   * Throwing matters: the composer keeps the text in the field when this rejects.
+   */
+  const sendMessage = React.useCallback(
+    async (text: string) => {
+      try {
+        const result = await boardApi.sendCardMessage(cardId, text);
+        queryClient.setQueryData(cardMessagesKey(cardId), {
+          pending: result.pending,
+          agent: result.agent,
+        });
+      } catch (error) {
+        toast.error(apiErrorMessage(error, translate("outbox.sendError")));
+        throw error;
+      }
+    },
+    [cardId, queryClient],
   );
 
   /**
@@ -841,13 +877,25 @@ export function CardTerminalView({
           <Loader2 className="h-4 w-4 animate-spin" /> {t("cardView.loadingCard")}
         </div>
       ) : !showTerminal ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
-          <div className="flex items-center gap-2">
-            <Loader2 className="h-4 w-4 animate-spin" /> {t("cardView.preparing")}
+        // A card that is still cloning has no terminal to type into — but it is EXACTLY the moment
+        // someone wants to say what the card is for. The composer is here, and what it sends goes
+        // to the outbox: queued now, delivered the instant Claude is up. The wait costs nothing.
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
+            <div className="flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" /> {t("cardView.preparing")}
+            </div>
+            <p className="max-w-md text-center text-xs opacity-70">
+              {t("cardView.firstCardNote")}
+            </p>
           </div>
-          <p className="max-w-md text-center text-xs opacity-70">
-            {t("cardView.firstCardNote")}
-          </p>
+          <CardOutbox cardId={cardId} />
+          <TerminalComposer
+            className="mt-1.5"
+            cardId={cardId}
+            onSend={sendMessage}
+            onUploadImage={uploadAttachment}
+          />
         </div>
       ) : (
         // Terminal LEFT, browser RIGHT, half each. Chromium is landscape and a browser stacked under
@@ -870,23 +918,26 @@ export function CardTerminalView({
             ) : (
               <>
                 <XTerminal
-                  ref={termRef}
                   zoomControl
                   wsPath={`/api/cards/${encodeURIComponent(cardId)}/terminal`}
                   reconnectKey={reconnectKey}
                   onStatus={setConnection}
                   onUploadImage={uploadImage}
+                  /* The COMPOSER is where a card is written from. A terminal that grabs the keyboard on
+                     every open (and every reconnect) puts the caret in the raw session, which is how a
+                     first message ends up typed into xterm instead of the field below. Clicking the
+                     terminal still focuses it — that is the deliberate way in. */
+                  autoFocus={false}
                   ariaLabel={t("cardView.terminalFor", { title: card?.title ?? t("cardView.cardFallback") })}
                 />
-                {/* Compose here, send when ready — the field accumulates until Enter or Send. */}
+                {/* Anything composed that has not reached the agent yet — usually nothing at all. */}
+                <CardOutbox cardId={cardId} />
+                {/* Compose here, send when ready — the field accumulates until Enter. */}
                 <TerminalComposer
                   className="mt-1.5"
                   cardId={cardId}
-                  onSend={(text) => {
-                    termRef.current?.sendText(text);
-                    termRef.current?.focus();
-                  }}
-                  onUploadImage={uploadImage}
+                  onSend={sendMessage}
+                  onUploadImage={uploadAttachment}
                 />
               </>
             )}

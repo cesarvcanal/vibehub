@@ -5,6 +5,7 @@ import * as registry from "../services/board/registry.js";
 import {
   applySessionChange, killCardSession, pauseCard, prepareCard, restartCard, resumeCard,
 } from "../services/board/workspace.js";
+import * as outbox from "../services/board/outbox.js";
 import { runnerToken } from "../runtime/runner.js";
 import { logger } from "../utils/logger.js";
 
@@ -281,6 +282,10 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
         );
       }
     }
+    // The agent just told us where it is. `waiting` means it reached its prompt — the best possible
+    // moment for anything queued for this card, and the reason a message typed while Claude was
+    // down lands the instant it comes back. Fire-and-forget: the hook has a 3s timeout.
+    if (card && status === "waiting") void outbox.flushCard(card.id);
     return await reply.send({ ok: true, applied: Boolean(card) });
   });
 }

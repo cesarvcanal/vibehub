@@ -84,6 +84,9 @@ running.
 | POST | `/api/cards/:id/restart` | fresh Claude process in the same worktree |
 | POST | `/api/cards/restart-all` | `{ restarted, skipped }` |
 | POST | `/api/cards/:id/upload` | `{ name, content }` with bare base64 → `{ path }` inside the runner (10 MB cap) |
+| POST | `/api/cards/:id/messages` | `{ text }` → `{ delivered, pending, agent }` — the composer's Enter. Delivered to a RUNNING Claude, otherwise QUEUED until there is one |
+| GET | `/api/cards/:id/messages` | `{ pending: OutboxMessage[], agent }` — `agent` is `running` / `shell` / `none` |
+| DELETE | `/api/cards/:id/messages/:messageId` | gives up on one queued message |
 | POST/DELETE | `/api/cards/:id/browser` | start/stop the card's live browser |
 | WS | `/api/cards/:id/terminal` | xterm bridge (`?shell=1` for a plain shell in the same worktree) |
 | WS | `/api/cards/:id/chat` | the SAME session read as a conversation: one JSON `ChatEvent` per frame (`{ id, kind: "user"\|"assistant"\|"tool", at, text, tool? }`), parsed from Claude Code's transcript. Opens with the last turns and streams what is appended; blank frames are the follower's heartbeat |
