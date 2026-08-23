@@ -83,8 +83,18 @@ export function BoardPage() {
     [setSearchParams],
   );
 
-  // Clicking a project selects it; clicking the selected one deselects it (the aggregated board).
-  const selectProject = (id: string) => go(id === selected?.id ? null : id);
+  /**
+   * The project's NAME navigates — unfolding its cards is the chevron's job now, and no longer
+   * costs you the terminal you had open.
+   *
+   * Clicking the project you are ALREADY on goes up exactly one level: out of a card to that
+   * project's board, and from that board to the aggregated one. It used to jump straight to the
+   * aggregated board from inside a card, which threw away two levels for one click.
+   */
+  const selectProject = (id: string) => {
+    if (id !== selected?.id) return go(id);
+    return go(cardId ? id : null);
+  };
   // Clicking a card opens it; clicking the one already open closes it (back to that project's board).
   const openCard = (nextProjectId: string, nextCardId: string) =>
     go(nextProjectId, projectId === nextProjectId && cardId === nextCardId ? null : nextCardId);

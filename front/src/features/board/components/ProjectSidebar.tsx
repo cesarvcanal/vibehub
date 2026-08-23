@@ -2,7 +2,17 @@ import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
-  Check, ChevronDown, ChevronUp, FolderGit2, Moon, Pause, Pencil, Plus, RotateCw, Trash2,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  FolderGit2,
+  Moon,
+  Pause,
+  Pencil,
+  Plus,
+  RotateCw,
+  Trash2,
 } from "lucide-react";
 import { cn, isNewTabClick } from "@/lib/utils";
 import { apiErrorMessage } from "@/lib/apiError";
@@ -20,9 +30,12 @@ import {
   cardDot,
   cardHref,
   dotClass,
+  gapToPosition,
+  isBelowMidpoint,
   nextPosition,
   splitSidebarCards,
 } from "@/features/board/lib/board";
+import { useExpandedProjects } from "@/features/board/lib/sidebarExpanded";
 import { RecentCards } from "@/features/board/components/RecentCards";
 import {
   boardApi,
@@ -43,11 +56,17 @@ import { t as translate, useT } from "@/i18n";
  * want to reach next, so the sidebar does not change either — it is the same component, in the same
  * place, on both views, and only the middle of the page swaps.
  *
- * Every row is one project. Clicking one SELECTS it: its board fills the middle and its cards
- * unfold underneath it, right here. Clicking the selected one again DESELECTS it and you get the
- * aggregated board — which is why there is no "All projects" row to hunt for. Clicking a card opens
- * its terminal; clicking the card that is already open closes it and puts the board back. Every
- * click moves exactly one level, in or out, which is why there is no "back to board" button either.
+ * Every row is one project, and it answers to TWO different clicks, because unfolding a project
+ * and going to it are two different intentions. The CHEVRON unfolds its cards where they are and
+ * changes nothing else — as many projects open at once as you like, and the card you have open
+ * stays open, which is the whole reason it exists. The NAME navigates: that project's board fills
+ * the middle. Clicking the name of the project you are already on takes you up one level — out of
+ * a card to its board, and from the board to the aggregated one, which is why there is no "All
+ * projects" row and no "back to board" button.
+ *
+ * Clicking a card opens its terminal, from ANY unfolded project rather than only the selected one:
+ * moving from one agent to another is one click from anywhere in the list. Clicking the card that
+ * is already open closes it and puts the board back.
  *
  * It is also the app's only chrome: the brand sits at the TOP of the panel and the account row
  * (theme, settings, sign out) at its BOTTOM. There is no page header any more — that band of
@@ -99,6 +118,7 @@ export function ProjectSidebar({
   onDeleteProject: (project: BoardProject) => void;
 }) {
   const t = useT();
+  const { isExpanded, toggle } = useExpandedProjects(selectedProjectId);
   const [draggingId, setDraggingId] = React.useState<string | null>(null);
   const [dropAt, setDropAt] = React.useState<{ index: number; below: boolean } | null>(null);
 
@@ -184,6 +204,10 @@ export function ProjectSidebar({
                 first={index === 0}
                 last={index === projects.length - 1}
                 selected={selected}
+                expanded={isExpanded(project.id)}
+                onToggleExpanded={() => toggle(project.id)}
+                // Only the selected project can own the card that is open: opening a card selects
+                // its project, so the two ids always belong together.
                 activeCardId={selected ? selectedCardId : null}
                 draggingId={draggingId}
                 dropLine={
@@ -219,14 +243,15 @@ export function ProjectSidebar({
 /**
  * One project.
  *
- * The row itself is a folder, a name and an always-visible `+`. Nothing else: the repository moved
+ * The row itself is a chevron, a name and an always-visible `+`. Nothing else: the repository moved
  * into the tooltip, and the management actions (reorder, delete) moved into the right-click menu,
  * because a row that sprouts three icon buttons on hover is a row you cannot read at a glance.
  *
- * When SELECTED it unfolds its cards, and only then does it fetch them — one poll, for the project
- * you are actually looking at. The cards that are working or waiting are always listed; the rest
- * hide behind "show more"; finished ones never appear, EXCEPT the card whose terminal is open,
- * which is always listed or the one thing on screen would be the one thing you cannot see.
+ * When UNFOLDED it lists its cards, and only then does it fetch them. Unfolded is not the same as
+ * selected — several projects can be open at once, and each open one polls, because a list of cards
+ * with stale dots is worse than no list. The cards that are working or waiting are always listed;
+ * the rest hide behind "show more"; finished ones never appear, EXCEPT the card whose terminal is
+ * open, which is always listed or the one thing on screen would be the one thing you cannot see.
  */
 function ProjectRow({
   project,
@@ -234,6 +259,8 @@ function ProjectRow({
   first,
   last,
   selected,
+  expanded,
+  onToggleExpanded,
   activeCardId,
   draggingId,
   dropLine,
@@ -252,6 +279,9 @@ function ProjectRow({
   first: boolean;
   last: boolean;
   selected: boolean;
+  /** Are this project's cards unfolded? Independent of `selected` — see the chevron. */
+  expanded: boolean;
+  onToggleExpanded: () => void;
   activeCardId: string | null;
   draggingId: string | null;
   dropLine: "top" | "bottom" | null;
@@ -275,13 +305,15 @@ function ProjectRow({
     // 2s, not 5s: the dot is the one thing on screen that has to feel live. A card that just went
     // amber is a card asking for you, and three extra seconds of green reads as "still busy".
     refetchInterval: 2_000,
-    enabled: selected,
+    // Unfolded, not selected: every open list has live dots, or the reason to keep two projects
+    // open at once — watching both — would not survive the first poll.
+    enabled: expanded,
   });
 
   const [showMore, setShowMore] = React.useState(false);
   React.useEffect(() => {
-    if (!selected) setShowMore(false);
-  }, [selected]);
+    if (!expanded) setShowMore(false);
+  }, [expanded]);
 
   const { active, idle } = splitSidebarCards(cards ?? []);
   const openCard = activeCardId ? (cards ?? []).find((c) => c.id === activeCardId) : undefined;
@@ -480,12 +512,31 @@ function ProjectRow({
       {/* Right-click anywhere on the row line, not only on the name. The card rows below have a
           menu of their own and stop the event, so the two never collide. */}
       <div className="flex items-center gap-0.5" onContextMenu={openAt}>
+        {/* The disclosure, ahead of the folder icon and outside the name button. It is its OWN
+            target, which is the whole point: unfolding a project never navigates anywhere. */}
+        <button
+          type="button"
+          onClick={onToggleExpanded}
+          aria-expanded={expanded}
+          aria-label={
+            expanded
+              ? t("sidebar.collapseProject", { name: project.name })
+              : t("sidebar.expandProject", { name: project.name })
+          }
+          className="ml-2 flex h-6 w-5 shrink-0 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
+        >
+          {expanded ? (
+            <ChevronDown className="h-3.5 w-3.5" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5" />
+          )}
+        </button>
         <button
           type="button"
           onClick={onSelect}
           aria-pressed={selected}
           title={projectHint(project)}
-          className="flex min-w-0 flex-1 cursor-grab items-center gap-2.5 py-2.5 pl-3 pr-1 text-left active:cursor-grabbing"
+          className="flex min-w-0 flex-1 cursor-grab items-center gap-2 py-2.5 pl-1 pr-1 text-left active:cursor-grabbing"
         >
           <FolderGit2 className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span
@@ -511,7 +562,7 @@ function ProjectRow({
         </Button>
       </div>
 
-      {selected ? (
+      {expanded ? (
         <div className="pb-1.5">
           {listed.map(renderCard)}
           {/* The revealed cards appear ABOVE the toggle, which stays anchored at the end of the
@@ -654,18 +705,7 @@ function SidebarCard({
 
 /* ------------------------------------------------------------- drag maths */
 
-/** Is the pointer in the BOTTOM half of the row it is over (drop after, rather than before)? PURE. */
-export function isBelowMidpoint(pointerY: number, rectTop: number, rectHeight: number): boolean {
-  return pointerY >= rectTop + rectHeight / 2;
-}
-
-/**
- * Turns a gap index (0..n, in the FULL list) into the `position` the server expects — the index
- * after the moved item has been taken out. Dropping a row back where it already is, on either side
- * of itself, is a no-op.
- */
-export function gapToPosition(gap: number, from: number): number {
-  if (gap === from || gap === from + 1) return from;
-  return gap > from ? gap - 1 : gap;
-}
+// The maths of dropping between two rows is the same here and on the kanban, so it lives in
+// `lib/board` and both read it from there. Re-exported because this is where it was first written.
+export { gapToPosition, isBelowMidpoint };
 

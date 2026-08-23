@@ -369,9 +369,68 @@ describe("BoardPage — the sidebar", () => {
 
     await user.click(within(nav).getByRole("button", { name: "billing" }));
 
-    // Deselected: the aggregated board, the cards folded away, and no board of its own.
+    // Deselected: the aggregated board, and no board of its own. The cards stay UNFOLDED — the
+    // fold belongs to the chevron now, and navigating never closes a list you opened.
     expect(await screen.findByText(/4 cards · 2 projects/)).toBeInTheDocument();
+    expect(within(nav).getByRole("link", { name: "chase the flake" })).toBeInTheDocument();
+  });
+
+  it("unfolds another project from the chevron WITHOUT leaving the card you are in", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    await screen.findByTestId("terminal");
+    const nav = sidebar();
+
+    await user.click(within(nav).getByRole("button", { name: "Show gateway's cards" }));
+
+    // The other project's cards are listed, and the terminal never went anywhere.
+    expect(await within(nav).findByRole("link", { name: "rotate the key" })).toBeInTheDocument();
+    expect(screen.getByTestId("terminal")).toHaveTextContent("c2");
+  });
+
+  it("folds a project away again from the same chevron", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+    await within(nav).findByRole("link", { name: "chase the flake" });
+
+    await user.click(within(nav).getByRole("button", { name: "Hide billing's cards" }));
+
     expect(within(nav).queryByRole("link", { name: "chase the flake" })).not.toBeInTheDocument();
+    // And the project is still the selected one — folding is not navigating.
+    expect(screen.getByRole("region", { name: "Working" })).toBeInTheDocument();
+  });
+
+  it("opens a card belonging to ANOTHER project in one click", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    await screen.findByTestId("terminal");
+    const nav = sidebar();
+
+    await user.click(within(nav).getByRole("button", { name: "Show gateway's cards" }));
+    await user.click(await within(nav).findByRole("link", { name: "rotate the key" }));
+
+    // Straight from one agent to another, without passing through the other project's board.
+    await waitFor(() => expect(screen.getByTestId("terminal")).toHaveTextContent("c4"));
+    // ...and the project came with it: the sidebar marks gateway as the one you are in.
+    expect(within(sidebar()).getByRole("button", { name: "gateway" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("takes the open card up to its own board when its project's name is clicked", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    await screen.findByTestId("terminal");
+
+    await user.click(within(sidebar()).getByRole("button", { name: "billing" }));
+
+    // One level up: billing's board, NOT the aggregated one.
+    await waitFor(() => expect(screen.queryByTestId("terminal")).not.toBeInTheDocument());
+    expect(await screen.findByText(/3 cards/)).toBeInTheDocument();
+    // Not the aggregated board, which is the one that counts projects alongside cards.
+    expect(screen.queryByText(/cards · /)).not.toBeInTheDocument();
   });
 
   it("jumps straight to another project's board from wherever you are", async () => {
