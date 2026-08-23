@@ -10,6 +10,9 @@
  */
 export const ptBR: Record<string, string> = {
   /* ------------------------------------------------------------------ comum */
+  "error.crashTitle": "Alguma coisa quebrou nesta tela",
+  "error.crashBody": "A página parou de renderizar. Recarregar costuma resolver na hora — o erro abaixo é o que aconteceu.",
+  "error.crashReload": "Recarregar a página",
   "common.cancel": "Cancelar",
   "common.delete": "Excluir",
   "common.save": "Salvar",

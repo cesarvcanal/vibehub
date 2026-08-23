@@ -1046,7 +1046,7 @@ describe("the brain (global CLAUDE.md) seeded on open", () => {
 // Pre-provisioning and the per-card lock
 // ---------------------------------------------------------------------------
 
-describe("pre-provisioning (prepareCard) and the per-card lock", () => {
+describe("pre-provisioning (prepareCard) and the per-clone lock", () => {
   it("prepareCard runs the SAME script as the open but does NOT apply the open rule", async () => {
     const { card } = await seed();
     const prep = await ws.prepareCard(card.id, "local:tester");
@@ -1101,15 +1101,17 @@ describe("pre-provisioning (prepareCard) and the per-card lock", () => {
     expect(opened.column).toBe("waiting");
   });
 
-  it("LOCK: a prepare that FAILS does not wedge the card; different cards do not block each other", async () => {
-    const { card, project } = await seed();
-    const other = await reg.createCard({ projectId: project.id, title: "Other" });
+  it("LOCK: a prepare that FAILS does not wedge the card; a card of ANOTHER clone does not wait", async () => {
+    const { card } = await seed();
+    // Another project = another clone directory = another queue.
+    const otherProject = await reg.createProject({ name: "bank-api", repoFullName: "acme/bank-api" });
+    const other = await reg.createCard({ projectId: otherProject.id, title: "Other" });
     let failPrepare: () => void = () => {};
     runScript.mockImplementationOnce(() => new Promise((_res, rej) => { failPrepare = () => rej(new Error("docker died")); }));
     const prepareP = ws.prepareCard(card.id);
     await vi.waitFor(() => expect(runScript).toHaveBeenCalledTimes(1));
 
-    // the other card does not wait on this card's lock
+    // a card that writes to a DIFFERENT clone does not wait on this one's lock
     expect((await ws.openCard(other.id)).column).toBe("waiting");
     expect(runScript).toHaveBeenCalledTimes(2);
 
@@ -1119,6 +1121,51 @@ describe("pre-provisioning (prepareCard) and the per-card lock", () => {
 
     expect((await ws.openCard(card.id)).column).toBe("waiting");
     expect(runScript).toHaveBeenCalledTimes(3);
+  });
+
+  /**
+   * THE REGRESSION. Two cards of the same project used to hold two DIFFERENT locks, so creating a
+   * card while another was being provisioned ran two scripts against one clone: a second `git clone`
+   * into a half-populated directory, or a `fetch`/`worktree add` overlapping another. `set -e` then
+   * killed the script and the card simply refused to open — until the first clone finished and a
+   * retry silently worked, which is what made it look random.
+   */
+  it("LOCK: two cards of the SAME project NEVER run two scripts at once against the clone", async () => {
+    const { card, project } = await seed();
+    const sibling = await reg.createCard({ projectId: project.id, title: "Sibling" });
+    let live = 0;
+    let maxLive = 0;
+    runScript.mockImplementation(async () => {
+      live += 1;
+      maxLive = Math.max(maxLive, live);
+      await new Promise((r) => setTimeout(r, 10));
+      live -= 1;
+      return { stdout: "", stderr: "" };
+    });
+
+    await Promise.all([ws.prepareCard(card.id), ws.openCard(sibling.id)]);
+
+    expect(runScript).toHaveBeenCalledTimes(2);
+    expect(maxLive).toBe(1); // serialized, not concurrent
+  });
+
+  it("LOCK: a project with NO repository locks per card — nothing is shared, so nothing queues", async () => {
+    const project = await reg.createProject({ name: "scratch" });
+    const a = await reg.createCard({ projectId: project.id, title: "A" });
+    const b = await reg.createCard({ projectId: project.id, title: "B" });
+    let live = 0;
+    let maxLive = 0;
+    runScript.mockImplementation(async () => {
+      live += 1;
+      maxLive = Math.max(maxLive, live);
+      await new Promise((r) => setTimeout(r, 10));
+      live -= 1;
+      return { stdout: "", stderr: "" };
+    });
+
+    await Promise.all([ws.openCard(a.id), ws.openCard(b.id)]);
+
+    expect(maxLive).toBe(2); // no clone to corrupt: they run together
   });
 
   it("LOCK: two simultaneous opens on one card serialize and both see the same stamp", async () => {

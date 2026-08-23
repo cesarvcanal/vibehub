@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { requireSession } from "../auth/session.js";
 import * as registry from "../services/board/registry.js";
-import { restartCard, applySessionChange } from "../services/board/workspace.js";
+import { prepareCard, restartCard, applySessionChange } from "../services/board/workspace.js";
 import { runnerToken } from "../runtime/runner.js";
 import { logger } from "../utils/logger.js";
 
@@ -109,7 +109,24 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
         // Optional fields (account, model, branch, imported session) are applied through the same
         // validation path an edit uses — one place where those values are checked, not two.
         const hasPatch = Object.values(patch).some((v) => v !== undefined);
-        return await reply.send({ card: hasPatch ? await registry.updateCard(card.id, patch) : card });
+        const created = hasPatch ? await registry.updateCard(card.id, patch) : card;
+        // PRE-PROVISIONING, in the background and AFTER the patch (the account, the model and the
+        // branch are what the script is built from): the clone, the worktree and the tmux session
+        // start being built the moment the card exists, while the user is still reading the board.
+        // Without it the whole cost — a full `git clone` on a project's first card — is paid inside
+        // the /open the click fires, which is a request that can sit there for minutes with nothing
+        // on screen but "preparing".
+        //
+        // Fire-and-forget ON PURPOSE: creating a card must answer immediately and must never fail
+        // because the runner is down. Whatever it does not finish, the open redoes (same idempotent
+        // script, same lock — the click QUEUES behind this instead of racing it).
+        void prepareCard(created.id, "card.create").catch((err: unknown) => {
+          logger.warn(
+            { card: created.worktreeSlug, detail: (err as Error).message },
+            "pre-provisioning of the new card failed (best-effort) — the first open will do it",
+          );
+        });
+        return await reply.send({ card: created });
       } catch (err) {
         const { code, body } = badRequest(err);
         return await reply.code(code).send(body);

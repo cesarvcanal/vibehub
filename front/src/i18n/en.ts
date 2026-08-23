@@ -10,6 +10,9 @@
  */
 export const en: Record<string, string> = {
   /* ------------------------------------------------------------------ common */
+  "error.crashTitle": "Something broke on this screen",
+  "error.crashBody": "The page stopped rendering. Reloading usually brings it straight back — the error below is what went wrong.",
+  "error.crashReload": "Reload the page",
   "common.cancel": "Cancel",
   "common.delete": "Delete",
   "common.save": "Save",

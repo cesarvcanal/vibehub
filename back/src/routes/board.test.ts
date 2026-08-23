@@ -12,6 +12,8 @@ const RUNNER_TOKEN = "runner-token-abcdef";
 
 /** The status hook's only side effect on the runner: the deferred restart of a flagged card. */
 const restartCard = vi.fn(async (id: string) => ({ id }));
+/** Creating a card kicks the workspace off in the BACKGROUND — the runner is not part of this suite. */
+const prepareCard = vi.fn(async (id: string) => ({ id }));
 
 async function boot(): Promise<FastifyInstance> {
   vi.resetModules();
@@ -31,7 +33,7 @@ async function boot(): Promise<FastifyInstance> {
   }));
   vi.doMock("../services/board/workspace.js", async () => {
     const actual = await vi.importActual<typeof import("../services/board/workspace.js")>("../services/board/workspace.js");
-    return { ...actual, restartCard };
+    return { ...actual, restartCard, prepareCard };
   });
   const { buildServer } = await import("../index.js");
   const server = await buildServer();
@@ -324,5 +326,42 @@ describe("board routes require a session", () => {
     for (const url of ["/api/projects", "/api/cards", "/api/accounts"]) {
       expect((await app.inject({ method: "GET", url })).statusCode, url).toBe(401);
     }
+  });
+});
+
+describe("card creation", () => {
+  it("PRE-PROVISIONS the new card in the background, without making the response wait for it", async () => {
+    const projectId = await makeProject();
+    const res = await app.inject({
+      method: "POST", url: "/api/cards", headers: { cookie }, payload: { projectId, title: "nova" },
+    });
+    expect(res.statusCode).toBe(200);
+    const card = res.json().card;
+    // The response is the CARD, not the workspace: the clone happens alongside it.
+    expect(card.preparedAt).toBeUndefined();
+    await vi.waitFor(() => expect(prepareCard).toHaveBeenCalledWith(card.id, "card.create"));
+  });
+
+  it("pre-provisions with the OPTIONAL fields already applied (account/model/branch reach the script)", async () => {
+    const projectId = await makeProject();
+    const res = await app.inject({
+      method: "POST", url: "/api/cards", headers: { cookie },
+      payload: { projectId, title: "com conta", model: "claude-opus-5", branch: "feat/x" },
+    });
+    const card = res.json().card;
+    expect(card.model).toBe("claude-opus-5");
+    expect(card.branch).toBe("feat/x");
+    // Fired AFTER the patch: the id is the same card, and by then it already carries the fields.
+    await vi.waitFor(() => expect(prepareCard).toHaveBeenCalledWith(card.id, "card.create"));
+  });
+
+  it("a pre-provisioning that BLOWS UP never reaches the caller (the first open covers it)", async () => {
+    prepareCard.mockRejectedValueOnce(new Error("docker died"));
+    const projectId = await makeProject();
+    const res = await app.inject({
+      method: "POST", url: "/api/cards", headers: { cookie }, payload: { projectId, title: "sem runner" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().card.title).toBe("sem runner");
   });
 });

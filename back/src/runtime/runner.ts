@@ -244,8 +244,40 @@ export interface RunnerStatusView {
   detail?: string;
 }
 
+/**
+ * Last answer, so a burst of callers does not turn into a burst of `docker exec`.
+ *
+ * The status is read by three different surfaces (the boot probe on every page load, the board's
+ * runner chip every 20s, the wizard) and it costs a round trip to the Docker host — the same host
+ * that is, at that very moment, cloning a repository for a new card. Under that load the probe is
+ * the slowest thing in the request, so callers that can live with a slightly stale answer say so
+ * (`maxAgeMs`) and get the previous one for free. No argument = always fresh.
+ */
+let lastStatus: { at: number; view: RunnerStatusView } | null = null;
+/** In-flight probe, so N concurrent callers share ONE `docker exec` instead of starting N. */
+let statusInFlight: Promise<RunnerStatusView> | null = null;
+
+export interface RunnerStatusOpts {
+  /** Accept a cached answer up to this old (ms). Absent/0 = probe the host now. */
+  maxAgeMs?: number;
+}
+
 /** Health of the runner: is Docker there, is the container up, is Claude installed? */
-export async function runnerStatus(): Promise<RunnerStatusView> {
+export async function runnerStatus(opts: RunnerStatusOpts = {}): Promise<RunnerStatusView> {
+  const maxAge = opts.maxAgeMs ?? 0;
+  if (maxAge > 0 && lastStatus && Date.now() - lastStatus.at <= maxAge) return lastStatus.view;
+  if (statusInFlight) return await statusInFlight;
+  statusInFlight = probeRunnerStatus().finally(() => { statusInFlight = null; });
+  return await statusInFlight;
+}
+
+async function probeRunnerStatus(): Promise<RunnerStatusView> {
+  const view = await readRunnerStatus();
+  lastStatus = { at: Date.now(), view };
+  return view;
+}
+
+async function readRunnerStatus(): Promise<RunnerStatusView> {
   const host = hostExecutor();
   const { container } = config.runner;
   const base: RunnerStatusView = {
@@ -261,7 +293,9 @@ export async function runnerStatus(): Promise<RunnerStatusView> {
         `echo "running=$(docker ps -q -f name=^${container}$ | head -1 | wc -l | tr -d ' ')"`,
         `echo "claude=$(docker exec ${shQuote(container)} sh -lc 'command -v claude >/dev/null && echo 1 || echo 0' 2>/dev/null || echo 0)"`,
       ].join("\n"),
-      { timeoutMs: 30_000 },
+      // Bounded on purpose: this probe sits in front of the app's first paint, so "the Docker host
+      // is not answering" has to become an answer in seconds, not half a minute.
+      { timeoutMs: 15_000 },
     );
     const read = (key: string): string => new RegExp(`^${key}=(.*)$`, "m").exec(stdout)?.[1]?.trim() ?? "";
     return {
@@ -275,6 +309,12 @@ export async function runnerStatus(): Promise<RunnerStatusView> {
     const detail = err instanceof HostExecError ? err.message : String(err);
     return { ...base, detail };
   }
+}
+
+/** Drops the cached status — tests and hot-reload only. */
+export function resetRunnerStatusCacheForTesting(): void {
+  lastStatus = null;
+  statusInFlight = null;
 }
 
 /** Starts a stopped runner (after a host reboot, say). */
