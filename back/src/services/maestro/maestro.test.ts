@@ -349,6 +349,21 @@ describe("model signals", () => {
     expect(maestro.pickModel({ model: null, at: 0 }, { model: null, at: 0 })).toBeNull();
   });
 
+  it("a card that PINS a model ignores settings.json — that profile is shared with every other card", async () => {
+    const { maestro } = await load();
+    const turn = { model: "claude-fable-5", at: 1000 };
+    // The bug: `/model opus` typed in a NEIGHBOURING card on the same account wrote "opus" into the
+    // shared profile, and this card (pinned to Fable, started with `--model`) read it as its own.
+    expect(maestro.pickModel(turn, { model: "opus", at: 5000 }, { model: "claude-fable-5", at: 900 })).toBe("claude-fable-5");
+    // The pin is newer than the transcript right after a switch (it restarted the session onto it).
+    expect(maestro.pickModel(turn, { model: null, at: 0 }, { model: "claude-opus-5", at: 2000 })).toBe("claude-opus-5");
+    // `/model` typed HERE after that switch is newer still, and it is what is answering.
+    expect(maestro.pickModel({ model: "claude-sonnet-5", at: 3000 }, { model: null, at: 0 }, { model: "claude-opus-5", at: 2000 }))
+      .toBe("claude-sonnet-5");
+    // No pin: settings.json keeps its old say.
+    expect(maestro.pickModel(turn, { model: "opus", at: 5000 })).toBe("opus");
+  });
+
   it("splits the session script output into transcript and settings", async () => {
     const { maestro } = await load();
     const out = maestro.parseSessionOutput('{"type":"assistant"}\n' + maestro.SESSION_MARKER + "\n1787370000\n{\"model\":\"fable\"}");

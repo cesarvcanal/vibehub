@@ -365,14 +365,23 @@ export function parseLastTurn(jsonl: string): { model: string | null; at: number
 /**
  * Which signal wins: `/model` + Enter writes the profile's settings.json AND switches the running
  * session, so a settings write NEWER than the last reply is the truth until the next reply lands.
- * Otherwise the last reply is. PURE.
+ * Otherwise the last reply is.
+ *
+ * A card that PINS a model replaces settings.json in that contest, it does not join it: the session
+ * starts with `--model`, which beats the profile's `"model"` — and that profile is SHARED by every
+ * card on the account, so any `/model` typed in a neighbouring card would otherwise be read here as
+ * this card's model. The pin is dated (`modelAt`) for the same reason settings.json is: switching it
+ * restarts the session, so from that instant it is newer, and truer, than the turns already in the
+ * transcript. PURE.
  */
 export function pickModel(
   lastTurn: { model: string | null; at: number },
   settings: { model: string | null; at: number },
+  pin: { model: string | null; at: number } = { model: null, at: 0 },
 ): string | null {
-  if (settings.model && settings.at >= lastTurn.at) return settings.model;
-  return lastTurn.model ?? settings.model;
+  const config = pin.model ? pin : settings;
+  if (config.model && config.at >= lastTurn.at) return config.model;
+  return lastTurn.model ?? config.model;
 }
 
 /**
@@ -448,7 +457,7 @@ export async function sessionInfo(cardId: string): Promise<SessionInfo> {
       { timeoutMs: 15_000 },
     );
     const { transcript, settings } = parseSessionOutput(stdout);
-    model = pickModel(parseLastTurn(transcript), settings);
+    model = pickModel(parseLastTurn(transcript), settings, { model: card.model ?? null, at: card.modelAt ?? 0 });
   } catch {
     model = null; // runner unreachable or no transcript yet — the UI shows the default
   }

@@ -56,6 +56,7 @@ import {
   defaultAccountLabelOr,
   modelInUse,
   projectAccountSlug,
+  whitelistModel,
   type BoardCard,
   type BoardProject,
 } from "@/features/board/api";
@@ -213,24 +214,37 @@ export function CardTerminalView({
   });
 
   const accountMutation = useMutation({
-    mutationFn: (accountSlug: string | null) => boardApi.patchCard(cardId, { accountSlug }),
-    onSuccess: (updated) => {
+    mutationFn: (accountSlug: string | null) => boardApi.patchCardSession(cardId, { accountSlug }),
+    onSuccess: ({ card: updated, session: change }) => {
       mirror(updated);
       // The pill shows what is in USE, so it has to re-read the session the switch just changed.
       void queryClient.invalidateQueries({ queryKey: cardSessionKey(updated.id) });
-      toast.success(translate("cardView.accountSwitched"));
+      // Same as the model: the profile is chosen when Claude starts, so a live session has to be
+      // restarted for the switch to be real — or flagged, when Claude is mid-task.
+      if (change === "restarted") setReconnectNonce((n) => n + 1);
+      toast.success(
+        translate(change === "pending" ? "cardView.accountSwitchPending" : "cardView.accountSwitched"),
+      );
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("cardView.accountSwitchError"))),
   });
 
   const modelMutation = useMutation({
-    mutationFn: (model: string | null) => boardApi.patchCard(cardId, { model }),
-    onSuccess: (updated) => {
+    mutationFn: (model: string | null) => boardApi.patchCardSession(cardId, { model }),
+    onSuccess: ({ card: updated, session: change }) => {
       mirror(updated);
       void queryClient.invalidateQueries({ queryKey: cardSessionKey(updated.id) });
       const label =
         CLAUDE_MODELS.find((m) => m.id === updated.model)?.label ?? translate("cardView.accountDefault");
-      toast.success(translate("cardView.modelSwitched", { label }));
+      // The model only reaches Claude when the process STARTS, so the message follows what the
+      // server actually did with the session — it used to promise a switch that never happened.
+      if (change === "restarted") setReconnectNonce((n) => n + 1);
+      toast.success(
+        translate(
+          change === "pending" ? "cardView.modelSwitchPending" : "cardView.modelSwitched",
+          { label },
+        ),
+      );
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("cardView.modelSwitchError"))),
   });
@@ -256,7 +270,10 @@ export function CardTerminalView({
 
   // The two pills answer "what am I talking to", never "what was typed into this card".
   const model = modelInUse(card, session);
-  const modelUnlisted = !CLAUDE_MODELS.some((m) => m.id === model.id);
+  // Which ROW of the menu the model in use belongs to — by family, so the alias settings.json keeps
+  // ("opus") and a dated transcript id both tick the whitelisted row instead of growing a second one.
+  const modelRow = whitelistModel(model.id);
+  const modelUnlisted = !modelRow;
   const accountName = accountInUseName(card, session, accounts, inheritedAccount);
   const defaultAccountName = defaultAccountLabelOr(accountsData?.defaultLabel);
 
@@ -323,9 +340,10 @@ export function CardTerminalView({
   const showTerminal = instant || openMutation.isSuccess;
 
   /**
-   * Changing the account or the model kills the session server-side; changing this key makes the
-   * terminal drop and reattach, which recreates it with the new environment in the SAME
-   * conversation. The restart nonce is appended only once somebody has restarted.
+   * Changing the account or the model ends the session server-side (applySessionChange); changing
+   * this key makes the terminal drop and reattach, which recreates it with the new environment in
+   * the SAME conversation. The nonce covers the rest: an explicit restart, and a switch on a card
+   * whose pin already had that value in the key.
    */
   const reconnectKey =
     `${card?.accountSlug ?? "-"}:${card?.model ?? "-"}` + (reconnectNonce ? `:r${reconnectNonce}` : "");
@@ -440,7 +458,7 @@ export function CardTerminalView({
                 {CLAUDE_MODELS.map((m) => (
                   <DropdownMenuCheckboxItem
                     key={m.id}
-                    checked={model.id === m.id}
+                    checked={modelRow?.id === m.id}
                     onSelect={() => modelMutation.mutate(m.id)}
                   >
                     {m.label}

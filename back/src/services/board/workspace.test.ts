@@ -462,41 +462,44 @@ describe("terminalRemoteArgs / cardAttachArgs (the websocket's COMPLETE attach-o
 // Model whitelist
 // ---------------------------------------------------------------------------
 
-describe("per-card model (ANTHROPIC_DEFAULT_MODEL in the session guard)", () => {
-  const modelGuard = (id: string, dir = "/root/.claude") =>
-    `export IS_SANDBOX=1; export ANTHROPIC_DEFAULT_MODEL=${id}; ` +
-    `if [ -s ${dir}/.oauth-token ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${dir}/.oauth-token)"; fi; `;
-
-  it("a VALID model becomes an env export; an absent one exports nothing", () => {
-    expect(ws.sessionCommand({ model: "claude-opus-5" })).toBe(`${modelGuard("claude-opus-5")}claude; exec bash`);
+describe("per-card model (`claude --model` — the flag, never the env)", () => {
+  it("a VALID model becomes a --model flag; an absent one adds nothing", () => {
+    expect(ws.sessionCommand({ model: "claude-opus-5" })).toBe(`${guard()}claude --model claude-opus-5; exec bash`);
     expect(ws.sessionCommand({})).toBe(CLAUDE);
-    expect(ws.sessionCommand({})).not.toContain("ANTHROPIC_DEFAULT_MODEL");
   });
 
-  it("an INVALID model is IGNORED (not exported, does not throw) — nothing raw reaches the shell", () => {
+  it("the pin is a FLAG, not ANTHROPIC_DEFAULT_MODEL — the profile's settings.json beats that env", () => {
+    // The bug: a card pinned to Opus booted on whatever `/model` last wrote into the SHARED account
+    // profile (Fable), because the env is only the default of last resort.
+    expect(ws.sessionCommand({ model: "claude-opus-5" })).not.toContain("ANTHROPIC_DEFAULT_MODEL");
+  });
+
+  it("an INVALID model is IGNORED (no flag, does not throw) — nothing raw reaches the shell", () => {
     const cmd = ws.sessionCommand({ model: "claude-gpt-9; rm -rf /" });
     expect(cmd).toBe(CLAUDE);
-    expect(cmd).not.toContain("ANTHROPIC_DEFAULT_MODEL");
+    expect(cmd).not.toContain("--model");
     expect(cmd).not.toContain("rm -rf");
   });
 
-  it("account + model + long-lived token coexist in one guard", () => {
+  it("the flag rides EVERY fallback of a resume, so no branch silently drops the pin", () => {
     expect(ws.sessionCommand({ model: "claude-sonnet-5", profileDir: "/root/.claude-profiles/personal", resume: true }))
-      .toBe(`${modelGuard("claude-sonnet-5", "/root/.claude-profiles/personal")}claude -c || claude; exec bash`);
+      .toBe(`${guard("/root/.claude-profiles/personal")}claude --model claude-sonnet-5 -c || claude --model claude-sonnet-5; exec bash`);
+    const imported = ws.sessionCommand({ model: "claude-opus-5", resumeSessionId: "a1b2c3d4-e5f6-4a4a-8b8b-000011112222" });
+    expect(imported.match(/--model claude-opus-5/g)).toHaveLength(3);
   });
 
-  it("both the attach and the open carry the card's model into the session guard", async () => {
+  it("both the attach and the open carry the card's model into the session command", async () => {
     const { project, card } = await seed();
     const c = await reg.updateCard(card.id, { model: "claude-fable-5" });
-    expect(ws.cardAttachArgs(CONTAINER, project, c).at(-1)).toContain("export ANTHROPIC_DEFAULT_MODEL=claude-fable-5;");
+    expect(ws.cardAttachArgs(CONTAINER, project, c).at(-1)).toContain("claude --model claude-fable-5");
 
     await ws.openCard(c.id);
     const tmux = lastScript().split("\n").find((l) => l.includes("tmux new-session"))!;
-    expect(tmux).toContain("export ANTHROPIC_DEFAULT_MODEL=claude-fable-5;");
+    expect(tmux).toContain("claude --model claude-fable-5");
 
-    // a card with no model (the account default): nothing in the guard. The board hands back the
-    // SAME object it stores, so `card` was mutated by updateCard — clear the field explicitly.
-    expect(ws.cardAttachArgs(CONTAINER, project, { ...card, model: undefined }).at(-1)).not.toContain("ANTHROPIC_DEFAULT_MODEL");
+    // a card with no model (the account default): no flag at all. The board hands back the SAME
+    // object it stores, so `card` was mutated by updateCard — clear the field explicitly.
+    expect(ws.cardAttachArgs(CONTAINER, project, { ...card, model: undefined }).at(-1)).not.toContain("--model");
   });
 });
 
@@ -669,6 +672,61 @@ describe("restart (single and all) — a working card is protected", () => {
     expect(scriptAt(0)).not.toContain(`${card.tmuxSession}-sh`);
 
     await expect(ws.restartCard("nope")).rejects.toThrow(/card not found/);
+  });
+
+  it("applySessionChange: a model switch on an IDLE live session ends it (the reattach starts Claude on the new model)", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "waiting");
+    const before = { ...(await reg.getCard(card.id))! }; // a COPY: the registry mutates what it hands back
+    const after = await reg.updateCard(card.id, { model: "claude-opus-5" });
+    runScript.mockClear();
+
+    expect(await ws.applySessionChange(before, after)).toBe("restarted");
+    expect(scriptAt(0)).toContain(`tmux kill-session -t '${card.tmuxSession}'`);
+    expect((await reg.getCard(card.id))?.restartPendingAt ?? null).toBeNull();
+  });
+
+  it("applySessionChange: switching while Claude WORKS flags the card instead of interrupting the task", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    const before = { ...(await reg.getCard(card.id))! };
+    const after = await reg.updateCard(card.id, { model: "claude-opus-5" });
+    runScript.mockClear();
+
+    expect(await ws.applySessionChange(before, after)).toBe("pending");
+    expect(runScript).not.toHaveBeenCalled();
+    const flagged = await reg.getCard(card.id);
+    expect(flagged?.restartReason).toBe("config");
+    expect(flagged?.restartPendingAt).toBeTruthy();
+  });
+
+  it("applySessionChange: an ACCOUNT switch counts too, and an unrelated edit or a dead session changes nothing", async () => {
+    const { card } = await seed();
+    const account = await reg.createAccount({ name: "Personal" });
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "waiting");
+
+    const beforeAccount = { ...(await reg.getCard(card.id))! };
+    const withAccount = await reg.updateCard(card.id, { accountSlug: account.slug });
+    runScript.mockClear();
+    expect(await ws.applySessionChange(beforeAccount, withAccount)).toBe("restarted");
+
+    // A title edit is not a session change.
+    const beforeTitle = { ...(await reg.getCard(card.id))! };
+    const renamed = await reg.updateCard(card.id, { title: "renamed" });
+    runScript.mockClear();
+    expect(await ws.applySessionChange(beforeTitle, renamed)).toBe("none");
+    expect(runScript).not.toHaveBeenCalled();
+
+    // No live session (paused): the pin is simply what the next start will use.
+    await reg.pauseCard(card.id);
+    const beforePaused = { ...(await reg.getCard(card.id))! };
+    const pinned = await reg.updateCard(card.id, { model: "claude-haiku-4-5" });
+    runScript.mockClear();
+    expect(await ws.applySessionChange(beforePaused, pinned)).toBe("none");
+    expect(runScript).not.toHaveBeenCalled();
   });
 
   it("restartAllCards: restarts only the idle ones, SKIPS the working ones, ignores the never-opened", async () => {
