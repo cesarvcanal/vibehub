@@ -41,6 +41,12 @@ an agent bug would land in the app's blast radius. Keeping it in one container i
 - What the agent can reach is exactly what you mounted and configured: the repos you connected, the
   MCP servers you registered, the tokens you planted.
 
+Claude's own first-run walls are taken down per profile before the session starts (see
+`services/accounts/firstRun.ts`): the setup wizard and the trust dialog would otherwise greet every
+card of an account whose profile is new, and every freshly created worktree. Neither asks anything
+the user has not already answered — the account was logged in on the Accounts screen, the worktree
+is a clone of the repository attached to the project.
+
 ## The host executor
 
 `runtime/host.ts` is the only module that knows how a command reaches Docker. Two implementations,

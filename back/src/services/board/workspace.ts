@@ -9,6 +9,7 @@ import {
   type Card, type Project, type RestartReason,
 } from "./registry.js";
 import { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir, profileDirFor, oauthTokenPath } from "../accounts/profiles.js";
+import { firstRunSeedCommand } from "../accounts/firstRun.js";
 import { resolveAccountToken, writeTokenLines, ghTokenPath, writeGhTokenLines, removeGhTokenLines } from "../accounts/token.js";
 import { cardCdpEndpoint } from "../browser/ports.js";
 import { mcpInjectLines, resolveMcpInjections, type McpInjection } from "../mcp/mcp.js";
@@ -76,6 +77,10 @@ export interface SessionCommandOpts {
  * `claude setup-token`), export CLAUDE_CODE_OAUTH_TOKEN read FROM THE FILE — Claude then starts
  * already logged in, no `/login`. With no file nothing changes (the profile's normal login).
  *
+ * Then the FIRST-RUN seed (see accounts/firstRun.ts): the profile's `.claude.json` gets
+ * `hasCompletedOnboarding` and the worktree's trust, so a card never opens on the setup wizard or on
+ * the trust dialog. Idempotent, and never fatal.
+ *
  * Then Claude itself: `resumeSessionId` (imported session) → `claude --resume <id> || claude -c ||
  * claude`; else `resume` (the card already had a session: pause, runner restart) → `claude -c ||
  * claude` — the transcript survives in the profile (CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1); else
@@ -104,6 +109,11 @@ export function sessionCommand(opts: SessionCommandOpts | boolean): string {
   const guard =
     `export IS_SANDBOX=1; ` +
     `if [ -s ${tokenFile} ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${tokenFile})"; fi; ` +
+    // Claude's first-run walls (setup wizard + trust dialog) taken down for THIS profile and THIS
+    // worktree. It lives in the session command — not in the open script — because the websocket's
+    // attach-or-create also creates sessions, and a card born that way used to land on the wizard.
+    // `$PWD` is the session's cwd (tmux new-session -c <worktree>), resolved when the line runs.
+    `${firstRunSeedCommand(profileDir, '"$PWD"')}; ` +
     ghGuard;
   // The pin is a COMMAND-LINE flag, not `ANTHROPIC_DEFAULT_MODEL`: that variable is only the default
   // for when nothing else says anything, and the profile's own settings.json (`"model"`, written by
