@@ -40,6 +40,50 @@ export function assertOauthToken(token: string): string {
 }
 
 /**
+ * GITHUB token per card — lets the card's own `git push` / `gh pr` act as the PROJECT's GitHub
+ * connection (`cesarvcanal`) instead of the runner's ambient `gh` login (the org). Same rules as the
+ * Claude token: the value is written to a per-card file inside the runner over STDIN (mode 600,
+ * never argv, never logged), and the session exports `GH_TOKEN` by reading that file. The runner's
+ * git credential helper is already `gh auth git-credential`, so a set `GH_TOKEN` steers BOTH `git`
+ * and `gh` to the connection identity — while cards without a connection keep the ambient login.
+ */
+const GH_TOKEN_DIR = "/root/.vibehub/gh";
+/** A card id is a uuid; keep the charset tight so it can name a file safely. PURE. */
+const CARD_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/** A GitHub token (ghp_…, github_pat_…, gho_…, or a classic 40-hex): safe charset, no spaces. */
+const GH_TOKEN_RE = /^[A-Za-z0-9_]{20,255}$/;
+
+/** Per-card file that holds the GitHub token inside the runner. THROWS on a bad id. PURE. */
+export function ghTokenPath(cardId: string): string {
+  if (!CARD_ID_RE.test(cardId)) throw new Error(`invalid card id: ${cardId}`);
+  return `${GH_TOKEN_DIR}/${cardId}.token`;
+}
+
+/** A GitHub token sane enough to go into a script (still shell-quoted). THROWS otherwise. PURE. */
+export function assertGhToken(token: string): string {
+  const v = String(token ?? "").trim();
+  if (!GH_TOKEN_RE.test(v)) throw new Error("invalid GitHub token (unexpected characters)");
+  return v;
+}
+
+/** Script lines that WRITE the card's GitHub token (mode 600) inside the runner. PURE. */
+export function writeGhTokenLines(cardId: string, token: string): string[] {
+  const file = ghTokenPath(cardId);
+  return [
+    `mkdir -p ${shQuote(GH_TOKEN_DIR)}`,
+    "umask 077",
+    `printf '%s' ${shQuote(assertGhToken(token))} > ${shQuote(file)}`,
+    `chmod 600 ${shQuote(file)}`,
+  ];
+}
+
+/** Script line that REMOVES the card's GitHub token — keeps the file in sync when a project has no
+ * connection (or it was cleared), so a stale token can never be exported. Idempotent. PURE. */
+export function removeGhTokenLines(cardId: string): string[] {
+  return [`rm -f ${shQuote(ghTokenPath(cardId))}`];
+}
+
+/**
  * Lines for the BODY of a script running INSIDE the runner: write the token to
  * `<profile>/.oauth-token` with mode 600, creating the profile directory first (a brand new account
  * has none yet). Shared by the card open (seeding from the vault) and the token route. PURE.

@@ -115,6 +115,41 @@ describe("script builders (pure)", () => {
   });
 });
 
+describe("GitHub token per card (pure)", () => {
+  const GH = "ghp_ABCdef1234567890ABCdef1234567890";
+
+  it("the path is per-card, under /root/.vibehub/gh, and a bad id THROWS before any file name", async () => {
+    const { token } = await fresh();
+    expect(token.ghTokenPath("be24168d-3c48-4d5b-b56c-6a933805165a")).toBe(
+      "/root/.vibehub/gh/be24168d-3c48-4d5b-b56c-6a933805165a.token",
+    );
+    expect(() => token.ghTokenPath("../../etc/passwd")).toThrow(/invalid card id/);
+    expect(() => token.ghTokenPath("id with space")).toThrow(/invalid card id/);
+  });
+
+  it("write is mode 600 via printf over stdin — token never in argv, mkdir first", async () => {
+    const { token } = await fresh();
+    const lines = token.writeGhTokenLines("id-1", GH).join("\n");
+    expect(lines).toContain("umask 077");
+    expect(lines).toContain(`printf '%s' '${GH}' > '/root/.vibehub/gh/id-1.token'`);
+    expect(lines).toContain("chmod 600 '/root/.vibehub/gh/id-1.token'");
+    expect(lines.indexOf("mkdir -p '/root/.vibehub/gh'")).toBeLessThan(lines.indexOf("printf"));
+  });
+
+  it("remove keeps the file in sync (idempotent rm -f)", async () => {
+    const { token } = await fresh();
+    expect(token.removeGhTokenLines("id-1").join("\n")).toBe("rm -f '/root/.vibehub/gh/id-1.token'");
+  });
+
+  it("a token with unexpected characters THROWS before reaching the shell", async () => {
+    const { token } = await fresh();
+    expect(token.assertGhToken(GH)).toBe(GH);
+    expect(token.assertGhToken("github_pat_11ABCDEFG0abcdefghij_KLMNOPqrstuvwxyz1234567890")).toBeTruthy();
+    expect(() => token.assertGhToken("ghp_x; rm -rf /")).toThrow(/invalid GitHub token/);
+    expect(() => token.assertGhToken("short")).toThrow(/invalid GitHub token/);
+  });
+});
+
 describe("set / resolve / remove", () => {
   it("stores in the vault and plants the file in the runner — never in argv, never in a log", async () => {
     const { token, registry, host } = await fresh();
