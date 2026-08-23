@@ -160,6 +160,17 @@ export interface Card {
    */
   pausedAt?: number | null;
   /**
+   * HIBERNATED card: the tmux session was killed because the card sat IDLE for too long (the idle
+   * sweep, or the manual "hibernate") and NOTHING else changed — same column, same position on the
+   * board. That is the whole point of it: pausing FILES a card away under `paused`, hibernating
+   * leaves it exactly where you left it and only says "this one has gone cold". No dot while it is
+   * hibernated (the front end draws a grey one from this stamp). Waking it up is just opening the
+   * card — `applyOpenTerminal` clears the stamp and the attach recreates the session with
+   * `claude -c`, same conversation. Any status the hooks report clears it too: activity means it is
+   * alive again, whoever started it.
+   */
+  hibernatedAt?: number | null;
+  /**
    * PENDING brain/MCP update: when the brain or the MCP servers are saved while Claude is WORKING on
    * this card, we do not restart right away (that would interrupt the task in flight) — we stamp the
    * moment here and the status hook restarts the session once the card goes idle
@@ -464,12 +475,13 @@ export function reactivatesOnActivity(card: Pick<Card, "column" | "pausedAt">, s
 }
 
 /**
- * A card with a LIVE session in the runner: it has been opened (`openedAt`) and is not paused (an
- * effective pause kills the session and stamps `pausedAt`). A card in `paused` that STILL has a live
+ * A card with a LIVE session in the runner: it has been opened (`openedAt`), is not paused (an
+ * effective pause kills the session and stamps `pausedAt`) and is not HIBERNATED (the idle sweep
+ * killed the session and left the card where it was). A card in `paused` that STILL has a live
  * session is a PENDING pause (moved there while Claude was working; it waits for Claude to finish). PURE.
  */
-export function hasLiveSession(c: Pick<Card, "openedAt" | "pausedAt">): boolean {
-  return !!c.openedAt && !c.pausedAt;
+export function hasLiveSession(c: Pick<Card, "openedAt" | "pausedAt" | "hibernatedAt">): boolean {
+  return !!c.openedAt && !c.pausedAt && !c.hibernatedAt;
 }
 
 /**
@@ -1111,6 +1123,9 @@ export async function applyCardStatus(cardId: string, status: CardStatus): Promi
     }
     card.status = status;
     card.statusAt = Date.now();
+    // A hook fired, so there IS a session again — whoever started it. Hibernation is a statement
+    // about silence and this is the opposite of silence.
+    if (card.hibernatedAt) card.hibernatedAt = null;
     let target: BoardColumn;
     if (reactivatesOnActivity(card, status)) {
       card.pausedAt = null;
@@ -1155,6 +1170,11 @@ export async function applyOpenTerminal(cardId: string): Promise<Card | undefine
     // Resuming a paused card IS opening it: the pause stamp goes away (the session exists again).
     if (card.pausedAt) {
       card.pausedAt = null;
+      changed = true;
+    }
+    // Same for a hibernated one: the attach recreates the session, so the card is warm again.
+    if (card.hibernatedAt) {
+      card.hibernatedAt = null;
       changed = true;
     }
     if (changed) card.updatedAt = Date.now();
@@ -1228,6 +1248,34 @@ export async function pauseCard(cardId: string): Promise<Card> {
     }
     // working -> PENDING pause: the session stays alive and the green dot is kept; the status hook
     // ends it when Claude finishes (`pausedAt` is NOT stamped now).
+    card.updatedAt = Date.now();
+    return card;
+  });
+}
+
+/**
+ * HIBERNATES the card: the session is about to be killed for having sat IDLE, and NOTHING else about
+ * the card changes — same column, same position, same conversation. It is the quiet cousin of the
+ * pause: `pauseCard` files the card away under `paused` because a human decided to park it, this one
+ * only records that a terminal went cold, so the board keeps reading like the board you left.
+ *
+ * Refuses (returns undefined, no throw — the caller is a sweep) anything that is not an idle live
+ * session: a card that was never opened, one that is already paused or hibernated, and above all a
+ * `working` one, which is Claude in the middle of a task. The dot is cleared with the session: a
+ * green or amber dot on a card with no process behind it is a lie.
+ */
+export async function hibernateCard(cardId: string): Promise<Card | undefined> {
+  return store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    if (!card) return undefined;
+    if (!hasLiveSession(card)) return undefined;
+    if (card.status === "working") return undefined;
+    card.hibernatedAt = Date.now();
+    card.status = null;
+    card.statusAt = undefined;
+    // A restart that was waiting for the card to go idle has nothing left to restart.
+    card.restartPendingAt = null;
+    card.restartReason = undefined;
     card.updatedAt = Date.now();
     return card;
   });

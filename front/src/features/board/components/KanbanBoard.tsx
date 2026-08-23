@@ -139,6 +139,19 @@ export function KanbanBoard({
     onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardRestartError"))),
   });
 
+  /**
+   * Hibernate: closes the terminal and leaves the card exactly where it is. What the idle sweep does
+   * on its own, available on the spot for a conversation you already know you are done with today.
+   */
+  const hibernateMutation = useMutation({
+    mutationFn: (id: string) => boardApi.hibernateCard(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: boardKey });
+      toast.success(translate("toast.cardHibernated"));
+    },
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardHibernateError"))),
+  });
+
   const deleteMutation = useMutation({
     mutationFn: (id: string) => boardApi.deleteCard(id),
     onSuccess: () => {
@@ -237,6 +250,7 @@ export function KanbanBoard({
                     onDone={finish}
                     onPause={(c) => pauseMutation.mutate(c.id)}
                     onRestart={restart}
+                    onHibernate={(c) => hibernateMutation.mutate(c.id)}
                     onAccount={(c) => {
                       setAccountChoice(c.accountSlug ?? "");
                       setAccountTarget(c);

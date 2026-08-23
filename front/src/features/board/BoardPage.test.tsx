@@ -412,6 +412,9 @@ describe("BoardPage — the sidebar", () => {
       "Rename",
       "Pause",
       "Restart",
+      // Hibernate sits between the two ways of stopping and the way of ending: it closes the
+      // terminal without moving the card anywhere.
+      "Hibernate",
       "Finish",
     ]);
   });

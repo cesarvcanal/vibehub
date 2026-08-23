@@ -190,6 +190,7 @@ export const ptBR: Record<string, string> = {
   "status.working": "Trabalhando",
   "status.waitingForYou": "Aguardando você",
   "status.paused": "Pausado",
+  "status.hibernated": "Hibernado — o terminal fechou por ficar parado. Abra pra continuar.",
 
   /* ------------------------------------------------------------------ board */
   "board.newCard": "Novo card",
@@ -228,11 +229,13 @@ export const ptBR: Record<string, string> = {
   /* -------------------------------------------------------------- card tile */
   "card.finishToDone": "Concluir (mover pra Feito)",
   "card.pauseEndsSession": "Pausar (encerra a sessão)",
+  "card.hibernateEndsSession": "Hibernar (fecha o terminal, o card fica aqui)",
   "card.claudeAccountMenu": "Conta Claude…",
   "card.deleteCard": "Excluir card",
   "card.pause": "Pausar",
   "card.rename": "Renomear",
   "card.restart": "Reiniciar",
+  "card.hibernate": "Hibernar",
   "card.finish": "Concluir",
   "card.pausingWhenIdle": "Pausando quando ficar livre…",
   "card.pausingWhenIdleHint":
@@ -246,6 +249,7 @@ export const ptBR: Record<string, string> = {
 
   /* ---------------------------------------------------------------- sidebar */
   "sidebar.projects": "Projetos",
+  "sidebar.recent": "Recentes",
   "sidebar.newProject": "Novo projeto",
   "sidebar.newCardIn": "Novo card em {name}",
   "sidebar.newCardHint": "Novo card (⌘K no projeto selecionado)",
@@ -470,6 +474,10 @@ export const ptBR: Record<string, string> = {
   "settings.defaultLabel": "Nome da conta padrão",
   "settings.defaultLabelHint":
     "Como o perfil embutido (/root/.claude) aparece nos seletores.",
+  "settings.idleHibernate": "Hibernar terminal parado depois de",
+  "settings.idleHibernateUnit": "minutos",
+  "settings.idleHibernateHint":
+    "Minutos sem sinal de vida até a sessão ser fechada. O card não sai do lugar, só fica cinza; abrir retoma a mesma conversa. Card trabalhando nunca é tocado. 0 desliga.",
   "settings.voice": "Entrada por voz",
   "settings.transcribeLanguage": "Idioma da transcrição",
   "settings.transcribePlaceholder": "auto (ou um código de duas letras: pt, en, es…)",
@@ -639,6 +647,8 @@ export const ptBR: Record<string, string> = {
   "toast.cardPauseError": "Não deu pra pausar o card",
   "toast.cardRestarting": "Reiniciando o terminal… a conversa retoma na próxima abertura.",
   "toast.cardRestartError": "Não deu pra reiniciar o card",
+  "toast.cardHibernated": "Hibernado — o card fica onde está; abrir retoma a mesma conversa.",
+  "toast.cardHibernateError": "Não deu pra hibernar o card",
   "toast.cardDeleted": "Card excluído.",
   "toast.cardDeleteError": "Não deu pra excluir o card",
   "toast.cardAccountSwitched":

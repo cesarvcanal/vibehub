@@ -18,8 +18,8 @@ ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx statu
 
 | Method | Path | Body / notes |
 |---|---|---|
-| GET | `/api/settings` | `{ git: { name, email }, autonomous, defaultAccountLabel, setupCompletedAt, runner: { kind, container, host, image, baseDir }, publicUrl }` |
-| PATCH | `/api/settings` | `{ git?, autonomous?, defaultAccountLabel?, transcribeLanguage? }` |
+| GET | `/api/settings` | `{ git: { name, email }, autonomous, defaultAccountLabel, setupCompletedAt, transcribeLanguage, idleHibernateMinutes, runner: { kind, container, host, image, baseDir }, publicUrl }` |
+| PATCH | `/api/settings` | `{ git?, autonomous?, defaultAccountLabel?, transcribeLanguage?, idleHibernateMinutes? }` — `idleHibernateMinutes` is a whole number of minutes, 0..10080 (0 = never hibernate) |
 | POST | `/api/settings/setup-complete` | stamps the install as set up so the wizard stops taking over |
 
 ## GitHub
@@ -66,12 +66,14 @@ connection #1 (label = its login) and the secret moves to `GITHUB_TOKEN_<id>`. I
 | DELETE | `/api/projects/:id` | also removes its cards |
 | PATCH | `/api/projects/:id/order` | `{ position }` — sidebar position |
 | GET | `/api/projects/:id/cards` | `{ cards: Card[] }` |
+| GET | `/api/cards` | `{ cards: Card[] }` — every card in the install, for the views that cut across projects (the sidebar's Recent list) |
 | POST | `/api/cards` | `{ projectId, title }` plus any editable field (`branch`, `accountSlug`, `model`, `resumeSessionId`), applied through the same validation an edit uses |
 | GET | `/api/cards/:id` | `{ card }` |
 | PATCH | `/api/cards/:id` | `{ title?, column?, accountSlug?, model? }` — moving to `done` is always manual |
 | DELETE | `/api/cards/:id` | kills the session and drops the worktree |
 | POST | `/api/cards/:id/open` | attach-or-create the tmux session; returns the card |
 | POST | `/api/cards/:id/pause` | kills tmux, clears status, back to backlog |
+| POST | `/api/cards/:id/hibernate` | kills tmux and stamps `hibernatedAt` — the card KEEPS its column and position and loses its dot; a card with nothing to hibernate (never opened, already cold, or `working`) comes back unchanged |
 | POST | `/api/cards/:id/restart` | fresh Claude process in the same worktree |
 | POST | `/api/cards/restart-all` | `{ restarted, skipped }` |
 | POST | `/api/cards/:id/upload` | `{ name, content }` with bare base64 → `{ path }` inside the runner (10 MB cap) |

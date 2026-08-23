@@ -32,6 +32,21 @@ describe("settings", () => {
     expect(settings.autonomous).toBe(false);
   });
 
+  it("defaults the idle hibernation to three hours and validates what replaces it", async () => {
+    const s = await fresh();
+    expect((await s.getSettings()).idleHibernateMinutes).toBe(180);
+
+    expect((await s.updateSettings({ idleHibernateMinutes: 45 })).idleHibernateMinutes).toBe(45);
+    // 0 is the spelling of "never" — a valid choice, not a rejected one.
+    expect((await s.updateSettings({ idleHibernateMinutes: 0 })).idleHibernateMinutes).toBe(0);
+
+    await expect(s.updateSettings({ idleHibernateMinutes: -1 })).rejects.toThrow(/idleHibernateMinutes/);
+    await expect(s.updateSettings({ idleHibernateMinutes: 10_081 })).rejects.toThrow(/idleHibernateMinutes/);
+    await expect(s.updateSettings({ idleHibernateMinutes: 1.5 })).rejects.toThrow(/idleHibernateMinutes/);
+    // and a rejected write changes nothing
+    expect((await s.getSettings()).idleHibernateMinutes).toBe(0);
+  });
+
   it("validates the git identity", async () => {
     const s = await fresh();
     await expect(s.updateSettings({ git: { name: "  " } })).rejects.toThrow(/cannot be empty/);

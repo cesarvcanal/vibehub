@@ -26,6 +26,12 @@ and you get:
 - **A terminal that is actually a terminal.** xterm over a websocket into tmux: colours, copy on
   select, paste, image paste, links. Close the tab, open it on another machine, the session is
   still there.
+- **The conversations you were just in, one click away.** The five most recent ones sit at the top
+  of the sidebar, across every project, and stay there while a terminal is open — answering the next
+  agent never means hunting for the project that owns it.
+- **Terminals that go cold on their own.** A card nobody has touched for a few hours has its session
+  closed and turns grey where it stands — same column, same place, same conversation when you open it
+  again. What you are working on now stops looking like what you walked away from yesterday.
 - **Several Claude accounts, side by side.** Each account is an isolated config profile; pick one
   per project or per card.
 - **Your MCP servers, everywhere.** Register them once; every profile gets them injected.

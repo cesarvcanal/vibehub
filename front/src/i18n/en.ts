@@ -189,6 +189,7 @@ export const en: Record<string, string> = {
   "status.working": "Working",
   "status.waitingForYou": "Waiting for you",
   "status.paused": "Paused",
+  "status.hibernated": "Hibernated — the terminal was closed after sitting idle. Open it to carry on.",
 
   /* ------------------------------------------------------------------ board */
   "board.newCard": "New card",
@@ -227,11 +228,13 @@ export const en: Record<string, string> = {
   /* -------------------------------------------------------------- card tile */
   "card.finishToDone": "Finish (move to Done)",
   "card.pauseEndsSession": "Pause (ends the session)",
+  "card.hibernateEndsSession": "Hibernate (closes the terminal, keeps the card here)",
   "card.claudeAccountMenu": "Claude account…",
   "card.deleteCard": "Delete card",
   "card.pause": "Pause",
   "card.rename": "Rename",
   "card.restart": "Restart",
+  "card.hibernate": "Hibernate",
   "card.finish": "Finish",
   "card.pausingWhenIdle": "Pausing when idle…",
   "card.pausingWhenIdleHint":
@@ -245,6 +248,7 @@ export const en: Record<string, string> = {
 
   /* ---------------------------------------------------------------- sidebar */
   "sidebar.projects": "Projects",
+  "sidebar.recent": "Recent",
   "sidebar.newProject": "New project",
   "sidebar.newCardIn": "New card in {name}",
   "sidebar.newCardHint": "New card (⌘K on the selected project)",
@@ -465,6 +469,10 @@ export const en: Record<string, string> = {
     "The runner is an isolated container — what it reaches is what you connected. Off = Claude asks, and the card waits.",
   "settings.defaultLabel": "Default account label",
   "settings.defaultLabelHint": "How the built-in profile (/root/.claude) is named in pickers.",
+  "settings.idleHibernate": "Hibernate an idle terminal after",
+  "settings.idleHibernateUnit": "minutes",
+  "settings.idleHibernateHint":
+    "Minutes with no sign of life before the session is closed. The card keeps its place on the board and turns grey; opening it resumes the same conversation. A card that is working is never touched. 0 turns it off.",
   "settings.voice": "Voice input",
   "settings.transcribeLanguage": "Transcription language",
   "settings.transcribePlaceholder": "auto (or a two-letter code: pt, en, es…)",
@@ -632,6 +640,8 @@ export const en: Record<string, string> = {
   "toast.cardPauseError": "Could not pause the card",
   "toast.cardRestarting": "Restarting the terminal… the conversation resumes on the next open.",
   "toast.cardRestartError": "Could not restart the card",
+  "toast.cardHibernated": "Hibernated — the card stays where it is; opening it resumes the same conversation.",
+  "toast.cardHibernateError": "Could not hibernate the card",
   "toast.cardDeleted": "Card deleted.",
   "toast.cardDeleteError": "Could not delete the card",
   "toast.cardAccountSwitched": "Account switched — the Claude session restarts on the next open.",

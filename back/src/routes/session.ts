@@ -118,6 +118,23 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
+  /**
+   * HIBERNATE: kill the session, leave the card exactly where it is on the board. A card that has
+   * nothing to hibernate (never opened, already cold, or `working`) is not an error — the answer is
+   * the card as it stands, so the UI can just re-render it.
+   */
+  app.post<{ Params: { id: string } }>("/api/cards/:id/hibernate", { preHandler: requireSession }, async (req, reply) => {
+    try {
+      const hibernated = await workspace.hibernateCard(req.params.id);
+      const card = hibernated ?? (await registry.getCard(req.params.id));
+      if (!card) return await reply.code(404).send({ error: "card not found" });
+      return await reply.send({ card });
+    } catch (err) {
+      const message = (err as Error).message;
+      return await reply.code(/not found/i.test(message) ? 404 : 502).send({ error: message });
+    }
+  });
+
   app.post<{ Params: { id: string } }>("/api/cards/:id/restart", { preHandler: requireSession }, async (req, reply) => {
     try {
       return await reply.send({ card: await workspace.restartCard(req.params.id) });
