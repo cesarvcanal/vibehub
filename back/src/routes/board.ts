@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { requireSession } from "../auth/session.js";
 import * as registry from "../services/board/registry.js";
-import { prepareCard, restartCard } from "../services/board/workspace.js";
+import { prepareCard, restartCard, applySessionChange } from "../services/board/workspace.js";
 import { runnerToken } from "../runtime/runner.js";
 import { logger } from "../utils/logger.js";
 
@@ -144,7 +144,13 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
     "/api/cards/:id", { preHandler: requireSession },
     async (req, reply) => {
       try {
-        return await reply.send({ card: await registry.updateCard(req.params.id, req.body ?? {}) });
+        // The card BEFORE the edit: the model and the account only reach Claude when the process
+        // starts, so a switch has to be carried into the live session (applySessionChange) instead
+        // of just being recorded. `session` tells the screen which of the two happened.
+        const before = await registry.getCard(req.params.id);
+        const card = await registry.updateCard(req.params.id, req.body ?? {});
+        const session = await applySessionChange(before, card);
+        return await reply.send({ card, session });
       } catch (err) {
         const { code, body } = badRequest(err);
         return await reply.code(code).send(body);

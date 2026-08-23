@@ -114,6 +114,17 @@ function assistantText(content: unknown): string {
 }
 
 /**
+ * Where a card's Claude transcripts live INSIDE the runner: the account profile's `projects/`
+ * directory for that card's cwd. Every reader of a transcript — the maestro, the model pill, the
+ * chat view — derives the path here, so they can never disagree about which file is the session.
+ * PURE.
+ */
+export function transcriptDirFor(project: Project, card: Card, accountSlug?: string | null): string {
+  const profileDir = profileDirFor(accountSlug ?? undefined);
+  return seedDestDir(profileDir, cardWorkPaths(project, card).cwd);
+}
+
+/**
  * Reads a Claude Code transcript (`.jsonl`, one JSON object per line) and returns the TEXT of the
  * last `last` assistant messages, oldest first. Malformed lines, non-assistant messages and
  * non-text blocks are dropped. PURE.
@@ -154,7 +165,12 @@ export function assertMaestroText(text: string, delimiter: string): void {
  * The text rides inside the script over stdin (quoted heredoc, no expansion); `docker exec -i`
  * forwards that stdin into the container, where `$(cat)` recovers it and `tmux send-keys -l` types
  * it LITERALLY — no key-name interpretation, so an instruction containing "Enter" or "C-c" is text,
- * not a keystroke. Container and session names are derived from the board and shell-quoted. PURE.
+ * not a keystroke. Container and session names are derived from the board and shell-quoted.
+ *
+ * The pause before Enter is the same 120 ms the browser's composer leaves (see XTerminal): a body
+ * arriving in one burst is read by Claude Code's TUI as a PASTE, and an Enter that lands inside
+ * that window is swallowed as part of it — the message is typed and never sent. Waiting for the
+ * paste detector to settle makes the Enter a keystroke again. PURE.
  */
 export function buildSendKeysScript(containerName: string, tmuxSession: string, text: string): string {
   const delimiter = "VIBEHUB_MAESTRO_TEXT";
@@ -162,6 +178,7 @@ export function buildSendKeysScript(containerName: string, tmuxSession: string, 
   const inner =
     `VIBEHUB_TEXT="$(cat)"; ` +
     `tmux send-keys -t "$1" -l -- "$VIBEHUB_TEXT"; ` +
+    `sleep 0.15; ` +
     `tmux send-keys -t "$1" Enter`;
   return [
     "set -e",
@@ -283,9 +300,7 @@ export async function readTerminal(cardId: string, last = 3): Promise<ReadResult
   const project = await getProject(card.projectId);
   if (!project) throw new Error("project for this card not found");
 
-  const profileDir = profileDirFor(effectiveAccountSlug(card, project));
-  const { cwd } = cardWorkPaths(project, card);
-  const transcriptDir = seedDestDir(profileDir, cwd);
+  const transcriptDir = transcriptDirFor(project, card, effectiveAccountSlug(card, project));
   const n = Math.max(1, Math.min(20, Math.floor(last) || 3));
 
   const { stdout } = await hostExecutor().runScript(
@@ -350,14 +365,23 @@ export function parseLastTurn(jsonl: string): { model: string | null; at: number
 /**
  * Which signal wins: `/model` + Enter writes the profile's settings.json AND switches the running
  * session, so a settings write NEWER than the last reply is the truth until the next reply lands.
- * Otherwise the last reply is. PURE.
+ * Otherwise the last reply is.
+ *
+ * A card that PINS a model replaces settings.json in that contest, it does not join it: the session
+ * starts with `--model`, which beats the profile's `"model"` — and that profile is SHARED by every
+ * card on the account, so any `/model` typed in a neighbouring card would otherwise be read here as
+ * this card's model. The pin is dated (`modelAt`) for the same reason settings.json is: switching it
+ * restarts the session, so from that instant it is newer, and truer, than the turns already in the
+ * transcript. PURE.
  */
 export function pickModel(
   lastTurn: { model: string | null; at: number },
   settings: { model: string | null; at: number },
+  pin: { model: string | null; at: number } = { model: null, at: 0 },
 ): string | null {
-  if (settings.model && settings.at >= lastTurn.at) return settings.model;
-  return lastTurn.model ?? settings.model;
+  const config = pin.model ? pin : settings;
+  if (config.model && config.at >= lastTurn.at) return config.model;
+  return lastTurn.model ?? config.model;
 }
 
 /**
@@ -405,6 +429,12 @@ export interface SessionInfo {
   modelLabel: string | null;
   /** The EFFECTIVE account (card → project → default) with its display name. */
   account: { slug: string | null; name: string };
+  /**
+   * What the terminal is doing right now. It is already polled here every few seconds, and the chat
+   * view needs it: without the board's card list beside it (a phone has none) there is nothing else
+   * on screen that says "the agent is still working".
+   */
+  situation: TerminalSituation;
 }
 
 /** What a card's session is really running with. Read-only; tolerates a missing transcript. */
@@ -422,17 +452,21 @@ export async function sessionInfo(cardId: string): Promise<SessionInfo> {
   let model: string | null = null;
   try {
     const profileDir = profileDirFor(slug);
-    const { cwd } = cardWorkPaths(project, card);
     const { stdout } = await hostExecutor().runScript(
-      buildReadSessionScript(config_runner_container(), seedDestDir(profileDir, cwd), profileDir, 200),
+      buildReadSessionScript(config_runner_container(), transcriptDirFor(project, card, slug), profileDir, 200),
       { timeoutMs: 15_000 },
     );
     const { transcript, settings } = parseSessionOutput(stdout);
-    model = pickModel(parseLastTurn(transcript), settings);
+    model = pickModel(parseLastTurn(transcript), settings, { model: card.model ?? null, at: card.modelAt ?? 0 });
   } catch {
     model = null; // runner unreachable or no transcript yet — the UI shows the default
   }
-  return { model, modelLabel: modelLabelFor(model), account: { slug: slug ?? null, name } };
+  return {
+    model,
+    modelLabel: modelLabelFor(model),
+    account: { slug: slug ?? null, name },
+    situation: terminalSituation(card),
+  };
 }
 
 function config_runner_container(): string {

@@ -54,9 +54,9 @@ export interface SessionCommandOpts {
    */
   profileDir?: string;
   /**
-   * The card's Claude model (one of CLAUDE_MODELS): when VALID, the guard exports
-   * `ANTHROPIC_DEFAULT_MODEL=<id>`. Absent/invalid = the account default (no env at all). Checked
-   * against the whitelist (isValidModel) — raw input never reaches the shell.
+   * The card's Claude model (one of CLAUDE_MODELS): when VALID, Claude starts with `--model <id>`.
+   * Absent/invalid = the account default (no flag at all). Checked against the whitelist
+   * (isValidModel) — raw input never reaches the shell.
    */
   model?: string;
 }
@@ -86,17 +86,20 @@ export function sessionCommand(opts: SessionCommandOpts | boolean): string {
   // IS_SANDBOX=1: the runner is root inside an isolated container; without it Claude refuses to run
   // without permission prompts ("cannot be used with root"). Belt for runners provisioned before the
   // container environment carried the flag.
-  // ANTHROPIC_DEFAULT_MODEL only when the card's model is VALID (CLAUDE_MODELS whitelist) — the id
-  // has a safe charset and never arrives raw; absent/invalid = account default (no env).
-  const modelEnv = isValidModel(o.model) ? `export ANTHROPIC_DEFAULT_MODEL=${o.model}; ` : "";
   const guard =
     `export IS_SANDBOX=1; ` +
-    modelEnv +
     `if [ -s ${tokenFile} ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${tokenFile})"; fi; `;
+  // The pin is a COMMAND-LINE flag, not `ANTHROPIC_DEFAULT_MODEL`: that variable is only the default
+  // for when nothing else says anything, and the profile's own settings.json (`"model"`, written by
+  // any `/model` typed in ANY card sharing that account profile) beat it — a card pinned to Opus
+  // would boot on whatever the last `/model` left behind. `--model` wins over both. Only when the id
+  // is VALID (CLAUDE_MODELS whitelist): safe charset, never raw input.
+  const model = isValidModel(o.model) ? ` --model ${o.model}` : "";
   let claude: string;
-  if (o.resumeSessionId) claude = `claude --resume ${assertSessionId(o.resumeSessionId)} || claude -c || claude`;
-  else if (o.resume) claude = "claude -c || claude";
-  else claude = "claude";
+  if (o.resumeSessionId) {
+    claude = `claude${model} --resume ${assertSessionId(o.resumeSessionId)} || claude${model} -c || claude${model}`;
+  } else if (o.resume) claude = `claude${model} -c || claude${model}`;
+  else claude = `claude${model}`;
   return `${guard}${claude}; exec bash`;
 }
 
@@ -167,7 +170,7 @@ export interface OpenScriptOpts {
   resume?: boolean;
   /** Imported session (uuid): the session is born with `claude --resume <id>`. */
   resumeSessionId?: string;
-  /** The card's Claude model: the guard exports ANTHROPIC_DEFAULT_MODEL. Absent = account default. */
+  /** The card's Claude model: Claude starts with `--model <id>`. Absent = account default. */
   model?: string;
   /**
    * The effective account's long-lived token (from the vault): SEEDED into the profile
@@ -316,7 +319,7 @@ export interface CardAttachOpts {
   resume?: boolean;
   /** Imported session (uuid): if the attach has to CREATE, it is born with `claude --resume <id>`. */
   resumeSessionId?: string;
-  /** The card's Claude model: the guard exports ANTHROPIC_DEFAULT_MODEL. Absent = account default. */
+  /** The card's Claude model: Claude starts with `--model <id>`. Absent = account default. */
   model?: string;
   /**
    * true = the EXTRA plain-shell terminal (the "Shell" button): a SEPARATE tmux session
@@ -776,6 +779,47 @@ export async function restartCard(cardId: string, by?: string): Promise<Card> {
     "card restarted — tmux session ended in the runner (reopens with claude -c)",
   );
   return card;
+}
+
+/**
+ * What a model/account switch did to the LIVE session, so the screen can say the truth instead of
+ * promising a switch that never reached Claude.
+ */
+export type SessionChange = "none" | "restarted" | "pending";
+
+/**
+ * Carries a card's model/account switch INTO the running session.
+ *
+ * Both are read by Claude only when the PROCESS STARTS (`--model` on the command line, the account's
+ * CLAUDE_CONFIG_DIR in the session's environment). Recording the change on the card is therefore
+ * only half of it: the terminal reattaches to the very same tmux session (`new-session -A`) and goes
+ * on talking to the old model on the old account — which is exactly the bug where a card read "Opus"
+ * in the bar while every reply came from Fable.
+ *
+ * So the session is ended here, the same way `restartCard` does it: the reattach recreates it with
+ * the new flag/profile and `claude -c`, in the SAME conversation. A card that is `working` is NOT
+ * interrupted — it is flagged (`config`) and the status hook restarts it the moment it goes idle,
+ * mirroring what a brain/MCP change does. Nothing to do when the card has no live session: the pin
+ * already IS what the next start will use.
+ */
+export async function applySessionChange(before: Card | undefined, after: Card, by?: string): Promise<SessionChange> {
+  const changed =
+    (before?.model ?? null) !== (after.model ?? null) || (before?.accountSlug ?? null) !== (after.accountSlug ?? null);
+  if (!before || !changed || !hasLiveSession(after)) return "none";
+  if (after.status === "working") {
+    await markRestartPending(after.id, "config");
+    logger.info(
+      { audit: true, action: "card.config.pending", card: after.worktreeSlug, model: after.model ?? null, account: after.accountSlug ?? null, by },
+      "model/account switched while Claude was working — the session restarts onto it once the card goes idle",
+    );
+    return "pending";
+  }
+  await restartCard(after.id, by);
+  logger.info(
+    { audit: true, action: "card.config.applied", card: after.worktreeSlug, model: after.model ?? null, account: after.accountSlug ?? null, by },
+    "model/account switched — the session was ended so the reattach starts Claude with it (claude -c)",
+  );
+  return "restarted";
 }
 
 /**

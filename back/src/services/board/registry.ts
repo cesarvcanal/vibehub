@@ -39,18 +39,18 @@ export const BOARD_COLUMNS: readonly BoardColumn[] = ["backlog", "waiting", "wor
 export type CardStatus = "working" | "waiting";
 
 /**
- * REASON a session restart is PENDING on a card: the shared brain or the MCP servers were edited
- * while the card was `working`. It is only a LABEL (so the UI can tell the two apart in a badge);
- * the restart mechanics are identical either way. See `restartPendingAt` on the card and
- * `shouldRestartOnStatus`.
+ * REASON a session restart is PENDING on a card: the shared brain or the MCP servers were edited, or
+ * the card's own model/account was switched (`config`), while the card was `working`. It is only a
+ * LABEL (so the UI can tell them apart in a badge); the restart mechanics are identical either way.
+ * See `restartPendingAt` on the card and `shouldRestartOnStatus`.
  */
-export type RestartReason = "brain" | "mcp";
-export const RESTART_REASONS: readonly RestartReason[] = ["brain", "mcp"] as const;
+export type RestartReason = "brain" | "mcp" | "config";
+export const RESTART_REASONS: readonly RestartReason[] = ["brain", "mcp", "config"] as const;
 
 /**
- * Claude models a card may pin. When set, the session exports `ANTHROPIC_DEFAULT_MODEL=<id>`.
- * Unset = whatever the account defaults to (no env var at all). These ids end up in a shell
- * environment, so they are never taken raw: they are checked against this whitelist first.
+ * Claude models a card may pin. When set, the session starts with `claude --model <id>`. Unset =
+ * whatever the account defaults to (no flag at all). These ids end up on a shell command line, so
+ * they are never taken raw: they are checked against this whitelist first.
  */
 export const CLAUDE_MODELS = ["claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"] as const;
 export type ClaudeModelId = (typeof CLAUDE_MODELS)[number];
@@ -131,8 +131,14 @@ export interface Card {
   statusAt?: number;
   /** Claude account for THIS card. Absent = inherit the project's (absent there = default account). */
   accountSlug?: string;
-  /** Claude model for THIS card (one of CLAUDE_MODELS). Absent = the account default (no env var). */
+  /** Claude model for THIS card (one of CLAUDE_MODELS). Absent = the account default (no flag). */
   model?: string;
+  /**
+   * WHEN the pin above last changed (epoch ms). The session reader needs it: the pin and the
+   * transcript can disagree (`/model` typed inside the terminal), and the NEWER of the two is the
+   * one that is true. Absent = a pin older than this field, which never beats the transcript.
+   */
+  modelAt?: number;
   /**
    * When the card's terminal was opened for the FIRST time (worktree and session already exist in
    * the runner). Present = the front-end may attach the websocket immediately (attach-or-create) and
@@ -162,7 +168,7 @@ export interface Card {
    * Null/absent = nothing pending. It mirrors the PENDING pause (`pausedAt`), but a PAUSE BEATS it.
    */
   restartPendingAt?: number | null;
-  /** Where the pending restart came from — a label for the badge only: "brain" | "mcp". */
+  /** Where the pending restart came from — a label for the badge only: "brain" | "mcp" | "config". */
   restartReason?: RestartReason;
   /**
    * IMPORTED Claude session (migrating from another environment): the uuid of a conversation whose
@@ -1030,9 +1036,12 @@ export async function updateCard(id: string, patch: UpdateCardInput): Promise<Ca
     if (patch.accountSlug !== undefined) {
       next.accountSlug = patch.accountSlug === null ? undefined : requireAccountSlug(doc, patch.accountSlug);
     }
-    // model: null/"" = CLEAR (back to the account default); a string must be whitelisted.
+    // model: null/"" = CLEAR (back to the account default); a string must be whitelisted. A change
+    // stamps `modelAt`: from that instant the pin is newer than any turn already in the transcript,
+    // which is what makes the pill show the model the session is being restarted onto.
     if (patch.model !== undefined) {
       next.model = patch.model === null || !String(patch.model).trim() ? undefined : assertModel(patch.model);
+      if (next.model !== card.model) next.modelAt = Date.now();
     }
     // Imported session / own branch: validated here (uuid / assertBranchName) because both become
     // argv or script content in the runner and must never pass through raw. null clears.

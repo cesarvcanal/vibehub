@@ -228,7 +228,23 @@ export interface CardSessionInfo {
   modelLabel: string | null;
   /** The account the session is really using. */
   account: { slug: string | null; name: string };
+  /**
+   * What the terminal is doing right now. The chat needs it: with no card list beside it (a phone
+   * has none) this poll is the only thing that says "the agent is still working".
+   */
+  situation: CardSituation;
 }
+
+/**
+ * What a model/account switch did to the LIVE session, straight from the server: `restarted` = the
+ * session was ended and the reattach starts Claude with the new one, in the same conversation;
+ * `pending` = Claude was working, so it applies the moment the card goes idle; `none` = there was no
+ * live session to change (the pin is simply what the next start uses).
+ */
+export type SessionChange = "none" | "restarted" | "pending";
+
+/** A terminal's current situation, as the server words it. */
+export type CardSituation = "working" | "waiting" | "paused" | "done" | "no session";
 
 /** One metered plan window: how much is gone, and when it empties again. */
 export interface UsageWindow {
@@ -311,6 +327,15 @@ export const boardApi = {
   patchCard: (id: string, body: CardPatchInput) =>
     patch<{ card: BoardCard }>(`/cards/${encodeURIComponent(id)}`, body).then((r) => r.card),
 
+  /**
+   * The same PATCH, keeping the server's verdict on the LIVE session: switching the model or the
+   * account ends it so the reattach starts Claude with the new one ("restarted"), or flags it when
+   * Claude is working ("pending"). The screen has to say which — promising a switch that has not
+   * happened yet is the whole bug this answers.
+   */
+  patchCardSession: (id: string, body: CardPatchInput) =>
+    patch<{ card: BoardCard; session?: SessionChange }>(`/cards/${encodeURIComponent(id)}`, body),
+
   deleteCard: (id: string) => del<{ ok: true }>(`/cards/${encodeURIComponent(id)}`),
 
   openCard: (id: string) =>
@@ -331,6 +356,8 @@ export const boardApi = {
         model: r?.model ?? null,
         modelLabel: r?.modelLabel ?? null,
         account: { slug: r?.account?.slug ?? null, name: r?.account?.name ?? "" },
+        // A server that predates the field simply never looks busy — better than looking stuck.
+        situation: r?.situation ?? "waiting",
       }),
     ),
 
@@ -343,6 +370,16 @@ export const boardApi = {
     const content = await fileToBase64(file);
     return await post<UploadResult>(`/cards/${encodeURIComponent(id)}/upload`, { name: file.name, content });
   },
+
+  /**
+   * Sends a chat message: the server types it at the prompt of the SAME tmux session the terminal
+   * is attached to. There is no separate chat conversation to keep in sync — there is one session.
+   */
+  sendCardChat: (id: string, text: string) => post<{ ok: true }>(`/cards/${encodeURIComponent(id)}/chat`, { text }),
+
+  /** Presses one whitelisted key in that session — `escape` is the chat's Stop button. */
+  sendCardChatKey: (id: string, key: "escape" | "interrupt") =>
+    post<{ sent: true }>(`/cards/${encodeURIComponent(id)}/chat/key`, { key }),
 
   startCardBrowser: (id: string) => post<unknown>(`/cards/${encodeURIComponent(id)}/browser`),
   stopCardBrowser: (id: string) => del<unknown>(`/cards/${encodeURIComponent(id)}/browser`),
@@ -544,25 +581,43 @@ export interface ModelInUse {
 /**
  * The model the pill must SHOW: what is in use, whether or not it was chosen here.
  *
- * Order of truth: the card's own pin (that is what the next session will start with), then the
- * model the live transcript reports, then — with nothing to read at all — the model Claude Code
- * boots on, flagged in the title as the assumption it is. There is no "Default model" outcome:
+ * The SESSION answers first, not the card's pin. The two can disagree — `/model` typed inside the
+ * terminal, or a switch still waiting for Claude to go idle — and the pin loses that argument: it is
+ * what the next start will use, and the bar is about the conversation on screen. (The server already
+ * weighs the pin against the transcript by date, so a switch that restarted the session shows up
+ * here immediately.) Then the pin, for a card that has never been opened, and last the model Claude
+ * Code boots on, flagged in the title as the assumption it is. There is no "Default model" outcome:
  * "whatever the account gives you" is not an answer to "which model am I talking to". PURE.
  */
 export function modelInUse(
   card: { model?: string | null } | null | undefined,
   session: CardSessionInfo | null | undefined,
 ): ModelInUse {
-  const pinned = card?.model?.trim();
-  if (pinned) return { id: pinned, label: modelLabelFor(pinned, null) };
   const live = session?.model?.trim();
   if (live) return { id: live, label: modelLabelFor(live, session?.modelLabel ?? null) };
+  const pinned = card?.model?.trim();
+  if (pinned) return { id: pinned, label: modelLabelFor(pinned, null) };
   return { id: IMPLICIT_MODEL.id, label: IMPLICIT_MODEL.label, title: implicitModelTitle() };
 }
 
-/** Whitelist label for a model id, the server's own label, or the raw id. PURE. */
+/**
+ * The whitelist entry a model id BELONGS TO — by exact id, or by family when the id is one of the
+ * many other spellings of the same model: the alias settings.json stores (`opus`), a dated id from a
+ * transcript (`claude-opus-4-5-20251101`). Without this, "the model in use" never matches any row of
+ * the menu, so the menu grew a second, checked "Opus" underneath the real one. PURE.
+ */
+export function whitelistModel(id: string | null | undefined): { id: string; label: string } | undefined {
+  const raw = (id ?? "").trim();
+  if (!raw) return undefined;
+  const exact = CLAUDE_MODELS.find((m) => m.id === raw);
+  if (exact) return exact;
+  const lower = raw.toLowerCase();
+  return CLAUDE_MODELS.find((m) => lower.includes(m.label.toLowerCase()));
+}
+
+/** Whitelist label for a model id (family included), the server's own label, or the raw id. PURE. */
 export function modelLabelFor(id: string, serverLabel: string | null): string {
-  const known = CLAUDE_MODELS.find((m) => m.id === id)?.label;
+  const known = whitelistModel(id)?.label;
   if (known) return known;
   return (serverLabel ?? "").trim() || id;
 }

@@ -77,6 +77,9 @@ connection #1 (label = its login) and the secret moves to `GITHUB_TOKEN_<id>`. I
 | POST | `/api/cards/:id/upload` | `{ name, content }` with bare base64 → `{ path }` inside the runner (10 MB cap) |
 | POST/DELETE | `/api/cards/:id/browser` | start/stop the card's live browser |
 | WS | `/api/cards/:id/terminal` | xterm bridge (`?shell=1` for a plain shell in the same worktree) |
+| WS | `/api/cards/:id/chat` | the SAME session read as a conversation: one JSON `ChatEvent` per frame (`{ id, kind: "user"\|"assistant"\|"tool", at, text, tool? }`), parsed from Claude Code's transcript. Opens with the last turns and streams what is appended; blank frames are the follower's heartbeat |
+| POST | `/api/cards/:id/chat` | `{ text }` — types it at that session's prompt and presses Enter (409 when the card has no live session) |
+| POST | `/api/cards/:id/chat/key` | `{ key: "escape" \| "interrupt" }` — the chat's Stop button |
 | WS | `/api/cards/:id/vnc` | noVNC bridge for the card browser |
 
 ## Claude accounts, MCPs, brain, import
@@ -105,7 +108,7 @@ connection #1 (label = its login) and the secret moves to `GITHUB_TOKEN_<id>`. I
 | POST | `/api/transcribe/keys` | `{ openaiKey?, anthropicKey? }` — empty string clears; Whisper transcribes, Claude proofreads against the brain |
 | POST | `/api/cards/:id/transcribe` | `{ base64, mimeType }` → `{ text, proofread }`; 503 when voice input is not configured |
 | POST | `/api/import` | `{ items: [{ repo, title, sessionId, branch?, column? }], stageDir? }` — adopt staged Claude sessions as cards |
-| GET | `/api/cards/:id/session` | `{ model, modelLabel, account: { slug, name } }` — what the session is REALLY using: model from the last assistant turn, effective account |
+| GET | `/api/cards/:id/session` | `{ model, modelLabel, account: { slug, name }, situation }` — what the session is REALLY using: model from the last assistant turn, effective account, and whether the agent is `working`/`waiting`/`paused`/`done`/`no session` |
 | GET | `/api/cards/:id/paths` | where the card maps to inside the runner (debugging an import) |
 
 ### `AccountUsage` — how much of the plan is gone

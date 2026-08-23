@@ -138,6 +138,9 @@ describe("buildSendKeysScript", () => {
     const script = maestro.buildSendKeysScript("c", "s", "press Enter twice");
     expect(script).toContain("send-keys -t \"$1\" -l --");
     expect(script).toContain('tmux send-keys -t "$1" Enter'); // the real submit, separate
+    // ...and after the TUI's paste window, or the Enter is swallowed INTO the paste and the
+    // message sits there typed but unsent.
+    expect(script).toContain("sleep 0.15");
   });
 
   it("refuses text that would close the heredoc early", async () => {
@@ -306,7 +309,13 @@ describe("session introspection", () => {
     const c = await registry.createCard({ projectId: p.id, title: "x" });
     runScript.mockResolvedValueOnce({ stdout: line({ type: "assistant", message: { model: "claude-opus-5", content: [] } }), stderr: "" });
     const info = await maestro.sessionInfo(c.id);
-    expect(info).toEqual({ model: "claude-opus-5", modelLabel: "Opus", account: { slug: acct.slug, name: "Tech" } });
+    expect(info).toEqual({
+      model: "claude-opus-5",
+      modelLabel: "Opus",
+      account: { slug: acct.slug, name: "Tech" },
+      // A card that was never opened has no session for the chat to be waiting on.
+      situation: "no session",
+    });
     runScript.mockRejectedValueOnce(new Error("runner down"));
     expect((await maestro.sessionInfo(c.id)).model).toBeNull();
   });
@@ -338,6 +347,21 @@ describe("model signals", () => {
     expect(maestro.pickModel(turn, { model: "fable", at: 500 })).toBe("claude-sonnet-5");
     expect(maestro.pickModel({ model: null, at: 0 }, { model: "opus", at: 0 })).toBe("opus");
     expect(maestro.pickModel({ model: null, at: 0 }, { model: null, at: 0 })).toBeNull();
+  });
+
+  it("a card that PINS a model ignores settings.json — that profile is shared with every other card", async () => {
+    const { maestro } = await load();
+    const turn = { model: "claude-fable-5", at: 1000 };
+    // The bug: `/model opus` typed in a NEIGHBOURING card on the same account wrote "opus" into the
+    // shared profile, and this card (pinned to Fable, started with `--model`) read it as its own.
+    expect(maestro.pickModel(turn, { model: "opus", at: 5000 }, { model: "claude-fable-5", at: 900 })).toBe("claude-fable-5");
+    // The pin is newer than the transcript right after a switch (it restarted the session onto it).
+    expect(maestro.pickModel(turn, { model: null, at: 0 }, { model: "claude-opus-5", at: 2000 })).toBe("claude-opus-5");
+    // `/model` typed HERE after that switch is newer still, and it is what is answering.
+    expect(maestro.pickModel({ model: "claude-sonnet-5", at: 3000 }, { model: null, at: 0 }, { model: "claude-opus-5", at: 2000 }))
+      .toBe("claude-sonnet-5");
+    // No pin: settings.json keeps its old say.
+    expect(maestro.pickModel(turn, { model: "opus", at: 5000 })).toBe("opus");
   });
 
   it("splits the session script output into transcript and settings", async () => {

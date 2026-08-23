@@ -12,7 +12,7 @@ import {
   applyZoom, readTerminalFontSize, shiftEnterSequence, writeTerminalFontSize, writeClipboard,
   zoomActionFromKey, TERMINAL_FONT_DEFAULT, TERMINAL_FONT_MIN, TERMINAL_FONT_MAX, type ZoomAction,
 } from "@/features/board/lib/terminalZoom";
-import { Minus, Plus } from "lucide-react";
+import { ArrowDown, Minus, Plus } from "lucide-react";
 import { useT } from "@/i18n";
 
 /**
@@ -197,6 +197,10 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
   const fitRef = React.useRef<FitAddon | null>(null);
   // Mirrors term.options.fontSize so the zoom control can render it; the terminal is the truth.
   const [fontSize, setFontSize] = React.useState<number>(() => readTerminalFontSize(TERMINAL_FONT_DEFAULT));
+  // The scrollback is not at the bottom: the reader has scrolled up into history and new output is
+  // arriving below the fold. While this is true we do NOT yank them down (that is xterm's default);
+  // the pill is how they choose to come back to the present.
+  const [awayFromBottom, setAwayFromBottom] = React.useState<boolean>(false);
 
   /** Applies a font size to the live terminal, persists it, and refits — the one zoom path. */
   const applyFontSize = React.useCallback((size: number) => {
@@ -641,11 +645,66 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
       touchCarry -= rows;
       // NEGATIVE is towards older output, which is where a downward drag goes.
       term.scrollLines?.(-rows);
+      refreshAwayFromBottom();
     };
 
     const endTouch = (): void => {
       touchY = null;
       touchCarry = 0;
+    };
+
+    /**
+     * Is the viewport pinned to the newest output? `baseY` is the top row when scrolled all the way
+     * down; `viewportY` is the top row shown now. Equal (or past) means we are at the bottom. When
+     * we are NOT, the reader is up in history and the "jump to latest" pill should show.
+     */
+    const refreshAwayFromBottom = (): void => {
+      const active = term.buffer?.active;
+      if (!active) return;
+      const baseY = typeof active.baseY === "number" ? active.baseY : 0;
+      setAwayFromBottom(active.viewportY < baseY);
+    };
+    const scrolled = term.onScroll?.(() => refreshAwayFromBottom());
+
+    /**
+     * Scrolling the scrollback with the MOUSE WHEEL / trackpad.
+     *
+     * Same root cause as the finger: the WebGL canvas sits over `.xterm-viewport`, so the wheel does
+     * not reliably reach xterm's own scroller — and when the agent is mid-turn the spinner repaints
+     * the bottom line, which on some builds drags the view back down the instant you scroll up. So we
+     * translate the wheel by hand exactly like the touch drag: pixels become rows, rows go to
+     * `scrollLines`, and once you are up in history xterm leaves you there until you come back.
+     *
+     * Capture + stopPropagation so ours is the only scroll (no double-step), and preventDefault so
+     * the page behind the terminal never moves. `ctrlKey` is a pinch-zoom gesture — left to xterm.
+     */
+    let wheelCarry = 0;
+    const onWheel = (event: WheelEvent): void => {
+      if (event.ctrlKey) return; // pinch-zoom — leave it to xterm/the browser
+      const dy = event.deltaY;
+      if (!dy) return;
+      // Only take over when there IS local scrollback to move. `baseY > 0` means xterm's own buffer
+      // holds history above the fold; then we scroll it locally — instant, no round-trip to the pty,
+      // and Claude Code never enters its network-bound scroll mode. With no local history (baseY 0,
+      // e.g. an alternate-screen program) we do nothing and let xterm/the app handle the wheel.
+      const active = term.buffer?.active;
+      const hasScrollback = !!active && typeof active.baseY === "number" && active.baseY > 0;
+      if (!hasScrollback) return;
+      // Capture-phase on the frame: stopping propagation here keeps the event from reaching xterm's
+      // own handler, so it is NOT forwarded to the app as a mouse-wheel escape. preventDefault keeps
+      // the page behind from scrolling.
+      event.preventDefault();
+      event.stopPropagation();
+      const height = rowHeight() || 18;
+      const perRow =
+        event.deltaMode === 1 ? dy : event.deltaMode === 2 ? dy * (term.rows || 1) : dy / height;
+      wheelCarry += perRow;
+      const rows = Math.trunc(wheelCarry);
+      if (rows === 0) return;
+      wheelCarry -= rows;
+      // POSITIVE deltaY is a downward wheel, towards newer output — positive scrollLines.
+      term.scrollLines?.(rows);
+      refreshAwayFromBottom();
     };
 
     // `passive: false` is what makes `preventDefault` legal on a touchmove — without it the browser
@@ -655,6 +714,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
     frame.addEventListener("touchmove", onTouchMove, { capture: true, passive: false });
     frame.addEventListener("touchend", endTouch, { capture: true, passive: true });
     frame.addEventListener("touchcancel", endTouch, { capture: true, passive: true });
+    frame.addEventListener("wheel", onWheel, { capture: true, passive: false });
 
     /* --------------------------------------------------- open after a real fit */
 
@@ -686,6 +746,8 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
       frame.removeEventListener("touchmove", onTouchMove, true);
       frame.removeEventListener("touchend", endTouch, true);
       frame.removeEventListener("touchcancel", endTouch, true);
+      frame.removeEventListener("wheel", onWheel, true);
+      scrolled?.dispose();
       observer?.disconnect();
       input.dispose();
       resized.dispose();
@@ -783,6 +845,27 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
             <Plus className="h-3 w-3" />
           </button>
         </div>
+      ) : null}
+      {awayFromBottom ? (
+        // Reading up in history: one tap back to the live output. Sits bottom-centre, just above the
+        // input line, and only while you are away from the bottom.
+        <button
+          type="button"
+          data-testid="terminal-jump-bottom"
+          aria-label={t("terminal.jumpToLatest")}
+          title={t("terminal.jumpToLatest")}
+          onClick={(e) => {
+            e.stopPropagation();
+            const term = termRef.current;
+            term?.scrollToBottom?.();
+            setAwayFromBottom(false);
+            term?.focus();
+          }}
+          className="absolute bottom-2.5 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border/60 bg-card/90 px-3 py-1.5 text-xs font-medium text-foreground shadow-md backdrop-blur-sm transition-colors hover:bg-accent"
+        >
+          <ArrowDown className="h-3.5 w-3.5" />
+          {t("terminal.jumpToLatest")}
+        </button>
       ) : null}
     </div>
   );
