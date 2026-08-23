@@ -1,7 +1,7 @@
 import { hostExecutor, shQuote, assertSafeRemotePath, HostExecError } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import { statusUrl } from "../../runtime/runner.js";
-import { gitAuthHeaderFor } from "../github/client.js";
+import { gitAuthHeaderFor, tokenFor } from "../github/client.js";
 import {
   getCard, getProject, applyOpenTerminal, markPrepared, pauseCard as registryPauseCard,
   listAllCards, assertBranchName, assertSessionId, effectiveAccountSlug, isValidModel, hasLiveSession,
@@ -9,7 +9,7 @@ import {
   type Card, type Project, type RestartReason,
 } from "./registry.js";
 import { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir, profileDirFor, oauthTokenPath } from "../accounts/profiles.js";
-import { resolveAccountToken, writeTokenLines } from "../accounts/token.js";
+import { resolveAccountToken, writeTokenLines, ghTokenPath, writeGhTokenLines, removeGhTokenLines } from "../accounts/token.js";
 import { cardCdpEndpoint } from "../browser/ports.js";
 import { mcpInjectLines, resolveMcpInjections, type McpInjection } from "../mcp/mcp.js";
 import { brainInjectLines, resolveBrainText } from "../brain/brain.js";
@@ -59,6 +59,13 @@ export interface SessionCommandOpts {
    * (isValidModel) — raw input never reaches the shell.
    */
   model?: string;
+  /**
+   * Per-card file that MAY hold the project's GitHub token. When set, the guard exports `GH_TOKEN`
+   * by reading the file IF it exists (`[ -s <file> ]`) — so `git push`/`gh` in the card act as the
+   * project's connection instead of the runner's ambient login. Only ever WRITTEN by the open script
+   * (over STDIN); this only READS it, so no token lands in argv. File missing = ambient login.
+   */
+  ghTokenFile?: string;
 }
 
 /**
@@ -86,9 +93,18 @@ export function sessionCommand(opts: SessionCommandOpts | boolean): string {
   // IS_SANDBOX=1: the runner is root inside an isolated container; without it Claude refuses to run
   // without permission prompts ("cannot be used with root"). Belt for runners provisioned before the
   // container environment carried the flag.
+  // GH_TOKEN, read from the per-card file when the open script wrote one (project has a connection):
+  // steers `git push` and `gh` to that identity. Guarded by `[ -s ]` so a card without a connection
+  // (no file) keeps the runner's ambient `gh` login. The path is validated; no token in argv.
+  let ghGuard = "";
+  if (o.ghTokenFile) {
+    assertSafeRemotePath(o.ghTokenFile);
+    ghGuard = `if [ -s ${o.ghTokenFile} ]; then export GH_TOKEN="$(cat ${o.ghTokenFile})"; fi; `;
+  }
   const guard =
     `export IS_SANDBOX=1; ` +
-    `if [ -s ${tokenFile} ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${tokenFile})"; fi; `;
+    `if [ -s ${tokenFile} ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${tokenFile})"; fi; ` +
+    ghGuard;
   // The pin is a COMMAND-LINE flag, not `ANTHROPIC_DEFAULT_MODEL`: that variable is only the default
   // for when nothing else says anything, and the profile's own settings.json (`"model"`, written by
   // any `/model` typed in ANY card sharing that account profile) beat it — a card pinned to Opus
@@ -178,6 +194,13 @@ export interface OpenScriptOpts {
    * is written.
    */
   oauthToken?: string;
+  /**
+   * The PROJECT's GitHub connection token (from the vault) — written to the per-card gh-token file
+   * (mode 600) inside the script, over STDIN, never argv. The session then exports `GH_TOKEN` from
+   * that file so the card's `git push`/`gh` act as the connection. Absent = the file is REMOVED
+   * (kept in sync), so the card falls back to the runner's ambient `gh` login.
+   */
+  ghToken?: string;
   /** Managed MCPs (JSON already resolved) to inject into the card's effective profile. */
   mcps?: McpInjection[];
   /**
@@ -274,6 +297,11 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
   // The account's long-lived token (vault): seeded into the profile on every open (idempotent; keeps
   // the runner current when the token was replaced in the UI before a runner/project existed).
   if (opts.oauthToken) inner.push(...writeTokenLines(profileDir, opts.oauthToken));
+  // GitHub token file, kept in SYNC with the project's connection: written when present, removed
+  // otherwise, so a card can never export a stale token from a connection that was cleared.
+  inner.push(
+    ...(opts.ghToken ? writeGhTokenLines(opts.cardId, opts.ghToken) : removeGhTokenLines(opts.cardId)),
+  );
   // Managed MCPs into the card's effective profile (remove-before + add-json, JSON in a heredoc).
   if (opts.mcps?.length) inner.push(...mcpInjectLines([opts.accountConfigDir], opts.mcps));
   // The brain (global CLAUDE.md) seeded into the card's effective profile — idempotent by signature,
@@ -300,7 +328,7 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
       ` -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8` +
       // Non-default account: the session's Claude uses the account profile (isolated credentials/state).
       (opts.accountConfigDir ? ` -e CLAUDE_CONFIG_DIR=${shQuote(opts.accountConfigDir)}` : "") +
-      ` ${shQuote(sessionCommand({ resume: !!opts.resume, resumeSessionId: opts.resumeSessionId, profileDir, model: opts.model }))}`,
+      ` ${shQuote(sessionCommand({ resume: !!opts.resume, resumeSessionId: opts.resumeSessionId, profileDir, model: opts.model, ghTokenFile: opts.ghToken ? ghTokenPath(opts.cardId) : undefined }))}`,
   );
   return [
     "set -e",
@@ -321,6 +349,11 @@ export interface CardAttachOpts {
   resumeSessionId?: string;
   /** The card's Claude model: Claude starts with `--model <id>`. Absent = account default. */
   model?: string;
+  /**
+   * Per-card gh-token file the session exports `GH_TOKEN` from (see SessionCommandOpts). The PATH is
+   * safe in argv — the token itself is only ever written by the open script over STDIN.
+   */
+  ghTokenFile?: string;
   /**
    * true = the EXTRA plain-shell terminal (the "Shell" button): a SEPARATE tmux session
    * `<tmuxSession>-sh`, same cwd, `exec bash` with no claude. The suffix is derived HERE — never
@@ -359,6 +392,7 @@ export function terminalRemoteArgs(containerName: string, tmuxSession: string, c
           resumeSessionId: opts.resumeSessionId,
           profileDir: opts.accountConfigDir ?? DEFAULT_CLAUDE_DIR,
           model: opts.model,
+          ghTokenFile: opts.ghTokenFile,
         }),
   ];
 }
@@ -387,6 +421,10 @@ export function cardAttachArgs(
     resume: !!card.openedAt,
     resumeSessionId: card.resumeSessionId,
     model: card.model,
+    // Only when the project has a GitHub connection: the session then exports GH_TOKEN from the
+    // per-card file a prior /open wrote (the export is still `[ -s ]`-guarded). The PATH is safe in
+    // argv; the token itself never is. No connection = the runner's ambient gh login, unchanged.
+    ghTokenFile: project.githubConnectionId ? ghTokenPath(card.id) : undefined,
     shell: opts.shell,
   });
 }
@@ -498,6 +536,18 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
 
     // The account's long-lived token (vault) — seeded into the profile inside the script (stdin).
     const oauthToken = await resolveAccountToken(accountSlug);
+    // The PROJECT's GitHub connection token, so the card's own git push / gh pr act as that identity
+    // (e.g. a personal repo the runner's org login can only read). BEST-EFFORT: a missing/unconfigured
+    // connection must not stop a card from opening — absent means the token file is removed and the
+    // card falls back to the runner's ambient gh login.
+    let ghToken: string | undefined;
+    if (project.githubConnectionId) {
+      try {
+        ghToken = await tokenFor(project.githubConnectionId);
+      } catch (e) {
+        logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "GitHub connection token not resolved on open (ambient gh login)");
+      }
+    }
     // Managed MCPs: BEST-EFFORT on open (a missing secret must not stop a card from opening — the
     // "apply" button in the UI is the path that fails loudly and names what is missing).
     let mcps: McpInjection[] = [];
@@ -526,6 +576,7 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
       resumeSessionId: card.resumeSessionId,
       model: card.model,
       oauthToken,
+      ghToken,
       mcps,
       brain,
       repo,

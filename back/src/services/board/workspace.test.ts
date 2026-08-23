@@ -40,7 +40,7 @@ vi.mock("../../runtime/host.js", async (orig) => ({
   ...(await orig<typeof import("../../runtime/host.js")>()),
   hostExecutor: vi.fn(),
 }));
-vi.mock("../github/client.js", () => ({ gitAuthHeaderFor: vi.fn() }));
+vi.mock("../github/client.js", () => ({ gitAuthHeaderFor: vi.fn(), tokenFor: vi.fn() }));
 
 /**
  * FAULT INJECTION for the staggered restart, opt-in per test (`fresh({ flakyRegistry: true })`): the
@@ -443,6 +443,20 @@ describe("terminalRemoteArgs / cardAttachArgs (the websocket's COMPLETE attach-o
     const sh = ws.cardAttachArgs(CONTAINER, p2, c2, { shell: true });
     expect(sh).toContain(`${card.tmuxSession}-sh`);
     expect(sh.at(-1)).toBe("exec bash");
+  });
+
+  it("a project WITH a GitHub connection points the session at the per-card gh-token file — the PATH, never the token", async () => {
+    const conn = await reg.addGithubConnection({ login: "cesarvcanal" });
+    const { project, card } = await seed();
+    const p = await reg.updateProject(project.id, { githubConnectionId: conn.id });
+
+    const cmd = ws.cardAttachArgs(CONTAINER, p, card).at(-1) as string;
+    expect(cmd).toContain(`if [ -s /root/.vibehub/gh/${card.id}.token ]`);
+    expect(cmd).toContain('export GH_TOKEN="$(cat /root/.vibehub/gh/');
+    // a project WITHOUT a connection gets no GH_TOKEN guard at all
+    expect(ws.cardAttachArgs(CONTAINER, project, card).at(-1)).not.toContain("GH_TOKEN");
+    // and the token itself is NEVER in argv, connection or not
+    expect(ws.cardAttachArgs(CONTAINER, p, card).join(" ")).not.toContain(TOKEN);
   });
 
   it("cardTerminalCommandLine quotes every element, and cardTerminalCommand goes through the host executor", async () => {
@@ -1120,5 +1134,45 @@ describe("pre-provisioning (prepareCard) and the per-card lock", () => {
     expect(order).toEqual(["start", "end", "start", "end"]);
     expect(a.openedAt).toBe(b.openedAt);
     expect(b.column).toBe("waiting");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GitHub token per card (push/PR as the project's connection, not the runner's org login)
+// ---------------------------------------------------------------------------
+
+describe("card push as the project's GitHub connection (GH_TOKEN)", () => {
+  const GH = "ghp_ABCdef1234567890ABCdef1234567890";
+  const ghGuard = (f: string) => `if [ -s ${f} ]; then export GH_TOKEN="$(cat ${f})"; fi; `;
+  const openOpts = {
+    containerName: CONTAINER,
+    tmuxSession: "card-abc",
+    cardId: "id-1",
+    statusUrl: STATUS_URL,
+    cwd: "/work/x",
+  };
+
+  it("sessionCommand exports GH_TOKEN from the file when given one, right after the Claude-token guard", () => {
+    const f = "/root/.vibehub/gh/id-1.token";
+    expect(ws.sessionCommand({ ghTokenFile: f })).toBe(`${guard()}${ghGuard(f)}claude; exec bash`);
+    // no file given = no GH_TOKEN at all (a card without a connection keeps the ambient gh login)
+    expect(ws.sessionCommand({})).toBe(CLAUDE);
+    expect(ws.sessionCommand({})).not.toContain("GH_TOKEN");
+  });
+
+  it("open WITH a connection token writes it 600 over stdin, and the session reads the FILE (token never in the command)", () => {
+    const script = ws.buildOpenScript({ ...openOpts, ghToken: GH });
+    expect(script).toContain(`printf '%s' '${GH}' > '/root/.vibehub/gh/id-1.token'`);
+    expect(script).toContain("chmod 600 '/root/.vibehub/gh/id-1.token'");
+    expect(script).toContain(ghGuard("/root/.vibehub/gh/id-1.token"));
+    // the value appears ONLY on the write line — the export reads the file, never inlines the token
+    expect(script).not.toContain(`GH_TOKEN="${GH}"`);
+  });
+
+  it("open WITHOUT a connection removes the token file (kept in sync) and emits no GH_TOKEN guard", () => {
+    const script = ws.buildOpenScript(openOpts);
+    expect(script).toContain("rm -f '/root/.vibehub/gh/id-1.token'");
+    expect(script).not.toContain("GH_TOKEN");
+    expect(script).not.toContain(GH);
   });
 });
