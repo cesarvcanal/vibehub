@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cardCdpEndpoint } from "../browser/ports.js";
+import { firstRunSeedCommand } from "../accounts/firstRun.js";
 
 /**
  * A card's workspace in the runner (open + terminal + pause + restart + drop). The INVARIANTS the
@@ -28,13 +29,17 @@ const CONTAINER = "vibehub-runner";
 /**
  * The LONG-LIVED TOKEN prefix every Claude session carries: a guard in the session's SHELL (not in
  * tmux's argv) — if the profile has an .oauth-token, export CLAUDE_CODE_OAUTH_TOKEN; otherwise
- * nothing happens.
+ * nothing happens. It ends with the FIRST-RUN seed (own unit test in accounts/firstRun.test.ts),
+ * which is what keeps a session from opening on Claude's setup wizard or trust dialog.
  */
 const guard = (dir = "/root/.claude") =>
   `export IS_SANDBOX=1; ` +
-  `if [ -s ${dir}/.oauth-token ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${dir}/.oauth-token)"; fi; `;
+  `if [ -s ${dir}/.oauth-token ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${dir}/.oauth-token)"; fi; ` +
+  `${firstRunSeedCommand(dir, '"$PWD"')}; `;
 const CLAUDE = `${guard()}claude; exec bash`;
 const CLAUDE_C = `${guard()}claude -c || claude; exec bash`;
+/** The session command as it appears INSIDE a script: one shell-quoted argument (it contains quotes of its own). */
+const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 vi.mock("../../runtime/host.js", async (orig) => ({
   ...(await orig<typeof import("../../runtime/host.js")>()),
@@ -206,7 +211,7 @@ describe("openCard", () => {
     expect(script).toContain(`VIBEHUB_CARD_ID='${card.id}'`);
     expect(script).toContain(`VIBEHUB_STATUS_URL='${STATUS_URL}'`);
     expect(script).toContain(`PW_CDP_ENDPOINT='${cardCdpEndpoint(card.id)}'`);
-    expect(script).toContain(`'${CLAUDE}'`);
+    expect(script).toContain(sq(CLAUDE));
 
     // the open rule: backlog → waiting
     expect(updated.column).toBe("waiting");
@@ -259,7 +264,7 @@ describe("openCard", () => {
     // idempotent: reopening produces the SAME script except for the Claude command — the second open
     // (openedAt) resumes the conversation with `claude -c || claude`
     await ws.openCard(card.id);
-    expect(scriptAt(1).replace(`'${CLAUDE_C}'`, `'${CLAUDE}'`)).toBe(script);
+    expect(scriptAt(1).replace(sq(CLAUDE_C), sq(CLAUDE))).toBe(script);
   });
 
   it("open is idempotent about columns: a card in done does NOT leave done", async () => {
@@ -464,7 +469,7 @@ describe("terminalRemoteArgs / cardAttachArgs (the websocket's COMPLETE attach-o
     const line = ws.cardTerminalCommandLine(CONTAINER, project, card);
     expect(line.startsWith("'docker' 'exec' '-it'")).toBe(true);
     // the claude command is ONE argument, whatever is inside it
-    expect(line).toContain(`'${CLAUDE.replace(/'/g, `'\\''`)}'`);
+    expect(line).toContain(sq(CLAUDE));
 
     const cmd = ws.cardTerminalCommand(project, card);
     expect(ptyCommand).toHaveBeenCalledWith(line);
@@ -545,12 +550,12 @@ describe("pause / resume (the session dies; reopening returns to the SAME conver
     const { card } = await seed();
     await ws.openCard(card.id);
     const tmux1 = scriptAt(0).split("\n").find((l) => l.includes("tmux new-session"))!;
-    expect(tmux1).toContain(`'${CLAUDE}'`);
+    expect(tmux1).toContain(sq(CLAUDE));
     expect(tmux1).not.toContain("claude -c");
 
     await ws.openCard(card.id); // the board now has openedAt
     const tmux2 = scriptAt(1).split("\n").find((l) => l.includes("tmux new-session"))!;
-    expect(tmux2).toContain(`'${CLAUDE_C}'`);
+    expect(tmux2).toContain(sq(CLAUDE_C));
     expect(tmux2).toMatch(/tmux has-session -t '[^']+' 2>\/dev\/null \|\| LANG=C\.UTF-8 LC_ALL=C\.UTF-8 tmux new-session -d/);
   });
 
@@ -574,7 +579,7 @@ describe("pause / resume (the session dies; reopening returns to the SAME conver
     const { project, card } = await seed();
     const c = await reg.updateCard(card.id, { resumeSessionId: SID });
     await ws.openCard(c.id);
-    expect(scriptAt(0)).toContain(`'${guard()}claude --resume ${SID} || claude -c || claude; exec bash'`);
+    expect(scriptAt(0)).toContain(sq(`${guard()}claude --resume ${SID} || claude -c || claude; exec bash`));
     expect(ws.cardAttachArgs(CONTAINER, project, c).at(-1)).toBe(`${guard()}claude --resume ${SID} || claude -c || claude; exec bash`);
     expect(ws.cardAttachArgs(CONTAINER, project, c, { shell: true }).at(-1)).toBe("exec bash");
 
@@ -648,7 +653,7 @@ describe("pause / resume (the session dies; reopening returns to the SAME conver
     const resumed = await ws.openCard(card.id);
     expect(resumed.pausedAt).toBeNull();
     expect(resumed.column).toBe("waiting");
-    expect(lastScript()).toContain(`'${CLAUDE_C}'`);
+    expect(lastScript()).toContain(sq(CLAUDE_C));
   });
 });
 
@@ -962,7 +967,7 @@ describe("long-lived token seeded on open (from the vault) and the session guard
     expect(script).toContain("chmod 600 '/root/.claude/.oauth-token'");
     // the seed comes BEFORE tmux (the session is born with the file already there)
     expect(script.indexOf(".oauth-token'")).toBeLessThan(script.indexOf("tmux new-session"));
-    expect(script).toContain(`'${CLAUDE}'`);
+    expect(script).toContain(sq(CLAUDE));
     for (const call of infoSpy.mock.calls) expect(JSON.stringify(call)).not.toContain(OAUTH);
   });
 
@@ -975,14 +980,14 @@ describe("long-lived token seeded on open (from the vault) and the session guard
     await ws.openCard(card.id);
     const script = scriptAt(0);
     expect(script).toContain(`printf '%s' '${OAUTH}' > '/root/.claude-profiles/personal/.oauth-token'`);
-    expect(script).toContain(`'${guard("/root/.claude-profiles/personal")}claude; exec bash'`);
+    expect(script).toContain(sq(`${guard("/root/.claude-profiles/personal")}claude; exec bash`));
     expect(script).not.toContain("/root/.claude/.oauth-token");
 
     // another card on the default account with NO token: no printf, but the (harmless) guard stays
     const b = await reg.createCard({ projectId: card.projectId, title: "B" });
     await ws.openCard(b.id);
     expect(scriptAt(1)).not.toContain("printf '%s' 'sk-ant");
-    expect(scriptAt(1)).toContain(`'${CLAUDE}'`);
+    expect(scriptAt(1)).toContain(sq(CLAUDE));
   });
 });
 
@@ -1057,7 +1062,7 @@ describe("pre-provisioning (prepareCard) and the per-clone lock", () => {
     expect(script).toContain("git clone");
     expect(script).toContain("worktree add");
     expect(script).toContain("tmux new-session");
-    expect(script).toContain(`'${CLAUDE}'`); // first session: plain claude, no -c
+    expect(script).toContain(sq(CLAUDE)); // first session: plain claude, no -c
 
     expect(prep.preparedAt).toBeTypeOf("number");
     expect(prep.column).toBe("backlog");

@@ -5,6 +5,7 @@ import { hostExecutor, shQuote } from "../runtime/host.js";
 import { config } from "../config/env.js";
 import { assertAccountSlug } from "../services/board/registry.js";
 import { profileDirFor, DEFAULT_ACCOUNT_SLUG } from "../services/accounts/profiles.js";
+import { firstRunSeedCommand } from "../services/accounts/firstRun.js";
 import { bridgePty } from "./session.js";
 import { logger } from "../utils/logger.js";
 
@@ -28,7 +29,11 @@ export async function accountLoginRoutes(app: FastifyInstance): Promise<void> {
       const raw = req.params.slug;
       const slug = raw === DEFAULT_ACCOUNT_SLUG ? undefined : assertAccountSlug(raw);
       const profileDir = profileDirFor(slug);
-      const inner = "claude /login; echo; echo '--- login flow ended — you can close this panel ---'; exec bash";
+      // The profile of an account that never ran Claude has no `.claude.json`: `claude /login` would
+      // open the setup wizard first and the login would be two screens away. Seeded here too.
+      const inner =
+        `${firstRunSeedCommand(profileDir)}; ` +
+        "claude /login; echo; echo '--- login flow ended — you can close this panel ---'; exec bash";
       const line =
         `docker exec -it ${shQuote(config.runner.container)} ` +
         `env LANG=C.UTF-8 LC_ALL=C.UTF-8 CLAUDE_CONFIG_DIR=${shQuote(profileDir)} ` +
