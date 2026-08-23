@@ -20,7 +20,7 @@ import { mcpRoutes } from "./routes/mcp.js";
 import { cardSessionRoutes } from "./routes/cardSession.js";
 import { chatRoutes } from "./routes/chat.js";
 import { accountLoginRoutes } from "./routes/accountLogin.js";
-import { sweepIdleCards } from "./services/board/workspace.js";
+import { startPauseReconciler, sweepIdleCards } from "./services/board/workspace.js";
 
 /**
  * The vibehub server: one process serving the API, the websocket terminals, and (in production) the
@@ -115,6 +115,12 @@ async function main(): Promise<void> {
   const app = await buildServer();
   await app.listen({ port: config.port, host: config.host });
   startIdleSweep();
+  // Pending pauses are normally closed by the Stop hook, but a session can go quiet without ever
+  // firing one (Claude parked on the "Resume from summary" menu, on a permission question, or
+  // killed). This asks the runner about those cards on a timer and finishes the pause — a card in
+  // Paused must not be running. Started HERE and not in buildServer, for the same reason as the
+  // idle sweep: tests that boot the app must not inherit background work.
+  startPauseReconciler();
   logger.info(
     { port: config.port, dataDir: config.dataDir, runner: config.runner.kind },
     `vibehub listening on http://${config.host}:${config.port}`,

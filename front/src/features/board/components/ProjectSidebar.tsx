@@ -285,10 +285,14 @@ function ProjectRow({
 
   const { active, idle } = splitSidebarCards(cards ?? []);
   const openCard = activeCardId ? (cards ?? []).find((c) => c.id === activeCardId) : undefined;
+  // The card you are IN always has a row, whatever column it sits in. It used to be listed only
+  // when it was in neither half, so opening a card straight out of the Backlog — which is every
+  // brand-new card — left the list with no row for the thing filling the screen, and the "show
+  // more" fold was the only place it existed.
   const listed =
-    openCard && !active.some((c) => c.id === openCard.id) && !idle.some((c) => c.id === openCard.id)
-      ? [openCard, ...active]
-      : active;
+    openCard && !active.some((c) => c.id === openCard.id) ? [openCard, ...active] : active;
+  const shown = new Set(listed.map((c) => c.id));
+  const folded = idle.filter((c) => !shown.has(c.id));
 
   /** Writes one card back into this project's cache, then lets the poll re-synchronise. */
   const mirror = React.useCallback(
@@ -513,18 +517,18 @@ function ProjectRow({
           {/* The revealed cards appear ABOVE the toggle, which stays anchored at the end of the
               list: expanding and collapsing are the same point of click, and nothing moves out
               from under the cursor. */}
-          {showMore ? idle.map(renderCard) : null}
-          {idle.length > 0 ? (
+          {showMore ? folded.map(renderCard) : null}
+          {folded.length > 0 ? (
             <button
               type="button"
               aria-expanded={showMore}
               onClick={() => setShowMore((v) => !v)}
               className="w-full py-1.5 pl-9 pr-3 text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground/80 transition-colors hover:bg-card/60 hover:text-foreground"
             >
-              {showMore ? t("sidebar.showLess") : t("sidebar.showMore", { n: idle.length })}
+              {showMore ? t("sidebar.showLess") : t("sidebar.showMore", { n: folded.length })}
             </button>
           ) : null}
-          {listed.length === 0 && idle.length === 0 ? (
+          {listed.length === 0 && folded.length === 0 ? (
             <p className="py-1.5 pl-9 pr-3 text-[11px] text-muted-foreground/60">{t("sidebar.noActiveCards")}</p>
           ) : null}
         </div>

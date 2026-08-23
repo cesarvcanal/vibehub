@@ -315,6 +315,52 @@ describe("BoardPage — the sidebar", () => {
     expect(within(nav).queryByRole("link", { name: "fix the totals" })).not.toBeInTheDocument();
   });
 
+  /**
+   * The card you just named has to be THERE. It used to need a round trip to the server AND a status
+   * from the runner before it existed on screen: a new card lands in the backlog, and the sidebar
+   * only listed the live columns — so you typed a title, got nothing, and clicked at a row that was
+   * not there yet.
+   */
+  it("puts a card you just created in the list at once, without waiting for a refetch", async () => {
+    const user = userEvent.setup();
+    // The server keeps answering with the OLD list: only the local write can put the row on screen.
+    mockPost.mockResolvedValue({
+      card: {
+        id: "c9", projectId: "p1", title: "brand new", column: "backlog", position: 1,
+        tmuxSession: "card-c9", worktreeSlug: "brand-new-c9", createdAt: 9,
+      },
+    });
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+
+    await user.click(within(nav).getByRole("button", { name: "New card in billing" }));
+    await user.type(await screen.findByLabelText("Title"), "brand new");
+    // From here on the server never answers another card list: whatever shows up on screen is the
+    // local write, not a refetch.
+    const stale = mockGet.getMockImplementation()!;
+    mockGet.mockImplementation((url: string) =>
+      url.endsWith("/cards") ? new Promise(() => {}) : stale(url),
+    );
+    await user.click(screen.getByRole("button", { name: "Create card" }));
+
+    expect(mockPost).toHaveBeenCalledWith("/cards", expect.objectContaining({ projectId: "p1", title: "brand new" }));
+    // In the backlog, so it rides with the folded cards — but the count says it exists NOW.
+    expect(await within(nav).findByRole("button", { name: "show more (2)" })).toBeInTheDocument();
+    await user.click(within(nav).getByRole("button", { name: "show more (2)" }));
+    expect(within(nav).getByRole("link", { name: "brand new" })).toBeInTheDocument();
+    // And on the board itself, in the column it was created in.
+    expect(within(screen.getByRole("region", { name: "Backlog" })).getByRole("link", { name: "brand new" }))
+      .toBeInTheDocument();
+  });
+
+  it("keeps a row for the card you are IN, even when it sits in the backlog", async () => {
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c1" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+    // c1 is a backlog card: it is on screen, so it is in the list — not hidden behind "show more".
+    expect(await within(nav).findByRole("link", { name: "fix the totals" })).toBeInTheDocument();
+    expect(within(nav).queryByRole("button", { name: /show more/ })).not.toBeInTheDocument();
+  });
+
   it("deselects the project when its row is clicked a second time", async () => {
     const user = userEvent.setup();
     renderApp(<BoardPage />, { route: "/?project=p1" });

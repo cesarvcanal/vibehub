@@ -475,6 +475,35 @@ export function reactivatesOnActivity(card: Pick<Card, "column" | "pausedAt">, s
 }
 
 /**
+ * What a card EDIT has to do to the runner, beyond writing the record — the rule behind dragging a
+ * card between columns:
+ *
+ *  - `pause`: it is going INTO `paused`, and it has a session to end (`openedAt`). A card that was
+ *    never opened has nothing running, so it just moves.
+ *  - `resume`: a card that HAD a session and no longer has one — paused, or hibernated by the idle
+ *    sweep — going into a LIVE column, `waiting` or `working`. That is what "take this off the
+ *    shelf" means, so the session comes back. `backlog` and `done` are not live columns: a card
+ *    dropped there stays dormant.
+ *  - `none`: everything else (a rename, an account switch, a move between live columns, and a
+ *    PENDING pause dragged back out — its session never died, so there is nothing to bring back).
+ *
+ * PURE/testable — the side effects belong to the route.
+ */
+export type CardMoveEffect = "pause" | "resume" | "none";
+
+export function cardMoveEffect(
+  before: Pick<Card, "column" | "openedAt" | "pausedAt" | "hibernatedAt">,
+  patch: Pick<UpdateCardInput, "column">,
+): CardMoveEffect {
+  const target = patch.column;
+  if (!target || target === before.column) return "none";
+  if (target === "paused") return before.openedAt ? "pause" : "none";
+  const live = target === "waiting" || target === "working";
+  if (live && before.openedAt && !hasLiveSession(before)) return "resume";
+  return "none";
+}
+
+/**
  * A card with a LIVE session in the runner: it has been opened (`openedAt`), is not paused (an
  * effective pause kills the session and stamps `pausedAt`) and is not HIBERNATED (the idle sweep
  * killed the session and left the card where it was). A card in `paused` that STILL has a live
@@ -1217,6 +1246,17 @@ export async function markRestartPending(cardId: string, reason: RestartReason):
   });
 }
 
+export interface PauseOpts {
+  /**
+   * true = pause EFFECTIVELY even though the dot says `working`. The caller (workspace.pauseCard,
+   * and the reconciler) sets it when the RUNNER contradicts the dot: the session is parked on a
+   * menu, on a permission prompt, or is gone altogether. Without it a stale `working` dot — a card
+   * sitting on Claude's "Resume from summary" screen never fires a Stop hook — would keep the card
+   * as a pending pause forever, burning a live session inside a column that means "not running".
+   */
+  effective?: boolean;
+}
+
 /**
  * PAUSES the card in the registry and moves it to `paused` (a sticky column: a paused card mirrors
  * nothing, and no late hook moves it). It only makes sense on a card that has had a session
@@ -1231,7 +1271,7 @@ export async function markRestartPending(cardId: string, reason: RestartReason):
  *    (applyCardStatus) stamps `pausedAt` then, and the caller ends the session at that point.
  *    `pausedAt` therefore always means "the session is dead".
  */
-export async function pauseCard(cardId: string): Promise<Card> {
+export async function pauseCard(cardId: string, opts: PauseOpts = {}): Promise<Card> {
   return store.mutate((doc) => {
     const card = doc.cards.find((c) => c.id === cardId);
     if (!card) throw new Error("card not found");
@@ -1240,7 +1280,7 @@ export async function pauseCard(cardId: string): Promise<Card> {
     // `done` is the user's own sticky column: pausing does NOT take the card out of it. And a card
     // already in `paused` has nowhere to move.
     if (card.column !== "paused" && card.column !== "done") placeCard(doc.cards, card, "paused");
-    if (shouldEndSessionOnMove(card.status)) {
+    if (opts.effective || shouldEndSessionOnMove(card.status)) {
       // Idle -> effective pause: the caller kills the session now.
       card.pausedAt = Date.now();
       card.status = null;

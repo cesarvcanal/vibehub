@@ -97,6 +97,16 @@ export function bridgePty(socket: WebSocket, term: IPty, label: string): void {
   socket.on("error", teardown);
 }
 
+/**
+ * true = this card has NO workspace in the runner yet (never opened, and the background prepare
+ * fired at its creation has not landed). Attaching a terminal to it would let `tmux new-session -A`
+ * create the session anyway — tmux quietly falls back to another directory when `-c` does not
+ * exist — and Claude would come up outside the card's worktree, or not at all. PURE.
+ */
+export function needsProvisioning(card: Pick<registry.Card, "openedAt" | "preparedAt">): boolean {
+  return !card.openedAt && !card.preparedAt;
+}
+
 export async function sessionRoutes(app: FastifyInstance): Promise<void> {
   /* -------------------------------------------------------------- lifecycle */
 
@@ -217,7 +227,31 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
         return;
       }
       const shell = req.query?.shell === "1";
-      const { file, args } = workspace.cardTerminalCommand(project, card, { shell });
+      // SNAPSHOT: `getCard` hands back the live cached record, which the provisioning below mutates
+      // in place. The attach command has to be built from the card as it is NOW — a card that never
+      // had a conversation must be born with a plain `claude`, never with `claude -c` (which prints
+      // "No conversation found to continue" before falling back).
+      const snapshot = { ...card };
+
+      // A card whose workspace was never provisioned (never opened, and the background prepare from
+      // its creation has not landed yet) has NO worktree in the runner. Attaching now would let
+      // `tmux new-session -A` create the session anyway — tmux quietly falls back to another
+      // directory when `-c` does not exist — and Claude would start outside the card's worktree, or
+      // land on a bare shell. That is the "terminal with no Claude in it" on a brand-new card. So
+      // provision FIRST and attach to a workspace that really exists.
+      if (needsProvisioning(snapshot)) {
+        try {
+          socket.send("\r\n[vibehub] preparing this card in the runner…\r\n");
+          await workspace.openCard(card.id);
+        } catch (err) {
+          logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not prepare the card for its terminal");
+          socket.send(`\r\n[vibehub] could not prepare this card: ${(err as Error).message}\r\n`);
+          socket.close();
+          return;
+        }
+      }
+
+      const { file, args } = workspace.cardTerminalCommand(project, snapshot, { shell });
       const term = pty.spawn(file, args, {
         name: "xterm-256color",
         cols: 120,

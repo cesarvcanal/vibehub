@@ -902,6 +902,19 @@ describe("board registry (persisted)", () => {
       await expect(reg.pauseCard("nope")).rejects.toThrow(/card not found/);
     });
 
+    it("effective:true pauses a WORKING card for real — how a stale green dot stops parking a live session", async () => {
+      const p = await seedProject();
+      const card = await reg.createCard({ projectId: p.id, title: "a" });
+      await reg.applyOpenTerminal(card.id);
+      await reg.applyCardStatus(card.id, "working");
+      // The runner said that pane is not generating anything: the dot was a leftover.
+      const paused = await reg.pauseCard(card.id, { effective: true });
+      expect(paused.column).toBe("paused");
+      expect(paused.pausedAt).toBeGreaterThan(0);
+      expect(paused.status).toBeNull();
+      expect(hasLiveSession(paused)).toBe(false);
+    });
+
     it("resuming = opening: it leaves paused, clears pausedAt, goes to waiting and keeps openedAt", async () => {
       const p = await seedProject();
       const card = await reg.createCard({ projectId: p.id, title: "a" });
@@ -911,6 +924,35 @@ describe("board registry (persisted)", () => {
       expect(resumed?.column).toBe("waiting");
       expect(resumed?.pausedAt).toBeNull();
       expect(resumed?.openedAt).toBe(opened?.openedAt);
+    });
+
+    /**
+     * What a DRAG has to do beyond repainting the card. This is the rule the PATCH route follows:
+     * Paused is not a label, it is "this card is not running".
+     */
+    it("cardMoveEffect: into Paused pauses, out of Paused into a live column resumes, the rest is a plain move", () => {
+      const opened = { column: "working" as const, openedAt: 1, pausedAt: null };
+      const parked = { column: "paused" as const, openedAt: 1, pausedAt: 2 };
+      const never = { column: "backlog" as const, openedAt: undefined, pausedAt: null };
+
+      expect(reg.cardMoveEffect(opened, { column: "paused" })).toBe("pause");
+      // A card that never ran has nothing to kill — it just moves.
+      expect(reg.cardMoveEffect(never, { column: "paused" })).toBe("none");
+      // Already there: nothing to do (a reorder inside Paused must not re-pause).
+      expect(reg.cardMoveEffect(parked, { column: "paused" })).toBe("none");
+
+      expect(reg.cardMoveEffect(parked, { column: "waiting" })).toBe("resume");
+      expect(reg.cardMoveEffect(parked, { column: "working" })).toBe("resume");
+      // Backlog and Done are not live columns: dropped there, the card stays dormant.
+      expect(reg.cardMoveEffect(parked, { column: "backlog" })).toBe("none");
+      expect(reg.cardMoveEffect(parked, { column: "done" })).toBe("none");
+
+      // Everything else: a rename, a reorder, a move between two live columns.
+      expect(reg.cardMoveEffect(opened, {})).toBe("none");
+      expect(reg.cardMoveEffect(opened, { column: "waiting" })).toBe("none");
+      // A PENDING pause (still alive) dragged out needs no runner call at all: the column stops
+      // being `paused`, so the status hook simply mirrors again and the pause never lands.
+      expect(reg.cardMoveEffect({ column: "paused", openedAt: 1, pausedAt: null }, { column: "waiting" })).toBe("none");
     });
   });
 
