@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BoardPage } from "@/features/board/BoardPage";
 import { renderApp } from "@/test/render";
@@ -363,13 +363,17 @@ describe("BoardPage — the sidebar", () => {
     expect(within(sidebar()).getByRole("button", { name: "gateway" })).toBeInTheDocument();
   });
 
-  it("renames a card in place on a double-click", async () => {
+  it("renames a card in place from its menu, without opening the card", async () => {
     mockPatch.mockResolvedValue({ card: { ...cards[1]!, title: "chase the other flake" } });
     const user = userEvent.setup();
     renderApp(<BoardPage />, { route: "/?project=p1" });
     const nav = await screen.findByRole("navigation", { name: /projects/i });
 
-    await user.dblClick(await within(nav).findByRole("link", { name: "chase the flake" }));
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: await within(nav).findByRole("link", { name: "chase the flake" }),
+    });
+    await user.click(await screen.findByRole("menuitem", { name: "Rename" }));
     const input = await screen.findByLabelText("Rename card");
     await user.clear(input);
     await user.type(input, "chase the other flake{Enter}");
@@ -384,7 +388,11 @@ describe("BoardPage — the sidebar", () => {
     renderApp(<BoardPage />, { route: "/?project=p1" });
     const nav = await screen.findByRole("navigation", { name: /projects/i });
 
-    await user.dblClick(await within(nav).findByRole("link", { name: "chase the flake" }));
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: await within(nav).findByRole("link", { name: "chase the flake" }),
+    });
+    await user.click(await screen.findByRole("menuitem", { name: "Rename" }));
     await user.type(await screen.findByLabelText("Rename card"), "nonsense{Escape}");
 
     await waitFor(() => expect(screen.queryByLabelText("Rename card")).not.toBeInTheDocument());
@@ -401,10 +409,45 @@ describe("BoardPage — the sidebar", () => {
     await user.pointer({ keys: "[MouseRight]", target: row });
     const menu = await screen.findByRole("menu", { name: "Actions for chase the flake" });
     expect(within(menu).getAllByRole("menuitem").map((i) => i.textContent)).toEqual([
+      "Rename",
       "Pause",
       "Restart",
       "Finish",
     ]);
+  });
+
+  // A double-click used to be the way in, and its FIRST click opens (or, on the card already open,
+  // closes) the card — the rename box arrived over a terminal that had just been torn down.
+  it("does not rename on a double-click, and opens the card exactly once", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+
+    await user.dblClick(await within(nav).findByRole("link", { name: "chase the flake" }));
+
+    expect(await screen.findByTestId("terminal")).toHaveTextContent("c2");
+    expect(screen.queryByLabelText("Rename card")).not.toBeInTheDocument();
+  });
+
+  it("opens the card menu on a long press, and the press does not open the card", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderApp(<BoardPage />, { route: "/?project=p1" });
+      const nav = await screen.findByRole("navigation", { name: /projects/i });
+      const row = await within(nav).findByRole("link", { name: "chase the flake" });
+
+      fireEvent.touchStart(row, { touches: [{ clientX: 40, clientY: 120 }] });
+      await act(async () => {
+        vi.advanceTimersByTime(600);
+      });
+      fireEvent.touchEnd(row);
+      fireEvent.click(row);
+
+      expect(await screen.findByRole("menu", { name: "Actions for chase the flake" })).toBeInTheDocument();
+      expect(screen.queryByTestId("terminal")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reorders a project from its right-click menu", async () => {

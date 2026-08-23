@@ -47,8 +47,73 @@ export function useContextMenuPoint() {
     event.stopPropagation();
     setPoint({ x: event.clientX, y: event.clientY });
   }, []);
+  /** The same opening, from a gesture that is not a mouse event — see `useLongPress`. */
+  const openAtPoint = React.useCallback((p: ContextMenuPoint) => setPoint(p), []);
   const close = React.useCallback(() => setPoint(null), []);
-  return { point, openAt, close };
+  return { point, openAt, openAtPoint, close };
+}
+
+/** How long a touch has to stay put before it counts as a press rather than a tap. */
+const LONG_PRESS_MS = 500;
+/** Past this much movement it is a scroll, not a press. */
+const LONG_PRESS_SLOP_PX = 10;
+
+/**
+ * Long-press as the touch screen's right-click.
+ *
+ * A phone has no `contextmenu` gesture worth relying on: a long press on a link gets the browser's
+ * own callout instead, so a menu that only opens on right-click simply does not exist there. This
+ * measures the press itself — a timer armed on `touchstart`, disarmed by movement (a scroll) or by
+ * lifting early (a tap) — and opens the panel at the finger.
+ *
+ * The press still ends in a `click`, which would follow the link the menu just opened over, so
+ * `pressed` stays true until the row's own handler reads it and drops the click on the floor.
+ */
+export function useLongPress(open: (point: ContextMenuPoint) => void) {
+  const timer = React.useRef<number | null>(null);
+  const origin = React.useRef<ContextMenuPoint | null>(null);
+  /** True from the moment the press fires until the click it produced has been swallowed. */
+  const pressed = React.useRef(false);
+
+  const cancel = React.useCallback(() => {
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    timer.current = null;
+    origin.current = null;
+  }, []);
+
+  React.useEffect(() => cancel, [cancel]);
+
+  const handlers = {
+    onTouchStart: (event: React.TouchEvent) => {
+      const touch = event.touches[0];
+      if (!touch) return;
+      const point = { x: touch.clientX, y: touch.clientY };
+      pressed.current = false;
+      origin.current = point;
+      timer.current = window.setTimeout(() => {
+        timer.current = null;
+        pressed.current = true;
+        open(point);
+      }, LONG_PRESS_MS);
+    },
+    onTouchMove: (event: React.TouchEvent) => {
+      const touch = event.touches[0];
+      const from = origin.current;
+      if (!touch || !from) return;
+      if (Math.hypot(touch.clientX - from.x, touch.clientY - from.y) > LONG_PRESS_SLOP_PX) cancel();
+    },
+    onTouchEnd: cancel,
+    onTouchCancel: cancel,
+  };
+
+  /** Did this click come from a press that already opened the menu? Consumes the flag. */
+  const swallowClick = () => {
+    if (!pressed.current) return false;
+    pressed.current = false;
+    return true;
+  };
+
+  return { handlers, swallowClick };
 }
 
 /** Row height + padding, used to guess the panel's height before it is measured. */
