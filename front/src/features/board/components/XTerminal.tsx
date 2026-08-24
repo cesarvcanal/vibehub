@@ -119,6 +119,15 @@ const THEME: ITerminalOptions["theme"] = {
 const FIT_BACKSTOP_MS = 90;
 
 /**
+ * A freshly opened socket must stay up this long before the connection counts as healthy and the
+ * backoff resets to its base. A redeploy racing the proxy, or a network flap, can accept a socket
+ * and drop it a moment later; resetting the delay on the bare `open` event would let that storm the
+ * server at the base interval forever. Staying up for this long is the signal the socket is real,
+ * so only then do we drop back to the first, fast retry delay.
+ */
+const STABLE_CONNECTION_MS = 3_000;
+
+/**
  * Reads one buffer row. Only the LAST row of a line is trimmed: an untrimmed row is exactly `cols`
  * characters wide, which is what lets an offset in the logical line map back to a cell by division.
  */
@@ -446,11 +455,26 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
 
     let socket: WebSocket | null = null;
     let retry: ReturnType<typeof setTimeout> | null = null;
+    // Set when a socket opens; fires after STABLE_CONNECTION_MS and resets the backoff. Cleared the
+    // moment the socket closes, so a connection that opens then dies never resets `attempt`.
+    let stableTimer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
     let disposed = false;
     const decoder = new TextDecoder();
 
     const setStatus = (state: ConnectionState): void => statusRef.current?.(state);
+
+    /**
+     * Can we even reach the server right now? Don't dial while the machine is offline or the tab is
+     * hidden — the socket would only fail and burn an attempt, ratcheting the backoff for nothing
+     * (this is the `ERR_NETWORK_CHANGED` storm). The `online` / `visibilitychange` listeners below
+     * redial the instant we are back, so a real recovery is prompt, not throttled.
+     */
+    const canConnectNow = (): boolean => {
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return false;
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return false;
+      return true;
+    };
 
     const sendResize = (cols = term.cols, rows = term.rows): void => {
       if (socket?.readyState !== WebSocket.OPEN) return;
@@ -466,6 +490,12 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
 
     const connect = (): void => {
       if (disposed || socket || typeof WebSocket === "undefined") return;
+      // Hidden tab or offline machine: hold off. A blind dial now just fails; the wake listeners
+      // below reconnect the moment we can actually reach the server again.
+      if (!canConnectNow()) {
+        setStatus("reconnecting");
+        return;
+      }
       setStatus(attempt === 0 ? "connecting" : "reconnecting");
       let next: WebSocket;
       try {
@@ -478,7 +508,6 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
       socketRef.current = next;
       next.binaryType = "arraybuffer";
       next.onopen = () => {
-        attempt = 0;
         setStatus("open");
         // Focus on EVERY open, reconnects included: a session that comes back and does not take the
         // keyboard leaves you typing into nothing without any sign of why. Unless the terminal is
@@ -487,6 +516,15 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
         if (autoFocusRef.current) term.focus();
         echo.reset();
         sendResize();
+        // Do NOT reset the backoff on the bare open — see STABLE_CONNECTION_MS. A socket that opens
+        // and immediately dies (a deploy racing the proxy, a flapping network) would otherwise reset
+        // to the base delay every time and hammer the server. Only once it has held for a moment do
+        // we trust it and drop back to the first, fast delay.
+        if (stableTimer) clearTimeout(stableTimer);
+        stableTimer = setTimeout(() => {
+          stableTimer = null;
+          attempt = 0;
+        }, STABLE_CONNECTION_MS);
       };
       next.onmessage = (event: MessageEvent) => {
         // The bridge sends text, but a proxy may hand it over as binary. Duck-typed rather than
@@ -502,6 +540,12 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
         /* onclose always follows; retrying is decided there so it happens exactly once */
       };
       next.onclose = () => {
+        // The socket died before it proved itself stable: drop the pending reset so `attempt` keeps
+        // ratcheting instead of snapping back to the base delay.
+        if (stableTimer) {
+          clearTimeout(stableTimer);
+          stableTimer = null;
+        }
         if (socket === next) socket = null;
         if (socketRef.current === next) socketRef.current = null;
         if (disposed) return;
@@ -512,6 +556,9 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
     const scheduleRetry = (): void => {
       if (disposed || retry) return;
       setStatus("reconnecting");
+      // Offline or hidden: don't schedule a blind retry that will only fail and ratchet the backoff.
+      // The wake listeners reconnect the instant the network or the tab comes back.
+      if (!canConnectNow()) return;
       const delay = reconnectDelay(attempt, Math.random);
       attempt += 1;
       retry = setTimeout(() => {
@@ -519,6 +566,28 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
         connect();
       }, delay);
     };
+
+    /**
+     * A real network change or a tab waking up should recover FAST, not sit out a long backoff.
+     * When we come back online or the tab becomes visible, cancel any pending wait and dial
+     * immediately — unless a socket is already live. `attempt` is deliberately NOT reset: if the
+     * server itself is down the backoff must keep growing; we only skip the remaining WAIT so a
+     * genuine reconnection is instant.
+     */
+    const wake = (): void => {
+      if (disposed || socket || !canConnectNow()) return;
+      if (retry) {
+        clearTimeout(retry);
+        retry = null;
+      }
+      connect();
+    };
+    const onOnline = (): void => wake();
+    const onVisibility = (): void => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") wake();
+    };
+    if (typeof window !== "undefined") window.addEventListener("online", onOnline);
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisibility);
 
     // Any resize — the ResizeObserver's fit, a zoom refit, a fonts-loaded refit — must reach the
     // pty, or the session keeps drawing for the old geometry (the terminal shrinks into a corner
@@ -747,9 +816,12 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
     return () => {
       disposed = true;
       if (retry) clearTimeout(retry);
+      if (stableTimer) clearTimeout(stableTimer);
       clearTimeout(backstop);
       cancelAnimationFrame(firstFrame);
       cancelAnimationFrame(secondFrame);
+      if (typeof window !== "undefined") window.removeEventListener("online", onOnline);
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisibility);
       host.removeEventListener("paste", onPaste, true);
       host.removeEventListener("dragover", onDragOver);
       host.removeEventListener("drop", onDrop);
