@@ -234,3 +234,16 @@ describe("terminal transport tuning", () => {
     expect(disableNagle({ _socket: { setNoDelay: () => { throw new Error("closing"); } } })).toBe(false);
   });
 });
+
+describe("human-active stamping throttle", () => {
+  it("writes at most once per window per card, then again after it passes", async () => {
+    const { shouldStampHumanActive, resetHumanStampThrottleForTesting, HUMAN_ACTIVE_THROTTLE_MS } = await import("./session.js");
+    resetHumanStampThrottleForTesting();
+    const t0 = 1_000_000;
+    expect(shouldStampHumanActive("card-a", t0)).toBe(true); // first keystroke stamps
+    expect(shouldStampHumanActive("card-a", t0 + 100)).toBe(false); // within the window — no write
+    expect(shouldStampHumanActive("card-a", t0 + HUMAN_ACTIVE_THROTTLE_MS)).toBe(true); // window passed
+    // the gate is per-card
+    expect(shouldStampHumanActive("card-b", t0 + 100)).toBe(true);
+  });
+});
