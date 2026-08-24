@@ -14,6 +14,7 @@ import {
   sortProjects,
   cardDot,
   cardHref,
+  declaredStateChip,
   dotClass,
   locationHref,
   recentCards,
@@ -201,6 +202,21 @@ describe("cardDot", () => {
   it("gives each tone its own colour", () => {
     const classes = (["ok", "warn", "cold"] as const).map(dotClass);
     expect(new Set(classes).size).toBe(3);
+  });
+});
+
+describe("declaredStateChip", () => {
+  it("is null until the agent has declared a state", () => {
+    expect(declaredStateChip(card({ id: "a" }))).toBeNull();
+  });
+
+  it("labels each state and gives each its own colour", () => {
+    expect(declaredStateChip(card({ id: "a", declaredState: "ready" }))?.label).toBe("Ready");
+    expect(declaredStateChip(card({ id: "a", declaredState: "needs_me" }))?.label).toBe("Needs you");
+    const classes = (["working", "ready", "needs_me", "blocked"] as const).map(
+      (s) => declaredStateChip(card({ id: "a", declaredState: s }))?.className,
+    );
+    expect(new Set(classes).size).toBe(4);
   });
 });
 

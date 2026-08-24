@@ -246,6 +246,10 @@ export const ptBR: Record<string, string> = {
   "card.projectChip": "Projeto: {name}",
   "card.ownAccount": "A conta Claude deste card",
   "card.actionsFor": "Ações de {title}",
+  "card.declaredState.working": "Em andamento",
+  "card.declaredState.ready": "Pronto",
+  "card.declaredState.needs_me": "Precisa de você",
+  "card.declaredState.blocked": "Bloqueado",
 
   /* ---------------------------------------------------------------- sidebar */
   "sidebar.projects": "Projetos",
