@@ -7,7 +7,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { cardDot, cardHref, dotClass } from "@/features/board/lib/board";
+import { cardDot, cardHref, declaredStateChip, dotClass } from "@/features/board/lib/board";
 import {
   ContextMenu,
   useContextMenuPoint,
@@ -66,6 +66,8 @@ export function CardTile({
 }) {
   const t = useT();
   const dot = cardDot(card);
+  /** The agent's own word on where the work stands (`vibehub_report`). Null = it has said nothing. */
+  const stateChip = declaredStateChip(card);
   const paused = Boolean(card.pausedAt);
   /** No session behind it any more: it was left alone long enough for the sweep to close it. */
   const hibernated = Boolean(card.hibernatedAt);
@@ -189,6 +191,20 @@ export function CardTile({
           >
             {t("card.updatingWhenFinishes")}
           </div>
+        ) : null}
+
+        {/* What the AGENT said about its own work (vibehub_report), colour-coded. The one-line
+            summary rides in the tooltip; with no summary the tooltip repeats the state label. */}
+        {stateChip ? (
+          <span
+            title={card.declaredSummary?.trim() || stateChip.label}
+            className={cn(
+              "mr-1 mt-1 inline-flex max-w-full items-center truncate rounded border px-1 py-px text-[10px] font-medium",
+              stateChip.className,
+            )}
+          >
+            {stateChip.label}
+          </span>
         ) : null}
 
         {/* The owning project, only where cards from several projects share a column. */}

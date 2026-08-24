@@ -282,9 +282,23 @@ export interface Card {
   restartPendingAt?: number | null;
   /** Which write scheduled the deferred restart. */
   restartReason?: "brain" | "mcp" | "config";
+  /**
+   * What the agent inside the card SAID about its own work (via `vibehub_report`): 'working' (still
+   * on it), 'ready' (done, ready to deliver/review), 'needs_me' (wants a decision from the user) or
+   * 'blocked' (cannot proceed). Orthogonal to `status`/`column` — it never moves the card. Absent =
+   * the agent has said nothing.
+   */
+  declaredState?: DeclaredState;
+  /** One-line summary the agent reported with `declaredState`. */
+  declaredSummary?: string;
+  /** Last time a human typed into this card's terminal (epoch ms). */
+  humanActiveAt?: number;
   createdAt: number;
   updatedAt?: number;
 }
+
+/** The agent's own read of where its work stands — see `Card.declaredState`. */
+export type DeclaredState = "working" | "ready" | "needs_me" | "blocked";
 
 export interface NewCard {
   projectId: string;

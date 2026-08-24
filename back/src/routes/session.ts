@@ -57,6 +57,33 @@ export function isValidTermSize(n: unknown): n is number {
   return typeof n === "number" && Number.isInteger(n) && n >= 10 && n <= 500;
 }
 
+/**
+ * How often a card's `humanActiveAt` is actually written while someone types. Keystrokes arrive many
+ * per second; persisting each would hammer the board store. The window a maestro reads
+ * (HUMAN_ACTIVE_WINDOW_MS, minutes) is far larger, so stamping at most this often loses nothing.
+ */
+export const HUMAN_ACTIVE_THROTTLE_MS = 5_000;
+
+/** Last time each card's human-active stamp was written — the throttle gate. Module-scoped. */
+const lastHumanStamp = new Map<string, number>();
+
+/**
+ * Should we WRITE the stamp for this card now? true when the throttle window has passed since the
+ * last write (updating the gate as a side effect). Keeps the disk-write rate bounded no matter how
+ * fast the user types, across every connection to the same card. PURE-ish (mutates the gate map).
+ */
+export function shouldStampHumanActive(cardId: string, now: number = Date.now()): boolean {
+  const last = lastHumanStamp.get(cardId) ?? 0;
+  if (now - last < HUMAN_ACTIVE_THROTTLE_MS) return false;
+  lastHumanStamp.set(cardId, now);
+  return true;
+}
+
+/** Clears the throttle gate — tests only. */
+export function resetHumanStampThrottleForTesting(): void {
+  lastHumanStamp.clear();
+}
+
 /** Frames from the browser: either raw keystrokes or a resize instruction. */
 export function parseTerminalFrame(raw: string): { type: "resize"; cols: number; rows: number } | { type: "data"; data: string } {
   if (raw.startsWith("{")) {
@@ -74,8 +101,14 @@ export function parseTerminalFrame(raw: string): { type: "resize"; cols: number;
 
 const KEEPALIVE_MS = 25_000;
 
-/** Wires a pty to a websocket: output out, keystrokes and resizes in, both sides closing together. */
-export function bridgePty(socket: WebSocket, term: IPty, label: string): void {
+/**
+ * Wires a pty to a websocket: output out, keystrokes and resizes in, both sides closing together.
+ *
+ * `onInput` (when given) is called with each DATA frame the browser sends — a human typing. The card
+ * terminal uses it to stamp `humanActiveAt`; resize frames never trigger it (a layout change is not
+ * a person typing).
+ */
+export function bridgePty(socket: WebSocket, term: IPty, label: string, onInput?: (data: string) => void): void {
   disableNagle(socket);
   const keepalive = setInterval(() => {
     // Proxies drop an idle websocket; a protocol ping keeps the terminal alive while you read.
@@ -94,7 +127,11 @@ export function bridgePty(socket: WebSocket, term: IPty, label: string): void {
   socket.on("message", (raw: Buffer) => {
     const frame = parseTerminalFrame(raw.toString());
     if (frame.type === "resize") term.resize(frame.cols, frame.rows);
-    else term.write(frame.data);
+    else {
+      term.write(frame.data);
+      // A person typed. Best-effort: a bad listener must never take the terminal down.
+      if (onInput) { try { onInput(frame.data); } catch { /* ignore */ } }
+    }
   });
 
   const teardown = (): void => {
@@ -311,7 +348,12 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
         env: { ...process.env, LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TERM: "xterm-256color" },
       });
       logger.info({ card: card.worktreeSlug, shell }, "terminal attached");
-      bridgePty(socket, term, card.worktreeSlug);
+      // A human typing here makes the card "human-active": a maestro must not send into it while a
+      // person is at the prompt. Throttled to a write every few seconds, and fire-and-forget — a
+      // keystroke must never wait on the board store, and an unknown card is a no-op there.
+      bridgePty(socket, term, card.worktreeSlug, () => {
+        if (shouldStampHumanActive(card.id)) void registry.markCardHumanActive(card.id);
+      });
 
       // A terminal attaching is the moment a dead session comes back: `tmux new-session -A`
       // recreates it with Claude inside, so anything queued for this card can go now. Delayed, and

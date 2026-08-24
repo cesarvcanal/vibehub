@@ -1,4 +1,4 @@
-import type { CardColumn, CardStatus } from "@/api/types";
+import type { CardColumn, CardStatus, DeclaredState } from "@/api/types";
 import type { BoardCard, BoardProject } from "@/features/board/api";
 import { t } from "@/i18n";
 
@@ -238,6 +238,31 @@ export function dotClass(tone: StatusDot["tone"]): string {
   if (tone === "ok") return "bg-emerald-400";
   if (tone === "warn") return "bg-amber-400";
   return "bg-muted-foreground/50";
+}
+
+/** The declared-state chip: the agent's own word on where the work stands, colour-coded. */
+export interface StateChip {
+  label: string;
+  className: string;
+}
+
+/** Border/bg/text classes per declared state — one place, so the chip is the same colour everywhere. */
+const STATE_CHIP_CLASS: Record<DeclaredState, string> = {
+  working: "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300",
+  ready: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  needs_me: "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  blocked: "border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300",
+};
+
+/**
+ * The chip a card shows for the agent's DECLARED state (`vibehub_report`), or null when the agent has
+ * said nothing. Label is resolved in the active language; the summary rides in the tooltip. PURE
+ * (given the language).
+ */
+export function declaredStateChip(card: Pick<BoardCard, "declaredState">): StateChip | null {
+  const state = card.declaredState;
+  if (!state) return null;
+  return { label: t(`card.declaredState.${state}`), className: STATE_CHIP_CLASS[state] };
 }
 
 /** How many conversations the "Recent" list carries. Five: a glance, not a second board. */

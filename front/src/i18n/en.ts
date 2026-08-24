@@ -245,6 +245,10 @@ export const en: Record<string, string> = {
   "card.projectChip": "Project: {name}",
   "card.ownAccount": "This card's Claude account",
   "card.actionsFor": "Actions for {title}",
+  "card.declaredState.working": "On it",
+  "card.declaredState.ready": "Ready",
+  "card.declaredState.needs_me": "Needs you",
+  "card.declaredState.blocked": "Blocked",
 
   /* ---------------------------------------------------------------- sidebar */
   "sidebar.projects": "Projects",

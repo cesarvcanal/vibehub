@@ -231,4 +231,20 @@ describe("CardTile — the chips", () => {
     renderApp(<CardTile card={card({ status: undefined, column: "backlog" })} onOpen={vi.fn()} />);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
+
+  it("shows the agent's declared state as a chip, with the summary in the tooltip", () => {
+    renderApp(
+      <CardTile card={card({ declaredState: "needs_me", declaredSummary: "which currency for the totals?" })} onOpen={vi.fn()} />,
+    );
+    const chip = screen.getByText("Needs you");
+    expect(chip).toBeInTheDocument();
+    expect(chip).toHaveAttribute("title", "which currency for the totals?");
+  });
+
+  it("shows no state chip when the agent has declared nothing", () => {
+    renderApp(<CardTile card={card()} onOpen={vi.fn()} />);
+    for (const label of ["On it", "Ready", "Needs you", "Blocked"]) {
+      expect(screen.queryByText(label)).not.toBeInTheDocument();
+    }
+  });
 });

@@ -1,6 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { listTerminals, sendToTerminal, readTerminal } from "../services/maestro/maestro.js";
+import { listTerminals, sendToTerminal, readTerminal, reportState } from "../services/maestro/maestro.js";
+import { DECLARED_STATES } from "../services/board/registry.js";
+import { runGate } from "../services/maestro/gate.js";
+import { deliver } from "../services/maestro/deliver.js";
 
 /**
  * MAESTRO TOOLS — what one card's agent can do to the OTHER cards.
@@ -77,6 +80,80 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     async (a) => {
       try {
         return ok(await readTerminal(a.cardId, a.last ?? 3));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_report",
+    {
+      description:
+        "Report THIS terminal's own state on the board, so a maestro (or a person) knows where the " +
+        "work stands without reading the whole transcript. `state` is your own judgement: 'working' " +
+        "(still on it), 'ready' (done, ready to deliver/review), 'needs_me' (stuck on a decision only " +
+        "the user can make) or 'blocked' (cannot proceed). `summary` is one short line. This is " +
+        "ORTHOGONAL to the board's activity dot — it never moves your card between columns. `card` is " +
+        "YOUR OWN card id: the value of the $VIBEHUB_CARD_ID environment variable in this terminal.",
+      inputSchema: {
+        card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this terminal"),
+        state: z.enum(DECLARED_STATES as unknown as [string, ...string[]]).describe("working | ready | needs_me | blocked"),
+        summary: z.string().max(500).optional().describe("one short line describing where the work stands"),
+      },
+    },
+    async (a) => {
+      try {
+        return ok(await reportState(a.card, a.state, a.summary, actor));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_gate",
+    {
+      description:
+        "Run a card's checks in its worktree and report whether they pass — the gate a delivery has " +
+        "to clear. It runs `.vibehub/gate.json` (`{ \"checks\": [\"…\"] }`) if the repo has one, else " +
+        "sensible defaults (a typecheck and `npm test`) when they are resolvable, else nothing at all. " +
+        "Returns { ran, passed, output }: `ran:false` means there was nothing to check (a pass-" +
+        "through, not a failure). Output is a redacted tail. Use it to know if a card is green before " +
+        "you ask to ship it.",
+      inputSchema: {
+        card: z.string().describe("id of the card to check (from vibehub_list_terminals)"),
+      },
+    },
+    async (a) => {
+      try {
+        return ok(await runGate(a.card));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_deliver",
+    {
+      description:
+        "Deliver a card: push its branch, open (or reuse) a pull request to `branch`, run the gate, " +
+        "and — ONLY when `authorized` is true and the gate is green — merge the PR with a merge commit " +
+        "(never a squash). All git/gh runs as the project's GitHub connection. Returns { prUrl, " +
+        "merged, reason }: `reason` is 'merged' on success, or 'gate' (checks red), 'unauthorized' " +
+        "(prepared the PR but was not told to merge), or a git failure. Pass `authorized:true` ONLY " +
+        "when the user named where to ship (e.g. 'sobe pra dev'); NEVER by default — a merge is a " +
+        "deploy. Cherry-picking to another branch is a separate, explicit operation, not part of this.",
+      inputSchema: {
+        card: z.string().describe("id of the card to deliver (from vibehub_list_terminals)"),
+        branch: z.string().optional().describe("target branch for the PR / merge. Absent = the project's base branch."),
+        authorized: z.boolean().optional().describe("true = merge (deploy). Only when the user named the target. Never default true."),
+      },
+    },
+    async (a) => {
+      try {
+        return ok(await deliver(a.card, { branch: a.branch, authorized: a.authorized === true, by: actor }));
       } catch (e) {
         return fail(e);
       }
