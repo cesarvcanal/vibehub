@@ -65,6 +65,15 @@ export interface XTerminalProps {
    * the reattach recreates it with the new environment, in the same conversation).
    */
   reconnectKey?: string;
+  /**
+   * Is this terminal the one on screen?
+   *
+   * Terminals now outlive the screen that opened them — the card deck keeps every card you opened
+   * attached — so "the socket just connected" no longer implies "you are looking at this". A hidden
+   * terminal that took the keyboard on a reconnect would silently swallow what you typed into the
+   * card you ARE looking at.
+   */
+  active?: boolean;
   onStatus?: (state: ConnectionState) => void;
   /**
    * Handles an image dropped or pasted onto the terminal. Resolve with the path INSIDE the runner
@@ -180,6 +189,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
     wsPath,
     zoomControl = false,
     reconnectKey = "",
+    active = true,
     onStatus,
     onUploadImage,
     localEcho = true,
@@ -253,6 +263,10 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
   statusRef.current = onStatus;
   const echoEnabledRef = React.useRef(localEcho);
   echoEnabledRef.current = localEcho;
+  // Read through a ref: the socket handlers below are installed once and outlive every switch
+  // between cards, so they must ask what is true NOW, not what was true when they were created.
+  const activeRef = React.useRef(active);
+  activeRef.current = active;
 
   React.useEffect(() => {
     const host = hostRef.current;
@@ -468,8 +482,9 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
         attempt = 0;
         setStatus("open");
         // Focus on EVERY open, reconnects included: a session that comes back and does not take the
-        // keyboard leaves you typing into nothing without any sign of why.
-        term.focus();
+        // keyboard leaves you typing into nothing without any sign of why. Unless this terminal is
+        // not the one on screen — then taking the keyboard is the bug, not the fix.
+        if (activeRef.current) term.focus();
         echo.reset();
         sendResize();
       };

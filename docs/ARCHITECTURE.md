@@ -75,6 +75,26 @@ Two deliberate exceptions:
   prompt) brings it back to `working`. Idle reports never do this, so a `done` card stays done while
   the session merely exists.
 
+## Terminals stay attached
+
+Switching cards in the browser is a change of which pane is VISIBLE, not a reconnect. Every card you
+open joins a deck of live panes (`front/src/features/board/lib/deck.ts`): the xterm stays mounted,
+the websocket stays open, and the scrollback stays where you left it — so hopping between agents
+costs nothing and the board is usable as a set of tabs. Going back to the kanban parks the whole
+deck off screen, still connected.
+
+Two consequences worth knowing:
+
+- **One websocket, one `tmux attach` process per live pane** — up to 6 on a desktop and 3 on a phone
+  (a WebGL context each, which browsers cap). The least recently used card leaves the deck when it
+  is full; nothing is lost, because the tmux session is in the runner and reattaching is what
+  opening a card always did.
+- **Hidden panes are hidden, not disabled.** A pane that is not on top keeps its socket but gives up
+  everything that reaches outside it: the tab title, the phone's scroll lock, the keyboard (`inert`,
+  so a reconnect cannot steal it), the microphone, and the polls that only feed its own bar. Pausing
+  a card, or deleting it anywhere, drops its pane rather than leaving a socket retrying at a session
+  that no longer exists.
+
 ## State
 
 No database. Under `VIBEHUB_DATA_DIR`:

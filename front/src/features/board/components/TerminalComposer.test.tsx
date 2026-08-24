@@ -296,6 +296,26 @@ describe("TerminalComposer — voice input", () => {
     expect(stopTrack).toHaveBeenCalled();
   });
 
+  it("ends a recording when you switch to another card — the pane stays mounted, the microphone does not", async () => {
+    // Card views are no longer unmounted when you look at another card (that is what keeps the
+    // session attached), so leaving one has to end the recording explicitly.
+    serveVoice(true);
+    const user = userEvent.setup();
+    const { rerender } = renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" active />);
+
+    await waitFor(() => expect(screen.getByTestId("composer-mic")).toBeEnabled());
+    await user.click(screen.getByTestId("composer-mic"));
+    await screen.findByTestId("composer-mic-cancel");
+
+    rerender(<TerminalComposer onSend={vi.fn()} cardId="c1" active={false} />);
+
+    // Back to a plain microphone, nothing uploaded, nothing written: a cancel, not a finish.
+    await waitFor(() => expect(screen.getByTestId("composer-mic")).toBeInTheDocument());
+    expect(FakeRecorder.last?.state).toBe("inactive");
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox")).toHaveValue("");
+  });
+
   it("discards a cancelled recording without uploading anything", async () => {
     serveVoice(true);
     const user = userEvent.setup();

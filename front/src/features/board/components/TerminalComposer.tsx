@@ -42,6 +42,15 @@ export interface TerminalComposerProps {
    * every second of the day. The `aria-label` still says what it is, for anyone who needs telling.
    */
   placeholder?: string;
+  /**
+   * Is the card this composer belongs to the one on screen?
+   *
+   * Card views are no longer torn down when you look at another card — they stay mounted so the
+   * session stays attached — which means "leaving the card" stopped being an unmount. A recording
+   * has to end anyway: a microphone that keeps listening on a card you walked away from is the one
+   * thing here that must never outlive the screen it belongs to.
+   */
+  active?: boolean;
   className?: string;
 }
 
@@ -122,6 +131,7 @@ export function TerminalComposer({
   onUploadImage,
   cardId,
   placeholder,
+  active = true,
   className,
 }: TerminalComposerProps) {
   const t = useT();
@@ -324,6 +334,14 @@ export function TerminalComposer({
     const id = setInterval(() => setElapsedMs(Date.now() - started), 250);
     return () => clearInterval(id);
   }, [recording]);
+
+  // Switching to another card mid-recording ends it the same way the Cancel button does. Nothing is
+  // uploaded and nothing is written: a thought you stopped saying halfway through is not a message,
+  // and the microphone must not stay live behind a screen you are no longer looking at.
+  React.useEffect(() => {
+    if (active) return;
+    if (recorderRef.current?.state === "recording") cancelRecording();
+  }, [active, cancelRecording]);
 
   // Leaving the card mid-recording must not leave the microphone light on, and must not fire a
   // transcription into a screen that is gone: this cancels, it does not finish.

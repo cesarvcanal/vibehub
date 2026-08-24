@@ -199,6 +199,94 @@ describe("CardTerminalView — instant open", () => {
   });
 });
 
+describe("CardTerminalView — behind another card", () => {
+  const originalMatchMedia = window.matchMedia;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    serve();
+    mockPost.mockResolvedValue({ card: card({ openedAt: 10 }) });
+  });
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+    document.documentElement.classList.remove("card-view-locked");
+  });
+
+  it("gets out of the way when its card is deleted somewhere else", async () => {
+    // The pane outlives the screen that opened it, so it has to notice the deletion itself — the
+    // worktree and the session are gone, and reconnecting to them forever is the alternative.
+    const onBack = vi.fn();
+    const onClose = vi.fn();
+    const client = testQueryClient();
+    client.setQueryData(cardsKey(project.id), [card({ openedAt: 10 })]);
+    renderApp(
+      <CardTerminalView project={project} cardId="c1" active={false} onBack={onBack} onClose={onClose} />,
+      { queryClient: client },
+    );
+    await screen.findByTestId("xterm");
+    expect(onClose).not.toHaveBeenCalled();
+
+    client.setQueryData(cardsKey(project.id), []);
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(onBack).toHaveBeenCalled();
+  });
+
+  it("keeps its terminal attached but leaves the tab title to the card on screen", async () => {
+    // A pane in the deck is a live session, not a live screen: the socket stays, everything that
+    // reaches out of the component does not.
+    document.title = "billing · vibehub";
+    const client = testQueryClient();
+    client.setQueryData(cardsKey(project.id), [card({ openedAt: 10 })]);
+    renderApp(
+      <CardTerminalView project={project} cardId="c1" active={false} onBack={vi.fn()} />,
+      { queryClient: client },
+    );
+
+    expect(await screen.findByTestId("xterm")).toBeInTheDocument();
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/cards/c1/open"));
+    expect(document.title).toBe("billing · vibehub");
+  });
+
+  it("stops polling the session it is not showing", async () => {
+    const client = testQueryClient();
+    client.setQueryData(cardsKey(project.id), [card({ openedAt: 10 })]);
+    renderApp(
+      <CardTerminalView project={project} cardId="c1" active={false} onBack={vi.fn()} />,
+      { queryClient: client },
+    );
+
+    await screen.findByTestId("xterm");
+    // The pills those routes feed are in a bar nobody can see.
+    expect(mockGet).not.toHaveBeenCalledWith("/cards/c1/session");
+    expect(mockGet).not.toHaveBeenCalledWith("/accounts/usage");
+  });
+
+  it("does not lock the phone's page scroll — the visible card owns that", async () => {
+    window.matchMedia = ((query: string) => ({
+      matches: query === MOBILE_QUERY,
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      onchange: null,
+      dispatchEvent: vi.fn(),
+    })) as unknown as typeof window.matchMedia;
+
+    const client = testQueryClient();
+    client.setQueryData(cardsKey(project.id), [card({ openedAt: 10 })]);
+    renderApp(
+      <CardTerminalView project={project} cardId="c1" active={false} onBack={vi.fn()} />,
+      { queryClient: client },
+    );
+
+    await screen.findByTestId("xterm");
+    expect(document.documentElement.classList.contains("card-view-locked")).toBe(false);
+  });
+});
+
 describe("CardTerminalView — the card bar", () => {
   beforeEach(() => {
     vi.resetAllMocks();

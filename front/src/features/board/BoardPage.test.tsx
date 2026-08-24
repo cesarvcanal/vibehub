@@ -26,21 +26,57 @@ vi.mock("sonner", () => ({
 }));
 
 // The terminal is exercised in its own file; here it only has to be a mountable placeholder so the
-// board's routing can be asserted without a WebSocket or a canvas.
-vi.mock("@/features/board/components/CardTerminalView", () => ({
-  CardTerminalView: ({ cardId, onOpenMenu }: { cardId: string; onOpenMenu?: () => void }) => (
-    <div data-testid="terminal">
-      {cardId}
-      {/* The real bar owns this button (see CardTerminalView.test); here it stands in for it, so
-          the page's drawer wiring can be exercised without a canvas or a WebSocket. */}
-      {onOpenMenu ? (
-        <button type="button" onClick={onOpenMenu}>
-          Open the card list
-        </button>
-      ) : null}
-    </div>
-  ),
-}));
+// board's routing can be asserted without a WebSocket or a canvas. It counts its own mounts: the
+// deck's whole promise is that switching cards does NOT mount a second terminal for a card that is
+// already open, and a placeholder that cannot see a remount cannot prove it.
+const mounts: string[] = [];
+vi.mock("@/features/board/components/CardTerminalView", async () => {
+  const React = await import("react");
+  return {
+    CardTerminalView: ({
+      cardId,
+      active,
+      onOpenMenu,
+    }: {
+      cardId: string;
+      active?: boolean;
+      onOpenMenu?: () => void;
+    }) => {
+      React.useEffect(() => {
+        mounts.push(cardId);
+      }, [cardId]);
+      return (
+        <div data-testid="terminal" data-card={cardId} data-active={active ? "true" : "false"}>
+          {cardId}
+          {/* The real bar owns this button (see CardTerminalView.test); here it stands in for it, so
+              the page's drawer wiring can be exercised without a canvas or a WebSocket. */}
+          {onOpenMenu ? (
+            <button type="button" onClick={onOpenMenu}>
+              Open the card list
+            </button>
+          ) : null}
+        </div>
+      );
+    },
+  };
+});
+
+/**
+ * The terminal ON TOP, or null when the board is showing.
+ *
+ * Every card that has been opened is still mounted — that is the point of the deck — so "is the
+ * terminal there" is no longer the question. The question is which pane is the active one.
+ */
+function activeTerminal(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('[data-card-pane][data-active="true"] [data-testid="terminal"]');
+}
+
+/** Every card that still holds a live pane, in render order. */
+function livePanes(): string[] {
+  return Array.from(document.querySelectorAll<HTMLElement>("[data-card-pane]")).map(
+    (el) => el.getAttribute("data-card-pane") ?? "",
+  );
+}
 
 const mockGet = vi.mocked(get);
 const mockPost = vi.mocked(post);
@@ -335,8 +371,10 @@ describe("BoardPage — the sidebar", () => {
 
     await user.click(within(sidebar()).getByRole("button", { name: "gateway" }));
 
-    await waitFor(() => expect(screen.queryByTestId("terminal")).not.toBeInTheDocument());
+    // The board is what you are looking at; c2's pane is parked, still connected, off screen.
+    await waitFor(() => expect(activeTerminal()).toBeNull());
     expect(await screen.findByRole("region", { name: "Waiting" })).toBeInTheDocument();
+    expect(livePanes()).toEqual(["c2"]);
   });
 
   it("closes the card when its own row is clicked again, one level at a time", async () => {
@@ -347,7 +385,7 @@ describe("BoardPage — the sidebar", () => {
 
     await user.click(await within(nav).findByRole("link", { name: "chase the flake" }));
 
-    await waitFor(() => expect(screen.queryByTestId("terminal")).not.toBeInTheDocument());
+    await waitFor(() => expect(activeTerminal()).toBeNull());
     expect(await screen.findByRole("region", { name: "Backlog" })).toBeInTheDocument();
   });
 
@@ -468,7 +506,7 @@ describe("BoardPage — one frame, two middles", () => {
 
   it("opens the terminal for the card named in the URL, keeping the sidebar", async () => {
     renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
-    expect(await screen.findByTestId("terminal")).toHaveTextContent("c2");
+    await waitFor(() => expect(activeTerminal()).toHaveTextContent("c2"));
     expect(screen.getByTestId("card-layout")).toBeInTheDocument();
     expect(sidebar()).toBeInTheDocument();
   });
@@ -476,7 +514,7 @@ describe("BoardPage — one frame, two middles", () => {
   it("shows the project's board when the URL names only a project", async () => {
     renderApp(<BoardPage />, { route: "/?project=p2" });
     expect(await screen.findByRole("region", { name: "Waiting" })).toBeInTheDocument();
-    expect(screen.queryByTestId("terminal")).not.toBeInTheDocument();
+    expect(activeTerminal()).toBeNull();
   });
 
   it("falls back to the AGGREGATED board when the URL names a project that is gone", async () => {
@@ -484,7 +522,7 @@ describe("BoardPage — one frame, two middles", () => {
     // at once is the honest answer.
     renderApp(<BoardPage />, { route: "/?project=deleted&card=c9" });
     expect(await screen.findByText(/4 cards · 2 projects/)).toBeInTheDocument();
-    expect(screen.queryByTestId("terminal")).not.toBeInTheDocument();
+    expect(activeTerminal()).toBeNull();
   });
 
   it("opening a card puts it in the URL, so a refresh lands in the same place", async () => {
@@ -492,7 +530,7 @@ describe("BoardPage — one frame, two middles", () => {
     renderApp(<BoardPage />, { route: "/?project=p1" });
     const working = await screen.findByRole("region", { name: "Working" });
     await user.click(within(working).getByRole("link", { name: "chase the flake" }));
-    expect(await screen.findByTestId("terminal")).toHaveTextContent("c2");
+    await waitFor(() => expect(activeTerminal()).toHaveTextContent("c2"));
   });
 
   it("gives every card a real href, so it can be opened in another tab", async () => {
@@ -567,7 +605,7 @@ describe("BoardPage — keyboard", () => {
     renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
     await screen.findByTestId("terminal");
     await user.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByTestId("terminal")).not.toBeInTheDocument());
+    await waitFor(() => expect(activeTerminal()).toBeNull());
   });
 });
 
@@ -622,7 +660,7 @@ describe("BoardPage — the aggregated board", () => {
     const other = within(waiting).getByRole("link", { name: "rotate the key" });
 
     await user.click(other);
-    expect(await screen.findByTestId("terminal")).toHaveTextContent("c4");
+    await waitFor(() => expect(activeTerminal()).toHaveTextContent("c4"));
   });
 
   it("keeps the managers but drops the runner chip and the New card button", async () => {
@@ -665,7 +703,109 @@ describe("BoardPage — narrow screens", () => {
     await user.click(await within(sidebar()).findByRole("link", { name: "waiting on review" }));
 
     // The drawer covers the terminal it just navigated to, so it has to get out of the way.
-    await waitFor(() => expect(screen.getByTestId("terminal")).toHaveTextContent("c3"));
+    await waitFor(() => expect(activeTerminal()).toHaveTextContent("c3"));
     await waitFor(() => expect(screen.queryByTestId("sidebar-backdrop")).not.toBeInTheDocument());
+  });
+});
+
+describe("BoardPage — the terminal deck", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mounts.length = 0;
+    serve();
+  });
+
+  it("keeps the terminal you came from alive and does not remount the one you go back to", async () => {
+    // The whole point: hopping between two agents is a change of which pane is visible, not a
+    // teardown and a fresh attach. A remount here would be a dropped websocket in the real app.
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    await waitFor(() => expect(activeTerminal()).toHaveTextContent("c2"));
+
+    await user.click(await within(sidebar()).findByRole("link", { name: "waiting on review" }));
+    await waitFor(() => expect(activeTerminal()).toHaveTextContent("c3"));
+    // Both are live; only one is on top.
+    expect(livePanes()).toEqual(["c2", "c3"]);
+
+    const before = document.querySelector('[data-card-pane="c2"] [data-testid="terminal"]');
+    await user.click(within(sidebar()).getByRole("link", { name: "chase the flake" }));
+    await waitFor(() => expect(activeTerminal()).toHaveTextContent("c2"));
+
+    // The SAME element, and no second mount for c2: nothing reconnected.
+    expect(document.querySelector('[data-card-pane="c2"] [data-testid="terminal"]')).toBe(before);
+    expect(mounts).toEqual(["c2", "c3"]);
+  });
+
+  it("parks the deck when you go back to the board, and finds it there when you return", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    const pane = await waitFor(() => {
+      const el = document.querySelector('[data-card-pane="c2"] [data-testid="terminal"]');
+      expect(el).not.toBeNull();
+      return el;
+    });
+
+    await user.keyboard("{Escape}");
+    await screen.findByRole("region", { name: "Backlog" });
+    // Off screen, out of the flow — but still mounted and still connected.
+    expect(activeTerminal()).toBeNull();
+    expect(screen.getByTestId("terminal-deck")).toHaveAttribute("data-parked", "true");
+
+    const working = screen.getByRole("region", { name: "Working" });
+    await user.click(within(working).getByRole("link", { name: "chase the flake" }));
+
+    await waitFor(() => expect(activeTerminal()).toHaveTextContent("c2"));
+    expect(document.querySelector('[data-card-pane="c2"] [data-testid="terminal"]')).toBe(pane);
+    expect(mounts).toEqual(["c2"]);
+  });
+
+  it("holds cards from different projects at once", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    await waitFor(() => expect(activeTerminal()).toHaveTextContent("c2"));
+
+    // Straight into the other project's card, from the sidebar.
+    await user.click(within(sidebar()).getByRole("button", { name: "gateway" }));
+    await user.click(await within(sidebar()).findByRole("link", { name: "rotate the key" }));
+
+    await waitFor(() => expect(activeTerminal()).toHaveTextContent("c4"));
+    expect(livePanes()).toEqual(["c2", "c4"]);
+  });
+
+  it("takes the keyboard away from the pane it hides", async () => {
+    // The pane you left still holds a focused terminal. Leaving it reachable would send your next
+    // keystrokes to an agent you are not looking at.
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    await waitFor(() => expect(activeTerminal()).toHaveTextContent("c2"));
+
+    const inside = screen.getByRole("button", { name: "Open the card list" });
+    inside.focus();
+    expect(document.activeElement).toBe(inside);
+
+    await user.click(await within(sidebar()).findByRole("link", { name: "waiting on review" }));
+    await waitFor(() => expect(activeTerminal()).toHaveTextContent("c3"));
+
+    const hidden = document.querySelector('[data-card-pane="c2"]')!;
+    expect(hidden).toHaveAttribute("inert");
+    expect(hidden.contains(document.activeElement)).toBe(false);
+  });
+
+  it("drops a project's panes when the project is deleted", async () => {
+    // Deleting a project takes its worktrees — and its sessions — with it. A pane left in the deck
+    // would be a socket retrying against nothing.
+    mockDel.mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    await waitFor(() => expect(activeTerminal()).toHaveTextContent("c2"));
+
+    const nav = sidebar();
+    await user.pointer({ keys: "[MouseRight]", target: within(nav).getByRole("button", { name: "billing" }) });
+    await user.click(await screen.findByRole("menuitem", { name: "Delete project…" }));
+    // What the server answers from here on: billing is gone.
+    serve({ projects: [projects[1]!] });
+    await user.click(screen.getByRole("button", { name: /delete project/i }));
+
+    await waitFor(() => expect(livePanes()).toEqual([]));
   });
 });

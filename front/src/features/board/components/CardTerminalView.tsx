@@ -93,11 +93,23 @@ const PILL =
 export function CardTerminalView({
   project,
   cardId,
+  active = true,
   onBack,
   onOpenMenu,
+  onClose,
 }: {
   project: BoardProject;
   cardId: string;
+  /**
+   * Is this the card ON TOP of the deck?
+   *
+   * Several card views are mounted at once — that is what makes switching cards instant — but only
+   * one of them is on screen. Everything that reaches OUT of this component belongs to the visible
+   * one alone: the tab title, the phone's scroll lock, the keyboard focus, and the polls that only
+   * feed this bar. The websocket is deliberately NOT in that list: keeping the session attached
+   * while you are looking at another card is the whole point.
+   */
+  active?: boolean;
   onBack: () => void;
   /**
    * Accepted so the page can keep passing it, but no longer rendered here: "New card" lives on the
@@ -111,6 +123,11 @@ export function CardTerminalView({
    * card — which is a long way round when the whole point is hopping between agents.
    */
   onOpenMenu?: () => void;
+  /**
+   * This card no longer has a session worth holding open — it was paused from here. The deck drops
+   * it, so its socket stops reconnecting into a session that is gone.
+   */
+  onClose?: () => void;
 }) {
   const t = useT();
   const isMobile = useIsMobile();
@@ -171,7 +188,32 @@ export function CardTerminalView({
   const card: BoardCard | null =
     cards?.find((c) => c.id === cardId) ?? openMutation.data ?? fetchedCard ?? null;
 
-  useDocumentTitle(boardTitle(project.name, card?.title));
+  /**
+   * The card was DELETED — from the board, the sidebar, another tab.
+   *
+   * A pane in the deck outlives the screen that opened it, so it has to notice this itself:
+   * otherwise a terminal nobody can see keeps reconnecting to a session that was destroyed with the
+   * worktree. Guarded by "we saw it in the list at least once", because a card created a moment ago
+   * is legitimately missing from a list that has not refetched yet — closing on that would fight
+   * the navigation that just opened it.
+   */
+  const seenInList = React.useRef(false);
+  const goneRef = React.useRef({ onBack, onClose });
+  goneRef.current = { onBack, onClose };
+  const present = cards?.some((c) => c.id === cardId);
+  React.useEffect(() => {
+    if (present === undefined) return;
+    if (present) {
+      seenInList.current = true;
+      return;
+    }
+    if (!seenInList.current) return;
+    goneRef.current.onBack();
+    goneRef.current.onClose?.();
+  }, [present]);
+
+  // Only the visible card names the tab; the panes behind it are not what you are looking at.
+  useDocumentTitle(boardTitle(project.name, card?.title), active);
 
   /* ------------------------------------------------------------- mutations */
 
@@ -187,6 +229,9 @@ export function CardTerminalView({
       mirror(updated);
       toast.success(translate("toast.cardPaused"));
       onBack();
+      // Pausing ENDS the session in the runner. Staying in the deck would leave a socket retrying
+      // against nothing, so the pane goes with it.
+      onClose?.();
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardPauseError"))),
   });
@@ -241,7 +286,10 @@ export function CardTerminalView({
   const { data: session } = useQuery({
     queryKey: cardSessionKey(cardId),
     queryFn: () => boardApi.cardSessionInfo(cardId),
-    refetchInterval: 5_000,
+    // Only while this card is the one on screen: the pills it feeds are in THIS bar, and a deck of
+    // six hidden cards each polling every five seconds is traffic nobody can see the result of.
+    refetchInterval: active ? 5_000 : false,
+    enabled: active,
     retry: false,
   });
 
@@ -266,7 +314,7 @@ export function CardTerminalView({
   const { data: usageData } = useQuery({
     queryKey: ACCOUNT_USAGE_KEY,
     queryFn: boardApi.accountsUsage,
-    enabled: Boolean(card),
+    enabled: Boolean(card) && active,
     refetchInterval: 60_000,
     staleTime: 55_000,
     retry: false,
@@ -364,11 +412,24 @@ export function CardTerminalView({
    * class goes on `<html>` while the card is open and comes off when it closes or the window grows.
    */
   React.useEffect(() => {
-    if (!isMobile || typeof document === "undefined") return;
+    if (!active || !isMobile || typeof document === "undefined") return;
     const root = document.documentElement;
     root.classList.add("card-view-locked");
     return () => root.classList.remove("card-view-locked");
-  }, [isMobile]);
+  }, [active, isMobile]);
+
+  /**
+   * Coming back to this card takes the keyboard.
+   *
+   * The terminal focuses itself when its socket opens, but a card that has been sitting in the deck
+   * for ten minutes opened its socket long ago — without this, switching to it would show you a
+   * live agent that quietly ignores everything you type.
+   */
+  React.useEffect(() => {
+    if (!active) return;
+    const id = requestAnimationFrame(() => termRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [active]);
 
   /** The model rows, shared by the desktop pill and the phone's overflow menu. */
   const modelItems = (
@@ -779,6 +840,7 @@ export function CardTerminalView({
             <XTerminal
               ref={termRef}
               zoomControl
+              active={active}
               wsPath={`/api/cards/${encodeURIComponent(cardId)}/terminal`}
               reconnectKey={reconnectKey}
               onStatus={setConnection}
@@ -789,6 +851,7 @@ export function CardTerminalView({
             <TerminalComposer
               className="mt-1.5"
               cardId={cardId}
+              active={active}
               onSend={(text) => {
                 termRef.current?.sendText(text);
                 termRef.current?.focus();
@@ -814,6 +877,7 @@ export function CardTerminalView({
                 </div>
                 {/* A separate tmux session on the server; closing this pane only drops the socket. */}
                 <XTerminal
+                  active={active}
                   wsPath={`/api/cards/${encodeURIComponent(cardId)}/terminal?shell=1`}
                   ariaLabel={t("cardView.shellAria")}
                 />
