@@ -287,6 +287,61 @@ describe("TerminalComposer", () => {
     expect(screen.queryByTestId("composer-attachment")).not.toBeInTheDocument();
   });
 
+  it("a failed upload can be tried again from the chip, with the same picture", async () => {
+    // The bytes are still in the page; asking someone to paste the screenshot again once their
+    // clipboard has moved on is asking them to take it again.
+    const onSend = vi.fn();
+    const onUploadImage = vi
+      .fn(async (_file: File): Promise<string | null> => null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce("/work/.uploads/c1/shot.png");
+    renderComposer(<TerminalComposer onSend={onSend} onUploadImage={onUploadImage} />);
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "look");
+    const png = new File(["x"], "shot.png", { type: "image/png" });
+    fireEvent.paste(box, { clipboardData: { items: [], files: [png] } });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("composer-attachment").dataset.status).toBe("error"),
+    );
+
+    await userEvent.click(screen.getByTestId("composer-attachment-retry"));
+
+    // Same chip, same file — and this time it lands.
+    await waitFor(() =>
+      expect(screen.getByTestId("composer-attachment").dataset.status).toBe("ready"),
+    );
+    expect(onUploadImage).toHaveBeenCalledTimes(2);
+    expect(onUploadImage.mock.calls[1]?.[0]).toBe(png);
+    expect(screen.getAllByTestId("composer-attachment")).toHaveLength(1);
+
+    await userEvent.type(box, "{Enter}");
+    expect(onSend).toHaveBeenCalledWith("look /work/.uploads/c1/shot.png");
+  });
+
+  it("an attachment can be dropped WHILE it is still uploading — nothing waits for it after that", async () => {
+    const onSend = vi.fn();
+    let land = (_path: string | null): void => undefined;
+    const onUploadImage = vi.fn(() => new Promise<string | null>((resolve) => (land = resolve)));
+    renderComposer(<TerminalComposer onSend={onSend} onUploadImage={onUploadImage} />);
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "never mind");
+    fireEvent.paste(box, {
+      clipboardData: { items: [], files: [new File(["x"], "shot.png", { type: "image/png" })] },
+    });
+    await screen.findByTestId("composer-attachment");
+
+    await userEvent.click(screen.getByTestId("composer-attachment-remove"));
+    expect(screen.queryByTestId("composer-attachment")).not.toBeInTheDocument();
+
+    // Enter goes straight out: there is no upload left to wait for...
+    await userEvent.type(box, "{Enter}");
+    expect(onSend).toHaveBeenCalledWith("never mind");
+    // ...and the abandoned upload landing later brings nothing back.
+    land("/work/.uploads/c1/shot.png");
+    await waitFor(() => expect(screen.queryByTestId("composer-attachment")).not.toBeInTheDocument());
+  });
+
   it("keeps the message in the field when the send is refused", async () => {
     const onSend = vi.fn().mockRejectedValue(new Error("no runner"));
     renderComposer(<TerminalComposer onSend={onSend} />);

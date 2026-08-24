@@ -50,6 +50,7 @@ import {
   boardApi,
   cardKey,
   cardMessagesKey,
+  cardNeedsOpen,
   cardOpensInstantly,
   cardRunnerHint,
   cardSessionKey,
@@ -150,6 +151,15 @@ export function CardTerminalView({
   const [cachedInstant] = React.useState(() =>
     cardOpensInstantly(queryClient.getQueryData<BoardCard[]>(boardKey)?.find((c) => c.id === cardId)),
   );
+  /**
+   * Whether this open has any work to do — decided from the same snapshot, at the same moment, and
+   * never revisited: a card that was live when you opened it does not need the runner touched, and
+   * an answer that changed its mind two seconds later would fire the call for nothing. See
+   * `cardNeedsOpen`.
+   */
+  const [cachedNeedsOpen] = React.useState(() =>
+    cardNeedsOpen(queryClient.getQueryData<BoardCard[]>(boardKey)?.find((c) => c.id === cardId)),
+  );
   const [cacheMiss] = React.useState(
     () => !queryClient.getQueryData<BoardCard[]>(boardKey)?.some((c) => c.id === cardId),
   );
@@ -185,10 +195,26 @@ export function CardTerminalView({
     },
   });
 
+  /**
+   * The open call, made only when it can change something.
+   *
+   * It used to run on every mount "to refresh the record". That refresh costs a full provisioning
+   * script in the runner, serialized per project — so opening four live cards put four scripts in a
+   * queue that the ONE card actually being provisioned then had to wait behind. What the record
+   * needs is already true for a card that is open and live, and the terminal's own websocket
+   * provisions by itself if the session turns out to be gone.
+   */
+  const needsOpen = cacheMiss ? cardNeedsOpen(fetchedCard) : cachedNeedsOpen;
   const open = openMutation.mutate;
+  const asked = React.useRef(false);
   React.useEffect(() => {
+    if (asked.current) return;
+    // A deep link has to wait for the record before it can tell — `undecided` is that wait.
+    if (cacheMiss && fetchingCard) return;
+    asked.current = true;
+    if (!needsOpen) return;
     open();
-  }, [open]);
+  }, [open, needsOpen, cacheMiss, fetchingCard]);
 
   const card: BoardCard | null =
     cards?.find((c) => c.id === cardId) ?? openMutation.data ?? fetchedCard ?? null;

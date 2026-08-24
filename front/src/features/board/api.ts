@@ -101,6 +101,31 @@ export function cardOpensInstantly(c: BoardCard | undefined | null): boolean {
   return Boolean(c?.openedAt || c?.preparedAt);
 }
 
+/**
+ * Does opening this card need `POST /open` at all?
+ *
+ * The call is not free: it runs the whole provisioning script in the runner (a `docker exec` that
+ * re-seeds the profile, the MCPs and the brain, and makes sure the worktree and the tmux session
+ * exist) and it is SERIALIZED PER PROJECT on the server. Firing it on every card you glance at puts
+ * the card that genuinely needs provisioning behind a queue of cards that needed nothing — which is
+ * exactly what "the card takes forever to load" feels like.
+ *
+ * So it is asked for only when it can change something:
+ *  - the card has never been opened (nothing exists in the runner yet);
+ *  - it was paused or hibernated (its session was killed and has to come back);
+ *  - it sits in `backlog` or `paused`, where opening it is what moves it to `waiting`.
+ *
+ * A card that is already open and live needs none of that: the terminal's own websocket attaches
+ * with `tmux new-session -A`, and it provisions on its own if the session turns out to be missing.
+ * PURE.
+ */
+export function cardNeedsOpen(c: BoardCard | undefined | null): boolean {
+  if (!c) return true; // nothing known about it: ask, and let the server decide
+  if (!c.openedAt) return true;
+  if (c.pausedAt || c.hibernatedAt) return true;
+  return c.column === "backlog" || c.column === "paused";
+}
+
 /** Display name of an account. */
 export function accountLabel(a: BoardAccount): string {
   return a.name || a.slug;

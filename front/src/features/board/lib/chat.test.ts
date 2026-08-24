@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mergeEvent, parseChatFrame, readCardMode, writeCardMode, type ChatEvent } from "@/features/board/lib/chat";
+import { groupChatRows, mergeEvent, parseChatFrame, readCardMode, writeCardMode, type ChatEvent } from "@/features/board/lib/chat";
 
 const event = (over: Partial<ChatEvent> = {}): ChatEvent => ({
   id: "a1",
@@ -51,19 +51,69 @@ describe("mergeEvent", () => {
   });
 });
 
+describe("groupChatRows", () => {
+  const tool = (id: string, name = "Bash") => event({ id, kind: "tool", tool: name, text: id });
+
+  it("leaves messages alone", () => {
+    const rows = groupChatRows([event({ id: "1", kind: "user" }), event({ id: "2", kind: "assistant" })]);
+    expect(rows.map((r) => r.kind)).toEqual(["event", "event"]);
+  });
+
+  it("folds a RUN of tool calls into one block", () => {
+    const rows = groupChatRows([
+      event({ id: "a", kind: "assistant" }),
+      tool("t1"),
+      tool("t2"),
+      tool("t3"),
+      event({ id: "b", kind: "assistant" }),
+    ]);
+    expect(rows.map((r) => r.kind)).toEqual(["event", "tools", "event"]);
+    const block = rows[1] as { kind: "tools"; events: unknown[] };
+    expect(block.events).toHaveLength(3);
+  });
+
+  it("does not fold a run below the threshold — a fold that hides one Read buys nothing", () => {
+    const rows = groupChatRows([tool("t1"), tool("t2")]);
+    expect(rows.map((r) => r.kind)).toEqual(["event", "event"]);
+  });
+
+  it("keeps the block's identity as the turn adds to it, so an opened block stays open", () => {
+    const first = groupChatRows([tool("t1"), tool("t2"), tool("t3")]);
+    const grown = groupChatRows([tool("t1"), tool("t2"), tool("t3"), tool("t4")]);
+    expect(grown[0]!.id).toBe(first[0]!.id);
+  });
+
+  it("folds each run separately — a message between them breaks the block", () => {
+    const rows = groupChatRows([
+      tool("t1"), tool("t2"), tool("t3"),
+      event({ id: "m", kind: "assistant" }),
+      tool("t4"), tool("t5"), tool("t6"),
+    ]);
+    expect(rows.map((r) => r.kind)).toEqual(["tools", "event", "tools"]);
+  });
+
+  it("is pure about an empty list", () => {
+    expect(groupChatRows([])).toEqual([]);
+  });
+});
+
 describe("the remembered mode", () => {
-  it("opens on the terminal until somebody chooses otherwise", () => {
-    expect(readCardMode("c1")).toBe("terminal");
+  it("opens in CHAT until somebody chooses otherwise — reading is what opening a card is for", () => {
+    expect(readCardMode("c1")).toBe("chat");
   });
 
   it("remembers per card", () => {
-    writeCardMode("c1", "chat");
-    expect(readCardMode("c1")).toBe("chat");
-    expect(readCardMode("c2")).toBe("terminal");
+    writeCardMode("c1", "terminal");
+    expect(readCardMode("c1")).toBe("terminal");
+    expect(readCardMode("c2")).toBe("chat");
   });
 
   it("ignores a stored value that is not one of ours", () => {
     localStorage.setItem("vibehub.cardMode.c1", "telepathy");
-    expect(readCardMode("c1")).toBe("terminal");
+    expect(readCardMode("c1")).toBe("chat");
+  });
+
+  it("still takes an explicit fallback, for a caller that knows better", () => {
+    expect(readCardMode("c9", "terminal")).toBe("terminal");
   });
 });
