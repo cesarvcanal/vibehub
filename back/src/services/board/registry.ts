@@ -39,6 +39,51 @@ export const BOARD_COLUMNS: readonly BoardColumn[] = ["backlog", "waiting", "wor
 export type CardStatus = "working" | "waiting";
 
 /**
+ * DECLARED STATE — what the agent inside a card SAYS about its own work, reported through the
+ * `vibehub_report` MCP tool. It is ORTHOGONAL to `status`/`column`: those mirror raw terminal
+ * activity (the dot: is Claude typing right now?), while this is the agent's own judgement of where
+ * the task stands, for a maestro (or a human) to act on:
+ *  - `working`   — still on it, no attention needed.
+ *  - `ready`     — the work is done and ready to be delivered/reviewed.
+ *  - `needs_me`  — stuck on a decision only the user can make; asking for input.
+ *  - `blocked`   — cannot proceed (a failing dependency, a missing credential, an external outage).
+ * It NEVER moves a card between columns — see the mirror rule; reporting state only writes these two
+ * fields.
+ */
+export type DeclaredState = "working" | "ready" | "needs_me" | "blocked";
+export const DECLARED_STATES: readonly DeclaredState[] = ["working", "ready", "needs_me", "blocked"] as const;
+const DECLARED_STATE_SET: ReadonlySet<string> = new Set(DECLARED_STATES);
+
+/** A whitelisted declared state. THROWS otherwise. PURE. */
+export function assertDeclaredState(state: string): DeclaredState {
+  const v = String(state ?? "").trim();
+  if (!DECLARED_STATE_SET.has(v)) {
+    throw new Error(`invalid state (expected one of ${DECLARED_STATES.join(", ")}): '${state}'`);
+  }
+  return v as DeclaredState;
+}
+
+/** A one-line summary is trimmed and capped — it rides into a tooltip and an MCP listing, not a log. */
+export const DECLARED_SUMMARY_MAX = 200;
+
+/** Normalizes a declared summary to a single trimmed line, capped. PURE. */
+export function normalizeSummary(summary: string | null | undefined): string {
+  return String(summary ?? "").replace(/\s+/g, " ").trim().slice(0, DECLARED_SUMMARY_MAX);
+}
+
+/**
+ * HUMAN-ACTIVE WINDOW — a card counts as "a human is at this terminal right now" for this long after
+ * the last keystroke a person typed into it (stamped as `humanActiveAt`). While it holds, a maestro
+ * must not type into the card (it would fight the human for the prompt); reading is always fine.
+ */
+export const HUMAN_ACTIVE_WINDOW_MS = 5 * 60_000;
+
+/** true = a human typed in this card's terminal within the last {@link HUMAN_ACTIVE_WINDOW_MS}. PURE. */
+export function isHumanActive(card: Pick<Card, "humanActiveAt">, now: number = Date.now()): boolean {
+  return !!card.humanActiveAt && now - card.humanActiveAt < HUMAN_ACTIVE_WINDOW_MS;
+}
+
+/**
  * REASON a session restart is PENDING on a card: the shared brain or the MCP servers were edited, or
  * the card's own model/account was switched (`config`), while the card was `working`. It is only a
  * LABEL (so the UI can tell them apart in a badge); the restart mechanics are identical either way.
@@ -190,6 +235,20 @@ export interface Card {
   resumeSessionId?: string;
   /** Worktree branch when it is NOT the derived `card/<worktreeSlug>` (assertBranchName). */
   branch?: string;
+  /**
+   * DECLARED STATE reported by the agent through `vibehub_report` — its own judgement of where the
+   * task stands ({@link DeclaredState}). ORTHOGONAL to `status`/`column`: reporting it never moves
+   * the card. Absent = the agent has said nothing yet.
+   */
+  declaredState?: DeclaredState;
+  /** One-line summary the agent reported alongside `declaredState`. Trimmed and capped. */
+  declaredSummary?: string;
+  /**
+   * Last time a HUMAN typed into this card's terminal (epoch ms). The websocket stamps it (throttled)
+   * on inbound keystrokes; {@link isHumanActive} reads it. A maestro must not send to a human-active
+   * card. Absent = nobody has typed here (or not since the field existed).
+   */
+  humanActiveAt?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -1172,6 +1231,45 @@ export async function applyCardStatus(cardId: string, status: CardStatus): Promi
       card.restartReason = undefined;
     }
     card.updatedAt = Date.now();
+    return card;
+  });
+}
+
+/**
+ * Records the agent's DECLARED STATE and one-line summary on a card (the `vibehub_report` tool). It
+ * writes ONLY `declaredState`/`declaredSummary` — never the column, never the dot: this is the
+ * agent's own read of the task, orthogonal to the mirror rule. The summary is normalized to a single
+ * capped line. Unknown card -> undefined (the caller decides the error).
+ */
+export async function reportCardState(
+  cardId: string,
+  state: string,
+  summary: string | null | undefined,
+): Promise<Card | undefined> {
+  const declaredState = assertDeclaredState(state); // validate BEFORE entering the mutation (cached doc)
+  const declaredSummary = normalizeSummary(summary);
+  return store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    if (!card) return undefined;
+    card.declaredState = declaredState;
+    card.declaredSummary = declaredSummary || undefined;
+    card.updatedAt = Date.now();
+    return card;
+  });
+}
+
+/**
+ * Stamps `humanActiveAt` on a card — a human just typed into its terminal. Best-effort by design:
+ * an unknown card is a no-op (the websocket that calls this must never fail over a stale id), and
+ * the CALLER throttles so this is not a disk write per keystroke. Returns the card, or undefined.
+ */
+export async function markCardHumanActive(cardId: string, at: number = Date.now()): Promise<Card | undefined> {
+  return store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    if (!card) return undefined;
+    card.humanActiveAt = at;
+    // Deliberately NOT bumping updatedAt: a keystroke is not an edit of the card, and it would churn
+    // the board's ordering (updatedAt is a tie-breaker) on every few seconds of typing.
     return card;
   });
 }
