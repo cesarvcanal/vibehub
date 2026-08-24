@@ -278,6 +278,71 @@ describe("sessionGoneError", () => {
   });
 });
 
+describe("reportState (declared state)", () => {
+  it("sets declaredState and a normalized summary, without touching the column or the dot", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "worker" });
+    await registry.updateCard(c.id, { column: "working" });
+    const out = await maestro.reportState(c.id, "ready", "  all green,   PR up ");
+    expect(out).toMatchObject({ reported: true, state: "ready", summary: "all green, PR up" });
+    const after = await registry.getCard(c.id);
+    expect(after?.declaredState).toBe("ready");
+    expect(after?.declaredSummary).toBe("all green, PR up");
+    // orthogonal: the activity column/dot is untouched
+    expect(after?.column).toBe("working");
+    expect(after?.status ?? null).toBeNull();
+  });
+
+  it("rejects an unknown state and an unknown card", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "worker" });
+    await expect(maestro.reportState(c.id, "shipping", "x")).rejects.toThrow(/invalid state/);
+    await expect(maestro.reportState("nope", "ready", "x")).rejects.toThrow(/card not found/);
+  });
+
+  it("surfaces declaredState, summary and humanActive through the terminal listing", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "worker" });
+    await maestro.reportState(c.id, "needs_me", "which currency?");
+    const [row] = await maestro.listTerminals();
+    expect(row).toMatchObject({ declaredState: "needs_me", declaredSummary: "which currency?", humanActive: false });
+  });
+});
+
+describe("human-active lock", () => {
+  it("refuses a send to a human-active card, sends nothing, but still allows a read", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "someone is typing" });
+    await registry.applyOpenTerminal(c.id); // a live session — the refusal is about the human, not the session
+    await registry.markCardHumanActive(c.id, Date.now());
+
+    await expect(maestro.sendToTerminal(c.id, "run the tests")).rejects.toThrow(/human-active/);
+    expect(runScript).not.toHaveBeenCalled();
+
+    // reading is always allowed
+    runScript.mockResolvedValueOnce({
+      stdout: JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } }),
+      stderr: "",
+    });
+    expect((await maestro.readTerminal(c.id, 1)).answers).toEqual(["hi"]);
+  });
+
+  it("a stale human-active stamp (older than the window) does not block a send", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "typed a while ago" });
+    await registry.applyOpenTerminal(c.id);
+    await registry.markCardHumanActive(c.id, Date.now() - registry.HUMAN_ACTIVE_WINDOW_MS - 1);
+    const out = await maestro.sendToTerminal(c.id, "carry on");
+    expect(out).toMatchObject({ sent: true });
+    expect(runScript).toHaveBeenCalledOnce();
+  });
+});
+
 describe("session introspection", () => {
   const line = (obj: unknown) => JSON.stringify(obj);
 

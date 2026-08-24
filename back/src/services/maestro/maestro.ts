@@ -2,8 +2,8 @@ import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.
 import { config } from "../../config/env.js";
 import {
   listProjects, listAllCards, getCard, getProject, hasLiveSession, effectiveAccountSlug,
-  listAccounts, getConfig,
-  type Card, type Project, type BoardColumn, type CardStatus,
+  listAccounts, getConfig, isHumanActive, reportCardState,
+  type Card, type Project, type BoardColumn, type CardStatus, type DeclaredState,
 } from "../board/registry.js";
 import { cardWorkPaths } from "../board/workspace.js";
 import { profileDirFor } from "../accounts/profiles.js";
@@ -44,6 +44,16 @@ export interface TerminalSummary {
   situation: TerminalSituation;
   /** true = a live tmux session in the runner (card opened and not paused). */
   liveSession: boolean;
+  /** What the agent SAID about its own work (`vibehub_report`); null = it has said nothing yet. */
+  declaredState: DeclaredState | null;
+  /** The one-line summary the agent reported with `declaredState`; null = none. */
+  declaredSummary: string | null;
+  /**
+   * true = a human typed into this terminal within the last few minutes. `vibehub_send_to_terminal`
+   * REFUSES a human-active card (reading is still allowed) — a maestro must not fight a person for
+   * the prompt.
+   */
+  humanActive: boolean;
   updatedAt: number;
 }
 
@@ -71,8 +81,8 @@ export function matchesProject(project: Pick<Project, "id" | "name">, filter: st
   return project.id.toLowerCase() === f || project.name.toLowerCase().includes(f);
 }
 
-/** Builds the summary of one terminal from its card and project. PURE. */
-export function terminalSummary(card: Card, project: Project): TerminalSummary {
+/** Builds the summary of one terminal from its card and project. PURE (given `now`). */
+export function terminalSummary(card: Card, project: Project, now: number = Date.now()): TerminalSummary {
   return {
     cardId: card.id,
     title: card.title,
@@ -82,6 +92,9 @@ export function terminalSummary(card: Card, project: Project): TerminalSummary {
     status: card.status ?? null,
     situation: terminalSituation(card),
     liveSession: hasLiveSession(card),
+    declaredState: card.declaredState ?? null,
+    declaredSummary: card.declaredSummary ?? null,
+    humanActive: isHumanActive(card, now),
     updatedAt: card.updatedAt,
   };
 }
@@ -205,12 +218,13 @@ export async function listTerminals(project?: string): Promise<TerminalSummary[]
   const [projects, cards] = await Promise.all([listProjects(), listAllCards()]);
   const byId = new Map(projects.map((p) => [p.id, p]));
   const filter = (project ?? "").trim();
+  const now = Date.now(); // one clock for the whole listing, so `humanActive` is consistent across it
   const out: TerminalSummary[] = [];
   for (const card of cards) {
     const owner = byId.get(card.projectId);
     if (!owner) continue; // orphan card (project deleted) — not a terminal anyone can reach
     if (filter && !matchesProject(owner, filter)) continue;
-    out.push(terminalSummary(card, owner));
+    out.push(terminalSummary(card, owner, now));
   }
   return out.sort(
     (a, b) =>
@@ -256,6 +270,13 @@ export async function sendToTerminal(cardId: string, text: string, by?: string):
   if (!instruction) throw new Error("empty text: there is nothing to send to the terminal");
   const card = await getCard(cardId);
   if (!card) throw new Error("card not found");
+  // A human is at this terminal right now: typing into it would fight them for the prompt. Refuse and
+  // send NOTHING — a maestro that wants what was said should READ (that stays allowed) and wait.
+  if (isHumanActive(card)) {
+    throw new Error(
+      `card "${card.title}" is human-active — someone is typing in it right now, so it will not accept a sent instruction; read it and wait, or ask the user`,
+    );
+  }
   if (!hasLiveSession(card)) {
     throw new Error(
       `the terminal for card "${card.title}" has no live session — open or resume the card before sending it an instruction`,
@@ -280,6 +301,38 @@ export async function sendToTerminal(cardId: string, text: string, by?: string):
     "instruction delivered to a card terminal",
   );
   return { sent: true, cardId: card.id, title: card.title, project: project.name };
+}
+
+export interface ReportResult {
+  reported: true;
+  cardId: string;
+  title: string;
+  state: DeclaredState;
+  summary: string;
+}
+
+/**
+ * Records a card's OWN declared state and one-line summary (`vibehub_report`). This is a SELF-report:
+ * `cardId` is the calling card's id (its `$VIBEHUB_CARD_ID`), the same way the status hook self-reports
+ * `{ card, status }`. It writes only `declaredState`/`declaredSummary` — never the column or the dot.
+ */
+export async function reportState(cardId: string, state: string, summary?: string, by?: string): Promise<ReportResult> {
+  const card = await reportCardState(cardId, state, summary); // validates the state; unknown card -> undefined
+  if (!card) throw new Error("card not found");
+  logger.info(
+    {
+      audit: true, action: "maestro.report", card: card.worktreeSlug,
+      state: card.declaredState, bytes: Buffer.byteLength(card.declaredSummary ?? ""), by,
+    },
+    "card reported its declared state",
+  );
+  return {
+    reported: true,
+    cardId: card.id,
+    title: card.title,
+    state: card.declaredState as DeclaredState,
+    summary: card.declaredSummary ?? "",
+  };
 }
 
 export interface ReadResult {
