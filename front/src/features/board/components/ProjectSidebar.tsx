@@ -1,18 +1,42 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, ChevronDown, ChevronUp, FolderGit2, Pause, Plus, RotateCw, Trash2 } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  FolderGit2,
+  Moon,
+  Pause,
+  Pencil,
+  Plus,
+  RotateCw,
+  Trash2,
+} from "lucide-react";
 import { cn, isNewTabClick } from "@/lib/utils";
 import { apiErrorMessage } from "@/lib/apiError";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
   useContextMenuPoint,
+  useLongPress,
   type ContextMenuItem,
 } from "@/features/board/components/ContextMenu";
 import { Logo } from "@/components/Logo";
 import { AccountRow } from "@/components/AccountRow";
-import { cardHref, nextPosition, splitSidebarCards, statusDot } from "@/features/board/lib/board";
+import {
+  SELECTED_ROW,
+  cardDot,
+  cardHref,
+  dotClass,
+  gapToPosition,
+  isBelowMidpoint,
+  nextPosition,
+  splitSidebarCards,
+} from "@/features/board/lib/board";
+import { useExpandedProjects } from "@/features/board/lib/sidebarExpanded";
+import { RecentCards } from "@/features/board/components/RecentCards";
 import {
   boardApi,
   cardRunnerHint,
@@ -32,11 +56,17 @@ import { t as translate, useT } from "@/i18n";
  * want to reach next, so the sidebar does not change either — it is the same component, in the same
  * place, on both views, and only the middle of the page swaps.
  *
- * Every row is one project. Clicking one SELECTS it: its board fills the middle and its cards
- * unfold underneath it, right here. Clicking the selected one again DESELECTS it and you get the
- * aggregated board — which is why there is no "All projects" row to hunt for. Clicking a card opens
- * its terminal; clicking the card that is already open closes it and puts the board back. Every
- * click moves exactly one level, in or out, which is why there is no "back to board" button either.
+ * Every row is one project, and it answers to TWO different clicks, because unfolding a project
+ * and going to it are two different intentions. The CHEVRON unfolds its cards where they are and
+ * changes nothing else — as many projects open at once as you like, and the card you have open
+ * stays open, which is the whole reason it exists. The NAME navigates: that project's board fills
+ * the middle. Clicking the name of the project you are already on takes you up one level — out of
+ * a card to its board, and from the board to the aggregated one, which is why there is no "All
+ * projects" row and no "back to board" button.
+ *
+ * Clicking a card opens its terminal, from ANY unfolded project rather than only the selected one:
+ * moving from one agent to another is one click from anywhere in the list. Clicking the card that
+ * is already open closes it and puts the board back.
  *
  * It is also the app's only chrome: the brand sits at the TOP of the panel and the account row
  * (theme, settings, sign out) at its BOTTOM. There is no page header any more — that band of
@@ -48,13 +78,6 @@ import { t as translate, useT } from "@/i18n";
  * copy and a mobile copy — the expanded project owns the poll that keeps every dot on screen fresh,
  * and two of those would be two of everything.
  */
-
-/**
- * Selected-row accent: a hairline down the left edge and a whisper of tint. Used for the selected
- * project and for the card that is open, so "this is the one" always looks the same.
- */
-export const SELECTED_ROW =
-  "relative bg-primary/[0.06] before:absolute before:inset-y-1 before:left-0 before:z-10 before:w-[3px] before:rounded-r-full before:bg-primary/70 before:content-['']";
 
 /** Name on the row, repository in the tooltip: the repo was noise on a list you read by name. */
 function projectHint(project: BoardProject): string {
@@ -95,6 +118,7 @@ export function ProjectSidebar({
   onDeleteProject: (project: BoardProject) => void;
 }) {
   const t = useT();
+  const { isExpanded, toggle } = useExpandedProjects(selectedProjectId);
   const [draggingId, setDraggingId] = React.useState<string | null>(null);
   const [dropAt, setDropAt] = React.useState<{ index: number; below: boolean } | null>(null);
 
@@ -148,6 +172,10 @@ export function ProjectSidebar({
           <Logo size="side" />
         </div>
 
+        {/* Where you just were, above what you own. It hides itself when there is nothing to
+            go back to, so a fresh install still opens on the project list. */}
+        <RecentCards projects={projects} activeCardId={selectedCardId} onOpenCard={onOpenCard} />
+
         <div className="flex shrink-0 items-center justify-between border-b border-border/60 py-1 pl-3 pr-1.5">
           <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
             {t("board.projects", { n: projects.length })}
@@ -176,6 +204,10 @@ export function ProjectSidebar({
                 first={index === 0}
                 last={index === projects.length - 1}
                 selected={selected}
+                expanded={isExpanded(project.id)}
+                onToggleExpanded={() => toggle(project.id)}
+                // Only the selected project can own the card that is open: opening a card selects
+                // its project, so the two ids always belong together.
                 activeCardId={selected ? selectedCardId : null}
                 draggingId={draggingId}
                 dropLine={
@@ -211,14 +243,15 @@ export function ProjectSidebar({
 /**
  * One project.
  *
- * The row itself is a folder, a name and an always-visible `+`. Nothing else: the repository moved
+ * The row itself is a chevron, a name and an always-visible `+`. Nothing else: the repository moved
  * into the tooltip, and the management actions (reorder, delete) moved into the right-click menu,
  * because a row that sprouts three icon buttons on hover is a row you cannot read at a glance.
  *
- * When SELECTED it unfolds its cards, and only then does it fetch them — one poll, for the project
- * you are actually looking at. The cards that are working or waiting are always listed; the rest
- * hide behind "show more"; finished ones never appear, EXCEPT the card whose terminal is open,
- * which is always listed or the one thing on screen would be the one thing you cannot see.
+ * When UNFOLDED it lists its cards, and only then does it fetch them. Unfolded is not the same as
+ * selected — several projects can be open at once, and each open one polls, because a list of cards
+ * with stale dots is worse than no list. The cards that are working or waiting are always listed;
+ * the rest hide behind "show more"; finished ones never appear, EXCEPT the card whose terminal is
+ * open, which is always listed or the one thing on screen would be the one thing you cannot see.
  */
 function ProjectRow({
   project,
@@ -226,6 +259,8 @@ function ProjectRow({
   first,
   last,
   selected,
+  expanded,
+  onToggleExpanded,
   activeCardId,
   draggingId,
   dropLine,
@@ -244,6 +279,9 @@ function ProjectRow({
   first: boolean;
   last: boolean;
   selected: boolean;
+  /** Are this project's cards unfolded? Independent of `selected` — see the chevron. */
+  expanded: boolean;
+  onToggleExpanded: () => void;
   activeCardId: string | null;
   draggingId: string | null;
   dropLine: "top" | "bottom" | null;
@@ -267,20 +305,26 @@ function ProjectRow({
     // 2s, not 5s: the dot is the one thing on screen that has to feel live. A card that just went
     // amber is a card asking for you, and three extra seconds of green reads as "still busy".
     refetchInterval: 2_000,
-    enabled: selected,
+    // Unfolded, not selected: every open list has live dots, or the reason to keep two projects
+    // open at once — watching both — would not survive the first poll.
+    enabled: expanded,
   });
 
   const [showMore, setShowMore] = React.useState(false);
   React.useEffect(() => {
-    if (!selected) setShowMore(false);
-  }, [selected]);
+    if (!expanded) setShowMore(false);
+  }, [expanded]);
 
   const { active, idle } = splitSidebarCards(cards ?? []);
   const openCard = activeCardId ? (cards ?? []).find((c) => c.id === activeCardId) : undefined;
+  // The card you are IN always has a row, whatever column it sits in. It used to be listed only
+  // when it was in neither half, so opening a card straight out of the Backlog — which is every
+  // brand-new card — left the list with no row for the thing filling the screen, and the "show
+  // more" fold was the only place it existed.
   const listed =
-    openCard && !active.some((c) => c.id === openCard.id) && !idle.some((c) => c.id === openCard.id)
-      ? [openCard, ...active]
-      : active;
+    openCard && !active.some((c) => c.id === openCard.id) ? [openCard, ...active] : active;
+  const shown = new Set(listed.map((c) => c.id));
+  const folded = idle.filter((c) => !shown.has(c.id));
 
   /** Writes one card back into this project's cache, then lets the poll re-synchronise. */
   const mirror = React.useCallback(
@@ -328,6 +372,15 @@ function ProjectRow({
     mutationFn: (id: string) => boardApi.restartCard(id),
     onSuccess: () => toast.success(translate("toast.cardRestarting")),
     onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardRestartError"))),
+  });
+
+  const hibernateMutation = useMutation({
+    mutationFn: (id: string) => boardApi.hibernateCard(id),
+    onSuccess: (updated) => {
+      mirror(updated);
+      toast.success(translate("toast.cardHibernated"));
+    },
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardHibernateError"))),
   });
 
   const moveMutation = useMutation({
@@ -407,6 +460,7 @@ function ProjectRow({
         }}
         onPause={(c) => pauseMutation.mutate(c.id)}
         onRestart={restart}
+        onHibernate={(c) => hibernateMutation.mutate(c.id)}
         onFinish={finish}
       />
     );
@@ -458,12 +512,31 @@ function ProjectRow({
       {/* Right-click anywhere on the row line, not only on the name. The card rows below have a
           menu of their own and stop the event, so the two never collide. */}
       <div className="flex items-center gap-0.5" onContextMenu={openAt}>
+        {/* The disclosure, ahead of the folder icon and outside the name button. It is its OWN
+            target, which is the whole point: unfolding a project never navigates anywhere. */}
+        <button
+          type="button"
+          onClick={onToggleExpanded}
+          aria-expanded={expanded}
+          aria-label={
+            expanded
+              ? t("sidebar.collapseProject", { name: project.name })
+              : t("sidebar.expandProject", { name: project.name })
+          }
+          className="ml-2 flex h-6 w-5 shrink-0 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
+        >
+          {expanded ? (
+            <ChevronDown className="h-3.5 w-3.5" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5" />
+          )}
+        </button>
         <button
           type="button"
           onClick={onSelect}
           aria-pressed={selected}
           title={projectHint(project)}
-          className="flex min-w-0 flex-1 cursor-grab items-center gap-2.5 py-2.5 pl-3 pr-1 text-left active:cursor-grabbing"
+          className="flex min-w-0 flex-1 cursor-grab items-center gap-2 py-2.5 pl-1 pr-1 text-left active:cursor-grabbing"
         >
           <FolderGit2 className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span
@@ -489,24 +562,24 @@ function ProjectRow({
         </Button>
       </div>
 
-      {selected ? (
+      {expanded ? (
         <div className="pb-1.5">
           {listed.map(renderCard)}
           {/* The revealed cards appear ABOVE the toggle, which stays anchored at the end of the
               list: expanding and collapsing are the same point of click, and nothing moves out
               from under the cursor. */}
-          {showMore ? idle.map(renderCard) : null}
-          {idle.length > 0 ? (
+          {showMore ? folded.map(renderCard) : null}
+          {folded.length > 0 ? (
             <button
               type="button"
               aria-expanded={showMore}
               onClick={() => setShowMore((v) => !v)}
               className="w-full py-1.5 pl-9 pr-3 text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground/80 transition-colors hover:bg-card/60 hover:text-foreground"
             >
-              {showMore ? t("sidebar.showLess") : t("sidebar.showMore", { n: idle.length })}
+              {showMore ? t("sidebar.showLess") : t("sidebar.showMore", { n: folded.length })}
             </button>
           ) : null}
-          {listed.length === 0 && idle.length === 0 ? (
+          {listed.length === 0 && folded.length === 0 ? (
             <p className="py-1.5 pl-9 pr-3 text-[11px] text-muted-foreground/60">{t("sidebar.noActiveCards")}</p>
           ) : null}
         </div>
@@ -527,8 +600,13 @@ function ProjectRow({
  *
  * A real link, so the browser's habits work (Cmd/Ctrl/Shift-click, middle-click, "copy link"). A
  * plain click opens it — or closes it, when it is the card already open, which the parent decides
- * by comparing ids. Double-click renames it in place; right-click offers the three things worth
- * doing to a live session, for ANY card in the list rather than only the open one.
+ * by comparing ids. Right-click (long-press on a touch screen) offers renaming plus the three
+ * things worth doing to a live session, for ANY card in the list rather than only the open one.
+ *
+ * Renaming is a MENU item and not a double-click, because the first click of that double-click is
+ * a real click: it opens another card, or — on the card already open — closes it, tearing the
+ * terminal down before the rename box even appears. A gesture whose first half navigates cannot be
+ * the way to edit a name.
  */
 function SidebarCard({
   card,
@@ -537,6 +615,7 @@ function SidebarCard({
   onRename,
   onPause,
   onRestart,
+  onHibernate,
   onFinish,
 }: {
   card: BoardCard;
@@ -545,23 +624,31 @@ function SidebarCard({
   onRename: () => void;
   onPause: (card: BoardCard) => void;
   onRestart: (card: BoardCard) => void;
+  onHibernate: (card: BoardCard) => void;
   onFinish: (card: BoardCard) => void;
 }) {
   const t = useT();
-  const dot = statusDot(card.status);
+  const dot = cardDot(card);
   const paused = Boolean(card.pausedAt);
-  const canPause = Boolean(card.openedAt) && !paused;
+  const canPause = Boolean(card.openedAt) && !paused && !card.hibernatedAt;
 
   const items: ContextMenuItem[] = [
+    { key: "rename", label: t("card.rename"), icon: Pencil, onSelect: onRename },
     ...(canPause ? [{ key: "pause", label: t("card.pause"), icon: Pause, onSelect: () => onPause(card) }] : []),
     ...(canPause
       ? [{ key: "restart", label: t("card.restart"), icon: RotateCw, onSelect: () => onRestart(card) }]
+      : []),
+    // Only where there is a session to close. It does the idle sweep's job on demand: the terminal
+    // goes, the card does not move.
+    ...(canPause
+      ? [{ key: "hibernate", label: t("card.hibernate"), icon: Moon, onSelect: () => onHibernate(card) }]
       : []),
     ...(card.column !== "done"
       ? [{ key: "finish", label: t("card.finish"), icon: Check, onSelect: () => onFinish(card) }]
       : []),
   ];
-  const { point, openAt, close } = useContextMenuPoint();
+  const { point, openAt, openAtPoint, close } = useContextMenuPoint();
+  const longPress = useLongPress(openAtPoint);
 
   return (
     <>
@@ -575,14 +662,18 @@ function SidebarCard({
         onClick={(e) => {
           if (isNewTabClick(e)) return;
           e.preventDefault();
-          // The first click of a double-click also lands here; renaming owns the second one.
+          // A long-press opened the menu over this row; the click it ends with is not a choice.
+          if (longPress.swallowClick()) return;
+          // A stray double-click would otherwise open and immediately close the card again.
           if (e.detail > 1) return;
           onOpen();
         }}
-        onDoubleClick={onRename}
-        onContextMenu={items.length > 0 ? openAt : undefined}
+        onContextMenu={openAt}
+        {...longPress.handlers}
         className={cn(
-          "flex w-full items-center gap-2 py-1.5 pl-9 pr-3 text-left text-sm transition-colors",
+          // `touch-callout` off: on iOS a long press on a link raises the browser's own preview,
+          // which would cover the menu that same press is here to open.
+          "flex w-full items-center gap-2 py-1.5 pl-9 pr-3 text-left text-sm transition-colors [-webkit-touch-callout:none]",
           active
             ? `${SELECTED_ROW} text-foreground`
             : "text-muted-foreground hover:bg-card/60 hover:text-foreground",
@@ -596,11 +687,7 @@ function SidebarCard({
             <Pause aria-hidden className="h-2.5 w-2.5 text-muted-foreground/70" />
           ) : dot ? (
             <span
-              className={cn(
-                "inline-block h-2 w-2 rounded-full",
-                dot.tone === "ok" ? "bg-emerald-400" : "bg-amber-400",
-                dot.live && "dot-live",
-              )}
+              className={cn("inline-block h-2 w-2 rounded-full", dotClass(dot.tone), dot.live && "dot-live")}
             />
           ) : null}
         </span>
@@ -618,18 +705,7 @@ function SidebarCard({
 
 /* ------------------------------------------------------------- drag maths */
 
-/** Is the pointer in the BOTTOM half of the row it is over (drop after, rather than before)? PURE. */
-export function isBelowMidpoint(pointerY: number, rectTop: number, rectHeight: number): boolean {
-  return pointerY >= rectTop + rectHeight / 2;
-}
-
-/**
- * Turns a gap index (0..n, in the FULL list) into the `position` the server expects — the index
- * after the moved item has been taken out. Dropping a row back where it already is, on either side
- * of itself, is a no-op.
- */
-export function gapToPosition(gap: number, from: number): number {
-  if (gap === from || gap === from + 1) return from;
-  return gap > from ? gap - 1 : gap;
-}
+// The maths of dropping between two rows is the same here and on the kanban, so it lives in
+// `lib/board` and both read it from there. Re-exported because this is where it was first written.
+export { gapToPosition, isBelowMidpoint };
 

@@ -2,8 +2,8 @@ import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.
 import { config } from "../../config/env.js";
 import {
   listProjects, listAllCards, getCard, getProject, hasLiveSession, effectiveAccountSlug,
-  listAccounts, getConfig,
-  type Card, type Project, type BoardColumn, type CardStatus,
+  listAccounts, getConfig, isHumanActive, reportCardState,
+  type Card, type Project, type BoardColumn, type CardStatus, type DeclaredState,
 } from "../board/registry.js";
 import { cardWorkPaths } from "../board/workspace.js";
 import { profileDirFor } from "../accounts/profiles.js";
@@ -44,6 +44,16 @@ export interface TerminalSummary {
   situation: TerminalSituation;
   /** true = a live tmux session in the runner (card opened and not paused). */
   liveSession: boolean;
+  /** What the agent SAID about its own work (`vibehub_report`); null = it has said nothing yet. */
+  declaredState: DeclaredState | null;
+  /** The one-line summary the agent reported with `declaredState`; null = none. */
+  declaredSummary: string | null;
+  /**
+   * true = a human typed into this terminal within the last few minutes. `vibehub_send_to_terminal`
+   * REFUSES a human-active card (reading is still allowed) — a maestro must not fight a person for
+   * the prompt.
+   */
+  humanActive: boolean;
   updatedAt: number;
 }
 
@@ -71,8 +81,8 @@ export function matchesProject(project: Pick<Project, "id" | "name">, filter: st
   return project.id.toLowerCase() === f || project.name.toLowerCase().includes(f);
 }
 
-/** Builds the summary of one terminal from its card and project. PURE. */
-export function terminalSummary(card: Card, project: Project): TerminalSummary {
+/** Builds the summary of one terminal from its card and project. PURE (given `now`). */
+export function terminalSummary(card: Card, project: Project, now: number = Date.now()): TerminalSummary {
   return {
     cardId: card.id,
     title: card.title,
@@ -82,6 +92,9 @@ export function terminalSummary(card: Card, project: Project): TerminalSummary {
     status: card.status ?? null,
     situation: terminalSituation(card),
     liveSession: hasLiveSession(card),
+    declaredState: card.declaredState ?? null,
+    declaredSummary: card.declaredSummary ?? null,
+    humanActive: isHumanActive(card, now),
     updatedAt: card.updatedAt,
   };
 }
@@ -111,6 +124,17 @@ function assistantText(content: unknown): string {
     }
   }
   return parts.join("\n").trim();
+}
+
+/**
+ * Where a card's Claude transcripts live INSIDE the runner: the account profile's `projects/`
+ * directory for that card's cwd. Every reader of a transcript — the maestro, the model pill, the
+ * chat view — derives the path here, so they can never disagree about which file is the session.
+ * PURE.
+ */
+export function transcriptDirFor(project: Project, card: Card, accountSlug?: string | null): string {
+  const profileDir = profileDirFor(accountSlug ?? undefined);
+  return seedDestDir(profileDir, cardWorkPaths(project, card).cwd);
 }
 
 /**
@@ -154,7 +178,12 @@ export function assertMaestroText(text: string, delimiter: string): void {
  * The text rides inside the script over stdin (quoted heredoc, no expansion); `docker exec -i`
  * forwards that stdin into the container, where `$(cat)` recovers it and `tmux send-keys -l` types
  * it LITERALLY — no key-name interpretation, so an instruction containing "Enter" or "C-c" is text,
- * not a keystroke. Container and session names are derived from the board and shell-quoted. PURE.
+ * not a keystroke. Container and session names are derived from the board and shell-quoted.
+ *
+ * The pause before Enter is the same 120 ms the browser's composer leaves (see XTerminal): a body
+ * arriving in one burst is read by Claude Code's TUI as a PASTE, and an Enter that lands inside
+ * that window is swallowed as part of it — the message is typed and never sent. Waiting for the
+ * paste detector to settle makes the Enter a keystroke again. PURE.
  */
 export function buildSendKeysScript(containerName: string, tmuxSession: string, text: string): string {
   const delimiter = "VIBEHUB_MAESTRO_TEXT";
@@ -162,6 +191,7 @@ export function buildSendKeysScript(containerName: string, tmuxSession: string, 
   const inner =
     `VIBEHUB_TEXT="$(cat)"; ` +
     `tmux send-keys -t "$1" -l -- "$VIBEHUB_TEXT"; ` +
+    `sleep 0.15; ` +
     `tmux send-keys -t "$1" Enter`;
   return [
     "set -e",
@@ -188,12 +218,13 @@ export async function listTerminals(project?: string): Promise<TerminalSummary[]
   const [projects, cards] = await Promise.all([listProjects(), listAllCards()]);
   const byId = new Map(projects.map((p) => [p.id, p]));
   const filter = (project ?? "").trim();
+  const now = Date.now(); // one clock for the whole listing, so `humanActive` is consistent across it
   const out: TerminalSummary[] = [];
   for (const card of cards) {
     const owner = byId.get(card.projectId);
     if (!owner) continue; // orphan card (project deleted) — not a terminal anyone can reach
     if (filter && !matchesProject(owner, filter)) continue;
-    out.push(terminalSummary(card, owner));
+    out.push(terminalSummary(card, owner, now));
   }
   return out.sort(
     (a, b) =>
@@ -239,6 +270,13 @@ export async function sendToTerminal(cardId: string, text: string, by?: string):
   if (!instruction) throw new Error("empty text: there is nothing to send to the terminal");
   const card = await getCard(cardId);
   if (!card) throw new Error("card not found");
+  // A human is at this terminal right now: typing into it would fight them for the prompt. Refuse and
+  // send NOTHING — a maestro that wants what was said should READ (that stays allowed) and wait.
+  if (isHumanActive(card)) {
+    throw new Error(
+      `card "${card.title}" is human-active — someone is typing in it right now, so it will not accept a sent instruction; read it and wait, or ask the user`,
+    );
+  }
   if (!hasLiveSession(card)) {
     throw new Error(
       `the terminal for card "${card.title}" has no live session — open or resume the card before sending it an instruction`,
@@ -265,6 +303,38 @@ export async function sendToTerminal(cardId: string, text: string, by?: string):
   return { sent: true, cardId: card.id, title: card.title, project: project.name };
 }
 
+export interface ReportResult {
+  reported: true;
+  cardId: string;
+  title: string;
+  state: DeclaredState;
+  summary: string;
+}
+
+/**
+ * Records a card's OWN declared state and one-line summary (`vibehub_report`). This is a SELF-report:
+ * `cardId` is the calling card's id (its `$VIBEHUB_CARD_ID`), the same way the status hook self-reports
+ * `{ card, status }`. It writes only `declaredState`/`declaredSummary` — never the column or the dot.
+ */
+export async function reportState(cardId: string, state: string, summary?: string, by?: string): Promise<ReportResult> {
+  const card = await reportCardState(cardId, state, summary); // validates the state; unknown card -> undefined
+  if (!card) throw new Error("card not found");
+  logger.info(
+    {
+      audit: true, action: "maestro.report", card: card.worktreeSlug,
+      state: card.declaredState, bytes: Buffer.byteLength(card.declaredSummary ?? ""), by,
+    },
+    "card reported its declared state",
+  );
+  return {
+    reported: true,
+    cardId: card.id,
+    title: card.title,
+    state: card.declaredState as DeclaredState,
+    summary: card.declaredSummary ?? "",
+  };
+}
+
 export interface ReadResult {
   cardId: string;
   title: string;
@@ -283,9 +353,7 @@ export async function readTerminal(cardId: string, last = 3): Promise<ReadResult
   const project = await getProject(card.projectId);
   if (!project) throw new Error("project for this card not found");
 
-  const profileDir = profileDirFor(effectiveAccountSlug(card, project));
-  const { cwd } = cardWorkPaths(project, card);
-  const transcriptDir = seedDestDir(profileDir, cwd);
+  const transcriptDir = transcriptDirFor(project, card, effectiveAccountSlug(card, project));
   const n = Math.max(1, Math.min(20, Math.floor(last) || 3));
 
   const { stdout } = await hostExecutor().runScript(
@@ -350,14 +418,23 @@ export function parseLastTurn(jsonl: string): { model: string | null; at: number
 /**
  * Which signal wins: `/model` + Enter writes the profile's settings.json AND switches the running
  * session, so a settings write NEWER than the last reply is the truth until the next reply lands.
- * Otherwise the last reply is. PURE.
+ * Otherwise the last reply is.
+ *
+ * A card that PINS a model replaces settings.json in that contest, it does not join it: the session
+ * starts with `--model`, which beats the profile's `"model"` — and that profile is SHARED by every
+ * card on the account, so any `/model` typed in a neighbouring card would otherwise be read here as
+ * this card's model. The pin is dated (`modelAt`) for the same reason settings.json is: switching it
+ * restarts the session, so from that instant it is newer, and truer, than the turns already in the
+ * transcript. PURE.
  */
 export function pickModel(
   lastTurn: { model: string | null; at: number },
   settings: { model: string | null; at: number },
+  pin: { model: string | null; at: number } = { model: null, at: 0 },
 ): string | null {
-  if (settings.model && settings.at >= lastTurn.at) return settings.model;
-  return lastTurn.model ?? settings.model;
+  const config = pin.model ? pin : settings;
+  if (config.model && config.at >= lastTurn.at) return config.model;
+  return lastTurn.model ?? config.model;
 }
 
 /**
@@ -405,6 +482,12 @@ export interface SessionInfo {
   modelLabel: string | null;
   /** The EFFECTIVE account (card → project → default) with its display name. */
   account: { slug: string | null; name: string };
+  /**
+   * What the terminal is doing right now. It is already polled here every few seconds, and the chat
+   * view needs it: without the board's card list beside it (a phone has none) there is nothing else
+   * on screen that says "the agent is still working".
+   */
+  situation: TerminalSituation;
 }
 
 /** What a card's session is really running with. Read-only; tolerates a missing transcript. */
@@ -422,17 +505,21 @@ export async function sessionInfo(cardId: string): Promise<SessionInfo> {
   let model: string | null = null;
   try {
     const profileDir = profileDirFor(slug);
-    const { cwd } = cardWorkPaths(project, card);
     const { stdout } = await hostExecutor().runScript(
-      buildReadSessionScript(config_runner_container(), seedDestDir(profileDir, cwd), profileDir, 200),
+      buildReadSessionScript(config_runner_container(), transcriptDirFor(project, card, slug), profileDir, 200),
       { timeoutMs: 15_000 },
     );
     const { transcript, settings } = parseSessionOutput(stdout);
-    model = pickModel(parseLastTurn(transcript), settings);
+    model = pickModel(parseLastTurn(transcript), settings, { model: card.model ?? null, at: card.modelAt ?? 0 });
   } catch {
     model = null; // runner unreachable or no transcript yet — the UI shows the default
   }
-  return { model, modelLabel: modelLabelFor(model), account: { slug: slug ?? null, name } };
+  return {
+    model,
+    modelLabel: modelLabelFor(model),
+    account: { slug: slug ?? null, name },
+    situation: terminalSituation(card),
+  };
 }
 
 function config_runner_container(): string {

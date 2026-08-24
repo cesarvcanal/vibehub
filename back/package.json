@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc && node scripts/build-assets.mjs",
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest"

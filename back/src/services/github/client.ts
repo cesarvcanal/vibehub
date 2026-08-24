@@ -68,8 +68,14 @@ export interface GithubRepo {
   description: string | null;
 }
 
+/** Ceiling for one GitHub call. Nothing here is worth blocking a request on for longer. */
+const GITHUB_TIMEOUT_MS = 8_000;
+
 async function githubFetch(path: string, token: string): Promise<Response> {
   return await fetch(`${API}${path}`, {
+    // Without this an unreachable github.com does not fail — it HANGS, and it hangs inside whatever
+    // request asked (the setup probe used to be one of them, which is a blank app until it gives up).
+    signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
     headers: {
       authorization: `Bearer ${token}`,
       accept: "application/vnd.github+json",

@@ -17,6 +17,8 @@ vi.mock("@/lib/api", () => ({
   del: vi.fn(),
 }));
 
+import { toast } from "sonner";
+
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), {
     success: vi.fn(),
@@ -32,6 +34,14 @@ vi.mock("sonner", () => ({
 vi.mock("@/features/board/components/XTerminal", () => ({
   XTerminal: ({ wsPath, reconnectKey }: { wsPath: string; reconnectKey?: string }) => (
     <div data-testid="xterm" data-ws={wsPath} data-reconnect={reconnectKey ?? ""} />
+  ),
+}));
+
+// The chat owns a websocket of its own and has its own test file; here we only care that it is the
+// thing on screen, and that the terminal is NOT (the whole point of switching is dropping that socket).
+vi.mock("@/features/board/components/ChatView", () => ({
+  ChatView: ({ cardId, working }: { cardId: string; working: boolean }) => (
+    <div data-testid="chat" data-card={cardId} data-working={String(working)} />
   ),
 }));
 
@@ -103,6 +113,10 @@ function serve() {
     if (url === "/cards/c1/session") {
       return Promise.resolve({ model: null, modelLabel: null, account: { slug: null, name: "" } });
     }
+    // The outbox: empty, which is the normal state and renders nothing at all.
+    if (/^\/cards\/[^/]+\/messages$/.test(url)) {
+      return Promise.resolve({ pending: [], agent: "running" });
+    }
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
 }
@@ -112,6 +126,7 @@ function serveSession(info: {
   model?: string | null;
   modelLabel?: string | null;
   account?: { slug: string | null; name: string };
+  situation?: string;
 }) {
   const base = mockGet.getMockImplementation();
   mockGet.mockImplementation((url: string, ...rest: unknown[]) => {
@@ -120,6 +135,7 @@ function serveSession(info: {
         model: info.model ?? null,
         modelLabel: info.modelLabel ?? null,
         account: info.account ?? { slug: null, name: "" },
+        situation: info.situation ?? "waiting",
       });
     }
     return (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest);
@@ -287,6 +303,74 @@ describe("CardTerminalView — behind another card", () => {
   });
 });
 
+describe("CardTerminalView — composing a message", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    serve();
+  });
+
+  it("hands Enter to the card's OUTBOX rather than typing it into the socket", async () => {
+    mockPost.mockResolvedValue({ delivered: true, pending: [], agent: "running" });
+    renderWithCache([card({ openedAt: 10 })]);
+    await screen.findByTestId("xterm");
+
+    await userEvent.type(screen.getByTestId("terminal-composer").querySelector("textarea") as HTMLTextAreaElement, "run the tests{Enter}");
+
+    await waitFor(() =>
+      expect(mockPost).toHaveBeenCalledWith("/cards/c1/messages", { text: "run the tests" }),
+    );
+  });
+
+  it("shows what could not be delivered, with the reason", async () => {
+    mockPost.mockResolvedValue({
+      delivered: false,
+      pending: [{ id: "m1", text: "run the tests", createdAt: 1, attempts: 0 }],
+      agent: "shell",
+    });
+    renderWithCache([card({ openedAt: 10 })]);
+    await screen.findByTestId("xterm");
+
+    await userEvent.type(screen.getByTestId("terminal-composer").querySelector("textarea") as HTMLTextAreaElement, "run the tests{Enter}");
+
+    // The message left the field and is visibly waiting instead of having vanished into a shell.
+    expect(await screen.findByTestId("card-outbox")).toHaveTextContent(/run the tests/);
+  });
+
+  it("lets you write while the card is still being prepared — it queues", async () => {
+    let resolveOpen: (value: unknown) => void = () => {};
+    mockPost.mockImplementation((url: string) => {
+      if (url === "/cards/c1/messages") {
+        return Promise.resolve({
+          delivered: false,
+          pending: [{ id: "m1", text: "start with the schema", createdAt: 1, attempts: 0 }],
+          agent: "none",
+        });
+      }
+      return new Promise((resolve) => (resolveOpen = resolve));
+    });
+
+    renderWithCache([card({ column: "backlog" })]);
+    await screen.findByText(/Preparing the worktree and session/i);
+
+    const box = screen.getByTestId("terminal-composer").querySelector("textarea") as HTMLTextAreaElement;
+    await userEvent.type(box, "start with the schema{Enter}");
+
+    await waitFor(() =>
+      expect(mockPost).toHaveBeenCalledWith("/cards/c1/messages", { text: "start with the schema" }),
+    );
+    expect(await screen.findByTestId("card-outbox")).toHaveTextContent(/start with the schema/);
+    resolveOpen({ card: card({ openedAt: 10 }) });
+  });
+
+  it("the COMPOSER takes the keyboard when the card opens, not the terminal", async () => {
+    mockPost.mockResolvedValue({ card: card({ openedAt: 10 }) });
+    renderWithCache([card({ openedAt: 10 })]);
+    await screen.findByTestId("xterm");
+    const box = screen.getByTestId("terminal-composer").querySelector("textarea");
+    await waitFor(() => expect(document.activeElement).toBe(box));
+  });
+});
+
 describe("CardTerminalView — the card bar", () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -364,7 +448,7 @@ describe("CardTerminalView — the card bar", () => {
   }
 
   it("switching the model reconnects the terminal on the same conversation", async () => {
-    mockPatch.mockResolvedValue({ card: card({ openedAt: 10, model: "claude-sonnet-5" }) });
+    mockPatch.mockResolvedValue({ card: card({ openedAt: 10, model: "claude-sonnet-5" }), session: "restarted" });
     const user = userEvent.setup();
     renderWithCache([card({ openedAt: 10 })]);
 
@@ -409,15 +493,42 @@ describe("CardTerminalView — the card bar", () => {
     expect(pill).toHaveAttribute("title", "Claude Code's default until the first reply");
   });
 
-  it("the card's own pin wins over the transcript — that is what the next session starts on", async () => {
-    serveSession({ model: "claude-opus-5", modelLabel: "Opus" });
-    mockPost.mockResolvedValue({ card: card({ openedAt: 10, model: "claude-haiku-4-5" }) });
+  it("the SESSION wins over the card's pin — the bar is about the conversation on screen", async () => {
+    // The bug: the card pinned Opus, so the bar said Opus, while every reply came from Fable. A pin
+    // only reaches Claude when the process starts; the server weighs the two and answers with the
+    // one that is actually talking.
+    serveSession({ model: "claude-fable-5", modelLabel: "Fable" });
     const user = userEvent.setup();
-    renderWithCache([card({ openedAt: 10, model: "claude-haiku-4-5" })]);
+    renderWithCache([card({ openedAt: 10, model: "claude-opus-5" })]);
 
-    expect(await screen.findByLabelText("Model")).toHaveTextContent("Haiku");
+    expect(await screen.findByLabelText("Model")).toHaveTextContent("Fable");
     await openMenu(user, "Model");
-    expect(screen.getByRole("menuitemcheckbox", { name: "Haiku" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("menuitemcheckbox", { name: "Fable" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("an alias or a dated id ticks the row it belongs to instead of growing a second one", async () => {
+    // settings.json stores "opus": the menu used to show Fable/Opus/Sonnet/Haiku AND a second,
+    // checked "Opus" underneath, because the id matched no row exactly.
+    serveSession({ model: "opus", modelLabel: "Opus" });
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10 })]);
+
+    await waitFor(() => expect(screen.getByLabelText("Model")).toHaveTextContent("Opus"));
+    const items = await openMenu(user, "Model");
+    expect(items.map((i) => i.textContent)).toEqual(["Fable", "Opus", "Sonnet", "Haiku"]);
+    expect(screen.getByRole("menuitemcheckbox", { name: "Opus" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("a switch the server could not apply yet says so instead of promising the conversation continues", async () => {
+    mockPatch.mockResolvedValue({ card: card({ openedAt: 10, model: "claude-opus-5" }), session: "pending" });
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10 })]);
+
+    await openMenu(user, "Model");
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Opus" }));
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/takes effect the moment Claude finishes/i)),
+    );
   });
 
   it("names the account in USE on the pill, with no (default) or (inherited) suffix", async () => {
@@ -776,5 +887,77 @@ describe("CardTerminalView — the phone", () => {
     renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
     await screen.findByTestId("card-bar");
     expect(document.documentElement.classList.contains("card-view-locked")).toBe(false);
+  });
+});
+
+describe("CardTerminalView — the Terminal | Chat switch", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    serve();
+    mockPost.mockResolvedValue({ card: card({ openedAt: 10 }) });
+    localStorage.clear();
+  });
+
+  afterEach(() => localStorage.clear());
+
+  /** The phone's viewport, so the second row (where the switch lives on a phone) is rendered. */
+  function setViewport(mobile: boolean): void {
+    window.matchMedia = ((query: string) => ({
+      matches: query === MOBILE_QUERY ? mobile : false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+  }
+
+  it("opens on the terminal and swaps the pane — the terminal socket goes away in chat", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderWithCache([card({ openedAt: 10 })]);
+
+    expect(await screen.findByTestId("xterm")).toBeInTheDocument();
+    await user.click(screen.getByTestId("card-view-chat"));
+
+    expect(await screen.findByTestId("chat")).toBeInTheDocument();
+    expect(screen.queryByTestId("xterm")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("card-view-terminal"));
+    expect(await screen.findByTestId("xterm")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
+  });
+
+  it("remembers the choice for THAT card, on this device", async () => {
+    const user = userEvent.setup({ delay: null });
+    const { unmount } = renderWithCache([card({ openedAt: 10 })]);
+    await user.click(await screen.findByTestId("card-view-chat"));
+    await screen.findByTestId("chat");
+    unmount();
+
+    // Same card: back in chat, without being asked again.
+    renderWithCache([card({ openedAt: 10 })]);
+    expect(await screen.findByTestId("chat")).toBeInTheDocument();
+  });
+
+  it("puts the switch in the bar on BOTH widths — never behind the overflow menu", async () => {
+    setViewport(true);
+    const { unmount } = renderWithCache([card({ openedAt: 10 })]);
+    expect(await screen.findByTestId("card-view-switch")).toBeInTheDocument();
+    unmount();
+
+    setViewport(false);
+    renderWithCache([card({ openedAt: 10 })]);
+    expect(await screen.findByTestId("card-view-switch")).toBeInTheDocument();
+  });
+
+  it("tells the chat whether the agent is working, from the session poll", async () => {
+    const user = userEvent.setup({ delay: null });
+    serveSession({ situation: "working" });
+    renderWithCache([card({ openedAt: 10, status: undefined })]);
+
+    await user.click(await screen.findByTestId("card-view-chat"));
+    await waitFor(() => expect(screen.getByTestId("chat")).toHaveAttribute("data-working", "true"));
   });
 });

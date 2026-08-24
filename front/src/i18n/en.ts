@@ -10,6 +10,9 @@
  */
 export const en: Record<string, string> = {
   /* ------------------------------------------------------------------ common */
+  "error.crashTitle": "Something broke on this screen",
+  "error.crashBody": "The page stopped rendering. Reloading usually brings it straight back — the error below is what went wrong.",
+  "error.crashReload": "Reload the page",
   "common.cancel": "Cancel",
   "common.delete": "Delete",
   "common.save": "Save",
@@ -186,6 +189,7 @@ export const en: Record<string, string> = {
   "status.working": "Working",
   "status.waitingForYou": "Waiting for you",
   "status.paused": "Paused",
+  "status.hibernated": "Hibernated — the terminal was closed after sitting idle. Open it to carry on.",
 
   /* ------------------------------------------------------------------ board */
   "board.newCard": "New card",
@@ -224,23 +228,31 @@ export const en: Record<string, string> = {
   /* -------------------------------------------------------------- card tile */
   "card.finishToDone": "Finish (move to Done)",
   "card.pauseEndsSession": "Pause (ends the session)",
+  "card.hibernateEndsSession": "Hibernate (closes the terminal, keeps the card here)",
   "card.claudeAccountMenu": "Claude account…",
   "card.deleteCard": "Delete card",
   "card.pause": "Pause",
+  "card.rename": "Rename",
   "card.restart": "Restart",
+  "card.hibernate": "Hibernate",
   "card.finish": "Finish",
   "card.pausingWhenIdle": "Pausing when idle…",
   "card.pausingWhenIdleHint":
     "The session ends as soon as the current turn finishes — nothing is interrupted.",
   "card.updatingWhenFinishes": "Updating when it finishes…",
   "card.updatingWhenFinishesHint":
-    "The brain or the MCP set changed while it was working — it restarts once it goes idle, without interrupting.",
+    "The brain, the MCP set or this card's model/account changed while it was working — it restarts onto the new one once it goes idle, without interrupting.",
   "card.projectChip": "Project: {name}",
   "card.ownAccount": "This card's Claude account",
   "card.actionsFor": "Actions for {title}",
+  "card.declaredState.working": "On it",
+  "card.declaredState.ready": "Ready",
+  "card.declaredState.needs_me": "Needs you",
+  "card.declaredState.blocked": "Blocked",
 
   /* ---------------------------------------------------------------- sidebar */
   "sidebar.projects": "Projects",
+  "sidebar.recent": "Recent",
   "sidebar.newProject": "New project",
   "sidebar.newCardIn": "New card in {name}",
   "sidebar.newCardHint": "New card (⌘K on the selected project)",
@@ -254,14 +266,18 @@ export const en: Record<string, string> = {
   "sidebar.moveDown": "Move down",
   "sidebar.deleteProject": "Delete project…",
   "sidebar.actionsForProject": "Actions for {name}",
+  "sidebar.expandProject": "Show {name}'s cards",
+  "sidebar.collapseProject": "Hide {name}'s cards",
 
   /* ----------------------------------------------------------- card view */
   "cardView.refreshError": "Could not refresh the card in the runner",
   "cardView.restarting": "Restarting — the conversation is resumed.",
   "cardView.restartError": "Could not restart the terminal",
-  "cardView.accountSwitched": "Account switched — the conversation continues.",
+  "cardView.accountSwitched": "Account switched — the session restarts on it, same conversation.",
+  "cardView.accountSwitchPending": "Account switched — it takes effect the moment Claude finishes.",
   "cardView.accountSwitchError": "Could not switch the account",
-  "cardView.modelSwitched": "Switched to {label} — the conversation continues.",
+  "cardView.modelSwitched": "Switched to {label} — the session restarts on it, same conversation.",
+  "cardView.modelSwitchPending": "Switched to {label} — it takes effect the moment Claude finishes.",
   "cardView.modelSwitchError": "Could not switch the model",
   "cardView.accountDefault": "the account default",
   "cardView.imageTooBig": "That image is over 10 MB.",
@@ -295,6 +311,21 @@ export const en: Record<string, string> = {
   "cardView.preparing": "Preparing the worktree and session…",
   "cardView.firstCardNote":
     "The first card in a project clones the whole repository into the runner, which can take a few minutes. Every card after that opens in seconds.",
+  "cardView.viewMode": "View mode",
+  "cardView.viewTerminal": "Terminal",
+  "cardView.viewChat": "Chat",
+  "chat.aria": "Card conversation",
+  "chat.ariaFor": "Conversation for {title}",
+  "chat.empty": "No messages yet",
+  "chat.emptyHint": "This is the same session as the terminal: what you send here is typed at its prompt.",
+  "chat.working": "Working…",
+  "chat.sending": "sending",
+  "chat.stop": "Stop",
+  "chat.stopHint": "Press Escape in the session",
+  "chat.sendError": "Could not send the message",
+  "chat.stopError": "Could not stop the agent",
+  "chat.quiet": "Nothing new for a while. If the terminal is asking for something — a permission, a plan, a login — it only shows up there.",
+  "chat.openTerminal": "Open the terminal",
   "cardView.terminalFor": "Terminal for {title}",
   "cardView.cardFallback": "card",
   "cardView.shellHeader": "Shell · bash in the worktree",
@@ -326,6 +357,21 @@ export const en: Record<string, string> = {
   "composer.record": "Record a message",
   "composer.recordHint": "Record a message — it is transcribed into the field, not sent",
   "composer.voiceUnavailable": "Voice input is not configured — add an OpenAI key in Settings",
+  "composer.pastedImage": "pasted image",
+  "composer.uploadFailed": "failed",
+  "composer.removeImage": "Remove {name} from the message",
+  "composer.sendingAfterUpload": "sending as soon as the image lands…",
+
+  /* ----------------------------------------------------------------- outbox */
+  "outbox.waitingSession.one": "1 message queued — open the card and it goes on its own",
+  "outbox.waitingSession.other": "{n} messages queued — open the card and they go on their own",
+  "outbox.waitingAgent.one": "1 message queued — Claude is not running in that terminal",
+  "outbox.waitingAgent.other": "{n} messages queued — Claude is not running in that terminal",
+  "outbox.waitingDelivery.one": "1 message queued — delivering…",
+  "outbox.waitingDelivery.other": "{n} messages queued — delivering…",
+  "outbox.cancel": "Drop this message from the queue",
+  "outbox.cancelError": "Could not drop that message from the queue",
+  "outbox.sendError": "Could not send — the message is still in the field",
 
   /* --------------------------------------------------------------- terminal */
   "terminal.aria": "Terminal",
@@ -335,6 +381,7 @@ export const en: Record<string, string> = {
   "terminal.resetHint": "Reset the text size (Cmd/Ctrl 0)",
   "terminal.larger": "Larger text",
   "terminal.largerHint": "Larger text (Cmd/Ctrl +)",
+  "terminal.jumpToLatest": "Jump to latest",
 
   /* ----------------------------------------------------------- runner banner */
   "runner.checking": "Checking the runner…",
@@ -443,6 +490,10 @@ export const en: Record<string, string> = {
     "The runner is an isolated container — what it reaches is what you connected. Off = Claude asks, and the card waits.",
   "settings.defaultLabel": "Default account label",
   "settings.defaultLabelHint": "How the built-in profile (/root/.claude) is named in pickers.",
+  "settings.idleHibernate": "Hibernate an idle terminal after",
+  "settings.idleHibernateUnit": "minutes",
+  "settings.idleHibernateHint":
+    "Minutes with no sign of life before the session is closed. The card keeps its place on the board and turns grey; opening it resumes the same conversation. A card that is working is never touched. 0 turns it off.",
   "settings.voice": "Voice input",
   "settings.transcribeLanguage": "Transcription language",
   "settings.transcribePlaceholder": "auto (or a two-letter code: pt, en, es…)",
@@ -610,6 +661,8 @@ export const en: Record<string, string> = {
   "toast.cardPauseError": "Could not pause the card",
   "toast.cardRestarting": "Restarting the terminal… the conversation resumes on the next open.",
   "toast.cardRestartError": "Could not restart the card",
+  "toast.cardHibernated": "Hibernated — the card stays where it is; opening it resumes the same conversation.",
+  "toast.cardHibernateError": "Could not hibernate the card",
   "toast.cardDeleted": "Card deleted.",
   "toast.cardDeleteError": "Could not delete the card",
   "toast.cardAccountSwitched": "Account switched — the Claude session restarts on the next open.",

@@ -10,6 +10,9 @@
  */
 export const ptBR: Record<string, string> = {
   /* ------------------------------------------------------------------ comum */
+  "error.crashTitle": "Alguma coisa quebrou nesta tela",
+  "error.crashBody": "A página parou de renderizar. Recarregar costuma resolver na hora — o erro abaixo é o que aconteceu.",
+  "error.crashReload": "Recarregar a página",
   "common.cancel": "Cancelar",
   "common.delete": "Excluir",
   "common.save": "Salvar",
@@ -187,6 +190,7 @@ export const ptBR: Record<string, string> = {
   "status.working": "Trabalhando",
   "status.waitingForYou": "Aguardando você",
   "status.paused": "Pausado",
+  "status.hibernated": "Hibernado — o terminal fechou por ficar parado. Abra pra continuar.",
 
   /* ------------------------------------------------------------------ board */
   "board.newCard": "Novo card",
@@ -225,23 +229,31 @@ export const ptBR: Record<string, string> = {
   /* -------------------------------------------------------------- card tile */
   "card.finishToDone": "Concluir (mover pra Feito)",
   "card.pauseEndsSession": "Pausar (encerra a sessão)",
+  "card.hibernateEndsSession": "Hibernar (fecha o terminal, o card fica aqui)",
   "card.claudeAccountMenu": "Conta Claude…",
   "card.deleteCard": "Excluir card",
   "card.pause": "Pausar",
+  "card.rename": "Renomear",
   "card.restart": "Reiniciar",
+  "card.hibernate": "Hibernar",
   "card.finish": "Concluir",
   "card.pausingWhenIdle": "Pausando quando ficar livre…",
   "card.pausingWhenIdleHint":
     "A sessão encerra assim que o turno atual terminar — nada é interrompido.",
   "card.updatingWhenFinishes": "Atualizando quando terminar…",
   "card.updatingWhenFinishesHint":
-    "O cérebro ou o conjunto de MCPs mudou enquanto ele trabalhava — reinicia sozinho quando ficar livre, sem interromper.",
+    "O cérebro, os MCPs ou o modelo/conta deste card mudou enquanto ele trabalhava — reinicia sozinho no novo quando ficar livre, sem interromper.",
   "card.projectChip": "Projeto: {name}",
   "card.ownAccount": "A conta Claude deste card",
   "card.actionsFor": "Ações de {title}",
+  "card.declaredState.working": "Em andamento",
+  "card.declaredState.ready": "Pronto",
+  "card.declaredState.needs_me": "Precisa de você",
+  "card.declaredState.blocked": "Bloqueado",
 
   /* ---------------------------------------------------------------- sidebar */
   "sidebar.projects": "Projetos",
+  "sidebar.recent": "Recentes",
   "sidebar.newProject": "Novo projeto",
   "sidebar.newCardIn": "Novo card em {name}",
   "sidebar.newCardHint": "Novo card (⌘K no projeto selecionado)",
@@ -255,14 +267,18 @@ export const ptBR: Record<string, string> = {
   "sidebar.moveDown": "Mover pra baixo",
   "sidebar.deleteProject": "Excluir projeto…",
   "sidebar.actionsForProject": "Ações de {name}",
+  "sidebar.expandProject": "Mostrar os cards de {name}",
+  "sidebar.collapseProject": "Ocultar os cards de {name}",
 
   /* ---------------------------------------------------------- tela do card */
   "cardView.refreshError": "Não deu pra atualizar o card no runner",
   "cardView.restarting": "Reiniciando — a conversa continua de onde parou.",
   "cardView.restartError": "Não deu pra reiniciar o terminal",
-  "cardView.accountSwitched": "Conta trocada — a conversa continua.",
+  "cardView.accountSwitched": "Conta trocada — a sessão reinicia nela, mesma conversa.",
+  "cardView.accountSwitchPending": "Conta trocada — vale assim que o Claude terminar o que está fazendo.",
   "cardView.accountSwitchError": "Não deu pra trocar a conta",
-  "cardView.modelSwitched": "Trocado pro {label} — a conversa continua.",
+  "cardView.modelSwitched": "Trocado pro {label} — a sessão reinicia nele, mesma conversa.",
+  "cardView.modelSwitchPending": "Trocado pro {label} — vale assim que o Claude terminar o que está fazendo.",
   "cardView.modelSwitchError": "Não deu pra trocar o modelo",
   "cardView.accountDefault": "o padrão da conta",
   "cardView.imageTooBig": "Essa imagem passa de 10 MB.",
@@ -296,6 +312,21 @@ export const ptBR: Record<string, string> = {
   "cardView.preparing": "Preparando o worktree e a sessão…",
   "cardView.firstCardNote":
     "O primeiro card de um projeto clona o repositório inteiro dentro do runner, e isso pode levar alguns minutos. Todo card depois desse abre em segundos.",
+  "cardView.viewMode": "Modo de exibição",
+  "cardView.viewTerminal": "Terminal",
+  "cardView.viewChat": "Chat",
+  "chat.aria": "Conversa do card",
+  "chat.ariaFor": "Conversa de {title}",
+  "chat.empty": "Nenhuma mensagem ainda",
+  "chat.emptyHint": "É a mesma sessão do terminal: o que você mandar aqui é digitado no prompt dele.",
+  "chat.working": "Trabalhando…",
+  "chat.sending": "enviando",
+  "chat.stop": "Parar",
+  "chat.stopHint": "Manda Escape na sessão",
+  "chat.sendError": "Não deu pra enviar a mensagem",
+  "chat.stopError": "Não deu pra parar o agente",
+  "chat.quiet": "Faz um tempo que nada aparece. Se o terminal estiver pedindo alguma coisa — permissão, plano, login — isso só aparece lá.",
+  "chat.openTerminal": "Abrir o terminal",
   "cardView.terminalFor": "Terminal de {title}",
   "cardView.cardFallback": "card",
   "cardView.shellHeader": "Shell · bash no worktree",
@@ -328,6 +359,23 @@ export const ptBR: Record<string, string> = {
   "composer.recordHint": "Gravar uma mensagem — ela é transcrita no campo, não enviada",
   "composer.voiceUnavailable":
     "Entrada por voz não configurada — adicione uma chave da OpenAI em Configurações",
+  "composer.pastedImage": "imagem colada",
+  "composer.uploadFailed": "falhou",
+  "composer.removeImage": "Tirar {name} da mensagem",
+  "composer.sendingAfterUpload": "enviando assim que a imagem subir…",
+
+  /* ----------------------------------------------------------------- outbox */
+  "outbox.waitingSession.one":
+    "1 mensagem na fila — abra o card pra subir o terminal e ela vai sozinha",
+  "outbox.waitingSession.other":
+    "{n} mensagens na fila — abra o card pra subir o terminal e elas vão sozinhas",
+  "outbox.waitingAgent.one": "1 mensagem na fila — o Claude não está rodando nesse terminal",
+  "outbox.waitingAgent.other": "{n} mensagens na fila — o Claude não está rodando nesse terminal",
+  "outbox.waitingDelivery.one": "1 mensagem na fila — entregando…",
+  "outbox.waitingDelivery.other": "{n} mensagens na fila — entregando…",
+  "outbox.cancel": "Tirar essa mensagem da fila",
+  "outbox.cancelError": "Não deu pra tirar essa mensagem da fila",
+  "outbox.sendError": "Não deu pra enviar — a mensagem continua no campo",
 
   /* --------------------------------------------------------------- terminal */
   "terminal.aria": "Terminal",
@@ -337,6 +385,7 @@ export const ptBR: Record<string, string> = {
   "terminal.resetHint": "Restaurar o tamanho do texto (Cmd/Ctrl 0)",
   "terminal.larger": "Texto maior",
   "terminal.largerHint": "Texto maior (Cmd/Ctrl +)",
+  "terminal.jumpToLatest": "Ir pro fim",
 
   /* ------------------------------------------------------------ faixa do runner */
   "runner.checking": "Verificando o runner…",
@@ -448,6 +497,10 @@ export const ptBR: Record<string, string> = {
   "settings.defaultLabel": "Nome da conta padrão",
   "settings.defaultLabelHint":
     "Como o perfil embutido (/root/.claude) aparece nos seletores.",
+  "settings.idleHibernate": "Hibernar terminal parado depois de",
+  "settings.idleHibernateUnit": "minutos",
+  "settings.idleHibernateHint":
+    "Minutos sem sinal de vida até a sessão ser fechada. O card não sai do lugar, só fica cinza; abrir retoma a mesma conversa. Card trabalhando nunca é tocado. 0 desliga.",
   "settings.voice": "Entrada por voz",
   "settings.transcribeLanguage": "Idioma da transcrição",
   "settings.transcribePlaceholder": "auto (ou um código de duas letras: pt, en, es…)",
@@ -617,6 +670,8 @@ export const ptBR: Record<string, string> = {
   "toast.cardPauseError": "Não deu pra pausar o card",
   "toast.cardRestarting": "Reiniciando o terminal… a conversa retoma na próxima abertura.",
   "toast.cardRestartError": "Não deu pra reiniciar o card",
+  "toast.cardHibernated": "Hibernado — o card fica onde está; abrir retoma a mesma conversa.",
+  "toast.cardHibernateError": "Não deu pra hibernar o card",
   "toast.cardDeleted": "Card excluído.",
   "toast.cardDeleteError": "Não deu pra excluir o card",
   "toast.cardAccountSwitched":

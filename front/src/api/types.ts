@@ -122,6 +122,8 @@ export interface Settings {
   setupCompletedAt: string | null;
   /** ISO 639-1 hint for voice transcription, or null to let Whisper detect. */
   transcribeLanguage?: string | null;
+  /** Minutes a terminal may sit idle before it is hibernated. 0 = never. */
+  idleHibernateMinutes?: number;
   runner: RunnerSettings;
   /** Externally reachable base URL, when the install has one. */
   publicUrl?: string;
@@ -140,6 +142,7 @@ export interface SettingsPatch {
   autonomous?: boolean;
   defaultAccountLabel?: string | null;
   transcribeLanguage?: string | null;
+  idleHibernateMinutes?: number;
   runner?: Partial<RunnerSettings>;
 }
 
@@ -265,16 +268,37 @@ export interface Card {
   preparedAt?: number;
   pausedAt?: number | null;
   /**
-   * The shared brain or the MCP set changed while this card was mid-turn. Claude only reads either
-   * one at start-up, so the server defers the restart instead of interrupting work: the card picks
-   * the new configuration up the moment it goes idle. Absent/null = nothing pending.
+   * HIBERNATED: the session was killed for having sat idle, and nothing else changed — the card is
+   * in the same column, in the same place, with no dot. It is the "gone cold" mark, not a move.
+   * Opening the card clears it (the session comes back with `claude -c`, same conversation).
+   */
+  hibernatedAt?: number | null;
+  /**
+   * The shared brain, the MCP set, or this card's own model/account (`config`) changed while it was
+   * mid-turn. Claude only reads any of them at start-up, so the server defers the restart instead of
+   * interrupting work: the card picks the new configuration up the moment it goes idle. Absent/null
+   * = nothing pending.
    */
   restartPendingAt?: number | null;
   /** Which write scheduled the deferred restart. */
-  restartReason?: "brain" | "mcp";
+  restartReason?: "brain" | "mcp" | "config";
+  /**
+   * What the agent inside the card SAID about its own work (via `vibehub_report`): 'working' (still
+   * on it), 'ready' (done, ready to deliver/review), 'needs_me' (wants a decision from the user) or
+   * 'blocked' (cannot proceed). Orthogonal to `status`/`column` — it never moves the card. Absent =
+   * the agent has said nothing.
+   */
+  declaredState?: DeclaredState;
+  /** One-line summary the agent reported with `declaredState`. */
+  declaredSummary?: string;
+  /** Last time a human typed into this card's terminal (epoch ms). */
+  humanActiveAt?: number;
   createdAt: number;
   updatedAt?: number;
 }
+
+/** The agent's own read of where its work stands — see `Card.declaredState`. */
+export type DeclaredState = "working" | "ready" | "needs_me" | "blocked";
 
 export interface NewCard {
   projectId: string;
@@ -307,6 +331,32 @@ export interface RestartAllResult {
 export interface UploadResult {
   /** Path of the uploaded file *inside the runner*. */
   path: string;
+}
+
+/* --------------------------------------------------------------- outbox */
+
+/** What the agent's pane is running — see the server's services/board/outbox.ts. */
+export type AgentState = "running" | "shell" | "none";
+
+/** A composed message the server accepted but could not deliver yet. */
+export interface OutboxMessage {
+  id: string;
+  text: string;
+  createdAt: number;
+  /** Failed delivery attempts. > 0 = it is not merely waiting, it is struggling. */
+  attempts: number;
+  lastError?: string;
+}
+
+/** `GET /api/cards/:id/messages` and the answer to a `POST`. */
+export interface OutboxStatus {
+  pending: OutboxMessage[];
+  agent: AgentState;
+}
+
+export interface QueueMessageResult extends OutboxStatus {
+  /** true = it went straight into the agent's prompt; false = it is waiting in `pending`. */
+  delivered: boolean;
 }
 
 /* ------------------------------------------------- accounts, mcps, brain */

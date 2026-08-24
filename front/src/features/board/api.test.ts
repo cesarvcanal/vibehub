@@ -7,6 +7,7 @@ import {
   mcpSecretNames,
   mcpSecretStatus,
   modelInUse,
+  whitelistModel,
 } from "@/features/board/api";
 import type { BoardAccount, BoardCard, BoardMcp, CardSessionInfo } from "@/features/board/api";
 
@@ -75,7 +76,7 @@ describe("mcpSecretStatus", () => {
 /* --------------------------------------------------------------- the pills */
 
 function session(overrides: Partial<CardSessionInfo> = {}): CardSessionInfo {
-  return { model: null, modelLabel: null, account: { slug: null, name: "" }, ...overrides };
+  return { model: null, modelLabel: null, account: { slug: null, name: "" }, situation: "waiting", ...overrides };
 }
 
 /**
@@ -84,8 +85,17 @@ function session(overrides: Partial<CardSessionInfo> = {}): CardSessionInfo {
  * asked while a terminal is running.
  */
 describe("modelInUse", () => {
-  it("prefers the card's own pin: that is what the next session starts on", () => {
+  it("prefers the LIVE session over the card's pin: the bar is about the conversation on screen", () => {
+    // The bug it answers: the bar read "Opus" (the pin) while every reply came from Fable, because
+    // a pin only reaches Claude when the process starts. The pin is a promise; the session is a fact.
     expect(modelInUse({ model: "claude-haiku-4-5" }, session({ model: "claude-opus-5" }))).toEqual({
+      id: "claude-opus-5",
+      label: "Opus",
+    });
+  });
+
+  it("falls back to the pin for a card whose session has not answered yet", () => {
+    expect(modelInUse({ model: "claude-haiku-4-5" }, session({ model: null }))).toEqual({
       id: "claude-haiku-4-5",
       label: "Haiku",
     });
@@ -117,6 +127,27 @@ describe("modelInUse", () => {
 
   it("treats an empty pin as no pin at all", () => {
     expect(modelInUse({ model: "   " }, session({ model: "claude-sonnet-5" })).id).toBe("claude-sonnet-5");
+  });
+
+  it("labels the other spellings of the same model — the alias and a dated id", () => {
+    // settings.json stores "opus"; a transcript carries a dated id. Both are the whitelist's Opus.
+    expect(modelInUse(null, session({ model: "opus" })).label).toBe("Opus");
+    expect(modelInUse(null, session({ model: "claude-sonnet-5-20260101" })).label).toBe("Sonnet");
+  });
+});
+
+describe("whitelistModel", () => {
+  it("maps an alias and a dated id onto the row of the menu they belong to", () => {
+    // Without this the menu grew a SECOND, checked "Opus" underneath the real one.
+    expect(whitelistModel("opus")?.id).toBe("claude-opus-5");
+    expect(whitelistModel("claude-opus-4-5-20251101")?.id).toBe("claude-opus-5");
+    expect(whitelistModel("claude-haiku-4-5")?.id).toBe("claude-haiku-4-5");
+  });
+
+  it("answers nothing for a model no row stands for", () => {
+    expect(whitelistModel("claude-x-9")).toBeUndefined();
+    expect(whitelistModel("")).toBeUndefined();
+    expect(whitelistModel(null)).toBeUndefined();
   });
 });
 

@@ -39,18 +39,63 @@ export const BOARD_COLUMNS: readonly BoardColumn[] = ["backlog", "waiting", "wor
 export type CardStatus = "working" | "waiting";
 
 /**
- * REASON a session restart is PENDING on a card: the shared brain or the MCP servers were edited
- * while the card was `working`. It is only a LABEL (so the UI can tell the two apart in a badge);
- * the restart mechanics are identical either way. See `restartPendingAt` on the card and
- * `shouldRestartOnStatus`.
+ * DECLARED STATE — what the agent inside a card SAYS about its own work, reported through the
+ * `vibehub_report` MCP tool. It is ORTHOGONAL to `status`/`column`: those mirror raw terminal
+ * activity (the dot: is Claude typing right now?), while this is the agent's own judgement of where
+ * the task stands, for a maestro (or a human) to act on:
+ *  - `working`   — still on it, no attention needed.
+ *  - `ready`     — the work is done and ready to be delivered/reviewed.
+ *  - `needs_me`  — stuck on a decision only the user can make; asking for input.
+ *  - `blocked`   — cannot proceed (a failing dependency, a missing credential, an external outage).
+ * It NEVER moves a card between columns — see the mirror rule; reporting state only writes these two
+ * fields.
  */
-export type RestartReason = "brain" | "mcp";
-export const RESTART_REASONS: readonly RestartReason[] = ["brain", "mcp"] as const;
+export type DeclaredState = "working" | "ready" | "needs_me" | "blocked";
+export const DECLARED_STATES: readonly DeclaredState[] = ["working", "ready", "needs_me", "blocked"] as const;
+const DECLARED_STATE_SET: ReadonlySet<string> = new Set(DECLARED_STATES);
+
+/** A whitelisted declared state. THROWS otherwise. PURE. */
+export function assertDeclaredState(state: string): DeclaredState {
+  const v = String(state ?? "").trim();
+  if (!DECLARED_STATE_SET.has(v)) {
+    throw new Error(`invalid state (expected one of ${DECLARED_STATES.join(", ")}): '${state}'`);
+  }
+  return v as DeclaredState;
+}
+
+/** A one-line summary is trimmed and capped — it rides into a tooltip and an MCP listing, not a log. */
+export const DECLARED_SUMMARY_MAX = 200;
+
+/** Normalizes a declared summary to a single trimmed line, capped. PURE. */
+export function normalizeSummary(summary: string | null | undefined): string {
+  return String(summary ?? "").replace(/\s+/g, " ").trim().slice(0, DECLARED_SUMMARY_MAX);
+}
 
 /**
- * Claude models a card may pin. When set, the session exports `ANTHROPIC_DEFAULT_MODEL=<id>`.
- * Unset = whatever the account defaults to (no env var at all). These ids end up in a shell
- * environment, so they are never taken raw: they are checked against this whitelist first.
+ * HUMAN-ACTIVE WINDOW — a card counts as "a human is at this terminal right now" for this long after
+ * the last keystroke a person typed into it (stamped as `humanActiveAt`). While it holds, a maestro
+ * must not type into the card (it would fight the human for the prompt); reading is always fine.
+ */
+export const HUMAN_ACTIVE_WINDOW_MS = 5 * 60_000;
+
+/** true = a human typed in this card's terminal within the last {@link HUMAN_ACTIVE_WINDOW_MS}. PURE. */
+export function isHumanActive(card: Pick<Card, "humanActiveAt">, now: number = Date.now()): boolean {
+  return !!card.humanActiveAt && now - card.humanActiveAt < HUMAN_ACTIVE_WINDOW_MS;
+}
+
+/**
+ * REASON a session restart is PENDING on a card: the shared brain or the MCP servers were edited, or
+ * the card's own model/account was switched (`config`), while the card was `working`. It is only a
+ * LABEL (so the UI can tell them apart in a badge); the restart mechanics are identical either way.
+ * See `restartPendingAt` on the card and `shouldRestartOnStatus`.
+ */
+export type RestartReason = "brain" | "mcp" | "config";
+export const RESTART_REASONS: readonly RestartReason[] = ["brain", "mcp", "config"] as const;
+
+/**
+ * Claude models a card may pin. When set, the session starts with `claude --model <id>`. Unset =
+ * whatever the account defaults to (no flag at all). These ids end up on a shell command line, so
+ * they are never taken raw: they are checked against this whitelist first.
  */
 export const CLAUDE_MODELS = ["claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"] as const;
 export type ClaudeModelId = (typeof CLAUDE_MODELS)[number];
@@ -131,8 +176,14 @@ export interface Card {
   statusAt?: number;
   /** Claude account for THIS card. Absent = inherit the project's (absent there = default account). */
   accountSlug?: string;
-  /** Claude model for THIS card (one of CLAUDE_MODELS). Absent = the account default (no env var). */
+  /** Claude model for THIS card (one of CLAUDE_MODELS). Absent = the account default (no flag). */
   model?: string;
+  /**
+   * WHEN the pin above last changed (epoch ms). The session reader needs it: the pin and the
+   * transcript can disagree (`/model` typed inside the terminal), and the NEWER of the two is the
+   * one that is true. Absent = a pin older than this field, which never beats the transcript.
+   */
+  modelAt?: number;
   /**
    * When the card's terminal was opened for the FIRST time (worktree and session already exist in
    * the runner). Present = the front-end may attach the websocket immediately (attach-or-create) and
@@ -154,6 +205,17 @@ export interface Card {
    */
   pausedAt?: number | null;
   /**
+   * HIBERNATED card: the tmux session was killed because the card sat IDLE for too long (the idle
+   * sweep, or the manual "hibernate") and NOTHING else changed — same column, same position on the
+   * board. That is the whole point of it: pausing FILES a card away under `paused`, hibernating
+   * leaves it exactly where you left it and only says "this one has gone cold". No dot while it is
+   * hibernated (the front end draws a grey one from this stamp). Waking it up is just opening the
+   * card — `applyOpenTerminal` clears the stamp and the attach recreates the session with
+   * `claude -c`, same conversation. Any status the hooks report clears it too: activity means it is
+   * alive again, whoever started it.
+   */
+  hibernatedAt?: number | null;
+  /**
    * PENDING brain/MCP update: when the brain or the MCP servers are saved while Claude is WORKING on
    * this card, we do not restart right away (that would interrupt the task in flight) — we stamp the
    * moment here and the status hook restarts the session once the card goes idle
@@ -162,7 +224,7 @@ export interface Card {
    * Null/absent = nothing pending. It mirrors the PENDING pause (`pausedAt`), but a PAUSE BEATS it.
    */
   restartPendingAt?: number | null;
-  /** Where the pending restart came from — a label for the badge only: "brain" | "mcp". */
+  /** Where the pending restart came from — a label for the badge only: "brain" | "mcp" | "config". */
   restartReason?: RestartReason;
   /**
    * IMPORTED Claude session (migrating from another environment): the uuid of a conversation whose
@@ -173,6 +235,20 @@ export interface Card {
   resumeSessionId?: string;
   /** Worktree branch when it is NOT the derived `card/<worktreeSlug>` (assertBranchName). */
   branch?: string;
+  /**
+   * DECLARED STATE reported by the agent through `vibehub_report` — its own judgement of where the
+   * task stands ({@link DeclaredState}). ORTHOGONAL to `status`/`column`: reporting it never moves
+   * the card. Absent = the agent has said nothing yet.
+   */
+  declaredState?: DeclaredState;
+  /** One-line summary the agent reported alongside `declaredState`. Trimmed and capped. */
+  declaredSummary?: string;
+  /**
+   * Last time a HUMAN typed into this card's terminal (epoch ms). The websocket stamps it (throttled)
+   * on inbound keystrokes; {@link isHumanActive} reads it. A maestro must not send to a human-active
+   * card. Absent = nobody has typed here (or not since the field existed).
+   */
+  humanActiveAt?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -458,12 +534,42 @@ export function reactivatesOnActivity(card: Pick<Card, "column" | "pausedAt">, s
 }
 
 /**
- * A card with a LIVE session in the runner: it has been opened (`openedAt`) and is not paused (an
- * effective pause kills the session and stamps `pausedAt`). A card in `paused` that STILL has a live
+ * What a card EDIT has to do to the runner, beyond writing the record — the rule behind dragging a
+ * card between columns:
+ *
+ *  - `pause`: it is going INTO `paused`, and it has a session to end (`openedAt`). A card that was
+ *    never opened has nothing running, so it just moves.
+ *  - `resume`: a card that HAD a session and no longer has one — paused, or hibernated by the idle
+ *    sweep — going into a LIVE column, `waiting` or `working`. That is what "take this off the
+ *    shelf" means, so the session comes back. `backlog` and `done` are not live columns: a card
+ *    dropped there stays dormant.
+ *  - `none`: everything else (a rename, an account switch, a move between live columns, and a
+ *    PENDING pause dragged back out — its session never died, so there is nothing to bring back).
+ *
+ * PURE/testable — the side effects belong to the route.
+ */
+export type CardMoveEffect = "pause" | "resume" | "none";
+
+export function cardMoveEffect(
+  before: Pick<Card, "column" | "openedAt" | "pausedAt" | "hibernatedAt">,
+  patch: Pick<UpdateCardInput, "column">,
+): CardMoveEffect {
+  const target = patch.column;
+  if (!target || target === before.column) return "none";
+  if (target === "paused") return before.openedAt ? "pause" : "none";
+  const live = target === "waiting" || target === "working";
+  if (live && before.openedAt && !hasLiveSession(before)) return "resume";
+  return "none";
+}
+
+/**
+ * A card with a LIVE session in the runner: it has been opened (`openedAt`), is not paused (an
+ * effective pause kills the session and stamps `pausedAt`) and is not HIBERNATED (the idle sweep
+ * killed the session and left the card where it was). A card in `paused` that STILL has a live
  * session is a PENDING pause (moved there while Claude was working; it waits for Claude to finish). PURE.
  */
-export function hasLiveSession(c: Pick<Card, "openedAt" | "pausedAt">): boolean {
-  return !!c.openedAt && !c.pausedAt;
+export function hasLiveSession(c: Pick<Card, "openedAt" | "pausedAt" | "hibernatedAt">): boolean {
+  return !!c.openedAt && !c.pausedAt && !c.hibernatedAt;
 }
 
 /**
@@ -1030,9 +1136,12 @@ export async function updateCard(id: string, patch: UpdateCardInput): Promise<Ca
     if (patch.accountSlug !== undefined) {
       next.accountSlug = patch.accountSlug === null ? undefined : requireAccountSlug(doc, patch.accountSlug);
     }
-    // model: null/"" = CLEAR (back to the account default); a string must be whitelisted.
+    // model: null/"" = CLEAR (back to the account default); a string must be whitelisted. A change
+    // stamps `modelAt`: from that instant the pin is newer than any turn already in the transcript,
+    // which is what makes the pill show the model the session is being restarted onto.
     if (patch.model !== undefined) {
       next.model = patch.model === null || !String(patch.model).trim() ? undefined : assertModel(patch.model);
+      if (next.model !== card.model) next.modelAt = Date.now();
     }
     // Imported session / own branch: validated here (uuid / assertBranchName) because both become
     // argv or script content in the runner and must never pass through raw. null clears.
@@ -1102,6 +1211,9 @@ export async function applyCardStatus(cardId: string, status: CardStatus): Promi
     }
     card.status = status;
     card.statusAt = Date.now();
+    // A hook fired, so there IS a session again — whoever started it. Hibernation is a statement
+    // about silence and this is the opposite of silence.
+    if (card.hibernatedAt) card.hibernatedAt = null;
     let target: BoardColumn;
     if (reactivatesOnActivity(card, status)) {
       card.pausedAt = null;
@@ -1119,6 +1231,45 @@ export async function applyCardStatus(cardId: string, status: CardStatus): Promi
       card.restartReason = undefined;
     }
     card.updatedAt = Date.now();
+    return card;
+  });
+}
+
+/**
+ * Records the agent's DECLARED STATE and one-line summary on a card (the `vibehub_report` tool). It
+ * writes ONLY `declaredState`/`declaredSummary` — never the column, never the dot: this is the
+ * agent's own read of the task, orthogonal to the mirror rule. The summary is normalized to a single
+ * capped line. Unknown card -> undefined (the caller decides the error).
+ */
+export async function reportCardState(
+  cardId: string,
+  state: string,
+  summary: string | null | undefined,
+): Promise<Card | undefined> {
+  const declaredState = assertDeclaredState(state); // validate BEFORE entering the mutation (cached doc)
+  const declaredSummary = normalizeSummary(summary);
+  return store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    if (!card) return undefined;
+    card.declaredState = declaredState;
+    card.declaredSummary = declaredSummary || undefined;
+    card.updatedAt = Date.now();
+    return card;
+  });
+}
+
+/**
+ * Stamps `humanActiveAt` on a card — a human just typed into its terminal. Best-effort by design:
+ * an unknown card is a no-op (the websocket that calls this must never fail over a stale id), and
+ * the CALLER throttles so this is not a disk write per keystroke. Returns the card, or undefined.
+ */
+export async function markCardHumanActive(cardId: string, at: number = Date.now()): Promise<Card | undefined> {
+  return store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    if (!card) return undefined;
+    card.humanActiveAt = at;
+    // Deliberately NOT bumping updatedAt: a keystroke is not an edit of the card, and it would churn
+    // the board's ordering (updatedAt is a tie-breaker) on every few seconds of typing.
     return card;
   });
 }
@@ -1146,6 +1297,11 @@ export async function applyOpenTerminal(cardId: string): Promise<Card | undefine
     // Resuming a paused card IS opening it: the pause stamp goes away (the session exists again).
     if (card.pausedAt) {
       card.pausedAt = null;
+      changed = true;
+    }
+    // Same for a hibernated one: the attach recreates the session, so the card is warm again.
+    if (card.hibernatedAt) {
+      card.hibernatedAt = null;
       changed = true;
     }
     if (changed) card.updatedAt = Date.now();
@@ -1188,6 +1344,17 @@ export async function markRestartPending(cardId: string, reason: RestartReason):
   });
 }
 
+export interface PauseOpts {
+  /**
+   * true = pause EFFECTIVELY even though the dot says `working`. The caller (workspace.pauseCard,
+   * and the reconciler) sets it when the RUNNER contradicts the dot: the session is parked on a
+   * menu, on a permission prompt, or is gone altogether. Without it a stale `working` dot — a card
+   * sitting on Claude's "Resume from summary" screen never fires a Stop hook — would keep the card
+   * as a pending pause forever, burning a live session inside a column that means "not running".
+   */
+  effective?: boolean;
+}
+
 /**
  * PAUSES the card in the registry and moves it to `paused` (a sticky column: a paused card mirrors
  * nothing, and no late hook moves it). It only makes sense on a card that has had a session
@@ -1202,7 +1369,7 @@ export async function markRestartPending(cardId: string, reason: RestartReason):
  *    (applyCardStatus) stamps `pausedAt` then, and the caller ends the session at that point.
  *    `pausedAt` therefore always means "the session is dead".
  */
-export async function pauseCard(cardId: string): Promise<Card> {
+export async function pauseCard(cardId: string, opts: PauseOpts = {}): Promise<Card> {
   return store.mutate((doc) => {
     const card = doc.cards.find((c) => c.id === cardId);
     if (!card) throw new Error("card not found");
@@ -1211,7 +1378,7 @@ export async function pauseCard(cardId: string): Promise<Card> {
     // `done` is the user's own sticky column: pausing does NOT take the card out of it. And a card
     // already in `paused` has nowhere to move.
     if (card.column !== "paused" && card.column !== "done") placeCard(doc.cards, card, "paused");
-    if (shouldEndSessionOnMove(card.status)) {
+    if (opts.effective || shouldEndSessionOnMove(card.status)) {
       // Idle -> effective pause: the caller kills the session now.
       card.pausedAt = Date.now();
       card.status = null;
@@ -1219,6 +1386,34 @@ export async function pauseCard(cardId: string): Promise<Card> {
     }
     // working -> PENDING pause: the session stays alive and the green dot is kept; the status hook
     // ends it when Claude finishes (`pausedAt` is NOT stamped now).
+    card.updatedAt = Date.now();
+    return card;
+  });
+}
+
+/**
+ * HIBERNATES the card: the session is about to be killed for having sat IDLE, and NOTHING else about
+ * the card changes — same column, same position, same conversation. It is the quiet cousin of the
+ * pause: `pauseCard` files the card away under `paused` because a human decided to park it, this one
+ * only records that a terminal went cold, so the board keeps reading like the board you left.
+ *
+ * Refuses (returns undefined, no throw — the caller is a sweep) anything that is not an idle live
+ * session: a card that was never opened, one that is already paused or hibernated, and above all a
+ * `working` one, which is Claude in the middle of a task. The dot is cleared with the session: a
+ * green or amber dot on a card with no process behind it is a lie.
+ */
+export async function hibernateCard(cardId: string): Promise<Card | undefined> {
+  return store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    if (!card) return undefined;
+    if (!hasLiveSession(card)) return undefined;
+    if (card.status === "working") return undefined;
+    card.hibernatedAt = Date.now();
+    card.status = null;
+    card.statusAt = undefined;
+    // A restart that was waiting for the card to go idle has nothing left to restart.
+    card.restartPendingAt = null;
+    card.restartReason = undefined;
     card.updatedAt = Date.now();
     return card;
   });

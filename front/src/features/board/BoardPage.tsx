@@ -36,9 +36,11 @@ import {
   ACCOUNTS_KEY,
   PROJECTS_KEY,
   boardApi,
+  cardKey,
   cardsKey,
   projectAccountSlug,
   projectBaseBranch,
+  type BoardCard,
   type BoardProject,
 } from "@/features/board/api";
 import type { NewCard } from "@/api/types";
@@ -93,8 +95,18 @@ export function BoardPage() {
     [setSearchParams],
   );
 
-  // Clicking a project selects it; clicking the selected one deselects it (the aggregated board).
-  const selectProject = (id: string) => go(id === selected?.id ? null : id);
+  /**
+   * The project's NAME navigates — unfolding its cards is the chevron's job now, and no longer
+   * costs you the terminal you had open.
+   *
+   * Clicking the project you are ALREADY on goes up exactly one level: out of a card to that
+   * project's board, and from that board to the aggregated one. It used to jump straight to the
+   * aggregated board from inside a card, which threw away two levels for one click.
+   */
+  const selectProject = (id: string) => {
+    if (id !== selected?.id) return go(id);
+    return go(cardId ? id : null);
+  };
   // Clicking a card opens it; clicking the one already open closes it (back to that project's board).
   const openCard = (nextProjectId: string, nextCardId: string) =>
     go(nextProjectId, projectId === nextProjectId && cardId === nextCardId ? null : nextCardId);
@@ -130,6 +142,14 @@ export function BoardPage() {
   const createCardMutation = useMutation({
     mutationFn: (input: NewCard) => boardApi.createCard(input),
     onSuccess: (card) => {
+      // WRITE IT INTO THE CACHE FIRST. Invalidating alone means the card only shows up after a
+      // round trip, and in that gap the sidebar has no row for the card the user just named — you
+      // click where it should be, nothing is there, and if you land in it anyway the terminal opens
+      // against a workspace nobody has admitted exists yet. Insert it, then let the poll confirm.
+      queryClient.setQueryData<BoardCard[]>(cardsKey(card.projectId), (previous) =>
+        previous ? (previous.some((c) => c.id === card.id) ? previous : [...previous, card]) : previous,
+      );
+      queryClient.setQueryData(cardKey(card.id), card);
       void queryClient.invalidateQueries({ queryKey: cardsKey(card.projectId) });
       // The dialog already closed itself on submit — several cards can be queued up back to back.
       // Created from inside a terminal: go straight to the new one. From the board, let it land in

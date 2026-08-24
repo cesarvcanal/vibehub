@@ -100,10 +100,20 @@ export async function runnerRoutes(app: FastifyInstance): Promise<void> {
    */
   app.get("/api/setup/state", async (_req, reply) => {
     const fresh = await isFreshInstall();
-    const settings = fresh ? null : await getSettings();
-    const runner = fresh ? null : await runnerStatus();
+    // THE WHOLE APP BOOTS THROUGH HERE — the front cannot decide between the wizard, the login and
+    // the board before this answers, and it renders a bare loading screen until it does. So it may
+    // not sit on anything unbounded: the probes run TOGETHER (not one after the other), the runner
+    // status is served from a short cache instead of a fresh `docker exec` per page load, and
+    // "GitHub done" is answered from the STORED connections — asking github.com who each token
+    // belongs to told this route nothing it uses and put an internet round trip in front of the
+    // first paint.
+    const [settings, runner, connections] = await Promise.all([
+      fresh ? null : getSettings(),
+      fresh ? null : runnerStatus({ maxAgeMs: 5_000 }),
+      fresh ? [] : github.listConnections(),
+    ]);
     // "GitHub done" = at least one account connected. The wizard step is optional either way.
-    const githubConnected = fresh ? false : (await github.state()).connections.length > 0;
+    const githubConnected = connections.length > 0;
     return await reply.send({
       fresh,
       completed: Boolean(settings?.setupCompletedAt),

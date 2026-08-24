@@ -7,6 +7,7 @@ import {
   Check,
   Loader2,
   Menu,
+  MessageSquare,
   MonitorPlay,
   MoreHorizontal,
   Pause,
@@ -29,12 +30,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { XTerminal } from "@/features/board/components/XTerminal";
+import { ChatView } from "@/features/board/components/ChatView";
 import { VncPanel } from "@/features/board/components/VncPanel";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
-import type { XTerminalHandle } from "@/features/board/components/XTerminal";
+import { CardOutbox } from "@/features/board/components/CardOutbox";
 import { nextPosition, statusDot } from "@/features/board/lib/board";
 import { boardTitle, useDocumentTitle } from "@/features/board/lib/documentTitle";
 import type { ConnectionState } from "@/features/board/lib/reconnect";
+import { readCardMode, writeCardMode, type CardViewMode } from "@/features/board/lib/chat";
 import {
   ACCOUNTS_KEY,
   ACCOUNT_USAGE_KEY,
@@ -46,6 +49,7 @@ import {
   accountLabel,
   boardApi,
   cardKey,
+  cardMessagesKey,
   cardOpensInstantly,
   cardRunnerHint,
   cardSessionKey,
@@ -53,6 +57,7 @@ import {
   defaultAccountLabelOr,
   modelInUse,
   projectAccountSlug,
+  whitelistModel,
   type BoardCard,
   type BoardProject,
 } from "@/features/board/api";
@@ -255,24 +260,37 @@ export function CardTerminalView({
   });
 
   const accountMutation = useMutation({
-    mutationFn: (accountSlug: string | null) => boardApi.patchCard(cardId, { accountSlug }),
-    onSuccess: (updated) => {
+    mutationFn: (accountSlug: string | null) => boardApi.patchCardSession(cardId, { accountSlug }),
+    onSuccess: ({ card: updated, session: change }) => {
       mirror(updated);
       // The pill shows what is in USE, so it has to re-read the session the switch just changed.
       void queryClient.invalidateQueries({ queryKey: cardSessionKey(updated.id) });
-      toast.success(translate("cardView.accountSwitched"));
+      // Same as the model: the profile is chosen when Claude starts, so a live session has to be
+      // restarted for the switch to be real — or flagged, when Claude is mid-task.
+      if (change === "restarted") setReconnectNonce((n) => n + 1);
+      toast.success(
+        translate(change === "pending" ? "cardView.accountSwitchPending" : "cardView.accountSwitched"),
+      );
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("cardView.accountSwitchError"))),
   });
 
   const modelMutation = useMutation({
-    mutationFn: (model: string | null) => boardApi.patchCard(cardId, { model }),
-    onSuccess: (updated) => {
+    mutationFn: (model: string | null) => boardApi.patchCardSession(cardId, { model }),
+    onSuccess: ({ card: updated, session: change }) => {
       mirror(updated);
       void queryClient.invalidateQueries({ queryKey: cardSessionKey(updated.id) });
       const label =
         CLAUDE_MODELS.find((m) => m.id === updated.model)?.label ?? translate("cardView.accountDefault");
-      toast.success(translate("cardView.modelSwitched", { label }));
+      // The model only reaches Claude when the process STARTS, so the message follows what the
+      // server actually did with the session — it used to promise a switch that never happened.
+      if (change === "restarted") setReconnectNonce((n) => n + 1);
+      toast.success(
+        translate(
+          change === "pending" ? "cardView.modelSwitchPending" : "cardView.modelSwitched",
+          { label },
+        ),
+      );
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("cardView.modelSwitchError"))),
   });
@@ -301,7 +319,10 @@ export function CardTerminalView({
 
   // The two pills answer "what am I talking to", never "what was typed into this card".
   const model = modelInUse(card, session);
-  const modelUnlisted = !CLAUDE_MODELS.some((m) => m.id === model.id);
+  // Which ROW of the menu the model in use belongs to — by family, so the alias settings.json keeps
+  // ("opus") and a dated transcript id both tick the whitelisted row instead of growing a second one.
+  const modelRow = whitelistModel(model.id);
+  const modelUnlisted = !modelRow;
   const accountName = accountInUseName(card, session, accounts, inheritedAccount);
   const defaultAccountName = defaultAccountLabelOr(accountsData?.defaultLabel);
 
@@ -333,18 +354,44 @@ export function CardTerminalView({
   const [editingTitle, setEditingTitle] = React.useState<string | null>(null);
   const [shellOpen, setShellOpen] = React.useState(false);
   const [browserOpen, setBrowserOpen] = React.useState(false);
-  const termRef = React.useRef<XTerminalHandle | null>(null);
   const [connection, setConnection] = React.useState<ConnectionState>("connecting");
 
+  /**
+   * TERMINAL or CHAT — the same session, rendered two ways, and the choice is the person's on every
+   * screen rather than something guessed from the width. It is remembered per card and per device
+   * (see `lib/chat.ts`): a phone can live in chat while the desktop stays on the terminal.
+   *
+   * Switching to chat UNMOUNTS the terminal, which closes its websocket. That is the point: an idle
+   * TUI still repaints, and a card left in chat stops paying for frames nobody is reading.
+   */
+  const [mode, setMode] = React.useState<CardViewMode>(() => readCardMode(cardId));
+  React.useEffect(() => setMode(readCardMode(cardId)), [cardId]);
+  const switchMode = React.useCallback(
+    (next: CardViewMode) => {
+      setMode(next);
+      writeCardMode(cardId, next);
+      // The indicator belongs to whichever socket is mounted; the new one has not connected yet.
+      setConnection("connecting");
+    },
+    [cardId],
+  );
+
   const dot = statusDot(card?.status);
+  /**
+   * Is the agent's turn running? The card record answers on a desktop, where the sidebar polls the
+   * board; on a phone the sidebar is not mounted, so the session poll (every 5s, already running
+   * for the pills) is what keeps this true.
+   */
+  const working = session?.situation === "working" || card?.status === "working";
   const hasLiveSession = Boolean(card?.openedAt && !card.pausedAt);
   const canFinish = Boolean(card && card.column !== "done");
   const showTerminal = instant || openMutation.isSuccess;
 
   /**
-   * Changing the account or the model kills the session server-side; changing this key makes the
-   * terminal drop and reattach, which recreates it with the new environment in the SAME
-   * conversation. The restart nonce is appended only once somebody has restarted.
+   * Changing the account or the model ends the session server-side (applySessionChange); changing
+   * this key makes the terminal drop and reattach, which recreates it with the new environment in
+   * the SAME conversation. The nonce covers the rest: an explicit restart, and a switch on a card
+   * whose pin already had that value in the key.
    */
   const reconnectKey =
     `${card?.accountSlug ?? "-"}:${card?.model ?? "-"}` + (reconnectNonce ? `:r${reconnectNonce}` : "");
@@ -377,22 +424,22 @@ export function CardTerminalView({
   }
 
   /**
-   * An image pasted or dropped on the terminal is uploaded and its path is typed into the prompt.
-   * The path is absolute and inside the runner: that is the only form the agent can actually read,
-   * since uploads land outside the card's worktree.
+   * Uploads an image so the agent can read it, and answers with its path inside the runner — the
+   * only form Claude can open, since uploads land outside the card's worktree.
    *
-   * There is no success toast. The path appearing in the prompt IS the confirmation, and a toast
-   * on top of it was two notifications for one event — only "uploading" and a failure say anything
-   * the screen does not already show.
+   * `progress` decides whether the WAIT is announced, and that is the whole difference between the
+   * two call sites: the composer already draws a spinner over the thumbnail it just showed you, so
+   * a toast there is a second notification for one event. A drop on the raw terminal has no such
+   * picture, and needs the toast. A failure always speaks.
    */
-  const uploadImage = React.useCallback(
-    async (file: File): Promise<string | null> => {
+  const uploadImageWith = React.useCallback(
+    async (file: File, progress: boolean): Promise<string | null> => {
       if (!file.type.startsWith("image/")) return null;
       if (file.size > UPLOAD_MAX_BYTES) {
         toast.error(translate("cardView.imageTooBig"));
         return null;
       }
-      const pending = toast.loading(translate("cardView.uploadingImage"));
+      const pending = progress ? toast.loading(translate("cardView.uploadingImage")) : null;
       try {
         const { path } = await boardApi.uploadCardImage(cardId, file);
         return path;
@@ -400,10 +447,46 @@ export function CardTerminalView({
         toast.error(apiErrorMessage(error, translate("cardView.uploadError")));
         return null;
       } finally {
-        toast.dismiss(pending);
+        if (pending !== null) toast.dismiss(pending);
       }
     },
     [cardId],
+  );
+
+  /** Dropped on the terminal: the path is typed at the prompt, and the wait gets a toast. */
+  const uploadImage = React.useCallback(
+    (file: File) => uploadImageWith(file, true),
+    [uploadImageWith],
+  );
+
+  /** Pasted into the composer: the thumbnail and its spinner are the whole story already. */
+  const uploadAttachment = React.useCallback(
+    (file: File) => uploadImageWith(file, false),
+    [uploadImageWith],
+  );
+
+  /**
+   * ENTER in the composer. The message does NOT go down the websocket any more: it is handed to the
+   * card's outbox on the server, which delivers it to a RUNNING Claude or holds it until there is
+   * one. A terminal socket types into whatever the pane happens to be — including the bare shell a
+   * card falls back to when Claude exits, where the message is executed and lost.
+   *
+   * Throwing matters: the composer keeps the text in the field when this rejects.
+   */
+  const sendMessage = React.useCallback(
+    async (text: string) => {
+      try {
+        const result = await boardApi.sendCardMessage(cardId, text);
+        queryClient.setQueryData(cardMessagesKey(cardId), {
+          pending: result.pending,
+          agent: result.agent,
+        });
+      } catch (error) {
+        toast.error(apiErrorMessage(error, translate("outbox.sendError")));
+        throw error;
+      }
+    },
+    [cardId, queryClient],
   );
 
   /**
@@ -419,17 +502,36 @@ export function CardTerminalView({
   }, [active, isMobile]);
 
   /**
-   * Coming back to this card takes the keyboard.
-   *
-   * The terminal focuses itself when its socket opens, but a card that has been sitting in the deck
-   * for ten minutes opened its socket long ago — without this, switching to it would show you a
-   * live agent that quietly ignores everything you type.
+   * TERMINAL | CHAT. The one control that is the same on a phone and on a desktop, in the same
+   * place, because it is the control you reach for precisely when the terminal is not behaving —
+   * and something you have to open a menu to find is not there when you need it. It never goes
+   * behind the `⋯`, and it is never decided for you by the width of the screen.
    */
-  React.useEffect(() => {
-    if (!active) return;
-    const id = requestAnimationFrame(() => termRef.current?.focus());
-    return () => cancelAnimationFrame(id);
-  }, [active]);
+  const viewSwitch = (
+    <div
+      role="group"
+      data-testid="card-view-switch"
+      aria-label={t("cardView.viewMode")}
+      className="flex shrink-0 items-center gap-0.5 rounded-md border border-border/50 bg-card/40 p-0.5"
+    >
+      <ModeButton
+        mode="terminal"
+        current={mode}
+        label={t("cardView.viewTerminal")}
+        icon={<TerminalSquare className="h-3.5 w-3.5" />}
+        compact={isMobile}
+        onSelect={switchMode}
+      />
+      <ModeButton
+        mode="chat"
+        current={mode}
+        label={t("cardView.viewChat")}
+        icon={<MessageSquare className="h-3.5 w-3.5" />}
+        compact={isMobile}
+        onSelect={switchMode}
+      />
+    </div>
+  );
 
   /** The model rows, shared by the desktop pill and the phone's overflow menu. */
   const modelItems = (
@@ -440,7 +542,7 @@ export function CardTerminalView({
                 {CLAUDE_MODELS.map((m) => (
                   <DropdownMenuCheckboxItem
                     key={m.id}
-                    checked={model.id === m.id}
+                    checked={modelRow?.id === m.id}
                     onSelect={() => modelMutation.mutate(m.id)}
                   >
                     {m.label}
@@ -593,6 +695,7 @@ export function CardTerminalView({
    */
   const actions = (
     <>
+        {viewSwitch}
         {hasLiveSession || canFinish ? (
           <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-border/50 bg-card/40 p-0.5">
             {hasLiveSession ? (
@@ -708,6 +811,7 @@ export function CardTerminalView({
    */
   const mobileActions = (
     <div data-testid="card-bar-actions" className="flex min-w-0 items-center gap-1.5">
+      {viewSwitch}
       {hasLiveSession ? (
         <IconAction
           label={t("cardView.pause")}
@@ -821,13 +925,26 @@ export function CardTerminalView({
           <Loader2 className="h-4 w-4 animate-spin" /> {t("cardView.loadingCard")}
         </div>
       ) : !showTerminal ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
-          <div className="flex items-center gap-2">
-            <Loader2 className="h-4 w-4 animate-spin" /> {t("cardView.preparing")}
+        // A card that is still cloning has no terminal to type into — but it is EXACTLY the moment
+        // someone wants to say what the card is for. The composer is here, and what it sends goes
+        // to the outbox: queued now, delivered the instant Claude is up. The wait costs nothing.
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
+            <div className="flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" /> {t("cardView.preparing")}
+            </div>
+            <p className="max-w-md text-center text-xs opacity-70">
+              {t("cardView.firstCardNote")}
+            </p>
           </div>
-          <p className="max-w-md text-center text-xs opacity-70">
-            {t("cardView.firstCardNote")}
-          </p>
+          <CardOutbox cardId={cardId} />
+          <TerminalComposer
+            className="mt-1.5"
+            cardId={cardId}
+            active={active}
+            onSend={sendMessage}
+            onUploadImage={uploadAttachment}
+          />
         </div>
       ) : (
         // Terminal LEFT, browser RIGHT, half each. Chromium is landscape and a browser stacked under
@@ -837,27 +954,44 @@ export function CardTerminalView({
           className={cn("flex min-h-0 flex-1 flex-col", browserOpen && "lg:flex-row lg:gap-2")}
         >
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <XTerminal
-              ref={termRef}
-              zoomControl
-              active={active}
-              wsPath={`/api/cards/${encodeURIComponent(cardId)}/terminal`}
-              reconnectKey={reconnectKey}
-              onStatus={setConnection}
-              onUploadImage={uploadImage}
-              ariaLabel={t("cardView.terminalFor", { title: card?.title ?? t("cardView.cardFallback") })}
-            />
-            {/* Compose here, send when ready — the field accumulates until Enter or Send. */}
-            <TerminalComposer
-              className="mt-1.5"
-              cardId={cardId}
-              active={active}
-              onSend={(text) => {
-                termRef.current?.sendText(text);
-                termRef.current?.focus();
-              }}
-              onUploadImage={uploadImage}
-            />
+            {mode === "chat" ? (
+              /* The SAME session, read from its transcript. No terminal websocket while this is up. */
+              <ChatView
+                cardId={cardId}
+                active={active}
+                working={working}
+                onUploadImage={uploadImage}
+                onStatus={setConnection}
+                onOpenTerminal={() => switchMode("terminal")}
+                ariaLabel={t("chat.ariaFor", { title: card?.title ?? t("cardView.cardFallback") })}
+              />
+            ) : (
+              <>
+                <XTerminal
+                  zoomControl
+                  wsPath={`/api/cards/${encodeURIComponent(cardId)}/terminal`}
+                  reconnectKey={reconnectKey}
+                  onStatus={setConnection}
+                  onUploadImage={uploadImage}
+                  /* The COMPOSER is where a card is written from. A terminal that grabs the keyboard on
+                     every open (and every reconnect) puts the caret in the raw session, which is how a
+                     first message ends up typed into xterm instead of the field below. Clicking the
+                     terminal still focuses it — that is the deliberate way in. */
+                  autoFocus={false}
+                  ariaLabel={t("cardView.terminalFor", { title: card?.title ?? t("cardView.cardFallback") })}
+                />
+                {/* Anything composed that has not reached the agent yet — usually nothing at all. */}
+                <CardOutbox cardId={cardId} />
+                {/* Compose here, send when ready — the field accumulates until Enter. */}
+                <TerminalComposer
+                  className="mt-1.5"
+                  cardId={cardId}
+                  active={active}
+                  onSend={sendMessage}
+                  onUploadImage={uploadAttachment}
+                />
+              </>
+            )}
             {shellOpen ? (
               <div className="flex h-[35%] min-h-[180px] shrink-0 flex-col gap-1">
                 <div className="flex items-center justify-between">
@@ -875,9 +1009,13 @@ export function CardTerminalView({
                     <X className="h-3.5 w-3.5" />
                   </Button>
                 </div>
-                {/* A separate tmux session on the server; closing this pane only drops the socket. */}
+                {/* A separate tmux session on the server; closing this pane only drops the socket.
+                    It takes the keyboard when it opens — that is what a shell you just asked for
+                    should do — but only while this card is the one on screen: a pane in the deck
+                    that reconnects behind your back must not pull the caret out of the card you are
+                    reading. */}
                 <XTerminal
-                  active={active}
+                  autoFocus={active}
                   wsPath={`/api/cards/${encodeURIComponent(cardId)}/terminal?shell=1`}
                   ariaLabel={t("cardView.shellAria")}
                 />
@@ -893,6 +1031,52 @@ export function CardTerminalView({
       )}
 
     </div>
+  );
+}
+
+/**
+ * One half of the Terminal | Chat switch: pressed or not, never disabled.
+ *
+ * Deliberately usable before the session is ready. The two panes are two ways of reading the same
+ * card, and a switch that greys out while a card is opening is a switch you cannot pre-set — which
+ * matters most on the slow open that made you want the chat in the first place.
+ */
+function ModeButton({
+  mode,
+  current,
+  label,
+  icon,
+  compact,
+  onSelect,
+}: {
+  mode: CardViewMode;
+  current: CardViewMode;
+  label: string;
+  icon: React.ReactNode;
+  compact?: boolean;
+  onSelect: (mode: CardViewMode) => void;
+}) {
+  const active = current === mode;
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={active}
+      aria-label={label}
+      title={label}
+      data-testid={`card-view-${mode}`}
+      onClick={() => onSelect(mode)}
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 rounded px-2 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        compact ? "h-8" : "h-6",
+        active
+          ? "bg-primary/15 text-primary"
+          : "text-muted-foreground hover:text-foreground",
+      )}
+    >
+      {icon}
+      {compact ? null : label}
+    </button>
   );
 }
 

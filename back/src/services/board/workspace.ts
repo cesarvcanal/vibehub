@@ -1,15 +1,18 @@
 import { hostExecutor, shQuote, assertSafeRemotePath, HostExecError } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import { statusUrl } from "../../runtime/runner.js";
-import { gitAuthHeaderFor } from "../github/client.js";
+import { gitAuthHeaderFor, tokenFor } from "../github/client.js";
 import {
   getCard, getProject, applyOpenTerminal, markPrepared, pauseCard as registryPauseCard,
+  hibernateCard as registryHibernateCard,
   listAllCards, assertBranchName, assertSessionId, effectiveAccountSlug, isValidModel, hasLiveSession,
   markRestartPending,
-  type Card, type Project, type RestartReason,
+  type Card, type CardStatus, type Project, type RestartReason,
 } from "./registry.js";
+import { getSettings } from "../settings/settings.js";
 import { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir, profileDirFor, oauthTokenPath } from "../accounts/profiles.js";
-import { resolveAccountToken, writeTokenLines } from "../accounts/token.js";
+import { firstRunSeedCommand } from "../accounts/firstRun.js";
+import { resolveAccountToken, writeTokenLines, ghTokenPath, writeGhTokenLines, removeGhTokenLines } from "../accounts/token.js";
 import { cardCdpEndpoint } from "../browser/ports.js";
 import { mcpInjectLines, resolveMcpInjections, type McpInjection } from "../mcp/mcp.js";
 import { brainInjectLines, resolveBrainText } from "../brain/brain.js";
@@ -54,11 +57,18 @@ export interface SessionCommandOpts {
    */
   profileDir?: string;
   /**
-   * The card's Claude model (one of CLAUDE_MODELS): when VALID, the guard exports
-   * `ANTHROPIC_DEFAULT_MODEL=<id>`. Absent/invalid = the account default (no env at all). Checked
-   * against the whitelist (isValidModel) — raw input never reaches the shell.
+   * The card's Claude model (one of CLAUDE_MODELS): when VALID, Claude starts with `--model <id>`.
+   * Absent/invalid = the account default (no flag at all). Checked against the whitelist
+   * (isValidModel) — raw input never reaches the shell.
    */
   model?: string;
+  /**
+   * Per-card file that MAY hold the project's GitHub token. When set, the guard exports `GH_TOKEN`
+   * by reading the file IF it exists (`[ -s <file> ]`) — so `git push`/`gh` in the card act as the
+   * project's connection instead of the runner's ambient login. Only ever WRITTEN by the open script
+   * (over STDIN); this only READS it, so no token lands in argv. File missing = ambient login.
+   */
+  ghTokenFile?: string;
 }
 
 /**
@@ -68,6 +78,10 @@ export interface SessionCommandOpts {
  * Conditional prefix: if the profile holds an `.oauth-token` (long-lived token from
  * `claude setup-token`), export CLAUDE_CODE_OAUTH_TOKEN read FROM THE FILE — Claude then starts
  * already logged in, no `/login`. With no file nothing changes (the profile's normal login).
+ *
+ * Then the FIRST-RUN seed (see accounts/firstRun.ts): the profile's `.claude.json` gets
+ * `hasCompletedOnboarding` and the worktree's trust, so a card never opens on the setup wizard or on
+ * the trust dialog. Idempotent, and never fatal.
  *
  * Then Claude itself: `resumeSessionId` (imported session) → `claude --resume <id> || claude -c ||
  * claude`; else `resume` (the card already had a session: pause, runner restart) → `claude -c ||
@@ -86,17 +100,34 @@ export function sessionCommand(opts: SessionCommandOpts | boolean): string {
   // IS_SANDBOX=1: the runner is root inside an isolated container; without it Claude refuses to run
   // without permission prompts ("cannot be used with root"). Belt for runners provisioned before the
   // container environment carried the flag.
-  // ANTHROPIC_DEFAULT_MODEL only when the card's model is VALID (CLAUDE_MODELS whitelist) — the id
-  // has a safe charset and never arrives raw; absent/invalid = account default (no env).
-  const modelEnv = isValidModel(o.model) ? `export ANTHROPIC_DEFAULT_MODEL=${o.model}; ` : "";
+  // GH_TOKEN, read from the per-card file when the open script wrote one (project has a connection):
+  // steers `git push` and `gh` to that identity. Guarded by `[ -s ]` so a card without a connection
+  // (no file) keeps the runner's ambient `gh` login. The path is validated; no token in argv.
+  let ghGuard = "";
+  if (o.ghTokenFile) {
+    assertSafeRemotePath(o.ghTokenFile);
+    ghGuard = `if [ -s ${o.ghTokenFile} ]; then export GH_TOKEN="$(cat ${o.ghTokenFile})"; fi; `;
+  }
   const guard =
     `export IS_SANDBOX=1; ` +
-    modelEnv +
-    `if [ -s ${tokenFile} ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${tokenFile})"; fi; `;
+    `if [ -s ${tokenFile} ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${tokenFile})"; fi; ` +
+    // Claude's first-run walls (setup wizard + trust dialog) taken down for THIS profile and THIS
+    // worktree. It lives in the session command — not in the open script — because the websocket's
+    // attach-or-create also creates sessions, and a card born that way used to land on the wizard.
+    // `$PWD` is the session's cwd (tmux new-session -c <worktree>), resolved when the line runs.
+    `${firstRunSeedCommand(profileDir, '"$PWD"')}; ` +
+    ghGuard;
+  // The pin is a COMMAND-LINE flag, not `ANTHROPIC_DEFAULT_MODEL`: that variable is only the default
+  // for when nothing else says anything, and the profile's own settings.json (`"model"`, written by
+  // any `/model` typed in ANY card sharing that account profile) beat it — a card pinned to Opus
+  // would boot on whatever the last `/model` left behind. `--model` wins over both. Only when the id
+  // is VALID (CLAUDE_MODELS whitelist): safe charset, never raw input.
+  const model = isValidModel(o.model) ? ` --model ${o.model}` : "";
   let claude: string;
-  if (o.resumeSessionId) claude = `claude --resume ${assertSessionId(o.resumeSessionId)} || claude -c || claude`;
-  else if (o.resume) claude = "claude -c || claude";
-  else claude = "claude";
+  if (o.resumeSessionId) {
+    claude = `claude${model} --resume ${assertSessionId(o.resumeSessionId)} || claude${model} -c || claude${model}`;
+  } else if (o.resume) claude = `claude${model} -c || claude${model}`;
+  else claude = `claude${model}`;
   return `${guard}${claude}; exec bash`;
 }
 
@@ -167,7 +198,7 @@ export interface OpenScriptOpts {
   resume?: boolean;
   /** Imported session (uuid): the session is born with `claude --resume <id>`. */
   resumeSessionId?: string;
-  /** The card's Claude model: the guard exports ANTHROPIC_DEFAULT_MODEL. Absent = account default. */
+  /** The card's Claude model: Claude starts with `--model <id>`. Absent = account default. */
   model?: string;
   /**
    * The effective account's long-lived token (from the vault): SEEDED into the profile
@@ -175,6 +206,13 @@ export interface OpenScriptOpts {
    * is written.
    */
   oauthToken?: string;
+  /**
+   * The PROJECT's GitHub connection token (from the vault) — written to the per-card gh-token file
+   * (mode 600) inside the script, over STDIN, never argv. The session then exports `GH_TOKEN` from
+   * that file so the card's `git push`/`gh` act as the connection. Absent = the file is REMOVED
+   * (kept in sync), so the card falls back to the runner's ambient `gh` login.
+   */
+  ghToken?: string;
   /** Managed MCPs (JSON already resolved) to inject into the card's effective profile. */
   mcps?: McpInjection[];
   /**
@@ -271,6 +309,11 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
   // The account's long-lived token (vault): seeded into the profile on every open (idempotent; keeps
   // the runner current when the token was replaced in the UI before a runner/project existed).
   if (opts.oauthToken) inner.push(...writeTokenLines(profileDir, opts.oauthToken));
+  // GitHub token file, kept in SYNC with the project's connection: written when present, removed
+  // otherwise, so a card can never export a stale token from a connection that was cleared.
+  inner.push(
+    ...(opts.ghToken ? writeGhTokenLines(opts.cardId, opts.ghToken) : removeGhTokenLines(opts.cardId)),
+  );
   // Managed MCPs into the card's effective profile (remove-before + add-json, JSON in a heredoc).
   if (opts.mcps?.length) inner.push(...mcpInjectLines([opts.accountConfigDir], opts.mcps));
   // The brain (global CLAUDE.md) seeded into the card's effective profile — idempotent by signature,
@@ -297,7 +340,7 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
       ` -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8` +
       // Non-default account: the session's Claude uses the account profile (isolated credentials/state).
       (opts.accountConfigDir ? ` -e CLAUDE_CONFIG_DIR=${shQuote(opts.accountConfigDir)}` : "") +
-      ` ${shQuote(sessionCommand({ resume: !!opts.resume, resumeSessionId: opts.resumeSessionId, profileDir, model: opts.model }))}`,
+      ` ${shQuote(sessionCommand({ resume: !!opts.resume, resumeSessionId: opts.resumeSessionId, profileDir, model: opts.model, ghTokenFile: opts.ghToken ? ghTokenPath(opts.cardId) : undefined }))}`,
   );
   return [
     "set -e",
@@ -316,8 +359,13 @@ export interface CardAttachOpts {
   resume?: boolean;
   /** Imported session (uuid): if the attach has to CREATE, it is born with `claude --resume <id>`. */
   resumeSessionId?: string;
-  /** The card's Claude model: the guard exports ANTHROPIC_DEFAULT_MODEL. Absent = account default. */
+  /** The card's Claude model: Claude starts with `--model <id>`. Absent = account default. */
   model?: string;
+  /**
+   * Per-card gh-token file the session exports `GH_TOKEN` from (see SessionCommandOpts). The PATH is
+   * safe in argv — the token itself is only ever written by the open script over STDIN.
+   */
+  ghTokenFile?: string;
   /**
    * true = the EXTRA plain-shell terminal (the "Shell" button): a SEPARATE tmux session
    * `<tmuxSession>-sh`, same cwd, `exec bash` with no claude. The suffix is derived HERE — never
@@ -356,6 +404,7 @@ export function terminalRemoteArgs(containerName: string, tmuxSession: string, c
           resumeSessionId: opts.resumeSessionId,
           profileDir: opts.accountConfigDir ?? DEFAULT_CLAUDE_DIR,
           model: opts.model,
+          ghTokenFile: opts.ghTokenFile,
         }),
   ];
 }
@@ -384,6 +433,10 @@ export function cardAttachArgs(
     resume: !!card.openedAt,
     resumeSessionId: card.resumeSessionId,
     model: card.model,
+    // Only when the project has a GitHub connection: the session then exports GH_TOKEN from the
+    // per-card file a prior /open wrote (the export is still `[ -s ]`-guarded). The PATH is safe in
+    // argv; the token itself never is. No connection = the runner's ambient gh login, unchanged.
+    ghTokenFile: project.githubConnectionId ? ghTokenPath(card.id) : undefined,
     shell: opts.shell,
   });
 }
@@ -426,25 +479,44 @@ function runnerUnreachable(err: unknown): Error {
 }
 
 /**
- * In-memory LOCK per card: the pre-provisioning (on creation) and the open (on click) run the SAME
- * script in the runner — two `git clone` calls into the same directory in parallel break the clone.
- * Every call queues behind the card's previous one and runs when it has finished (success or
- * error); since the script is idempotent, an open that waited for a prepare only pays for the
- * verification (tenths of a second, not seconds). One backend process = a Map is enough (no other
- * process touches this runner).
+ * In-memory LOCK, keyed by the CLONE the script is going to touch: the pre-provisioning (on
+ * creation) and the open (on click) run the SAME script in the runner, and everything it does to a
+ * repository — `git clone` into the directory, `fetch --prune`, `worktree add` — is a write to ONE
+ * shared clone under /work. Two of those at once do not merely race: a second clone into a
+ * half-populated directory dies with "destination path already exists", and a fetch that overlaps
+ * another fetch or a worktree add dies on `index.lock`/`cannot lock ref`. `set -e` then fails the
+ * whole script, so what the user sees is a card that refuses to open — and, because the clone that
+ * came first carries on, the same card opening fine a couple of minutes later.
+ *
+ * A per-CARD key would not cover that: the cards that collide are DIFFERENT cards of the SAME
+ * project, which is exactly what creating two cards in a row does. So the key is the clone
+ * directory, and cards with no repository (scratch projects, which touch nothing shared) fall back
+ * to their own id and never queue behind anyone.
+ *
+ * The cost is small: the script is idempotent, so a card that waited for a neighbour's clone only
+ * pays for the verification (tenths of a second, no network — the fetch only runs when the worktree
+ * is missing). One backend process = a Map is enough (no other process touches this runner).
  */
-const cardLocks = new Map<string, Promise<unknown>>();
+const provisionLocks = new Map<string, Promise<unknown>>();
 
-async function withCardLock<T>(cardId: string, fn: () => Promise<T>): Promise<T> {
-  const previous = cardLocks.get(cardId) ?? Promise.resolve();
+async function withProvisionLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const previous = provisionLocks.get(key) ?? Promise.resolve();
   const run = previous.then(fn, fn);
   const tail = run.then(() => undefined, () => undefined);
-  cardLocks.set(cardId, tail);
+  provisionLocks.set(key, tail);
   try {
     return await run;
   } finally {
-    if (cardLocks.get(cardId) === tail) cardLocks.delete(cardId);
+    if (provisionLocks.get(key) === tail) provisionLocks.delete(key);
   }
+}
+
+/**
+ * The lock key for a card: the project's clone directory when it has a repository (shared with
+ * every other card of that project), the card itself otherwise. PURE.
+ */
+export function provisionLockKey(project: Project, card: Card): string {
+  return cardWorkPaths(project, card).repoDir ?? `card:${card.id}`;
 }
 
 /** Result of provisioning: the loaded card/project and the effective account (for the audit line). */
@@ -462,7 +534,15 @@ interface ProvisionResult {
  * provisioning.
  */
 async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
-  return withCardLock(cardId, async () => {
+  // The KEY is resolved before the queue is entered (it names the clone this script will write to);
+  // the card and the project are read AGAIN inside, because what matters to the script is the state
+  // in force after whoever was ahead in the queue has finished.
+  const pending = await getCard(cardId);
+  if (!pending) throw new Error("card not found");
+  const pendingProject = await getProject(pending.projectId);
+  if (!pendingProject) throw new Error("project for this card not found");
+
+  return withProvisionLock(provisionLockKey(pendingProject, pending), async () => {
     const card = await getCard(cardId);
     if (!card) throw new Error("card not found");
     const project = await getProject(card.projectId);
@@ -495,6 +575,18 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
 
     // The account's long-lived token (vault) — seeded into the profile inside the script (stdin).
     const oauthToken = await resolveAccountToken(accountSlug);
+    // The PROJECT's GitHub connection token, so the card's own git push / gh pr act as that identity
+    // (e.g. a personal repo the runner's org login can only read). BEST-EFFORT: a missing/unconfigured
+    // connection must not stop a card from opening — absent means the token file is removed and the
+    // card falls back to the runner's ambient gh login.
+    let ghToken: string | undefined;
+    if (project.githubConnectionId) {
+      try {
+        ghToken = await tokenFor(project.githubConnectionId);
+      } catch (e) {
+        logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "GitHub connection token not resolved on open (ambient gh login)");
+      }
+    }
     // Managed MCPs: BEST-EFFORT on open (a missing secret must not stop a card from opening — the
     // "apply" button in the UI is the path that fails loudly and names what is missing).
     let mcps: McpInjection[] = [];
@@ -523,6 +615,7 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
       resumeSessionId: card.resumeSessionId,
       model: card.model,
       oauthToken,
+      ghToken,
       mcps,
       brain,
       repo,
@@ -693,23 +786,129 @@ export async function killCardSession(card: Card, opts: { includeShell?: boolean
   }
 }
 
+/* ------------------------------------------------------------------ probe */
+
+/**
+ * What the runner says about a card's tmux session RIGHT NOW:
+ *  - `busy`: Claude is generating (the pane footer carries its "esc to interrupt" hint);
+ *  - `idle`: the session is there but nothing is running — a prompt, a menu (the "Resume from
+ *    summary" screen), a permission dialog, or a bare shell after Claude exited;
+ *  - `gone`: no such tmux session (the runner restarted, or something killed it);
+ *  - `unknown`: the runner could not be reached — the caller decides what to do with that.
+ */
+export type SessionState = "busy" | "idle" | "gone" | "unknown";
+
+/**
+ * The marker Claude Code prints in the pane footer WHILE it is generating ("· esc to interrupt ·").
+ * It is absent from every idle screen — the plain prompt, the resume menu, a permission question —
+ * which is exactly the distinction the board needs and the status hooks cannot always give it: a
+ * card parked on the resume menu never fires a Stop hook, so its dot stays green forever.
+ */
+const BUSY_MARKER = "esc to interrupt";
+
+/** How many lines of the pane bottom to look at: the footer, not the conversation. PURE. */
+const PANE_TAIL_LINES = 12;
+
+/** true = this pane capture shows Claude actually generating. PURE/testable. */
+export function paneLooksBusy(pane: string): boolean {
+  const lines = String(pane ?? "").split("\n");
+  return lines
+    .slice(-PANE_TAIL_LINES)
+    .some((line) => line.toLowerCase().includes(BUSY_MARKER));
+}
+
+/** Parses one `<session> <state>` line of the probe output. PURE. */
+export function parseProbeOutput(stdout: string): Map<string, SessionState> {
+  const out = new Map<string, SessionState>();
+  for (const line of String(stdout ?? "").split("\n")) {
+    const m = /^(\S+) (busy|idle|gone)$/.exec(line.trim());
+    if (m?.[1] && m[2]) out.set(m[1], m[2] as SessionState);
+  }
+  return out;
+}
+
+/**
+ * Script that asks the runner what each tmux session is DOING: `gone` when tmux does not know it,
+ * `busy` when the bottom of the pane carries Claude's "esc to interrupt" footer, `idle` otherwise.
+ * Read-only (has-session + capture-pane) — it never touches the session. Session names come from
+ * the BOARD (derived from the card id) and are shell-quoted on top of that. PURE/testable.
+ */
+export function buildSessionProbeScript(containerName: string, sessions: string[]): string {
+  const inner =
+    'for s in "$@"; do ' +
+    'if tmux has-session -t "$s" 2>/dev/null; then ' +
+    `if tmux capture-pane -p -t "$s" 2>/dev/null | tail -n ${PANE_TAIL_LINES} | grep -qi ${shQuote(BUSY_MARKER)}; then ` +
+    'echo "$s busy"; else echo "$s idle"; fi; ' +
+    'else echo "$s gone"; fi; done';
+  return `docker exec ${shQuote(containerName)} sh -c ${shQuote(inner)} _ ${sessions.map(shQuote).join(" ")}`;
+}
+
+/**
+ * PROBES several sessions in ONE round trip to the runner. A host/runner failure is NOT an error
+ * here: every session comes back `unknown` and the caller keeps the conservative behaviour (a card
+ * the board believes is working stays a PENDING pause instead of being cut off).
+ */
+export async function probeSessions(sessions: string[]): Promise<Map<string, SessionState>> {
+  const names = sessions.filter((s) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(s));
+  if (names.length === 0) return new Map();
+  try {
+    const { stdout } = await hostExecutor().runScript(
+      buildSessionProbeScript(config.runner.container, names),
+      { timeoutMs: 30_000 },
+    );
+    return parseProbeOutput(stdout);
+  } catch (e) {
+    logger.warn({ detail: (e as Error).message, sessions: names.length }, "session probe failed (treated as unknown)");
+    return new Map();
+  }
+}
+
+/** The state of ONE card's session, `unknown` when the runner could not answer. */
+export async function probeCardSession(card: Pick<Card, "tmuxSession">): Promise<SessionState> {
+  return (await probeSessions([card.tmuxSession])).get(card.tmuxSession) ?? "unknown";
+}
+
+/**
+ * PURE decision: does this pause have to take effect RIGHT NOW, ignoring the dot the board is
+ * showing? Yes whenever the runner CONTRADICTS a `working` dot — the session is idle (parked on a
+ * menu, a permission prompt or a bare shell) or gone. `busy` and `unknown` keep the polite
+ * behaviour: let Claude finish and pause afterwards. PURE/testable.
+ */
+export function pauseMustBeEffective(status: CardStatus | null | undefined, state: SessionState): boolean {
+  if (status !== "working") return true; // idle by the board's own reckoning
+  return state === "idle" || state === "gone";
+}
+
 /**
  * PAUSES the card (POST /api/cards/:id/pause and the drag into the "paused" column): the board goes
  * first (registryPauseCard — a card that does not exist or was never opened THROWS before the host
  * is touched), and the tmux session only dies NOW if the pause was EFFECTIVE (idle card → `pausedAt`
  * stamped): both sessions are killed (claude and shell), the Claude process dies, zero consumption.
- * A `working` card is a PENDING pause (registryPauseCard does not stamp `pausedAt`): the session
- * stays ALIVE and the status hook ends it when Claude finishes — "let it finish, then pause", so
- * work in progress is never interrupted. Resuming is just opening the card: the attach recreates the
- * session with `claude -c` and comes back to the same conversation.
+ * A card that is GENUINELY working is a PENDING pause (registryPauseCard does not stamp `pausedAt`):
+ * the session stays ALIVE and the status hook ends it when Claude finishes — "let it finish, then
+ * pause", so work in progress is never interrupted. "Genuinely" is decided by the RUNNER, not by the
+ * dot: a card whose session is parked on a menu or is gone gets paused for real right away
+ * (pauseMustBeEffective), because its dot would never turn amber and the pause would never land.
+ * Resuming is just opening the card (see `resumeCard`): the attach recreates the session with
+ * `claude -c` and comes back to the same conversation.
  */
 export async function pauseCard(cardId: string, by?: string): Promise<Card> {
-  const card = await registryPauseCard(cardId);
+  // The DOT can be a lie. A card parked on Claude's "Resume from summary" screen, on a permission
+  // question, or one whose session died, never fires the Stop hook that would turn its green dot
+  // amber — and a pending pause on such a card would wait forever, keeping a live session inside a
+  // column that means "not running". So before deciding, ASK THE RUNNER what that session is doing;
+  // only a genuinely busy Claude earns the polite "let it finish" treatment.
+  const before = await getCard(cardId);
+  let effective = false;
+  if (before?.status === "working" && hasLiveSession(before)) {
+    effective = pauseMustBeEffective(before.status, await probeCardSession(before));
+  }
+  const card = await registryPauseCard(cardId, { effective });
   if (card.pausedAt) {
     // EFFECTIVE pause (the card was idle): end the sessions right away.
     await killCardSession(card, { includeShell: true });
     logger.info(
-      { audit: true, action: "card.pause", card: card.worktreeSlug, session: card.tmuxSession, by },
+      { audit: true, action: "card.pause", card: card.worktreeSlug, session: card.tmuxSession, forced: effective, by },
       "card paused — tmux sessions ended in the runner",
     );
   } else {
@@ -720,6 +919,178 @@ export async function pauseCard(cardId: string, by?: string): Promise<Card> {
     );
   }
   return card;
+}
+
+/**
+ * RESUMES a paused card — the drag OUT of the "paused" column, and anything else that means "work
+ * on this again". It is exactly an open (the workspace script is idempotent: the clone and the
+ * worktree are already there, so it only recreates the tmux session with `claude -c`, back in the
+ * same conversation) and `applyOpenTerminal` clears `pausedAt`, which is what makes the card live
+ * again for the board, for restart-all and for the maestro.
+ *
+ * It does NOT force a column: the caller has already moved the card where the user dropped it, and
+ * `columnAfterOpen` leaves every column except `backlog`/`paused` alone.
+ */
+export async function resumeCard(cardId: string, by?: string): Promise<Card> {
+  const card = await openCard(cardId, by);
+  logger.info(
+    { audit: true, action: "card.resume", card: card.worktreeSlug, session: card.tmuxSession, by },
+    "card resumed — the tmux session is back in the runner",
+  );
+  return card;
+}
+
+/**
+ * HIBERNATES the card (the idle sweep, and POST /api/cards/:id/hibernate): the board goes first
+ * (`registryHibernateCard` refuses anything that is not an IDLE live session and answers undefined),
+ * then both tmux sessions die — Claude and the Shell — so the card stops costing a process.
+ *
+ * It is deliberately NOT a pause: the column and the position are untouched. A card you abandoned in
+ * "Waiting" stays in Waiting, where you left it, and only loses its dot. Reopening it is enough to
+ * bring it back — the attach recreates the session with `claude -c`, in the same conversation.
+ *
+ * Returns the card when it hibernated, or undefined when there was nothing to hibernate (never
+ * opened, already paused/hibernated, or `working`, which is a task in flight).
+ */
+export async function hibernateCard(cardId: string, by?: string): Promise<Card | undefined> {
+  const card = await registryHibernateCard(cardId);
+  if (!card) return undefined;
+  await killCardSession(card, { includeShell: true });
+  logger.info(
+    { audit: true, action: "card.hibernate", card: card.worktreeSlug, session: card.tmuxSession, by },
+    "card hibernated — tmux sessions ended in the runner, the card stayed where it was on the board",
+  );
+  return card;
+}
+
+/**
+ * PURE selection of the PENDING pauses the runner contradicts: cards sitting in `paused` with a
+ * session still alive whose probe says `idle` or `gone`. `busy` (Claude really is generating) and
+ * `unknown` (the runner did not answer) are left alone — the pause stays pending, which is the
+ * conservative side of the trade. PURE/testable.
+ */
+export function overduePauses<T extends Pick<Card, "tmuxSession">>(
+  pending: T[],
+  states: Map<string, SessionState>,
+): T[] {
+  return pending.filter((c) => {
+    const state = states.get(c.tmuxSession) ?? "unknown";
+    return state === "idle" || state === "gone";
+  });
+}
+
+/**
+ * RECONCILES the pending pauses — the loop the status hooks cannot close on their own.
+ *
+ * A pending pause is carried out by the Stop hook (applyCardStatus). But a session can stop being
+ * busy WITHOUT ever firing that hook: Claude parked on the "Resume from summary" menu, on a
+ * permission question nobody answered, killed by a restart, or gone with the runner. Those cards sit
+ * in `paused` — the column that means "not running" — with a live session and a green dot, forever.
+ *
+ * So every tick this asks the runner about them in ONE round trip and finishes the pause for the
+ * ones that are no longer working: stamps `pausedAt`, clears the dot, kills both tmux sessions.
+ * Best-effort by construction (a runner that is down answers `unknown` and nothing is touched).
+ * Returns how many pauses it carried out.
+ */
+export async function reconcilePausedCards(): Promise<number> {
+  const pending = (await listAllCards()).filter((c) => c.column === "paused" && hasLiveSession(c));
+  if (pending.length === 0) return 0;
+  const states = await probeSessions(pending.map((c) => c.tmuxSession));
+  const overdue = overduePauses(pending, states);
+  for (const card of overdue) {
+    try {
+      const paused = await registryPauseCard(card.id, { effective: true });
+      if (paused.pausedAt) await killCardSession(paused, { includeShell: true });
+      logger.info(
+        {
+          audit: true, action: "card.pause.reconciled", card: card.worktreeSlug,
+          session: card.tmuxSession, state: states.get(card.tmuxSession),
+        },
+        "pending pause carried out by the reconciler — the session was not working any more",
+      );
+    } catch (e) {
+      logger.warn(
+        { card: card.worktreeSlug, detail: (e as Error).message },
+        "could not carry out a pending pause (best-effort, will retry next tick)",
+      );
+    }
+  }
+  return overdue.length;
+}
+
+/** How often the reconciler looks at the pending pauses. */
+export const PAUSE_RECONCILE_MS = 60_000;
+
+/**
+ * Starts the pending-pause reconciler and returns the function that stops it. The timer is
+ * `unref`'d so it never keeps the process (or a test run) alive, and one tick never overlaps the
+ * next. Called from the server's entry point — not from `buildServer`, so importing the app in a
+ * test does not start background work.
+ */
+export function startPauseReconciler(intervalMs: number = PAUSE_RECONCILE_MS): () => void {
+  let running = false;
+  const tick = async (): Promise<void> => {
+    if (running) return;
+    running = true;
+    try {
+      await reconcilePausedCards();
+    } catch (e) {
+      logger.warn({ detail: (e as Error).message }, "pause reconciler tick failed (continuing)");
+    } finally {
+      running = false;
+    }
+  };
+  const timer = setInterval(() => void tick(), intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
+/**
+ * When a card was last ALIVE: the newest of the last hook report and the first open. Not `updatedAt`
+ * — renaming a card or dragging it between columns is something a HUMAN did to the board, not a sign
+ * that the conversation is warm, and counting it would keep a dead terminal looking busy. PURE.
+ */
+export function lastActivityAt(card: Pick<Card, "statusAt" | "openedAt">): number {
+  return Math.max(card.statusAt ?? 0, card.openedAt ?? 0);
+}
+
+/**
+ * PURE selection for the idle sweep: live sessions that are NOT `working` and whose last sign of
+ * life is older than `idleMs`. `working` is excluded whatever the clock says — a long task is not an
+ * abandoned one, and the hooks stop talking while Claude thinks.
+ *
+ * `idleMs <= 0` selects NOTHING: that is how the setting spells "never hibernate". PURE/testable.
+ */
+export function cardsToHibernate<T extends Pick<Card, "openedAt" | "pausedAt" | "hibernatedAt" | "status" | "statusAt">>(
+  cards: T[],
+  now: number,
+  idleMs: number,
+): T[] {
+  if (!(idleMs > 0)) return [];
+  return cards.filter(
+    (c) => hasLiveSession(c) && c.status !== "working" && now - lastActivityAt(c) >= idleMs,
+  );
+}
+
+/**
+ * THE IDLE SWEEP (a timer in `index.ts`, every few minutes): hibernates every card whose terminal has
+ * been silent for longer than `idleHibernateMinutes`. Best-effort per card — a runner that is down
+ * must not stop the rest — and it reads the setting on EVERY pass, so changing it takes effect at the
+ * next sweep instead of at the next restart. Returns how many cards went cold.
+ */
+export async function sweepIdleCards(now: number = Date.now()): Promise<number> {
+  const { idleHibernateMinutes } = await getSettings();
+  const idleMs = Math.max(0, Number(idleHibernateMinutes) || 0) * 60_000;
+  if (idleMs <= 0) return 0;
+  const target = cardsToHibernate(await listAllCards(), now, idleMs);
+  if (target.length === 0) return 0;
+  const results = await Promise.allSettled(target.map((c) => hibernateCard(c.id, "idle-sweep")));
+  const hibernated = results.filter((r) => r.status === "fulfilled" && r.value).length;
+  logger.info(
+    { audit: true, action: "card.sweepIdle", idleMinutes: idleHibernateMinutes, candidates: target.length, hibernated },
+    "idle sweep — terminals with no sign of life were hibernated (columns untouched)",
+  );
+  return hibernated;
 }
 
 /**
@@ -749,6 +1120,47 @@ export async function restartCard(cardId: string, by?: string): Promise<Card> {
     "card restarted — tmux session ended in the runner (reopens with claude -c)",
   );
   return card;
+}
+
+/**
+ * What a model/account switch did to the LIVE session, so the screen can say the truth instead of
+ * promising a switch that never reached Claude.
+ */
+export type SessionChange = "none" | "restarted" | "pending";
+
+/**
+ * Carries a card's model/account switch INTO the running session.
+ *
+ * Both are read by Claude only when the PROCESS STARTS (`--model` on the command line, the account's
+ * CLAUDE_CONFIG_DIR in the session's environment). Recording the change on the card is therefore
+ * only half of it: the terminal reattaches to the very same tmux session (`new-session -A`) and goes
+ * on talking to the old model on the old account — which is exactly the bug where a card read "Opus"
+ * in the bar while every reply came from Fable.
+ *
+ * So the session is ended here, the same way `restartCard` does it: the reattach recreates it with
+ * the new flag/profile and `claude -c`, in the SAME conversation. A card that is `working` is NOT
+ * interrupted — it is flagged (`config`) and the status hook restarts it the moment it goes idle,
+ * mirroring what a brain/MCP change does. Nothing to do when the card has no live session: the pin
+ * already IS what the next start will use.
+ */
+export async function applySessionChange(before: Card | undefined, after: Card, by?: string): Promise<SessionChange> {
+  const changed =
+    (before?.model ?? null) !== (after.model ?? null) || (before?.accountSlug ?? null) !== (after.accountSlug ?? null);
+  if (!before || !changed || !hasLiveSession(after)) return "none";
+  if (after.status === "working") {
+    await markRestartPending(after.id, "config");
+    logger.info(
+      { audit: true, action: "card.config.pending", card: after.worktreeSlug, model: after.model ?? null, account: after.accountSlug ?? null, by },
+      "model/account switched while Claude was working — the session restarts onto it once the card goes idle",
+    );
+    return "pending";
+  }
+  await restartCard(after.id, by);
+  logger.info(
+    { audit: true, action: "card.config.applied", card: after.worktreeSlug, model: after.model ?? null, account: after.accountSlug ?? null, by },
+    "model/account switched — the session was ended so the reattach starts Claude with it (claude -c)",
+  );
+  return "restarted";
 }
 
 /**

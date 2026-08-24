@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cardCdpEndpoint } from "../browser/ports.js";
+import { firstRunSeedCommand } from "../accounts/firstRun.js";
 
 /**
  * A card's workspace in the runner (open + terminal + pause + restart + drop). The INVARIANTS the
@@ -28,19 +29,23 @@ const CONTAINER = "vibehub-runner";
 /**
  * The LONG-LIVED TOKEN prefix every Claude session carries: a guard in the session's SHELL (not in
  * tmux's argv) — if the profile has an .oauth-token, export CLAUDE_CODE_OAUTH_TOKEN; otherwise
- * nothing happens.
+ * nothing happens. It ends with the FIRST-RUN seed (own unit test in accounts/firstRun.test.ts),
+ * which is what keeps a session from opening on Claude's setup wizard or trust dialog.
  */
 const guard = (dir = "/root/.claude") =>
   `export IS_SANDBOX=1; ` +
-  `if [ -s ${dir}/.oauth-token ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${dir}/.oauth-token)"; fi; `;
+  `if [ -s ${dir}/.oauth-token ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${dir}/.oauth-token)"; fi; ` +
+  `${firstRunSeedCommand(dir, '"$PWD"')}; `;
 const CLAUDE = `${guard()}claude; exec bash`;
 const CLAUDE_C = `${guard()}claude -c || claude; exec bash`;
+/** The session command as it appears INSIDE a script: one shell-quoted argument (it contains quotes of its own). */
+const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 vi.mock("../../runtime/host.js", async (orig) => ({
   ...(await orig<typeof import("../../runtime/host.js")>()),
   hostExecutor: vi.fn(),
 }));
-vi.mock("../github/client.js", () => ({ gitAuthHeaderFor: vi.fn() }));
+vi.mock("../github/client.js", () => ({ gitAuthHeaderFor: vi.fn(), tokenFor: vi.fn() }));
 
 /**
  * FAULT INJECTION for the staggered restart, opt-in per test (`fresh({ flakyRegistry: true })`): the
@@ -206,7 +211,7 @@ describe("openCard", () => {
     expect(script).toContain(`VIBEHUB_CARD_ID='${card.id}'`);
     expect(script).toContain(`VIBEHUB_STATUS_URL='${STATUS_URL}'`);
     expect(script).toContain(`PW_CDP_ENDPOINT='${cardCdpEndpoint(card.id)}'`);
-    expect(script).toContain(`'${CLAUDE}'`);
+    expect(script).toContain(sq(CLAUDE));
 
     // the open rule: backlog → waiting
     expect(updated.column).toBe("waiting");
@@ -259,7 +264,7 @@ describe("openCard", () => {
     // idempotent: reopening produces the SAME script except for the Claude command — the second open
     // (openedAt) resumes the conversation with `claude -c || claude`
     await ws.openCard(card.id);
-    expect(scriptAt(1).replace(`'${CLAUDE_C}'`, `'${CLAUDE}'`)).toBe(script);
+    expect(scriptAt(1).replace(sq(CLAUDE_C), sq(CLAUDE))).toBe(script);
   });
 
   it("open is idempotent about columns: a card in done does NOT leave done", async () => {
@@ -445,12 +450,26 @@ describe("terminalRemoteArgs / cardAttachArgs (the websocket's COMPLETE attach-o
     expect(sh.at(-1)).toBe("exec bash");
   });
 
+  it("a project WITH a GitHub connection points the session at the per-card gh-token file — the PATH, never the token", async () => {
+    const conn = await reg.addGithubConnection({ login: "cesarvcanal" });
+    const { project, card } = await seed();
+    const p = await reg.updateProject(project.id, { githubConnectionId: conn.id });
+
+    const cmd = ws.cardAttachArgs(CONTAINER, p, card).at(-1) as string;
+    expect(cmd).toContain(`if [ -s /root/.vibehub/gh/${card.id}.token ]`);
+    expect(cmd).toContain('export GH_TOKEN="$(cat /root/.vibehub/gh/');
+    // a project WITHOUT a connection gets no GH_TOKEN guard at all
+    expect(ws.cardAttachArgs(CONTAINER, project, card).at(-1)).not.toContain("GH_TOKEN");
+    // and the token itself is NEVER in argv, connection or not
+    expect(ws.cardAttachArgs(CONTAINER, p, card).join(" ")).not.toContain(TOKEN);
+  });
+
   it("cardTerminalCommandLine quotes every element, and cardTerminalCommand goes through the host executor", async () => {
     const { project, card } = await seed();
     const line = ws.cardTerminalCommandLine(CONTAINER, project, card);
     expect(line.startsWith("'docker' 'exec' '-it'")).toBe(true);
     // the claude command is ONE argument, whatever is inside it
-    expect(line).toContain(`'${CLAUDE.replace(/'/g, `'\\''`)}'`);
+    expect(line).toContain(sq(CLAUDE));
 
     const cmd = ws.cardTerminalCommand(project, card);
     expect(ptyCommand).toHaveBeenCalledWith(line);
@@ -462,41 +481,44 @@ describe("terminalRemoteArgs / cardAttachArgs (the websocket's COMPLETE attach-o
 // Model whitelist
 // ---------------------------------------------------------------------------
 
-describe("per-card model (ANTHROPIC_DEFAULT_MODEL in the session guard)", () => {
-  const modelGuard = (id: string, dir = "/root/.claude") =>
-    `export IS_SANDBOX=1; export ANTHROPIC_DEFAULT_MODEL=${id}; ` +
-    `if [ -s ${dir}/.oauth-token ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${dir}/.oauth-token)"; fi; `;
-
-  it("a VALID model becomes an env export; an absent one exports nothing", () => {
-    expect(ws.sessionCommand({ model: "claude-opus-5" })).toBe(`${modelGuard("claude-opus-5")}claude; exec bash`);
+describe("per-card model (`claude --model` — the flag, never the env)", () => {
+  it("a VALID model becomes a --model flag; an absent one adds nothing", () => {
+    expect(ws.sessionCommand({ model: "claude-opus-5" })).toBe(`${guard()}claude --model claude-opus-5; exec bash`);
     expect(ws.sessionCommand({})).toBe(CLAUDE);
-    expect(ws.sessionCommand({})).not.toContain("ANTHROPIC_DEFAULT_MODEL");
   });
 
-  it("an INVALID model is IGNORED (not exported, does not throw) — nothing raw reaches the shell", () => {
+  it("the pin is a FLAG, not ANTHROPIC_DEFAULT_MODEL — the profile's settings.json beats that env", () => {
+    // The bug: a card pinned to Opus booted on whatever `/model` last wrote into the SHARED account
+    // profile (Fable), because the env is only the default of last resort.
+    expect(ws.sessionCommand({ model: "claude-opus-5" })).not.toContain("ANTHROPIC_DEFAULT_MODEL");
+  });
+
+  it("an INVALID model is IGNORED (no flag, does not throw) — nothing raw reaches the shell", () => {
     const cmd = ws.sessionCommand({ model: "claude-gpt-9; rm -rf /" });
     expect(cmd).toBe(CLAUDE);
-    expect(cmd).not.toContain("ANTHROPIC_DEFAULT_MODEL");
+    expect(cmd).not.toContain("--model");
     expect(cmd).not.toContain("rm -rf");
   });
 
-  it("account + model + long-lived token coexist in one guard", () => {
+  it("the flag rides EVERY fallback of a resume, so no branch silently drops the pin", () => {
     expect(ws.sessionCommand({ model: "claude-sonnet-5", profileDir: "/root/.claude-profiles/personal", resume: true }))
-      .toBe(`${modelGuard("claude-sonnet-5", "/root/.claude-profiles/personal")}claude -c || claude; exec bash`);
+      .toBe(`${guard("/root/.claude-profiles/personal")}claude --model claude-sonnet-5 -c || claude --model claude-sonnet-5; exec bash`);
+    const imported = ws.sessionCommand({ model: "claude-opus-5", resumeSessionId: "a1b2c3d4-e5f6-4a4a-8b8b-000011112222" });
+    expect(imported.match(/--model claude-opus-5/g)).toHaveLength(3);
   });
 
-  it("both the attach and the open carry the card's model into the session guard", async () => {
+  it("both the attach and the open carry the card's model into the session command", async () => {
     const { project, card } = await seed();
     const c = await reg.updateCard(card.id, { model: "claude-fable-5" });
-    expect(ws.cardAttachArgs(CONTAINER, project, c).at(-1)).toContain("export ANTHROPIC_DEFAULT_MODEL=claude-fable-5;");
+    expect(ws.cardAttachArgs(CONTAINER, project, c).at(-1)).toContain("claude --model claude-fable-5");
 
     await ws.openCard(c.id);
     const tmux = lastScript().split("\n").find((l) => l.includes("tmux new-session"))!;
-    expect(tmux).toContain("export ANTHROPIC_DEFAULT_MODEL=claude-fable-5;");
+    expect(tmux).toContain("claude --model claude-fable-5");
 
-    // a card with no model (the account default): nothing in the guard. The board hands back the
-    // SAME object it stores, so `card` was mutated by updateCard — clear the field explicitly.
-    expect(ws.cardAttachArgs(CONTAINER, project, { ...card, model: undefined }).at(-1)).not.toContain("ANTHROPIC_DEFAULT_MODEL");
+    // a card with no model (the account default): no flag at all. The board hands back the SAME
+    // object it stores, so `card` was mutated by updateCard — clear the field explicitly.
+    expect(ws.cardAttachArgs(CONTAINER, project, { ...card, model: undefined }).at(-1)).not.toContain("--model");
   });
 });
 
@@ -528,12 +550,12 @@ describe("pause / resume (the session dies; reopening returns to the SAME conver
     const { card } = await seed();
     await ws.openCard(card.id);
     const tmux1 = scriptAt(0).split("\n").find((l) => l.includes("tmux new-session"))!;
-    expect(tmux1).toContain(`'${CLAUDE}'`);
+    expect(tmux1).toContain(sq(CLAUDE));
     expect(tmux1).not.toContain("claude -c");
 
     await ws.openCard(card.id); // the board now has openedAt
     const tmux2 = scriptAt(1).split("\n").find((l) => l.includes("tmux new-session"))!;
-    expect(tmux2).toContain(`'${CLAUDE_C}'`);
+    expect(tmux2).toContain(sq(CLAUDE_C));
     expect(tmux2).toMatch(/tmux has-session -t '[^']+' 2>\/dev\/null \|\| LANG=C\.UTF-8 LC_ALL=C\.UTF-8 tmux new-session -d/);
   });
 
@@ -557,7 +579,7 @@ describe("pause / resume (the session dies; reopening returns to the SAME conver
     const { project, card } = await seed();
     const c = await reg.updateCard(card.id, { resumeSessionId: SID });
     await ws.openCard(c.id);
-    expect(scriptAt(0)).toContain(`'${guard()}claude --resume ${SID} || claude -c || claude; exec bash'`);
+    expect(scriptAt(0)).toContain(sq(`${guard()}claude --resume ${SID} || claude -c || claude; exec bash`));
     expect(ws.cardAttachArgs(CONTAINER, project, c).at(-1)).toBe(`${guard()}claude --resume ${SID} || claude -c || claude; exec bash`);
     expect(ws.cardAttachArgs(CONTAINER, project, c, { shell: true }).at(-1)).toBe("exec bash");
 
@@ -600,17 +622,59 @@ describe("pause / resume (the session dies; reopening returns to the SAME conver
     expect((await reg.getCard(card.id))?.pausedAt).toBe(paused.pausedAt);
   });
 
-  it("pauseCard: a WORKING card is a PENDING pause — it moves, the session STAYS ALIVE, no pausedAt", async () => {
+  it("pauseCard: a card the runner confirms is BUSY is a PENDING pause — it moves, the session STAYS ALIVE", async () => {
     const { card } = await seed();
     await ws.openCard(card.id);
     await reg.applyCardStatus(card.id, "working"); // Claude is busy
     runScript.mockClear();
+    // The runner agrees: that pane is generating right now.
+    runScript.mockResolvedValue({ stdout: `${card.tmuxSession} busy\n`, stderr: "" });
 
     const pending = await ws.pauseCard(card.id, "tester");
     expect(pending.column).toBe("paused");
     expect(pending.pausedAt ?? null).toBeNull();
     expect(pending.status).toBe("working");
-    expect(runScript).not.toHaveBeenCalled();
+    // ONE call: the read-only probe. Nothing was killed.
+    expect(runScript).toHaveBeenCalledTimes(1);
+    expect(scriptAt(0)).toContain("capture-pane");
+    expect(scriptAt(0)).not.toContain("kill-session");
+  });
+
+  it("pauseCard: a `working` dot the runner CONTRADICTS (idle pane) pauses for real, right away", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    runScript.mockClear();
+    // The card is parked on a menu / a prompt: the dot is stale and no Stop hook is ever coming.
+    runScript.mockResolvedValue({ stdout: `${card.tmuxSession} idle\n`, stderr: "" });
+
+    const paused = await ws.pauseCard(card.id, "tester");
+    expect(paused.pausedAt).toBeTypeOf("number");
+    expect(paused.status).toBeNull();
+    expect(runScript).toHaveBeenCalledTimes(2); // probe, then the kill
+    expect(scriptAt(1)).toContain(`tmux kill-session -t '${card.tmuxSession}'`);
+    expect(scriptAt(1)).toContain(`tmux kill-session -t '${card.tmuxSession}-sh'`);
+  });
+
+  it("pauseCard: a session that is GONE pauses for real; an unreachable runner keeps the pause pending", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    runScript.mockClear();
+    runScript.mockResolvedValue({ stdout: `${card.tmuxSession} gone\n`, stderr: "" });
+    expect((await ws.pauseCard(card.id)).pausedAt).toBeTypeOf("number");
+
+    // A second card, this time with a runner that does not answer: the probe is `unknown`, so the
+    // polite behaviour wins — never cut a Claude off because Docker had a bad second.
+    const other = await reg.createCard({ projectId: card.projectId, title: "other" });
+    runScript.mockResolvedValue({ stdout: "", stderr: "" });
+    await ws.openCard(other.id);
+    await reg.applyCardStatus(other.id, "working");
+    runScript.mockClear();
+    runScript.mockRejectedValue(new Error("host is down"));
+    const pending = await ws.pauseCard(other.id);
+    expect(pending.pausedAt ?? null).toBeNull();
+    expect(pending.column).toBe("paused");
   });
 
   it("pauseCard: a card never opened / unknown THROWS and nothing runs; a dead host does not undo the pause", async () => {
@@ -631,7 +695,7 @@ describe("pause / resume (the session dies; reopening returns to the SAME conver
     const resumed = await ws.openCard(card.id);
     expect(resumed.pausedAt).toBeNull();
     expect(resumed.column).toBe("waiting");
-    expect(lastScript()).toContain(`'${CLAUDE_C}'`);
+    expect(lastScript()).toContain(sq(CLAUDE_C));
   });
 });
 
@@ -649,6 +713,77 @@ describe("restart (single and all) — a working card is protected", () => {
       { id: "e", openedAt: 1, pausedAt: 123, status: "waiting" as const }, // paused → out
     ];
     expect(ws.cardsToRestart(cards).map((c) => c.id)).toEqual(["a", "b"]);
+  });
+
+  it("cardsToHibernate (PURE): idle live sessions older than the threshold, never a working one", () => {
+    const now = 1_700_000_000_000; // a real epoch: the threshold is measured against real stamps
+    const old = now - 4 * 60 * 60_000; // four hours ago
+    const recent = now - 60_000;
+    const cards = [
+      { id: "a", openedAt: old, pausedAt: null, status: "waiting" as const, statusAt: old }, // cold → in
+      { id: "b", openedAt: old, pausedAt: null, status: null, statusAt: undefined }, // opened, never spoke → in
+      { id: "c", openedAt: old, pausedAt: null, status: "waiting" as const, statusAt: recent }, // just spoke → out
+      { id: "d", openedAt: old, pausedAt: null, status: "working" as const, statusAt: old }, // busy → OUT
+      { id: "e", openedAt: undefined, pausedAt: null, status: null, statusAt: undefined }, // never opened → out
+      { id: "f", openedAt: old, pausedAt: old, status: null, statusAt: undefined }, // paused → out
+      { id: "g", openedAt: old, pausedAt: null, hibernatedAt: old, status: null, statusAt: undefined }, // already cold → out
+    ];
+    const threeHours = 3 * 60 * 60_000;
+    expect(ws.cardsToHibernate(cards, now, threeHours).map((c) => c.id)).toEqual(["a", "b"]);
+    // 0 (or less) is how the setting spells "never".
+    expect(ws.cardsToHibernate(cards, now, 0)).toEqual([]);
+  });
+
+  it("hibernateCard: kills BOTH sessions and leaves the card in its column", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "waiting");
+    const before = await reg.getCard(card.id);
+    runScript.mockClear();
+
+    const cold = await ws.hibernateCard(card.id, "tester");
+    expect(cold?.hibernatedAt).toBeGreaterThan(0);
+    expect(cold?.column).toBe(before?.column);
+    expect(cold?.position).toBe(before?.position);
+    expect(runScript).toHaveBeenCalledTimes(1);
+    expect(scriptAt(0)).toContain(`tmux kill-session -t '${card.tmuxSession}'`);
+    expect(scriptAt(0)).toContain(`${card.tmuxSession}-sh`);
+
+    // Nothing to hibernate = nothing happens, and no script is run.
+    runScript.mockClear();
+    expect(await ws.hibernateCard(card.id)).toBeUndefined();
+    expect(await ws.hibernateCard("nope")).toBeUndefined();
+    expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("sweepIdleCards: hibernates the silent ones, spares the working one, and honours 0 = off", async () => {
+    const p = await reg.createProject({ name: "x" });
+    const cold = await reg.createCard({ projectId: p.id, title: "cold" });
+    const busy = await reg.createCard({ projectId: p.id, title: "busy" });
+    await ws.openCard(cold.id);
+    await ws.openCard(busy.id);
+    await reg.applyCardStatus(cold.id, "waiting");
+    await reg.applyCardStatus(busy.id, "working");
+
+    const settings = await import("../settings/settings.js");
+    await settings.updateSettings({ idleHibernateMinutes: 180 });
+
+    // Nothing is old enough yet.
+    expect(await ws.sweepIdleCards(Date.now())).toBe(0);
+
+    // Four hours later, the idle one goes cold and the working one does not.
+    runScript.mockClear();
+    const later = Date.now() + 4 * 60 * 60_000;
+    expect(await ws.sweepIdleCards(later)).toBe(1);
+    expect((await reg.getCard(cold.id))?.hibernatedAt).toBeGreaterThan(0);
+    expect((await reg.getCard(busy.id))?.hibernatedAt ?? null).toBeNull();
+    expect(lastScript()).toContain(`tmux kill-session -t '${cold.tmuxSession}'`);
+
+    // Turned off: even a card that has been silent for days is left alone.
+    await settings.updateSettings({ idleHibernateMinutes: 0 });
+    await ws.openCard(cold.id);
+    expect(await ws.sweepIdleCards(later + 24 * 60 * 60_000)).toBe(0);
+    expect((await reg.getCard(cold.id))?.hibernatedAt ?? null).toBeNull();
   });
 
   it("restartCard: kills ONLY the claude session (not -sh) and does NOT touch the board", async () => {
@@ -669,6 +804,61 @@ describe("restart (single and all) — a working card is protected", () => {
     expect(scriptAt(0)).not.toContain(`${card.tmuxSession}-sh`);
 
     await expect(ws.restartCard("nope")).rejects.toThrow(/card not found/);
+  });
+
+  it("applySessionChange: a model switch on an IDLE live session ends it (the reattach starts Claude on the new model)", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "waiting");
+    const before = { ...(await reg.getCard(card.id))! }; // a COPY: the registry mutates what it hands back
+    const after = await reg.updateCard(card.id, { model: "claude-opus-5" });
+    runScript.mockClear();
+
+    expect(await ws.applySessionChange(before, after)).toBe("restarted");
+    expect(scriptAt(0)).toContain(`tmux kill-session -t '${card.tmuxSession}'`);
+    expect((await reg.getCard(card.id))?.restartPendingAt ?? null).toBeNull();
+  });
+
+  it("applySessionChange: switching while Claude WORKS flags the card instead of interrupting the task", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    const before = { ...(await reg.getCard(card.id))! };
+    const after = await reg.updateCard(card.id, { model: "claude-opus-5" });
+    runScript.mockClear();
+
+    expect(await ws.applySessionChange(before, after)).toBe("pending");
+    expect(runScript).not.toHaveBeenCalled();
+    const flagged = await reg.getCard(card.id);
+    expect(flagged?.restartReason).toBe("config");
+    expect(flagged?.restartPendingAt).toBeTruthy();
+  });
+
+  it("applySessionChange: an ACCOUNT switch counts too, and an unrelated edit or a dead session changes nothing", async () => {
+    const { card } = await seed();
+    const account = await reg.createAccount({ name: "Personal" });
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "waiting");
+
+    const beforeAccount = { ...(await reg.getCard(card.id))! };
+    const withAccount = await reg.updateCard(card.id, { accountSlug: account.slug });
+    runScript.mockClear();
+    expect(await ws.applySessionChange(beforeAccount, withAccount)).toBe("restarted");
+
+    // A title edit is not a session change.
+    const beforeTitle = { ...(await reg.getCard(card.id))! };
+    const renamed = await reg.updateCard(card.id, { title: "renamed" });
+    runScript.mockClear();
+    expect(await ws.applySessionChange(beforeTitle, renamed)).toBe("none");
+    expect(runScript).not.toHaveBeenCalled();
+
+    // No live session (paused): the pin is simply what the next start will use.
+    await reg.pauseCard(card.id);
+    const beforePaused = { ...(await reg.getCard(card.id))! };
+    const pinned = await reg.updateCard(card.id, { model: "claude-haiku-4-5" });
+    runScript.mockClear();
+    expect(await ws.applySessionChange(beforePaused, pinned)).toBe("none");
+    expect(runScript).not.toHaveBeenCalled();
   });
 
   it("restartAllCards: restarts only the idle ones, SKIPS the working ones, ignores the never-opened", async () => {
@@ -890,7 +1080,7 @@ describe("long-lived token seeded on open (from the vault) and the session guard
     expect(script).toContain("chmod 600 '/root/.claude/.oauth-token'");
     // the seed comes BEFORE tmux (the session is born with the file already there)
     expect(script.indexOf(".oauth-token'")).toBeLessThan(script.indexOf("tmux new-session"));
-    expect(script).toContain(`'${CLAUDE}'`);
+    expect(script).toContain(sq(CLAUDE));
     for (const call of infoSpy.mock.calls) expect(JSON.stringify(call)).not.toContain(OAUTH);
   });
 
@@ -903,14 +1093,14 @@ describe("long-lived token seeded on open (from the vault) and the session guard
     await ws.openCard(card.id);
     const script = scriptAt(0);
     expect(script).toContain(`printf '%s' '${OAUTH}' > '/root/.claude-profiles/personal/.oauth-token'`);
-    expect(script).toContain(`'${guard("/root/.claude-profiles/personal")}claude; exec bash'`);
+    expect(script).toContain(sq(`${guard("/root/.claude-profiles/personal")}claude; exec bash`));
     expect(script).not.toContain("/root/.claude/.oauth-token");
 
     // another card on the default account with NO token: no printf, but the (harmless) guard stays
     const b = await reg.createCard({ projectId: card.projectId, title: "B" });
     await ws.openCard(b.id);
     expect(scriptAt(1)).not.toContain("printf '%s' 'sk-ant");
-    expect(scriptAt(1)).toContain(`'${CLAUDE}'`);
+    expect(scriptAt(1)).toContain(sq(CLAUDE));
   });
 });
 
@@ -974,7 +1164,7 @@ describe("the brain (global CLAUDE.md) seeded on open", () => {
 // Pre-provisioning and the per-card lock
 // ---------------------------------------------------------------------------
 
-describe("pre-provisioning (prepareCard) and the per-card lock", () => {
+describe("pre-provisioning (prepareCard) and the per-clone lock", () => {
   it("prepareCard runs the SAME script as the open but does NOT apply the open rule", async () => {
     const { card } = await seed();
     const prep = await ws.prepareCard(card.id, "local:tester");
@@ -985,7 +1175,7 @@ describe("pre-provisioning (prepareCard) and the per-card lock", () => {
     expect(script).toContain("git clone");
     expect(script).toContain("worktree add");
     expect(script).toContain("tmux new-session");
-    expect(script).toContain(`'${CLAUDE}'`); // first session: plain claude, no -c
+    expect(script).toContain(sq(CLAUDE)); // first session: plain claude, no -c
 
     expect(prep.preparedAt).toBeTypeOf("number");
     expect(prep.column).toBe("backlog");
@@ -1029,15 +1219,17 @@ describe("pre-provisioning (prepareCard) and the per-card lock", () => {
     expect(opened.column).toBe("waiting");
   });
 
-  it("LOCK: a prepare that FAILS does not wedge the card; different cards do not block each other", async () => {
-    const { card, project } = await seed();
-    const other = await reg.createCard({ projectId: project.id, title: "Other" });
+  it("LOCK: a prepare that FAILS does not wedge the card; a card of ANOTHER clone does not wait", async () => {
+    const { card } = await seed();
+    // Another project = another clone directory = another queue.
+    const otherProject = await reg.createProject({ name: "bank-api", repoFullName: "acme/bank-api" });
+    const other = await reg.createCard({ projectId: otherProject.id, title: "Other" });
     let failPrepare: () => void = () => {};
     runScript.mockImplementationOnce(() => new Promise((_res, rej) => { failPrepare = () => rej(new Error("docker died")); }));
     const prepareP = ws.prepareCard(card.id);
     await vi.waitFor(() => expect(runScript).toHaveBeenCalledTimes(1));
 
-    // the other card does not wait on this card's lock
+    // a card that writes to a DIFFERENT clone does not wait on this one's lock
     expect((await ws.openCard(other.id)).column).toBe("waiting");
     expect(runScript).toHaveBeenCalledTimes(2);
 
@@ -1047,6 +1239,51 @@ describe("pre-provisioning (prepareCard) and the per-card lock", () => {
 
     expect((await ws.openCard(card.id)).column).toBe("waiting");
     expect(runScript).toHaveBeenCalledTimes(3);
+  });
+
+  /**
+   * THE REGRESSION. Two cards of the same project used to hold two DIFFERENT locks, so creating a
+   * card while another was being provisioned ran two scripts against one clone: a second `git clone`
+   * into a half-populated directory, or a `fetch`/`worktree add` overlapping another. `set -e` then
+   * killed the script and the card simply refused to open — until the first clone finished and a
+   * retry silently worked, which is what made it look random.
+   */
+  it("LOCK: two cards of the SAME project NEVER run two scripts at once against the clone", async () => {
+    const { card, project } = await seed();
+    const sibling = await reg.createCard({ projectId: project.id, title: "Sibling" });
+    let live = 0;
+    let maxLive = 0;
+    runScript.mockImplementation(async () => {
+      live += 1;
+      maxLive = Math.max(maxLive, live);
+      await new Promise((r) => setTimeout(r, 10));
+      live -= 1;
+      return { stdout: "", stderr: "" };
+    });
+
+    await Promise.all([ws.prepareCard(card.id), ws.openCard(sibling.id)]);
+
+    expect(runScript).toHaveBeenCalledTimes(2);
+    expect(maxLive).toBe(1); // serialized, not concurrent
+  });
+
+  it("LOCK: a project with NO repository locks per card — nothing is shared, so nothing queues", async () => {
+    const project = await reg.createProject({ name: "scratch" });
+    const a = await reg.createCard({ projectId: project.id, title: "A" });
+    const b = await reg.createCard({ projectId: project.id, title: "B" });
+    let live = 0;
+    let maxLive = 0;
+    runScript.mockImplementation(async () => {
+      live += 1;
+      maxLive = Math.max(maxLive, live);
+      await new Promise((r) => setTimeout(r, 10));
+      live -= 1;
+      return { stdout: "", stderr: "" };
+    });
+
+    await Promise.all([ws.openCard(a.id), ws.openCard(b.id)]);
+
+    expect(maxLive).toBe(2); // no clone to corrupt: they run together
   });
 
   it("LOCK: two simultaneous opens on one card serialize and both see the same stamp", async () => {
@@ -1062,5 +1299,215 @@ describe("pre-provisioning (prepareCard) and the per-card lock", () => {
     expect(order).toEqual(["start", "end", "start", "end"]);
     expect(a.openedAt).toBe(b.openedAt);
     expect(b.column).toBe("waiting");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Probing the runner: what a session is REALLY doing
+// ---------------------------------------------------------------------------
+
+/**
+ * The board's dot comes from the Claude hooks, and the hooks do not fire for every way a session
+ * can go quiet: parked on the "Resume from summary" menu, on a permission question nobody answered,
+ * or killed. A card in `paused` that keeps a live session is exactly the bug this closes — Paused
+ * means "not running".
+ */
+describe("session probe (busy / idle / gone) and the pending-pause reconciler", () => {
+  /** The footer Claude Code prints WHILE it generates — the marker the probe keys on. */
+  const BUSY_PANE = [
+    "● Running the tests",
+    "✶ Thundering… (1m 8s · ↓ 3.6k tokens)",
+    "❯ ",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← for agents",
+  ].join("\n");
+  /** The same card one second later, with nothing running. */
+  const IDLE_PANE = [
+    "● OK",
+    "❯ ",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents",
+  ].join("\n");
+  /** The screen a resumed card sits on until somebody answers it — no hook ever fires here. */
+  const RESUME_MENU = [
+    "  This session is 13h 56m old and 327.8k tokens.",
+    "  ❯ 1. Resume from summary (recommended)",
+    "    2. Resume full session as-is",
+    "  Enter to confirm · Esc to cancel",
+  ].join("\n");
+
+  it("paneLooksBusy: only the 'esc to interrupt' footer counts as working", () => {
+    expect(ws.paneLooksBusy(BUSY_PANE)).toBe(true);
+    expect(ws.paneLooksBusy(IDLE_PANE)).toBe(false);
+    expect(ws.paneLooksBusy(RESUME_MENU)).toBe(false);
+    expect(ws.paneLooksBusy("")).toBe(false);
+    // The marker in the SCROLLBACK is not the footer: only the bottom of the pane is the status line.
+    expect(ws.paneLooksBusy(["esc to interrupt", ...Array(30).fill("output")].join("\n"))).toBe(false);
+  });
+
+  it("buildSessionProbeScript: read-only, session names quoted, one round trip for every card", () => {
+    const script = ws.buildSessionProbeScript(CONTAINER, ["card-aaaa1111", "card-bbbb2222"]);
+    expect(script).toContain(`docker exec '${CONTAINER}'`);
+    expect(script).toContain("has-session");
+    expect(script).toContain("capture-pane");
+    expect(script).toContain("'card-aaaa1111' 'card-bbbb2222'");
+    // Nothing here may change the session.
+    expect(script).not.toContain("kill-session");
+    expect(script).not.toContain("send-keys");
+  });
+
+  it("parseProbeOutput: reads the states and ignores anything else on stdout", () => {
+    const states = ws.parseProbeOutput("card-a busy\ncard-b idle\ncard-c gone\nsome noise\n");
+    expect([...states]).toEqual([["card-a", "busy"], ["card-b", "idle"], ["card-c", "gone"]]);
+  });
+
+  it("probeSessions: a runner that is down answers nothing — every card is `unknown`, never `idle`", async () => {
+    runScript.mockRejectedValue(new Error("host is down"));
+    expect(await ws.probeSessions(["card-aaaa1111"])).toEqual(new Map());
+    expect(await ws.probeCardSession({ tmuxSession: "card-aaaa1111" })).toBe("unknown");
+  });
+
+  it("pauseMustBeEffective: the runner only ever gets to CONTRADICT a working dot", () => {
+    expect(ws.pauseMustBeEffective("waiting", "busy")).toBe(true); // idle by the board's own reckoning
+    expect(ws.pauseMustBeEffective(null, "unknown")).toBe(true);
+    expect(ws.pauseMustBeEffective("working", "busy")).toBe(false);
+    expect(ws.pauseMustBeEffective("working", "unknown")).toBe(false);
+    expect(ws.pauseMustBeEffective("working", "idle")).toBe(true);
+    expect(ws.pauseMustBeEffective("working", "gone")).toBe(true);
+  });
+
+  it("overduePauses: `idle` and `gone` are overdue; `busy` and a missing answer are left alone", () => {
+    const cards = [{ tmuxSession: "a" }, { tmuxSession: "b" }, { tmuxSession: "c" }, { tmuxSession: "d" }];
+    const states = new Map<string, ws.SessionState>([
+      ["a", "idle"], ["b", "busy"], ["c", "gone"],
+    ]);
+    expect(ws.overduePauses(cards, states).map((c) => c.tmuxSession)).toEqual(["a", "c"]);
+  });
+
+  it("reconcilePausedCards: a pending pause whose Claude went quiet is carried out (stamp + both sessions killed)", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    // The user drags it into Paused while Claude is genuinely busy: a pending pause.
+    runScript.mockResolvedValue({ stdout: `${card.tmuxSession} busy\n`, stderr: "" });
+    await ws.pauseCard(card.id);
+    expect((await reg.getCard(card.id))?.pausedAt ?? null).toBeNull();
+
+    // Later, Claude stops without ever firing a Stop hook (it is sitting on the resume menu).
+    runScript.mockClear();
+    runScript.mockResolvedValue({ stdout: `${card.tmuxSession} idle\n`, stderr: "" });
+    expect(await ws.reconcilePausedCards()).toBe(1);
+
+    const done = await reg.getCard(card.id);
+    expect(done?.pausedAt).toBeTypeOf("number");
+    expect(done?.status).toBeNull();
+    expect(done?.column).toBe("paused");
+    expect(lastScript()).toContain(`tmux kill-session -t '${card.tmuxSession}'`);
+    expect(lastScript()).toContain(`tmux kill-session -t '${card.tmuxSession}-sh'`);
+
+    // Idempotent: the card has no live session any more, so the next tick has nothing to do.
+    runScript.mockClear();
+    expect(await ws.reconcilePausedCards()).toBe(0);
+    expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("reconcilePausedCards: a card that is really working is NOT cut off, and cards outside Paused are never touched", async () => {
+    const { project, card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    runScript.mockResolvedValue({ stdout: `${card.tmuxSession} busy\n`, stderr: "" });
+    await ws.pauseCard(card.id); // pending
+
+    // A second card, working, in the `working` column: none of the reconciler's business.
+    const other = await reg.createCard({ projectId: project.id, title: "still going" });
+    runScript.mockResolvedValue({ stdout: "", stderr: "" });
+    await ws.openCard(other.id);
+    await reg.applyCardStatus(other.id, "working");
+
+    runScript.mockClear();
+    runScript.mockResolvedValue({ stdout: `${card.tmuxSession} busy\n`, stderr: "" });
+    expect(await ws.reconcilePausedCards()).toBe(0);
+    // Only the pending pause was probed — and only with a read-only command.
+    expect(runScript).toHaveBeenCalledTimes(1);
+    expect(scriptAt(0)).toContain(card.tmuxSession);
+    expect(scriptAt(0)).not.toContain(other.tmuxSession);
+    expect((await reg.getCard(other.id))?.pausedAt ?? null).toBeNull();
+    expect((await reg.getCard(other.id))?.column).toBe("working");
+  });
+
+  it("startPauseReconciler: ticks on the interval and stops when told to", async () => {
+    vi.useFakeTimers();
+    try {
+      const { card } = await seed();
+      await ws.openCard(card.id);
+      await reg.applyCardStatus(card.id, "working");
+      runScript.mockResolvedValue({ stdout: `${card.tmuxSession} busy\n`, stderr: "" });
+      await ws.pauseCard(card.id);
+
+      runScript.mockClear();
+      runScript.mockResolvedValue({ stdout: `${card.tmuxSession} gone\n`, stderr: "" });
+      const stop = ws.startPauseReconciler(1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect((await reg.getCard(card.id))?.pausedAt).toBeTypeOf("number");
+
+      stop();
+      runScript.mockClear();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(runScript).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resumeCard: a paused card comes back with its session and its conversation", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await ws.pauseCard(card.id);
+    expect((await reg.getCard(card.id))?.pausedAt).toBeTypeOf("number");
+
+    runScript.mockClear();
+    const resumed = await ws.resumeCard(card.id, "drag out of Paused");
+    expect(resumed.pausedAt).toBeNull();
+    expect(resumed.openedAt).toBeTypeOf("number");
+    // Same conversation: the session is recreated with `claude -c`.
+    expect(lastScript()).toContain(sq(CLAUDE_C));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GitHub token per card (push/PR as the project's connection, not the runner's org login)
+// ---------------------------------------------------------------------------
+
+describe("card push as the project's GitHub connection (GH_TOKEN)", () => {
+  const GH = "ghp_ABCdef1234567890ABCdef1234567890";
+  const ghGuard = (f: string) => `if [ -s ${f} ]; then export GH_TOKEN="$(cat ${f})"; fi; `;
+  const openOpts = {
+    containerName: CONTAINER,
+    tmuxSession: "card-abc",
+    cardId: "id-1",
+    statusUrl: STATUS_URL,
+    cwd: "/work/x",
+  };
+
+  it("sessionCommand exports GH_TOKEN from the file when given one, right after the Claude-token guard", () => {
+    const f = "/root/.vibehub/gh/id-1.token";
+    expect(ws.sessionCommand({ ghTokenFile: f })).toBe(`${guard()}${ghGuard(f)}claude; exec bash`);
+    // no file given = no GH_TOKEN at all (a card without a connection keeps the ambient gh login)
+    expect(ws.sessionCommand({})).toBe(CLAUDE);
+    expect(ws.sessionCommand({})).not.toContain("GH_TOKEN");
+  });
+
+  it("open WITH a connection token writes it 600 over stdin, and the session reads the FILE (token never in the command)", () => {
+    const script = ws.buildOpenScript({ ...openOpts, ghToken: GH });
+    expect(script).toContain(`printf '%s' '${GH}' > '/root/.vibehub/gh/id-1.token'`);
+    expect(script).toContain("chmod 600 '/root/.vibehub/gh/id-1.token'");
+    expect(script).toContain(ghGuard("/root/.vibehub/gh/id-1.token"));
+    // the value appears ONLY on the write line — the export reads the file, never inlines the token
+    expect(script).not.toContain(`GH_TOKEN="${GH}"`);
+  });
+
+  it("open WITHOUT a connection removes the token file (kept in sync) and emits no GH_TOKEN guard", () => {
+    const script = ws.buildOpenScript(openOpts);
+    expect(script).toContain("rm -f '/root/.vibehub/gh/id-1.token'");
+    expect(script).not.toContain("GH_TOKEN");
+    expect(script).not.toContain(GH);
   });
 });

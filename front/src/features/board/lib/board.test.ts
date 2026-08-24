@@ -3,6 +3,7 @@ import {
   COLUMNS,
   groupByColumn,
   lastActivity,
+  dropPosition,
   moveCardLocal,
   moveProjectLocal,
   nextPosition,
@@ -11,8 +12,12 @@ import {
   sortByRecency,
   sortCards,
   sortProjects,
+  cardDot,
   cardHref,
+  declaredStateChip,
+  dotClass,
   locationHref,
+  recentCards,
   splitSidebarCards,
   statusDot,
   writeLocation,
@@ -106,14 +111,61 @@ describe("moveCardLocal", () => {
   it("moves only the card it was asked to move", () => {
     const cards = [card({ id: "a" }), card({ id: "b" })];
     const next = moveCardLocal(cards, "a", "done", 3);
-    expect(next.find((c) => c.id === "a")).toMatchObject({ column: "done", position: 3 });
+    // Clamped to the end of an empty column, exactly as the server clamps it.
+    expect(next.find((c) => c.id === "a")).toMatchObject({ column: "done", position: 0 });
     expect(next.find((c) => c.id === "b")).toMatchObject({ column: "backlog" });
   });
 
+  it("renumbers the column it lands in, so a reorder holds until the refetch", () => {
+    const cards = [
+      card({ id: "a", position: 0 }),
+      card({ id: "b", position: 1 }),
+      card({ id: "c", position: 2 }),
+    ];
+    // Third card to the top of its own column.
+    const next = sortCards(moveCardLocal(cards, "c", "backlog", 0));
+    expect(next.map((c) => c.id)).toEqual(["c", "a", "b"]);
+    expect(next.map((c) => c.position)).toEqual([0, 1, 2]);
+  });
+
+  it("closes the gap left behind in the column it came from", () => {
+    const cards = [
+      card({ id: "a", position: 0 }),
+      card({ id: "b", position: 1 }),
+      card({ id: "c", position: 2 }),
+    ];
+    const next = moveCardLocal(cards, "a", "done", 0);
+    expect(next.filter((c) => c.column === "backlog").map((c) => c.position)).toEqual([0, 1]);
+  });
+
   it("leaves the input untouched", () => {
-    const cards = [card({ id: "a" })];
-    moveCardLocal(cards, "a", "done", 1);
+    const cards = [card({ id: "a" }), card({ id: "b", position: 1 })];
+    moveCardLocal(cards, "b", "backlog", 0);
+    expect(cards.map((c) => c.position)).toEqual([0, 1]);
     expect(cards[0]?.column).toBe("backlog");
+  });
+});
+
+describe("dropPosition", () => {
+  it("is the gap itself for a card arriving from another column", () => {
+    expect(dropPosition(0, -1, 3)).toBe(0);
+    expect(dropPosition(2, -1, 3)).toBe(2);
+  });
+
+  it("clamps a gap past the end of the destination", () => {
+    expect(dropPosition(9, -1, 3)).toBe(3);
+  });
+
+  it("discounts the card's own slot when it is already in the column", () => {
+    // [a, b, c], dragging c (index 2) to the very top.
+    expect(dropPosition(0, 2, 3)).toBe(0);
+    // ...and dragging a (index 0) to the very bottom.
+    expect(dropPosition(3, 0, 3)).toBe(2);
+  });
+
+  it("answers null for the two gaps either side of the card itself", () => {
+    expect(dropPosition(1, 1, 3)).toBeNull();
+    expect(dropPosition(2, 1, 3)).toBeNull();
   });
 });
 
@@ -129,6 +181,69 @@ describe("statusDot", () => {
   it("shows NO dot when the runner has reported nothing", () => {
     expect(statusDot(null)).toBeNull();
     expect(statusDot(undefined)).toBeNull();
+  });
+});
+
+describe("cardDot", () => {
+  it("is the status dot for a card with a session", () => {
+    expect(cardDot(card({ id: "a", status: "working" }))?.tone).toBe("ok");
+    expect(cardDot(card({ id: "a", status: "waiting" }))?.tone).toBe("warn");
+    expect(cardDot(card({ id: "a" }))).toBeNull();
+  });
+
+  it("goes grey and still once the card is hibernated, whatever the last status said", () => {
+    const dot = cardDot(card({ id: "a", status: "waiting", hibernatedAt: 5 }));
+    expect(dot?.tone).toBe("cold");
+    expect(dot?.live).toBe(false);
+    // A green dot on a card with no process behind it would be a lie.
+    expect(cardDot(card({ id: "a", status: "working", hibernatedAt: 5 }))?.tone).toBe("cold");
+  });
+
+  it("gives each tone its own colour", () => {
+    const classes = (["ok", "warn", "cold"] as const).map(dotClass);
+    expect(new Set(classes).size).toBe(3);
+  });
+});
+
+describe("declaredStateChip", () => {
+  it("is null until the agent has declared a state", () => {
+    expect(declaredStateChip(card({ id: "a" }))).toBeNull();
+  });
+
+  it("labels each state and gives each its own colour", () => {
+    expect(declaredStateChip(card({ id: "a", declaredState: "ready" }))?.label).toBe("Ready");
+    expect(declaredStateChip(card({ id: "a", declaredState: "needs_me" }))?.label).toBe("Needs you");
+    const classes = (["working", "ready", "needs_me", "blocked"] as const).map(
+      (s) => declaredStateChip(card({ id: "a", declaredState: s }))?.className,
+    );
+    expect(new Set(classes).size).toBe(4);
+  });
+});
+
+describe("recentCards", () => {
+  it("is the conversations you have actually been in, newest first", () => {
+    const recent = recentCards([
+      card({ id: "never-opened", column: "backlog" }),
+      card({ id: "oldest", column: "waiting", openedAt: 10 }),
+      card({ id: "newest", column: "working", openedAt: 5, statusAt: 90 }),
+      card({ id: "middle", column: "paused", openedAt: 50 }),
+    ]);
+    expect(recent.map((c) => c.id)).toEqual(["newest", "middle", "oldest"]);
+  });
+
+  it("drops what you finished, keeps what merely went cold", () => {
+    const recent = recentCards([
+      card({ id: "done", column: "done", openedAt: 99 }),
+      card({ id: "hibernated", column: "waiting", openedAt: 10, hibernatedAt: 20 }),
+    ]);
+    expect(recent.map((c) => c.id)).toEqual(["hibernated"]);
+  });
+
+  it("stops at the limit — it is a glance, not a second board", () => {
+    const many = Array.from({ length: 9 }, (_, i) => card({ id: `c${i}`, column: "waiting", openedAt: i + 1 }));
+    expect(recentCards(many)).toHaveLength(5);
+    expect(recentCards(many, 2).map((c) => c.id)).toEqual(["c8", "c7"]);
+    expect(recentCards(many, 0)).toEqual([]);
   });
 });
 

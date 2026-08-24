@@ -18,7 +18,10 @@ import { sessionRoutes } from "./routes/session.js";
 import { agentRoutes } from "./routes/agent.js";
 import { mcpRoutes } from "./routes/mcp.js";
 import { cardSessionRoutes } from "./routes/cardSession.js";
+import { chatRoutes } from "./routes/chat.js";
 import { accountLoginRoutes } from "./routes/accountLogin.js";
+import { startPauseReconciler, sweepIdleCards } from "./services/board/workspace.js";
+import { startOutboxFlusher } from "./services/board/outbox.js";
 
 /**
  * The vibehub server: one process serving the API, the websocket terminals, and (in production) the
@@ -52,6 +55,7 @@ export async function buildServer() {
   await app.register(agentRoutes);
   await app.register(mcpRoutes);
   await app.register(cardSessionRoutes);
+  await app.register(chatRoutes);
   await app.register(accountLoginRoutes);
 
   const staticDir = process.env.VIBEHUB_STATIC_DIR
@@ -85,10 +89,42 @@ export async function buildServer() {
   return app;
 }
 
+/**
+ * How often the idle sweep runs. Not the threshold — that is `idleHibernateMinutes` in settings and
+ * is measured in hours; this is only the resolution at which we notice, and five minutes of extra
+ * life on a terminal nobody has touched since lunch costs nothing.
+ *
+ * It lives in `main()` rather than in `buildServer()` on purpose: tests build the server and must
+ * not inherit a timer that kills sessions underneath them.
+ */
+const IDLE_SWEEP_MS = 5 * 60_000;
+
+function startIdleSweep(): NodeJS.Timeout {
+  const timer = setInterval(() => {
+    void sweepIdleCards().catch((err: unknown) => {
+      // Best-effort by design: a runner that is down means the sweep waits five more minutes.
+      logger.warn({ err }, "idle sweep failed — no card was hibernated this pass");
+    });
+  }, IDLE_SWEEP_MS);
+  // The sweep must never be the reason the process stays alive.
+  timer.unref?.();
+  return timer;
+}
+
 async function main(): Promise<void> {
   await mkdir(config.dataDir, { recursive: true });
   const app = await buildServer();
+  // The outbox backstop. Started HERE and not in buildServer(): tests build servers by the dozen
+  // and none of them wants a timer poking at a runner.
+  startOutboxFlusher();
   await app.listen({ port: config.port, host: config.host });
+  startIdleSweep();
+  // Pending pauses are normally closed by the Stop hook, but a session can go quiet without ever
+  // firing one (Claude parked on the "Resume from summary" menu, on a permission question, or
+  // killed). This asks the runner about those cards on a timer and finishes the pause — a card in
+  // Paused must not be running. Started HERE and not in buildServer, for the same reason as the
+  // idle sweep: tests that boot the app must not inherit background work.
+  startPauseReconciler();
   logger.info(
     { port: config.port, dataDir: config.dataDir, runner: config.runner.kind },
     `vibehub listening on http://${config.host}:${config.port}`,

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BoardPage } from "@/features/board/BoardPage";
 import { renderApp } from "@/test/render";
@@ -171,6 +171,10 @@ function serve(overrides: { cards?: BoardCard[]; projects?: BoardProject[] } = {
       });
     }
     if (url === "/github") return Promise.resolve({ connected: true, login: "operator" });
+    if (/^\/cards\/[^/]+\/messages$/.test(url)) return Promise.resolve({ pending: [], agent: "running" });
+    if (/^\/cards\/[^/]+\/session$/.test(url)) {
+      return Promise.resolve({ model: null, modelLabel: null, account: { slug: null, name: "" } });
+    }
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
 }
@@ -351,6 +355,52 @@ describe("BoardPage — the sidebar", () => {
     expect(within(nav).queryByRole("link", { name: "fix the totals" })).not.toBeInTheDocument();
   });
 
+  /**
+   * The card you just named has to be THERE. It used to need a round trip to the server AND a status
+   * from the runner before it existed on screen: a new card lands in the backlog, and the sidebar
+   * only listed the live columns — so you typed a title, got nothing, and clicked at a row that was
+   * not there yet.
+   */
+  it("puts a card you just created in the list at once, without waiting for a refetch", async () => {
+    const user = userEvent.setup();
+    // The server keeps answering with the OLD list: only the local write can put the row on screen.
+    mockPost.mockResolvedValue({
+      card: {
+        id: "c9", projectId: "p1", title: "brand new", column: "backlog", position: 1,
+        tmuxSession: "card-c9", worktreeSlug: "brand-new-c9", createdAt: 9,
+      },
+    });
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+
+    await user.click(within(nav).getByRole("button", { name: "New card in billing" }));
+    await user.type(await screen.findByLabelText("Title"), "brand new");
+    // From here on the server never answers another card list: whatever shows up on screen is the
+    // local write, not a refetch.
+    const stale = mockGet.getMockImplementation()!;
+    mockGet.mockImplementation((url: string) =>
+      url.endsWith("/cards") ? new Promise(() => {}) : stale(url),
+    );
+    await user.click(screen.getByRole("button", { name: "Create card" }));
+
+    expect(mockPost).toHaveBeenCalledWith("/cards", expect.objectContaining({ projectId: "p1", title: "brand new" }));
+    // In the backlog, so it rides with the folded cards — but the count says it exists NOW.
+    expect(await within(nav).findByRole("button", { name: "show more (2)" })).toBeInTheDocument();
+    await user.click(within(nav).getByRole("button", { name: "show more (2)" }));
+    expect(within(nav).getByRole("link", { name: "brand new" })).toBeInTheDocument();
+    // And on the board itself, in the column it was created in.
+    expect(within(screen.getByRole("region", { name: "Backlog" })).getByRole("link", { name: "brand new" }))
+      .toBeInTheDocument();
+  });
+
+  it("keeps a row for the card you are IN, even when it sits in the backlog", async () => {
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c1" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+    // c1 is a backlog card: it is on screen, so it is in the list — not hidden behind "show more".
+    expect(await within(nav).findByRole("link", { name: "fix the totals" })).toBeInTheDocument();
+    expect(within(nav).queryByRole("button", { name: /show more/ })).not.toBeInTheDocument();
+  });
+
   it("deselects the project when its row is clicked a second time", async () => {
     const user = userEvent.setup();
     renderApp(<BoardPage />, { route: "/?project=p1" });
@@ -359,9 +409,70 @@ describe("BoardPage — the sidebar", () => {
 
     await user.click(within(nav).getByRole("button", { name: "billing" }));
 
-    // Deselected: the aggregated board, the cards folded away, and no board of its own.
+    // Deselected: the aggregated board, and no board of its own. The cards stay UNFOLDED — the
+    // fold belongs to the chevron now, and navigating never closes a list you opened.
     expect(await screen.findByText(/4 cards · 2 projects/)).toBeInTheDocument();
+    expect(within(nav).getByRole("link", { name: "chase the flake" })).toBeInTheDocument();
+  });
+
+  it("unfolds another project from the chevron WITHOUT leaving the card you are in", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    await screen.findByTestId("terminal");
+    const nav = sidebar();
+
+    await user.click(within(nav).getByRole("button", { name: "Show gateway's cards" }));
+
+    // The other project's cards are listed, and the terminal never went anywhere.
+    expect(await within(nav).findByRole("link", { name: "rotate the key" })).toBeInTheDocument();
+    expect(screen.getByTestId("terminal")).toHaveTextContent("c2");
+  });
+
+  it("folds a project away again from the same chevron", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+    await within(nav).findByRole("link", { name: "chase the flake" });
+
+    await user.click(within(nav).getByRole("button", { name: "Hide billing's cards" }));
+
     expect(within(nav).queryByRole("link", { name: "chase the flake" })).not.toBeInTheDocument();
+    // And the project is still the selected one — folding is not navigating.
+    expect(screen.getByRole("region", { name: "Working" })).toBeInTheDocument();
+  });
+
+  it("opens a card belonging to ANOTHER project in one click", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    await screen.findByTestId("terminal");
+    const nav = sidebar();
+
+    await user.click(within(nav).getByRole("button", { name: "Show gateway's cards" }));
+    await user.click(await within(nav).findByRole("link", { name: "rotate the key" }));
+
+    // Straight from one agent to another, without passing through the other project's board. The
+    // card you came from is still mounted behind it — that is the deck — so the assertion is about
+    // which pane is ON TOP, not about how many exist.
+    await waitFor(() => expect(activeTerminal()).toHaveTextContent("c4"));
+    // ...and the project came with it: the sidebar marks gateway as the one you are in.
+    expect(within(sidebar()).getByRole("button", { name: "gateway" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("takes the open card up to its own board when its project's name is clicked", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    await screen.findByTestId("terminal");
+
+    await user.click(within(sidebar()).getByRole("button", { name: "billing" }));
+
+    // One level up: billing's board, NOT the aggregated one. The card's pane is parked, not gone.
+    await waitFor(() => expect(activeTerminal()).toBeNull());
+    expect(await screen.findByText(/3 cards/)).toBeInTheDocument();
+    // Not the aggregated board, which is the one that counts projects alongside cards.
+    expect(screen.queryByText(/cards · /)).not.toBeInTheDocument();
   });
 
   it("jumps straight to another project's board from wherever you are", async () => {
@@ -401,13 +512,17 @@ describe("BoardPage — the sidebar", () => {
     expect(within(sidebar()).getByRole("button", { name: "gateway" })).toBeInTheDocument();
   });
 
-  it("renames a card in place on a double-click", async () => {
+  it("renames a card in place from its menu, without opening the card", async () => {
     mockPatch.mockResolvedValue({ card: { ...cards[1]!, title: "chase the other flake" } });
     const user = userEvent.setup();
     renderApp(<BoardPage />, { route: "/?project=p1" });
     const nav = await screen.findByRole("navigation", { name: /projects/i });
 
-    await user.dblClick(await within(nav).findByRole("link", { name: "chase the flake" }));
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: await within(nav).findByRole("link", { name: "chase the flake" }),
+    });
+    await user.click(await screen.findByRole("menuitem", { name: "Rename" }));
     const input = await screen.findByLabelText("Rename card");
     await user.clear(input);
     await user.type(input, "chase the other flake{Enter}");
@@ -422,7 +537,11 @@ describe("BoardPage — the sidebar", () => {
     renderApp(<BoardPage />, { route: "/?project=p1" });
     const nav = await screen.findByRole("navigation", { name: /projects/i });
 
-    await user.dblClick(await within(nav).findByRole("link", { name: "chase the flake" }));
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: await within(nav).findByRole("link", { name: "chase the flake" }),
+    });
+    await user.click(await screen.findByRole("menuitem", { name: "Rename" }));
     await user.type(await screen.findByLabelText("Rename card"), "nonsense{Escape}");
 
     await waitFor(() => expect(screen.queryByLabelText("Rename card")).not.toBeInTheDocument());
@@ -439,10 +558,48 @@ describe("BoardPage — the sidebar", () => {
     await user.pointer({ keys: "[MouseRight]", target: row });
     const menu = await screen.findByRole("menu", { name: "Actions for chase the flake" });
     expect(within(menu).getAllByRole("menuitem").map((i) => i.textContent)).toEqual([
+      "Rename",
       "Pause",
       "Restart",
+      // Hibernate sits between the two ways of stopping and the way of ending: it closes the
+      // terminal without moving the card anywhere.
+      "Hibernate",
       "Finish",
     ]);
+  });
+
+  // A double-click used to be the way in, and its FIRST click opens (or, on the card already open,
+  // closes) the card — the rename box arrived over a terminal that had just been torn down.
+  it("does not rename on a double-click, and opens the card exactly once", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+
+    await user.dblClick(await within(nav).findByRole("link", { name: "chase the flake" }));
+
+    expect(await screen.findByTestId("terminal")).toHaveTextContent("c2");
+    expect(screen.queryByLabelText("Rename card")).not.toBeInTheDocument();
+  });
+
+  it("opens the card menu on a long press, and the press does not open the card", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderApp(<BoardPage />, { route: "/?project=p1" });
+      const nav = await screen.findByRole("navigation", { name: /projects/i });
+      const row = await within(nav).findByRole("link", { name: "chase the flake" });
+
+      fireEvent.touchStart(row, { touches: [{ clientX: 40, clientY: 120 }] });
+      await act(async () => {
+        vi.advanceTimersByTime(600);
+      });
+      fireEvent.touchEnd(row);
+      fireEvent.click(row);
+
+      expect(await screen.findByRole("menu", { name: "Actions for chase the flake" })).toBeInTheDocument();
+      expect(screen.queryByTestId("terminal")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reorders a project from its right-click menu", async () => {

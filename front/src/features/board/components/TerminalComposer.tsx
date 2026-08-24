@@ -24,15 +24,32 @@ import { t as translate, useT } from "@/i18n";
  * need telling actually read it.
  *
  * Everything that arrives from somewhere other than the keyboard lands the same way — appended, not
- * sent. A pasted or dropped IMAGE is uploaded and its runner path appended; a RECORDING is
- * transcribed and its text appended. Speak three times and you get one message, because dictation
- * is not a series of commands: it is one thought, said in pieces, and the field is where it becomes
- * a sentence you are willing to stand behind.
+ * sent. A RECORDING is transcribed and its text appended. Speak three times and you get one
+ * message, because dictation is not a series of commands: it is one thought, said in pieces, and
+ * the field is where it becomes a sentence you are willing to stand behind.
+ *
+ * ## Images are attachments, not paths
+ *
+ * Pasting a screenshot used to type `/work/.uploads/<card>/1712-shot.png` into the field: you
+ * pasted a picture and got a filename, and there was no way to tell what you had pasted, or that
+ * you had pasted twice. Now the image appears AS AN IMAGE the moment it lands — a thumbnail, with
+ * its upload running behind it — and the path only exists at send time, appended to the message so
+ * the agent can read the file. Press Enter while an upload is still flying and the message waits
+ * for it rather than going out half-formed.
+ *
+ * ## The field remembers
+ *
+ * A half-written message is not lost by walking to another card: drafts (text AND attachments) are
+ * kept per card and restored on the way back — see `draftStore` below.
  */
 export interface TerminalComposerProps {
-  /** Delivers the text to the session. The trailing carriage return is added here. */
-  onSend: (text: string) => void;
-  /** Uploads an image and resolves with its path inside the runner (null = nothing to append). */
+  /**
+   * Hands the composed message over — the text alone, with no trailing carriage return: this is a
+   * MESSAGE, not a keystroke, and whoever delivers it decides how it is submitted. A rejected
+   * promise leaves the text in the field rather than pretending it went.
+   */
+  onSend: (text: string) => void | Promise<unknown>;
+  /** Uploads an image and resolves with its path inside the runner (null = the upload failed). */
   onUploadImage?: (file: File) => Promise<string | null>;
   /** The card recordings are transcribed against. Omit and there is no microphone at all. */
   cardId?: string;
@@ -52,6 +69,12 @@ export interface TerminalComposerProps {
    */
   active?: boolean;
   className?: string;
+  /**
+   * Take the keyboard on mount. THIS field is where a card is written from — opening a card and
+   * finding the caret in the raw terminal is how a first message gets typed into the wrong place.
+   * Off on a phone, where focusing a field throws the on-screen keyboard over half the screen.
+   */
+  autoFocus?: boolean;
 }
 
 /** Image files in a paste or drop payload, ignoring everything else. */
@@ -75,6 +98,139 @@ export function appendFragment(current: string, fragment: string): string {
   const t = fragment.trim();
   if (!t) return current;
   return current ? `${current} ${t}` : t;
+}
+
+/* ------------------------------------------------------------- attachments */
+
+/** An image sitting in the field, from the instant it is pasted to the moment it is sent. */
+export interface Attachment {
+  id: string;
+  name: string;
+  /** `blob:` URL for the thumbnail. In memory only — it dies with the tab, the path does not. */
+  previewUrl?: string;
+  /** Where it landed inside the runner. Only a `ready` attachment has one. */
+  path?: string;
+  status: "uploading" | "ready" | "error";
+}
+
+/**
+ * The text that actually goes to the agent: what was typed, then the paths of every image that
+ * uploaded. The paths go LAST so the sentence still reads as a sentence — "look at this bug" comes
+ * before the file, the way it does when a person writes it by hand. PURE.
+ */
+export function composeMessage(text: string, attachments: readonly Attachment[]): string {
+  const paths = attachments.filter((a) => a.status === "ready" && a.path).map((a) => a.path as string);
+  return [text.trim(), ...paths].filter(Boolean).join(" ");
+}
+
+/** true = something is still uploading, so a send has to wait for it. PURE. */
+export function hasPendingUpload(attachments: readonly Attachment[]): boolean {
+  return attachments.some((a) => a.status === "uploading");
+}
+
+/** Nothing typed and no image that made it: there is no message here. PURE. */
+export function isEmptyDraft(text: string, attachments: readonly Attachment[]): boolean {
+  return !text.trim() && !attachments.some((a) => a.status !== "error");
+}
+
+/* ------------------------------------------------------------------ drafts */
+
+export const DRAFTS_KEY = "vibehub.composerDrafts";
+
+/** What survives a reload: the words, and the images that finished uploading (paths, not blobs). */
+export interface StoredDraft {
+  text: string;
+  attachments: { id: string; name: string; path: string }[];
+}
+
+/**
+ * Drafts, per card, in TWO layers.
+ *
+ * The in-memory map is the one that matters while the app is open: it keeps the whole attachment,
+ * blob preview included, so hopping to another card and back shows exactly the field you left —
+ * thumbnails and all. localStorage is the reload layer, and a `blob:` URL cannot survive one, so
+ * only the finished uploads (name + runner path) are written there.
+ *
+ * Nothing here is a cache to invalidate: the composer writes on every keystroke and clears on send.
+ */
+const memoryDrafts = new Map<string, { text: string; attachments: Attachment[] }>();
+
+function readStoredDrafts(): Record<string, StoredDraft> {
+  try {
+    const raw = localStorage.getItem(DRAFTS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, StoredDraft>) : {};
+  } catch {
+    return {}; // private mode, quota, a corrupted value: a draft is never worth an exception
+  }
+}
+
+function writeStoredDrafts(drafts: Record<string, StoredDraft>): void {
+  try {
+    localStorage.setItem(DRAFTS_KEY, JSON.stringify(drafts));
+  } catch {
+    /* nothing to do: the in-memory draft still works for this session */
+  }
+}
+
+/** Remembers a card's unsent field. Called on every change — cheap, and the point of the feature. */
+export function saveDraft(cardId: string, text: string, attachments: readonly Attachment[]): void {
+  const list = [...attachments];
+  if (!text.trim() && list.length === 0) {
+    clearDraft(cardId);
+    return;
+  }
+  memoryDrafts.set(cardId, { text, attachments: list });
+  const drafts = readStoredDrafts();
+  drafts[cardId] = {
+    text,
+    attachments: list
+      .filter((a) => a.status === "ready" && a.path)
+      .map((a) => ({ id: a.id, name: a.name, path: a.path as string })),
+  };
+  writeStoredDrafts(drafts);
+}
+
+/** The draft to restore for a card: the live one if this session wrote it, else the stored one. */
+export function loadDraft(cardId: string): { text: string; attachments: Attachment[] } {
+  const live = memoryDrafts.get(cardId);
+  if (live) return { text: live.text, attachments: [...live.attachments] };
+  const stored = readStoredDrafts()[cardId];
+  if (!stored) return { text: "", attachments: [] };
+  return {
+    text: typeof stored.text === "string" ? stored.text : "",
+    // No `previewUrl`: a blob from a previous page load points at nothing. The chip falls back to
+    // the file's name, which is still enough to know what is attached.
+    attachments: (Array.isArray(stored.attachments) ? stored.attachments : [])
+      .filter((a) => a && typeof a.path === "string")
+      .map((a) => ({ id: a.id, name: a.name, path: a.path, status: "ready" as const })),
+  };
+}
+
+/** Tests only: forget every draft, in both layers. */
+export function resetDraftsForTesting(): void {
+  memoryDrafts.clear();
+  try {
+    localStorage.removeItem(DRAFTS_KEY);
+  } catch {
+    /* nothing stored */
+  }
+}
+
+/** Forgets a card's draft — on send, and when the card itself is gone. */
+export function clearDraft(cardId: string): void {
+  memoryDrafts.delete(cardId);
+  const drafts = readStoredDrafts();
+  if (!(cardId in drafts)) return;
+  delete drafts[cardId];
+  writeStoredDrafts(drafts);
+}
+
+/** Ids that do not depend on `crypto.randomUUID` (absent in some jsdom/webview combinations). */
+let attachmentSeq = 0;
+function nextAttachmentId(): string {
+  attachmentSeq += 1;
+  return `att-${Date.now().toString(36)}-${attachmentSeq}`;
 }
 
 /**
@@ -133,29 +289,133 @@ export function TerminalComposer({
   placeholder,
   active = true,
   className,
+  autoFocus = true,
 }: TerminalComposerProps) {
   const t = useT();
   const isMobile = useIsMobile();
-  const [text, setText] = React.useState("");
+  // The draft key. A composer with no card (the runner console) keeps its field in memory only.
+  const draftKey = cardId ?? "";
+  const initial = React.useMemo(() => (draftKey ? loadDraft(draftKey) : { text: "", attachments: [] }), [draftKey]);
+  const [text, setText] = React.useState(initial.text);
+  const [attachments, setAttachments] = React.useState<Attachment[]>(initial.attachments);
+  const [sending, setSending] = React.useState(false);
+  /**
+   * Enter was pressed while an image was still uploading. The message is not dropped and it is not
+   * sent without its picture: it goes the moment the last upload lands (see the effect below).
+   */
+  const [sendWhenReady, setSendWhenReady] = React.useState(false);
   const ref = React.useRef<HTMLTextAreaElement | null>(null);
+
+  // Switching cards swaps the whole field for that card's draft — including the one just restored
+  // on mount, which is why this runs on `draftKey` and not only on the state initialiser.
+  React.useEffect(() => {
+    const draft = draftKey ? loadDraft(draftKey) : { text: "", attachments: [] };
+    setText(draft.text);
+    setAttachments(draft.attachments);
+    setSendWhenReady(false);
+  }, [draftKey]);
+
+  // Persisted on every change: what makes leaving the card safe. Uploads in flight are written too
+  // (as nothing, since they have no path yet) — the store only ever keeps what can be restored.
+  React.useEffect(() => {
+    if (!draftKey) return;
+    saveDraft(draftKey, text, attachments);
+  }, [draftKey, text, attachments]);
+
+  /**
+   * The field takes the keyboard when the card opens — and again when you come BACK to this card.
+   *
+   * Card views are not unmounted any more (the deck keeps every card you opened attached), so
+   * "mounted" stopped meaning "just opened": without `active` in here, returning to a card would
+   * leave the caret wherever it was and the first thing you typed would go nowhere.
+   */
+  React.useEffect(() => {
+    if (!autoFocus || isMobile || !active) return;
+    // After the terminal's own mount focus (the websocket grabs it on open), or the caret lands in
+    // xterm and the first thing typed goes into the raw session.
+    const id = setTimeout(() => ref.current?.focus(), 0);
+    return () => clearTimeout(id);
+  }, [autoFocus, isMobile, draftKey, active]);
 
   const append = React.useCallback((fragment: string) => {
     setText((prev) => appendFragment(prev, fragment));
   }, []);
 
+  const removeAttachment = React.useCallback((id: string) => {
+    setAttachments((prev) => {
+      const gone = prev.find((a) => a.id === id);
+      if (gone?.previewUrl) URL.revokeObjectURL(gone.previewUrl);
+      return prev.filter((a) => a.id !== id);
+    });
+  }, []);
+
+  /**
+   * The one place a message leaves this component. Everything it needs is already decided: the
+   * paths are appended by `composeMessage`, and the field is only cleared once the caller has
+   * accepted the message — a queue that rejected it leaves the words where you can see them.
+   */
+  const deliver = React.useCallback(
+    async (value: string, attached: Attachment[]) => {
+      const body = composeMessage(value, attached);
+      if (!body) return;
+      setSending(true);
+      try {
+        await onSend(body);
+        attached.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl));
+        setText("");
+        setAttachments([]);
+        if (draftKey) clearDraft(draftKey);
+        if (!isMobile) ref.current?.focus();
+      } catch {
+        /* the caller has already said what went wrong; the draft stays put */
+      } finally {
+        setSending(false);
+      }
+    },
+    [draftKey, isMobile, onSend],
+  );
+
   const send = (): void => {
-    const value = text.trim();
-    if (!value) return;
-    onSend(`${value}\r`);
-    setText("");
+    if (sending) return;
+    if (isEmptyDraft(text, attachments)) return;
+    // An upload still in flight: remember the intent instead of sending the text without its image.
+    if (hasPendingUpload(attachments)) {
+      setSendWhenReady(true);
+      return;
+    }
+    void deliver(text, attachments);
   };
 
+  // The deferred send, fired by the last upload finishing.
+  React.useEffect(() => {
+    if (!sendWhenReady || sending) return;
+    if (hasPendingUpload(attachments)) return;
+    setSendWhenReady(false);
+    if (isEmptyDraft(text, attachments)) return;
+    void deliver(text, attachments);
+  }, [sendWhenReady, sending, attachments, text, deliver]);
+
+  /**
+   * A pasted or dropped image appears IMMEDIATELY as a thumbnail and uploads behind it. The preview
+   * comes from the local file, so it is on screen in the same frame as the paste — the upload only
+   * decides whether the chip ends up carrying a path or an error.
+   */
   const upload = (files: File[]): void => {
     if (!onUploadImage) return;
     for (const file of files) {
-      void onUploadImage(file).then((path) => {
-        if (path) append(path);
-      });
+      const id = nextAttachmentId();
+      const previewUrl = typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : undefined;
+      setAttachments((prev) => [
+        ...prev,
+        { id, name: file.name || t("composer.pastedImage"), previewUrl, status: "uploading" },
+      ]);
+      void onUploadImage(file).then(
+        (path) =>
+          setAttachments((prev) =>
+            prev.map((a) => (a.id === id ? { ...a, path: path ?? undefined, status: path ? "ready" : "error" } : a)),
+          ),
+        () => setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, status: "error" } : a))),
+      );
     }
   };
 
@@ -372,8 +632,20 @@ export function TerminalComposer({
   return (
     <div
       data-testid="terminal-composer"
-      className={cn("flex shrink-0 items-center gap-2", className)}
+      className={cn("flex shrink-0 flex-col gap-1.5", className)}
     >
+      {/* What you pasted, as what you pasted. Above the field, so it never fights the caret. */}
+      {attachments.length > 0 ? (
+        <AttachmentStrip
+          attachments={attachments}
+          waiting={sendWhenReady}
+          onRemove={removeAttachment}
+        />
+      ) : null}
+
+      {/* The field and the microphone. Vertically centred: the field grows with the text and a
+          bottom-aligned 48px circle drifts away from it as it does. */}
+      <div data-testid="composer-row" className="flex items-center gap-2">
       <div className="relative min-w-0 flex-1">
         <textarea
           ref={ref}
@@ -438,7 +710,80 @@ export function TerminalComposer({
           onCancel={cancelRecording}
         />
       ) : null}
+      </div>
+    </div>
+  );
+}
 
+/**
+ * The row of pasted images.
+ *
+ * A thumbnail, not a filename: the whole reason this exists is that a screenshot pasted into a text
+ * field used to become `/work/.uploads/…/1712-shot.png`, which tells you nothing about which of the
+ * three screenshots you just took it is. The upload runs behind the picture — a spinner over the
+ * corner while it flies, and a chip that says so if it fails, in which case it is simply not part
+ * of the message (and can be dropped with the ✕ like any other).
+ */
+function AttachmentStrip({
+  attachments,
+  waiting,
+  onRemove,
+}: {
+  attachments: readonly Attachment[];
+  /** Enter was pressed and the message is waiting on these uploads. */
+  waiting: boolean;
+  onRemove: (id: string) => void;
+}) {
+  const t = useT();
+  return (
+    <div data-testid="composer-attachments" className="flex flex-wrap items-center gap-2">
+      {attachments.map((a) => (
+        <div
+          key={a.id}
+          data-testid="composer-attachment"
+          data-status={a.status}
+          title={a.name}
+          className={cn(
+            "group relative h-16 w-16 shrink-0 overflow-hidden rounded-md border bg-muted/40",
+            a.status === "error" ? "border-destructive/60" : "border-border/60",
+          )}
+        >
+          {a.previewUrl ? (
+            <img src={a.previewUrl} alt={a.name} className="h-full w-full object-cover" />
+          ) : (
+            // Restored after a reload: the blob is gone, the file is not. Its name is the picture.
+            <div className="flex h-full w-full items-center justify-center px-1 text-center text-[9px] leading-tight text-muted-foreground">
+              <span className="line-clamp-3 break-all">{a.name}</span>
+            </div>
+          )}
+
+          {a.status === "uploading" ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-background/60">
+              <Loader2 className="h-4 w-4 animate-spin text-foreground" />
+            </div>
+          ) : null}
+          {a.status === "error" ? (
+            <div className="absolute inset-x-0 bottom-0 bg-destructive/80 px-1 py-0.5 text-center text-[9px] text-destructive-foreground">
+              {t("composer.uploadFailed")}
+            </div>
+          ) : null}
+
+          <button
+            type="button"
+            data-testid="composer-attachment-remove"
+            aria-label={t("composer.removeImage", { name: a.name })}
+            onClick={() => onRemove(a.id)}
+            className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-background/80 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 md:h-4 md:w-4"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      ))}
+      {waiting ? (
+        <span data-testid="composer-waiting-upload" className="text-[11px] text-muted-foreground">
+          {t("composer.sendingAfterUpload")}
+        </span>
+      ) : null}
     </div>
   );
 }

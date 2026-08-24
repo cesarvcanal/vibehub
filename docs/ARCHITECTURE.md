@@ -41,6 +41,12 @@ an agent bug would land in the app's blast radius. Keeping it in one container i
 - What the agent can reach is exactly what you mounted and configured: the repos you connected, the
   MCP servers you registered, the tokens you planted.
 
+Claude's own first-run walls are taken down per profile before the session starts (see
+`services/accounts/firstRun.ts`): the setup wizard and the trust dialog would otherwise greet every
+card of an account whose profile is new, and every freshly created worktree. Neither asks anything
+the user has not already answered — the account was logged in on the Accounts screen, the worktree
+is a clone of the repository attached to the project.
+
 ## The host executor
 
 `runtime/host.ts` is the only module that knows how a command reaches Docker. Two implementations,
@@ -94,6 +100,36 @@ Two consequences worth knowing:
   so a reconnect cannot steal it), the microphone, and the polls that only feed its own bar. Pausing
   a card, or deleting it anywhere, drops its pane rather than leaving a socket retrying at a session
   that no longer exists.
+## Two ways to read one session
+
+A card is one `claude` process in one tmux session. The board shows it either way, switched by hand
+from the card bar on every screen size:
+
+- **Terminal** — an xterm attached to the pty. Everything works here, including what only the TUI
+  can do: permission prompts, plan approval, `/login`, `/model`. The cost is that it ships a
+  REPAINTING SCREEN — an idle spinner is thousands of frames an hour, and a phone rasterises each.
+- **Chat** — the same session read from the transcript Claude Code already writes
+  (`~/.claude/projects/<cwd>/<id>.jsonl`). The server follows the newest file with one `tail -F`,
+  parses each line into an event (user message, assistant message, or a collapsed tool line) and
+  pushes it over `WS /api/cards/:id/chat`. Sending goes through the maestro's `tmux send-keys`, so a
+  message written in the chat lands at the same prompt the terminal types into.
+
+Switching to chat UNMOUNTS the terminal, which closes its websocket — that is the point. What chat
+cannot show is anything drawn only on the screen, so when the agent goes quiet mid-turn the view
+says so and offers the terminal instead of pretending. The choice is remembered per card and per
+device (localStorage), never inferred from the width of the screen.
+
+## Hibernation — the third thing a session can be
+
+Pausing MOVES a card (to `paused`); hibernating does not move it at all. A sweep every five minutes
+kills the tmux session of every card that has had no sign of life for longer than
+`idleHibernateMinutes` (default 180, `0` = off) and stamps `hibernatedAt`. The column, the position
+and the conversation are untouched — the card simply loses its dot and goes grey, which is how the
+board tells "what I am working on now" apart from "what I walked away from".
+
+A `working` card is never hibernated, whatever the clock says: the hooks go quiet while Claude
+thinks, and a long task is not an abandoned one. Waking up is opening the card (or any hook report):
+`hibernatedAt` is cleared and the attach recreates the session with `claude -c`, same conversation.
 
 ## State
 
@@ -102,7 +138,8 @@ No database. Under `VIBEHUB_DATA_DIR`:
 | File | Holds |
 |---|---|
 | `board.json` | projects, cards, accounts, MCP servers |
-| `settings.json` | git identity, autonomy, setup stamp |
+| `outbox.json` | messages composed for a card that its agent has not received yet |
+| `settings.json` | git identity, autonomy, setup stamp, idle-hibernation threshold |
 | `users.json` | local accounts (scrypt hashes) |
 | `secrets.enc` | AES-256-GCM vault: GitHub token, Claude tokens, MCP secrets, runner token |
 | `master.key` | vault key, generated on first boot unless `VIBEHUB_SECRET_KEY` is set |
@@ -110,6 +147,22 @@ No database. Under `VIBEHUB_DATA_DIR`:
 
 Every write is atomic (tmp + rename) at mode 600, and mutations are serialized per document — the
 status hooks are frequent and concurrent, and a lost update there would silently corrupt the board.
+
+## The outbox
+
+A card's terminal runs `claude; exec bash`, so a pane whose Claude exited is still attached and
+still accepting keystrokes — into a SHELL. Typing a composed message into that moment executed it as
+a command; typing one into a card that was never opened wrote it to nothing.
+
+So the composer no longer writes into the terminal websocket. It POSTs to the card's outbox
+(`services/board/outbox.ts`), which probes what the pane is really running
+(`tmux list-panes -F '#{pane_current_command}'`) and either delivers with `send-keys` — the same
+path the maestro uses — or keeps the message in `outbox.json` until it can. A flush is attempted on
+enqueue, when a terminal attaches, when a status hook reports the agent went idle, and on a slow
+ticker as the backstop.
+
+Delivery is at-least-once (deliver, then remove): a crash between the two repeats a message, which
+is visible, while the alternative loses one silently.
 
 ## Credentials
 

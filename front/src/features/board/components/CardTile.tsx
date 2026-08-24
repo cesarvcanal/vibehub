@@ -1,4 +1,4 @@
-import { Check, MoreHorizontal, Pause, RotateCw, Trash2, Users } from "lucide-react";
+import { Check, Moon, MoreHorizontal, Pause, RotateCw, Trash2, Users } from "lucide-react";
 import { cn, isNewTabClick } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -7,7 +7,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { cardHref, statusDot } from "@/features/board/lib/board";
+import { cardDot, cardHref, declaredStateChip, dotClass } from "@/features/board/lib/board";
 import {
   ContextMenu,
   useContextMenuPoint,
@@ -41,6 +41,7 @@ export function CardTile({
   onDone,
   onPause,
   onRestart,
+  onHibernate,
   onAccount,
   onDelete,
   onDragStart,
@@ -53,6 +54,8 @@ export function CardTile({
   onPause?: (card: BoardCard) => void;
   /** Kills and recreates the session — same conversation, fresh brain/MCP configuration. */
   onRestart?: (card: BoardCard) => void;
+  /** Closes the session and leaves the card where it is — the manual form of the idle sweep. */
+  onHibernate?: (card: BoardCard) => void;
   /** Opens the dialog that switches this card's Claude account. */
   onAccount?: (card: BoardCard) => void;
   onDelete?: (card: BoardCard) => void;
@@ -62,8 +65,12 @@ export function CardTile({
   projectLabel?: string;
 }) {
   const t = useT();
-  const dot = statusDot(card.status);
+  const dot = cardDot(card);
+  /** The agent's own word on where the work stands (`vibehub_report`). Null = it has said nothing. */
+  const stateChip = declaredStateChip(card);
   const paused = Boolean(card.pausedAt);
+  /** No session behind it any more: it was left alone long enough for the sweep to close it. */
+  const hibernated = Boolean(card.hibernatedAt);
   /**
    * Moved to Paused while the agent was still working: the runner ends the session once the
    * current turn finishes, so the card is on its way there rather than already parked.
@@ -76,7 +83,7 @@ export function CardTile({
    * the server, so its text is the one that is true.
    */
   const updatePending = !paused && !pausingWhenIdle && Boolean(card.restartPendingAt);
-  const canPause = Boolean(card.openedAt) && !paused;
+  const canPause = Boolean(card.openedAt) && !paused && !hibernated;
   // Same precondition: there is only a session to restart once the card has been opened.
   const canRestart = canPause;
   const draggable = Boolean(onDragStart);
@@ -88,6 +95,9 @@ export function CardTile({
       : []),
     ...(onPause && canPause
       ? [{ key: "pause", label: t("card.pauseEndsSession"), icon: Pause, onSelect: () => onPause(card) }]
+      : []),
+    ...(onHibernate && canPause
+      ? [{ key: "hibernate", label: t("card.hibernateEndsSession"), icon: Moon, onSelect: () => onHibernate(card) }]
       : []),
     ...(onAccount ? [{ key: "account", label: t("card.claudeAccountMenu"), icon: Users, onSelect: () => onAccount(card) }] : []),
     ...(onDelete
@@ -156,11 +166,7 @@ export function CardTile({
           <span
             role="status"
             aria-label={dot.label}
-            className={cn(
-              "inline-block h-2.5 w-2.5 rounded-full",
-              dot.tone === "ok" ? "bg-emerald-400" : "bg-amber-400",
-              dot.live && "dot-live",
-            )}
+            className={cn("inline-block h-2.5 w-2.5 rounded-full", dotClass(dot.tone), dot.live && "dot-live")}
           />
         </span>
       ) : null}
@@ -185,6 +191,20 @@ export function CardTile({
           >
             {t("card.updatingWhenFinishes")}
           </div>
+        ) : null}
+
+        {/* What the AGENT said about its own work (vibehub_report), colour-coded. The one-line
+            summary rides in the tooltip; with no summary the tooltip repeats the state label. */}
+        {stateChip ? (
+          <span
+            title={card.declaredSummary?.trim() || stateChip.label}
+            className={cn(
+              "mr-1 mt-1 inline-flex max-w-full items-center truncate rounded border px-1 py-px text-[10px] font-medium",
+              stateChip.className,
+            )}
+          >
+            {stateChip.label}
+          </span>
         ) : null}
 
         {/* The owning project, only where cards from several projects share a column. */}

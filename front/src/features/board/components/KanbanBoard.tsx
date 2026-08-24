@@ -19,7 +19,9 @@ import { CardTile } from "@/features/board/components/CardTile";
 import {
   columnHint,
   columnLabel,
+  dropPosition,
   groupByColumn,
+  isBelowMidpoint,
   moveCardLocal,
   nextPosition,
 } from "@/features/board/lib/board";
@@ -87,6 +89,12 @@ export function KanbanBoard({
   });
 
   const [dragging, setDragging] = React.useState<BoardCard | null>(null);
+  /**
+   * Where the card being dragged would land: a column and a GAP index in it (0 = above the first
+   * card, n = below the last). It is what draws the insertion line, and it is the only thing the
+   * drop needs to know — the column alone could never express "third, not last".
+   */
+  const [dropAt, setDropAt] = React.useState<{ column: CardColumn; gap: number } | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<BoardCard | null>(null);
   // Switching a card's Claude account: the target card, plus the choice ("" = inherit).
   const [accountTarget, setAccountTarget] = React.useState<BoardCard | null>(null);
@@ -139,6 +147,19 @@ export function KanbanBoard({
     onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardRestartError"))),
   });
 
+  /**
+   * Hibernate: closes the terminal and leaves the card exactly where it is. What the idle sweep does
+   * on its own, available on the spot for a conversation you already know you are done with today.
+   */
+  const hibernateMutation = useMutation({
+    mutationFn: (id: string) => boardApi.hibernateCard(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: boardKey });
+      toast.success(translate("toast.cardHibernated"));
+    },
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardHibernateError"))),
+  });
+
   const deleteMutation = useMutation({
     mutationFn: (id: string) => boardApi.deleteCard(id),
     onSuccess: () => {
@@ -167,11 +188,28 @@ export function KanbanBoard({
   const groups = groupByColumn(cards ?? []);
   const total = (cards ?? []).length;
 
-  function dropOn(column: CardColumn) {
-    const card = dragging;
+  const clearDrag = () => {
     setDragging(null);
-    if (!card || card.column === column) return;
-    moveMutation.mutate({ id: card.id, column, position: nextPosition(cards ?? [], column) });
+    setDropAt(null);
+  };
+
+  /**
+   * Drops the dragged card into `column` at `gap`.
+   *
+   * REORDERING INSIDE a column is the same gesture as moving between them — the difference is only
+   * that the card is already in the destination list, so its own index has to come out of the
+   * arithmetic (`dropPosition`). It used to bail out whenever the column had not changed, which is
+   * exactly why dragging a card up its own column did nothing at all.
+   */
+  function dropOn(column: CardColumn, gap: number) {
+    const card = dragging;
+    clearDrag();
+    if (!card) return;
+    const ordered = groups[column];
+    const from = ordered.findIndex((c) => c.id === card.id);
+    const position = dropPosition(gap, from, ordered.length);
+    if (position === null) return;
+    moveMutation.mutate({ id: card.id, column, position });
   }
 
   function finish(card: BoardCard) {
@@ -226,25 +264,52 @@ export function KanbanBoard({
                 label={columnLabel(column.key)}
                 hint={columnHint(column.key)}
                 count={groups[column.key].length}
-                active={Boolean(dragging) && dragging?.column !== column.key}
-                onDrop={() => dropOn(column.key)}
+                // ANY drag makes every column a target now, its own included: dropping a card back
+                // into the column it came from is how you reorder it.
+                active={Boolean(dragging)}
+                // The wash of colour is for a card CHANGING column. Inside its own column the thin
+                // insertion line says everything, and tinting the whole column for a reorder is a
+                // lot of screen shouting about a small move.
+                highlight={Boolean(dragging) && dragging?.column !== column.key}
+                // Anywhere in the column that is not a card means "at the end".
+                onDragOverEmpty={() => setDropAt({ column: column.key, gap: groups[column.key].length })}
+                onDrop={() =>
+                  dropOn(
+                    column.key,
+                    dropAt?.column === column.key ? dropAt.gap : groups[column.key].length,
+                  )
+                }
+                onDragLeave={() => setDropAt((at) => (at?.column === column.key ? null : at))}
               >
-                {groups[column.key].map((card) => (
-                  <CardTile
+                {groups[column.key].map((card, cardIndex) => (
+                  <CardDropSlot
                     key={card.id}
-                    card={card}
-                    onOpen={onOpenCard}
-                    onDone={finish}
-                    onPause={(c) => pauseMutation.mutate(c.id)}
-                    onRestart={restart}
-                    onAccount={(c) => {
-                      setAccountChoice(c.accountSlug ?? "");
-                      setAccountTarget(c);
-                    }}
-                    onDelete={setDeleteTarget}
-                    onDragStart={setDragging}
-                    onDragEnd={() => setDragging(null)}
-                  />
+                    active={Boolean(dragging)}
+                    line={
+                      dropAt?.column === column.key && dragging
+                        ? insertionLine(dropAt.gap, cardIndex, groups[column.key].length)
+                        : null
+                    }
+                    onDragOver={(below) =>
+                      setDropAt({ column: column.key, gap: cardIndex + (below ? 1 : 0) })
+                    }
+                  >
+                    <CardTile
+                      card={card}
+                      onOpen={onOpenCard}
+                      onDone={finish}
+                      onPause={(c) => pauseMutation.mutate(c.id)}
+                      onRestart={restart}
+                      onHibernate={(c) => hibernateMutation.mutate(c.id)}
+                      onAccount={(c) => {
+                        setAccountChoice(c.accountSlug ?? "");
+                        setAccountTarget(c);
+                      }}
+                      onDelete={setDeleteTarget}
+                      onDragStart={setDragging}
+                      onDragEnd={clearDrag}
+                    />
+                  </CardDropSlot>
                 ))}
                 {groups[column.key].length === 0 ? (
                   <p className="px-1 py-2 text-center text-[11px] text-muted-foreground/60">{t("board.empty")}</p>
@@ -376,6 +441,9 @@ export function ColumnZone({
   hint,
   count,
   active,
+  highlight = true,
+  onDragOverEmpty,
+  onDragLeave,
   onDrop,
   children,
 }: {
@@ -384,6 +452,11 @@ export function ColumnZone({
   hint: string;
   count: number;
   active: boolean;
+  /** Wash the whole column while a card hovers it. Off for a card reordering inside its own column. */
+  highlight?: boolean;
+  /** The pointer is over the column but not over a card — the drop lands at the END. */
+  onDragOverEmpty?: () => void;
+  onDragLeave?: () => void;
   onDrop: () => void;
   children: React.ReactNode;
 }) {
@@ -398,6 +471,9 @@ export function ColumnZone({
           ? (e) => {
               e.preventDefault();
               e.dataTransfer.dropEffect = "move";
+              // Only fires for the gaps BETWEEN cards and the empty space below them: the slot each
+              // card sits in stops the event before it gets here.
+              onDragOverEmpty?.();
             }
           : undefined
       }
@@ -412,7 +488,10 @@ export function ColumnZone({
       onDragLeave={
         active
           ? (e) => {
-              if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver(false);
+              if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                setOver(false);
+                onDragLeave?.();
+              }
             }
           : undefined
       }
@@ -428,7 +507,7 @@ export function ColumnZone({
       className={cn(
         "flex min-h-40 min-w-0 flex-col gap-2 rounded-xl border p-2 backdrop-blur-sm transition-colors md:min-h-[calc(100vh-19rem)]",
         tone.border,
-        active && over ? "bg-primary/10 ring-2 ring-primary/40" : tone.bg,
+        active && over && highlight ? "bg-primary/10 ring-2 ring-primary/40" : tone.bg,
       )}
     >
       <header className="flex items-center justify-between px-1 pt-0.5" title={hint}>
@@ -440,6 +519,71 @@ export function ColumnZone({
   );
 }
 
+
+/**
+ * The strip one card occupies while a drag is in flight.
+ *
+ * It exists for one reason: to say WHERE between two cards the drop would land. Halfway down the
+ * card is the seam — above it the card goes before this one, below it after — and the blue line
+ * follows the pointer across that seam. Without it a column can only ever be dropped INTO, which
+ * is why reordering used to be impossible: the board had no way to hear "third, not last".
+ *
+ * It stops the dragover event, or the column behind it would immediately answer "at the end".
+ */
+export function CardDropSlot({
+  active,
+  line,
+  onDragOver,
+  children,
+}: {
+  active: boolean;
+  line: "top" | "bottom" | null;
+  onDragOver: (below: boolean) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className="relative"
+      onDragOver={
+        active
+          ? (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              e.dataTransfer.dropEffect = "move";
+              const rect = e.currentTarget.getBoundingClientRect();
+              onDragOver(isBelowMidpoint(e.clientY, rect.top, rect.height));
+            }
+          : undefined
+      }
+    >
+      {line ? (
+        <span
+          aria-hidden
+          data-drop-line={line}
+          className={cn(
+            "pointer-events-none absolute inset-x-0 z-20 h-0.5 rounded-full bg-primary",
+            // Half the 0.5rem column gap, so the line sits in the middle of the seam rather than
+            // on top of one of the two cards.
+            line === "top" ? "-top-1" : "-bottom-1",
+          )}
+        />
+      ) : null}
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Which edge of card `index` the insertion line is drawn on, if any. PURE.
+ *
+ * A gap is drawn as the BOTTOM edge of the card above it, so consecutive cards never both claim the
+ * same seam; gap 0 is the only one with no card above it, and it takes the first card's top edge.
+ */
+export function insertionLine(gap: number, index: number, length: number): "top" | "bottom" | null {
+  if (gap <= 0) return index === 0 ? "top" : null;
+  if (gap >= length) return index === length - 1 ? "bottom" : null;
+  return gap - 1 === index ? "bottom" : null;
+}
 
 /**
  * The phone board's "show more" — the one control that reveals Paused, Backlog and Done.

@@ -3,10 +3,11 @@ import type { IPty } from "node-pty";
 import pty from "node-pty";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
-import { requireSession } from "../auth/session.js";
+import { requireSession, sessionUserId } from "../auth/session.js";
 import * as registry from "../services/board/registry.js";
 import * as workspace from "../services/board/workspace.js";
 import * as browser from "../services/browser/browser.js";
+import * as outbox from "../services/board/outbox.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -44,9 +45,43 @@ export function disableNagle(socket: unknown): boolean {
   }
 }
 
+/**
+ * How long after a terminal attaches the outbox is flushed. Claude Code has to boot and draw its
+ * prompt before a `send-keys` means anything; three seconds is the gap between "the session exists"
+ * and "the agent is listening".
+ */
+export const OUTBOX_ATTACH_DELAY_MS = 3_000;
+
 /** Terminal geometry the runner will accept: an integer between 10 and 500. */
 export function isValidTermSize(n: unknown): n is number {
   return typeof n === "number" && Number.isInteger(n) && n >= 10 && n <= 500;
+}
+
+/**
+ * How often a card's `humanActiveAt` is actually written while someone types. Keystrokes arrive many
+ * per second; persisting each would hammer the board store. The window a maestro reads
+ * (HUMAN_ACTIVE_WINDOW_MS, minutes) is far larger, so stamping at most this often loses nothing.
+ */
+export const HUMAN_ACTIVE_THROTTLE_MS = 5_000;
+
+/** Last time each card's human-active stamp was written — the throttle gate. Module-scoped. */
+const lastHumanStamp = new Map<string, number>();
+
+/**
+ * Should we WRITE the stamp for this card now? true when the throttle window has passed since the
+ * last write (updating the gate as a side effect). Keeps the disk-write rate bounded no matter how
+ * fast the user types, across every connection to the same card. PURE-ish (mutates the gate map).
+ */
+export function shouldStampHumanActive(cardId: string, now: number = Date.now()): boolean {
+  const last = lastHumanStamp.get(cardId) ?? 0;
+  if (now - last < HUMAN_ACTIVE_THROTTLE_MS) return false;
+  lastHumanStamp.set(cardId, now);
+  return true;
+}
+
+/** Clears the throttle gate — tests only. */
+export function resetHumanStampThrottleForTesting(): void {
+  lastHumanStamp.clear();
 }
 
 /** Frames from the browser: either raw keystrokes or a resize instruction. */
@@ -66,8 +101,14 @@ export function parseTerminalFrame(raw: string): { type: "resize"; cols: number;
 
 const KEEPALIVE_MS = 25_000;
 
-/** Wires a pty to a websocket: output out, keystrokes and resizes in, both sides closing together. */
-export function bridgePty(socket: WebSocket, term: IPty, label: string): void {
+/**
+ * Wires a pty to a websocket: output out, keystrokes and resizes in, both sides closing together.
+ *
+ * `onInput` (when given) is called with each DATA frame the browser sends — a human typing. The card
+ * terminal uses it to stamp `humanActiveAt`; resize frames never trigger it (a layout change is not
+ * a person typing).
+ */
+export function bridgePty(socket: WebSocket, term: IPty, label: string, onInput?: (data: string) => void): void {
   disableNagle(socket);
   const keepalive = setInterval(() => {
     // Proxies drop an idle websocket; a protocol ping keeps the terminal alive while you read.
@@ -86,7 +127,11 @@ export function bridgePty(socket: WebSocket, term: IPty, label: string): void {
   socket.on("message", (raw: Buffer) => {
     const frame = parseTerminalFrame(raw.toString());
     if (frame.type === "resize") term.resize(frame.cols, frame.rows);
-    else term.write(frame.data);
+    else {
+      term.write(frame.data);
+      // A person typed. Best-effort: a bad listener must never take the terminal down.
+      if (onInput) { try { onInput(frame.data); } catch { /* ignore */ } }
+    }
   });
 
   const teardown = (): void => {
@@ -95,6 +140,16 @@ export function bridgePty(socket: WebSocket, term: IPty, label: string): void {
   };
   socket.on("close", teardown);
   socket.on("error", teardown);
+}
+
+/**
+ * true = this card has NO workspace in the runner yet (never opened, and the background prepare
+ * fired at its creation has not landed). Attaching a terminal to it would let `tmux new-session -A`
+ * create the session anyway — tmux quietly falls back to another directory when `-c` does not
+ * exist — and Claude would come up outside the card's worktree, or not at all. PURE.
+ */
+export function needsProvisioning(card: Pick<registry.Card, "openedAt" | "preparedAt">): boolean {
+  return !card.openedAt && !card.preparedAt;
 }
 
 export async function sessionRoutes(app: FastifyInstance): Promise<void> {
@@ -112,6 +167,23 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string } }>("/api/cards/:id/pause", { preHandler: requireSession }, async (req, reply) => {
     try {
       return await reply.send({ card: await workspace.pauseCard(req.params.id) });
+    } catch (err) {
+      const message = (err as Error).message;
+      return await reply.code(/not found/i.test(message) ? 404 : 502).send({ error: message });
+    }
+  });
+
+  /**
+   * HIBERNATE: kill the session, leave the card exactly where it is on the board. A card that has
+   * nothing to hibernate (never opened, already cold, or `working`) is not an error — the answer is
+   * the card as it stands, so the UI can just re-render it.
+   */
+  app.post<{ Params: { id: string } }>("/api/cards/:id/hibernate", { preHandler: requireSession }, async (req, reply) => {
+    try {
+      const hibernated = await workspace.hibernateCard(req.params.id);
+      const card = hibernated ?? (await registry.getCard(req.params.id));
+      if (!card) return await reply.code(404).send({ error: "card not found" });
+      return await reply.send({ card });
     } catch (err) {
       const message = (err as Error).message;
       return await reply.code(/not found/i.test(message) ? 404 : 502).send({ error: message });
@@ -165,6 +237,50 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  /* --------------------------------------------------------------- messages */
+
+  /**
+   * The composer's Enter. It does NOT type into the websocket any more: the message is handed to
+   * the OUTBOX, which delivers it to a RUNNING Claude or keeps it queued until there is one. A
+   * card whose agent has exited (the pane fell back to `exec bash`) or whose session does not exist
+   * yet used to swallow whatever you sent it — see services/board/outbox.ts.
+   */
+  app.post<{ Params: { id: string }; Body: { text?: string } }>(
+    "/api/cards/:id/messages", { preHandler: requireSession },
+    async (req, reply) => {
+      try {
+        const by = (await sessionUserId(req)) ?? undefined;
+        return await reply.send(await outbox.queueMessage(req.params.id, String(req.body?.text ?? ""), by));
+      } catch (err) {
+        const message = (err as Error).message;
+        return await reply.code(/not found/i.test(message) ? 404 : 400).send({ error: message });
+      }
+    },
+  );
+
+  /** What is still waiting for this card, and whether the agent is up to receive it. */
+  app.get<{ Params: { id: string } }>(
+    "/api/cards/:id/messages", { preHandler: requireSession },
+    async (req, reply) => {
+      try {
+        return await reply.send(await outbox.outboxStatus(req.params.id));
+      } catch (err) {
+        const message = (err as Error).message;
+        return await reply.code(/not found/i.test(message) ? 404 : 502).send({ error: message });
+      }
+    },
+  );
+
+  /** Gives up on a queued message (the ✕ on a pending chip). */
+  app.delete<{ Params: { id: string; messageId: string } }>(
+    "/api/cards/:id/messages/:messageId", { preHandler: requireSession },
+    async (req, reply) => {
+      const removed = await outbox.cancelMessage(req.params.id, req.params.messageId);
+      if (!removed) return await reply.code(404).send({ error: "message not found" });
+      return await reply.send({ ok: true });
+    },
+  );
+
   /* ---------------------------------------------------------------- browser */
 
   app.post<{ Params: { id: string } }>("/api/cards/:id/browser", { preHandler: requireSession }, async (req, reply) => {
@@ -200,7 +316,31 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
         return;
       }
       const shell = req.query?.shell === "1";
-      const { file, args } = workspace.cardTerminalCommand(project, card, { shell });
+      // SNAPSHOT: `getCard` hands back the live cached record, which the provisioning below mutates
+      // in place. The attach command has to be built from the card as it is NOW — a card that never
+      // had a conversation must be born with a plain `claude`, never with `claude -c` (which prints
+      // "No conversation found to continue" before falling back).
+      const snapshot = { ...card };
+
+      // A card whose workspace was never provisioned (never opened, and the background prepare from
+      // its creation has not landed yet) has NO worktree in the runner. Attaching now would let
+      // `tmux new-session -A` create the session anyway — tmux quietly falls back to another
+      // directory when `-c` does not exist — and Claude would start outside the card's worktree, or
+      // land on a bare shell. That is the "terminal with no Claude in it" on a brand-new card. So
+      // provision FIRST and attach to a workspace that really exists.
+      if (needsProvisioning(snapshot)) {
+        try {
+          socket.send("\r\n[vibehub] preparing this card in the runner…\r\n");
+          await workspace.openCard(card.id);
+        } catch (err) {
+          logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not prepare the card for its terminal");
+          socket.send(`\r\n[vibehub] could not prepare this card: ${(err as Error).message}\r\n`);
+          socket.close();
+          return;
+        }
+      }
+
+      const { file, args } = workspace.cardTerminalCommand(project, snapshot, { shell });
       const term = pty.spawn(file, args, {
         name: "xterm-256color",
         cols: 120,
@@ -208,7 +348,21 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
         env: { ...process.env, LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TERM: "xterm-256color" },
       });
       logger.info({ card: card.worktreeSlug, shell }, "terminal attached");
-      bridgePty(socket, term, card.worktreeSlug);
+      // A human typing here makes the card "human-active": a maestro must not send into it while a
+      // person is at the prompt. Throttled to a write every few seconds, and fire-and-forget — a
+      // keystroke must never wait on the board store, and an unknown card is a no-op there.
+      bridgePty(socket, term, card.worktreeSlug, () => {
+        if (shouldStampHumanActive(card.id)) void registry.markCardHumanActive(card.id);
+      });
+
+      // A terminal attaching is the moment a dead session comes back: `tmux new-session -A`
+      // recreates it with Claude inside, so anything queued for this card can go now. Delayed, and
+      // fire-and-forget — the agent needs a moment to reach its prompt, and the socket must not
+      // wait on a docker exec either way.
+      if (!shell) {
+        const flush = setTimeout(() => void outbox.flushCard(card.id), OUTBOX_ATTACH_DELAY_MS);
+        socket.on("close", () => clearTimeout(flush));
+      }
 
       // Writing into a paused or finished card revives it — the same rule a status hook follows,
       // applied here because the websocket is how a human actually shows up.

@@ -138,6 +138,9 @@ describe("buildSendKeysScript", () => {
     const script = maestro.buildSendKeysScript("c", "s", "press Enter twice");
     expect(script).toContain("send-keys -t \"$1\" -l --");
     expect(script).toContain('tmux send-keys -t "$1" Enter'); // the real submit, separate
+    // ...and after the TUI's paste window, or the Enter is swallowed INTO the paste and the
+    // message sits there typed but unsent.
+    expect(script).toContain("sleep 0.15");
   });
 
   it("refuses text that would close the heredoc early", async () => {
@@ -275,6 +278,71 @@ describe("sessionGoneError", () => {
   });
 });
 
+describe("reportState (declared state)", () => {
+  it("sets declaredState and a normalized summary, without touching the column or the dot", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "worker" });
+    await registry.updateCard(c.id, { column: "working" });
+    const out = await maestro.reportState(c.id, "ready", "  all green,   PR up ");
+    expect(out).toMatchObject({ reported: true, state: "ready", summary: "all green, PR up" });
+    const after = await registry.getCard(c.id);
+    expect(after?.declaredState).toBe("ready");
+    expect(after?.declaredSummary).toBe("all green, PR up");
+    // orthogonal: the activity column/dot is untouched
+    expect(after?.column).toBe("working");
+    expect(after?.status ?? null).toBeNull();
+  });
+
+  it("rejects an unknown state and an unknown card", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "worker" });
+    await expect(maestro.reportState(c.id, "shipping", "x")).rejects.toThrow(/invalid state/);
+    await expect(maestro.reportState("nope", "ready", "x")).rejects.toThrow(/card not found/);
+  });
+
+  it("surfaces declaredState, summary and humanActive through the terminal listing", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "worker" });
+    await maestro.reportState(c.id, "needs_me", "which currency?");
+    const [row] = await maestro.listTerminals();
+    expect(row).toMatchObject({ declaredState: "needs_me", declaredSummary: "which currency?", humanActive: false });
+  });
+});
+
+describe("human-active lock", () => {
+  it("refuses a send to a human-active card, sends nothing, but still allows a read", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "someone is typing" });
+    await registry.applyOpenTerminal(c.id); // a live session — the refusal is about the human, not the session
+    await registry.markCardHumanActive(c.id, Date.now());
+
+    await expect(maestro.sendToTerminal(c.id, "run the tests")).rejects.toThrow(/human-active/);
+    expect(runScript).not.toHaveBeenCalled();
+
+    // reading is always allowed
+    runScript.mockResolvedValueOnce({
+      stdout: JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } }),
+      stderr: "",
+    });
+    expect((await maestro.readTerminal(c.id, 1)).answers).toEqual(["hi"]);
+  });
+
+  it("a stale human-active stamp (older than the window) does not block a send", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "typed a while ago" });
+    await registry.applyOpenTerminal(c.id);
+    await registry.markCardHumanActive(c.id, Date.now() - registry.HUMAN_ACTIVE_WINDOW_MS - 1);
+    const out = await maestro.sendToTerminal(c.id, "carry on");
+    expect(out).toMatchObject({ sent: true });
+    expect(runScript).toHaveBeenCalledOnce();
+  });
+});
+
 describe("session introspection", () => {
   const line = (obj: unknown) => JSON.stringify(obj);
 
@@ -306,7 +374,13 @@ describe("session introspection", () => {
     const c = await registry.createCard({ projectId: p.id, title: "x" });
     runScript.mockResolvedValueOnce({ stdout: line({ type: "assistant", message: { model: "claude-opus-5", content: [] } }), stderr: "" });
     const info = await maestro.sessionInfo(c.id);
-    expect(info).toEqual({ model: "claude-opus-5", modelLabel: "Opus", account: { slug: acct.slug, name: "Tech" } });
+    expect(info).toEqual({
+      model: "claude-opus-5",
+      modelLabel: "Opus",
+      account: { slug: acct.slug, name: "Tech" },
+      // A card that was never opened has no session for the chat to be waiting on.
+      situation: "no session",
+    });
     runScript.mockRejectedValueOnce(new Error("runner down"));
     expect((await maestro.sessionInfo(c.id)).model).toBeNull();
   });
@@ -338,6 +412,21 @@ describe("model signals", () => {
     expect(maestro.pickModel(turn, { model: "fable", at: 500 })).toBe("claude-sonnet-5");
     expect(maestro.pickModel({ model: null, at: 0 }, { model: "opus", at: 0 })).toBe("opus");
     expect(maestro.pickModel({ model: null, at: 0 }, { model: null, at: 0 })).toBeNull();
+  });
+
+  it("a card that PINS a model ignores settings.json — that profile is shared with every other card", async () => {
+    const { maestro } = await load();
+    const turn = { model: "claude-fable-5", at: 1000 };
+    // The bug: `/model opus` typed in a NEIGHBOURING card on the same account wrote "opus" into the
+    // shared profile, and this card (pinned to Fable, started with `--model`) read it as its own.
+    expect(maestro.pickModel(turn, { model: "opus", at: 5000 }, { model: "claude-fable-5", at: 900 })).toBe("claude-fable-5");
+    // The pin is newer than the transcript right after a switch (it restarted the session onto it).
+    expect(maestro.pickModel(turn, { model: null, at: 0 }, { model: "claude-opus-5", at: 2000 })).toBe("claude-opus-5");
+    // `/model` typed HERE after that switch is newer still, and it is what is answering.
+    expect(maestro.pickModel({ model: "claude-sonnet-5", at: 3000 }, { model: null, at: 0 }, { model: "claude-opus-5", at: 2000 }))
+      .toBe("claude-sonnet-5");
+    // No pin: settings.json keeps its old say.
+    expect(maestro.pickModel(turn, { model: "opus", at: 5000 })).toBe("opus");
   });
 
   it("splits the session script output into transcript and settings", async () => {
