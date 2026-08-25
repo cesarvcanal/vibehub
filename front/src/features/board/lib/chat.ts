@@ -132,3 +132,43 @@ export function writeCardMode(cardId: string, mode: CardViewMode): void {
     /* the choice still holds for this screen */
   }
 }
+
+/** One message the person sent that has not yet come back in the transcript. */
+export interface PendingMessage {
+  id: string;
+  text: string;
+}
+
+const PENDING_PREFIX = "vibehub.chatPending.";
+
+/**
+ * Messages you sent that have not appeared in the transcript yet — kept PER CARD in localStorage so
+ * they SURVIVE the thing that used to lose them: a tab switch (terminal↔chat), a pane remount, a
+ * reload. Send a message while Claude is busy and Claude Code queues it internally (not in the
+ * transcript yet); the optimistic bubble used to be React state, so leaving the chat erased it and
+ * the message "vanished" even though it was safe in the queue. Now it stays on screen until it comes
+ * back for real. Never throws — a blocked/absent store just means no persistence this session.
+ */
+export function readPending(cardId: string): PendingMessage[] {
+  try {
+    const raw = localStorage.getItem(PENDING_PREFIX + cardId);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (p): p is PendingMessage =>
+        Boolean(p) && typeof (p as PendingMessage).id === "string" && typeof (p as PendingMessage).text === "string",
+    );
+  } catch {
+    return [];
+  }
+}
+
+export function writePending(cardId: string, pending: PendingMessage[]): void {
+  try {
+    if (pending.length === 0) localStorage.removeItem(PENDING_PREFIX + cardId);
+    else localStorage.setItem(PENDING_PREFIX + cardId, JSON.stringify(pending));
+  } catch {
+    /* the bubbles still hold for this screen */
+  }
+}
