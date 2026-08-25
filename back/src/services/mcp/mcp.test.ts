@@ -278,7 +278,9 @@ describe("applyMcpsEverywhere", () => {
     const info = vi.spyOn(logger, "info");
 
     const out = await mod.applyMcpsEverywhere("alice");
-    expect(out).toEqual({ runners: 1, mcps: 2 });
+    // 2 registered MCPs + the always-on built-in browser MCP (no runner token here, so the maestro
+    // built-in is skipped).
+    expect(out).toEqual({ runners: 1, mcps: 3 });
     expect(runScript).toHaveBeenCalledTimes(1);
 
     const [script, opts] = runScript.mock.calls[0]!;
@@ -307,9 +309,10 @@ describe("applyMcpsEverywhere", () => {
     expect(runScript).not.toHaveBeenCalled();
   });
 
-  it("with no MCP at all it still reaches the runner and reports zero", async () => {
+  it("with no registered MCP it still reaches the runner, shipping only the built-in browser MCP", async () => {
     const { mod } = await fresh();
-    expect(await mod.applyMcpsEverywhere()).toEqual({ runners: 1, mcps: 0 });
+    // No registered MCP and no runner token → only the always-on browser built-in ships.
+    expect(await mod.applyMcpsEverywhere()).toEqual({ runners: 1, mcps: 1 });
     expect(runScript).toHaveBeenCalledTimes(1);
   });
 
@@ -354,5 +357,50 @@ describe("built-in maestro server", () => {
     await vault.secretSet("VIBEHUB_RUNNER_TOKEN", "runner-token-123");
     await reg.createMcp({ name: "playwright", kind: "stdio", command: "npx" });
     expect((await mod.resolveMcpInjections())[0]?.name).toBe(mod.BUILTIN_MAESTRO_NAME);
+  });
+});
+
+describe("built-in browser server", () => {
+  it("is a stdio Playwright MCP wired to the card's live Chromium over CDP", async () => {
+    const { mod } = await fresh();
+    const inj = mod.builtinBrowserInjection();
+    expect(inj.name).toBe(mod.BUILTIN_BROWSER_NAME);
+    const parsed = JSON.parse(inj.json) as { type: string; command: string; args: string[] };
+    expect(parsed.type).toBe("stdio");
+    expect(parsed.command).toBe("npx");
+    expect(parsed.args).toContain("@playwright/mcp@latest");
+    const i = parsed.args.indexOf("--cdp-endpoint");
+    expect(i).toBeGreaterThanOrEqual(0);
+    // The endpoint is the shell reference expanded per SESSION (never a baked-in per-card URL), with
+    // a loopback default so a session without the variable still yields a valid endpoint.
+    expect(parsed.args[i + 1]).toBe("${PW_CDP_ENDPOINT:-http://127.0.0.1:9222}");
+  });
+
+  it("carries a literal `$` reference and stays a single line — safe for the quoted heredoc", async () => {
+    const { mod } = await fresh();
+    const inj = mod.builtinBrowserInjection();
+    expect(inj.json).toContain("${PW_CDP_ENDPOINT");
+    expect(inj.json).not.toMatch(/[\r\n]/);
+    // It survives the injection builder without tripping its heredoc guard.
+    const lines = mod.mcpInjectLines([undefined], [inj]);
+    expect(lines.some((l) => l.includes("claude mcp add-json -s user 'navegador'"))).toBe(true);
+  });
+
+  it("is injected into every card, even with no runner token (unlike the maestro)", async () => {
+    const { mod } = await fresh();
+    const injections = await mod.resolveMcpInjections();
+    // No VIBEHUB_RUNNER_TOKEN set → the maestro is skipped, but the browser MCP still ships.
+    expect(injections.some((i) => i.name === mod.BUILTIN_MAESTRO_NAME)).toBe(false);
+    expect(injections.some((i) => i.name === mod.BUILTIN_BROWSER_NAME)).toBe(true);
+  });
+
+  it("cannot be shadowed by a user-registered MCP with the same name", async () => {
+    const { mod, reg } = await fresh();
+    await reg.createMcp({ name: mod.BUILTIN_BROWSER_NAME, kind: "stdio", command: "npx", args: ["own-headless"] });
+    const injections = await mod.resolveMcpInjections();
+    const matching = injections.filter((i) => i.name === mod.BUILTIN_BROWSER_NAME);
+    expect(matching).toHaveLength(1);
+    // The built-in one won (it targets the CDP endpoint, not the user's plain command).
+    expect(matching[0]!.json).toContain("--cdp-endpoint");
   });
 });
