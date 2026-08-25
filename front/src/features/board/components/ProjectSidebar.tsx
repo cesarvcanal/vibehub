@@ -33,6 +33,7 @@ import {
   gapToPosition,
   isBelowMidpoint,
   nextPosition,
+  projectHref,
   splitSidebarCards,
 } from "@/features/board/lib/board";
 import { useExpandedProjects } from "@/features/board/lib/sidebarExpanded";
@@ -531,9 +532,20 @@ function ProjectRow({
             <ChevronRight className="h-3.5 w-3.5" />
           )}
         </button>
-        <button
-          type="button"
-          onClick={onSelect}
+        {/* A REAL link, exactly like a card row: middle-click and Cmd/Ctrl/Shift-click open the
+            project in a new tab natively, a plain click is intercepted and handled in-app. Not
+            draggable itself, so grabbing the name still starts the row's reorder drag (the outer
+            div is the drag source) instead of the browser's drag-a-link. */}
+        <a
+          href={projectHref(project.id)}
+          draggable={false}
+          onClick={(e) => {
+            // Let the browser open a new tab for middle-click / Cmd/Ctrl/Shift-click: do NOT
+            // preventDefault and do NOT select in-app.
+            if (isNewTabClick(e)) return;
+            e.preventDefault();
+            onSelect();
+          }}
           aria-pressed={selected}
           title={projectHint(project)}
           className="flex min-w-0 flex-1 cursor-grab items-center gap-2 py-2.5 pl-1 pr-1 text-left active:cursor-grabbing"
@@ -547,7 +559,7 @@ function ProjectRow({
           >
             {project.name}
           </span>
-        </button>
+        </a>
         {/* Always visible, on every row: writing down the next task is the most frequent thing
             anyone does here, and it should not require selecting the project first. */}
         <Button

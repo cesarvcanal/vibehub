@@ -386,3 +386,11 @@ export function locationHref(location: BoardLocation): string {
 export function cardHref(projectId: string, cardId: string): string {
   return locationHref({ projectId, cardId });
 }
+
+/**
+ * The href of a project (no card). Same shape as `cardHref`, so a project row is a REAL link:
+ * middle-click and Cmd/Ctrl/Shift-click open it in another tab, and a plain click is intercepted.
+ */
+export function projectHref(projectId: string): string {
+  return locationHref({ projectId, cardId: null });
+}

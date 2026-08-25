@@ -547,9 +547,100 @@ describe("XTerminal — the websocket", () => {
     await waitFor(() => expect(FakeSocket.instances).toHaveLength(2));
   });
 
+  it("backs off: each failed connect waits strictly longer than the last", async () => {
+    vi.useFakeTimers();
+    render(<XTerminal wsPath="/api/cards/c1/terminal" />);
+    await tickToConnect();
+    expect(FakeSocket.instances).toHaveLength(1);
 
+    // First failure — the retry is fast (base is 400ms plus up to 25% jitter), so a blip is invisible.
+    FakeSocket.instances[0]!.drop();
+    await vi.advanceTimersByTimeAsync(399);
+    expect(FakeSocket.instances).toHaveLength(1); // not yet: the base delay is at least 400ms
+    await vi.advanceTimersByTimeAsync(101); // 500ms — the whole base window has elapsed
+    expect(FakeSocket.instances).toHaveLength(2);
 
+    // Second failure — strictly longer: at least 800ms, so 799ms is still not enough.
+    FakeSocket.instances[1]!.drop();
+    await vi.advanceTimersByTimeAsync(799);
+    expect(FakeSocket.instances).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(201); // 1000ms — the whole second window has elapsed
+    expect(FakeSocket.instances).toHaveLength(3);
+  });
 
+  it("resets the backoff to the base once a connection has stayed up", async () => {
+    vi.useFakeTimers();
+    render(<XTerminal wsPath="/api/cards/c1/terminal" />);
+    await tickToConnect();
+
+    // Two failures ratchet the delay up to the ~1600ms step.
+    FakeSocket.instances[0]!.drop();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(FakeSocket.instances).toHaveLength(2);
+    FakeSocket.instances[1]!.drop();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(FakeSocket.instances).toHaveLength(3);
+
+    // This one connects AND stays up past the stability window, so the connection is trusted.
+    FakeSocket.instances[2]!.accept();
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    // A drop now retries at the BASE delay again (≤500ms), not the ratcheted ~1600ms — proof the
+    // backoff was reset only after the socket proved itself, never on the bare open.
+    FakeSocket.instances[2]!.drop();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(FakeSocket.instances).toHaveLength(4);
+  });
+
+  it("does not reconnect while offline, and reconnects the moment it is back", async () => {
+    vi.useFakeTimers();
+    const onStatus = vi.fn();
+    render(<XTerminal wsPath="/api/cards/c1/terminal" onStatus={onStatus} />);
+    await tickToConnect();
+    FakeSocket.instances[0]!.accept();
+
+    try {
+      // The network goes away, and the socket drops with it.
+      Object.defineProperty(navigator, "onLine", { configurable: true, get: () => false });
+      FakeSocket.instances[0]!.drop();
+
+      // No retry storm: however long we wait, nothing is dialled while offline.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(FakeSocket.instances).toHaveLength(1);
+      expect(onStatus).toHaveBeenLastCalledWith("reconnecting");
+
+      // Back online: the wake listener dials immediately, without sitting out a backoff.
+      Object.defineProperty(navigator, "onLine", { configurable: true, get: () => true });
+      window.dispatchEvent(new Event("online"));
+      expect(FakeSocket.instances).toHaveLength(2);
+    } finally {
+      delete (navigator as unknown as Record<string, unknown>).onLine;
+    }
+  });
+
+  it("does not reconnect while the tab is hidden, and reconnects when it becomes visible", async () => {
+    vi.useFakeTimers();
+    render(<XTerminal wsPath="/api/cards/c1/terminal" />);
+    await tickToConnect();
+    FakeSocket.instances[0]!.accept();
+
+    try {
+      // The tab is backgrounded, then the socket drops.
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+      FakeSocket.instances[0]!.drop();
+
+      // Hidden: no reconnect is scheduled, no matter how long we wait.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(FakeSocket.instances).toHaveLength(1);
+
+      // Visible again: the wake listener reconnects promptly.
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(FakeSocket.instances).toHaveLength(2);
+    } finally {
+      delete (document as unknown as Record<string, unknown>).visibilityState;
+    }
+  });
 });
 
 describe("XTerminal — local echo", () => {
