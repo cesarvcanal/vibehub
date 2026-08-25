@@ -37,7 +37,13 @@ export interface TranscribeStatus {
 
 export async function transcribeStatus(): Promise<TranscribeStatus> {
   const [openai, anthropic, settings] = await Promise.all([secretGet(OPENAI_KEY), secretGet(ANTHROPIC_KEY), getSettings()]);
-  return { available: Boolean(openai), proofread: Boolean(anthropic), language: settings.transcribeLanguage ?? null };
+  return {
+    available: Boolean(openai),
+    // Proofreading is only "on" when BOTH a key is stored AND the person opted in — it is off by
+    // default because the model kept answering the dictation instead of cleaning it.
+    proofread: Boolean(anthropic) && settings.transcribeProofread,
+    language: settings.transcribeLanguage ?? null,
+  };
 }
 
 /** Stores or clears the keys. An empty string clears; undefined leaves it alone. */
@@ -185,7 +191,9 @@ export async function transcribeCardAudio(
 
   let text = raw;
   let didProofread = false;
-  const anthropicKey = await secretGet(ANTHROPIC_KEY);
+  // Raw Whisper by default: the person's exact words. Proofreading is opt-in (settings) because the
+  // cleanup model kept ANSWERING conversational dictation instead of correcting it.
+  const anthropicKey = settings.transcribeProofread ? await secretGet(ANTHROPIC_KEY) : null;
   if (anthropicKey) {
     try {
       text = await proofread(anthropicKey, raw, language);
