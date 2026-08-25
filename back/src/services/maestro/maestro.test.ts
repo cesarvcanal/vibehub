@@ -312,15 +312,16 @@ describe("reportState (declared state)", () => {
   });
 });
 
-describe("human-active lock", () => {
-  it("refuses a send to a human-active card, sends nothing, but still allows a read", async () => {
+describe("human-active lock (maestro-only)", () => {
+  it("with respectHumanActive, refuses a send to a human-active card, sends nothing, but still allows a read", async () => {
     const { maestro, registry } = await load();
     const p = await registry.createProject({ name: "billing" });
     const c = await registry.createCard({ projectId: p.id, title: "someone is typing" });
     await registry.applyOpenTerminal(c.id); // a live session — the refusal is about the human, not the session
     await registry.markCardHumanActive(c.id, Date.now());
 
-    await expect(maestro.sendToTerminal(c.id, "run the tests")).rejects.toThrow(/human-active/);
+    // the MAESTRO path opts in and is refused
+    await expect(maestro.sendToTerminal(c.id, "run the tests", { respectHumanActive: true })).rejects.toThrow(/human-active/);
     expect(runScript).not.toHaveBeenCalled();
 
     // reading is always allowed
@@ -331,13 +332,26 @@ describe("human-active lock", () => {
     expect((await maestro.readTerminal(c.id, 1)).answers).toEqual(["hi"]);
   });
 
-  it("a stale human-active stamp (older than the window) does not block a send", async () => {
+  it("the PERSON's own send (no respectHumanActive) is NEVER blocked by human-active — their typing is what marks it", async () => {
+    // REGRESSION: the human-active check was firing on the user's OWN chat send, so nothing they
+    // typed could be delivered. Their send must always go through.
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "the user is here" });
+    await registry.applyOpenTerminal(c.id);
+    await registry.markCardHumanActive(c.id, Date.now()); // active RIGHT NOW
+    const out = await maestro.sendToTerminal(c.id, "oi"); // no opts = the user path
+    expect(out).toMatchObject({ sent: true });
+    expect(runScript).toHaveBeenCalledOnce();
+  });
+
+  it("a stale human-active stamp (older than the window) does not block even the maestro", async () => {
     const { maestro, registry } = await load();
     const p = await registry.createProject({ name: "billing" });
     const c = await registry.createCard({ projectId: p.id, title: "typed a while ago" });
     await registry.applyOpenTerminal(c.id);
     await registry.markCardHumanActive(c.id, Date.now() - registry.HUMAN_ACTIVE_WINDOW_MS - 1);
-    const out = await maestro.sendToTerminal(c.id, "carry on");
+    const out = await maestro.sendToTerminal(c.id, "carry on", { respectHumanActive: true });
     expect(out).toMatchObject({ sent: true });
     expect(runScript).toHaveBeenCalledOnce();
   });
