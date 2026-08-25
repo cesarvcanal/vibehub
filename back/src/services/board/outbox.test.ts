@@ -61,6 +61,14 @@ describe("classifyAgentState", () => {
     expect(outbox.classifyAgentState("claude\n")).toBe("running");
   });
 
+  it("the K bug: a shell in the foreground but claude in the tree is RUNNING, not shell", async () => {
+    const { outbox } = await load();
+    // Exactly what the tree probe returns while Claude runs a Bash tool: the pane's foreground is a
+    // shell, but `claude` is right there underneath. The old foreground-only probe read this as
+    // "shell" and queued the message; the tree probe must read it as "running".
+    expect(outbox.classifyAgentState("bash\nclaude\nnpm exec @playw\nsh\nbash\n")).toBe("running");
+  });
+
   it("empty output is no session at all", async () => {
     const { outbox } = await load();
     expect(outbox.classifyAgentState("")).toBe("none");
@@ -73,7 +81,10 @@ describe("buildAgentProbeScript", () => {
     const { outbox } = await load();
     const script = outbox.buildAgentProbeScript("vibehub-runner", "card-1234abcd");
     expect(script).toContain("tmux list-panes");
-    expect(script).toContain("pane_current_command");
+    // Walks the pane's process TREE (pane_pid + ps), not just the foreground command, so a Claude
+    // busy in a Bash tool is still seen as running.
+    expect(script).toContain("pane_pid");
+    expect(script).toContain("ps -eo");
     expect(script).toContain("|| true");
     expect(script).not.toMatch(/\brm\b|\bkill\b|send-keys/);
   });

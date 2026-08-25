@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, Loader2, Mic, X } from "lucide-react";
+import { Check, Loader2, Mic, RotateCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/lib/useIsMobile";
@@ -59,6 +59,15 @@ export interface TerminalComposerProps {
    * every second of the day. The `aria-label` still says what it is, for anyone who needs telling.
    */
   placeholder?: string;
+  /**
+   * Is the card this composer belongs to the one on screen?
+   *
+   * Card views are no longer torn down when you look at another card — they stay mounted so the
+   * session stays attached — which means "leaving the card" stopped being an unmount. A recording
+   * has to end anyway: a microphone that keeps listening on a card you walked away from is the one
+   * thing here that must never outlive the screen it belongs to.
+   */
+  active?: boolean;
   className?: string;
   /**
    * Take the keyboard on mount. THIS field is where a card is written from — opening a card and
@@ -278,6 +287,7 @@ export function TerminalComposer({
   onUploadImage,
   cardId,
   placeholder,
+  active = true,
   className,
   autoFocus = true,
 }: TerminalComposerProps) {
@@ -296,6 +306,16 @@ export function TerminalComposer({
   const [sendWhenReady, setSendWhenReady] = React.useState(false);
   const ref = React.useRef<HTMLTextAreaElement | null>(null);
 
+  /**
+   * The bytes behind each chip, kept only for as long as the chip is.
+   *
+   * An upload can fail for reasons that have nothing to do with the picture — the runner was
+   * restarting, the network blinked — and "paste it again" is a terrible answer when the clipboard
+   * has moved on. Holding the File is what makes RETRY possible; it is dropped as soon as the
+   * attachment is removed or the message goes.
+   */
+  const filesRef = React.useRef(new Map<string, File>());
+
   // Switching cards swaps the whole field for that card's draft — including the one just restored
   // on mount, which is why this runs on `draftKey` and not only on the state initialiser.
   React.useEffect(() => {
@@ -303,6 +323,8 @@ export function TerminalComposer({
     setText(draft.text);
     setAttachments(draft.attachments);
     setSendWhenReady(false);
+    // The bytes belong to the chips that were on screen, not to the card that just arrived.
+    filesRef.current.clear();
   }, [draftKey]);
 
   // Persisted on every change: what makes leaving the card safe. Uploads in flight are written too
@@ -312,20 +334,32 @@ export function TerminalComposer({
     saveDraft(draftKey, text, attachments);
   }, [draftKey, text, attachments]);
 
-  /** The field takes the keyboard when the card opens. See `autoFocus` on the props. */
+  /**
+   * The field takes the keyboard when the card opens — and again when you come BACK to this card.
+   *
+   * Card views are not unmounted any more (the deck keeps every card you opened attached), so
+   * "mounted" stopped meaning "just opened": without `active` in here, returning to a card would
+   * leave the caret wherever it was and the first thing you typed would go nowhere.
+   */
   React.useEffect(() => {
-    if (!autoFocus || isMobile) return;
+    if (!autoFocus || isMobile || !active) return;
     // After the terminal's own mount focus (the websocket grabs it on open), or the caret lands in
     // xterm and the first thing typed goes into the raw session.
     const id = setTimeout(() => ref.current?.focus(), 0);
     return () => clearTimeout(id);
-  }, [autoFocus, isMobile, draftKey]);
+  }, [autoFocus, isMobile, draftKey, active]);
 
   const append = React.useCallback((fragment: string) => {
     setText((prev) => appendFragment(prev, fragment));
   }, []);
 
+  // Read through a ref so a retry fired minutes later uses the handler that is current, and so the
+  // upload callbacks are not re-created on every render of the parent.
+  const uploadRef = React.useRef(onUploadImage);
+  uploadRef.current = onUploadImage;
+
   const removeAttachment = React.useCallback((id: string) => {
+    filesRef.current.delete(id);
     setAttachments((prev) => {
       const gone = prev.find((a) => a.id === id);
       if (gone?.previewUrl) URL.revokeObjectURL(gone.previewUrl);
@@ -346,6 +380,7 @@ export function TerminalComposer({
       try {
         await onSend(body);
         attached.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl));
+        filesRef.current.clear();
         setText("");
         setAttachments([]);
         if (draftKey) clearDraft(draftKey);
@@ -384,24 +419,49 @@ export function TerminalComposer({
    * comes from the local file, so it is on screen in the same frame as the paste — the upload only
    * decides whether the chip ends up carrying a path or an error.
    */
-  const upload = (files: File[]): void => {
-    if (!onUploadImage) return;
-    for (const file of files) {
-      const id = nextAttachmentId();
-      const previewUrl = typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : undefined;
-      setAttachments((prev) => [
-        ...prev,
-        { id, name: file.name || t("composer.pastedImage"), previewUrl, status: "uploading" },
-      ]);
-      void onUploadImage(file).then(
+  /** Runs (or re-runs) one chip's upload, leaving the chip itself exactly where it is. */
+  const startUpload = React.useCallback(
+    (id: string, file: File) => {
+      const handler = uploadRef.current;
+      if (!handler) return;
+      setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, status: "uploading" } : a)));
+      void handler(file).then(
         (path) =>
           setAttachments((prev) =>
             prev.map((a) => (a.id === id ? { ...a, path: path ?? undefined, status: path ? "ready" : "error" } : a)),
           ),
         () => setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, status: "error" } : a))),
       );
+    },
+    [],
+  );
+
+  const upload = (files: File[]): void => {
+    if (!onUploadImage) return;
+    for (const file of files) {
+      const id = nextAttachmentId();
+      const previewUrl = typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : undefined;
+      filesRef.current.set(id, file);
+      setAttachments((prev) => [
+        ...prev,
+        { id, name: file.name || t("composer.pastedImage"), previewUrl, status: "uploading" },
+      ]);
+      startUpload(id, file);
     }
   };
+
+  /**
+   * Try that one again. The chip stays put — same thumbnail, same place in the strip — and goes
+   * back to its spinner, so a retry looks like what it is: the same picture, once more.
+   */
+  const retryAttachment = React.useCallback(
+    (id: string) => {
+      const file = filesRef.current.get(id);
+      if (!file) return;
+      startUpload(id, file);
+    },
+    [startUpload],
+  );
 
   /* ----------------------------------------------------------- voice input */
 
@@ -579,6 +639,14 @@ export function TerminalComposer({
     return () => clearInterval(id);
   }, [recording]);
 
+  // Switching to another card mid-recording ends it the same way the Cancel button does. Nothing is
+  // uploaded and nothing is written: a thought you stopped saying halfway through is not a message,
+  // and the microphone must not stay live behind a screen you are no longer looking at.
+  React.useEffect(() => {
+    if (active) return;
+    if (recorderRef.current?.state === "recording") cancelRecording();
+  }, [active, cancelRecording]);
+
   // Leaving the card mid-recording must not leave the microphone light on, and must not fire a
   // transcription into a screen that is gone: this cancels, it does not finish.
   React.useEffect(() => {
@@ -614,6 +682,7 @@ export function TerminalComposer({
       {attachments.length > 0 ? (
         <AttachmentStrip
           attachments={attachments}
+          onRetry={retryAttachment}
           waiting={sendWhenReady}
           onRemove={removeAttachment}
         />
@@ -704,11 +773,14 @@ function AttachmentStrip({
   attachments,
   waiting,
   onRemove,
+  onRetry,
 }: {
   attachments: readonly Attachment[];
   /** Enter was pressed and the message is waiting on these uploads. */
   waiting: boolean;
   onRemove: (id: string) => void;
+  /** Runs a failed upload again, in the same chip. */
+  onRetry: (id: string) => void;
 }) {
   const t = useT();
   return (
@@ -739,9 +811,20 @@ function AttachmentStrip({
             </div>
           ) : null}
           {a.status === "error" ? (
-            <div className="absolute inset-x-0 bottom-0 bg-destructive/80 px-1 py-0.5 text-center text-[9px] text-destructive-foreground">
-              {t("composer.uploadFailed")}
-            </div>
+            /* The failure is a BUTTON, not a label. An upload dies for reasons that have nothing to
+               do with the picture (a restarting runner, a blink of network), and "paste it again"
+               is a terrible answer once the clipboard has moved on — the bytes are still here. */
+            <button
+              type="button"
+              data-testid="composer-attachment-retry"
+              aria-label={t("composer.retryUpload", { name: a.name })}
+              title={t("composer.retryUpload", { name: a.name })}
+              onClick={() => onRetry(a.id)}
+              className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-0.5 bg-destructive/80 px-1 py-0.5 text-center text-[9px] text-destructive-foreground hover:bg-destructive"
+            >
+              <RotateCw className="h-2.5 w-2.5" />
+              {t("composer.tryAgain")}
+            </button>
           ) : null}
 
           <button

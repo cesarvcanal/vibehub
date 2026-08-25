@@ -16,15 +16,17 @@ import {
 import { AccountsManager } from "@/features/board/components/AccountsManager";
 import { AllProjectsBoard } from "@/features/board/components/AllProjectsBoard";
 import { BrainManager } from "@/features/board/components/BrainManager";
-import { CardTerminalView } from "@/features/board/components/CardTerminalView";
 import { KanbanBoard } from "@/features/board/components/KanbanBoard";
 import { McpManager } from "@/features/board/components/McpManager";
 import { NewCardDialog } from "@/features/board/components/NewCardDialog";
 import { ProjectFormDialog } from "@/features/board/components/ProjectFormDialog";
 import { ProjectSidebar } from "@/features/board/components/ProjectSidebar";
 import { RunnerBanner } from "@/features/board/components/RunnerBanner";
+import { TerminalDeck } from "@/features/board/components/TerminalDeck";
 import { moveProjectLocal, readLocation, sortProjects, writeLocation } from "@/features/board/lib/board";
+import { deckLimit, dropFromDeck, pruneDeck, touchDeck, type DeckEntry } from "@/features/board/lib/deck";
 import { cardViewHeight } from "@/features/board/lib/focusMode";
+import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/lib/useIsMobile";
 import {
   attachLeaveFocusShortcut,
@@ -56,6 +58,16 @@ import { t as translate, useT } from "@/i18n";
  * Where you are lives in the URL (`?project=…&card=…`), never in component state, so a refresh, a
  * second tab and a pasted link all land in the same place, including inside a terminal. NO project
  * is a destination too: it is the aggregated board across everything.
+ *
+ * ## One layout, and the deck inside it
+ *
+ * The page renders ONE element tree in both states. The board and the card view are not two screens
+ * that replace each other; they are the same frame with a different middle. That is what lets the
+ * TERMINAL DECK — every card you have opened, still mounted, still connected — sit at a fixed spot
+ * in that tree and survive every navigation: React reconciles by position, so a deck that moved
+ * between two branches would be a deck that unmounts, and unmounting is exactly the cost this is
+ * here to remove. Switching cards is now a change of which pane is visible; going back to the board
+ * parks the deck off screen with its sockets intact.
  */
 export function BoardPage() {
   const t = useT();
@@ -173,6 +185,35 @@ export function BoardPage() {
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: PROJECTS_KEY }),
   });
+
+  /* ------------------------------------------------------------------ deck */
+
+  /**
+   * The cards whose terminals stay alive. Every card you open joins; the limit decides who leaves.
+   *
+   * This is the ONE piece of screen state the URL does not own, and deliberately so: the URL says
+   * which card you are looking at, this says which ones are still warm behind it. A refresh is
+   * allowed to forget the deck — the sessions are in the runner, not here.
+   */
+  const [deck, setDeck] = React.useState<DeckEntry[]>([]);
+  const limit = deckLimit(isMobile);
+  const projectExists = Boolean(selected);
+
+  React.useEffect(() => {
+    if (!cardId || !projectId || !projectExists) return;
+    setDeck((prev) => touchDeck(prev, { cardId, projectId }, limit));
+  }, [cardId, projectId, projectExists, limit]);
+
+  // A deleted project takes its worktrees and its sessions with it; nothing of it stays connected.
+  React.useEffect(() => {
+    if (!projectList) return;
+    const ids = projects.map((p) => p.id);
+    setDeck((prev) => pruneDeck(prev, ids));
+  }, [projectList, projects]);
+
+  const closePane = React.useCallback((id: string) => {
+    setDeck((prev) => dropFromDeck(prev, id));
+  }, []);
 
   /* ------------------------------------------------------------- shortcuts */
 
@@ -302,89 +343,76 @@ export function BoardPage() {
     </>
   );
 
-  /* --------------------------------------------------------- the card view */
+  /* -------------------------------------------------------- board and card */
 
-  if (selected && cardId) {
-    return (
-      <div className="h-full">
-        <div
-          data-testid="card-layout"
-          className="flex min-h-[420px] flex-col gap-3 lg:flex-row lg:items-stretch"
-          style={{ height: cardViewHeight(undefined, isMobile) }}
-        >
-          {/* The handle is the card bar's, not the page's — see `menuButton`. The slot stays so
-              React keeps reconciling the sidebar against the sidebar across the two branches. */}
-          {null}
-          {sidebar}
-          {/* Keyed by card: switching cards tears the socket down and opens the next one cleanly. */}
-          <CardTerminalView
-            key={cardId}
-            project={selected}
-            cardId={cardId}
-            onBack={() => go(selected.id)}
-            onNewCard={() => setNewCardProject(selected)}
-            onOpenMenu={() => setMenuOpen(true)}
-          />
-        </div>
-        {dialogs}
+  /**
+   * The board's middle. Not rendered while a card is open — the deck is standing in that slot — so
+   * the kanban stops polling and gets out of the way, exactly as it did when these were two screens.
+   */
+  const boardMiddle = isLoading ? (
+    <div className="flex justify-center py-12">
+      <Loader2 className="h-7 w-7 animate-spin text-muted-foreground" />
+    </div>
+  ) : projects.length === 0 ? (
+    <div className="panel flex flex-col items-center gap-3 py-12 text-center">
+      <div className="grid h-11 w-11 place-items-center rounded-xl bg-primary/10 text-primary">
+        <Code2 className="h-5 w-5" />
       </div>
-    );
-  }
-
-  /* ------------------------------------------------------------- the board */
+      <div>
+        <p className="font-medium">{t("board.noProjects")}</p>
+        <p className="text-sm leading-relaxed text-muted-foreground">{t("board.noProjectsBody")}</p>
+      </div>
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        <Button onClick={() => setNewProjectOpen(true)}>
+          <Plus /> {t("board.createFirstProject")}
+        </Button>
+        <RunnerBanner />
+      </div>
+    </div>
+  ) : selected ? (
+    <KanbanBoard
+      project={selected}
+      onOpenCard={(card) => go(selected.id, card.id)}
+      onNewCard={() => setNewCardProject(selected)}
+      headerExtra={headerExtra}
+      headerLead={menuButton}
+    />
+  ) : (
+    // Nothing selected: every project's cards at once. Opening one goes to ITS project.
+    <AllProjectsBoard
+      projects={projects}
+      onOpenCard={(card) => go(card.projectId, card.id)}
+      headerExtra={aggregateHeaderExtra}
+      headerLead={menuButton}
+    />
+  );
 
   return (
-    <div className="space-y-5">
-      {isLoading ? (
-        <div className="flex justify-center py-12">
-          <Loader2 className="h-7 w-7 animate-spin text-muted-foreground" />
-        </div>
-      ) : projects.length === 0 ? (
-        <div className="panel flex flex-col items-center gap-3 py-12 text-center">
-          <div className="grid h-11 w-11 place-items-center rounded-xl bg-primary/10 text-primary">
-            <Code2 className="h-5 w-5" />
-          </div>
-          <div>
-            <p className="font-medium">{t("board.noProjects")}</p>
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              {t("board.noProjectsBody")}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            <Button onClick={() => setNewProjectOpen(true)}>
-              <Plus /> {t("board.createFirstProject")}
-            </Button>
-            <RunnerBanner />
-          </div>
-        </div>
-      ) : (
-        // `lg:items-start` — the sidebar is as tall as its own content here, not as tall as the
-        // board beside it.
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
-          {null}
-          {sidebar}
-
-          <div className="min-w-0 flex-1">
-            {selected ? (
-              <KanbanBoard
-                project={selected}
-                onOpenCard={(card) => go(selected.id, card.id)}
-                onNewCard={() => setNewCardProject(selected)}
-                headerExtra={headerExtra}
-                headerLead={menuButton}
-              />
-            ) : (
-              // Nothing selected: every project's cards at once. Opening one goes to ITS project.
-              <AllProjectsBoard
-                projects={projects}
-                onOpenCard={(card) => go(card.projectId, card.id)}
-                headerExtra={aggregateHeaderExtra}
-                headerLead={menuButton}
-              />
-            )}
-          </div>
-        </div>
-      )}
+    <div className={cardOpen ? "h-full" : "space-y-5"}>
+      {/* THE frame. Same element, same children, in both states — see the note at the top: the deck
+          below only stays connected because it never changes its place in this tree. With a card
+          open the row is exactly one viewport tall; on the board it is as tall as its content. */}
+      <div
+        data-testid={cardOpen ? "card-layout" : "board-layout"}
+        className={cn(
+          "flex min-w-0 flex-col gap-3 lg:flex-row",
+          cardOpen ? "min-h-[420px] lg:items-stretch" : "lg:items-start",
+        )}
+        style={cardOpen ? { height: cardViewHeight(undefined, isMobile) } : undefined}
+      >
+        {/* No projects at all: there is nothing to list, and the invitation below is the whole page. */}
+        {projects.length > 0 ? sidebar : null}
+        {cardOpen ? null : <div className="min-w-0 flex-1">{boardMiddle}</div>}
+        <TerminalDeck
+          entries={deck}
+          activeCardId={cardOpen ? cardId : null}
+          projects={projects}
+          onBack={(id) => go(id)}
+          onNewCard={setNewCardProject}
+          onOpenMenu={() => setMenuOpen(true)}
+          onClose={closePane}
+        />
+      </div>
 
       {dialogs}
     </div>

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Loader2, MessageSquare, Square, TerminalSquare, Wrench } from "lucide-react";
+import { ChevronRight, Loader2, MessageSquare, Square, TerminalSquare, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { wsUrl } from "@/lib/ws";
 import { apiErrorMessage } from "@/lib/apiError";
@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { boardApi } from "@/features/board/api";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
 import { reconnectDelay, type ConnectionState } from "@/features/board/lib/reconnect";
-import { mergeEvent, parseChatFrame, type ChatEvent } from "@/features/board/lib/chat";
+import { groupChatRows, mergeEvent, parseChatFrame, type ChatEvent } from "@/features/board/lib/chat";
 import { mdBlocks, mdInline } from "@/features/board/lib/markdown";
 import { t as translate, useT } from "@/i18n";
 
@@ -30,8 +30,21 @@ import { t as translate, useT } from "@/i18n";
 /** After this long with no new event while the agent is "working", offer the terminal. */
 export const QUIET_HINT_MS = 60_000;
 
+/**
+ * How long a freshly connected stream is given to replay its tail before an empty screen is called
+ * empty. Long enough for the server's first frames, short enough that a genuinely new card does not
+ * sit staring at a spinner.
+ */
+export const REPLAY_GRACE_MS = 600;
+
 export interface ChatViewProps {
   cardId: string;
+  /**
+   * Is this card the one on screen? Card views stay mounted behind the one you are reading (the
+   * deck), so the transcript keeps streaming — but the composer under it must not take the keyboard
+   * away from the card that IS on screen.
+   */
+  active?: boolean;
   /** true = the agent's turn is running (the card's status dot is green). */
   working: boolean;
   /** Uploads an image and resolves with its path inside the runner (appended to the message). */
@@ -45,6 +58,7 @@ export interface ChatViewProps {
 
 export function ChatView({
   cardId,
+  active = true,
   working,
   onUploadImage,
   onStatus,
@@ -61,6 +75,15 @@ export function ChatView({
    */
   const [pending, setPending] = React.useState<{ id: string; text: string }[]>([]);
   const [lastEventAt, setLastEventAt] = React.useState(() => Date.now());
+  /**
+   * Has the transcript had its say yet?
+   *
+   * The stream replays its tail the moment it connects, so the first instant of a card is not "no
+   * messages" — it is "not known yet", and printing the empty state there tells you a card is empty
+   * when it is merely young. This flips once the socket has opened AND either an event arrived or a
+   * short grace has passed with nothing.
+   */
+  const [settled, setSettled] = React.useState(false);
 
   const statusRef = React.useRef<ChatViewProps["onStatus"]>(onStatus);
   statusRef.current = onStatus;
@@ -69,7 +92,9 @@ export function ChatView({
 
   React.useEffect(() => {
     setEvents([]);
+    setSettled(false);
     let socket: WebSocket | null = null;
+    let grace: ReturnType<typeof setTimeout> | null = null;
     let retry: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
     let disposed = false;
@@ -89,6 +114,9 @@ export function ChatView({
       next.onopen = () => {
         attempt = 0;
         setStatus("open");
+        // Connected: the replay is on its way. If nothing has arrived shortly, the card really is
+        // empty and the empty state is the truth rather than a guess.
+        if (!grace) grace = setTimeout(() => setSettled(true), REPLAY_GRACE_MS);
       };
       next.onmessage = (event: MessageEvent) => {
         if (typeof event.data !== "string") return;
@@ -98,6 +126,7 @@ export function ChatView({
         // (or a new session file) idempotent instead of duplicating the history.
         setEvents((prev) => mergeEvent(prev, parsed));
         setLastEventAt(Date.now());
+        setSettled(true);
       };
       next.onerror = () => {
         /* onclose always follows; the retry is decided there so it happens once */
@@ -123,6 +152,7 @@ export function ChatView({
     connect();
     return () => {
       disposed = true;
+      if (grace) clearTimeout(grace);
       if (retry) clearTimeout(retry);
       try { socket?.close(); } catch { /* already closing */ }
       setStatus("closed");
@@ -193,6 +223,7 @@ export function ChatView({
   const quiet = quietFor >= QUIET_HINT_MS;
 
   const empty = events.length === 0 && pending.length === 0;
+  const rows = React.useMemo(() => groupChatRows(events), [events]);
 
   return (
     <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", className)}>
@@ -205,7 +236,19 @@ export function ChatView({
         data-testid="chat-scroller"
         className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain rounded-md border border-border/60 bg-card/30 px-3 py-3"
       >
-        {empty ? (
+        {empty && !settled ? (
+          // Connecting, or the replay has not landed yet. Saying "no messages" here would be a lie
+          // that lasts exactly as long as the thing you are waiting for.
+          <div
+            data-testid="chat-loading"
+            className="flex h-full flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground"
+          >
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <p>{t("chat.loading")}</p>
+          </div>
+        ) : null}
+
+        {empty && settled ? (
           <div className="flex h-full flex-col items-center justify-center gap-1 text-center text-sm text-muted-foreground">
             <MessageSquare className="h-5 w-5 opacity-60" />
             <p>{t("chat.empty")}</p>
@@ -213,9 +256,15 @@ export function ChatView({
           </div>
         ) : null}
 
-        {events.map((event) => (
-          <ChatRow key={event.id} event={event} />
-        ))}
+        {/* Folded: a run of tool calls is ONE block, not fifteen lines that push the reply off the
+            screen. See `groupChatRows` — the fold is a pure function of the event list. */}
+        {rows.map((row) =>
+          row.kind === "tools" ? (
+            <ToolGroup key={row.id} events={row.events} />
+          ) : (
+            <ChatRow key={row.id} event={row.event} />
+          ),
+        )}
         {pending.map((p) => (
           <ChatRow key={p.id} event={{ id: p.id, kind: "user", at: 0, text: p.text }} sending />
         ))}
@@ -244,6 +293,7 @@ export function ChatView({
         <TerminalComposer
           className="min-w-0 flex-1"
           cardId={cardId}
+          active={active}
           onSend={send}
           onUploadImage={onUploadImage}
         />
@@ -261,6 +311,52 @@ export function ChatView({
           </Button>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * A run of tool calls, folded.
+ *
+ * What an agent's turn mostly IS, in lines on a screen, is tools: reads, greps, edits, a dozen bash
+ * invocations. Rendered flat they bury the two sentences you opened the card for. So the run
+ * collapses into one row that says how many and shows the last one — enough to know what it is
+ * doing — and clicking it unfolds every call in place. Nothing is hidden, and nothing is lost when
+ * it grows: the block keeps its identity while the turn adds to it, so a block you opened stays
+ * open.
+ */
+function ToolGroup({ events }: { events: ChatEvent[] }) {
+  const t = useT();
+  const [open, setOpen] = React.useState(false);
+  const last = events[events.length - 1];
+
+  return (
+    <div data-testid="chat-tool-group" data-count={events.length} className="pl-0.5">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label={open ? t("chat.actionsHide", { n: events.length }) : t("chat.actionsShow", { n: events.length })}
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full min-w-0 items-center gap-1.5 rounded text-left text-xs text-muted-foreground/80 hover:text-foreground"
+      >
+        <ChevronRight className={cn("h-3 w-3 shrink-0 transition-transform", open && "rotate-90")} />
+        <Wrench className="h-3 w-3 shrink-0 opacity-70" />
+        <span className="shrink-0 font-medium">{t("chat.actions", { n: events.length })}</span>
+        {/* Folded, the LAST call is the useful one: it is what the agent is doing right now. */}
+        {!open && last ? (
+          <span className="min-w-0 truncate font-mono opacity-70">
+            {last.tool}
+            {last.text ? ` ${last.text}` : ""}
+          </span>
+        ) : null}
+      </button>
+      {open ? (
+        <div className="mt-1 space-y-1 border-l border-border/60 pl-2">
+          {events.map((event) => (
+            <ChatRow key={event.id} event={event} />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

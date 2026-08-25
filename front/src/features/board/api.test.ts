@@ -3,6 +3,8 @@ import {
   IMPLICIT_MODEL,
   implicitModelTitle,
   accountInUseName,
+  cardNeedsOpen,
+  cardOpensInstantly,
   cardRunnerHint,
   mcpSecretNames,
   mcpSecretStatus,
@@ -191,5 +193,39 @@ describe("cardRunnerHint", () => {
       "base dev",
     );
     expect(cardRunnerHint(undefined)).toBe("");
+  });
+});
+
+describe("cardNeedsOpen", () => {
+  const base = { id: "c1", projectId: "p1", title: "t", base: "dev", createdAt: 1 };
+  const c = (over: Partial<BoardCard>): BoardCard => ({ ...base, column: "working", ...over } as BoardCard);
+
+  it("says NO for a card that is already open and live — the runner has nothing to do", () => {
+    // The call is a provisioning script, serialized per project. Asking for it on a card that needs
+    // nothing is what makes the card that DOES need it wait.
+    expect(cardNeedsOpen(c({ openedAt: 10 }))).toBe(false);
+    expect(cardNeedsOpen(c({ openedAt: 10, column: "waiting" }))).toBe(false);
+    expect(cardNeedsOpen(c({ openedAt: 10, column: "done" }))).toBe(false);
+  });
+
+  it("says YES when there is something to build or to revive", () => {
+    expect(cardNeedsOpen(c({ column: "backlog" }))).toBe(true); // never opened
+    expect(cardNeedsOpen(c({ openedAt: 10, pausedAt: 20, column: "paused" }))).toBe(true);
+    expect(cardNeedsOpen(c({ openedAt: 10, hibernatedAt: 30 }))).toBe(true);
+    // Opening a backlog card is what moves it to `waiting`: a real change, even with a session.
+    expect(cardNeedsOpen(c({ openedAt: 10, column: "backlog" }))).toBe(true);
+  });
+
+  it("says YES when nothing is known — the server decides, not a guess here", () => {
+    expect(cardNeedsOpen(undefined)).toBe(true);
+    expect(cardNeedsOpen(null)).toBe(true);
+  });
+
+  it("is not the same question as `cardOpensInstantly`", () => {
+    // A paused card attaches instantly (its worktree is there) AND needs the open (its session is
+    // not). Collapsing the two is how one of them ends up wrong.
+    const paused = c({ openedAt: 10, pausedAt: 20, column: "paused" });
+    expect(cardOpensInstantly(paused)).toBe(true);
+    expect(cardNeedsOpen(paused)).toBe(true);
   });
 });

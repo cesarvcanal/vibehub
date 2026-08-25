@@ -110,12 +110,94 @@ describe("ChatView", () => {
     expect(screen.getByText("verde").tagName).toBe("STRONG");
   });
 
-  it("ignores the heartbeat that keeps the follower alive", async () => {
+  it("folds a run of tool calls into one block, and opens it in place", async () => {
+    // A turn is mostly tools. Rendered flat, fifteen `Read` lines push the two sentences you came
+    // for off the screen.
+    const user = userEvent.setup({ delay: null });
     renderChat();
     const ws = await socket();
     ws.accept();
-    ws.raw("\n");
-    expect(screen.getByText(/no messages yet/i)).toBeInTheDocument();
+    ws.deliver({ id: "a1", kind: "assistant", at: 1, text: "vou olhar" });
+    for (let i = 0; i < 5; i += 1) {
+      ws.deliver({ id: `t${i}`, kind: "tool", at: 2 + i, tool: "Bash", text: `step ${i}` });
+    }
+
+    const group = await screen.findByTestId("chat-tool-group");
+    expect(group).toHaveAttribute("data-count", "5");
+    expect(group).toHaveTextContent("5 actions");
+    // Folded: the LAST call is the one shown, because it is what the agent is doing now.
+    expect(group).toHaveTextContent("step 4");
+    expect(screen.queryAllByTestId("chat-tool")).toHaveLength(0);
+    // The message it interrupted is still a message, not part of the block.
+    expect(screen.getByTestId("chat-assistant")).toHaveTextContent("vou olhar");
+
+    await user.click(screen.getByRole("button", { name: /show these 5 actions/i }));
+    expect(screen.getAllByTestId("chat-tool")).toHaveLength(5);
+
+    await user.click(screen.getByRole("button", { name: /fold these 5 actions away/i }));
+    expect(screen.queryAllByTestId("chat-tool")).toHaveLength(0);
+  });
+
+  it("leaves a short run as plain lines — folding one Read is a click that buys nothing", async () => {
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ id: "t1", kind: "tool", at: 1, tool: "Read", text: "api.ts" });
+    ws.deliver({ id: "t2", kind: "tool", at: 2, tool: "Read", text: "board.ts" });
+
+    await waitFor(() => expect(screen.getAllByTestId("chat-tool")).toHaveLength(2));
+    expect(screen.queryByTestId("chat-tool-group")).not.toBeInTheDocument();
+  });
+
+  it("ignores the heartbeat that keeps the follower alive", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderChat();
+      const ws = await socket();
+      ws.accept();
+      ws.raw("\n");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(screen.getByText(/no messages yet/i)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says it is LOADING before it says a card is empty — the stream replays on connect", async () => {
+    // "No messages yet" in the first instant of every card is a lie that lasts exactly as long as
+    // the thing you are waiting for.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderChat();
+      expect(screen.getByTestId("chat-loading")).toBeInTheDocument();
+      expect(screen.queryByText(/no messages yet/i)).not.toBeInTheDocument();
+
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ id: "a1", kind: "assistant", at: 1, text: "aqui está" });
+
+      expect(await screen.findByTestId("chat-assistant")).toHaveTextContent("aqui está");
+      expect(screen.queryByTestId("chat-loading")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does call an empty card empty, once the replay has had its moment", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderChat();
+      (await socket()).accept();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(screen.getByText(/no messages yet/i)).toBeInTheDocument();
+      expect(screen.queryByTestId("chat-loading")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not duplicate history when the stream replays it (a reconnect)", async () => {

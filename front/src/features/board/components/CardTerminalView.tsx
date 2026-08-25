@@ -50,6 +50,7 @@ import {
   boardApi,
   cardKey,
   cardMessagesKey,
+  cardNeedsOpen,
   cardOpensInstantly,
   cardRunnerHint,
   cardSessionKey,
@@ -98,11 +99,23 @@ const PILL =
 export function CardTerminalView({
   project,
   cardId,
+  active = true,
   onBack,
   onOpenMenu,
+  onClose,
 }: {
   project: BoardProject;
   cardId: string;
+  /**
+   * Is this the card ON TOP of the deck?
+   *
+   * Several card views are mounted at once — that is what makes switching cards instant — but only
+   * one of them is on screen. Everything that reaches OUT of this component belongs to the visible
+   * one alone: the tab title, the phone's scroll lock, the keyboard focus, and the polls that only
+   * feed this bar. The websocket is deliberately NOT in that list: keeping the session attached
+   * while you are looking at another card is the whole point.
+   */
+  active?: boolean;
   onBack: () => void;
   /**
    * Accepted so the page can keep passing it, but no longer rendered here: "New card" lives on the
@@ -116,6 +129,11 @@ export function CardTerminalView({
    * card — which is a long way round when the whole point is hopping between agents.
    */
   onOpenMenu?: () => void;
+  /**
+   * This card no longer has a session worth holding open — it was paused from here. The deck drops
+   * it, so its socket stops reconnecting into a session that is gone.
+   */
+  onClose?: () => void;
 }) {
   const t = useT();
   const isMobile = useIsMobile();
@@ -132,6 +150,15 @@ export function CardTerminalView({
   // Decided ONCE, on mount, before anything can refetch underneath us.
   const [cachedInstant] = React.useState(() =>
     cardOpensInstantly(queryClient.getQueryData<BoardCard[]>(boardKey)?.find((c) => c.id === cardId)),
+  );
+  /**
+   * Whether this open has any work to do — decided from the same snapshot, at the same moment, and
+   * never revisited: a card that was live when you opened it does not need the runner touched, and
+   * an answer that changed its mind two seconds later would fire the call for nothing. See
+   * `cardNeedsOpen`.
+   */
+  const [cachedNeedsOpen] = React.useState(() =>
+    cardNeedsOpen(queryClient.getQueryData<BoardCard[]>(boardKey)?.find((c) => c.id === cardId)),
   );
   const [cacheMiss] = React.useState(
     () => !queryClient.getQueryData<BoardCard[]>(boardKey)?.some((c) => c.id === cardId),
@@ -168,15 +195,56 @@ export function CardTerminalView({
     },
   });
 
+  /**
+   * The open call, made only when it can change something.
+   *
+   * It used to run on every mount "to refresh the record". That refresh costs a full provisioning
+   * script in the runner, serialized per project — so opening four live cards put four scripts in a
+   * queue that the ONE card actually being provisioned then had to wait behind. What the record
+   * needs is already true for a card that is open and live, and the terminal's own websocket
+   * provisions by itself if the session turns out to be gone.
+   */
+  const needsOpen = cacheMiss ? cardNeedsOpen(fetchedCard) : cachedNeedsOpen;
   const open = openMutation.mutate;
+  const asked = React.useRef(false);
   React.useEffect(() => {
+    if (asked.current) return;
+    // A deep link has to wait for the record before it can tell — `undecided` is that wait.
+    if (cacheMiss && fetchingCard) return;
+    asked.current = true;
+    if (!needsOpen) return;
     open();
-  }, [open]);
+  }, [open, needsOpen, cacheMiss, fetchingCard]);
 
   const card: BoardCard | null =
     cards?.find((c) => c.id === cardId) ?? openMutation.data ?? fetchedCard ?? null;
 
-  useDocumentTitle(boardTitle(project.name, card?.title));
+  /**
+   * The card was DELETED — from the board, the sidebar, another tab.
+   *
+   * A pane in the deck outlives the screen that opened it, so it has to notice this itself:
+   * otherwise a terminal nobody can see keeps reconnecting to a session that was destroyed with the
+   * worktree. Guarded by "we saw it in the list at least once", because a card created a moment ago
+   * is legitimately missing from a list that has not refetched yet — closing on that would fight
+   * the navigation that just opened it.
+   */
+  const seenInList = React.useRef(false);
+  const goneRef = React.useRef({ onBack, onClose });
+  goneRef.current = { onBack, onClose };
+  const present = cards?.some((c) => c.id === cardId);
+  React.useEffect(() => {
+    if (present === undefined) return;
+    if (present) {
+      seenInList.current = true;
+      return;
+    }
+    if (!seenInList.current) return;
+    goneRef.current.onBack();
+    goneRef.current.onClose?.();
+  }, [present]);
+
+  // Only the visible card names the tab; the panes behind it are not what you are looking at.
+  useDocumentTitle(boardTitle(project.name, card?.title), active);
 
   /* ------------------------------------------------------------- mutations */
 
@@ -192,6 +260,9 @@ export function CardTerminalView({
       mirror(updated);
       toast.success(translate("toast.cardPaused"));
       onBack();
+      // Pausing ENDS the session in the runner. Staying in the deck would leave a socket retrying
+      // against nothing, so the pane goes with it.
+      onClose?.();
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardPauseError"))),
   });
@@ -259,7 +330,10 @@ export function CardTerminalView({
   const { data: session } = useQuery({
     queryKey: cardSessionKey(cardId),
     queryFn: () => boardApi.cardSessionInfo(cardId),
-    refetchInterval: 5_000,
+    // Only while this card is the one on screen: the pills it feeds are in THIS bar, and a deck of
+    // six hidden cards each polling every five seconds is traffic nobody can see the result of.
+    refetchInterval: active ? 5_000 : false,
+    enabled: active,
     retry: false,
   });
 
@@ -287,7 +361,7 @@ export function CardTerminalView({
   const { data: usageData } = useQuery({
     queryKey: ACCOUNT_USAGE_KEY,
     queryFn: boardApi.accountsUsage,
-    enabled: Boolean(card),
+    enabled: Boolean(card) && active,
     refetchInterval: 60_000,
     staleTime: 55_000,
     retry: false,
@@ -447,11 +521,11 @@ export function CardTerminalView({
    * class goes on `<html>` while the card is open and comes off when it closes or the window grows.
    */
   React.useEffect(() => {
-    if (!isMobile || typeof document === "undefined") return;
+    if (!active || !isMobile || typeof document === "undefined") return;
     const root = document.documentElement;
     root.classList.add("card-view-locked");
     return () => root.classList.remove("card-view-locked");
-  }, [isMobile]);
+  }, [active, isMobile]);
 
   /**
    * TERMINAL | CHAT. The one control that is the same on a phone and on a desktop, in the same
@@ -893,6 +967,7 @@ export function CardTerminalView({
           <TerminalComposer
             className="mt-1.5"
             cardId={cardId}
+            active={active}
             onSend={sendMessage}
             onUploadImage={uploadAttachment}
           />
@@ -909,6 +984,7 @@ export function CardTerminalView({
               /* The SAME session, read from its transcript. No terminal websocket while this is up. */
               <ChatView
                 cardId={cardId}
+                active={active}
                 working={working}
                 onUploadImage={uploadImage}
                 onStatus={setConnection}
@@ -936,6 +1012,7 @@ export function CardTerminalView({
                 <TerminalComposer
                   className="mt-1.5"
                   cardId={cardId}
+                  active={active}
                   onSend={sendMessage}
                   onUploadImage={uploadAttachment}
                 />
@@ -958,8 +1035,13 @@ export function CardTerminalView({
                     <X className="h-3.5 w-3.5" />
                   </Button>
                 </div>
-                {/* A separate tmux session on the server; closing this pane only drops the socket. */}
+                {/* A separate tmux session on the server; closing this pane only drops the socket.
+                    It takes the keyboard when it opens — that is what a shell you just asked for
+                    should do — but only while this card is the one on screen: a pane in the deck
+                    that reconnects behind your back must not pull the caret out of the card you are
+                    reading. */}
                 <XTerminal
+                  autoFocus={active}
                   wsPath={`/api/cards/${encodeURIComponent(cardId)}/terminal?shell=1`}
                   ariaLabel={t("cardView.shellAria")}
                 />

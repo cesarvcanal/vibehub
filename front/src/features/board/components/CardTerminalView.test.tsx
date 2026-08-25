@@ -6,6 +6,7 @@ import { CardTerminalView } from "@/features/board/components/CardTerminalView";
 import { renderApp, testQueryClient } from "@/test/render";
 import { get, patch, post } from "@/lib/api";
 import { cardsKey, type BoardCard, type BoardProject } from "@/features/board/api";
+import { writeCardMode, type CardViewMode } from "@/features/board/lib/chat";
 import { MOBILE_QUERY } from "@/lib/useIsMobile";
 
 vi.mock("@/lib/api", () => ({
@@ -39,11 +40,18 @@ vi.mock("@/features/board/components/XTerminal", () => ({
 
 // The chat owns a websocket of its own and has its own test file; here we only care that it is the
 // thing on screen, and that the terminal is NOT (the whole point of switching is dropping that socket).
-vi.mock("@/features/board/components/ChatView", () => ({
-  ChatView: ({ cardId, working }: { cardId: string; working: boolean }) => (
-    <div data-testid="chat" data-card={cardId} data-working={String(working)} />
-  ),
-}));
+// It carries the REAL composer, because the composer is the one thing the two panes share — and
+// what a half-written message survives is exactly the swap between them.
+vi.mock("@/features/board/components/ChatView", async () => {
+  const { TerminalComposer } = await import("@/features/board/components/TerminalComposer");
+  return {
+    ChatView: ({ cardId, working, active }: { cardId: string; working: boolean; active?: boolean }) => (
+      <div data-testid="chat" data-card={cardId} data-working={String(working)}>
+        <TerminalComposer cardId={cardId} active={active} onSend={() => undefined} />
+      </div>
+    ),
+  };
+});
 
 vi.mock("@/features/board/components/VncPanel", () => ({
   VncPanel: ({ cardId }: { cardId: string }) => <div data-testid="vnc">{cardId}</div>,
@@ -142,9 +150,20 @@ function serveSession(info: {
   });
 }
 
-/** Renders the view with `seed` already in the board cache — i.e. arriving from the board. */
-function renderWithCache(seed: BoardCard[], client: QueryClient = testQueryClient()) {
+/**
+ * Renders the view with `seed` already in the board cache — i.e. arriving from the board.
+ *
+ * The pane is chosen EXPLICITLY (terminal by default here) rather than left to the app's own
+ * default: a card now opens in chat, and most of what this file asserts is about the terminal.
+ * Tests that are about the default say so by passing the mode themselves, or by writing none.
+ */
+function renderWithCache(
+  seed: BoardCard[],
+  client: QueryClient = testQueryClient(),
+  mode: CardViewMode | null = "terminal",
+) {
   client.setQueryData(cardsKey(project.id), seed);
+  if (mode) writeCardMode("c1", mode);
   return renderApp(
     <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />,
     { queryClient: client },
@@ -157,16 +176,34 @@ describe("CardTerminalView — instant open", () => {
     serve();
   });
 
-  it("attaches immediately for a card that has been opened before, and calls open in parallel", async () => {
-    let resolveOpen: (value: unknown) => void = () => {};
-    mockPost.mockImplementation(() => new Promise((resolve) => (resolveOpen = resolve)));
+  it("attaches immediately for a card that has been opened before — and asks the runner for NOTHING", async () => {
+    // The open call runs a provisioning script that is serialized per project. A card that is
+    // already open and live needs none of it: the websocket attaches on its own, and firing the
+    // call anyway is what puts the card that DOES need provisioning behind a queue.
+    mockPost.mockImplementation(() => new Promise(() => {}));
 
     renderWithCache([card({ openedAt: 10 })]);
 
-    // The terminal is on screen BEFORE the open request has answered.
     expect(await screen.findByTestId("xterm")).toBeInTheDocument();
-    expect(mockPost).toHaveBeenCalledWith("/cards/c1/open");
-    resolveOpen({ card: card({ openedAt: 10 }) });
+    expect(mockPost).not.toHaveBeenCalledWith("/cards/c1/open");
+  });
+
+  it("still opens a card whose session was killed — paused, hibernated, or back in the backlog", async () => {
+    mockPost.mockResolvedValue({ card: card({ openedAt: 10 }) });
+
+    const paused = renderWithCache([card({ openedAt: 10, pausedAt: 20, column: "paused" })]);
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/cards/c1/open"));
+    paused.unmount();
+
+    mockPost.mockClear();
+    const hibernated = renderWithCache([card({ openedAt: 10, hibernatedAt: 30 })]);
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/cards/c1/open"));
+    hibernated.unmount();
+
+    mockPost.mockClear();
+    renderWithCache([card({ openedAt: 10, column: "backlog" })]);
+    // Opening a backlog card is what moves it to `waiting`; that is a change, so it is asked for.
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/cards/c1/open"));
   });
 
   it("attaches immediately for a card that was pre-provisioned but never opened", async () => {
@@ -209,9 +246,102 @@ describe("CardTerminalView — instant open", () => {
       return Promise.reject(new Error(`unexpected GET ${url}`));
     });
 
-    // No cache seed at all: this is a refresh or a pasted link.
+    // No cache seed at all: this is a refresh or a pasted link. The pane is named because what is
+    // being asserted is the ATTACH, not which of the two views the card opens in.
+    writeCardMode("c1", "terminal");
     renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
     expect(await screen.findByTestId("xterm")).toBeInTheDocument();
+    localStorage.clear();
+  });
+});
+
+describe("CardTerminalView — behind another card", () => {
+  const originalMatchMedia = window.matchMedia;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    serve();
+    mockPost.mockResolvedValue({ card: card({ openedAt: 10 }) });
+    // This suite is about the TERMINAL pane surviving behind another card.
+    writeCardMode("c1", "terminal");
+  });
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+    document.documentElement.classList.remove("card-view-locked");
+    localStorage.clear();
+  });
+
+  it("gets out of the way when its card is deleted somewhere else", async () => {
+    // The pane outlives the screen that opened it, so it has to notice the deletion itself — the
+    // worktree and the session are gone, and reconnecting to them forever is the alternative.
+    const onBack = vi.fn();
+    const onClose = vi.fn();
+    const client = testQueryClient();
+    client.setQueryData(cardsKey(project.id), [card({ openedAt: 10 })]);
+    renderApp(
+      <CardTerminalView project={project} cardId="c1" active={false} onBack={onBack} onClose={onClose} />,
+      { queryClient: client },
+    );
+    await screen.findByTestId("xterm");
+    expect(onClose).not.toHaveBeenCalled();
+
+    client.setQueryData(cardsKey(project.id), []);
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(onBack).toHaveBeenCalled();
+  });
+
+  it("keeps its terminal attached but leaves the tab title to the card on screen", async () => {
+    // A pane in the deck is a live session, not a live screen: the socket stays, everything that
+    // reaches out of the component does not.
+    document.title = "billing · vibehub";
+    const client = testQueryClient();
+    client.setQueryData(cardsKey(project.id), [card({ openedAt: 10 })]);
+    renderApp(
+      <CardTerminalView project={project} cardId="c1" active={false} onBack={vi.fn()} />,
+      { queryClient: client },
+    );
+
+    expect(await screen.findByTestId("xterm")).toBeInTheDocument();
+    expect(document.title).toBe("billing · vibehub");
+  });
+
+  it("stops polling the session it is not showing", async () => {
+    const client = testQueryClient();
+    client.setQueryData(cardsKey(project.id), [card({ openedAt: 10 })]);
+    renderApp(
+      <CardTerminalView project={project} cardId="c1" active={false} onBack={vi.fn()} />,
+      { queryClient: client },
+    );
+
+    await screen.findByTestId("xterm");
+    // The pills those routes feed are in a bar nobody can see.
+    expect(mockGet).not.toHaveBeenCalledWith("/cards/c1/session");
+    expect(mockGet).not.toHaveBeenCalledWith("/accounts/usage");
+  });
+
+  it("does not lock the phone's page scroll — the visible card owns that", async () => {
+    window.matchMedia = ((query: string) => ({
+      matches: query === MOBILE_QUERY,
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      onchange: null,
+      dispatchEvent: vi.fn(),
+    })) as unknown as typeof window.matchMedia;
+
+    const client = testQueryClient();
+    client.setQueryData(cardsKey(project.id), [card({ openedAt: 10 })]);
+    renderApp(
+      <CardTerminalView project={project} cardId="c1" active={false} onBack={vi.fn()} />,
+      { queryClient: client },
+    );
+
+    await screen.findByTestId("xterm");
+    expect(document.documentElement.classList.contains("card-view-locked")).toBe(false);
   });
 });
 
@@ -413,7 +543,7 @@ describe("CardTerminalView — the card bar", () => {
     const user = userEvent.setup();
     renderWithCache([card({ openedAt: 10, model: "claude-opus-5" })]);
 
-    expect(await screen.findByLabelText("Model")).toHaveTextContent("Fable");
+    await waitFor(() => expect(screen.getByLabelText("Model")).toHaveTextContent("Fable"));
     await openMenu(user, "Model");
     expect(screen.getByRole("menuitemcheckbox", { name: "Fable" })).toHaveAttribute("aria-checked", "true");
   });
@@ -730,7 +860,7 @@ describe("CardTerminalView — the phone", () => {
 
     // Row one is who you are looking at: back, the dot, the title. Nothing else.
     expect(within(identity).getByTestId("card-back")).toBeInTheDocument();
-    expect(within(identity).getByRole("heading", { name: "fix the totals" })).toBeInTheDocument();
+    expect(await within(identity).findByRole("heading", { name: "fix the totals" })).toBeInTheDocument();
 
     // Row two is the three things you press mid-task, as icons, plus one overflow menu.
     expect(within(actions).getByRole("button", { name: "Pause" })).toBeInTheDocument();
@@ -826,12 +956,11 @@ describe("CardTerminalView — the Terminal | Chat switch", () => {
     })) as unknown as typeof window.matchMedia;
   }
 
-  it("opens on the terminal and swaps the pane — the terminal socket goes away in chat", async () => {
+  it("opens in CHAT and swaps the pane — the terminal socket only exists while the terminal is up", async () => {
+    // The default, and the reason for it: opening a card is usually reading what the agent said.
+    // Nothing is written to storage here, so this is the app's own answer.
     const user = userEvent.setup({ delay: null });
-    renderWithCache([card({ openedAt: 10 })]);
-
-    expect(await screen.findByTestId("xterm")).toBeInTheDocument();
-    await user.click(screen.getByTestId("card-view-chat"));
+    renderWithCache([card({ openedAt: 10 })], testQueryClient(), null);
 
     expect(await screen.findByTestId("chat")).toBeInTheDocument();
     expect(screen.queryByTestId("xterm")).not.toBeInTheDocument();
@@ -839,19 +968,44 @@ describe("CardTerminalView — the Terminal | Chat switch", () => {
     await user.click(screen.getByTestId("card-view-terminal"));
     expect(await screen.findByTestId("xterm")).toBeInTheDocument();
     expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("card-view-chat"));
+    expect(await screen.findByTestId("chat")).toBeInTheDocument();
+    expect(screen.queryByTestId("xterm")).not.toBeInTheDocument();
   });
 
   it("remembers the choice for THAT card, on this device", async () => {
     const user = userEvent.setup({ delay: null });
     const { unmount } = renderWithCache([card({ openedAt: 10 })]);
-    await user.click(await screen.findByTestId("card-view-chat"));
-    await screen.findByTestId("chat");
+    await user.click(await screen.findByTestId("card-view-terminal"));
+    await screen.findByTestId("xterm");
     unmount();
 
-    // Same card: back in chat, without being asked again.
-    renderWithCache([card({ openedAt: 10 })]);
-    expect(await screen.findByTestId("chat")).toBeInTheDocument();
+    // Same card: back on the terminal, without being asked again. Nothing is written here — the
+    // stored choice IS what is being tested.
+    renderWithCache([card({ openedAt: 10 })], testQueryClient(), null);
+    expect(await screen.findByTestId("xterm")).toBeInTheDocument();
   });
+
+  it("keeps a half-written message when you swap Chat and Terminal", async () => {
+    // The two panes are two different composers. What is typed belongs to the CARD, not to the pane
+    // it happened to be typed in — losing a paragraph to a click on a view switch is unforgivable.
+    const user = userEvent.setup({ delay: null });
+    renderWithCache([card({ openedAt: 10 })], testQueryClient(), "terminal");
+    await screen.findByTestId("xterm");
+
+    const field = () => screen.getByTestId("terminal-composer").querySelector("textarea") as HTMLTextAreaElement;
+    await user.type(field(), "meia frase que eu ainda vou terminar");
+
+    await user.click(screen.getByTestId("card-view-chat"));
+    await screen.findByTestId("chat");
+    expect(field()).toHaveValue("meia frase que eu ainda vou terminar");
+
+    // ...and back, still there.
+    await user.click(screen.getByTestId("card-view-terminal"));
+    await screen.findByTestId("xterm");
+    expect(field()).toHaveValue("meia frase que eu ainda vou terminar");
+  }, 20_000);
 
   it("puts the switch in the bar on BOTH widths — never behind the overflow menu", async () => {
     setViewport(true);

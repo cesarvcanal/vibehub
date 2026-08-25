@@ -100,6 +100,37 @@ cannot show is anything drawn only on the screen, so when the agent goes quiet m
 says so and offers the terminal instead of pretending. The choice is remembered per card and per
 device (localStorage), never inferred from the width of the screen.
 
+A card nobody has switched opens in CHAT: opening a card is usually reading what the agent said, and
+that is the view that neither repaints nor costs a pty. The terminal is one click away, and the
+click is remembered. The tool calls in a turn — a dozen reads, four edits — fold into one expandable
+block, so what the agent SAID is what fills the screen.
+
+## Cards stay open
+
+Switching cards in the browser is a change of which pane is VISIBLE, not a reconnect. Every card you
+open joins a deck of live panes (`front/src/features/board/lib/deck.ts`): the pane stays mounted
+with its socket — the terminal's, or the chat's — and the scrollback (or the transcript, and the
+half-written message in the field) stays where you left it. Hopping between agents costs nothing,
+and going back to the kanban parks the whole deck off screen, still connected.
+
+Three consequences worth knowing:
+
+- **One socket per live pane**, and one `tmux attach` process for each pane that is on the terminal
+  — up to 6 panes on a desktop and 3 on a phone (a WebGL context each, which browsers cap). The
+  least recently used card leaves the deck when it is full; nothing is lost, because the session is
+  in the runner and reattaching is what opening a card always did.
+- **Hidden panes are hidden, not disabled.** A pane that is not on top keeps its socket but gives up
+  everything that reaches outside it: the tab title, the phone's scroll lock, the keyboard (`inert`,
+  so a reconnect cannot steal it), the microphone, and the polls that only feed its own bar. Pausing
+  a card, or deleting it anywhere, drops its pane rather than leaving a socket retrying at a session
+  that no longer exists.
+- **`POST /open` is asked for only when it can change something** (`cardNeedsOpen`): a card that has
+  never been opened, one whose session was killed (paused, hibernated), or one whose column the open
+  rule would move. That call runs the provisioning script and is serialized per project, so firing
+  it for every card you glance at is how the one card that genuinely needs provisioning ends up
+  waiting behind a queue of cards that needed nothing. A live card needs none of it: the pane's own
+  websocket provisions by itself if the session turns out to be gone.
+
 ## Hibernation — the third thing a session can be
 
 Pausing MOVES a card (to `paused`); hibernating does not move it at all. A sweep every five minutes
