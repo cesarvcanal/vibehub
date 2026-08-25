@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { act } from "react";
 import { ChatView } from "@/features/board/components/ChatView";
@@ -108,6 +108,19 @@ describe("ChatView", () => {
     // Bold is rendered as bold, not as asterisks.
     expect(screen.getByTestId("chat-assistant")).toHaveTextContent("Tudo verde.");
     expect(screen.getByText("verde").tagName).toBe("STRONG");
+  });
+
+  it("copies a message's SOURCE text with its copy button", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ id: "a1", kind: "assistant", at: 1, text: "Tudo **verde**." });
+    await screen.findByTestId("chat-assistant");
+    // The rendered markdown shows "verde" without the asterisks; the copy carries the SOURCE.
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("Tudo **verde**."));
   });
 
   it("draws a system notification as a muted event, never as the user's message", async () => {

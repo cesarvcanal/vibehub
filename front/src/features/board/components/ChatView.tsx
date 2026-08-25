@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Bell, ChevronRight, Loader2, MessageSquare, Square, TerminalSquare, Wrench } from "lucide-react";
+import { Bell, Check, ChevronRight, Copy, Loader2, MessageSquare, Square, TerminalSquare, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { wsUrl } from "@/lib/ws";
 import { apiErrorMessage } from "@/lib/apiError";
@@ -402,25 +402,63 @@ function ChatRow({ event, sending }: { event: ChatEvent; sending?: boolean }) {
 
   if (event.kind === "user") {
     return (
-      <div className="flex justify-end" title={when}>
+      <div className="group flex flex-col items-end" title={when}>
         <div
           data-testid="chat-user"
           className={cn(
-            "max-w-[85%] whitespace-pre-wrap break-words rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-sm",
+            "max-w-[85%] select-text whitespace-pre-wrap break-words rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-sm",
             sending && "opacity-60",
           )}
         >
           {event.text}
           {sending ? <span className="ml-2 text-[10px] uppercase opacity-70">{t("chat.sending")}</span> : null}
         </div>
+        {sending ? null : <CopyButton text={event.text} />}
       </div>
     );
   }
 
   return (
-    <div data-testid="chat-assistant" title={when} className="max-w-full text-sm leading-relaxed">
+    <div data-testid="chat-assistant" title={when} className="group max-w-full select-text text-sm leading-relaxed">
       <Markdown text={event.text} />
+      <CopyButton text={event.text} />
     </div>
+  );
+}
+
+/**
+ * Copy a message's SOURCE text — the reliable path when a hand selection over rendered markdown
+ * comes out scrambled or refuses to copy at all. Hidden until the message is hovered (touch shows it
+ * on tap-focus via focus-within on the row); flips to a check for a moment on success.
+ */
+function CopyButton({ text }: { text: string }) {
+  const t = useT();
+  const [copied, setCopied] = React.useState(false);
+  const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  React.useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+  }, []);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error(t("chat.copyError"));
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      aria-label={t("chat.copy")}
+      title={t("chat.copy")}
+      className="mt-1 inline-flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-muted-foreground/70 opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+    >
+      {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+      {copied ? t("chat.copied") : t("chat.copy")}
+    </button>
   );
 }
 
