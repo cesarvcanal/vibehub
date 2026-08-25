@@ -258,7 +258,10 @@ export function BoardPage() {
     </>
   );
 
-  const sidebar = (
+  // `inline` swaps the drawer for an in-flow panel: on a phone with nothing open, the project/card
+  // list IS the page rather than a menu behind a handle (see `showInlineMenu` below). Same instance
+  // wherever it renders, so only one poll is ever alive.
+  const sidebar = (inline = false) => (
     <ProjectSidebar
       projects={projects}
       selectedProjectId={selected?.id ?? null}
@@ -270,7 +273,9 @@ export function BoardPage() {
       onReorder={(id, position) => reorderMutation.mutate({ id, position })}
       onNewProject={() => setNewProjectOpen(true)}
       onNewCard={(project) => askCard(project, false)}
+      onNewGlobalCard={() => askCard(null, true)}
       onDeleteProject={setDeleteTarget}
+      inline={inline}
     />
   );
 
@@ -390,6 +395,17 @@ export function BoardPage() {
     />
   );
 
+  /**
+   * The phone homepage shows the MENU, not the kanban.
+   *
+   * On a narrow screen with nothing open, the aggregated board is five columns squeezed into one —
+   * not what you reach for on a phone, where the question is "which project / which card". So the
+   * sidebar becomes the main view, in-flow instead of a drawer, and the board middle stands aside.
+   * Above `lg`, and whenever a project or card is open, nothing changes: the sidebar is the drawer
+   * it always was and the board fills the column beside it.
+   */
+  const showInlineMenu = isMobile && !cardOpen && !selected && projects.length > 0;
+
   return (
     <div className={cardOpen ? "h-full" : "space-y-5"}>
       {/* THE frame. Same element, same children, in both states — see the note at the top: the deck
@@ -403,9 +419,13 @@ export function BoardPage() {
         )}
         style={cardOpen ? { height: cardViewHeight(undefined, isMobile) } : undefined}
       >
-        {/* No projects at all: there is nothing to list, and the invitation below is the whole page. */}
-        {projects.length > 0 ? sidebar : null}
-        {cardOpen ? null : <div className="min-w-0 flex-1">{boardMiddle}</div>}
+        {/* No projects at all: there is nothing to list, and the invitation below is the whole page.
+            When the phone menu IS the page, the sidebar moves into the middle slot instead — one
+            instance, never both, so the poll stays single. */}
+        {projects.length > 0 && !showInlineMenu ? sidebar() : null}
+        {cardOpen ? null : (
+          <div className="min-w-0 flex-1">{showInlineMenu ? sidebar(true) : boardMiddle}</div>
+        )}
         <TerminalDeck
           entries={deck}
           activeCardId={cardOpen ? cardId : null}

@@ -99,7 +99,9 @@ export function ProjectSidebar({
   onReorder,
   onNewProject,
   onNewCard,
+  onNewGlobalCard,
   onDeleteProject,
+  inline = false,
 }: {
   projects: BoardProject[];
   selectedProjectId: string | null;
@@ -116,7 +118,19 @@ export function ProjectSidebar({
   onReorder: (id: string, position: number) => void;
   onNewProject: () => void;
   onNewCard: (project: BoardProject) => void;
+  /**
+   * Create a card with NO project implied — the `+` beside the brand. The dialog then asks which
+   * project it belongs to. Omitted where a global create makes no sense; the button hides itself.
+   */
+  onNewGlobalCard?: () => void;
   onDeleteProject: (project: BoardProject) => void;
+  /**
+   * In-flow instead of a drawer: the panel becomes part of the page's own column rather than a
+   * `fixed` overlay slid in from the left. This is the phone homepage, where the project/card list
+   * IS the main view — so there is no backdrop, no slide transform, and it fills the column it sits
+   * in. Above `lg` the desktop sidebar is already in-flow, so this only changes the small screen.
+   */
+  inline?: boolean;
 }) {
   const t = useT();
   const { isExpanded, toggle } = useExpandedProjects(selectedProjectId);
@@ -148,8 +162,9 @@ export function ProjectSidebar({
   return (
     <>
       {/* Only exists — and only intercepts a click — while the drawer is open, and never above
-          `lg`, where the sidebar is part of the page rather than on top of it. */}
-      {mobileOpen ? (
+          `lg`, where the sidebar is part of the page rather than on top of it. The in-flow variant
+          is not an overlay, so it never has one. */}
+      {!inline && mobileOpen ? (
         <div
           data-testid="sidebar-backdrop"
           aria-hidden="true"
@@ -161,16 +176,37 @@ export function ProjectSidebar({
       <nav
         aria-label={t("sidebar.projects")}
         className={cn(
-          "panel fixed inset-y-0 left-0 z-40 flex w-72 max-w-[85vw] shrink-0 flex-col overflow-hidden shadow-2xl transition-transform duration-200 ease-out",
-          // The gutter is `p-3`, so a full-height column is the viewport minus 1.5rem. Sticky, not
-          // just tall: the account row at the bottom must stay on screen while the board scrolls.
-          "lg:sticky lg:top-0 lg:z-auto lg:h-[calc(100vh-1.5rem)] lg:w-64 lg:max-w-none lg:translate-x-0 lg:shadow-none lg:transition-none",
-          mobileOpen ? "translate-x-0" : "-translate-x-full",
+          inline
+            ? // In the page's own column: full width, its own height, no overlay chrome. The height
+              // matches the sticky desktop panel — viewport minus the `p-3` gutter — so the account
+              // row stays pinned at the bottom while the project list scrolls.
+              "panel flex h-[calc(100dvh-1.5rem)] w-full min-w-0 shrink-0 flex-col overflow-hidden"
+            : cn(
+                "panel fixed inset-y-0 left-0 z-40 flex w-72 max-w-[85vw] shrink-0 flex-col overflow-hidden shadow-2xl transition-transform duration-200 ease-out",
+                // The gutter is `p-3`, so a full-height column is the viewport minus 1.5rem. Sticky,
+                // not just tall: the account row at the bottom must stay on screen while the board
+                // scrolls.
+                "lg:sticky lg:top-0 lg:z-auto lg:h-[calc(100vh-1.5rem)] lg:w-64 lg:max-w-none lg:translate-x-0 lg:shadow-none lg:transition-none",
+                mobileOpen ? "translate-x-0" : "-translate-x-full",
+              ),
         )}
       >
-        {/* The brand, at the top of the panel — inside it, so it never eats into the terminal. */}
-        <div className="flex shrink-0 items-center border-b border-border/60 px-3 py-2.5">
+        {/* The brand, at the top of the panel — inside it, so it never eats into the terminal. The
+            `+` beside it is a global new card: no project implied, the dialog asks which. */}
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/60 py-2.5 pl-3 pr-1.5">
           <Logo size="side" />
+          {onNewGlobalCard ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
+              aria-label={t("sidebar.newGlobalCard")}
+              title={t("sidebar.newGlobalCard")}
+              onClick={onNewGlobalCard}
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          ) : null}
         </div>
 
         {/* Where you just were, above what you own. It hides itself when there is nothing to

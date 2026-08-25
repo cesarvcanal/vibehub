@@ -256,6 +256,7 @@ export const ptBR: Record<string, string> = {
   "sidebar.projects": "Projetos",
   "sidebar.recent": "Recentes",
   "sidebar.newProject": "Novo projeto",
+  "sidebar.newGlobalCard": "Novo card…",
   "sidebar.newCardIn": "Novo card em {name}",
   "sidebar.newCardHint": "Novo card (⌘K no projeto selecionado)",
   "sidebar.noProjects": "Nenhum projeto ainda.",
