@@ -58,7 +58,7 @@ beforeEach(() => {
 });
 
 function board() {
-  return renderApp(<KanbanBoard project={project} onOpenCard={vi.fn()} onNewCard={vi.fn()} />);
+  return renderApp(<KanbanBoard project={project} onOpenCard={vi.fn()} onNewCard={vi.fn()} onNewBacklogCard={vi.fn()} />);
 }
 
 /** The draggable tile for a card title, and the slot around it that owns the drop maths. */

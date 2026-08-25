@@ -17,7 +17,10 @@ import {
   DEFAULT_ACCOUNT_SLUG,
   accountLabel,
   boardApi,
+  projectAccountSlug,
+  projectBaseBranch,
   type BoardAccount,
+  type BoardProject,
 } from "@/features/board/api";
 import { pillPercent } from "@/features/board/lib/usage";
 import type { NewCard } from "@/api/types";
@@ -41,28 +44,33 @@ export const SELECT_CLASS =
 export function NewCardDialog({
   open,
   onOpenChange,
-  projectId,
+  projects,
+  initialProjectId,
   accounts,
   defaultAccountLabel,
-  inheritedAccount,
-  defaultBranch,
   onSubmit,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  projectId: string;
+  /** Every project, so a card created from a no-project context can pick one. */
+  projects: BoardProject[];
+  /** Which project the card belongs to. null = created from the homepage / a global "+": ask which. */
+  initialProjectId: string | null;
   accounts: BoardAccount[];
   /** Display name of the runner's built-in profile. */
   defaultAccountLabel: string;
-  /** Account the project passes down, if any. */
-  inheritedAccount?: string;
-  /** Branch the project cuts worktrees from — shown as the placeholder. */
-  defaultBranch?: string;
   /** Fired and forgotten — the dialog does not wait for it. */
   onSubmit: (input: NewCard) => void;
 }) {
   const t = useT();
   const [title, setTitle] = React.useState("");
+  // When the caller knew the project we keep it fixed and hidden; when it did not (homepage / global
+  // "+"), the person picks one — defaulting to the first so a card is always one field from done.
+  const askProject = initialProjectId === null;
+  const [projectId, setProjectId] = React.useState(initialProjectId ?? projects[0]?.id ?? "");
+  const selectedProject = projects.find((p) => p.id === projectId);
+  const inheritedAccount = projectAccountSlug(selectedProject);
+  const defaultBranch = projectBaseBranch(selectedProject);
   const [account, setAccount] = React.useState("");
   const [model, setModel] = React.useState("");
   const [branch, setBranch] = React.useState("");
@@ -89,11 +97,12 @@ export function NewCardDialog({
 
   const reset = React.useCallback(() => {
     setTitle("");
+    setProjectId(initialProjectId ?? projects[0]?.id ?? "");
     setAccount("");
     setModel("");
     setBranch("");
     setShowOptions(false);
-  }, []);
+  }, [initialProjectId, projects]);
 
   /**
    * The one way out that is not a submit. Cancel used to call `onOpenChange` directly, skipping the
@@ -109,7 +118,7 @@ export function NewCardDialog({
   function submit(event: React.FormEvent) {
     event.preventDefault();
     const trimmed = title.trim();
-    if (!trimmed) return;
+    if (!trimmed || !projectId) return;
     onSubmit({
       projectId,
       title: trimmed,
@@ -142,6 +151,24 @@ export function NewCardDialog({
         </DialogHeader>
 
         <form onSubmit={submit} className="space-y-4">
+          {askProject ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="new-card-project">{t("newCard.project")}</Label>
+              <select
+                id="new-card-project"
+                className={SELECT_CLASS}
+                value={projectId}
+                onChange={(e) => setProjectId(e.target.value)}
+              >
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+
           <div className="space-y-1.5">
             <Label htmlFor="new-card-title">{t("newCard.titleLabel")}</Label>
             <Input

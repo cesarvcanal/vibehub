@@ -193,6 +193,7 @@ export const en: Record<string, string> = {
 
   /* ------------------------------------------------------------------ board */
   "board.newCard": "New card",
+  "board.addToBacklog": "Add to backlog",
   "board.newCardHint": "New card (⌘K or Ctrl+T)",
   "board.cards.one": "{n} card",
   "board.cards.other": "{n} cards",
@@ -442,6 +443,7 @@ export const en: Record<string, string> = {
   "newCard.title": "New card",
   "newCard.description":
     "Just the task. The branch, worktree and terminal session are derived from the title inside the runner.",
+  "newCard.project": "Project",
   "newCard.titleLabel": "Title",
   "newCard.titlePlaceholder": "e.g. fix the totals on the closing screen",
   "newCard.hideOptions": "Hide options",

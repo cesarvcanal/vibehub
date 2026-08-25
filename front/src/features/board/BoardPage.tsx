@@ -38,8 +38,6 @@ import {
   boardApi,
   cardKey,
   cardsKey,
-  projectAccountSlug,
-  projectBaseBranch,
   type BoardCard,
   type BoardProject,
 } from "@/features/board/api";
@@ -129,8 +127,12 @@ export function BoardPage() {
 
   const [newProjectOpen, setNewProjectOpen] = React.useState(false);
   const [deleteTarget, setDeleteTarget] = React.useState<BoardProject | null>(null);
-  // Which project a new card belongs to. Set from any row's `+`, or from the shortcut.
-  const [newCardProject, setNewCardProject] = React.useState<BoardProject | null>(null);
+  // A new-card request in flight. `project` is null when it came from a no-project context (the
+  // homepage / a global "+"): the dialog asks which. `open` = jump into the card once it is created
+  // — true for the prominent "New card" buttons, false for the Backlog column's "+", which is for
+  // jotting down work without leaving the board.
+  const [newCard, setNewCard] = React.useState<{ project: BoardProject | null; open: boolean } | null>(null);
+  const askCard = (project: BoardProject | null, open: boolean) => setNewCard({ project, open });
   // The drawer, on screens where the sidebar is not part of the page.
   const [menuOpen, setMenuOpen] = React.useState(false);
   // Any navigation closes it: on a phone the drawer covers the thing it just navigated to.
@@ -140,8 +142,8 @@ export function BoardPage() {
   const { data: accountsData } = useQuery({ queryKey: ACCOUNTS_KEY, queryFn: boardApi.listAccounts });
 
   const createCardMutation = useMutation({
-    mutationFn: (input: NewCard) => boardApi.createCard(input),
-    onSuccess: (card) => {
+    mutationFn: ({ input }: { input: NewCard; open: boolean }) => boardApi.createCard(input),
+    onSuccess: (card, { open }) => {
       // WRITE IT INTO THE CACHE FIRST. Invalidating alone means the card only shows up after a
       // round trip, and in that gap the sidebar has no row for the card the user just named — you
       // click where it should be, nothing is there, and if you land in it anyway the terminal opens
@@ -152,9 +154,9 @@ export function BoardPage() {
       queryClient.setQueryData(cardKey(card.id), card);
       void queryClient.invalidateQueries({ queryKey: cardsKey(card.projectId) });
       // The dialog already closed itself on submit — several cards can be queued up back to back.
-      // Created from inside a terminal: go straight to the new one. From the board, let it land in
-      // the backlog — you are looking at the board precisely to decide what to do next.
-      if (cardId) go(card.projectId, card.id);
+      // Whether to jump into the new card is the CALLER's choice (see `newCard.open`): the prominent
+      // "New card" buttons open it; the Backlog column's "+" leaves it on the board.
+      if (open) go(card.projectId, card.id);
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardCreateError"))),
   });
@@ -224,7 +226,7 @@ export function BoardPage() {
   React.useEffect(
     () =>
       attachNewCardShortcut(() => {
-        if (selectedRef.current) setNewCardProject(selectedRef.current);
+        askCard(selectedRef.current, true);
       }),
     [],
   );
@@ -267,7 +269,7 @@ export function BoardPage() {
       onOpenCard={openCard}
       onReorder={(id, position) => reorderMutation.mutate({ id, position })}
       onNewProject={() => setNewProjectOpen(true)}
-      onNewCard={setNewCardProject}
+      onNewCard={(project) => askCard(project, false)}
       onDeleteProject={setDeleteTarget}
     />
   );
@@ -300,16 +302,15 @@ export function BoardPage() {
         onCreated={(project) => go(project.id)}
       />
 
-      {newCardProject ? (
+      {newCard ? (
         <NewCardDialog
           open
-          onOpenChange={(next) => !next && setNewCardProject(null)}
-          projectId={newCardProject.id}
+          onOpenChange={(next) => !next && setNewCard(null)}
+          projects={projects}
+          initialProjectId={newCard.project?.id ?? null}
           accounts={accountsData?.accounts ?? []}
           defaultAccountLabel={accountsData?.defaultLabel || t("board.defaultAccountFallback")}
-          inheritedAccount={projectAccountSlug(newCardProject)}
-          defaultBranch={projectBaseBranch(newCardProject)}
-          onSubmit={(input) => createCardMutation.mutate(input)}
+          onSubmit={(input) => createCardMutation.mutate({ input, open: newCard.open })}
         />
       ) : null}
 
@@ -373,7 +374,8 @@ export function BoardPage() {
     <KanbanBoard
       project={selected}
       onOpenCard={(card) => go(selected.id, card.id)}
-      onNewCard={() => setNewCardProject(selected)}
+      onNewCard={() => askCard(selected, true)}
+      onNewBacklogCard={() => askCard(selected, false)}
       headerExtra={headerExtra}
       headerLead={menuButton}
     />
@@ -382,6 +384,7 @@ export function BoardPage() {
     <AllProjectsBoard
       projects={projects}
       onOpenCard={(card) => go(card.projectId, card.id)}
+      onNewCard={() => askCard(null, true)}
       headerExtra={aggregateHeaderExtra}
       headerLead={menuButton}
     />
@@ -408,7 +411,7 @@ export function BoardPage() {
           activeCardId={cardOpen ? cardId : null}
           projects={projects}
           onBack={(id) => go(id)}
-          onNewCard={setNewCardProject}
+          onNewCard={(project) => askCard(project, true)}
           onOpenMenu={() => setMenuOpen(true)}
           onClose={closePane}
         />

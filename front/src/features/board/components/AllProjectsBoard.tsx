@@ -1,8 +1,9 @@
 import * as React from "react";
 import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
+import { Loader2, Plus } from "lucide-react";
 import { apiErrorMessage } from "@/lib/apiError";
+import { Button } from "@/components/ui/button";
 import { useIsMobile } from "@/lib/useIsMobile";
 import { CardTile } from "@/features/board/components/CardTile";
 import { ColumnZone, MoreColumnsToggle } from "@/features/board/components/KanbanBoard";
@@ -48,11 +49,14 @@ import { t as translate, useT } from "@/i18n";
 export function AllProjectsBoard({
   projects,
   onOpenCard,
+  onNewCard,
   headerExtra,
   headerLead,
 }: {
   projects: BoardProject[];
   onOpenCard: (card: BoardCard) => void;
+  /** New card from the aggregated board — no project is implied, so the dialog asks which. */
+  onNewCard: () => void;
   headerExtra?: React.ReactNode;
   /** Rendered FIRST in the header row — where the phone's drawer handle lives. */
   headerLead?: React.ReactNode;
@@ -134,6 +138,9 @@ export function AllProjectsBoard({
           {t("board.cards", { n: cards.length })} · {t("board.projects", { n: projects.length })}
         </span>
         {headerExtra}
+        <Button size="sm" className="h-9 gap-0" title={t("board.newCardHint")} onClick={onNewCard}>
+          <Plus className="mr-1.5 h-4 w-4" /> {t("board.newCard")}
+        </Button>
       </div>
 
       {isLoading ? (

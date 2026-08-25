@@ -194,6 +194,7 @@ export const ptBR: Record<string, string> = {
 
   /* ------------------------------------------------------------------ board */
   "board.newCard": "Novo card",
+  "board.addToBacklog": "Adicionar ao backlog",
   "board.newCardHint": "Novo card (⌘K ou Ctrl+T)",
   "board.cards.one": "{n} card",
   "board.cards.other": "{n} cards",
@@ -448,6 +449,7 @@ export const ptBR: Record<string, string> = {
   "newCard.title": "Novo card",
   "newCard.description":
     "Só a tarefa. A branch, o worktree e a sessão do terminal saem do título, dentro do runner.",
+  "newCard.project": "Projeto",
   "newCard.titleLabel": "Título",
   "newCard.titlePlaceholder": "ex.: corrigir os totais na tela de fechamento",
   "newCard.hideOptions": "Ocultar opções",
