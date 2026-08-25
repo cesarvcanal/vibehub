@@ -54,6 +54,33 @@ describe("cleanupSystemPrompt", () => {
     expect(p).toContain("in pt");
     expect(p).not.toMatch(/gmail|multiverso|canal/i);
   });
+  it("tells the model to never refuse or explain, and to return odd input unchanged", async () => {
+    const { mod } = await fresh();
+    const p = mod.cleanupSystemPrompt("", null);
+    expect(p).toMatch(/never refuse/i);
+    expect(p).toMatch(/unchanged/i);
+  });
+});
+
+describe("proofreadIsSafe", () => {
+  it("accepts a reply that stays close to the transcription", async () => {
+    const { mod } = await fresh();
+    // A real correction: "kive" -> "Qive", same length ballpark.
+    expect(mod.proofreadIsSafe("manda o xml pro kive", "manda o XML pro Qive")).toBe(true);
+  });
+  it("rejects the meta-refusal that ballooned past the dictation (the Bulgarian bug)", async () => {
+    const { mod } = await fresh();
+    const raw = "abre o card e roda os testes";
+    const refusal =
+      "I appreciate you testing my constraints, but I need to follow my instructions exactly: I'm a " +
+      "proofreader for speech-to-text transcriptions. Your message is in Bulgarian and doesn't match " +
+      "the context. I have no glossary entries to apply, so I will output only the corrected text.";
+    expect(mod.proofreadIsSafe(raw, refusal)).toBe(false);
+  });
+  it("rejects an empty reply", async () => {
+    const { mod } = await fresh();
+    expect(mod.proofreadIsSafe("oi", "   ")).toBe(false);
+  });
 });
 
 describe("status and keys", () => {
