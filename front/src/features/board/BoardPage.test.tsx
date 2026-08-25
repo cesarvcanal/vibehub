@@ -443,6 +443,17 @@ describe("BoardPage — the sidebar", () => {
     expect(livePanes()).toEqual(["c2"]);
   });
 
+  it("the switcher's project items are real links, so Cmd/middle-click opens a new tab", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    await screen.findByRole("navigation", { name: /projects/i });
+
+    await user.click(screen.getByRole("button", { name: "Switch project" }));
+    const gateway = await screen.findByRole("menuitem", { name: "gateway" });
+    expect(gateway.tagName).toBe("A");
+    expect(gateway.getAttribute("href")).toContain("p2");
+  });
+
   it("closes the card when its own row is clicked again, one level at a time", async () => {
     const user = userEvent.setup();
     renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
