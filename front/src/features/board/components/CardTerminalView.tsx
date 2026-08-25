@@ -767,6 +767,7 @@ export function CardTerminalView({
             disabled={!showTerminal}
             icon={<MonitorPlay className="h-3.5 w-3.5" />}
             onClick={() => setBrowserOpen((v) => !v)}
+            hint={t("cardView.browserHint")}
           />
           <PaneToggle
             label={t("cardView.shell")}
@@ -1152,12 +1153,15 @@ function PaneToggle({
   disabled,
   icon,
   onClick,
+  hint,
 }: {
   label: string;
   open: boolean;
   disabled: boolean;
   icon: React.ReactNode;
   onClick: () => void;
+  /** Extra tooltip shown when the pane is CLOSED (e.g. "this card can drive a browser"). */
+  hint?: string;
 }) {
   return (
     <button
@@ -1168,7 +1172,7 @@ function PaneToggle({
           title={
         open
           ? translate("cardView.closePane", { label: label.toLowerCase() })
-          : translate("cardView.openPane", { label: label.toLowerCase() })
+          : hint ?? translate("cardView.openPane", { label: label.toLowerCase() })
       }
       className={cn(
         "inline-flex h-6 shrink-0 items-center gap-1 rounded-full border px-2 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
