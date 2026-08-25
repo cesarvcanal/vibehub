@@ -406,6 +406,42 @@ describe("session introspection", () => {
     const c = await registry.createCard({ projectId: p.id, title: "x" });
     expect((await maestro.sessionInfo(c.id)).account).toEqual({ slug: null, name: "principal" });
   });
+
+  it("a live card whose Claude EXITED to a bare shell reads as 'stopped' (J: 'Claude parou')", async () => {
+    // The registry still calls this card 'waiting' (openedAt set, not paused); only a live probe
+    // knows Claude is gone and the pane is a bare shell. sessionInfo runs it: transcript first, then
+    // the probe.
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "claude left" });
+    await registry.applyOpenTerminal(c.id);
+    runScript
+      .mockResolvedValueOnce({ stdout: "", stderr: "" }) // transcript: no model yet
+      .mockResolvedValueOnce({ stdout: "bash\n", stderr: "" }); // probe: only a shell in the tree
+    expect((await maestro.sessionInfo(c.id)).situation).toBe("stopped");
+  });
+
+  it("a live card the runner lost (empty probe) reads as 'no session', not a false 'waiting'", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "ghost" });
+    await registry.applyOpenTerminal(c.id);
+    runScript
+      .mockResolvedValueOnce({ stdout: "", stderr: "" }) // transcript
+      .mockResolvedValueOnce({ stdout: "", stderr: "" }); // probe: nothing at all → none
+    expect((await maestro.sessionInfo(c.id)).situation).toBe("no session");
+  });
+
+  it("a live card with Claude alive in the tree stays 'waiting' (no false 'stopped')", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "alive" });
+    await registry.applyOpenTerminal(c.id);
+    runScript
+      .mockResolvedValueOnce({ stdout: "", stderr: "" }) // transcript
+      .mockResolvedValueOnce({ stdout: "bash\nclaude\n", stderr: "" }); // probe: claude is there
+    expect((await maestro.sessionInfo(c.id)).situation).toBe("waiting");
+  });
 });
 
 describe("model signals", () => {
