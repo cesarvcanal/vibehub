@@ -409,6 +409,10 @@ export function CardTerminalView({
    * for the pills) is what keeps this true.
    */
   const working = session?.situation === "working" || card?.status === "working";
+  // Claude EXITED and left a bare shell (server probed the tree). The card still looks "open", so
+  // without this it is a mute terminal that silently queues whatever you type — J. The banner turns
+  // that into "Claude parou — Reiniciar".
+  const stopped = session?.situation === "stopped";
   const hasLiveSession = Boolean(card?.openedAt && !card.pausedAt);
   const canFinish = Boolean(card && card.column !== "done");
   const showTerminal = instant || openMutation.isSuccess;
@@ -934,6 +938,36 @@ export function CardTerminalView({
           {actions}
         </div>
       )}
+
+      {/* Claude exited to a bare shell — say so loudly, above whichever pane is on screen, and offer
+          the one thing that helps: restart, which resumes the SAME conversation (`claude -c`). */}
+      {stopped ? (
+        <div
+          data-testid="claude-stopped-banner"
+          role="status"
+          className="mt-1.5 flex shrink-0 items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400"
+        >
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <span className="font-medium">{t("cardView.claudeStopped")}</span>
+            <span className="ml-1 opacity-80">{t("cardView.claudeStoppedHint")}</span>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 shrink-0 gap-1.5 border-amber-500/50 hover:bg-amber-500/20"
+            disabled={restartMutation.isPending}
+            onClick={() => restartMutation.mutate()}
+          >
+            {restartMutation.isPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RotateCw className="h-3.5 w-3.5" />
+            )}
+            {t("cardView.restart")}
+          </Button>
+        </div>
+      ) : null}
 
       {/* Body */}
       {!instant && openMutation.isError ? (

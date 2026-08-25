@@ -295,6 +295,8 @@ export const ptBR: Record<string, string> = {
   "cardView.restart": "Reiniciar",
   "cardView.restartHint":
     "Mata e recria o processo do Claude no mesmo worktree. A conversa é retomada e os MCPs, o cérebro e o modelo são relidos.",
+  "cardView.claudeStopped": "Claude parou.",
+  "cardView.claudeStoppedHint": "A sessão segue aberta, mas o Claude saiu. Reinicie pra retomar a conversa.",
   "cardView.done": "Concluir",
   "cardView.doneHint": "Move o card pra Feito e volta pro board",
   "cardView.browser": "Navegador",

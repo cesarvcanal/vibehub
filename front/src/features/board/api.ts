@@ -279,8 +279,12 @@ export interface CardSessionInfo {
  */
 export type SessionChange = "none" | "restarted" | "pending";
 
-/** A terminal's current situation, as the server words it. */
-export type CardSituation = "working" | "waiting" | "paused" | "done" | "no session";
+/**
+ * A terminal's current situation, as the server words it. `stopped` = the session is still there but
+ * Claude has EXITED, leaving a bare shell (a `/exit`, a crash) — the chat surfaces it as
+ * "Claude parou" with a Restart, instead of a silent shell that quietly swallows what you type.
+ */
+export type CardSituation = "working" | "waiting" | "paused" | "done" | "stopped" | "no session";
 
 /** One metered plan window: how much is gone, and when it empties again. */
 export interface UsageWindow {
