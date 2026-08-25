@@ -922,7 +922,7 @@ describe("BoardPage — the terminal deck", () => {
     await waitFor(() => expect(activeTerminal()).toHaveTextContent("c2"));
 
     // Straight into the other project's card, from the sidebar.
-    await user.click(within(sidebar()).getByRole("button", { name: "gateway" }));
+    await user.click(within(sidebar()).getByRole("link", { name: "gateway" }));
     await user.click(await within(sidebar()).findByRole("link", { name: "rotate the key" }));
 
     await waitFor(() => expect(activeTerminal()).toHaveTextContent("c4"));
@@ -957,7 +957,7 @@ describe("BoardPage — the terminal deck", () => {
     await waitFor(() => expect(activeTerminal()).toHaveTextContent("c2"));
 
     const nav = sidebar();
-    await user.pointer({ keys: "[MouseRight]", target: within(nav).getByRole("button", { name: "billing" }) });
+    await user.pointer({ keys: "[MouseRight]", target: within(nav).getByRole("link", { name: "billing" }) });
     await user.click(await screen.findByRole("menuitem", { name: "Delete project…" }));
     // What the server answers from here on: billing is gone.
     serve({ projects: [projects[1]!] });
