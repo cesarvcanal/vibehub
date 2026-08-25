@@ -94,6 +94,15 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
     rfbRef.current = rfb;
   }, [cardId]);
 
+  // Opening the Browser tab shows the live browser straight away — no manual "Connect" gate. The
+  // agent's built-in Playwright MCP drives THIS same Chromium over CDP, so it needs the browser
+  // running; auto-connecting on mount is what guarantees that the moment the pane is open. `connect`
+  // is idempotent (it no-ops when an RFB client already exists) and `startCardBrowser` is idempotent
+  // in the runner, so a re-render or a StrictMode double-mount never spawns a second browser.
+  React.useEffect(() => {
+    void connect();
+  }, [connect]);
+
   function close() {
     teardown();
     setState("closed");

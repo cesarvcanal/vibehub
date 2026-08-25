@@ -301,6 +301,7 @@ export const en: Record<string, string> = {
   "cardView.done": "Done",
   "cardView.doneHint": "Moves the card to Done and returns to the board",
   "cardView.browser": "Browser",
+  "cardView.browserHint": "Open the browser — this card can drive it: ask it to visit a site and act there.",
   "cardView.shell": "Shell",
   "cardView.openPane": "Open the {label}",
   "cardView.closePane": "Close the {label}",

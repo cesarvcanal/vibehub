@@ -302,6 +302,7 @@ export const ptBR: Record<string, string> = {
   "cardView.done": "Concluir",
   "cardView.doneHint": "Move o card pra Feito e volta pro board",
   "cardView.browser": "Navegador",
+  "cardView.browserHint": "Abra o navegador — este card sabe dirigi-lo: peça pra ele acessar um site e agir lá.",
   "cardView.shell": "Shell",
   "cardView.openPane": "Abrir o {label}",
   "cardView.closePane": "Fechar o {label}",

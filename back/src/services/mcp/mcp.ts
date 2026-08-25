@@ -5,6 +5,7 @@ import { listMcps, getMcp, listAccounts, type McpServer } from "../board/registr
 import {
   CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, DEFAULT_ACCOUNT_SLUG, accountConfigDir, profileDirFor,
 } from "../accounts/profiles.js";
+import { CDP_PORT_BASE } from "../browser/ports.js";
 import { runnerToken } from "../../runtime/runner.js";
 import { logger } from "../../utils/logger.js";
 
@@ -210,13 +211,51 @@ export async function builtinMaestroInjection(): Promise<McpInjection | undefine
 /** Reserved name of the built-in server, so a user-registered MCP cannot shadow it. */
 export const BUILTIN_MAESTRO_NAME = "vibehub";
 
-/** Every registered MCP as a resolved injection (name + JSON), plus the built-in vibehub server. */
+/** Reserved name of the built-in browser server, so a user-registered MCP cannot shadow it. */
+export const BUILTIN_BROWSER_NAME = "navegador";
+
+/**
+ * The built-in BROWSER MCP every card gets: a Playwright MCP wired over CDP to the card's OWN live
+ * Chromium — the exact browser the user watches (and can take over) on the card's noVNC canvas —
+ * instead of a private headless browser of its own. This is what makes "access site X and do Y"
+ * actually happen in the browser on screen.
+ *
+ * The endpoint is NOT baked in per card: it is the literal `${PW_CDP_ENDPOINT}` shell reference,
+ * which Claude Code expands AT MCP LAUNCH from the tmux session's environment (buildOpenScript and
+ * terminalRemoteArgs both export `PW_CDP_ENDPOINT=cardCdpEndpoint(id)` per session). That indirection
+ * is deliberate and load-bearing: one single injection, shared across every card and every account
+ * profile, resolves to a DIFFERENT browser per card. A URL resolved per card and baked into the
+ * shared profile would instead make every card on that account drive one card's browser. The `:-`
+ * default only guards a session that somehow reaches this without the variable set — a real card
+ * session always has it.
+ *
+ * `$` reaches the runner literally: the JSON is placed in a QUOTED heredoc by `mcpInjectLines`, so
+ * the runner's shell never expands it; `claude mcp add-json` stores it verbatim in the profile's
+ * `.claude.json`, and the expansion happens only when Claude launches the MCP. PURE.
+ */
+export function builtinBrowserInjection(): McpInjection {
+  const endpoint = `\${PW_CDP_ENDPOINT:-http://127.0.0.1:${CDP_PORT_BASE}}`;
+  return {
+    name: BUILTIN_BROWSER_NAME,
+    json: JSON.stringify({
+      type: "stdio",
+      command: "npx",
+      args: ["-y", "@playwright/mcp@latest", "--cdp-endpoint", endpoint],
+    }),
+  };
+}
+
+/** Every registered MCP as a resolved injection (name + JSON), plus the built-in servers. */
 export async function resolveMcpInjections(): Promise<McpInjection[]> {
   const out: McpInjection[] = [];
   const builtin = await builtinMaestroInjection();
   if (builtin) out.push(builtin);
+  // The browser MCP is card-agnostic (its endpoint is resolved per session from PW_CDP_ENDPOINT), so
+  // it is a constant injection like the maestro — added to every profile with no per-card state.
+  out.push(builtinBrowserInjection());
   for (const mcp of await listMcps()) {
-    if (mcp.name === BUILTIN_MAESTRO_NAME) continue; // never let a registration shadow the built-in
+    // Never let a registration shadow a built-in (by name).
+    if (mcp.name === BUILTIN_MAESTRO_NAME || mcp.name === BUILTIN_BROWSER_NAME) continue;
     out.push({ name: mcp.name, json: mcpServerJson(mcp, await resolveMcpSecrets(mcp)) });
   }
   return out;
