@@ -566,6 +566,9 @@ function ProjectRow({
     onSuccess: (updated) => {
       mirror(updated);
       toast.success(translate("toast.cardHibernated"));
+      // Hibernating the card you are IN kills its session; if the view stays open it just reconnects
+      // and reopens it — an endless loop. So take you up one level, exactly like pause.
+      if (updated.id === activeCardId) onOpenCard(updated.id);
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardHibernateError"))),
   });
