@@ -377,6 +377,12 @@ export const ptBR: Record<string, string> = {
   "composer.tryAgain": "Tentar de novo",
   "composer.removeImage": "Tirar {name} da mensagem",
   "composer.sendingAfterUpload": "enviando assim que a imagem subir…",
+  "composer.recording": "Gravando",
+  "composer.attach": "Anexar",
+  "composer.attachMenu": "Anexar uma foto ou arquivo",
+  "composer.takePhoto": "Tirar foto",
+  "composer.fromGallery": "Foto da galeria",
+  "composer.attachFile": "Anexar um arquivo",
 
   /* ----------------------------------------------------------------- outbox */
   "outbox.waitingSession.one":

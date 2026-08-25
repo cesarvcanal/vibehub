@@ -524,6 +524,23 @@ describe("TerminalComposer — voice input", () => {
     expect(screen.getByRole("textbox")).toHaveValue("");
   });
 
+  it("shows a calm recording strip: a waveform, the elapsed time, and two exits", async () => {
+    serveVoice(true);
+    const user = userEvent.setup();
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
+
+    await waitFor(() => expect(screen.getByTestId("composer-mic")).toBeEnabled());
+    await user.click(screen.getByTestId("composer-mic"));
+
+    const strip = await screen.findByTestId("composer-mic-recording");
+    // It announces itself, and carries all three: the waveform, the clock, and both ways out.
+    expect(strip).toHaveAttribute("role", "status");
+    expect(screen.getByTestId("composer-mic-bars")).toBeInTheDocument();
+    expect(screen.getByTestId("composer-mic-elapsed")).toBeInTheDocument();
+    expect(screen.getByTestId("composer-mic-cancel")).toBeInTheDocument();
+    expect(screen.getByTestId("composer-mic-finish")).toBeInTheDocument();
+  });
+
   it("discards a cancelled recording without uploading anything", async () => {
     serveVoice(true);
     const user = userEvent.setup();
@@ -536,6 +553,45 @@ describe("TerminalComposer — voice input", () => {
     await waitFor(() => expect(screen.getByTestId("composer-mic")).toBeInTheDocument());
     expect(mockPost).not.toHaveBeenCalled();
     expect(screen.getByRole("textbox")).toHaveValue("");
+  });
+});
+
+describe("TerminalComposer — the attach menu", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockGet.mockResolvedValue({ available: false, proofread: false, language: null });
+  });
+
+  it("offers no attach button when there is no upload pipeline", () => {
+    renderComposer(<TerminalComposer onSend={vi.fn()} />);
+    expect(screen.queryByTestId("composer-attach")).not.toBeInTheDocument();
+  });
+
+  it("opens a menu with the three ways in", async () => {
+    const user = userEvent.setup();
+    renderComposer(<TerminalComposer onSend={vi.fn()} onUploadImage={vi.fn(async () => null)} />);
+    await user.click(screen.getByTestId("composer-attach"));
+    expect(await screen.findByTestId("composer-attach-camera")).toBeInTheDocument();
+    expect(screen.getByTestId("composer-attach-gallery")).toBeInTheDocument();
+    expect(screen.getByTestId("composer-attach-file")).toBeInTheDocument();
+  });
+
+  it("a file chosen from the gallery input enters the SAME pipeline as a paste", async () => {
+    const onUploadImage = vi.fn(async () => "/work/.uploads/c1/pick.png");
+    renderComposer(<TerminalComposer onSend={vi.fn()} onUploadImage={onUploadImage} />);
+    const png = new File(["x"], "pick.png", { type: "image/png" });
+    // The hidden input is what the menu item clicks; driving its change directly is the pick.
+    fireEvent.change(screen.getByTestId("composer-input-gallery"), { target: { files: [png] } });
+    expect(onUploadImage).toHaveBeenCalledWith(png);
+    // …and it shows up as an attachment chip, exactly like a pasted image would.
+    expect(await screen.findByTestId("composer-attachment")).toBeInTheDocument();
+  });
+
+  it("the camera input asks for the rear camera, so a phone opens the camera and not the roll", () => {
+    renderComposer(<TerminalComposer onSend={vi.fn()} onUploadImage={vi.fn(async () => null)} />);
+    const camera = screen.getByTestId("composer-input-camera");
+    expect(camera).toHaveAttribute("capture", "environment");
+    expect(camera).toHaveAttribute("accept", "image/*");
   });
 });
 

@@ -375,6 +375,12 @@ export const en: Record<string, string> = {
   "composer.tryAgain": "Try again",
   "composer.removeImage": "Remove {name} from the message",
   "composer.sendingAfterUpload": "sending as soon as the image lands…",
+  "composer.recording": "Recording",
+  "composer.attach": "Attach",
+  "composer.attachMenu": "Attach a photo or file",
+  "composer.takePhoto": "Take photo",
+  "composer.fromGallery": "Photo from gallery",
+  "composer.attachFile": "Attach a file",
 
   /* ----------------------------------------------------------------- outbox */
   "outbox.waitingSession.one": "1 message queued — open the card and it goes on its own",
