@@ -9,7 +9,14 @@ import { Button } from "@/components/ui/button";
 import { boardApi } from "@/features/board/api";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
 import { reconnectDelay, type ConnectionState } from "@/features/board/lib/reconnect";
-import { groupChatRows, mergeEvent, parseChatFrame, type ChatEvent } from "@/features/board/lib/chat";
+import {
+  groupChatRows,
+  mergeEvent,
+  parseChatFrame,
+  readPending,
+  writePending,
+  type ChatEvent,
+} from "@/features/board/lib/chat";
 import { mdBlocks, mdInline } from "@/features/board/lib/markdown";
 import { t as translate, useT } from "@/i18n";
 
@@ -73,7 +80,13 @@ export function ChatView({
    * user line as the turn starts, so this lasts a moment — but without it the field empties and
    * NOTHING appears, which reads as a message that went nowhere.
    */
-  const [pending, setPending] = React.useState<{ id: string; text: string }[]>([]);
+  // Seeded from localStorage so a message you sent while Claude was busy — queued by Claude Code,
+  // not in the transcript yet — is still on screen after a tab switch, a remount or a reload.
+  const [pending, setPending] = React.useState<{ id: string; text: string }[]>(() => readPending(cardId));
+  // Persist every change (keyed by card), so the bubbles outlive this component.
+  React.useEffect(() => {
+    writePending(cardId, pending);
+  }, [cardId, pending]);
   const [lastEventAt, setLastEventAt] = React.useState(() => Date.now());
   /**
    * Has the transcript had its say yet?

@@ -123,6 +123,19 @@ describe("ChatView", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("Tudo **verde**."));
   });
 
+  it("shows a message sent earlier and persisted — it never vanishes on a remount", async () => {
+    // The bug: send while Claude is busy (Claude Code queues it, not in the transcript yet), switch
+    // tabs, and the optimistic bubble — plain React state — was gone. Now it is seeded from storage.
+    localStorage.setItem(
+      "vibehub.chatPending.c1",
+      JSON.stringify([{ id: "p1", text: "manda isso quando terminar" }]),
+    );
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    expect(await screen.findByText("manda isso quando terminar")).toBeInTheDocument();
+  });
+
   it("draws a system notification as a muted event, never as the user's message", async () => {
     renderChat();
     const ws = await socket();

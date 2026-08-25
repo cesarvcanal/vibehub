@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { groupChatRows, mergeEvent, parseChatFrame, readCardMode, writeCardMode, type ChatEvent } from "@/features/board/lib/chat";
+import { groupChatRows, mergeEvent, parseChatFrame, readCardMode, writeCardMode, readPending, writePending, type ChatEvent } from "@/features/board/lib/chat";
 
 const event = (over: Partial<ChatEvent> = {}): ChatEvent => ({
   id: "a1",
@@ -115,5 +115,23 @@ describe("the remembered mode", () => {
 
   it("still takes an explicit fallback, for a caller that knows better", () => {
     expect(readCardMode("c9", "terminal")).toBe("terminal");
+  });
+});
+
+describe("durable pending messages", () => {
+  it("round-trips per card and clears the key when empty", () => {
+    expect(readPending("c1")).toEqual([]);
+    writePending("c1", [{ id: "a", text: "arruma o dre" }]);
+    expect(readPending("c1")).toEqual([{ id: "a", text: "arruma o dre" }]);
+    expect(readPending("c2")).toEqual([]); // per card
+    writePending("c1", []);
+    expect(localStorage.getItem("vibehub.chatPending.c1")).toBeNull();
+  });
+
+  it("survives garbage in the store instead of throwing", () => {
+    localStorage.setItem("vibehub.chatPending.c1", "{not json");
+    expect(readPending("c1")).toEqual([]);
+    localStorage.setItem("vibehub.chatPending.c1", JSON.stringify([{ id: "a" }, { text: "x" }, { id: "b", text: "ok" }]));
+    expect(readPending("c1")).toEqual([{ id: "b", text: "ok" }]); // only well-formed entries survive
   });
 });
