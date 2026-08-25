@@ -328,6 +328,7 @@ export const en: Record<string, string> = {
   "chat.stop": "Stop",
   "chat.stopHint": "Press Escape in the session",
   "chat.sendError": "Could not send the message",
+  "chat.awaitingChoice": "The terminal is waiting on a choice (a session menu, /compact, or a permission prompt). Open the Terminal tab, answer it, then send again. Your message was kept.",
   "chat.stopError": "Could not stop the agent",
   "chat.quiet": "Nothing new for a while. If the terminal is asking for something — a permission, a plan, a login — it only shows up there.",
   "chat.openTerminal": "Open the terminal",

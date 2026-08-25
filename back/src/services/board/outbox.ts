@@ -10,6 +10,7 @@ import { logger } from "../../utils/logger.js";
 // The agent probe used to live here; it moved to ./agentState.js so the session view can consult it
 // too without a cycle. Re-exported so existing importers (and tests) keep their old entry point.
 export { buildAgentProbeScript, classifyAgentState, cardAgentState, type AgentState } from "./agentState.js";
+export { looksLikeInteractiveMenu, buildMenuProbeScript, cardAwaitingChoice } from "./agentState.js";
 
 /**
  * THE OUTBOX — what you typed reaches the agent, or it waits until it can.

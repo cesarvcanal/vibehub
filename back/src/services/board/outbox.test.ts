@@ -95,6 +95,34 @@ describe("buildAgentProbeScript", () => {
   });
 });
 
+describe("looksLikeInteractiveMenu", () => {
+  it("catches the session-resume menu, the permission prompt and the confirm/cancel footer", async () => {
+    const { outbox } = await load();
+    expect(outbox.looksLikeInteractiveMenu("❯ 1. Resume from summary (recommended)\n  2. Resume full")).toBe(true);
+    expect(outbox.looksLikeInteractiveMenu("Do you want to proceed?\n❯ 1. Yes\n  2. No")).toBe(true);
+    expect(outbox.looksLikeInteractiveMenu("some text\nEnter to confirm · Esc to cancel")).toBe(true);
+    // A navigable slash-command menu: "select" (not "confirm") + the ↑/↓ hint. Was a false negative.
+    expect(outbox.looksLikeInteractiveMenu("  5. Chat about this\nEnter to select · ↑/↓ to navigate · Esc to cancel")).toBe(true);
+  });
+  it("leaves the normal prompt, the busy spinner and a bare shell alone", async () => {
+    const { outbox } = await load();
+    expect(outbox.looksLikeInteractiveMenu("> \n? for shortcuts")).toBe(false);
+    expect(outbox.looksLikeInteractiveMenu("Brewing… (esc to interrupt)")).toBe(false);
+    expect(outbox.looksLikeInteractiveMenu("❯ ls -la")).toBe(false); // a zsh prompt, no numbered option
+    expect(outbox.looksLikeInteractiveMenu("")).toBe(false);
+  });
+});
+
+describe("buildMenuProbeScript", () => {
+  it("captures the pane tail, read-only, and never fails on a missing session", async () => {
+    const { outbox } = await load();
+    const script = outbox.buildMenuProbeScript("vibehub-runner", "card-1234abcd");
+    expect(script).toContain("capture-pane");
+    expect(script).toContain("|| true");
+    expect(script).not.toMatch(/\brm\b|\bkill\b|send-keys/);
+  });
+});
+
 describe("queueMessage", () => {
   it("delivers straight away when Claude is running", async () => {
     const { outbox, registry } = await load();

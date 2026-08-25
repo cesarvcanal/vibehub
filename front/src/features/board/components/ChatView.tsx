@@ -175,7 +175,10 @@ export function ChatView({
     mutationFn: (text: string) => boardApi.sendCardChat(cardId, text),
     onError: (error, text) => {
       setPending((prev) => prev.filter((p) => p.text !== text));
-      toast.error(apiErrorMessage(error, translate("chat.sendError")));
+      const message = apiErrorMessage(error, translate("chat.sendError"));
+      // A menu is open in the terminal (resume / compact / permission): sending would have pressed
+      // Enter on an option. Say so plainly — the composer keeps the words (see `deliver`).
+      toast.error(/awaiting choice/i.test(message) ? translate("chat.awaitingChoice") : message);
     },
   });
 
@@ -184,12 +187,14 @@ export function ChatView({
     onError: (error) => toast.error(apiErrorMessage(error, translate("chat.stopError"))),
   });
 
-  const send = (raw: string): void => {
+  const send = async (raw: string): Promise<void> => {
     // The composer speaks terminal ("\r" submits); here the Enter is the server's job.
     const text = raw.replace(/\r$/, "").trim();
     if (!text) return;
     setPending((prev) => [...prev, { id: `local:${Date.now()}:${prev.length}`, text }]);
-    sendMutation.mutate(text);
+    // Await so a REJECTED send (e.g. the terminal is on a menu) propagates to the composer, which
+    // then keeps the draft instead of clearing it. onError still handles the toast + the pending row.
+    await sendMutation.mutateAsync(text);
   };
 
   /* ------------------------------------------------------------ scrolling */

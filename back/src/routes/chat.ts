@@ -88,13 +88,13 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       const text = String(req.body?.text ?? "");
       try {
         // The user's OWN send — never gate on human-active (their typing is what marks it active).
-        await sendToTerminal(req.params.id, text, { by: actorOf(req) });
+        await sendToTerminal(req.params.id, text, { by: actorOf(req), guardInteractiveMenu: true });
         return await reply.send({ ok: true });
       } catch (err) {
         const message = (err as Error).message;
         // "no live session" is not a server fault and not a missing card: it is a card that has to
         // be opened first, and the UI says exactly that.
-        const code = /not found/i.test(message) ? 404 : /no live session|empty text/i.test(message) ? 409 : 502;
+        const code = /not found/i.test(message) ? 404 : /no live session|empty text|awaiting choice/i.test(message) ? 409 : 502;
         return await reply.code(code).send({ error: message });
       }
     },

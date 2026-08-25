@@ -6,7 +6,7 @@ import {
   type Card, type Project, type BoardColumn, type CardStatus, type DeclaredState,
 } from "../board/registry.js";
 import { cardWorkPaths } from "../board/workspace.js";
-import { cardAgentState } from "../board/agentState.js";
+import { cardAgentState, cardAwaitingChoice } from "../board/agentState.js";
 import { profileDirFor } from "../accounts/profiles.js";
 import { seedDestDir } from "../import/import.js";
 import { logger } from "../../utils/logger.js";
@@ -274,10 +274,17 @@ export interface SendResult {
 export interface SendOpts {
   by?: string;
   respectHumanActive?: boolean;
+  /**
+   * Refuse the send when a MENU is open in the terminal (session resume, /compact, a permission
+   * prompt), instead of typing a message that presses Enter on the highlighted option. On for a
+   * person's chat send (the corruption they hit); off by default so an agent-to-agent send pays no
+   * probe.
+   */
+  guardInteractiveMenu?: boolean;
 }
 
 export async function sendToTerminal(cardId: string, text: string, opts: SendOpts = {}): Promise<SendResult> {
-  const { by, respectHumanActive = false } = opts;
+  const { by, respectHumanActive = false, guardInteractiveMenu = false } = opts;
   const instruction = String(text ?? "").trim();
   if (!instruction) throw new Error("empty text: there is nothing to send to the terminal");
   const card = await getCard(cardId);
@@ -292,6 +299,15 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
   if (!hasLiveSession(card)) {
     throw new Error(
       `the terminal for card "${card.title}" has no live session — open or resume the card before sending it an instruction`,
+    );
+  }
+  // A menu is open in the terminal (session-resume, /compact, a permission prompt): typing a message
+  // now would press Enter on the highlighted option and be swallowed. Refuse — the caller keeps the
+  // text and the person answers the menu in the Terminal tab. The marker lets the routes map it to a
+  // 409 and the UI to a clear line.
+  if (guardInteractiveMenu && (await cardAwaitingChoice(card))) {
+    throw new Error(
+      `awaiting choice: card "${card.title}" is waiting on a menu in the terminal (session resume, /compact or a permission prompt). Open the Terminal tab, answer it, then send again.`,
     );
   }
   const project = await getProject(card.projectId);
