@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ChevronRight, Loader2, MessageSquare, Square, TerminalSquare, Wrench } from "lucide-react";
+import { Bell, ChevronRight, Loader2, MessageSquare, Square, TerminalSquare, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { wsUrl } from "@/lib/ws";
 import { apiErrorMessage } from "@/lib/apiError";
@@ -376,6 +376,21 @@ function ChatRow({ event, sending }: { event: ChatEvent; sending?: boolean }) {
         <Wrench className="h-3 w-3 shrink-0 translate-y-0.5 opacity-70" />
         <span className="font-mono">{event.tool}</span>
         {event.text ? <span className="min-w-0 truncate opacity-80">{event.text}</span> : null}
+      </div>
+    );
+  }
+
+  if (event.kind === "system") {
+    // The harness talking (a background-task notification), not the person. A quiet centered note,
+    // never a message bubble, so it reads as an event and not as something Cesar typed.
+    return (
+      <div
+        data-testid="chat-system"
+        title={when}
+        className="flex items-center justify-center gap-1.5 py-0.5 text-center text-xs text-muted-foreground/70"
+      >
+        <Bell className="h-3 w-3 shrink-0 opacity-70" />
+        <span className="min-w-0 truncate italic">{event.text}</span>
       </div>
     );
   }

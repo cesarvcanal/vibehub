@@ -110,6 +110,18 @@ describe("ChatView", () => {
     expect(screen.getByText("verde").tagName).toBe("STRONG");
   });
 
+  it("draws a system notification as a muted event, never as the user's message", async () => {
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ id: "s1", kind: "system", at: 1, text: "Vigiar reconexão da Z-API completed" });
+
+    const note = await screen.findByTestId("chat-system");
+    expect(note).toHaveTextContent("Vigiar reconexão da Z-API completed");
+    // The important part: it is NOT a user bubble (that was the bug).
+    expect(screen.queryByTestId("chat-user")).not.toBeInTheDocument();
+  });
+
   it("folds a run of tool calls into one block, and opens it in place", async () => {
     // A turn is mostly tools. Rendered flat, fifteen `Read` lines push the two sentences you came
     // for off the screen.

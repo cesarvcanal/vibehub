@@ -30,7 +30,7 @@ export const CHAT_TAIL_LINES = 400;
 /** Longest tool detail we put on a collapsed line. Beyond this it stops being a summary. */
 export const TOOL_DETAIL_MAX = 160;
 
-export type ChatEventKind = "user" | "assistant" | "tool";
+export type ChatEventKind = "user" | "assistant" | "tool" | "system";
 
 export interface ChatEvent {
   /** Stable id from the transcript (`uuid`, plus the block for tool calls) — the browser dedupes on it. */
@@ -104,6 +104,22 @@ export function unwrapSlashCommand(text: string): string {
   return args ? `${name} ${args}` : name;
 }
 
+/**
+ * A user-role line that is really the HARNESS talking, not the person: a background-task
+ * notification and the "[SYSTEM NOTIFICATION - NOT USER INPUT]" envelope it arrives in. These land
+ * in the transcript as `type:"user"` with no `toolUseResult`, so the chat used to draw them as the
+ * user's own message — the thing that made a scheduled watcher's "task completed" look like Cesar
+ * had typed it. Returns a SHORT human label to show as a muted event, or null when it is a real
+ * message. PURE.
+ */
+export function systemNote(text: string): string | null {
+  const t = text.trim();
+  if (!/^\[SYSTEM NOTIFICATION\b/i.test(t) && !t.includes("<task-notification>")) return null;
+  const summary = /<summary>([\s\S]*?)<\/summary>/.exec(t)?.[1]?.trim();
+  const label = summary || "Background task update";
+  return label.length > TOOL_DETAIL_MAX ? `${label.slice(0, TOOL_DETAIL_MAX - 1)}…` : label;
+}
+
 /** The text blocks of a message content, joined. Ignores images, thinking and tool results. PURE. */
 function textOf(content: unknown): string {
   if (typeof content === "string") return content.trim();
@@ -161,6 +177,13 @@ export function parseChatEvents(jsonl: string): ChatEvent[] {
       // `<local-command-stdout>` is the terminal echoing a slash command's own output back into the
       // transcript. It belongs to the screen, not to the conversation.
       if (!text || text.startsWith("<local-command-stdout>")) continue;
+      // A background-task notification / system envelope is the harness talking, not the person —
+      // show it as a muted event, never as the user's own message.
+      const note = systemNote(text);
+      if (note) {
+        events.push({ id: uuid, kind: "system", at, text: note });
+        continue;
+      }
       events.push({ id: uuid, kind: "user", at, text });
       continue;
     }
