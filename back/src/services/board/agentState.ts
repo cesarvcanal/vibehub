@@ -83,3 +83,53 @@ export async function cardAgentState(card: Pick<Card, "openedAt" | "pausedAt" | 
     return "none";
   }
 }
+
+/**
+ * Does the pane's tail look like Claude Code waiting on an interactive CHOICE — the session-resume
+ * menu ("❯ 1. Resume from summary … Enter to confirm · Esc to cancel"), the /compact recap, a tool
+ * permission prompt ("Do you want to proceed? ❯ 1. Yes") — rather than its normal message prompt?
+ * Typing a message into one of these makes tmux press Enter on the HIGHLIGHTED option and swallow
+ * the message — the thing that turned a chat send into an accidental "/compact" or a wrong resume.
+ *
+ * Signatures: a numbered option carrying the `❯` selection cursor, the confirm/cancel footer, or an
+ * explicit "Do you want to …". A bare zsh `❯` prompt (no number) and the busy "esc to interrupt"
+ * spinner deliberately do NOT match. Biased toward catching a menu: a false positive only holds a
+ * send back (draft kept); a false negative is the corruption this exists to stop. PURE.
+ */
+export function looksLikeInteractiveMenu(paneText: string): boolean {
+  const t = String(paneText ?? "");
+  if (/❯\s*\d+\.\s/.test(t)) return true; // ❯ 1. Resume from summary
+  if (/↑\/↓|to navigate/i.test(t)) return true; // a navigable list's hint ("↑/↓ to navigate")
+  if (/enter to (confirm|select)/i.test(t)) return true; // the menu's action footer
+  if (/esc to (cancel|go back)/i.test(t)) return true; // menus cancel with Esc; the busy "interrupt" does not match
+  if (/\bdo you want to (proceed|continue|make this edit|create|trust)/i.test(t)) return true;
+  return false;
+}
+
+/** Captures the pane's tail so looksLikeInteractiveMenu can read it. Read-only; `|| true` on purpose. */
+export function buildMenuProbeScript(containerName: string, tmuxSession: string): string {
+  return (
+    `docker exec ${shQuote(containerName)} tmux capture-pane -p -t ${shQuote(tmuxSession)} ` +
+    `2>/dev/null | tail -n 30 || true`
+  );
+}
+
+/**
+ * True when the card's terminal is sitting on an interactive CHOICE (a menu), not its message
+ * prompt. A card with no live session is never awaiting a choice. Never throws: if the probe fails
+ * we do NOT block the send (an unreachable host is not a menu).
+ */
+export async function cardAwaitingChoice(
+  card: Pick<Card, "openedAt" | "pausedAt" | "tmuxSession">,
+): Promise<boolean> {
+  if (!hasLiveSession(card)) return false;
+  try {
+    const { stdout } = await hostExecutor().runScript(
+      buildMenuProbeScript(config.runner.container, card.tmuxSession),
+      { timeoutMs: 15_000 },
+    );
+    return looksLikeInteractiveMenu(stdout);
+  } catch {
+    return false;
+  }
+}

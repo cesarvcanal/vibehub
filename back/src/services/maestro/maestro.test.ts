@@ -357,6 +357,47 @@ describe("human-active lock (maestro-only)", () => {
   });
 });
 
+describe("interactive-menu guard", () => {
+  it("with guardInteractiveMenu, refuses to send into an open menu and never types", async () => {
+    // The chat send opts in. A menu in the pane (resume/compact/permission) → refuse, so the message
+    // is not pressed onto the highlighted option. Only the probe ran; no send-keys.
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "at a menu" });
+    await registry.applyOpenTerminal(c.id);
+    runScript.mockResolvedValueOnce({
+      stdout: "❯ 1. Resume from summary\n  2. Resume full\nEnter to confirm · Esc to cancel",
+      stderr: "",
+    });
+    await expect(maestro.sendToTerminal(c.id, "arruma o dre", { guardInteractiveMenu: true })).rejects.toThrow(
+      /awaiting choice/i,
+    );
+    expect(runScript).toHaveBeenCalledOnce();
+  });
+
+  it("with guardInteractiveMenu but no menu, the message goes through", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "at the prompt" });
+    await registry.applyOpenTerminal(c.id);
+    runScript.mockResolvedValueOnce({ stdout: "> \n? for shortcuts", stderr: "" }); // menu probe: normal prompt
+    runScript.mockResolvedValueOnce({ stdout: "", stderr: "" }); // the send-keys
+    const out = await maestro.sendToTerminal(c.id, "roda os testes", { guardInteractiveMenu: true });
+    expect(out).toMatchObject({ sent: true });
+    expect(runScript).toHaveBeenCalledTimes(2);
+  });
+
+  it("the agent path (no flag) never probes for a menu", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "agent send" });
+    await registry.applyOpenTerminal(c.id);
+    const out = await maestro.sendToTerminal(c.id, "carry on");
+    expect(out).toMatchObject({ sent: true });
+    expect(runScript).toHaveBeenCalledOnce(); // just the send-keys
+  });
+});
+
 describe("session introspection", () => {
   const line = (obj: unknown) => JSON.stringify(obj);
 

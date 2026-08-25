@@ -329,6 +329,7 @@ export const ptBR: Record<string, string> = {
   "chat.stop": "Parar",
   "chat.stopHint": "Manda Escape na sessão",
   "chat.sendError": "Não deu pra enviar a mensagem",
+  "chat.awaitingChoice": "O terminal está esperando uma escolha (menu de sessão, /compact ou permissão). Abra a aba Terminal, responda e envie de novo. Sua mensagem foi mantida.",
   "chat.stopError": "Não deu pra parar o agente",
   "chat.quiet": "Faz um tempo que nada aparece. Se o terminal estiver pedindo alguma coisa — permissão, plano, login — isso só aparece lá.",
   "chat.openTerminal": "Abrir o terminal",
