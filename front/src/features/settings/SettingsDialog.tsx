@@ -140,7 +140,10 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
+      {/* grid-cols-1 pins the single column to minmax(0,1fr): without it the primitive's implicit
+          grid column sizes to its widest child's min-content, and with overflow-y-auto promoting
+          overflow-x to auto the hint paragraphs get CLIPPED on the right instead of wrapping. */}
+      <DialogContent className="grid-cols-1 max-h-[85vh] max-w-lg overflow-y-auto overflow-x-hidden">
         <DialogHeader>
           <DialogTitle>{t("settings.title")}</DialogTitle>
           <DialogDescription>
