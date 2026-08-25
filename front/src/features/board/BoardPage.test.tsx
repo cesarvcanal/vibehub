@@ -528,6 +528,21 @@ describe("BoardPage — the sidebar", () => {
     ]);
   });
 
+  it("hibernating the card you are IN closes it, so the view stops reopening in a loop", async () => {
+    // Hibernate kills the session; leaving the card open just reconnects and reopens it — a loop.
+    mockPost.mockResolvedValue({ card: { ...cards[1]!, openedAt: null, hibernatedAt: "2026-08-25T00:00:00Z" } });
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    await screen.findByTestId("terminal");
+    const nav = sidebar();
+
+    await user.pointer({ keys: "[MouseRight]", target: within(nav).getByRole("link", { name: "chase the flake" }) });
+    await user.click(await screen.findByRole("menuitem", { name: "Hibernate" }));
+
+    // Taken up one level — the terminal is gone, not endlessly reconnecting.
+    await waitFor(() => expect(activeTerminal()).toBeNull());
+  });
+
   // A double-click used to be the way in, and its FIRST click opens (or, on the card already open,
   // closes) the card — the rename box arrived over a terminal that had just been torn down.
   it("does not rename on a double-click, and opens the card exactly once", async () => {
