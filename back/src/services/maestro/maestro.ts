@@ -264,15 +264,26 @@ export interface SendResult {
  *
  * Throws a distinct, actionable error when the card has no live session — that is the case a
  * maestro has to tell apart from "no such card", because the fix is different (open the card).
+ *
+ * `respectHumanActive` is for the MAESTRO only: a maestro must not type into a card a PERSON is using
+ * right now (it would fight them for the prompt). It is OFF by default — the person's OWN send (the
+ * chat composer) must ALWAYS go through, even though their very typing is what marked the card
+ * human-active. Only `vibehub_send_to_terminal` (an agent driving another card) opts in.
  */
-export async function sendToTerminal(cardId: string, text: string, by?: string): Promise<SendResult> {
+export interface SendOpts {
+  by?: string;
+  respectHumanActive?: boolean;
+}
+
+export async function sendToTerminal(cardId: string, text: string, opts: SendOpts = {}): Promise<SendResult> {
+  const { by, respectHumanActive = false } = opts;
   const instruction = String(text ?? "").trim();
   if (!instruction) throw new Error("empty text: there is nothing to send to the terminal");
   const card = await getCard(cardId);
   if (!card) throw new Error("card not found");
-  // A human is at this terminal right now: typing into it would fight them for the prompt. Refuse and
-  // send NOTHING — a maestro that wants what was said should READ (that stays allowed) and wait.
-  if (isHumanActive(card)) {
+  // A maestro must not type into a card a person is using right now — but the person's own send is
+  // never blocked (respectHumanActive is off unless the caller is a maestro driving another card).
+  if (respectHumanActive && isHumanActive(card)) {
     throw new Error(
       `card "${card.title}" is human-active — someone is typing in it right now, so it will not accept a sent instruction; read it and wait, or ask the user`,
     );

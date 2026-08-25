@@ -57,7 +57,7 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     },
     async (a) => {
       try {
-        return ok(await sendToTerminal(a.cardId, a.text, actor));
+        return ok(await sendToTerminal(a.cardId, a.text, { by: actor, respectHumanActive: true }));
       } catch (e) {
         return fail(e);
       }

@@ -87,7 +87,8 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const text = String(req.body?.text ?? "");
       try {
-        await sendToTerminal(req.params.id, text, actorOf(req));
+        // The user's OWN send — never gate on human-active (their typing is what marks it active).
+        await sendToTerminal(req.params.id, text, { by: actorOf(req) });
         return await reply.send({ ok: true });
       } catch (err) {
         const message = (err as Error).message;
