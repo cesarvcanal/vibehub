@@ -275,6 +275,7 @@ export function BoardPage() {
       onNewCard={(project) => askCard(project, false)}
       onNewGlobalCard={() => askCard(null, true)}
       onDeleteProject={setDeleteTarget}
+      onShowAllProjects={() => go(null)}
       inline={inline}
     />
   );
