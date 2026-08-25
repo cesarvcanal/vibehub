@@ -483,6 +483,28 @@ describe("CardTerminalView — the card bar", () => {
     expect(screen.queryByRole("button", { name: /restart/i })).not.toBeInTheDocument();
   });
 
+  it("shows a 'Claude parou' banner with Restart when the agent has exited (situation=stopped)", async () => {
+    // J: Claude exited to a bare shell. Without this the card is a mute terminal that queues what
+    // you type; the banner names it and offers the restart.
+    serveSession({ situation: "stopped" });
+    mockPost.mockResolvedValue({ card: card({ openedAt: 10 }) });
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10 })]);
+
+    const banner = await screen.findByTestId("claude-stopped-banner");
+    expect(banner).toHaveTextContent(/claude stopped/i);
+
+    await user.click(within(banner).getByRole("button", { name: /restart/i }));
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/cards/c1/restart"));
+  });
+
+  it("shows NO 'Claude parou' banner while the agent is alive (situation=waiting)", async () => {
+    serveSession({ situation: "waiting" });
+    renderWithCache([card({ openedAt: 10 })]);
+    await screen.findByTestId("xterm");
+    expect(screen.queryByTestId("claude-stopped-banner")).not.toBeInTheDocument();
+  });
+
   /** Opens one of the two bar menus and hands back its items. */
   async function openMenu(user: ReturnType<typeof userEvent.setup>, label: string) {
     await user.click(await screen.findByLabelText(label));

@@ -294,6 +294,8 @@ export const en: Record<string, string> = {
   "cardView.restart": "Restart",
   "cardView.restartHint":
     "Kills and recreates the Claude process in the same worktree. The conversation is resumed and MCPs, brain and model are re-read.",
+  "cardView.claudeStopped": "Claude stopped.",
+  "cardView.claudeStoppedHint": "The session is still open, but Claude exited. Restart to resume the conversation.",
   "cardView.done": "Done",
   "cardView.doneHint": "Moves the card to Done and returns to the board",
   "cardView.browser": "Browser",

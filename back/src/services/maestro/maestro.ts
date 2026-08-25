@@ -6,6 +6,7 @@ import {
   type Card, type Project, type BoardColumn, type CardStatus, type DeclaredState,
 } from "../board/registry.js";
 import { cardWorkPaths } from "../board/workspace.js";
+import { cardAgentState } from "../board/agentState.js";
 import { profileDirFor } from "../accounts/profiles.js";
 import { seedDestDir } from "../import/import.js";
 import { logger } from "../../utils/logger.js";
@@ -31,7 +32,7 @@ import { logger } from "../../utils/logger.js";
 const TAIL_LINES = 800;
 
 /** What a terminal is doing right now, in words a coordinating agent can act on. */
-export type TerminalSituation = "working" | "waiting" | "paused" | "done" | "no session";
+export type TerminalSituation = "working" | "waiting" | "paused" | "done" | "stopped" | "no session";
 
 export interface TerminalSummary {
   cardId: string;
@@ -525,11 +526,24 @@ export async function sessionInfo(cardId: string): Promise<SessionInfo> {
   } catch {
     model = null; // runner unreachable or no transcript yet — the UI shows the default
   }
+  // The board mirror reads a card's situation from the registry (cheap, no probe). Here — on the ONE
+  // card the person is actually looking at, polled every few seconds — we can afford a live probe:
+  // the registry still calls a card "waiting" after Claude has EXITED to the bare shell underneath
+  // it (openedAt is set, pausedAt is not), and that silent shell with a growing queue is exactly
+  // what confused people. A probe turns it into "stopped" (the chat shows "Claude parou — Reiniciar")
+  // or "no session" when the runner lost the session entirely. Only "waiting" is refined, so working/
+  // paused/done never pay for the probe.
+  let situation = terminalSituation(card);
+  if (situation === "waiting") {
+    const agent = await cardAgentState(card);
+    if (agent === "shell") situation = "stopped";
+    else if (agent === "none") situation = "no session";
+  }
   return {
     model,
     modelLabel: modelLabelFor(model),
     account: { slug: slug ?? null, name },
-    situation: terminalSituation(card),
+    situation,
   };
 }
 
