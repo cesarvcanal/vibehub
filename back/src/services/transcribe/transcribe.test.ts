@@ -119,10 +119,10 @@ describe("transcribeCardAudio", () => {
     expect(await mod.transcribeCardAudio(c.id, AUDIO, "audio/webm")).toEqual({ text: "fix the totals", proofread: false });
   });
 
-  it("proofreads with Claude when both keys exist, and sends the language hint", async () => {
+  it("proofreads with Claude when both keys exist AND the person opted in, and sends the language hint", async () => {
     const { mod, reg, settings } = await fresh();
     await mod.setTranscribeKeys({ openaiKey: "sk-openai-x", anthropicKey: "sk-ant-x" });
-    await settings.updateSettings({ transcribeLanguage: "pt" });
+    await settings.updateSettings({ transcribeLanguage: "pt", transcribeProofread: true });
     const p = await reg.createProject({ name: "p" });
     const c = await reg.createCard({ projectId: p.id, title: "c" });
     const calls: string[] = [];
@@ -141,13 +141,29 @@ describe("transcribeCardAudio", () => {
   });
 
   it("falls back to the raw text when proofreading fails — never loses the transcription", async () => {
-    const { mod, reg } = await fresh();
+    const { mod, reg, settings } = await fresh();
     await mod.setTranscribeKeys({ openaiKey: "sk-openai-x", anthropicKey: "sk-ant-x" });
+    await settings.updateSettings({ transcribeProofread: true });
     const p = await reg.createProject({ name: "p" });
     const c = await reg.createCard({ projectId: p.id, title: "c" });
     vi.stubGlobal("fetch", vi.fn(async (url: string) =>
       url.includes("openai") ? json({ text: "raw words" }) : json({ error: "down" }, 500)));
     expect((await mod.transcribeCardAudio(c.id, AUDIO, "audio/webm")).text).toBe("raw words");
+  });
+
+  it("does NOT proofread by default even with both keys — raw Whisper, the person's exact words", async () => {
+    // The safe default after the cleanup model kept answering the dictation instead of cleaning it.
+    const { mod, reg } = await fresh();
+    await mod.setTranscribeKeys({ openaiKey: "sk-openai-x", anthropicKey: "sk-ant-x" });
+    const p = await reg.createProject({ name: "p" });
+    const c = await reg.createCard({ projectId: p.id, title: "c" });
+    const fetchMock = vi.fn(async (url: string) =>
+      url.includes("openai") ? json({ text: "posso te mandar umas demandas?" }) : json({ content: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const out = await mod.transcribeCardAudio(c.id, AUDIO, "audio/webm");
+    expect(out).toEqual({ text: "posso te mandar umas demandas?", proofread: false });
+    // The Anthropic proofreader is never even called.
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("anthropic"))).toBe(false);
   });
 
   it("surfaces a Whisper failure with the status", async () => {

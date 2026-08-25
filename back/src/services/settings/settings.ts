@@ -27,6 +27,13 @@ export interface Settings {
   /** ISO 639-1 hint for voice transcription ("pt", "en"…). Null = let Whisper detect. */
   transcribeLanguage: string | null;
   /**
+   * OFF by default. When on, a small Claude model proofreads the Whisper text against the brain to
+   * fix names/terms. It is off by default because that model keeps ANSWERING the dictation instead
+   * of cleaning it (a conversational "olha, tenho umas demandas…" came back as a reply, not a
+   * transcription). Raw Whisper — the person's exact words — is the safe default.
+   */
+  transcribeProofread: boolean;
+  /**
    * MINUTES a card's terminal may sit idle before it is HIBERNATED: the session is killed and the
    * card stays exactly where it is on the board, marked cold. 0 turns the sweep off entirely.
    *
@@ -45,6 +52,7 @@ const DEFAULTS: Settings = {
   defaultAccountLabel: null,
   setupCompletedAt: null,
   transcribeLanguage: null,
+  transcribeProofread: false,
   idleHibernateMinutes: 180,
 };
 
@@ -72,6 +80,7 @@ export interface SettingsPatch {
   autonomous?: boolean;
   defaultAccountLabel?: string | null;
   transcribeLanguage?: string | null;
+  transcribeProofread?: boolean;
   idleHibernateMinutes?: number;
 }
 
@@ -84,6 +93,9 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
   }
   if (patch.autonomous !== undefined && typeof patch.autonomous !== "boolean") {
     throw new Error("autonomous must be a boolean");
+  }
+  if (patch.transcribeProofread !== undefined && typeof patch.transcribeProofread !== "boolean") {
+    throw new Error("transcribeProofread must be a boolean");
   }
   if (patch.transcribeLanguage !== undefined && patch.transcribeLanguage !== null) {
     if (!/^[a-z]{2}$/.test(String(patch.transcribeLanguage).trim())) {
@@ -108,6 +120,9 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
     }
     if (patch.transcribeLanguage !== undefined) {
       doc.settings.transcribeLanguage = patch.transcribeLanguage === null ? null : String(patch.transcribeLanguage).trim();
+    }
+    if (patch.transcribeProofread !== undefined) {
+      doc.settings.transcribeProofread = patch.transcribeProofread;
     }
     if (patch.idleHibernateMinutes !== undefined) {
       doc.settings.idleHibernateMinutes = Number(patch.idleHibernateMinutes);
