@@ -204,12 +204,13 @@ describe("BoardPage — the board", () => {
     serve();
   });
 
-  it("lists every project in sidebar order, on the board as well as beside a card", async () => {
-    renderApp(<BoardPage />, { route: "/?project=p1" });
-    await screen.findByRole("region", { name: "Backlog" });
-    const rows = Array.from(sidebar().querySelectorAll("[data-project-row]")).map(
-      (row) => row.textContent ?? "",
-    );
+  it("lists every project in sidebar order on the aggregated board", async () => {
+    // All projects show when NONE is focused. Inside a project the sidebar is just that project's
+    // cards (see the focused-sidebar tests) — you switch from the name at the top.
+    renderApp(<BoardPage />, { route: "/" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+    await waitFor(() => expect(nav.querySelectorAll("[data-project-row]").length).toBe(2));
+    const rows = Array.from(nav.querySelectorAll("[data-project-row]")).map((row) => row.textContent ?? "");
     expect(rows[0]).toContain("billing");
     expect(rows[1]).toContain("gateway");
   });
@@ -402,88 +403,41 @@ describe("BoardPage — the sidebar", () => {
     expect(within(nav).queryByRole("button", { name: /show more/ })).not.toBeInTheDocument();
   });
 
-  it("deselects the project when its row is clicked a second time", async () => {
+  it("leaves the focused project for the aggregated board via the switcher's 'All projects'", async () => {
     const user = userEvent.setup();
     renderApp(<BoardPage />, { route: "/?project=p1" });
     const nav = await screen.findByRole("navigation", { name: /projects/i });
     await within(nav).findByRole("link", { name: "chase the flake" });
 
-    await user.click(within(nav).getByRole("link", { name: "billing" }));
+    await user.click(within(nav).getByRole("button", { name: "Switch project" }));
+    await user.click(await screen.findByRole("menuitem", { name: "All projects" }));
 
-    // Deselected: the aggregated board, and no board of its own. The cards stay UNFOLDED — the
-    // fold belongs to the chevron now, and navigating never closes a list you opened.
+    // The aggregated board — the one that counts projects alongside cards.
     expect(await screen.findByText(/4 cards · 2 projects/)).toBeInTheDocument();
-    expect(within(nav).getByRole("link", { name: "chase the flake" })).toBeInTheDocument();
   });
 
-  it("unfolds another project from the chevron WITHOUT leaving the card you are in", async () => {
+  it("beside an open card, focuses on ONLY that project — no other projects, no chevron", async () => {
+    // The whole point of the change: working inside one project, the sidebar is just its cards.
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    await screen.findByTestId("terminal");
+    const nav = sidebar();
+
+    expect(await within(nav).findByRole("link", { name: "chase the flake" })).toBeInTheDocument();
+    // The other project is not a row on screen, and there is no chevron to unfold one.
+    expect(within(nav).queryByRole("link", { name: "gateway" })).not.toBeInTheDocument();
+    expect(within(nav).queryByRole("button", { name: /Show .*cards/ })).not.toBeInTheDocument();
+  });
+
+  it("reaches another project from the name switcher, parking the card you leave", async () => {
     const user = userEvent.setup();
     renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
     await screen.findByTestId("terminal");
     const nav = sidebar();
 
-    await user.click(within(nav).getByRole("button", { name: "Show gateway's cards" }));
+    await user.click(within(nav).getByRole("button", { name: "Switch project" }));
+    await user.click(await screen.findByRole("menuitem", { name: "gateway" }));
 
-    // The other project's cards are listed, and the terminal never went anywhere.
-    expect(await within(nav).findByRole("link", { name: "rotate the key" })).toBeInTheDocument();
-    expect(screen.getByTestId("terminal")).toHaveTextContent("c2");
-  });
-
-  it("folds a project away again from the same chevron", async () => {
-    const user = userEvent.setup();
-    renderApp(<BoardPage />, { route: "/?project=p1" });
-    const nav = await screen.findByRole("navigation", { name: /projects/i });
-    await within(nav).findByRole("link", { name: "chase the flake" });
-
-    await user.click(within(nav).getByRole("button", { name: "Hide billing's cards" }));
-
-    expect(within(nav).queryByRole("link", { name: "chase the flake" })).not.toBeInTheDocument();
-    // And the project is still the selected one — folding is not navigating.
-    expect(screen.getByRole("region", { name: "Working" })).toBeInTheDocument();
-  });
-
-  it("opens a card belonging to ANOTHER project in one click", async () => {
-    const user = userEvent.setup();
-    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
-    await screen.findByTestId("terminal");
-    const nav = sidebar();
-
-    await user.click(within(nav).getByRole("button", { name: "Show gateway's cards" }));
-    await user.click(await within(nav).findByRole("link", { name: "rotate the key" }));
-
-    // Straight from one agent to another, without passing through the other project's board. The
-    // card you came from is still mounted behind it — that is the deck — so the assertion is about
-    // which pane is ON TOP, not about how many exist.
-    await waitFor(() => expect(activeTerminal()).toHaveTextContent("c4"));
-    // ...and the project came with it: the sidebar marks gateway as the one you are in.
-    expect(within(sidebar()).getByRole("link", { name: "gateway" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-  });
-
-  it("takes the open card up to its own board when its project's name is clicked", async () => {
-    const user = userEvent.setup();
-    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
-    await screen.findByTestId("terminal");
-
-    await user.click(within(sidebar()).getByRole("link", { name: "billing" }));
-
-    // One level up: billing's board, NOT the aggregated one. The card's pane is parked, not gone.
-    await waitFor(() => expect(activeTerminal()).toBeNull());
-    expect(await screen.findByText(/3 cards/)).toBeInTheDocument();
-    // Not the aggregated board, which is the one that counts projects alongside cards.
-    expect(screen.queryByText(/cards · /)).not.toBeInTheDocument();
-  });
-
-  it("jumps straight to another project's board from wherever you are", async () => {
-    const user = userEvent.setup();
-    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
-    await screen.findByTestId("terminal");
-
-    await user.click(within(sidebar()).getByRole("link", { name: "gateway" }));
-
-    // The board is what you are looking at; c2's pane is parked, still connected, off screen.
+    // gateway's board is what you see; c2's pane is parked, still connected, off screen.
     await waitFor(() => expect(activeTerminal()).toBeNull());
     expect(await screen.findByRole("region", { name: "Waiting" })).toBeInTheDocument();
     expect(livePanes()).toEqual(["c2"]);
@@ -505,12 +459,6 @@ describe("BoardPage — the sidebar", () => {
     renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
     await screen.findByTestId("terminal");
     expect(within(sidebar()).queryByText(/back to board/i)).not.toBeInTheDocument();
-  });
-
-  it("keeps the whole project list beside an open card, not just its cards", async () => {
-    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
-    await screen.findByTestId("terminal");
-    expect(within(sidebar()).getByRole("link", { name: "gateway" })).toBeInTheDocument();
   });
 
   it("renames a card in place from its menu, without opening the card", async () => {
@@ -606,7 +554,8 @@ describe("BoardPage — the sidebar", () => {
   it("reorders a project from its right-click menu", async () => {
     mockPatch.mockResolvedValue({ projects });
     const user = userEvent.setup();
-    renderApp(<BoardPage />, { route: "/?project=p1" });
+    // The overview lists every project; the row menu lives there (a focused sidebar has one project).
+    renderApp(<BoardPage />, { route: "/" });
     const nav = await screen.findByRole("navigation", { name: /projects/i });
 
     await user.pointer({ keys: "[MouseRight]", target: within(nav).getByRole("link", { name: "gateway" }) });
@@ -618,7 +567,7 @@ describe("BoardPage — the sidebar", () => {
   it("asks before deleting a project, from the same menu", async () => {
     mockDel.mockResolvedValue({ ok: true });
     const user = userEvent.setup();
-    renderApp(<BoardPage />, { route: "/?project=p1" });
+    renderApp(<BoardPage />, { route: "/" });
     const nav = await screen.findByRole("navigation", { name: /projects/i });
 
     await user.pointer({ keys: "[MouseRight]", target: within(nav).getByRole("link", { name: "gateway" }) });
@@ -629,13 +578,12 @@ describe("BoardPage — the sidebar", () => {
     await waitFor(() => expect(mockDel).toHaveBeenCalledWith("/projects/p2"));
   });
 
-  it("keeps a `+` on every row, whether or not the project is selected", async () => {
+  it("keeps a `+` on every row in the overview", async () => {
     const user = userEvent.setup();
-    renderApp(<BoardPage />, { route: "/?project=p1" });
+    renderApp(<BoardPage />, { route: "/" });
     const nav = await screen.findByRole("navigation", { name: /projects/i });
 
-    // The row that is NOT selected still offers it — writing down the next task should not
-    // require selecting the project first.
+    // Every row offers it — writing down the next task should not require selecting the project first.
     await user.click(within(nav).getByRole("button", { name: "New card in gateway" }));
     expect(await screen.findByRole("dialog")).toHaveTextContent(/New card/);
   });
@@ -707,10 +655,10 @@ describe("BoardPage — the tab title", () => {
     serve();
   });
 
-  it("leads with the project on a board", async () => {
+  it("is just the project name", async () => {
     renderApp(<BoardPage />, { route: "/?project=p1" });
     await screen.findByRole("region", { name: "Backlog" });
-    await waitFor(() => expect(document.title).toBe("billing · vibehub"));
+    await waitFor(() => expect(document.title).toBe("billing"));
   });
 
   it("is just the app on the aggregated board", async () => {
@@ -995,8 +943,9 @@ describe("BoardPage — the terminal deck", () => {
     renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
     await waitFor(() => expect(activeTerminal()).toHaveTextContent("c2"));
 
-    // Straight into the other project's card, from the sidebar.
-    await user.click(within(sidebar()).getByRole("link", { name: "gateway" }));
+    // Into the other project via the name switcher, then its card.
+    await user.click(within(sidebar()).getByRole("button", { name: "Switch project" }));
+    await user.click(await screen.findByRole("menuitem", { name: "gateway" }));
     await user.click(await within(sidebar()).findByRole("link", { name: "rotate the key" }));
 
     await waitFor(() => expect(activeTerminal()).toHaveTextContent("c4"));
@@ -1030,6 +979,10 @@ describe("BoardPage — the terminal deck", () => {
     renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
     await waitFor(() => expect(activeTerminal()).toHaveTextContent("c2"));
 
+    // Deleting a project lives in the overview (the focused sidebar shows one project). The card's
+    // pane stays parked in the deck while we go there.
+    await user.click(within(sidebar()).getByRole("button", { name: "Switch project" }));
+    await user.click(await screen.findByRole("menuitem", { name: "All projects" }));
     const nav = sidebar();
     await user.pointer({ keys: "[MouseRight]", target: within(nav).getByRole("link", { name: "billing" }) });
     await user.click(await screen.findByRole("menuitem", { name: "Delete project…" }));

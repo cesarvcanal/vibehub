@@ -18,6 +18,12 @@ import { cn, isNewTabClick } from "@/lib/utils";
 import { apiErrorMessage } from "@/lib/apiError";
 import { Button } from "@/components/ui/button";
 import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
+import {
   ContextMenu,
   useContextMenuPoint,
   useLongPress,
@@ -101,6 +107,7 @@ export function ProjectSidebar({
   onNewCard,
   onNewGlobalCard,
   onDeleteProject,
+  onShowAllProjects,
   inline = false,
 }: {
   projects: BoardProject[];
@@ -124,6 +131,8 @@ export function ProjectSidebar({
    */
   onNewGlobalCard?: () => void;
   onDeleteProject: (project: BoardProject) => void;
+  /** Leave the focused project for the aggregated "all projects" board (the switcher's top item). */
+  onShowAllProjects?: () => void;
   /**
    * In-flow instead of a drawer: the panel becomes part of the page's own column rather than a
    * `fixed` overlay slid in from the left. This is the phone homepage, where the project/card list
@@ -134,6 +143,11 @@ export function ProjectSidebar({
 }) {
   const t = useT();
   const { isExpanded, toggle } = useExpandedProjects(selectedProjectId);
+
+  // A project is open: focus the sidebar on ONLY that project's cards. The other projects and the
+  // "recent" strip are noise while you work inside one — you switch projects from the name up top.
+  const focusedProject = selectedProjectId ? projects.find((p) => p.id === selectedProjectId) : undefined;
+  const focused = Boolean(focusedProject);
   const [draggingId, setDraggingId] = React.useState<string | null>(null);
   const [dropAt, setDropAt] = React.useState<{ index: number; below: boolean } | null>(null);
 
@@ -209,71 +223,181 @@ export function ProjectSidebar({
           ) : null}
         </div>
 
-        {/* Where you just were, above what you own. It hides itself when there is nothing to
-            go back to, so a fresh install still opens on the project list. */}
-        <RecentCards projects={projects} activeCardId={selectedCardId} onOpenCard={onOpenCard} />
+        {focused && focusedProject ? (
+          // A project is open: the switcher IS the header — it names the project and lets you jump
+          // to another. No "recent" strip, no other projects: just this project's cards, below.
+          <ProjectSwitcher
+            current={focusedProject}
+            projects={projects}
+            onSelect={onSelectProject}
+            onShowAll={onShowAllProjects}
+            onNewCard={() => onNewCard(focusedProject)}
+            onNewProject={onNewProject}
+          />
+        ) : (
+          <>
+            {/* Where you just were, above what you own. It hides itself when there is nothing to
+                go back to, so a fresh install still opens on the project list. */}
+            <RecentCards projects={projects} activeCardId={selectedCardId} onOpenCard={onOpenCard} />
 
-        <div className="flex shrink-0 items-center justify-between border-b border-border/60 py-1 pl-3 pr-1.5">
-          <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-            {t("board.projects", { n: projects.length })}
-          </span>
-          {/* Creating a project belongs on the list of projects, not in the page header. */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 text-muted-foreground hover:text-foreground"
-            aria-label={t("sidebar.newProject")}
-            title={t("sidebar.newProject")}
-            onClick={onNewProject}
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-        </div>
+            <div className="flex shrink-0 items-center justify-between border-b border-border/60 py-1 pl-3 pr-1.5">
+              <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                {t("board.projects", { n: projects.length })}
+              </span>
+              {/* Creating a project belongs on the list of projects, not in the page header. */}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                aria-label={t("sidebar.newProject")}
+                title={t("sidebar.newProject")}
+                onClick={onNewProject}
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+            </div>
+          </>
+        )}
 
         <div className="min-h-0 flex-1 divide-y divide-border/60 overflow-y-auto">
-          {projects.map((project, index) => {
-            const selected = project.id === selectedProjectId;
-            return (
-              <ProjectRow
-                key={project.id}
-                project={project}
-                index={index}
-                first={index === 0}
-                last={index === projects.length - 1}
-                selected={selected}
-                expanded={isExpanded(project.id)}
-                onToggleExpanded={() => toggle(project.id)}
-                // Only the selected project can own the card that is open: opening a card selects
-                // its project, so the two ids always belong together.
-                activeCardId={selected ? selectedCardId : null}
-                draggingId={draggingId}
-                dropLine={
-                  draggingId && draggingId !== project.id && dropAt?.index === index
-                    ? dropAt.below
-                      ? "bottom"
-                      : "top"
-                    : null
-                }
-                onSelect={() => onSelectProject(project.id)}
-                onOpenCard={(cardId) => onOpenCard(project.id, cardId)}
-                onNewCard={() => onNewCard(project)}
-                onDelete={() => onDeleteProject(project)}
-                onStep={(direction) => step(project.id, direction)}
-                onDragStart={() => setDraggingId(project.id)}
-                onDragEnd={clear}
-                onHover={(i, below) => setDropAt({ index: i, below })}
-                onDrop={drop}
-              />
-            );
-          })}
-          {projects.length === 0 ? (
-            <p className="px-3 py-3 text-xs text-muted-foreground">{t("sidebar.noProjects")}</p>
-          ) : null}
+          {focused && focusedProject ? (
+            // Just this project's cards. Always open (focused), no name line (the switcher has it),
+            // no drag/reorder (nothing to reorder against).
+            <ProjectRow
+              project={focusedProject}
+              index={0}
+              first
+              last
+              selected
+              expanded
+              focused
+              onToggleExpanded={() => {}}
+              activeCardId={selectedCardId}
+              draggingId={null}
+              dropLine={null}
+              onSelect={() => onSelectProject(focusedProject.id)}
+              onOpenCard={(cardId) => onOpenCard(focusedProject.id, cardId)}
+              onNewCard={() => onNewCard(focusedProject)}
+              onDelete={() => onDeleteProject(focusedProject)}
+              onStep={() => {}}
+              onDragStart={() => {}}
+              onDragEnd={() => {}}
+              onHover={() => {}}
+              onDrop={() => {}}
+            />
+          ) : (
+            <>
+              {projects.map((project, index) => {
+                const selected = project.id === selectedProjectId;
+                return (
+                  <ProjectRow
+                    key={project.id}
+                    project={project}
+                    index={index}
+                    first={index === 0}
+                    last={index === projects.length - 1}
+                    selected={selected}
+                    expanded={isExpanded(project.id)}
+                    onToggleExpanded={() => toggle(project.id)}
+                    // Only the selected project can own the card that is open: opening a card selects
+                    // its project, so the two ids always belong together.
+                    activeCardId={selected ? selectedCardId : null}
+                    draggingId={draggingId}
+                    dropLine={
+                      draggingId && draggingId !== project.id && dropAt?.index === index
+                        ? dropAt.below
+                          ? "bottom"
+                          : "top"
+                        : null
+                    }
+                    onSelect={() => onSelectProject(project.id)}
+                    onOpenCard={(cardId) => onOpenCard(project.id, cardId)}
+                    onNewCard={() => onNewCard(project)}
+                    onDelete={() => onDeleteProject(project)}
+                    onStep={(direction) => step(project.id, direction)}
+                    onDragStart={() => setDraggingId(project.id)}
+                    onDragEnd={clear}
+                    onHover={(i, below) => setDropAt({ index: i, below })}
+                    onDrop={drop}
+                  />
+                );
+              })}
+              {projects.length === 0 ? (
+                <p className="px-3 py-3 text-xs text-muted-foreground">{t("sidebar.noProjects")}</p>
+              ) : null}
+            </>
+          )}
         </div>
 
         <AccountRow />
       </nav>
     </>
+  );
+}
+
+/**
+ * The header when a single project is focused: its name is a dropdown that switches projects, with
+ * the new-card "+" beside it. This is how you leave one project for another without a strip of all
+ * of them on screen the whole time.
+ */
+function ProjectSwitcher({
+  current,
+  projects,
+  onSelect,
+  onShowAll,
+  onNewCard,
+  onNewProject,
+}: {
+  current: BoardProject;
+  projects: BoardProject[];
+  onSelect: (id: string) => void;
+  onShowAll?: () => void;
+  onNewCard: () => void;
+  onNewProject: () => void;
+}) {
+  const t = useT();
+  return (
+    <div className="flex shrink-0 items-center gap-0.5 border-b border-border/60 py-1 pl-1.5 pr-1.5">
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          aria-label={t("sidebar.switchProject")}
+          title={t("sidebar.switchProject")}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <FolderGit2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate text-sm font-semibold">{current.name}</span>
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="max-h-[60vh] w-56 overflow-y-auto">
+          {onShowAll ? (
+            <DropdownMenuItem onSelect={onShowAll} className="gap-2 text-muted-foreground">
+              <FolderGit2 className="h-3.5 w-3.5 shrink-0 opacity-70" />
+              {t("sidebar.allProjects")}
+            </DropdownMenuItem>
+          ) : null}
+          {projects.map((p) => (
+            <DropdownMenuItem key={p.id} onSelect={() => onSelect(p.id)} className="gap-2">
+              <Check className={cn("h-3.5 w-3.5 shrink-0", p.id === current.id ? "opacity-100" : "opacity-0")} />
+              <span className="min-w-0 flex-1 truncate">{p.name}</span>
+            </DropdownMenuItem>
+          ))}
+          <DropdownMenuItem onSelect={onNewProject} className="gap-2 text-muted-foreground">
+            <Plus className="h-3.5 w-3.5 shrink-0" />
+            {t("sidebar.newProject")}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+        aria-label={t("sidebar.newCardIn", { name: current.name })}
+        title={t("sidebar.newCardHint")}
+        onClick={onNewCard}
+      >
+        <Plus className="h-4 w-4" />
+      </Button>
+    </div>
   );
 }
 
@@ -310,6 +434,7 @@ function ProjectRow({
   onDragEnd,
   onHover,
   onDrop,
+  focused = false,
 }: {
   project: BoardProject;
   index: number;
@@ -318,6 +443,11 @@ function ProjectRow({
   selected: boolean;
   /** Are this project's cards unfolded? Independent of `selected` — see the chevron. */
   expanded: boolean;
+  /**
+   * The sidebar is showing ONLY this project (a project is open): its name lives in the switcher
+   * above, so the row drops its own name line and drag handle and just lists the cards, always open.
+   */
+  focused?: boolean;
   onToggleExpanded: () => void;
   activeCardId: string | null;
   draggingId: string | null;
@@ -343,8 +473,8 @@ function ProjectRow({
     // amber is a card asking for you, and three extra seconds of green reads as "still busy".
     refetchInterval: 2_000,
     // Unfolded, not selected: every open list has live dots, or the reason to keep two projects
-    // open at once — watching both — would not survive the first poll.
-    enabled: expanded,
+    // open at once — watching both — would not survive the first poll. Focused = always open.
+    enabled: expanded || focused,
   });
 
   const [showMore, setShowMore] = React.useState(false);
@@ -547,7 +677,9 @@ function ProjectRow({
       ) : null}
 
       {/* Right-click anywhere on the row line, not only on the name. The card rows below have a
-          menu of their own and stop the event, so the two never collide. */}
+          menu of their own and stop the event, so the two never collide. Hidden when focused: the
+          switcher above owns the name. */}
+      {focused ? null : (
       <div className="flex items-center gap-0.5" onContextMenu={openAt}>
         {/* The disclosure, ahead of the folder icon and outside the name button. It is its OWN
             target, which is the whole point: unfolding a project never navigates anywhere. */}
@@ -609,8 +741,9 @@ function ProjectRow({
           <Plus className="h-3.5 w-3.5" />
         </Button>
       </div>
+      )}
 
-      {expanded ? (
+      {expanded || focused ? (
         <div className="pb-1.5">
           {listed.map(renderCard)}
           {/* The revealed cards appear ABOVE the toggle, which stays anchored at the end of the

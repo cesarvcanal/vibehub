@@ -3,18 +3,18 @@ import { render, cleanup } from "@testing-library/react";
 import { BASE_TITLE, boardTitle, useDocumentTitle } from "@/features/board/lib/documentTitle";
 
 describe("boardTitle", () => {
-  it("leads with the PROJECT, which is what groups a tab strip full of cards", () => {
-    expect(boardTitle("billing", "fix the totals")).toBe("billing · fix the totals");
+  it("is just the PROJECT — the card no longer clutters the tab", () => {
+    expect(boardTitle("billing", "fix the totals")).toBe("billing");
+    expect(boardTitle("billing")).toBe("billing");
   });
 
-  it("falls back to the project, then to the app", () => {
-    expect(boardTitle("billing")).toBe(`billing · ${BASE_TITLE}`);
+  it("falls back to the app with no project", () => {
     expect(boardTitle()).toBe(BASE_TITLE);
     expect(boardTitle(null, "orphan card")).toBe(BASE_TITLE);
   });
 
   it("trims, and treats blank as absent", () => {
-    expect(boardTitle("  billing  ", "  fix  ")).toBe("billing · fix");
+    expect(boardTitle("  billing  ", "  fix  ")).toBe("billing");
     expect(boardTitle("   ")).toBe(BASE_TITLE);
   });
 });
