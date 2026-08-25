@@ -255,6 +255,7 @@ export const en: Record<string, string> = {
   "sidebar.projects": "Projects",
   "sidebar.recent": "Recent",
   "sidebar.newProject": "New project",
+  "sidebar.newGlobalCard": "New card…",
   "sidebar.newCardIn": "New card in {name}",
   "sidebar.newCardHint": "New card (⌘K on the selected project)",
   "sidebar.noProjects": "No projects yet.",

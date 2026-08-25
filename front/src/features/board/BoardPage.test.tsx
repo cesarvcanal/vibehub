@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BoardPage } from "@/features/board/BoardPage";
 import { renderApp } from "@/test/render";
 import { del, get, patch, post } from "@/lib/api";
+import { MOBILE_QUERY } from "@/lib/useIsMobile";
 import type { BoardCard, BoardProject } from "@/features/board/api";
 
 vi.mock("@/lib/api", () => ({
@@ -863,6 +864,78 @@ describe("BoardPage — narrow screens", () => {
     // The drawer covers the terminal it just navigated to, so it has to get out of the way.
     await waitFor(() => expect(activeTerminal()).toHaveTextContent("c3"));
     await waitFor(() => expect(screen.queryByTestId("sidebar-backdrop")).not.toBeInTheDocument());
+  });
+});
+
+/**
+ * On a phone, the homepage is the MENU, not the kanban.
+ *
+ * With nothing open on a narrow screen the aggregated board is five columns crushed into one, which
+ * is not what you reach for on a phone — the question there is which project, which card. So the
+ * sidebar becomes the main view (in-flow, no drawer), and a `+` beside the brand creates a card
+ * from nowhere in particular. Every assertion is paired with "the desktop / an open card is exactly
+ * as it was", because the failure mode of a responsive change is reshaping the layout nobody asked
+ * to change.
+ */
+describe("BoardPage — the phone homepage menu", () => {
+  const originalMatchMedia = window.matchMedia;
+
+  function setViewport(mobile: boolean): void {
+    window.matchMedia = ((query: string) => ({
+      matches: query === MOBILE_QUERY ? mobile : false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    setViewport(true);
+    serve();
+  });
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+  });
+
+  it("shows the project menu as the main view, not the aggregated board", async () => {
+    renderApp(<BoardPage />);
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+
+    // The list is the page: both projects are on it, in the flow rather than behind a handle.
+    expect(within(nav).getByRole("link", { name: "billing" })).toBeInTheDocument();
+    expect(within(nav).getByRole("link", { name: "gateway" })).toBeInTheDocument();
+    // In-flow, not an overlay: no backdrop, no drawer handle.
+    expect(screen.queryByTestId("sidebar-backdrop")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open the projects and cards" })).not.toBeInTheDocument();
+    // And the squeezed aggregated board is NOT what fills the screen.
+    expect(screen.queryByText(/cards · /)).not.toBeInTheDocument();
+  });
+
+  it("creates a card from the `+` beside the brand, letting the dialog ask which project", async () => {
+    const user = userEvent.setup();
+    renderApp(<BoardPage />);
+    await screen.findByRole("navigation", { name: /projects/i });
+
+    await user.click(screen.getByRole("button", { name: "New card…" }));
+
+    // No project is implied — the dialog is the global one, which offers the project picker.
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(/New card/);
+    expect(within(dialog).getByLabelText(/project/i)).toBeInTheDocument();
+  });
+
+  it("keeps the kanban on a phone once a project is selected", async () => {
+    // Only the homepage becomes the menu. Selecting a project is asking for that board, and the
+    // sidebar goes back to being the drawer behind its handle.
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    expect(await screen.findByRole("region", { name: "Working" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open the projects and cards" })).toBeInTheDocument();
   });
 });
 
