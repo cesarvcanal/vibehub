@@ -356,9 +356,12 @@ function ProjectSwitcher({
   onNewProject: () => void;
 }) {
   const t = useT();
+  // Controlled: a plain click on a project link preventDefaults (to stop a full-page nav), and Radix
+  // SKIPS its own onSelect when the click was defaultPrevented — so we close the menu ourselves.
+  const [open, setOpen] = React.useState(false);
   return (
     <div className="flex shrink-0 items-center gap-0.5 border-b border-border/60 py-1 pl-1.5 pr-1.5">
-      <DropdownMenu>
+      <DropdownMenu open={open} onOpenChange={setOpen}>
         <DropdownMenuTrigger
           aria-label={t("sidebar.switchProject")}
           title={t("sidebar.switchProject")}
@@ -376,9 +379,26 @@ function ProjectSwitcher({
             </DropdownMenuItem>
           ) : null}
           {projects.map((p) => (
-            <DropdownMenuItem key={p.id} onSelect={() => onSelect(p.id)} className="gap-2">
-              <Check className={cn("h-3.5 w-3.5 shrink-0", p.id === current.id ? "opacity-100" : "opacity-0")} />
-              <span className="min-w-0 flex-1 truncate">{p.name}</span>
+            // A REAL link, so Cmd/Ctrl/Shift/middle-click opens the project in a NEW TAB natively;
+            // a plain click switches in-app.
+            <DropdownMenuItem key={p.id} asChild className="gap-2">
+              <a
+                href={projectHref(p.id)}
+                onClick={(e) => {
+                  // New tab (Cmd/Ctrl/Shift/middle): let the browser follow the href; just close.
+                  if (isNewTabClick(e)) {
+                    setOpen(false);
+                    return;
+                  }
+                  // Plain click: switch in-app, no full-page nav.
+                  e.preventDefault();
+                  setOpen(false);
+                  onSelect(p.id);
+                }}
+              >
+                <Check className={cn("h-3.5 w-3.5 shrink-0", p.id === current.id ? "opacity-100" : "opacity-0")} />
+                <span className="min-w-0 flex-1 truncate">{p.name}</span>
+              </a>
             </DropdownMenuItem>
           ))}
           <DropdownMenuItem onSelect={onNewProject} className="gap-2 text-muted-foreground">
