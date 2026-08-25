@@ -32,10 +32,10 @@ function setup(overrides: Partial<React.ComponentProps<typeof NewCardDialog>> = 
     <NewCardDialog
       open
       onOpenChange={onOpenChange}
-      projectId="p1"
+      projects={[{ id: "p1", name: "P1", repoFullName: "acme/p1", baseBranch: "dev", position: 0, createdAt: 1 }]}
+      initialProjectId="p1"
       accounts={[{ slug: "personal", name: "Personal" }]}
       defaultAccountLabel="the runner default"
-      defaultBranch="dev"
       onSubmit={onSubmit}
       {...overrides}
     />,
@@ -54,6 +54,36 @@ describe("NewCardDialog", () => {
 
     expect(onSubmit).toHaveBeenCalledWith({ projectId: "p1", title: "fix the totals" });
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("with a fixed project shows no project picker", () => {
+    setup();
+    expect(screen.queryByLabelText("Project")).not.toBeInTheDocument();
+  });
+
+  it("from a no-project context asks which project, and submits with the one chosen", async () => {
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    renderApp(
+      <NewCardDialog
+        open
+        onOpenChange={vi.fn()}
+        projects={[
+          { id: "p1", name: "billing", repoFullName: "acme/billing", baseBranch: "dev", position: 0, createdAt: 1 },
+          { id: "p2", name: "gateway", repoFullName: "acme/gateway", baseBranch: "main", position: 1, createdAt: 2 },
+        ]}
+        initialProjectId={null}
+        accounts={[]}
+        defaultAccountLabel="the runner default"
+        onSubmit={onSubmit}
+      />,
+    );
+    const picker = screen.getByLabelText("Project") as HTMLSelectElement;
+    expect(picker).toBeInTheDocument();
+    await user.selectOptions(picker, "p2");
+    await user.type(screen.getByLabelText("Title"), "rotate the key");
+    await user.click(screen.getByRole("button", { name: "Create card" }));
+    expect(onSubmit).toHaveBeenCalledWith({ projectId: "p2", title: "rotate the key" });
   });
 
   it("closes on Enter too, so a card is a type-and-go", async () => {

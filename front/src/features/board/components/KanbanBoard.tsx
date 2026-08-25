@@ -63,12 +63,16 @@ export function KanbanBoard({
   project,
   onOpenCard,
   onNewCard,
+  onNewBacklogCard,
   headerExtra,
   headerLead,
 }: {
   project: BoardProject;
   onOpenCard: (card: BoardCard) => void;
+  /** The prominent "New card" button: jots the card down AND opens it. */
   onNewCard: () => void;
+  /** The Backlog column's "+": jots a card down without leaving the board. */
+  onNewBacklogCard: () => void;
   headerExtra?: React.ReactNode;
   /** Rendered FIRST in the header row — where the phone's drawer handle lives. */
   headerLead?: React.ReactNode;
@@ -281,6 +285,17 @@ export function KanbanBoard({
                 }
                 onDragLeave={() => setDropAt((at) => (at?.column === column.key ? null : at))}
               >
+                {column.key === "backlog" ? (
+                  // Jot a card down right where it lands — no dialog trip to the top button, and it
+                  // stays on the board (no jump into the card) because you are still filling the list.
+                  <button
+                    type="button"
+                    onClick={onNewBacklogCard}
+                    className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-border/70 py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
+                  >
+                    <Plus className="h-3.5 w-3.5" /> {t("board.addToBacklog")}
+                  </button>
+                ) : null}
                 {groups[column.key].map((card, cardIndex) => (
                   <CardDropSlot
                     key={card.id}

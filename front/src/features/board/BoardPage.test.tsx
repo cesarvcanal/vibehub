@@ -820,11 +820,12 @@ describe("BoardPage — the aggregated board", () => {
     await waitFor(() => expect(activeTerminal()).toHaveTextContent("c4"));
   });
 
-  it("keeps the managers but drops the runner chip and the New card button", async () => {
-    // There is no single runner to report on here, and no project for a new card to belong to.
+  it("keeps the managers AND the New card button, but drops the runner chip", async () => {
+    // There is no single runner to report on here. There IS a New card button now: it has no project
+    // to imply, so the dialog asks which — creating from the aggregated board is a real thing to do.
     renderApp(<BoardPage />);
     expect(await screen.findByRole("button", { name: "Brain" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /New card$/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /New card$/ })).toBeInTheDocument();
     expect(screen.queryByTitle(/running, claude installed/)).not.toBeInTheDocument();
   });
 });

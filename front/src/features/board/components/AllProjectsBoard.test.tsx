@@ -68,7 +68,7 @@ beforeEach(() => {
 
 describe("AllProjectsBoard", () => {
   it("merges every project's cards into the one set of columns", async () => {
-    renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} />);
+    renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} onNewCard={vi.fn()} />);
 
     const working = await screen.findByRole("region", { name: "Working" });
     expect(within(working).getByText("chase the flake")).toBeInTheDocument();
@@ -79,14 +79,14 @@ describe("AllProjectsBoard", () => {
   });
 
   it("reads one query per project, so both views share a cache instead of double-fetching", async () => {
-    renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} />);
+    renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} onNewCard={vi.fn()} />);
     await screen.findByText("chase the flake");
     expect(mockGet).toHaveBeenCalledWith("/projects/p1/cards");
     expect(mockGet).toHaveBeenCalledWith("/projects/p2/cards");
   });
 
   it("labels each card with the project it belongs to", async () => {
-    renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} />);
+    renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} onNewCard={vi.fn()} />);
     const tile = await screen.findByRole("link", { name: "rotate the key" });
     expect(within(tile).getByText("gateway")).toBeInTheDocument();
     const other = screen.getByRole("link", { name: "chase the flake" });
@@ -94,14 +94,14 @@ describe("AllProjectsBoard", () => {
   });
 
   it("counts the cards and the projects in the header", async () => {
-    renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} />);
+    renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} onNewCard={vi.fn()} />);
     expect(await screen.findByText("3 cards · 2 projects")).toBeInTheDocument();
   });
 
   it("opens a card with its own project, not the one that happens to be selected", async () => {
     const onOpenCard = vi.fn();
     const user = userEvent.setup();
-    renderApp(<AllProjectsBoard projects={projects} onOpenCard={onOpenCard} />);
+    renderApp(<AllProjectsBoard projects={projects} onOpenCard={onOpenCard} onNewCard={vi.fn()} />);
 
     await user.click(await screen.findByRole("link", { name: "rotate the key" }));
     expect(onOpenCard).toHaveBeenCalledWith(expect.objectContaining({ id: "c3", projectId: "p2" }));
@@ -109,7 +109,7 @@ describe("AllProjectsBoard", () => {
 
   it("routes a cross-column drag through the card's OWN project", async () => {
     mockPatch.mockResolvedValue({ card: { ...byProject.p2![0], column: "done" } });
-    renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} />);
+    renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} onNewCard={vi.fn()} />);
 
     const tile = await screen.findByRole("link", { name: "rotate the key" });
     const done = screen.getByRole("region", { name: "Done" });
@@ -125,7 +125,7 @@ describe("AllProjectsBoard", () => {
     // p1 already has a card in Backlog at position 0, so p1's card moving there lands at 1 — while
     // p2's card moving to the same column starts from p2's own empty space.
     mockPatch.mockResolvedValue({ card: byProject.p2![0] });
-    renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} />);
+    renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} onNewCard={vi.fn()} />);
 
     const tile = await screen.findByRole("link", { name: "rotate the key" });
     dragTo(tile, screen.getByRole("region", { name: "Backlog" }));
@@ -136,7 +136,7 @@ describe("AllProjectsBoard", () => {
   });
 
   it("does not PATCH when a card is dropped back on its own column", async () => {
-    renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} />);
+    renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} onNewCard={vi.fn()} />);
     const tile = await screen.findByRole("link", { name: "rotate the key" });
     dragTo(tile, screen.getByRole("region", { name: "Waiting" }));
     await waitFor(() => expect(mockPatch).not.toHaveBeenCalled());
@@ -146,7 +146,7 @@ describe("AllProjectsBoard", () => {
     // Acting on a card is done where its context is — its own project's board, or its terminal.
     // This view answers one question, "who needs me", and every extra control dilutes it.
     const user = userEvent.setup();
-    renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} />);
+    renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} onNewCard={vi.fn()} />);
 
     const tile = await screen.findByRole("link", { name: "rotate the key" });
     expect(within(tile).queryByRole("button", { name: /Actions for/ })).not.toBeInTheDocument();
@@ -156,7 +156,7 @@ describe("AllProjectsBoard", () => {
   });
 
   it("shows an empty column rather than collapsing it", async () => {
-    renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} />);
+    renderApp(<AllProjectsBoard projects={projects} onOpenCard={vi.fn()} onNewCard={vi.fn()} />);
     const paused = await screen.findByRole("region", { name: "Paused" });
     expect(within(paused).getByText("empty")).toBeInTheDocument();
   });

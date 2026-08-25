@@ -145,7 +145,7 @@ describe("visibleColumns / hiddenCount", () => {
 describe("KanbanBoard on a phone", () => {
   it("renders only Waiting and Working, plus a toggle carrying the hidden count", async () => {
     setViewport(true);
-    renderApp(<KanbanBoard project={PROJECT} onOpenCard={() => {}} onNewCard={() => {}} />);
+    renderApp(<KanbanBoard project={PROJECT} onOpenCard={() => {}} onNewCard={() => {}} onNewBacklogCard={() => {}} />);
 
     await waitFor(() => expect(columnNames()).toEqual(["waiting", "working"]));
     expect(screen.getByText("needs an answer")).toBeInTheDocument();
@@ -158,7 +158,7 @@ describe("KanbanBoard on a phone", () => {
 
   it("expands the other three in board order, and the button flips to Show less", async () => {
     setViewport(true);
-    renderApp(<KanbanBoard project={PROJECT} onOpenCard={() => {}} onNewCard={() => {}} />);
+    renderApp(<KanbanBoard project={PROJECT} onOpenCard={() => {}} onNewCard={() => {}} onNewBacklogCard={() => {}} />);
     await userEvent.click(await screen.findByRole("button", { name: /Show more/ }));
 
     await waitFor(() =>
@@ -175,12 +175,12 @@ describe("KanbanBoard on a phone", () => {
 
   it("remembers the choice for the session", async () => {
     setViewport(true);
-    const first = renderApp(<KanbanBoard project={PROJECT} onOpenCard={() => {}} onNewCard={() => {}} />);
+    const first = renderApp(<KanbanBoard project={PROJECT} onOpenCard={() => {}} onNewCard={() => {}} onNewBacklogCard={() => {}} />);
     await userEvent.click(await screen.findByRole("button", { name: /Show more/ }));
     await waitFor(() => expect(sessionStorage.getItem(SHOW_MORE_KEY)).toBe("1"));
     first.unmount();
 
-    renderApp(<KanbanBoard project={PROJECT} onOpenCard={() => {}} onNewCard={() => {}} />);
+    renderApp(<KanbanBoard project={PROJECT} onOpenCard={() => {}} onNewCard={() => {}} onNewBacklogCard={() => {}} />);
     await waitFor(() =>
       expect(columnNames()).toEqual(["waiting", "working", "paused", "backlog", "done"]),
     );
@@ -188,7 +188,7 @@ describe("KanbanBoard on a phone", () => {
 
   it("keeps the new-card button at the top, above the columns", async () => {
     setViewport(true);
-    renderApp(<KanbanBoard project={PROJECT} onOpenCard={() => {}} onNewCard={() => {}} />);
+    renderApp(<KanbanBoard project={PROJECT} onOpenCard={() => {}} onNewCard={() => {}} onNewBacklogCard={() => {}} />);
     const button = await screen.findByRole("button", { name: /New card/ });
     const waiting = await screen.findByRole("region", { name: "Waiting" });
     expect(button.compareDocumentPosition(waiting) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -197,7 +197,7 @@ describe("KanbanBoard on a phone", () => {
   it("still drops a card onto an expanded column", async () => {
     setViewport(true);
     mockPatch.mockResolvedValue({ card: {} });
-    renderApp(<KanbanBoard project={PROJECT} onOpenCard={() => {}} onNewCard={() => {}} />);
+    renderApp(<KanbanBoard project={PROJECT} onOpenCard={() => {}} onNewCard={() => {}} onNewBacklogCard={() => {}} />);
     await userEvent.click(await screen.findByRole("button", { name: /Show more/ }));
     await screen.findByRole("region", { name: "Done" });
 
@@ -213,7 +213,7 @@ describe("KanbanBoard on a phone", () => {
   });
 
   it("leaves the desktop board with all five columns and no toggle", async () => {
-    renderApp(<KanbanBoard project={PROJECT} onOpenCard={() => {}} onNewCard={() => {}} />);
+    renderApp(<KanbanBoard project={PROJECT} onOpenCard={() => {}} onNewCard={() => {}} onNewBacklogCard={() => {}} />);
     await waitFor(() =>
       expect(columnNames()).toEqual(["backlog", "paused", "waiting", "working", "done"]),
     );
@@ -226,7 +226,7 @@ describe("AllProjectsBoard on a phone", () => {
 
   it("shows the same two columns and the same toggle", async () => {
     setViewport(true);
-    renderApp(<AllProjectsBoard projects={projects} onOpenCard={() => {}} />);
+    renderApp(<AllProjectsBoard projects={projects} onOpenCard={() => {}} onNewCard={() => {}} />);
     await waitFor(() => expect(columnNames()).toEqual(["waiting", "working"]));
 
     await userEvent.click(screen.getByRole("button", { name: /Show more \(3\)/ }));
@@ -237,7 +237,7 @@ describe("AllProjectsBoard on a phone", () => {
   });
 
   it("is unchanged on the desktop", async () => {
-    renderApp(<AllProjectsBoard projects={projects} onOpenCard={() => {}} />);
+    renderApp(<AllProjectsBoard projects={projects} onOpenCard={() => {}} onNewCard={() => {}} />);
     await waitFor(() =>
       expect(columnNames()).toEqual(["backlog", "paused", "waiting", "working", "done"]),
     );
