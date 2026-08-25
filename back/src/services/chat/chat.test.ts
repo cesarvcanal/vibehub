@@ -4,6 +4,7 @@ import {
   toolSummary,
   clampDetail,
   unwrapSlashCommand,
+  systemNote,
   buildFollowCommand,
   buildSendKeyScript,
 } from "./chat.js";
@@ -100,6 +101,24 @@ describe("parseChatEvents", () => {
     expect(parseChatEvents(userLine("<local-command-stdout>bytes</local-command-stdout>"))).toEqual([]);
   });
 
+  it("a background-task notification is a muted SYSTEM event, not the user's message", () => {
+    // The exact shape the harness injects: a `type:"user"` line that is really the harness talking.
+    // It used to render as Cesar's own bubble; now it is a system note carrying the summary.
+    const notif =
+      "[SYSTEM NOTIFICATION - NOT USER INPUT]\nAn automated background-task event.\n" +
+      "<task-notification><task-id>br824e66c</task-id><status>completed</status>" +
+      '<summary>Background command "Vigiar reconexão da Z-API" completed (exit code 0)</summary>' +
+      "</task-notification>";
+    expect(parseChatEvents(userLine(notif))).toEqual([
+      {
+        id: "u1",
+        kind: "system",
+        at: Date.parse("2026-08-22T18:00:00.000Z"),
+        text: 'Background command "Vigiar reconexão da Z-API" completed (exit code 0)',
+      },
+    ]);
+  });
+
   it("keeps the text of a user message that arrived as blocks (a paste with an image)", () => {
     const events = parseChatEvents(
       userLine("", {
@@ -139,6 +158,25 @@ describe("toolSummary", () => {
   it("collapses whitespace and clamps a long line", () => {
     expect(toolSummary("Bash", { command: "echo   a\n  b" })).toBe("echo a b");
     expect(clampDetail("x".repeat(300))).toHaveLength(160);
+  });
+});
+
+describe("systemNote", () => {
+  it("pulls the summary out of a task-notification", () => {
+    expect(systemNote("<task-notification><summary>watcher done</summary></task-notification>")).toBe("watcher done");
+  });
+  it("recognizes the SYSTEM NOTIFICATION envelope even without a summary", () => {
+    expect(systemNote("[SYSTEM NOTIFICATION - NOT USER INPUT]\nsomething happened")).toBe("Background task update");
+  });
+  it("clamps an overlong summary", () => {
+    const long = "x".repeat(300);
+    const note = systemNote(`<task-notification><summary>${long}</summary></task-notification>`)!;
+    expect(note.length).toBeLessThanOrEqual(160);
+    expect(note.endsWith("…")).toBe(true);
+  });
+  it("leaves a real message alone (null)", () => {
+    expect(systemNote("roda os testes por favor")).toBeNull();
+    expect(systemNote("olha esse <task> aqui no código")).toBeNull();
   });
 });
 

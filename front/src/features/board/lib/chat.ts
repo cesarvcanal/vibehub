@@ -8,7 +8,7 @@
  * disappear the moment the real message lands.
  */
 
-export type ChatEventKind = "user" | "assistant" | "tool";
+export type ChatEventKind = "user" | "assistant" | "tool" | "system";
 
 export interface ChatEvent {
   id: string;
@@ -31,7 +31,7 @@ export function parseChatFrame(raw: string): ChatEvent | null {
   if (!obj || typeof obj !== "object") return null;
   const e = obj as Partial<ChatEvent>;
   if (typeof e.id !== "string" || typeof e.text !== "string") return null;
-  if (e.kind !== "user" && e.kind !== "assistant" && e.kind !== "tool") return null;
+  if (e.kind !== "user" && e.kind !== "assistant" && e.kind !== "tool" && e.kind !== "system") return null;
   return { id: e.id, kind: e.kind, at: typeof e.at === "number" ? e.at : 0, text: e.text, tool: e.tool };
 }
 
