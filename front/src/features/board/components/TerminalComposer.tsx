@@ -1,8 +1,14 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, Loader2, Mic, RotateCw, X } from "lucide-react";
+import { Camera, Check, ImageIcon, Loader2, Mic, Paperclip, Plus, RotateCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/lib/useIsMobile";
 import { apiErrorMessage } from "@/lib/apiError";
@@ -691,6 +697,7 @@ export function TerminalComposer({
       {/* The field and the microphone. Vertically centred: the field grows with the text and a
           bottom-aligned 48px circle drifts away from it as it does. */}
       <div data-testid="composer-row" className="flex items-center gap-2">
+      {onUploadImage ? <AttachControl mobile={isMobile} onPick={upload} /> : null}
       <div className="relative min-w-0 flex-1">
         <textarea
           ref={ref}
@@ -757,6 +764,108 @@ export function TerminalComposer({
       ) : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * The "+" that attaches a photo or a file.
+ *
+ * Paste and drag already reach the same pipeline, but neither exists on a phone: there is no
+ * clipboard image to paste and nothing to drag onto. This is the touch-first way in — a discreet
+ * "+" that opens three obvious choices and hands whatever is picked to the SAME upload the paste
+ * path uses. On a phone the camera choice opens the camera (`capture`), the gallery choice opens
+ * the photo roll, and "a file" opens the system picker; on a desktop they are all just a file
+ * dialog, which is exactly right.
+ *
+ * The uploads are wired to the image pipeline, so a non-image chosen through "a file" comes back as
+ * a failed chip rather than an attachment — the honest outcome until the runner accepts arbitrary
+ * files.
+ */
+function AttachControl({ mobile, onPick }: { mobile: boolean; onPick: (files: File[]) => void }) {
+  const t = useT();
+  const cameraRef = React.useRef<HTMLInputElement | null>(null);
+  const galleryRef = React.useRef<HTMLInputElement | null>(null);
+  const fileRef = React.useRef<HTMLInputElement | null>(null);
+
+  // The same input element is reused across picks, so clear it or choosing the same file twice in a
+  // row fires no `change` and the second pick is silently lost.
+  const handlePicked = (input: HTMLInputElement | null) => {
+    const files = input?.files ? Array.from(input.files) : [];
+    if (files.length > 0) onPick(files);
+    if (input) input.value = "";
+  };
+
+  return (
+    <>
+      {/* Off-screen, driven by the menu. `capture` is what turns the first one into a camera on a
+          phone; a desktop ignores it and shows a file dialog, which is the right fallback. */}
+      <input
+        ref={cameraRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        data-testid="composer-input-camera"
+        onChange={() => handlePicked(cameraRef.current)}
+      />
+      <input
+        ref={galleryRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        data-testid="composer-input-gallery"
+        onChange={() => handlePicked(galleryRef.current)}
+      />
+      <input
+        ref={fileRef}
+        type="file"
+        className="hidden"
+        data-testid="composer-input-file"
+        onChange={() => handlePicked(fileRef.current)}
+      />
+
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            data-testid="composer-attach"
+            aria-label={t("composer.attachMenu")}
+            title={t("composer.attach")}
+            className={cn(
+              "shrink-0 rounded-full text-muted-foreground",
+              mobile ? "h-12 w-12" : "h-9 w-9 md:rounded-md",
+            )}
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" side="top" className="min-w-[12rem]">
+          <DropdownMenuItem
+            data-testid="composer-attach-camera"
+            onSelect={() => cameraRef.current?.click()}
+          >
+            <Camera className="text-muted-foreground" />
+            {t("composer.takePhoto")}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            data-testid="composer-attach-gallery"
+            onSelect={() => galleryRef.current?.click()}
+          >
+            <ImageIcon className="text-muted-foreground" />
+            {t("composer.fromGallery")}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            data-testid="composer-attach-file"
+            onSelect={() => fileRef.current?.click()}
+          >
+            <Paperclip className="text-muted-foreground" />
+            {t("composer.attachFile")}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </>
   );
 }
 
@@ -893,14 +1002,18 @@ function VoiceControl({
   }
 
   if (state === "recording") {
+    // One calm strip, the same shape on every screen: throw-away on the left, then a live
+    // waveform with its elapsed time, then the obvious tap-to-stop. Red and, on a phone, a ring
+    // that breathes — the one state worth seeing from across the room. The breathing is a CSS
+    // animation, so `prefers-reduced-motion` stills it with everything else.
     return (
       <div
         data-testid="composer-mic-recording"
+        role="status"
+        aria-label={t("composer.recording")}
         className={cn(
-          "flex shrink-0 items-center gap-1 border border-destructive/50 bg-card/80",
-          // Recording is the one state worth seeing from across the room: red, and a ring that
-          // breathes. On a phone the whole strip is 44 tall so the two exits stay thumb-sized.
-          mobile ? "rec-ring h-12 gap-1.5 rounded-full px-2" : "h-9 rounded-md px-1",
+          "flex shrink-0 items-center border border-destructive/40 bg-destructive/5",
+          mobile ? "rec-ring h-12 gap-1.5 rounded-full pl-1 pr-1" : "h-9 gap-1 rounded-full px-1",
         )}
       >
         <button
@@ -911,29 +1024,39 @@ function VoiceControl({
           onClick={onCancel}
           className={cn(
             "flex items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-            mobile ? "h-10 w-10" : "h-6 w-6",
+            mobile ? "h-10 w-10" : "h-7 w-7",
           )}
         >
           <X className={mobile ? "h-4 w-4" : "h-3.5 w-3.5"} />
         </button>
-        {mobile ? (
+
+        <div className="flex items-center gap-2 px-1">
+          {/* The steady heartbeat of "on the air", next to the reactive waveform. */}
+          <span
+            aria-hidden
+            className="vh-pulse h-2 w-2 shrink-0 rounded-full bg-destructive"
+          />
+          <div
+            data-testid="composer-mic-bars"
+            aria-hidden
+            className="flex h-6 items-center gap-[3px]"
+          >
+            {levels.map((level, i) => (
+              <span
+                key={i}
+                className="w-[3px] rounded-full bg-destructive/90"
+                style={{ height: `${4 + level * 14}px` }}
+              />
+            ))}
+          </div>
           <span
             data-testid="composer-mic-elapsed"
             className="min-w-[2.5rem] text-center font-mono text-[13px] tabular-nums text-destructive"
           >
             {elapsed}
           </span>
-        ) : (
-          <div data-testid="composer-mic-bars" aria-hidden className="flex h-6 items-end gap-[3px] px-1">
-            {levels.map((level, i) => (
-              <span
-                key={i}
-                className="w-[3px] rounded-full bg-destructive"
-                style={{ height: `${4 + level * 12}px` }}
-              />
-            ))}
-          </div>
-        )}
+        </div>
+
         <button
           type="button"
           data-testid="composer-mic-finish"
@@ -942,7 +1065,7 @@ function VoiceControl({
           onClick={onFinish}
           className={cn(
             "flex items-center justify-center rounded-full bg-destructive text-destructive-foreground transition-opacity hover:opacity-90",
-            mobile ? "h-10 w-10" : "h-6 w-6",
+            mobile ? "h-10 w-10" : "h-7 w-7",
           )}
         >
           <Check className={mobile ? "h-4 w-4" : "h-3.5 w-3.5"} />
