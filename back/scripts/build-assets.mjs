@@ -16,3 +16,10 @@ const dest = join(backRoot, "dist", rel);
 mkdirSync(dest, { recursive: true });
 // Only the markdown assets — any future `.ts` in this dir is already compiled into dist by tsc.
 cpSync(src, dest, { recursive: true, filter: (p) => !p.endsWith(".ts") });
+
+// The SDK driver script (`services/sdk/sdk-driver.mjs`) — read at runtime by services/sdk/driver.ts
+// and planted into the runner. tsc ignores .mjs, so copy the file to the same relative path in dist.
+const sdkRel = join("services", "sdk");
+const sdkDest = join(backRoot, "dist", sdkRel);
+mkdirSync(sdkDest, { recursive: true });
+cpSync(join(backRoot, "src", sdkRel, "sdk-driver.mjs"), join(sdkDest, "sdk-driver.mjs"));

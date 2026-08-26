@@ -59,6 +59,19 @@ describe("settings", () => {
     expect((await s.updateSettings({ defaultAccountLabel: " work " })).defaultAccountLabel).toBe("work");
   });
 
+  it("defaults the SDK driver flag to OFF and round-trips it", async () => {
+    const s = await fresh();
+    expect((await s.getSettings()).sdkDriver).toBe(false);
+    expect((await s.updateSettings({ sdkDriver: true })).sdkDriver).toBe(true);
+    expect((await s.updateSettings({ sdkDriver: false })).sdkDriver).toBe(false);
+  });
+
+  it("rejects a non-boolean sdkDriver", async () => {
+    const s = await fresh();
+    // @ts-expect-error — exercising the runtime guard
+    await expect(s.updateSettings({ sdkDriver: "yes" })).rejects.toThrow(/must be a boolean/);
+  });
+
   it("stamps setup completion once — the first timestamp wins", async () => {
     const s = await fresh();
     const first = await s.markSetupCompleted();
