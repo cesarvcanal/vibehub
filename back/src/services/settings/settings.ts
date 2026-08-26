@@ -42,6 +42,15 @@ export interface Settings {
    * and pretending to be live work.
    */
   idleHibernateMinutes: number;
+  /**
+   * EXPERIMENTAL, OFF by default. When on, a card's session can be driven through the Agent SDK
+   * "driver" (a headless, structured stream-json process in the runner) instead of the tmux/send-keys
+   * TUI, reached over the `/api/cards/:id/sdk` websocket. Purely ADDITIVE: with this false, nothing in
+   * the TUI/chat/provisioning path changes and the SDK websocket refuses to start. Turning it on is a
+   * per-install opt-in for the migration described in `docs/sdk-migration-plan.md`; a live smoke test
+   * (see `docs/sdk-driver.md`) is a prerequisite before enabling it.
+   */
+  sdkDriver: boolean;
 }
 
 interface SettingsDoc { settings: Settings }
@@ -54,6 +63,7 @@ const DEFAULTS: Settings = {
   transcribeLanguage: null,
   transcribeProofread: false,
   idleHibernateMinutes: 180,
+  sdkDriver: false,
 };
 
 const store = new JsonStore<SettingsDoc>(
@@ -82,6 +92,7 @@ export interface SettingsPatch {
   transcribeLanguage?: string | null;
   transcribeProofread?: boolean;
   idleHibernateMinutes?: number;
+  sdkDriver?: boolean;
 }
 
 /** Validates and applies a partial update. Unknown fields are ignored, not merged blindly. */
@@ -96,6 +107,9 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
   }
   if (patch.transcribeProofread !== undefined && typeof patch.transcribeProofread !== "boolean") {
     throw new Error("transcribeProofread must be a boolean");
+  }
+  if (patch.sdkDriver !== undefined && typeof patch.sdkDriver !== "boolean") {
+    throw new Error("sdkDriver must be a boolean");
   }
   if (patch.transcribeLanguage !== undefined && patch.transcribeLanguage !== null) {
     if (!/^[a-z]{2}$/.test(String(patch.transcribeLanguage).trim())) {
@@ -123,6 +137,9 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
     }
     if (patch.transcribeProofread !== undefined) {
       doc.settings.transcribeProofread = patch.transcribeProofread;
+    }
+    if (patch.sdkDriver !== undefined) {
+      doc.settings.sdkDriver = patch.sdkDriver;
     }
     if (patch.idleHibernateMinutes !== undefined) {
       doc.settings.idleHibernateMinutes = Number(patch.idleHibernateMinutes);
