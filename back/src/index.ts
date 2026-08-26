@@ -20,6 +20,7 @@ import { mcpRoutes } from "./routes/mcp.js";
 import { cardSessionRoutes } from "./routes/cardSession.js";
 import { chatRoutes } from "./routes/chat.js";
 import { accountLoginRoutes } from "./routes/accountLogin.js";
+import { cardSdkRoutes } from "./routes/cardSdk.js";
 import { startPauseReconciler, sweepIdleCards } from "./services/board/workspace.js";
 import { startOutboxFlusher } from "./services/board/outbox.js";
 
@@ -57,6 +58,7 @@ export async function buildServer() {
   await app.register(cardSessionRoutes);
   await app.register(chatRoutes);
   await app.register(accountLoginRoutes);
+  await app.register(cardSdkRoutes);
 
   const staticDir = process.env.VIBEHUB_STATIC_DIR
     ? resolve(process.env.VIBEHUB_STATIC_DIR)
