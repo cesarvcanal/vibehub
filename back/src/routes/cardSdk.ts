@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
-import { requireSession } from "../auth/session.js";
+import { requireCardAccess } from "../auth/access.js";
 import * as registry from "../services/board/registry.js";
 import { getSettings } from "../services/settings/settings.js";
 import { installCardSdkDriver, sdkDriverCommand } from "../services/sdk/driver.js";
@@ -103,7 +103,7 @@ export function bridgeSdkDriver(socket: WebSocket, child: ChildProcessWithoutNul
 export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>(
     "/api/cards/:id/sdk",
-    { websocket: true, preHandler: requireSession },
+    { websocket: true, preHandler: requireCardAccess },
     async (socket: WebSocket, req) => {
       const settings = await getSettings();
       if (!settings.sdkDriver) {

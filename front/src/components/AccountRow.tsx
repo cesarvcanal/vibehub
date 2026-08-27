@@ -1,11 +1,12 @@
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
-import { LogOut, Settings2, UserRound } from "lucide-react";
+import { LogOut, Settings2, UserRound, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/providers/auth";
 import { Paths } from "@/lib/paths";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { SettingsDialog } from "@/features/settings/SettingsDialog";
+import { AccessDialog } from "@/features/settings/AccessDialog";
 import { useT } from "@/i18n";
 import {
   DropdownMenu,
@@ -26,8 +27,9 @@ import {
  */
 export function AccountRow({ className }: { className?: string }) {
   const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [accessOpen, setAccessOpen] = React.useState(false);
   const t = useT();
-  const { user, signOut } = useAuth();
+  const { user, signOut, isOwner } = useAuth();
   const navigate = useNavigate();
 
   async function onSignOut() {
@@ -54,9 +56,18 @@ export function AccountRow({ className }: { className?: string }) {
         <DropdownMenuContent align="end" side="top">
           <DropdownMenuLabel>{t("account.signedIn")}</DropdownMenuLabel>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => setSettingsOpen(true)}>
-            <Settings2 />
-            {t("account.settings")}
+          {/* Settings is the INSTALL's (git identity, GitHub, voice keys, the runner) — a member
+              has none of it, and the route behind it answers 403. Access is where a member's one
+              item lives: their own password. */}
+          {isOwner ? (
+            <DropdownMenuItem onSelect={() => setSettingsOpen(true)}>
+              <Settings2 />
+              {t("account.settings")}
+            </DropdownMenuItem>
+          ) : null}
+          <DropdownMenuItem onSelect={() => setAccessOpen(true)}>
+            <Users />
+            {t("account.access")}
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => void onSignOut()}>
             <LogOut />
@@ -64,7 +75,8 @@ export function AccountRow({ className }: { className?: string }) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      {isOwner ? <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} /> : null}
+      <AccessDialog open={accessOpen} onOpenChange={setAccessOpen} />
     </div>
   );
 }

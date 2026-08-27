@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { requireSession } from "../auth/session.js";
+import { requireSession, requireOwner, currentUser } from "../auth/session.js";
+import { requireCardAccess, visibleCards, visibleProjects } from "../auth/access.js";
 import * as registry from "../services/board/registry.js";
 import {
   applySessionChange, killCardSession, pauseCard, prepareCard, restartCard, resumeCard,
@@ -36,11 +37,14 @@ export function tokenMatches(provided: string | undefined, expected: string | un
 export async function boardRoutes(app: FastifyInstance): Promise<void> {
   /* ---------------------------------------------------------------- projects */
 
-  app.get("/api/projects", { preHandler: requireSession }, async (_req, reply) => {
-    return await reply.send({ projects: await registry.listProjects() });
+  // The listings are the only board routes a member may call: they answer with what has been
+  // shared with that person (today: nothing), never with the whole install.
+  app.get("/api/projects", { preHandler: requireSession }, async (req, reply) => {
+    const projects = await visibleProjects(await currentUser(req), await registry.listProjects());
+    return await reply.send({ projects });
   });
 
-  app.post<{ Body: registry.CreateProjectInput }>("/api/projects", { preHandler: requireSession }, async (req, reply) => {
+  app.post<{ Body: registry.CreateProjectInput }>("/api/projects", { preHandler: requireOwner }, async (req, reply) => {
     try {
       return await reply.send({ project: await registry.createProject(req.body ?? ({} as registry.CreateProjectInput)) });
     } catch (err) {
@@ -50,7 +54,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.patch<{ Params: { id: string }; Body: registry.UpdateProjectInput }>(
-    "/api/projects/:id", { preHandler: requireSession },
+    "/api/projects/:id", { preHandler: requireOwner },
     async (req, reply) => {
       try {
         return await reply.send({ project: await registry.updateProject(req.params.id, req.body ?? {}) });
@@ -62,7 +66,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
   );
 
   app.patch<{ Params: { id: string }; Body: { position?: number } }>(
-    "/api/projects/:id/order", { preHandler: requireSession },
+    "/api/projects/:id/order", { preHandler: requireOwner },
     async (req, reply) => {
       const position = Number(req.body?.position);
       if (!Number.isInteger(position) || position < 0) {
@@ -81,7 +85,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
    * Deleting a project cascades to its cards. The tmux sessions and worktrees of those cards are
    * torn down by the session layer, which is why the removed cards come back in the response.
    */
-  app.delete<{ Params: { id: string } }>("/api/projects/:id", { preHandler: requireSession }, async (req, reply) => {
+  app.delete<{ Params: { id: string } }>("/api/projects/:id", { preHandler: requireOwner }, async (req, reply) => {
     try {
       const removed = await registry.removeProject(req.params.id);
       logger.info({ audit: true, action: "project.remove", project: removed.project.id, cards: removed.cards.length },
@@ -94,17 +98,19 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get<{ Params: { id: string } }>("/api/projects/:id/cards", { preHandler: requireSession }, async (req, reply) => {
-    return await reply.send({ cards: await registry.listCards(req.params.id) });
+    const cards = await visibleCards(await currentUser(req), await registry.listCards(req.params.id));
+    return await reply.send({ cards });
   });
 
   /* ------------------------------------------------------------------- cards */
 
-  app.get("/api/cards", { preHandler: requireSession }, async (_req, reply) => {
-    return await reply.send({ cards: await registry.listAllCards() });
+  app.get("/api/cards", { preHandler: requireSession }, async (req, reply) => {
+    const cards = await visibleCards(await currentUser(req), await registry.listAllCards());
+    return await reply.send({ cards });
   });
 
   app.post<{ Body: registry.CreateCardInput & registry.UpdateCardInput }>(
-    "/api/cards", { preHandler: requireSession },
+    "/api/cards", { preHandler: requireOwner },
     async (req, reply) => {
       const { projectId, title, ...patch } = req.body ?? ({} as registry.CreateCardInput & registry.UpdateCardInput);
       try {
@@ -137,7 +143,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  app.get<{ Params: { id: string } }>("/api/cards/:id", { preHandler: requireSession }, async (req, reply) => {
+  app.get<{ Params: { id: string } }>("/api/cards/:id", { preHandler: requireCardAccess }, async (req, reply) => {
     const card = await registry.getCard(req.params.id);
     if (!card) return await reply.code(404).send({ error: "card not found" });
     return await reply.send({ card });
@@ -153,7 +159,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
    * a card that looked alive with no session behind it.
    */
   app.patch<{ Params: { id: string }; Body: registry.UpdateCardInput }>(
-    "/api/cards/:id", { preHandler: requireSession },
+    "/api/cards/:id", { preHandler: requireCardAccess },
     async (req, reply) => {
       // SNAPSHOT before the write. `getCard` hands back the LIVE cached record and `updateCard`
       // mutates that very object, so a "before" that is not copied is really the "after": both
@@ -194,12 +200,12 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
 
   /* ---------------------------------------------------------------- accounts */
 
-  app.get("/api/accounts", { preHandler: requireSession }, async (_req, reply) => {
+  app.get("/api/accounts", { preHandler: requireOwner }, async (_req, reply) => {
     const [accounts, config] = await Promise.all([registry.listAccounts(), registry.getConfig()]);
     return await reply.send({ accounts, defaultLabel: config.defaultAccountLabel ?? null });
   });
 
-  app.post<{ Body: { name?: string } }>("/api/accounts", { preHandler: requireSession }, async (req, reply) => {
+  app.post<{ Body: { name?: string } }>("/api/accounts", { preHandler: requireOwner }, async (req, reply) => {
     try {
       return await reply.send({ account: await registry.createAccount({ name: req.body?.name ?? "" }) });
     } catch (err) {
@@ -208,7 +214,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.delete<{ Params: { slug: string } }>("/api/accounts/:slug", { preHandler: requireSession }, async (req, reply) => {
+  app.delete<{ Params: { slug: string } }>("/api/accounts/:slug", { preHandler: requireOwner }, async (req, reply) => {
     try {
       return await reply.send({ account: await registry.removeAccount(req.params.slug) });
     } catch (err) {

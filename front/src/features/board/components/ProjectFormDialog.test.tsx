@@ -55,7 +55,7 @@ function serve(connections: GithubConnection[]): void {
     }
     if (url.includes("/branches")) return { branches: ["dev", "main"] };
     if (url === "/accounts") return { accounts: [], defaultLabel: "" };
-    if (url === "/auth/me") return { user: { id: "1", username: "operator" } };
+    if (url === "/auth/me") return { user: { id: "1", username: "operator", role: "owner" } };
     return {};
   });
 }

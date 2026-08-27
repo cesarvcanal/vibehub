@@ -176,6 +176,27 @@ ticker as the backstop.
 Delivery is at-least-once (deliver, then remove): a crash between the two repeats a message, which
 is visible, while the alternative loses one silently.
 
+## Who can see what
+
+An install has an **owner** — the person the setup wizard created — and the **members** they invite.
+The split is not a permission matrix; it is one line: the owner owns the INSTALL, a member is given
+WORK.
+
+- Owner: every project and card, the Claude accounts, the vault, the MCP servers, the shared brain,
+  the settings, the runner container, and the list of people. Also `/mcp` from a browser session —
+  those tools reach every card on the board and can type into any of them.
+- Member: what has been shared with them, and their own password. Nothing else is drawn in the UI,
+  and nothing else answers on the API.
+
+Two gates carry it, both Fastify preHandlers, and every route wears exactly one:
+`requireOwner` (`auth/session.ts`) for what belongs to the install, and `requireCardAccess`
+(`auth/access.ts`) for what belongs to a card. `auth/access.ts` is also where the board listings are
+narrowed (`visibleProjects`/`visibleCards`), so a member's board is filtered rather than refused.
+
+Today `canAccessCard` answers "owner: yes, member: no". Sharing a card (or a whole project) with a
+member lands in that one function and in the listings beside it — which is why the routes ask it
+instead of asking for a role.
+
 ## Credentials
 
 - The **GitHub token** is handed to `git clone/fetch` per command as an environment-scoped http

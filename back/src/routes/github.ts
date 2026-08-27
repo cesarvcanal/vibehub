@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { requireSession } from "../auth/session.js";
+import { requireOwner } from "../auth/session.js";
 import * as github from "../services/github/client.js";
 import { getSettings, updateSettings } from "../services/settings/settings.js";
 
@@ -17,13 +17,13 @@ function failure(err: unknown): { code: number; body: { error: string } } {
  * Contents read/write, or a classic token with `repo`).
  */
 export async function githubRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/api/github", { preHandler: requireSession }, async (_req, reply) => {
+  app.get("/api/github", { preHandler: requireOwner }, async (_req, reply) => {
     return await reply.send(await github.state());
   });
 
   /** Adds an account. The token is checked against GitHub before anything is stored. */
   app.post<{ Body: { label?: string; token?: string } }>(
-    "/api/github/connections", { preHandler: requireSession },
+    "/api/github/connections", { preHandler: requireOwner },
     async (req, reply) => {
       try {
         const { connection, identity } = await github.connect(req.body?.label ?? "", req.body?.token ?? "");
@@ -38,7 +38,7 @@ export async function githubRoutes(app: FastifyInstance): Promise<void> {
 
   /** Removes one account. 409 while a project still points at it. */
   app.delete<{ Params: { id: string } }>(
-    "/api/github/connections/:id", { preHandler: requireSession },
+    "/api/github/connections/:id", { preHandler: requireOwner },
     async (req, reply) => {
       try {
         await github.removeConnection(req.params.id);
@@ -54,7 +54,7 @@ export async function githubRoutes(app: FastifyInstance): Promise<void> {
    * BACKWARD COMPATIBILITY with the setup wizard: create the first connection, or replace the token
    * of the one that exists. Still the whole GitHub step of a fresh install.
    */
-  app.post<{ Body: { token?: string; label?: string } }>("/api/github/token", { preHandler: requireSession }, async (req, reply) => {
+  app.post<{ Body: { token?: string; label?: string } }>("/api/github/token", { preHandler: requireOwner }, async (req, reply) => {
     try {
       const { connection, identity } = await github.connectOrReplaceFirst(req.body?.token ?? "", req.body?.label);
       await seedGitIdentity(identity);
@@ -65,12 +65,12 @@ export async function githubRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /** Forgets every account. */
-  app.delete("/api/github", { preHandler: requireSession }, async (_req, reply) => {
+  app.delete("/api/github", { preHandler: requireOwner }, async (_req, reply) => {
     await github.disconnect();
     return await reply.send({ ok: true });
   });
 
-  app.get<{ Querystring: { q?: string; connection?: string } }>("/api/github/repos", { preHandler: requireSession }, async (req, reply) => {
+  app.get<{ Querystring: { q?: string; connection?: string } }>("/api/github/repos", { preHandler: requireOwner }, async (req, reply) => {
     try {
       const repos = await github.listRepos(req.query?.connection ?? "", req.query?.q ?? "");
       return await reply.send({ repos });
@@ -82,7 +82,7 @@ export async function githubRoutes(app: FastifyInstance): Promise<void> {
 
   app.get<{ Params: { owner: string; repo: string }; Querystring: { connection?: string } }>(
     "/api/github/repos/:owner/:repo/branches",
-    { preHandler: requireSession },
+    { preHandler: requireOwner },
     async (req, reply) => {
       try {
         const branches = await github.listBranches(req.query?.connection ?? "", req.params.owner, req.params.repo);

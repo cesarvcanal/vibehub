@@ -28,6 +28,7 @@ import { deckLimit, dropFromDeck, pruneDeck, touchDeck, type DeckEntry } from "@
 import { cardViewHeight } from "@/features/board/lib/focusMode";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/lib/useIsMobile";
+import { useAuth } from "@/providers/auth";
 import {
   attachLeaveFocusShortcut,
   attachNewCardShortcut,
@@ -69,6 +70,9 @@ import { t as translate, useT } from "@/i18n";
  */
 export function BoardPage() {
   const t = useT();
+  // What this person may do to the BOARD itself (create a project, create a card, reach the
+  // install's managers). A member may only work inside the cards they were given.
+  const { isOwner } = useAuth();
   // Only used for the card view's height unit: `dvh` on a phone, `vh` everywhere else.
   const isMobile = useIsMobile();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -222,10 +226,13 @@ export function BoardPage() {
   // Read through a ref so the listeners are bound once and never re-bound on every navigation.
   const selectedRef = React.useRef(selected);
   selectedRef.current = selected;
+  const ownerRef = React.useRef(isOwner);
+  ownerRef.current = isOwner;
 
   React.useEffect(
     () =>
       attachNewCardShortcut(() => {
+        if (!ownerRef.current) return;
         askCard(selectedRef.current, true);
       }),
     [],
@@ -239,24 +246,30 @@ export function BoardPage() {
 
   /* ------------------------------------------------------------- the parts */
 
-  /** The install-wide managers, then the runner chip — which sits next to the New card button. */
-  const headerExtra = (
+  /**
+   * The install-wide managers, then the runner chip — which sits next to the New card button.
+   *
+   * All four belong to the OWNER: the Claude accounts, the MCP servers, the shared brain and the
+   * container everything runs in are the install, not the work. A member gets the board and nothing
+   * around it (and the routes behind these answer 403 either way).
+   */
+  const headerExtra = isOwner ? (
     <>
       <AccountsManager />
       <McpManager />
       <BrainManager />
       <RunnerBanner />
     </>
-  );
+  ) : null;
 
   /** The same managers minus the runner: the aggregated board has no single runner to report on. */
-  const aggregateHeaderExtra = (
+  const aggregateHeaderExtra = isOwner ? (
     <>
       <AccountsManager />
       <McpManager />
       <BrainManager />
     </>
-  );
+  ) : null;
 
   // `inline` swaps the drawer for an in-flow panel: on a phone with nothing open, the project/card
   // list IS the page rather than a menu behind a handle (see `showInlineMenu` below). Same instance
@@ -273,7 +286,8 @@ export function BoardPage() {
       onReorder={(id, position) => reorderMutation.mutate({ id, position })}
       onNewProject={() => setNewProjectOpen(true)}
       onNewCard={(project) => askCard(project, false)}
-      onNewGlobalCard={() => askCard(null, true)}
+      onNewGlobalCard={isOwner ? () => askCard(null, true) : undefined}
+      canManage={isOwner}
       onDeleteProject={setDeleteTarget}
       onShowAllProjects={() => go(null)}
       inline={inline}
@@ -390,7 +404,7 @@ export function BoardPage() {
     <AllProjectsBoard
       projects={projects}
       onOpenCard={(card) => go(card.projectId, card.id)}
-      onNewCard={() => askCard(null, true)}
+      onNewCard={isOwner ? () => askCard(null, true) : undefined}
       headerExtra={aggregateHeaderExtra}
       headerLead={menuButton}
     />

@@ -140,7 +140,7 @@ const gatewayCards: BoardCard[] = [
 
 function serve(overrides: { cards?: BoardCard[]; projects?: BoardProject[] } = {}) {
   mockGet.mockImplementation((url: string) => {
-    if (url === "/auth/me") return Promise.resolve({ user: { id: "1", username: "operator" } });
+    if (url === "/auth/me") return Promise.resolve({ user: { id: "1", username: "operator", role: "owner" } });
     if (url === "/setup/state") {
       return Promise.resolve({
         fresh: false,

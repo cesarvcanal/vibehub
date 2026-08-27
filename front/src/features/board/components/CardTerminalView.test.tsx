@@ -87,7 +87,7 @@ function card(overrides: Partial<BoardCard> = {}): BoardCard {
 
 function serve() {
   mockGet.mockImplementation((url: string) => {
-    if (url === "/auth/me") return Promise.resolve({ user: { id: "1", username: "operator" } });
+    if (url === "/auth/me") return Promise.resolve({ user: { id: "1", username: "operator", role: "owner" } });
     if (url === "/setup/state") {
       return Promise.resolve({
         fresh: false,
@@ -241,7 +241,7 @@ describe("CardTerminalView — instant open", () => {
       if (url === "/cards/c1") return Promise.resolve({ card: card({ openedAt: 10 }) });
       if (url === "/accounts") return Promise.resolve({ accounts: [], defaultLabel: "" });
       if (url === "/transcribe") return Promise.resolve({ available: false, proofread: false, language: null });
-      if (url === "/auth/me") return Promise.resolve({ user: { id: "1", username: "operator" } });
+      if (url === "/auth/me") return Promise.resolve({ user: { id: "1", username: "operator", role: "owner" } });
       if (url === "/setup/state") return Promise.reject(new Error("not needed"));
       return Promise.reject(new Error(`unexpected GET ${url}`));
     });

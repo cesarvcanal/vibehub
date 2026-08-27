@@ -38,7 +38,7 @@ const mockGet = vi.mocked(get);
 /** `tech` has never logged in; the built-in profile has, and reports its usage. */
 function serve() {
   mockGet.mockImplementation((url: string) => {
-    if (url === "/auth/me") return Promise.resolve({ user: { id: "1", username: "operator" } });
+    if (url === "/auth/me") return Promise.resolve({ user: { id: "1", username: "operator", role: "owner" } });
     if (url === "/accounts") {
       return Promise.resolve({ accounts: [{ slug: "tech", name: "Tech", createdAt: 1 }], defaultLabel: "Main" });
     }

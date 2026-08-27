@@ -56,7 +56,8 @@ export function AllProjectsBoard({
   projects: BoardProject[];
   onOpenCard: (card: BoardCard) => void;
   /** New card from the aggregated board — no project is implied, so the dialog asks which. */
-  onNewCard: () => void;
+  /** Absent = this person may not create cards (a member): the button is not drawn. */
+  onNewCard?: () => void;
   headerExtra?: React.ReactNode;
   /** Rendered FIRST in the header row — where the phone's drawer handle lives. */
   headerLead?: React.ReactNode;
@@ -138,9 +139,11 @@ export function AllProjectsBoard({
           {t("board.cards", { n: cards.length })} · {t("board.projects", { n: projects.length })}
         </span>
         {headerExtra}
-        <Button size="sm" className="h-9 gap-0" title={t("board.newCardHint")} onClick={onNewCard}>
-          <Plus className="mr-1.5 h-4 w-4" /> {t("board.newCard")}
-        </Button>
+        {onNewCard ? (
+          <Button size="sm" className="h-9 gap-0" title={t("board.newCardHint")} onClick={onNewCard}>
+            <Plus className="mr-1.5 h-4 w-4" /> {t("board.newCard")}
+          </Button>
+        ) : null}
       </div>
 
       {isLoading ? (

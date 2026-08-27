@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import pty from "node-pty";
-import { requireSession } from "../auth/session.js";
+import { requireOwner } from "../auth/session.js";
 import { provisionRunner, runnerStatus, startRunner } from "../runtime/runner.js";
 import { hostExecutor, shQuote } from "../runtime/host.js";
 import { config } from "../config/env.js";
@@ -35,7 +35,7 @@ function broadcast(chunk: string): void {
 }
 
 export async function runnerRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/api/runner", { preHandler: requireSession }, async (_req, reply) => {
+  app.get("/api/runner", { preHandler: requireOwner }, async (_req, reply) => {
     return await reply.send({ ...(await runnerStatus()), provisioning: provisioning !== null, terminal: true });
   });
 
@@ -45,7 +45,7 @@ export async function runnerRoutes(app: FastifyInstance): Promise<void> {
    * command is fixed: container name from config, shell picked with `command -v` (a failing `exec`
    * would take the shell down with it — the `||` would never run).
    */
-  app.get("/api/runner/terminal", { websocket: true, preHandler: requireSession }, (socket) => {
+  app.get("/api/runner/terminal", { websocket: true, preHandler: requireOwner }, (socket) => {
     const pick = "if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh";
     const line = `docker exec -it ${shQuote(config.runner.container)} env LANG=C.UTF-8 LC_ALL=C.UTF-8 sh -c ${shQuote(pick)}`;
     const { file, args } = hostExecutor().ptyCommand(line);
@@ -59,7 +59,7 @@ export async function runnerRoutes(app: FastifyInstance): Promise<void> {
     bridgePty(socket, term, "runner-shell");
   });
 
-  app.post("/api/runner/provision", { preHandler: requireSession }, async (_req, reply) => {
+  app.post("/api/runner/provision", { preHandler: requireOwner }, async (_req, reply) => {
     if (provisioning) return await reply.send({ ok: true, alreadyRunning: true });
     const settings = await getSettings();
     logBuffer = [];
@@ -78,7 +78,7 @@ export async function runnerRoutes(app: FastifyInstance): Promise<void> {
     return await reply.send({ ok: true });
   });
 
-  app.post("/api/runner/start", { preHandler: requireSession }, async (_req, reply) => {
+  app.post("/api/runner/start", { preHandler: requireOwner }, async (_req, reply) => {
     try {
       await startRunner();
       return await reply.send(await runnerStatus());
@@ -87,7 +87,7 @@ export async function runnerRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.get("/api/runner/logs", { websocket: true, preHandler: requireSession }, (socket) => {
+  app.get("/api/runner/logs", { websocket: true, preHandler: requireOwner }, (socket) => {
     subscribers.add(socket);
     if (logBuffer.length) socket.send(logBuffer.join(""));
     socket.on("close", () => subscribers.delete(socket));

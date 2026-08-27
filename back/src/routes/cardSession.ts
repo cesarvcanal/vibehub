@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { requireSession } from "../auth/session.js";
+import { requireCardAccess } from "../auth/access.js";
 import { sessionInfo } from "../services/maestro/maestro.js";
 
 /**
@@ -8,7 +8,7 @@ import { sessionInfo } from "../services/maestro/maestro.js";
  * nothing and the person wants to see what is in use.
  */
 export async function cardSessionRoutes(app: FastifyInstance): Promise<void> {
-  app.get<{ Params: { id: string } }>("/api/cards/:id/session", { preHandler: requireSession }, async (req, reply) => {
+  app.get<{ Params: { id: string } }>("/api/cards/:id/session", { preHandler: requireCardAccess }, async (req, reply) => {
     try {
       return await reply.send(await sessionInfo(req.params.id));
     } catch (err) {

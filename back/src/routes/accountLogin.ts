@@ -1,6 +1,6 @@
 import pty from "node-pty";
 import type { FastifyInstance } from "fastify";
-import { requireSession } from "../auth/session.js";
+import { requireOwner } from "../auth/session.js";
 import { hostExecutor, shQuote } from "../runtime/host.js";
 import { config } from "../config/env.js";
 import { assertAccountSlug } from "../services/board/registry.js";
@@ -24,7 +24,7 @@ import { logger } from "../utils/logger.js";
 export async function accountLoginRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { slug: string } }>(
     "/api/accounts/:slug/login-terminal",
-    { websocket: true, preHandler: requireSession },
+    { websocket: true, preHandler: requireOwner },
     (socket, req) => {
       const raw = req.params.slug;
       const slug = raw === DEFAULT_ACCOUNT_SLUG ? undefined : assertAccountSlug(raw);

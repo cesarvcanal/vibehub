@@ -25,7 +25,7 @@ describe("ProjectSidebar — the shell", () => {
     vi.resetAllMocks();
     mockGet.mockImplementation((url: string) => {
       if (url === "/setup/state") return Promise.resolve(setupState());
-      if (url === "/auth/me") return Promise.resolve({ user: { id: "u1", username: "cesar" } });
+      if (url === "/auth/me") return Promise.resolve({ user: { id: "u1", username: "cesar", role: "owner" } });
       return Promise.reject(new Error(`unexpected GET ${url}`));
     });
   });

@@ -3,6 +3,7 @@ import { readFile, writeFile, mkdir, chmod } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { config, dataPath } from "../config/env.js";
+import { findUser, type PublicUser } from "./users.js";
 
 /**
  * SESSIONS — a signed cookie holding "<userId>.<issuedAt>.<hmac>". Stateless on purpose: the server
@@ -107,6 +108,36 @@ export async function requireSession(req: FastifyRequest, reply: FastifyReply): 
     return;
   }
   (req as FastifyRequest & { userId?: string }).userId = userId;
+}
+
+/**
+ * The signed-in user (public shape), or null when there is no session — or when the session is
+ * signed correctly but the account behind it is gone (deleted user, restored backup).
+ */
+export async function currentUser(req: FastifyRequest): Promise<PublicUser | null> {
+  const userId = await sessionUserId(req);
+  return userId ? await findUser(userId) : null;
+}
+
+/**
+ * Fastify preHandler for everything that belongs to the INSTALL rather than to a piece of work:
+ * the Claude accounts, the vault, the MCP servers, the brain, the settings, the runner, the user
+ * list. 401 without a session, 403 for a member.
+ *
+ * The rule of thumb for which gate a route gets: if the answer to "whose is this?" is "the
+ * install's", it is `requireOwner`; if it is "this card's", it is `requireCardAccess`.
+ */
+export async function requireOwner(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const user = await currentUser(req);
+  if (!user) {
+    await reply.code(401).send({ error: "not authenticated" });
+    return;
+  }
+  if (user.role !== "owner") {
+    await reply.code(403).send({ error: "owner only" });
+    return;
+  }
+  (req as FastifyRequest & { userId?: string }).userId = user.id;
 }
 
 export function resetSessionKeyForTesting(): void {

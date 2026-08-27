@@ -1,5 +1,7 @@
 import type { FastifyInstance } from "fastify";
-import { createUser, verifyCredentials, isFreshInstall, listUsers, changePassword } from "../auth/users.js";
+import {
+  createUser, verifyCredentials, isFreshInstall, findUser, changePassword, publicUser,
+} from "../auth/users.js";
 import { setSessionCookie, clearSessionCookie, requireSession, sessionUserId } from "../auth/session.js";
 import { logger } from "../utils/logger.js";
 
@@ -18,7 +20,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     }
     await setSessionCookie(reply, user.id);
     logger.info({ audit: true, action: "auth.login", user: user.username }, "signed in");
-    return await reply.send({ user: { id: user.id, username: user.username } });
+    return await reply.send({ user: publicUser(user) });
   });
 
   app.post("/api/auth/logout", async (_req, reply) => {
@@ -28,7 +30,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/api/auth/me", { preHandler: requireSession }, async (req, reply) => {
     const userId = await sessionUserId(req);
-    const user = (await listUsers()).find((u) => u.id === userId);
+    const user = userId ? await findUser(userId) : null;
     if (!user) {
       // Session signed correctly but the user is gone (deleted install, restored backup).
       clearSessionCookie(reply);
@@ -43,10 +45,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     }
     const { username = "", password = "" } = req.body ?? {};
     try {
-      const user = await createUser(username, password);
+      const user = await createUser(username, password, "owner");
       await setSessionCookie(reply, user.id);
       logger.info({ audit: true, action: "setup.owner", user: user.username }, "owner account created");
-      return await reply.send({ user: { id: user.id, username: user.username } });
+      return await reply.send({ user: publicUser(user) });
     } catch (err) {
       return await reply.code(400).send({ error: (err as Error).message });
     }
