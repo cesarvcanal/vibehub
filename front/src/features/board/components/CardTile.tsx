@@ -1,4 +1,5 @@
-import { Check, Moon, MoreHorizontal, Pause, RotateCw, Trash2, Users } from "lucide-react";
+import * as React from "react";
+import { Check, Moon, MoreHorizontal, Pause, RotateCw, Share2, Trash2, Users } from "lucide-react";
 import { cn, isNewTabClick } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,6 +16,8 @@ import {
 } from "@/features/board/components/ContextMenu";
 import type { BoardCard } from "@/features/board/api";
 import { useT } from "@/i18n";
+import { useAuth } from "@/providers/auth";
+import { ShareDialog } from "@/features/board/components/ShareDialog";
 
 /**
  * One card on the board: a status dot and a title, and nothing else it can avoid saying.
@@ -65,6 +68,9 @@ export function CardTile({
   projectLabel?: string;
 }) {
   const t = useT();
+  // Sharing is the owner's: a member has been given this card, not the right to hand it on.
+  const { isOwner } = useAuth();
+  const [shareOpen, setShareOpen] = React.useState(false);
   const dot = cardDot(card);
   /** The agent's own word on where the work stands (`vibehub_report`). Null = it has said nothing. */
   const stateChip = declaredStateChip(card);
@@ -100,6 +106,7 @@ export function CardTile({
       ? [{ key: "hibernate", label: t("card.hibernateEndsSession"), icon: Moon, onSelect: () => onHibernate(card) }]
       : []),
     ...(onAccount ? [{ key: "account", label: t("card.claudeAccountMenu"), icon: Users, onSelect: () => onAccount(card) }] : []),
+    ...(isOwner ? [{ key: "share", label: t("card.share"), icon: Share2, onSelect: () => setShareOpen(true) }] : []),
     ...(onDelete
       ? [{ key: "delete", label: t("card.deleteCard"), icon: Trash2, danger: true, onSelect: () => onDelete(card) }]
       : []),
@@ -255,6 +262,12 @@ export function CardTile({
         ariaLabel={t("card.actionsFor", { title: card.title })}
         onClose={close}
       />
+
+      {/* Mounted only while it is open. The dialog itself is portalled to the body, so it is not
+          really inside this anchor — a click in it never navigates to the card. */}
+      {shareOpen ? (
+        <ShareDialog kind="card" targetId={card.id} title={card.title} open onOpenChange={setShareOpen} />
+      ) : null}
     </a>
   );
 }

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
-import { requireCardAccess } from "../auth/access.js";
+import { requireCardAccess, requireCardWork } from "../auth/access.js";
 import { sendToTerminal } from "../services/maestro/maestro.js";
 import { chatSource, sendChatKey, parseChatEvents, CHAT_KEYS } from "../services/chat/chat.js";
 import { logger } from "../utils/logger.js";
@@ -83,7 +83,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   /** Sends a message: types it at the session's prompt and presses Enter. */
   app.post<{ Params: { id: string }; Body: { text?: string } }>(
     "/api/cards/:id/chat",
-    { preHandler: requireCardAccess },
+    { preHandler: requireCardWork },
     async (req, reply) => {
       const text = String(req.body?.text ?? "");
       try {
@@ -103,7 +103,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   /** Presses one whitelisted key (Stop = Escape) in the session. */
   app.post<{ Params: { id: string }; Body: { key?: string } }>(
     "/api/cards/:id/chat/key",
-    { preHandler: requireCardAccess },
+    { preHandler: requireCardWork },
     async (req, reply) => {
       const key = String(req.body?.key ?? "");
       if (!CHAT_KEYS[key]) return await reply.code(400).send({ error: `unknown key: '${key}'` });

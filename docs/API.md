@@ -10,10 +10,13 @@ Two, and only two:
 - **owner** — the install is theirs: every project and card, the Claude accounts, the vault, the MCP
   servers, the brain, the settings, the runner, and the people. The setup wizard creates the first
   one.
-- **member** — somebody the owner invited. They see only what has been **shared** with them, which
-  today is nothing; the sharing of a card (and of a whole project) is the next increment.
+- **member** — somebody the owner invited. They see only what has been **shared** with them: a card,
+  or a whole project (every card in it, including the ones created later). A share carries a level —
+  `work` (their terminal types into the session) or `view` (they read it; nothing they send reaches
+  the agent). A card reached both ways takes the STRONGER of the two levels.
 
-Routes marked **owner** answer `403 { "error": "owner only" }` to a member. Card-scoped routes
+Routes marked **owner** answer `403 { "error": "owner only" }` to a member. A card-scoped route that
+CHANGES the card or reaches its session answers `403` to a `view` share. Card-scoped routes
 (`/api/cards/:id/...`) answer **404** when the card is not visible to the caller — to somebody who
 cannot see a card, that card does not exist, and a 403 would confirm the id names something real.
 The listings (`/api/projects`, `/api/cards`, `/api/projects/:id/cards`) are filtered to what the
@@ -97,6 +100,22 @@ server also **reconciles pending pauses every 60s**: for each card sitting in `p
 session it asks the runner what that tmux session is doing (`tmux capture-pane`, read-only) and
 finishes the pause for the ones that are no longer generating. A card in Paused is never left
 running.
+
+## Sharing
+
+**owner** only. Sharing with another owner is refused (400) — they already see everything.
+
+| Method | Path | Body / notes |
+|---|---|---|
+| GET | `/api/cards/:id/shares` | `{ shares: [{ kind, targetId, userId, username, level, createdAt }] }` |
+| POST | `/api/cards/:id/shares` | `{ userId, level? }` → `{ share }`; `level` defaults to `"work"`. Idempotent: sharing again only sets the level |
+| DELETE | `/api/cards/:id/shares/:userId` | `{ ok: true, removed }` — `removed: false` when there was no share |
+| GET | `/api/projects/:id/shares` | same shape, for a whole project |
+| POST | `/api/projects/:id/shares` | `{ userId, level? }` — every card in the project, now and later |
+| DELETE | `/api/projects/:id/shares/:userId` | — |
+
+A share never outlives what it points at: deleting a card, a project (with its cards) or a person
+drops theirs.
 
 ## Projects & cards
 

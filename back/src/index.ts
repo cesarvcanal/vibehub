@@ -11,6 +11,7 @@ import { config } from "./config/env.js";
 import { logger } from "./utils/logger.js";
 import { authRoutes } from "./routes/auth.js";
 import { usersRoutes } from "./routes/users.js";
+import { sharesRoutes } from "./routes/shares.js";
 import { settingsRoutes } from "./routes/settings.js";
 import { githubRoutes } from "./routes/github.js";
 import { runnerRoutes } from "./routes/runner.js";
@@ -50,6 +51,7 @@ export async function buildServer() {
 
   await app.register(authRoutes);
   await app.register(usersRoutes);
+  await app.register(sharesRoutes);
   await app.register(settingsRoutes);
   await app.register(githubRoutes);
   await app.register(runnerRoutes);

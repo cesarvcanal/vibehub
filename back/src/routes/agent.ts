@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { requireOwner, requireSession } from "../auth/session.js";
-import { requireCardAccess } from "../auth/access.js";
+import { requireCardAccess, requireCardWork } from "../auth/access.js";
 import * as registry from "../services/board/registry.js";
 import { cardWorkPaths, restartStaggered } from "../services/board/workspace.js";
 import { setAccountToken, removeAccountToken, accountsTokenStatus } from "../services/accounts/token.js";
@@ -231,7 +231,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post<{ Params: { id: string }; Body: { base64?: string; mimeType?: string } }>(
     "/api/cards/:id/transcribe",
-    { preHandler: requireCardAccess, bodyLimit: Math.ceil(AUDIO_MAX_BYTES * 1.4) },
+    { preHandler: requireCardWork, bodyLimit: Math.ceil(AUDIO_MAX_BYTES * 1.4) },
     async (req, reply) => {
       try {
         const out = await transcribeCardAudio(req.params.id, req.body?.base64 ?? "", req.body?.mimeType ?? "audio/webm");
