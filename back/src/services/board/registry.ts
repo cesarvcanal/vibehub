@@ -253,6 +253,45 @@ export interface Card {
   updatedAt: number;
 }
 
+/**
+ * A SHARE — one person, one thing on the board, one level.
+ *
+ * The owner never has a share: they own the install and see everything. A share exists so a MEMBER
+ * can reach a piece of work, and there are two things worth sharing:
+ *  - a CARD, which is the ask ("come and work on this one with me"), and
+ *  - a PROJECT, which is the standing version of it: every card in it, including the ones created
+ *    after the share, without a click per card.
+ *
+ * A card reached through both takes the STRONGER level of the two — being handed a card to work on
+ * is not undone by the project around it being shared read-only.
+ */
+export type ShareKind = "card" | "project";
+export type ShareLevel = "work" | "view";
+export const SHARE_LEVELS: readonly ShareLevel[] = ["work", "view"] as const;
+
+/** A whitelisted share level. THROWS otherwise — it decides what a member may do. PURE. */
+export function assertShareLevel(level: string): ShareLevel {
+  const v = String(level ?? "").trim();
+  if (v !== "work" && v !== "view") throw new Error(`invalid level (expected work or view): '${level}'`);
+  return v;
+}
+
+export interface Share {
+  kind: ShareKind;
+  /** The card id or the project id. */
+  targetId: string;
+  /** The user the thing is shared WITH (never the owner). */
+  userId: string;
+  level: ShareLevel;
+  createdAt: number;
+}
+
+/** The stronger of two levels — `work` beats `view`. PURE. */
+export function strongerLevel(a: ShareLevel | null, b: ShareLevel | null): ShareLevel | null {
+  if (a === "work" || b === "work") return "work";
+  return a ?? b ?? null;
+}
+
 export type McpKind = "stdio" | "http" | "sse";
 export const MCP_KINDS: readonly McpKind[] = ["stdio", "http", "sse"] as const;
 
@@ -362,11 +401,13 @@ export interface BoardDoc {
   mcps: McpServer[];
   /** GitHub accounts vibehub can clone as. Older documents have none — the field is filled on load. */
   githubConnections: GithubConnection[];
+  /** Who else can reach which card or project. Empty on an install nobody has shared anything on. */
+  shares: Share[];
 }
 
 const store = new JsonStore<BoardDoc>(
   dataPath("board.json"),
-  () => ({ config: {}, accounts: [], projects: [], cards: [], mcps: [], githubConnections: [] }),
+  () => ({ config: {}, accounts: [], projects: [], cards: [], mcps: [], githubConnections: [], shares: [] }),
   (raw) => {
     const doc = raw as Partial<BoardDoc> | null;
     return {
@@ -376,6 +417,7 @@ const store = new JsonStore<BoardDoc>(
       cards: Array.isArray(doc?.cards) ? doc.cards : [],
       mcps: Array.isArray(doc?.mcps) ? doc.mcps : [],
       githubConnections: Array.isArray(doc?.githubConnections) ? doc.githubConnections : [],
+      shares: Array.isArray(doc?.shares) ? doc.shares : [],
     };
   },
 );
@@ -1023,6 +1065,10 @@ export async function removeProject(id: string): Promise<RemovedProject> {
     const cards = doc.cards.filter((c) => c.projectId === id);
     doc.cards = doc.cards.filter((c) => c.projectId !== id);
     doc.projects = doc.projects.filter((p) => p.id !== id);
+    // The shares of the project AND of every card that went with it: a share pointing at something
+    // that no longer exists is a permission nobody can see and nobody can revoke.
+    const gone = new Set<string>([id, ...cards.map((c) => c.id)]);
+    doc.shares = doc.shares.filter((s) => !gone.has(s.targetId));
     normalizeProjectPositions(doc.projects);
     return { project, cards };
   });
@@ -1172,6 +1218,7 @@ export async function removeCard(id: string): Promise<Card | undefined> {
     const found = doc.cards.find((c) => c.id === id);
     if (!found) return undefined;
     doc.cards = doc.cards.filter((c) => c.id !== id);
+    doc.shares = doc.shares.filter((s) => !(s.kind === "card" && s.targetId === id));
     normalizeColumns(doc.cards, found.projectId, [found.column]);
     return found;
   });
@@ -1503,5 +1550,83 @@ export async function removeMcp(id: string): Promise<McpServer> {
     if (!found) throw new Error("MCP not found");
     doc.mcps = doc.mcps.filter((m) => m.id !== id);
     return found;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Shares — who else can reach a card or a project
+// ---------------------------------------------------------------------------
+
+export async function listShares(): Promise<Share[]> {
+  return (await store.load()).shares;
+}
+
+/** Every share on one thing. */
+export async function sharesForTarget(kind: ShareKind, targetId: string): Promise<Share[]> {
+  return (await store.load()).shares.filter((s) => s.kind === kind && s.targetId === targetId);
+}
+
+/** Every share held by one person. */
+export async function sharesForUser(userId: string): Promise<Share[]> {
+  return (await store.load()).shares.filter((s) => s.userId === userId);
+}
+
+export interface ShareInput {
+  kind: ShareKind;
+  targetId: string;
+  userId: string;
+  level?: string;
+}
+
+/**
+ * Shares a card or a project with somebody. IDEMPOTENT: sharing the same thing with the same person
+ * again only updates the level, so the UI can send the state it wants instead of diffing first.
+ *
+ * The TARGET is checked here (a share pointing at a card that does not exist would be a permission
+ * on nothing); the USER is checked by the route, which is the layer that knows about accounts.
+ */
+export async function shareWith(input: ShareInput): Promise<Share> {
+  const kind = input?.kind === "project" ? "project" : "card";
+  const targetId = String(input?.targetId ?? "").trim();
+  const userId = String(input?.userId ?? "").trim();
+  const level = assertShareLevel(input?.level ?? "work");
+  if (!targetId) throw new Error(`${kind} not found`);
+  if (!userId) throw new Error("user not found");
+  return store.mutate((doc) => {
+    const exists = kind === "card"
+      ? doc.cards.some((c) => c.id === targetId)
+      : doc.projects.some((p) => p.id === targetId);
+    if (!exists) throw new Error(`${kind} not found`);
+    const found = doc.shares.find((s) => s.kind === kind && s.targetId === targetId && s.userId === userId);
+    if (found) {
+      found.level = level;
+      return found;
+    }
+    const share: Share = { kind, targetId, userId, level, createdAt: Date.now() };
+    doc.shares.push(share);
+    return share;
+  });
+}
+
+/** Takes a share away. Returns false when there was none — unsharing twice is not an error. */
+export async function unshare(kind: ShareKind, targetId: string, userId: string): Promise<boolean> {
+  return store.mutate((doc) => {
+    const before = doc.shares.length;
+    doc.shares = doc.shares.filter(
+      (s) => !(s.kind === kind && s.targetId === targetId && s.userId === userId),
+    );
+    return doc.shares.length < before;
+  });
+}
+
+/**
+ * Drops every share held by a person — called when their account is removed, so a later user with a
+ * recycled id could never inherit somebody else's access.
+ */
+export async function removeSharesForUser(userId: string): Promise<number> {
+  return store.mutate((doc) => {
+    const before = doc.shares.length;
+    doc.shares = doc.shares.filter((s) => s.userId !== userId);
+    return before - doc.shares.length;
   });
 }

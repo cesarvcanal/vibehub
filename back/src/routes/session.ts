@@ -4,7 +4,7 @@ import pty from "node-pty";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import { requireOwner, sessionUserId } from "../auth/session.js";
-import { requireCardAccess } from "../auth/access.js";
+import { requireCardAccess, requireCardWork, requestCardLevel } from "../auth/access.js";
 import * as registry from "../services/board/registry.js";
 import * as workspace from "../services/board/workspace.js";
 import * as browser from "../services/browser/browser.js";
@@ -109,7 +109,19 @@ const KEEPALIVE_MS = 25_000;
  * terminal uses it to stamp `humanActiveAt`; resize frames never trigger it (a layout change is not
  * a person typing).
  */
-export function bridgePty(socket: WebSocket, term: IPty, label: string, onInput?: (data: string) => void): void {
+export interface BridgeOptions {
+  /** Called with what a person typed (the human-active stamp). Not called on a read-only bridge. */
+  onInput?: (data: string) => void;
+  /**
+   * READ-ONLY attach: the pty's output still streams to the browser, and nothing the browser sends
+   * reaches the pty — keystrokes AND resizes, because a resize is not private (tmux sizes a window
+   * to its smallest client, so a viewer's window would reshape what the person working sees).
+   * This is what a card shared `view` gets.
+   */
+  readOnly?: boolean;
+}
+
+export function bridgePty(socket: WebSocket, term: IPty, label: string, options: BridgeOptions = {}): void {
   disableNagle(socket);
   const keepalive = setInterval(() => {
     // Proxies drop an idle websocket; a protocol ping keeps the terminal alive while you read.
@@ -125,15 +137,17 @@ export function bridgePty(socket: WebSocket, term: IPty, label: string, onInput?
     logger.debug({ label, exitCode }, "terminal process exited");
   });
 
-  socket.on("message", (raw: Buffer) => {
-    const frame = parseTerminalFrame(raw.toString());
-    if (frame.type === "resize") term.resize(frame.cols, frame.rows);
-    else {
-      term.write(frame.data);
-      // A person typed. Best-effort: a bad listener must never take the terminal down.
-      if (onInput) { try { onInput(frame.data); } catch { /* ignore */ } }
-    }
-  });
+  if (!options.readOnly) {
+    socket.on("message", (raw: Buffer) => {
+      const frame = parseTerminalFrame(raw.toString());
+      if (frame.type === "resize") term.resize(frame.cols, frame.rows);
+      else {
+        term.write(frame.data);
+        // A person typed. Best-effort: a bad listener must never take the terminal down.
+        if (options.onInput) { try { options.onInput(frame.data); } catch { /* ignore */ } }
+      }
+    });
+  }
 
   const teardown = (): void => {
     clearInterval(keepalive);
@@ -156,7 +170,7 @@ export function needsProvisioning(card: Pick<registry.Card, "openedAt" | "prepar
 export async function sessionRoutes(app: FastifyInstance): Promise<void> {
   /* -------------------------------------------------------------- lifecycle */
 
-  app.post<{ Params: { id: string } }>("/api/cards/:id/open", { preHandler: requireCardAccess }, async (req, reply) => {
+  app.post<{ Params: { id: string } }>("/api/cards/:id/open", { preHandler: requireCardWork }, async (req, reply) => {
     try {
       return await reply.send({ card: await workspace.openCard(req.params.id) });
     } catch (err) {
@@ -165,7 +179,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.post<{ Params: { id: string } }>("/api/cards/:id/pause", { preHandler: requireCardAccess }, async (req, reply) => {
+  app.post<{ Params: { id: string } }>("/api/cards/:id/pause", { preHandler: requireCardWork }, async (req, reply) => {
     try {
       return await reply.send({ card: await workspace.pauseCard(req.params.id) });
     } catch (err) {
@@ -179,7 +193,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
    * nothing to hibernate (never opened, already cold, or `working`) is not an error — the answer is
    * the card as it stands, so the UI can just re-render it.
    */
-  app.post<{ Params: { id: string } }>("/api/cards/:id/hibernate", { preHandler: requireCardAccess }, async (req, reply) => {
+  app.post<{ Params: { id: string } }>("/api/cards/:id/hibernate", { preHandler: requireCardWork }, async (req, reply) => {
     try {
       const hibernated = await workspace.hibernateCard(req.params.id);
       const card = hibernated ?? (await registry.getCard(req.params.id));
@@ -191,7 +205,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.post<{ Params: { id: string } }>("/api/cards/:id/restart", { preHandler: requireCardAccess }, async (req, reply) => {
+  app.post<{ Params: { id: string } }>("/api/cards/:id/restart", { preHandler: requireCardWork }, async (req, reply) => {
     try {
       return await reply.send({ card: await workspace.restartCard(req.params.id) });
     } catch (err) {
@@ -226,7 +240,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post<{ Params: { id: string }; Body: { name?: string; content?: string } }>(
-    "/api/cards/:id/upload", { preHandler: requireCardAccess },
+    "/api/cards/:id/upload", { preHandler: requireCardWork },
     async (req, reply) => {
       const { name = "image.png", content = "" } = req.body ?? {};
       try {
@@ -247,7 +261,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
    * yet used to swallow whatever you sent it — see services/board/outbox.ts.
    */
   app.post<{ Params: { id: string }; Body: { text?: string } }>(
-    "/api/cards/:id/messages", { preHandler: requireCardAccess },
+    "/api/cards/:id/messages", { preHandler: requireCardWork },
     async (req, reply) => {
       try {
         const by = (await sessionUserId(req)) ?? undefined;
@@ -274,7 +288,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
 
   /** Gives up on a queued message (the ✕ on a pending chip). */
   app.delete<{ Params: { id: string; messageId: string } }>(
-    "/api/cards/:id/messages/:messageId", { preHandler: requireCardAccess },
+    "/api/cards/:id/messages/:messageId", { preHandler: requireCardWork },
     async (req, reply) => {
       const removed = await outbox.cancelMessage(req.params.id, req.params.messageId);
       if (!removed) return await reply.code(404).send({ error: "message not found" });
@@ -284,7 +298,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
 
   /* ---------------------------------------------------------------- browser */
 
-  app.post<{ Params: { id: string } }>("/api/cards/:id/browser", { preHandler: requireCardAccess }, async (req, reply) => {
+  app.post<{ Params: { id: string } }>("/api/cards/:id/browser", { preHandler: requireCardWork }, async (req, reply) => {
     try {
       return await reply.send({ ports: await browser.openCardBrowser(req.params.id) });
     } catch (err) {
@@ -293,7 +307,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.delete<{ Params: { id: string } }>("/api/cards/:id/browser", { preHandler: requireCardAccess }, async (req, reply) => {
+  app.delete<{ Params: { id: string } }>("/api/cards/:id/browser", { preHandler: requireCardWork }, async (req, reply) => {
     try {
       await browser.closeCardBrowser(req.params.id);
       return await reply.send({ ok: true });
@@ -329,6 +343,13 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       // directory when `-c` does not exist — and Claude would start outside the card's worktree, or
       // land on a bare shell. That is the "terminal with no Claude in it" on a brand-new card. So
       // provision FIRST and attach to a workspace that really exists.
+      if (needsProvisioning(snapshot) && requestCardLevel(req) !== "work") {
+        // A read-only viewer must not be what STARTS a card: provisioning clones a worktree and
+        // brings a Claude process up, which spends the account's plan. Nothing to watch yet.
+        socket.send("\r\n[vibehub] this card has not been started yet\r\n");
+        socket.close();
+        return;
+      }
       if (needsProvisioning(snapshot)) {
         try {
           socket.send("\r\n[vibehub] preparing this card in the runner…\r\n");
@@ -352,22 +373,29 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       // A human typing here makes the card "human-active": a maestro must not send into it while a
       // person is at the prompt. Throttled to a write every few seconds, and fire-and-forget — a
       // keystroke must never wait on the board store, and an unknown card is a no-op there.
-      bridgePty(socket, term, card.worktreeSlug, () => {
-        if (shouldStampHumanActive(card.id)) void registry.markCardHumanActive(card.id);
+      // A card shared read-only attaches as a WINDOW on the session, not a seat at it: output
+      // streams, nothing typed here reaches tmux (see BridgeOptions.readOnly).
+      const readOnly = requestCardLevel(req) !== "work";
+      bridgePty(socket, term, card.worktreeSlug, {
+        readOnly,
+        onInput: () => {
+          if (shouldStampHumanActive(card.id)) void registry.markCardHumanActive(card.id);
+        },
       });
+      if (readOnly) socket.send("\r\n[vibehub] this card is shared with you read-only\r\n");
 
       // A terminal attaching is the moment a dead session comes back: `tmux new-session -A`
       // recreates it with Claude inside, so anything queued for this card can go now. Delayed, and
       // fire-and-forget — the agent needs a moment to reach its prompt, and the socket must not
       // wait on a docker exec either way.
-      if (!shell) {
+      if (!shell && !readOnly) {
         const flush = setTimeout(() => void outbox.flushCard(card.id), OUTBOX_ATTACH_DELAY_MS);
         socket.on("close", () => clearTimeout(flush));
       }
 
       // Writing into a paused or finished card revives it — the same rule a status hook follows,
       // applied here because the websocket is how a human actually shows up.
-      if (!shell && (card.column === "paused" || card.column === "done")) {
+      if (!shell && !readOnly && (card.column === "paused" || card.column === "done")) {
         socket.once("message", () => {
           void registry.applyCardStatus(card.id, "working");
         });
@@ -381,7 +409,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
    */
   app.get<{ Params: { id: string } }>(
     "/api/cards/:id/vnc",
-    { websocket: true, preHandler: requireCardAccess },
+    { websocket: true, preHandler: requireCardWork },
     async (socket: WebSocket, req) => {
       let bridge: Awaited<ReturnType<typeof browser.cardVncBridge>>;
       try {

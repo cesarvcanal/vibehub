@@ -93,6 +93,23 @@ export const ptBR: Record<string, string> = {
   "access.ownPassword": "Sua senha",
   "access.ownPasswordChanged": "Senha trocada",
 
+  /* ------------------------------------------------------ compartilhamento */
+  "share.cardTitle": "Compartilhar este card",
+  "share.projectTitle": "Compartilhar este projeto",
+  "share.cardHint": "Quem mais trabalha em \u201c{title}\u201d. A pessoa recebe este card e nada mais.",
+  "share.projectHint": "Quem mais trabalha em \u201c{title}\u201d — todos os cards dele, inclusive os que você criar depois.",
+  "share.noMembers": "Ainda não há com quem compartilhar. Crie uma conta primeiro, em Acessos.",
+  "share.accessOf": "Acesso de {name}",
+  "share.levelNone": "Sem acesso",
+  "share.levelWork": "Pode trabalhar",
+  "share.levelView": "Pode ver",
+  "share.granted": "{name} agora tem \u201c{title}\u201d",
+  "share.revoked": "Acesso removido",
+  "card.share": "Compartilhar…",
+  "project.share": "Compartilhar…",
+  "share.readOnly": "somente leitura",
+  "share.readOnlyHint": "Este card foi compartilhado com você somente para leitura: dá pra acompanhar, mas nada que você digitar chega no agente.",
+
   /* ------------------------------------------------------------------- tema */
   "theme.system": "Sistema",
   "theme.dark": "Escuro",

@@ -1,19 +1,7 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import {
-  Check,
-  ChevronDown,
-  ChevronRight,
-  ChevronUp,
-  FolderGit2,
-  Moon,
-  Pause,
-  Pencil,
-  Plus,
-  RotateCw,
-  Trash2,
-} from "lucide-react";
+import { Check, ChevronDown, ChevronRight, ChevronUp, FolderGit2, Moon, Pause, Pencil, Plus, RotateCw, Share2, Trash2 } from "lucide-react";
 import { cn, isNewTabClick } from "@/lib/utils";
 import { apiErrorMessage } from "@/lib/apiError";
 import { Button } from "@/components/ui/button";
@@ -44,6 +32,7 @@ import {
 } from "@/features/board/lib/board";
 import { useExpandedProjects } from "@/features/board/lib/sidebarExpanded";
 import { RecentCards } from "@/features/board/components/RecentCards";
+import { ShareDialog } from "@/features/board/components/ShareDialog";
 import {
   boardApi,
   cardRunnerHint,
@@ -289,6 +278,7 @@ export function ProjectSidebar({
               onOpenCard={(cardId) => onOpenCard(focusedProject.id, cardId)}
               onNewCard={() => onNewCard(focusedProject)}
               onDelete={() => onDeleteProject(focusedProject)}
+              canManage={canManage}
               onStep={() => {}}
               onDragStart={() => {}}
               onDragEnd={() => {}}
@@ -324,6 +314,7 @@ export function ProjectSidebar({
                     onOpenCard={(cardId) => onOpenCard(project.id, cardId)}
                     onNewCard={() => onNewCard(project)}
                     onDelete={() => onDeleteProject(project)}
+                    canManage={canManage}
                     onStep={(direction) => step(project.id, direction)}
                     onDragStart={() => setDraggingId(project.id)}
                     onDragEnd={clear}
@@ -465,6 +456,7 @@ function ProjectRow({
   onHover,
   onDrop,
   focused = false,
+  canManage = true,
 }: {
   project: BoardProject;
   index: number;
@@ -485,6 +477,8 @@ function ProjectRow({
   onSelect: () => void;
   onOpenCard: (cardId: string) => void;
   onNewCard: () => void;
+  /** false = a member: the row lists the cards and offers nothing that would 403. */
+  canManage?: boolean;
   onDelete: () => void;
   onStep: (direction: -1 | 1) => void;
   onDragStart: () => void;
@@ -618,13 +612,19 @@ function ProjectRow({
 
   /* --------------------------------------------------------- the row itself */
 
-  const projectMenu: ContextMenuItem[] = [
-    { key: "new-card", label: t("board.newCard"), icon: Plus, onSelect: onNewCard },
-    ...(first ? [] : [{ key: "up", label: t("sidebar.moveUp"), icon: ChevronUp, onSelect: () => onStep(-1) }]),
-    ...(last ? [] : [{ key: "down", label: t("sidebar.moveDown"), icon: ChevronDown, onSelect: () => onStep(1) }]),
-    { key: "delete", label: t("sidebar.deleteProject"), icon: Trash2, danger: true, onSelect: onDelete },
-  ];
+  const projectMenu: ContextMenuItem[] = canManage
+    ? [
+        { key: "new-card", label: t("board.newCard"), icon: Plus, onSelect: onNewCard },
+        // Sharing the PROJECT is the standing version of sharing a card: every card in it, and the
+        // ones created after it, without a click per card.
+        { key: "share", label: t("project.share"), icon: Share2, onSelect: () => setShareOpen(true) },
+        ...(first ? [] : [{ key: "up", label: t("sidebar.moveUp"), icon: ChevronUp, onSelect: () => onStep(-1) }]),
+        ...(last ? [] : [{ key: "down", label: t("sidebar.moveDown"), icon: ChevronDown, onSelect: () => onStep(1) }]),
+        { key: "delete", label: t("sidebar.deleteProject"), icon: Trash2, danger: true, onSelect: onDelete },
+      ]
+    : [];
   const { point, openAt, close } = useContextMenuPoint();
+  const [shareOpen, setShareOpen] = React.useState(false);
 
   const dropActive = Boolean(draggingId) && draggingId !== project.id;
   const below = (e: React.DragEvent) => {
@@ -805,6 +805,10 @@ function ProjectRow({
         ariaLabel={t("sidebar.actionsForProject", { name: project.name })}
         onClose={close}
       />
+
+      {shareOpen ? (
+        <ShareDialog kind="project" targetId={project.id} title={project.name} open onOpenChange={setShareOpen} />
+      ) : null}
     </div>
   );
 }

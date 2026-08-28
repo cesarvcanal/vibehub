@@ -458,7 +458,7 @@ describe("board registry (persisted)", () => {
     expect((await stat(file)).mode & 0o777).toBe(0o600);
     const doc = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
     expect(Object.keys(doc).sort()).toEqual([
-      "accounts", "cards", "config", "githubConnections", "mcps", "projects",
+      "accounts", "cards", "config", "githubConnections", "mcps", "projects", "shares",
     ]);
   });
 

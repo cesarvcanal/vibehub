@@ -93,6 +93,23 @@ export const en: Record<string, string> = {
   "access.ownPassword": "Your password",
   "access.ownPasswordChanged": "Password changed",
 
+  /* ----------------------------------------------------------------- share */
+  "share.cardTitle": "Share this card",
+  "share.projectTitle": "Share this project",
+  "share.cardHint": "Who else works on \u201c{title}\u201d. They get this card and nothing else.",
+  "share.projectHint": "Who else works on \u201c{title}\u201d — every card in it, including the ones you create later.",
+  "share.noMembers": "There is nobody to share with yet. Create an account first, under Access.",
+  "share.accessOf": "{name}'s access",
+  "share.levelNone": "No access",
+  "share.levelWork": "Can work",
+  "share.levelView": "Can view",
+  "share.granted": "{name} now has \u201c{title}\u201d",
+  "share.revoked": "Access removed",
+  "card.share": "Share…",
+  "project.share": "Share…",
+  "share.readOnly": "read-only",
+  "share.readOnlyHint": "This card was shared with you read-only: you can read it, but nothing you type reaches the agent.",
+
   /* ------------------------------------------------------------------ theme */
   "theme.system": "System",
   "theme.dark": "Dark",

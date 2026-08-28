@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { requireOwner, sessionUserId, clearSessionCookie } from "../auth/session.js";
 import { createUser, listUsers, changePassword, removeUser, setRole, assertRole } from "../auth/users.js";
+import { removeSharesForUser } from "../services/board/registry.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -62,6 +63,9 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
     const me = await sessionUserId(req);
     try {
       const removed = await removeUser(req.params.id);
+      // Their shares go with them: a share pointing at a user that no longer exists is access
+      // nobody can see and nobody can revoke, and a recycled id would inherit it.
+      await removeSharesForUser(removed.id);
       if (me === removed.id) clearSessionCookie(reply);
       logger.info({ audit: true, action: "user.remove", user: removed.username }, "user removed");
       return await reply.send({ ok: true, user: removed });

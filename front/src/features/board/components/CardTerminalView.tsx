@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/providers/auth";
 import { useIsMobile } from "@/lib/useIsMobile";
 import { apiErrorMessage } from "@/lib/apiError";
 import { Button } from "@/components/ui/button";
@@ -136,6 +137,9 @@ export function CardTerminalView({
   onClose?: () => void;
 }) {
   const t = useT();
+  // A member has been given this card to work on, not the install around it: the two pills below
+  // read the owner's accounts and plan usage, and those routes answer 403 to anybody else.
+  const { isOwner } = useAuth();
   const isMobile = useIsMobile();
   const queryClient = useQueryClient();
   const boardKey = cardsKey(project.id);
@@ -337,7 +341,12 @@ export function CardTerminalView({
     retry: false,
   });
 
-  const { data: accountsData } = useQuery({ queryKey: ACCOUNTS_KEY, queryFn: boardApi.listAccounts });
+  // The install's Claude accounts are the OWNER's: which profile a card runs on, and how much of
+  // whose plan is left, is their business and their route (403 for anybody else). A member
+  // working on a card they were given simply does not get the two pills.
+  const { data: accountsData } = useQuery({
+    queryKey: ACCOUNTS_KEY, queryFn: boardApi.listAccounts, enabled: isOwner,
+  });
   const accounts = accountsData?.accounts ?? [];
   // What the empty option stands for: the project's account if it pins one, otherwise the install's
   // name for the runner's built-in profile.
@@ -361,7 +370,7 @@ export function CardTerminalView({
   const { data: usageData } = useQuery({
     queryKey: ACCOUNT_USAGE_KEY,
     queryFn: boardApi.accountsUsage,
-    enabled: Boolean(card) && active,
+    enabled: Boolean(card) && active && isOwner,
     refetchInterval: 60_000,
     staleTime: 55_000,
     retry: false,

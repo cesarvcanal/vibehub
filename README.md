@@ -32,6 +32,10 @@ and you get:
 - **Terminals that go cold on their own.** A card nobody has touched for a few hours has its session
   closed and turns grey where it stands — same column, same place, same conversation when you open it
   again. What you are working on now stops looking like what you walked away from yesterday.
+- **The people you work with.** Create an account for a teammate and hand them one card — or a
+  whole project — from its menu. They get that work and nothing else: no other card, no accounts, no
+  settings. `Can work` puts them at the same terminal as you; `can view` lets them read it without
+  touching the agent.
 - **Several Claude accounts, side by side.** Each account is an isolated config profile; pick one
   per project or per card.
 - **Your MCP servers, everywhere.** Register them once; every profile gets them injected.

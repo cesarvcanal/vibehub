@@ -638,6 +638,7 @@ describe("CardTerminalView — the card bar", () => {
     // one account "tech", the first row was labelled with whatever was in use — so he saw
     // "tech / ✓ tech", and picking one renamed the other.
     mockGet.mockImplementation((url: string) => {
+      if (url === "/auth/me") return Promise.resolve({ user: { id: "1", username: "operator", role: "owner" } });
       if (url === "/accounts") {
         return Promise.resolve({
           accounts: [{ slug: "tech", name: "tech", createdAt: 1 }],
@@ -662,6 +663,7 @@ describe("CardTerminalView — the card bar", () => {
 
   it("falls back to the profile's own slug when the session says nothing and nobody renamed it", async () => {
     mockGet.mockImplementation((url: string) => {
+      if (url === "/auth/me") return Promise.resolve({ user: { id: "1", username: "operator", role: "owner" } });
       // "" is what the server sends for "never named" — an empty pill would be worse than a slug.
       if (url === "/accounts") return Promise.resolve({ accounts: [], defaultLabel: "" });
       if (url === "/transcribe") return Promise.resolve({ available: false, proofread: false, language: null });

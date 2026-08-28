@@ -188,14 +188,31 @@ WORK.
 - Member: what has been shared with them, and their own password. Nothing else is drawn in the UI,
   and nothing else answers on the API.
 
+A **share** is `{ kind: "card" | "project", targetId, userId, level }` living in `board.json`
+beside the cards. Two levels: `work` — their terminal types into the same tmux session yours does —
+and `view` — the output streams to them and nothing they press reaches the pty (the websocket
+attaches read-only, resizes included, because tmux sizes a window to its smallest client). Sharing a
+PROJECT is the standing version of sharing a card: every card in it, including the ones created
+afterwards. A card reached both ways takes the stronger of the two levels, and a share never
+outlives the card, the project, or the person it names.
+
 Two gates carry it, both Fastify preHandlers, and every route wears exactly one:
 `requireOwner` (`auth/session.ts`) for what belongs to the install, and `requireCardAccess`
 (`auth/access.ts`) for what belongs to a card. `auth/access.ts` is also where the board listings are
 narrowed (`visibleProjects`/`visibleCards`), so a member's board is filtered rather than refused.
 
-Today `canAccessCard` answers "owner: yes, member: no". Sharing a card (or a whole project) with a
-member lands in that one function and in the listings beside it — which is why the routes ask it
-instead of asking for a role.
+**What sharing does NOT reach yet: the agent inside the card.** Every card's Claude gets the vibehub
+MCP registered with the RUNNER's token (`services/mcp/mcp.ts`), and that token is install-wide — the
+maestro tools it unlocks can list, read and type into every terminal on the board, whoever is at the
+keyboard. So a member working in a card they were given can ask its agent for what their browser
+would refuse them. Scoping those tools to the card that holds them (a token per card) is the next
+piece of this work; until then, share cards with people you would trust with the board.
+
+`cardLevel` is the one function that answers "what may this person do with this card"; every gate
+and every listing is built on it, which is why no route asks for a role. The two preHandlers split
+by verb, not by screen: reading a card is `requireCardAccess`, and anything that changes it or
+reaches its session — typing, sending, uploading, pausing, renaming, the SDK bridge, the VNC relay —
+is `requireCardWork`.
 
 ## Credentials
 

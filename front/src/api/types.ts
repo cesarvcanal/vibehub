@@ -26,6 +26,28 @@ export interface UsersResponse {
   users: User[];
 }
 
+/**
+ * What a member may do with a card that was shared with them: `work` types into the session,
+ * `view` only reads it. A card reached through its project AND directly takes the stronger of the
+ * two.
+ */
+export type ShareLevel = "work" | "view";
+
+/** A share as the server answers it — the username rides along, because the screen shows people. */
+export interface Share {
+  kind: "card" | "project";
+  targetId: string;
+  userId: string;
+  username: string;
+  level: ShareLevel;
+  createdAt: number;
+}
+
+/** `GET /api/cards/:id/shares` and `GET /api/projects/:id/shares` — owner only. */
+export interface SharesResponse {
+  shares: Share[];
+}
+
 /** `GET /api/auth/me` */
 export interface MeResponse {
   user: User;

@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { requireSession, requireOwner, currentUser } from "../auth/session.js";
-import { requireCardAccess, visibleCards, visibleProjects } from "../auth/access.js";
+import { requireCardAccess, requireCardWork, visibleCards, visibleProjects } from "../auth/access.js";
 import * as registry from "../services/board/registry.js";
 import {
   applySessionChange, killCardSession, pauseCard, prepareCard, restartCard, resumeCard,
@@ -159,7 +159,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
    * a card that looked alive with no session behind it.
    */
   app.patch<{ Params: { id: string }; Body: registry.UpdateCardInput }>(
-    "/api/cards/:id", { preHandler: requireCardAccess },
+    "/api/cards/:id", { preHandler: requireCardWork },
     async (req, reply) => {
       // SNAPSHOT before the write. `getCard` hands back the LIVE cached record and `updateCard`
       // mutates that very object, so a "before" that is not copied is really the "after": both
