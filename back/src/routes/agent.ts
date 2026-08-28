@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { requireSession } from "../auth/session.js";
+import { requireOwner, requireSession } from "../auth/session.js";
+import { requireCardAccess } from "../auth/access.js";
 import * as registry from "../services/board/registry.js";
 import { cardWorkPaths, restartStaggered } from "../services/board/workspace.js";
 import { setAccountToken, removeAccountToken, accountsTokenStatus } from "../services/accounts/token.js";
@@ -63,7 +64,7 @@ async function autoApply(
 export async function agentRoutes(app: FastifyInstance): Promise<void> {
   /* ------------------------------------------------------- Claude accounts */
 
-  app.get("/api/accounts/tokens", { preHandler: requireSession }, async (_req, reply) => {
+  app.get("/api/accounts/tokens", { preHandler: requireOwner }, async (_req, reply) => {
     return await reply.send(await accountsTokenStatus());
   });
 
@@ -72,12 +73,12 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
    * interactive login and a throttled endpoint into a per-account `error`, because this feeds a
    * widget that must not be able to break the board.
    */
-  app.get("/api/accounts/usage", { preHandler: requireSession }, async (_req, reply) => {
+  app.get("/api/accounts/usage", { preHandler: requireOwner }, async (_req, reply) => {
     return await reply.send(await allAccountsUsage());
   });
 
   app.post<{ Params: { slug: string }; Body: { token?: string } }>(
-    "/api/accounts/:slug/token", { preHandler: requireSession },
+    "/api/accounts/:slug/token", { preHandler: requireOwner },
     async (req, reply) => {
       try {
         return await reply.send(await setAccountToken(req.params.slug, req.body?.token ?? ""));
@@ -89,7 +90,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   );
 
   app.delete<{ Params: { slug: string } }>(
-    "/api/accounts/:slug/token", { preHandler: requireSession },
+    "/api/accounts/:slug/token", { preHandler: requireOwner },
     async (req, reply) => {
       try {
         return await reply.send(await removeAccountToken(req.params.slug));
@@ -102,11 +103,11 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
 
   /* ------------------------------------------------------------ MCP servers */
 
-  app.get("/api/mcps", { preHandler: requireSession }, async (_req, reply) => {
+  app.get("/api/mcps", { preHandler: requireOwner }, async (_req, reply) => {
     return await reply.send({ mcps: await registry.listMcps() });
   });
 
-  app.post<{ Body: registry.CreateMcpInput }>("/api/mcps", { preHandler: requireSession }, async (req, reply) => {
+  app.post<{ Body: registry.CreateMcpInput }>("/api/mcps", { preHandler: requireOwner }, async (req, reply) => {
     try {
       const mcp = await registry.createMcp(req.body ?? ({} as registry.CreateMcpInput));
       // Auto-applied on save (best-effort): an MCP whose secret is still missing is a silent no-op
@@ -119,7 +120,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.delete<{ Params: { id: string } }>("/api/mcps/:id", { preHandler: requireSession }, async (req, reply) => {
+  app.delete<{ Params: { id: string } }>("/api/mcps/:id", { preHandler: requireOwner }, async (req, reply) => {
     try {
       const mcp = await registry.removeMcp(req.params.id);
       // Auto-applied on save (best-effort): drops the MCP from the runner right away + staggered restart.
@@ -131,7 +132,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post<{ Params: { id: string }; Body: { key?: string; value?: string } }>(
-    "/api/mcps/:id/secret", { preHandler: requireSession },
+    "/api/mcps/:id/secret", { preHandler: requireOwner },
     async (req, reply) => {
       try {
         await setMcpSecretById(req.params.id, req.body?.key ?? "", req.body?.value ?? "");
@@ -149,13 +150,13 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
    * Which declared env vars / headers already have a value in the vault. Names and booleans only —
    * the values themselves never leave the server.
    */
-  app.get("/api/mcps/secrets", { preHandler: requireSession }, async (_req, reply) => {
+  app.get("/api/mcps/secrets", { preHandler: requireOwner }, async (_req, reply) => {
     const mcps = await registry.listMcps();
     const entries = await Promise.all(mcps.map(async (mcp) => [mcp.id, await mcpSecretsStatus(mcp)] as const));
     return await reply.send({ byMcp: Object.fromEntries(entries) });
   });
 
-  app.post("/api/mcps/apply", { preHandler: requireSession }, async (_req, reply) => {
+  app.post("/api/mcps/apply", { preHandler: requireOwner }, async (_req, reply) => {
     try {
       return await reply.send({ ok: true, ...(await applyMcpsEverywhere()) });
     } catch (err) {
@@ -166,7 +167,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
 
   /* ------------------------------------------------------------------ brain */
 
-  app.get("/api/brain", { preHandler: requireSession }, async (_req, reply) => {
+  app.get("/api/brain", { preHandler: requireOwner }, async (_req, reply) => {
     return await reply.send(await brainView());
   });
 
@@ -175,7 +176,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
    * staggered restart — best-effort, so the save never fails because of the apply (see autoApply).
    * "Apply now" remains the manual force.
    */
-  app.post<{ Body: { text?: string } }>("/api/brain", { preHandler: requireSession }, async (req, reply) => {
+  app.post<{ Body: { text?: string } }>("/api/brain", { preHandler: requireOwner }, async (req, reply) => {
     try {
       const saved = await setBrainText(req.body?.text ?? "");
       return await reply.send({ ...saved, ...(await autoApply("brain", applyBrainEverywhere)) });
@@ -186,13 +187,13 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /** Back to the seed text — the same auto-apply as a save, since the runner content changes too. */
-  app.delete("/api/brain", { preHandler: requireSession }, async (_req, reply) => {
+  app.delete("/api/brain", { preHandler: requireOwner }, async (_req, reply) => {
     await resetBrain();
     const effect = await autoApply("brain", applyBrainEverywhere);
     return await reply.send({ ...(await brainView()), ...effect });
   });
 
-  app.post("/api/brain/apply", { preHandler: requireSession }, async (_req, reply) => {
+  app.post("/api/brain/apply", { preHandler: requireOwner }, async (_req, reply) => {
     try {
       return await reply.send({ ok: true, ...(await applyBrainEverywhere()) });
     } catch (err) {
@@ -203,13 +204,17 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
 
   /* ------------------------------------------------------------- voice input */
 
+  // The only route in this file that is not the owner's: it answers "can this install
+  // transcribe at all", which is what the composer of a card asks on mount — and a member
+  // working on a card they were given has a microphone like anybody else. It carries no key
+  // and no secret, only booleans. Storing the keys (below) is the owner's.
   app.get("/api/transcribe", { preHandler: requireSession }, async (_req, reply) => {
     return await reply.send(await transcribeStatus());
   });
 
   /** Stores the operator's keys. Values never come back — only whether each one is set. */
   app.post<{ Body: { openaiKey?: string; anthropicKey?: string } }>(
-    "/api/transcribe/keys", { preHandler: requireSession },
+    "/api/transcribe/keys", { preHandler: requireOwner },
     async (req, reply) => {
       try {
         return await reply.send(await setTranscribeKeys(req.body ?? {}));
@@ -226,7 +231,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post<{ Params: { id: string }; Body: { base64?: string; mimeType?: string } }>(
     "/api/cards/:id/transcribe",
-    { preHandler: requireSession, bodyLimit: Math.ceil(AUDIO_MAX_BYTES * 1.4) },
+    { preHandler: requireCardAccess, bodyLimit: Math.ceil(AUDIO_MAX_BYTES * 1.4) },
     async (req, reply) => {
       try {
         const out = await transcribeCardAudio(req.params.id, req.body?.base64 ?? "", req.body?.mimeType ?? "audio/webm");
@@ -246,7 +251,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
    * working directory of a card is derived by the workspace module and handed in — the importer
    * must not reach into the clone/worktree lifecycle itself, and the two paths must never drift.
    */
-  app.post<{ Body: ImportInput }>("/api/import", { preHandler: requireSession }, async (req, reply) => {
+  app.post<{ Body: ImportInput }>("/api/import", { preHandler: requireOwner }, async (req, reply) => {
     try {
       const result = await importSessions(
         req.body ?? { items: [] },
@@ -260,7 +265,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /** The board's own view of what a card maps to in the runner — handy for debugging an import. */
-  app.get<{ Params: { id: string } }>("/api/cards/:id/paths", { preHandler: requireSession }, async (req, reply) => {
+  app.get<{ Params: { id: string } }>("/api/cards/:id/paths", { preHandler: requireCardAccess }, async (req, reply) => {
     const card = await registry.getCard(req.params.id);
     const project = card ? await registry.getProject(card.projectId) : undefined;
     if (!card || !project) return await reply.code(404).send({ error: "card not found" });

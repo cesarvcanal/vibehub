@@ -3,7 +3,8 @@ import type { IPty } from "node-pty";
 import pty from "node-pty";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
-import { requireSession, sessionUserId } from "../auth/session.js";
+import { requireOwner, sessionUserId } from "../auth/session.js";
+import { requireCardAccess } from "../auth/access.js";
 import * as registry from "../services/board/registry.js";
 import * as workspace from "../services/board/workspace.js";
 import * as browser from "../services/browser/browser.js";
@@ -155,7 +156,7 @@ export function needsProvisioning(card: Pick<registry.Card, "openedAt" | "prepar
 export async function sessionRoutes(app: FastifyInstance): Promise<void> {
   /* -------------------------------------------------------------- lifecycle */
 
-  app.post<{ Params: { id: string } }>("/api/cards/:id/open", { preHandler: requireSession }, async (req, reply) => {
+  app.post<{ Params: { id: string } }>("/api/cards/:id/open", { preHandler: requireCardAccess }, async (req, reply) => {
     try {
       return await reply.send({ card: await workspace.openCard(req.params.id) });
     } catch (err) {
@@ -164,7 +165,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.post<{ Params: { id: string } }>("/api/cards/:id/pause", { preHandler: requireSession }, async (req, reply) => {
+  app.post<{ Params: { id: string } }>("/api/cards/:id/pause", { preHandler: requireCardAccess }, async (req, reply) => {
     try {
       return await reply.send({ card: await workspace.pauseCard(req.params.id) });
     } catch (err) {
@@ -178,7 +179,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
    * nothing to hibernate (never opened, already cold, or `working`) is not an error — the answer is
    * the card as it stands, so the UI can just re-render it.
    */
-  app.post<{ Params: { id: string } }>("/api/cards/:id/hibernate", { preHandler: requireSession }, async (req, reply) => {
+  app.post<{ Params: { id: string } }>("/api/cards/:id/hibernate", { preHandler: requireCardAccess }, async (req, reply) => {
     try {
       const hibernated = await workspace.hibernateCard(req.params.id);
       const card = hibernated ?? (await registry.getCard(req.params.id));
@@ -190,7 +191,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.post<{ Params: { id: string } }>("/api/cards/:id/restart", { preHandler: requireSession }, async (req, reply) => {
+  app.post<{ Params: { id: string } }>("/api/cards/:id/restart", { preHandler: requireCardAccess }, async (req, reply) => {
     try {
       return await reply.send({ card: await workspace.restartCard(req.params.id) });
     } catch (err) {
@@ -199,7 +200,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.post("/api/cards/restart-all", { preHandler: requireSession }, async (_req, reply) => {
+  app.post("/api/cards/restart-all", { preHandler: requireOwner }, async (_req, reply) => {
     try {
       return await reply.send(await workspace.restartAllCards());
     } catch (err) {
@@ -211,7 +212,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
    * Deleting a card tears down its runner side first (session, then worktree) and only then drops
    * it from the board — the other order would leave an orphan session nothing points at.
    */
-  app.delete<{ Params: { id: string } }>("/api/cards/:id", { preHandler: requireSession }, async (req, reply) => {
+  app.delete<{ Params: { id: string } }>("/api/cards/:id", { preHandler: requireOwner }, async (req, reply) => {
     const card = await registry.getCard(req.params.id);
     if (!card) return await reply.code(404).send({ error: "card not found" });
     try {
@@ -225,7 +226,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post<{ Params: { id: string }; Body: { name?: string; content?: string } }>(
-    "/api/cards/:id/upload", { preHandler: requireSession },
+    "/api/cards/:id/upload", { preHandler: requireCardAccess },
     async (req, reply) => {
       const { name = "image.png", content = "" } = req.body ?? {};
       try {
@@ -246,7 +247,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
    * yet used to swallow whatever you sent it — see services/board/outbox.ts.
    */
   app.post<{ Params: { id: string }; Body: { text?: string } }>(
-    "/api/cards/:id/messages", { preHandler: requireSession },
+    "/api/cards/:id/messages", { preHandler: requireCardAccess },
     async (req, reply) => {
       try {
         const by = (await sessionUserId(req)) ?? undefined;
@@ -260,7 +261,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
 
   /** What is still waiting for this card, and whether the agent is up to receive it. */
   app.get<{ Params: { id: string } }>(
-    "/api/cards/:id/messages", { preHandler: requireSession },
+    "/api/cards/:id/messages", { preHandler: requireCardAccess },
     async (req, reply) => {
       try {
         return await reply.send(await outbox.outboxStatus(req.params.id));
@@ -273,7 +274,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
 
   /** Gives up on a queued message (the ✕ on a pending chip). */
   app.delete<{ Params: { id: string; messageId: string } }>(
-    "/api/cards/:id/messages/:messageId", { preHandler: requireSession },
+    "/api/cards/:id/messages/:messageId", { preHandler: requireCardAccess },
     async (req, reply) => {
       const removed = await outbox.cancelMessage(req.params.id, req.params.messageId);
       if (!removed) return await reply.code(404).send({ error: "message not found" });
@@ -283,7 +284,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
 
   /* ---------------------------------------------------------------- browser */
 
-  app.post<{ Params: { id: string } }>("/api/cards/:id/browser", { preHandler: requireSession }, async (req, reply) => {
+  app.post<{ Params: { id: string } }>("/api/cards/:id/browser", { preHandler: requireCardAccess }, async (req, reply) => {
     try {
       return await reply.send({ ports: await browser.openCardBrowser(req.params.id) });
     } catch (err) {
@@ -292,7 +293,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.delete<{ Params: { id: string } }>("/api/cards/:id/browser", { preHandler: requireSession }, async (req, reply) => {
+  app.delete<{ Params: { id: string } }>("/api/cards/:id/browser", { preHandler: requireCardAccess }, async (req, reply) => {
     try {
       await browser.closeCardBrowser(req.params.id);
       return await reply.send({ ok: true });
@@ -306,7 +307,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
 
   app.get<{ Params: { id: string }; Querystring: { shell?: string } }>(
     "/api/cards/:id/terminal",
-    { websocket: true, preHandler: requireSession },
+    { websocket: true, preHandler: requireCardAccess },
     async (socket: WebSocket, req) => {
       const card = await registry.getCard(req.params.id);
       const project = card ? await registry.getProject(card.projectId) : undefined;
@@ -380,7 +381,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
    */
   app.get<{ Params: { id: string } }>(
     "/api/cards/:id/vnc",
-    { websocket: true, preHandler: requireSession },
+    { websocket: true, preHandler: requireCardAccess },
     async (socket: WebSocket, req) => {
       let bridge: Awaited<ReturnType<typeof browser.cardVncBridge>>;
       try {

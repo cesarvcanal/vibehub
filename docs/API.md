@@ -3,6 +3,22 @@
 Everything lives under `/api`. JSON in, JSON out. Every route requires a session cookie except the
 ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx status.
 
+## Roles
+
+Two, and only two:
+
+- **owner** — the install is theirs: every project and card, the Claude accounts, the vault, the MCP
+  servers, the brain, the settings, the runner, and the people. The setup wizard creates the first
+  one.
+- **member** — somebody the owner invited. They see only what has been **shared** with them, which
+  today is nothing; the sharing of a card (and of a whole project) is the next increment.
+
+Routes marked **owner** answer `403 { "error": "owner only" }` to a member. Card-scoped routes
+(`/api/cards/:id/...`) answer **404** when the card is not visible to the caller — to somebody who
+cannot see a card, that card does not exist, and a 403 would confirm the id names something real.
+The listings (`/api/projects`, `/api/cards`, `/api/projects/:id/cards`) are filtered to what the
+caller may see rather than refused. `/mcp` accepts the runner token or an **owner** session.
+
 ## Setup & auth
 
 | Method | Path | Body / notes |
@@ -12,9 +28,24 @@ ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx statu
 | POST | `/api/auth/login` | **public** — `{ username, password }` → sets the session cookie. |
 | POST | `/api/auth/logout` | — |
 | POST | `/api/auth/password` | `{ password }` — change your own password |
-| GET | `/api/auth/me` | `{ user: { id, username } }` |
+| GET | `/api/auth/me` | `{ user: { id, username, role, createdAt } }` |
+
+## Access — the install's people
+
+**owner** only, all of it. There is no sign-up and no invitation email: the owner types a username
+and a password and hands them over. The **last owner** can be neither demoted nor removed (400) —
+an install with no owner is an install nobody can administer.
+
+| Method | Path | Body / notes |
+|---|---|---|
+| GET | `/api/users` | `{ users: [{ id, username, role, createdAt }] }` — never a hash or a salt |
+| POST | `/api/users` | `{ username, password, role? }` → `{ user }`; `role` defaults to `"member"` |
+| PATCH | `/api/users/:id` | `{ password?, role? }` → `{ user }` — reset a password, change a role, or both |
+| DELETE | `/api/users/:id` | `{ ok: true, user }`; removing YOURSELF also clears your session cookie |
 
 ## Settings
+
+**owner** only.
 
 | Method | Path | Body / notes |
 |---|---|---|
@@ -23,6 +54,8 @@ ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx statu
 | POST | `/api/settings/setup-complete` | stamps the install as set up so the wizard stops taking over |
 
 ## GitHub
+
+**owner** only.
 
 There is no OAuth flow: a connection is a **pasted token** — a fine-grained PAT with Contents
 read/write on the repositories you want, or a classic token with `repo`.
@@ -47,6 +80,8 @@ connection #1 (label = its login) and the secret moves to `GITHUB_TOKEN_<id>`. I
 
 ## Runner
 
+**owner** only (except the public status callback).
+
 | Method | Path | Body / notes |
 |---|---|---|
 | GET | `/api/runner` | `RunnerStatus` = `{ running, exists, claudeInstalled, dockerReachable, container, host, detail?, provisioning, terminal: true }` |
@@ -64,6 +99,10 @@ finishes the pause for the ones that are no longer generating. A card in Paused 
 running.
 
 ## Projects & cards
+
+Creating, editing and deleting a project (and creating or deleting a card) is the **owner**'s. The
+listings are filtered to what the caller may see; reading and editing ONE card follows access to
+that card.
 
 | Method | Path | Body / notes |
 |---|---|---|
@@ -95,6 +134,8 @@ running.
 | WS | `/api/cards/:id/vnc` | noVNC bridge for the card browser |
 
 ## Claude accounts, MCPs, brain, import
+
+**owner** only, except the card-scoped routes (`/api/cards/:id/upload`, `/api/cards/:id/transcribe`, `/api/cards/:id/paths`), which follow the card.
 
 | Method | Path | Body / notes |
 |---|---|---|

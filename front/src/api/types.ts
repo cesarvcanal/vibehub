@@ -8,9 +8,22 @@
 
 /* ------------------------------------------------------------------ auth */
 
+/**
+ * `owner` runs the install (every project, every card, the accounts, the vault, the settings, the
+ * people). `member` is somebody the owner invited: they see only what has been shared with them.
+ */
+export type Role = "owner" | "member";
+
 export interface User {
   id: string;
   username: string;
+  role: Role;
+  createdAt?: string;
+}
+
+/** `GET /api/users` — owner only. */
+export interface UsersResponse {
+  users: User[];
 }
 
 /** `GET /api/auth/me` */

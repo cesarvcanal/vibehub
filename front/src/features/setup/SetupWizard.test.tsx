@@ -35,7 +35,7 @@ function serve(state: SetupState, { signedIn = false } = {}) {
     }
     if (url === "/auth/me") {
       return signedIn
-        ? Promise.resolve({ user: { id: "1", username: "operator" } })
+        ? Promise.resolve({ user: { id: "1", username: "operator", role: "owner" } })
         : Promise.reject(apiReject(401, "no session"));
     }
     if (url === "/github") return Promise.resolve({ connected: false });
@@ -255,7 +255,7 @@ describe("SetupWizard — runner step", () => {
     let state = partial({ owner: true });
     mockGet.mockImplementation((url: string) => {
       if (url === "/setup/state") return Promise.resolve(state);
-      if (url === "/auth/me") return Promise.resolve({ user: { id: "1", username: "operator" } });
+      if (url === "/auth/me") return Promise.resolve({ user: { id: "1", username: "operator", role: "owner" } });
       return Promise.reject(new Error(`unexpected GET ${url}`));
     });
     mockPatch.mockResolvedValue({});
@@ -341,7 +341,7 @@ describe("SetupWizard — GitHub step", () => {
     let state = partial({ owner: true, runner: true });
     mockGet.mockImplementation((url: string) => {
       if (url === "/setup/state") return Promise.resolve(state);
-      if (url === "/auth/me") return Promise.resolve({ user: { id: "1", username: "operator" } });
+      if (url === "/auth/me") return Promise.resolve({ user: { id: "1", username: "operator", role: "owner" } });
       if (url === "/github") {
         return Promise.resolve({
           connections: [{ id: "OCTO_DEV", label: "personal", login: "octo-dev", createdAt: 1, ok: true }],

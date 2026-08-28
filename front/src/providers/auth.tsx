@@ -9,6 +9,14 @@ export const ME_KEY = ["auth", "me"] as const;
 export interface AuthValue {
   user: User | null;
   isAuthenticated: boolean;
+  /**
+   * The signed-in person runs this install. It decides what the UI even OFFERS — the managers, the
+   * settings, the New project button. The server enforces the same thing on every route; this is
+   * so a member is never shown a button that would 403.
+   *
+   * Unknown (no session yet) reads as false: show nothing until we know.
+   */
+  isOwner: boolean;
   /** The install has never been configured — everything should funnel into /setup. */
   isFresh: boolean;
   setup: SetupState | undefined;
@@ -63,6 +71,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     () => ({
       user: meQuery.data ?? null,
       isAuthenticated: Boolean(meQuery.data),
+      isOwner: meQuery.data?.role === "owner",
       isFresh: setupQuery.data?.fresh === true,
       setup: setupQuery.data,
       isLoading: meQuery.isPending || setupQuery.isPending,

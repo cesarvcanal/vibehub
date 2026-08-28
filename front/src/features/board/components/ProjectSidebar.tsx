@@ -107,6 +107,7 @@ export function ProjectSidebar({
   onNewCard,
   onNewGlobalCard,
   onDeleteProject,
+  canManage = true,
   onShowAllProjects,
   inline = false,
 }: {
@@ -125,6 +126,13 @@ export function ProjectSidebar({
   onReorder: (id: string, position: number) => void;
   onNewProject: () => void;
   onNewCard: (project: BoardProject) => void;
+  /**
+   * The signed-in person may create and delete things here. False for a member, who has been given
+   * cards to work on and nothing to administer — the server refuses those calls anyway, so this is
+   * about not offering a button that answers 403. Defaults to true: every caller but the member
+   * path is the owner.
+   */
+  canManage?: boolean;
   /**
    * Create a card with NO project implied — the `+` beside the brand. The dialog then asks which
    * project it belongs to. Omitted where a global create makes no sense; the button hides itself.
@@ -245,16 +253,18 @@ export function ProjectSidebar({
                 {t("board.projects", { n: projects.length })}
               </span>
               {/* Creating a project belongs on the list of projects, not in the page header. */}
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                aria-label={t("sidebar.newProject")}
-                title={t("sidebar.newProject")}
-                onClick={onNewProject}
-              >
-                <Plus className="h-4 w-4" />
-              </Button>
+              {canManage ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                  aria-label={t("sidebar.newProject")}
+                  title={t("sidebar.newProject")}
+                  onClick={onNewProject}
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+              ) : null}
             </div>
           </>
         )}

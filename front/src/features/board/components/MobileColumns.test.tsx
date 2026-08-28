@@ -104,7 +104,7 @@ beforeEach(() => {
   mockGet.mockImplementation(async (url: string) => {
     if (/^\/projects\/.+\/cards$/.test(url)) return { cards: CARDS };
     if (url === "/accounts") return { accounts: [], defaultLabel: "" };
-    if (url === "/auth/me") return { user: { id: "1", username: "operator" } };
+    if (url === "/auth/me") return { user: { id: "1", username: "operator", role: "owner" } };
     return {};
   });
 });

@@ -10,6 +10,7 @@ import fastifyStatic from "@fastify/static";
 import { config } from "./config/env.js";
 import { logger } from "./utils/logger.js";
 import { authRoutes } from "./routes/auth.js";
+import { usersRoutes } from "./routes/users.js";
 import { settingsRoutes } from "./routes/settings.js";
 import { githubRoutes } from "./routes/github.js";
 import { runnerRoutes } from "./routes/runner.js";
@@ -48,6 +49,7 @@ export async function buildServer() {
   app.get("/api/health", async () => ({ ok: true, version: "0.1.0" }));
 
   await app.register(authRoutes);
+  await app.register(usersRoutes);
   await app.register(settingsRoutes);
   await app.register(githubRoutes);
   await app.register(runnerRoutes);
