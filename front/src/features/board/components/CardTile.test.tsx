@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CardTile } from "@/features/board/components/CardTile";
+import { get } from "@/lib/api";
 import { renderApp } from "@/test/render";
 import type { BoardCard } from "@/features/board/api";
 
@@ -174,6 +175,23 @@ describe("CardTile — the card is a link", () => {
 });
 
 describe("CardTile — the ⋯ menu", () => {
+  it("offers Share\u2026 to the owner, who is the only one who can hand a card on", async () => {
+    const user = userEvent.setup();
+    // The default mock answers {} to everything, so there is no session and no Share item — which
+    // is exactly what a member sees. Here somebody IS signed in, and they own the install.
+    vi.mocked(get).mockImplementation(async (url: string) =>
+      url === "/auth/me" ? { user: { id: "u1", username: "cesar", role: "owner" } } : {},
+    );
+    try {
+      renderApp(<CardTile card={card({ openedAt: 5 })} onOpen={vi.fn()} onDelete={vi.fn()} />);
+      await user.click(screen.getByRole("button", { name: "Actions for fix the totals" }));
+      const items = await screen.findAllByRole("menuitem");
+      expect(items.map((i) => i.textContent)).toContain("Share\u2026");
+    } finally {
+      vi.mocked(get).mockResolvedValue({});
+    }
+  });
+
   it("offers card management, in order, behind one trigger", async () => {
     const user = userEvent.setup();
     renderApp(

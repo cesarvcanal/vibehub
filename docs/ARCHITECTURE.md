@@ -201,6 +201,13 @@ Two gates carry it, both Fastify preHandlers, and every route wears exactly one:
 (`auth/access.ts`) for what belongs to a card. `auth/access.ts` is also where the board listings are
 narrowed (`visibleProjects`/`visibleCards`), so a member's board is filtered rather than refused.
 
+**What sharing does NOT reach yet: the agent inside the card.** Every card's Claude gets the vibehub
+MCP registered with the RUNNER's token (`services/mcp/mcp.ts`), and that token is install-wide — the
+maestro tools it unlocks can list, read and type into every terminal on the board, whoever is at the
+keyboard. So a member working in a card they were given can ask its agent for what their browser
+would refuse them. Scoping those tools to the card that holds them (a token per card) is the next
+piece of this work; until then, share cards with people you would trust with the board.
+
 `cardLevel` is the one function that answers "what may this person do with this card"; every gate
 and every listing is built on it, which is why no route asks for a role. The two preHandlers split
 by verb, not by screen: reading a card is `requireCardAccess`, and anything that changes it or

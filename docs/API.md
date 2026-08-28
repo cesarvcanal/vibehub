@@ -117,6 +117,10 @@ running.
 A share never outlives what it points at: deleting a card, a project (with its cards) or a person
 drops theirs.
 
+`/mcp` is not narrowed by a share: it authenticates the RUNNER, and the maestro tools reach every
+card on the board. A member cannot call it from a browser (owner session or runner token only), but
+the agent inside a card they were given can — see "Who can see what" in `ARCHITECTURE.md`.
+
 ## Projects & cards
 
 Creating, editing and deleting a project (and creating or deleting a card) is the **owner**'s. The
