@@ -498,6 +498,16 @@ export interface ImportSession {
   updatedAt?: number;
 }
 
+/** One TCP port listening inside the runner — `GET /api/preview/ports`. */
+export interface PreviewPort {
+  port: number;
+  /** Where the server bound. Informational: the proxy reaches all of them. */
+  address: "loopback" | "all" | "other";
+  /** Best-effort process name ("node", "vite", …). */
+  process?: string;
+  pid?: number;
+}
+
 /* --------------------------------------------------------------- generic */
 
 /** Every non-2xx response body. */

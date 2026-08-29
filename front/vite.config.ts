@@ -21,6 +21,13 @@ export default defineConfig({
         // Terminal, VNC and provisioning logs all ride WebSockets under /api.
         ws: true,
       },
+      // The preview proxy tab (`/preview/<port>/...`) belongs to the back-end; HMR of the
+      // PREVIEWED app rides WebSockets under it too.
+      "/preview": {
+        target: BACKEND,
+        changeOrigin: true,
+        ws: true,
+      },
     },
   },
   build: {

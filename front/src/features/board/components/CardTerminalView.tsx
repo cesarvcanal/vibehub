@@ -33,6 +33,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { XTerminal } from "@/features/board/components/XTerminal";
 import { ChatView } from "@/features/board/components/ChatView";
 import { VncPanel } from "@/features/board/components/VncPanel";
+import { PreviewMenu } from "@/features/board/components/PreviewMenu";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
 import { CardOutbox } from "@/features/board/components/CardOutbox";
 import { nextPosition, statusDot } from "@/features/board/lib/board";
@@ -770,6 +771,7 @@ export function CardTerminalView({
         <div className="flex shrink-0 items-center gap-1.5">
           {/* The two extra panes of THIS card. They were a footer row; a footer row costs a line of
               terminal, and these are configuration-weight controls that belong beside the pills. */}
+          <PreviewMenu disabled={!showTerminal} />
           <PaneToggle
             label={t("cardView.browser")}
             open={browserOpen}
@@ -882,6 +884,7 @@ export function CardTerminalView({
 
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
         {showTerminal ? <ConnectionIndicator state={connection} /> : null}
+        <PreviewMenu compact disabled={!showTerminal} />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
