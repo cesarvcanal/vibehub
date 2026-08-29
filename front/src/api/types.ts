@@ -333,8 +333,22 @@ export interface Card {
   declaredSummary?: string;
   /** Last time a human typed into this card's terminal (epoch ms). */
   humanActiveAt?: number;
+  /**
+   * Previews the agent registered (via `vibehub_preview`): ports to open through `/preview/<port>/`.
+   * The chip on the card bar and the first section of the Preview menu render from this. Absent =
+   * the agent registered none. The server prunes entries whose port stopped listening.
+   */
+  previews?: CardPreview[];
   createdAt: number;
   updatedAt?: number;
+}
+
+/** One preview the agent announced on a card — see `Card.previews`. */
+export interface CardPreview {
+  port: number;
+  /** What the agent called it ("front", "storybook"). Absent = the port speaks for itself. */
+  label?: string;
+  createdAt: number;
 }
 
 /** The agent's own read of where its work stands — see `Card.declaredState`. */
