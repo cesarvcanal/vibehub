@@ -371,6 +371,13 @@ function SdkChatRow({ row, onPermission }: { row: SdkRow; onPermission?: (id: st
       >
         <AlertTriangle className="h-3.5 w-3.5 shrink-0 translate-y-0.5" />
         <span className="min-w-0 whitespace-pre-wrap break-words">{errorText(row.text, t)}</span>
+        {/* The reconnect loop repeats the SAME refusal; the reducer folds the copies into one row
+            and this badge is how the row says it kept happening. */}
+        {(row.count ?? 1) > 1 ? (
+          <span data-testid="sdk-error-count" className="ml-auto shrink-0 font-mono tabular-nums opacity-80">
+            ×{row.count}
+          </span>
+        ) : null}
       </div>
     );
   }
