@@ -733,6 +733,17 @@ describe("board registry (persisted)", () => {
       await expect(reg.updateCard(card.id, { resumeSessionId: "abc; rm -rf /" })).rejects.toThrow(/resumeSessionId/);
     });
 
+    it("sdkChat: opt-in stores true, false/null clear to ABSENT, non-boolean rejected", async () => {
+      const p = await seedProject();
+      const card = await reg.createCard({ projectId: p.id, title: "a" });
+      expect(card.sdkChat).toBeUndefined(); // default: the TUI path, untouched
+      expect((await reg.updateCard(card.id, { sdkChat: true })).sdkChat).toBe(true);
+      expect((await reg.updateCard(card.id, { sdkChat: false })).sdkChat).toBeUndefined();
+      expect((await reg.updateCard(card.id, { sdkChat: true })).sdkChat).toBe(true);
+      expect((await reg.updateCard(card.id, { sdkChat: null })).sdkChat).toBeUndefined();
+      await expect(reg.updateCard(card.id, { sdkChat: "yes" as unknown as boolean })).rejects.toThrow(/sdkChat/);
+    });
+
     it("branch and base: validated, null/'' clears branch, injection rejected", async () => {
       const p = await seedProject();
       const card = await reg.createCard({ projectId: p.id, title: "a" });
