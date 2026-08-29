@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { PreviewMenu, previewUrl, parsePortInput } from "@/features/board/components/PreviewMenu";
+import {
+  PreviewMenu,
+  PreviewChip,
+  previewUrl,
+  parsePortInput,
+  previewName,
+  sortPreviews,
+} from "@/features/board/components/PreviewMenu";
 import { renderApp } from "@/test/render";
 import { get } from "@/lib/api";
 
@@ -58,6 +65,45 @@ describe("previewUrl / parsePortInput", () => {
   });
 });
 
+describe("previewName / sortPreviews", () => {
+  it("names a preview by its label, falling back to the port", () => {
+    expect(previewName({ port: 5173, label: "front" })).toBe("front");
+    expect(previewName({ port: 5173, label: "  " })).toBe(":5173");
+    expect(previewName({ port: 5173 })).toBe(":5173");
+  });
+
+  it("sorts newest first without mutating the input; tolerates undefined", () => {
+    const list = [
+      { port: 3000, createdAt: 1 },
+      { port: 5173, createdAt: 2 },
+    ];
+    expect(sortPreviews(list).map((p) => p.port)).toEqual([5173, 3000]);
+    expect(list[0]!.port).toBe(3000);
+    expect(sortPreviews(undefined)).toEqual([]);
+  });
+});
+
+describe("PreviewChip", () => {
+  it("renders nothing without previews; shows the LATEST one and opens it in a new tab", async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderApp(<PreviewChip previews={[]} />);
+    expect(screen.queryByTestId("preview-chip")).not.toBeInTheDocument();
+
+    rerender(
+      <PreviewChip
+        previews={[
+          { port: 3000, label: "api", createdAt: 1 },
+          { port: 5173, label: "front", createdAt: 2 },
+        ]}
+      />,
+    );
+    const chip = screen.getByTestId("preview-chip");
+    expect(chip).toHaveTextContent("Preview: front");
+    await user.click(chip);
+    expect(opened).toEqual(["/preview/5173/"]);
+  });
+});
+
 describe("PreviewMenu", () => {
   it("scans on open and lists what is listening, with the process name", async () => {
     const user = userEvent.setup();
@@ -95,6 +141,28 @@ describe("PreviewMenu", () => {
     await user.type(input, "99999{Enter}");
     expect(opened).toEqual([]);
     expect(screen.getByRole("button", { name: "Open" })).toBeDisabled();
+  });
+
+  it("lists registered previews FIRST (label + port) and hides them from the scan section", async () => {
+    const user = userEvent.setup();
+    renderApp(
+      <PreviewMenu
+        previews={[
+          { port: 5173, label: "front", createdAt: 2 },
+          { port: 4000, createdAt: 1 },
+        ]}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Preview" }));
+    expect(await screen.findByText("Announced by the agent")).toBeInTheDocument();
+    expect(screen.getByText("front")).toBeInTheDocument();
+    // 5173 is registered, so the scan section keeps only 3000; the registered row shows :5173.
+    expect(screen.getByText(":5173")).toBeInTheDocument();
+    expect(screen.getByText(":3000")).toBeInTheDocument();
+    expect(screen.queryByText("vite")).not.toBeInTheDocument();
+
+    await user.click(screen.getByText("front"));
+    expect(opened).toEqual(["/preview/5173/"]);
   });
 
   it("says so when nothing is listening", async () => {

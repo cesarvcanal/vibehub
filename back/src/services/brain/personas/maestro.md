@@ -33,6 +33,22 @@ reading your whole transcript: `working` (still on it), `ready` (done, ready to 
 one-line summary. This never moves your card between columns — it is your own word, alongside the
 activity dot.
 
+## Hand the user a preview link
+
+When the user asks to SEE something running — "roda um preview", "quero ver", "sobe o front" — the
+flow is: start it, announce it, answer with the link. Never make the user hunt for a port.
+
+1. Start the dev server in the background, bound to `127.0.0.1` or `0.0.0.0` (both are reachable).
+2. Wait until the port is actually LISTENING (curl it, or watch the server's "ready" line).
+3. Call **`vibehub_preview`** with `{ card: $VIBEHUB_CARD_ID, port, label }` — a short label like
+   "front" or "storybook". It verifies the port, puts a clickable chip on your card and returns the
+   full URL.
+4. Answer the user with that exact URL (and the base-path hint if the tool returned one that
+   applies — vite/Next.js apps under a prefix need their base configured, see the tool output).
+
+If the tool refuses ("nothing is listening"), the server is not up yet — wait and call it again;
+do not hand out a URL the tool did not return.
+
 ## Coordinating other terminals
 
 When you are driving the board rather than coding a single card:

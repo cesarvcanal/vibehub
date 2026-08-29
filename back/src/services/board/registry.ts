@@ -71,6 +71,37 @@ export function normalizeSummary(summary: string | null | undefined): string {
   return String(summary ?? "").replace(/\s+/g, " ").trim().slice(0, DECLARED_SUMMARY_MAX);
 }
 
+/* ------------------------------------------------------------------ previews */
+
+/**
+ * A PREVIEW the card's agent registered (`vibehub_preview`): a TCP port inside the runner that the
+ * user can open through the `/preview/<port>/` proxy. Registering is the agent handing the user a
+ * LINK — the chip on the card bar and the first section of the Preview menu render from this list.
+ */
+export interface CardPreview {
+  port: number;
+  /** What the agent called it ("front", "storybook"). Absent = the port speaks for itself. */
+  label?: string;
+  createdAt: number;
+}
+
+/** Preview labels ride into a chip; one trimmed line, capped. */
+export const PREVIEW_LABEL_MAX = 60;
+
+/** Normalizes a preview label: one trimmed line, capped, empty -> undefined. PURE. */
+export function normalizePreviewLabel(label: string | null | undefined): string | undefined {
+  const v = String(label ?? "").replace(/\s+/g, " ").trim().slice(0, PREVIEW_LABEL_MAX);
+  return v || undefined;
+}
+
+/** A usable TCP port for a preview. THROWS otherwise — it becomes part of a URL and a proxy target. PURE. */
+export function assertPreviewPort(port: number): number {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`invalid preview port (expected 1-65535): '${String(port)}'`);
+  }
+  return port;
+}
+
 /**
  * HUMAN-ACTIVE WINDOW — a card counts as "a human is at this terminal right now" for this long after
  * the last keystroke a person typed into it (stamped as `humanActiveAt`). While it holds, a maestro
@@ -251,6 +282,12 @@ export interface Card {
   declaredState?: DeclaredState;
   /** One-line summary the agent reported alongside `declaredState`. Trimmed and capped. */
   declaredSummary?: string;
+  /**
+   * PREVIEWS the agent registered on this card (`vibehub_preview`): ports the user can open through
+   * the proxy, deduped by port. Ports that stop listening are pruned when the runner is scanned
+   * (GET /api/preview/ports) — no daemon watches them. Absent = the agent registered none.
+   */
+  previews?: CardPreview[];
   /**
    * Last time a HUMAN typed into this card's terminal (epoch ms). The websocket stamps it (throttled)
    * on inbound keystrokes; {@link isHumanActive} reads it. A maestro must not send to a human-active
@@ -1318,6 +1355,51 @@ export async function reportCardState(
     card.declaredSummary = declaredSummary || undefined;
     card.updatedAt = Date.now();
     return card;
+  });
+}
+
+/**
+ * Registers a PREVIEW on a card (`vibehub_preview`): the agent says "there is something to see on
+ * this port". DEDUPED BY PORT — registering the same port again refreshes the label and the stamp
+ * instead of stacking a second chip. The caller has already checked the port is actually listening
+ * (services/preview/announce.ts); this only records it. Unknown card -> undefined.
+ */
+export async function registerCardPreview(
+  cardId: string,
+  port: number,
+  label?: string | null,
+): Promise<Card | undefined> {
+  const p = assertPreviewPort(port); // validate BEFORE entering the mutation (cached doc)
+  const clean = normalizePreviewLabel(label);
+  return store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    if (!card) return undefined;
+    const preview: CardPreview = { port: p, ...(clean ? { label: clean } : {}), createdAt: Date.now() };
+    card.previews = [...(card.previews ?? []).filter((v) => v.port !== p), preview];
+    card.updatedAt = Date.now();
+    return card;
+  });
+}
+
+/**
+ * Drops every registered preview whose port is NOT in `listening` — the cleanup that keeps dead
+ * links off the cards without a daemon: it runs whenever the runner's ports are scanned (the
+ * Preview menu opening, a registration). Cards with no previews are untouched, `updatedAt` only
+ * moves on the cards that actually lost one. Returns how many previews went.
+ */
+export async function pruneCardPreviews(listening: readonly number[]): Promise<number> {
+  const alive = new Set(listening);
+  return store.mutate((doc) => {
+    let pruned = 0;
+    for (const card of doc.cards) {
+      if (!card.previews?.length) continue;
+      const kept = card.previews.filter((p) => alive.has(p.port));
+      if (kept.length === card.previews.length) continue;
+      pruned += card.previews.length - kept.length;
+      card.previews = kept.length > 0 ? kept : undefined;
+      card.updatedAt = Date.now();
+    }
+    return pruned;
   });
 }
 

@@ -9,6 +9,24 @@ port. **Preview** puts that server in your own browser tab.
 2. The menu scans the runner and lists every port that is listening, with the process name.
 3. Click a port — or type one — and it opens in a new tab at `http://<vibehub>/preview/<port>/`.
 
+## The request → link flow (`vibehub_preview`)
+
+You should not have to hunt for ports. Ask the card's agent for a preview ("roda um preview",
+"quero ver") and the flow is:
+
+1. The agent starts the dev server inside the runner and waits for it to listen.
+2. It calls the **`vibehub_preview`** MCP tool with `{ card, port, label }`. vibehub verifies the
+   port is actually listening (same scan as the menu), records the preview on the card and returns
+   the full URL (`<publicUrl>/preview/<port>/`).
+3. The agent answers with that link, and the card grows a **chip** ("Preview: front") on its bar —
+   click it and the app opens in a new tab. The Preview menu lists the announced previews first,
+   above the raw port scan.
+
+If the announced port is not listening, the tool refuses and tells the agent what is — so a link
+you receive is a link that worked at the moment it was announced. Registered previews whose port
+stops listening are pruned the next time the runner is scanned (opening the menu does it); there
+is no background daemon watching them.
+
 ## How it works
 
 The runner container publishes no ports and sits on a Docker network your machine cannot route to,
