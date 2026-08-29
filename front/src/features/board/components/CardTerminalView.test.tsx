@@ -925,6 +925,27 @@ describe("CardTerminalView — the phone", () => {
     expect(await screen.findByTestId("vnc")).toBeInTheDocument();
   });
 
+  it("offers the native chat toggle on BOTH widths — the desktop `⋯` too, not only the phone's menu", async () => {
+    // Regression: the toggle shipped inside the phone's overflow menu only, so on a desktop there
+    // was simply NO way to turn native chat on for a card.
+    for (const mobile of [true, false]) {
+      setViewport(mobile);
+      mockPatch.mockClear();
+      mockPatch.mockResolvedValue({ card: card({ openedAt: 10, sdkChat: true }) });
+      const user = userEvent.setup();
+      const { unmount } = renderApp(
+        <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />,
+      );
+
+      await user.click(await screen.findByTestId("card-bar-more"));
+      const toggle = await screen.findByTestId("card-native-chat-toggle");
+      expect(toggle).toHaveAttribute("aria-checked", "false");
+      await user.click(toggle);
+      await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/cards/c1", { sdkChat: true }));
+      unmount();
+    }
+  });
+
   it("leaves the desktop bar as the single row it has always been", async () => {
     renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
 

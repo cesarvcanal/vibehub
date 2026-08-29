@@ -51,6 +51,18 @@ describe("settings", () => {
     const s = await fresh();
     await expect(s.updateSettings({ git: { name: "  " } })).rejects.toThrow(/cannot be empty/);
     await expect(s.updateSettings({ git: { email: "not-an-email" } })).rejects.toThrow(/valid address/);
+    await expect(s.updateSettings({ git: { email: "two words@host" } })).rejects.toThrow(/valid address/);
+    await expect(s.updateSettings({ git: { email: "a@b@c" } })).rejects.toThrow(/valid address/);
+  });
+
+  it("accepts the seeded default git email — a dotless host is valid for git", async () => {
+    const s = await fresh();
+    // Regression: the validator once required a dot in the host, so `vibehub@localhost` (the
+    // seeded default) failed its OWN validation and the settings form could not save ANYTHING.
+    const seeded = (await s.getSettings()).git.email;
+    expect((await s.updateSettings({ git: { email: seeded } })).git.email).toBe(seeded);
+    expect((await s.updateSettings({ git: { email: "cesar@localhost" } })).git.email).toBe("cesar@localhost");
+    expect((await s.updateSettings({ git: { email: "ada@example.com" } })).git.email).toBe("ada@example.com");
   });
 
   it("normalizes an empty default account label to null", async () => {

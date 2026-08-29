@@ -95,6 +95,47 @@ describe("applySdkEvent", () => {
     ]);
     expect(state.rows.map((r) => r.kind)).toEqual(["error", "error"]);
   });
+
+  it("collapses the SAME error repeated by a reconnect loop into one counted row", () => {
+    // Flag off: every reconnect attempt is refused with the identical message. A validation
+    // session once stacked ~14 copies of this banner; now it is one row that counts.
+    const refusal = { type: "error", message: "the SDK driver is off (enable the sdkDriver setting)" } as const;
+    const state = feed(Array.from({ length: 14 }, () => ({ ...refusal })));
+    expect(state.rows).toHaveLength(1);
+    expect(state.rows[0]).toMatchObject({ kind: "error", text: refusal.message, count: 14 });
+  });
+
+  it("keeps DIFFERENT errors as separate rows, and a repeat after other rows starts fresh", () => {
+    const state = feed([
+      { type: "error", message: "a" },
+      { type: "error", message: "b" },
+      { type: "assistant_text", text: "hi" },
+      { type: "error", message: "b" },
+    ]);
+    expect(state.rows.map((r) => (r.kind === "error" ? r.text : r.kind))).toEqual([
+      "a",
+      "b",
+      "assistant",
+      "b",
+    ]);
+    expect(state.rows.every((r) => r.kind !== "error" || (r.count ?? 1) === 1)).toBe(true);
+  });
+
+  it("collapses a repeated parse_error and a repeated error result too", () => {
+    const parses = feed([
+      { type: "parse_error", raw: "{bad" },
+      { type: "parse_error", raw: "{bad" },
+    ]);
+    expect(parses.rows).toHaveLength(1);
+    expect(parses.rows[0]).toMatchObject({ kind: "error", count: 2 });
+
+    const results = feed([
+      { type: "result", isError: true, result: "boom" },
+      { type: "result", isError: true, result: "boom" },
+    ]);
+    expect(results.rows).toHaveLength(1);
+    expect(results.rows[0]).toMatchObject({ kind: "error", text: "boom", count: 2 });
+  });
 });
 
 describe("decidePermission", () => {

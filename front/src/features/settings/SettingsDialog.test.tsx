@@ -44,6 +44,24 @@ describe("SettingsDialog", () => {
     })));
   });
 
+  it("shows a refused save INSIDE the form, and clears it on the next attempt", async () => {
+    // Regression: a 400 here used to reach only a corner toast — in practice invisible, so the
+    // form just looked broken (the seeded `vibehub@localhost` failed the old email validation and
+    // NOTHING on this form could be saved, with no visible reason).
+    patch.mockRejectedValueOnce({ response: { data: { error: "git email is not a valid address" } } });
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText("Name")).toHaveValue("Ada"));
+
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    const alert = await screen.findByTestId("settings-save-error");
+    expect(alert).toHaveTextContent("git email is not a valid address");
+
+    // A later attempt that succeeds takes the message away with it.
+    patch.mockResolvedValue(SETTINGS);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByTestId("settings-save-error")).toBeNull());
+  });
+
   it("tells the truth about voice keys and never renders a stored value", async () => {
     renderApp(<SettingsDialog open onOpenChange={() => {}} />);
     expect(await screen.findByText(/microphone unavailable/)).toBeInTheDocument();

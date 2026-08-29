@@ -68,8 +68,9 @@ export type SdkRow =
   | { kind: "tool"; id: string; name: string; summary: string; input?: unknown }
   /** The "Permitir / Negar" card — a sensitive call waiting on the human (or how it ended). */
   | { kind: "permission"; id: string; tool: string; summary: string; reason?: string; outcome: PermissionOutcome }
-  /** Something went wrong and saying so beats swallowing it. */
-  | { kind: "error"; id: string; text: string }
+  /** Something went wrong and saying so beats swallowing it. `count` > 1 = the SAME error again
+      (a reconnect loop against a refused socket) — one banner that counts, not a stack of copies. */
+  | { kind: "error"; id: string; text: string; count?: number }
   /** A quiet note (resumed session, turn ended with an error result…). */
   | { kind: "note"; id: string; text: string };
 
@@ -111,6 +112,23 @@ function nextId(state: SdkChatState, prefix: string): { id: string; seq: number 
 function streamingRow(rows: SdkRow[]): { kind: "assistant"; id: string; text: string; streaming: boolean } | null {
   const last = rows[rows.length - 1];
   return last && last.kind === "assistant" && last.streaming ? last : null;
+}
+
+/**
+ * Append an error row — or COLLAPSE it into the previous one when it says the same thing.
+ *
+ * The reconnect loop makes this the common case, not the corner: with the global flag off (or the
+ * driver down) every attempt is refused with the identical message, and each refusal used to add
+ * one more banner — a validation session collected ~14 copies of "the SDK driver is off". One
+ * banner with a counter says the same thing without burying the conversation. PURE.
+ */
+function appendErrorRow(state: SdkChatState, rows: SdkRow[], text: string): SdkChatState {
+  const last = rows[rows.length - 1];
+  if (last && last.kind === "error" && last.text === text) {
+    return { ...state, rows: [...rows.slice(0, -1), { ...last, count: (last.count ?? 1) + 1 }] };
+  }
+  const { id, seq } = nextId(state, "e");
+  return { ...state, seq, rows: [...rows, { kind: "error", id, text }] };
 }
 
 /** Close any live streaming row (a tool call or the turn's end interrupts the text block). */
@@ -211,27 +229,15 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       return decidePermission(state, event.id, outcome);
     }
     case "result": {
-      let next: SdkChatState = { ...state, turnActive: false, rows: settleStreaming(state.rows) };
+      const next: SdkChatState = { ...state, turnActive: false, rows: settleStreaming(state.rows) };
       if (event.sessionId) next.sessionId = event.sessionId;
-      if (event.isError) {
-        const { id, seq } = nextId(next, "e");
-        next = { ...next, seq, rows: [...next.rows, { kind: "error", id, text: event.result || "error" }] };
-      }
+      if (event.isError) return appendErrorRow(next, next.rows, event.result || "error");
       return next;
     }
-    case "error": {
-      const { id, seq } = nextId(state, "e");
-      return {
-        ...state,
-        seq,
-        turnActive: false,
-        rows: [...settleStreaming(state.rows), { kind: "error", id, text: event.message ?? "error" }],
-      };
-    }
-    case "parse_error": {
-      const { id, seq } = nextId(state, "e");
-      return { ...state, seq, rows: [...state.rows, { kind: "error", id, text: event.raw ?? "parse error" }] };
-    }
+    case "error":
+      return appendErrorRow({ ...state, turnActive: false }, settleStreaming(state.rows), event.message ?? "error");
+    case "parse_error":
+      return appendErrorRow(state, state.rows, event.raw ?? "parse error");
     default:
       return state;
   }
