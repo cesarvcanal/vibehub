@@ -768,19 +768,58 @@ export async function uploadCardImage(
   return { path: destPath };
 }
 
+/** Heredoc delimiter of the kill script — a reserved word, never derived from input. */
+const KILL_DELIM = "VIBEHUB_KILL";
+
+/**
+ * Script that ends tmux sessions AND the whole process tree of their panes.
+ *
+ * `tmux kill-session` alone is how `claude` processes leaked in production: it hands the pane a
+ * SIGHUP, and a process that survives it (or a descendant in another process group) is reparented
+ * to PID 1 and keeps running — the runner accumulated ~180 orphaned `claude` processes that ran
+ * for days. So every path that ends or replaces a card terminal (pause, hibernate, restart,
+ * restart-all, delete, model/account switch) goes through this: collect every DESCENDANT of each
+ * pane (one `ps` snapshot walked in awk — pgrep is not guaranteed in the image), SIGTERM the tree,
+ * kill the sessions, then SIGKILL whatever survived the grace second.
+ *
+ * Best-effort by construction: a session that is already gone, a pane with no children or a pid
+ * that died mid-way are all fine (`2>/dev/null` + `|| true` + the final `true`). Session names come
+ * from the BOARD (derived from the card id) and are shell-quoted on top of that. PURE/testable.
+ */
+export function buildKillSessionScript(containerName: string, sessions: string[]): string {
+  return [
+    `docker exec -i ${shQuote(containerName)} bash -s <<'${KILL_DELIM}'`,
+    // Every pid whose ancestry reaches a pane pid, panes included. One ps snapshot per pane; awk
+    // walks each pid up the ppid chain (pgrep is not guaranteed in the image). A pid whose chain
+    // ends elsewhere (0/1) is not printed.
+    'PIDS=""',
+    ...sessions.map(
+      (s) =>
+        `for pane in $(tmux list-panes -s -t ${shQuote(s)} -F '#{pane_pid}' 2>/dev/null); do ` +
+        `PIDS="$PIDS $(ps -eo pid=,ppid= 2>/dev/null | awk -v r="$pane" '{pp[$1]=$2} END {for (p in pp) {q=p; while ((q in pp) && q != r) q=pp[q]; if (q == r) print p}; print r}')"; ` +
+        "done",
+    ),
+    // TERM first (graceful, while the tree still exists as captured), then the sessions...
+    '[ -n "$PIDS" ] && kill -TERM $PIDS 2>/dev/null || true',
+    ...sessions.map((s) => `tmux kill-session -t ${shQuote(s)} 2>/dev/null || true`),
+    // ...then KILL whatever ignored both the TERM and tmux's HUP (claude did, in production).
+    'if [ -n "$PIDS" ]; then sleep 1; kill -KILL $PIDS 2>/dev/null || true; fi',
+    "true",
+    KILL_DELIM,
+  ].join("\n");
+}
+
 /**
  * Kills the card's tmux session in the runner (BEST-EFFORT — used by card deletion and by the
  * pause). The session name comes from the BOARD (derived from the id), never from input.
  * `includeShell` also kills the `-sh` session of the Shell button (the suffix is derived HERE).
+ * The whole PROCESS TREE of each pane dies with the session (see buildKillSessionScript).
  * A runner that is missing or a host that is down is simply ignored.
  */
 export async function killCardSession(card: Card, opts: { includeShell?: boolean } = {}): Promise<void> {
   try {
     const sessions = opts.includeShell ? [card.tmuxSession, `${card.tmuxSession}-sh`] : [card.tmuxSession];
-    const cmd = sessions
-      .map((s) => `docker exec ${shQuote(config.runner.container)} tmux kill-session -t ${shQuote(s)} 2>/dev/null`)
-      .join("; ");
-    await hostExecutor().runScript(`${cmd}; true`, { timeoutMs: 30_000 });
+    await hostExecutor().runScript(buildKillSessionScript(config.runner.container, sessions), { timeoutMs: 30_000 });
   } catch (e) {
     logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "kill-session failed (best-effort, continuing)");
   }
