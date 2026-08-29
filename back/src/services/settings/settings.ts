@@ -99,7 +99,10 @@ export interface SettingsPatch {
 export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
   const git = patch.git;
   if (git?.name !== undefined && String(git.name).trim() === "") throw new Error("git name cannot be empty");
-  if (git?.email !== undefined && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(git.email).trim())) {
+  // `local@host` is enough: git itself accepts a dotless host (`user@localhost`), and the seeded
+  // default IS `vibehub@localhost` — a validator stricter than its own default bricks the whole
+  // settings form, because the form resends the stored identity on every save.
+  if (git?.email !== undefined && !/^[^@\s]+@[^@\s]+$/.test(String(git.email).trim())) {
     throw new Error("git email is not a valid address");
   }
   if (patch.autonomous !== undefined && typeof patch.autonomous !== "boolean") {

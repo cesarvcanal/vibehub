@@ -270,6 +270,15 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             </div>
           </section>
 
+          {/* The refusal, INSIDE the form. The toast alone proved invisible in practice (it lives
+              in the top-right corner while the person is looking at the Save button, and it is
+              gone in seconds) — a 400 here once made the whole form look silently broken. This
+              line stays until the next attempt. */}
+          {save.isError ? (
+            <p role="alert" data-testid="settings-save-error" className="text-xs text-red-500">
+              {apiErrorMessage(save.error)}
+            </p>
+          ) : null}
           <div className="flex justify-end">
             <Button type="submit" disabled={save.isPending || !name.trim() || !email.trim()}>
               {save.isPending ? t("common.saving") : t("common.save")}
