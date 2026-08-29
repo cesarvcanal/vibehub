@@ -68,6 +68,11 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
 
       const teardown = (): void => {
         clearInterval(keepalive);
+        // Closing stdin FIRST is deliberate: the follow loop inside the runner watches its stdin
+        // for EOF (its parent-liveness check), so this reaches across the docker exec and stops
+        // the loop even when killing the local client alone would not (the daemon keeps a killed
+        // client's exec running — that is exactly how watchers leaked in production).
+        try { child.stdin.end(); } catch { /* already gone */ }
         try { child.kill(); } catch { /* already gone */ }
       };
       child.on("close", () => {

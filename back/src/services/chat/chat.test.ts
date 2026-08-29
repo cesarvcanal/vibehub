@@ -192,7 +192,7 @@ describe("unwrapSlashCommand", () => {
 describe("buildFollowCommand", () => {
   it("follows the NEWEST transcript and moves across when a new session starts one", () => {
     const cmd = buildFollowCommand("vibehub-runner", "/root/.claude/projects/-work-x", 400);
-    expect(cmd).toContain("docker exec 'vibehub-runner'");
+    expect(cmd).toContain("docker exec -i 'vibehub-runner'");
     expect(cmd).toContain("ls -1t \"$1\"/*.jsonl");
     expect(cmd).toContain("tail -n 400 -F \"$f\"");
     expect(cmd).toContain("'/root/.claude/projects/-work-x'");
@@ -200,6 +200,22 @@ describe("buildFollowCommand", () => {
 
   it("heartbeats to stdout, which is what kills it when the reader goes away", () => {
     expect(buildFollowCommand("c", "/dir")).toContain("while printf");
+  });
+
+  it("dies on stdin EOF — the check that stops the loop when the backend end of the exec is gone", () => {
+    const cmd = buildFollowCommand("c", "/dir");
+    // `docker exec -i` so the loop's stdin IS the connection to the backend...
+    expect(cmd).toContain("docker exec -i");
+    // ...and the sleep doubles as the liveness probe: timeout (rc>128) keeps looping, EOF exits.
+    expect(cmd).toContain("read -t 2 -r hb");
+    expect(cmd).toContain("[ $rc -le 128 ]");
+    expect(cmd).not.toContain("sleep 2");
+    // bash on purpose: dash (the runner's sh) has no `read -t`.
+    expect(cmd).toContain("bash -c");
+  });
+
+  it("carries the marker the reaper uses to recognise a leaked watcher", () => {
+    expect(buildFollowCommand("c", "/dir")).toContain("vibehub-transcript-follow");
   });
 
   it("takes its tail down with it — a signal trap that does not exit would just keep looping", () => {
