@@ -60,16 +60,16 @@ describe("registerCardPreview", () => {
   it("records port + label + stamp on the card", async () => {
     const reg = await freshRegistry();
     const id = await withCard(reg);
-    const card = await reg.registerCardPreview(id, 5173, "front");
+    const card = await reg.registerCardPreview(id, 5173, { label: "front" });
     expect(card?.previews).toEqual([{ port: 5173, label: "front", createdAt: expect.any(Number) }]);
   });
 
   it("dedupes by port: re-registering refreshes the label instead of stacking", async () => {
     const reg = await freshRegistry();
     const id = await withCard(reg);
-    await reg.registerCardPreview(id, 5173, "front");
-    await reg.registerCardPreview(id, 3000, "api");
-    const card = await reg.registerCardPreview(id, 5173, "vite");
+    await reg.registerCardPreview(id, 5173, { label: "front" });
+    await reg.registerCardPreview(id, 3000, { label: "api" });
+    const card = await reg.registerCardPreview(id, 5173, { label: "vite" });
     expect(card?.previews?.map((p) => [p.port, p.label])).toEqual([
       [3000, "api"],
       [5173, "vite"],
@@ -86,12 +86,64 @@ describe("registerCardPreview", () => {
   });
 });
 
+describe("registerCardPreview — relaunch recipe (command/cwd)", () => {
+  it("stores command and cwd; a re-announce WITHOUT them keeps the stored recipe", async () => {
+    const reg = await freshRegistry();
+    const id = await withCard(reg);
+    await reg.registerCardPreview(id, 5173, { label: "front", command: "npm run dev", cwd: "/work/app" });
+    const card = await reg.registerCardPreview(id, 5173, { label: "vite" });
+    expect(card?.previews?.[0]).toEqual({
+      port: 5173, label: "vite", command: "npm run dev", cwd: "/work/app", createdAt: expect.any(Number),
+    });
+  });
+
+  it("normalizePreviewCommand: single trimmed line, capped hard, empty -> undefined", async () => {
+    const reg = await freshRegistry();
+    expect(reg.normalizePreviewCommand("  npm run dev  ")).toBe("npm run dev");
+    expect(reg.normalizePreviewCommand("")).toBeUndefined();
+    expect(() => reg.normalizePreviewCommand("a\nb")).toThrow(/single line/);
+    expect(() => reg.normalizePreviewCommand("x".repeat(500))).toThrow(/longer than/);
+  });
+
+  it("normalizePreviewCwd: absolute plain path or nothing", async () => {
+    const reg = await freshRegistry();
+    expect(reg.normalizePreviewCwd("/work/app")).toBe("/work/app");
+    expect(reg.normalizePreviewCwd("")).toBeUndefined();
+    for (const bad of ["relative", "/a/../b", "/a b", "/a;rm"]) {
+      expect(() => reg.normalizePreviewCwd(bad)).toThrow(/invalid preview cwd/);
+    }
+  });
+});
+
+describe("removeCardPreview", () => {
+  it("removes one preview and returns it; removing again (or from nowhere) -> undefined", async () => {
+    const reg = await freshRegistry();
+    const id = await withCard(reg);
+    await reg.registerCardPreview(id, 5173, { label: "front" });
+    await reg.registerCardPreview(id, 3000, { label: "api" });
+    const gone = await reg.removeCardPreview(id, 5173);
+    expect(gone?.port).toBe(5173);
+    expect((await reg.getCard(id))?.previews?.map((p) => p.port)).toEqual([3000]);
+    expect(await reg.removeCardPreview(id, 5173)).toBeUndefined();
+    expect(await reg.removeCardPreview("nope", 3000)).toBeUndefined();
+  });
+});
+
 describe("pruneCardPreviews", () => {
+  it("SPARES a dead preview that has a stored command — it renders as 'parado', not as gone", async () => {
+    const reg = await freshRegistry();
+    const id = await withCard(reg);
+    await reg.registerCardPreview(id, 5173, { command: "npm run dev", cwd: "/work/app" });
+    await reg.registerCardPreview(id, 3000);
+    expect(await reg.pruneCardPreviews([])).toBe(1);
+    expect((await reg.getCard(id))?.previews?.map((p) => p.port)).toEqual([5173]);
+  });
+
   it("drops previews whose port is not listening; keeps the live ones", async () => {
     const reg = await freshRegistry();
     const id = await withCard(reg);
-    await reg.registerCardPreview(id, 5173, "front");
-    await reg.registerCardPreview(id, 3000, "api");
+    await reg.registerCardPreview(id, 5173, { label: "front" });
+    await reg.registerCardPreview(id, 3000, { label: "api" });
     const pruned = await reg.pruneCardPreviews([5173, 9999]);
     expect(pruned).toBe(1);
     const card = await reg.getCard(id);

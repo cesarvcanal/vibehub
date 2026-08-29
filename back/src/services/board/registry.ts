@@ -82,6 +82,16 @@ export interface CardPreview {
   port: number;
   /** What the agent called it ("front", "storybook"). Absent = the port speaks for itself. */
   label?: string;
+  /**
+   * Start command of the server ("npm run dev -- --port 5173"), as the agent announced it. It is
+   * what gives the preview a LIFE OF ITS OWN: with it, vibehub can relaunch the server in the
+   * preview's dedicated tmux session (`preview-<card8>-<port>`, OUTSIDE the card pane's process
+   * tree) after a pause/restart killed the original. Absent = an old/manual preview that only the
+   * card's agent can bring back.
+   */
+  command?: string;
+  /** Where `command` runs. Absent = the card's own worktree cwd. */
+  cwd?: string;
   createdAt: number;
 }
 
@@ -100,6 +110,39 @@ export function assertPreviewPort(port: number): number {
     throw new Error(`invalid preview port (expected 1-65535): '${String(port)}'`);
   }
   return port;
+}
+
+/** A preview start command is one shell line, capped — it becomes `bash -lc <command>` in the runner. */
+export const PREVIEW_COMMAND_MAX = 400;
+
+/**
+ * Normalizes a preview start command: trimmed, single line, capped. THROWS on control characters or
+ * an over-long command rather than truncating — a truncated command would relaunch the wrong thing.
+ * Empty -> undefined (the preview simply has no relaunch). The command is the agent's own shell (it
+ * already runs arbitrary commands in the runner); this only keeps it storable and quotable. PURE.
+ */
+export function normalizePreviewCommand(command: string | null | undefined): string | undefined {
+  const v = String(command ?? "").trim();
+  if (!v) return undefined;
+  if (/[\r\n\0]/.test(v)) throw new Error("invalid preview command: it must be a single line");
+  if (v.length > PREVIEW_COMMAND_MAX) {
+    throw new Error(`invalid preview command: longer than ${PREVIEW_COMMAND_MAX} characters`);
+  }
+  return v;
+}
+
+/**
+ * A sane cwd for the preview command: absolute, no '..', shell-safe charset (the same rules as
+ * runtime/host's assertSafeRemotePath — duplicated here because the registry validates SHAPES and
+ * must not depend on the runtime layer). Empty -> undefined (fall back to the card's cwd). PURE.
+ */
+export function normalizePreviewCwd(cwd: string | null | undefined): string | undefined {
+  const v = String(cwd ?? "").trim();
+  if (!v) return undefined;
+  if (!v.startsWith("/") || v.includes("..") || !/^[A-Za-z0-9/_.-]+$/.test(v)) {
+    throw new Error(`invalid preview cwd (expected an absolute, plain path): '${cwd}'`);
+  }
+  return v;
 }
 
 /**
@@ -1364,17 +1407,36 @@ export async function reportCardState(
  * instead of stacking a second chip. The caller has already checked the port is actually listening
  * (services/preview/announce.ts); this only records it. Unknown card -> undefined.
  */
+export interface RegisterPreviewInput {
+  label?: string | null;
+  /** Start command, when the agent announced one — what makes the preview relaunchable. */
+  command?: string | null;
+  /** Where the command runs. Absent = the card's own cwd. */
+  cwd?: string | null;
+}
+
 export async function registerCardPreview(
   cardId: string,
   port: number,
-  label?: string | null,
+  input: RegisterPreviewInput = {},
 ): Promise<Card | undefined> {
   const p = assertPreviewPort(port); // validate BEFORE entering the mutation (cached doc)
-  const clean = normalizePreviewLabel(label);
+  const label = normalizePreviewLabel(input.label);
+  const command = normalizePreviewCommand(input.command);
+  const cwd = normalizePreviewCwd(input.cwd);
   return store.mutate((doc) => {
     const card = doc.cards.find((c) => c.id === cardId);
     if (!card) return undefined;
-    const preview: CardPreview = { port: p, ...(clean ? { label: clean } : {}), createdAt: Date.now() };
+    // Re-announcing WITHOUT a command keeps the one already stored: the relaunch recipe is the
+    // hard-won part of the record, and a lazier second call must not erase it.
+    const prior = (card.previews ?? []).find((v) => v.port === p);
+    const preview: CardPreview = {
+      port: p,
+      ...(label ? { label } : {}),
+      ...((command ?? prior?.command) ? { command: command ?? prior?.command } : {}),
+      ...((cwd ?? prior?.cwd) ? { cwd: cwd ?? prior?.cwd } : {}),
+      createdAt: Date.now(),
+    };
     card.previews = [...(card.previews ?? []).filter((v) => v.port !== p), preview];
     card.updatedAt = Date.now();
     return card;
@@ -1382,10 +1444,30 @@ export async function registerCardPreview(
 }
 
 /**
- * Drops every registered preview whose port is NOT in `listening` — the cleanup that keeps dead
- * links off the cards without a daemon: it runs whenever the runner's ports are scanned (the
- * Preview menu opening, a registration). Cards with no previews are untouched, `updatedAt` only
- * moves on the cards that actually lost one. Returns how many previews went.
+ * Removes one preview from a card — the "Parar preview" button, after its session was killed.
+ * Returns the removed preview (the caller needs its port/session to tear down), or undefined when
+ * the card or the preview does not exist — stopping twice is not an error.
+ */
+export async function removeCardPreview(cardId: string, port: number): Promise<CardPreview | undefined> {
+  const p = assertPreviewPort(port);
+  return store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    if (!card) return undefined;
+    const found = (card.previews ?? []).find((v) => v.port === p);
+    if (!found) return undefined;
+    const kept = (card.previews ?? []).filter((v) => v.port !== p);
+    card.previews = kept.length > 0 ? kept : undefined;
+    card.updatedAt = Date.now();
+    return found;
+  });
+}
+
+/**
+ * Drops every registered preview that is DEAD AND UNRECOVERABLE: its port is not in `listening`
+ * AND it carries no start command. A preview WITH a command survives a silent port on purpose —
+ * it renders as "parado" with a Restart button instead of vanishing; only the old/manual ones
+ * (no relaunch recipe) are dead links worth removing. Runs whenever the runner's ports are
+ * scanned — no daemon. Returns how many previews went.
  */
 export async function pruneCardPreviews(listening: readonly number[]): Promise<number> {
   const alive = new Set(listening);
@@ -1393,7 +1475,7 @@ export async function pruneCardPreviews(listening: readonly number[]): Promise<n
     let pruned = 0;
     for (const card of doc.cards) {
       if (!card.previews?.length) continue;
-      const kept = card.previews.filter((p) => alive.has(p.port));
+      const kept = card.previews.filter((p) => alive.has(p.port) || p.command);
       if (kept.length === card.previews.length) continue;
       pruned += card.previews.length - kept.length;
       card.previews = kept.length > 0 ? kept : undefined;

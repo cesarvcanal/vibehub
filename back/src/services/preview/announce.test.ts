@@ -75,7 +75,7 @@ describe("announcePreview", () => {
     const { registry, announce, cardId } = await boot();
     runScript.mockResolvedValue({ stdout: scanOutput([5173]), stderr: "", code: 0 });
 
-    const out = await announce.announcePreview(cardId, 5173, "  front  ");
+    const out = await announce.announcePreview(cardId, 5173, { label: "  front  " });
     expect(out).toEqual({
       registered: true,
       cardId,
@@ -86,6 +86,27 @@ describe("announcePreview", () => {
     });
     const card = await registry.getCard(cardId);
     expect(card?.previews).toEqual([{ port: 5173, label: "front", createdAt: expect.any(Number) }]);
+  });
+
+  it("stores the relaunch recipe: command as announced, cwd defaulting to the card's worktree", async () => {
+    const { registry, announce, cardId } = await boot();
+    runScript.mockResolvedValue({ stdout: scanOutput([5173]), stderr: "", code: 0 });
+
+    await announce.announcePreview(cardId, 5173, { label: "front", command: "npm run dev -- --port 5173" });
+    const preview = (await registry.getCard(cardId))?.previews?.[0];
+    expect(preview?.command).toBe("npm run dev -- --port 5173");
+    // A project with no repository puts the card in the scratch directory — that is its cwd.
+    expect(preview?.cwd).toMatch(/^\/work\/scratch\//);
+
+    // An explicit cwd wins; a malformed one is refused before anything is scanned or written.
+    await announce.announcePreview(cardId, 5173, { command: "npm start", cwd: "/work/app" });
+    expect((await registry.getCard(cardId))?.previews?.[0]?.cwd).toBe("/work/app");
+    await expect(
+      announce.announcePreview(cardId, 5173, { command: "npm start", cwd: "../etc" }),
+    ).rejects.toThrow(/invalid preview cwd/);
+    await expect(
+      announce.announcePreview(cardId, 5173, { command: "a\nb" }),
+    ).rejects.toThrow(/single line/);
   });
 
   it("refuses a silent port WITHOUT registering anything", async () => {
