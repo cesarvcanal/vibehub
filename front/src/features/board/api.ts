@@ -16,6 +16,7 @@ import type {
   McpTransport,
   NewCard,
   OutboxStatus,
+  PreviewPort,
   Project,
   QueueMessageResult,
   RestartAllResult,
@@ -193,6 +194,7 @@ export const BRAIN_KEY = ["board", "brain"] as const;
 export const TRANSCRIBE_KEY = ["board", "transcribe"] as const;
 export const RUNNER_KEY = ["board", "runner"] as const;
 export const GITHUB_KEY = ["board", "github"] as const;
+export const PREVIEW_PORTS_KEY = ["board", "preview", "ports"] as const;
 /** Prefix matching EVERY project's card list — for invalidating the whole board at once. */
 export const CARDS_PREFIX_KEY = ["board", "cards"] as const;
 /**
@@ -460,6 +462,10 @@ export const boardApi = {
 
   startCardBrowser: (id: string) => post<unknown>(`/cards/${encodeURIComponent(id)}/browser`),
   stopCardBrowser: (id: string) => del<unknown>(`/cards/${encodeURIComponent(id)}/browser`),
+
+  /** Ports listening inside the runner right now — what the Preview menu offers to open. */
+  previewPorts: () =>
+    get<{ ports?: PreviewPort[] }>("/preview/ports").then((r) => (Array.isArray(r?.ports) ? r.ports : [])),
 
   /* accounts */
   listAccounts: () =>
