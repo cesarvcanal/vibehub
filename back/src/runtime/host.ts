@@ -79,6 +79,12 @@ export interface HostExecutor {
    * because ssh concatenates argv and re-parses it remotely — quoting must already be inside.
    */
   ptyCommand(remoteCommand: string): { file: string; args: string[] };
+  /**
+   * argv for a long-lived command whose stdio carries RAW BYTES over plain pipes (the preview
+   * tunnel). Same quoting contract as ptyCommand, but NO tty: `ssh -tt` would translate line
+   * endings and eat the binary stream.
+   */
+  pipeCommand(remoteCommand: string): { file: string; args: string[] };
 }
 
 function runProcess(file: string, args: string[], stdin: string, opts: ExecOpts): Promise<ExecResult> {
@@ -168,6 +174,9 @@ class LocalExecutor implements HostExecutor {
   ptyCommand(remoteCommand: string): { file: string; args: string[] } {
     return { file: "bash", args: ["-lc", remoteCommand] };
   }
+  pipeCommand(remoteCommand: string): { file: string; args: string[] } {
+    return { file: "bash", args: ["-lc", remoteCommand] };
+  }
 }
 
 class SshExecutor implements HostExecutor {
@@ -184,6 +193,10 @@ class SshExecutor implements HostExecutor {
   ptyCommand(remoteCommand: string): { file: string; args: string[] } {
     // -tt forces a tty even though stdin is a pipe; the command must come AFTER the hostname.
     return { file: "ssh", args: [...sshArgs(["-tt"]), remoteCommand] };
+  }
+  pipeCommand(remoteCommand: string): { file: string; args: string[] } {
+    // Deliberately NO -tt: this stream is binary and a tty would rewrite line endings.
+    return { file: "ssh", args: [...sshArgs(), remoteCommand] };
   }
 }
 
