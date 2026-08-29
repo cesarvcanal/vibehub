@@ -396,6 +396,27 @@ export const en: Record<string, string> = {
   "chat.actions": "{n} actions",
   "chat.actionsShow": "Show these {n} actions",
   "chat.actionsHide": "Fold these {n} actions away",
+
+  /* ------------------------------------------------------ native chat (SDK) */
+  "sdk.aria": "Native card conversation",
+  "sdk.beta": "Native chat (beta)",
+  "sdk.connecting": "Starting the agent…",
+  "sdk.empty": "No messages yet",
+  "sdk.emptyHint": "This conversation runs over the Agent SDK: structured events, and permissions answered right here in the chat.",
+  "sdk.session": "session {id}",
+  "sdk.resumed": "Resuming session {id}",
+  "sdk.offline": "Not connected — the message was not sent. It stays in the field.",
+  "sdk.interrupt": "Interrupt the agent",
+  "sdk.permissionTitle": "Permission needed",
+  "sdk.permissionTimeoutHint": "No answer denies it after 5 minutes.",
+  "sdk.allow": "Allow",
+  "sdk.deny": "Deny",
+  "sdk.allowed": "Allowed",
+  "sdk.denied": "Denied",
+  "sdk.timedOut": "No answer in time — denied.",
+  "sdk.flagOff": "The SDK driver is off for this install. Turn on \"SDK driver\" in Settings to use native chat.",
+  "cardView.nativeChat": "Native chat (beta)",
+
   "cardView.terminalFor": "Terminal for {title}",
   "cardView.cardFallback": "card",
   "cardView.shellHeader": "Shell · bash in the worktree",
@@ -573,6 +594,9 @@ export const en: Record<string, string> = {
   "settings.idleHibernateUnit": "minutes",
   "settings.idleHibernateHint":
     "Minutes with no sign of life before the session is closed. The card keeps its place on the board and turns grey; opening it resumes the same conversation. A card that is working is never touched. 0 turns it off.",
+  "settings.sdkDriver": "SDK driver (native chat, beta)",
+  "settings.sdkDriverHint":
+    "Arms the per-card \"Native chat (beta)\": that card's conversation runs over the Agent SDK — structured events, permission buttons in the chat — instead of the terminal transcript. Off, nothing changes anywhere.",
   "settings.voice": "Voice input",
   "settings.transcribeLanguage": "Transcription language",
   "settings.transcribePlaceholder": "auto (or a two-letter code: pt, en, es…)",

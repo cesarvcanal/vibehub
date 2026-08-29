@@ -19,12 +19,28 @@ export interface AssistantDeltaEvent { type: "assistant_delta"; text: string }
 export interface ToolUseEvent { type: "tool_use"; id: string; name: string; input: unknown }
 /** The session id — emitted as soon as the driver learns it, and again on the result. */
 export interface SessionEvent { type: "session"; sessionId: string }
-/** A permission decision the driver's PreToolUse gate made (observability + future escalation). */
+/** A permission decision the driver's PreToolUse gate made (observability + the escalation's outcome). */
 export interface PermissionEvent {
   type: "permission";
   tool: string;
   decision: "allow" | "deny";
   sensitive: boolean;
+  reason?: string;
+  /** Present when the decision answers a `permission_request` (the same id), so the front can pair them. */
+  id?: string;
+  /** True when the deny happened because nobody answered within the timeout. */
+  timedOut?: boolean;
+}
+/**
+ * A SENSITIVE tool call is waiting for the human: the driver pauses the agent (the PreToolUse hook
+ * awaits) until a `permission_decision` control with this `id` arrives on stdin — or the timeout
+ * (PERMISSION_TIMEOUT_MS) denies it. The front renders this as the "Permitir / Negar" card.
+ */
+export interface PermissionRequestEvent {
+  type: "permission_request";
+  id: string;
+  tool: string;
+  input?: unknown;
   reason?: string;
 }
 /** End of a turn. */
@@ -49,6 +65,7 @@ export type DriverEvent =
   | ToolUseEvent
   | SessionEvent
   | PermissionEvent
+  | PermissionRequestEvent
   | ResultEvent
   | ReadyEvent
   | DriverErrorEvent
@@ -61,6 +78,7 @@ const DRIVER_EVENT_TYPES = new Set([
   "tool_use",
   "session",
   "permission",
+  "permission_request",
   "result",
   "ready",
   "error",
@@ -91,7 +109,9 @@ export function parseDriverLine(line: string): DriverEvent | null {
 /** A message the front sends TO the driver over stdin (one JSON object per line). */
 export interface UserControl { type: "user"; text: string }
 export interface InterruptControl { type: "interrupt" }
-export type DriverControl = UserControl | InterruptControl;
+/** The human's answer to a `permission_request` — `id` pairs it with the awaiting call. */
+export interface PermissionDecisionControl { type: "permission_decision"; id: string; allow: boolean }
+export type DriverControl = UserControl | InterruptControl | PermissionDecisionControl;
 
 /** Serialise a control message as one stdin line (with the trailing newline). PURE. */
 export function encodeControl(control: DriverControl): string {
@@ -104,10 +124,10 @@ export function encodeControl(control: DriverControl): string {
  * The SENSITIVE set — actions this increment REFUSES to auto-run because a mistake is destructive or
  * exfiltrating. Matched against a Bash command string (the only tool whose payload is a shell line).
  *
- * TODO(increment 2): instead of denying, ESCALATE each of these to a "Permitir / Negar" button in
- * the chat (the `canUseTool`/PreToolUse callback awaits the human's click). Until that UI exists the
- * safe behaviour for an experimental, opt-in driver is to DENY — the agent is told it was blocked and
- * carries on, exactly as the PoC's scenario E proved. The bulk of tools auto-allow (bypass sandbox).
+ * Increment 2: each of these ESCALATES to a "Permitir / Negar" card in the chat — the driver's
+ * PreToolUse hook emits a `permission_request` and AWAITS the human's `permission_decision` (see
+ * `createPermissionBroker`); the timeout denies. The bulk of tools auto-allow (bypass sandbox) —
+ * César's call: "libera tudo, pergunta só o sensível".
  */
 export const SENSITIVE_BASH_PATTERNS: readonly RegExp[] = [
   /\brm\s+-[a-z]*[rf]/i, // rm -r / rm -f / rm -rf (recursive or forced delete)
@@ -160,4 +180,62 @@ export function sdkPermissionDecision(toolName: string, input: unknown): Permiss
     };
   }
   return { behavior: "allow", sensitive: false };
+}
+
+/* ------------------------------------------------- permission escalation */
+
+/**
+ * How long a `permission_request` waits for the human before it is DENIED. Five minutes: long
+ * enough to grab the phone and answer, short enough that a forgotten card does not hold the
+ * agent's loop hostage forever (the PreToolUse hook AWAITS this).
+ */
+export const PERMISSION_TIMEOUT_MS = 5 * 60_000;
+
+export interface PermissionWaitResult {
+  allow: boolean;
+  /** True when nobody answered in time (the deny was the clock's, not the human's). */
+  timedOut: boolean;
+}
+
+export interface PermissionBroker {
+  /** Await the human's decision for `id`. Resolves with a deny when the timeout fires first. */
+  wait(id: string): Promise<PermissionWaitResult>;
+  /** Deliver a decision. Returns false when nothing was waiting under that id (late click, typo). */
+  resolve(id: string, allow: boolean): boolean;
+  /** How many requests are still waiting (observability + tests). */
+  pendingCount(): number;
+}
+
+/**
+ * The pending-permission ledger the driver keeps between "emitted a permission_request" and "the
+ * stdin brought a permission_decision". PURE apart from the injected clock (`setTimeout`), which is
+ * what makes the timeout testable. The driver embeds a MIRROR copy (see the file header) — keep
+ * them in step.
+ */
+export function createPermissionBroker(timeoutMs: number = PERMISSION_TIMEOUT_MS): PermissionBroker {
+  const pending = new Map<string, (result: PermissionWaitResult) => void>();
+  return {
+    wait(id: string): Promise<PermissionWaitResult> {
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          resolve({ allow: false, timedOut: true });
+        }, timeoutMs);
+        pending.set(id, (result) => {
+          clearTimeout(timer);
+          pending.delete(id);
+          resolve(result);
+        });
+      });
+    },
+    resolve(id: string, allow: boolean): boolean {
+      const deliver = pending.get(id);
+      if (!deliver) return false;
+      deliver({ allow, timedOut: false });
+      return true;
+    },
+    pendingCount(): number {
+      return pending.size;
+    },
+  };
 }

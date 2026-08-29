@@ -475,8 +475,9 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-/** The blocks of one answer. See `lib/markdown.ts` for what is understood — and what is not. */
-function Markdown({ text }: { text: string }) {
+/** The blocks of one answer. See `lib/markdown.ts` for what is understood — and what is not.
+ * Exported so the native SDK chat renders answers exactly the way this view does. */
+export function Markdown({ text }: { text: string }) {
   return (
     <div className="space-y-2">
       {mdBlocks(text).map((block, i) => {

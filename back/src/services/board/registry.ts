@@ -233,6 +233,14 @@ export interface Card {
    * because it becomes an argv entry.
    */
   resumeSessionId?: string;
+  /**
+   * NATIVE CHAT (beta) — this card opts into the Agent-SDK driver: with the global `sdkDriver`
+   * setting ON, the card's chat pane talks to `/api/cards/:id/sdk` (structured events, permission
+   * buttons) instead of reading the tmux transcript. PER CARD on purpose: the global flag arms the
+   * feature, this field picks the guinea-pig cards, and everything else stays on the TUI path.
+   * Absent/false = the current behaviour, untouched.
+   */
+  sdkChat?: boolean;
   /** Worktree branch when it is NOT the derived `card/<worktreeSlug>` (assertBranchName). */
   branch?: string;
   /**
@@ -1142,6 +1150,8 @@ export interface UpdateCardInput {
   model?: string | null;
   /** Imported session (uuid); null clears it (back to `claude -c`). */
   resumeSessionId?: string | null;
+  /** Native chat (beta) opt-in for THIS card; false/null clears it (back to the TUI chat). */
+  sdkChat?: boolean | null;
   /** The card's own worktree branch; null clears it (back to `card/<worktreeSlug>`). */
   branch?: string | null;
   /** Base branch of the worktree (just the label the next open/worktree uses); validated. */
@@ -1193,6 +1203,12 @@ export async function updateCard(id: string, patch: UpdateCardInput): Promise<Ca
     // argv or script content in the runner and must never pass through raw. null clears.
     if (patch.resumeSessionId !== undefined) {
       next.resumeSessionId = patch.resumeSessionId === null ? undefined : assertSessionId(patch.resumeSessionId);
+    }
+    // sdkChat: strictly boolean (or null to clear). Stored as `true` or ABSENT — a board.json full
+    // of `sdkChat: false` would just be noise for the default behaviour.
+    if (patch.sdkChat !== undefined) {
+      if (patch.sdkChat !== null && typeof patch.sdkChat !== "boolean") throw new Error("sdkChat must be a boolean");
+      next.sdkChat = patch.sdkChat === true ? true : undefined;
     }
     if (patch.branch !== undefined) {
       next.branch = patch.branch === null || !String(patch.branch).trim() ? undefined : assertBranchName(patch.branch);

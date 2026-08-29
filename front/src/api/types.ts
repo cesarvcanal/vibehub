@@ -159,6 +159,8 @@ export interface Settings {
   transcribeLanguage?: string | null;
   /** Minutes a terminal may sit idle before it is hibernated. 0 = never. */
   idleHibernateMinutes?: number;
+  /** EXPERIMENTAL: arms the Agent-SDK driver socket (`/api/cards/:id/sdk`). Off = nothing changes. */
+  sdkDriver?: boolean;
   runner: RunnerSettings;
   /** Externally reachable base URL, when the install has one. */
   publicUrl?: string;
@@ -178,6 +180,7 @@ export interface SettingsPatch {
   defaultAccountLabel?: string | null;
   transcribeLanguage?: string | null;
   idleHibernateMinutes?: number;
+  sdkDriver?: boolean;
   runner?: Partial<RunnerSettings>;
 }
 
@@ -294,6 +297,8 @@ export interface Card {
   model?: string;
   /** Claude session id this card resumes. */
   resumeSessionId?: string;
+  /** Native chat (beta): this card's conversation runs over the Agent SDK driver socket. */
+  sdkChat?: boolean;
   /** First time the card's terminal was opened — presence means "attach instantly". */
   openedAt?: number;
   /**

@@ -397,6 +397,27 @@ export const ptBR: Record<string, string> = {
   "chat.actions": "{n} ações",
   "chat.actionsShow": "Mostrar estas {n} ações",
   "chat.actionsHide": "Recolher estas {n} ações",
+
+  /* ------------------------------------------------------ chat nativo (SDK) */
+  "sdk.aria": "Conversa nativa do card",
+  "sdk.beta": "Chat nativo (beta)",
+  "sdk.connecting": "Iniciando o agente…",
+  "sdk.empty": "Nenhuma mensagem ainda",
+  "sdk.emptyHint": "Esta conversa roda pelo Agent SDK: eventos estruturados, e permissões respondidas aqui mesmo no chat.",
+  "sdk.session": "sessão {id}",
+  "sdk.resumed": "Retomando a sessão {id}",
+  "sdk.offline": "Sem conexão — a mensagem não foi enviada. Ela fica no campo.",
+  "sdk.interrupt": "Interromper o agente",
+  "sdk.permissionTitle": "Permissão necessária",
+  "sdk.permissionTimeoutHint": "Sem resposta, nega sozinho em 5 minutos.",
+  "sdk.allow": "Permitir",
+  "sdk.deny": "Negar",
+  "sdk.allowed": "Permitida",
+  "sdk.denied": "Negada",
+  "sdk.timedOut": "Sem resposta a tempo — negada.",
+  "sdk.flagOff": "O driver SDK está desligado nesta instalação. Ligue \"Driver SDK\" nas Configurações para usar o chat nativo.",
+  "cardView.nativeChat": "Chat nativo (beta)",
+
   "cardView.terminalFor": "Terminal de {title}",
   "cardView.cardFallback": "card",
   "cardView.shellHeader": "Shell · bash no worktree",
@@ -580,6 +601,9 @@ export const ptBR: Record<string, string> = {
   "settings.idleHibernateUnit": "minutos",
   "settings.idleHibernateHint":
     "Minutos sem sinal de vida até a sessão ser fechada. O card não sai do lugar, só fica cinza; abrir retoma a mesma conversa. Card trabalhando nunca é tocado. 0 desliga.",
+  "settings.sdkDriver": "Driver SDK (chat nativo, beta)",
+  "settings.sdkDriverHint":
+    "Arma o \"Chat nativo (beta)\" por card: a conversa daquele card roda pelo Agent SDK — eventos estruturados, botões de permissão no chat — em vez do transcript do terminal. Desligado, nada muda em lugar nenhum.",
   "settings.voice": "Entrada por voz",
   "settings.transcribeLanguage": "Idioma da transcrição",
   "settings.transcribePlaceholder": "auto (ou um código de duas letras: pt, en, es…)",

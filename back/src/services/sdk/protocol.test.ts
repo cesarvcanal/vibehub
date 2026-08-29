@@ -4,6 +4,7 @@ import {
   encodeControl,
   classifySensitivity,
   sdkPermissionDecision,
+  createPermissionBroker,
 } from "./protocol.js";
 
 describe("parseDriverLine", () => {
@@ -103,5 +104,71 @@ describe("classifySensitivity / sdkPermissionDecision", () => {
     expect(d.behavior).toBe("deny");
     expect(d.sensitive).toBe(true);
     expect(d.reason).toMatch(/blocked/i);
+  });
+});
+
+describe("permission escalation protocol (increment 2)", () => {
+  it("parses a permission_request line from the driver", () => {
+    const line = `{"type":"permission_request","id":"perm_1","tool":"Bash","input":{"command":"rm -rf ."},"reason":"sensitive"}`;
+    expect(parseDriverLine(line)).toEqual({
+      type: "permission_request",
+      id: "perm_1",
+      tool: "Bash",
+      input: { command: "rm -rf ." },
+      reason: "sensitive",
+    });
+  });
+
+  it("encodes a permission_decision control for the driver's stdin", () => {
+    expect(encodeControl({ type: "permission_decision", id: "perm_1", allow: true })).toBe(
+      `{"type":"permission_decision","id":"perm_1","allow":true}\n`,
+    );
+  });
+});
+
+describe("createPermissionBroker", () => {
+  it("resolves an awaited request with the human's allow", async () => {
+    const broker = createPermissionBroker(60_000);
+    const waited = broker.wait("p1");
+    expect(broker.pendingCount()).toBe(1);
+    expect(broker.resolve("p1", true)).toBe(true);
+    await expect(waited).resolves.toEqual({ allow: true, timedOut: false });
+    expect(broker.pendingCount()).toBe(0);
+  });
+
+  it("resolves with the human's deny", async () => {
+    const broker = createPermissionBroker(60_000);
+    const waited = broker.wait("p2");
+    expect(broker.resolve("p2", false)).toBe(true);
+    await expect(waited).resolves.toEqual({ allow: false, timedOut: false });
+  });
+
+  it("DENIES on timeout when nobody answers", async () => {
+    const broker = createPermissionBroker(10);
+    await expect(broker.wait("slow")).resolves.toEqual({ allow: false, timedOut: true });
+    expect(broker.pendingCount()).toBe(0);
+  });
+
+  it("ignores a decision nothing is waiting for (a late click)", () => {
+    const broker = createPermissionBroker(60_000);
+    expect(broker.resolve("ghost", true)).toBe(false);
+  });
+
+  it("a second decision for the same id is a no-op (idempotent)", async () => {
+    const broker = createPermissionBroker(60_000);
+    const waited = broker.wait("p3");
+    expect(broker.resolve("p3", false)).toBe(true);
+    expect(broker.resolve("p3", true)).toBe(false); // the deny already won
+    await expect(waited).resolves.toEqual({ allow: false, timedOut: false });
+  });
+
+  it("keeps concurrent requests independent", async () => {
+    const broker = createPermissionBroker(60_000);
+    const a = broker.wait("a");
+    const b = broker.wait("b");
+    broker.resolve("b", true);
+    broker.resolve("a", false);
+    await expect(a).resolves.toEqual({ allow: false, timedOut: false });
+    await expect(b).resolves.toEqual({ allow: true, timedOut: false });
   });
 });
