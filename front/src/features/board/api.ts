@@ -331,6 +331,8 @@ export interface CardPatchInput {
   accountSlug?: string | null;
   /** null clears it (back to the account default). */
   model?: string | null;
+  /** Native chat (beta) opt-in for this card; false/null go back to the transcript chat. */
+  sdkChat?: boolean | null;
 }
 
 /* --------------------------------------------------------------- requests */
