@@ -4,6 +4,7 @@ import { listTerminals, sendToTerminal, readTerminal, reportState } from "../ser
 import { DECLARED_STATES } from "../services/board/registry.js";
 import { runGate } from "../services/maestro/gate.js";
 import { deliver } from "../services/maestro/deliver.js";
+import { announcePreview } from "../services/preview/announce.js";
 
 /**
  * MAESTRO TOOLS — what one card's agent can do to the OTHER cards.
@@ -105,6 +106,31 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     async (a) => {
       try {
         return ok(await reportState(a.card, a.state, a.summary, actor));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_preview",
+    {
+      description:
+        "Announce a PREVIEW on your own card: you started a server inside the runner (a dev server, " +
+        "an API) and the user should get a clickable link to it. vibehub verifies the port is " +
+        "actually LISTENING, records the preview on the card (a visible chip the user clicks) and " +
+        "returns the full URL — answer the user with that exact URL. If the port is not listening " +
+        "yet, it refuses and tells you what is: start the server first (bound to 127.0.0.1 or " +
+        "0.0.0.0) and wait until it listens. `card` is YOUR OWN card id ($VIBEHUB_CARD_ID).",
+      inputSchema: {
+        card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this terminal"),
+        port: z.number().int().min(1).max(65535).describe("TCP port the server is listening on inside the runner"),
+        label: z.string().max(60).optional().describe("short name for the chip ('front', 'storybook'); default = the port"),
+      },
+    },
+    async (a) => {
+      try {
+        return ok(await announcePreview(a.card, a.port, a.label));
       } catch (e) {
         return fail(e);
       }

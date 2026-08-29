@@ -13,6 +13,7 @@ import {
   parsePreviewTarget,
   tunnelRemoteCommand,
 } from "../services/preview/preview.js";
+import { pruneCardPreviews } from "../services/board/registry.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -165,7 +166,16 @@ export async function previewRoutes(app: FastifyInstance): Promise<void> {
       const { stdout } = await hostExecutor().runScript(listPortsScript(config.runner.container), {
         timeoutMs: 20_000,
       });
-      return await reply.send({ ports: parseListeningPorts(stdout) });
+      const ports = parseListeningPorts(stdout);
+      // The scan is also the CLEANUP moment for registered previews: a chip pointing at a port that
+      // no longer answers is a dead link, and this is the one place that knows which ports live.
+      // Best-effort — a registry hiccup must not break the listing the user asked for.
+      try {
+        await pruneCardPreviews(ports.map((p) => p.port));
+      } catch (err) {
+        logger.warn({ err: (err as Error).message }, "preview prune failed (listing continues)");
+      }
+      return await reply.send({ ports });
     } catch (err) {
       return await reply.code(502).send({ error: (err as Error).message });
     }
