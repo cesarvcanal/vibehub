@@ -52,8 +52,8 @@ an install with no owner is an install nobody can administer.
 
 | Method | Path | Body / notes |
 |---|---|---|
-| GET | `/api/settings` | `{ git: { name, email }, autonomous, defaultAccountLabel, setupCompletedAt, transcribeLanguage, idleHibernateMinutes, runner: { kind, container, host, image, baseDir }, publicUrl }` |
-| PATCH | `/api/settings` | `{ git?, autonomous?, defaultAccountLabel?, transcribeLanguage?, idleHibernateMinutes? }` — `idleHibernateMinutes` is a whole number of minutes, 0..10080 (0 = never hibernate) |
+| GET | `/api/settings` | `{ git: { name, email }, autonomous, defaultAccountLabel, setupCompletedAt, transcribeLanguage, idleHibernateMinutes, sdkDriver, runner: { kind, container, host, image, baseDir }, publicUrl }` |
+| PATCH | `/api/settings` | `{ git?, autonomous?, defaultAccountLabel?, transcribeLanguage?, idleHibernateMinutes?, sdkDriver? }` — `idleHibernateMinutes` is a whole number of minutes, 0..10080 (0 = never hibernate) |
 | POST | `/api/settings/setup-complete` | stamps the install as set up so the wizard stops taking over |
 
 ## GitHub
@@ -138,7 +138,7 @@ that card.
 | GET | `/api/cards` | `{ cards: Card[] }` — every card in the install, for the views that cut across projects (the sidebar's Recent list) |
 | POST | `/api/cards` | `{ projectId, title }` plus any editable field (`branch`, `accountSlug`, `model`, `resumeSessionId`), applied through the same validation an edit uses. Answers immediately and **pre-provisions the workspace in the background** (clone, worktree, tmux), so the first open is instant |
 | GET | `/api/cards/:id` | `{ card }` |
-| PATCH | `/api/cards/:id` | `{ title?, column?, accountSlug?, model? }` — moving to `done` is always manual. A column is not just a label: moving **into `paused` pauses the card for real** (same rules as the pause route) and moving a paused card into `waiting`/`working` **resumes it** (the session comes back in the background) |
+| PATCH | `/api/cards/:id` | `{ title?, column?, accountSlug?, model?, sdkChat? }` — `sdkChat` is the per-card "Chat nativo (beta)" opt-in (SDK driver socket) — moving to `done` is always manual. A column is not just a label: moving **into `paused` pauses the card for real** (same rules as the pause route) and moving a paused card into `waiting`/`working` **resumes it** (the session comes back in the background) |
 | DELETE | `/api/cards/:id` | kills the session and drops the worktree |
 | POST | `/api/cards/:id/open` | attach-or-create the tmux session; returns the card. Also resumes a paused or hibernated one |
 | POST | `/api/cards/:id/pause` | moves the card to `paused` and ends its tmux sessions. A card that is REALLY working (the runner is asked, not the dot) becomes a *pending* pause: the session lives until Claude finishes. A stale `working` dot — a card parked on Claude's "Resume from summary" screen never fires a Stop hook — does not defer anything: it is paused on the spot |
@@ -153,6 +153,7 @@ that card.
 | WS | `/api/cards/:id/terminal` | xterm bridge (`?shell=1` for a plain shell in the same worktree) |
 | WS | `/api/cards/:id/chat` | the SAME session read as a conversation: one JSON `ChatEvent` per frame (`{ id, kind: "user"\|"assistant"\|"tool", at, text, tool? }`), parsed from Claude Code's transcript. Opens with the last turns and streams what is appended; blank frames are the follower's heartbeat |
 | POST | `/api/cards/:id/chat` | `{ text }` — types it at that session's prompt and presses Enter (409 when the card has no live session) |
+| WS | `/api/cards/:id/sdk` | **native chat (beta)** — the Agent-SDK driver, gated by the `sdkDriver` setting. One JSON `DriverEvent` per frame (`ready`, `session`, `assistant_delta`, `assistant_text`, `tool_use`, `permission_request`, `permission`, `result`, `error`, `parse_error`); the client sends `{ type: "user", text }`, `{ type: "interrupt" }` or `{ type: "permission_decision", id, allow }`. The route persists each new `session_id` on the card (`resumeSessionId`) so a reconnect resumes the same conversation. Contract in `back/src/services/sdk/protocol.ts` + `docs/sdk-driver.md` |
 | POST | `/api/cards/:id/chat/key` | `{ key: "escape" \| "interrupt" }` — the chat's Stop button |
 | WS | `/api/cards/:id/vnc` | noVNC bridge for the card browser |
 
