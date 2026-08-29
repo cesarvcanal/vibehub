@@ -32,6 +32,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { XTerminal } from "@/features/board/components/XTerminal";
 import { ChatView } from "@/features/board/components/ChatView";
+import { SdkChatView } from "@/features/board/components/SdkChatView";
 import { VncPanel } from "@/features/board/components/VncPanel";
 import { PreviewMenu } from "@/features/board/components/PreviewMenu";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
@@ -257,6 +258,13 @@ export function CardTerminalView({
     mutationFn: (title: string) => boardApi.patchCard(cardId, { title }),
     onSuccess: mirror,
     onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardRenameError"))),
+  });
+
+  /** Native chat (beta) opt-in — per card, so one guinea-pig card can try the SDK driver alone. */
+  const sdkChatMutation = useMutation({
+    mutationFn: (sdkChat: boolean) => boardApi.patchCard(cardId, { sdkChat }),
+    onSuccess: mirror,
+    onError: (error) => toast.error(apiErrorMessage(error)),
   });
 
   const pauseMutation = useMutation({
@@ -913,6 +921,14 @@ export function CardTerminalView({
             >
               {t("cardView.shell")}
             </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem
+              data-testid="card-native-chat-toggle"
+              checked={Boolean(card?.sdkChat)}
+              disabled={!card || sdkChatMutation.isPending}
+              onSelect={() => card && sdkChatMutation.mutate(!card.sdkChat)}
+            >
+              {t("cardView.nativeChat")}
+            </DropdownMenuCheckboxItem>
             {card ? (
               <>
                 <DropdownMenuSeparator />
@@ -1027,7 +1043,18 @@ export function CardTerminalView({
           className={cn("flex min-h-0 flex-1 flex-col", browserOpen && "lg:flex-row lg:gap-2")}
         >
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {mode === "chat" ? (
+            {mode === "chat" && card?.sdkChat ? (
+              /* NATIVE CHAT (beta): the Agent SDK driver socket — structured events, permission
+                 buttons in the chat. Per-card opt-in; the global sdkDriver setting still gates the
+                 server side, and with it off this view says so. */
+              <SdkChatView
+                cardId={cardId}
+                active={active}
+                onUploadImage={uploadImage}
+                onStatus={setConnection}
+                ariaLabel={t("chat.ariaFor", { title: card?.title ?? t("cardView.cardFallback") })}
+              />
+            ) : mode === "chat" ? (
               /* The SAME session, read from its transcript. No terminal websocket while this is up. */
               <ChatView
                 cardId={cardId}

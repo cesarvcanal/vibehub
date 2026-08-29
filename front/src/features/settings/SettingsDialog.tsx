@@ -51,6 +51,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [name, setName] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [autonomous, setAutonomous] = React.useState(true);
+  const [sdkDriver, setSdkDriver] = React.useState(false);
   const [defaultLabel, setDefaultLabel] = React.useState("");
   const [language, setLanguage] = React.useState("");
   // Kept as a STRING: the field has to be clearable while you retype it, and "" is not 0.
@@ -68,6 +69,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     setName(settings.data.git.name);
     setEmail(settings.data.git.email);
     setAutonomous(settings.data.autonomous);
+    setSdkDriver(settings.data.sdkDriver ?? false);
     setDefaultLabel(settings.data.defaultAccountLabel ?? "");
     setLanguage(settings.data.transcribeLanguage ?? "");
     setIdleHibernate(String(settings.data.idleHibernateMinutes ?? 180));
@@ -131,6 +133,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     save.mutate({
       git: { name: name.trim(), email: email.trim() },
       autonomous,
+      sdkDriver,
       defaultAccountLabel: defaultLabel.trim() || null,
       transcribeLanguage: language.trim() || null,
       // A blank field is not "never" — it is a field being typed in. Leave the stored value alone.
@@ -209,6 +212,15 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 </p>
               </div>
               <Switch id="settings-autonomous" checked={autonomous} onCheckedChange={setAutonomous} />
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <Label htmlFor="settings-sdk-driver">{t("settings.sdkDriver")}</Label>
+                <p className="text-xs text-muted-foreground">
+                  {t("settings.sdkDriverHint")}
+                </p>
+              </div>
+              <Switch id="settings-sdk-driver" checked={sdkDriver} onCheckedChange={setSdkDriver} />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="settings-idle-hibernate">{t("settings.idleHibernate")}</Label>
