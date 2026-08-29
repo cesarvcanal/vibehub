@@ -22,6 +22,7 @@ import { mcpRoutes } from "./routes/mcp.js";
 import { cardSessionRoutes } from "./routes/cardSession.js";
 import { chatRoutes } from "./routes/chat.js";
 import { accountLoginRoutes } from "./routes/accountLogin.js";
+import { previewRoutes, installPreviewUpgrade } from "./routes/preview.js";
 import { cardSdkRoutes } from "./routes/cardSdk.js";
 import { startPauseReconciler, sweepIdleCards } from "./services/board/workspace.js";
 import { startOutboxFlusher } from "./services/board/outbox.js";
@@ -63,6 +64,11 @@ export async function buildServer() {
   await app.register(cardSessionRoutes);
   await app.register(chatRoutes);
   await app.register(accountLoginRoutes);
+  await app.register(previewRoutes);
+
+  // Preview websockets (vite HMR) ride the same `upgrade` event @fastify/websocket owns; the
+  // interceptor wraps its listener once everything is registered.
+  app.addHook("onReady", async () => { installPreviewUpgrade(app.server); });
   await app.register(cardSdkRoutes);
 
   const staticDir = process.env.VIBEHUB_STATIC_DIR
