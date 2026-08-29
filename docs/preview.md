@@ -15,17 +15,37 @@ You should not have to hunt for ports. Ask the card's agent for a preview ("roda
 "quero ver") and the flow is:
 
 1. The agent starts the dev server inside the runner and waits for it to listen.
-2. It calls the **`vibehub_preview`** MCP tool with `{ card, port, label }`. vibehub verifies the
-   port is actually listening (same scan as the menu), records the preview on the card and returns
-   the full URL (`<publicUrl>/preview/<port>/`).
+2. It calls the **`vibehub_preview`** MCP tool with `{ card, port, label, command, cwd }`. vibehub
+   verifies the port is actually listening (same scan as the menu), records the preview on the
+   card — **including the start command**, which is the relaunch recipe — and returns the full URL
+   (`<publicUrl>/preview/<port>/`).
 3. The agent answers with that link, and the card grows a **chip** ("Preview: front") on its bar —
    click it and the app opens in a new tab. The Preview menu lists the announced previews first,
    above the raw port scan.
 
 If the announced port is not listening, the tool refuses and tells the agent what is — so a link
-you receive is a link that worked at the moment it was announced. Registered previews whose port
-stops listening are pruned the next time the runner is scanned (opening the menu does it); there
-is no background daemon watching them.
+you receive is a link that worked at the moment it was announced.
+
+## Preview lifecycle — it outlives the card session
+
+A server the agent starts lives inside the card's tmux pane, and everything that ends the card
+session (pause, hibernate, restart, a model switch) tree-kills that pane's descendants — so the
+server dies with the card. Registered previews survive that on purpose:
+
+- **State on the chip.** The chip (and each row in the menu) carries the live state from the port
+  scan: green = listening, amber "parado" = the port went silent.
+- **Stopped ≠ dead.** Clicking a stopped preview never lands on a bare 502: it opens a small
+  "Preview parado" screen. **Restart** relaunches the stored command in the preview's **own tmux
+  session** in the runner (`preview-<card8>-<port>` — outside the card's kill tree, invisible to
+  the process reaper), waits until the port listens and opens the tab. From that point the server
+  belongs to the preview, and pausing/restarting the card no longer touches it.
+- **No stored command** (an old or manual registration): the screen says the honest thing — ask
+  the card's agent to start the server again; it will re-announce the link.
+- **Stop preview** (the ✕ on the row, or the button in the dialog) tree-kills the dedicated
+  session and removes the chip.
+- **Cleanup without a daemon:** a registered preview whose port stopped listening and that has
+  **no** relaunch command is pruned on the next scan (opening the menu does it). Previews with a
+  command are kept — stopped and restartable is exactly their point.
 
 ## How it works
 

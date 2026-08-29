@@ -20,6 +20,7 @@ import type {
   Project,
   QueueMessageResult,
   RestartAllResult,
+  RestartedPreview,
   RunnerStatus,
   UploadResult,
 } from "@/api/types";
@@ -468,6 +469,18 @@ export const boardApi = {
   /** Ports listening inside the runner right now — what the Preview menu offers to open. */
   previewPorts: () =>
     get<{ ports?: PreviewPort[] }>("/preview/ports").then((r) => (Array.isArray(r?.ports) ? r.ports : [])),
+
+  /**
+   * Relaunches a stopped preview in its dedicated runner session and resolves once the port is
+   * listening again — the "Reiniciar" of the stopped-preview screen. The server answers 409 with
+   * a human message when there is nothing to relaunch (no stored command).
+   */
+  restartPreview: (cardId: string, port: number) =>
+    post<RestartedPreview>(`/cards/${encodeURIComponent(cardId)}/previews/${port}/restart`),
+
+  /** Stops a preview: kills its dedicated session and removes the chip from the card. */
+  stopPreview: (cardId: string, port: number) =>
+    del<{ stopped: true; port: number }>(`/cards/${encodeURIComponent(cardId)}/previews/${port}`),
 
   /* accounts */
   listAccounts: () =>
