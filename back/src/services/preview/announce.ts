@@ -1,6 +1,15 @@
 import { hostExecutor } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
-import { getCard, registerCardPreview, assertPreviewPort, type CardPreview } from "../board/registry.js";
+import {
+  getCard,
+  getProject,
+  registerCardPreview,
+  assertPreviewPort,
+  normalizePreviewCommand,
+  normalizePreviewCwd,
+  type CardPreview,
+} from "../board/registry.js";
+import { cardWorkPaths } from "../board/workspace.js";
 import { listPortsScript, parseListeningPorts, type ListeningPort } from "./preview.js";
 import { logger } from "../../utils/logger.js";
 
@@ -57,20 +66,40 @@ export function portNotListeningError(port: number, listening: readonly Listenin
   );
 }
 
+export interface AnnounceInput {
+  label?: string;
+  /**
+   * Start command of the server. ALWAYS pass it: it is what lets vibehub relaunch the preview in
+   * its own session after the card is paused/restarted (see services/preview/lifecycle.ts).
+   */
+  command?: string;
+  /** Where the command runs. Absent with a command = the card's own worktree cwd. */
+  cwd?: string;
+}
+
 /**
  * Verifies the port is LISTENING in the runner, records the preview on the card (deduped by port)
  * and returns the full URL. Throws a clear, actionable error when the port is silent or the card
- * does not exist — those are the two mistakes an agent actually makes here.
+ * does not exist — those are the two mistakes an agent actually makes here. When a command comes
+ * without a cwd, the card's own worktree cwd is resolved NOW and stored, so the record stays
+ * relaunchable on its own.
  */
-export async function announcePreview(cardId: string, port: number, label?: string): Promise<AnnouncedPreview> {
+export async function announcePreview(cardId: string, port: number, input: AnnounceInput = {}): Promise<AnnouncedPreview> {
   const p = assertPreviewPort(port);
+  // Shape errors (a two-line command, a relative cwd) must beat the scan: they are the agent's to fix.
+  const command = normalizePreviewCommand(input.command);
+  let cwd = normalizePreviewCwd(input.cwd);
   const card = await getCard(cardId);
   if (!card) throw new Error("card not found — pass your OWN card id ($VIBEHUB_CARD_ID)");
+  if (command && !cwd) {
+    const project = await getProject(card.projectId);
+    if (project) cwd = cardWorkPaths(project, card).cwd;
+  }
 
   const listening = await scanListeningPorts();
   if (!listening.some((l) => l.port === p)) throw portNotListeningError(p, listening);
 
-  const updated = await registerCardPreview(cardId, p, label);
+  const updated = await registerCardPreview(cardId, p, { label: input.label, command, cwd });
   if (!updated) throw new Error("card not found — pass your OWN card id ($VIBEHUB_CARD_ID)");
   const stored = (updated.previews ?? []).find((v): v is CardPreview => v.port === p);
 

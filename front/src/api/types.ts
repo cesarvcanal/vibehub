@@ -348,7 +348,24 @@ export interface CardPreview {
   port: number;
   /** What the agent called it ("front", "storybook"). Absent = the port speaks for itself. */
   label?: string;
+  /**
+   * Start command the agent announced — the relaunch recipe. Present = a stopped preview can be
+   * restarted from the UI (`POST /cards/:id/previews/:port/restart`); absent = only the card's
+   * agent can bring it back.
+   */
+  command?: string;
+  /** Where the command runs inside the runner. */
+  cwd?: string;
   createdAt: number;
+}
+
+/** `POST /api/cards/:id/previews/:port/restart` — the relaunched preview, once its port listens. */
+export interface RestartedPreview {
+  restarted: true;
+  port: number;
+  /** Same-origin path to open (`/preview/<port>/`). */
+  path: string;
+  url: string;
 }
 
 /** The agent's own read of where its work stands — see `Card.declaredState`. */

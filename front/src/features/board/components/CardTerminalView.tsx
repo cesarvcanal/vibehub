@@ -796,8 +796,8 @@ export function CardTerminalView({
         <div className="flex shrink-0 items-center gap-1.5">
           {/* The two extra panes of THIS card. They were a footer row; a footer row costs a line of
               terminal, and these are configuration-weight controls that belong beside the pills. */}
-          <PreviewChip previews={card?.previews} />
-          <PreviewMenu disabled={!showTerminal} previews={card?.previews} />
+          <PreviewChip cardId={cardId} previews={card?.previews} />
+          <PreviewMenu cardId={cardId} disabled={!showTerminal} previews={card?.previews} />
           <PaneToggle
             label={t("cardView.browser")}
             open={browserOpen}
@@ -930,7 +930,7 @@ export function CardTerminalView({
 
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
         {showTerminal ? <ConnectionIndicator state={connection} /> : null}
-        <PreviewMenu compact disabled={!showTerminal} previews={card?.previews} />
+        <PreviewMenu cardId={cardId} compact disabled={!showTerminal} previews={card?.previews} />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button

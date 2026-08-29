@@ -40,9 +40,12 @@ flow is: start it, announce it, answer with the link. Never make the user hunt f
 
 1. Start the dev server in the background, bound to `127.0.0.1` or `0.0.0.0` (both are reachable).
 2. Wait until the port is actually LISTENING (curl it, or watch the server's "ready" line).
-3. Call **`vibehub_preview`** with `{ card: $VIBEHUB_CARD_ID, port, label }` — a short label like
-   "front" or "storybook". It verifies the port, puts a clickable chip on your card and returns the
-   full URL.
+3. Call **`vibehub_preview`** with `{ card: $VIBEHUB_CARD_ID, port, label, command, cwd }` — a
+   short label like "front" or "storybook". **ALWAYS pass `command`** (the exact single-line start
+   command, e.g. `npm run dev -- --port 5173`) and `cwd` when it is not your worktree: vibehub
+   stores them so the preview can be relaunched in its own session after your card is paused or
+   restarted — without them the link dies with your terminal. The tool verifies the port, puts a
+   clickable chip on your card and returns the full URL.
 4. Answer the user with that exact URL (and the base-path hint if the tool returned one that
    applies — vite/Next.js apps under a prefix need their base configured, see the tool output).
 

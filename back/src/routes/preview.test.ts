@@ -118,6 +118,70 @@ describe("GET /api/preview/ports", () => {
   });
 });
 
+describe("preview lifecycle routes", () => {
+  /** A card with a registered preview, written through the SAME registry the booted server uses. */
+  async function seedPreview(recipe: { command?: string; cwd?: string } = {}): Promise<string> {
+    const registry = await import("../services/board/registry.js");
+    const project = await registry.createProject({ name: "Shop" });
+    const card = await registry.createCard({ projectId: project.id, title: "Checkout" });
+    await registry.registerCardPreview(card.id, 5173, { label: "front", ...recipe });
+    return card.id;
+  }
+
+  it("POST restart: 409 with the 'ask the agent' message when there is no stored command", async () => {
+    const cardId = await seedPreview();
+    const res = await app.inject({
+      method: "POST", url: `/api/cards/${cardId}/previews/5173/restart`, headers: { cookie },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/no stored start command/);
+  });
+
+  it("POST restart: relaunches and answers with the proxy path once the port listens", async () => {
+    const cardId = await seedPreview({ command: "npm run dev", cwd: "/work/app" });
+    runScript.mockImplementation((script: string) => {
+      if (script.includes("new-session")) return Promise.resolve({ stdout: "", stderr: "" });
+      return Promise.resolve({
+        stdout: "   1: 00000000:1435 00000000:0000 0A 0:0 0:0 0 0 1 1\n__VIBEHUB_PROC__\n",
+        stderr: "",
+      });
+    });
+    const res = await app.inject({
+      method: "POST", url: `/api/cards/${cardId}/previews/5173/restart`, headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ restarted: true, port: 5173, path: "/preview/5173/" });
+  });
+
+  it("DELETE: kills the dedicated session, removes the chip; a second stop is a 409", async () => {
+    const cardId = await seedPreview({ command: "npm run dev", cwd: "/work/app" });
+    runScript.mockResolvedValue({ stdout: "", stderr: "" });
+    const res = await app.inject({
+      method: "DELETE", url: `/api/cards/${cardId}/previews/5173`, headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ stopped: true, port: 5173 });
+    const registry = await import("../services/board/registry.js");
+    expect((await registry.getCard(cardId))?.previews).toBeUndefined();
+
+    const again = await app.inject({
+      method: "DELETE", url: `/api/cards/${cardId}/previews/5173`, headers: { cookie },
+    });
+    expect(again.statusCode).toBe(409);
+  });
+
+  it("both routes require a session", async () => {
+    const cardId = await seedPreview();
+    for (const [method, url] of [
+      ["POST", `/api/cards/${cardId}/previews/5173/restart`],
+      ["DELETE", `/api/cards/${cardId}/previews/5173`],
+    ] as const) {
+      const res = await app.inject({ method, url });
+      expect(res.statusCode).toBe(401);
+    }
+  });
+});
+
 describe("/preview/:port proxy", () => {
   it("relays a request into the runner and the response back verbatim", async () => {
     const seen: { url?: string; prefix?: string; session?: string } = {};

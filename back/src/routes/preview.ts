@@ -13,6 +13,7 @@ import {
   parsePreviewTarget,
   tunnelRemoteCommand,
 } from "../services/preview/preview.js";
+import { restartPreview, stopPreview } from "../services/preview/lifecycle.js";
 import { pruneCardPreviews } from "../services/board/registry.js";
 import { logger } from "../utils/logger.js";
 
@@ -180,6 +181,43 @@ export async function previewRoutes(app: FastifyInstance): Promise<void> {
       return await reply.code(502).send({ error: (err as Error).message });
     }
   });
+
+  /**
+   * RELAUNCH a registered preview in its dedicated session (the "Reiniciar" of the stopped-preview
+   * screen) and wait until the port listens. 409 = there is nothing to relaunch (no stored command,
+   * or no such preview) — the UI shows the message verbatim; 502 = the relaunch itself failed
+   * (never started listening, runner unreachable).
+   */
+  app.post<{ Params: { cardId: string; port: string } }>(
+    "/api/cards/:cardId/previews/:port/restart",
+    { preHandler: requireSession },
+    async (req, reply) => {
+      const port = Number(req.params.port);
+      try {
+        return await reply.send(await restartPreview(req.params.cardId, port));
+      } catch (err) {
+        const message = (err as Error).message;
+        const conflict = /no preview registered|no stored start command|card not found|invalid preview port/.test(message);
+        return await reply.code(conflict ? 409 : 502).send({ error: message });
+      }
+    },
+  );
+
+  /** STOP a preview: tree-kill its dedicated session and remove the chip. Stopping twice is a 409. */
+  app.delete<{ Params: { cardId: string; port: string } }>(
+    "/api/cards/:cardId/previews/:port",
+    { preHandler: requireSession },
+    async (req, reply) => {
+      const port = Number(req.params.port);
+      try {
+        return await reply.send(await stopPreview(req.params.cardId, port));
+      } catch (err) {
+        const message = (err as Error).message;
+        const known = /no preview registered|card not found|invalid preview port/.test(message);
+        return await reply.code(known ? 409 : 502).send({ error: message });
+      }
+    },
+  );
 
   // The proxy lives in its own encapsulated scope so the catch-all body parser (the proxy forwards
   // bytes, it does not interpret them) cannot leak into the API routes.
