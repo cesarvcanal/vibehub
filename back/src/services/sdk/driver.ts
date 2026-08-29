@@ -27,9 +27,19 @@ export const SDK_DRIVER_DIR = "/root/.vibehub-sdk";
 /** The driver script's path inside the runner. */
 export const SDK_DRIVER_PATH = `${SDK_DRIVER_DIR}/sdk-driver.mjs`;
 
+/**
+ * The Agent SDK version the driver runs against — the one the spike proved. Bumping it is a
+ * deliberate act: change the constant and the next connect reinstalls (the `.sdk-version` marker
+ * no longer matches).
+ */
+export const SDK_PACKAGE_VERSION = "0.3.246";
+/** Marker file recording which SDK version is installed — what makes the install a no-op on every open after the first. */
+export const SDK_VERSION_MARKER = `${SDK_DRIVER_DIR}/.sdk-version`;
+
 /** Reserved heredoc delimiters — never derived from input. */
 const INSTALL_DELIM = "VIBEHUB_SDK_INSTALL";
 const SOURCE_DELIM = "VIBEHUB_SDK_DRIVER_SRC";
+const ENSURE_DELIM = "VIBEHUB_SDK_ENSURE";
 
 /** The driver source, read from the sibling asset (copied into dist by scripts/build-assets.mjs). */
 const DRIVER_SOURCE_FILE = join(dirname(fileURLToPath(import.meta.url)), "sdk-driver.mjs");
@@ -65,6 +75,34 @@ export function buildInstallDriverScript(containerName: string, source: string):
   ].join("\n");
 }
 
+/**
+ * Script that makes sure the Agent SDK is INSTALLED in the runner (in the driver's own dir, not the
+ * card worktrees), idempotent by version marker: when `.sdk-version` already says
+ * `SDK_PACKAGE_VERSION` and the package dir exists, it does NOTHING — no npm, no network. This is
+ * what turned the manual step in docs/sdk-driver.md §"Live smoke test" into part of the connect
+ * path. The runner is NEVER recreated by this; it only writes under /root/.vibehub-sdk. PURE.
+ */
+export function buildEnsureSdkScript(containerName: string, version: string = SDK_PACKAGE_VERSION): string {
+  if (!/^\d+\.\d+\.\d+(-[A-Za-z0-9.-]+)?$/.test(version)) throw new Error(`invalid SDK version: '${version}'`);
+  const pkgDir = `${SDK_DRIVER_DIR}/node_modules/@anthropic-ai/claude-agent-sdk`;
+  const inner = [
+    "set -e",
+    "umask 077",
+    `mkdir -p ${shQuote(SDK_DRIVER_DIR)}`,
+    `if [ "$(cat ${shQuote(SDK_VERSION_MARKER)} 2>/dev/null || true)" != ${shQuote(version)} ] || [ ! -d ${shQuote(pkgDir)} ]; then`,
+    `  cd ${shQuote(SDK_DRIVER_DIR)}`,
+    `  npm install --no-audit --no-fund --loglevel=error ${shQuote(`@anthropic-ai/claude-agent-sdk@${version}`)}`,
+    `  printf '%s' ${shQuote(version)} > ${shQuote(SDK_VERSION_MARKER)}`,
+    "fi",
+  ].join("\n");
+  return [
+    "set -e",
+    `docker exec -i ${shQuote(containerName)} bash -s <<'${ENSURE_DELIM}'`,
+    inner,
+    ENSURE_DELIM,
+  ].join("\n");
+}
+
 export interface SdkDriverCommandOpts {
   containerName: string;
   /** cwd of the driver (the card's worktree). */
@@ -93,6 +131,10 @@ export function buildSdkDriverCommandLine(opts: SdkDriverCommandOpts): string {
   const model = isValidModel(opts.model) ? ` --model ${shQuote(opts.model)}` : "";
   const resume = opts.resumeSessionId ? ` --resume ${shQuote(assertSessionId(opts.resumeSessionId))}` : "";
   const script =
+    // AUTH RULE (ordem do César): the driver signs in with CLAUDE_CODE_OAUTH_TOKEN (the Max
+    // subscription's setup-token, same as the TUI) and NEVER with an API key — an inherited
+    // ANTHROPIC_API_KEY would silently swallow the token and bill the API, so it is unset first.
+    `unset ANTHROPIC_API_KEY; ` +
     `export IS_SANDBOX=1; ` +
     `export NODE_PATH=${shQuote(`${SDK_DRIVER_DIR}/node_modules`)}; ` +
     `if [ -s ${shQuote(tokenFile)} ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${shQuote(tokenFile)})"; fi; ` +
@@ -119,7 +161,12 @@ export function sdkDriverCommand(project: Project, card: Card): { file: string; 
   return hostExecutor().ptyCommand(line);
 }
 
-/** Plant the driver script in the runner (idempotent). Run once before spawning. */
+/**
+ * Plant the driver script AND make sure the SDK is installed in the runner (both idempotent).
+ * Run before spawning. The first ever run pays one `npm install`; every run after that is a marker
+ * check — the version marker is what keeps a reconnect from reinstalling anything.
+ */
 export async function installCardSdkDriver(): Promise<void> {
   await hostExecutor().runScript(buildInstallDriverScript(config.runner.container, sdkDriverSource()));
+  await hostExecutor().runScript(buildEnsureSdkScript(config.runner.container));
 }

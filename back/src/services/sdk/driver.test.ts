@@ -2,8 +2,11 @@ import { describe, it, expect } from "vitest";
 import {
   buildSdkDriverCommandLine,
   buildInstallDriverScript,
+  buildEnsureSdkScript,
   SDK_DRIVER_PATH,
   SDK_DRIVER_DIR,
+  SDK_PACKAGE_VERSION,
+  SDK_VERSION_MARKER,
 } from "./driver.js";
 
 describe("buildSdkDriverCommandLine", () => {
@@ -74,5 +77,48 @@ describe("buildInstallDriverScript", () => {
     expect(script).toContain("console.log('hi')");
     // quoted heredoc delimiter => the source is written literally, not expanded
     expect(script).toContain("<<'VIBEHUB_SDK_DRIVER_SRC'");
+  });
+});
+
+describe("auth hygiene — CLAUDE_CODE_OAUTH_TOKEN only (ordem do César)", () => {
+  const base = { containerName: "vibehub-runner", cwd: "/work/o--r-worktrees/card-1", profileDir: "/root/.claude" };
+
+  it("UNSETS ANTHROPIC_API_KEY before anything else, so an inherited key can never win over the token", () => {
+    const line = buildSdkDriverCommandLine(base);
+    expect(line).toContain("unset ANTHROPIC_API_KEY");
+    // the unset comes BEFORE the exec of node — it is environment prep, not an afterthought
+    expect(line.indexOf("unset ANTHROPIC_API_KEY")).toBeLessThan(line.indexOf("exec node"));
+    // and the command never EXPORTS an API key of its own
+    expect(line).not.toContain("export ANTHROPIC_API_KEY");
+  });
+
+  it("the driver source itself deletes ANTHROPIC_API_KEY (second lock on the same door)", async () => {
+    const { sdkDriverSource } = await import("./driver.js");
+    expect(sdkDriverSource()).toContain("delete process.env.ANTHROPIC_API_KEY");
+  });
+});
+
+describe("buildEnsureSdkScript — the automatic, idempotent SDK install", () => {
+  it("installs the pinned SDK only when the version marker disagrees (idempotent by marker)", () => {
+    const script = buildEnsureSdkScript("vibehub-runner");
+    expect(script).toContain("docker exec -i 'vibehub-runner' bash -s");
+    // the guard: marker equal + package dir present => the whole install is skipped
+    expect(script).toContain(`cat '${SDK_VERSION_MARKER}'`);
+    expect(script).toContain(`!= '${SDK_PACKAGE_VERSION}'`);
+    expect(script).toContain("node_modules/@anthropic-ai/claude-agent-sdk");
+    // the install pins the exact version and writes the marker AFTER installing
+    expect(script).toContain(`'@anthropic-ai/claude-agent-sdk@${SDK_PACKAGE_VERSION}'`);
+    expect(script.indexOf("npm install")).toBeLessThan(script.indexOf(`printf '%s' '${SDK_PACKAGE_VERSION}'`));
+  });
+
+  it("never touches the container itself — only /root/.vibehub-sdk", () => {
+    const script = buildEnsureSdkScript("vibehub-runner");
+    expect(script).not.toContain("docker run");
+    expect(script).not.toContain("docker rm");
+    expect(script).toContain(SDK_DRIVER_DIR);
+  });
+
+  it("rejects a malformed version rather than passing it to npm", () => {
+    expect(() => buildEnsureSdkScript("vibehub-runner", "1.2; rm -rf /")).toThrow();
   });
 });
