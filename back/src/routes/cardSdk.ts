@@ -25,13 +25,15 @@ import { logger } from "../utils/logger.js";
  *   { "type": "assistant_delta", "text": string }        // live token stream
  *   { "type": "assistant_text", "text": string }          // consolidated block
  *   { "type": "tool_use", "id": string, "name": string, "input": unknown }
- *   { "type": "permission", "tool": string, "decision": "allow"|"deny", "sensitive": boolean, "reason"?: string }
+ *   { "type": "permission", "tool": string, "decision": "allow"|"deny", "sensitive": boolean, "reason"?: string, "id"?: string, "timedOut"?: boolean }
+ *   { "type": "permission_request", "id": string, "tool": string, "input"?: unknown, "reason"?: string }
  *   { "type": "result", "isError": boolean, "sessionId"?: string, "subtype"?: string, "result"?: string, "permissionDenials"?: unknown[] }
  *   { "type": "error", "message": string }
  *   { "type": "parse_error", "raw": string }              // synthesised by the back for a bad line
  *
- * The front sends, per message: either a JSON object { "type": "user", "text": "..." } (or
- * { "type": "interrupt" }), or a bare string which is treated as a user message.
+ * The front sends, per message: either a JSON object { "type": "user", "text": "..." },
+ * { "type": "interrupt" }, or { "type": "permission_decision", "id": string, "allow": boolean }
+ * (the answer to a `permission_request`) — or a bare string, treated as a user message.
  */
 
 const KEEPALIVE_MS = 25_000;
@@ -42,9 +44,12 @@ export function parseSdkClientFrame(raw: string): DriverControl | null {
   if (trimmed === "") return null;
   if (trimmed.startsWith("{")) {
     try {
-      const parsed = JSON.parse(trimmed) as { type?: unknown; text?: unknown };
+      const parsed = JSON.parse(trimmed) as { type?: unknown; text?: unknown; id?: unknown; allow?: unknown };
       if (parsed.type === "interrupt") return { type: "interrupt" };
       if (parsed.type === "user" && typeof parsed.text === "string") return { type: "user", text: parsed.text };
+      if (parsed.type === "permission_decision" && typeof parsed.id === "string" && typeof parsed.allow === "boolean") {
+        return { type: "permission_decision", id: parsed.id, allow: parsed.allow };
+      }
       return null;
     } catch {
       // not JSON — fall through and treat as a bare user message
@@ -57,13 +62,20 @@ export function parseSdkClientFrame(raw: string): DriverControl | null {
  * Wire a driver child process to a websocket: NDJSON events out (one frame each), control lines in.
  * Both sides close together. Exported for the route; the child is spawned by the caller.
  */
-export function bridgeSdkDriver(socket: WebSocket, child: ChildProcessWithoutNullStreams, label: string): void {
+export function bridgeSdkDriver(
+  socket: WebSocket,
+  child: ChildProcessWithoutNullStreams,
+  label: string,
+  /** Called (deduplicated) whenever the driver reports a session id — the resume key to persist. */
+  onSessionId?: (sessionId: string) => void,
+): void {
   disableNagle(socket);
   const keepalive = setInterval(() => {
     try { socket.ping?.(); } catch { /* the close handler cleans up */ }
   }, KEEPALIVE_MS);
 
   let buffer = "";
+  let lastSessionId: string | undefined;
   child.stdout.on("data", (chunk: Buffer) => {
     buffer += chunk.toString();
     let nl: number;
@@ -72,6 +84,16 @@ export function bridgeSdkDriver(socket: WebSocket, child: ChildProcessWithoutNul
       buffer = buffer.slice(nl + 1);
       const event = parseDriverLine(line);
       if (event) {
+        // The session id is the RESUME key: persisting it on the card is what lets a reconnect (or
+        // reopening the card tomorrow) continue the same conversation. Deduplicated here so the
+        // registry is only touched when the id actually changes.
+        if (onSessionId && (event.type === "session" || event.type === "result")) {
+          const sessionId = event.sessionId;
+          if (sessionId && sessionId !== lastSessionId) {
+            lastSessionId = sessionId;
+            onSessionId(sessionId);
+          }
+        }
         try { socket.send(JSON.stringify(event)); } catch { /* socket going away; teardown tidies */ }
       }
     }
@@ -128,7 +150,13 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       const { file, args } = sdkDriverCommand(project, card);
       const child = spawn(file, args, { stdio: ["pipe", "pipe", "pipe"] }) as ChildProcessWithoutNullStreams;
       logger.info({ card: card.worktreeSlug }, "sdk driver attached");
-      bridgeSdkDriver(socket, child, card.worktreeSlug);
+      bridgeSdkDriver(socket, child, card.worktreeSlug, (sessionId) => {
+        // Persist the resume key on the card (board.json) so the NEXT driver spawn — a reconnect,
+        // a reopened card — continues this very conversation (`--resume` in sdkDriverCommand).
+        void registry.updateCard(card.id, { resumeSessionId: sessionId }).catch((err: unknown) => {
+          logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not persist the sdk session id");
+        });
+      });
     },
   );
 }
