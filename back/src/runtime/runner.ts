@@ -164,8 +164,10 @@ export function buildSetupScript(opts: {
     "export DEBIAN_FRONTEND=noninteractive",
     "apt-get update -qq",
     // tmux/git/ripgrep/curl = the card terminal. xvfb/x11vnc/novnc/websockify/socat = the card's
-    // live browser: virtual display + RFB + bridge. apt is idempotent, so re-runs are cheap.
-    "apt-get install -y -qq tmux git ripgrep curl xvfb x11vnc novnc websockify socat >/dev/null",
+    // live browser: virtual display + RFB + bridge. procps = the `ps` the tree-kill and the
+    // process reaper depend on (present in the full node image, but stated so a slimmer image
+    // cannot silently lose it). apt is idempotent, so re-runs are cheap.
+    "apt-get install -y -qq tmux git ripgrep curl procps xvfb x11vnc novnc websockify socat >/dev/null",
     // gh CLI from the official repo — the agent opens PRs and checks CI. Auth is the user's own.
     'if ! command -v gh >/dev/null; then mkdir -p /etc/apt/keyrings && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list && apt-get update -qq && apt-get install -y -qq gh >/dev/null; fi',
     "npm i -g @anthropic-ai/claude-code >/dev/null 2>&1",

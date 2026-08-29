@@ -25,6 +25,7 @@ import { accountLoginRoutes } from "./routes/accountLogin.js";
 import { cardSdkRoutes } from "./routes/cardSdk.js";
 import { startPauseReconciler, sweepIdleCards } from "./services/board/workspace.js";
 import { startOutboxFlusher } from "./services/board/outbox.js";
+import { startRunnerReaper } from "./services/reaper/reaper.js";
 
 /**
  * The vibehub server: one process serving the API, the websocket terminals, and (in production) the
@@ -131,6 +132,11 @@ async function main(): Promise<void> {
   // Paused must not be running. Started HERE and not in buildServer, for the same reason as the
   // idle sweep: tests that boot the app must not inherit background work.
   startPauseReconciler();
+  // The runner reaper: the backstop against leaked processes inside the runner (orphaned claude
+  // and transcript watchers with ppid 1). The primary fixes are the tree-kill and the follow
+  // loop's stdin check — this collects whatever slips through, every ten minutes. Started HERE
+  // for the same reason as the others: tests must not inherit a timer that kills processes.
+  startRunnerReaper();
   logger.info(
     { port: config.port, dataDir: config.dataDir, runner: config.runner.kind },
     `vibehub listening on http://${config.host}:${config.port}`,

@@ -27,6 +27,13 @@ import { logger } from "../../utils/logger.js";
 /** How much history a chat opens with. ~400 lines is several turns without being a download. */
 export const CHAT_TAIL_LINES = 400;
 
+/**
+ * Marker embedded in the follow loop's command line (a no-op `:` argument), so a leaked watcher is
+ * IDENTIFIABLE in `ps` inside the runner. The reaper (services/reaper) kills any orphaned process
+ * carrying it. Never derived from input.
+ */
+export const TRANSCRIPT_FOLLOW_MARKER = "vibehub-transcript-follow";
+
 /** Longest tool detail we put on a collapsed line. Beyond this it stops being a summary. */
 export const TOOL_DETAIL_MAX = 160;
 
@@ -224,9 +231,23 @@ export function parseChatEvents(jsonl: string): ChatEvent[] {
  *    `tail -F` would sit on the old one forever, so the loop re-checks which file is newest and
  *    moves the tail across.
  *  - **The reader going away.** The browser closing kills our end, but the process INSIDE the
- *    container would happily keep looping. The heartbeat newline is what stops it: writing to a
- *    pipe nobody reads fails, the loop's condition fails with it, and the shell exits. It doubles
- *    as a "still connected" tick on the wire, and parses as nothing.
+ *    container would happily keep looping. TWO independent things stop it, because ONE was not
+ *    enough in production (the runner accumulated hundreds of these loops):
+ *      1. The heartbeat newline: writing to a pipe nobody reads fails, the loop's condition fails
+ *         with it, and the shell exits. It doubles as a "still connected" tick on the wire, and
+ *         parses as nothing. BUT — and this is how the loops leaked — a `docker exec` whose CLIENT
+ *         was killed does not break that pipe: the daemon keeps consuming stdout, so the printf
+ *         succeeds forever and the loop never notices the reader is gone.
+ *      2. The STDIN liveness check: the exec runs with `-i`, so the loop's stdin IS the connection
+ *         to the backend. Nothing ever arrives on it — `read -t 2` is the loop's sleep — but when
+ *         the backend's process dies (socket closed, backend restarted, ssh dropped), the daemon
+ *         closes that stdin and `read` comes back with EOF instead of a timeout. EOF = no reader =
+ *         exit. This is the parent-liveness check (`kill -0 $PPID` does not work here: a process
+ *         started by `docker exec` sees PPID 0 inside the container's namespace).
+ *
+ * The loop carries TRANSCRIPT_FOLLOW_MARKER on its command line (a no-op `:` argument) so that a
+ * watcher that leaks anyway — a runner upgraded mid-flight, a docker daemon hiccup — is visible in
+ * `ps` and gets collected by the reaper.
  *
  * The directory is derived from the board and validated; nothing from the request reaches the
  * shell. PURE.
@@ -235,7 +256,7 @@ export function buildFollowCommand(containerName: string, transcriptDir: string,
   assertSafeRemotePath(transcriptDir);
   const n = Math.max(1, Math.min(5000, Math.floor(tailLines) || CHAT_TAIL_LINES));
   const inner =
-    `cur=""; pid=""; ` +
+    `: ${TRANSCRIPT_FOLLOW_MARKER}; cur=""; pid=""; ` +
     // The tail is a CHILD: without this it outlives the loop that started it and keeps a handle on
     // a socket nobody is reading. Killing it on the way out is what makes a closed chat cost zero.
     // The signal trap has to `exit` explicitly — a shell that HANDLES a signal does not die from
@@ -248,9 +269,12 @@ export function buildFollowCommand(containerName: string, transcriptDir: string,
     `if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; fi; ` +
     `cur="$f"; tail -n ${n} -F "$f" & pid=$!; ` +
     `fi; ` +
-    `sleep 2; ` +
+    // The 2s cadence AND the liveness check in one: timeout (rc>128) = still connected, keep going;
+    // EOF/error (rc 1..128) = the backend end of this exec is gone — exit, and the EXIT trap takes
+    // the tail down. bash, not sh: dash has no `read -t`.
+    `read -t 2 -r hb; rc=$?; if [ $rc -ne 0 ] && [ $rc -le 128 ]; then exit 0; fi; ` +
     `done`;
-  return `docker exec ${shQuote(containerName)} sh -c ${shQuote(inner)} _ ${shQuote(transcriptDir)}`;
+  return `docker exec -i ${shQuote(containerName)} bash -c ${shQuote(inner)} _ ${shQuote(transcriptDir)}`;
 }
 
 /** Keys the chat may press in the session, by name. Nothing else reaches tmux. */

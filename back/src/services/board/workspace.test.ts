@@ -616,9 +616,10 @@ describe("pause / resume (the session dies; reopening returns to the SAME conver
 
     expect(runScript).toHaveBeenCalledTimes(1);
     const cmd = scriptAt(0);
-    expect(cmd).toContain(`docker exec '${CONTAINER}' tmux kill-session -t '${card.tmuxSession}'`);
-    expect(cmd).toContain(`docker exec '${CONTAINER}' tmux kill-session -t '${card.tmuxSession}-sh'`);
-    expect(cmd).toMatch(/; true$/); // best-effort: a missing session is not an error
+    expect(cmd).toContain(`docker exec -i '${CONTAINER}' bash -s`);
+    expect(cmd).toContain(`tmux kill-session -t '${card.tmuxSession}'`);
+    expect(cmd).toContain(`tmux kill-session -t '${card.tmuxSession}-sh'`);
+    expect(cmd).toContain("|| true"); // best-effort: a missing session is not an error
     expect((await reg.getCard(card.id))?.pausedAt).toBe(paused.pausedAt);
   });
 
@@ -975,7 +976,7 @@ describe("restart (single and all) — a working card is protected", () => {
     const { card } = await seed();
     await ws.killCardSession(card);
     expect(scriptAt(0)).toContain(`tmux kill-session -t '${card.tmuxSession}'`);
-    expect(scriptAt(0)).toContain(`docker exec '${CONTAINER}'`);
+    expect(scriptAt(0)).toContain(`docker exec -i '${CONTAINER}'`);
     expect(scriptAt(0)).not.toContain(`${card.tmuxSession}-sh`);
 
     runScript.mockRejectedValue(new Error("host is down"));
@@ -1447,6 +1448,11 @@ describe("session probe (busy / idle / gone) and the pending-pause reconciler", 
       const stop = ws.startPauseReconciler(1_000);
       await vi.advanceTimersByTimeAsync(1_000);
       expect((await reg.getCard(card.id))?.pausedAt).toBeTypeOf("number");
+      // Let the tick's own kill land BEFORE measuring the silence after stop() — the pause is
+      // stamped (fs) before the session is killed (host), so the read above can win that race.
+      await vi.waitFor(() =>
+        expect(runScript.mock.calls.some((c) => String(c[0]).includes("kill-session"))).toBe(true),
+      );
 
       stop();
       runScript.mockClear();
@@ -1509,5 +1515,36 @@ describe("card push as the project's GitHub connection (GH_TOKEN)", () => {
     expect(script).toContain("rm -f '/root/.vibehub/gh/id-1.token'");
     expect(script).not.toContain("GH_TOKEN");
     expect(script).not.toContain(GH);
+  });
+});
+
+describe("buildKillSessionScript (the whole pane process tree dies, not just the session)", () => {
+  it("collects every descendant of each pane, TERMs the tree, kills the sessions, then KILLs survivors", () => {
+    const script = ws.buildKillSessionScript(CONTAINER, ["card-a1b2", "card-a1b2-sh"]);
+    // The script runs INSIDE the runner (bash over stdin), not as N separate docker execs.
+    expect(script).toContain(`docker exec -i '${CONTAINER}' bash -s`);
+    // Pane pids per session — quoted, so a hostile session name cannot escape.
+    expect(script).toContain("tmux list-panes -s -t 'card-a1b2' -F '#{pane_pid}'");
+    expect(script).toContain("tmux list-panes -s -t 'card-a1b2-sh' -F '#{pane_pid}'");
+    // The descendant walk (one ps snapshot, awk climbs the ppid chain up to the pane).
+    expect(script).toContain("ps -eo pid=,ppid=");
+    // TERM the captured tree BEFORE kill-session; escalate to KILL after the grace second —
+    // production showed claude surviving tmux's HUP and living for days as a ppid-1 orphan.
+    const iTerm = script.indexOf("kill -TERM $PIDS");
+    const iSession = script.indexOf("tmux kill-session -t 'card-a1b2'");
+    const iKill = script.indexOf("kill -KILL $PIDS");
+    expect(iTerm).toBeGreaterThan(-1);
+    expect(iSession).toBeGreaterThan(iTerm);
+    expect(iKill).toBeGreaterThan(iSession);
+    expect(script).toContain("sleep 1");
+    // Best-effort: a session already gone must not fail the script.
+    expect(script).toContain("tmux kill-session -t 'card-a1b2' 2>/dev/null || true");
+    expect(script.trimEnd().endsWith("VIBEHUB_KILL")).toBe(true);
+  });
+
+  it("quotes a hostile session name instead of interpolating it", () => {
+    const script = ws.buildKillSessionScript(CONTAINER, ["s'; rm -rf /; '"]);
+    expect(script).toContain(`'s'\\''; rm -rf /; '\\'''`);
+    expect(script).not.toContain("-t s';");
   });
 });

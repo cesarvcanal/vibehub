@@ -3,6 +3,7 @@ import type { WebSocket } from "ws";
 import pty from "node-pty";
 import { requireOwner } from "../auth/session.js";
 import { provisionRunner, runnerStatus, startRunner } from "../runtime/runner.js";
+import { runnerProcessStats } from "../services/reaper/reaper.js";
 import { hostExecutor, shQuote } from "../runtime/host.js";
 import { config } from "../config/env.js";
 import { bridgePty } from "./session.js";
@@ -36,7 +37,15 @@ function broadcast(chunk: string): void {
 
 export async function runnerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/runner", { preHandler: requireOwner }, async (_req, reply) => {
-    return await reply.send({ ...(await runnerStatus()), provisioning: provisioning !== null, terminal: true });
+    return await reply.send({
+      ...(await runnerStatus()),
+      provisioning: provisioning !== null,
+      terminal: true,
+      // Last reaper sweep: total processes inside the runner + what it collected. A count that
+      // keeps climbing between sweeps is the early sign of a NEW leak (the 2026-08-29 incident
+      // was ~800 processes and load 55 before anyone noticed). null until the first sweep.
+      processes: runnerProcessStats(),
+    });
   });
 
   /**
