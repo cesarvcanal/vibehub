@@ -650,6 +650,23 @@ export function CardTerminalView({
   );
 
   /**
+   * The NATIVE CHAT (beta) opt-in, shared by the desktop `⋯` and the phone's overflow menu. It is
+   * a per-card setting, and a per-card setting reachable from only one width of screen is a
+   * setting half the installs cannot flip — the first cut had it behind the phone menu only, and
+   * on a desktop there was simply no way to turn it on.
+   */
+  const nativeChatItem = (
+    <DropdownMenuCheckboxItem
+      data-testid="card-native-chat-toggle"
+      checked={Boolean(card?.sdkChat)}
+      disabled={!card || sdkChatMutation.isPending}
+      onSelect={() => card && sdkChatMutation.mutate(!card.sdkChat)}
+    >
+      {t("cardView.nativeChat")}
+    </DropdownMenuCheckboxItem>
+  );
+
+  /**
    * IDENTITY: back, the menu handle, the status dot, the title, the project. What this screen IS.
    *
    * The back arrow is the first thing in the bar on EVERY width. On a phone the only other way out
@@ -845,6 +862,26 @@ export function CardTerminalView({
               </DropdownMenuContent>
             </DropdownMenu>
           ) : null}
+          {/* The desktop `⋯`: the card options that are not worth a pill of their own. The phone
+              has had this menu since the two-row bar; the desktop needs it for the same reason —
+              the native-chat toggle has to exist HERE too, not only behind the phone's menu. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                data-testid="card-bar-more"
+                aria-label={t("cardView.more")}
+                title={t("cardView.more")}
+                className="h-7 w-7 shrink-0 rounded-md border border-border/50 bg-card/40 text-muted-foreground"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent side="bottom" align="end">
+              {nativeChatItem}
+            </DropdownMenuContent>
+          </DropdownMenu>
           {showTerminal ? <ConnectionIndicator state={connection} /> : null}
         </div>
     </>
@@ -921,14 +958,7 @@ export function CardTerminalView({
             >
               {t("cardView.shell")}
             </DropdownMenuCheckboxItem>
-            <DropdownMenuCheckboxItem
-              data-testid="card-native-chat-toggle"
-              checked={Boolean(card?.sdkChat)}
-              disabled={!card || sdkChatMutation.isPending}
-              onSelect={() => card && sdkChatMutation.mutate(!card.sdkChat)}
-            >
-              {t("cardView.nativeChat")}
-            </DropdownMenuCheckboxItem>
+            {nativeChatItem}
             {card ? (
               <>
                 <DropdownMenuSeparator />
