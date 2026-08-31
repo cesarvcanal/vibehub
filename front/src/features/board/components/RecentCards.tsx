@@ -12,9 +12,11 @@ import { useT } from "@/i18n";
  * The projects list answers "what am I working on"; this answers "where was I two minutes ago", and
  * they are not the same question. With one terminal per card spread over several repositories, going
  * back to the thread you just left meant remembering which project owned it, selecting that project,
- * and finding the card — three steps to reach something you had open a moment ago. So the five most
- * recent conversations sit here, ACROSS projects, with the project's name under each title, and they
- * stay on screen while a terminal is open: from inside one conversation the next one is one click.
+ * and finding the card — three steps to reach something you had open a moment ago. So EVERY
+ * conversation sits here, ACROSS projects, newest first, with the project's name under each title,
+ * and they stay on screen while a terminal is open: from inside one conversation the next one is one
+ * click. The list scrolls inside its own bounded box rather than pushing the projects off screen —
+ * the last handful is what you reach for, the rest is one wheel-turn away.
  *
  * It reads `GET /api/cards` — one request for every card in the install, rather than one poll per
  * project — on a slower interval than the board itself. This list is a way back, not a monitor: the
@@ -64,7 +66,10 @@ export function RecentCards({
           {t("sidebar.recent")}
         </span>
       </div>
-      <div className="pb-1.5">
+      {/* Bounded and scrollable: the full history lives here, and the box must not squeeze the
+          project list below it out of the panel. `overscroll-contain` keeps a wheel that reaches
+          the end from scrolling the page behind it. */}
+      <div data-testid="recent-cards-list" className="max-h-[40dvh] overflow-y-auto overscroll-contain pb-1.5">
         {recent.map((card) => (
           <RecentRow
             key={card.id}
