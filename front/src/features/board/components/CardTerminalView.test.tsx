@@ -57,6 +57,12 @@ vi.mock("@/features/board/components/VncPanel", () => ({
   VncPanel: ({ cardId }: { cardId: string }) => <div data-testid="vnc">{cardId}</div>,
 }));
 
+// The native (SDK) chat also owns a websocket and has its own test file; here the only question is
+// WHICH of the two chats got mounted — the bug was the legacy one flashing in on a beta card.
+vi.mock("@/features/board/components/SdkChatView", () => ({
+  SdkChatView: ({ cardId }: { cardId: string }) => <div data-testid="sdk-chat" data-card={cardId} />,
+}));
+
 const mockGet = vi.mocked(get);
 const mockPost = vi.mocked(post);
 const mockPatch = vi.mocked(patch);
@@ -252,6 +258,58 @@ describe("CardTerminalView — instant open", () => {
     renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
     expect(await screen.findByTestId("xterm")).toBeInTheDocument();
     localStorage.clear();
+  });
+});
+
+describe("CardTerminalView — which chat a card opens in (the beta must not vanish)", () => {
+  beforeEach(() => {
+    serve();
+    mockPost.mockResolvedValue({ card: card({ openedAt: 10, sdkChat: true }) });
+  });
+  afterEach(() => localStorage.clear());
+
+  it("a cached beta card opens straight into the NATIVE chat", async () => {
+    renderWithCache([card({ openedAt: 10, sdkChat: true })], testQueryClient(), "chat");
+    expect(await screen.findByTestId("sdk-chat")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat")).toBeNull();
+  });
+
+  it("a deep link WAITS for the card record before choosing a chat — the legacy view never flashes in", async () => {
+    // Regression: with the record still loading, `card?.sdkChat` read as false and the LEGACY chat
+    // mounted first — "reabri o card e o modo beta sumiu" — then swapped, losing whatever the
+    // person had started doing in the wrong view.
+    let resolveCard: (value: unknown) => void = () => undefined;
+    const base = mockGet.getMockImplementation();
+    mockGet.mockImplementation((url: string, ...rest: unknown[]) => {
+      if (url === "/cards/c1") return new Promise((r) => { resolveCard = r; });
+      return (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest);
+    });
+
+    writeCardMode("c1", "chat");
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+
+    // While the record is unknown: NEITHER chat is mounted (a spinner is what shows).
+    await screen.findByText("Loading the card…", undefined, { timeout: 3000 }).catch(() => undefined);
+    expect(screen.queryByTestId("chat")).toBeNull();
+    expect(screen.queryByTestId("sdk-chat")).toBeNull();
+
+    resolveCard({ card: card({ openedAt: 10, sdkChat: true }) });
+    expect(await screen.findByTestId("sdk-chat")).toBeInTheDocument();
+    // the legacy chat was NEVER mounted along the way
+    expect(screen.queryByTestId("chat")).toBeNull();
+  });
+
+  it("a deep link to a NON-beta card still lands in the legacy chat", async () => {
+    const base = mockGet.getMockImplementation();
+    mockGet.mockImplementation((url: string, ...rest: unknown[]) => {
+      if (url === "/cards/c1") return Promise.resolve({ card: card({ openedAt: 10 }) });
+      return (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest);
+    });
+    mockPost.mockResolvedValue({ card: card({ openedAt: 10 }) });
+    writeCardMode("c1", "chat");
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    expect(await screen.findByTestId("chat")).toBeInTheDocument();
+    expect(screen.queryByTestId("sdk-chat")).toBeNull();
   });
 });
 
