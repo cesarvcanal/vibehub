@@ -12,10 +12,13 @@ import { reconnectDelay, type ConnectionState } from "@/features/board/lib/recon
 import {
   groupChatRows,
   mergeEvent,
+  normalizeMessage,
   parseChatFrame,
+  pendingPhase,
   readPending,
   writePending,
   type ChatEvent,
+  type PendingMessage,
 } from "@/features/board/lib/chat";
 import { mdBlocks, mdInline } from "@/features/board/lib/markdown";
 import { t as translate, useT } from "@/i18n";
@@ -82,7 +85,7 @@ export function ChatView({
    */
   // Seeded from localStorage so a message you sent while Claude was busy — queued by Claude Code,
   // not in the transcript yet — is still on screen after a tab switch, a remount or a reload.
-  const [pending, setPending] = React.useState<{ id: string; text: string }[]>(() => readPending(cardId));
+  const [pending, setPending] = React.useState<PendingMessage[]>(() => readPending(cardId));
   // Persist every change (keyed by card), so the bubbles outlive this component.
   React.useEffect(() => {
     writePending(cardId, pending);
@@ -172,12 +175,14 @@ export function ChatView({
     };
   }, [cardId]);
 
-  /** An optimistic bubble dies when the real message for it arrives. */
+  /** An optimistic bubble dies when the real message for it arrives. Matched on the COLLAPSED
+   * text: the transcript's echo may re-flow whitespace, and a mismatch here was one of the ways a
+   * delivered message kept spinning as "enviando" forever. */
   React.useEffect(() => {
     setPending((prev) => {
       if (!prev.length) return prev;
-      const said = new Set(events.filter((e) => e.kind === "user").map((e) => e.text.trim()));
-      const next = prev.filter((p) => !said.has(p.text.trim()));
+      const said = new Set(events.filter((e) => e.kind === "user").map((e) => normalizeMessage(e.text)));
+      const next = prev.filter((p) => !said.has(normalizeMessage(p.text)));
       return next.length === prev.length ? prev : next;
     });
   }, [events]);
@@ -204,10 +209,19 @@ export function ChatView({
     // The composer speaks terminal ("\r" submits); here the Enter is the server's job.
     const text = raw.replace(/\r$/, "").trim();
     if (!text) return;
-    setPending((prev) => [...prev, { id: `local:${Date.now()}:${prev.length}`, text }]);
+    setPending((prev) => [...prev, { id: `local:${Date.now()}:${prev.length}`, text, at: Date.now() }]);
     // Await so a REJECTED send (e.g. the terminal is on a menu) propagates to the composer, which
     // then keeps the draft instead of clearing it. onError still handles the toast + the pending row.
     await sendMutation.mutateAsync(text);
+  };
+
+  /** The overdue bubble's "Reenviar": drop the stuck entry, send the same words again fresh. */
+  const resendPending = (message: PendingMessage): void => {
+    setPending((prev) => prev.filter((p) => p.id !== message.id));
+    void send(message.text).catch(() => undefined); // failures surface via the mutation's toast
+  };
+  const discardPending = (message: PendingMessage): void => {
+    setPending((prev) => prev.filter((p) => p.id !== message.id));
   };
 
   /* ------------------------------------------------------------ scrolling */
@@ -230,13 +244,15 @@ export function ChatView({
 
   /* --------------------------------------------------------------- quiet */
 
-  // A clock only while it can change something: working, and nothing new for a while.
+  // A clock only while it can change something: working (the quiet hint), or a pending bubble
+  // whose "enviando" has a deadline to keep honest.
   const [now, setNow] = React.useState(() => Date.now());
   React.useEffect(() => {
-    if (!working) return;
+    if (!working && pending.length === 0) return;
+    setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 15_000);
     return () => clearInterval(timer);
-  }, [working]);
+  }, [working, pending.length]);
   const quietFor = working ? now - lastEventAt : 0;
   const quiet = quietFor >= QUIET_HINT_MS;
 
@@ -283,9 +299,16 @@ export function ChatView({
             <ChatRow key={row.id} event={row.event} />
           ),
         )}
-        {pending.map((p) => (
-          <ChatRow key={p.id} event={{ id: p.id, kind: "user", at: 0, text: p.text }} sending />
-        ))}
+        {pending.map((p) =>
+          pendingPhase(p, now) === "sending" ? (
+            <ChatRow key={p.id} event={{ id: p.id, kind: "user", at: 0, text: p.text }} sending />
+          ) : (
+            /* OVERDUE: the transcript never echoed it. Claude may have restarted, the terminal may
+               have eaten it at a menu — whatever it was, an eternal "enviando" is a lie. The words
+               stay on screen with the honest label and the two ways out. */
+            <PendingStuck key={p.id} text={p.text} onResend={() => resendPending(p)} onDiscard={() => discardPending(p)} />
+          ),
+        )}
 
         {working ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="chat-working">
@@ -328,6 +351,42 @@ export function ChatView({
             <Square className="h-3.5 w-3.5" />
           </Button>
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A message that was sent but never confirmed by the transcript within the deadline. The bubble
+ * keeps the words (nothing is silently dropped) and hands the person the two honest moves.
+ */
+function PendingStuck({ text, onResend, onDiscard }: { text: string; onResend: () => void; onDiscard: () => void }) {
+  const t = useT();
+  return (
+    <div className="flex flex-col items-end gap-1" data-testid="chat-pending-stuck">
+      <div className="max-w-[85%] select-text whitespace-pre-wrap break-words rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
+        {text}
+      </div>
+      <div className="flex max-w-[85%] items-center gap-2 text-xs text-amber-500">
+        <span>{t("chat.pendingStuck")}</span>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-6 px-2 text-xs"
+          data-testid="chat-pending-resend"
+          onClick={onResend}
+        >
+          {t("chat.resend")}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-6 px-2 text-xs text-muted-foreground"
+          data-testid="chat-pending-discard"
+          onClick={onDiscard}
+        >
+          {t("chat.discard")}
+        </Button>
       </div>
     </div>
   );

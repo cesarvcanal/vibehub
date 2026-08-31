@@ -281,10 +281,19 @@ export interface SendOpts {
    * probe.
    */
   guardInteractiveMenu?: boolean;
+  /**
+   * Refuse the send when CLAUDE IS NOT RUNNING in the pane. A card whose Claude exited (crash,
+   * `/exit`, a hibernate that half-landed) still has a live tmux with a bare SHELL under it: the
+   * board says "open", send-keys succeeds — and the message is executed by bash or swallowed,
+   * never reaching any conversation. That was the chat's "balão pendente para sempre": a 200 with
+   * no echo ever coming. On for the person's chat send; off by default (the outbox path probes for
+   * itself, and an agent-to-agent send pays no extra exec).
+   */
+  requireAgent?: boolean;
 }
 
 export async function sendToTerminal(cardId: string, text: string, opts: SendOpts = {}): Promise<SendResult> {
-  const { by, respectHumanActive = false, guardInteractiveMenu = false } = opts;
+  const { by, respectHumanActive = false, guardInteractiveMenu = false, requireAgent = false } = opts;
   const instruction = String(text ?? "").trim();
   if (!instruction) throw new Error("empty text: there is nothing to send to the terminal");
   const card = await getCard(cardId);
@@ -305,6 +314,19 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
   // now would press Enter on the highlighted option and be swallowed. Refuse — the caller keeps the
   // text and the person answers the menu in the Terminal tab. The marker lets the routes map it to a
   // 409 and the UI to a clear line.
+  // Claude EXITED under this session (the pane is a bare shell) or the session evaporated: typing
+  // here would hand the message to bash, answer 200, and echo NOTHING back — the chat's forever-
+  // pending bubble. Refuse with the action that fixes it instead.
+  if (requireAgent) {
+    const agent = await cardAgentState(card);
+    if (agent !== "running") {
+      throw new Error(
+        `no agent running: Claude is not running in card "${card.title}" (the terminal is ${
+          agent === "shell" ? "at a bare shell" : "gone"
+        }) — restart the card, then send again`,
+      );
+    }
+  }
   if (guardInteractiveMenu && (await cardAwaitingChoice(card))) {
     throw new Error(
       `awaiting choice: card "${card.title}" is waiting on a menu in the terminal (session resume, /compact or a permission prompt). Open the Terminal tab, answer it, then send again.`,

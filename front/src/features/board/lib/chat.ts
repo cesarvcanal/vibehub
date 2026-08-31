@@ -137,6 +137,29 @@ export function writeCardMode(cardId: string, mode: CardViewMode): void {
 export interface PendingMessage {
   id: string;
   text: string;
+  /** When it was sent — what tells a moment's "enviando" apart from a bubble stuck forever. */
+  at: number;
+}
+
+/**
+ * After this long with no transcript echo the bubble stops claiming "enviando" and says so —
+ * offering resend/discard instead of spinning forever. Long enough for a busy Claude to drain its
+ * input queue in the common case; the message is NOT dropped at the deadline, only re-labelled.
+ */
+export const PENDING_TIMEOUT_MS = 2 * 60_000;
+
+/** What a pending bubble is: still plausibly on its way, or overdue and owed an honest label. PURE. */
+export function pendingPhase(pending: Pick<PendingMessage, "at">, now: number): "sending" | "unconfirmed" {
+  return now - pending.at >= PENDING_TIMEOUT_MS ? "unconfirmed" : "sending";
+}
+
+/**
+ * The transcript's echo is matched by TEXT (it carries no client id), and the echo is not always
+ * byte-identical — Claude Code may re-flow whitespace. Comparing the collapsed form keeps a
+ * delivered message from haunting the screen as a forever-pending bubble. PURE.
+ */
+export function normalizeMessage(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
 }
 
 const PENDING_PREFIX = "vibehub.chatPending.";
@@ -155,10 +178,14 @@ export function readPending(cardId: string): PendingMessage[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (p): p is PendingMessage =>
-        Boolean(p) && typeof (p as PendingMessage).id === "string" && typeof (p as PendingMessage).text === "string",
-    );
+    return parsed
+      .filter(
+        (p): p is PendingMessage =>
+          Boolean(p) && typeof (p as PendingMessage).id === "string" && typeof (p as PendingMessage).text === "string",
+      )
+      // Entries written before `at` existed start their clock NOW: they become "unconfirmed" after
+      // one timeout instead of spinning as "enviando" until the end of time.
+      .map((p) => (typeof p.at === "number" ? p : { ...p, at: Date.now() }));
   } catch {
     return [];
   }

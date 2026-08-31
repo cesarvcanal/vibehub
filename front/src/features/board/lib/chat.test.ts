@@ -1,5 +1,17 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { groupChatRows, mergeEvent, parseChatFrame, readCardMode, writeCardMode, readPending, writePending, type ChatEvent } from "@/features/board/lib/chat";
+import {
+  groupChatRows,
+  mergeEvent,
+  normalizeMessage,
+  parseChatFrame,
+  pendingPhase,
+  readCardMode,
+  writeCardMode,
+  readPending,
+  writePending,
+  PENDING_TIMEOUT_MS,
+  type ChatEvent,
+} from "@/features/board/lib/chat";
 
 const event = (over: Partial<ChatEvent> = {}): ChatEvent => ({
   id: "a1",
@@ -121,8 +133,8 @@ describe("the remembered mode", () => {
 describe("durable pending messages", () => {
   it("round-trips per card and clears the key when empty", () => {
     expect(readPending("c1")).toEqual([]);
-    writePending("c1", [{ id: "a", text: "arruma o dre" }]);
-    expect(readPending("c1")).toEqual([{ id: "a", text: "arruma o dre" }]);
+    writePending("c1", [{ id: "a", text: "arruma o dre", at: 123 }]);
+    expect(readPending("c1")).toEqual([{ id: "a", text: "arruma o dre", at: 123 }]);
     expect(readPending("c2")).toEqual([]); // per card
     writePending("c1", []);
     expect(localStorage.getItem("vibehub.chatPending.c1")).toBeNull();
@@ -132,6 +144,32 @@ describe("durable pending messages", () => {
     localStorage.setItem("vibehub.chatPending.c1", "{not json");
     expect(readPending("c1")).toEqual([]);
     localStorage.setItem("vibehub.chatPending.c1", JSON.stringify([{ id: "a" }, { text: "x" }, { id: "b", text: "ok" }]));
-    expect(readPending("c1")).toEqual([{ id: "b", text: "ok" }]); // only well-formed entries survive
+    expect(readPending("c1")).toMatchObject([{ id: "b", text: "ok" }]); // only well-formed entries survive
+  });
+
+  it("stamps NOW on an entry written before `at` existed — its timeout clock starts, not never", () => {
+    localStorage.setItem("vibehub.chatPending.c1", JSON.stringify([{ id: "old", text: "antiga" }]));
+    const [entry] = readPending("c1");
+    expect(entry!.at).toBeGreaterThan(0);
+    expect(Math.abs(Date.now() - entry!.at)).toBeLessThan(5_000);
+  });
+});
+
+describe("pendingPhase — 'enviando' has a deadline", () => {
+  // THE BUG: the optimistic bubble was cleared ONLY by the transcript echoing the same text. When
+  // the echo never came (Claude exited to a shell, a menu ate the keystrokes, a restart dropped the
+  // input queue) the bubble spun as "enviando" forever, in card after card.
+  it("is 'sending' before the timeout and 'unconfirmed' at it", () => {
+    const at = 1_000_000;
+    expect(pendingPhase({ at }, at)).toBe("sending");
+    expect(pendingPhase({ at }, at + PENDING_TIMEOUT_MS - 1)).toBe("sending");
+    expect(pendingPhase({ at }, at + PENDING_TIMEOUT_MS)).toBe("unconfirmed");
+  });
+});
+
+describe("normalizeMessage — the echo match", () => {
+  it("collapses whitespace so a re-flowed echo still clears its bubble", () => {
+    expect(normalizeMessage("  arruma\n  o dre  ")).toBe("arruma o dre");
+    expect(normalizeMessage("arruma o dre")).toBe("arruma o dre");
   });
 });

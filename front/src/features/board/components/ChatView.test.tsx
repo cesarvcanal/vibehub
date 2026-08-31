@@ -136,6 +136,66 @@ describe("ChatView", () => {
     expect(await screen.findByText("manda isso quando terminar")).toBeInTheDocument();
   });
 
+  it("an OVERDUE pending bubble stops claiming 'enviando' and offers Resend / Discard", async () => {
+    // THE BUG: the bubble was cleared only by the transcript echoing the exact text. When the echo
+    // never came (Claude exited, a menu ate the keys, a restart dropped the queue) it spun as
+    // "enviando" forever — in card after card. Overdue now means an honest label + a way out.
+    localStorage.setItem(
+      "vibehub.chatPending.c1",
+      JSON.stringify([{ id: "p1", text: "cadê você", at: Date.now() - 10 * 60_000 }]),
+    );
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+
+    const stuck = await screen.findByTestId("chat-pending-stuck");
+    expect(stuck).toHaveTextContent("cadê você");
+    expect(screen.queryByText("sending")).toBeNull();
+
+    // Resend: the same words go to the server again, as a fresh send.
+    await userEvent.click(screen.getByTestId("chat-pending-resend"));
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/cards/c1/chat", { text: "cadê você" }));
+    // the stuck bubble was replaced by a fresh "sending" one
+    expect(screen.queryByTestId("chat-pending-stuck")).toBeNull();
+    expect(await screen.findByText("cadê você")).toBeInTheDocument();
+  });
+
+  it("Discard drops the overdue bubble — and the storage entry with it", async () => {
+    localStorage.setItem(
+      "vibehub.chatPending.c1",
+      JSON.stringify([{ id: "p1", text: "some daqui", at: Date.now() - 10 * 60_000 }]),
+    );
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    await userEvent.click(await screen.findByTestId("chat-pending-discard"));
+    expect(screen.queryByTestId("chat-pending-stuck")).toBeNull();
+    expect(screen.queryByText("some daqui")).toBeNull();
+    await waitFor(() => expect(localStorage.getItem("vibehub.chatPending.c1")).toBeNull());
+  });
+
+  it("a fresh send still shows as 'sending', not as overdue", async () => {
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    await userEvent.type(screen.getByRole("textbox"), "agora vai{Enter}");
+    await screen.findByText("agora vai");
+    expect(screen.queryByTestId("chat-pending-stuck")).toBeNull();
+  });
+
+  it("the echo clears the bubble even when the transcript re-flowed its whitespace", async () => {
+    localStorage.setItem(
+      "vibehub.chatPending.c1",
+      JSON.stringify([{ id: "p1", text: "arruma  o\ndre", at: Date.now() }]),
+    );
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    await screen.findByText(/arruma/);
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: "arruma o dre" });
+    await waitFor(() => expect(localStorage.getItem("vibehub.chatPending.c1")).toBeNull());
+  });
+
   it("draws a system notification as a muted event, never as the user's message", async () => {
     renderChat();
     const ws = await socket();

@@ -357,6 +357,44 @@ describe("human-active lock (maestro-only)", () => {
   });
 });
 
+describe("requireAgent guard — the chat's forever-pending bubble", () => {
+  // THE BUG: Claude exits, the pane is a bare shell that still accepts keystrokes; the chat send
+  // answered 200 and the message went to bash — never echoed, so the optimistic bubble hung as
+  // "enviando" forever. With `requireAgent` the send refuses instead, and the UI can say so.
+  it("refuses to type into a pane where Claude exited to a bare shell", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "claude saiu" });
+    await registry.applyOpenTerminal(c.id);
+    runScript.mockResolvedValueOnce({ stdout: "bash\n", stderr: "" }); // agent probe: only shells in the tree
+    await expect(maestro.sendToTerminal(c.id, "arruma o dre", { requireAgent: true })).rejects.toThrow(
+      /no agent running/i,
+    );
+    expect(runScript).toHaveBeenCalledOnce(); // only the probe — never the send-keys
+  });
+
+  it("refuses when the tmux session is gone entirely (probe sees nothing)", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "sessão sumiu" });
+    await registry.applyOpenTerminal(c.id);
+    runScript.mockResolvedValueOnce({ stdout: "", stderr: "" }); // agent probe: no panes at all
+    await expect(maestro.sendToTerminal(c.id, "oi", { requireAgent: true })).rejects.toThrow(/no agent running/i);
+  });
+
+  it("with Claude alive, the message goes through (probe + send)", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "vivo" });
+    await registry.applyOpenTerminal(c.id);
+    runScript.mockResolvedValueOnce({ stdout: "bash\nnode\n", stderr: "" }); // agent probe: claude under the shell
+    runScript.mockResolvedValueOnce({ stdout: "", stderr: "" }); // the send-keys
+    const out = await maestro.sendToTerminal(c.id, "roda os testes", { requireAgent: true });
+    expect(out).toMatchObject({ sent: true });
+    expect(runScript).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("interactive-menu guard", () => {
   it("with guardInteractiveMenu, refuses to send into an open menu and never types", async () => {
     // The chat send opts in. A menu in the pane (resume/compact/permission) → refuse, so the message
