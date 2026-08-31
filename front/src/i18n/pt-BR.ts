@@ -431,6 +431,7 @@ export const ptBR: Record<string, string> = {
   "sdk.flagOff": "O driver SDK está desligado nesta instalação. Ligue \"Driver SDK\" nas Configurações para usar o chat nativo.",
   "cardView.nativeChat": "Chat nativo (beta)",
 
+  "cardView.sdkTerminalNote": "Chat nativo (beta) ativo neste card — é a mesma conversa: o chat nativo retoma sempre a sessão mais recente, inclusive o que você digitar aqui.",
   "cardView.terminalFor": "Terminal de {title}",
   "cardView.cardFallback": "card",
   "cardView.shellHeader": "Shell · bash no worktree",

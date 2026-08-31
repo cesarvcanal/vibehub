@@ -87,6 +87,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         attempt = 0;
         setStatus("open");
         setConnected(true);
+        // EVERY connect replays the card's history from the server log (see back/services/sdk/
+        // history.ts), so the slate is wiped here — otherwise a reconnect would draw the whole
+        // conversation twice. What was on screen comes right back, from disk instead of memory.
+        setState(INITIAL_SDK_STATE);
       };
       next.onmessage = (event: MessageEvent) => {
         if (typeof event.data !== "string") return;

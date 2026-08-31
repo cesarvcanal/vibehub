@@ -2,16 +2,19 @@
  * NATIVE CHAT (SDK driver) — the state rules of `/api/cards/:id/sdk`, kept out of the component.
  *
  * This socket is NOT the transcript reader (`lib/chat.ts`): it is a live, structured stream from
- * the Agent SDK driver. Nothing replays — each connect starts a fresh driver that RESUMES the same
- * conversation by session id — so the reducer's job is folding a stream of typed events into rows,
- * not idempotent merging. The wire contract lives in `back/src/services/sdk/protocol.ts`.
+ * the Agent SDK driver. Each connect REPLAYS the conversation so far (the back keeps a per-card
+ * event log — see `back/src/services/sdk/history.ts`) and then starts a fresh driver that RESUMES
+ * the same conversation by session id. The view resets its state when the socket OPENS, so the
+ * reducer's job stays folding a stream of typed events into rows, not idempotent merging. The wire
+ * contract lives in `back/src/services/sdk/protocol.ts`.
  */
 
 /* ----------------------------------------------------------------- events */
 
-/** One frame from the SDK socket — the driver's event contract, verbatim. */
+/** One frame from the SDK socket — the driver's event contract, verbatim (`user` only on replay). */
 export interface SdkEvent {
   type:
+    | "user"
     | "ready"
     | "session"
     | "assistant_delta"
@@ -144,13 +147,21 @@ function settleStreaming(rows: SdkRow[]): SdkRow[] {
  */
 export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatState {
   switch (event.type) {
+    case "user": {
+      // A replayed message of the person's own (live sends are drawn by `appendUserRow` when the
+      // socket accepts the frame — the server does not echo those back on the same connection).
+      if (!event.text) return state;
+      return appendUserRow({ ...state, rows: settleStreaming(state.rows) }, event.text);
+    }
     case "ready": {
-      const next: SdkChatState = { ...state, ready: true };
+      // A fresh driver process: nothing is running in it yet, whatever the replayed tail looked
+      // like (a turn cut mid-tool must not leave the spinner on forever).
+      const next: SdkChatState = { ...state, ready: true, turnActive: false, rows: settleStreaming(state.rows) };
       if (event.resume) {
         next.sessionId = event.resume;
         const { id, seq } = nextId(state, "note");
         next.seq = seq;
-        next.rows = [...state.rows, { kind: "note", id, text: `resume:${event.resume}` }];
+        next.rows = [...next.rows, { kind: "note", id, text: `resume:${event.resume}` }];
       }
       return next;
     }

@@ -155,6 +155,42 @@ describe("appendUserRow", () => {
   });
 });
 
+describe("history replay (the conversation must survive a remount)", () => {
+  it("draws a replayed `user` event as the person's own bubble", () => {
+    const state = applySdkEvent(INITIAL_SDK_STATE, { type: "user", text: "manda a primeira" });
+    expect(state.rows[0]).toMatchObject({ kind: "user", text: "manda a primeira" });
+  });
+
+  it("ignores a user event with no text", () => {
+    expect(applySdkEvent(INITIAL_SDK_STATE, { type: "user" })).toBe(INITIAL_SDK_STATE);
+  });
+
+  it("rebuilds a whole replayed conversation in order", () => {
+    let state = INITIAL_SDK_STATE;
+    state = applySdkEvent(state, { type: "user", text: "roda os testes" });
+    state = applySdkEvent(state, { type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } });
+    state = applySdkEvent(state, { type: "assistant_text", text: "Tudo verde." });
+    state = applySdkEvent(state, { type: "ready" });
+    expect(state.rows.map((r) => r.kind)).toEqual(["user", "tool", "assistant"]);
+    expect(state.ready).toBe(true);
+  });
+
+  it("`ready` ends any turn the replayed tail left hanging — a fresh driver runs nothing yet", () => {
+    let state = applySdkEvent(INITIAL_SDK_STATE, { type: "tool_use", id: "t1", name: "Bash", input: {} });
+    expect(state.turnActive).toBe(true);
+    state = applySdkEvent(state, { type: "ready" });
+    expect(state.turnActive).toBe(false);
+  });
+
+  it("`ready` settles a streaming row before adding the resume note", () => {
+    let state = applySdkEvent(INITIAL_SDK_STATE, { type: "assistant_delta", text: "meio de fra" });
+    state = applySdkEvent(state, { type: "ready", resume: "bfe63d25-95df-4c86-bf34-047b1366cc02" });
+    expect(state.rows[0]).toMatchObject({ kind: "assistant", streaming: false });
+    expect(state.rows[1]).toMatchObject({ kind: "note" });
+    expect(state.sessionId).toBe("bfe63d25-95df-4c86-bf34-047b1366cc02");
+  });
+});
+
 describe("toolSummary", () => {
   it("prefers the command, falls back to the file, and truncates long lines", () => {
     expect(toolSummary({ command: "ls -la" })).toBe("ls -la");
