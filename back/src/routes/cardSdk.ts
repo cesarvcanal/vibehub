@@ -5,7 +5,18 @@ import { requireCardWork } from "../auth/access.js";
 import * as registry from "../services/board/registry.js";
 import { getSettings } from "../services/settings/settings.js";
 import { installCardSdkDriver, sdkDriverCommand } from "../services/sdk/driver.js";
-import { parseDriverLine, encodeControl, type DriverControl } from "../services/sdk/protocol.js";
+import { appendHistory, readHistory, replayableHistoryEvent } from "../services/sdk/history.js";
+import {
+  buildLatestTranscriptScript,
+  parseLatestTranscript,
+  resumeTargetFor,
+  transcriptToSdkHistory,
+} from "../services/sdk/transcript.js";
+import { parseDriverLine, encodeControl, type DriverControl, type DriverEvent } from "../services/sdk/protocol.js";
+import { transcriptDirFor } from "../services/maestro/maestro.js";
+import { effectiveAccountSlug } from "../services/board/registry.js";
+import { config } from "../config/env.js";
+import { hostExecutor } from "../runtime/host.js";
 import { disableNagle } from "./session.js";
 import { logger } from "../utils/logger.js";
 
@@ -62,13 +73,22 @@ export function parseSdkClientFrame(raw: string): DriverControl | null {
  * Wire a driver child process to a websocket: NDJSON events out (one frame each), control lines in.
  * Both sides close together. Exported for the route; the child is spawned by the caller.
  */
+export interface BridgeHooks {
+  /** Called (deduplicated) whenever the driver reports a session id — the resume key to persist. */
+  onSessionId?: (sessionId: string) => void;
+  /** Every parsed driver event, after it went to the socket — the history recorder taps in here. */
+  onEvent?: (event: DriverEvent) => void;
+  /** Every parsed control from the browser, after it went to the driver's stdin. */
+  onControl?: (control: DriverControl) => void;
+}
+
 export function bridgeSdkDriver(
   socket: WebSocket,
   child: ChildProcessWithoutNullStreams,
   label: string,
-  /** Called (deduplicated) whenever the driver reports a session id — the resume key to persist. */
-  onSessionId?: (sessionId: string) => void,
+  hooks: BridgeHooks = {},
 ): void {
+  const { onSessionId, onEvent, onControl } = hooks;
   disableNagle(socket);
   const keepalive = setInterval(() => {
     try { socket.ping?.(); } catch { /* the close handler cleans up */ }
@@ -95,6 +115,7 @@ export function bridgeSdkDriver(
           }
         }
         try { socket.send(JSON.stringify(event)); } catch { /* socket going away; teardown tidies */ }
+        onEvent?.(event);
       }
     }
   });
@@ -112,6 +133,7 @@ export function bridgeSdkDriver(
     const control = parseSdkClientFrame(raw.toString());
     if (!control) return;
     try { child.stdin.write(encodeControl(control)); } catch { /* driver gone; close will fire */ }
+    onControl?.(control);
   });
 
   const teardown = (): void => {
@@ -147,15 +169,60 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
         socket.close();
         return;
       }
-      const { file, args } = sdkDriverCommand(project, card);
+      // ONE read-only probe: the newest transcript in the card's worktree. It answers two things —
+      // which session the driver must RESUME (the card's one conversation, whichever mode wrote it
+      // last: the TUI or a previous driver), and what the TUI-era of that conversation looked like,
+      // so flipping the beta toggle never makes the conversation vanish from the screen.
+      let latestSessionId: string | null = null;
+      let tuiJsonl = "";
+      try {
+        const dir = transcriptDirFor(project, card, effectiveAccountSlug(card, project));
+        const { stdout } = await hostExecutor().runScript(
+          buildLatestTranscriptScript(config.runner.container, dir),
+          { timeoutMs: 15_000 },
+        );
+        ({ sessionId: latestSessionId, jsonl: tuiJsonl } = parseLatestTranscript(stdout));
+      } catch (err) {
+        logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not read the card transcript for the sdk chat");
+      }
+
+      // REPLAY FIRST: the conversation so far, before the driver says a word. The `--resume` id
+      // preserves the conversation for the model; this preserves it for the SCREEN — without it a
+      // remount (tab switch, reopened card, reload) started visually empty and the whole
+      // conversation "sumia" even though it was delivered (the production bug). The TUI era comes
+      // from the transcript, the SDK era from the per-card history log; the cutoff (where the log
+      // begins) keeps a conversation that lived in both modes from being drawn twice.
+      try {
+        const sdkHistory = await readHistory(card.id);
+        const cutoffAt = sdkHistory.find((e) => typeof e.at === "number")?.at ?? Number.POSITIVE_INFINITY;
+        for (const past of [...transcriptToSdkHistory(tuiJsonl, cutoffAt), ...sdkHistory]) {
+          try { socket.send(JSON.stringify(past)); } catch { /* socket going away */ }
+        }
+      } catch (err) {
+        logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not replay sdk chat history");
+      }
+      const { file, args } = sdkDriverCommand(project, {
+        ...card,
+        resumeSessionId: resumeTargetFor(card, latestSessionId),
+      });
       const child = spawn(file, args, { stdio: ["pipe", "pipe", "pipe"] }) as ChildProcessWithoutNullStreams;
       logger.info({ card: card.worktreeSlug }, "sdk driver attached");
-      bridgeSdkDriver(socket, child, card.worktreeSlug, (sessionId) => {
-        // Persist the resume key on the card (board.json) so the NEXT driver spawn — a reconnect,
-        // a reopened card — continues this very conversation (`--resume` in sdkDriverCommand).
-        void registry.updateCard(card.id, { resumeSessionId: sessionId }).catch((err: unknown) => {
-          logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not persist the sdk session id");
-        });
+      bridgeSdkDriver(socket, child, card.worktreeSlug, {
+        onSessionId: (sessionId) => {
+          // Persist the resume key on the card (board.json) so the NEXT driver spawn — a reconnect,
+          // a reopened card — continues this very conversation (`--resume` in sdkDriverCommand).
+          void registry.updateCard(card.id, { resumeSessionId: sessionId }).catch((err: unknown) => {
+            logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not persist the sdk session id");
+          });
+        },
+        // The history log is what the next connect replays: every event worth re-drawing, and the
+        // person's own messages (they cross on stdin, so stdout alone would forget them).
+        onEvent: (event) => {
+          if (replayableHistoryEvent(event)) void appendHistory(card.id, { ...event, at: Date.now() });
+        },
+        onControl: (control) => {
+          if (control.type === "user") void appendHistory(card.id, { type: "user", text: control.text, at: Date.now() });
+        },
       });
     },
   );
