@@ -483,13 +483,18 @@ describe("board registry (persisted)", () => {
     await expect(reg.updateProject("nope", { name: "x" })).rejects.toThrow(/project not found/);
   });
 
-  it("createCard: lands at the end of the backlog with derived session/slug and inherited base", async () => {
+  it("createCard: lands at the TOP of the backlog with derived session/slug and inherited base", async () => {
     const p = await seedProject({ baseBranch: "main" });
     const a = await reg.createCard({ projectId: p.id, title: "First card" });
     const b = await reg.createCard({ projectId: p.id, title: "Second card" });
     expect(a.column).toBe("backlog");
-    expect(a.position).toBe(0);
-    expect(b.position).toBe(1);
+    // The newest card is the one you are about to look for: it goes first, pushing the rest down.
+    expect(b.position).toBe(0);
+    const backlog = (await reg.listCards(p.id)).filter((c) => c.column === "backlog");
+    expect(backlog.map((c) => [c.id, c.position])).toEqual([
+      [b.id, 0],
+      [a.id, 1],
+    ]);
     expect(a.base).toBe("main");
     expect(a.tmuxSession).toBe(`card-${a.id.slice(0, 8)}`);
     expect(a.worktreeSlug).toBe(`first-card-${a.id.slice(0, 4)}`);
@@ -530,21 +535,21 @@ describe("board registry (persisted)", () => {
     const movedB = await reg.updateCard(b.id, { column: "done" });
     expect(movedB.column).toBe("done");
     expect(movedB.position).toBe(0);
-    // the backlog closed the gap
+    // the backlog closed the gap (creation stacks newest first: c above a)
     const backlog = (await reg.listCards(p.id)).filter((x) => x.column === "backlog");
     expect(backlog.map((x) => [x.id, x.position])).toEqual([
-      [a.id, 0],
-      [c.id, 1],
+      [c.id, 0],
+      [a.id, 1],
     ]);
 
-    // c to the front of the backlog
-    await reg.updateCard(c.id, { column: "backlog", position: 0 });
+    // a to the front of the backlog
+    await reg.updateCard(a.id, { column: "backlog", position: 0 });
     const reordered = (await reg.listCards(p.id)).filter((x) => x.column === "backlog");
-    expect(reordered.map((x) => x.id)).toEqual([c.id, a.id]);
+    expect(reordered.map((x) => x.id)).toEqual([a.id, c.id]);
 
     // a position past the end is clamped
-    await reg.updateCard(c.id, { position: 99 });
-    expect((await reg.listCards(p.id)).filter((x) => x.column === "backlog").map((x) => x.id)).toEqual([a.id, c.id]);
+    await reg.updateCard(a.id, { position: 99 });
+    expect((await reg.listCards(p.id)).filter((x) => x.column === "backlog").map((x) => x.id)).toEqual([c.id, a.id]);
   });
 
   it("listCards orders by column (backlog, waiting, working, paused, done) then position", async () => {
@@ -586,9 +591,10 @@ describe("board registry (persisted)", () => {
     const b = await reg.createCard({ projectId: p.id, title: "b" });
     const c = await reg.createCard({ projectId: p.id, title: "c" });
     expect((await reg.removeCard(b.id))?.id).toBe(b.id);
+    // Creation stacks newest first, so with b gone the backlog reads c, a.
     expect((await reg.listCards(p.id)).map((x) => [x.id, x.position])).toEqual([
-      [a.id, 0],
-      [c.id, 1],
+      [c.id, 0],
+      [a.id, 1],
     ]);
     expect(await reg.removeCard("nope")).toBeUndefined();
   });
