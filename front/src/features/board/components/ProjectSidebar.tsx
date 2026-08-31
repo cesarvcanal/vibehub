@@ -431,9 +431,11 @@ function ProjectSwitcher({
  *
  * When UNFOLDED it lists its cards, and only then does it fetch them. Unfolded is not the same as
  * selected — several projects can be open at once, and each open one polls, because a list of cards
- * with stale dots is worse than no list. The cards that are working or waiting are always listed;
- * the rest hide behind "show more"; finished ones never appear, EXCEPT the card whose terminal is
- * open, which is always listed or the one thing on screen would be the one thing you cannot see.
+ * with stale dots is worse than no list. The LIVE conversations are always listed, newest first,
+ * along with any card created moments ago (see `splitSidebarCards`); everything abandoned — grey,
+ * paused, untouched backlog — hides behind "show more"; finished ones never appear, EXCEPT the card
+ * whose terminal is open, which is always listed or the one thing on screen would be the one thing
+ * you cannot see.
  */
 function ProjectRow({
   project,

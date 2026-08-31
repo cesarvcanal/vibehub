@@ -58,9 +58,21 @@ function positionOf(card: BoardCard): number {
   return Number.isFinite(card.position) ? (card.position as number) : Number.POSITIVE_INFINITY;
 }
 
-/** Last time anything happened on a card that has been started. */
+/**
+ * Last time anything happened on the card's CONVERSATION, as close as the stamps we have allow:
+ * the last hook report (`statusAt`), the first open, the moment it was parked or went cold
+ * (`pausedAt`/`hibernatedAt` — the session died right after the last exchange, so they are the
+ * best stand-in once the dot's stamp is cleared), and creation itself, so a card that was just
+ * written down counts as touched NOW rather than never.
+ */
 export function lastActivity(card: BoardCard): number {
-  return Math.max(card.statusAt ?? 0, card.openedAt ?? 0);
+  return Math.max(
+    card.statusAt ?? 0,
+    card.openedAt ?? 0,
+    card.pausedAt ?? 0,
+    card.hibernatedAt ?? 0,
+    card.createdAt ?? 0,
+  );
 }
 
 /** Most recently touched first, with a stable tie-break so idle cards never shuffle on a poll. */
@@ -265,64 +277,57 @@ export function declaredStateChip(card: Pick<BoardCard, "declaredState">): State
   return { label: t(`card.declaredState.${state}`), className: STATE_CHIP_CLASS[state] };
 }
 
-/** How many conversations the "Recent" list carries. Five: a glance, not a second board. */
-export const RECENT_LIMIT = 5;
-
 /**
- * The last conversations you were in, newest first, across EVERY project.
+ * The last conversations you were in, newest first, across EVERY project. The WHOLE history now,
+ * not a five-row glance: the list is the way back to any conversation, and the component that
+ * renders it gives it its own scroll. A `limit` may still be passed where a caller wants a slice.
  *
  * The question it answers is "where was I", so it only counts cards that have actually been opened
  * (`openedAt`) — a backlog card nobody has talked to is not a conversation — and it drops the ones
  * filed under `done`, which are the conversations you deliberately ended. Paused and hibernated ones
  * stay: they are exactly the thread you might want to pick back up, and their icon says so.
  *
- * Ordering is `lastActivity` (the last hook report, or the first open), so the card whose agent just
- * spoke rises to the top on the next poll. PURE.
+ * Ordering is `lastActivity`, so the card whose agent just spoke rises to the top on the next poll.
+ * PURE.
  */
-export function recentCards(cards: BoardCard[], limit: number = RECENT_LIMIT): BoardCard[] {
+export function recentCards(cards: BoardCard[], limit?: number): BoardCard[] {
   const started = cards.filter((c) => Boolean(c.openedAt) && c.column !== "done");
-  return sortByRecency(started).slice(0, Math.max(0, limit));
+  const ordered = sortByRecency(started);
+  return limit === undefined ? ordered : ordered.slice(0, Math.max(0, limit));
 }
 
 /**
- * Which of the two live columns a card in the sidebar is sorted under. `waiting` first: it is the
- * column that is asking something of you.
+ * How long a brand-new card stays in the sidebar's MAIN list before it folds away unopened. Long
+ * enough to find the card you just wrote down (it lands at the very top — its recency is its
+ * creation); short enough that jotted-down backlog does not crowd the live conversations out.
  */
-const ACTIVE_RANK: Record<"waiting" | "working", number> = { waiting: 0, working: 1 };
+export const FRESH_CARD_MS = 15 * 60_000;
 
 /**
- * Split for the narrow card list beside an open terminal: ACTIVE cards (the mirrored columns, the
- * ones with a dot) are always visible; the rest hide behind "show more" — paused first, then
- * backlog. Finished cards never appear.
+ * Split for the sidebar's card list: the MAIN list is the conversations that are alive right now,
+ * ordered by recency — the last one that spoke on top — plus any card created moments ago, so a
+ * card you just wrote down is at the very top instead of buried under "show more". Everything
+ * abandoned goes behind the fold: hibernated (grey — the session went cold), paused, and backlog
+ * that nobody has touched. Finished cards never appear.
  *
- * The active ones group by STATUS before recency: every `waiting` card sits above every `working`
- * card, and only inside a group does the most recently touched win. Sorting by recency alone let a
- * card that had just gone green jump ahead of an older amber one — pushing the card that is blocked
- * on you down the list exactly when it started needing you. Grouping comes first, not alongside.
+ * "Alive" is the two mirrored columns WITHOUT a hibernation stamp: hibernating keeps the column on
+ * purpose, so the column alone would keep a wall of grey, dead conversations pinned to the top of
+ * the list — exactly what the fold exists to absorb. The fold is ordered by recency too: the most
+ * recently abandoned thread is the one you are most likely to pick back up.
  */
-export function splitSidebarCards(cards: BoardCard[]): { active: BoardCard[]; idle: BoardCard[] } {
-  const rank: Record<CardColumn, number> = { working: 0, waiting: 1, paused: 2, backlog: 3, done: 99 };
-  const active = cards
-    .filter((c): c is BoardCard & { column: "waiting" | "working" } =>
-      c.column === "working" || c.column === "waiting",
-    )
-    .sort(
-      (a, b) =>
-        ACTIVE_RANK[a.column] - ACTIVE_RANK[b.column] ||
-        lastActivity(b) - lastActivity(a) ||
-        a.createdAt - b.createdAt ||
-        a.id.localeCompare(b.id),
-    );
-  const idle = cards
-    .filter((c) => c.column === "paused" || c.column === "backlog")
-    .sort(
-      (a, b) =>
-        rank[a.column] - rank[b.column] ||
-        positionOf(a) - positionOf(b) ||
-        a.createdAt - b.createdAt ||
-        a.id.localeCompare(b.id),
-    );
-  return { active, idle };
+export function splitSidebarCards(
+  cards: BoardCard[],
+  now: number = Date.now(),
+): { active: BoardCard[]; idle: BoardCard[] } {
+  const alive = (c: BoardCard) =>
+    (c.column === "working" || c.column === "waiting") && !c.hibernatedAt && !c.pausedAt;
+  const fresh = (c: BoardCard) =>
+    c.column === "backlog" && !c.openedAt && now - c.createdAt < FRESH_CARD_MS;
+  const listed = cards.filter((c) => c.column !== "done");
+  return {
+    active: sortByRecency(listed.filter((c) => alive(c) || fresh(c))),
+    idle: sortByRecency(listed.filter((c) => !alive(c) && !fresh(c))),
+  };
 }
 
 /* ------------------------------------------------------------- deep links */
