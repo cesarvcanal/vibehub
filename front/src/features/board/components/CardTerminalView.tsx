@@ -1074,7 +1074,18 @@ export function CardTerminalView({
           className={cn("flex min-h-0 flex-1 flex-col", browserOpen && "lg:flex-row lg:gap-2")}
         >
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {mode === "chat" && card?.sdkChat ? (
+            {mode === "chat" && !card ? (
+              /* The card record is not here yet (deep link, cold cache). WHICH chat this card uses
+                 is written on that record (`sdkChat`), so guessing would mount the WRONG view: the
+                 legacy chat flashed in, took the first message down the tmux path, and the person
+                 read it as "reabri o card e o modo beta sumiu". A beat of spinner tells the truth. */
+              <div
+                data-testid="chat-mode-deciding"
+                className="flex min-h-0 flex-1 items-center justify-center rounded-md border border-border/60 bg-card/30"
+              >
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : mode === "chat" && card?.sdkChat ? (
               /* NATIVE CHAT (beta): the Agent SDK driver socket — structured events, permission
                  buttons in the chat. Per-card opt-in; the global sdkDriver setting still gates the
                  server side, and with it off this view says so. */

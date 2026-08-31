@@ -750,6 +750,21 @@ describe("board registry (persisted)", () => {
       await expect(reg.updateCard(card.id, { sdkChat: "yes" as unknown as boolean })).rejects.toThrow(/sdkChat/);
     });
 
+    it("sdkChat survives a reload from disk and every unrelated patch — 'reabrir o card' keeps the beta", async () => {
+      const p = await seedProject();
+      const card = await reg.createCard({ projectId: p.id, title: "teste chat nativo sdk" });
+      await reg.updateCard(card.id, { sdkChat: true });
+      // unrelated life of the card: rename, move, pause-shaped column changes
+      await reg.updateCard(card.id, { title: "renomeado" });
+      await reg.updateCard(card.id, { column: "paused", position: 0 });
+      await reg.updateCard(card.id, { column: "waiting", position: 0 });
+      expect((await reg.getCard(card.id))?.sdkChat).toBe(true);
+      // a vibehub restart: a fresh process reading the same board.json
+      const reopened = await freshRegistry();
+      expect((await reopened.getCard(card.id))?.sdkChat).toBe(true);
+      expect((await reopened.listCards(p.id)).find((c) => c.id === card.id)?.sdkChat).toBe(true);
+    });
+
     it("branch and base: validated, null/'' clears branch, injection rejected", async () => {
       const p = await seedProject();
       const card = await reg.createCard({ projectId: p.id, title: "a" });
