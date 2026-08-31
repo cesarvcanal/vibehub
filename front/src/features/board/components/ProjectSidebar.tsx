@@ -203,9 +203,23 @@ export function ProjectSidebar({
         )}
       >
         {/* The brand, at the top of the panel — inside it, so it never eats into the terminal. The
-            `+` beside it is a global new card: no project implied, the dialog asks which. */}
+            `+` beside it is a global new card: no project implied, the dialog asks which. The mark
+            is a REAL link to the aggregated board (the app's home): middle-click and
+            Cmd/Ctrl/Shift-click open it in a new tab natively, a plain click navigates in-app. */}
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/60 py-2.5 pl-3 pr-1.5">
-          <Logo size="side" />
+          <a
+            href="?"
+            aria-label={t("sidebar.allProjects")}
+            title={t("sidebar.allProjects")}
+            onClick={(e) => {
+              if (isNewTabClick(e)) return;
+              e.preventDefault();
+              onShowAllProjects?.();
+            }}
+            className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Logo size="side" />
+          </a>
           {onNewGlobalCard ? (
             <Button
               variant="ghost"
@@ -431,9 +445,11 @@ function ProjectSwitcher({
  *
  * When UNFOLDED it lists its cards, and only then does it fetch them. Unfolded is not the same as
  * selected — several projects can be open at once, and each open one polls, because a list of cards
- * with stale dots is worse than no list. The cards that are working or waiting are always listed;
- * the rest hide behind "show more"; finished ones never appear, EXCEPT the card whose terminal is
- * open, which is always listed or the one thing on screen would be the one thing you cannot see.
+ * with stale dots is worse than no list. The LIVE conversations are always listed, newest first,
+ * along with any card created moments ago (see `splitSidebarCards`); everything abandoned — grey,
+ * paused, untouched backlog — hides behind "show more"; finished ones never appear, EXCEPT the card
+ * whose terminal is open, which is always listed or the one thing on screen would be the one thing
+ * you cannot see.
  */
 function ProjectRow({
   project,

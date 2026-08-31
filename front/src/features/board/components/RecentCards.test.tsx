@@ -106,6 +106,26 @@ describe("RecentCards", () => {
     expect(dot?.className).toContain("bg-muted-foreground");
   });
 
+  it("lists the WHOLE history — more than five — inside its own scrollable box", async () => {
+    serve(
+      Array.from({ length: 8 }, (_, i) =>
+        card({ id: `c${i}`, projectId: "p1", title: `conversation ${i}`, openedAt: i + 1 }),
+      ),
+    );
+
+    renderApp(<RecentCards projects={projects} activeCardId={null} onOpenCard={vi.fn()} />);
+
+    const list = await screen.findByTestId("recent-cards-list");
+    // Every conversation, newest first — the old five-row cut is gone.
+    const titles = Array.from(list.querySelectorAll("a")).map((a) => a.textContent ?? "");
+    expect(titles).toHaveLength(8);
+    expect(titles[0]).toContain("conversation 7");
+    expect(titles[7]).toContain("conversation 0");
+    // The box scrolls instead of pushing the project list off the panel.
+    expect(list.className).toContain("overflow-y-auto");
+    expect(list.className).toContain("max-h-");
+  });
+
   it("renders nothing at all when there is no conversation to go back to", async () => {
     serve([card({ id: "c3", projectId: "p1", title: "never opened", column: "backlog" })]);
 

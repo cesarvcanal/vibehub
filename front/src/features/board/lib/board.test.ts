@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   COLUMNS,
+  FRESH_CARD_MS,
   groupByColumn,
   lastActivity,
   dropPosition,
@@ -224,103 +225,156 @@ describe("recentCards", () => {
   it("is the conversations you have actually been in, newest first", () => {
     const recent = recentCards([
       card({ id: "never-opened", column: "backlog" }),
-      card({ id: "oldest", column: "waiting", openedAt: 10 }),
-      card({ id: "newest", column: "working", openedAt: 5, statusAt: 90 }),
-      card({ id: "middle", column: "paused", openedAt: 50 }),
+      card({ id: "oldest", column: "waiting", openedAt: 1_010 }),
+      card({ id: "newest", column: "working", openedAt: 1_005, statusAt: 1_090 }),
+      card({ id: "middle", column: "paused", openedAt: 1_050 }),
     ]);
     expect(recent.map((c) => c.id)).toEqual(["newest", "middle", "oldest"]);
   });
 
   it("drops what you finished, keeps what merely went cold", () => {
     const recent = recentCards([
-      card({ id: "done", column: "done", openedAt: 99 }),
-      card({ id: "hibernated", column: "waiting", openedAt: 10, hibernatedAt: 20 }),
+      card({ id: "done", column: "done", openedAt: 1_099 }),
+      card({ id: "hibernated", column: "waiting", openedAt: 1_010, hibernatedAt: 1_020 }),
     ]);
     expect(recent.map((c) => c.id)).toEqual(["hibernated"]);
   });
 
-  it("stops at the limit — it is a glance, not a second board", () => {
-    const many = Array.from({ length: 9 }, (_, i) => card({ id: `c${i}`, column: "waiting", openedAt: i + 1 }));
-    expect(recentCards(many)).toHaveLength(5);
+  it("is the WHOLE history by default — the component gives it a scroll, not a cut", () => {
+    const many = Array.from({ length: 9 }, (_, i) =>
+      card({ id: `c${i}`, column: "waiting", openedAt: 2_000 + i }),
+    );
+    expect(recentCards(many)).toHaveLength(9);
     expect(recentCards(many, 2).map((c) => c.id)).toEqual(["c8", "c7"]);
     expect(recentCards(many, 0)).toEqual([]);
   });
 });
 
 describe("recency", () => {
-  it("takes the latest of statusAt and openedAt", () => {
-    expect(lastActivity(card({ id: "a", statusAt: 5, openedAt: 9 }))).toBe(9);
-    expect(lastActivity(card({ id: "a" }))).toBe(0);
+  it("takes the latest stamp the card carries: status, open, pause, hibernate, creation", () => {
+    expect(lastActivity(card({ id: "a", statusAt: 2_005, openedAt: 2_009 }))).toBe(2_009);
+    // Pausing/hibernating clears statusAt on the server; the stamp of the kill is the stand-in.
+    expect(lastActivity(card({ id: "a", openedAt: 2_009, pausedAt: 2_020 }))).toBe(2_020);
+    expect(lastActivity(card({ id: "a", openedAt: 2_009, hibernatedAt: 2_030 }))).toBe(2_030);
+    // A card that was only just written down counts as touched at creation, not never.
+    expect(lastActivity(card({ id: "a" }))).toBe(1_000);
   });
 
   it("puts the most recently touched card first, with a stable tie-break", () => {
     const cards = [
-      card({ id: "old", statusAt: 10 }),
-      card({ id: "new", statusAt: 30 }),
+      card({ id: "old", statusAt: 2_010 }),
+      card({ id: "new", statusAt: 2_030 }),
       card({ id: "tie-b", createdAt: 2 }),
       card({ id: "tie-a", createdAt: 1 }),
     ];
-    expect(sortByRecency(cards).map((c) => c.id)).toEqual(["new", "old", "tie-a", "tie-b"]);
+    expect(sortByRecency(cards).map((c) => c.id)).toEqual(["new", "old", "tie-b", "tie-a"]);
   });
 });
 
 describe("splitSidebarCards", () => {
-  it("keeps the mirrored columns visible and hides paused then backlog behind show-more", () => {
-    const { active, idle } = splitSidebarCards([
-      card({ id: "backlog", column: "backlog" }),
-      card({ id: "paused", column: "paused" }),
-      card({ id: "waiting", column: "waiting", statusAt: 1 }),
-      card({ id: "working", column: "working", statusAt: 2 }),
-    ]);
-    expect(active.map((c) => c.id)).toEqual(["waiting", "working"]);
+  // A fixed "now", so the freshness window is deterministic. The fixtures' default createdAt is
+  // 1_000 — far outside the window — unless a test says otherwise.
+  const NOW = 100 * 60_000;
+
+  it("keeps the live conversations visible and folds paused and stale backlog away", () => {
+    const { active, idle } = splitSidebarCards(
+      [
+        card({ id: "backlog", column: "backlog" }),
+        card({ id: "paused", column: "paused", openedAt: 1_500, pausedAt: 2_000 }),
+        card({ id: "waiting", column: "waiting", statusAt: 2_001 }),
+        card({ id: "working", column: "working", statusAt: 2_002 }),
+      ],
+      NOW,
+    );
+    expect(active.map((c) => c.id)).toEqual(["working", "waiting"]);
     expect(idle.map((c) => c.id)).toEqual(["paused", "backlog"]);
   });
 
   it("never lists a finished card", () => {
-    const { active, idle } = splitSidebarCards([card({ id: "done", column: "done" })]);
+    const { active, idle } = splitSidebarCards([card({ id: "done", column: "done" })], NOW);
     expect([...active, ...idle]).toEqual([]);
   });
 
-  it("puts every waiting card above every working one, however recent the working one is", () => {
-    // The regression this rule exists for: `fresh` went green a moment ago, `stale` has been
-    // waiting for a human since forever. Recency alone would bury the one that needs an answer.
-    const { active } = splitSidebarCards([
-      card({ id: "fresh", column: "working", statusAt: 9_000 }),
-      card({ id: "stale", column: "waiting", statusAt: 10 }),
+  it("orders the live list purely by recency — the conversation that just spoke rises", () => {
+    const { active } = splitSidebarCards(
+      [
+        card({ id: "waiting-old", column: "waiting", statusAt: 2_010 }),
+        card({ id: "working-old", column: "working", statusAt: 2_020 }),
+        card({ id: "waiting-new", column: "waiting", statusAt: 2_030 }),
+        card({ id: "working-new", column: "working", statusAt: 2_040 }),
+      ],
+      NOW,
+    );
+    expect(active.map((c) => c.id)).toEqual([
+      "working-new",
+      "waiting-new",
+      "working-old",
+      "waiting-old",
     ]);
-    expect(active.map((c) => c.id)).toEqual(["stale", "fresh"]);
   });
 
-  it("orders by recency inside each group", () => {
-    const { active } = splitSidebarCards([
-      card({ id: "waiting-old", column: "waiting", statusAt: 10 }),
-      card({ id: "working-old", column: "working", statusAt: 20 }),
-      card({ id: "waiting-new", column: "waiting", statusAt: 30 }),
-      card({ id: "working-new", column: "working", statusAt: 40 }),
-    ]);
-    expect(active.map((c) => c.id)).toEqual([
-      "waiting-new",
-      "waiting-old",
-      "working-new",
-      "working-old",
-    ]);
+  it("folds a HIBERNATED card away even though it kept its live column — grey is abandoned", () => {
+    const { active, idle } = splitSidebarCards(
+      [
+        card({ id: "cold", column: "waiting", openedAt: 1_500, statusAt: 0, hibernatedAt: 2_000 }),
+        card({ id: "hot", column: "working", openedAt: 1_500, statusAt: 2_500 }),
+      ],
+      NOW,
+    );
+    expect(active.map((c) => c.id)).toEqual(["hot"]);
+    expect(idle.map((c) => c.id)).toEqual(["cold"]);
+  });
+
+  it("puts a card created moments ago at the TOP of the main list, never behind show-more", () => {
+    const { active, idle } = splitSidebarCards(
+      [
+        card({ id: "just-created", column: "backlog", createdAt: NOW - 1_000 }),
+        card({ id: "live", column: "working", openedAt: 1_500, statusAt: 2_000 }),
+        card({ id: "stale-backlog", column: "backlog" }),
+      ],
+      NOW,
+    );
+    expect(active.map((c) => c.id)).toEqual(["just-created", "live"]);
+    expect(idle.map((c) => c.id)).toEqual(["stale-backlog"]);
+  });
+
+  it("lets an unopened card fold away once the freshness window has passed", () => {
+    const created = NOW - FRESH_CARD_MS - 1;
+    const { active, idle } = splitSidebarCards(
+      [card({ id: "forgotten", column: "backlog", createdAt: created })],
+      NOW,
+    );
+    expect(active).toEqual([]);
+    expect(idle.map((c) => c.id)).toEqual(["forgotten"]);
+  });
+
+  it("orders the fold by recency too — the most recently abandoned thread first", () => {
+    const { idle } = splitSidebarCards(
+      [
+        card({ id: "cold-old", column: "working", openedAt: 1_500, hibernatedAt: 2_000 }),
+        card({ id: "cold-new", column: "waiting", openedAt: 1_500, hibernatedAt: 3_000 }),
+        card({ id: "parked", column: "paused", openedAt: 1_500, pausedAt: 2_500 }),
+      ],
+      NOW,
+    );
+    expect(idle.map((c) => c.id)).toEqual(["cold-new", "parked", "cold-old"]);
   });
 
   it("breaks a tie stably, so an idle board never reshuffles between polls", () => {
     const cards = [
-      card({ id: "b", column: "waiting", statusAt: 5, createdAt: 1 }),
-      card({ id: "a", column: "waiting", statusAt: 5, createdAt: 1 }),
+      card({ id: "b", column: "waiting", statusAt: 2_005, createdAt: 1 }),
+      card({ id: "a", column: "waiting", statusAt: 2_005, createdAt: 1 }),
     ];
-    expect(splitSidebarCards(cards).active.map((c) => c.id)).toEqual(["a", "b"]);
-    expect(splitSidebarCards([...cards].reverse()).active.map((c) => c.id)).toEqual(["a", "b"]);
+    expect(splitSidebarCards(cards, NOW).active.map((c) => c.id)).toEqual(["a", "b"]);
+    expect(splitSidebarCards([...cards].reverse(), NOW).active.map((c) => c.id)).toEqual(["a", "b"]);
   });
 
   it("does not mutate the list it is given", () => {
     const cards = [
-      card({ id: "working", column: "working", statusAt: 2 }),
-      card({ id: "waiting", column: "waiting", statusAt: 1 }),
+      card({ id: "working", column: "working", statusAt: 2_002 }),
+      card({ id: "waiting", column: "waiting", statusAt: 2_001 }),
     ];
-    splitSidebarCards(cards);
+    splitSidebarCards(cards, NOW);
     expect(cards.map((c) => c.id)).toEqual(["working", "waiting"]);
   });
 });
