@@ -75,7 +75,7 @@ describe("bridgeSdkDriver — session id persistence", () => {
     const child = fakeChild();
     const socket = fakeSocket();
     const seen: string[] = [];
-    bridgeSdkDriver(socket as never, child as never, "t", (id) => seen.push(id));
+    bridgeSdkDriver(socket as never, child as never, "t", { onSessionId: (id) => seen.push(id) });
     child.stdout.write(`{"type":"session","sessionId":"aaaa"}\n`);
     child.stdout.write(`{"type":"result","isError":false,"sessionId":"aaaa"}\n`); // same id: no re-persist
     child.stdout.write(`{"type":"result","isError":false,"sessionId":"bbbb"}\n`); // new id: persist again
@@ -90,13 +90,62 @@ describe("bridgeSdkDriver — session id persistence", () => {
     const child = fakeChild();
     const socket = fakeSocket();
     const seen: string[] = [];
-    bridgeSdkDriver(socket as never, child as never, "t", (id) => seen.push(id));
+    bridgeSdkDriver(socket as never, child as never, "t", { onSessionId: (id) => seen.push(id) });
     child.stdout.write(`{"type":"ready"}\n`);
     child.stdout.write(`{"type":"assistant_text","text":"oi"}\n`);
     child.stdout.write(`{"type":"permission_request","id":"perm_1","tool":"Bash"}\n`);
     await new Promise((r) => setImmediate(r));
     expect(seen).toEqual([]);
     expect(socket.sent.length).toBe(3);
+    socket.emit("close");
+  });
+});
+
+describe("bridgeSdkDriver — history hooks (the conversation must survive a remount)", () => {
+  function fakeChild() {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: PassThrough; stderr: PassThrough; stdin: PassThrough; kill: () => void;
+    };
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.stdin = new PassThrough();
+    child.kill = () => { /* test double */ };
+    return child;
+  }
+  function fakeSocket() {
+    const socket = new EventEmitter() as EventEmitter & { sent: string[]; send: (s: string) => void; close: () => void };
+    socket.sent = [];
+    socket.send = (s: string) => socket.sent.push(s);
+    socket.close = () => { /* test double */ };
+    return socket;
+  }
+
+  it("hands every parsed driver event to onEvent (the recorder decides what is worth keeping)", async () => {
+    const child = fakeChild();
+    const socket = fakeSocket();
+    const events: string[] = [];
+    bridgeSdkDriver(socket as never, child as never, "t", { onEvent: (e) => events.push(e.type) });
+    child.stdout.write(`{"type":"ready"}\n`);
+    child.stdout.write(`{"type":"assistant_delta","text":"oi"}\n`);
+    child.stdout.write(`{"type":"assistant_text","text":"oi"}\n`);
+    await new Promise((r) => setImmediate(r));
+    expect(events).toEqual(["ready", "assistant_delta", "assistant_text"]);
+    socket.emit("close");
+  });
+
+  it("hands the person's own messages to onControl — they cross on stdin, stdout never echoes them", async () => {
+    const child = fakeChild();
+    const socket = fakeSocket();
+    const controls: unknown[] = [];
+    bridgeSdkDriver(socket as never, child as never, "t", { onControl: (c) => controls.push(c) });
+    socket.emit("message", Buffer.from(`{"type":"user","text":"roda os testes"}`));
+    socket.emit("message", Buffer.from(`{"type":"interrupt"}`));
+    socket.emit("message", Buffer.from("   ")); // blank: parsed to null, never recorded
+    await new Promise((r) => setImmediate(r));
+    expect(controls).toEqual([
+      { type: "user", text: "roda os testes" },
+      { type: "interrupt" },
+    ]);
     socket.emit("close");
   });
 });

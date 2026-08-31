@@ -1098,6 +1098,18 @@ export function CardTerminalView({
               />
             ) : (
               <>
+                {/* THE RULE of running both modes on one card: it is ONE conversation. The native
+                    chat resumes the NEWEST session in this worktree — including turns typed here —
+                    so the terminal stays available (permission prompts, /login) without forking
+                    the story. Said here, where the two modes meet. */}
+                {card?.sdkChat ? (
+                  <p
+                    data-testid="sdk-terminal-note"
+                    className="mb-1 rounded-md border border-border/60 bg-card/40 px-2 py-1 text-[11px] text-muted-foreground"
+                  >
+                    {t("cardView.sdkTerminalNote")}
+                  </p>
+                ) : null}
                 <XTerminal
                   zoomControl
                   wsPath={`/api/cards/${encodeURIComponent(cardId)}/terminal`}

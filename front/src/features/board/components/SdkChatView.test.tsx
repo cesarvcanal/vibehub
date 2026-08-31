@@ -167,6 +167,40 @@ describe("SdkChatView", () => {
     expect(screen.queryByTestId("sdk-interrupt")).toBeNull();
   });
 
+  it("draws the server's replay — the conversation survives a remount instead of 'sumindo'", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    // What the back replays from the per-card history log (and the TUI transcript) on connect:
+    ws.deliver({ type: "user", text: "manda a primeira" });
+    ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } });
+    ws.deliver({ type: "assistant_text", text: "Feito." });
+    ws.deliver({ type: "ready", resume: "bfe63d25-95df-4c86-bf34-047b1366cc02" });
+
+    expect(screen.getByTestId("sdk-user")).toHaveTextContent("manda a primeira");
+    expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("Feito.");
+    // a replayed tail never leaves the working spinner on: the fresh driver runs nothing yet
+    expect(screen.queryByTestId("sdk-chat-working")).toBeNull();
+  });
+
+  it("resets the slate on every open — a reconnect's full replay is drawn once, not twice", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "user", text: "manda a primeira" });
+    ws.deliver({ type: "assistant_text", text: "Feito." });
+    expect(screen.getAllByTestId("sdk-user")).toHaveLength(1);
+
+    // the socket re-opens (reconnect): the server replays the WHOLE history again
+    ws.accept();
+    ws.deliver({ type: "user", text: "manda a primeira" });
+    ws.deliver({ type: "assistant_text", text: "Feito." });
+    ws.deliver({ type: "ready" });
+
+    expect(screen.getAllByTestId("sdk-user")).toHaveLength(1);
+    expect(screen.getAllByTestId("sdk-assistant")).toHaveLength(1);
+  });
+
   it("a driver error is visible — including the flag-off refusal, translated", async () => {
     renderSdkChat();
     const ws = await socket();

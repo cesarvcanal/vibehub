@@ -430,6 +430,7 @@ export const en: Record<string, string> = {
   "sdk.flagOff": "The SDK driver is off for this install. Turn on \"SDK driver\" in Settings to use native chat.",
   "cardView.nativeChat": "Native chat (beta)",
 
+  "cardView.sdkTerminalNote": "Native chat (beta) is on for this card — it is the same conversation: the native chat always resumes the newest session, including what you type here.",
   "cardView.terminalFor": "Terminal for {title}",
   "cardView.cardFallback": "card",
   "cardView.shellHeader": "Shell · bash in the worktree",
