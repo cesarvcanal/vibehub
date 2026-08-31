@@ -285,7 +285,10 @@ export function BoardPage() {
       onOpenCard={openCard}
       onReorder={(id, position) => reorderMutation.mutate({ id, position })}
       onNewProject={() => setNewProjectOpen(true)}
-      onNewCard={(project) => askCard(project, false)}
+      // From the BOARD the sidebar's `+` jots work down without leaving the board (the card still
+      // shows up at once, at the top of the list). From inside a CARD, creating one means starting
+      // the next conversation — so it opens on the spot instead of hiding behind the terminal.
+      onNewCard={(project) => askCard(project, cardOpen)}
       onNewGlobalCard={isOwner ? () => askCard(null, true) : undefined}
       canManage={isOwner}
       onDeleteProject={setDeleteTarget}

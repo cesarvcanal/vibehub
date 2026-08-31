@@ -363,13 +363,13 @@ describe("BoardPage — the sidebar", () => {
    * only listed the live columns — so you typed a title, got nothing, and clicked at a row that was
    * not there yet.
    */
-  it("puts a card you just created in the list at once, without waiting for a refetch", async () => {
+  it("puts a card you just created in the MAIN list at once, on top — never behind show-more", async () => {
     const user = userEvent.setup();
     // The server keeps answering with the OLD list: only the local write can put the row on screen.
     mockPost.mockResolvedValue({
       card: {
-        id: "c9", projectId: "p1", title: "brand new", column: "backlog", position: 1,
-        tmuxSession: "card-c9", worktreeSlug: "brand-new-c9", createdAt: 9,
+        id: "c9", projectId: "p1", title: "brand new", column: "backlog", position: 0,
+        tmuxSession: "card-c9", worktreeSlug: "brand-new-c9", createdAt: Date.now(),
       },
     });
     renderApp(<BoardPage />, { route: "/?project=p1" });
@@ -386,13 +386,76 @@ describe("BoardPage — the sidebar", () => {
     await user.click(screen.getByRole("button", { name: "Create card" }));
 
     expect(mockPost).toHaveBeenCalledWith("/cards", expect.objectContaining({ projectId: "p1", title: "brand new" }));
-    // In the backlog, so it rides with the folded cards — but the count says it exists NOW.
-    expect(await within(nav).findByRole("button", { name: "show more (2)" })).toBeInTheDocument();
-    await user.click(within(nav).getByRole("button", { name: "show more (2)" }));
-    expect(within(nav).getByRole("link", { name: "brand new" })).toBeInTheDocument();
+    // Fresh means VISIBLE: the card you just named is the FIRST row of the list, not an entry you
+    // have to dig out of "show more" (the regression this window exists for).
+    const created = await within(nav).findByRole("link", { name: "brand new" });
+    expect(created).toBeInTheDocument();
+    const cardRows = within(nav)
+      .getAllByRole("link")
+      .filter((l) => l.getAttribute("href")?.includes("card="))
+      .map((l) => l.textContent ?? "");
+    expect(cardRows[0]).toContain("brand new");
+    // The stale backlog card stays folded, alone.
+    expect(within(nav).getByRole("button", { name: "show more (1)" })).toBeInTheDocument();
     // And on the board itself, in the column it was created in.
     expect(within(screen.getByRole("region", { name: "Backlog" })).getByRole("link", { name: "brand new" }))
       .toBeInTheDocument();
+  });
+
+  /**
+   * WHERE the card was created from decides whether it opens. From inside a card, creating one is
+   * "start the next conversation": the terminal swaps to it at once. From the board, the sidebar's
+   * `+` stays a jot-it-down: the board keeps still and the new row appears at the top.
+   */
+  it("opens the card right away when it was created from beside an open card", async () => {
+    const user = userEvent.setup();
+    mockPost.mockImplementation((url: string) => {
+      if (url === "/cards") {
+        return Promise.resolve({
+          card: {
+            id: "c9", projectId: "p1", title: "next thing", column: "backlog", position: 0,
+            tmuxSession: "card-c9", worktreeSlug: "next-thing-c9", createdAt: Date.now(),
+          },
+        });
+      }
+      return Promise.resolve({});
+    });
+    // Inside c2's terminal: the sidebar is focused on billing, its `+` sits beside the switcher.
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+
+    await user.click(within(nav).getByRole("button", { name: "New card in billing" }));
+    await user.type(await screen.findByLabelText("Title"), "next thing");
+    await user.click(screen.getByRole("button", { name: "Create card" }));
+
+    // The page jumped INTO the new card: its pane is the active one.
+    await waitFor(() => expect(activeTerminal()?.getAttribute("data-card")).toBe("c9"));
+  });
+
+  it("does NOT open the card when it was created from the board's sidebar", async () => {
+    const user = userEvent.setup();
+    mockPost.mockResolvedValue({
+      card: {
+        id: "c9", projectId: "p1", title: "later thing", column: "backlog", position: 0,
+        tmuxSession: "card-c9", worktreeSlug: "later-thing-c9", createdAt: Date.now(),
+      },
+    });
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+
+    await user.click(within(nav).getByRole("button", { name: "New card in billing" }));
+    await user.type(await screen.findByLabelText("Title"), "later thing");
+    // Freeze the card list from here on, so the row on screen is the local write and the poll
+    // cannot race it away before the assertion runs.
+    const stale = mockGet.getMockImplementation()!;
+    mockGet.mockImplementation((url: string) =>
+      url.endsWith("/cards") ? new Promise(() => {}) : stale(url),
+    );
+    await user.click(screen.getByRole("button", { name: "Create card" }));
+
+    // The row exists, the board is still the middle, no terminal took over.
+    expect(await within(nav).findByRole("link", { name: "later thing" })).toBeInTheDocument();
+    expect(activeTerminal()).toBeNull();
   });
 
   it("keeps a row for the card you are IN, even when it sits in the backlog", async () => {
