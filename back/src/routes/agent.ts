@@ -2,11 +2,13 @@ import type { FastifyInstance } from "fastify";
 import { requireOwner, requireSession } from "../auth/session.js";
 import { requireCardAccess, requireCardWork } from "../auth/access.js";
 import * as registry from "../services/board/registry.js";
-import { cardWorkPaths, restartStaggered } from "../services/board/workspace.js";
+import { cardWorkPaths, restartStaggered, applyProjectBrainEverywhere } from "../services/board/workspace.js";
 import { setAccountToken, removeAccountToken, accountsTokenStatus } from "../services/accounts/token.js";
 import { allAccountsUsage } from "../services/accounts/usage.js";
 import { applyMcpsEverywhere, setMcpSecretById, mcpSecretsStatus } from "../services/mcp/mcp.js";
-import { brainView, setBrainText, resetBrain, applyBrainEverywhere } from "../services/brain/brain.js";
+import {
+  brainView, setBrainText, resetBrain, applyBrainEverywhere, projectBrainView, setProjectBrainText,
+} from "../services/brain/brain.js";
 import { importSessions, type ImportInput } from "../services/import/import.js";
 import { transcribeCardAudio, transcribeStatus, setTranscribeKeys, AUDIO_MAX_BYTES } from "../services/transcribe/transcribe.js";
 import { logger } from "../utils/logger.js";
@@ -47,10 +49,11 @@ interface AutoApplyResult {
 async function autoApply(
   reason: "brain" | "mcp",
   apply: () => Promise<unknown>,
+  opts: { projectId?: string } = {},
 ): Promise<AutoApplyResult> {
   try {
     await apply();
-    const { restarted, pending } = await restartStaggered(reason);
+    const { restarted, pending } = await restartStaggered(reason, undefined, opts);
     return { applied: true, restarted, pending };
   } catch (err) {
     logger.warn(
@@ -201,6 +204,50 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       return await reply.code(code).send(body);
     }
   });
+
+  /* -------------------------------------------------------- project brains */
+
+  app.get<{ Params: { id: string } }>(
+    "/api/brain/projects/:id", { preHandler: requireOwner },
+    async (req, reply) => {
+      if (!(await registry.getProject(req.params.id))) return await reply.code(404).send({ error: "project not found" });
+      return await reply.send(await projectBrainView(req.params.id));
+    },
+  );
+
+  /**
+   * PERSISTS and AUTO-APPLIES the PROJECT brain, mirroring the global save: rewrites
+   * CLAUDE.local.md in the project's worktrees and runs the staggered restart (best-effort — the
+   * save is already persisted). An EMPTY text clears the project brain and removes the file.
+   */
+  app.post<{ Params: { id: string }; Body: { text?: string } }>(
+    "/api/brain/projects/:id", { preHandler: requireOwner },
+    async (req, reply) => {
+      try {
+        if (!(await registry.getProject(req.params.id))) return await reply.code(404).send({ error: "project not found" });
+        const saved = await setProjectBrainText(req.params.id, req.body?.text ?? "");
+        const effect = await autoApply("brain", () => applyProjectBrainEverywhere(req.params.id), {
+          projectId: req.params.id,
+        });
+        return await reply.send({ ...saved, ...effect });
+      } catch (err) {
+        const { code, body } = fail(err);
+        return await reply.code(code).send(body);
+      }
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/api/brain/projects/:id/apply", { preHandler: requireOwner },
+    async (req, reply) => {
+      try {
+        return await reply.send({ ok: true, ...(await applyProjectBrainEverywhere(req.params.id)) });
+      } catch (err) {
+        const { code, body } = fail(err);
+        return await reply.code(code).send(body);
+      }
+    },
+  );
 
   /* ------------------------------------------------------------- voice input */
 

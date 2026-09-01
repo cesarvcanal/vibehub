@@ -5,6 +5,7 @@ import { DECLARED_STATES } from "../services/board/registry.js";
 import { runGate } from "../services/maestro/gate.js";
 import { deliver } from "../services/maestro/deliver.js";
 import { announcePreview } from "../services/preview/announce.js";
+import { recordLearning } from "../services/brain/learn.js";
 
 /**
  * MAESTRO TOOLS — what one card's agent can do to the OTHER cards.
@@ -114,6 +115,34 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     async (a) => {
       try {
         return ok(await reportState(a.card, a.state, a.summary, actor));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_brain_learn",
+    {
+      description:
+        "Record a DURABLE learning about this card's PROJECT in the project's brain (the " +
+        "instructions every card of the project reads). Use it when you discover something lasting " +
+        "— an architecture fact, a business rule, a decision, a build gotcha — in 1-3 objective " +
+        "sentences. Do NOT record trivia, task status, or secrets/credentials. The entry is APPENDED " +
+        "as a dated bullet under the project brain's '## Aprendizados' section — this tool can never " +
+        "modify anything else in the brain (append-only; identical text is deduplicated). The user " +
+        "curates the section on the Brain screen. `card` is YOUR OWN card id ($VIBEHUB_CARD_ID) — it " +
+        "is how the learning is routed to the right project.",
+      inputSchema: {
+        card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this terminal"),
+        learning: z.string().max(600).describe(
+          "the learning, 1-3 objective sentences on ONE line (newlines are collapsed). No secrets.",
+        ),
+      },
+    },
+    async (a) => {
+      try {
+        return ok(await recordLearning(a.card, a.learning, actor));
       } catch (e) {
         return fail(e);
       }
