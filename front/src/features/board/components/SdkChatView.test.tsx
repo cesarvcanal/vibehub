@@ -233,6 +233,23 @@ describe("SdkChatView", () => {
     expect(screen.queryByTestId("sdk-chat-working")).toBeNull();
   });
 
+  it("mounting mid-turn shows 'Trabalhando…' — the `ready` carries the manager's turn state (prompt-56fc)", async () => {
+    // Terminal↔Chat with a turn running: the remounted view replays, reattaches to the LIVE
+    // driver, and the synthesized `ready` says a turn is in flight — the spinner must be on
+    // from the mount, and go out on the result.
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "user", text: "faz a coisa" });
+    ws.deliver({ type: "assistant_text", text: "começando…" });
+    ws.deliver({ type: "ready", turnActive: true });
+    expect(screen.getByTestId("sdk-chat-working")).toBeInTheDocument();
+    expect(screen.getByTestId("sdk-interrupt")).toBeInTheDocument();
+
+    ws.deliver({ type: "result", isError: false });
+    expect(screen.queryByTestId("sdk-chat-working")).toBeNull();
+  });
+
   it("resets the slate on every open — a reconnect's full replay is drawn once, not twice", async () => {
     renderSdkChat();
     const ws = await socket();

@@ -31,6 +31,8 @@ export interface SdkEvent {
   text?: string;
   sessionId?: string;
   resume?: string;
+  /** On `ready`: the back's live turn count says a turn is ALREADY running (reattach mid-turn). */
+  turnActive?: boolean;
   id?: string;
   name?: string;
   tool?: string;
@@ -199,9 +201,17 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       return appendUserRow({ ...marked, rows: settleStreaming(marked.rows) }, event.text, event.from);
     }
     case "ready": {
-      // A fresh driver process: nothing is running in it yet, whatever the replayed tail looked
-      // like (a turn cut mid-tool must not leave the spinner on forever).
-      const next: SdkChatState = { ...state, ready: true, turnActive: false, rows: settleStreaming(state.rows) };
+      // The frame carries the manager's REAL turn state. `turnActive: true` = a turn is in flight
+      // in the card's live driver — the reattach mid-turn (Terminal↔Chat, reload) must light the
+      // spinner even though this view saw no live event yet (card prompt-56fc). Absent/false =
+      // nothing is running, whatever the replayed tail looked like (a turn cut mid-tool must not
+      // leave the spinner on forever).
+      const next: SdkChatState = {
+        ...state,
+        ready: true,
+        turnActive: event.turnActive === true,
+        rows: settleStreaming(state.rows),
+      };
       if (event.resume) {
         next.sessionId = event.resume;
         const { id, seq } = nextId(state, "note");

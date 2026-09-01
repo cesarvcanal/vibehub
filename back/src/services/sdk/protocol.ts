@@ -52,8 +52,11 @@ export interface ResultEvent {
   result?: string;
   permissionDenials?: unknown[];
 }
-/** The driver is up and ready to accept the first user message. */
-export interface ReadyEvent { type: "ready"; resume?: string }
+/** The driver is up and ready to accept the first user message. The back stamps `turnActive` on
+ *  every `ready` it sends (real or synthesized on reattach) with the manager's live turn count, so
+ *  a view mounting mid-turn knows work is running (card prompt-56fc: Terminal↔Chat during a turn
+ *  remounted the view and the "Trabalhando…" spinner never lit). */
+export interface ReadyEvent { type: "ready"; resume?: string; turnActive?: boolean }
 /** The driver hit an error (SDK threw, auth missing, etc.). */
 export interface DriverErrorEvent { type: "error"; message: string }
 /** A line that was NOT valid JSON, or an unknown event — surfaced rather than swallowed. */

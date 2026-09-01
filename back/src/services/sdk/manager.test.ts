@@ -175,6 +175,44 @@ describe("attachSocket — multiplexing (duas abas = uma sessão)", () => {
     spawned[0]!.stdout.emit("data", line({ type: "ready" }));
     expect(sentTypes(s1)).toEqual(["ready"]);
   });
+
+  it("the synthesized `ready` says a turn is IN FLIGHT (reattach mid-turn — Terminal↔Chat do prompt-56fc)", () => {
+    const session = ensure();
+    const s1 = fakeSocket();
+    attachSocket(session, s1 as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    s1.emit("message", Buffer.from(`{"type":"user","text":"faz a coisa"}`));
+    // the view remounts (tab switch): the fresh socket must LEARN the turn is running
+    const s2 = fakeSocket();
+    attachSocket(session, s2 as never);
+    const ready = JSON.parse(s2.sent[0]!) as { type: string; turnActive?: boolean };
+    expect(ready.type).toBe("ready");
+    expect(ready.turnActive).toBe(true);
+  });
+
+  it("the synthesized `ready` says turnActive false when NOTHING is running (reattach idle)", () => {
+    const session = ensure();
+    const s1 = fakeSocket();
+    attachSocket(session, s1 as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    s1.emit("message", Buffer.from(`{"type":"user","text":"faz a coisa"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    const s2 = fakeSocket();
+    attachSocket(session, s2 as never);
+    const ready = JSON.parse(s2.sent[0]!) as { type: string; turnActive?: boolean };
+    expect(ready.turnActive).toBe(false);
+  });
+
+  it("the driver's REAL `ready` is stamped with the live turn count (message queued before boot)", () => {
+    const session = ensure();
+    const s1 = fakeSocket();
+    attachSocket(session, s1 as never);
+    // the message goes out before the driver said `ready` — it is queued on stdin
+    s1.emit("message", Buffer.from(`{"type":"user","text":"faz a coisa"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    const ready = s1.sent.map((s) => JSON.parse(s) as { type: string; turnActive?: boolean }).find((e) => e.type === "ready");
+    expect(ready?.turnActive).toBe(true);
+  });
 });
 
 describe("the turn survives the page (o bug do Cmd+Shift+R)", () => {

@@ -210,6 +210,27 @@ describe("history replay (the conversation must survive a remount)", () => {
     expect(state.turnActive).toBe(true);
   });
 
+  it("`ready` with turnActive:true LIGHTS the spinner — the reattach mid-turn (prompt-56fc)", () => {
+    // César switched Terminal↔Chat with a turn running: the remounted view reattached to the live
+    // driver, the synthesized `ready` arrived, and nothing re-lit "Trabalhando…" until the next
+    // live event. The frame now carries the manager's real state: turn in flight = spinner on.
+    let state = applySdkEvent(INITIAL_SDK_STATE, { type: "user", text: "replayed" });
+    state = applySdkEvent(state, { type: "assistant_text", text: "tail replayed" });
+    state = applySdkEvent(state, { type: "ready", turnActive: true });
+    expect(state.ready).toBe(true);
+    expect(state.turnActive).toBe(true);
+    // …and the turn's end still puts it out.
+    state = applySdkEvent(state, { type: "result", isError: false });
+    expect(state.turnActive).toBe(false);
+  });
+
+  it("`ready` with turnActive:false (or absent) keeps the spinner OFF", () => {
+    let state = applySdkEvent(INITIAL_SDK_STATE, { type: "ready", turnActive: false });
+    expect(state.turnActive).toBe(false);
+    state = applySdkEvent(INITIAL_SDK_STATE, { type: "ready" });
+    expect(state.turnActive).toBe(false);
+  });
+
   it("`ready` settles a streaming row before adding the resume note", () => {
     let state = applySdkEvent(INITIAL_SDK_STATE, { type: "assistant_delta", text: "meio de fra" });
     state = applySdkEvent(state, { type: "ready", resume: "bfe63d25-95df-4c86-bf34-047b1366cc02" });
