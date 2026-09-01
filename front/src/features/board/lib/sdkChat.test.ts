@@ -3,6 +3,7 @@ import {
   INITIAL_SDK_STATE,
   applySdkEvent,
   appendUserRow,
+  answerQuestion,
   decidePermission,
   groupSdkRows,
   parseSdkFrame,
@@ -223,7 +224,7 @@ describe("history replay (the conversation must survive a remount)", () => {
     expect(state.turnActive).toBe(true);
   });
 
-  it("`ready` with turnActive:true LIGHTS the spinner — the reattach mid-turn (prompt-56fc)", () => {
+  it("`ready` with turnActive:true LIGHTS the spinner — the reattach mid-turn", () => {
     // The user switched Terminal↔Chat with a turn running: the remounted view reattached to the live
     // driver, the synthesized `ready` arrived, and nothing re-lit "Trabalhando…" until the next
     // live event. The frame now carries the manager's real state: turn in flight = spinner on.
@@ -323,5 +324,72 @@ describe("groupSdkRows", () => {
       Array.from({ length: n }, (_, i) => ({ kind: "tool" as const, id: `t${i}`, name: "Read", summary: "" }));
     expect(groupSdkRows(tools(3)).map((r) => r.kind)).toEqual(["tools"]);
     expect(groupSdkRows(tools(2)).map((r) => r.kind)).toEqual(["row", "row"]);
+  });
+});
+
+describe("user questions (AskUserQuestion no chat)", () => {
+  const QUESTIONS = [
+    { question: "Formato?", header: "Format", options: [{ label: "Resumo" }, { label: "Detalhado" }] },
+  ];
+
+  it("a user_question draws a pending question card and keeps the turn alive", () => {
+    const state = feed([
+      { type: "ready" },
+      { type: "user_question", id: "q_1", questions: QUESTIONS },
+    ]);
+    expect(state.rows).toHaveLength(1);
+    expect(state.rows[0]).toMatchObject({ kind: "question", id: "q_1", outcome: "pending" });
+    expect(state.turnActive).toBe(true);
+  });
+
+  it("ignores a question with no id or no questions", () => {
+    const ready = feed([{ type: "ready" }]);
+    expect(applySdkEvent(ready, { type: "user_question", questions: QUESTIONS })).toBe(ready);
+    expect(applySdkEvent(ready, { type: "user_question", id: "q_1", questions: [] })).toBe(ready);
+  });
+
+  it("a question_result settles the card — answered with the picks, unanswered without", () => {
+    const pending = feed([
+      { type: "ready" },
+      { type: "user_question", id: "q_1", questions: QUESTIONS },
+    ]);
+    const answered = applySdkEvent(pending, { type: "question_result", id: "q_1", answers: [{ selected: ["Resumo"] }] });
+    expect(answered.rows[0]).toMatchObject({ kind: "question", outcome: "answered", answers: [{ selected: ["Resumo"] }] });
+
+    const gaveUp = applySdkEvent(pending, { type: "question_result", id: "q_1", timedOut: true });
+    expect(gaveUp.rows[0]).toMatchObject({ kind: "question", outcome: "unanswered" });
+  });
+
+  it("the first settlement wins — a late echo cannot flip the card", () => {
+    const pending = feed([
+      { type: "ready" },
+      { type: "user_question", id: "q_1", questions: QUESTIONS },
+    ]);
+    const clicked = answerQuestion(pending, "q_1", [{ selected: ["Resumo"] }]);
+    expect(clicked.rows[0]).toMatchObject({ outcome: "answered" });
+    const echoed = applySdkEvent(clicked, { type: "question_result", id: "q_1", answers: [{ selected: ["Detalhado"] }] });
+    expect(echoed.rows[0]).toMatchObject({ outcome: "answered", answers: [{ selected: ["Resumo"] }] });
+  });
+
+  it("REPLAY: a user_question with no question_result re-renders PENDING (clickable after F5)", () => {
+    // History replays before `ready` — exactly what a reconnect looks like.
+    const state = feed([
+      { type: "user", text: "planeja a tela" },
+      { type: "user_question", id: "q_9", questions: QUESTIONS },
+      { type: "ready", turnActive: true },
+    ]);
+    expect(state.rows[1]).toMatchObject({ kind: "question", id: "q_9", outcome: "pending" });
+    // …and a replayed PAIR comes back settled.
+    const settled = feed([
+      { type: "user_question", id: "q_9", questions: QUESTIONS },
+      { type: "question_result", id: "q_9", answers: [{ selected: ["Detalhado"] }] },
+      { type: "ready" },
+    ]);
+    expect(settled.rows[0]).toMatchObject({ kind: "question", outcome: "answered" });
+  });
+
+  it("answerQuestion on an unknown id changes nothing", () => {
+    const state = feed([{ type: "ready" }]);
+    expect(answerQuestion(state, "ghost", [{ selected: ["A"] }])).toBe(state);
   });
 });
