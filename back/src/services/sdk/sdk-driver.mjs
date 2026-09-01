@@ -150,6 +150,7 @@ let currentQuery = null; // the live query() iterator, so an interrupt can reach
 async function runTurn(text) {
   const options = baseOptions();
   if (lastSessionId) options.resume = lastSessionId;
+  let closed = false; // did this turn emit its own end (a result, or an error)?
   try {
     currentQuery = query({ prompt: text, options });
     for await (const msg of currentQuery) {
@@ -168,13 +169,20 @@ async function runTurn(text) {
         }
       } else if (msg.type === "result") {
         if (msg.session_id) lastSessionId = msg.session_id;
+        closed = true;
         emit({ type: "result", subtype: msg.subtype, isError: !!msg.is_error,
           sessionId: msg.session_id, result: msg.result, permissionDenials: msg.permission_denials });
       }
     }
   } catch (err) {
+    closed = true;
     emit({ type: "error", message: err && err.message ? err.message : String(err) });
   } finally {
+    // A turn can END without a result: `interrupt()` just stops the iterator, and a stalled query
+    // can be torn down mid-stream. The front's "Trabalhando…" only clears on a result/error/ready —
+    // a turn that ends silently left it spinning FOREVER (the César incident). Every turn now
+    // closes itself, whatever ended it.
+    if (!closed) emit({ type: "result", subtype: "aborted", isError: false, sessionId: lastSessionId });
     currentQuery = null;
   }
 }
