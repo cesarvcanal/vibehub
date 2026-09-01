@@ -93,6 +93,21 @@ describe("settings", () => {
     expect((await s.updateSettings({ sdkPermissionMode: "same-as-terminal" })).sdkPermissionMode).toBe("same-as-terminal");
   });
 
+  it("defaults sdkAutoResume to ON and round-trips it", async () => {
+    // The deploy-resume switch: on = a panel restart that kills a native-chat turn is resumed
+    // automatically at the next boot; off = only the visible system line.
+    const s = await fresh();
+    expect((await s.getSettings()).sdkAutoResume).toBe(true);
+    expect((await s.updateSettings({ sdkAutoResume: false })).sdkAutoResume).toBe(false);
+    expect((await s.updateSettings({ sdkAutoResume: true })).sdkAutoResume).toBe(true);
+  });
+
+  it("rejects a non-boolean sdkAutoResume", async () => {
+    const s = await fresh();
+    // @ts-expect-error — exercising the runtime guard
+    await expect(s.updateSettings({ sdkAutoResume: "yes" })).rejects.toThrow(/must be a boolean/);
+  });
+
   it("rejects an unknown sdkPermissionMode", async () => {
     const s = await fresh();
     // @ts-expect-error — exercising the runtime guard

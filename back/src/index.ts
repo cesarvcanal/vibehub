@@ -28,6 +28,8 @@ import { cardSdkRoutes } from "./routes/cardSdk.js";
 import { startPauseReconciler, sweepIdleCards } from "./services/board/workspace.js";
 import { startOutboxFlusher } from "./services/board/outbox.js";
 import { startRunnerReaper } from "./services/reaper/reaper.js";
+import { shutdownAllDrivers } from "./services/sdk/manager.js";
+import { resumeInterruptedTurns } from "./services/sdk/resume.js";
 
 /**
  * The vibehub server: one process serving the API, the websocket terminals, and (in production) the
@@ -145,6 +147,28 @@ async function main(): Promise<void> {
   // loop's stdin check — this collects whatever slips through, every ten minutes. Started HERE
   // for the same reason as the others: tests must not inherit a timer that kills processes.
   startRunnerReaper();
+  // Turnos do chat nativo interrompidos pelo ÚLTIMO deploy (o back morre, os drivers — filhos dele —
+  // morrem juntos): o sweep acha os marcadores duráveis, escreve a linha de sistema no chat do card
+  // e retoma o turno automaticamente (uma vez, nunca em loop). Depois do listen, fire-and-forget:
+  // aceitar conexões não espera o runner. Ver services/sdk/resume.ts.
+  void resumeInterruptedTurns().then((summary) => {
+    if (summary.resumed.length > 0 || summary.noted.length > 0) {
+      logger.info({ resumed: summary.resumed.length, noted: summary.noted.length }, "sdk boot resume done");
+    }
+  });
+  // Graceful shutdown (melhor esforço): o docker stop de um deploy manda SIGTERM e dá uns segundos.
+  // Encerrar o stdin dos drivers é o adeus limpo (EOF = exit do driver, atravessa o docker exec);
+  // os marcadores de turno em voo FICAM no disco — são eles que contam ao próximo boot o que este
+  // shutdown interrompeu. Nada aqui bloqueia a saída.
+  const shutdown = (signal: NodeJS.Signals): void => {
+    logger.info({ signal }, "vibehub shutting down — closing sdk drivers (inflight markers kept)");
+    try { shutdownAllDrivers(); } catch { /* best-effort by design */ }
+    void app.close().finally(() => process.exit(0));
+    // The escape hatch: a socket that will not close must not outlive docker's grace window.
+    setTimeout(() => process.exit(0), 5_000).unref?.();
+  };
+  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
   logger.info(
     { port: config.port, dataDir: config.dataDir, runner: config.runner.kind },
     `vibehub listening on http://${config.host}:${config.port}`,

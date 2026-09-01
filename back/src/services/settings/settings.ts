@@ -67,6 +67,14 @@ export interface Settings {
   sdkDriver: boolean;
   /** Permission behaviour of the SDK driver's gate — see {@link SdkPermissionMode}. */
   sdkPermissionMode: SdkPermissionMode;
+  /**
+   * ON by default. A deploy of the panel restarts the back, and the SDK drivers (its children) die
+   * with it — a turn in flight used to be lost in silence. With this on, the boot sweep finds the
+   * interrupted turns (durable markers, see services/sdk/inflight.ts), writes a visible system line
+   * in the card's chat and resumes the turn automatically — ONCE per turn, never in a loop. Off =
+   * only the system line; the person resumes by hand.
+   */
+  sdkAutoResume: boolean;
 }
 
 interface SettingsDoc { settings: Settings }
@@ -81,6 +89,7 @@ const DEFAULTS: Settings = {
   idleHibernateMinutes: 180,
   sdkDriver: true,
   sdkPermissionMode: "same-as-terminal",
+  sdkAutoResume: true,
 };
 
 const store = new JsonStore<SettingsDoc>(
@@ -111,6 +120,7 @@ export interface SettingsPatch {
   idleHibernateMinutes?: number;
   sdkDriver?: boolean;
   sdkPermissionMode?: SdkPermissionMode;
+  sdkAutoResume?: boolean;
 }
 
 /** Validates and applies a partial update. Unknown fields are ignored, not merged blindly. */
@@ -134,6 +144,9 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
   }
   if (patch.sdkPermissionMode !== undefined && !SDK_PERMISSION_MODES.includes(patch.sdkPermissionMode)) {
     throw new Error("sdkPermissionMode must be 'same-as-terminal' or 'ask-sensitive'");
+  }
+  if (patch.sdkAutoResume !== undefined && typeof patch.sdkAutoResume !== "boolean") {
+    throw new Error("sdkAutoResume must be a boolean");
   }
   if (patch.transcribeLanguage !== undefined && patch.transcribeLanguage !== null) {
     if (!/^[a-z]{2}$/.test(String(patch.transcribeLanguage).trim())) {
@@ -167,6 +180,9 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
     }
     if (patch.sdkPermissionMode !== undefined) {
       doc.settings.sdkPermissionMode = patch.sdkPermissionMode;
+    }
+    if (patch.sdkAutoResume !== undefined) {
+      doc.settings.sdkAutoResume = patch.sdkAutoResume;
     }
     if (patch.idleHibernateMinutes !== undefined) {
       doc.settings.idleHibernateMinutes = Number(patch.idleHibernateMinutes);
