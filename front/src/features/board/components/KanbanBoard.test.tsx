@@ -178,6 +178,145 @@ describe("KanbanBoard reordering", () => {
   });
 });
 
+/**
+ * Pointer events with coordinates, built by hand — jsdom has no PointerEvent, so the coordinate
+ * has to be planted on the event (same trick as `dragOverAt`). An Element goes through
+ * testing-library so React's delegated handler hears it; `window` takes a raw dispatch, which is
+ * all the marquee's own window listeners need.
+ */
+function firePointer(target: EventTarget, type: "pointerdown" | "pointermove" | "pointerup", x: number, y: number) {
+  const event =
+    target instanceof Element
+      ? createEvent[type === "pointerdown" ? "pointerDown" : type === "pointermove" ? "pointerMove" : "pointerUp"](target)
+      : new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "clientX", { value: x });
+  Object.defineProperty(event, "clientY", { value: y });
+  Object.defineProperty(event, "button", { value: 0 });
+  fireEvent(target as Element, event);
+}
+
+/** Plants a client rectangle on a card's tile so the marquee has something to intersect. */
+function placeTile(title: string, left: number, top: number, size = 20) {
+  tile(title).handle.getBoundingClientRect = () =>
+    ({ left, top, right: left + size, bottom: top + size, width: size, height: size }) as DOMRect;
+}
+
+function selectedTitles(): string[] {
+  return [...document.querySelectorAll("[data-selected]")].map(
+    (el) => el.getAttribute("aria-label") ?? "",
+  );
+}
+
+describe("KanbanBoard multi-selection", () => {
+  it("shift-click toggles a card in and out without opening it", async () => {
+    const onOpen = vi.fn();
+    renderApp(
+      <KanbanBoard project={project} onOpenCard={onOpen} onNewCard={vi.fn()} onNewBacklogCard={vi.fn()} />,
+    );
+    await screen.findByText("first");
+
+    fireEvent.click(tile("first").handle, { shiftKey: true });
+    fireEvent.click(tile("second").handle, { shiftKey: true });
+    expect(selectedTitles()).toEqual(["first", "second"]);
+
+    fireEvent.click(tile("second").handle, { shiftKey: true });
+    expect(selectedTitles()).toEqual(["first"]);
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("Esc clears the selection; a plain click opens the card and clears it too", async () => {
+    const onOpen = vi.fn();
+    renderApp(
+      <KanbanBoard project={project} onOpenCard={onOpen} onNewCard={vi.fn()} onNewBacklogCard={vi.fn()} />,
+    );
+    await screen.findByText("first");
+
+    fireEvent.click(tile("first").handle, { shiftKey: true });
+    expect(selectedTitles()).toEqual(["first"]);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(selectedTitles()).toEqual([]);
+
+    fireEvent.click(tile("second").handle, { shiftKey: true });
+    fireEvent.click(tile("first").handle);
+    expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ id: "c1" }));
+    expect(selectedTitles()).toEqual([]);
+  });
+
+  it("marquee on empty board selects the cards it touches; a click on nothing clears", async () => {
+    board();
+    await screen.findByText("third");
+    placeTile("first", 0, 0);
+    placeTile("second", 0, 40);
+    placeTile("third", 0, 400);
+    const column = screen.getByRole("region", { name: "Backlog" });
+
+    // Drag a band from (5,5) to (30,70): it crosses first and second, not third.
+    firePointer(column, "pointerdown", 5, 5);
+    firePointer(window, "pointermove", 30, 70);
+    expect(document.querySelector("[data-marquee-band]")).not.toBeNull();
+    expect(selectedTitles()).toEqual(["first", "second"]);
+    firePointer(window, "pointerup", 30, 70);
+    expect(document.querySelector("[data-marquee-band]")).toBeNull();
+    expect(selectedTitles()).toEqual(["first", "second"]);
+
+    // Press-and-release on the background without travelling: a click, and it clears.
+    firePointer(column, "pointerdown", 300, 300);
+    firePointer(window, "pointerup", 300, 300);
+    expect(selectedTitles()).toEqual([]);
+  });
+
+  it("a press ON a card never starts a marquee", async () => {
+    board();
+    await screen.findByText("first");
+    placeTile("first", 0, 0);
+
+    firePointer(tile("first").handle, "pointerdown", 5, 5);
+    firePointer(window, "pointermove", 200, 200);
+    expect(document.querySelector("[data-marquee-band]")).toBeNull();
+    expect(selectedTitles()).toEqual([]);
+    firePointer(window, "pointerup", 200, 200);
+  });
+
+  it("dragging a selected card moves EVERY selected card to the target column, order kept", async () => {
+    board();
+    await screen.findByText("third");
+
+    fireEvent.click(tile("third").handle, { shiftKey: true });
+    fireEvent.click(tile("first").handle, { shiftKey: true });
+
+    const dataTransfer = transfer();
+    const done = screen.getByRole("region", { name: "Done" });
+    fireEvent.dragStart(tile("first").handle, { dataTransfer });
+    fireEvent.dragOver(done, { dataTransfer });
+    fireEvent.drop(done, { dataTransfer });
+
+    // Board order (first is above third), not click order — and one PATCH per card.
+    await waitFor(() => expect(mockPatch).toHaveBeenCalledTimes(2));
+    expect(mockPatch).toHaveBeenNthCalledWith(1, "/cards/c1", { column: "done", position: 0 });
+    expect(mockPatch).toHaveBeenNthCalledWith(2, "/cards/c3", { column: "done", position: 1 });
+  });
+
+  it("dragging a card OUTSIDE the selection moves only it and drops the selection", async () => {
+    board();
+    await screen.findByText("third");
+
+    fireEvent.click(tile("first").handle, { shiftKey: true });
+    fireEvent.click(tile("second").handle, { shiftKey: true });
+
+    const dataTransfer = transfer();
+    const done = screen.getByRole("region", { name: "Done" });
+    fireEvent.dragStart(tile("third").handle, { dataTransfer });
+    fireEvent.dragOver(done, { dataTransfer });
+    fireEvent.drop(done, { dataTransfer });
+
+    await waitFor(() =>
+      expect(mockPatch).toHaveBeenCalledWith("/cards/c3", { column: "done", position: 0 }),
+    );
+    expect(mockPatch).toHaveBeenCalledTimes(1);
+    expect(selectedTitles()).toEqual([]);
+  });
+});
+
 describe("insertionLine", () => {
   it("draws gap 0 on the top edge of the first card", () => {
     expect(insertionLine(0, 0, 3)).toBe("top");

@@ -244,6 +244,8 @@ export const ptBR: Record<string, string> = {
   "board.newCardHint": "Novo card (⌘K ou Ctrl+T)",
   "board.cards.one": "{n} card",
   "board.cards.other": "{n} cards",
+  "board.dragCount.one": "{n} card",
+  "board.dragCount.other": "{n} cards",
   "board.projects.one": "{n} projeto",
   "board.projects.other": "{n} projetos",
   "board.empty": "vazio",
