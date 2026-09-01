@@ -166,6 +166,28 @@ export interface Settings {
   publicUrl?: string;
 }
 
+/* ------------------------------------------------------------------ cofre */
+
+export type CredentialType = "userpass" | "token";
+
+/** A named credential in the Cofre. The VALUE never comes back — only this metadata does. */
+export interface Credential {
+  id: string;
+  name: string;
+  type: CredentialType;
+  createdAt: number;
+  usedAt?: string;
+}
+
+/** A login captured on a card's browser, pending a save decision. NEVER carries the password. */
+export interface CardCapture {
+  id: string;
+  host: string;
+  suggestedName: string;
+  username: string;
+  at: number;
+}
+
 /** `GET /api/transcribe` — voice input status. Key values never come back. */
 export interface TranscribeStatus {
   available: boolean;

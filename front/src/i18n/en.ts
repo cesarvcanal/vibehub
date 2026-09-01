@@ -650,6 +650,31 @@ export const en: Record<string, string> = {
   "settings.removeKeys": "Remove keys",
   "settings.saveKeys": "Save keys",
 
+  /* ------------------------------------------------------------------ cofre */
+  "cofre.title": "Vault",
+  "cofre.hint":
+    "Named logins for the systems the cards sign in to. The value goes in and never comes back — an agent fills a credential by name, without ever seeing it.",
+  "cofre.empty": "No credential saved yet.",
+  "cofre.add": "Add credential",
+  "cofre.name": "Credential name",
+  "cofre.namePlaceholder": "erp-prod, space, …",
+  "cofre.type": "Type",
+  "cofre.typeUserpass": "User + password",
+  "cofre.typeToken": "Single value (token)",
+  "cofre.username": "Username",
+  "cofre.password": "Password",
+  "cofre.value": "Value",
+  "cofre.used": "used {when}",
+  "cofre.neverUsed": "never used",
+  "cofre.removeAria": "Remove credential {name}",
+  "cofre.saved": "Credential saved.",
+  "cofre.removed": "Credential removed.",
+  "capture.prompt": "Save the login for {host} to the Vault?",
+  "capture.saveAs": "Save as",
+  "capture.save": "Save",
+  "capture.dismiss": "Not now",
+  "capture.saved": "Login saved to the Vault.",
+
   /* --------------------------------------------------------------- accounts */
   "accounts.aria": "Claude accounts",
   "accounts.title": "Claude accounts",

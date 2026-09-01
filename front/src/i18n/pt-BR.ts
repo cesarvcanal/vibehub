@@ -657,6 +657,31 @@ export const ptBR: Record<string, string> = {
   "settings.removeKeys": "Remover as chaves",
   "settings.saveKeys": "Salvar as chaves",
 
+  /* ------------------------------------------------------------------ cofre */
+  "cofre.title": "Cofre",
+  "cofre.hint":
+    "Logins nomeados dos sistemas em que os cards entram. O valor entra e nunca volta — o agente preenche uma credencial pelo nome, sem nunca vê-la.",
+  "cofre.empty": "Nenhuma credencial salva ainda.",
+  "cofre.add": "Adicionar credencial",
+  "cofre.name": "Nome da credencial",
+  "cofre.namePlaceholder": "erp-prod, space, …",
+  "cofre.type": "Tipo",
+  "cofre.typeUserpass": "Usuário + senha",
+  "cofre.typeToken": "Valor único (token)",
+  "cofre.username": "Usuário",
+  "cofre.password": "Senha",
+  "cofre.value": "Valor",
+  "cofre.used": "usada {when}",
+  "cofre.neverUsed": "nunca usada",
+  "cofre.removeAria": "Remover a credencial {name}",
+  "cofre.saved": "Credencial salva.",
+  "cofre.removed": "Credencial removida.",
+  "capture.prompt": "Salvar o acesso de {host} no Cofre?",
+  "capture.saveAs": "Salvar como",
+  "capture.save": "Salvar",
+  "capture.dismiss": "Agora não",
+  "capture.saved": "Acesso salvo no Cofre.",
+
   /* ----------------------------------------------------------------- contas */
   "accounts.aria": "Contas Claude",
   "accounts.title": "Contas Claude",
