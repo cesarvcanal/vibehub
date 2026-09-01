@@ -3,6 +3,7 @@ import {
   buildLatestTranscriptScript,
   mergeTranscriptReplay,
   parseLatestTranscript,
+  replayDedupeKey,
   resumeTargetFor,
   transcriptToSdkHistory,
 } from "./transcript.js";
@@ -184,5 +185,29 @@ describe("mergeTranscriptReplay (one timeline, nothing lost, nothing twice)", ()
       `sobe@${at("2026-08-31T10:00:00Z")}`,
       `sobe@${at("2026-08-31T10:02:00Z")}`,
     ]);
+  });
+});
+
+describe("edição (supersede) — o dedupe casa pelo texto EMBRULHADO", () => {
+  it("replayDedupeKey uses `sent` (the wrapped words) when present, `text` otherwise", () => {
+    expect(replayDedupeKey({ type: "user", text: "limpa", sent: "embrulhada limpa" })).toBe("user:embrulhada limpa");
+    expect(replayDedupeKey({ type: "user", text: "limpa" })).toBe("user:limpa");
+  });
+
+  it("mergeTranscriptReplay drops the transcript's WRAPPED user line when the history holds the clean edit", () => {
+    const wrapped = "[correção do usuário — desconsidere a mensagem anterior:\n«velha»\ne considere esta versão no lugar:]\n\nnova";
+    const jsonl = [
+      JSON.stringify({ type: "user", uuid: "u1", timestamp: "2026-09-01T12:00:00Z", message: { role: "user", content: wrapped } }),
+    ].join("\n");
+    const history = [
+      { type: "user" as const, text: "velha", at: Date.parse("2026-09-01T11:59:00Z") },
+      { type: "message_edited" as const, originalText: "velha", at: Date.parse("2026-09-01T12:00:00Z") },
+      { type: "user" as const, text: "nova", sent: wrapped, at: Date.parse("2026-09-01T12:00:00Z") },
+    ];
+    const merged = mergeTranscriptReplay(jsonl, history);
+    // the wrapped transcript line is the SAME event as the history's clean one — drawn once, clean
+    const users = merged.filter((e) => e.type === "user");
+    expect(users.map((e) => (e as { text: string }).text)).toEqual(["velha", "nova"]);
+    expect(merged.some((e) => e.type === "message_edited")).toBe(true);
   });
 });

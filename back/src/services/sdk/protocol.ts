@@ -155,7 +155,35 @@ export interface InterruptControl { type: "interrupt" }
 export interface PermissionDecisionControl { type: "permission_decision"; id: string; allow: boolean }
 /** The human's answer to a `user_question` — one entry per question, in order. */
 export interface QuestionAnswerControl { type: "question_answer"; id: string; answers: UserQuestionAnswer[] }
-export type DriverControl = UserControl | InterruptControl | PermissionDecisionControl | QuestionAnswerControl;
+/**
+ * The user EDITED a message he already sent — a SUPERSEDE, not a rewrite of the past: the model
+ * has read the original, so the edit reaches it as a new user turn wrapped by `buildSupersedeText`
+ * (the manager does the wrapping — the driver only ever sees a normal `user` control). `original`
+ * is the message being replaced (how the front marks it "editada"), `text` the version that now
+ * stands. Provenance stays the USER's: it is his speech, corrected.
+ */
+export interface EditUserControl { type: "edit_user"; original: string; text: string }
+export type DriverControl =
+  | UserControl
+  | InterruptControl
+  | PermissionDecisionControl
+  | QuestionAnswerControl
+  | EditUserControl;
+
+/**
+ * The supersede wrapper an EDITED message wears on its way to the MODEL. The original was already
+ * read — pretending it never existed would be lying to the context — so the edit says exactly what
+ * happened: disregard that version, this one stands. Kept in pt-BR deliberately: it is the user's
+ * own speech act, and this panel's users speak pt-BR to their agents. PURE.
+ */
+export function buildSupersedeText(original: string, text: string): string {
+  return (
+    `[correção do usuário — desconsidere a mensagem anterior:\n` +
+    `«${original}»\n` +
+    `e considere esta versão no lugar:]\n\n` +
+    text
+  );
+}
 
 /** Serialise a control message as one stdin line (with the trailing newline). PURE. */
 export function encodeControl(control: DriverControl): string {
@@ -177,6 +205,14 @@ export function parseSdkClientFrame(raw: string): DriverControl | null {
       if (parsed.type === "question_answer" && typeof parsed.id === "string") {
         const answers = parseQuestionAnswers((parsed as { answers?: unknown }).answers);
         if (answers) return { type: "question_answer", id: parsed.id, answers };
+      }
+      if (
+        parsed.type === "edit_user" &&
+        typeof (parsed as { original?: unknown }).original === "string" &&
+        typeof parsed.text === "string" &&
+        parsed.text.trim() !== ""
+      ) {
+        return { type: "edit_user", original: (parsed as { original: string }).original, text: parsed.text };
       }
       return null;
     } catch {

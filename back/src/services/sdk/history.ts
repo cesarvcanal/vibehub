@@ -37,7 +37,23 @@ export const HISTORY_COMPACT_FACTOR = 4;
  * messages and on everything written before this field existed; the replay carries it verbatim, so
  * the native chat's attribution is exact, never matched.
  */
-export type HistoryEvent = (DriverEvent | { type: "user"; text: string } | { type: "system_note"; text: string }) & {
+export type HistoryEvent = (
+  | DriverEvent
+  | {
+      type: "user";
+      text: string;
+      /**
+       * On an EDITED message's new version: the text as it went to the driver's stdin (the
+       * supersede wrapper, see protocol.ts `buildSupersedeText`). `text` stays the CLEAN version —
+       * what the screen draws — while `sent` is what the transcript will carry, so the replay
+       * dedupe (`replayDedupeKey`) matches the transcript line instead of drawing it twice.
+       */
+      sent?: string;
+    }
+  /** The user edited a sent message: the row whose text matches `originalText` is drawn "editada". */
+  | { type: "message_edited"; originalText: string }
+  | { type: "system_note"; text: string }
+) & {
   at?: number;
   from?: MessageOrigin;
   /** The event was MIRRORED from the card's terminal (TUI) transcript, not spoken by the driver. */
@@ -74,6 +90,8 @@ export function replayableHistoryEvent(event: HistoryEvent): boolean {
     case "system_note":
     case "user_question":
     case "question_result":
+    // The edit marker: without it a replay would draw the superseded message as if it still stood.
+    case "message_edited":
       return true;
     case "permission":
       return typeof (event as { id?: unknown }).id === "string";

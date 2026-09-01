@@ -106,14 +106,19 @@ export function chatEventToHistory(event: ChatEvent): HistoryEvent | null {
  * tool events are id'd `<line uuid>#<tool_use id>` while the driver emits the bare tool_use id —
  * the LAST `#` segment is the id the API minted, the same on both sides. PURE.
  */
-export function replayDedupeKey(event: Pick<HistoryEvent, "type"> & { text?: string; id?: string }): string | null {
+export function replayDedupeKey(
+  event: Pick<HistoryEvent, "type"> & { text?: string; id?: string; sent?: string },
+): string | null {
   if (event.type === "tool_use") {
     const raw = typeof event.id === "string" ? event.id : "";
     const bare = raw.split("#").pop() ?? "";
     return bare === "" ? null : `tool:${bare}`;
   }
   if (event.type !== "user" && event.type !== "assistant_text") return null;
-  const norm = String(event.text ?? "").replace(/\s+/g, " ").trim();
+  // An EDITED message's history line shows the clean text but was SENT wrapped (the supersede
+  // wrapper, protocol.ts): the transcript carries the wrapped words, so the key must match those.
+  const worded = typeof event.sent === "string" && event.sent !== "" ? event.sent : event.text;
+  const norm = String(worded ?? "").replace(/\s+/g, " ").trim();
   return norm === "" ? null : `${event.type}:${norm}`;
 }
 

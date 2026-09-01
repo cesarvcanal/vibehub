@@ -47,6 +47,8 @@ describe("replayableHistoryEvent", () => {
     ).toBe(true);
     // the panel's own voice (deploy interrupted a turn, boot resumed it) — re-drawn on every replay
     expect(replayableHistoryEvent({ type: "system_note", text: "turno interrompido" })).toBe(true);
+    // the edit marker: without it a replay would draw the superseded message as still standing
+    expect(replayableHistoryEvent({ type: "message_edited", originalText: "velha" })).toBe(true);
     // The question pair replays too: a pending card comes back clickable, a settled one settled.
     expect(
       replayableHistoryEvent({ type: "user_question", id: "q1", questions: [{ question: "Which?", options: [] }] }),
