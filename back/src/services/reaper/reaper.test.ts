@@ -97,6 +97,16 @@ describe("reapCandidates", () => {
     expect(at(reaper.REAP_MIN_AGE_S - 1)).toBe(0);
     expect(at(reaper.REAP_MIN_AGE_S)).toBe(1);
   });
+
+  it("never touches the card-owned SDK driver — it is ALIVE with no page open by design", () => {
+    expect(reaper.isSdkDriverProcess("node /root/.vibehub-sdk/sdk-driver.mjs --cwd /work/x")).toBe(true);
+    expect(reaper.isSdkDriverProcess("claude -c")).toBe(false);
+    const procs = [
+      proc(200, 1, 900000, "node /root/.vibehub-sdk/sdk-driver.mjs --cwd /work/x --resume abc"), // spared, always
+      proc(201, 1, 900000, "claude -c"), // the control: same shape, still dies
+    ];
+    expect(reaper.reapCandidates(procs).map((p) => p.pid)).toEqual([201]);
+  });
 });
 
 describe("script builders (pure)", () => {

@@ -22,7 +22,8 @@ Toggle it via `PATCH /api/settings { "sdkDriver": true }`. It only gates the SDK
 | `back/src/services/sdk/sdk-driver.mjs` | The **driver process**. Runs IN the runner (Node, in the card's worktree). `query()` with `bypassPermissions` + a `PreToolUse` gate; NDJSON events on stdout; user messages on stdin. |
 | `back/src/services/sdk/protocol.ts` | Pure contract: `DriverEvent` types, `parseDriverLine`, `encodeControl`, and the permission classifier (`classifySensitivity` / `sdkPermissionDecision`). Unit-tested; the driver embeds a mirror copy. |
 | `back/src/services/sdk/driver.ts` | Installs the driver into the runner (`docker exec`, atomic) and builds the spawn command (`docker exec -i … bash -c '<token guard>; exec node …'`), resolved through the host executor. |
-| `back/src/routes/cardSdk.ts` | The **websocket** `GET /api/cards/:id/sdk`. Flag-gated; spawns the driver and bridges events ↔ stdin. Entirely separate from the terminal/chat routes. |
+| `back/src/services/sdk/manager.ts` | O **dono do driver**: UM driver por card, propriedade do BACK (não da conexão). Multiplexa todos os websockets do card, persiste history/resume-id do lado que sobrevive, e cuida do fim de vida (killCardSession + idle). |
+| `back/src/routes/cardSdk.ts` | The **websocket** `GET /api/cards/:id/sdk`. Flag-gated; faz o trabalho por-conexão (replay, mirror, quem digita) e ATTACHA no driver vivo do card via o manager. Entirely separate from the terminal/chat routes. |
 
 The driver `.mjs` is copied into `dist` by `back/scripts/build-assets.mjs` (tsc ignores `.mjs`).
 
@@ -165,6 +166,42 @@ Um card é **UMA conversa**, mesmo quando ela acontece em duas telas. As regras:
   conversa. Alternar à vontade é suportado; a regra de resume é sempre "o transcript mais novo
   vence" (`resumeTargetFor`).
 - **Estado honesto.** "Trabalhando…" só acende com evento VIVO do driver (depois do `ready`) e
-  apaga quando o socket cai (driver morre com a conexão); replay nunca acende. Todo turno do driver
-  se fecha sozinho: um turno encerrado sem `result` (interrupt, stall) emite
-  `result{subtype:"aborted"}` no `finally` do `runTurn`.
+  apaga quando o socket cai (a tela desconectada não pode atestar o que o driver está fazendo);
+  replay nunca acende — no reconnect, se o turno ainda roda, o próximo delta reacende. Todo turno
+  do driver se fecha sozinho: um turno encerrado sem `result` (interrupt, erro, stall) emite
+  `result{subtype:"aborted"}` no `finally` do `runTurn` — é também assim que o manager conta
+  turnos pra saber quando o driver está ocioso.
+
+## O turno sobrevive à página (manager — bug do Cmd+Shift+R, card prompt-56fc)
+
+O driver era filho da CONEXÃO: o route spawnava um por websocket e o matava no close. César mandou
+mensagem no chat nativo, deu Cmd+Shift+R no meio do turno → o socket caiu, o driver morreu NO MEIO
+do turno, a resposta nunca chegou ao transcript e o driver novo do reconnect fez `--resume` sem
+continuar o turno pendente — mensagem engolida.
+
+Agora o driver é **do CARD**, propriedade do back (`back/src/services/sdk/manager.ts`):
+
+- **Um driver por card.** `ensureDriverSession` spawna no máximo um; reconectar (ou abrir uma
+  segunda aba) ATTACHA no processo vivo — duas abas multiplexam o mesmo driver, nunca dois.
+- **A persistência mora no lado que sobrevive.** É o manager (não o socket) que ouve o stdout do
+  driver: sdk-history, resume-id no board e as chaves de dedupe do mirror continuam fluindo com
+  ZERO páginas abertas. Fechar a página só desanexa o socket; o turno segue e fica gravado — o
+  reconnect replay mostra o que a tela perdeu.
+- **Reconnect reata.** Um socket que chega num driver já `ready` recebe um `ready` sintetizado
+  (com o resume-id mais novo) — sem ele o composer da página nova nunca habilitaria.
+- **Interrupt continua funcionando**: o botão manda o frame pro stdin do driver VIVO, de qualquer
+  aba conectada.
+- **Morte silenciosa é proibida.** O manager guarda a cauda do stderr do driver
+  (`STDERR_TAIL_MAX`); uma saída que ninguém pediu (crash, código ≠ 0) vira log **warn** no back
+  (código de saída + stderr + turnos em voo) E frame de erro no chat com o mesmo post-mortem.
+  Investigação do incidente (2026-08-31, repro manual no runner): o `--resume` da sessão de 3,7MB
+  funciona normalmente — a morte era o socket fechando e levando o driver junto (Cmd+Shift+R,
+  troca de aba), com o stderr em nível debug e o frame de saída indo pra um socket já fechado.
+- **Fim de vida.** (1) `killCardSession` notifica o manager (`onCardSessionKill` em
+  `workspace.ts`) — pausar, hibernar, reiniciar, deletar, trocar modelo/conta matam o driver
+  junto com o tmux. (2) **Ocioso**: sem nenhum socket E sem turno rodando por `DRIVER_IDLE_MS`
+  (15 min), o driver se encerra sozinho — o resume-id persistido traz a conversa de volta no
+  próximo connect. (3) O **reaper** nunca julga um driver vivo: `reapCandidates` recusa qualquer
+  processo com `.vibehub-sdk/sdk-driver.mjs` na linha de comando (e os subprocessos do SDK pendem
+  do driver, nunca ppid 1 enquanto ele vive). Um driver realmente morto sai sozinho no EOF do
+  stdin (`rl.on("close") → exit 0`), inclusive quando o back reinicia.

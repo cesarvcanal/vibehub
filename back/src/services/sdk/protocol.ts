@@ -118,6 +118,26 @@ export function encodeControl(control: DriverControl): string {
   return JSON.stringify(control) + "\n";
 }
 
+/** Interpret a browser frame as a driver control message. A bare string = a user message. PURE. */
+export function parseSdkClientFrame(raw: string): DriverControl | null {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed) as { type?: unknown; text?: unknown; id?: unknown; allow?: unknown };
+      if (parsed.type === "interrupt") return { type: "interrupt" };
+      if (parsed.type === "user" && typeof parsed.text === "string") return { type: "user", text: parsed.text };
+      if (parsed.type === "permission_decision" && typeof parsed.id === "string" && typeof parsed.allow === "boolean") {
+        return { type: "permission_decision", id: parsed.id, allow: parsed.allow };
+      }
+      return null;
+    } catch {
+      // not JSON — fall through and treat as a bare user message
+    }
+  }
+  return { type: "user", text: raw };
+}
+
 /* ------------------------------------------------------ permission gate */
 
 /**

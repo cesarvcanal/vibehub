@@ -175,13 +175,14 @@ async function runTurn(text) {
       }
     }
   } catch (err) {
-    closed = true;
     emit({ type: "error", message: err && err.message ? err.message : String(err) });
   } finally {
-    // A turn can END without a result: `interrupt()` just stops the iterator, and a stalled query
-    // can be torn down mid-stream. The front's "Trabalhando…" only clears on a result/error/ready —
-    // a turn that ends silently left it spinning FOREVER (the César incident). Every turn now
-    // closes itself, whatever ended it.
+    // A turn can END without a result: `interrupt()` just stops the iterator, a stalled query can
+    // be torn down mid-stream, and an SDK error only produces the `error` event above. The front's
+    // "Trabalhando…" only clears on a result/error/ready — a turn that ends silently left it
+    // spinning FOREVER (the César incident) — and the backend MANAGER counts turns by their
+    // `result` events to know when the driver is idle. Every turn now closes itself with a result,
+    // whatever ended it.
     if (!closed) emit({ type: "result", subtype: "aborted", isError: false, sessionId: lastSessionId });
     currentQuery = null;
   }

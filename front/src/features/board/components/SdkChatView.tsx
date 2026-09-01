@@ -230,9 +230,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
           ),
         )}
 
-        {/* "Trabalhando…" only while the wire is UP: a dead socket means a dead driver (it dies
-            with its connection), and a spinner surviving the disconnect was the production lie —
-            frozen on "Trabalhando…" while the conversation had moved on in the terminal. */}
+        {/* "Trabalhando…" only while the wire is UP. The driver now SURVIVES a dead socket (it is
+            card-owned in the back, not this connection's child), but a disconnected view cannot
+            vouch for what it is doing — so the spinner stays honest and yields to the reconnect:
+            the live stream relights it within the next delta if the turn is still running. */}
         {connected && state.turnActive ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="sdk-chat-working">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />

@@ -771,6 +771,34 @@ export async function uploadCardImage(
 /** Heredoc delimiter of the kill script — a reserved word, never derived from input. */
 const KILL_DELIM = "VIBEHUB_KILL";
 
+/* ----------------------------------------------------- session-kill hooks */
+
+/**
+ * Listeners told whenever a card's session is being ENDED (pause, hibernate, restart, delete,
+ * model/account switch — every caller of `killCardSession`). Registration instead of an import so
+ * the SDK driver manager can hang its per-card driver's life on the same rule without a
+ * workspace → sdk → chat → maestro → workspace import cycle.
+ */
+type CardSessionKillListener = (cardId: string) => void;
+const cardSessionKillListeners = new Set<CardSessionKillListener>();
+
+/** Register a listener for card-session kills. Returns the unsubscribe. */
+export function onCardSessionKill(listener: CardSessionKillListener): () => void {
+  cardSessionKillListeners.add(listener);
+  return () => cardSessionKillListeners.delete(listener);
+}
+
+/** Tell every listener a card's session is being ended. Best-effort: a listener cannot break the kill. */
+export function notifyCardSessionKill(cardId: string): void {
+  for (const listener of cardSessionKillListeners) {
+    try {
+      listener(cardId);
+    } catch (err) {
+      logger.warn({ card: cardId, detail: (err as Error).message }, "card-session kill listener failed (continuing)");
+    }
+  }
+}
+
 /**
  * Script that ends tmux sessions AND the whole process tree of their panes.
  *
@@ -817,6 +845,9 @@ export function buildKillSessionScript(containerName: string, sessions: string[]
  * A runner that is missing or a host that is down is simply ignored.
  */
 export async function killCardSession(card: Card, opts: { includeShell?: boolean } = {}): Promise<void> {
+  // FIRST the listeners: the SDK driver manager ends the card's driver here, so every pause /
+  // hibernate / restart / delete / switch that kills the tmux session kills the driver too.
+  notifyCardSessionKill(card.id);
   try {
     const sessions = opts.includeShell ? [card.tmuxSession, `${card.tmuxSession}-sh`] : [card.tmuxSession];
     await hostExecutor().runScript(buildKillSessionScript(config.runner.container, sessions), { timeoutMs: 30_000 });
