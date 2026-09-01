@@ -1450,6 +1450,24 @@ export async function registerCardPreview(
 }
 
 /**
+ * The card that registered a preview on this PORT, with the preview itself — how the proxy's
+ * stopped-preview screen finds the restart recipe when all it knows is the URL's port. When two
+ * cards ever registered the same port, the NEWEST registration wins (it is the one whose server
+ * held the port last). Read-only; unknown port -> undefined.
+ */
+export async function findCardPreviewByPort(port: number): Promise<{ card: Card; preview: CardPreview } | undefined> {
+  const p = assertPreviewPort(port);
+  const doc = await store.load();
+  let best: { card: Card; preview: CardPreview } | undefined;
+  for (const card of doc.cards) {
+    for (const preview of card.previews ?? []) {
+      if (preview.port === p && (!best || preview.createdAt > best.preview.createdAt)) best = { card, preview };
+    }
+  }
+  return best;
+}
+
+/**
  * Removes one preview from a card — the "Parar preview" button, after its session was killed.
  * Returns the removed preview (the caller needs its port/session to tear down), or undefined when
  * the card or the preview does not exist — stopping twice is not an error.
