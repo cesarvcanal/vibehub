@@ -198,6 +198,7 @@ export const TRANSCRIBE_KEY = ["board", "transcribe"] as const;
 export const RUNNER_KEY = ["board", "runner"] as const;
 export const GITHUB_KEY = ["board", "github"] as const;
 export const PREVIEW_PORTS_KEY = ["board", "preview", "ports"] as const;
+export const FEATURES_KEY = ["board", "features"] as const;
 /** Prefix matching EVERY project's card list — for invalidating the whole board at once. */
 export const CARDS_PREFIX_KEY = ["board", "cards"] as const;
 /**
@@ -338,9 +339,20 @@ export interface CardPatchInput {
   sdkChat?: boolean | null;
 }
 
+/**
+ * `GET /api/features` — install-wide flags every signed-in user can read (settings stay
+ * owner-only). `sdkChat` true = the Chat tab of EVERY card is the native (SDK) chat; false = the
+ * classic transcript chat. It replaced the per-card `sdkChat` opt-in (2026-08-31).
+ */
+export interface InstallFeatures {
+  sdkChat: boolean;
+}
+
 /* --------------------------------------------------------------- requests */
 
 export const boardApi = {
+  /** Install-wide UI flags — which chat the Chat tab mounts, for one. */
+  features: () => get<InstallFeatures>("/features"),
   /* projects */
   listProjects: () => get<{ projects: BoardProject[] }>("/projects").then((r) => r.projects ?? []),
 

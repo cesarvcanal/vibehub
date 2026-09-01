@@ -11,12 +11,22 @@
 // Auth: CLAUDE_CODE_OAUTH_TOKEN is exported by the spawn command (read from the card profile's
 // .oauth-token, exactly like the TUI's sessionCommand), so `query()` boots already logged in.
 //
-// Permission model (increment 2): permissionMode "bypassPermissions" auto-allows the bulk; a
-// PreToolUse hook ESCALATES the SENSITIVE set (rm -rf / force-push / deploy / secret reads) to the
-// chat — it emits a `permission_request` and AWAITS the human's `permission_decision` on stdin,
-// denying after PERMISSION_TIMEOUT_MS. The runner's own settings.json allowlist is NOT relied upon
-// (the PoC found bare-name allow entries SHADOW the callback) — the driver passes its own hook,
-// which fires regardless.
+// Permission model: `--permission-gate` picks the mode (mirror of `sdkGateAction` in protocol.ts).
+//   - "same-as-terminal": the native chat mirrors the Terminal tab — the runner's own Claude
+//     settings decide, no vibehub gate on top; the hook only emits observability events.
+//   - "ask-sensitive" (the fallback when the flag is absent/unknown): permissionMode
+//     "bypassPermissions" auto-allows the bulk; the PreToolUse hook ESCALATES the SENSITIVE set
+//     (rm -rf / force-push / deploy / secret reads) to the chat — it emits a `permission_request`
+//     and AWAITS the human's `permission_decision` on stdin, denying after PERMISSION_TIMEOUT_MS.
+// The runner's settings.json allowlist is NOT relied upon for the gate (the PoC found bare-name
+// allow entries SHADOW the callback) — the driver's own hook fires regardless.
+//
+// Tools: the SDK is told to load the SAME configuration the TUI session sees — settingSources
+// user+project+local (the profile's managed MCPs: vibehub, navegador, the registered ones; the
+// worktree's .mcp.json; the runner settings' status hooks) and the claude_code system prompt preset
+// (the brain CLAUDE.md at the profile root + the repo's own CLAUDE.md). The `navegador` MCP's
+// stored config references ${PW_CDP_ENDPOINT}, which the spawn command exports per card — so the
+// native chat drives the card's OWN Chromium, the one the user watches on the noVNC canvas.
 //
 // AUTH IS THE OAUTH TOKEN, PERIOD (ordem do César): the spawn command exports
 // CLAUDE_CODE_OAUTH_TOKEN from the card profile and UNSETS ANTHROPIC_API_KEY; the delete below is
@@ -36,6 +46,8 @@ function argOf(flag) {
 const CWD = argOf("--cwd") || process.cwd();
 const INITIAL_RESUME = argOf("--resume"); // a stored session_id to continue on the first message
 const MODEL = argOf("--model");
+// Mirror of `parseGateMode` in protocol.ts: anything unrecognised falls back to the STRICTER mode.
+const GATE_MODE = argOf("--permission-gate") === "same-as-terminal" ? "same-as-terminal" : "ask-sensitive";
 
 /* ------------------------------------------------------------- output */
 
@@ -94,12 +106,18 @@ function resolvePermission(id, allow) {
 
 let permissionSeq = 0;
 
-// PreToolUse hook: auto-allow the bulk; a SENSITIVE call becomes a `permission_request` in the chat
-// and the agent's loop WAITS here for the human's `permission_decision` (or the timeout's deny).
+// PreToolUse hook — mirror of `sdkGateAction` in protocol.ts. "same-as-terminal": everything is
+// allowed (the Terminal tab's behaviour), only observability events are emitted. "ask-sensitive":
+// auto-allow the bulk; a SENSITIVE call becomes a `permission_request` in the chat and the agent's
+// loop WAITS here for the human's `permission_decision` (or the timeout's deny).
 async function preToolUse(input) {
   const name = input.tool_name;
   const toolInput = input.tool_input ?? {};
   const sensitive = classifySensitivity(name, toolInput);
+  if (GATE_MODE === "same-as-terminal") {
+    emit({ type: "permission", tool: name, decision: "allow", sensitive });
+    return {};
+  }
   if (sensitive) {
     const id = `perm_${++permissionSeq}_${Date.now()}`;
     emit({ type: "permission_request", id, tool: name, input: toolInput,
@@ -139,6 +157,16 @@ function baseOptions() {
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
     includePartialMessages: true,
+    // The SAME configuration the card's TUI session loads, so the native chat has the same tools:
+    // "user" brings the profile's managed MCPs (vibehub — whose MCP instructions ARE the maestro
+    // persona —, navegador over ${PW_CDP_ENDPOINT}, and every registered one) plus the runner
+    // settings (status hooks, session persistence); "project"/"local" bring the worktree's own
+    // .mcp.json and settings, honoured without a prompt by the runner's enableAllProjectMcpServers.
+    // Explicit rather than the SDK default so a future default flip cannot silently strip the tools.
+    settingSources: ["user", "project", "local"],
+    // The TUI's system prompt (Claude Code's own), which is also what loads CLAUDE.md — the brain
+    // at the profile root and the repo's. Without it the driver ran on the bare SDK prompt.
+    systemPrompt: { type: "preset", preset: "claude_code" },
     hooks: { PreToolUse: [{ hooks: [preToolUse] }] },
   };
   if (MODEL) opts.model = MODEL;

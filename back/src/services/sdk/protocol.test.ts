@@ -172,3 +172,37 @@ describe("createPermissionBroker", () => {
     await expect(b).resolves.toEqual({ allow: true, timedOut: false });
   });
 });
+
+describe("gate modes — sdkGateAction / parseGateMode", () => {
+  it("parses the driver flag, falling back to the STRICTER mode on anything unknown", async () => {
+    const { parseGateMode } = await import("./protocol.js");
+    expect(parseGateMode("same-as-terminal")).toBe("same-as-terminal");
+    expect(parseGateMode("ask-sensitive")).toBe("ask-sensitive");
+    expect(parseGateMode(undefined)).toBe("ask-sensitive");
+    expect(parseGateMode("whatever")).toBe("ask-sensitive");
+  });
+
+  it("same-as-terminal never escalates — even the sensitive set is allowed (Terminal-tab parity)", async () => {
+    const { sdkGateAction } = await import("./protocol.js");
+    expect(sdkGateAction("same-as-terminal", "Bash", { command: "rm -rf /work/repo" }))
+      .toEqual({ action: "allow", sensitive: true });
+    expect(sdkGateAction("same-as-terminal", "Bash", { command: "git push --force origin main" }))
+      .toEqual({ action: "allow", sensitive: true });
+    expect(sdkGateAction("same-as-terminal", "KillShell", {}))
+      .toEqual({ action: "allow", sensitive: true });
+    expect(sdkGateAction("same-as-terminal", "Bash", { command: "ls -la" }))
+      .toEqual({ action: "allow", sensitive: false });
+  });
+
+  it("ask-sensitive escalates the sensitive set and allows the bulk", async () => {
+    const { sdkGateAction } = await import("./protocol.js");
+    expect(sdkGateAction("ask-sensitive", "Bash", { command: "rm -rf /work/repo" }))
+      .toEqual({ action: "escalate", sensitive: true });
+    expect(sdkGateAction("ask-sensitive", "Bash", { command: "npm publish" }))
+      .toEqual({ action: "escalate", sensitive: true });
+    expect(sdkGateAction("ask-sensitive", "Bash", { command: "npm test" }))
+      .toEqual({ action: "allow", sensitive: false });
+    expect(sdkGateAction("ask-sensitive", "Read", { file_path: "/work/a.ts" }))
+      .toEqual({ action: "allow", sensitive: false });
+  });
+});

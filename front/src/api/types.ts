@@ -159,8 +159,10 @@ export interface Settings {
   transcribeLanguage?: string | null;
   /** Minutes a terminal may sit idle before it is hibernated. 0 = never. */
   idleHibernateMinutes?: number;
-  /** EXPERIMENTAL: arms the Agent-SDK driver socket (`/api/cards/:id/sdk`). Off = nothing changes. */
+  /** Native chat as the Chat tab of every card (default on). Off = classic chat everywhere. */
   sdkDriver?: boolean;
+  /** Native chat permission gate: mirror the Terminal tab, or ask for the sensitive set in the chat. */
+  sdkPermissionMode?: "same-as-terminal" | "ask-sensitive";
   runner: RunnerSettings;
   /** Externally reachable base URL, when the install has one. */
   publicUrl?: string;
@@ -203,6 +205,7 @@ export interface SettingsPatch {
   transcribeLanguage?: string | null;
   idleHibernateMinutes?: number;
   sdkDriver?: boolean;
+  sdkPermissionMode?: "same-as-terminal" | "ask-sensitive";
   runner?: Partial<RunnerSettings>;
 }
 

@@ -60,6 +60,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [email, setEmail] = React.useState("");
   const [autonomous, setAutonomous] = React.useState(true);
   const [sdkDriver, setSdkDriver] = React.useState(false);
+  const [sdkPermissionMode, setSdkPermissionMode] = React.useState<"same-as-terminal" | "ask-sensitive">("same-as-terminal");
   const [defaultLabel, setDefaultLabel] = React.useState("");
   const [language, setLanguage] = React.useState("");
   // Kept as a STRING: the field has to be clearable while you retype it, and "" is not 0.
@@ -84,6 +85,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     setEmail(settings.data.git.email);
     setAutonomous(settings.data.autonomous);
     setSdkDriver(settings.data.sdkDriver ?? false);
+    setSdkPermissionMode(settings.data.sdkPermissionMode ?? "same-as-terminal");
     setDefaultLabel(settings.data.defaultAccountLabel ?? "");
     setLanguage(settings.data.transcribeLanguage ?? "");
     setIdleHibernate(String(settings.data.idleHibernateMinutes ?? 180));
@@ -183,6 +185,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       git: { name: name.trim(), email: email.trim() },
       autonomous,
       sdkDriver,
+      sdkPermissionMode,
       defaultAccountLabel: defaultLabel.trim() || null,
       transcribeLanguage: language.trim() || null,
       // A blank field is not "never" — it is a field being typed in. Leave the stored value alone.
@@ -270,6 +273,23 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 </p>
               </div>
               <Switch id="settings-sdk-driver" checked={sdkDriver} onCheckedChange={setSdkDriver} />
+            </div>
+            {/* How the native chat's gate behaves — one install-wide choice, only meaningful with
+                the native chat on, hence disabled together with the switch above. */}
+            <div className="space-y-1.5">
+              <Label htmlFor="settings-sdk-permission-mode">{t("settings.sdkPermissionMode")}</Label>
+              <select
+                id="settings-sdk-permission-mode"
+                data-testid="settings-sdk-permission-mode"
+                className={SELECT_CLASS}
+                value={sdkPermissionMode}
+                disabled={!sdkDriver}
+                onChange={(e) => setSdkPermissionMode(e.target.value as "same-as-terminal" | "ask-sensitive")}
+              >
+                <option value="same-as-terminal">{t("settings.sdkPermissionSame")}</option>
+                <option value="ask-sensitive">{t("settings.sdkPermissionAsk")}</option>
+              </select>
+              <p className="text-xs text-muted-foreground">{t("settings.sdkPermissionModeHint")}</p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="settings-idle-hibernate">{t("settings.idleHibernate")}</Label>

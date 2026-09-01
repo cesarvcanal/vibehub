@@ -168,7 +168,7 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       const session = ensureDriverSession({
         cardId: card.id,
         label: card.worktreeSlug,
-        command: sdkDriverCommand(project, {
+        command: await sdkDriverCommand(project, {
           ...card,
           resumeSessionId: resumeTargetFor(card, latestSessionId),
         }),

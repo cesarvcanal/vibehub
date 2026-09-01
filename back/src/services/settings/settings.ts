@@ -12,6 +12,21 @@ export interface GitIdentitySettings {
   email: string;
 }
 
+/**
+ * How the SDK driver's permission gate behaves (only matters with `sdkDriver` on):
+ *
+ * - `"same-as-terminal"` — the native chat has EXACTLY the permission behaviour the Terminal tab of
+ *   the same card already has: the runner is autonomous (bypassPermissions), so nothing escalates to
+ *   the chat. One card, two views, ONE permission story — César's call for his install (2026-08-31):
+ *   consistency between the two interfaces, no extra restrictions in one of them.
+ * - `"ask-sensitive"` — the driver's PreToolUse gate escalates the SENSITIVE set (rm -rf /
+ *   force-push / deploy / secret reads) to Permitir/Negar buttons in the chat. Kept for scenarios
+ *   where the chat is in less-trusted hands (shared members, phone-only review).
+ */
+export type SdkPermissionMode = "same-as-terminal" | "ask-sensitive";
+
+const SDK_PERMISSION_MODES: readonly SdkPermissionMode[] = ["same-as-terminal", "ask-sensitive"];
+
 export interface Settings {
   /** Identity the runner commits with. Defaults come from the connected GitHub account. */
   git: GitIdentitySettings;
@@ -43,14 +58,15 @@ export interface Settings {
    */
   idleHibernateMinutes: number;
   /**
-   * EXPERIMENTAL, OFF by default. When on, a card's session can be driven through the Agent SDK
-   * "driver" (a headless, structured stream-json process in the runner) instead of the tmux/send-keys
-   * TUI, reached over the `/api/cards/:id/sdk` websocket. Purely ADDITIVE: with this false, nothing in
-   * the TUI/chat/provisioning path changes and the SDK websocket refuses to start. Turning it on is a
-   * per-install opt-in for the migration described in `docs/sdk-migration-plan.md`; a live smoke test
-   * (see `docs/sdk-driver.md`) is a prerequisite before enabling it.
+   * The NATIVE CHAT switch — on by default since 2026-08-31, when it graduated from the per-card
+   * beta. With it on, the Chat tab of EVERY card runs over the Agent SDK "driver" (a headless,
+   * structured stream-json process in the runner) instead of the tmux transcript reader; the
+   * per-card `sdkChat` field became vestigial. With it off, every card uses the classic chat and
+   * the `/api/cards/:id/sdk` websocket does not start. See `docs/sdk-driver.md`.
    */
   sdkDriver: boolean;
+  /** Permission behaviour of the SDK driver's gate — see {@link SdkPermissionMode}. */
+  sdkPermissionMode: SdkPermissionMode;
 }
 
 interface SettingsDoc { settings: Settings }
@@ -63,7 +79,8 @@ const DEFAULTS: Settings = {
   transcribeLanguage: null,
   transcribeProofread: false,
   idleHibernateMinutes: 180,
-  sdkDriver: false,
+  sdkDriver: true,
+  sdkPermissionMode: "same-as-terminal",
 };
 
 const store = new JsonStore<SettingsDoc>(
@@ -93,6 +110,7 @@ export interface SettingsPatch {
   transcribeProofread?: boolean;
   idleHibernateMinutes?: number;
   sdkDriver?: boolean;
+  sdkPermissionMode?: SdkPermissionMode;
 }
 
 /** Validates and applies a partial update. Unknown fields are ignored, not merged blindly. */
@@ -113,6 +131,9 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
   }
   if (patch.sdkDriver !== undefined && typeof patch.sdkDriver !== "boolean") {
     throw new Error("sdkDriver must be a boolean");
+  }
+  if (patch.sdkPermissionMode !== undefined && !SDK_PERMISSION_MODES.includes(patch.sdkPermissionMode)) {
+    throw new Error("sdkPermissionMode must be 'same-as-terminal' or 'ask-sensitive'");
   }
   if (patch.transcribeLanguage !== undefined && patch.transcribeLanguage !== null) {
     if (!/^[a-z]{2}$/.test(String(patch.transcribeLanguage).trim())) {
@@ -143,6 +164,9 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
     }
     if (patch.sdkDriver !== undefined) {
       doc.settings.sdkDriver = patch.sdkDriver;
+    }
+    if (patch.sdkPermissionMode !== undefined) {
+      doc.settings.sdkPermissionMode = patch.sdkPermissionMode;
     }
     if (patch.idleHibernateMinutes !== undefined) {
       doc.settings.idleHibernateMinutes = Number(patch.idleHibernateMinutes);
