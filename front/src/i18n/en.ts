@@ -243,6 +243,8 @@ export const en: Record<string, string> = {
   "board.newCardHint": "New card (⌘K or Ctrl+T)",
   "board.cards.one": "{n} card",
   "board.cards.other": "{n} cards",
+  "board.dragCount.one": "{n} card",
+  "board.dragCount.other": "{n} cards",
   "board.projects.one": "{n} project",
   "board.projects.other": "{n} projects",
   "board.empty": "empty",

@@ -8,6 +8,16 @@ import { useIsMobile } from "@/lib/useIsMobile";
 import { CardTile } from "@/features/board/components/CardTile";
 import { ColumnZone, MoreColumnsToggle } from "@/features/board/components/KanbanBoard";
 import {
+  MarqueeSelect,
+  useClearSelectionOnEscape,
+} from "@/features/board/components/MarqueeSelect";
+import {
+  orderByBoard,
+  planGroupDropByProject,
+  setGroupDragGhost,
+  toggleId,
+} from "@/features/board/lib/selection";
+import {
   columnHint,
   columnLabel,
   groupByColumn,
@@ -98,6 +108,11 @@ export function AllProjectsBoard({
   }, [cards]);
 
   const [dragging, setDragging] = React.useState<BoardCard | null>(null);
+  /** Multi-selection, exactly as on the single-project board. See `KanbanBoard`. */
+  const [selected, setSelected] = React.useState<ReadonlySet<string>>(() => new Set());
+  const clearSelection = React.useCallback(() => setSelected(new Set()), []);
+  const replaceSelection = React.useCallback((ids: string[]) => setSelected(new Set(ids)), []);
+  useClearSelectionOnEscape(selected.size > 0, clearSelection);
 
   const moveMutation = useMutation({
     mutationFn: ({ id, column, position }: MoveVars) => boardApi.patchCard(id, { column, position }),
@@ -116,10 +131,42 @@ export function AllProjectsBoard({
       queryClient.invalidateQueries({ queryKey: cardsKey(vars.projectId) }),
   });
 
+  /** See `KanbanBoard.startDrag`: selected card = bulk drag with the head-count ghost. */
+  function startDrag(card: BoardCard, e: React.DragEvent) {
+    if (selected.has(card.id) && selected.size > 1) {
+      setGroupDragGhost(e.dataTransfer, translate("board.dragCount", { n: selected.size }));
+    } else if (selected.size > 0) {
+      clearSelection();
+    }
+    setDragging(card);
+  }
+
   function dropOn(column: CardColumn) {
     const card = dragging;
     setDragging(null);
-    if (!card || card.column === column) return;
+    if (!card) return;
+    // Bulk drop: the group splits by PROJECT (positions are per-project) and each part lands at the
+    // end of its own destination column, board order kept. One ordinary PATCH per card, in order.
+    if (selected.has(card.id) && selected.size > 1) {
+      const moving = orderByBoard(cards, selected).filter((c) => c.column !== column);
+      const steps = planGroupDropByProject(cards, moving, column);
+      void (async () => {
+        for (const step of steps) {
+          try {
+            await moveMutation.mutateAsync({
+              id: step.id,
+              projectId: step.projectId,
+              column,
+              position: step.position,
+            });
+          } catch {
+            break;
+          }
+        }
+      })();
+      return;
+    }
+    if (card.column === column) return;
     const siblings = byProject.get(card.projectId) ?? [];
     moveMutation.mutate({
       id: card.id,
@@ -130,6 +177,9 @@ export function AllProjectsBoard({
   }
 
   const groups = groupByColumn(cards);
+  // A bulk drag can hold cards from several columns, so EVERY column is a target for it — the
+  // dragged card's own included: the rest of the group still has somewhere to go.
+  const bulkDragging = Boolean(dragging && selected.has(dragging.id) && selected.size > 1);
 
   return (
     <div className="space-y-3">
@@ -151,6 +201,7 @@ export function AllProjectsBoard({
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
       ) : (
+        <MarqueeSelect enabled={!isMobile} onSelect={replaceSelection} onClear={clearSelection}>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
           {visibleColumns(isMobile, expanded).map((column, index) => (
             <React.Fragment key={column.key}>
@@ -159,7 +210,7 @@ export function AllProjectsBoard({
                 label={columnLabel(column.key)}
                 hint={columnHint(column.key)}
                 count={groups[column.key].length}
-                active={Boolean(dragging) && dragging?.column !== column.key}
+                active={Boolean(dragging) && (bulkDragging || dragging?.column !== column.key)}
                 onDrop={() => dropOn(column.key)}
               >
                 {groups[column.key].map((card) => (
@@ -167,8 +218,13 @@ export function AllProjectsBoard({
                     key={card.id}
                     card={card}
                     projectLabel={projectName.get(card.projectId)}
-                    onOpen={onOpenCard}
-                    onDragStart={setDragging}
+                    selected={selected.has(card.id)}
+                    onToggleSelect={(c) => setSelected((s) => toggleId(s, c.id))}
+                    onOpen={(c) => {
+                      clearSelection();
+                      onOpenCard(c);
+                    }}
+                    onDragStart={startDrag}
                     onDragEnd={() => setDragging(null)}
                   />
                 ))}
@@ -186,6 +242,7 @@ export function AllProjectsBoard({
             </React.Fragment>
           ))}
         </div>
+        </MarqueeSelect>
       )}
     </div>
   );
