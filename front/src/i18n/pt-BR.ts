@@ -426,6 +426,7 @@ export const ptBR: Record<string, string> = {
   "sdk.emptyHint": "Esta conversa roda pelo Agent SDK: eventos estruturados, e permissões respondidas aqui mesmo no chat.",
   "sdk.session": "sessão {id}",
   "sdk.resumed": "Retomando a sessão {id}",
+  "sdk.terminalActivity": "Atividade no terminal — a conversa seguiu na aba Terminal",
   "sdk.offline": "Sem conexão — a mensagem não foi enviada. Ela fica no campo.",
   "sdk.permissionTitle": "Permissão necessária",
   "sdk.permissionTimeoutHint": "Sem resposta, nega sozinho em 5 minutos.",

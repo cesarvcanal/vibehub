@@ -46,6 +46,8 @@ export interface SdkEvent {
   raw?: string;
   /** Message provenance on `user` events — who sent it (see lib/chat.ts `MessageOrigin`). */
   from?: MessageOrigin;
+  /** "terminal" = the event was MIRRORED from the card's TUI transcript, not spoken by the driver. */
+  source?: string;
 }
 
 /** Parse one socket frame. Null for anything that is not a JSON object with a type. PURE. */
@@ -89,13 +91,47 @@ export interface SdkChatState {
   sessionId?: string;
   /** The driver said `ready` — messages can go. */
   ready: boolean;
-  /** A turn is running (something arrived since the last `result`). */
+  /** A DRIVER turn is running (something arrived since the last `result`). Replayed history and
+   *  terminal-mirrored events never set it: the spinner only claims work the driver is doing. */
   turnActive: boolean;
+  /** The conversation's tail is coming from the TERMINAL mirror (one "atividade no terminal" note
+   *  is drawn when a burst starts; the flag keeps the burst from noting every line). */
+  terminalBurst: boolean;
   /** Monotonic counter for rows the driver did not name. */
   seq: number;
 }
 
-export const INITIAL_SDK_STATE: SdkChatState = { rows: [], ready: false, turnActive: false, seq: 0 };
+export const INITIAL_SDK_STATE: SdkChatState = { rows: [], ready: false, turnActive: false, terminalBurst: false, seq: 0 };
+
+/** The note row a terminal burst opens with (the view translates it). */
+export const TERMINAL_ACTIVITY_NOTE = "terminal-activity";
+
+/**
+ * Marks which side of the card is talking. A terminal-mirrored event OPENS a burst: one system
+ * note ("atividade no terminal") so the reader knows the conversation moved to the Terminal tab;
+ * a driver event closes it. PURE.
+ */
+function markSource(state: SdkChatState, viaTerminal: boolean): SdkChatState {
+  if (!viaTerminal) return state.terminalBurst ? { ...state, terminalBurst: false } : state;
+  if (state.terminalBurst) return state;
+  const { id, seq } = nextId(state, "note");
+  return {
+    ...state,
+    seq,
+    terminalBurst: true,
+    rows: [...settleStreaming(state.rows), { kind: "note", id, text: TERMINAL_ACTIVITY_NOTE }],
+  };
+}
+
+/**
+ * Whether an event may light the "Trabalhando…" spinner: only a LIVE driver event (after `ready`).
+ * Replay arrives before `ready` and carries no turn ends, so it used to leave the spinner ON with
+ * nothing running — the "Trabalhando… pendurado" of the production incident. Terminal-mirrored
+ * events are the terminal's work, told by the burst note instead. PURE.
+ */
+function nextTurnActive(state: SdkChatState, viaTerminal: boolean): boolean {
+  return state.turnActive || (state.ready && !viaTerminal);
+}
 
 /** How much of a tool input is worth one compact line. */
 const SUMMARY_MAX = 120;
@@ -152,12 +188,15 @@ function settleStreaming(rows: SdkRow[]): SdkRow[] {
  * changes nothing, so React can skip the render.
  */
 export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatState {
+  const viaTerminal = event.source === "terminal";
   switch (event.type) {
     case "user": {
       // A replayed message (live sends of one's own are drawn by `appendUserRow` when the socket
-      // accepts the frame) — or a LIVE external one: another card's agent talking to this card.
+      // accepts the frame) — or a LIVE external one: another card's agent talking to this card,
+      // or a message the terminal mirror lifted from the TUI.
       if (!event.text) return state;
-      return appendUserRow({ ...state, rows: settleStreaming(state.rows) }, event.text, event.from);
+      const marked = markSource(state, viaTerminal);
+      return appendUserRow({ ...marked, rows: settleStreaming(marked.rows) }, event.text, event.from);
     }
     case "ready": {
       // A fresh driver process: nothing is running in it yet, whatever the replayed tail looked
@@ -176,43 +215,46 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       return { ...state, sessionId: event.sessionId };
     case "assistant_delta": {
       if (!event.text) return state;
-      const live = streamingRow(state.rows);
+      const base = markSource(state, false); // deltas are always the driver talking — closes a burst
+      const live = streamingRow(base.rows);
       if (live) {
-        const rows = [...state.rows.slice(0, -1), { ...live, text: live.text + event.text }];
-        return { ...state, rows, turnActive: true };
+        const rows = [...base.rows.slice(0, -1), { ...live, text: live.text + event.text }];
+        return { ...base, rows, turnActive: nextTurnActive(base, false) };
       }
-      const { id, seq } = nextId(state, "a");
+      const { id, seq } = nextId(base, "a");
       return {
-        ...state,
+        ...base,
         seq,
-        turnActive: true,
-        rows: [...state.rows, { kind: "assistant", id, text: event.text, streaming: true }],
+        turnActive: nextTurnActive(base, false),
+        rows: [...base.rows, { kind: "assistant", id, text: event.text, streaming: true }],
       };
     }
     case "assistant_text": {
       const text = event.text ?? "";
       const live = streamingRow(state.rows);
-      if (live) {
+      if (live && !viaTerminal) {
         // The consolidated block REPLACES the deltas that built it — same words, now settled.
         const rows = [...state.rows.slice(0, -1), { ...live, text, streaming: false }];
-        return { ...state, rows, turnActive: true };
+        return { ...state, rows, turnActive: nextTurnActive(state, viaTerminal) };
       }
       if (text === "") return state;
-      const { id, seq } = nextId(state, "a");
+      const marked = markSource(state, viaTerminal);
+      const { id, seq } = nextId(marked, "a");
       return {
-        ...state,
+        ...marked,
         seq,
-        turnActive: true,
-        rows: [...state.rows, { kind: "assistant", id, text, streaming: false }],
+        turnActive: nextTurnActive(marked, viaTerminal),
+        rows: [...settleStreaming(marked.rows), { kind: "assistant", id, text, streaming: false }],
       };
     }
     case "tool_use": {
-      const { id, seq } = nextId(state, "t");
-      const rows = settleStreaming(state.rows);
+      const marked = markSource(state, viaTerminal);
+      const { id, seq } = nextId(marked, "t");
+      const rows = settleStreaming(marked.rows);
       return {
-        ...state,
+        ...marked,
         seq,
-        turnActive: true,
+        turnActive: nextTurnActive(marked, viaTerminal),
         rows: [
           ...rows,
           { kind: "tool", id: event.id ?? id, name: event.name ?? "?", summary: toolSummary(event.input), input: event.input },
@@ -224,7 +266,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       const rows = settleStreaming(state.rows);
       return {
         ...state,
-        turnActive: true,
+        turnActive: nextTurnActive(state, viaTerminal),
         rows: [
           ...rows,
           {

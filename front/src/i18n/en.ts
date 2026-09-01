@@ -425,6 +425,7 @@ export const en: Record<string, string> = {
   "sdk.emptyHint": "This conversation runs over the Agent SDK: structured events, and permissions answered right here in the chat.",
   "sdk.session": "session {id}",
   "sdk.resumed": "Resuming session {id}",
+  "sdk.terminalActivity": "Activity in the terminal — the conversation moved to the Terminal tab",
   "sdk.offline": "Not connected — the message was not sent. It stays in the field.",
   "sdk.permissionTitle": "Permission needed",
   "sdk.permissionTimeoutHint": "No answer denies it after 5 minutes.",

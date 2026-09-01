@@ -206,6 +206,8 @@ describe("SdkChatView", () => {
     const ws = await socket();
     ws.accept();
     expect(screen.queryByTestId("sdk-interrupt")).toBeNull();
+    // A live turn only exists after `ready` — replayed events must not arm the button.
+    ws.deliver({ type: "ready" });
     ws.deliver({ type: "assistant_delta", text: "trabalhando…" });
 
     await userEvent.click(screen.getByTestId("sdk-interrupt"));
@@ -255,5 +257,33 @@ describe("SdkChatView", () => {
     ws.accept();
     ws.deliver({ type: "error", message: "the SDK driver is off (enable the sdkDriver setting)" });
     expect(screen.getByTestId("sdk-error")).toHaveTextContent(/SDK driver is off/i);
+  });
+
+  it("'Trabalhando…' dies with the socket — a dead driver cannot be working", async () => {
+    // The production incident: the back redeployed mid-turn, the socket dropped without a result,
+    // and the spinner stayed frozen on screen while the conversation moved on in the terminal.
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "assistant_delta", text: "meio de fra" });
+    expect(screen.getByTestId("sdk-chat-working")).toBeInTheDocument();
+
+    act(() => ws.onclose?.());
+    expect(screen.queryByTestId("sdk-chat-working")).toBeNull();
+  });
+
+  it("terminal-mirrored events draw the conversation with an 'activity in the terminal' note — no spinner", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "ok boa como a gnt segue?", source: "terminal" });
+    ws.deliver({ type: "assistant_text", text: "Seguimos assim…", source: "terminal" });
+
+    expect(screen.getByTestId("sdk-note")).toHaveTextContent(/terminal/i);
+    expect(screen.getByTestId("sdk-user")).toHaveTextContent("ok boa como a gnt segue?");
+    expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("Seguimos assim…");
+    expect(screen.queryByTestId("sdk-chat-working")).toBeNull();
   });
 });
