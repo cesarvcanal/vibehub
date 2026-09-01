@@ -49,7 +49,7 @@ export function formatBrainStamp(updatedAt: string | undefined, by?: string): st
   return by ? translate("brain.stampBy", { when, by }) : translate("brain.stampAt", { when });
 }
 
-export function BrainManager() {
+export function BrainManager({ trigger = "icon" }: { trigger?: "icon" | "row" } = {}) {
   const t = useT();
   const queryClient = useQueryClient();
   const [open, setOpen] = React.useState(false);
@@ -135,16 +135,29 @@ export function BrainManager() {
   return (
     <>
       {/* Icon only, beside Accounts and MCP: three settings that share one quiet corner. */}
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-7 w-7 text-muted-foreground hover:text-foreground"
-        aria-label={t("brain.aria")}
-        title={t("brain.buttonTitle")}
-        onClick={() => setOpen(true)}
-      >
-        <Brain className="h-4 w-4" />
-      </Button>
+      {trigger === "row" ? (
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full justify-start gap-2"
+          title={t("brain.buttonTitle")}
+          onClick={() => setOpen(true)}
+        >
+          <Brain className="h-4 w-4 text-muted-foreground" />
+          {t("brain.aria")}
+        </Button>
+      ) : (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 text-muted-foreground hover:text-foreground"
+          aria-label={t("brain.aria")}
+          title={t("brain.buttonTitle")}
+          onClick={() => setOpen(true)}
+        >
+          <Brain className="h-4 w-4" />
+        </Button>
+      )}
 
       <Dialog
         open={open}

@@ -14,6 +14,10 @@ import type {
   Settings, SettingsPatch, GithubConnection, GithubState, TranscribeStatus, Credential, CredentialType,
 } from "@/api/types";
 import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
+import { AccountsManager } from "@/features/board/components/AccountsManager";
+import { McpManager } from "@/features/board/components/McpManager";
+import { BrainManager } from "@/features/board/components/BrainManager";
+import { RunnerBanner } from "@/features/board/components/RunnerBanner";
 import {
   LANGUAGES,
   getLanguage,
@@ -591,6 +595,23 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 {addCredential.isPending ? t("common.saving") : t("cofre.add")}
               </Button>
             </div>
+          </div>
+        </section>
+
+        {/* The install's agent managers and the runner, which used to crowd the board's header:
+            Claude accounts, MCP servers, the shared brain, and the runner chip with its shell.
+            They are settings — opened twice a month — so they live with the other settings. */}
+        <section className="space-y-3 border-t border-border/60 pt-4" data-testid="settings-managers">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            {t("settings.managers")}
+          </h3>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <AccountsManager trigger="row" />
+            <McpManager trigger="row" />
+            <BrainManager trigger="row" />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <RunnerBanner />
           </div>
         </section>
       </DialogContent>

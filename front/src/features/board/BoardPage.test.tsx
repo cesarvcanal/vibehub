@@ -810,21 +810,15 @@ describe("BoardPage — the install-wide managers", () => {
     serve();
   });
 
-  it("puts the brain within reach of the board, beside accounts and MCP", async () => {
-    // The route has existed with no way to reach it; a shared CLAUDE.md nobody can edit is a
-    // feature that does not exist.
+  it("keeps the board's bar free of them — accounts, MCP and brain live in Settings now", async () => {
+    // They used to crowd the header. They are the install's configuration, not the day's work,
+    // so the board carries the board and Settings carries the managers (see SettingsDialog.test).
     renderApp(<BoardPage />, { route: "/?project=p1" });
-    expect(await screen.findByRole("button", { name: "Brain" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /accounts/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "MCP" })).toBeInTheDocument();
-  });
-
-  it("opens the brain editor from the board", async () => {
-    const user = userEvent.setup();
-    renderApp(<BoardPage />, { route: "/?project=p1" });
-    await user.click(await screen.findByRole("button", { name: "Brain" }));
-    expect(await screen.findByLabelText("Brain text")).toBeInTheDocument();
-    await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/brain"));
+    await screen.findByRole("region", { name: "Backlog" });
+    expect(screen.queryByRole("button", { name: "Brain" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Claude accounts" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "MCP" })).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/running, claude installed/)).not.toBeInTheDocument();
   });
 });
 
@@ -858,12 +852,12 @@ describe("BoardPage — the aggregated board", () => {
     await waitFor(() => expect(activeTerminal()).toHaveTextContent("c4"));
   });
 
-  it("keeps the managers AND the New card button, but drops the runner chip", async () => {
-    // There is no single runner to report on here. There IS a New card button now: it has no project
-    // to imply, so the dialog asks which — creating from the aggregated board is a real thing to do.
+  it("keeps the New card button; the managers and the runner chip moved into Settings", async () => {
+    // The New card button has no project to imply, so the dialog asks which — creating from the
+    // aggregated board is a real thing to do. Everything install-shaped left the bar.
     renderApp(<BoardPage />);
-    expect(await screen.findByRole("button", { name: "Brain" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /New card$/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /New card$/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Brain" })).not.toBeInTheDocument();
     expect(screen.queryByTitle(/running, claude installed/)).not.toBeInTheDocument();
   });
 });

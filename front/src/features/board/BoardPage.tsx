@@ -13,11 +13,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { AccountsManager } from "@/features/board/components/AccountsManager";
 import { AllProjectsBoard } from "@/features/board/components/AllProjectsBoard";
-import { BrainManager } from "@/features/board/components/BrainManager";
 import { KanbanBoard } from "@/features/board/components/KanbanBoard";
-import { McpManager } from "@/features/board/components/McpManager";
 import { NewCardDialog } from "@/features/board/components/NewCardDialog";
 import { ProjectFormDialog } from "@/features/board/components/ProjectFormDialog";
 import { ProjectSidebar } from "@/features/board/components/ProjectSidebar";
@@ -252,30 +249,9 @@ export function BoardPage() {
 
   /* ------------------------------------------------------------- the parts */
 
-  /**
-   * The install-wide managers, then the runner chip — which sits next to the New card button.
-   *
-   * All four belong to the OWNER: the Claude accounts, the MCP servers, the shared brain and the
-   * container everything runs in are the install, not the work. A member gets the board and nothing
-   * around it (and the routes behind these answer 403 either way).
-   */
-  const headerExtra = isOwner ? (
-    <>
-      <AccountsManager />
-      <McpManager />
-      <BrainManager />
-      <RunnerBanner />
-    </>
-  ) : null;
-
-  /** The same managers minus the runner: the aggregated board has no single runner to report on. */
-  const aggregateHeaderExtra = isOwner ? (
-    <>
-      <AccountsManager />
-      <McpManager />
-      <BrainManager />
-    </>
-  ) : null;
+  // The install-wide managers (accounts, MCPs, brain) and the runner chip used to sit here in the
+  // header. They moved into Settings — they are the install's configuration, not the day's work —
+  // which leaves the board's bar to the board (César, 2026-09-01).
 
   // `inline` swaps the drawer for an in-flow panel: on a phone with nothing open, the project/card
   // list IS the page rather than a menu behind a handle (see `showInlineMenu` below). Same instance
@@ -411,7 +387,6 @@ export function BoardPage() {
       onOpenCard={(card) => go(selected.id, card.id)}
       onNewCard={() => askCard(selected, true)}
       onNewBacklogCard={() => askCard(selected, false)}
-      headerExtra={headerExtra}
       headerLead={menuButton}
     />
   ) : (
@@ -420,7 +395,6 @@ export function BoardPage() {
       projects={projects}
       onOpenCard={(card) => go(card.projectId, card.id)}
       onNewCard={isOwner ? () => askCard(null, true) : undefined}
-      headerExtra={aggregateHeaderExtra}
       headerLead={menuButton}
     />
   );
