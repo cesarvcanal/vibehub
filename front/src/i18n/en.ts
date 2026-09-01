@@ -453,6 +453,7 @@ export const en: Record<string, string> = {
   "sdk.denied": "Denied",
   "sdk.timedOut": "No answer in time — denied.",
   "sdk.questionTitle": "The agent asks",
+  "sdk.pendingTitle": "Pending decisions",
   "sdk.questionOther": "Other answer…",
   "sdk.questionSend": "Answer",
   "sdk.questionAnswered": "Answered: {answers}",
