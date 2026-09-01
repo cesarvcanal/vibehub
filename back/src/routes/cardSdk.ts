@@ -1,4 +1,3 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import { requireCardWork } from "../auth/access.js";
@@ -6,7 +5,8 @@ import { findUser } from "../auth/users.js";
 import * as registry from "../services/board/registry.js";
 import { getSettings } from "../services/settings/settings.js";
 import { installCardSdkDriver, sdkDriverCommand } from "../services/sdk/driver.js";
-import { appendHistory, onExternalMessage, readHistory, replayableHistoryEvent } from "../services/sdk/history.js";
+import { attachSocket, ensureDriverSession, hasDriverSession } from "../services/sdk/manager.js";
+import { onExternalMessage, readHistory } from "../services/sdk/history.js";
 import { matchOrigin, primeProvenance, type MessageOrigin } from "../services/chat/provenance.js";
 import {
   buildLatestTranscriptScript,
@@ -14,13 +14,12 @@ import {
   parseLatestTranscript,
   resumeTargetFor,
 } from "../services/sdk/transcript.js";
-import { acquireTranscriptMirror, noteDriverEventFor } from "../services/sdk/mirror.js";
-import { parseDriverLine, encodeControl, type DriverControl, type DriverEvent } from "../services/sdk/protocol.js";
+import { acquireTranscriptMirror } from "../services/sdk/mirror.js";
+import { parseSdkClientFrame } from "../services/sdk/protocol.js";
 import { transcriptDirFor } from "../services/maestro/maestro.js";
 import { effectiveAccountSlug } from "../services/board/registry.js";
 import { config } from "../config/env.js";
 import { hostExecutor } from "../runtime/host.js";
-import { disableNagle } from "./session.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -28,10 +27,11 @@ import { logger } from "../utils/logger.js";
  * (OFF by default); ADDITIVE and entirely SEPARATE from the terminal/chat routes. With the flag off
  * it refuses to start, so production is byte-for-byte unchanged.
  *
- * It spawns the per-card driver in the runner (a Node process, NOT the tmux TUI) and bridges its
- * structured protocol both ways:
- *   driver stdout (NDJSON events)  ->  one JSON text frame per event, to the front
- *   front message (a user message) ->  a JSON control line on the driver's stdin
+ * The driver is NOT this connection's child: it belongs to the CARD (see services/sdk/manager.ts).
+ * This route's job per connect is the per-connection work — the replay, the mirror refcount, who is
+ * typing — and then `attachSocket` onto the card's one live driver (spawning it only when there is
+ * none). Closing the page detaches the socket and nothing else: a turn in flight keeps running and
+ * keeps persisting, and the next connect reattaches to the same process.
  *
  * The wire contract the front consumes (see services/sdk/protocol.ts `DriverEvent`):
  *   { "type": "ready", "resume"?: string }
@@ -50,102 +50,8 @@ import { logger } from "../utils/logger.js";
  * (the answer to a `permission_request`) — or a bare string, treated as a user message.
  */
 
-const KEEPALIVE_MS = 25_000;
-
-/** Interpret a browser frame as a driver control message. A bare string = a user message. PURE. */
-export function parseSdkClientFrame(raw: string): DriverControl | null {
-  const trimmed = raw.trim();
-  if (trimmed === "") return null;
-  if (trimmed.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(trimmed) as { type?: unknown; text?: unknown; id?: unknown; allow?: unknown };
-      if (parsed.type === "interrupt") return { type: "interrupt" };
-      if (parsed.type === "user" && typeof parsed.text === "string") return { type: "user", text: parsed.text };
-      if (parsed.type === "permission_decision" && typeof parsed.id === "string" && typeof parsed.allow === "boolean") {
-        return { type: "permission_decision", id: parsed.id, allow: parsed.allow };
-      }
-      return null;
-    } catch {
-      // not JSON — fall through and treat as a bare user message
-    }
-  }
-  return { type: "user", text: raw };
-}
-
-/**
- * Wire a driver child process to a websocket: NDJSON events out (one frame each), control lines in.
- * Both sides close together. Exported for the route; the child is spawned by the caller.
- */
-export interface BridgeHooks {
-  /** Called (deduplicated) whenever the driver reports a session id — the resume key to persist. */
-  onSessionId?: (sessionId: string) => void;
-  /** Every parsed driver event, after it went to the socket — the history recorder taps in here. */
-  onEvent?: (event: DriverEvent) => void;
-  /** Every parsed control from the browser, after it went to the driver's stdin. */
-  onControl?: (control: DriverControl) => void;
-}
-
-export function bridgeSdkDriver(
-  socket: WebSocket,
-  child: ChildProcessWithoutNullStreams,
-  label: string,
-  hooks: BridgeHooks = {},
-): void {
-  const { onSessionId, onEvent, onControl } = hooks;
-  disableNagle(socket);
-  const keepalive = setInterval(() => {
-    try { socket.ping?.(); } catch { /* the close handler cleans up */ }
-  }, KEEPALIVE_MS);
-
-  let buffer = "";
-  let lastSessionId: string | undefined;
-  child.stdout.on("data", (chunk: Buffer) => {
-    buffer += chunk.toString();
-    let nl: number;
-    while ((nl = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, nl);
-      buffer = buffer.slice(nl + 1);
-      const event = parseDriverLine(line);
-      if (event) {
-        // The session id is the RESUME key: persisting it on the card is what lets a reconnect (or
-        // reopening the card tomorrow) continue the same conversation. Deduplicated here so the
-        // registry is only touched when the id actually changes.
-        if (onSessionId && (event.type === "session" || event.type === "result")) {
-          const sessionId = event.sessionId;
-          if (sessionId && sessionId !== lastSessionId) {
-            lastSessionId = sessionId;
-            onSessionId(sessionId);
-          }
-        }
-        try { socket.send(JSON.stringify(event)); } catch { /* socket going away; teardown tidies */ }
-        onEvent?.(event);
-      }
-    }
-  });
-  child.stderr.on("data", (chunk: Buffer) => {
-    logger.debug({ label, stderr: chunk.toString().slice(0, 500) }, "sdk driver stderr");
-  });
-  child.on("close", (code) => {
-    clearInterval(keepalive);
-    try { socket.send(JSON.stringify({ type: "error", message: `driver exited (code ${code ?? "?"})` })); } catch { /* ignore */ }
-    try { socket.close(); } catch { /* already closed */ }
-    logger.debug({ label, code }, "sdk driver exited");
-  });
-
-  socket.on("message", (raw: Buffer) => {
-    const control = parseSdkClientFrame(raw.toString());
-    if (!control) return;
-    try { child.stdin.write(encodeControl(control)); } catch { /* driver gone; close will fire */ }
-    onControl?.(control);
-  });
-
-  const teardown = (): void => {
-    clearInterval(keepalive);
-    try { child.kill(); } catch { /* already gone */ }
-  };
-  socket.on("close", teardown);
-  socket.on("error", teardown);
-}
+// Re-exported for compatibility (tests, callers): the parser moved into the pure protocol module.
+export { parseSdkClientFrame };
 
 export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>(
@@ -165,12 +71,17 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
         socket.close();
         return;
       }
-      try {
-        await installCardSdkDriver();
-      } catch (err) {
-        try { socket.send(JSON.stringify({ type: "error", message: `could not install the driver in the runner: ${(err as Error).message}` })); } catch { /* ignore */ }
-        socket.close();
-        return;
+      // Whether the card's driver is ALREADY alive decides two things below: the install becomes a
+      // no-op check, and the spawn command's resume probe is only advisory (the live driver wins).
+      const driverAlive = hasDriverSession(card.id);
+      if (!driverAlive) {
+        try {
+          await installCardSdkDriver();
+        } catch (err) {
+          try { socket.send(JSON.stringify({ type: "error", message: `could not install the driver in the runner: ${(err as Error).message}` })); } catch { /* ignore */ }
+          socket.close();
+          return;
+        }
       }
       // ONE read-only probe: the newest transcript in the card's worktree. It answers two things —
       // which session the driver must RESUME (the card's one conversation, whichever mode wrote it
@@ -218,10 +129,6 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       } catch (err) {
         logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not replay sdk chat history");
       }
-      const { file, args } = sdkDriverCommand(project, {
-        ...card,
-        resumeSessionId: resumeTargetFor(card, latestSessionId),
-      });
       // WHO is typing on this socket — stamped on their messages so OTHER readers of this card see
       // the name (their own render unlabelled: the front compares it). Resolved once per connect.
       let wsOrigin: MessageOrigin | undefined;
@@ -233,8 +140,9 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
         } catch { /* unattributed beats broken */ }
       }
       // An agent's send (`vibehub_send_to_terminal`) — and every event the transcript MIRROR lifts
-      // from the terminal — lands in the history log, not on this socket's driver stdout. Forward
-      // them live so the conversation is visible as it happens, whichever screen it happens on.
+      // from the terminal — lands in the history log, not on the driver's stdout. Forward them live
+      // so the conversation is visible as it happens, whichever screen it happens on. (The driver's
+      // own events reach this socket through the manager's broadcast.)
       const offExternal = onExternalMessage(card.id, (event) => {
         try { socket.send(JSON.stringify(event)); } catch { /* socket going away */ }
       });
@@ -254,31 +162,19 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
         releaseMirror?.();
         releaseMirror = null;
       });
-      const child = spawn(file, args, { stdio: ["pipe", "pipe", "pipe"] }) as ChildProcessWithoutNullStreams;
-      logger.info({ card: card.worktreeSlug }, "sdk driver attached");
-      bridgeSdkDriver(socket, child, card.worktreeSlug, {
-        onSessionId: (sessionId) => {
-          // Persist the resume key on the card (board.json) so the NEXT driver spawn — a reconnect,
-          // a reopened card — continues this very conversation (`--resume` in sdkDriverCommand).
-          void registry.updateCard(card.id, { resumeSessionId: sessionId }).catch((err: unknown) => {
-            logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not persist the sdk session id");
-          });
-        },
-        // The history log is what the next connect replays: every event worth re-drawing, and the
-        // person's own messages (they cross on stdin, so stdout alone would forget them). Both are
-        // ALSO reported to the mirror: the driver's turns land in the transcript too, and without
-        // these keys the follow would bring every one of them around a second time.
-        onEvent: (event) => {
-          noteDriverEventFor(card.id, event);
-          if (replayableHistoryEvent(event)) void appendHistory(card.id, { ...event, at: Date.now() });
-        },
-        onControl: (control) => {
-          if (control.type === "user") {
-            noteDriverEventFor(card.id, control);
-            void appendHistory(card.id, { type: "user", text: control.text, at: Date.now(), from: wsOrigin });
-          }
-        },
+      // The card's ONE driver: reuse it live (mid-turn included — the reconnect after the reload),
+      // or spawn it resuming the newest transcript. History persistence, resume-id persistence and
+      // the mirror's dedupe keys all live in the manager — the side that survives this socket.
+      const session = ensureDriverSession({
+        cardId: card.id,
+        label: card.worktreeSlug,
+        command: sdkDriverCommand(project, {
+          ...card,
+          resumeSessionId: resumeTargetFor(card, latestSessionId),
+        }),
       });
+      attachSocket(session, socket, wsOrigin);
+      logger.info({ card: card.worktreeSlug, reattached: driverAlive }, "sdk chat attached");
     },
   );
 }
