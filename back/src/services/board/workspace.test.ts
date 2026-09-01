@@ -945,6 +945,24 @@ describe("restart (single and all) — a working card is protected", () => {
     expect((await reg.getCard(parked.id))?.restartPendingAt ?? null).toBeNull();
   });
 
+  it("restartStaggered: scoped to a project, it never touches another project's cards", async () => {
+    const alpha = await reg.createProject({ name: "alpha" });
+    const beta = await reg.createProject({ name: "beta" });
+    const a = await reg.createCard({ projectId: alpha.id, title: "A" });
+    const b = await reg.createCard({ projectId: beta.id, title: "B" });
+    for (const c of [a, b]) {
+      await ws.openCard(c.id);
+      await reg.applyCardStatus(c.id, "waiting");
+    }
+    runScript.mockClear();
+    const out = await ws.restartStaggered("brain", "tester", { projectId: alpha.id });
+    expect(out).toEqual({ restarted: 1, pending: 0 });
+    // only alpha's card had its session ended — beta's tmux session is nowhere in the scripts
+    const scripts = runScript.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(scripts).toContain(a.tmuxSession);
+    expect(scripts).not.toContain(b.tmuxSession);
+  });
+
   it("restartStaggered: the reason is recorded per card so the badge can tell brain from MCP", async () => {
     const p = await reg.createProject({ name: "x" });
     const busy = await reg.createCard({ projectId: p.id, title: "busy" });
@@ -1169,7 +1187,89 @@ describe("the brain (global CLAUDE.md) seeded on open", () => {
     vi.spyOn(brain, "resolveBrainText").mockRejectedValue(new Error("brain is corrupt"));
     const { card } = await seed();
     expect((await ws.openCard(card.id)).column).toBe("waiting");
-    expect(scriptAt(0)).not.toContain("CLAUDE.md");
+    expect(scriptAt(0)).not.toContain("CLAUDE.md'"); // CLAUDE.local.md (the project brain) may still appear
+  });
+});
+
+describe("the PROJECT brain (CLAUDE.local.md) seeded on open", () => {
+  it("with a saved project brain: written at the WORKTREE root, before tmux, and git-excluded", async () => {
+    const brain = await import("../brain/brain.js");
+    const { project, card } = await seed();
+    await brain.setProjectBrainText(project.id, "# Regras do projeto\nfilial explícita sempre");
+    await ws.openCard(card.id);
+    const script = scriptAt(0);
+    const wt = `/work/acme--erp-aux-worktrees/${card.worktreeSlug}`;
+    expect(script).toContain(`cat > '${wt}/CLAUDE.local.md' <<'VIBEHUB_BRAIN_TEXT_`);
+    expect(script).toContain("# Regras do projeto\nfilial explícita sempre");
+    expect(script.indexOf("CLAUDE.local.md")).toBeLessThan(script.indexOf("tmux new-session"));
+    // never dirties the repo: excluded through the clone's info/exclude (shared by every worktree)
+    expect(script).toContain(`grep -qxF 'CLAUDE.local.md' "$REPO_DIR/.git/info/exclude"`);
+    expect(script).toContain(`echo 'CLAUDE.local.md' >> "$REPO_DIR/.git/info/exclude"`);
+  });
+
+  it("with NO project brain: the file is removed (kept in sync), not written", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    const script = scriptAt(0);
+    expect(script).toContain(`rm -f '/work/acme--erp-aux-worktrees/${card.worktreeSlug}/CLAUDE.local.md'`);
+    expect(script).not.toContain("cat > '/work/acme--erp-aux-worktrees");
+  });
+
+  it("a scratch project (no repo) gets it too — in the scratch directory, with no git exclude", async () => {
+    const brain = await import("../brain/brain.js");
+    const { project, card } = await seed(false);
+    await brain.setProjectBrainText(project.id, "cérebro do scratch");
+    await ws.openCard(card.id);
+    const script = scriptAt(0);
+    expect(script).toContain(`cat > '/work/scratch/${card.worktreeSlug}/CLAUDE.local.md'`);
+    expect(script).not.toContain("info/exclude");
+  });
+
+  it("a broken project brain does not block the open (best-effort)", async () => {
+    const brain = await import("../brain/brain.js");
+    vi.spyOn(brain, "resolveProjectBrainText").mockRejectedValue(new Error("store is corrupt"));
+    const { card } = await seed();
+    expect((await ws.openCard(card.id)).column).toBe("waiting");
+    expect(scriptAt(0)).not.toContain("CLAUDE.local.md' <<");
+  });
+});
+
+describe("applyProjectBrainEverywhere", () => {
+  it("writes into every worktree of THAT project — and into NO other project's", async () => {
+    const brain = await import("../brain/brain.js");
+    const alpha = await reg.createProject({ name: "alpha", repoFullName: "acme/alpha" });
+    const beta = await reg.createProject({ name: "beta", repoFullName: "acme/beta" });
+    const a1 = await reg.createCard({ projectId: alpha.id, title: "A1" });
+    const a2 = await reg.createCard({ projectId: alpha.id, title: "A2" });
+    const b1 = await reg.createCard({ projectId: beta.id, title: "B1" });
+    await brain.setProjectBrainText(alpha.id, "SÓ DO ALPHA");
+
+    const out = await ws.applyProjectBrainEverywhere(alpha.id, "tester");
+    expect(out).toEqual({ cards: 2, bytes: Buffer.byteLength("SÓ DO ALPHA") });
+    expect(runScript).toHaveBeenCalledTimes(1);
+    const script = scriptAt(0);
+    expect(script).toContain(`/work/acme--alpha-worktrees/${a1.worktreeSlug}/CLAUDE.local.md`);
+    expect(script).toContain(`/work/acme--alpha-worktrees/${a2.worktreeSlug}/CLAUDE.local.md`);
+    expect(script).not.toContain("acme--beta-worktrees");
+    expect(script).not.toContain(b1.worktreeSlug);
+    // guarded per worktree: a card whose workspace was never provisioned is skipped, not created
+    expect(script).toContain(`if [ -d '/work/acme--alpha-worktrees/${a1.worktreeSlug}' ]; then`);
+  });
+
+  it("an empty project brain REMOVES the file from the worktrees", async () => {
+    const alpha = await reg.createProject({ name: "alpha", repoFullName: "acme/alpha" });
+    const a1 = await reg.createCard({ projectId: alpha.id, title: "A1" });
+    const out = await ws.applyProjectBrainEverywhere(alpha.id);
+    expect(out.bytes).toBe(0);
+    expect(scriptAt(0)).toContain(`rm -f '/work/acme--alpha-worktrees/${a1.worktreeSlug}/CLAUDE.local.md'`);
+  });
+
+  it("no cards = no host call; unknown project = error", async () => {
+    const alpha = await reg.createProject({ name: "alpha", repoFullName: "acme/alpha" });
+    const out = await ws.applyProjectBrainEverywhere(alpha.id);
+    expect(out).toEqual({ cards: 0, bytes: 0 });
+    expect(runScript).not.toHaveBeenCalled();
+    await expect(ws.applyProjectBrainEverywhere("nope")).rejects.toThrow(/project not found/);
   });
 });
 

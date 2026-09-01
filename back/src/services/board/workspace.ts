@@ -15,7 +15,9 @@ import { firstRunSeedCommand } from "../accounts/firstRun.js";
 import { resolveAccountToken, writeTokenLines, ghTokenPath, writeGhTokenLines, removeGhTokenLines } from "../accounts/token.js";
 import { cardCdpEndpoint } from "../browser/ports.js";
 import { mcpInjectLines, resolveMcpInjections, type McpInjection } from "../mcp/mcp.js";
-import { brainInjectLines, resolveBrainText } from "../brain/brain.js";
+import {
+  brainInjectLines, resolveBrainText, projectBrainWriteLines, resolveProjectBrainText, PROJECT_BRAIN_FILE,
+} from "../brain/brain.js";
 import { logger } from "../../utils/logger.js";
 
 export { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir };
@@ -221,6 +223,13 @@ export interface OpenScriptOpts {
    * when the text changed.
    */
   brain?: string;
+  /**
+   * The PROJECT brain, written as CLAUDE.local.md at the ROOT of the card's worktree — Claude Code
+   * loads it natively as project memory in both the TUI and the SDK driver. Written on EVERY open
+   * (a cat over stdin costs nothing next to the clone/fetch) so the file can never go stale; empty
+   * string = removed. `undefined` = do not touch it.
+   */
+  projectBrain?: string;
   /** Present = the project has a repository: clone/fetch/worktree before tmux. */
   repo?: {
     dir: string;
@@ -319,6 +328,18 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
   // The brain (global CLAUDE.md) seeded into the card's effective profile — idempotent by signature,
   // so reopening a card rewrites nothing; new text is picked up on the next open.
   if (opts.brain) inner.push(...brainInjectLines([opts.accountConfigDir], opts.brain));
+  // The PROJECT brain, as CLAUDE.local.md at the worktree root (project memory for both the TUI and
+  // the SDK driver). Kept OUT of git through the clone's info/exclude — shared by every worktree of
+  // the clone, and added idempotently even when the project has no brain yet, so a text saved while
+  // a card is already open never shows up as an untracked file.
+  if (opts.repo) {
+    inner.push(
+      `if [ -d "$REPO_DIR/.git" ] && ! grep -qxF ${shQuote(PROJECT_BRAIN_FILE)} "$REPO_DIR/.git/info/exclude" 2>/dev/null; then`,
+      `  mkdir -p "$REPO_DIR/.git/info" && echo ${shQuote(PROJECT_BRAIN_FILE)} >> "$REPO_DIR/.git/info/exclude"`,
+      `fi`,
+    );
+  }
+  if (opts.projectBrain !== undefined) inner.push(...projectBrainWriteLines(opts.cwd, opts.projectBrain));
   inner.push(
     // With no tty (bash -s through docker exec -i), `new-session -A` on an existing session becomes
     // an attach and exits with "open terminal failed" — the guard creates the session ONLY when it
@@ -605,6 +626,13 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
     } catch (e) {
       logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "brain not seeded on open (continuing)");
     }
+    // The PROJECT brain (CLAUDE.local.md in the worktree): same best-effort rule as the global one.
+    let projectBrain: string | undefined;
+    try {
+      projectBrain = await resolveProjectBrainText(project.id);
+    } catch (e) {
+      logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "project brain not seeded on open (continuing)");
+    }
 
     const script = buildOpenScript({
       containerName: config.runner.container,
@@ -620,6 +648,7 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
       ghToken,
       mcps,
       brain,
+      projectBrain,
       repo,
     });
     try {
@@ -1272,8 +1301,13 @@ export async function restartAllCards(by?: string): Promise<{ restarted: number;
 export async function restartStaggered(
   reason: RestartReason,
   by?: string,
+  opts: { projectId?: string } = {},
 ): Promise<{ restarted: number; pending: number }> {
-  const live = (await listAllCards()).filter(hasLiveSession);
+  // `projectId` scopes the sweep (a PROJECT brain save only concerns that project's cards — bouncing
+  // every other project's terminals for it would be noise). Absent = the whole board, as before.
+  const live = (await listAllCards()).filter(
+    (c) => hasLiveSession(c) && (!opts.projectId || c.projectId === opts.projectId),
+  );
   const idle = cardsToRestart(live); // live session and NOT working
   const working = live.filter((c) => c.status === "working"); // live session AND working
   await Promise.allSettled(idle.map((c) => restartCard(c.id, by)));
@@ -1283,6 +1317,41 @@ export async function restartStaggered(
     "staggered restart after applying the brain/MCPs — idle cards restarted now, working cards flagged as pending",
   );
   return { restarted: idle.length, pending: working.length };
+}
+
+/**
+ * WRITES the PROJECT brain (CLAUDE.local.md) into every EXISTING worktree of that project's cards —
+ * and ONLY that project's: the sweep filters the board by projectId, and each write is guarded by
+ * `[ -d <worktree> ]` so a card whose workspace was never provisioned is skipped, not created. An
+ * empty text removes the file everywhere instead of leaving it stale. One host call. It lives here
+ * (not in brain.ts) because it needs the card→worktree mapping, and workspace already imports brain.
+ */
+export async function applyProjectBrainEverywhere(
+  projectId: string,
+  by?: string,
+): Promise<{ cards: number; bytes: number }> {
+  const project = await getProject(projectId);
+  if (!project) throw new Error("project not found");
+  const text = await resolveProjectBrainText(projectId);
+  const bytes = Buffer.byteLength(text);
+  const cards = (await listAllCards()).filter((c) => c.projectId === projectId);
+  if (cards.length) {
+    const lines = ["set -e", `docker exec -i ${shQuote(config.runner.container)} bash -s <<'${OPEN_DELIM}'`];
+    for (const card of cards) {
+      lines.push(...projectBrainWriteLines(cardWorkPaths(project, card).cwd, text));
+    }
+    lines.push(OPEN_DELIM);
+    try {
+      await hostExecutor().runScript(lines.join("\n"), { timeoutMs: 300_000 });
+    } catch (err) {
+      throw runnerUnreachable(err);
+    }
+  }
+  logger.info(
+    { audit: true, action: "brain.project.apply", project: projectId, cards: cards.length, bytes, by },
+    "project brain applied to the project's worktrees",
+  );
+  return { cards: cards.length, bytes };
 }
 
 /**
