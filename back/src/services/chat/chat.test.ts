@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  isHarnessFiller,
   parseChatEvents,
   toolSummary,
   clampDetail,
@@ -133,6 +134,40 @@ describe("parseChatEvents", () => {
       }),
     );
     expect(events).toEqual([{ id: "u3", kind: "user", at: Date.parse("2026-08-22T18:00:00.000Z"), text: "olha isso" }]);
+  });
+});
+
+describe("harness filler — the canned pair a killed turn leaves in the transcript", () => {
+  // Seen twice in production (2026-08-31): a deploy killed the driver mid-turn; on resume the
+  // harness wrote "[Request interrupted by user]" + "No response requested." into the transcript,
+  // and the chat showed the pair as if Claude had dismissed the person's next message.
+  it("drops '[Request interrupted by user]' and 'No response requested.' — they are not conversation", () => {
+    const events = parseChatEvents(
+      [
+        userLine("[Request interrupted by user]"),
+        assistantLine([{ type: "text", text: "No response requested." }]),
+        userLine("e aí, como tá indo?", { uuid: "u2" }),
+        assistantLine([{ type: "text", text: "Indo bem — retomando." }], { uuid: "a2" }),
+      ].join("\n"),
+    );
+    expect(events.map((e) => e.text)).toEqual(["e aí, como tá indo?", "Indo bem — retomando."]);
+  });
+
+  it("drops the tool-use variant and the string-content assistant shape too", () => {
+    const events = parseChatEvents(
+      [
+        userLine("[Request interrupted by user for tool use]"),
+        assistantLine([], { message: { role: "assistant", content: "No response requested." } }),
+      ].join("\n"),
+    );
+    expect(events).toEqual([]);
+  });
+
+  it("isHarnessFiller is exact: a real sentence that merely contains the words passes through", () => {
+    expect(isHarnessFiller("assistant", "No response requested.")).toBe(true);
+    expect(isHarnessFiller("assistant", "No response requested by anyone, but here it is.")).toBe(false);
+    expect(isHarnessFiller("user", "[Request interrupted by user]")).toBe(true);
+    expect(isHarnessFiller("user", "fala sobre [Request interrupted by user]")).toBe(false);
   });
 });
 
