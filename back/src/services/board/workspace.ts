@@ -340,7 +340,7 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
       ` -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8` +
       // Non-default account: the session's Claude uses the account profile (isolated credentials/state).
       (opts.accountConfigDir ? ` -e CLAUDE_CONFIG_DIR=${shQuote(opts.accountConfigDir)}` : "") +
-      ` ${shQuote(sessionCommand({ resume: !!opts.resume, resumeSessionId: opts.resumeSessionId, profileDir, model: opts.model, ghTokenFile: opts.ghToken ? ghTokenPath(opts.cardId) : undefined }))}`,
+      ` ${shQuote(sessionCommand({ resume: !!opts.resume, resumeSessionId: opts.resumeSessionId, profileDir, model: opts.model, ghTokenFile: ghTokenPath(opts.cardId) }))}`,
   );
   return [
     "set -e",
@@ -433,10 +433,12 @@ export function cardAttachArgs(
     resume: !!card.openedAt,
     resumeSessionId: card.resumeSessionId,
     model: card.model,
-    // Only when the project has a GitHub connection: the session then exports GH_TOKEN from the
-    // per-card file a prior /open wrote (the export is still `[ -s ]`-guarded). The PATH is safe in
-    // argv; the token itself never is. No connection = the runner's ambient gh login, unchanged.
-    ghTokenFile: project.githubConnectionId ? ghTokenPath(card.id) : undefined,
+    // Always the card's token file: the session exports GH_TOKEN from what a prior /open wrote
+    // (the export is `[ -s ]`-guarded, so no file = no export). The open writes it whenever ANY
+    // GitHub account is connected — projects with no explicit connection use the first one, same
+    // as the clone — so gh in the card acts as the configured account, never the ambient login.
+    // The PATH is safe in argv; the token itself never is.
+    ghTokenFile: ghTokenPath(card.id),
     shell: opts.shell,
   });
 }
@@ -576,16 +578,16 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
     // The account's long-lived token (vault) — seeded into the profile inside the script (stdin).
     const oauthToken = await resolveAccountToken(accountSlug);
     // The PROJECT's GitHub connection token, so the card's own git push / gh pr act as that identity
-    // (e.g. a personal repo the runner's org login can only read). BEST-EFFORT: a missing/unconfigured
-    // connection must not stop a card from opening — absent means the token file is removed and the
-    // card falls back to the runner's ambient gh login.
+    // — the SAME resolution the clone uses (`githubConnectionId`; absent = the first connected
+    // account), so a project that names no connection still operates as the configured account and
+    // NEVER as the runner's ambient gh login. BEST-EFFORT: a missing/unconfigured connection must
+    // not stop a card from opening — absent means the token file is removed and only then does the
+    // card fall back to the ambient login (install with no GitHub account connected).
     let ghToken: string | undefined;
-    if (project.githubConnectionId) {
-      try {
-        ghToken = await tokenFor(project.githubConnectionId);
-      } catch (e) {
-        logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "GitHub connection token not resolved on open (ambient gh login)");
-      }
+    try {
+      ghToken = await tokenFor(project.githubConnectionId);
+    } catch (e) {
+      logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "GitHub connection token not resolved on open (ambient gh login)");
     }
     // Managed MCPs: BEST-EFFORT on open (a missing secret must not stop a card from opening — the
     // "apply" button in the UI is the path that fails loudly and names what is missing).

@@ -38,6 +38,14 @@ const guard = (dir = "/root/.claude") =>
   `${firstRunSeedCommand(dir, '"$PWD"')}; `;
 const CLAUDE = `${guard()}claude; exec bash`;
 const CLAUDE_C = `${guard()}claude -c || claude; exec bash`;
+/** The per-card GH_TOKEN guard every CARD session carries (`[ -s ]`-guarded: no file, no export). */
+const ghGuardFor = (cardId: string) => {
+  const f = `/root/.vibehub/gh/${cardId}.token`;
+  return `if [ -s ${f} ]; then export GH_TOKEN="$(cat ${f})"; fi; `;
+};
+/** Card-flow session commands (open script / attach): the plain ones PLUS the gh-token guard. */
+const claudeFor = (cardId: string, dir?: string) => `${guard(dir)}${ghGuardFor(cardId)}claude; exec bash`;
+const claudeCFor = (cardId: string, dir?: string) => `${guard(dir)}${ghGuardFor(cardId)}claude -c || claude; exec bash`;
 /** The session command as it appears INSIDE a script: one shell-quoted argument (it contains quotes of its own). */
 const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
@@ -211,7 +219,7 @@ describe("openCard", () => {
     expect(script).toContain(`VIBEHUB_CARD_ID='${card.id}'`);
     expect(script).toContain(`VIBEHUB_STATUS_URL='${STATUS_URL}'`);
     expect(script).toContain(`PW_CDP_ENDPOINT='${cardCdpEndpoint(card.id)}'`);
-    expect(script).toContain(sq(CLAUDE));
+    expect(script).toContain(sq(claudeFor(card.id)));
 
     // the open rule: backlog → waiting
     expect(updated.column).toBe("waiting");
@@ -264,7 +272,7 @@ describe("openCard", () => {
     // idempotent: reopening produces the SAME script except for the Claude command — the second open
     // (openedAt) resumes the conversation with `claude -c || claude`
     await ws.openCard(card.id);
-    expect(scriptAt(1).replace(sq(CLAUDE_C), sq(CLAUDE))).toBe(script);
+    expect(scriptAt(1).replace(sq(claudeCFor(card.id)), sq(claudeFor(card.id)))).toBe(script);
   });
 
   it("open is idempotent about columns: a card in done does NOT leave done", async () => {
@@ -450,7 +458,7 @@ describe("terminalRemoteArgs / cardAttachArgs (the websocket's COMPLETE attach-o
     expect(sh.at(-1)).toBe("exec bash");
   });
 
-  it("a project WITH a GitHub connection points the session at the per-card gh-token file — the PATH, never the token", async () => {
+  it("the attach ALWAYS points the session at the per-card gh-token file — the PATH, never the token", async () => {
     const conn = await reg.addGithubConnection({ login: "cesarvcanal" });
     const { project, card } = await seed();
     const p = await reg.updateProject(project.id, { githubConnectionId: conn.id });
@@ -458,10 +466,14 @@ describe("terminalRemoteArgs / cardAttachArgs (the websocket's COMPLETE attach-o
     const cmd = ws.cardAttachArgs(CONTAINER, p, card).at(-1) as string;
     expect(cmd).toContain(`if [ -s /root/.vibehub/gh/${card.id}.token ]`);
     expect(cmd).toContain('export GH_TOKEN="$(cat /root/.vibehub/gh/');
-    // a project WITHOUT a connection gets no GH_TOKEN guard at all
-    expect(ws.cardAttachArgs(CONTAINER, project, card).at(-1)).not.toContain("GH_TOKEN");
+    // a project WITHOUT an explicit connection carries the SAME guard: the open writes the file
+    // whenever any GitHub account is connected (first-account fallback), and `[ -s ]` makes the
+    // guard a no-op when the file is absent — gh never silently falls back to the org login.
+    const plain = ws.cardAttachArgs(CONTAINER, project, card).at(-1) as string;
+    expect(plain).toContain(`if [ -s /root/.vibehub/gh/${card.id}.token ]`);
     // and the token itself is NEVER in argv, connection or not
     expect(ws.cardAttachArgs(CONTAINER, p, card).join(" ")).not.toContain(TOKEN);
+    expect(plain).not.toContain(TOKEN);
   });
 
   it("cardTerminalCommandLine quotes every element, and cardTerminalCommand goes through the host executor", async () => {
@@ -469,7 +481,7 @@ describe("terminalRemoteArgs / cardAttachArgs (the websocket's COMPLETE attach-o
     const line = ws.cardTerminalCommandLine(CONTAINER, project, card);
     expect(line.startsWith("'docker' 'exec' '-it'")).toBe(true);
     // the claude command is ONE argument, whatever is inside it
-    expect(line).toContain(sq(CLAUDE));
+    expect(line).toContain(sq(claudeFor(card.id)));
 
     const cmd = ws.cardTerminalCommand(project, card);
     expect(ptyCommand).toHaveBeenCalledWith(line);
@@ -550,12 +562,12 @@ describe("pause / resume (the session dies; reopening returns to the SAME conver
     const { card } = await seed();
     await ws.openCard(card.id);
     const tmux1 = scriptAt(0).split("\n").find((l) => l.includes("tmux new-session"))!;
-    expect(tmux1).toContain(sq(CLAUDE));
+    expect(tmux1).toContain(sq(claudeFor(card.id)));
     expect(tmux1).not.toContain("claude -c");
 
     await ws.openCard(card.id); // the board now has openedAt
     const tmux2 = scriptAt(1).split("\n").find((l) => l.includes("tmux new-session"))!;
-    expect(tmux2).toContain(sq(CLAUDE_C));
+    expect(tmux2).toContain(sq(claudeCFor(card.id)));
     expect(tmux2).toMatch(/tmux has-session -t '[^']+' 2>\/dev\/null \|\| LANG=C\.UTF-8 LC_ALL=C\.UTF-8 tmux new-session -d/);
   });
 
@@ -566,25 +578,25 @@ describe("pause / resume (the session dies; reopening returns to the SAME conver
     expect(ws.terminalRemoteArgs("c", "card-1", "/w", { ...base, resume: true, shell: true }).at(-1)).toBe("exec bash");
 
     const { project, card } = await seed();
-    expect(ws.cardAttachArgs(CONTAINER, project, card).at(-1)).toBe(CLAUDE);
+    expect(ws.cardAttachArgs(CONTAINER, project, card).at(-1)).toBe(claudeFor(card.id));
     const opened = (await reg.applyOpenTerminal(card.id))!;
-    expect(ws.cardAttachArgs(CONTAINER, project, opened).at(-1)).toBe(CLAUDE_C);
+    expect(ws.cardAttachArgs(CONTAINER, project, opened).at(-1)).toBe(claudeCFor(card.id));
     // a PAUSED card (openedAt stays, pausedAt stamped): the websocket attach already resumes on its own
     const paused = await reg.pauseCard(card.id);
     expect(paused.pausedAt).toBeTypeOf("number");
-    expect(ws.cardAttachArgs(CONTAINER, project, paused).at(-1)).toBe(CLAUDE_C);
+    expect(ws.cardAttachArgs(CONTAINER, project, paused).at(-1)).toBe(claudeCFor(card.id));
   });
 
   it("an IMPORTED session drives both the open and the attach; clearing it goes back to -c", async () => {
     const { project, card } = await seed();
     const c = await reg.updateCard(card.id, { resumeSessionId: SID });
     await ws.openCard(c.id);
-    expect(scriptAt(0)).toContain(sq(`${guard()}claude --resume ${SID} || claude -c || claude; exec bash`));
-    expect(ws.cardAttachArgs(CONTAINER, project, c).at(-1)).toBe(`${guard()}claude --resume ${SID} || claude -c || claude; exec bash`);
+    expect(scriptAt(0)).toContain(sq(`${guard()}${ghGuardFor(card.id)}claude --resume ${SID} || claude -c || claude; exec bash`));
+    expect(ws.cardAttachArgs(CONTAINER, project, c).at(-1)).toBe(`${guard()}${ghGuardFor(card.id)}claude --resume ${SID} || claude -c || claude; exec bash`);
     expect(ws.cardAttachArgs(CONTAINER, project, c, { shell: true }).at(-1)).toBe("exec bash");
 
     const cleared = await reg.updateCard(card.id, { resumeSessionId: null });
-    expect(ws.cardAttachArgs(CONTAINER, project, cleared).at(-1)).toBe(CLAUDE_C);
+    expect(ws.cardAttachArgs(CONTAINER, project, cleared).at(-1)).toBe(claudeCFor(card.id));
   });
 
   it("the card's own branch: origin/<branch> when it already exists remotely, else the base", async () => {
@@ -696,7 +708,7 @@ describe("pause / resume (the session dies; reopening returns to the SAME conver
     const resumed = await ws.openCard(card.id);
     expect(resumed.pausedAt).toBeNull();
     expect(resumed.column).toBe("waiting");
-    expect(lastScript()).toContain(sq(CLAUDE_C));
+    expect(lastScript()).toContain(sq(claudeCFor(card.id)));
   });
 });
 
@@ -1081,7 +1093,7 @@ describe("long-lived token seeded on open (from the vault) and the session guard
     expect(script).toContain("chmod 600 '/root/.claude/.oauth-token'");
     // the seed comes BEFORE tmux (the session is born with the file already there)
     expect(script.indexOf(".oauth-token'")).toBeLessThan(script.indexOf("tmux new-session"));
-    expect(script).toContain(sq(CLAUDE));
+    expect(script).toContain(sq(claudeFor(card.id)));
     for (const call of infoSpy.mock.calls) expect(JSON.stringify(call)).not.toContain(OAUTH);
   });
 
@@ -1094,14 +1106,14 @@ describe("long-lived token seeded on open (from the vault) and the session guard
     await ws.openCard(card.id);
     const script = scriptAt(0);
     expect(script).toContain(`printf '%s' '${OAUTH}' > '/root/.claude-profiles/personal/.oauth-token'`);
-    expect(script).toContain(sq(`${guard("/root/.claude-profiles/personal")}claude; exec bash`));
+    expect(script).toContain(sq(claudeFor(card.id, "/root/.claude-profiles/personal")));
     expect(script).not.toContain("/root/.claude/.oauth-token");
 
     // another card on the default account with NO token: no printf, but the (harmless) guard stays
     const b = await reg.createCard({ projectId: card.projectId, title: "B" });
     await ws.openCard(b.id);
     expect(scriptAt(1)).not.toContain("printf '%s' 'sk-ant");
-    expect(scriptAt(1)).toContain(sq(CLAUDE));
+    expect(scriptAt(1)).toContain(sq(claudeFor(b.id)));
   });
 });
 
@@ -1176,7 +1188,7 @@ describe("pre-provisioning (prepareCard) and the per-clone lock", () => {
     expect(script).toContain("git clone");
     expect(script).toContain("worktree add");
     expect(script).toContain("tmux new-session");
-    expect(script).toContain(sq(CLAUDE)); // first session: plain claude, no -c
+    expect(script).toContain(sq(claudeFor(card.id))); // first session: plain claude, no -c
 
     expect(prep.preparedAt).toBeTypeOf("number");
     expect(prep.column).toBe("backlog");
@@ -1474,7 +1486,7 @@ describe("session probe (busy / idle / gone) and the pending-pause reconciler", 
     expect(resumed.pausedAt).toBeNull();
     expect(resumed.openedAt).toBeTypeOf("number");
     // Same conversation: the session is recreated with `claude -c`.
-    expect(lastScript()).toContain(sq(CLAUDE_C));
+    expect(lastScript()).toContain(sq(claudeCFor(card.id)));
   });
 });
 
@@ -1510,11 +1522,44 @@ describe("card push as the project's GitHub connection (GH_TOKEN)", () => {
     expect(script).not.toContain(`GH_TOKEN="${GH}"`);
   });
 
-  it("open WITHOUT a connection removes the token file (kept in sync) and emits no GH_TOKEN guard", () => {
+  it("open WITHOUT a token removes the file (kept in sync) — the session guard stays, `[ -s ]` makes it a no-op", () => {
     const script = ws.buildOpenScript(openOpts);
     expect(script).toContain("rm -f '/root/.vibehub/gh/id-1.token'");
-    expect(script).not.toContain("GH_TOKEN");
+    // the guard is still emitted (the path is constant per card), but the file it reads is gone
+    expect(script).toContain(ghGuard("/root/.vibehub/gh/id-1.token"));
     expect(script).not.toContain(GH);
+  });
+
+  it("openCard resolves the token even WITHOUT an explicit connection (first-account fallback) — gh in the card never acts as the ambient login", async () => {
+    const gh = await import("../github/client.js");
+    vi.mocked(gh.tokenFor).mockResolvedValueOnce(GH);
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    // resolved through the SAME rule the clone uses: the project named no connection (undefined),
+    // and tokenFor falls back to the first connected account
+    expect(gh.tokenFor).toHaveBeenCalledWith(undefined);
+    const script = lastScript();
+    expect(script).toContain(`printf '%s' '${GH}' > '/root/.vibehub/gh/${card.id}.token'`);
+    expect(script).toContain(`chmod 600 '/root/.vibehub/gh/${card.id}.token'`);
+    expect(script).toContain(ghGuard(`/root/.vibehub/gh/${card.id}.token`));
+  });
+
+  it("openCard passes the project's EXPLICIT connection id through to tokenFor", async () => {
+    const gh = await import("../github/client.js");
+    vi.mocked(gh.tokenFor).mockResolvedValueOnce(GH);
+    const conn = await reg.addGithubConnection({ login: "cesarvcanal" });
+    const { project, card } = await seed();
+    await reg.updateProject(project.id, { githubConnectionId: conn.id });
+    await ws.openCard(card.id);
+    expect(gh.tokenFor).toHaveBeenCalledWith(conn.id);
+  });
+
+  it("openCard with NO GitHub account at all (tokenFor throws): opens anyway and removes the token file", async () => {
+    const gh = await import("../github/client.js");
+    vi.mocked(gh.tokenFor).mockRejectedValueOnce(new Error("GitHub is not connected"));
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    expect(lastScript()).toContain(`rm -f '/root/.vibehub/gh/${card.id}.token'`);
   });
 });
 
