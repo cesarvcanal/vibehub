@@ -63,6 +63,9 @@ export const en: Record<string, string> = {
   "account.signedIn": "Signed in",
   "account.settings": "Settings",
   "account.signOut": "Sign out",
+  "account.preferences": "Preferences",
+  "account.editUser": "Edit user",
+  "account.editUserHint": "Your account ({name}): set a new password.",
   "account.access": "Access",
 
   /* ---------------------------------------------------------------- access */
@@ -92,6 +95,15 @@ export const en: Record<string, string> = {
   "access.removed": "Account removed",
   "access.ownPassword": "Your password",
   "access.ownPasswordChanged": "Password changed",
+  "access.sharedProjects": "Shared projects",
+  "access.noSharedProjects": "No projects shared.",
+  "access.addProject": "Add project…",
+  "access.addProjectFor": "Add a project for {name}",
+  "access.addLevelFor": "Access level for {name}",
+  "access.shareProjectWith": "Share with {name}",
+  "access.unshareProject": "Remove {project} from {name}",
+  "access.projectShared": "Project shared with {name}.",
+  "access.projectUnshared": "Share removed from {name}.",
 
   /* ----------------------------------------------------------------- share */
   "share.cardTitle": "Share this card",
@@ -117,6 +129,7 @@ export const en: Record<string, string> = {
   "theme.labelSystem": "Theme: follow system",
   "theme.labelDark": "Theme: dark",
   "theme.labelLight": "Theme: light",
+  "theme.menuLabel": "Theme",
 
   /* ------------------------------------------------------------------ setup */
   "setup.readingState": "Reading setup state",
@@ -307,6 +320,7 @@ export const en: Record<string, string> = {
   "sidebar.switchProject": "Switch project",
   "sidebar.allProjects": "All projects",
   "sidebar.newGlobalCard": "New card…",
+  "sidebar.shareProject": "Share project {name}",
   "sidebar.newCardIn": "New card in {name}",
   "sidebar.newCardHint": "New card (⌘K on the selected project)",
   "sidebar.noProjects": "No projects yet.",
@@ -615,6 +629,7 @@ export const en: Record<string, string> = {
   "settings.name": "Name",
   "settings.email": "Email",
   "settings.agent": "Agent",
+  "settings.managers": "Agent & runner",
   "settings.autonomous": "Run without permission prompts",
   "settings.autonomousHint":
     "The runner is an isolated container — what it reaches is what you connected. Off = Claude asks, and the card waits.",

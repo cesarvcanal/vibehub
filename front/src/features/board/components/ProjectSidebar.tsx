@@ -378,6 +378,7 @@ function ProjectSwitcher({
   // Controlled: a plain click on a project link preventDefaults (to stop a full-page nav), and Radix
   // SKIPS its own onSelect when the click was defaultPrevented — so we close the menu ourselves.
   const [open, setOpen] = React.useState(false);
+  const [shareOpen, setShareOpen] = React.useState(false);
   return (
     <div className="flex shrink-0 items-center gap-0.5 border-b border-border/60 py-1 pl-1.5 pr-1.5">
       <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -439,6 +440,24 @@ function ProjectSwitcher({
         >
           <Plus className="h-4 w-4" />
         </Button>
+      ) : null}
+      {/* Sharing, IN THE OPEN: it lived only in the row's right-click menu, and the owner explored
+          the whole screen without finding it. The header of the open project is where the eye
+          looks for "who else sees this". Owner-only — the routes behind it are requireOwner. */}
+      {canManage ? (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+          aria-label={t("sidebar.shareProject", { name: current.name })}
+          title={t("sidebar.shareProject", { name: current.name })}
+          onClick={() => setShareOpen(true)}
+        >
+          <Share2 className="h-3.5 w-3.5" />
+        </Button>
+      ) : null}
+      {shareOpen ? (
+        <ShareDialog kind="project" targetId={current.id} title={current.name} open onOpenChange={setShareOpen} />
       ) : null}
     </div>
   );

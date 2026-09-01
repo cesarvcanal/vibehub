@@ -63,6 +63,9 @@ export const ptBR: Record<string, string> = {
   "account.signedIn": "Conectado como",
   "account.settings": "Configurações",
   "account.signOut": "Sair",
+  "account.preferences": "Preferências",
+  "account.editUser": "Editar usuário",
+  "account.editUserHint": "Sua conta ({name}): defina uma nova senha.",
   "account.access": "Acessos",
 
   /* --------------------------------------------------------------- acessos */
@@ -92,6 +95,15 @@ export const ptBR: Record<string, string> = {
   "access.removed": "Conta removida",
   "access.ownPassword": "Sua senha",
   "access.ownPasswordChanged": "Senha trocada",
+  "access.sharedProjects": "Projetos compartilhados",
+  "access.noSharedProjects": "Nenhum projeto compartilhado.",
+  "access.addProject": "Adicionar projeto…",
+  "access.addProjectFor": "Adicionar projeto pra {name}",
+  "access.addLevelFor": "Nível de acesso pra {name}",
+  "access.shareProjectWith": "Compartilhar com {name}",
+  "access.unshareProject": "Tirar {project} de {name}",
+  "access.projectShared": "Projeto compartilhado com {name}.",
+  "access.projectUnshared": "Compartilhamento removido de {name}.",
 
   /* ------------------------------------------------------ compartilhamento */
   "share.cardTitle": "Compartilhar este card",
@@ -117,6 +129,7 @@ export const ptBR: Record<string, string> = {
   "theme.labelSystem": "Tema: seguir o sistema",
   "theme.labelDark": "Tema: escuro",
   "theme.labelLight": "Tema: claro",
+  "theme.menuLabel": "Tema",
 
   /* ---------------------------------------------------------- configuração */
   "setup.readingState": "Lendo o estado da configuração",
@@ -308,6 +321,7 @@ export const ptBR: Record<string, string> = {
   "sidebar.switchProject": "Trocar de projeto",
   "sidebar.allProjects": "Todos os projetos",
   "sidebar.newGlobalCard": "Novo card…",
+  "sidebar.shareProject": "Compartilhar projeto {name}",
   "sidebar.newCardIn": "Novo card em {name}",
   "sidebar.newCardHint": "Novo card (⌘K no projeto selecionado)",
   "sidebar.noProjects": "Nenhum projeto ainda.",
@@ -621,6 +635,7 @@ export const ptBR: Record<string, string> = {
   "settings.name": "Nome",
   "settings.email": "E-mail",
   "settings.agent": "Agente",
+  "settings.managers": "Agente e runner",
   "settings.autonomous": "Rodar sem pedir permissão",
   "settings.autonomousHint":
     "O runner é um container isolado — ele alcança só o que você conectou. Desligado = o Claude pergunta, e o card espera.",

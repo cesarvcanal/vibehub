@@ -182,3 +182,41 @@ describe("role-aware UI — the sidebar without management", () => {
     expect(await screen.findByRole("button", { name: "New card in billing" })).toBeInTheDocument();
   });
 });
+
+describe("the focused project's header — sharing in the open", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function renderFocused(canManage: boolean) {
+    renderApp(
+      <ProjectSidebar
+        projects={[project]}
+        selectedProjectId="p1"
+        selectedCardId={null}
+        mobileOpen={false}
+        onCloseMobile={vi.fn()}
+        onSelectProject={vi.fn()}
+        onOpenCard={vi.fn()}
+        onReorder={vi.fn()}
+        onNewProject={vi.fn()}
+        onNewCard={vi.fn()}
+        onDeleteProject={vi.fn()}
+        canManage={canManage}
+      />,
+    );
+  }
+
+  it("gives the owner an explicit share button that opens the project's share dialog", async () => {
+    serveAs("owner");
+    renderFocused(true);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Share project billing" }));
+    expect(await screen.findByTestId("share-dialog")).toBeInTheDocument();
+  });
+
+  it("offers no share button to a member", async () => {
+    serveAs("member");
+    renderFocused(false);
+    await screen.findByRole("navigation", { name: "Projects" });
+    expect(screen.queryByRole("button", { name: "Share project billing" })).not.toBeInTheDocument();
+  });
+});
