@@ -37,7 +37,14 @@ export const HISTORY_COMPACT_FACTOR = 4;
  * messages and on everything written before this field existed; the replay carries it verbatim, so
  * the native chat's attribution is exact, never matched.
  */
-export type HistoryEvent = (DriverEvent | { type: "user"; text: string }) & { at?: number; from?: MessageOrigin };
+export type HistoryEvent = (DriverEvent | { type: "user"; text: string }) & {
+  at?: number;
+  from?: MessageOrigin;
+  /** The event was MIRRORED from the card's terminal (TUI) transcript, not spoken by the driver. */
+  source?: "terminal";
+  /** The transcript event id a mirrored event came from — the exact dedupe key on replay. */
+  tid?: string;
+};
 
 /**
  * Card ids are UUIDs minted by the registry. The id also names a file on disk, so anything that is

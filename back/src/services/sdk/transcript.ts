@@ -1,5 +1,5 @@
 import { shQuote, assertSafeRemotePath } from "../../runtime/host.js";
-import { parseChatEvents } from "../chat/chat.js";
+import { parseChatEvents, type ChatEvent } from "../chat/chat.js";
 import type { Card } from "../board/registry.js";
 import type { HistoryEvent } from "./history.js";
 
@@ -72,20 +72,109 @@ export function transcriptToSdkHistory(jsonl: string, cutoffAt: number = Number.
   const out: HistoryEvent[] = [];
   for (const event of parseChatEvents(jsonl)) {
     if (!(event.at > 0) || event.at >= cutoffAt) continue;
-    if (event.kind === "user") out.push({ type: "user", text: event.text, at: event.at });
-    else if (event.kind === "assistant") out.push({ type: "assistant_text", text: event.text, at: event.at });
-    else if (event.kind === "tool") {
-      out.push({
-        type: "tool_use",
-        id: event.id,
-        name: event.tool ?? "?",
-        // The transcript keeps a one-line summary, not the raw input; `description` is what the
-        // front's toolSummary shows, so the replayed line reads like the live one did.
-        input: event.text ? { description: event.text } : {},
-        at: event.at,
-      });
+    const converted = chatEventToHistory(event);
+    if (converted) out.push(converted);
+  }
+  return out;
+}
+
+/**
+ * ONE transcript event as a history/replay frame. `tid` is the transcript's own event id — the
+ * exact dedupe key a later replay uses against what a mirror already persisted. "system" notes are
+ * the harness talking — not part of the conversation being preserved. PURE.
+ */
+export function chatEventToHistory(event: ChatEvent): HistoryEvent | null {
+  if (event.kind === "user") return { type: "user", text: event.text, at: event.at, tid: event.id };
+  if (event.kind === "assistant") return { type: "assistant_text", text: event.text, at: event.at, tid: event.id };
+  if (event.kind === "tool") {
+    return {
+      type: "tool_use",
+      id: event.id,
+      name: event.tool ?? "?",
+      // The transcript keeps a one-line summary, not the raw input; `description` is what the
+      // front's toolSummary shows, so the replayed line reads like the live one did.
+      input: event.text ? { description: event.text } : {},
+      at: event.at,
+      tid: event.id,
+    };
+  }
+  return null;
+}
+
+/**
+ * The dedupe key of one replayable event: the tool id when there is one, else kind+text. Transcript
+ * tool events are id'd `<line uuid>#<tool_use id>` while the driver emits the bare tool_use id —
+ * the LAST `#` segment is the id the API minted, the same on both sides. PURE.
+ */
+export function replayDedupeKey(event: Pick<HistoryEvent, "type"> & { text?: string; id?: string }): string | null {
+  if (event.type === "tool_use") {
+    const raw = typeof event.id === "string" ? event.id : "";
+    const bare = raw.split("#").pop() ?? "";
+    return bare === "" ? null : `tool:${bare}`;
+  }
+  if (event.type !== "user" && event.type !== "assistant_text") return null;
+  const norm = String(event.text ?? "").replace(/\s+/g, " ").trim();
+  return norm === "" ? null : `${event.type}:${norm}`;
+}
+
+/**
+ * The whole replay of one connect: the card's sdk history MERGED with the transcript, deduped.
+ *
+ * The old rule was a single timestamp cutoff — transcript events at or after the history's first
+ * entry were dropped wholesale. That rule silently ate every conversation the TERMINAL had after
+ * the native chat was first used (the César bug: he talked to the TUI, came back, and the native
+ * chat "não puxou nada" — those events were newer than the cutoff and in no history file). The
+ * merge keeps them: a transcript event is dropped only when the history ALREADY HAS it —
+ *
+ *  - by transcript id (`tid`): what a live mirror persisted, exact;
+ *  - by tool-use id: the driver's tool calls (the API id is the same on both sides);
+ *  - by kind + normalized text (multiset): the driver's user/assistant turns, whose lines the
+ *    forked transcript carries again with the SAME words.
+ *
+ * Everything the history does not know is the terminal's own era: pre-native history replays as
+ * before, and events newer than the history's first entry are stamped `source:"terminal"` so the
+ * front can say where the conversation went. The result is ONE timeline, ordered by time (history
+ * wins ties — it carries provenance and permission outcomes). PURE.
+ */
+export function mergeTranscriptReplay(jsonl: string, history: HistoryEvent[]): HistoryEvent[] {
+  const tids = new Set<string>();
+  const counts = new Map<string, number>();
+  for (const event of history) {
+    const tid = (event as { tid?: unknown }).tid;
+    if (typeof tid === "string" && tid !== "") tids.add(tid);
+    const key = replayDedupeKey(event as HistoryEvent & { text?: string; id?: string });
+    if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const firstHistoryAt = history.find((e) => typeof e.at === "number" && e.at > 0)?.at ?? Number.POSITIVE_INFINITY;
+
+  const fromTranscript: HistoryEvent[] = [];
+  for (const event of parseChatEvents(jsonl)) {
+    if (!(event.at > 0)) continue; // an event without a timestamp cannot be placed — dropped, not guessed
+    const converted = chatEventToHistory(event);
+    if (!converted) continue;
+    if (converted.tid && tids.has(converted.tid)) continue;
+    const key = replayDedupeKey(converted as HistoryEvent & { text?: string; id?: string });
+    if (key) {
+      const left = counts.get(key) ?? 0;
+      if (left > 0) {
+        counts.set(key, left - 1);
+        continue;
+      }
     }
-    // "system" notes are the harness talking — not part of the conversation being preserved.
+    fromTranscript.push(converted.at !== undefined && converted.at >= firstHistoryAt ? { ...converted, source: "terminal" } : converted);
+  }
+
+  // Two at-ascending lists → one timeline. History wins ties: its version knows who sent what.
+  const out: HistoryEvent[] = [];
+  let h = 0;
+  let t = 0;
+  while (h < history.length || t < fromTranscript.length) {
+    const hv = history[h];
+    const tv = fromTranscript[t];
+    if (hv === undefined) { out.push(tv as HistoryEvent); t += 1; continue; }
+    if (tv === undefined) { out.push(hv); h += 1; continue; }
+    if ((tv.at ?? 0) < (hv.at ?? 0)) { out.push(tv); t += 1; }
+    else { out.push(hv); h += 1; }
   }
   return out;
 }
