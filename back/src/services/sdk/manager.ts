@@ -3,7 +3,9 @@ import type { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
 import { onCardSessionKill } from "../board/workspace.js";
 import { appendHistory, replayableHistoryEvent } from "./history.js";
+import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inflight.js";
 import { noteDriverEventFor } from "./mirror.js";
+import { isHarnessFiller } from "../chat/chat.js";
 import { parseDriverLine, parseSdkClientFrame, encodeControl, type DriverEvent } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { logger } from "../../utils/logger.js";
@@ -132,6 +134,11 @@ function maybeScheduleIdleStop(session: DriverSession): void {
 
 /** One driver event, seen by the SURVIVING side: persist, remember, fan out. */
 function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
+  // The harness's canned close-out for a turn that died mid-flight ("No response requested.") can
+  // also arrive LIVE, as the resumed session's first assistant message. It is filler, not an
+  // answer — shown, it reads as Claude dismissing the person's message (the production symptom).
+  if (event.type === "assistant_text" && typeof (event as { text?: unknown }).text === "string"
+    && isHarnessFiller("assistant", (event as { text: string }).text)) return;
   if (event.type === "ready") {
     session.ready = true;
     // Stamp the manager's live turn count on the frame: a message may already be queued on the
@@ -148,6 +155,9 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   }
   if (event.type === "result") {
     session.activeTurns = Math.max(0, session.activeTurns - 1);
+    // The last turn in flight CLOSED: the durable "turn in flight" marker comes off. A deploy that
+    // lands after this point interrupts nothing — no marker, no boot-resume (see ./inflight.ts).
+    if (session.activeTurns === 0) void clearInflightMarker(session.cardId);
     maybeScheduleIdleStop(session);
   }
   broadcast(session, event);
@@ -248,6 +258,48 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
 }
 
 /**
+ * ONE client frame (raw text from a websocket — live or buffered while the route was still setting
+ * the connection up) funneled into the card's driver. A user message is a TURN: it goes to the
+ * driver's stdin AS a user message (never converted, never wrapped), the turn count and the durable
+ * in-flight marker (see ./inflight.ts) both move, and the history gets the line with its sender.
+ */
+export function handleClientFrame(session: DriverSession, raw: string, origin?: MessageOrigin): void {
+  const control = parseSdkClientFrame(raw);
+  if (!control) return;
+  try { session.child.stdin.write(encodeControl(control)); } catch { /* driver gone; close will fire */ }
+  if (control.type === "user") {
+    session.activeTurns += 1;
+    clearIdleTimer(session);
+    noteDriverEventFor(session.cardId, control);
+    void appendHistory(session.cardId, { type: "user", text: control.text, at: Date.now(), from: origin });
+    // The durable "turn in flight" record: if a deploy kills the back (and this driver with it)
+    // before the result arrives, the boot sweep finds this marker and the turn is not silently
+    // lost. attempts: 0 — a person's own turn always earns one automatic resume.
+    void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(control.text), attempts: 0 });
+  } else if (control.type === "interrupt") {
+    // The driver drops its QUEUE on interrupt — only the running turn will still produce a
+    // result. Forgetting the queued ones here keeps an abandoned queue from pinning the driver
+    // past the idle stop forever.
+    session.activeTurns = Math.min(session.activeTurns, 1);
+  }
+}
+
+/**
+ * A turn injected by the BACKEND itself (the boot-resume after a deploy killed a turn in flight):
+ * same stdin path and same turn accounting as a person's message — the driver receives a NORMAL
+ * user turn — but the history line carries system provenance (it must never read as the person's
+ * own words) and the in-flight marker carries the attempt count that stops a resume loop.
+ */
+export function injectSystemTurn(session: DriverSession, text: string, origin: MessageOrigin, attempts: number): void {
+  try { session.child.stdin.write(encodeControl({ type: "user", text })); } catch { /* driver gone; close will fire */ }
+  session.activeTurns += 1;
+  clearIdleTimer(session);
+  noteDriverEventFor(session.cardId, { type: "user", text });
+  void appendHistory(session.cardId, { type: "user", text, at: Date.now(), from: origin });
+  void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(text), attempts });
+}
+
+/**
  * Attach one websocket to the card's live driver: events fan out to it, its controls funnel in.
  * `origin` is who types on THIS socket — stamped on the messages it persists. Detaching (socket
  * close/error) never touches the driver; it only arms the idle stop when nothing else holds it.
@@ -272,20 +324,7 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
   }, KEEPALIVE_MS);
 
   socket.on("message", (raw: Buffer) => {
-    const control = parseSdkClientFrame(raw.toString());
-    if (!control) return;
-    try { session.child.stdin.write(encodeControl(control)); } catch { /* driver gone; close will fire */ }
-    if (control.type === "user") {
-      session.activeTurns += 1;
-      clearIdleTimer(session);
-      noteDriverEventFor(session.cardId, control);
-      void appendHistory(session.cardId, { type: "user", text: control.text, at: Date.now(), from: origin });
-    } else if (control.type === "interrupt") {
-      // The driver drops its QUEUE on interrupt — only the running turn will still produce a
-      // result. Forgetting the queued ones here keeps an abandoned queue from pinning the driver
-      // past the idle stop forever.
-      session.activeTurns = Math.min(session.activeTurns, 1);
-    }
+    handleClientFrame(session, raw.toString(), origin);
   });
 
   const detach = (): void => {
@@ -310,7 +349,33 @@ export function stopCardDriver(cardId: string): void {
   session.closed = true;
   try { session.child.stdin.end(); } catch { /* already gone */ }
   try { session.child.kill(); } catch { /* already gone */ }
+  // A DELIBERATE stop (pause, hibernate, restart, delete, model switch, idle) abandons the turn on
+  // purpose — the marker comes off so the next boot does not "resume" something a person ended.
+  void clearInflightMarker(cardId);
   logger.debug({ card: session.label }, "sdk driver stopped");
+}
+
+/**
+ * Best-effort goodbye on the BACK's own shutdown (SIGTERM from a deploy): end every driver's stdin
+ * (EOF is the driver's exit signal, it reaches across the docker exec) and kill the local clients —
+ * but KEEP the in-flight markers: they are exactly what tells the next boot which turns this
+ * shutdown interrupted (see ./resume.ts). Synchronous and non-blocking — docker stop gives seconds,
+ * not promises.
+ */
+export function shutdownAllDrivers(): void {
+  for (const session of sessions.values()) {
+    clearIdleTimer(session);
+    session.closed = true;
+    try { session.child.stdin.end(); } catch { /* already gone */ }
+    try { session.child.kill(); } catch { /* already gone */ }
+    if (session.activeTurns > 0) {
+      logger.warn(
+        { audit: true, action: "sdk.driver.shutdown", card: session.label, turnsInFlight: session.activeTurns },
+        "sdk driver shut down with a turn in flight — marker kept for the boot resume",
+      );
+    }
+  }
+  sessions.clear();
 }
 
 // Every path that ends a card's terminal (pause, hibernate, restart, delete, model/account
