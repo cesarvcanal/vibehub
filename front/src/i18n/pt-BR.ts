@@ -460,6 +460,10 @@ export const ptBR: Record<string, string> = {
   "sdk.questionAnswered": "Respondida: {answers}",
   "sdk.questionUnanswered": "Sem resposta — o agente seguiu sem ela.",
   "sdk.questionTimeoutHint": "Sem resposta, o agente segue sozinho em 30 minutos.",
+  "sdk.edit": "Editar mensagem",
+  "sdk.edited": "editada",
+  "sdk.preparing": "Preparando\u2026",
+  "sdk.thinking": "Pensando\u2026",
   "sdk.flagOff": "O driver SDK está desligado nesta instalação. Ligue \"Driver SDK\" nas Configurações para usar o chat nativo.",
 
   "cardView.sdkTerminalNote": "Chat nativo ativo neste card — é a mesma conversa: o chat nativo retoma sempre a sessão mais recente, inclusive o que você digitar aqui.",
@@ -478,6 +482,8 @@ export const ptBR: Record<string, string> = {
 
   /* --------------------------------------------------------------- composer */
   "composer.placeholder": "",
+  "composer.editing": "Editando mensagem \u2014 Esc cancela",
+  "composer.editingCancel": "Cancelar a edi\u00e7\u00e3o",
   "composer.aria": "Escreva aqui — Enter envia, Shift+Enter quebra linha",
   "composer.recordingTooBig": "Essa gravação passa de 20 MB.",
   "composer.transcribing": "Transcrevendo…",

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Camera, Check, ImageIcon, Loader2, Mic, Paperclip, Plus, RotateCw, Square, X } from "lucide-react";
+import { Camera, Check, ImageIcon, Loader2, Mic, Paperclip, Pencil, Plus, RotateCw, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -99,6 +99,21 @@ export interface TerminalComposerProps {
     /** Lets each chat keep its own test id (`chat-stop`, `sdk-interrupt`). */
     testId?: string;
   };
+  /**
+   * EDIT MODE (the native chat's "editar mensagem"): non-null puts the field into editing — the
+   * original message replaces the draft (which is stashed), an indicator above the field says so,
+   * and Enter delivers through the same `onSend` (the parent knows it is an edit). Esc — or the
+   * indicator's X, the phone's only way out — restores the stashed draft and calls `onCancel`.
+   * Terminal-style: like pressing Esc/up in the CLI to rewrite what you said.
+   */
+  editing?: { text: string } | null;
+  /** Leave edit mode without sending (Esc / the indicator's X). The parent clears `editing`. */
+  onCancelEdit?: () => void;
+  /**
+   * Esc on an EMPTY field outside edit mode — the terminal's "edit my last message" gesture. The
+   * parent decides whether there is a message to edit (and refuses while a turn is running).
+   */
+  onEditLast?: () => void;
 }
 
 /** Image files in a paste or drop payload, ignoring everything else. */
@@ -315,6 +330,9 @@ export function TerminalComposer({
   className,
   autoFocus = true,
   interrupt,
+  editing,
+  onCancelEdit,
+  onEditLast,
 }: TerminalComposerProps) {
   const t = useT();
   const isMobile = useIsMobile();
@@ -354,10 +372,49 @@ export function TerminalComposer({
 
   // Persisted on every change: what makes leaving the card safe. Uploads in flight are written too
   // (as nothing, since they have no path yet) — the store only ever keeps what can be restored.
+  // NOT while editing a sent message: the field holds the OLD message's words then, and stamping
+  // them over the stashed draft would destroy exactly what Esc promises to bring back.
   React.useEffect(() => {
-    if (!draftKey) return;
+    if (!draftKey || editing) return;
     saveDraft(draftKey, text, attachments);
-  }, [draftKey, text, attachments]);
+  }, [draftKey, text, attachments, editing]);
+
+  /* ------------------------------------------------------------ edit mode */
+
+  // What was in the field when the edit began — what Esc restores. The refs keep the transition
+  // effect below honest without re-running it on every keystroke.
+  const editStashRef = React.useRef<string>("");
+  const textRef = React.useRef(text);
+  textRef.current = text;
+  const onCancelEditRef = React.useRef(onCancelEdit);
+  onCancelEditRef.current = onCancelEdit;
+  const wasEditingRef = React.useRef(false);
+  const editingTextRef = React.useRef("");
+
+  React.useEffect(() => {
+    const now = editing != null;
+    if (now && (!wasEditingRef.current || editing.text !== editingTextRef.current)) {
+      // Entering edit mode (or switching to another message mid-edit): the draft is stashed ONCE,
+      // the message being edited fills the field, the caret goes to its end.
+      if (!wasEditingRef.current) editStashRef.current = textRef.current;
+      editingTextRef.current = editing.text;
+      setText(editing.text);
+      setTimeout(() => {
+        const el = ref.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      }, 0);
+    }
+    if (!now && wasEditingRef.current) editStashRef.current = ""; // sent or cancelled: the stash is spent
+    wasEditingRef.current = now;
+  }, [editing]);
+
+  /** Esc / the indicator's X: the field gets its stashed draft back and the parent leaves edit mode. */
+  const cancelEdit = React.useCallback((): void => {
+    setText(editStashRef.current);
+    onCancelEditRef.current?.();
+  }, []);
 
   /**
    * The field takes the keyboard when the card opens — and again when you come BACK to this card.
@@ -703,6 +760,27 @@ export function TerminalComposer({
       data-testid="terminal-composer"
       className={cn("flex shrink-0 flex-col gap-1.5", className)}
     >
+      {/* EDITING a sent message: the banner says so, and the X is the phone's Esc. */}
+      {editing ? (
+        <div
+          data-testid="composer-editing"
+          className="flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-600 dark:text-amber-400"
+        >
+          <Pencil className="h-3 w-3 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">{t("composer.editing")}</span>
+          <button
+            type="button"
+            data-testid="composer-editing-cancel"
+            aria-label={t("composer.editingCancel")}
+            title={t("composer.editingCancel")}
+            onClick={cancelEdit}
+            className="shrink-0 rounded p-0.5 hover:bg-amber-500/20"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : null}
+
       {/* What you pasted, as what you pasted. Above the field, so it never fights the caret. */}
       {attachments.length > 0 ? (
         <AttachmentStrip
@@ -726,6 +804,16 @@ export function TerminalComposer({
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               send();
+            } else if (e.key === "Escape") {
+              if (editing) {
+                // Cancel the edit and put the interrupted draft back — the terminal's Esc.
+                e.preventDefault();
+                cancelEdit();
+              } else if (isEmptyDraft(text, attachments) && onEditLast) {
+                // Esc on an empty field: step into editing the last sent message (terminal parity).
+                e.preventDefault();
+                onEditLast();
+              }
             }
           }}
           onPaste={(e) => {

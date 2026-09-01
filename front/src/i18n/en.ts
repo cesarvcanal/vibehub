@@ -459,6 +459,10 @@ export const en: Record<string, string> = {
   "sdk.questionAnswered": "Answered: {answers}",
   "sdk.questionUnanswered": "No answer — the agent moved on without it.",
   "sdk.questionTimeoutHint": "No answer and the agent moves on after 30 minutes.",
+  "sdk.edit": "Edit message",
+  "sdk.edited": "edited",
+  "sdk.preparing": "Preparing\u2026",
+  "sdk.thinking": "Thinking\u2026",
   "sdk.flagOff": "The SDK driver is off for this install. Turn on \"SDK driver\" in Settings to use native chat.",
 
   "cardView.sdkTerminalNote": "Native chat is on for this card — it is the same conversation: the native chat always resumes the newest session, including what you type here.",
@@ -477,6 +481,8 @@ export const en: Record<string, string> = {
 
   /* --------------------------------------------------------------- composer */
   "composer.placeholder": "",
+  "composer.editing": "Editing message \u2014 Esc cancels",
+  "composer.editingCancel": "Cancel editing",
   "composer.aria": "Write here — Enter sends, Shift+Enter starts a new line",
   "composer.recordingTooBig": "That recording is over 20 MB.",
   "composer.transcribing": "Transcribing…",

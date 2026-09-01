@@ -556,3 +556,146 @@ describe("SdkChatView — bandeja de decisões pendentes", () => {
     expect(screen.getAllByTestId("sdk-prose-question")).toHaveLength(1);
   });
 });
+
+describe("SdkChatView — editar mensagem enviada (supersede)", () => {
+  async function textbox(): Promise<HTMLTextAreaElement> {
+    return (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+  }
+
+  it("the pencil puts the original in the composer; Enter sends ONE edit_user frame and settles the rows", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "sobe pra prod" }); // replayed own message (no from = self)
+
+    await userEvent.click(screen.getByTestId("sdk-edit"));
+    expect(screen.getByTestId("composer-editing")).toBeInTheDocument();
+    const box = await textbox();
+    expect(box.value).toBe("sobe pra prod");
+
+    await userEvent.clear(box);
+    await userEvent.type(box, "sobe pra dev{Enter}");
+
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    expect(JSON.parse(ws.sent[0]!)).toEqual({ type: "edit_user", original: "sobe pra prod", text: "sobe pra dev" });
+    // the original dims with the badge; the new version stands; edit mode is over
+    const bubbles = screen.getAllByTestId("sdk-user");
+    expect(bubbles[0]).toHaveAttribute("data-edited", "true");
+    expect(screen.getByTestId("sdk-user-edited")).toHaveTextContent(/editada|edited/);
+    expect(bubbles[1]).toHaveTextContent("sobe pra dev");
+    expect(screen.queryByTestId("composer-editing")).not.toBeInTheDocument();
+  });
+
+  it("with the turn RUNNING the edit interrupts first and only goes after the result", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    const box = await textbox();
+    await userEvent.type(box, "sobe pra prod{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "Subindo…" }); // the turn is visibly running
+
+    await userEvent.click(screen.getByTestId("sdk-edit"));
+    await userEvent.clear(box);
+    await userEvent.type(box, "sobe pra dev{Enter}");
+
+    // the STOP went; the edit is waiting for the interrupted turn's result
+    await waitFor(() => expect(ws.sent.length).toBe(2));
+    expect(JSON.parse(ws.sent[1]!)).toEqual({ type: "interrupt" });
+
+    ws.deliver({ type: "result", isError: false, subtype: "aborted" });
+    await waitFor(() => expect(ws.sent.length).toBe(3));
+    expect(JSON.parse(ws.sent[2]!)).toEqual({ type: "edit_user", original: "sobe pra prod", text: "sobe pra dev" });
+  });
+
+  it("Esc cancels the edit and brings the interrupted draft back", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "sobe pra prod" });
+
+    const box = await textbox();
+    await userEvent.type(box, "rascunho em progresso");
+    await userEvent.click(screen.getByTestId("sdk-edit"));
+    await waitFor(() => expect(box.value).toBe("sobe pra prod"));
+
+    fireEvent.keyDown(box, { key: "Escape" });
+    expect(box.value).toBe("rascunho em progresso");
+    expect(screen.queryByTestId("composer-editing")).not.toBeInTheDocument();
+    expect(ws.sent.length).toBe(0); // nothing went anywhere
+  });
+
+  it("Esc on an EMPTY field steps into editing the last message of one's own (terminal parity)", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "primeira" });
+    ws.deliver({ type: "user", text: "última" });
+
+    const box = await textbox();
+    await userEvent.clear(box); // a draft restored from another test's storage is not "empty"
+    fireEvent.keyDown(box, { key: "Escape" });
+    await waitFor(() => expect(screen.getByTestId("composer-editing")).toBeInTheDocument());
+    expect(box.value).toBe("última");
+  });
+
+  it("a REPLAYED message_edited settles the original as editada (persistence across F5)", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "user", text: "sobe pra prod" });
+    ws.deliver({ type: "message_edited", originalText: "sobe pra prod" });
+    ws.deliver({ type: "user", text: "sobe pra dev" });
+    ws.deliver({ type: "ready" });
+
+    const bubbles = screen.getAllByTestId("sdk-user");
+    expect(bubbles[0]).toHaveAttribute("data-edited", "true");
+    expect(bubbles[1]).not.toHaveAttribute("data-edited");
+    // a superseded message offers no pencil — only the standing version does
+    expect(screen.getAllByTestId("sdk-edit")).toHaveLength(1);
+  });
+});
+
+describe("SdkChatView — escada de estados (Preparando → Pensando → Trabalhando)", () => {
+  it("cold driver: the send shows Preparando…, ready turns it into Pensando…, the first token into Trabalhando…", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept(); // socket open, driver still booting (no ready yet)
+
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.type(box, "oi{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+
+    const indicator = screen.getByTestId("sdk-chat-working");
+    expect(indicator).toHaveAttribute("data-phase", "preparing");
+
+    ws.deliver({ type: "ready" });
+    expect(screen.getByTestId("sdk-chat-working")).toHaveAttribute("data-phase", "thinking");
+
+    ws.deliver({ type: "assistant_delta", text: "olá" });
+    expect(screen.getByTestId("sdk-chat-working")).toHaveAttribute("data-phase", "working");
+
+    ws.deliver({ type: "result", isError: false });
+    expect(screen.queryByTestId("sdk-chat-working")).not.toBeInTheDocument();
+  });
+
+  it("warm driver: the send goes straight to Pensando… (one indicator, never stacked)", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.type(box, "oi{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+
+    const indicators = screen.getAllByTestId("sdk-chat-working");
+    expect(indicators).toHaveLength(1);
+    expect(indicators[0]).toHaveAttribute("data-phase", "thinking");
+  });
+});
