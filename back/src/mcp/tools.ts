@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { listTerminals, sendToTerminal, readTerminal, reportState } from "../services/maestro/maestro.js";
+import { listTerminals, sendToTerminal, readTerminal, reportState, agentOriginFor } from "../services/maestro/maestro.js";
 import { DECLARED_STATES } from "../services/board/registry.js";
 import { runGate } from "../services/maestro/gate.js";
 import { deliver } from "../services/maestro/deliver.js";
@@ -54,11 +54,19 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
       inputSchema: {
         cardId: z.string().describe("id of the destination card (from vibehub_list_terminals)"),
         text: z.string().describe("the instruction to type at that terminal's prompt (submitted with Enter)"),
+        from: z.string().optional().describe(
+          "YOUR OWN card id — the $VIBEHUB_CARD_ID of this terminal. Always pass it: it is how the " +
+          "destination card's chat shows WHO sent the message (your card's name, linked back to it).",
+        ),
       },
     },
     async (a) => {
       try {
-        return ok(await sendToTerminal(a.cardId, a.text, { by: actor, respectHumanActive: true }));
+        return ok(await sendToTerminal(a.cardId, a.text, {
+          by: actor,
+          respectHumanActive: true,
+          origin: await agentOriginFor(a.from),
+        }));
       } catch (e) {
         return fail(e);
       }

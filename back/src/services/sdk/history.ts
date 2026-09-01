@@ -1,7 +1,9 @@
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { dataPath } from "../../config/env.js";
 import type { DriverEvent } from "./protocol.js";
+import type { MessageOrigin } from "../chat/provenance.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -28,8 +30,14 @@ export const HISTORY_REPLAY_LIMIT = 500;
 /** Compaction threshold: when a file holds this many times the replay limit, it is rewritten. */
 export const HISTORY_COMPACT_FACTOR = 4;
 
-/** What the log stores: driver events, plus the user's own messages (they come from stdin, not stdout). */
-export type HistoryEvent = (DriverEvent | { type: "user"; text: string }) & { at?: number };
+/**
+ * What the log stores: driver events, plus the user's own messages (they come from stdin, not
+ * stdout). `from` is the message's PROVENANCE — who put it into this card: another person's chat
+ * send, or another card's agent (`vibehub_send_to_terminal`). Absent on the card owner's own
+ * messages and on everything written before this field existed; the replay carries it verbatim, so
+ * the native chat's attribution is exact, never matched.
+ */
+export type HistoryEvent = (DriverEvent | { type: "user"; text: string }) & { at?: number; from?: MessageOrigin };
 
 /**
  * Card ids are UUIDs minted by the registry. The id also names a file on disk, so anything that is
@@ -119,6 +127,30 @@ export async function readHistory(cardId: string, limit: number = HISTORY_REPLAY
     });
   }
   return tail;
+}
+
+/* -------------------------------------------------------- external events */
+
+/**
+ * Events that enter a card's conversation from OUTSIDE its own websocket — today, an agent's
+ * `vibehub_send_to_terminal`. The bridge records driver/browser traffic itself, so this bus exists
+ * for the one case it cannot see: the text was typed into the card's terminal by the backend, and a
+ * native chat that happens to be open should draw it NOW, not on the next reconnect.
+ */
+const externalBus = new EventEmitter();
+externalBus.setMaxListeners(0); // one listener per open native chat — not a leak, a fan-out
+
+/** Appends an external message to the card's log AND announces it to any open native chat. */
+export function publishExternalMessage(cardId: string, event: HistoryEvent): Promise<void> {
+  const done = appendHistory(cardId, event);
+  externalBus.emit(cardId, event);
+  return done;
+}
+
+/** Subscribe to a card's external messages. Returns the unsubscribe. */
+export function onExternalMessage(cardId: string, listener: (event: HistoryEvent) => void): () => void {
+  externalBus.on(cardId, listener);
+  return () => externalBus.off(cardId, listener);
 }
 
 /** Runs `work` inside the card's append chain (compaction must not interleave with an append). */

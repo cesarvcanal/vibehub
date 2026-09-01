@@ -9,6 +9,8 @@ import { cardWorkPaths } from "../board/workspace.js";
 import { cardAgentState, cardAwaitingChoice } from "../board/agentState.js";
 import { profileDirFor } from "../accounts/profiles.js";
 import { seedDestDir } from "../import/import.js";
+import { recordOrigin, type MessageOrigin } from "../chat/provenance.js";
+import { publishExternalMessage } from "../sdk/history.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -290,10 +292,37 @@ export interface SendOpts {
    * itself, and an agent-to-agent send pays no extra exec).
    */
   requireAgent?: boolean;
+  /**
+   * WHO this message is from — the visual attribution the destination card's chat shows ("card X
+   * said this", "user Y said this"). Recording it changes NOTHING about delivery: the text is typed
+   * at the prompt exactly as before. Absent = unattributed (drawn as the card owner's own message,
+   * which is the pre-provenance behaviour).
+   */
+  origin?: MessageOrigin;
+}
+
+/**
+ * The origin of an AGENT send (`vibehub_send_to_terminal`): the calling card's title, plus the ids
+ * the chat needs to link back to it. The tool's `from` is self-declared (like `vibehub_report`'s
+ * `card`), so an unknown/absent id degrades to a nameless agent label, never to an error — naming
+ * the sender must not be able to break the send itself.
+ */
+export async function agentOriginFor(fromCardId?: string): Promise<MessageOrigin> {
+  if (fromCardId) {
+    try {
+      const sender = await getCard(fromCardId);
+      if (sender) {
+        return { kind: "agent", name: sender.title, sourceCardId: sender.id, sourceProjectId: sender.projectId };
+      }
+    } catch {
+      /* registry unreadable — fall through to the anonymous agent */
+    }
+  }
+  return { kind: "agent", name: "" };
 }
 
 export async function sendToTerminal(cardId: string, text: string, opts: SendOpts = {}): Promise<SendResult> {
-  const { by, respectHumanActive = false, guardInteractiveMenu = false, requireAgent = false } = opts;
+  const { by, respectHumanActive = false, guardInteractiveMenu = false, requireAgent = false, origin } = opts;
   const instruction = String(text ?? "").trim();
   if (!instruction) throw new Error("empty text: there is nothing to send to the terminal");
   const card = await getCard(cardId);
@@ -342,6 +371,17 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
     );
   } catch (err) {
     throw sessionGoneError(err, card.title);
+  }
+  if (origin) {
+    // Attribution only, AFTER a successful delivery — a failed send must leave no ghost label, and
+    // a failed record must not fail a delivered message (both writers below never throw).
+    // The provenance log is what the OLD chat matches its transcript user-events against; the sdk
+    // history line is what makes an agent's message VISIBLE (with its sender) in the native chat,
+    // which never sees text typed into the tmux prompt.
+    void recordOrigin(card.id, instruction, origin);
+    if (origin.kind === "agent") {
+      void publishExternalMessage(card.id, { type: "user", text: instruction, at: Date.now(), from: origin });
+    }
   }
   logger.info(
     {

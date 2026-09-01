@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { config } from "../../config/env.js";
 import {
   appendHistory,
+  onExternalMessage,
+  publishExternalMessage,
   readHistory,
   replayableHistoryEvent,
   HISTORY_COMPACT_FACTOR,
@@ -113,5 +115,34 @@ describe("appendHistory / readHistory", () => {
     const events = (await readHistory(CARD)) as Array<HistoryEvent & { text: string }>;
     expect(events.length).toBe(20);
     expect(events.map((e) => e.text)).toEqual(Array.from({ length: 20 }, (_, i) => `p${i}`));
+  });
+
+  it("round-trips a message's provenance (`from`) — the replay carries the sender verbatim", async () => {
+    const from = { kind: "agent" as const, name: "card preview", sourceCardId: "c1", sourceProjectId: "p1" };
+    await appendHistory(CARD, { type: "user", text: "oi", at: 7, from });
+    const [event] = await readHistory(CARD);
+    expect(event).toEqual({ type: "user", text: "oi", at: 7, from });
+  });
+});
+
+describe("external messages (an agent talking to this card)", () => {
+  it("publishExternalMessage appends to the log AND notifies subscribers; unsubscribe stops it", async () => {
+    const from = { kind: "agent" as const, name: "maestro" };
+    const seen: HistoryEvent[] = [];
+    const off = onExternalMessage(CARD, (e) => seen.push(e));
+    await publishExternalMessage(CARD, { type: "user", text: "delegado", at: 1, from });
+    off();
+    await publishExternalMessage(CARD, { type: "user", text: "depois do off", at: 2, from });
+    expect(seen).toEqual([{ type: "user", text: "delegado", at: 1, from }]);
+    // both landed in the log regardless of who was listening
+    expect((await readHistory(CARD)).map((e) => (e as { text: string }).text)).toEqual(["delegado", "depois do off"]);
+  });
+
+  it("subscriptions are per card — another card's chat hears nothing", async () => {
+    const seen: HistoryEvent[] = [];
+    const off = onExternalMessage("bbbb498d1-98dd-44b6-97ee-c06a181c376", (e) => seen.push(e));
+    await publishExternalMessage(CARD, { type: "user", text: "para outro card", at: 1 });
+    off();
+    expect(seen).toEqual([]);
   });
 });

@@ -97,4 +97,15 @@ describe("/mcp tools", () => {
       expect(res.body).toContain(name);
     }
   });
+
+  it("send_to_terminal advertises the `from` parameter (the sender card, for chat attribution)", async () => {
+    const res = await app.inject({
+      method: "POST", url: "/mcp",
+      headers: { authorization: `Bearer ${TOKEN}`, accept: "application/json, text/event-stream" },
+      payload: { jsonrpc: "2.0", id: 3, method: "tools/list", params: {} },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain("YOUR OWN card id");
+    expect(res.body).toContain("WHO sent the message");
+  });
 });
