@@ -101,10 +101,10 @@ describe("mirrorNewEvents", () => {
 
   it("attaches provenance to a mirrored user message when the log knows the sender", () => {
     const at = Date.parse("2026-08-31T21:31:00Z");
-    recordOrigin(CARD, "mensagem do mussa", { kind: "user", name: "mussa" }, at);
+    recordOrigin(CARD, "mensagem do alex", { kind: "user", name: "alex" }, at);
     const state = createMirrorState(T0);
-    const out = mirrorNewEvents(state, userLine("u1", "2026-08-31T21:31:00Z", "mensagem do mussa"), CARD);
-    expect(out[0]).toMatchObject({ type: "user", from: { kind: "user", name: "mussa" } });
+    const out = mirrorNewEvents(state, userLine("u1", "2026-08-31T21:31:00Z", "mensagem do alex"), CARD);
+    expect(out[0]).toMatchObject({ type: "user", from: { kind: "user", name: "alex" } });
   });
 
   it("system notes are not part of the conversation being mirrored", () => {

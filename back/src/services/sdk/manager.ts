@@ -11,8 +11,8 @@ import { logger } from "../../utils/logger.js";
 /**
  * SDK DRIVER MANAGER — ONE driver process per card, owned by the BACKEND, not by a websocket.
  *
- * The bug this closes (card prompt-56fc, sessão 69b30a1f): the driver used to be spawned per
- * CONNECTION and torn down in the socket's close handler — César sent a message on the native
+ * The bug this closes (the reload-mid-turn bug): the driver used to be spawned per
+ * CONNECTION and torn down in the socket's close handler — the user sent a message on the native
  * chat, hit Cmd+Shift+R, the socket died and killed the driver MID-TURN. The answer never reached
  * the transcript, and the reconnect's fresh driver resumed the session without continuing the
  * pending turn: the message was silently swallowed.
@@ -202,7 +202,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     }
   });
   child.stderr?.on("data", (chunk: Buffer) => {
-    // KEEP the tail, don't just debug-log it: in the prompt-56fc incident the driver died with its
+    // KEEP the tail, don't just debug-log it: in the original incident the driver died with its
     // stderr invisible (debug level) and its exit frame sent to an already-closed socket — a fully
     // SILENT death. The tail is the post-mortem the exit handler below reports.
     session.stderrTail = (session.stderrTail + chunk.toString()).slice(-STDERR_TAIL_MAX);
@@ -259,7 +259,7 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
 
   // The reconnect case: the driver said `ready` long ago (it only says it at boot). Without a
   // synthesized one the fresh page would never enable its composer. `turnActive` carries the
-  // manager's REAL state: a view remounting mid-turn (Terminal↔Chat, reload — card prompt-56fc)
+  // manager's REAL state: a view remounting mid-turn (Terminal↔Chat, reload)
   // reset its own turn flag and nothing re-lit the "Trabalhando…" spinner until much later.
   if (session.ready) {
     try {

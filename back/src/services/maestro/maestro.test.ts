@@ -358,9 +358,9 @@ describe("message provenance on send", () => {
     await registry.applyOpenTerminal(dest.id);
     const live: unknown[] = [];
     const off = history.onExternalMessage(dest.id, (e) => live.push(e));
-    await maestro.sendToTerminal(dest.id, "oi", { origin: { kind: "user", name: "mussa" } });
+    await maestro.sendToTerminal(dest.id, "oi", { origin: { kind: "user", name: "alex" } });
     off();
-    expect(provenance.matchOrigin(dest.id, "oi", Date.now())).toEqual({ kind: "user", name: "mussa" });
+    expect(provenance.matchOrigin(dest.id, "oi", Date.now())).toEqual({ kind: "user", name: "alex" });
     expect(live).toHaveLength(0); // their own websocket already draws it — no external announcement
   });
 

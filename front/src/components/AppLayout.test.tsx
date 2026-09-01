@@ -20,7 +20,7 @@ describe("AppLayout", () => {
     vi.resetAllMocks();
     mockGet.mockImplementation((url: string) => {
       if (url === "/setup/state") return Promise.resolve(setupState());
-      if (url === "/auth/me") return Promise.resolve({ user: { id: "u1", username: "cesar", role: "owner" } });
+      if (url === "/auth/me") return Promise.resolve({ user: { id: "u1", username: "sam", role: "owner" } });
       return Promise.reject(new Error(`unexpected GET ${url}`));
     });
     document.documentElement.style.removeProperty("--app-header-h");

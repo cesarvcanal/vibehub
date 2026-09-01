@@ -150,7 +150,7 @@ export function parseSdkClientFrame(raw: string): DriverControl | null {
  * Increment 2: each of these ESCALATES to a "Permitir / Negar" card in the chat — the driver's
  * PreToolUse hook emits a `permission_request` and AWAITS the human's `permission_decision` (see
  * `createPermissionBroker`); the timeout denies. The bulk of tools auto-allow (bypass sandbox) —
- * César's call: "libera tudo, pergunta só o sensível".
+ * the maintainer chose to allow everything and ask only for the sensitive set.
  */
 export const SENSITIVE_BASH_PATTERNS: readonly RegExp[] = [
   /\brm\s+-[a-z]*[rf]/i, // rm -r / rm -f / rm -rf (recursive or forced delete)

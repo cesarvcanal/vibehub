@@ -398,7 +398,7 @@ describe("GitHub connection ids (pure)", () => {
   it("derives an UPPER_SNAKE id from a login", () => {
     expect(githubConnectionIdFor("octocat")).toBe("OCTOCAT");
     expect(githubConnectionIdFor("acme-inc")).toBe("ACME_INC");
-    expect(githubConnectionIdFor("césar.canal")).toBe("CESAR_CANAL");
+    expect(githubConnectionIdFor("josé.silva")).toBe("JOSE_SILVA");
   });
 
   it("falls back to a random id when the login derives nothing usable", () => {

@@ -214,7 +214,7 @@ export function AccessDialog({ open, onOpenChange }: AccessDialogProps) {
                     value={username}
                     autoComplete="off"
                     onChange={(e) => setUsername(e.target.value)}
-                    placeholder="mussa"
+                    placeholder="alex"
                   />
                 </div>
                 <div className="space-y-1.5">

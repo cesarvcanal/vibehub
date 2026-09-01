@@ -37,7 +37,7 @@ describe("ProjectSidebar — a project row is a navigable link", () => {
     localStorage.clear();
     mockGet.mockImplementation((url: string) => {
       if (url === "/setup/state") return Promise.resolve(setupState());
-      if (url === "/auth/me") return Promise.resolve({ user: { id: "u1", username: "cesar", role: "owner" } });
+      if (url === "/auth/me") return Promise.resolve({ user: { id: "u1", username: "sam", role: "owner" } });
       return Promise.reject(new Error(`unexpected GET ${url}`));
     });
   });
@@ -126,7 +126,7 @@ describe("ProjectSidebar — the logo is a link home", () => {
     localStorage.clear();
     mockGet.mockImplementation((url: string) => {
       if (url === "/setup/state") return Promise.resolve(setupState());
-      if (url === "/auth/me") return Promise.resolve({ user: { id: "u1", username: "cesar", role: "owner" } });
+      if (url === "/auth/me") return Promise.resolve({ user: { id: "u1", username: "sam", role: "owner" } });
       return Promise.reject(new Error(`unexpected GET ${url}`));
     });
   });

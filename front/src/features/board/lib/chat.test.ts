@@ -60,24 +60,24 @@ describe("message provenance (from)", () => {
   });
 
   it("parseOrigin validates the shape and keeps only the known fields", () => {
-    expect(parseOrigin({ kind: "user", name: "mussa", extra: true })).toEqual({
-      kind: "user", name: "mussa", sourceCardId: undefined, sourceProjectId: undefined,
+    expect(parseOrigin({ kind: "user", name: "alex", extra: true })).toEqual({
+      kind: "user", name: "alex", sourceCardId: undefined, sourceProjectId: undefined,
     });
     expect(parseOrigin(null)).toBeUndefined();
     expect(parseOrigin({ kind: "agent" })).toBeUndefined(); // a nameless origin is no origin
   });
 
   it("originRole: no provenance = the viewer's own message (the pre-provenance behaviour)", () => {
-    expect(originRole(undefined, "cesar")).toBe("self");
+    expect(originRole(undefined, "sam")).toBe("self");
     expect(originRole(undefined, undefined)).toBe("self");
   });
 
   it("originRole: an agent is always an agent; a person is 'self' only on their own screen", () => {
-    expect(originRole(agent, "cesar")).toBe("agent");
-    expect(originRole({ kind: "user", name: "mussa" }, "cesar")).toBe("user");
-    expect(originRole({ kind: "owner", name: "cesar" }, "cesar")).toBe("self");
+    expect(originRole(agent, "sam")).toBe("agent");
+    expect(originRole({ kind: "user", name: "alex" }, "sam")).toBe("user");
+    expect(originRole({ kind: "owner", name: "sam" }, "sam")).toBe("self");
     // Viewer unknown (auth still loading): show the sender rather than silently claiming the message.
-    expect(originRole({ kind: "user", name: "mussa" }, undefined)).toBe("user");
+    expect(originRole({ kind: "user", name: "alex" }, undefined)).toBe("user");
   });
 });
 

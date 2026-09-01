@@ -17,7 +17,7 @@ export interface GitIdentitySettings {
  *
  * - `"same-as-terminal"` — the native chat has EXACTLY the permission behaviour the Terminal tab of
  *   the same card already has: the runner is autonomous (bypassPermissions), so nothing escalates to
- *   the chat. One card, two views, ONE permission story — César's call for his install (2026-08-31):
+ *   the chat. One card, two views, ONE permission story — the maintainer's call for autonomous installs:
  *   consistency between the two interfaces, no extra restrictions in one of them.
  * - `"ask-sensitive"` — the driver's PreToolUse gate escalates the SENSITIVE set (rm -rf /
  *   force-push / deploy / secret reads) to Permitir/Negar buttons in the chat. Kept for scenarios

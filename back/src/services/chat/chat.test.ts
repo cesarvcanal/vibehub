@@ -103,18 +103,18 @@ describe("parseChatEvents", () => {
 
   it("a background-task notification is a muted SYSTEM event, not the user's message", () => {
     // The exact shape the harness injects: a `type:"user"` line that is really the harness talking.
-    // It used to render as Cesar's own bubble; now it is a system note carrying the summary.
+    // It used to render as the user's own bubble; now it is a system note carrying the summary.
     const notif =
       "[SYSTEM NOTIFICATION - NOT USER INPUT]\nAn automated background-task event.\n" +
       "<task-notification><task-id>br824e66c</task-id><status>completed</status>" +
-      '<summary>Background command "Vigiar reconexão da Z-API" completed (exit code 0)</summary>' +
+      '<summary>Background command "Vigiar reconexão do webhook" completed (exit code 0)</summary>' +
       "</task-notification>";
     expect(parseChatEvents(userLine(notif))).toEqual([
       {
         id: "u1",
         kind: "system",
         at: Date.parse("2026-08-22T18:00:00.000Z"),
-        text: 'Background command "Vigiar reconexão da Z-API" completed (exit code 0)',
+        text: 'Background command "Vigiar reconexão do webhook" completed (exit code 0)',
       },
     ]);
   });

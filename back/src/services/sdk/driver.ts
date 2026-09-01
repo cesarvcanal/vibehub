@@ -168,7 +168,7 @@ export function buildSdkDriverCommandLine(opts: SdkDriverCommandOpts): string {
   }
   if (opts.statusUrl) cardEnv += `export VIBEHUB_STATUS_URL=${shQuote(assertSafeUrl(opts.statusUrl))}; `;
   const script =
-    // AUTH RULE (ordem do César): the driver signs in with CLAUDE_CODE_OAUTH_TOKEN (the Max
+    // AUTH RULE (project rule): the driver signs in with CLAUDE_CODE_OAUTH_TOKEN (the Max
     // subscription's setup-token, same as the TUI) and NEVER with an API key — an inherited
     // ANTHROPIC_API_KEY would silently swallow the token and bill the API, so it is unset first.
     `unset ANTHROPIC_API_KEY; ` +

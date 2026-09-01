@@ -459,7 +459,7 @@ describe("terminalRemoteArgs / cardAttachArgs (the websocket's COMPLETE attach-o
   });
 
   it("the attach ALWAYS points the session at the per-card gh-token file — the PATH, never the token", async () => {
-    const conn = await reg.addGithubConnection({ login: "cesarvcanal" });
+    const conn = await reg.addGithubConnection({ login: "octocat" });
     const { project, card } = await seed();
     const p = await reg.updateProject(project.id, { githubConnectionId: conn.id });
 
@@ -1547,7 +1547,7 @@ describe("card push as the project's GitHub connection (GH_TOKEN)", () => {
   it("openCard passes the project's EXPLICIT connection id through to tokenFor", async () => {
     const gh = await import("../github/client.js");
     vi.mocked(gh.tokenFor).mockResolvedValueOnce(GH);
-    const conn = await reg.addGithubConnection({ login: "cesarvcanal" });
+    const conn = await reg.addGithubConnection({ login: "octocat" });
     const { project, card } = await seed();
     await reg.updateProject(project.id, { githubConnectionId: conn.id });
     await ws.openCard(card.id);
