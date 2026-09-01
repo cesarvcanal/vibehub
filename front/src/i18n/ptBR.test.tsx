@@ -152,6 +152,7 @@ describe("pt-BR — settings", () => {
       }
       if (url === "/github") return { connections: [] };
       if (url === "/transcribe") return { available: false, proofread: false, language: "pt" };
+      if (url === "/credentials") return { credentials: [] };
       throw new Error(`unexpected ${url}`);
     });
 
