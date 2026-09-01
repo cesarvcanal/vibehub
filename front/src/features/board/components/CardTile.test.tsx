@@ -184,7 +184,8 @@ describe("CardTile — the ⋯ menu", () => {
     );
     try {
       renderApp(<CardTile card={card({ openedAt: 5 })} onOpen={vi.fn()} onDelete={vi.fn()} />);
-      await user.click(screen.getByRole("button", { name: "Actions for fix the totals" }));
+      // The trigger only exists once /auth/me answered: every remaining item is the owner's.
+      await user.click(await screen.findByRole("button", { name: "Actions for fix the totals" }));
       const items = await screen.findAllByRole("menuitem");
       expect(items.map((i) => i.textContent)).toContain("Share\u2026");
     } finally {
@@ -194,38 +195,54 @@ describe("CardTile — the ⋯ menu", () => {
 
   it("offers card management, in order, behind one trigger", async () => {
     const user = userEvent.setup();
-    renderApp(
-      <CardTile
-        card={card({ openedAt: 5 })}
-        onOpen={vi.fn()}
-        onDone={vi.fn()}
-        onPause={vi.fn()}
-        onAccount={vi.fn()}
-        onDelete={vi.fn()}
-      />,
+    // Account switch and Delete are the OWNER's items now, so this menu needs an owner session.
+    vi.mocked(get).mockImplementation(async (url: string) =>
+      url === "/auth/me" ? { user: { id: "u1", username: "cesar", role: "owner" } } : {},
     );
+    try {
+      renderApp(
+        <CardTile
+          card={card({ openedAt: 5 })}
+          onOpen={vi.fn()}
+          onDone={vi.fn()}
+          onPause={vi.fn()}
+          onAccount={vi.fn()}
+          onDelete={vi.fn()}
+        />,
+      );
 
-    await user.click(screen.getByRole("button", { name: "Actions for fix the totals" }));
-    const items = await screen.findAllByRole("menuitem");
-    expect(items.map((i) => i.textContent)).toEqual([
-      "Finish (move to Done)",
-      "Pause (ends the session)",
-      "Claude account…",
-      "Delete card",
-    ]);
+      await user.click(await screen.findByRole("button", { name: "Actions for fix the totals" }));
+      const items = await screen.findAllByRole("menuitem");
+      expect(items.map((i) => i.textContent)).toEqual([
+        "Finish (move to Done)",
+        "Pause (ends the session)",
+        "Claude account…",
+        "Share…",
+        "Delete card",
+      ]);
+    } finally {
+      vi.mocked(get).mockResolvedValue({});
+    }
   });
 
   it("runs an action without also opening the card", async () => {
     const user = userEvent.setup();
     const onOpen = vi.fn();
     const onDelete = vi.fn();
-    renderApp(<CardTile card={card()} onOpen={onOpen} onDelete={onDelete} />);
+    vi.mocked(get).mockImplementation(async (url: string) =>
+      url === "/auth/me" ? { user: { id: "u1", username: "cesar", role: "owner" } } : {},
+    );
+    try {
+      renderApp(<CardTile card={card()} onOpen={onOpen} onDelete={onDelete} />);
 
-    await user.click(screen.getByRole("button", { name: "Actions for fix the totals" }));
-    await user.click(await screen.findByRole("menuitem", { name: "Delete card" }));
+      await user.click(await screen.findByRole("button", { name: "Actions for fix the totals" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Delete card" }));
 
-    expect(onDelete).toHaveBeenCalledWith(expect.objectContaining({ id: "c1" }));
-    expect(onOpen).not.toHaveBeenCalled();
+      expect(onDelete).toHaveBeenCalledWith(expect.objectContaining({ id: "c1" }));
+      expect(onOpen).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(get).mockResolvedValue({});
+    }
   });
 
   it("has no trigger at all where the board offers no actions", () => {

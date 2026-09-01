@@ -143,7 +143,13 @@ export function BoardPage() {
   const location = `${projectId ?? ""}:${cardId ?? ""}`;
   React.useEffect(() => setMenuOpen(false), [location]);
 
-  const { data: accountsData } = useQuery({ queryKey: ACCOUNTS_KEY, queryFn: boardApi.listAccounts });
+  // The install's Claude accounts feed the new-card dialog, which only the owner can open — and
+  // the route answers 403 to a member, so a member must not even ask.
+  const { data: accountsData } = useQuery({
+    queryKey: ACCOUNTS_KEY,
+    queryFn: boardApi.listAccounts,
+    enabled: isOwner,
+  });
 
   const createCardMutation = useMutation({
     mutationFn: ({ input }: { input: NewCard; open: boolean }) => boardApi.createCard(input),
@@ -384,14 +390,20 @@ export function BoardPage() {
       </div>
       <div>
         <p className="font-medium">{t("board.noProjects")}</p>
-        <p className="text-sm leading-relaxed text-muted-foreground">{t("board.noProjectsBody")}</p>
+        <p className="text-sm leading-relaxed text-muted-foreground">
+          {isOwner ? t("board.noProjectsBody") : t("board.noProjectsMemberBody")}
+        </p>
       </div>
-      <div className="flex flex-wrap items-center justify-center gap-2">
-        <Button onClick={() => setNewProjectOpen(true)}>
-          <Plus /> {t("board.createFirstProject")}
-        </Button>
-        <RunnerBanner />
-      </div>
+      {/* Creating the first project — and the runner behind it — is the owner's. A member with
+          nothing shared just sees why the board is empty. */}
+      {isOwner ? (
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <Button onClick={() => setNewProjectOpen(true)}>
+            <Plus /> {t("board.createFirstProject")}
+          </Button>
+          <RunnerBanner />
+        </div>
+      ) : null}
     </div>
   ) : selected ? (
     <KanbanBoard

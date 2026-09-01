@@ -244,6 +244,7 @@ export function ProjectSidebar({
             onShowAll={onShowAllProjects}
             onNewCard={() => onNewCard(focusedProject)}
             onNewProject={onNewProject}
+            canManage={canManage}
           />
         ) : (
           <>
@@ -362,6 +363,7 @@ function ProjectSwitcher({
   onShowAll,
   onNewCard,
   onNewProject,
+  canManage = true,
 }: {
   current: BoardProject;
   projects: BoardProject[];
@@ -369,6 +371,8 @@ function ProjectSwitcher({
   onShowAll?: () => void;
   onNewCard: () => void;
   onNewProject: () => void;
+  /** false = a member: no "new project" row, no new-card `+` — the routes behind both answer 403. */
+  canManage?: boolean;
 }) {
   const t = useT();
   // Controlled: a plain click on a project link preventDefaults (to stop a full-page nav), and Radix
@@ -416,22 +420,26 @@ function ProjectSwitcher({
               </a>
             </DropdownMenuItem>
           ))}
-          <DropdownMenuItem onSelect={onNewProject} className="gap-2 text-muted-foreground">
-            <Plus className="h-3.5 w-3.5 shrink-0" />
-            {t("sidebar.newProject")}
-          </DropdownMenuItem>
+          {canManage ? (
+            <DropdownMenuItem onSelect={onNewProject} className="gap-2 text-muted-foreground">
+              <Plus className="h-3.5 w-3.5 shrink-0" />
+              {t("sidebar.newProject")}
+            </DropdownMenuItem>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
-        aria-label={t("sidebar.newCardIn", { name: current.name })}
-        title={t("sidebar.newCardHint")}
-        onClick={onNewCard}
-      >
-        <Plus className="h-4 w-4" />
-      </Button>
+      {canManage ? (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+          aria-label={t("sidebar.newCardIn", { name: current.name })}
+          title={t("sidebar.newCardHint")}
+          onClick={onNewCard}
+        >
+          <Plus className="h-4 w-4" />
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -684,7 +692,8 @@ function ProjectRow({
   return (
     <div
       data-project-row={project.id}
-      draggable
+      // Reordering projects is the owner's (the route answers 403 to a member).
+      draggable={canManage}
       onDragStart={(e) => {
         e.dataTransfer.effectAllowed = "move";
         e.dataTransfer.setData("text/plain", project.id);
@@ -778,17 +787,20 @@ function ProjectRow({
           </span>
         </a>
         {/* Always visible, on every row: writing down the next task is the most frequent thing
-            anyone does here, and it should not require selecting the project first. */}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="mr-1.5 h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
-          aria-label={t("sidebar.newCardIn", { name: project.name })}
-          title={t("sidebar.newCardHint")}
-          onClick={onNewCard}
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </Button>
+            anyone does here, and it should not require selecting the project first. Not for a
+            member — creating cards is the owner's, and the route answers 403. */}
+        {canManage ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="mr-1.5 h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
+            aria-label={t("sidebar.newCardIn", { name: project.name })}
+            title={t("sidebar.newCardHint")}
+            onClick={onNewCard}
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </Button>
+        ) : null}
       </div>
       )}
 

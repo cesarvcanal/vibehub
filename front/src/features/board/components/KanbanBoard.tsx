@@ -52,6 +52,7 @@ import {
   type BoardProject,
 } from "@/features/board/api";
 import type { CardColumn } from "@/api/types";
+import { useAuth } from "@/providers/auth";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -88,6 +89,9 @@ export function KanbanBoard({
   headerLead?: React.ReactNode;
 }) {
   const t = useT();
+  // Creating and deleting cards is the OWNER's (the routes answer 403 to a member); a member gets
+  // the board of what was shared, and works inside those cards.
+  const { isOwner } = useAuth();
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
   const [expanded, setExpanded] = useExpandedColumns();
@@ -299,9 +303,11 @@ export function KanbanBoard({
           {t("board.cards", { n: total })}
         </span>
         {headerExtra}
-        <Button size="sm" className="h-9 gap-0" title={t("board.newCardHint")} onClick={onNewCard}>
-          <Plus className="mr-1.5 h-4 w-4" /> {t("board.newCard")}
-        </Button>
+        {isOwner ? (
+          <Button size="sm" className="h-9 gap-0" title={t("board.newCardHint")} onClick={onNewCard}>
+            <Plus className="mr-1.5 h-4 w-4" /> {t("board.newCard")}
+          </Button>
+        ) : null}
       </div>
 
       {isLoading ? (
@@ -338,7 +344,7 @@ export function KanbanBoard({
                 }
                 onDragLeave={() => setDropAt((at) => (at?.column === column.key ? null : at))}
               >
-                {column.key === "backlog" ? (
+                {column.key === "backlog" && isOwner ? (
                   // Jot a card down right where it lands — no dialog trip to the top button, and it
                   // stays on the board (no jump into the card) because you are still filling the list.
                   <button
