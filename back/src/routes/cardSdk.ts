@@ -10,10 +10,11 @@ import { appendHistory, onExternalMessage, readHistory, replayableHistoryEvent }
 import { matchOrigin, primeProvenance, type MessageOrigin } from "../services/chat/provenance.js";
 import {
   buildLatestTranscriptScript,
+  mergeTranscriptReplay,
   parseLatestTranscript,
   resumeTargetFor,
-  transcriptToSdkHistory,
 } from "../services/sdk/transcript.js";
+import { acquireTranscriptMirror, noteDriverEventFor } from "../services/sdk/mirror.js";
 import { parseDriverLine, encodeControl, type DriverControl, type DriverEvent } from "../services/sdk/protocol.js";
 import { transcriptDirFor } from "../services/maestro/maestro.js";
 import { effectiveAccountSlug } from "../services/board/registry.js";
@@ -175,6 +176,10 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       // which session the driver must RESUME (the card's one conversation, whichever mode wrote it
       // last: the TUI or a previous driver), and what the TUI-era of that conversation looked like,
       // so flipping the beta toggle never makes the conversation vanish from the screen.
+      // The mirror's floor is taken BEFORE the probe reads the transcript: a line written while the
+      // probe runs is either in the replay (then its id is pre-seeded below) or newer than this
+      // instant — never in the gap between the two.
+      const mirrorCutoffAt = Date.now();
       let latestSessionId: string | null = null;
       let tuiJsonl = "";
       try {
@@ -191,22 +196,23 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       // REPLAY FIRST: the conversation so far, before the driver says a word. The `--resume` id
       // preserves the conversation for the model; this preserves it for the SCREEN — without it a
       // remount (tab switch, reopened card, reload) started visually empty and the whole
-      // conversation "sumia" even though it was delivered (the production bug). The TUI era comes
-      // from the transcript, the SDK era from the per-card history log; the cutoff (where the log
-      // begins) keeps a conversation that lived in both modes from being drawn twice.
+      // conversation "sumia" even though it was delivered (the production bug). The history log and
+      // the transcript are MERGED into one timeline (see mergeTranscriptReplay): the TUI era, the
+      // SDK era, and the terminal conversations the log never saw — deduped, never drawn twice.
+      const replayedIds: string[] = [];
       try {
         const sdkHistory = await readHistory(card.id);
-        const cutoffAt = sdkHistory.find((e) => typeof e.at === "number")?.at ?? Number.POSITIVE_INFINITY;
         // TUI-era user lines carry no sender; the provenance log (best-effort text+time match, see
         // services/chat/provenance.ts) restores who really typed them. SDK-era events need nothing:
         // their `from` is on the ndjson line itself.
         await primeProvenance(card.id).catch(() => undefined);
-        const tuiEvents = transcriptToSdkHistory(tuiJsonl, cutoffAt).map((past) => {
-          if (past.type !== "user" || past.from) return past;
+        const replay = mergeTranscriptReplay(tuiJsonl, sdkHistory).map((past) => {
+          if (past.type !== "user" || past.from || !past.tid) return past;
           const from = matchOrigin(card.id, past.text, past.at ?? 0);
           return from ? { ...past, from } : past;
         });
-        for (const past of [...tuiEvents, ...sdkHistory]) {
+        for (const past of replay) {
+          if (past.tid) replayedIds.push(past.tid);
           try { socket.send(JSON.stringify(past)); } catch { /* socket going away */ }
         }
       } catch (err) {
@@ -226,12 +232,28 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
           if (user) wsOrigin = { kind: user.role === "owner" ? "owner" : "user", name: user.username };
         } catch { /* unattributed beats broken */ }
       }
-      // An agent's send (`vibehub_send_to_terminal`) lands in the history log, not on this socket's
-      // driver stdout — forward it live so "the cards talking" is visible as it happens.
+      // An agent's send (`vibehub_send_to_terminal`) — and every event the transcript MIRROR lifts
+      // from the terminal — lands in the history log, not on this socket's driver stdout. Forward
+      // them live so the conversation is visible as it happens, whichever screen it happens on.
       const offExternal = onExternalMessage(card.id, (event) => {
         try { socket.send(JSON.stringify(event)); } catch { /* socket going away */ }
       });
       socket.on("close", offExternal);
+      // The MIRROR: while this chat is connected, the card's transcript is followed and whatever
+      // the TERMINAL says (a person typing at the TUI, its answers) shows up here — the bug this
+      // closes is the conversation that moved to the Terminal tab and never reached the native
+      // chat. Refcounted per card; the last close stops the follow.
+      let releaseMirror: (() => void) | null = null;
+      let socketClosed = false;
+      void acquireTranscriptMirror(card.id, { cutoffAt: mirrorCutoffAt, seenIds: replayedIds }).then((releaseIt) => {
+        if (socketClosed) releaseIt();
+        else releaseMirror = releaseIt;
+      });
+      socket.on("close", () => {
+        socketClosed = true;
+        releaseMirror?.();
+        releaseMirror = null;
+      });
       const child = spawn(file, args, { stdio: ["pipe", "pipe", "pipe"] }) as ChildProcessWithoutNullStreams;
       logger.info({ card: card.worktreeSlug }, "sdk driver attached");
       bridgeSdkDriver(socket, child, card.worktreeSlug, {
@@ -243,12 +265,16 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
           });
         },
         // The history log is what the next connect replays: every event worth re-drawing, and the
-        // person's own messages (they cross on stdin, so stdout alone would forget them).
+        // person's own messages (they cross on stdin, so stdout alone would forget them). Both are
+        // ALSO reported to the mirror: the driver's turns land in the transcript too, and without
+        // these keys the follow would bring every one of them around a second time.
         onEvent: (event) => {
+          noteDriverEventFor(card.id, event);
           if (replayableHistoryEvent(event)) void appendHistory(card.id, { ...event, at: Date.now() });
         },
         onControl: (control) => {
           if (control.type === "user") {
+            noteDriverEventFor(card.id, control);
             void appendHistory(card.id, { type: "user", text: control.text, at: Date.now(), from: wsOrigin });
           }
         },

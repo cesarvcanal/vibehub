@@ -141,3 +141,30 @@ The chat footer shows the short session id (the resume key you are on).
    persistido no card.
 8. **Isolamento:** qualquer outro card (sem o toggle) segue exatamente como antes; desligar o flag
    global desliga tudo (o chat nativo passa a mostrar o aviso de driver desligado).
+
+## Convivência TUI ↔ chat nativo — as regras de um card com as duas telas
+
+Um card é **UMA conversa**, mesmo quando ela acontece em duas telas. As regras:
+
+- **Terminal → chat nativo, ao vivo (o espelho).** Enquanto um chat nativo está conectado, o back
+  segue o transcript do card (o mesmo loop `tail -F` do chat clássico — `buildFollowCommand`,
+  marcador do reaper incluído; ver `back/src/services/sdk/mirror.ts`) e converte as linhas NOVAS em
+  frames pro chat: a mensagem digitada na TUI aparece como balão de usuário (com remetente, quando
+  o log de proveniência conhece), as respostas como assistant/tool, e o burst abre com a linha de
+  sistema **"Atividade no terminal"**. Os eventos espelhados também entram no `sdk-history`
+  (`source:"terminal"` + `tid`), então sobrevivem a reconexão.
+- **Reconexão / chat fechado (o merge).** O replay de cada connect é um MERGE do `sdk-history` com
+  o transcript (`mergeTranscriptReplay`): o que o history não conhece — inclusive conversa feita na
+  TUI **enquanto nenhum chat estava aberto** — entra na linha do tempo; o que o driver já disse é
+  deduplicado por id de tool-use, por `tid` e por texto normalizado (multiset). Nada some, nada é
+  desenhado duas vezes.
+- **Chat nativo → terminal.** Uma mensagem mandada no chat nativo roda no driver, que grava a
+  sessão no MESMO diretório de transcripts; a TUI **não** desenha esse turno ao vivo (o processo
+  `claude` dela não sabe do driver — a tela dela segue "congelada" enquanto o driver conversa), mas
+  o próximo `claude -c` / resume retoma o transcript mais novo e continua exatamente dessa
+  conversa. Alternar à vontade é suportado; a regra de resume é sempre "o transcript mais novo
+  vence" (`resumeTargetFor`).
+- **Estado honesto.** "Trabalhando…" só acende com evento VIVO do driver (depois do `ready`) e
+  apaga quando o socket cai (driver morre com a conexão); replay nunca acende. Todo turno do driver
+  se fecha sozinho: um turno encerrado sem `result` (interrupt, stall) emite
+  `result{subtype:"aborted"}` no `finally` do `runTurn`.

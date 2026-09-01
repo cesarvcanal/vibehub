@@ -53,6 +53,7 @@ describe("applySdkEvent", () => {
 
   it("streams deltas into ONE growing assistant row, consolidated by assistant_text", () => {
     const state = feed([
+      { type: "ready" },
       { type: "assistant_delta", text: "Olá" },
       { type: "assistant_delta", text: ", César" },
       { type: "assistant_text", text: "Olá, César!" },
@@ -194,11 +195,19 @@ describe("history replay (the conversation must survive a remount)", () => {
     expect(state.ready).toBe(true);
   });
 
-  it("`ready` ends any turn the replayed tail left hanging — a fresh driver runs nothing yet", () => {
+  it("a replayed tail NEVER lights the spinner — nothing is running before `ready`", () => {
+    // The production incident: replayed assistant/tool events carry no `result`, so they used to
+    // leave "Trabalhando…" on until the driver finally said `ready` — a lie for however long the
+    // driver took to boot (an npm install, a slow docker exec), or forever when it died silently.
     let state = applySdkEvent(INITIAL_SDK_STATE, { type: "tool_use", id: "t1", name: "Bash", input: {} });
-    expect(state.turnActive).toBe(true);
+    expect(state.turnActive).toBe(false);
+    state = applySdkEvent(state, { type: "assistant_text", text: "replayed" });
+    expect(state.turnActive).toBe(false);
     state = applySdkEvent(state, { type: "ready" });
     expect(state.turnActive).toBe(false);
+    // Only a LIVE driver event (after ready) means work is happening.
+    state = applySdkEvent(state, { type: "tool_use", id: "t2", name: "Bash", input: {} });
+    expect(state.turnActive).toBe(true);
   });
 
   it("`ready` settles a streaming row before adding the resume note", () => {
@@ -207,6 +216,61 @@ describe("history replay (the conversation must survive a remount)", () => {
     expect(state.rows[0]).toMatchObject({ kind: "assistant", streaming: false });
     expect(state.rows[1]).toMatchObject({ kind: "note" });
     expect(state.sessionId).toBe("bfe63d25-95df-4c86-bf34-047b1366cc02");
+  });
+});
+
+describe("terminal mirror (the conversation that happens in the TUI)", () => {
+  const ready: SdkEvent = { type: "ready" };
+
+  it("a terminal-mirrored burst opens with ONE 'atividade no terminal' note", () => {
+    const state = feed([
+      ready,
+      { type: "user", text: "ok boa como a gnt segue?", source: "terminal" },
+      { type: "assistant_text", text: "Seguimos assim…", source: "terminal" },
+      { type: "tool_use", id: "t9", name: "Bash", input: {}, source: "terminal" },
+    ]);
+    const notes = state.rows.filter((r) => r.kind === "note" && r.text === "terminal-activity");
+    expect(notes).toHaveLength(1);
+    expect(state.rows.map((r) => r.kind)).toEqual(["note", "user", "assistant", "tool"]);
+  });
+
+  it("terminal events never light 'Trabalhando…' — the terminal's work is told by the note", () => {
+    const state = feed([
+      ready,
+      { type: "assistant_text", text: "resposta na TUI", source: "terminal" },
+      { type: "tool_use", id: "t1", name: "Bash", input: {}, source: "terminal" },
+    ]);
+    expect(state.turnActive).toBe(false);
+  });
+
+  it("a driver turn between two terminal bursts starts a NEW note", () => {
+    const state = feed([
+      ready,
+      { type: "assistant_text", text: "tui 1", source: "terminal" },
+      { type: "assistant_text", text: "driver falando" },
+      { type: "assistant_text", text: "tui 2", source: "terminal" },
+    ]);
+    const notes = state.rows.filter((r) => r.kind === "note" && r.text === "terminal-activity");
+    expect(notes).toHaveLength(2);
+  });
+
+  it("a mirrored user message keeps its provenance", () => {
+    const from = { kind: "user" as const, name: "mussa" };
+    const state = feed([ready, { type: "user", text: "oi", source: "terminal", from }]);
+    const user = state.rows.find((r) => r.kind === "user");
+    expect(user).toMatchObject({ text: "oi", from });
+  });
+});
+
+describe("honest turn end (the driver closes every turn)", () => {
+  it("an aborted result (interrupt, silent stall) clears the spinner", () => {
+    const state = feed([
+      { type: "ready" },
+      { type: "assistant_delta", text: "meio de fra" },
+      { type: "result", isError: false, subtype: "aborted" },
+    ]);
+    expect(state.turnActive).toBe(false);
+    expect(state.rows[0]).toMatchObject({ kind: "assistant", streaming: false });
   });
 });
 

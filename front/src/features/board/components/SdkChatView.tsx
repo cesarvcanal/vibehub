@@ -18,6 +18,7 @@ import { originRole } from "@/features/board/lib/chat";
 import { reconnectDelay, type ConnectionState } from "@/features/board/lib/reconnect";
 import {
   INITIAL_SDK_STATE,
+  TERMINAL_ACTIVITY_NOTE,
   applySdkEvent,
   appendUserRow,
   decidePermission,
@@ -229,7 +230,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
           ),
         )}
 
-        {state.turnActive ? (
+        {/* "Trabalhando…" only while the wire is UP: a dead socket means a dead driver (it dies
+            with its connection), and a spinner surviving the disconnect was the production lie —
+            frozen on "Trabalhando…" while the conversation had moved on in the terminal. */}
+        {connected && state.turnActive ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="sdk-chat-working">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             {t("chat.working")}
@@ -380,7 +384,11 @@ function SdkChatRow({ row, onPermission }: { row: SdkRow; onPermission?: (id: st
   if (row.kind === "note") {
     return (
       <div data-testid="sdk-note" className="py-0.5 text-center text-xs italic text-muted-foreground/70">
-        {row.text.startsWith("resume:") ? t("sdk.resumed", { id: row.text.slice("resume:".length, "resume:".length + 8) }) : row.text}
+        {row.text.startsWith("resume:")
+          ? t("sdk.resumed", { id: row.text.slice("resume:".length, "resume:".length + 8) })
+          : row.text === TERMINAL_ACTIVITY_NOTE
+            ? t("sdk.terminalActivity")
+            : row.text}
       </div>
     );
   }

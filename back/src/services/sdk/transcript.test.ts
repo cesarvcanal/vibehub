@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildLatestTranscriptScript,
+  mergeTranscriptReplay,
   parseLatestTranscript,
   resumeTargetFor,
   transcriptToSdkHistory,
@@ -91,5 +92,97 @@ describe("resumeTargetFor", () => {
   it("falls back to the persisted key when the probe found nothing", () => {
     expect(resumeTargetFor({ resumeSessionId: "old-sdk-id" }, null)).toBe("old-sdk-id");
     expect(resumeTargetFor({}, null)).toBeUndefined();
+  });
+});
+
+describe("mergeTranscriptReplay (one timeline, nothing lost, nothing twice)", () => {
+  const at = (s: string) => Date.parse(s);
+  const transcript = [
+    line({ type: "user", uuid: "u1", timestamp: "2026-08-31T10:00:00Z", message: { content: "arruma o login" } }),
+    line({
+      type: "assistant", uuid: "a1", timestamp: "2026-08-31T10:00:05Z",
+      message: { content: [{ type: "text", text: "Feito." }] },
+    }),
+  ].join("\n");
+
+  it("with no history, the whole transcript replays (the pre-native era)", () => {
+    const out = mergeTranscriptReplay(transcript, []);
+    expect(out.map((e) => e.type)).toEqual(["user", "assistant_text"]);
+    expect(out.every((e) => e.source === undefined)).toBe(true);
+  });
+
+  it("keeps the TERMINAL conversation the history never saw — the 'não puxou nada' bug", () => {
+    // Native chat used at 10:01; then the person talked to the TUI at 10:05 with no chat open.
+    // The old cutoff dropped everything after 10:01 — the terminal conversation vanished forever.
+    const history = [
+      { type: "user" as const, text: "pergunta no chat nativo", at: at("2026-08-31T10:01:00Z") },
+      { type: "assistant_text" as const, text: "resposta do driver", at: at("2026-08-31T10:01:10Z") },
+    ];
+    const withGap = [
+      transcript,
+      line({ type: "user", uuid: "u2", timestamp: "2026-08-31T10:05:00Z", message: { content: "ok boa como a gnt segue?" } }),
+      line({
+        type: "assistant", uuid: "a2", timestamp: "2026-08-31T10:05:30Z",
+        message: { content: [{ type: "text", text: "Seguimos assim…" }] },
+      }),
+    ].join("\n");
+    const out = mergeTranscriptReplay(withGap, history);
+    expect(out.map((e) => ("text" in e ? e.text : e.type))).toEqual([
+      "arruma o login",
+      "Feito.",
+      "pergunta no chat nativo",
+      "resposta do driver",
+      "ok boa como a gnt segue?",
+      "Seguimos assim…",
+    ]);
+    // The gap era is stamped as the terminal's, so the front can say where the conversation went.
+    expect(out[4]).toMatchObject({ source: "terminal" });
+    expect(out[5]).toMatchObject({ source: "terminal" });
+    expect(out[0].source).toBeUndefined();
+  });
+
+  it("does not draw the driver's own turns twice (the transcript carries them again)", () => {
+    // The SDK logs its session into the same directory: the driver's words come back through the
+    // newest transcript with the SAME text and the SAME tool-use ids.
+    const history = [
+      { type: "user" as const, text: "roda os testes", at: at("2026-08-31T10:01:00Z") },
+      { type: "tool_use" as const, id: "toolu_9", name: "Bash", input: { command: "npm test" }, at: at("2026-08-31T10:01:05Z") },
+      { type: "assistant_text" as const, text: "Tudo verde.", at: at("2026-08-31T10:01:10Z") },
+    ];
+    const forked = [
+      line({ type: "user", uuid: "u5", timestamp: "2026-08-31T10:01:00Z", message: { content: "roda os testes" } }),
+      line({
+        type: "assistant", uuid: "a5", timestamp: "2026-08-31T10:01:05Z",
+        message: { content: [{ type: "tool_use", id: "toolu_9", name: "Bash", input: { command: "npm test" } }] },
+      }),
+      line({
+        type: "assistant", uuid: "a6", timestamp: "2026-08-31T10:01:10Z",
+        message: { content: [{ type: "text", text: "Tudo verde." }] },
+      }),
+    ].join("\n");
+    const out = mergeTranscriptReplay(forked, history);
+    expect(out).toEqual(history);
+  });
+
+  it("skips exactly by transcript id what a live mirror already persisted (tid)", () => {
+    const history = [
+      { type: "user" as const, text: "arruma o login", at: at("2026-08-31T10:00:00Z"), tid: "u1", source: "terminal" as const },
+    ];
+    const out = mergeTranscriptReplay(transcript, history);
+    expect(out.map((e) => ("text" in e ? e.text : e.type))).toEqual(["arruma o login", "Feito."]);
+    expect(out[0]).toBe(history[0]); // the history's version wins — it knows who sent it
+  });
+
+  it("dedupes repeated identical texts as a multiset — one copy each, extras replay", () => {
+    const history = [{ type: "user" as const, text: "sobe", at: at("2026-08-31T10:00:00Z") }];
+    const repeated = [
+      line({ type: "user", uuid: "r1", timestamp: "2026-08-31T10:00:00Z", message: { content: "sobe" } }),
+      line({ type: "user", uuid: "r2", timestamp: "2026-08-31T10:02:00Z", message: { content: "sobe" } }),
+    ].join("\n");
+    const out = mergeTranscriptReplay(repeated, history);
+    expect(out.map((e) => ("text" in e ? `${e.text}@${e.at}` : e.type))).toEqual([
+      `sobe@${at("2026-08-31T10:00:00Z")}`,
+      `sobe@${at("2026-08-31T10:02:00Z")}`,
+    ]);
   });
 });

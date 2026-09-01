@@ -58,6 +58,18 @@ describe("replayableHistoryEvent", () => {
       replayableHistoryEvent({ type: "permission", tool: "Read", decision: "allow", sensitive: false }),
     ).toBe(false);
   });
+
+  it("a MIRRORED terminal event survives the round trip with its stamp, tid and time", async () => {
+    const mirrored: HistoryEvent = {
+      type: "user",
+      text: "ok boa como a gnt segue?",
+      at: 1_756_680_000_000,
+      source: "terminal",
+      tid: "u1",
+    };
+    await publishExternalMessage(CARD, mirrored);
+    expect(await readHistory(CARD)).toEqual([mirrored]);
+  });
 });
 
 describe("appendHistory / readHistory", () => {
