@@ -1,4 +1,4 @@
-# SDK driver — Fase 1, increments 1 e 2
+# SDK driver — o chat nativo
 
 Implements step 1 of `docs/sdk-migration-plan.md` §4: a **per-card SDK driver** that can run a card's
 Claude session through the Agent SDK (`query()`) instead of the tmux/send-keys TUI. It is **opt-in,
@@ -11,9 +11,14 @@ by `session_id`, and a **bare-name allowlist SHADOWS the permission callback** (
 
 ## The flag
 
-`sdkDriver: boolean` in `back/src/services/settings/settings.ts` — **default `false`**. Mirrors the
-`transcribeProofread` pattern (interface + DEFAULTS + `SettingsPatch` + boolean validation + apply).
-Toggle it via `PATCH /api/settings { "sdkDriver": true }`. It only gates the SDK websocket below.
+`sdkDriver: boolean` in `back/src/services/settings/settings.ts` — **default `true`** since
+2026-08-31 (the native chat graduated: it IS the Chat tab of every card). Off is the install-wide
+fallback to the classic chat: the front mounts the transcript chat everywhere (it learns the flag
+from `GET /api/features`, which any signed-in user can read) and the `/sdk` websocket does not
+start. `PATCH /api/settings { "sdkDriver": false }` or the "Chat nativo" switch in Configurações.
+
+`sdkPermissionMode: "same-as-terminal" | "ask-sensitive"` — **default `"same-as-terminal"`** — picks
+the driver's permission-gate behaviour; see "Permission model" below.
 
 ## The pieces
 
@@ -50,9 +55,29 @@ The front sends, per message: a JSON object `{ "type": "user", "text": "…" }`,
 Multi-turn works by resume: the driver captures `session_id`, the route persists it on the card
 (`resumeSessionId`), and the next spawn continues the same session.
 
-## Permission model (increment 2 — live)
+## Permission model — a configurable MODE (`sdkPermissionMode`)
 
-`bypassPermissions` auto-allows the bulk ("libera tudo, pergunta só o sensível" — decisão do César).
+Decisão de produto do César (2026-08-31, dono da instalação): o gate do driver virou um **modo
+configurável**, `sdkPermissionMode`, com **`"same-as-terminal"` como default da instalação dele**.
+
+- **`"same-as-terminal"`** — o chat nativo tem **exatamente o mesmo comportamento de permissões da
+  aba Terminal do mesmo card**: o terminal roda o Claude sob as settings do próprio runner
+  (`bypassPermissions` quando a instalação é autônoma) sem nenhum gate do vibehub por cima — então o
+  hook do driver não escala nada, só emite eventos `permission` de observabilidade. Racional: um
+  card, duas telas, UMA história de permissões — o gate antigo chegou a pedir confirmação para um
+  `rm` do próprio scratchpad `/tmp` do agente, uma fricção que o terminal nunca teve.
+- **`"ask-sensitive"`** — o comportamento anterior, mantido para cenários futuros (membros
+  compartilhados, revisão só pelo celular): o conjunto SENSÍVEL escala para os botões
+  Permitir/Negar no chat, como descrito abaixo. Toda a infraestrutura de `permission_request` /
+  botões / timeout continua viva e testada neste modo.
+
+O modo viaja para o driver como `--permission-gate` (fallback: `ask-sensitive`, o modo mais
+estrito, para um driver spawnado sem a flag). A decisão pura é `sdkGateAction` em `protocol.ts`
+(unit-tested; o driver embute o espelho).
+
+### O modo `ask-sensitive`, por dentro
+
+`bypassPermissions` auto-allows the bulk ("libera tudo, pergunta só o sensível").
 The driver's **own** `PreToolUse` hook classifies the **SENSITIVE set** — `rm -r/-f`,
 `git push --force`, `git reset --hard`, deploy-shaped commands (kubectl/helm/vercel/…),
 `npm publish`, `curl | sh`, and reads of secret files (`.env`, `id_rsa`, `.oauth-token`, …) — and
@@ -67,6 +92,29 @@ The driver's **own** `PreToolUse` hook classifies the **SENSITIVE set** — `rm 
 
 The pending ledger is `createPermissionBroker` in `protocol.ts` (unit-tested; the driver embeds the
 mirror). An `interrupt` denies everything still pending and interrupts the running `query()`.
+
+## As mesmas ferramentas do terminal (MCPs, navegador, CLAUDE.md) — 2026-08-31
+
+O chat nativo carrega a MESMA configuração que a sessão TUI do card ("preciso liberar ele sair
+clicando nas coisas, testando, abrindo o Chrome, principalmente no preview, e eu acompanhar"):
+
+- `settingSources: ["user", "project", "local"]` no `query()` — o perfil do card traz os MCPs
+  gerenciados (`vibehub`, cujas instructions SÃO a persona maestro; `navegador`; os registrados) e
+  as settings do runner (status hooks — o dot de atividade segue o chat nativo —, persistência de
+  sessão); o worktree traz o `.mcp.json` e settings do repo. Explícito de propósito: o default do
+  SDK hoje é "all sources", mas um flip futuro não pode tirar as ferramentas em silêncio.
+- `systemPrompt: { type: "preset", preset: "claude_code" }` — o prompt do próprio Claude Code, que
+  é também o que carrega os CLAUDE.md (o brain na raiz do perfil e o do repo). Antes o driver
+  rodava no prompt cru do SDK.
+- O spawn (`buildSdkDriverCommandLine`) exporta o que a sessão tmux sempre exportou:
+  `PW_CDP_ENDPOINT` (o MCP `navegador` resolve para o Chromium DESTE card — o mesmo que o usuário
+  assiste no noVNC, botão Navegador), `VIBEHUB_CARD_ID` e `VIBEHUB_STATUS_URL` (os hooks de status
+  do settings.json do runner passam a reportar o card certo).
+
+No painel Navegador, o usuário escolhe entre **"Só assistir"** (default; conexão view-only do RFB —
+o mouse dele não interfere no agente) e **"Pilotar junto"** (input habilitado; entra JUNTO do
+controle do agente — o agente dirige via CDP, canal separado do VNC, ninguém expulsa ninguém). O
+toggle troca `viewOnly` na conexão viva, sem reconectar.
 
 ## Auth — OAuth token ONLY (ordem do César)
 
@@ -114,13 +162,16 @@ NEW id onto the card (`resumeSessionId` in board.json, deduplicated). The next d
 reconnect, the card reopened tomorrow — passes `--resume <id>` and continues the SAME conversation.
 The chat footer shows the short session id (the resume key you are on).
 
-## Turning it on — two switches, both off by default
+## Turning it on — ONE switch, on by default (2026-08-31)
 
-1. **Global:** the `sdkDriver` setting — the "Driver SDK (chat nativo, beta)" switch in
-   **Configurações**, or `PATCH /api/settings { "sdkDriver": true }`. Off = the `/sdk` socket
-   refuses; NOTHING anywhere changes.
-2. **Per card:** the card menu (`⋯`) → **"Chat nativo (beta)"**. Only cards with this checked use
-   the SDK chat — every other card stays on the TUI/transcript path. This is the guinea-pig knob.
+**Global only:** the `sdkDriver` setting — "Chat nativo (padrão da instalação)" in
+**Configurações**. On (the default), the Chat tab of EVERY card is the native chat; off, every
+card falls back to the classic transcript chat and the `/sdk` socket refuses.
+
+The per-card opt-in ("Chat nativo (beta)" in the `⋯` menu) was **retired** the same day: the field
+`card.sdkChat` still exists in `board.json` records that set it, but nothing reads it anymore —
+**vestigial, no data migration needed**. Cards that never used the native chat lose nothing: the
+history bridge (#43/#51) merges the TUI transcript into the native chat's replay on first open.
 
 ## Validação pela tela (roteiro do César)
 

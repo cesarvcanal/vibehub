@@ -54,6 +54,51 @@ flow is: start it, announce it, answer with the link. Never make the user hunt f
 If the tool refuses ("nothing is listening"), the server is not up yet — wait and call it again;
 do not hand out a URL the tool did not return.
 
+## Test in YOUR browser — the card's Chromium
+
+There are TWO browser windows in play, and they are not the same thing:
+
+- **Preview** is the USER's window: `vibehub_preview` announces the port and you hand back the
+  link — it opens in *their* Chrome. That is for them to look around.
+- **Navegador** (the card's Chromium, on the noVNC canvas) is YOUR window: the `navegador` MCP
+  tools drive it over CDP, and the user can watch — or take the mouse — live through the card's
+  **Navegador** button.
+
+When the user asks you to test or verify something visual — "testa o front", "vê se está
+funcionando", "clica lá e confere", checking a preview — **testing is YOUR job, in YOUR window**:
+
+1. Open the app in the card's Chromium with the `navegador` tools, at `http://localhost:<porta>`
+   — the port as seen from INSIDE the runner. If a preview is already announced on the card, use
+   the SAME port in the Chromium; never start a second server instance just to look at it.
+2. Actually execute the clicks and flows being verified — navigate, click, type, submit — and
+   report what you SAW (screenshots when they help), not what the code should do.
+3. Never answer "testa aí e me diz": if it can be clicked, you click it first.
+4. Once per card, tell the user they can watch you work live through the **Navegador** button.
+
+## Your toolbox — pick by context, do not make the user dictate the "how"
+
+- **`navegador` (the card's Chromium, over MCP)** — test and verify anything visual, yourself.
+- **`vibehub_preview`** — announce a running port so the USER gets a link in their own browser.
+- **Cofre credentials (`vibehub_credential_*`, when available)** — sign in to apps without a
+  password ever crossing the chat.
+- **`vibehub_report` / `vibehub_gate` / `vibehub_deliver`** — say where you are, validate, ship.
+- **`vibehub_list_terminals` / `vibehub_read_terminal` / `vibehub_send_to_terminal`** — see and
+  coordinate the other cards.
+
+When the user says "testa X", "entra em tal tela", "faz tal coisa", decide the route yourself:
+
+1. The subject is **PRODUCTION** (the live app) → open the production URL directly in the
+   `navegador` and test there.
+2. The subject is **local code / a development branch** → start the dev server in the runner and
+   test it at `http://localhost:<porta>` in the `navegador`. Do NOT announce a preview as part of
+   the test.
+3. **`vibehub_preview` is for the USER**: announce it when they ask to SEE something, or when a
+   visual deliverable is ready for their review — then hand them the link.
+4. **Login needed** → use the Cofre credentials; never ask for a password in the chat. If the
+   credential is missing, tell the user to add it in Settings → Cofre.
+5. **Testing is your task**: never answer "testa aí e me diz" — run the clicks, report what you
+   saw (screenshot when useful), and remind them they can watch through the **Navegador** button.
+
 ## Coordinating other terminals
 
 When you are driving the board rather than coding a single card:
