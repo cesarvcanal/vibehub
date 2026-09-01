@@ -404,3 +404,37 @@ describe("ChatView", () => {
     }
   });
 });
+
+describe("ChatView — 'ir pro fim' flutuante (mesmo comportamento do chat nativo)", () => {
+  it("appears when scrolled up, badges on a new message without auto-scroll, click returns and hides", async () => {
+    renderApp(<ChatView cardId="c1" working={false} />);
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ id: "a1", kind: "assistant", at: 1, text: "primeira resposta" });
+
+    expect(screen.queryByTestId("jump-latest")).toBeNull();
+
+    const scroller = screen.getByTestId("chat-scroller");
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 1000 });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 200 });
+    let top = 0;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => { top = v; },
+    });
+    fireEvent.scroll(scroller);
+    expect(screen.getByTestId("jump-latest")).toBeInTheDocument();
+    expect(screen.queryByTestId("jump-latest-new")).toBeNull();
+
+    ws.deliver({ id: "a2", kind: "assistant", at: 2, text: "mensagem nova" });
+    expect(screen.getByTestId("jump-latest-new")).toBeInTheDocument();
+    expect(scroller.scrollTop).toBe(0); // never yanked
+
+    const scrollTo = vi.fn(function (this: HTMLElement, opts: { top: number }) { this.scrollTop = opts.top; });
+    Object.defineProperty(scroller, "scrollTo", { configurable: true, value: scrollTo });
+    await userEvent.click(screen.getByTestId("jump-latest"));
+    expect(scrollTo).toHaveBeenCalledWith({ top: 1000, behavior: "smooth" });
+    expect(screen.queryByTestId("jump-latest")).toBeNull();
+  });
+});
