@@ -46,6 +46,13 @@ function openTunnel(port: number): ChildProcessWithoutNullStreams {
  * The upstream was asked for `connection: close`, so its response ends when the tunnel's stdout
  * ends — piping with end:true closes the client socket, which is also what tells a browser without
  * a content-length where the body stops.
+ *
+ * The tunnel's stdin is deliberately NOT ended after the request. socat answers a stdin EOF by
+ * half-closing the upstream connection (FIN), and a Node http server destroys its socket on FIN —
+ * so any response slower than that FIN came back as ZERO bytes, and the user saw "nothing is
+ * listening" with the port alive (the prod bug). The request needs no EOF to be complete: it is
+ * delimited by its content-length. The exchange ends from the OTHER side — the upstream closes
+ * after responding (connection: close), the tunnel exits, and the close handler ends the client.
  */
 function relayHttp(socket: Duplex, port: number, head: string, body: Buffer | undefined, fallback: string): void {
   const child = openTunnel(port);
@@ -55,7 +62,6 @@ function relayHttp(socket: Duplex, port: number, head: string, body: Buffer | un
   child.stdin.on("error", () => { /* tunnel died first; the close handler reports */ });
   child.stdin.write(head);
   if (body && body.length > 0) child.stdin.write(body);
-  child.stdin.end();
 
   child.stdout.on("data", () => { sawBytes = true; });
   // end:false — a tunnel that dies WITHOUT producing a byte must still get to write the 502; an
