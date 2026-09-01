@@ -81,8 +81,12 @@ describe("announcePreview", () => {
       cardId,
       port: 5173,
       label: "front",
+      // The PATH is the canonical link — valid on every host the panel is reached through; the
+      // full URL is only that path on the configured public URL (one example host).
+      path: "/preview/5173/",
       url: "http://10.8.0.25:3010/preview/5173/",
       hint: PREVIEW_BASE_HINT,
+      note: announce.PREVIEW_HOST_NOTE,
     });
     const card = await registry.getCard(cardId);
     expect(card?.previews).toEqual([{ port: 5173, label: "front", createdAt: expect.any(Number) }]);

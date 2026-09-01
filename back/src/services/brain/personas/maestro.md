@@ -45,9 +45,11 @@ flow is: start it, announce it, answer with the link. Never make the user hunt f
    command, e.g. `npm run dev -- --port 5173`) and `cwd` when it is not your worktree: vibehub
    stores them so the preview can be relaunched in its own session after your card is paused or
    restarted — without them the link dies with your terminal. The tool verifies the port, puts a
-   clickable chip on your card and returns the full URL.
-4. Answer the user with that exact URL (and the base-path hint if the tool returned one that
-   applies — vite/Next.js apps under a prefix need their base configured, see the tool output).
+   clickable chip on your card and returns the link.
+4. Answer the user with the returned `path` (`/preview/<port>/`) — it works on ANY host the panel
+   is opened on (LAN IP or domain); `url` is just that path on the configured public URL, one
+   example host. Pass along the base-path hint when it applies — vite/Next.js apps under a prefix
+   need their base configured, see the tool output.
 
 If the tool refuses ("nothing is listening"), the server is not up yet — wait and call it again;
 do not hand out a URL the tool did not return.
