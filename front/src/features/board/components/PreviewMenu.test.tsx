@@ -106,7 +106,38 @@ describe("PreviewChip", () => {
     const chip = screen.getByTestId("preview-chip");
     expect(chip).toHaveTextContent("Preview: front");
     await user.click(chip);
+    // Same-origin RELATIVE url — the tab inherits whatever host the panel is being used on.
     expect(opened).toEqual(["/preview/5173/"]);
+  });
+
+  it("green is EARNED by the scan: neutral while unverified, emerald once the port answers", async () => {
+    renderApp(<PreviewChip cardId="c1" previews={[{ port: 5173, label: "front", createdAt: 1 }]} />);
+    const chip = screen.getByTestId("preview-chip");
+    // Before the scan resolves the chip claims nothing: no green, no amber.
+    expect(chip.className).not.toContain("emerald");
+    expect(chip.className).not.toContain("amber");
+    await waitFor(() => expect(chip.className).toContain("emerald"));
+  });
+
+  it("a dead port never shows green — the scan is the source of truth, not optimism", async () => {
+    renderApp(<PreviewChip cardId="c1" previews={[{ port: 3100, label: "multihire", createdAt: 1 }]} />);
+    const chip = screen.getByTestId("preview-chip");
+    await waitFor(() => expect(chip.className).toContain("amber"));
+    expect(chip).toHaveTextContent("stopped");
+    expect(chip.className).not.toContain("emerald");
+  });
+
+  it("a failing scan leaves the chip neutral, not green", async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/auth/me") return Promise.resolve({ user: { id: "1", username: "op", role: "owner" } });
+      if (url === "/preview/ports") return Promise.reject(new Error("runner unreachable"));
+      return Promise.resolve({});
+    });
+    renderApp(<PreviewChip cardId="c1" previews={[{ port: 5173, label: "front", createdAt: 1 }]} />);
+    const chip = screen.getByTestId("preview-chip");
+    await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/preview/ports"));
+    expect(chip.className).not.toContain("emerald");
+    expect(chip.className).not.toContain("amber");
   });
 });
 

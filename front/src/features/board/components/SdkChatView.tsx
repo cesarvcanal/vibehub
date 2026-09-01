@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { wsUrl } from "@/lib/ws";
 import { Button } from "@/components/ui/button";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
-import { Markdown } from "@/features/board/components/ChatView";
+import { LinkifiedText, Markdown } from "@/features/board/components/ChatView";
 import { reconnectDelay, type ConnectionState } from "@/features/board/lib/reconnect";
 import {
   INITIAL_SDK_STATE,
@@ -401,7 +401,7 @@ function SdkChatRow({ row, onPermission }: { row: SdkRow; onPermission?: (id: st
           data-testid="sdk-user"
           className="max-w-[85%] select-text whitespace-pre-wrap break-words rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-sm"
         >
-          {row.text}
+          <LinkifiedText text={row.text} />
         </div>
       </div>
     );

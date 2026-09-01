@@ -89,10 +89,39 @@ export type MdToken =
   | { type: "strong"; value: string }
   | { type: "link"; value: string };
 
-/** `code`, **bold** and bare URLs, in the order they appear. Everything else is text. PURE. */
+/**
+ * What counts as a clickable link, everywhere a chat message is rendered:
+ *  - absolute http(s) URLs (trailing sentence punctuation stays out of the link);
+ *  - the panel's own RELATIVE preview paths (`/preview/<port>/…`) — the `vibehub_preview` tool
+ *    answers with the path on purpose (it works on every host the panel is reached through), and a
+ *    link the agent hands the user must be a link, not text to copy.
+ * ONLY these two shapes ever become an href, which is the whole sanitisation story: `javascript:`,
+ * `data:` or any other scheme simply never matches, so it can never leave as anything but text.
+ */
+const LINK_SOURCE = "https?:\\/\\/[^\\s<>()]+[^\\s<>().,;:!?]|\\/preview\\/\\d{1,5}\\/(?:[^\\s<>()]*[^\\s<>().,;:!?])?";
+
+/**
+ * Bare linkification for PLAIN text (a user's own message): only text and link tokens, nothing of
+ * markdown is interpreted — a user's asterisks are their asterisks. PURE, TOTAL.
+ */
+export function linkifyTokens(text: string): MdToken[] {
+  const tokens: MdToken[] = [];
+  const pattern = new RegExp(`(${LINK_SOURCE})`, "g");
+  let last = 0;
+  const source = String(text ?? "");
+  for (let m = pattern.exec(source); m; m = pattern.exec(source)) {
+    if (m.index > last) tokens.push({ type: "text", value: source.slice(last, m.index) });
+    tokens.push({ type: "link", value: m[1] as string });
+    last = m.index + m[0].length;
+  }
+  if (last < source.length) tokens.push({ type: "text", value: source.slice(last) });
+  return tokens;
+}
+
+/** `code`, **bold** and bare URLs/preview paths, in the order they appear. Everything else is text. PURE. */
 export function mdInline(text: string): MdToken[] {
   const tokens: MdToken[] = [];
-  const pattern = /`([^`\n]+)`|\*\*([^*\n]+)\*\*|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?])/g;
+  const pattern = new RegExp(`\`([^\`\\n]+)\`|\\*\\*([^*\\n]+)\\*\\*|(${LINK_SOURCE})`, "g");
   let last = 0;
   const source = String(text ?? "");
   for (let m = pattern.exec(source); m; m = pattern.exec(source)) {

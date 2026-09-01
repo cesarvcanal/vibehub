@@ -227,10 +227,47 @@ describe("/preview/:port proxy", () => {
     }
   });
 
-  it("answers 502 when nothing is listening on the port", async () => {
+  it("answers a JSON 502 when nothing is listening and the caller is not a navigation", async () => {
     const res = await fetch(`http://127.0.0.1:${appPort}/preview/59999/`, { headers: { cookie } });
     expect(res.status).toBe(502);
     expect((await res.json() as { error: string }).error).toContain("59999");
+  });
+
+  it("a NAVIGATION to a dead REGISTERED preview gets the 'Preview parado' screen with Reiniciar", async () => {
+    const registry = await import("../services/board/registry.js");
+    const project = await registry.createProject({ name: "Shop" });
+    const card = await registry.createCard({ projectId: project.id, title: "Checkout" });
+    await registry.registerCardPreview(card.id, 59998, { label: "front", command: "npm run dev", cwd: "/work/app" });
+
+    const res = await fetch(`http://127.0.0.1:${appPort}/preview/59998/`, {
+      headers: { cookie, accept: "text/html,application/xhtml+xml" },
+    });
+    expect(res.status).toBe(502);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const body = await res.text();
+    expect(body).toContain("Preview &quot;front&quot; parado");
+    expect(body).toContain("Reiniciar");
+    // The restart call is RELATIVE — it must work on whatever host the panel is reached through.
+    expect(body).toContain(`"/api/cards/${card.id}/previews/59998/restart"`);
+  });
+
+  it("a navigation to a dead UNREGISTERED port gets the screen with guidance, no button", async () => {
+    const res = await fetch(`http://127.0.0.1:${appPort}/preview/59997/`, {
+      headers: { cookie, accept: "text/html" },
+    });
+    expect(res.status).toBe(502);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const body = await res.text();
+    expect(body).not.toContain('id="restart"');
+    expect(body).toContain("agente");
+  });
+
+  it("an ASSET request (non-html Accept) to a dead port keeps the structured JSON error", async () => {
+    const res = await fetch(`http://127.0.0.1:${appPort}/preview/59996/main.js`, {
+      headers: { cookie, accept: "*/*" },
+    });
+    expect(res.status).toBe(502);
+    expect(res.headers.get("content-type")).toContain("application/json");
   });
 
   it("redirects /preview/<port> to the trailing slash so relative URLs resolve", async () => {

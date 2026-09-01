@@ -20,7 +20,7 @@ import {
   type ChatEvent,
   type PendingMessage,
 } from "@/features/board/lib/chat";
-import { mdBlocks, mdInline } from "@/features/board/lib/markdown";
+import { mdBlocks, mdInline, linkifyTokens } from "@/features/board/lib/markdown";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -482,7 +482,7 @@ function ChatRow({ event, sending }: { event: ChatEvent; sending?: boolean }) {
             sending && "opacity-60",
           )}
         >
-          {event.text}
+          <LinkifiedText text={event.text} />
           {sending ? <span className="ml-2 text-[10px] uppercase opacity-70">{t("chat.sending")}</span> : null}
         </div>
         {sending ? null : <CopyButton text={event.text} />}
@@ -531,6 +531,34 @@ function CopyButton({ text }: { text: string }) {
       {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
       {copied ? t("chat.copied") : t("chat.copy")}
     </button>
+  );
+}
+
+/**
+ * Plain text with its URLs (and the panel's own `/preview/<port>/` paths) clickable — the render
+ * for a USER'S message, where markdown must NOT be interpreted but a pasted link must still be a
+ * link. Only what `linkifyTokens` recognises (http/https, preview paths) ever becomes an href, so
+ * `javascript:` and friends stay literal text. Exported for the native SDK chat.
+ */
+export function LinkifiedText({ text }: { text: string }) {
+  return (
+    <>
+      {linkifyTokens(text).map((token, i) =>
+        token.type === "link" ? (
+          <a
+            key={i}
+            href={token.value}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="text-primary underline underline-offset-2"
+          >
+            {token.value}
+          </a>
+        ) : (
+          <React.Fragment key={i}>{token.value}</React.Fragment>
+        ),
+      )}
+    </>
   );
 }
 

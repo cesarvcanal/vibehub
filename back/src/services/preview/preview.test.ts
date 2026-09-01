@@ -9,7 +9,10 @@ import {
   parseListeningPorts,
   parsePreviewTarget,
   stripSessionCookie,
+  stoppedPreviewPage,
   tunnelRemoteCommand,
+  escapeHtml,
+  wantsHtmlInterstitial,
 } from "./preview.js";
 import { VNC_PORT_BASE, CDP_PORT_BASE, SLOT_SPACE } from "../browser/ports.js";
 
@@ -241,5 +244,66 @@ describe("badGatewayResponse", () => {
     expect(res).toContain("5173");
     const body = res.split("\r\n\r\n")[1]!;
     expect(res).toContain(`content-length: ${Buffer.byteLength(body)}\r\n`);
+  });
+});
+
+describe("wantsHtmlInterstitial", () => {
+  it("is true only for a navigation: GET asking for text/html", () => {
+    expect(wantsHtmlInterstitial("GET", "text/html,application/xhtml+xml")).toBe(true);
+    expect(wantsHtmlInterstitial("get", "TEXT/HTML")).toBe(true);
+    expect(wantsHtmlInterstitial(undefined, "text/html")).toBe(true); // method defaults to GET
+  });
+
+  it("keeps the JSON error for assets, APIs and non-GETs", () => {
+    expect(wantsHtmlInterstitial("GET", "application/json")).toBe(false);
+    expect(wantsHtmlInterstitial("GET", "*/*")).toBe(false);
+    expect(wantsHtmlInterstitial("GET", undefined)).toBe(false);
+    expect(wantsHtmlInterstitial("POST", "text/html")).toBe(false);
+  });
+
+  it("tolerates an array Accept header", () => {
+    expect(wantsHtmlInterstitial("GET", ["application/json", "text/html"])).toBe(true);
+  });
+});
+
+describe("escapeHtml", () => {
+  it("neutralizes every HTML metacharacter and tolerates garbage", () => {
+    expect(escapeHtml(`<img src=x onerror="a">&'`)).toBe("&lt;img src=x onerror=&quot;a&quot;&gt;&amp;&#39;");
+    expect(escapeHtml(undefined as unknown as string)).toBe("");
+  });
+});
+
+describe("stoppedPreviewPage", () => {
+  const info = { cardId: "660fa4e5-7139-4f6a-8fe5-7df8207a0425", label: "front", restartable: true };
+
+  it("is a complete text/html 502 with the Reiniciar button posting the RELATIVE restart endpoint", () => {
+    const res = stoppedPreviewPage(3100, info);
+    expect(res.startsWith("HTTP/1.1 502 Bad Gateway\r\n")).toBe(true);
+    expect(res).toContain("content-type: text/html");
+    const body = res.split("\r\n\r\n")[1]!;
+    expect(res).toContain(`content-length: ${Buffer.byteLength(body)}\r\n`);
+    expect(body).toContain("Preview &quot;front&quot; parado");
+    // RELATIVE url — the restart must work on whatever host the panel is being reached through.
+    expect(body).toContain(`"/api/cards/${info.cardId}/previews/3100/restart"`);
+    expect(body).toContain("Reiniciar");
+  });
+
+  it("without a relaunch recipe it renders the guidance, not a button", () => {
+    const res = stoppedPreviewPage(3100, { cardId: info.cardId, restartable: false });
+    expect(res).not.toContain("Reiniciar<");
+    expect(res).toContain("agente");
+    // An unregistered port (no card at all) gets the same honest guidance.
+    const bare = stoppedPreviewPage(3100, { restartable: true });
+    expect(bare).not.toContain("id=\"restart\"");
+  });
+
+  it("escapes the label — a hostile label cannot inject markup", () => {
+    const res = stoppedPreviewPage(3100, { ...info, label: `<script>alert(1)</script>` });
+    expect(res).not.toContain("<script>alert(1)");
+    expect(res).toContain("&lt;script&gt;");
+  });
+
+  it("refuses an invalid port instead of interpolating it", () => {
+    expect(() => stoppedPreviewPage(0, info)).toThrow(/invalid preview port/);
   });
 });

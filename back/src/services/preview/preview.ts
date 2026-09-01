@@ -251,8 +251,103 @@ export function badGatewayResponse(port: number): string {
   const body = JSON.stringify({
     error: `nothing answered on port ${port} inside the runner — is the server running and listening?`,
   });
+  return rawResponse("application/json", body);
+}
+
+function rawResponse(contentType: string, body: string): string {
   return (
-    `HTTP/1.1 502 Bad Gateway\r\ncontent-type: application/json\r\n` +
+    `HTTP/1.1 502 Bad Gateway\r\ncontent-type: ${contentType}; charset=utf-8\r\n` +
     `content-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`
   );
+}
+
+/* ------------------------------------------------- stopped-preview screen */
+
+/**
+ * True when a failed proxy exchange should answer with the HUMAN screen instead of JSON: a
+ * navigation — a person opening the link in a tab (GET + an Accept that asks for text/html).
+ * Assets and API calls made BY the previewed app keep the structured JSON error. PURE, TOTAL.
+ */
+export function wantsHtmlInterstitial(method: string | undefined, accept: string | string[] | undefined): boolean {
+  if ((method ?? "GET").toUpperCase() !== "GET") return false;
+  const value = Array.isArray(accept) ? accept.join(",") : accept;
+  return typeof value === "string" && value.toLowerCase().includes("text/html");
+}
+
+const HTML_ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+
+/** Minimal HTML escaping for the few dynamic values embedded in the interstitial. PURE, TOTAL. */
+export function escapeHtml(value: string): string {
+  return String(value ?? "").replace(/[&<>"']/g, (c) => HTML_ESCAPES[c] as string);
+}
+
+export interface StoppedPageInfo {
+  /** Card that registered this port, when one did — the restart endpoint is per card. */
+  cardId?: string;
+  /** The preview's label, purely for the headline. */
+  label?: string;
+  /** Whether a relaunch recipe (command + cwd) is stored — decides button vs guidance. */
+  restartable: boolean;
+}
+
+/**
+ * The "Preview parado" INTERSTITIAL: the full 502 response for a navigation that hit a dead port.
+ * With a registered, relaunchable preview it renders a Reiniciar button that POSTs the per-card
+ * restart endpoint (same-origin — the session cookie rides along, and the RELATIVE url keeps it
+ * working on every host the panel is reached through) and reloads the tab once the port listens.
+ * Without a recipe it says the honest thing: ask the card's agent to start the server again. PURE.
+ */
+export function stoppedPreviewPage(port: number, info: StoppedPageInfo): string {
+  if (!isValidPreviewPort(port)) throw new Error(`invalid preview port: ${port}`);
+  const name = escapeHtml(info.label?.trim() || `:${port}`);
+  const action = info.restartable && info.cardId
+    ? `<button id="restart" onclick="restart()">Reiniciar</button>
+       <p id="status" hidden></p>
+       <script>
+         async function restart() {
+           const btn = document.getElementById("restart");
+           const status = document.getElementById("status");
+           btn.disabled = true; status.hidden = false; status.textContent = "Reiniciando\\u2026";
+           try {
+             const res = await fetch(${JSON.stringify(`/api/cards/${info.cardId}/previews/${port}/restart`)}, { method: "POST" });
+             if (!res.ok) {
+               const body = await res.json().catch(() => null);
+               throw new Error((body && body.error) || ("HTTP " + res.status));
+             }
+             status.textContent = "Preview no ar \\u2014 recarregando\\u2026";
+             location.reload();
+           } catch (err) {
+             btn.disabled = false;
+             status.textContent = "Falha ao reiniciar: " + (err && err.message ? err.message : err);
+           }
+         }
+       </script>`
+    : `<p class="muted">Este preview não tem um comando de relançamento registrado — peça ao agente
+       do card para subir o servidor de novo (ele vai reanunciar o link com <code>vibehub_preview</code>).</p>`;
+  const body = `<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Preview parado</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+         font: 15px/1.5 system-ui, sans-serif; background: #f6f6f7; color: #1c1c1f; }
+  @media (prefers-color-scheme: dark) { body { background: #141417; color: #e6e6ea; } }
+  main { max-width: 26rem; padding: 2rem; text-align: center; }
+  h1 { font-size: 1.15rem; margin: 0 0 .5rem; }
+  .muted { opacity: .7; font-size: .9rem; }
+  code { font-family: ui-monospace, monospace; font-size: .85em; }
+  button { margin-top: 1rem; padding: .55rem 1.4rem; font: inherit; border-radius: .5rem;
+           border: 1px solid #d97706; background: #f59e0b22; color: inherit; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: default; }
+  #status { font-size: .85rem; opacity: .8; }
+</style>
+</head>
+<body><main>
+<h1>Preview &quot;${name}&quot; parado</h1>
+<p class="muted">Nada está escutando na porta ${port} dentro do runner.</p>
+${action}
+</main></body></html>`;
+  return rawResponse("text/html", body);
 }

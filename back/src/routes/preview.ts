@@ -11,10 +11,12 @@ import {
   listPortsScript,
   parseListeningPorts,
   parsePreviewTarget,
+  stoppedPreviewPage,
   tunnelRemoteCommand,
+  wantsHtmlInterstitial,
 } from "../services/preview/preview.js";
 import { restartPreview, stopPreview } from "../services/preview/lifecycle.js";
-import { pruneCardPreviews } from "../services/board/registry.js";
+import { findCardPreviewByPort, pruneCardPreviews } from "../services/board/registry.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -45,7 +47,7 @@ function openTunnel(port: number): ChildProcessWithoutNullStreams {
  * ends — piping with end:true closes the client socket, which is also what tells a browser without
  * a content-length where the body stops.
  */
-function relayHttp(socket: Duplex, port: number, head: string, body: Buffer | undefined): void {
+function relayHttp(socket: Duplex, port: number, head: string, body: Buffer | undefined, fallback: string): void {
   const child = openTunnel(port);
   let sawBytes = false;
   let stderr = "";
@@ -63,7 +65,7 @@ function relayHttp(socket: Duplex, port: number, head: string, body: Buffer | un
 
   child.on("error", (err) => {
     logger.warn({ err: err.message, port }, "preview tunnel failed to spawn");
-    socket.end(badGatewayResponse(port));
+    socket.end(fallback);
   });
   child.on("close", (code) => {
     if (sawBytes) {
@@ -72,7 +74,7 @@ function relayHttp(socket: Duplex, port: number, head: string, body: Buffer | un
     }
     // socat could not connect (nothing listening) — it exits without writing a byte.
     if (code !== 0) logger.info({ port, detail: stderr.trim().slice(0, 300) }, "preview target unreachable");
-    socket.end(badGatewayResponse(port));
+    socket.end(fallback);
   });
   // The browser gave up (tab closed, navigation) — the tunnel must not outlive it.
   socket.on("close", () => { child.kill("SIGKILL"); });
@@ -237,6 +239,19 @@ export async function previewRoutes(app: FastifyInstance): Promise<void> {
         await reply.redirect(`/preview/${target.port}/`, 302);
         return;
       }
+      // What a dead port answers with. For a NAVIGATION (a person in a tab) it is the
+      // "Preview parado" screen — with the Restart button when the port belongs to a registered,
+      // relaunchable preview; assets and API calls keep the structured JSON error. Resolved BEFORE
+      // hijacking, because the relay's close handler is synchronous.
+      let fallback = badGatewayResponse(target.port);
+      if (wantsHtmlInterstitial(req.raw.method, req.raw.headers.accept)) {
+        const found = await findCardPreviewByPort(target.port).catch(() => undefined);
+        fallback = stoppedPreviewPage(target.port, {
+          cardId: found?.card.id,
+          label: found?.preview.label,
+          restartable: Boolean(found?.preview.command && found?.preview.cwd),
+        });
+      }
       const body = Buffer.isBuffer(req.body) ? req.body : undefined;
       const head = buildProxyHead({
         kind: "http",
@@ -248,7 +263,7 @@ export async function previewRoutes(app: FastifyInstance): Promise<void> {
         bodyLength: body?.length ?? 0,
       });
       reply.hijack();
-      relayHttp(req.raw.socket, target.port, head, body);
+      relayHttp(req.raw.socket, target.port, head, body, fallback);
     };
 
     scope.route({

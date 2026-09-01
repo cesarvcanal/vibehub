@@ -298,6 +298,23 @@ describe("ChatView", () => {
     }
   });
 
+  it("a URL in a USER message is a clickable link (new tab, noopener); javascript: stays text", async () => {
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: "vê http://10.8.0.25:3010/preview/3100/ e javascript:alert(1)" });
+
+    const bubble = await screen.findByTestId("chat-user");
+    const anchor = bubble.querySelector("a");
+    expect(anchor).not.toBeNull();
+    expect(anchor).toHaveAttribute("href", "http://10.8.0.25:3010/preview/3100/");
+    expect(anchor).toHaveAttribute("target", "_blank");
+    expect(anchor?.getAttribute("rel")).toContain("noopener");
+    // the hostile scheme never becomes an anchor
+    expect(bubble.querySelectorAll("a")).toHaveLength(1);
+    expect(bubble).toHaveTextContent("javascript:alert(1)");
+  });
+
   it("does not duplicate history when the stream replays it (a reconnect)", async () => {
     renderChat();
     const ws = await socket();

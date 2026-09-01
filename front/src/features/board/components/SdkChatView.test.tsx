@@ -123,6 +123,24 @@ describe("SdkChatView", () => {
     expect(screen.getByTestId("sdk-user")).toHaveTextContent("roda os testes");
   });
 
+  it("a URL in a user message is clickable; javascript: never becomes a link", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "abre /preview/3100/ ou javascript:alert(1){Enter}");
+
+    const bubble = await screen.findByTestId("sdk-user");
+    const anchors = bubble.querySelectorAll("a");
+    expect(anchors).toHaveLength(1);
+    expect(anchors[0]).toHaveAttribute("href", "/preview/3100/");
+    expect(anchors[0]).toHaveAttribute("target", "_blank");
+    expect(anchors[0]?.getAttribute("rel")).toContain("noopener");
+    expect(bubble).toHaveTextContent("javascript:alert(1)");
+  });
+
   it("a permission request shows Allow/Deny; Allow sends the decision and settles the card", async () => {
     renderSdkChat();
     const ws = await socket();
