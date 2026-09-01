@@ -6,7 +6,6 @@ import {
   Loader2,
   MessageSquare,
   ShieldAlert,
-  Square,
   Wrench,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -238,28 +237,16 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         ) : null}
       </div>
 
-      <div className="mt-1.5 flex items-end gap-1.5">
-        <TerminalComposer
-          className="min-w-0 flex-1"
-          cardId={cardId}
-          active={active}
-          onSend={send}
-          onUploadImage={onUploadImage}
-        />
-        {state.turnActive ? (
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-9 w-9 shrink-0 text-muted-foreground"
-            aria-label={t("sdk.interrupt")}
-            title={t("sdk.interrupt")}
-            data-testid="sdk-interrupt"
-            onClick={interrupt}
-          >
-            <Square className="h-3.5 w-3.5" />
-          </Button>
-        ) : null}
-      </div>
+      {/* The interrupt button lives INSIDE the composer — right column, above the microphone —
+          in the same seat as the transcript chat's stop. The interrupt frame is still this view's. */}
+      <TerminalComposer
+        className="mt-1.5"
+        cardId={cardId}
+        active={active}
+        onSend={send}
+        onUploadImage={onUploadImage}
+        interrupt={{ active: state.turnActive, onInterrupt: interrupt, testId: "sdk-interrupt" }}
+      />
 
       {/* The footer says which conversation this IS (the resume key) and whether the wire is up. */}
       <div className="mt-1 flex items-center gap-2 px-1 text-[11px] text-muted-foreground/70" data-testid="sdk-chat-footer">

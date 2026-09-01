@@ -405,8 +405,6 @@ export const en: Record<string, string> = {
   "chat.copy": "Copy",
   "chat.copied": "Copied",
   "chat.copyError": "Could not copy",
-  "chat.stop": "Stop",
-  "chat.stopHint": "Press Escape in the session",
   "chat.sendError": "Could not send the message",
   "chat.awaitingChoice": "The terminal is waiting on a choice (a session menu, /compact, or a permission prompt). Open the Terminal tab, answer it, then send again. Your message was kept.",
   "chat.stopError": "Could not stop the agent",
@@ -428,7 +426,6 @@ export const en: Record<string, string> = {
   "sdk.session": "session {id}",
   "sdk.resumed": "Resuming session {id}",
   "sdk.offline": "Not connected — the message was not sent. It stays in the field.",
-  "sdk.interrupt": "Interrupt the agent",
   "sdk.permissionTitle": "Permission needed",
   "sdk.permissionTimeoutHint": "No answer denies it after 5 minutes.",
   "sdk.allow": "Allow",
@@ -483,6 +480,7 @@ export const en: Record<string, string> = {
   "composer.takePhoto": "Take photo",
   "composer.fromGallery": "Photo from gallery",
   "composer.attachFile": "Attach a file",
+  "composer.interrupt": "Interrupt",
 
   /* ----------------------------------------------------------------- outbox */
   "outbox.waitingSession.one": "1 message queued — open the card and it goes on its own",

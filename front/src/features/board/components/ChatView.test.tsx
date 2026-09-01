@@ -377,11 +377,13 @@ describe("ChatView", () => {
   it("offers Stop only while the agent is working, and Stop presses Escape in the session", async () => {
     const user = userEvent.setup({ delay: null });
     const { rerender } = renderChat({ working: false });
-    expect(screen.queryByRole("button", { name: /stop/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("chat-stop")).not.toBeInTheDocument();
+    // The seat is reserved even while the button is away — the microphone never jumps.
+    expect(screen.getByTestId("composer-interrupt-slot")).toBeInTheDocument();
 
     rerender(<ChatView cardId="c1" working />);
     expect(screen.getByTestId("chat-working")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /stop/i }));
+    await user.click(screen.getByTestId("chat-stop"));
     expect(mockPost).toHaveBeenCalledWith("/cards/c1/chat/key", { key: "escape" });
   });
 
