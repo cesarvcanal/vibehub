@@ -57,8 +57,8 @@ Multi-turn works by resume: the driver captures `session_id`, the route persists
 
 ## Permission model — a configurable MODE (`sdkPermissionMode`)
 
-Decisão de produto do César (2026-08-31, dono da instalação): o gate do driver virou um **modo
-configurável**, `sdkPermissionMode`, com **`"same-as-terminal"` como default da instalação dele**.
+Decisão de produto do mantenedor: o gate do driver virou um **modo configurável**,
+`sdkPermissionMode`, com **`"same-as-terminal"` como default**.
 
 - **`"same-as-terminal"`** — o chat nativo tem **exatamente o mesmo comportamento de permissões da
   aba Terminal do mesmo card**: o terminal roda o Claude sob as settings do próprio runner
@@ -93,10 +93,10 @@ The driver's **own** `PreToolUse` hook classifies the **SENSITIVE set** — `rm 
 The pending ledger is `createPermissionBroker` in `protocol.ts` (unit-tested; the driver embeds the
 mirror). An `interrupt` denies everything still pending and interrupts the running `query()`.
 
-## As mesmas ferramentas do terminal (MCPs, navegador, CLAUDE.md) — 2026-08-31
+## As mesmas ferramentas do terminal (MCPs, navegador, CLAUDE.md)
 
-O chat nativo carrega a MESMA configuração que a sessão TUI do card ("preciso liberar ele sair
-clicando nas coisas, testando, abrindo o Chrome, principalmente no preview, e eu acompanhar"):
+O chat nativo carrega a MESMA configuração que a sessão TUI do card — o agente precisa poder
+navegar, clicar e testar (Chrome/preview) igualzinho ao terminal, com o usuário acompanhando:
 
 - `settingSources: ["user", "project", "local"]` no `query()` — o perfil do card traz os MCPs
   gerenciados (`vibehub`, cujas instructions SÃO a persona maestro; `navegador`; os registrados) e
@@ -116,7 +116,7 @@ o mouse dele não interfere no agente) e **"Pilotar junto"** (input habilitado; 
 controle do agente — o agente dirige via CDP, canal separado do VNC, ninguém expulsa ninguém). O
 toggle troca `viewOnly` na conexão viva, sem reconectar.
 
-## Auth — OAuth token ONLY (ordem do César)
+## Auth — OAuth token ONLY (regra do projeto)
 
 The driver authenticates **exclusively** with `CLAUDE_CODE_OAUTH_TOKEN`, read from the card
 profile's `.oauth-token` (the Max subscription's setup-token, same as the TUI's session command).
@@ -173,7 +173,7 @@ The per-card opt-in ("Chat nativo (beta)" in the `⋯` menu) was **retired** the
 **vestigial, no data migration needed**. Cards that never used the native chat lose nothing: the
 history bridge (#43/#51) merges the TUI transcript into the native chat's replay on first open.
 
-## Validação pela tela (roteiro do César)
+## Validação pela tela (roteiro manual)
 
 1. **Ligar o flag global:** Configurações → "Driver SDK (chat nativo, beta)" → salvar.
 2. **Escolher UM card de teste:** abrir o card → menu `⋯` → marcar **"Chat nativo (beta)"**.
@@ -223,12 +223,12 @@ Um card é **UMA conversa**, mesmo quando ela acontece em duas telas. As regras:
   `result{subtype:"aborted"}` no `finally` do `runTurn` — é também assim que o manager conta
   turnos pra saber quando o driver está ocioso.
 
-## O turno sobrevive à página (manager — bug do Cmd+Shift+R, card prompt-56fc)
+## O turno sobrevive à página (manager — o bug do reload no meio do turno)
 
-O driver era filho da CONEXÃO: o route spawnava um por websocket e o matava no close. César mandou
-mensagem no chat nativo, deu Cmd+Shift+R no meio do turno → o socket caiu, o driver morreu NO MEIO
-do turno, a resposta nunca chegou ao transcript e o driver novo do reconnect fez `--resume` sem
-continuar o turno pendente — mensagem engolida.
+O driver era filho da CONEXÃO: o route spawnava um por websocket e o matava no close. Bastava o
+usuário mandar mensagem no chat nativo e recarregar a página no meio do turno → o socket caía, o
+driver morria NO MEIO do turno, a resposta nunca chegava ao transcript e o driver novo do reconnect
+fazia `--resume` sem continuar o turno pendente — mensagem engolida.
 
 Agora o driver é **do CARD**, propriedade do back (`back/src/services/sdk/manager.ts`):
 
@@ -245,7 +245,7 @@ Agora o driver é **do CARD**, propriedade do back (`back/src/services/sdk/manag
 - **Morte silenciosa é proibida.** O manager guarda a cauda do stderr do driver
   (`STDERR_TAIL_MAX`); uma saída que ninguém pediu (crash, código ≠ 0) vira log **warn** no back
   (código de saída + stderr + turnos em voo) E frame de erro no chat com o mesmo post-mortem.
-  Investigação do incidente (2026-08-31, repro manual no runner): o `--resume` da sessão de 3,7MB
+  Investigação (repro manual no runner): o `--resume` de uma sessão grande (3,7MB)
   funciona normalmente — a morte era o socket fechando e levando o driver junto (Cmd+Shift+R,
   troca de aba), com o stderr em nível debug e o frame de saída indo pra um socket já fechado.
 - **Fim de vida.** (1) `killCardSession` notifica o manager (`onCardSessionKill` em

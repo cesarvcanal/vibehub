@@ -1,7 +1,7 @@
 # Plano — migrar a sessão do vibehub para o Agent SDK (stream-json)
 
 > Status: **PROPOSTA / só planejamento.** Nada aqui está implementado. Objetivo: decidir se
-> vamos, e provar antes de mexer no núcleo. Decisão do César (25/08): "só planejar por enquanto".
+> vamos, e provar antes de mexer no núcleo. Decisão registrada do mantenedor: só planejar por enquanto.
 
 ## 1. O problema (a raiz dos "techgambs")
 
@@ -10,7 +10,7 @@ Hoje o vibehub dirige o Claude Code rodando a **TUI dele no tmux** e:
 - **envia** mensagem por `send-keys` (teclado apontado pra tela), e
 - **lê** o estado pelo **parsing do transcript** e do **pane** (capture-pane).
 
-Ou seja: pilotamos por cima de uma interface feita pra humano. Toda a classe de bug desta sessão
+Ou seja: pilotamos por cima de uma interface feita pra humano. Toda uma classe de bug
 nasce daí:
 
 | Sintoma | Gambiarra atual |
@@ -46,7 +46,7 @@ A classe inteira de bug morre — não some com gambiarra, some por construção
   é sandbox por card → dá pra ser permissivo com segurança.
 - Sessão é **resumível** por id (`--resume <id>` no headless / `query()` no SDK).
 
-## 3. Como a gente TESTA antes de fazer (o pedido do César)
+## 3. Como a gente TESTA antes de fazer
 
 **Não migra nada de cara.** Primeiro um **spike / prova de conceito**, isolado, que NÃO encosta no
 provisionamento atual. Se o PoC provar, aí planejamos a migração de verdade.
@@ -63,8 +63,7 @@ Um harness pequeno (um endpoint dev escondido, ou um script no runner) que:
 
 **Critérios de aceite do PoC:** (a) eventos vêm estruturados; (b) `canUseTool` dispara e a decisão
 é honrada; (c) resume funciona; (d) roda uma edição de verdade; (e) **zero** mudança no que já roda
-em produção. Roda numa **branch/frente separada**, o César testa isolado — e este terminal segue
-livre pras alterações de UX.
+em produção. Roda numa **branch/frente separada** e é validado isolado, sem bloquear o resto do trabalho.
 
 ## 4. A migração de verdade (só depois do PoC verde)
 
@@ -95,7 +94,7 @@ O menu-guard, o pending durável, o botão copiar, o navegador ligado, a UI e o 
 **continuam valendo** como v1 — deixaram o chat usável AGORA. A migração é o movimento que faz os
 techgambs **pararem de nascer**; até lá, os gambs seguram a peteca sem prejuízo.
 
-## 7. Decisões em aberto (pra fechar com o César antes do PoC)
+## 7. Decisões em aberto (pra fechar antes do PoC)
 
 1. **Onde roda o driver SDK?** No runner (um processo por card, como hoje o `claude`) — provável — ou
    no back? (Runner mantém o isolamento por card.)
@@ -107,5 +106,5 @@ techgambs **pararem de nascer**; até lá, os gambs seguram a peteca sem prejuí
 
 ## Próximo passo
 
-Com o "vai" do César: rodar o **PoC** (seção 3) numa branch separada, isolado. Ele testa; se provar,
+Com o aval do mantenedor: rodar o **PoC** (seção 3) numa branch separada, isolado. Ele testa; se provar,
 abrimos o plano da Fase 1.
