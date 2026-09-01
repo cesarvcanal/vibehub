@@ -40,6 +40,21 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(INSTRUCTIONS.trim().length).toBeGreaterThan(0);
   });
 
+  it("register vibehub_brain_learn and instruct on recording DURABLE learnings only", () => {
+    const server = createMcpServer("test") as unknown as {
+      _registeredTools?: Record<string, { description?: string }>;
+    };
+    const tools = server._registeredTools ?? {};
+    expect(Object.keys(tools)).toContain("vibehub_brain_learn");
+    // the tool's own contract: append-only into the Aprendizados section, never the rest
+    const description = tools["vibehub_brain_learn"]?.description ?? "";
+    expect(description).toContain("Aprendizados");
+    expect(description.toLowerCase()).toContain("append");
+    // the persona tells agents what belongs there — and what never does
+    expect(INSTRUCTIONS).toContain("vibehub_brain_learn");
+    expect(INSTRUCTIONS.toLowerCase()).toContain("secret");
+  });
+
   it("register the Cofre tools and instruct on using them for logins", () => {
     const server = createMcpServer("test") as unknown as {
       _registeredTools?: Record<string, unknown>;

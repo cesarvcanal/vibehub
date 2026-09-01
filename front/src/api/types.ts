@@ -543,6 +543,25 @@ export interface BrainApplyResult extends ApplyOutcome {
 }
 
 /**
+ * `GET /api/brain/projects/:id` — a PROJECT's own brain, delivered as CLAUDE.local.md at the root
+ * of each of that project's card worktrees. No seed: empty text = the project has none yet.
+ */
+export interface ProjectBrain {
+  text: string;
+  updatedAt?: string;
+  by?: string;
+}
+
+/** `POST /api/brain/projects/:id` — the saved view plus what the push achieved. */
+export type ProjectBrainWriteResult = ProjectBrain & ApplyOutcome;
+
+/** `POST /api/brain/projects/:id/apply` — the manual re-push into the project's worktrees. */
+export interface ProjectBrainApplyResult extends ApplyOutcome {
+  /** Card worktrees the text was written into. */
+  cards?: number;
+}
+
+/**
  * `GET /api/mcps/secrets` — which declared env vars / headers already have a value in the vault.
  * Booleans only: the values themselves never leave the server.
  */

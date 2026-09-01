@@ -776,6 +776,18 @@ export const ptBR: Record<string, string> = {
   "brain.stampSaved": "salvo",
   "brain.stampBy": "salvo em {when} por {by}",
   "brain.stampAt": "salvo em {when}",
+  "brain.scopeAria": "Escopo do cérebro",
+  "brain.scopeGlobal": "Global — todo card",
+  "brain.projectDescription":
+    "Instruções só deste projeto, escritas como CLAUDE.local.md na raiz de cada worktree dos cards dele — só os cards deste projeto leem, por cima do cérebro global e do CLAUDE.md do repositório. A seção '## Aprendizados' é onde o vibehub_brain_learn anexa o que os agentes descobrem; enxugue por aqui como qualquer texto.",
+  "brain.projectPlaceholder": "Este projeto ainda não tem cérebro. Escreva as regras dele aqui — ou deixe os cards registrarem aprendizados com o vibehub_brain_learn.",
+  "brain.projectStampNever": "nenhum cérebro de projeto salvo ainda",
+  "brain.projectSubject": "Cérebro do projeto {name}",
+  "brain.clearedSubject": "Cérebro do projeto {name} limpo —",
+  "brain.clear": "Limpar",
+  "brain.clearTitle": "Remover o cérebro deste projeto (apaga o CLAUDE.local.md das worktrees)",
+  "brain.applyProjectTitle": "Reescrever em toda worktree deste projeto, sem salvar um texto novo",
+  "brain.appliedToCards": "Aplicado a {n} worktree(s)",
   "brain.appliedTo": "Aplicado a {n} perfil(is)",
   "brain.appliedRestarted":
     "{where}. {restarted} terminal(is) reiniciado(s), {skipped} seguem trabalhando.",

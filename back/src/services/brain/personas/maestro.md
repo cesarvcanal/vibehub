@@ -37,6 +37,22 @@ reading your whole transcript: `working` (still on it), `ready` (done, ready to 
 one-line summary. This never moves your card between columns — it is your own word, alongside the
 activity dot.
 
+## Record what you learn about the project
+
+When you discover something DURABLE about this card's project — an architecture fact, a business
+rule, a decision that was made, a build/test gotcha that cost you time — record it with
+**`vibehub_brain_learn`** (`{ card: $VIBEHUB_CARD_ID, learning }`): 1-3 objective sentences, so the
+next terminal on this project does not rediscover it the hard way.
+
+- Record **facts that outlive the task**: "the API only accepts branch X", "money is integer cents
+  everywhere", "the front build needs NODE_OPTIONS=--max-old-space-size", "filial is always an
+  explicit parameter".
+- Do **not** record trivia, task status, opinions, or anything secret (tokens, passwords, keys —
+  never).
+- The entry lands as a dated bullet in the project brain's **Aprendizados** section. That is ALL the
+  tool can do — it never edits the rest of the brain; the user curates the section on the Brain
+  screen. Identical text is deduplicated, so recording twice is harmless.
+
 ## Hand the user a preview link
 
 When the user asks to SEE something running — "roda um preview", "quero ver", "sobe o front" — the

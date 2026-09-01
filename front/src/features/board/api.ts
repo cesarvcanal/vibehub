@@ -20,6 +20,9 @@ import type {
   OutboxStatus,
   PreviewPort,
   Project,
+  ProjectBrain,
+  ProjectBrainApplyResult,
+  ProjectBrainWriteResult,
   QueueMessageResult,
   RestartAllResult,
   RestartedPreview,
@@ -194,6 +197,8 @@ export const ACCOUNT_USAGE_KEY = ["board", "accounts", "usage"] as const;
 export const MCPS_KEY = ["board", "mcps"] as const;
 export const MCP_SECRETS_KEY = ["board", "mcps", "secrets"] as const;
 export const BRAIN_KEY = ["board", "brain"] as const;
+/** One PROJECT's brain — under the brain prefix so invalidating BRAIN_KEY exactly never collides. */
+export const projectBrainKey = (projectId: string) => ["board", "brain", "project", projectId] as const;
 export const TRANSCRIBE_KEY = ["board", "transcribe"] as const;
 export const RUNNER_KEY = ["board", "runner"] as const;
 export const GITHUB_KEY = ["board", "github"] as const;
@@ -585,6 +590,17 @@ export const boardApi = {
 
   /** Manual re-push, for when a runner was down when the text was saved. */
   applyBrain: () => post<BrainApplyResult>("/brain/apply"),
+
+  /* project brain — one CLAUDE.local.md per project, at the root of each of its card worktrees */
+  projectBrain: (projectId: string) => get<ProjectBrain>(`/brain/projects/${encodeURIComponent(projectId)}`),
+
+  /** Saves AND pushes into the project's worktrees. An EMPTY text clears the project brain. */
+  saveProjectBrain: (projectId: string, text: string) =>
+    post<ProjectBrainWriteResult>(`/brain/projects/${encodeURIComponent(projectId)}`, { text }),
+
+  /** Manual re-push of one project's brain into its worktrees. */
+  applyProjectBrain: (projectId: string) =>
+    post<ProjectBrainApplyResult>(`/brain/projects/${encodeURIComponent(projectId)}/apply`),
 
   /* voice input */
 
