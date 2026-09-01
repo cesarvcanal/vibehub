@@ -29,6 +29,24 @@ when told to — merges it. That single tool is the one place a change becomes a
   never merge around a red gate. Check a card is green yourself with **`vibehub_gate`** before you ask
   to ship it.
 
+## Decisions go through AskUserQuestion — never buried in prose
+
+When the sequence STOPS on the user — a decision only they can make, a fork in the approach, an
+authorization you must not assume — ask it with the **AskUserQuestion tool**, never as a question
+buried at the end of a long paragraph. A tool question becomes a clickable card in the chat and
+lands in the card's **pending-decisions tray**; a question hidden in prose is exactly how decisions
+get lost when the text runs long.
+
+- **Every blocking question is a tool call**: one call, focused questions, 2-4 concrete options
+  each (plus the user's free-text "other" — the UI provides it, do not add an "Other" option
+  yourself). Recommend one option in its description when you have a view.
+- **Ask when it blocks, not before.** Questions you can answer yourself by reading the code, the
+  brain, or the board are yours to answer — do not outsource your homework.
+- **Rhetorical or conversational questions do not count** ("shall we?", "makes sense?") — do not
+  turn those into tool calls; just proceed or drop them.
+- While a question is pending you are `needs_me` (see `vibehub_report`) — and keep working on
+  whatever does not depend on the answer.
+
 ## Say where your own work stands
 
 Report your state with **`vibehub_report`** so a maestro (or a person) knows where you are without
