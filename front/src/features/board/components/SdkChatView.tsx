@@ -613,6 +613,13 @@ function SdkChatRow({
         {t("sdk.edited")}
       </div>
     ) : null;
+    // Streaming input: the driver confirmed this send FOLDED into the turn already running — the
+    // label says it entered the current turn, so a mid-turn message never looks lost or ignored.
+    const absorbedTag = row.absorbed ? (
+      <div data-testid="sdk-user-absorbed" className="mt-1 text-right text-[10px] italic text-muted-foreground/80">
+        {t("sdk.absorbed")}
+      </div>
+    ) : null;
     if (role !== "self" && row.from) {
       return (
         <div className="flex flex-col items-start" data-testid="sdk-user" data-role={role} data-edited={row.edited || undefined}>
@@ -626,6 +633,7 @@ function SdkChatRow({
             <SenderTag from={row.from} />
             <LinkifiedText text={row.text} />
             {editedBadge}
+            {absorbedTag}
           </div>
         </div>
       );
@@ -642,6 +650,7 @@ function SdkChatRow({
         >
           <LinkifiedText text={row.text} />
           {editedBadge}
+          {absorbedTag}
         </div>
         {/* The pencil: hover-revealed on a desktop, simply there on touch (no hover to reveal it).
             A superseded message offers no pencil — the standing version is the one to edit. */}

@@ -437,6 +437,7 @@ export const ptBR: Record<string, string> = {
   "chat.openSenderCard": "Abrir o card que enviou esta mensagem",
 
   /* ------------------------------------------------------ chat nativo (SDK) */
+  "sdk.absorbed": "entrou no turno em andamento",
   "sdk.aria": "Conversa nativa do card",
   "sdk.beta": "Chat nativo",
   "sdk.connecting": "Iniciando o agente…",

@@ -29,6 +29,7 @@ export interface SdkEvent {
     | "user_question"
     | "question_result"
     | "message_edited"
+    | "turn_absorbed"
     | "result"
     | "error"
     | "parse_error";
@@ -98,8 +99,10 @@ export type QuestionOutcome = "pending" | "answered" | "unanswered";
 export type SdkRow =
   /** A message the person sent. `sent` = it reached the driver's stdin (the socket was open).
    *  `from` = provenance on replayed/external messages: another card's agent, another person.
-   *  `edited` = a later version SUPERSEDED this one (drawn dimmed, with the "editada" badge). */
-  | { kind: "user"; id: string; text: string; state: "sent"; from?: MessageOrigin; edited?: boolean }
+   *  `edited` = a later version SUPERSEDED this one (drawn dimmed, with the "editada" badge).
+   *  `absorbed` = it arrived mid-turn and the driver folded it into the RUNNING turn (streaming
+   *  input) — drawn with the "entrou no turno em andamento" label so it never looks lost. */
+  | { kind: "user"; id: string; text: string; state: "sent"; from?: MessageOrigin; edited?: boolean; absorbed?: boolean }
   /** Claude talking. `streaming` while deltas are still landing on it. */
   | { kind: "assistant"; id: string; text: string; streaming: boolean }
   /** One tool call, compact: the name plus a one-line summary of its input. */
@@ -368,6 +371,14 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       if (!event.id) return state;
       return answerQuestion(state, event.id, event.answers);
     }
+    case "turn_absorbed": {
+      // The driver's confirmation that the LAST send folded into the turn already running
+      // (streaming input): the newest not-yet-labelled user row gets the "entrou no turno em
+      // andamento" tag. Live-only — never replayed (by replay time the turn is history).
+      const next = markUserAbsorbed(state);
+      if (next === state && !state.awaiting) return state;
+      return { ...next, turnActive: nextTurnActive(next, false), awaiting: false };
+    }
     case "message_edited": {
       // The user superseded a message he sent: the LAST user row with those words is drawn dimmed
       // with the "editada" badge (the new version follows as its own row). Matching is by
@@ -421,6 +432,18 @@ export function markUserEdited(state: SdkChatState, originalText: string): SdkCh
     const row = state.rows[i]!;
     if (row.kind !== "user" || row.edited === true || normalizeMessageText(row.text) !== target) continue;
     const rows = [...state.rows.slice(0, i), { ...row, edited: true }, ...state.rows.slice(i + 1)];
+    return { ...state, rows };
+  }
+  return state;
+}
+
+/** Mark the LAST not-yet-absorbed user row as folded into the running turn. PURE. */
+export function markUserAbsorbed(state: SdkChatState): SdkChatState {
+  for (let i = state.rows.length - 1; i >= 0; i -= 1) {
+    const row = state.rows[i]!;
+    if (row.kind !== "user") continue;
+    if (row.absorbed === true) return state; // the newest user row is already labelled — nothing newer to label
+    const rows = [...state.rows.slice(0, i), { ...row, absorbed: true }, ...state.rows.slice(i + 1)];
     return { ...state, rows };
   }
   return state;

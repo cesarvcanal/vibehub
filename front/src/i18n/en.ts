@@ -436,6 +436,7 @@ export const en: Record<string, string> = {
   "chat.openSenderCard": "Open the card that sent this",
 
   /* ------------------------------------------------------ native chat (SDK) */
+  "sdk.absorbed": "joined the running turn",
   "sdk.aria": "Native card conversation",
   "sdk.beta": "Native chat",
   "sdk.connecting": "Starting the agent…",
