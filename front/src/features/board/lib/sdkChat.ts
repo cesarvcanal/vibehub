@@ -26,6 +26,8 @@ export interface SdkEvent {
     | "tool_use"
     | "permission"
     | "permission_request"
+    | "user_question"
+    | "question_result"
     | "result"
     | "error"
     | "parse_error";
@@ -51,7 +53,22 @@ export interface SdkEvent {
   from?: MessageOrigin;
   /** "terminal" = the event was MIRRORED from the card's TUI transcript, not spoken by the driver. */
   source?: string;
+  /** On `user_question`: the questions with their selectable options. */
+  questions?: SdkQuestion[];
+  /** On `question_result`: what the person picked (absent when it timed out / was cancelled). */
+  answers?: SdkQuestionAnswer[];
 }
+
+/** One question of a `user_question` (mirror of `UserQuestionItem` in the back's protocol). */
+export interface SdkQuestion {
+  question: string;
+  header?: string;
+  options: { label: string; description?: string }[];
+  multiSelect?: boolean;
+}
+
+/** One question's answer — the chosen labels (free text is one more string). */
+export interface SdkQuestionAnswer { selected: string[] }
 
 /** Parse one socket frame. Null for anything that is not a JSON object with a type. PURE. */
 export function parseSdkFrame(raw: string): SdkEvent | null {
@@ -72,6 +89,9 @@ export function parseSdkFrame(raw: string): SdkEvent | null {
 /** What one permission card is showing: still waiting, or how it ended. */
 export type PermissionOutcome = "pending" | "allowed" | "denied" | "timeout";
 
+/** What one question card is showing: still waiting, answered, or given up (timeout/cancel). */
+export type QuestionOutcome = "pending" | "answered" | "unanswered";
+
 export type SdkRow =
   /** A message the person sent. `sent` = it reached the driver's stdin (the socket was open).
    *  `from` = provenance on replayed/external messages: another card's agent, another person. */
@@ -82,6 +102,8 @@ export type SdkRow =
   | { kind: "tool"; id: string; name: string; summary: string; input?: unknown }
   /** The "Permitir / Negar" card — a sensitive call waiting on the human (or how it ended). */
   | { kind: "permission"; id: string; tool: string; summary: string; reason?: string; outcome: PermissionOutcome }
+  /** The agent's question with clickable options — waiting on the human, or how it was answered. */
+  | { kind: "question"; id: string; questions: SdkQuestion[]; outcome: QuestionOutcome; answers?: SdkQuestionAnswer[] }
   /** Something went wrong and saying so beats swallowing it. `count` > 1 = the SAME error again
       (a reconnect loop against a refused socket) — one banner that counts, not a stack of copies. */
   | { kind: "error"; id: string; text: string; count?: number }
@@ -211,7 +233,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
     case "ready": {
       // The frame carries the manager's REAL turn state. `turnActive: true` = a turn is in flight
       // in the card's live driver — the reattach mid-turn (Terminal↔Chat, reload) must light the
-      // spinner even though this view saw no live event yet (card prompt-56fc). Absent/false =
+      // spinner even though this view saw no live event yet (reattach mid-turn). Absent/false =
       // nothing is running, whatever the replayed tail looked like (a turn cut mid-tool must not
       // leave the spinner on forever).
       const next: SdkChatState = {
@@ -305,6 +327,22 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         event.decision === "allow" ? "allowed" : event.timedOut ? "timeout" : "denied";
       return decidePermission(state, event.id, outcome);
     }
+    case "user_question": {
+      if (!event.id || !Array.isArray(event.questions) || event.questions.length === 0) return state;
+      const rows = settleStreaming(state.rows);
+      return {
+        ...state,
+        turnActive: nextTurnActive(state, viaTerminal),
+        rows: [
+          ...rows,
+          { kind: "question", id: event.id, questions: event.questions, outcome: "pending" },
+        ],
+      };
+    }
+    case "question_result": {
+      if (!event.id) return state;
+      return answerQuestion(state, event.id, event.answers);
+    }
     case "result": {
       const next: SdkChatState = { ...state, turnActive: false, rows: settleStreaming(state.rows) };
       if (event.sessionId) next.sessionId = event.sessionId;
@@ -335,6 +373,20 @@ export function decidePermission(state: SdkChatState, id: string, outcome: Permi
     if (row.outcome !== "pending" && outcome === "pending") return row;
     changed = true;
     return { ...row, outcome };
+  });
+  return changed ? { ...state, rows } : state;
+}
+
+/** Settle a question card (a click, the driver's echo, or a replayed result — idempotent). PURE. */
+export function answerQuestion(state: SdkChatState, id: string, answers?: SdkQuestionAnswer[]): SdkChatState {
+  const outcome: QuestionOutcome = answers && answers.length > 0 ? "answered" : "unanswered";
+  let changed = false;
+  const rows = state.rows.map((row) => {
+    if (row.kind !== "question" || row.id !== id) return row;
+    // The first settlement wins on screen: an echo may confirm it, never flip it back to pending.
+    if (row.outcome !== "pending") return row;
+    changed = true;
+    return { ...row, outcome, answers };
   });
   return changed ? { ...state, rows } : state;
 }

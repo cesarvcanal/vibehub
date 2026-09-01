@@ -11,6 +11,7 @@ import { useAuth } from "@/providers/auth";
 import { boardApi } from "@/features/board/api";
 import { cardHref } from "@/features/board/lib/board";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
+import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
 import { reconnectDelay, type ConnectionState } from "@/features/board/lib/reconnect";
 import {
   groupChatRows,
@@ -231,21 +232,14 @@ export function ChatView({
 
   /* ------------------------------------------------------------ scrolling */
 
-  const scrollerRef = React.useRef<HTMLDivElement | null>(null);
   /**
-   * Whether the reader is AT the bottom. Scrolling up to re-read something and being yanked back
-   * down by the next tool line is the single most annoying thing a live transcript can do.
+   * Sticky-bottom + the floating "jump to latest" arrow (shared with the native chat). Scrolling
+   * up to re-read something and being yanked back down by the next tool line is the single most
+   * annoying thing a live transcript can do — so away from the end nothing moves, and new content
+   * only badges the arrow.
    */
-  const stickRef = React.useRef(true);
-  const onScroll = (): void => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-  };
-  React.useLayoutEffect(() => {
-    const el = scrollerRef.current;
-    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
-  }, [events, pending, working]);
+  const scrollContent = React.useMemo(() => [events, pending, working] as const, [events, pending, working]);
+  const stick = useStickToBottom(scrollContent);
 
   /* --------------------------------------------------------------- quiet */
 
@@ -266,9 +260,10 @@ export function ChatView({
 
   return (
     <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", className)}>
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <div
-        ref={scrollerRef}
-        onScroll={onScroll}
+        ref={stick.scrollerRef}
+        onScroll={stick.onScroll}
         role="log"
         aria-label={ariaLabel ?? t("chat.aria")}
         aria-live="polite"
@@ -333,6 +328,8 @@ export function ChatView({
             ) : null}
           </div>
         ) : null}
+      </div>
+      <JumpToLatest stick={stick} />
       </div>
 
       {/* The stop button lives INSIDE the composer now — right column, above the microphone —

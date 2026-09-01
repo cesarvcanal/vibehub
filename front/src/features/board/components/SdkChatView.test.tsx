@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { act } from "react";
 import { SdkChatView } from "@/features/board/components/SdkChatView";
@@ -233,7 +233,7 @@ describe("SdkChatView", () => {
     expect(screen.queryByTestId("sdk-chat-working")).toBeNull();
   });
 
-  it("mounting mid-turn shows 'Trabalhando…' — the `ready` carries the manager's turn state (prompt-56fc)", async () => {
+  it("mounting mid-turn shows 'Trabalhando…' — the `ready` carries the manager's turn state", async () => {
     // Terminal↔Chat with a turn running: the remounted view replays, reattaches to the LIVE
     // driver, and the synthesized `ready` says a turn is in flight — the spinner must be on
     // from the mount, and go out on the result.
@@ -302,5 +302,175 @@ describe("SdkChatView", () => {
     expect(screen.getByTestId("sdk-user")).toHaveTextContent("ok boa como a gnt segue?");
     expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("Seguimos assim…");
     expect(screen.queryByTestId("sdk-chat-working")).toBeNull();
+  });
+});
+
+describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
+  const QUESTION = {
+    type: "user_question" as const,
+    id: "q_1",
+    questions: [
+      {
+        question: "Como formatar a saída?",
+        header: "Formato",
+        options: [
+          { label: "Resumo", description: "Visão geral" },
+          { label: "Detalhado", description: "Explicação completa" },
+        ],
+      },
+    ],
+  };
+
+  it("renders the question card and a CLICK on an option answers it (single choice)", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(QUESTION);
+
+    const card = screen.getByTestId("sdk-question");
+    expect(card).toHaveAttribute("data-outcome", "pending");
+    expect(card).toHaveTextContent("Como formatar a saída?");
+
+    await userEvent.click(screen.getByRole("button", { name: "Resumo" }));
+    const frame = ws.sent.map((s) => JSON.parse(s)).find((f) => f.type === "question_answer");
+    expect(frame).toEqual({ type: "question_answer", id: "q_1", answers: [{ selected: ["Resumo"] }] });
+    // optimistic settle — and the driver's echo cannot flip it
+    expect(screen.getByTestId("sdk-question")).toHaveAttribute("data-outcome", "answered");
+    expect(screen.getByTestId("sdk-question")).toHaveTextContent("Resumo");
+    ws.deliver({ type: "question_result", id: "q_1", answers: [{ selected: ["Resumo"] }] });
+    expect(screen.getByTestId("sdk-question")).toHaveAttribute("data-outcome", "answered");
+  });
+
+  it("multiSelect collects the picks and sends them together on 'Answer'", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({
+      type: "user_question",
+      id: "q_2",
+      questions: [
+        {
+          question: "Quais seções?",
+          options: [{ label: "Intro" }, { label: "Meio" }, { label: "Fim" }],
+          multiSelect: true,
+        },
+      ],
+    });
+
+    const send = screen.getByTestId("sdk-question-send");
+    expect(send).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Intro" }));
+    await userEvent.click(screen.getByRole("button", { name: "Fim" }));
+    expect(send).toBeEnabled();
+    await userEvent.click(send);
+
+    const frame = ws.sent.map((s) => JSON.parse(s)).find((f) => f.type === "question_answer");
+    expect(frame).toEqual({ type: "question_answer", id: "q_2", answers: [{ selected: ["Intro", "Fim"] }] });
+    expect(screen.getByTestId("sdk-question")).toHaveAttribute("data-outcome", "answered");
+  });
+
+  it("the free-text 'other answer' rides as the answer", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(QUESTION);
+
+    await userEvent.type(screen.getByTestId("sdk-question-other"), "nenhum dos dois, faz em tabela");
+    await userEvent.click(screen.getByTestId("sdk-question-send"));
+
+    const frame = ws.sent.map((s) => JSON.parse(s)).find((f) => f.type === "question_answer");
+    expect(frame).toEqual({
+      type: "question_answer",
+      id: "q_1",
+      answers: [{ selected: ["nenhum dos dois, faz em tabela"] }],
+    });
+  });
+
+  it("REPLAY: a pending question replayed before `ready` comes back CLICKABLE (survives F5)", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    // replay lands BEFORE ready — the exact reconnect order
+    ws.deliver(QUESTION);
+    ws.deliver({ type: "ready", turnActive: true });
+
+    expect(screen.getByTestId("sdk-question")).toHaveAttribute("data-outcome", "pending");
+    await userEvent.click(screen.getByRole("button", { name: "Detalhado" }));
+    const frame = ws.sent.map((s) => JSON.parse(s)).find((f) => f.type === "question_answer");
+    expect(frame).toEqual({ type: "question_answer", id: "q_1", answers: [{ selected: ["Detalhado"] }] });
+  });
+
+  it("a timed-out question replays settled as unanswered", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver(QUESTION);
+    ws.deliver({ type: "question_result", id: "q_1", timedOut: true });
+    ws.deliver({ type: "ready" });
+    expect(screen.getByTestId("sdk-question")).toHaveAttribute("data-outcome", "unanswered");
+    expect(screen.queryByTestId("sdk-question-send")).toBeNull();
+  });
+});
+
+describe("SdkChatView — 'ir pro fim' flutuante", () => {
+  function fakeScrollMetrics(el: HTMLElement, { scrollTop = 0 } = {}) {
+    Object.defineProperty(el, "scrollHeight", { configurable: true, value: 1000 });
+    Object.defineProperty(el, "clientHeight", { configurable: true, value: 200 });
+    let top = scrollTop;
+    Object.defineProperty(el, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => { top = v; },
+    });
+  }
+
+  it("appears when scrolled up, badges on a NEW message (no auto-scroll), and a click returns to the end", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "assistant_text", text: "primeira resposta" });
+
+    // at the bottom: no button
+    expect(screen.queryByTestId("jump-latest")).toBeNull();
+
+    // the reader scrolls UP
+    const scroller = screen.getByTestId("sdk-chat-scroller");
+    fakeScrollMetrics(scroller, { scrollTop: 0 });
+    fireEvent.scroll(scroller);
+    expect(screen.getByTestId("jump-latest")).toBeInTheDocument();
+    expect(screen.queryByTestId("jump-latest-new")).toBeNull();
+
+    // a new message lands: the badge lights, the view does NOT jump
+    ws.deliver({ type: "assistant_text", text: "mensagem nova" });
+    expect(screen.getByTestId("jump-latest-new")).toBeInTheDocument();
+    expect(scroller.scrollTop).toBe(0);
+
+    // the click scrolls to the end and the button goes away
+    const scrollTo = vi.fn(function (this: HTMLElement, opts: { top: number }) { this.scrollTop = opts.top; });
+    Object.defineProperty(scroller, "scrollTo", { configurable: true, value: scrollTo });
+    await userEvent.click(screen.getByTestId("jump-latest"));
+    expect(scrollTo).toHaveBeenCalledWith({ top: 1000, behavior: "smooth" });
+    expect(screen.queryByTestId("jump-latest")).toBeNull();
+  });
+
+  it("disappears when the reader scrolls back to the end on their own", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "assistant_text", text: "oi" });
+
+    const scroller = screen.getByTestId("sdk-chat-scroller");
+    fakeScrollMetrics(scroller, { scrollTop: 0 });
+    fireEvent.scroll(scroller);
+    expect(screen.getByTestId("jump-latest")).toBeInTheDocument();
+
+    scroller.scrollTop = 900; // 1000 - 900 - 200 < 120 → at the bottom again
+    fireEvent.scroll(scroller);
+    expect(screen.queryByTestId("jump-latest")).toBeNull();
   });
 });

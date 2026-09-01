@@ -5,6 +5,11 @@ import {
   classifySensitivity,
   sdkPermissionDecision,
   createPermissionBroker,
+  createQuestionBroker,
+  normalizeUserQuestions,
+  buildAskUserAnswers,
+  parseQuestionAnswers,
+  parseSdkClientFrame,
 } from "./protocol.js";
 
 describe("parseDriverLine", () => {
@@ -204,5 +209,125 @@ describe("gate modes — sdkGateAction / parseGateMode", () => {
       .toEqual({ action: "allow", sensitive: false });
     expect(sdkGateAction("ask-sensitive", "Read", { file_path: "/work/a.ts" }))
       .toEqual({ action: "allow", sensitive: false });
+  });
+});
+
+describe("user questions — AskUserQuestion over the chat", () => {
+  const QUESTIONS = [
+    {
+      question: "How should I format the output?",
+      header: "Format",
+      options: [
+        { label: "Summary", description: "Brief overview" },
+        { label: "Detailed", description: "Full explanation" },
+      ],
+    },
+  ];
+
+  it("parses a user_question line from the driver", () => {
+    const line = JSON.stringify({ type: "user_question", id: "q_1", questions: QUESTIONS });
+    expect(parseDriverLine(line)).toEqual({ type: "user_question", id: "q_1", questions: QUESTIONS });
+  });
+
+  it("parses a question_result line (answered and timed out)", () => {
+    expect(parseDriverLine(`{"type":"question_result","id":"q_1","answers":[{"selected":["Summary"]}]}`)).toEqual({
+      type: "question_result", id: "q_1", answers: [{ selected: ["Summary"] }],
+    });
+    expect(parseDriverLine(`{"type":"question_result","id":"q_2","timedOut":true}`)).toEqual({
+      type: "question_result", id: "q_2", timedOut: true,
+    });
+  });
+
+  it("encodes a question_answer control for the driver's stdin", () => {
+    expect(encodeControl({ type: "question_answer", id: "q_1", answers: [{ selected: ["Summary"] }] })).toBe(
+      `{"type":"question_answer","id":"q_1","answers":[{"selected":["Summary"]}]}\n`,
+    );
+  });
+
+  it("parseSdkClientFrame accepts a question_answer frame and refuses a malformed one", () => {
+    expect(parseSdkClientFrame(`{"type":"question_answer","id":"q_1","answers":[{"selected":["A","texto livre"]}]}`)).toEqual({
+      type: "question_answer", id: "q_1", answers: [{ selected: ["A", "texto livre"] }],
+    });
+    expect(parseSdkClientFrame(`{"type":"question_answer","id":"q_1"}`)).toBeNull();
+    expect(parseSdkClientFrame(`{"type":"question_answer","id":"q_1","answers":[{"selected":[1]}]}`)).toBeNull();
+    expect(parseSdkClientFrame(`{"type":"question_answer","answers":[]}`)).toBeNull();
+  });
+
+  it("parseQuestionAnswers keeps only answer-shaped payloads", () => {
+    expect(parseQuestionAnswers([{ selected: ["A"] }, { selected: [] }])).toEqual([{ selected: ["A"] }, { selected: [] }]);
+    expect(parseQuestionAnswers("nope")).toBeNull();
+    expect(parseQuestionAnswers([{ selected: "A" }])).toBeNull();
+  });
+
+  it("normalizeUserQuestions accepts the AskUserQuestion shape and refuses junk", () => {
+    expect(normalizeUserQuestions({ questions: QUESTIONS })).toEqual(QUESTIONS);
+    // multiSelect and header survive; label-less options are dropped, not fatal.
+    expect(
+      normalizeUserQuestions({
+        questions: [{ question: "Which?", multiSelect: true, options: [{ label: "A" }, { nope: 1 }] }],
+      }),
+    ).toEqual([{ question: "Which?", options: [{ label: "A" }], multiSelect: true }]);
+    expect(normalizeUserQuestions({})).toBeNull();
+    expect(normalizeUserQuestions({ questions: [] })).toBeNull();
+    expect(normalizeUserQuestions({ questions: [{ question: "" }] })).toBeNull();
+    expect(normalizeUserQuestions(null)).toBeNull();
+  });
+
+  it("buildAskUserAnswers maps question text to label(s) — single string, multiSelect array", () => {
+    const questions = [
+      { question: "Format?", options: [{ label: "A" }, { label: "B" }] },
+      { question: "Sections?", options: [{ label: "Intro" }, { label: "End" }], multiSelect: true },
+    ];
+    expect(
+      buildAskUserAnswers(questions, [{ selected: ["A"] }, { selected: ["Intro", "End"] }]),
+    ).toEqual({ "Format?": "A", "Sections?": ["Intro", "End"] });
+  });
+
+  it("buildAskUserAnswers: free text rides as the answer; empty/missing answers are omitted", () => {
+    const questions = [
+      { question: "Format?", options: [{ label: "A" }] },
+      { question: "Extra?", options: [] },
+    ];
+    expect(buildAskUserAnswers(questions, [{ selected: ["  "] }, { selected: ["do it my way"] }])).toEqual({
+      "Extra?": "do it my way",
+    });
+    // Two picks on a single-select question degrade to a joined string, never an array.
+    expect(buildAskUserAnswers([questions[0]!], [{ selected: ["A", "B"] }])).toEqual({ "Format?": "A, B" });
+  });
+});
+
+describe("createQuestionBroker", () => {
+  it("resolves an awaited question with the human answers", async () => {
+    const broker = createQuestionBroker(60_000);
+    const waited = broker.wait("q1");
+    expect(broker.pendingCount()).toBe(1);
+    expect(broker.resolve("q1", [{ selected: ["A"] }])).toBe(true);
+    await expect(waited).resolves.toEqual({ answers: [{ selected: ["A"] }], timedOut: false });
+    expect(broker.pendingCount()).toBe(0);
+  });
+
+  it("reports timedOut with null answers when nobody answers", async () => {
+    const broker = createQuestionBroker(10);
+    await expect(broker.wait("slow")).resolves.toEqual({ answers: null, timedOut: true });
+    expect(broker.pendingCount()).toBe(0);
+  });
+
+  it("ignores an answer nothing is waiting for, and a second answer for the same id", async () => {
+    const broker = createQuestionBroker(60_000);
+    expect(broker.resolve("ghost", [])).toBe(false);
+    const waited = broker.wait("q2");
+    expect(broker.resolve("q2", [{ selected: ["B"] }])).toBe(true);
+    expect(broker.resolve("q2", [{ selected: ["C"] }])).toBe(false);
+    await expect(waited).resolves.toEqual({ answers: [{ selected: ["B"] }], timedOut: false });
+  });
+
+  it("abandonAll resolves every pending question as unanswered (the interrupt path)", async () => {
+    const broker = createQuestionBroker(60_000);
+    const a = broker.wait("a");
+    const b = broker.wait("b");
+    broker.abandonAll();
+    await expect(a).resolves.toEqual({ answers: null, timedOut: false });
+    await expect(b).resolves.toEqual({ answers: null, timedOut: false });
+    expect(broker.pendingCount()).toBe(0);
   });
 });

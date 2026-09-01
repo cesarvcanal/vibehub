@@ -93,6 +93,31 @@ The driver's **own** `PreToolUse` hook classifies the **SENSITIVE set** — `rm 
 The pending ledger is `createPermissionBroker` in `protocol.ts` (unit-tested; the driver embeds the
 mirror). An `interrupt` denies everything still pending and interrupts the running `query()`.
 
+## Perguntas com opções — AskUserQuestion no chat
+
+O agente pode PERGUNTAR em vez de chutar: quando o modelo chama a tool nativa **AskUserQuestion**,
+o SDK roteia a chamada pelo callback **`canUseTool`** em QUALQUER permission mode
+(`bypassPermissions` incluído — é uma pergunta ao humano, não uma permissão). O driver intercepta:
+
+1. valida/normaliza o input (`normalizeUserQuestions`) e emite
+   `user_question { id, questions: [{ question, header?, options: [{label, description?}], multiSelect? }] }`;
+2. o front desenha o **card de pergunta**: opções clicáveis por questão + campo livre
+   **"Outra resposta…"**. Uma pergunta única de escolha única responde NO CLIQUE; multi-select (ou
+   várias perguntas) coleta as escolhas e envia com um "Responder";
+3. a resposta volta como `{ "type": "question_answer", "id", "answers": [{ "selected": [...] }] }`
+   (uma entrada por pergunta, na ordem; texto livre é mais uma string em `selected`);
+4. o driver devolve ao modelo via `updatedInput` (`{ questions, answers: { "<pergunta>": label | labels[] } }`,
+   `buildAskUserAnswers`) e emite `question_result { id, answers }` para o card assentar
+   ("Respondida: …");
+5. **timeout generoso** (`QUESTION_TIMEOUT_MS`, 30 min): sem resposta, o modelo recebe um deny
+   dizendo que o usuário não respondeu e que siga com o melhor julgamento; o card mostra "Sem
+   resposta". Um `interrupt` cancela as perguntas pendentes do turno.
+
+O par `user_question`/`question_result` é persistido no `sdk-history`: o replay re-desenha uma
+pergunta pendente CLICÁVEL (o driver é do card e continua aguardando — F5 não perde a pergunta,
+como a permissão) e uma respondida/expirada já assentada. Ledger: `createQuestionBroker` em
+`protocol.ts` (unit-tested; o driver embute o espelho).
+
 ## As mesmas ferramentas do terminal (MCPs, navegador, CLAUDE.md)
 
 O chat nativo carrega a MESMA configuração que a sessão TUI do card — o agente precisa poder

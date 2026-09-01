@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import {
   AlertTriangle,
   ChevronRight,
+  CircleHelp,
   Loader2,
   MessageSquare,
   ShieldAlert,
@@ -16,15 +17,18 @@ import { TerminalComposer } from "@/features/board/components/TerminalComposer";
 import { LinkifiedText, Markdown, SenderTag } from "@/features/board/components/ChatView";
 import { originRole } from "@/features/board/lib/chat";
 import { reconnectDelay, type ConnectionState } from "@/features/board/lib/reconnect";
+import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
 import {
   INITIAL_SDK_STATE,
   TERMINAL_ACTIVITY_NOTE,
+  answerQuestion,
   applySdkEvent,
   appendUserRow,
   decidePermission,
   groupSdkRows,
   parseSdkFrame,
   type SdkChatState,
+  type SdkQuestionAnswer,
   type SdkRow,
 } from "@/features/board/lib/sdkChat";
 import { t as translate, useT } from "@/i18n";
@@ -176,28 +180,30 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     setState((prev) => decidePermission(prev, id, allow ? "allowed" : "denied"));
   };
 
+  const answerUserQuestion = (id: string, answers: SdkQuestionAnswer[]): void => {
+    try {
+      sendFrame({ type: "question_answer", id, answers });
+    } catch (err) {
+      toast.error((err as Error).message);
+      return;
+    }
+    // Optimistic only in DRAWING — the driver echoes a `question_result`; the first settlement wins.
+    setState((prev) => answerQuestion(prev, id, answers));
+  };
+
   /* ------------------------------------------------------------ scrolling */
 
-  const scrollerRef = React.useRef<HTMLDivElement | null>(null);
-  const stickRef = React.useRef(true);
-  const onScroll = (): void => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-  };
-  React.useLayoutEffect(() => {
-    const el = scrollerRef.current;
-    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
-  }, [state]);
+  const stick = useStickToBottom(state.rows);
 
   const rendered = React.useMemo(() => groupSdkRows(state.rows), [state.rows]);
   const empty = state.rows.length === 0;
 
   return (
     <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", className)}>
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <div
-        ref={scrollerRef}
-        onScroll={onScroll}
+        ref={stick.scrollerRef}
+        onScroll={stick.onScroll}
         role="log"
         aria-label={ariaLabel ?? t("sdk.aria")}
         aria-live="polite"
@@ -226,7 +232,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
           entry.kind === "tools" ? (
             <SdkToolGroup key={entry.id} rows={entry.rows} />
           ) : (
-            <SdkChatRow key={entry.id} row={entry.row} onPermission={answerPermission} />
+            <SdkChatRow key={entry.id} row={entry.row} onPermission={answerPermission} onAnswer={answerUserQuestion} />
           ),
         )}
 
@@ -240,6 +246,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
             {t("chat.working")}
           </div>
         ) : null}
+      </div>
+      <JumpToLatest stick={stick} />
       </div>
 
       {/* The interrupt button lives INSIDE the composer — right column, above the microphone —
@@ -303,10 +311,22 @@ function SdkToolGroup({ rows }: { rows: SdkRow[] }) {
   );
 }
 
-function SdkChatRow({ row, onPermission }: { row: SdkRow; onPermission?: (id: string, allow: boolean) => void }) {
+function SdkChatRow({
+  row,
+  onPermission,
+  onAnswer,
+}: {
+  row: SdkRow;
+  onPermission?: (id: string, allow: boolean) => void;
+  onAnswer?: (id: string, answers: SdkQuestionAnswer[]) => void;
+}) {
   const t = useT();
   // Whose screen this is — their own messages render unlabelled, everyone else's carry the sender.
   const viewer = useAuth().user?.username;
+
+  if (row.kind === "question") {
+    return <SdkQuestionCard row={row} onAnswer={onAnswer} />;
+  }
 
   if (row.kind === "tool") {
     return (
@@ -430,6 +450,148 @@ function SdkChatRow({ row, onPermission }: { row: SdkRow; onPermission?: (id: st
     <div data-testid="sdk-assistant" className="max-w-full select-text text-sm leading-relaxed">
       <Markdown text={row.text} />
       {row.streaming ? <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-foreground/60 align-baseline" /> : null}
+    </div>
+  );
+}
+
+/**
+ * The agent's QUESTION card — AskUserQuestion rendered as clickable options in the chat.
+ *
+ * Reading rules: a single-choice single question answers on the CLICK (one gesture, like the
+ * permission buttons); multi-select — or several questions at once — collects the picks and sends
+ * them with one "Responder". Every question also takes a free-text "Outra resposta…" (sent as the
+ * answer when filled). A settled card shows what was chosen; a replayed pending one is clickable
+ * again (the driver is still waiting — the timeout is 30 minutes).
+ */
+function SdkQuestionCard({
+  row,
+  onAnswer,
+}: {
+  row: Extract<SdkRow, { kind: "question" }>;
+  onAnswer?: (id: string, answers: SdkQuestionAnswer[]) => void;
+}) {
+  const t = useT();
+  const [picked, setPicked] = React.useState<string[][]>(() => row.questions.map(() => []));
+  const [other, setOther] = React.useState<string[]>(() => row.questions.map(() => ""));
+
+  const single = row.questions.length === 1 && row.questions[0]?.multiSelect !== true;
+
+  const answersFrom = (pickedNow: string[][], otherNow: string[]): SdkQuestionAnswer[] =>
+    row.questions.map((_, i) => {
+      const text = (otherNow[i] ?? "").trim();
+      return { selected: [...(pickedNow[i] ?? []), ...(text !== "" ? [text] : [])] };
+    });
+
+  const complete = row.questions.every((_, i) => (picked[i]?.length ?? 0) > 0 || (other[i] ?? "").trim() !== "");
+
+  const submit = (answers: SdkQuestionAnswer[]): void => onAnswer?.(row.id, answers);
+
+  const toggle = (qi: number, label: string): void => {
+    const multi = row.questions[qi]?.multiSelect === true;
+    if (single) {
+      // One question, one choice: the click IS the answer.
+      submit(answersFrom(row.questions.map((_, i) => (i === 0 ? [label] : [])), other.map(() => "")));
+      return;
+    }
+    setPicked((prev) =>
+      prev.map((sel, i) => {
+        if (i !== qi) return sel;
+        if (!multi) return sel.includes(label) ? [] : [label];
+        return sel.includes(label) ? sel.filter((l) => l !== label) : [...sel, label];
+      }),
+    );
+  };
+
+  if (row.outcome !== "pending") {
+    const chosen = (row.answers ?? []).map((a) => a.selected.join(", ")).filter((s) => s !== "");
+    return (
+      <div
+        data-testid="sdk-question"
+        data-outcome={row.outcome}
+        className="flex flex-col gap-1.5 rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs"
+      >
+        <div className="flex items-center gap-1.5 font-medium text-sky-500">
+          <CircleHelp className="h-3.5 w-3.5 shrink-0" />
+          {t("sdk.questionTitle")}
+        </div>
+        {row.questions.map((q, i) => (
+          <div key={i} className="min-w-0 text-muted-foreground">{q.question}</div>
+        ))}
+        <div className="text-foreground/90">
+          {row.outcome === "answered" ? t("sdk.questionAnswered", { answers: chosen.join(" · ") }) : t("sdk.questionUnanswered")}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      data-testid="sdk-question"
+      data-outcome="pending"
+      className="flex flex-col gap-2 rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs"
+    >
+      <div className="flex items-center gap-1.5 font-medium text-sky-500">
+        <CircleHelp className="h-3.5 w-3.5 shrink-0" />
+        {t("sdk.questionTitle")}
+      </div>
+      {row.questions.map((q, qi) => (
+        <div key={qi} className="flex flex-col gap-1.5">
+          {q.header ? <div className="text-[10px] font-semibold uppercase tracking-wide text-sky-500/80">{q.header}</div> : null}
+          <div className="text-sm text-foreground">{q.question}</div>
+          <div className="flex flex-wrap gap-1.5">
+            {q.options.map((opt) => {
+              const selected = (picked[qi] ?? []).includes(opt.label);
+              return (
+                <Button
+                  key={opt.label}
+                  size="sm"
+                  variant={selected ? "default" : "outline"}
+                  className="h-7 max-w-full text-xs"
+                  data-testid="sdk-question-option"
+                  aria-pressed={selected}
+                  title={opt.description}
+                  onClick={() => toggle(qi, opt.label)}
+                >
+                  <span className="truncate">{opt.label}</span>
+                </Button>
+              );
+            })}
+          </div>
+          <input
+            type="text"
+            data-testid="sdk-question-other"
+            aria-label={t("sdk.questionOther")}
+            placeholder={t("sdk.questionOther")}
+            value={other[qi] ?? ""}
+            onChange={(e) => setOther((prev) => prev.map((v, i) => (i === qi ? e.target.value : v)))}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              const answers = answersFrom(picked, other);
+              if (answers[qi]!.selected.length > 0 && (single || complete)) submit(answers);
+            }}
+            className="h-7 rounded-md border border-border/70 bg-background/80 px-2 text-xs outline-none placeholder:text-muted-foreground/60 focus:border-sky-500/60"
+          />
+        </div>
+      ))}
+      {single ? (
+        (other[0] ?? "").trim() !== "" ? (
+          <Button size="sm" className="h-7 self-start text-xs" data-testid="sdk-question-send" onClick={() => submit(answersFrom(picked, other))}>
+            {t("sdk.questionSend")}
+          </Button>
+        ) : null
+      ) : (
+        <Button
+          size="sm"
+          className="h-7 self-start text-xs"
+          data-testid="sdk-question-send"
+          disabled={!complete}
+          onClick={() => submit(answersFrom(picked, other))}
+        >
+          {t("sdk.questionSend")}
+        </Button>
+      )}
+      <span className="text-muted-foreground/70">{t("sdk.questionTimeoutHint")}</span>
     </div>
   );
 }

@@ -41,13 +41,17 @@ import { logger } from "../utils/logger.js";
  *   { "type": "tool_use", "id": string, "name": string, "input": unknown }
  *   { "type": "permission", "tool": string, "decision": "allow"|"deny", "sensitive": boolean, "reason"?: string, "id"?: string, "timedOut"?: boolean }
  *   { "type": "permission_request", "id": string, "tool": string, "input"?: unknown, "reason"?: string }
+ *   { "type": "user_question", "id": string, "questions": [{ "question", "header"?, "options": [{ "label", "description"? }], "multiSelect"? }] }
+ *   { "type": "question_result", "id": string, "answers"?: [{ "selected": string[] }], "timedOut"?: boolean }
  *   { "type": "result", "isError": boolean, "sessionId"?: string, "subtype"?: string, "result"?: string, "permissionDenials"?: unknown[] }
  *   { "type": "error", "message": string }
  *   { "type": "parse_error", "raw": string }              // synthesised by the back for a bad line
  *
  * The front sends, per message: either a JSON object { "type": "user", "text": "..." },
- * { "type": "interrupt" }, or { "type": "permission_decision", "id": string, "allow": boolean }
- * (the answer to a `permission_request`) — or a bare string, treated as a user message.
+ * { "type": "interrupt" }, { "type": "permission_decision", "id": string, "allow": boolean }
+ * (the answer to a `permission_request`), or { "type": "question_answer", "id": string,
+ * "answers": [{ "selected": string[] }] } (the answer to a `user_question`) — or a bare string,
+ * treated as a user message.
  */
 
 // Re-exported for compatibility (tests, callers): the parser moved into the pure protocol module.

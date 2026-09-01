@@ -43,6 +43,41 @@ export interface PermissionRequestEvent {
   input?: unknown;
   reason?: string;
 }
+/* ------------------------------------------------------- user questions */
+
+/** One selectable option of a question (mirror of AskUserQuestion's option shape). */
+export interface UserQuestionOption { label: string; description?: string }
+/** One question the agent asked, with its selectable options. */
+export interface UserQuestionItem {
+  question: string;
+  /** Short chip-like title ("Auth", "Deploy"…). */
+  header?: string;
+  options: UserQuestionOption[];
+  /** True = the person may pick several options. */
+  multiSelect?: boolean;
+}
+/**
+ * The agent called AskUserQuestion: instead of executing, the driver pauses the turn and asks the
+ * HUMAN — the front renders this as a question card with clickable options (plus a free-text
+ * "other answer" field). Answered by a `question_answer` control with the same `id`, or the
+ * timeout (QUESTION_TIMEOUT_MS) reports "no answer" to the model.
+ */
+export interface UserQuestionEvent {
+  type: "user_question";
+  id: string;
+  questions: UserQuestionItem[];
+}
+/** One question's answer: the chosen option labels (free text arrives as one more string). */
+export interface UserQuestionAnswer { selected: string[] }
+/** How a `user_question` ended — pairs by `id`, so a replayed card can settle. */
+export interface QuestionResultEvent {
+  type: "question_result";
+  id: string;
+  answers?: UserQuestionAnswer[];
+  /** True when nobody answered within the timeout (the model was told "no answer"). */
+  timedOut?: boolean;
+}
+
 /** End of a turn. */
 export interface ResultEvent {
   type: "result";
@@ -54,7 +89,7 @@ export interface ResultEvent {
 }
 /** The driver is up and ready to accept the first user message. The back stamps `turnActive` on
  *  every `ready` it sends (real or synthesized on reattach) with the manager's live turn count, so
- *  a view mounting mid-turn knows work is running (card prompt-56fc: Terminal↔Chat during a turn
+ *  a view mounting mid-turn knows work is running (reattach mid-turn: Terminal↔Chat during a turn
  *  remounted the view and the "Trabalhando…" spinner never lit). */
 export interface ReadyEvent { type: "ready"; resume?: string; turnActive?: boolean }
 /** The driver hit an error (SDK threw, auth missing, etc.). */
@@ -69,6 +104,8 @@ export type DriverEvent =
   | SessionEvent
   | PermissionEvent
   | PermissionRequestEvent
+  | UserQuestionEvent
+  | QuestionResultEvent
   | ResultEvent
   | ReadyEvent
   | DriverErrorEvent
@@ -82,6 +119,8 @@ const DRIVER_EVENT_TYPES = new Set([
   "session",
   "permission",
   "permission_request",
+  "user_question",
+  "question_result",
   "result",
   "ready",
   "error",
@@ -114,7 +153,9 @@ export interface UserControl { type: "user"; text: string }
 export interface InterruptControl { type: "interrupt" }
 /** The human's answer to a `permission_request` — `id` pairs it with the awaiting call. */
 export interface PermissionDecisionControl { type: "permission_decision"; id: string; allow: boolean }
-export type DriverControl = UserControl | InterruptControl | PermissionDecisionControl;
+/** The human's answer to a `user_question` — one entry per question, in order. */
+export interface QuestionAnswerControl { type: "question_answer"; id: string; answers: UserQuestionAnswer[] }
+export type DriverControl = UserControl | InterruptControl | PermissionDecisionControl | QuestionAnswerControl;
 
 /** Serialise a control message as one stdin line (with the trailing newline). PURE. */
 export function encodeControl(control: DriverControl): string {
@@ -132,6 +173,10 @@ export function parseSdkClientFrame(raw: string): DriverControl | null {
       if (parsed.type === "user" && typeof parsed.text === "string") return { type: "user", text: parsed.text };
       if (parsed.type === "permission_decision" && typeof parsed.id === "string" && typeof parsed.allow === "boolean") {
         return { type: "permission_decision", id: parsed.id, allow: parsed.allow };
+      }
+      if (parsed.type === "question_answer" && typeof parsed.id === "string") {
+        const answers = parseQuestionAnswers((parsed as { answers?: unknown }).answers);
+        if (answers) return { type: "question_answer", id: parsed.id, answers };
       }
       return null;
     } catch {
@@ -290,6 +335,133 @@ export function createPermissionBroker(timeoutMs: number = PERMISSION_TIMEOUT_MS
       if (!deliver) return false;
       deliver({ allow, timedOut: false });
       return true;
+    },
+    pendingCount(): number {
+      return pending.size;
+    },
+  };
+}
+
+/* --------------------------------------------------------- user questions */
+
+/**
+ * How long a `user_question` waits for the human before the model is told "no answer". Generous
+ * (30 minutes): a question is a fork in the work, worth waiting for — but a forgotten card must
+ * not hold the agent's loop hostage forever (the canUseTool callback AWAITS this).
+ */
+export const QUESTION_TIMEOUT_MS = 30 * 60_000;
+
+/** Parse the `answers` payload of a `question_answer` frame. Null when it is not answer-shaped. PURE. */
+export function parseQuestionAnswers(raw: unknown): UserQuestionAnswer[] | null {
+  if (!Array.isArray(raw)) return null;
+  const answers: UserQuestionAnswer[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") return null;
+    const selected = (entry as { selected?: unknown }).selected;
+    if (!Array.isArray(selected) || selected.some((s) => typeof s !== "string")) return null;
+    answers.push({ selected: selected as string[] });
+  }
+  return answers;
+}
+
+/**
+ * Normalize the AskUserQuestion tool input into the wire's `questions` — refusing anything that is
+ * not question-shaped (the driver falls back to letting the SDK handle a malformed call). PURE.
+ */
+export function normalizeUserQuestions(input: unknown): UserQuestionItem[] | null {
+  if (!input || typeof input !== "object") return null;
+  const raw = (input as { questions?: unknown }).questions;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const questions: UserQuestionItem[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") return null;
+    const q = entry as { question?: unknown; header?: unknown; options?: unknown; multiSelect?: unknown };
+    if (typeof q.question !== "string" || q.question.trim() === "") return null;
+    const options: UserQuestionOption[] = [];
+    if (Array.isArray(q.options)) {
+      for (const opt of q.options) {
+        if (!opt || typeof opt !== "object") continue;
+        const o = opt as { label?: unknown; description?: unknown };
+        if (typeof o.label !== "string" || o.label.trim() === "") continue;
+        options.push({ label: o.label, ...(typeof o.description === "string" ? { description: o.description } : {}) });
+      }
+    }
+    questions.push({
+      question: q.question,
+      ...(typeof q.header === "string" && q.header.trim() !== "" ? { header: q.header } : {}),
+      options,
+      ...(q.multiSelect === true ? { multiSelect: true } : {}),
+    });
+  }
+  return questions;
+}
+
+/**
+ * Build the `answers` map the SDK's canUseTool response wants: question text → chosen label(s)
+ * (one string for a single choice, an array for multiSelect; free text is just one more string).
+ * Answers pair with questions BY INDEX; a question left without an answer is omitted. PURE — the
+ * driver embeds a mirror copy (see the file header); keep `sdk-driver.mjs` in step.
+ */
+export function buildAskUserAnswers(
+  questions: readonly UserQuestionItem[],
+  answers: readonly UserQuestionAnswer[],
+): Record<string, string | string[]> {
+  const map: Record<string, string | string[]> = {};
+  questions.forEach((q, i) => {
+    const selected = answers[i]?.selected.filter((s) => s.trim() !== "") ?? [];
+    if (selected.length === 0) return;
+    map[q.question] = q.multiSelect ? selected : (selected.length === 1 ? selected[0]! : selected.join(", "));
+  });
+  return map;
+}
+
+export interface QuestionWaitResult {
+  /** Null when nobody answered in time. */
+  answers: UserQuestionAnswer[] | null;
+  timedOut: boolean;
+}
+
+export interface QuestionBroker {
+  /** Await the human's answers for `id`. Resolves with `timedOut` when the clock fires first. */
+  wait(id: string): Promise<QuestionWaitResult>;
+  /** Deliver answers. Returns false when nothing was waiting under that id (late click, typo). */
+  resolve(id: string, answers: UserQuestionAnswer[]): boolean;
+  /** Resolve everything still pending as unanswered (an interrupt kills the turn they belong to). */
+  abandonAll(): void;
+  /** How many questions are still waiting (observability + tests). */
+  pendingCount(): number;
+}
+
+/**
+ * The pending-question ledger the driver keeps between "emitted a user_question" and "the stdin
+ * brought a question_answer" — the same shape as `createPermissionBroker`, with answers instead of
+ * a boolean. The driver embeds a MIRROR copy (see the file header) — keep them in step.
+ */
+export function createQuestionBroker(timeoutMs: number = QUESTION_TIMEOUT_MS): QuestionBroker {
+  const pending = new Map<string, (result: QuestionWaitResult) => void>();
+  return {
+    wait(id: string): Promise<QuestionWaitResult> {
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          resolve({ answers: null, timedOut: true });
+        }, timeoutMs);
+        pending.set(id, (result) => {
+          clearTimeout(timer);
+          pending.delete(id);
+          resolve(result);
+        });
+      });
+    },
+    resolve(id: string, answers: UserQuestionAnswer[]): boolean {
+      const deliver = pending.get(id);
+      if (!deliver) return false;
+      deliver({ answers, timedOut: false });
+      return true;
+    },
+    abandonAll(): void {
+      for (const deliver of [...pending.values()]) deliver({ answers: null, timedOut: false });
+      pending.clear();
     },
     pendingCount(): number {
       return pending.size;
