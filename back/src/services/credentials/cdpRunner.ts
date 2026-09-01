@@ -51,13 +51,44 @@ const FOCUS_SRC = `function focusField(field) {
 }`;
 
 /**
- * Injected into the page: reports a login on form submit. The value goes to the Runtime binding
- * (which THIS program reads on its own stdout), never into the DOM, a log or the model. Browser JS.
+ * Injected into the page: reports a login on form submit, and paints a short ripple where every
+ * click lands — GUIDED VIEWING: the person watching over noVNC sees exactly where the agent (or the
+ * co-pilot) clicked. The agent's Playwright/CDP clicks go through Chromium's real input pipeline,
+ * so they fire the same pointer events a human's do. The ripple lives in a closed shadow root on a
+ * pointer-events:none host, so it can never interfere with the page. The login value goes to the
+ * Runtime binding (which THIS program reads on its own stdout), never into the DOM, a log or the
+ * model. Browser JS.
  */
 const OBSERVER_SRC = `function installObserver() {
   var w = window;
   if (w.__vibehubCaptureInstalled) return;
   w.__vibehubCaptureInstalled = true;
+  function ripple(x, y) {
+    try {
+      var host = document.createElement("div");
+      host.style.cssText = "position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;pointer-events:none;";
+      var root = host.attachShadow ? host.attachShadow({ mode: "closed" }) : host;
+      var dot = document.createElement("div");
+      dot.style.cssText =
+        "position:fixed;left:" + (x - 14) + "px;top:" + (y - 14) + "px;width:28px;height:28px;" +
+        "border-radius:50%;border:2px solid rgba(255,171,0,0.9);background:rgba(255,171,0,0.28);" +
+        "pointer-events:none;z-index:2147483647;";
+      root.appendChild(dot);
+      var parent = document.documentElement || document.body;
+      if (!parent) return;
+      parent.appendChild(host);
+      if (dot.animate) {
+        dot.animate(
+          [{ transform: "scale(0.4)", opacity: 1 }, { transform: "scale(1.7)", opacity: 0 }],
+          { duration: 500, easing: "ease-out" }
+        );
+      }
+      setTimeout(function () { try { host.remove(); } catch (e) {} }, 520);
+    } catch (e) {}
+  }
+  w.addEventListener("pointerdown", function (e) {
+    if (e && typeof e.clientX === "number") ripple(e.clientX, e.clientY);
+  }, true);
   function report(form) {
     try {
       var pw = form.querySelector("input[type=password]");
@@ -147,6 +178,7 @@ function connectCdp(wsUrl) {
       },
       on(fn) { listeners.push(fn); },
       close() { try { sock.destroy(); } catch { /* ignore */ } },
+      onclose: null,
     };
     function frame(text) {
       const data = Buffer.from(text, "utf8");
@@ -197,6 +229,7 @@ function connectCdp(wsUrl) {
       }
     });
     sock.on("error", reject);
+    sock.on("close", () => { if (handshaken && api.onclose) api.onclose(); });
     sock.setTimeout(20000);
   });
 }
@@ -231,6 +264,9 @@ async function doFill() {
 
 async function doCapture() {
   const ws = await connectCdp(await pickPageTarget());
+  // The browser died (or this page went away): exit so the back forgets this listener and the next
+  // start injects a fresh observer into the NEW browser — capture and the click ripple come back.
+  ws.onclose = () => process.exit(0);
   await ws.send("Runtime.enable");
   await ws.send("Page.enable").catch(() => {});
   await ws.send("Runtime.addBinding", { name: "__vibehubCapture" });
