@@ -431,6 +431,7 @@ export const ptBR: Record<string, string> = {
   "chat.actionsHide": "Recolher estas {n} ações",
   "chat.agentFallback": "Agente",
   "chat.userFallback": "Usuário",
+  "chat.systemSender": "Sistema (vibehub)",
   "chat.openSenderCard": "Abrir o card que enviou esta mensagem",
 
   /* ------------------------------------------------------ chat nativo (SDK) */
@@ -649,6 +650,9 @@ export const ptBR: Record<string, string> = {
   "settings.sdkDriver": "Chat nativo (padrão da instalação)",
   "settings.sdkDriverHint":
     "A aba Chat de TODO card roda pelo Agent SDK — eventos estruturados, as mesmas ferramentas do terminal (MCPs, navegador do card). Desligue para voltar ao chat clássico (transcript do terminal) em todos os cards.",
+  "settings.sdkAutoResume": "Retomar turno interrompido por deploy",
+  "settings.sdkAutoResumeHint":
+    "Uma atualização do painel reinicia o servidor e derruba o chat nativo no meio de um turno. Ligado: no boot seguinte o card ganha uma linha de sistema e o trabalho é retomado automaticamente (uma vez só, nunca em loop). Desligado: só a linha de sistema.",
   "settings.sdkPermissionMode": "Permissões do chat nativo",
   "settings.sdkPermissionModeHint":
     "\"Igual ao terminal\" = o chat nativo tem exatamente o mesmo comportamento de permissões da aba Terminal do card. \"Perguntar o sensível\" = ações sensíveis (rm -rf, force-push, deploy, segredos) viram botões Permitir/Negar no chat.",

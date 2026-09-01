@@ -430,6 +430,7 @@ export const en: Record<string, string> = {
   "chat.actionsHide": "Fold these {n} actions away",
   "chat.agentFallback": "Agent",
   "chat.userFallback": "User",
+  "chat.systemSender": "System (vibehub)",
   "chat.openSenderCard": "Open the card that sent this",
 
   /* ------------------------------------------------------ native chat (SDK) */
@@ -642,6 +643,9 @@ export const en: Record<string, string> = {
   "settings.sdkDriver": "Native chat (install default)",
   "settings.sdkDriverHint":
     "The Chat tab of EVERY card runs over the Agent SDK — structured events, the same tools as the terminal (MCPs, the card's browser). Turn it off to fall back to the classic chat (terminal transcript) on all cards.",
+  "settings.sdkAutoResume": "Resume a turn a deploy interrupted",
+  "settings.sdkAutoResumeHint":
+    "A panel update restarts the server and kills the native chat mid-turn. On: the next boot writes a system line in the card and resumes the work automatically (once — never a loop). Off: only the system line.",
   "settings.sdkPermissionMode": "Native chat permissions",
   "settings.sdkPermissionModeHint":
     "\"Same as the terminal\" = the native chat has exactly the permission behaviour of the card's Terminal tab. \"Ask for the sensitive\" = sensitive actions (rm -rf, force-push, deploy, secrets) become Allow/Deny buttons in the chat.",

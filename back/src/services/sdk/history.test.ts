@@ -45,6 +45,8 @@ describe("replayableHistoryEvent", () => {
     expect(
       replayableHistoryEvent({ type: "permission", id: "p1", tool: "Bash", decision: "allow", sensitive: true }),
     ).toBe(true);
+    // the panel's own voice (deploy interrupted a turn, boot resumed it) — re-drawn on every replay
+    expect(replayableHistoryEvent({ type: "system_note", text: "turno interrompido" })).toBe(true);
   });
 
   it("drops the connection's own chatter: deltas, ready, session, results, errors", () => {

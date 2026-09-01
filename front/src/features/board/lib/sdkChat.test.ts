@@ -51,6 +51,19 @@ describe("applySdkEvent", () => {
     expect(state.rows).toEqual([{ kind: "note", id: "note:1", text: "resume:abc-123" }]);
   });
 
+  it("system_note draws the panel's own line as a muted note, never a bubble, never a turn", () => {
+    // The deploy-resume line ("o turno foi interrompido por uma atualização do painel…"): replayed
+    // from the history like any other event, rendered like the terminal-activity note.
+    const state = feed([
+      { type: "ready" },
+      { type: "system_note", text: "O turno foi interrompido por uma atualização do painel — retomando automaticamente…" },
+    ]);
+    expect(state.rows).toEqual([
+      { kind: "note", id: "note:1", text: "O turno foi interrompido por uma atualização do painel — retomando automaticamente…" },
+    ]);
+    expect(state.turnActive).toBe(false); // a note is about the conversation, not work in flight
+  });
+
   it("streams deltas into ONE growing assistant row, consolidated by assistant_text", () => {
     const state = feed([
       { type: "ready" },

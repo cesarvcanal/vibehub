@@ -17,7 +17,7 @@ export type ChatEventKind = "user" | "assistant" | "tool" | "system";
  * as the reader's own message (the pre-provenance behaviour).
  */
 export interface MessageOrigin {
-  kind: "owner" | "user" | "agent";
+  kind: "owner" | "user" | "agent" | "system";
   name: string;
   sourceCardId?: string;
   sourceProjectId?: string;
@@ -27,7 +27,7 @@ export interface MessageOrigin {
 export function parseOrigin(value: unknown): MessageOrigin | undefined {
   if (!value || typeof value !== "object") return undefined;
   const o = value as Partial<MessageOrigin>;
-  if (o.kind !== "owner" && o.kind !== "user" && o.kind !== "agent") return undefined;
+  if (o.kind !== "owner" && o.kind !== "user" && o.kind !== "agent" && o.kind !== "system") return undefined;
   if (typeof o.name !== "string") return undefined;
   return {
     kind: o.kind,
@@ -43,9 +43,12 @@ export function parseOrigin(value: unknown): MessageOrigin | undefined {
  * are "self" wherever they typed them; an unattributed message defaults to "self" because that is
  * what every message was before provenance existed. PURE.
  */
-export function originRole(from: MessageOrigin | undefined, viewer: string | undefined): "self" | "agent" | "user" {
+export function originRole(from: MessageOrigin | undefined, viewer: string | undefined): "self" | "agent" | "user" | "system" {
   if (!from) return "self";
   if (from.kind === "agent") return "agent";
+  // The panel's own injected turn (the boot-resume continuation): NEVER "self", whatever the
+  // viewer's name is — it must not read as something the person typed.
+  if (from.kind === "system") return "system";
   return viewer !== undefined && from.name === viewer ? "self" : "user";
 }
 

@@ -5,7 +5,7 @@ import { findUser } from "../auth/users.js";
 import * as registry from "../services/board/registry.js";
 import { getSettings } from "../services/settings/settings.js";
 import { installCardSdkDriver, sdkDriverCommand } from "../services/sdk/driver.js";
-import { attachSocket, ensureDriverSession, hasDriverSession } from "../services/sdk/manager.js";
+import { attachSocket, ensureDriverSession, handleClientFrame, hasDriverSession } from "../services/sdk/manager.js";
 import { onExternalMessage, readHistory } from "../services/sdk/history.js";
 import { matchOrigin, primeProvenance, type MessageOrigin } from "../services/chat/provenance.js";
 import {
@@ -58,6 +58,15 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
     "/api/cards/:id/sdk",
     { websocket: true, preHandler: requireCardWork },
     async (socket: WebSocket, req) => {
+      // BUFFER FIRST, before any await: this handler does seconds of async setup (settings, the
+      // transcript probe, the replay) with NO message listener attached — and ws drops frames that
+      // arrive with no listener. A message typed right after a reconnect (exactly what a person
+      // does when the panel comes back from a deploy: "e aí, como tá indo?") was SWALLOWED in that
+      // gap. Everything sent before attach is kept and delivered to the driver, in order, as the
+      // normal user turns they are.
+      const pendingFrames: string[] = [];
+      const bufferFrame = (raw: Buffer): void => { pendingFrames.push(raw.toString()); };
+      socket.on("message", bufferFrame);
       const settings = await getSettings();
       if (!settings.sdkDriver) {
         try { socket.send(JSON.stringify({ type: "error", message: "the SDK driver is off (enable the sdkDriver setting)" })); } catch { /* ignore */ }
@@ -174,7 +183,11 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
         }),
       });
       attachSocket(session, socket, wsOrigin);
-      logger.info({ card: card.worktreeSlug, reattached: driverAlive }, "sdk chat attached");
+      // Setup is done: hand the frames buffered during it to the SAME funnel the live listener
+      // uses — user messages become normal user turns (queued by the driver until it is ready).
+      socket.off("message", bufferFrame);
+      for (const raw of pendingFrames) handleClientFrame(session, raw, wsOrigin);
+      logger.info({ card: card.worktreeSlug, reattached: driverAlive, buffered: pendingFrames.length }, "sdk chat attached");
     },
   );
 }

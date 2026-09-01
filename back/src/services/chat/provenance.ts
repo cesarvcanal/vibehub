@@ -22,9 +22,10 @@ import { logger } from "../../utils/logger.js";
  *    Attribution can be missing; it is never invented for a text that was not recorded.
  */
 
-/** Who a message came from. `owner`/`user` = a person (by username); `agent` = another card's AI. */
+/** Who a message came from. `owner`/`user` = a person (by username); `agent` = another card's AI;
+ *  `system` = the panel itself (e.g. the boot-resume's continuation turn — never a person's words). */
 export interface MessageOrigin {
-  kind: "owner" | "user" | "agent";
+  kind: "owner" | "user" | "agent" | "system";
   /** The username, or the sender card's title. Empty = unknown (the front shows a generic label). */
   name: string;
   /** For `agent`: the card the message came from — what the chat links back to. */

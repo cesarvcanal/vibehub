@@ -65,6 +65,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [autonomous, setAutonomous] = React.useState(true);
   const [sdkDriver, setSdkDriver] = React.useState(false);
   const [sdkPermissionMode, setSdkPermissionMode] = React.useState<"same-as-terminal" | "ask-sensitive">("same-as-terminal");
+  const [sdkAutoResume, setSdkAutoResume] = React.useState(true);
   const [defaultLabel, setDefaultLabel] = React.useState("");
   const [language, setLanguage] = React.useState("");
   // Kept as a STRING: the field has to be clearable while you retype it, and "" is not 0.
@@ -90,6 +91,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     setAutonomous(settings.data.autonomous);
     setSdkDriver(settings.data.sdkDriver ?? false);
     setSdkPermissionMode(settings.data.sdkPermissionMode ?? "same-as-terminal");
+    setSdkAutoResume(settings.data.sdkAutoResume ?? true);
     setDefaultLabel(settings.data.defaultAccountLabel ?? "");
     setLanguage(settings.data.transcribeLanguage ?? "");
     setIdleHibernate(String(settings.data.idleHibernateMinutes ?? 180));
@@ -190,6 +192,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       autonomous,
       sdkDriver,
       sdkPermissionMode,
+      sdkAutoResume,
       defaultAccountLabel: defaultLabel.trim() || null,
       transcribeLanguage: language.trim() || null,
       // A blank field is not "never" — it is a field being typed in. Leave the stored value alone.
@@ -277,6 +280,22 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 </p>
               </div>
               <Switch id="settings-sdk-driver" checked={sdkDriver} onCheckedChange={setSdkDriver} />
+            </div>
+            {/* A deploy restarts the back and kills the drivers mid-turn: with this on, the next
+                boot resumes the interrupted turn automatically (once — never a loop). */}
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <Label htmlFor="settings-sdk-auto-resume">{t("settings.sdkAutoResume")}</Label>
+                <p className="text-xs text-muted-foreground">
+                  {t("settings.sdkAutoResumeHint")}
+                </p>
+              </div>
+              <Switch
+                id="settings-sdk-auto-resume"
+                checked={sdkAutoResume}
+                disabled={!sdkDriver}
+                onCheckedChange={setSdkAutoResume}
+              />
             </div>
             {/* How the native chat's gate behaves — one install-wide choice, only meaningful with
                 the native chat on, hence disabled together with the switch above. */}

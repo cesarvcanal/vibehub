@@ -9,11 +9,15 @@ import {
   DRIVER_IDLE_MS,
   attachSocket,
   ensureDriverSession,
+  handleClientFrame,
   hasDriverSession,
+  injectSystemTurn,
   resetSdkSessionsForTesting,
   setDriverSpawnerForTesting,
+  shutdownAllDrivers,
   stopCardDriver,
 } from "./manager.js";
+import { readInflightMarker } from "./inflight.js";
 import { notifyCardSessionKill } from "../board/workspace.js";
 
 /**
@@ -377,5 +381,112 @@ describe("session id persistence", () => {
     attachSocket(session, s2 as never);
     const ready = JSON.parse(s2.sent[0]!) as { type: string; resume?: string };
     expect(ready.resume).toBe("second");
+  });
+});
+
+describe("inflight markers — a durabilidade do turno em voo (o bug do deploy)", () => {
+  it("a user turn writes the durable marker; the closing result removes it", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"trabalho longo"}`));
+    await vi.waitFor(async () => {
+      const marker = await readInflightMarker(CARD);
+      expect(marker).not.toBeNull();
+      expect(marker!.attempts).toBe(0);
+      expect(marker!.preview).toBe("trabalho longo");
+    });
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    await vi.waitFor(async () => {
+      expect(await readInflightMarker(CARD)).toBeNull();
+    });
+  });
+
+  it("two turns in flight: the marker only comes off when the LAST one closes", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"um"}`));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"dois"}`));
+    await vi.waitFor(async () => expect(await readInflightMarker(CARD)).not.toBeNull());
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    // one turn still running — the marker stays
+    await new Promise((r) => setImmediate(r));
+    expect(await readInflightMarker(CARD)).not.toBeNull();
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    await vi.waitFor(async () => {
+      expect(await readInflightMarker(CARD)).toBeNull();
+    });
+  });
+
+  it("a DELIBERATE stop (pause/hibernate/delete) clears the marker — no resume of what a person ended", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"faz a coisa"}`));
+    await vi.waitFor(async () => expect(await readInflightMarker(CARD)).not.toBeNull());
+    stopCardDriver(CARD);
+    await vi.waitFor(async () => {
+      expect(await readInflightMarker(CARD)).toBeNull();
+    });
+  });
+
+  it("shutdownAllDrivers (SIGTERM do deploy) KEEPS the marker — it is the message to the next boot", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"faz a coisa"}`));
+    await vi.waitFor(async () => expect(await readInflightMarker(CARD)).not.toBeNull());
+    shutdownAllDrivers();
+    expect(spawned[0]!.stdin.ended).toBe(true); // the clean goodbye that crosses the docker exec
+    expect(hasDriverSession(CARD)).toBe(false);
+    await new Promise((r) => setImmediate(r));
+    expect(await readInflightMarker(CARD)).not.toBeNull(); // the boot sweep's input survives
+  });
+
+  it("injectSystemTurn: normal user turn on stdin, system provenance in history, attempts carried", async () => {
+    const session = ensure();
+    injectSystemTurn(session, "continue de onde parou", { kind: "system", name: "vibehub" }, 1);
+    const frames = spawned[0]!.stdin.written.map((s) => JSON.parse(s) as { type: string; text?: string });
+    expect(frames).toEqual([{ type: "user", text: "continue de onde parou" }]); // NEVER wrapped
+    expect(session.activeTurns).toBe(1);
+    await vi.waitFor(async () => {
+      const history = await readHistory(CARD);
+      expect(history.length).toBe(1);
+      expect(history[0]!.type).toBe("user");
+      expect(history[0]!.from).toEqual({ kind: "system", name: "vibehub" });
+      expect((await readInflightMarker(CARD))?.attempts).toBe(1);
+    });
+  });
+
+  it("handleClientFrame delivers a frame buffered during the route's setup gap as a normal user turn", async () => {
+    // The production symptom: a message typed right after a reconnect (while the route was still
+    // probing/replaying, with no listener attached) was silently dropped. The route now buffers
+    // and drains through this same funnel.
+    const session = ensure();
+    handleClientFrame(session, `{"type":"user","text":"e aí, como tá indo?"}`);
+    const frames = spawned[0]!.stdin.written.map((s) => JSON.parse(s) as { type: string; text?: string });
+    expect(frames).toEqual([{ type: "user", text: "e aí, como tá indo?" }]);
+    expect(session.activeTurns).toBe(1);
+  });
+});
+
+describe("harness filler — 'No response requested.' nunca vira resposta no chat", () => {
+  it("drops the canned close-out arriving live from a resumed session", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "No response requested." }));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "Resposta de verdade." }));
+    const texts = socket.sent
+      .map((s) => JSON.parse(s) as { type: string; text?: string })
+      .filter((e) => e.type === "assistant_text")
+      .map((e) => e.text);
+    expect(texts).toEqual(["Resposta de verdade."]);
+    await vi.waitFor(async () => {
+      const history = await readHistory(CARD);
+      expect(history.map((e) => (e as { text?: string }).text)).toEqual(["Resposta de verdade."]);
+    });
   });
 });

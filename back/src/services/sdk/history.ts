@@ -37,7 +37,7 @@ export const HISTORY_COMPACT_FACTOR = 4;
  * messages and on everything written before this field existed; the replay carries it verbatim, so
  * the native chat's attribution is exact, never matched.
  */
-export type HistoryEvent = (DriverEvent | { type: "user"; text: string }) & {
+export type HistoryEvent = (DriverEvent | { type: "user"; text: string } | { type: "system_note"; text: string }) & {
   at?: number;
   from?: MessageOrigin;
   /** The event was MIRRORED from the card's terminal (TUI) transcript, not spoken by the driver. */
@@ -69,6 +69,9 @@ export function replayableHistoryEvent(event: HistoryEvent): boolean {
     case "assistant_text":
     case "tool_use":
     case "permission_request":
+    // The panel's own voice in the conversation ("o turno foi interrompido por uma atualização…"):
+    // written by the backend, never by the driver — and worth re-drawing on every replay.
+    case "system_note":
       return true;
     case "permission":
       return typeof (event as { id?: unknown }).id === "string";

@@ -79,6 +79,16 @@ describe("message provenance (from)", () => {
     // Viewer unknown (auth still loading): show the sender rather than silently claiming the message.
     expect(originRole({ kind: "user", name: "alex" }, undefined)).toBe("user");
   });
+
+  it("originRole/parseOrigin: the panel's own injected turn (system) is never 'self'", () => {
+    // The boot-resume continuation (#48 provenance): stamped system so it cannot read as the
+    // person's own words — even when the names happen to collide.
+    expect(parseOrigin({ kind: "system", name: "vibehub" })).toEqual({
+      kind: "system", name: "vibehub", sourceCardId: undefined, sourceProjectId: undefined,
+    });
+    expect(originRole({ kind: "system", name: "vibehub" }, "vibehub")).toBe("system");
+    expect(originRole({ kind: "system", name: "vibehub" }, undefined)).toBe("system");
+  });
 });
 
 describe("mergeEvent", () => {

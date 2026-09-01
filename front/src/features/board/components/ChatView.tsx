@@ -444,7 +444,10 @@ function ToolGroup({ events }: { events: ChatEvent[] }) {
 export function SenderTag({ from }: { from: MessageOrigin }) {
   const t = useT();
   const isAgent = from.kind === "agent";
-  const name = from.name || (isAgent ? t("chat.agentFallback") : t("chat.userFallback"));
+  const isSystem = from.kind === "system";
+  const name = isSystem
+    ? t("chat.systemSender")
+    : from.name || (isAgent ? t("chat.agentFallback") : t("chat.userFallback"));
   return (
     <div
       data-testid="chat-sender"
@@ -453,7 +456,7 @@ export function SenderTag({ from }: { from: MessageOrigin }) {
         isAgent ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground",
       )}
     >
-      {isAgent ? <Bot className="h-3 w-3 shrink-0" /> : <UserRound className="h-3 w-3 shrink-0" />}
+      {isAgent ? <Bot className="h-3 w-3 shrink-0" /> : isSystem ? <Bell className="h-3 w-3 shrink-0" /> : <UserRound className="h-3 w-3 shrink-0" />}
       {isAgent && from.sourceProjectId && from.sourceCardId ? (
         <Link
           to={cardHref(from.sourceProjectId, from.sourceCardId)}
