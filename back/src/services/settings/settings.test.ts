@@ -71,17 +71,32 @@ describe("settings", () => {
     expect((await s.updateSettings({ defaultAccountLabel: " work " })).defaultAccountLabel).toBe("work");
   });
 
-  it("defaults the SDK driver flag to OFF and round-trips it", async () => {
+  it("defaults the native chat (sdkDriver) to ON and round-trips it", async () => {
+    // Since 2026-08-31 the native chat is the default of a new install; false is the fallback to
+    // the classic chat on every card.
     const s = await fresh();
-    expect((await s.getSettings()).sdkDriver).toBe(false);
-    expect((await s.updateSettings({ sdkDriver: true })).sdkDriver).toBe(true);
+    expect((await s.getSettings()).sdkDriver).toBe(true);
     expect((await s.updateSettings({ sdkDriver: false })).sdkDriver).toBe(false);
+    expect((await s.updateSettings({ sdkDriver: true })).sdkDriver).toBe(true);
   });
 
   it("rejects a non-boolean sdkDriver", async () => {
     const s = await fresh();
     // @ts-expect-error — exercising the runtime guard
     await expect(s.updateSettings({ sdkDriver: "yes" })).rejects.toThrow(/must be a boolean/);
+  });
+
+  it("defaults sdkPermissionMode to same-as-terminal and round-trips both modes", async () => {
+    const s = await fresh();
+    expect((await s.getSettings()).sdkPermissionMode).toBe("same-as-terminal");
+    expect((await s.updateSettings({ sdkPermissionMode: "ask-sensitive" })).sdkPermissionMode).toBe("ask-sensitive");
+    expect((await s.updateSettings({ sdkPermissionMode: "same-as-terminal" })).sdkPermissionMode).toBe("same-as-terminal");
+  });
+
+  it("rejects an unknown sdkPermissionMode", async () => {
+    const s = await fresh();
+    // @ts-expect-error — exercising the runtime guard
+    await expect(s.updateSettings({ sdkPermissionMode: "yolo" })).rejects.toThrow(/same-as-terminal/);
   });
 
   it("stamps setup completion once — the first timestamp wins", async () => {

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { config } from "../config/env.js";
-import { requireOwner } from "../auth/session.js";
+import { requireOwner, requireSession } from "../auth/session.js";
 import { getSettings, updateSettings, markSetupCompleted, type SettingsPatch } from "../services/settings/settings.js";
 import { setDefaultAccountLabel } from "../services/board/registry.js";
 import { hostExecutor } from "../runtime/host.js";
@@ -40,5 +40,15 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
 
   app.post("/api/settings/setup-complete", { preHandler: requireOwner }, async (_req, reply) => {
     return await reply.send(await markSetupCompleted());
+  });
+
+  /**
+   * Install-wide flags EVERY signed-in user needs to render the right UI — settings themselves stay
+   * owner-only. `sdkChat`: with the global sdkDriver switch on, the native chat IS the Chat tab of
+   * every card (the per-card `sdkChat` opt-in is retired/vestigial); off = the classic chat.
+   */
+  app.get("/api/features", { preHandler: requireSession }, async (_req, reply) => {
+    const settings = await getSettings();
+    return await reply.send({ sdkChat: settings.sdkDriver });
   });
 }
