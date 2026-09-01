@@ -12,8 +12,10 @@ import {
 import { cn } from "@/lib/utils";
 import { wsUrl } from "@/lib/ws";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/providers/auth";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
-import { LinkifiedText, Markdown } from "@/features/board/components/ChatView";
+import { LinkifiedText, Markdown, SenderTag } from "@/features/board/components/ChatView";
+import { originRole } from "@/features/board/lib/chat";
 import { reconnectDelay, type ConnectionState } from "@/features/board/lib/reconnect";
 import {
   INITIAL_SDK_STATE,
@@ -311,6 +313,8 @@ function SdkToolGroup({ rows }: { rows: SdkRow[] }) {
 
 function SdkChatRow({ row, onPermission }: { row: SdkRow; onPermission?: (id: string, allow: boolean) => void }) {
   const t = useT();
+  // Whose screen this is — their own messages render unlabelled, everyone else's carry the sender.
+  const viewer = useAuth().user?.username;
 
   if (row.kind === "tool") {
     return (
@@ -395,6 +399,25 @@ function SdkChatRow({ row, onPermission }: { row: SdkRow; onPermission?: (id: st
   }
 
   if (row.kind === "user") {
+    // Same reading rules as the transcript chat: your own message keeps the right-aligned primary
+    // bubble; another card's agent gets the green robot bubble (name links to its card), another
+    // person a neutral one with their name.
+    const role = originRole(row.from, viewer);
+    if (role !== "self" && row.from) {
+      return (
+        <div className="flex flex-col items-start" data-testid="sdk-user" data-role={role}>
+          <div
+            className={cn(
+              "max-w-[85%] select-text whitespace-pre-wrap break-words rounded-lg border px-3 py-2 text-sm",
+              role === "agent" ? "border-emerald-500/40 bg-emerald-500/10" : "border-border/70 bg-muted/50",
+            )}
+          >
+            <SenderTag from={row.from} />
+            <LinkifiedText text={row.text} />
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="flex flex-col items-end">
         <div

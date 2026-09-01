@@ -2,10 +2,12 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import { requireCardWork } from "../auth/access.js";
+import { findUser } from "../auth/users.js";
 import * as registry from "../services/board/registry.js";
 import { getSettings } from "../services/settings/settings.js";
 import { installCardSdkDriver, sdkDriverCommand } from "../services/sdk/driver.js";
-import { appendHistory, readHistory, replayableHistoryEvent } from "../services/sdk/history.js";
+import { appendHistory, onExternalMessage, readHistory, replayableHistoryEvent } from "../services/sdk/history.js";
+import { matchOrigin, primeProvenance, type MessageOrigin } from "../services/chat/provenance.js";
 import {
   buildLatestTranscriptScript,
   parseLatestTranscript,
@@ -195,7 +197,16 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       try {
         const sdkHistory = await readHistory(card.id);
         const cutoffAt = sdkHistory.find((e) => typeof e.at === "number")?.at ?? Number.POSITIVE_INFINITY;
-        for (const past of [...transcriptToSdkHistory(tuiJsonl, cutoffAt), ...sdkHistory]) {
+        // TUI-era user lines carry no sender; the provenance log (best-effort text+time match, see
+        // services/chat/provenance.ts) restores who really typed them. SDK-era events need nothing:
+        // their `from` is on the ndjson line itself.
+        await primeProvenance(card.id).catch(() => undefined);
+        const tuiEvents = transcriptToSdkHistory(tuiJsonl, cutoffAt).map((past) => {
+          if (past.type !== "user" || past.from) return past;
+          const from = matchOrigin(card.id, past.text, past.at ?? 0);
+          return from ? { ...past, from } : past;
+        });
+        for (const past of [...tuiEvents, ...sdkHistory]) {
           try { socket.send(JSON.stringify(past)); } catch { /* socket going away */ }
         }
       } catch (err) {
@@ -205,6 +216,22 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
         ...card,
         resumeSessionId: resumeTargetFor(card, latestSessionId),
       });
+      // WHO is typing on this socket — stamped on their messages so OTHER readers of this card see
+      // the name (their own render unlabelled: the front compares it). Resolved once per connect.
+      let wsOrigin: MessageOrigin | undefined;
+      const userId = (req as typeof req & { userId?: string }).userId;
+      if (userId) {
+        try {
+          const user = await findUser(userId);
+          if (user) wsOrigin = { kind: user.role === "owner" ? "owner" : "user", name: user.username };
+        } catch { /* unattributed beats broken */ }
+      }
+      // An agent's send (`vibehub_send_to_terminal`) lands in the history log, not on this socket's
+      // driver stdout — forward it live so "the cards talking" is visible as it happens.
+      const offExternal = onExternalMessage(card.id, (event) => {
+        try { socket.send(JSON.stringify(event)); } catch { /* socket going away */ }
+      });
+      socket.on("close", offExternal);
       const child = spawn(file, args, { stdio: ["pipe", "pipe", "pipe"] }) as ChildProcessWithoutNullStreams;
       logger.info({ card: card.worktreeSlug }, "sdk driver attached");
       bridgeSdkDriver(socket, child, card.worktreeSlug, {
@@ -221,7 +248,9 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
           if (replayableHistoryEvent(event)) void appendHistory(card.id, { ...event, at: Date.now() });
         },
         onControl: (control) => {
-          if (control.type === "user") void appendHistory(card.id, { type: "user", text: control.text, at: Date.now() });
+          if (control.type === "user") {
+            void appendHistory(card.id, { type: "user", text: control.text, at: Date.now(), from: wsOrigin });
+          }
         },
       });
     },

@@ -416,6 +416,9 @@ export const ptBR: Record<string, string> = {
   "chat.actions": "{n} ações",
   "chat.actionsShow": "Mostrar estas {n} ações",
   "chat.actionsHide": "Recolher estas {n} ações",
+  "chat.agentFallback": "Agente",
+  "chat.userFallback": "Usuário",
+  "chat.openSenderCard": "Abrir o card que enviou esta mensagem",
 
   /* ------------------------------------------------------ chat nativo (SDK) */
   "sdk.aria": "Conversa nativa do card",

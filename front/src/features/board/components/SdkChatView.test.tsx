@@ -141,6 +141,36 @@ describe("SdkChatView", () => {
     expect(bubble).toHaveTextContent("javascript:alert(1)");
   });
 
+  it("draws an AGENT's message as the green robot bubble, named and linked to its card", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({
+      type: "user", text: "roda os testes",
+      from: { kind: "agent", name: "card preview", sourceCardId: "c9", sourceProjectId: "p1" },
+    });
+
+    const bubble = await screen.findByTestId("sdk-user");
+    expect(bubble).toHaveAttribute("data-role", "agent");
+    expect(screen.getByTestId("chat-sender")).toHaveTextContent("card preview");
+    expect(screen.getByTestId("chat-sender-link")).toHaveAttribute("href", "/?project=p1&card=c9");
+  });
+
+  it("draws another person's replayed message with their name; an unattributed one stays plain", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "user", text: "fala mussa", from: { kind: "user", name: "mussa" } });
+    ws.deliver({ type: "user", text: "minha própria" });
+
+    await screen.findByText("fala mussa");
+    const bubbles = screen.getAllByTestId("sdk-user");
+    expect(bubbles[0]).toHaveAttribute("data-role", "user");
+    expect(screen.getByTestId("chat-sender")).toHaveTextContent("mussa");
+    expect(bubbles[1]).not.toHaveAttribute("data-role");
+    expect(screen.getAllByTestId("chat-sender")).toHaveLength(1);
+  });
+
   it("a permission request shows Allow/Deny; Allow sends the decision and settles the card", async () => {
     renderSdkChat();
     const ws = await socket();

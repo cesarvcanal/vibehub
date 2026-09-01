@@ -415,6 +415,9 @@ export const en: Record<string, string> = {
   "chat.actions": "{n} actions",
   "chat.actionsShow": "Show these {n} actions",
   "chat.actionsHide": "Fold these {n} actions away",
+  "chat.agentFallback": "Agent",
+  "chat.userFallback": "User",
+  "chat.openSenderCard": "Open the card that sent this",
 
   /* ------------------------------------------------------ native chat (SDK) */
   "sdk.aria": "Native card conversation",

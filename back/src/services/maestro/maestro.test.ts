@@ -19,6 +19,8 @@ async function load() {
   return {
     maestro: await import("./maestro.js"),
     registry: await import("../board/registry.js"),
+    provenance: await import("../chat/provenance.js"),
+    history: await import("../sdk/history.js"),
   };
 }
 
@@ -309,6 +311,66 @@ describe("reportState (declared state)", () => {
     await maestro.reportState(c.id, "needs_me", "which currency?");
     const [row] = await maestro.listTerminals();
     expect(row).toMatchObject({ declaredState: "needs_me", declaredSummary: "which currency?", humanActive: false });
+  });
+});
+
+describe("message provenance on send", () => {
+  it("agentOriginFor names the calling card, with the ids the chat links back to", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const sender = await registry.createCard({ projectId: p.id, title: "card preview" });
+    expect(await maestro.agentOriginFor(sender.id)).toEqual({
+      kind: "agent", name: "card preview", sourceCardId: sender.id, sourceProjectId: p.id,
+    });
+    // Self-declared and optional: an unknown or absent id degrades to a nameless agent, never an error.
+    expect(await maestro.agentOriginFor("nope")).toEqual({ kind: "agent", name: "" });
+    expect(await maestro.agentOriginFor(undefined)).toEqual({ kind: "agent", name: "" });
+  });
+
+  it("records who sent it and announces an agent's message to the native chat", async () => {
+    const { maestro, registry, provenance, history } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const sender = await registry.createCard({ projectId: p.id, title: "card preview" });
+    const dest = await registry.createCard({ projectId: p.id, title: "destino" });
+    await registry.applyOpenTerminal(dest.id);
+    const origin = await maestro.agentOriginFor(sender.id);
+
+    const live: unknown[] = [];
+    const off = history.onExternalMessage(dest.id, (e) => live.push(e));
+    await maestro.sendToTerminal(dest.id, "roda os testes", { origin });
+    off();
+
+    // Delivery is unchanged (same send-keys script), and the attribution is queryable right away.
+    expect(runScript).toHaveBeenCalledOnce();
+    expect(provenance.matchOrigin(dest.id, "roda  os\ntestes", Date.now())).toEqual(origin);
+    // The native chat heard it live, and the history log replays it with its sender.
+    expect(live).toHaveLength(1);
+    expect(live[0]).toMatchObject({ type: "user", text: "roda os testes", from: origin });
+    await history.appendHistory(dest.id, { type: "session", sessionId: "s" }); // barrier: the chain is serialized
+    const replay = await history.readHistory(dest.id);
+    expect(replay.find((e) => e.type === "user")).toMatchObject({ text: "roda os testes", from: origin });
+  });
+
+  it("a person's send records their username, and goes nowhere near the sdk history", async () => {
+    const { maestro, registry, provenance, history } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const dest = await registry.createCard({ projectId: p.id, title: "destino" });
+    await registry.applyOpenTerminal(dest.id);
+    const live: unknown[] = [];
+    const off = history.onExternalMessage(dest.id, (e) => live.push(e));
+    await maestro.sendToTerminal(dest.id, "oi", { origin: { kind: "user", name: "mussa" } });
+    off();
+    expect(provenance.matchOrigin(dest.id, "oi", Date.now())).toEqual({ kind: "user", name: "mussa" });
+    expect(live).toHaveLength(0); // their own websocket already draws it — no external announcement
+  });
+
+  it("a send without origin records nothing (the pre-provenance behaviour)", async () => {
+    const { maestro, registry, provenance } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const dest = await registry.createCard({ projectId: p.id, title: "destino" });
+    await registry.applyOpenTerminal(dest.id);
+    await maestro.sendToTerminal(dest.id, "sem origem");
+    expect(provenance.matchOrigin(dest.id, "sem origem", Date.now())).toBeUndefined();
   });
 });
 

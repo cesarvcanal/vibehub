@@ -3,7 +3,9 @@ import {
   groupChatRows,
   mergeEvent,
   normalizeMessage,
+  originRole,
   parseChatFrame,
+  parseOrigin,
   pendingPhase,
   readCardMode,
   writeCardMode,
@@ -11,6 +13,7 @@ import {
   writePending,
   PENDING_TIMEOUT_MS,
   type ChatEvent,
+  type MessageOrigin,
 } from "@/features/board/lib/chat";
 
 const event = (over: Partial<ChatEvent> = {}): ChatEvent => ({
@@ -44,6 +47,37 @@ describe("parseChatFrame", () => {
       text: "oi",
       tool: undefined,
     });
+  });
+});
+
+describe("message provenance (from)", () => {
+  const agent: MessageOrigin = { kind: "agent", name: "card preview", sourceCardId: "c1", sourceProjectId: "p1" };
+
+  it("parseChatFrame carries a valid `from` through and drops a malformed one", () => {
+    expect(parseChatFrame(JSON.stringify({ id: "u1", kind: "user", at: 1, text: "oi", from: agent }))?.from).toEqual(agent);
+    expect(parseChatFrame(JSON.stringify({ id: "u1", kind: "user", at: 1, text: "oi", from: { kind: "ghost", name: "x" } }))?.from).toBeUndefined();
+    expect(parseChatFrame(JSON.stringify({ id: "u1", kind: "user", at: 1, text: "oi", from: "junk" }))?.from).toBeUndefined();
+  });
+
+  it("parseOrigin validates the shape and keeps only the known fields", () => {
+    expect(parseOrigin({ kind: "user", name: "mussa", extra: true })).toEqual({
+      kind: "user", name: "mussa", sourceCardId: undefined, sourceProjectId: undefined,
+    });
+    expect(parseOrigin(null)).toBeUndefined();
+    expect(parseOrigin({ kind: "agent" })).toBeUndefined(); // a nameless origin is no origin
+  });
+
+  it("originRole: no provenance = the viewer's own message (the pre-provenance behaviour)", () => {
+    expect(originRole(undefined, "cesar")).toBe("self");
+    expect(originRole(undefined, undefined)).toBe("self");
+  });
+
+  it("originRole: an agent is always an agent; a person is 'self' only on their own screen", () => {
+    expect(originRole(agent, "cesar")).toBe("agent");
+    expect(originRole({ kind: "user", name: "mussa" }, "cesar")).toBe("user");
+    expect(originRole({ kind: "owner", name: "cesar" }, "cesar")).toBe("self");
+    // Viewer unknown (auth still loading): show the sender rather than silently claiming the message.
+    expect(originRole({ kind: "user", name: "mussa" }, undefined)).toBe("user");
   });
 });
 
