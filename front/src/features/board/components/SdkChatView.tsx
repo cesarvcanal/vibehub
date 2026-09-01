@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ChevronRight,
   CircleHelp,
+  ListTodo,
   Loader2,
   MessageSquare,
   ShieldAlert,
@@ -18,6 +19,7 @@ import { LinkifiedText, Markdown, SenderTag } from "@/features/board/components/
 import { originRole } from "@/features/board/lib/chat";
 import { reconnectDelay, type ConnectionState } from "@/features/board/lib/reconnect";
 import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
+import { pendingDecisions, splitProseQuestion, type PendingDecision } from "@/features/board/lib/pendingDecisions";
 import {
   INITIAL_SDK_STATE,
   TERMINAL_ACTIVITY_NOTE,
@@ -195,11 +197,34 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
 
   const stick = useStickToBottom(state.rows);
 
+  /* ----------------------------------------------------- pending decisions */
+
+  const rootRef = React.useRef<HTMLDivElement | null>(null);
+  const rowRefs = React.useRef(new Map<string, HTMLDivElement>());
+  const [flashId, setFlashId] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (!flashId) return;
+    const timer = setTimeout(() => setFlashId(null), 2500);
+    return () => clearTimeout(timer);
+  }, [flashId]);
+
+  // Derived from the rows — which the sdk-history replays on every connect, so the tray survives
+  // F5 exactly like the question cards do.
+  const pending = React.useMemo(() => pendingDecisions(state.rows), [state.rows]);
+
+  /** Tray click: scroll to the message, flash it, and put the cursor in the composer. */
+  const jumpToDecision = (decision: PendingDecision): void => {
+    const el = rowRefs.current.get(decision.rowId);
+    el?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    setFlashId(decision.rowId);
+    rootRef.current?.querySelector("textarea")?.focus();
+  };
+
   const rendered = React.useMemo(() => groupSdkRows(state.rows), [state.rows]);
   const empty = state.rows.length === 0;
 
   return (
-    <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", className)}>
+    <div ref={rootRef} className={cn("flex min-h-0 min-w-0 flex-1 flex-col", className)}>
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <div
         ref={stick.scrollerRef}
@@ -228,13 +253,23 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
           </div>
         ) : null}
 
-        {rendered.map((entry) =>
-          entry.kind === "tools" ? (
-            <SdkToolGroup key={entry.id} rows={entry.rows} />
-          ) : (
-            <SdkChatRow key={entry.id} row={entry.row} onPermission={answerPermission} onAnswer={answerUserQuestion} />
-          ),
-        )}
+        {rendered.map((entry) => (
+          <div
+            key={entry.id}
+            ref={(el) => {
+              if (el) rowRefs.current.set(entry.id, el);
+              else rowRefs.current.delete(entry.id);
+            }}
+            data-flash={flashId === entry.id || undefined}
+            className={cn(flashId === entry.id && "rounded-md ring-2 ring-amber-400/70")}
+          >
+            {entry.kind === "tools" ? (
+              <SdkToolGroup rows={entry.rows} />
+            ) : (
+              <SdkChatRow row={entry.row} onPermission={answerPermission} onAnswer={answerUserQuestion} />
+            )}
+          </div>
+        ))}
 
         {/* "Trabalhando…" only while the wire is UP. The driver now SURVIVES a dead socket (it is
             card-owned in the back, not this connection's child), but a disconnected view cannot
@@ -249,6 +284,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       </div>
       <JumpToLatest stick={stick} />
       </div>
+
+      {/* PENDING DECISIONS — the questions still waiting on the user, surfaced right above the
+          composer so they never drown in a long turn. Clicking one jumps to it in the chat. */}
+      {pending.length > 0 ? <PendingTray pending={pending} onJump={jumpToDecision} /> : null}
 
       {/* The interrupt button lives INSIDE the composer — right column, above the microphone —
           in the same seat as the transcript chat's stop. The interrupt frame is still this view's. */}
@@ -271,6 +310,60 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
           </span>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The tray of decisions still waiting on the user — collapsible, with a count badge. Expanded by
+ * default: the whole point is that a blocking question never hides. Each entry jumps to (and
+ * flashes) its message; answering — by the option card or by a plain message — removes it, because
+ * the list is derived from the rows.
+ */
+function PendingTray({ pending, onJump }: { pending: PendingDecision[]; onJump: (d: PendingDecision) => void }) {
+  const t = useT();
+  const [open, setOpen] = React.useState(true);
+  return (
+    <div data-testid="pending-tray" className="mt-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 text-xs">
+      <button
+        type="button"
+        data-testid="pending-tray-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left font-medium text-amber-600 dark:text-amber-400"
+      >
+        <ChevronRight className={cn("h-3 w-3 shrink-0 transition-transform", open && "rotate-90")} />
+        <ListTodo className="h-3.5 w-3.5 shrink-0" />
+        <span>{t("sdk.pendingTitle")}</span>
+        <span
+          data-testid="pending-tray-count"
+          className="ml-1 rounded-full bg-amber-500/20 px-1.5 py-0.5 font-mono text-[10px] tabular-nums"
+        >
+          {pending.length}
+        </span>
+      </button>
+      {open ? (
+        <ul className="flex flex-col gap-0.5 px-2 pb-1.5">
+          {pending.map((d) => (
+            <li key={d.rowId}>
+              <button
+                type="button"
+                data-testid="pending-tray-item"
+                data-kind={d.kind}
+                onClick={() => onJump(d)}
+                className="flex w-full min-w-0 items-center gap-1.5 rounded px-1.5 py-1 text-left text-muted-foreground hover:bg-amber-500/10 hover:text-foreground"
+              >
+                {d.kind === "question" ? (
+                  <CircleHelp className="h-3 w-3 shrink-0 text-sky-500" />
+                ) : (
+                  <MessageSquare className="h-3 w-3 shrink-0 text-amber-500/80" />
+                )}
+                <span className="min-w-0 truncate">{d.summary}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }
@@ -446,6 +539,22 @@ function SdkChatRow({
     );
   }
 
+  // Best-effort highlight: when the message CLOSES on a question directed at the user, that final
+  // paragraph gets a subtle amber frame so it never drowns in the text above it.
+  const prose = row.kind === "assistant" && !row.streaming ? splitProseQuestion(row.text) : null;
+  if (prose) {
+    return (
+      <div data-testid="sdk-assistant" className="max-w-full select-text text-sm leading-relaxed">
+        {prose.body !== "" ? <Markdown text={prose.body} /> : null}
+        <div
+          data-testid="sdk-prose-question"
+          className="mt-1.5 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5"
+        >
+          <Markdown text={prose.question} />
+        </div>
+      </div>
+    );
+  }
   return (
     <div data-testid="sdk-assistant" className="max-w-full select-text text-sm leading-relaxed">
       <Markdown text={row.text} />

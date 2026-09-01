@@ -454,6 +454,7 @@ export const ptBR: Record<string, string> = {
   "sdk.denied": "Negada",
   "sdk.timedOut": "Sem resposta a tempo — negada.",
   "sdk.questionTitle": "O agente pergunta",
+  "sdk.pendingTitle": "Decisões pendentes",
   "sdk.questionOther": "Outra resposta…",
   "sdk.questionSend": "Responder",
   "sdk.questionAnswered": "Respondida: {answers}",

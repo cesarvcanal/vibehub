@@ -474,3 +474,85 @@ describe("SdkChatView — 'ir pro fim' flutuante", () => {
     expect(screen.queryByTestId("jump-latest")).toBeNull();
   });
 });
+
+describe("SdkChatView — bandeja de decisões pendentes", () => {
+  const QUESTION = {
+    type: "user_question" as const,
+    id: "q_1",
+    questions: [{ question: "Formato do relatório?", options: [{ label: "Resumo" }, { label: "Detalhado" }] }],
+  };
+
+  it("lists pending decisions (estruturada + prosa) with the count, and answering clears them", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    // nothing pending, no tray
+    expect(screen.queryByTestId("pending-tray")).toBeNull();
+
+    ws.deliver(QUESTION);
+    ws.deliver({ type: "assistant_text", text: "Além disso:\n\nQual banco você prefere?" });
+
+    expect(screen.getByTestId("pending-tray")).toBeInTheDocument();
+    expect(screen.getByTestId("pending-tray-count")).toHaveTextContent("2");
+    const items = screen.getAllByTestId("pending-tray-item");
+    expect(items[0]).toHaveTextContent("Formato do relatório?");
+    expect(items[1]).toHaveTextContent("Qual banco você prefere?");
+
+    // a plain user message deals with the PROSE one…
+    ws.deliver({ type: "user", text: "postgres", from: { kind: "user", name: "alex" } });
+    expect(screen.getByTestId("pending-tray-count")).toHaveTextContent("1");
+
+    // …and answering the structured one empties (and removes) the tray
+    await userEvent.click(screen.getByRole("button", { name: "Resumo" }));
+    expect(screen.queryByTestId("pending-tray")).toBeNull();
+  });
+
+  it("clicking an item scrolls to the message, flashes it and focuses the composer", async () => {
+    const scrolled = vi.fn();
+    Element.prototype.scrollIntoView = scrolled;
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(QUESTION);
+
+    await userEvent.click(screen.getByTestId("pending-tray-item"));
+    expect(scrolled).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+    const flashed = document.querySelector("[data-flash]");
+    expect(flashed).not.toBeNull();
+    expect(flashed!.textContent).toContain("Formato do relatório?");
+    expect(document.activeElement?.tagName).toBe("TEXTAREA");
+  });
+
+  it("REPLAY: a pending question replayed before `ready` fills the tray (sobrevive F5)", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver(QUESTION); // replayed history, before ready
+    ws.deliver({ type: "ready", turnActive: true });
+    expect(screen.getByTestId("pending-tray-count")).toHaveTextContent("1");
+
+    // a replayed ANSWERED pair never shows a tray
+    ws.deliver({ type: "question_result", id: "q_1", answers: [{ selected: ["Resumo"] }] });
+    expect(screen.queryByTestId("pending-tray")).toBeNull();
+  });
+
+  it("highlights a final prose question inside the assistant message", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "assistant_text", text: "Fiz A e B.\n\nQual dos dois você prefere?" });
+
+    const highlight = screen.getByTestId("sdk-prose-question");
+    expect(highlight).toHaveTextContent("Qual dos dois você prefere?");
+    // the body stays outside the highlight
+    expect(highlight).not.toHaveTextContent("Fiz A e B.");
+
+    // an undirected message gets no highlight
+    ws.deliver({ type: "assistant_text", text: "Tudo verde. Faz sentido?" });
+    expect(screen.getAllByTestId("sdk-prose-question")).toHaveLength(1);
+  });
+});
