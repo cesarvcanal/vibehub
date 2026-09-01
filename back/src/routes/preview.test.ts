@@ -209,6 +209,47 @@ describe("/preview/:port proxy", () => {
     }
   });
 
+  it("relays a response that only arrives after a delay — the tunnel must not half-close early", async () => {
+    // The prod bug: the relay ended the tunnel's stdin right after the request, socat half-closed
+    // the upstream connection (FIN), and a Node http server destroys the socket on FIN — so any
+    // response slower than the FIN's arrival came back as ZERO bytes and the user saw "nothing is
+    // listening" with the port alive. A response written only later reproduces it deterministically.
+    const upstream = createServer((req, res) => {
+      setTimeout(() => {
+        res.writeHead(200, { "content-type": "text/plain" });
+        res.end("late but alive");
+      }, 400);
+    });
+    const port = await listen(upstream);
+    try {
+      const res = await fetch(`http://127.0.0.1:${appPort}/preview/${port}/slow`, { headers: { cookie } });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe("late but alive");
+    } finally {
+      upstream.close();
+    }
+  });
+
+  it("a slow response to a request WITH a body also survives — the body is delimited, not EOF-framed", async () => {
+    let received = "";
+    const upstream = createServer((req, res) => {
+      req.on("data", (d: Buffer) => { received += d.toString(); });
+      req.on("end", () => {
+        setTimeout(() => { res.writeHead(200); res.end("ok:" + received); }, 300);
+      });
+    });
+    const port = await listen(upstream);
+    try {
+      const res = await fetch(`http://127.0.0.1:${appPort}/preview/${port}/api`, {
+        method: "POST", headers: { cookie, "content-type": "application/json" }, body: '{"b":2}',
+      });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('ok:{"b":2}');
+    } finally {
+      upstream.close();
+    }
+  });
+
   it("forwards a request body", async () => {
     let body = "";
     const upstream = createServer((req, res) => {
