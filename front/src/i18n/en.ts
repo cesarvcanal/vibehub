@@ -365,6 +365,7 @@ export const en: Record<string, string> = {
   "preview.registered": "Announced by the agent",
   "preview.chip": "Preview: {name}",
   "preview.chipHint": "Open the \"{name}\" preview in a new tab",
+  "preview.chipUnknownHint": "Open the \"{name}\" preview in a new tab (state not verified yet)",
   "preview.chipDown": "Preview: {name} — stopped",
   "preview.chipDownHint": "The \"{name}\" preview is not listening — click to restart it",
   "preview.stoppedTitle": "Preview \"{name}\" stopped",

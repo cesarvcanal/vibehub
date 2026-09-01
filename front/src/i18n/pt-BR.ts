@@ -366,6 +366,7 @@ export const ptBR: Record<string, string> = {
   "preview.registered": "Anunciados pelo agente",
   "preview.chip": "Preview: {name}",
   "preview.chipHint": "Abrir o preview \"{name}\" em nova aba",
+  "preview.chipUnknownHint": "Abrir o preview \"{name}\" em nova aba (estado ainda não verificado)",
   "preview.chipDown": "Preview: {name} — parado",
   "preview.chipDownHint": "O preview \"{name}\" não está escutando — clique pra reiniciar",
   "preview.stoppedTitle": "Preview \"{name}\" parado",
