@@ -163,6 +163,8 @@ export interface Settings {
   sdkDriver?: boolean;
   /** Native chat permission gate: mirror the Terminal tab, or ask for the sensitive set in the chat. */
   sdkPermissionMode?: "same-as-terminal" | "ask-sensitive";
+  /** Resume automatically a native-chat turn a panel deploy interrupted (default on). */
+  sdkAutoResume?: boolean;
   runner: RunnerSettings;
   /** Externally reachable base URL, when the install has one. */
   publicUrl?: string;
@@ -206,6 +208,7 @@ export interface SettingsPatch {
   idleHibernateMinutes?: number;
   sdkDriver?: boolean;
   sdkPermissionMode?: "same-as-terminal" | "ask-sensitive";
+  sdkAutoResume?: boolean;
   runner?: Partial<RunnerSettings>;
 }
 

@@ -18,6 +18,7 @@ import { parseOrigin, type MessageOrigin } from "@/features/board/lib/chat";
 export interface SdkEvent {
   type:
     | "user"
+    | "system_note"
     | "ready"
     | "session"
     | "assistant_delta"
@@ -199,6 +200,13 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       if (!event.text) return state;
       const marked = markSource(state, viaTerminal);
       return appendUserRow({ ...marked, rows: settleStreaming(marked.rows) }, event.text, event.from);
+    }
+    case "system_note": {
+      // The PANEL talking (a deploy interrupted a turn, the boot resumed it): one muted centered
+      // line, never a bubble — it is about the conversation, not part of it.
+      if (!event.text) return state;
+      const { id, seq } = nextId(state, "note");
+      return { ...state, seq, rows: [...settleStreaming(state.rows), { kind: "note", id, text: event.text }] };
     }
     case "ready": {
       // The frame carries the manager's REAL turn state. `turnActive: true` = a turn is in flight
