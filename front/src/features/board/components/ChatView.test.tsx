@@ -110,6 +110,39 @@ describe("ChatView", () => {
     expect(screen.getByText("verde").tagName).toBe("STRONG");
   });
 
+  it("draws an AGENT's message as the green robot bubble, named and linked to its card", async () => {
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({
+      id: "u1", kind: "user", at: 1, text: "roda os testes",
+      from: { kind: "agent", name: "card preview", sourceCardId: "c9", sourceProjectId: "p1" },
+    });
+
+    const bubble = await screen.findByTestId("chat-user");
+    expect(bubble).toHaveAttribute("data-role", "agent");
+    expect(screen.getByTestId("chat-sender")).toHaveTextContent("card preview");
+    // The name is a real link to the sender card — the board's own ?project&card address.
+    expect(screen.getByTestId("chat-sender-link")).toHaveAttribute("href", "/?project=p1&card=c9");
+  });
+
+  it("draws ANOTHER PERSON's message with their name and no robot; one's own stays unlabelled", async () => {
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: "fala mussa", from: { kind: "user", name: "mussa" } });
+    ws.deliver({ id: "u2", kind: "user", at: 2, text: "minha própria" });
+
+    await screen.findByText("fala mussa");
+    const bubbles = screen.getAllByTestId("chat-user");
+    expect(bubbles[0]).toHaveAttribute("data-role", "user");
+    expect(screen.getByTestId("chat-sender")).toHaveTextContent("mussa");
+    expect(screen.queryByTestId("chat-sender-link")).not.toBeInTheDocument(); // a person is not a card
+    // The unattributed message renders exactly as before: no sender tag on it.
+    expect(bubbles[1]).not.toHaveAttribute("data-role");
+    expect(screen.getAllByTestId("chat-sender")).toHaveLength(1);
+  });
+
   it("copies a message's SOURCE text with its copy button", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });

@@ -1,23 +1,28 @@
 import * as React from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Bell, Check, ChevronRight, Copy, Loader2, MessageSquare, Square, TerminalSquare, Wrench } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Bell, Bot, Check, ChevronRight, Copy, Loader2, MessageSquare, Square, TerminalSquare, UserRound, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { wsUrl } from "@/lib/ws";
 import { apiErrorMessage } from "@/lib/apiError";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/providers/auth";
 import { boardApi } from "@/features/board/api";
+import { cardHref } from "@/features/board/lib/board";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
 import { reconnectDelay, type ConnectionState } from "@/features/board/lib/reconnect";
 import {
   groupChatRows,
   mergeEvent,
   normalizeMessage,
+  originRole,
   parseChatFrame,
   pendingPhase,
   readPending,
   writePending,
   type ChatEvent,
+  type MessageOrigin,
   type PendingMessage,
 } from "@/features/board/lib/chat";
 import { mdBlocks, mdInline, linkifyTokens } from "@/features/board/lib/markdown";
@@ -438,9 +443,45 @@ function ToolGroup({ events }: { events: ChatEvent[] }) {
   );
 }
 
+/**
+ * The name tag on a message that came from somewhere else: robot + card name for an agent's send
+ * (clicking it goes to that card), a plain name for another person's. Exported for the native chat,
+ * which draws its bubbles with the same rules.
+ */
+export function SenderTag({ from }: { from: MessageOrigin }) {
+  const t = useT();
+  const isAgent = from.kind === "agent";
+  const name = from.name || (isAgent ? t("chat.agentFallback") : t("chat.userFallback"));
+  return (
+    <div
+      data-testid="chat-sender"
+      className={cn(
+        "mb-1 flex items-center gap-1 text-[11px] font-medium",
+        isAgent ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground",
+      )}
+    >
+      {isAgent ? <Bot className="h-3 w-3 shrink-0" /> : <UserRound className="h-3 w-3 shrink-0" />}
+      {isAgent && from.sourceProjectId && from.sourceCardId ? (
+        <Link
+          to={cardHref(from.sourceProjectId, from.sourceCardId)}
+          data-testid="chat-sender-link"
+          title={t("chat.openSenderCard")}
+          className="min-w-0 truncate underline-offset-2 hover:underline"
+        >
+          {name}
+        </Link>
+      ) : (
+        <span className="min-w-0 truncate">{name}</span>
+      )}
+    </div>
+  );
+}
+
 /** One entry: a message from either side, or the one line a tool call is worth. */
 function ChatRow({ event, sending }: { event: ChatEvent; sending?: boolean }) {
   const t = useT();
+  // Whose screen this is: their own messages render unlabelled, everyone else's carry the sender.
+  const viewer = useAuth().user?.username;
   const when = event.at ? new Date(event.at).toLocaleString() : undefined;
 
   if (event.kind === "tool") {
@@ -473,6 +514,25 @@ function ChatRow({ event, sending }: { event: ChatEvent; sending?: boolean }) {
   }
 
   if (event.kind === "user") {
+    // WHO said it, for THIS reader: their own messages keep the familiar right-aligned primary
+    // bubble; an agent's (another card's AI) or another person's sit on the left with a name tag.
+    const role = originRole(event.from, viewer);
+    if (role !== "self" && event.from) {
+      return (
+        <div className="group flex flex-col items-start" title={when} data-testid="chat-user" data-role={role}>
+          <div
+            className={cn(
+              "max-w-[85%] select-text whitespace-pre-wrap break-words rounded-lg border px-3 py-2 text-sm",
+              role === "agent" ? "border-emerald-500/40 bg-emerald-500/10" : "border-border/70 bg-muted/50",
+            )}
+          >
+            <SenderTag from={event.from} />
+            <LinkifiedText text={event.text} />
+          </div>
+          <CopyButton text={event.text} />
+        </div>
+      );
+    }
     return (
       <div className="group flex flex-col items-end" title={when}>
         <div

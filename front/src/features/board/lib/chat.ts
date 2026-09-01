@@ -10,6 +10,45 @@
 
 export type ChatEventKind = "user" | "assistant" | "tool" | "system";
 
+/**
+ * WHO put a message into this card — the server-recorded provenance (see
+ * back/src/services/chat/provenance.ts). `agent` = another card's AI (the green robot bubble,
+ * linked back to its card); `owner`/`user` = a person, by username. Absent = unattributed, drawn
+ * as the reader's own message (the pre-provenance behaviour).
+ */
+export interface MessageOrigin {
+  kind: "owner" | "user" | "agent";
+  name: string;
+  sourceCardId?: string;
+  sourceProjectId?: string;
+}
+
+/** Validates a frame's `from` field. Anything malformed reads as "no provenance", never as junk. PURE. */
+export function parseOrigin(value: unknown): MessageOrigin | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const o = value as Partial<MessageOrigin>;
+  if (o.kind !== "owner" && o.kind !== "user" && o.kind !== "agent") return undefined;
+  if (typeof o.name !== "string") return undefined;
+  return {
+    kind: o.kind,
+    name: o.name,
+    sourceCardId: typeof o.sourceCardId === "string" ? o.sourceCardId : undefined,
+    sourceProjectId: typeof o.sourceProjectId === "string" ? o.sourceProjectId : undefined,
+  };
+}
+
+/**
+ * How a message bubble should read for THIS viewer: their own (unlabelled, as always), another
+ * card's agent (robot + card name), or another person (name, no robot). A person's own messages
+ * are "self" wherever they typed them; an unattributed message defaults to "self" because that is
+ * what every message was before provenance existed. PURE.
+ */
+export function originRole(from: MessageOrigin | undefined, viewer: string | undefined): "self" | "agent" | "user" {
+  if (!from) return "self";
+  if (from.kind === "agent") return "agent";
+  return viewer !== undefined && from.name === viewer ? "self" : "user";
+}
+
 export interface ChatEvent {
   id: string;
   kind: ChatEventKind;
@@ -18,6 +57,8 @@ export interface ChatEvent {
   text: string;
   /** Tool name, on `tool` events only. */
   tool?: string;
+  /** Message provenance, on `user` events the server could attribute. */
+  from?: MessageOrigin;
 }
 
 /** One frame from the chat socket, or null when it is not an event (the heartbeat, junk). PURE. */
@@ -32,7 +73,14 @@ export function parseChatFrame(raw: string): ChatEvent | null {
   const e = obj as Partial<ChatEvent>;
   if (typeof e.id !== "string" || typeof e.text !== "string") return null;
   if (e.kind !== "user" && e.kind !== "assistant" && e.kind !== "tool" && e.kind !== "system") return null;
-  return { id: e.id, kind: e.kind, at: typeof e.at === "number" ? e.at : 0, text: e.text, tool: e.tool };
+  return {
+    id: e.id,
+    kind: e.kind,
+    at: typeof e.at === "number" ? e.at : 0,
+    text: e.text,
+    tool: e.tool,
+    from: parseOrigin(e.from),
+  };
 }
 
 /**

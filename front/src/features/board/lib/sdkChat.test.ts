@@ -24,6 +24,25 @@ describe("parseSdkFrame", () => {
   });
 });
 
+describe("message provenance (from)", () => {
+  const agent = { kind: "agent" as const, name: "card preview", sourceCardId: "c1", sourceProjectId: "p1" };
+
+  it("parseSdkFrame keeps a valid `from` and drops a malformed one", () => {
+    expect(parseSdkFrame(JSON.stringify({ type: "user", text: "oi", from: agent }))?.from).toEqual(agent);
+    expect(parseSdkFrame(JSON.stringify({ type: "user", text: "oi", from: { kind: "ghost" } }))?.from).toBeUndefined();
+  });
+
+  it("a user event with provenance becomes a user row that says who sent it", () => {
+    const state = feed([{ type: "user", text: "roda os testes", from: agent }]);
+    expect(state.rows).toEqual([{ kind: "user", id: "u:1", text: "roda os testes", state: "sent", from: agent }]);
+  });
+
+  it("one's own send (appendUserRow without from) stays unlabelled", () => {
+    const state = appendUserRow(INITIAL_SDK_STATE, "oi");
+    expect(state.rows[0]).toEqual({ kind: "user", id: "u:1", text: "oi", state: "sent", from: undefined });
+  });
+});
+
 describe("applySdkEvent", () => {
   it("ready arms the view; a resume id becomes the session and a note", () => {
     const state = feed([{ type: "ready", resume: "abc-123" }]);

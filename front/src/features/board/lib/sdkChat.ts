@@ -9,9 +9,12 @@
  * contract lives in `back/src/services/sdk/protocol.ts`.
  */
 
+import { parseOrigin, type MessageOrigin } from "@/features/board/lib/chat";
+
 /* ----------------------------------------------------------------- events */
 
-/** One frame from the SDK socket — the driver's event contract, verbatim (`user` only on replay). */
+/** One frame from the SDK socket — the driver's event contract, verbatim (`user` only on replay
+ *  and for external sends: another card's agent, another person's message). */
 export interface SdkEvent {
   type:
     | "user"
@@ -41,6 +44,8 @@ export interface SdkEvent {
   result?: string;
   message?: string;
   raw?: string;
+  /** Message provenance on `user` events — who sent it (see lib/chat.ts `MessageOrigin`). */
+  from?: MessageOrigin;
 }
 
 /** Parse one socket frame. Null for anything that is not a JSON object with a type. PURE. */
@@ -54,7 +59,7 @@ export function parseSdkFrame(raw: string): SdkEvent | null {
   if (!obj || typeof obj !== "object") return null;
   const e = obj as Partial<SdkEvent>;
   if (typeof e.type !== "string") return null;
-  return e as SdkEvent;
+  return { ...e, from: parseOrigin(e.from) } as SdkEvent;
 }
 
 /* ------------------------------------------------------------------- rows */
@@ -63,8 +68,9 @@ export function parseSdkFrame(raw: string): SdkEvent | null {
 export type PermissionOutcome = "pending" | "allowed" | "denied" | "timeout";
 
 export type SdkRow =
-  /** A message the person sent. `sent` = it reached the driver's stdin (the socket was open). */
-  | { kind: "user"; id: string; text: string; state: "sent" }
+  /** A message the person sent. `sent` = it reached the driver's stdin (the socket was open).
+   *  `from` = provenance on replayed/external messages: another card's agent, another person. */
+  | { kind: "user"; id: string; text: string; state: "sent"; from?: MessageOrigin }
   /** Claude talking. `streaming` while deltas are still landing on it. */
   | { kind: "assistant"; id: string; text: string; streaming: boolean }
   /** One tool call, compact: the name plus a one-line summary of its input. */
@@ -148,10 +154,10 @@ function settleStreaming(rows: SdkRow[]): SdkRow[] {
 export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatState {
   switch (event.type) {
     case "user": {
-      // A replayed message of the person's own (live sends are drawn by `appendUserRow` when the
-      // socket accepts the frame — the server does not echo those back on the same connection).
+      // A replayed message (live sends of one's own are drawn by `appendUserRow` when the socket
+      // accepts the frame) — or a LIVE external one: another card's agent talking to this card.
       if (!event.text) return state;
-      return appendUserRow({ ...state, rows: settleStreaming(state.rows) }, event.text);
+      return appendUserRow({ ...state, rows: settleStreaming(state.rows) }, event.text, event.from);
     }
     case "ready": {
       // A fresh driver process: nothing is running in it yet, whatever the replayed tail looked
@@ -254,10 +260,10 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
   }
 }
 
-/** Append a message the person just sent (the socket accepted the frame). PURE. */
-export function appendUserRow(state: SdkChatState, text: string): SdkChatState {
+/** Append a user message: one's own send (no `from`), or a replayed/external one with provenance. PURE. */
+export function appendUserRow(state: SdkChatState, text: string, from?: MessageOrigin): SdkChatState {
   const { id, seq } = nextId(state, "u");
-  return { ...state, seq, rows: [...state.rows, { kind: "user", id, text, state: "sent" }] };
+  return { ...state, seq, rows: [...state.rows, { kind: "user", id, text, state: "sent", from }] };
 }
 
 /** Settle a permission card's outcome (a click, or the driver's echo — idempotent). PURE. */
