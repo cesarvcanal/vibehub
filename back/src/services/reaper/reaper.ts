@@ -86,10 +86,21 @@ export function isTranscriptWatcher(args: string): boolean {
 }
 
 /**
+ * The MARKER of the card-owned SDK driver (services/sdk/manager.ts): its command line always names
+ * the planted script. The driver is a LIVE, backend-owned process even with no page open (that is
+ * the point of the detach) — the reaper must never judge it or anything wearing its path. Its own
+ * SDK subprocesses hang off it (never ppid 1 while it lives); a truly dead driver exits on stdin
+ * EOF, so there is nothing here for the reaper to collect. PURE.
+ */
+export function isSdkDriverProcess(args: string): boolean {
+  return args.includes(".vibehub-sdk/sdk-driver.mjs");
+}
+
+/**
  * The processes a sweep is allowed to kill: ORPHANED (ppid 1 — reparented, nothing owns them),
  * OLD ENOUGH (>= minAgeS) and RECOGNISED (a claude process or a transcript watcher). Everything
- * else — tmux, panes, live claudes under tmux, live watchers under their docker exec, PID 1
- * itself — never qualifies. PURE/testable.
+ * else — tmux, panes, live claudes under tmux, live watchers under their docker exec, the SDK
+ * driver (see isSdkDriverProcess), PID 1 itself — never qualifies. PURE/testable.
  */
 export function reapCandidates(procs: RunnerProc[], minAgeS: number = REAP_MIN_AGE_S): RunnerProc[] {
   return procs.filter(
@@ -97,6 +108,7 @@ export function reapCandidates(procs: RunnerProc[], minAgeS: number = REAP_MIN_A
       p.pid > 1 &&
       p.ppid === 1 &&
       p.etimes >= minAgeS &&
+      !isSdkDriverProcess(p.args) &&
       (isClaudeProcess(p.args) || isTranscriptWatcher(p.args)),
   );
 }
