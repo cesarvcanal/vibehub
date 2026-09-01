@@ -420,7 +420,7 @@ export const ptBR: Record<string, string> = {
 
   /* ------------------------------------------------------ chat nativo (SDK) */
   "sdk.aria": "Conversa nativa do card",
-  "sdk.beta": "Chat nativo (beta)",
+  "sdk.beta": "Chat nativo",
   "sdk.connecting": "Iniciando o agente…",
   "sdk.empty": "Nenhuma mensagem ainda",
   "sdk.emptyHint": "Esta conversa roda pelo Agent SDK: eventos estruturados, e permissões respondidas aqui mesmo no chat.",
@@ -436,9 +436,8 @@ export const ptBR: Record<string, string> = {
   "sdk.denied": "Negada",
   "sdk.timedOut": "Sem resposta a tempo — negada.",
   "sdk.flagOff": "O driver SDK está desligado nesta instalação. Ligue \"Driver SDK\" nas Configurações para usar o chat nativo.",
-  "cardView.nativeChat": "Chat nativo (beta)",
 
-  "cardView.sdkTerminalNote": "Chat nativo (beta) ativo neste card — é a mesma conversa: o chat nativo retoma sempre a sessão mais recente, inclusive o que você digitar aqui.",
+  "cardView.sdkTerminalNote": "Chat nativo ativo neste card — é a mesma conversa: o chat nativo retoma sempre a sessão mais recente, inclusive o que você digitar aqui.",
   "cardView.terminalFor": "Terminal de {title}",
   "cardView.cardFallback": "card",
   "cardView.shellHeader": "Shell · bash no worktree",
@@ -546,6 +545,14 @@ export const ptBR: Record<string, string> = {
   "vnc.state.error": "erro",
   "vnc.state.closed": "fechado",
   "vnc.header": "Navegador · Chromium do card",
+  "vnc.fit": "Ajustar",
+  "vnc.fitHint": "A tela do Chromium escala para caber no painel. Clique para ver em tamanho real (1:1, resolução original).",
+  "vnc.realSize": "Tamanho real",
+  "vnc.realSizeHint": "1:1 na resolução original do Chromium — fiel para testar front. Clique para ajustar ao painel.",
+  "vnc.watchOnly": "Só assistir",
+  "vnc.watchOnlyHint": "Seu mouse e teclado não entram na página — você só acompanha o agente. Clique para pilotar junto.",
+  "vnc.pilot": "Pilotar junto",
+  "vnc.pilotHint": "Seus cliques e teclado entram junto com o controle do agente. Clique para voltar a só assistir.",
   "vnc.disconnect": "Desconectar",
   "vnc.disconnectAria": "Desconectar o navegador",
   "vnc.disconnectHint": "Desconectar e parar o navegador no runner",
@@ -623,9 +630,14 @@ export const ptBR: Record<string, string> = {
   "settings.idleHibernateUnit": "minutos",
   "settings.idleHibernateHint":
     "Minutos sem sinal de vida até a sessão ser fechada. O card não sai do lugar, só fica cinza; abrir retoma a mesma conversa. Card trabalhando nunca é tocado. 0 desliga.",
-  "settings.sdkDriver": "Driver SDK (chat nativo, beta)",
+  "settings.sdkDriver": "Chat nativo (padrão da instalação)",
   "settings.sdkDriverHint":
-    "Arma o \"Chat nativo (beta)\" por card: a conversa daquele card roda pelo Agent SDK — eventos estruturados, botões de permissão no chat — em vez do transcript do terminal. Desligado, nada muda em lugar nenhum.",
+    "A aba Chat de TODO card roda pelo Agent SDK — eventos estruturados, as mesmas ferramentas do terminal (MCPs, navegador do card). Desligue para voltar ao chat clássico (transcript do terminal) em todos os cards.",
+  "settings.sdkPermissionMode": "Permissões do chat nativo",
+  "settings.sdkPermissionModeHint":
+    "\"Igual ao terminal\" = o chat nativo tem exatamente o mesmo comportamento de permissões da aba Terminal do card. \"Perguntar o sensível\" = ações sensíveis (rm -rf, force-push, deploy, segredos) viram botões Permitir/Negar no chat.",
+  "settings.sdkPermissionSame": "Igual ao terminal",
+  "settings.sdkPermissionAsk": "Perguntar o sensível no chat",
   "settings.voice": "Entrada por voz",
   "settings.transcribeLanguage": "Idioma da transcrição",
   "settings.transcribePlaceholder": "auto (ou um código de duas letras: pt, en, es…)",

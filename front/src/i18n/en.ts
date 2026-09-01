@@ -419,7 +419,7 @@ export const en: Record<string, string> = {
 
   /* ------------------------------------------------------ native chat (SDK) */
   "sdk.aria": "Native card conversation",
-  "sdk.beta": "Native chat (beta)",
+  "sdk.beta": "Native chat",
   "sdk.connecting": "Starting the agent…",
   "sdk.empty": "No messages yet",
   "sdk.emptyHint": "This conversation runs over the Agent SDK: structured events, and permissions answered right here in the chat.",
@@ -435,9 +435,8 @@ export const en: Record<string, string> = {
   "sdk.denied": "Denied",
   "sdk.timedOut": "No answer in time — denied.",
   "sdk.flagOff": "The SDK driver is off for this install. Turn on \"SDK driver\" in Settings to use native chat.",
-  "cardView.nativeChat": "Native chat (beta)",
 
-  "cardView.sdkTerminalNote": "Native chat (beta) is on for this card — it is the same conversation: the native chat always resumes the newest session, including what you type here.",
+  "cardView.sdkTerminalNote": "Native chat is on for this card — it is the same conversation: the native chat always resumes the newest session, including what you type here.",
   "cardView.terminalFor": "Terminal for {title}",
   "cardView.cardFallback": "card",
   "cardView.shellHeader": "Shell · bash in the worktree",
@@ -540,6 +539,14 @@ export const en: Record<string, string> = {
   "vnc.state.error": "error",
   "vnc.state.closed": "closed",
   "vnc.header": "Browser · card Chromium",
+  "vnc.fit": "Fit",
+  "vnc.fitHint": "The Chromium screen scales to fit the pane. Click for real size (1:1, native resolution).",
+  "vnc.realSize": "Real size",
+  "vnc.realSizeHint": "1:1 at the Chromium's native resolution — faithful for front-end testing. Click to fit the pane.",
+  "vnc.watchOnly": "Watch only",
+  "vnc.watchOnlyHint": "Your mouse and keyboard do not reach the page — you just watch the agent. Click to co-pilot.",
+  "vnc.pilot": "Co-pilot",
+  "vnc.pilotHint": "Your clicks and typing land alongside the agent's control. Click to go back to watching only.",
   "vnc.disconnect": "Disconnect",
   "vnc.disconnectAria": "Disconnect browser",
   "vnc.disconnectHint": "Disconnect and stop the browser in the runner",
@@ -616,9 +623,14 @@ export const en: Record<string, string> = {
   "settings.idleHibernateUnit": "minutes",
   "settings.idleHibernateHint":
     "Minutes with no sign of life before the session is closed. The card keeps its place on the board and turns grey; opening it resumes the same conversation. A card that is working is never touched. 0 turns it off.",
-  "settings.sdkDriver": "SDK driver (native chat, beta)",
+  "settings.sdkDriver": "Native chat (install default)",
   "settings.sdkDriverHint":
-    "Arms the per-card \"Native chat (beta)\": that card's conversation runs over the Agent SDK — structured events, permission buttons in the chat — instead of the terminal transcript. Off, nothing changes anywhere.",
+    "The Chat tab of EVERY card runs over the Agent SDK — structured events, the same tools as the terminal (MCPs, the card's browser). Turn it off to fall back to the classic chat (terminal transcript) on all cards.",
+  "settings.sdkPermissionMode": "Native chat permissions",
+  "settings.sdkPermissionModeHint":
+    "\"Same as the terminal\" = the native chat has exactly the permission behaviour of the card's Terminal tab. \"Ask for the sensitive\" = sensitive actions (rm -rf, force-push, deploy, secrets) become Allow/Deny buttons in the chat.",
+  "settings.sdkPermissionSame": "Same as the terminal",
+  "settings.sdkPermissionAsk": "Ask for the sensitive in the chat",
   "settings.voice": "Voice input",
   "settings.transcribeLanguage": "Transcription language",
   "settings.transcribePlaceholder": "auto (or a two-letter code: pt, en, es…)",
