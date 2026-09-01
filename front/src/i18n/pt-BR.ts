@@ -406,8 +406,6 @@ export const ptBR: Record<string, string> = {
   "chat.copy": "Copiar",
   "chat.copied": "Copiado",
   "chat.copyError": "Não deu pra copiar",
-  "chat.stop": "Parar",
-  "chat.stopHint": "Manda Escape na sessão",
   "chat.sendError": "Não deu pra enviar a mensagem",
   "chat.awaitingChoice": "O terminal está esperando uma escolha (menu de sessão, /compact ou permissão). Abra a aba Terminal, responda e envie de novo. Sua mensagem foi mantida.",
   "chat.stopError": "Não deu pra parar o agente",
@@ -429,7 +427,6 @@ export const ptBR: Record<string, string> = {
   "sdk.session": "sessão {id}",
   "sdk.resumed": "Retomando a sessão {id}",
   "sdk.offline": "Sem conexão — a mensagem não foi enviada. Ela fica no campo.",
-  "sdk.interrupt": "Interromper o agente",
   "sdk.permissionTitle": "Permissão necessária",
   "sdk.permissionTimeoutHint": "Sem resposta, nega sozinho em 5 minutos.",
   "sdk.allow": "Permitir",
@@ -485,6 +482,7 @@ export const ptBR: Record<string, string> = {
   "composer.takePhoto": "Tirar foto",
   "composer.fromGallery": "Foto da galeria",
   "composer.attachFile": "Anexar um arquivo",
+  "composer.interrupt": "Interromper",
 
   /* ----------------------------------------------------------------- outbox */
   "outbox.waitingSession.one":

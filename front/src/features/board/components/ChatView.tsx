@@ -2,7 +2,7 @@ import * as React from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
-import { Bell, Bot, Check, ChevronRight, Copy, Loader2, MessageSquare, Square, TerminalSquare, UserRound, Wrench } from "lucide-react";
+import { Bell, Bot, Check, ChevronRight, Copy, Loader2, MessageSquare, TerminalSquare, UserRound, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { wsUrl } from "@/lib/ws";
 import { apiErrorMessage } from "@/lib/apiError";
@@ -335,28 +335,21 @@ export function ChatView({
         ) : null}
       </div>
 
-      <div className="mt-1.5 flex items-end gap-1.5">
-        <TerminalComposer
-          className="min-w-0 flex-1"
-          cardId={cardId}
-          active={active}
-          onSend={send}
-          onUploadImage={onUploadImage}
-        />
-        {working ? (
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-9 w-9 shrink-0 text-muted-foreground"
-            aria-label={t("chat.stop")}
-            title={t("chat.stopHint")}
-            disabled={stopMutation.isPending}
-            onClick={() => stopMutation.mutate()}
-          >
-            <Square className="h-3.5 w-3.5" />
-          </Button>
-        ) : null}
-      </div>
+      {/* The stop button lives INSIDE the composer now — right column, above the microphone —
+          instead of floating loose at the row's edge. The Escape round-trip is still this view's. */}
+      <TerminalComposer
+        className="mt-1.5"
+        cardId={cardId}
+        active={active}
+        onSend={send}
+        onUploadImage={onUploadImage}
+        interrupt={{
+          active: working,
+          disabled: stopMutation.isPending,
+          onInterrupt: () => stopMutation.mutate(),
+          testId: "chat-stop",
+        }}
+      />
     </div>
   );
 }

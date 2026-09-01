@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Camera, Check, ImageIcon, Loader2, Mic, Paperclip, Plus, RotateCw, X } from "lucide-react";
+import { Camera, Check, ImageIcon, Loader2, Mic, Paperclip, Plus, RotateCw, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -81,6 +81,24 @@ export interface TerminalComposerProps {
    * Off on a phone, where focusing a field throws the on-screen keyboard over half the screen.
    */
   autoFocus?: boolean;
+  /**
+   * The stop button, anchored where it can be FOUND: in the composer's right column, directly
+   * above the microphone. It used to float as a sibling next to the composer, appearing out of
+   * nowhere at the row's edge and shoving the layout when it came and went. Now the chat view
+   * hands the composer its interrupt and the composer owns the geometry: the slot is ALWAYS
+   * reserved (so nothing jumps and nothing is covered) and the button fills it only while the
+   * agent's turn is running (`active`). Each chat keeps its own way of stopping — the handler is
+   * the view's, only the seat is the composer's.
+   */
+  interrupt?: {
+    /** true while the agent is working — the only time the button is on screen. */
+    active: boolean;
+    onInterrupt: () => void;
+    /** A stop already in flight (the transcript chat's Escape round-trip). */
+    disabled?: boolean;
+    /** Lets each chat keep its own test id (`chat-stop`, `sdk-interrupt`). */
+    testId?: string;
+  };
 }
 
 /** Image files in a paste or drop payload, ignoring everything else. */
@@ -296,6 +314,7 @@ export function TerminalComposer({
   active = true,
   className,
   autoFocus = true,
+  interrupt,
 }: TerminalComposerProps) {
   const t = useT();
   const isMobile = useIsMobile();
@@ -750,17 +769,46 @@ export function TerminalComposer({
         ) : null}
       </div>
 
-      {cardId ? (
-        <VoiceControl
-          state={recording}
-          available={canRecord}
-          levels={levels}
-          mobile={isMobile}
-          elapsed={formatElapsed(elapsedMs)}
-          onStart={() => void startRecording()}
-          onFinish={finishRecording}
-          onCancel={cancelRecording}
-        />
+      {cardId || interrupt ? (
+        /* The right column: stop above microphone, always in the same two seats. The stop slot is
+           reserved even while empty so the mic never moves and the button never lands on top of
+           anything — it simply lights up in its place when the agent starts working. */
+        <div className="flex shrink-0 flex-col items-center gap-1.5">
+          {interrupt ? (
+            <div
+              data-testid="composer-interrupt-slot"
+              className="h-12 w-12 shrink-0 md:h-9 md:w-9"
+            >
+              {interrupt.active ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  data-testid={interrupt.testId ?? "composer-interrupt"}
+                  aria-label={t("composer.interrupt")}
+                  title={t("composer.interrupt")}
+                  disabled={interrupt.disabled}
+                  onClick={interrupt.onInterrupt}
+                  className="h-12 w-12 shrink-0 rounded-full text-muted-foreground hover:border-destructive/50 hover:bg-destructive/10 hover:text-destructive md:h-9 md:w-9 md:rounded-md"
+                >
+                  <Square className="h-3.5 w-3.5" />
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+          {cardId ? (
+            <VoiceControl
+              state={recording}
+              available={canRecord}
+              levels={levels}
+              mobile={isMobile}
+              elapsed={formatElapsed(elapsedMs)}
+              onStart={() => void startRecording()}
+              onFinish={finishRecording}
+              onCancel={cancelRecording}
+            />
+          ) : null}
+        </div>
       ) : null}
       </div>
     </div>

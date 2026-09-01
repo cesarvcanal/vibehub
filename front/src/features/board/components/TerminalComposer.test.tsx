@@ -673,3 +673,46 @@ describe("TerminalComposer — on a phone", () => {
     expect(onSend).toHaveBeenCalledWith("deploy");
   });
 });
+
+describe("interrupt button", () => {
+  const interrupt = (active: boolean, onInterrupt = vi.fn()) => ({ active, onInterrupt });
+
+  it("keeps its seat reserved above the microphone, empty until the agent works", async () => {
+    mockGet.mockResolvedValue({ available: false });
+    const { rerender } = renderComposer(
+      <TerminalComposer onSend={vi.fn()} cardId="c1" interrupt={interrupt(false)} />,
+    );
+    // The slot is on screen even with no button in it — when the agent starts, the button lights
+    // up IN PLACE instead of shoving the microphone or landing on top of anything.
+    const slot = screen.getByTestId("composer-interrupt-slot");
+    expect(screen.queryByTestId("composer-interrupt")).toBeNull();
+
+    rerender(<TerminalComposer onSend={vi.fn()} cardId="c1" interrupt={interrupt(true)} />);
+    const button = screen.getByTestId("composer-interrupt");
+    const mic = await screen.findByTestId("composer-mic");
+    // Same column, stop first: directly ABOVE the microphone.
+    expect(slot.parentElement).toBe(mic.parentElement);
+    expect(slot.compareDocumentPosition(mic) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(slot.contains(button)).toBe(true);
+  });
+
+  it("fires the view's own interrupt, and carries the view's test id", async () => {
+    mockGet.mockResolvedValue({ available: false });
+    const user = userEvent.setup();
+    const onInterrupt = vi.fn();
+    renderComposer(
+      <TerminalComposer
+        onSend={vi.fn()}
+        cardId="c1"
+        interrupt={{ active: true, onInterrupt, testId: "sdk-interrupt" }}
+      />,
+    );
+    await user.click(screen.getByTestId("sdk-interrupt"));
+    expect(onInterrupt).toHaveBeenCalledTimes(1);
+  });
+
+  it("without the prop there is no slot at all — other composers keep their old shape", () => {
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
+    expect(screen.queryByTestId("composer-interrupt-slot")).toBeNull();
+  });
+});
