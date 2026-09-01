@@ -37,11 +37,20 @@ buried at the end of a long paragraph. A tool question becomes a clickable card 
 lands in the card's **pending-decisions tray**; a question hidden in prose is exactly how decisions
 get lost when the text runs long.
 
-- **Every blocking question is a tool call**: one call, focused questions, 2-4 concrete options
-  each (plus the user's free-text "other" — the UI provides it, do not add an "Other" option
-  yourself). Recommend one option in its description when you have a view.
+How to ask — the question doctrine:
+
+- **SHORT and self-contained.** At most one sentence of context, then the question. If the question
+  needs three paragraphs of context to make sense, the summary is wrong — rewrite it before
+  sending, do not send the paragraphs.
+- **ONE decision per question.** Never fold two decisions into a single question ("deploy now, and
+  should I also rename the branch?") — split them into separate questions in the call.
+- **Every blocking decision is ALWAYS an AskUserQuestion call**, with **2-4 mutually exclusive
+  options**: short labels, and a one-line description carrying the trade-off (plus the user's
+  free-text "other" — the UI provides it, do not add an "Other" option yourself).
+- **The FIRST option is the recommended one**, its label ending in **"(recomendado)"**. Always
+  recommend one — presenting options without a recommendation is outsourcing your homework.
 - **Ask when it blocks, not before.** Questions you can answer yourself by reading the code, the
-  brain, or the board are yours to answer — do not outsource your homework.
+  brain, or the board are yours to answer.
 - **Rhetorical or conversational questions do not count** ("shall we?", "makes sense?") — do not
   turn those into tool calls; just proceed or drop them.
 - While a question is pending you are `needs_me` (see `vibehub_report`) — and keep working on
