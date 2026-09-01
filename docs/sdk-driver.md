@@ -162,6 +162,33 @@ NEW id onto the card (`resumeSessionId` in board.json, deduplicated). The next d
 reconnect, the card reopened tomorrow — passes `--resume <id>` and continues the SAME conversation.
 The chat footer shows the short session id (the resume key you are on).
 
+## Deploy resume — um turno em voo sobrevive ao restart do painel (2026-09-01)
+
+Um push na `main` reinicia o app-vibehub; o driver é filho do back (docker exec) e **morre junto,
+no meio do turno** — 2x em produção o card ficou mudo. A resposta:
+
+- **Marcador durável por card** (`<dataDir>/sdk-inflight/<cardId>.json`, ver
+  `services/sdk/inflight.ts`): escrito quando um turno de usuário entra no stdin do driver
+  (`{startedAt, preview, attempts}`), removido quando o `result` fecha o último turno em voo, e
+  também num stop DELIBERADO (pause/hibernate/delete — o que a pessoa encerrou não se retoma).
+- **SIGTERM** (o docker stop do deploy): `shutdownAllDrivers()` encerra o stdin de cada driver
+  (EOF = saída limpa, atravessa o docker exec) e **mantém os marcadores** — eles são a mensagem
+  para o próximo boot.
+- **Sweep de boot** (`services/sdk/resume.ts`, depois do listen): para cada marcador órfão, o card
+  ganha uma **linha de sistema** no sdk-history (`system_note`, replayed como nota no chat) e —
+  com `sdkAutoResume` ligado (default) — o driver sobe de novo (`--resume` da chave persistida) e
+  recebe um turno de continuação **como turno de usuário normal** (nunca embrulhado em
+  notificação), com **proveniência `system`** (#48) para nunca parecer fala da pessoa.
+- **Sem loop:** o turno retomado nasce com `attempts: 1`; se um segundo deploy o matar, o próximo
+  boot só escreve a linha ("não vou retomar de novo") e para explicitamente.
+- **Filler do harness filtrado:** o par que o Claude Code sintetiza ao retomar sessão cortada —
+  `[Request interrupted by user]` + `No response requested.` — é descartado em todo caminho que lê
+  transcript (chat clássico, merge do replay, mirror) e também vindo ao vivo do driver: no chat
+  ele lia como o Claude "dispensando" a mensagem da pessoa.
+- **Mensagem durante o setup da conexão:** a rota `/sdk` agora **bufferiza** frames que chegam
+  enquanto o connect ainda faz o probe/replay (antes eram descartados sem listener) e os entrega
+  ao driver na ordem, como turnos normais.
+
 ## Turning it on — ONE switch, on by default (2026-08-31)
 
 **Global only:** the `sdkDriver` setting — "Chat nativo (padrão da instalação)" in
