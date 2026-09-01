@@ -87,7 +87,7 @@ describe("pt-BR — the board", () => {
     setLanguage("pt-BR");
     // The ⋯ menu only carries Delete for the OWNER now, and owner-ness comes from /auth/me.
     get.mockImplementation(async (url: string) =>
-      url === "/auth/me" ? { user: { id: "u1", username: "cesar", role: "owner" } } : {},
+      url === "/auth/me" ? { user: { id: "u1", username: "sam", role: "owner" } } : {},
     );
     renderApp(
       <CardTile

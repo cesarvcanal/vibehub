@@ -122,7 +122,7 @@ export function replayDedupeKey(event: Pick<HistoryEvent, "type"> & { text?: str
  *
  * The old rule was a single timestamp cutoff — transcript events at or after the history's first
  * entry were dropped wholesale. That rule silently ate every conversation the TERMINAL had after
- * the native chat was first used (the César bug: he talked to the TUI, came back, and the native
+ * the native chat was first used (a real bug: the user talked to the TUI, came back, and the native
  * chat "não puxou nada" — those events were newer than the cutoff and in no history file). The
  * merge keeps them: a transcript event is dropped only when the history ALREADY HAS it —
  *

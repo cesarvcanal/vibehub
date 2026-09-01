@@ -702,7 +702,7 @@ describe("CardTerminalView — the card bar", () => {
   });
 
   it("lists the install's OWN names: the default profile's label, then each account", async () => {
-    // The exact bug the owner hit: with the built-in profile signed in as cesarvcanal@gmail.com and
+    // The exact bug the owner hit: with the built-in profile signed in as owner@example.com and
     // one account "tech", the first row was labelled with whatever was in use — so he saw
     // "tech / ✓ tech", and picking one renamed the other.
     mockGet.mockImplementation((url: string) => {
@@ -710,7 +710,7 @@ describe("CardTerminalView — the card bar", () => {
       if (url === "/accounts") {
         return Promise.resolve({
           accounts: [{ slug: "tech", name: "tech", createdAt: 1 }],
-          defaultLabel: "cesarvcanal@gmail.com",
+          defaultLabel: "owner@example.com",
         });
       }
       if (url === "/cards/c1/session") {
@@ -723,7 +723,7 @@ describe("CardTerminalView — the card bar", () => {
     renderWithCache([card({ openedAt: 10 })]);
 
     const items = await openMenu(user, "Claude account");
-    expect(items.map((i) => i.textContent)).toEqual(["cesarvcanal@gmail.com", "tech"]);
+    expect(items.map((i) => i.textContent)).toEqual(["owner@example.com", "tech"]);
     // The check follows the account the SESSION is signed in to, not the card's (absent) pin.
     expect(items[1]).toHaveAttribute("aria-checked", "true");
     expect(items[0]).toHaveAttribute("aria-checked", "false");

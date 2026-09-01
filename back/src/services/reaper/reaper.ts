@@ -27,7 +27,7 @@ import { logger } from "../../utils/logger.js";
  * wait(): a process this reaper (or anything else) kills whose parent is already PID 1 becomes a
  * zombie FOREVER (defunct entries; ~176 observed in the incident). Zombies hold no CPU/memory,
  * only a pid slot, but the real fix is recreating the container with `init: true` so PID 1 is a
- * real init that reaps children — scheduled separately with César (see docs/runner-processes.md).
+ * real init that reaps children — scheduled separately by the operator (see docs/runner-processes.md).
  */
 
 /** Minimum age (seconds) before an orphan is reaped. */

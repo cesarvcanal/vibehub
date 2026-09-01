@@ -115,7 +115,7 @@ describe("buildInstallDriverScript", () => {
   });
 });
 
-describe("auth hygiene — CLAUDE_CODE_OAUTH_TOKEN only (ordem do César)", () => {
+describe("auth hygiene — CLAUDE_CODE_OAUTH_TOKEN only (project rule)", () => {
   const base = { containerName: "vibehub-runner", cwd: "/work/o--r-worktrees/card-1", profileDir: "/root/.claude" };
 
   it("UNSETS ANTHROPIC_API_KEY before anything else, so an inherited key can never win over the token", () => {

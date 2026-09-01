@@ -54,7 +54,7 @@ async function signUpOwner(server: FastifyInstance): Promise<string> {
   }));
 }
 
-async function addMember(server: FastifyInstance, owner: string, username = "mussa"): Promise<string> {
+async function addMember(server: FastifyInstance, owner: string, username = "alex"): Promise<string> {
   await server.inject({
     method: "POST", url: "/api/users", headers: { cookie: owner },
     payload: { username, password: "supersecret", role: "member" },
@@ -78,13 +78,13 @@ describe("the owner's user list", () => {
     const owner = await signUpOwner(app);
     const created = await app.inject({
       method: "POST", url: "/api/users", headers: { cookie: owner },
-      payload: { username: "mussa", password: "supersecret" },
+      payload: { username: "alex", password: "supersecret" },
     });
     expect(created.statusCode).toBe(200);
-    expect(created.json()).toMatchObject({ user: { username: "mussa", role: "member" } });
+    expect(created.json()).toMatchObject({ user: { username: "alex", role: "member" } });
 
     const login = await app.inject({
-      method: "POST", url: "/api/auth/login", payload: { username: "mussa", password: "supersecret" },
+      method: "POST", url: "/api/auth/login", payload: { username: "alex", password: "supersecret" },
     });
     expect(login.statusCode).toBe(200);
     expect(login.json()).toMatchObject({ user: { role: "member" } });
@@ -102,7 +102,7 @@ describe("the owner's user list", () => {
     const owner = await signUpOwner(app);
     const member = await addMember(app, owner);
     const id = (await app.inject({ method: "GET", url: "/api/users", headers: { cookie: owner } }))
-      .json().users.find((u: { username: string }) => u.username === "mussa").id;
+      .json().users.find((u: { username: string }) => u.username === "alex").id;
 
     const res = await app.inject({
       method: "PATCH", url: `/api/users/${id}`, headers: { cookie: owner },
@@ -112,7 +112,7 @@ describe("the owner's user list", () => {
     expect(res.json()).toMatchObject({ user: { role: "owner" } });
     expect(member).toBeTruthy();
     const login = await app.inject({
-      method: "POST", url: "/api/auth/login", payload: { username: "mussa", password: "brandnewsecret" },
+      method: "POST", url: "/api/auth/login", payload: { username: "alex", password: "brandnewsecret" },
     });
     expect(login.statusCode).toBe(200);
   });
@@ -121,7 +121,7 @@ describe("the owner's user list", () => {
     const owner = await signUpOwner(app);
     const member = await addMember(app, owner);
     const id = (await app.inject({ method: "GET", url: "/api/users", headers: { cookie: owner } }))
-      .json().users.find((u: { username: string }) => u.username === "mussa").id;
+      .json().users.find((u: { username: string }) => u.username === "alex").id;
 
     expect((await app.inject({ method: "DELETE", url: `/api/users/${id}`, headers: { cookie: owner } })).statusCode)
       .toBe(200);

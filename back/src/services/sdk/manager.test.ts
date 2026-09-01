@@ -17,8 +17,8 @@ import {
 import { notifyCardSessionKill } from "../board/workspace.js";
 
 /**
- * THE BUG THIS FILE PINS (card prompt-56fc, sessão 69b30a1f): the SDK driver was a CHILD OF THE
- * WEBSOCKET — César sent a message, reloaded the page, the socket died and took the driver down
+ * THE BUG THIS FILE PINS (the reload-mid-turn bug): the SDK driver was a CHILD OF THE
+ * WEBSOCKET — the user sent a message, reloaded the page, the socket died and took the driver down
  * MID-TURN. The message was swallowed: no answer in the transcript, and the reconnect's fresh
  * driver resumed the session without continuing the pending turn. The manager decouples the two:
  * ONE driver per card, owned by the backend, multiplexing every socket — a page can close and the
@@ -176,7 +176,7 @@ describe("attachSocket — multiplexing (duas abas = uma sessão)", () => {
     expect(sentTypes(s1)).toEqual(["ready"]);
   });
 
-  it("the synthesized `ready` says a turn is IN FLIGHT (reattach mid-turn — Terminal↔Chat do prompt-56fc)", () => {
+  it("the synthesized `ready` says a turn is IN FLIGHT (reattach mid-turn — Terminal↔Chat mid-turn)", () => {
     const session = ensure();
     const s1 = fakeSocket();
     attachSocket(session, s1 as never);
@@ -240,12 +240,12 @@ describe("the turn survives the page (o bug do Cmd+Shift+R)", () => {
   it("stamps the sender's origin on the user message it persists", async () => {
     const session = ensure();
     const socket = fakeSocket();
-    attachSocket(session, socket as never, { kind: "user", name: "mussa" });
+    attachSocket(session, socket as never, { kind: "user", name: "alex" });
     socket.emit("message", Buffer.from(`{"type":"user","text":"oi"}`));
     await vi.waitFor(async () => {
       const history = await readHistory(CARD);
       const user = history.find((e) => e.type === "user") as { from?: { name?: string } } | undefined;
-      expect(user?.from?.name).toBe("mussa");
+      expect(user?.from?.name).toBe("alex");
     });
   });
 });
@@ -278,7 +278,7 @@ describe("end of life", () => {
   });
 
   it("a crash is NEVER silent: the exit frame carries the code AND the stderr tail", () => {
-    // The prompt-56fc incident: the driver died with stderr at debug level and the exit frame on a
+    // The original incident: the driver died with stderr at debug level and the exit frame on a
     // closed socket — nothing anywhere said WHY. The post-mortem now travels in the frame itself.
     const session = ensure();
     const socket = fakeSocket();

@@ -180,7 +180,7 @@ describe("CardTile — the ⋯ menu", () => {
     // The default mock answers {} to everything, so there is no session and no Share item — which
     // is exactly what a member sees. Here somebody IS signed in, and they own the install.
     vi.mocked(get).mockImplementation(async (url: string) =>
-      url === "/auth/me" ? { user: { id: "u1", username: "cesar", role: "owner" } } : {},
+      url === "/auth/me" ? { user: { id: "u1", username: "sam", role: "owner" } } : {},
     );
     try {
       renderApp(<CardTile card={card({ openedAt: 5 })} onOpen={vi.fn()} onDelete={vi.fn()} />);
@@ -197,7 +197,7 @@ describe("CardTile — the ⋯ menu", () => {
     const user = userEvent.setup();
     // Account switch and Delete are the OWNER's items now, so this menu needs an owner session.
     vi.mocked(get).mockImplementation(async (url: string) =>
-      url === "/auth/me" ? { user: { id: "u1", username: "cesar", role: "owner" } } : {},
+      url === "/auth/me" ? { user: { id: "u1", username: "sam", role: "owner" } } : {},
     );
     try {
       renderApp(
@@ -230,7 +230,7 @@ describe("CardTile — the ⋯ menu", () => {
     const onOpen = vi.fn();
     const onDelete = vi.fn();
     vi.mocked(get).mockImplementation(async (url: string) =>
-      url === "/auth/me" ? { user: { id: "u1", username: "cesar", role: "owner" } } : {},
+      url === "/auth/me" ? { user: { id: "u1", username: "sam", role: "owner" } } : {},
     );
     try {
       renderApp(<CardTile card={card()} onOpen={onOpen} onDelete={onDelete} />);

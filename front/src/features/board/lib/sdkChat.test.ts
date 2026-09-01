@@ -55,11 +55,11 @@ describe("applySdkEvent", () => {
     const state = feed([
       { type: "ready" },
       { type: "assistant_delta", text: "Olá" },
-      { type: "assistant_delta", text: ", César" },
-      { type: "assistant_text", text: "Olá, César!" },
+      { type: "assistant_delta", text: ", Alex" },
+      { type: "assistant_text", text: "Olá, Alex!" },
     ]);
     expect(state.rows).toHaveLength(1);
-    expect(state.rows[0]).toMatchObject({ kind: "assistant", text: "Olá, César!", streaming: false });
+    expect(state.rows[0]).toMatchObject({ kind: "assistant", text: "Olá, Alex!", streaming: false });
     expect(state.turnActive).toBe(true);
   });
 
@@ -211,7 +211,7 @@ describe("history replay (the conversation must survive a remount)", () => {
   });
 
   it("`ready` with turnActive:true LIGHTS the spinner — the reattach mid-turn (prompt-56fc)", () => {
-    // César switched Terminal↔Chat with a turn running: the remounted view reattached to the live
+    // The user switched Terminal↔Chat with a turn running: the remounted view reattached to the live
     // driver, the synthesized `ready` arrived, and nothing re-lit "Trabalhando…" until the next
     // live event. The frame now carries the manager's real state: turn in flight = spinner on.
     let state = applySdkEvent(INITIAL_SDK_STATE, { type: "user", text: "replayed" });
@@ -276,7 +276,7 @@ describe("terminal mirror (the conversation that happens in the TUI)", () => {
   });
 
   it("a mirrored user message keeps its provenance", () => {
-    const from = { kind: "user" as const, name: "mussa" };
+    const from = { kind: "user" as const, name: "alex" };
     const state = feed([ready, { type: "user", text: "oi", source: "terminal", from }]);
     const user = state.rows.find((r) => r.kind === "user");
     expect(user).toMatchObject({ text: "oi", from });

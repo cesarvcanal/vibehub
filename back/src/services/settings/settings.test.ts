@@ -61,7 +61,7 @@ describe("settings", () => {
     // seeded default) failed its OWN validation and the settings form could not save ANYTHING.
     const seeded = (await s.getSettings()).git.email;
     expect((await s.updateSettings({ git: { email: seeded } })).git.email).toBe(seeded);
-    expect((await s.updateSettings({ git: { email: "cesar@localhost" } })).git.email).toBe("cesar@localhost");
+    expect((await s.updateSettings({ git: { email: "dev@localhost" } })).git.email).toBe("dev@localhost");
     expect((await s.updateSettings({ git: { email: "ada@example.com" } })).git.email).toBe("ada@example.com");
   });
 

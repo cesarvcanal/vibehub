@@ -52,7 +52,7 @@ describe("cleanupSystemPrompt", () => {
     const p = mod.cleanupSystemPrompt("## Glossary\nQive = fiscal SaaS", "pt");
     expect(p).toContain("Qive = fiscal SaaS");
     expect(p).toContain("in pt");
-    expect(p).not.toMatch(/gmail|multiverso|canal/i);
+    expect(p).not.toMatch(/gmail/i);
   });
   it("tells the model to never refuse or explain, and to return odd input unchanged", async () => {
     const { mod } = await fresh();

@@ -115,7 +115,7 @@ export function unwrapSlashCommand(text: string): string {
  * A user-role line that is really the HARNESS talking, not the person: a background-task
  * notification and the "[SYSTEM NOTIFICATION - NOT USER INPUT]" envelope it arrives in. These land
  * in the transcript as `type:"user"` with no `toolUseResult`, so the chat used to draw them as the
- * user's own message — the thing that made a scheduled watcher's "task completed" look like Cesar
+ * user's own message — the thing that made a scheduled watcher's "task completed" look like the user
  * had typed it. Returns a SHORT human label to show as a muted event, or null when it is a real
  * message. PURE.
  */

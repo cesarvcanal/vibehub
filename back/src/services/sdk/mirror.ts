@@ -11,7 +11,7 @@ import { logger } from "../../utils/logger.js";
  * TRANSCRIPT MIRROR — what keeps the NATIVE chat honest while the conversation happens in the TUI.
  *
  * The native chat's socket hears the SDK driver's stdout and nothing else. The moment the person
- * switches to the Terminal tab and types at the prompt (the César incident: the chat felt slow, he
+ * switches to the Terminal tab and types at the prompt (a real incident: the chat felt slow, the user
  * went to the terminal, and the native chat never showed that conversation), everything moves to
  * the transcript — a file the native view never read. This mirror is the missing tail: while at
  * least one native chat is connected to a card, ONE follow process per card (the same

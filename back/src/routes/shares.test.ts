@@ -69,11 +69,11 @@ async function world(): Promise<World> {
   }));
   const created = await app.inject({
     method: "POST", url: "/api/users", headers: { cookie: owner },
-    payload: { username: "mussa", password: "supersecret", role: "member" },
+    payload: { username: "alex", password: "supersecret", role: "member" },
   });
   const memberId = created.json().user.id as string;
   const member = cookieOf(await app.inject({
-    method: "POST", url: "/api/auth/login", payload: { username: "mussa", password: "supersecret" },
+    method: "POST", url: "/api/auth/login", payload: { username: "alex", password: "supersecret" },
   }));
   const projectId = (await app.inject({
     method: "POST", url: "/api/projects", headers: { cookie: owner }, payload: { name: "erp-aux" },
@@ -151,7 +151,7 @@ describe("a card shared to work on", () => {
     await share(w, "cards", w.cardId, "view");
     const list = await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/shares`, headers: { cookie: w.owner } });
     expect(list.json().shares).toHaveLength(1);
-    expect(list.json().shares[0]).toMatchObject({ level: "view", username: "mussa" });
+    expect(list.json().shares[0]).toMatchObject({ level: "view", username: "alex" });
   });
 });
 

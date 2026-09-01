@@ -493,7 +493,7 @@ function ChatRow({ event, sending }: { event: ChatEvent; sending?: boolean }) {
 
   if (event.kind === "system") {
     // The harness talking (a background-task notification), not the person. A quiet centered note,
-    // never a message bubble, so it reads as an event and not as something Cesar typed.
+    // never a message bubble, so it reads as an event and not as something the user typed.
     return (
       <div
         data-testid="chat-system"

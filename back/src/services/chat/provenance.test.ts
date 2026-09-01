@@ -26,7 +26,7 @@ import {
 
 const CARD = "aaaa498d1-98dd-44b6-97ee-c06a181c376";
 const AGENT: MessageOrigin = { kind: "agent", name: "card preview", sourceCardId: "c1", sourceProjectId: "p1" };
-const USER: MessageOrigin = { kind: "user", name: "mussa" };
+const USER: MessageOrigin = { kind: "user", name: "alex" };
 
 let dir = "";
 let savedDataDir = "";

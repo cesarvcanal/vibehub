@@ -35,7 +35,7 @@ async function boot() {
   vi.resetModules();
   const env = await import("../../config/env.js");
   env.config.dataDir = dir;
-  env.config.publicUrl = "http://10.8.0.25:3010";
+  env.config.publicUrl = "http://192.0.2.10:3010";
   vi.doMock("../../runtime/host.js", async () => {
     const actual = await vi.importActual<typeof import("../../runtime/host.js")>("../../runtime/host.js");
     return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript }) };
@@ -87,7 +87,7 @@ describe("restartPreview", () => {
       restarted: true,
       port: 5173,
       path: "/preview/5173/",
-      url: "http://10.8.0.25:3010/preview/5173/",
+      url: "http://192.0.2.10:3010/preview/5173/",
     });
     const start = runScript.mock.calls.find((c) => String(c[0]).includes("new-session"))?.[0] as string;
     expect(start).toContain("preview-");

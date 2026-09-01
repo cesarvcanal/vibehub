@@ -28,7 +28,7 @@
 // stored config references ${PW_CDP_ENDPOINT}, which the spawn command exports per card — so the
 // native chat drives the card's OWN Chromium, the one the user watches on the noVNC canvas.
 //
-// AUTH IS THE OAUTH TOKEN, PERIOD (ordem do César): the spawn command exports
+// AUTH IS THE OAUTH TOKEN, PERIOD (project rule): the spawn command exports
 // CLAUDE_CODE_OAUTH_TOKEN from the card profile and UNSETS ANTHROPIC_API_KEY; the delete below is
 // the second lock on the same door, in case the driver is ever spawned by another path. An API key
 // in the environment would silently bill the API instead of the Max subscription.
@@ -208,7 +208,7 @@ async function runTurn(text) {
     // A turn can END without a result: `interrupt()` just stops the iterator, a stalled query can
     // be torn down mid-stream, and an SDK error only produces the `error` event above. The front's
     // "Trabalhando…" only clears on a result/error/ready — a turn that ends silently left it
-    // spinning FOREVER (the César incident) — and the backend MANAGER counts turns by their
+    // spinning FOREVER (a real incident) — and the backend MANAGER counts turns by their
     // `result` events to know when the driver is idle. Every turn now closes itself with a result,
     // whatever ended it.
     if (!closed) emit({ type: "result", subtype: "aborted", isError: false, sessionId: lastSessionId });

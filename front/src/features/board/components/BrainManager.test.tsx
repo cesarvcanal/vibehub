@@ -61,7 +61,7 @@ describe("formatBrainStamp", () => {
 
   it("names the author when there is one", () => {
     const at = new Date(2026, 7, 20, 9, 5, 3).toISOString();
-    expect(formatBrainStamp(at, "cesar")).toBe("saved 20/08/2026 09:05:03 by cesar");
+    expect(formatBrainStamp(at, "sam")).toBe("saved 20/08/2026 09:05:03 by sam");
   });
 
   it("does not render Invalid Date when the server sends something unparseable", () => {

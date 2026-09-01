@@ -160,13 +160,13 @@ describe("SdkChatView", () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
-    ws.deliver({ type: "user", text: "fala mussa", from: { kind: "user", name: "mussa" } });
+    ws.deliver({ type: "user", text: "fala alex", from: { kind: "user", name: "alex" } });
     ws.deliver({ type: "user", text: "minha própria" });
 
-    await screen.findByText("fala mussa");
+    await screen.findByText("fala alex");
     const bubbles = screen.getAllByTestId("sdk-user");
     expect(bubbles[0]).toHaveAttribute("data-role", "user");
-    expect(screen.getByTestId("chat-sender")).toHaveTextContent("mussa");
+    expect(screen.getByTestId("chat-sender")).toHaveTextContent("alex");
     expect(bubbles[1]).not.toHaveAttribute("data-role");
     expect(screen.getAllByTestId("chat-sender")).toHaveLength(1);
   });

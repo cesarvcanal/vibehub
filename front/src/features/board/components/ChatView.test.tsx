@@ -130,13 +130,13 @@ describe("ChatView", () => {
     renderChat();
     const ws = await socket();
     ws.accept();
-    ws.deliver({ id: "u1", kind: "user", at: 1, text: "fala mussa", from: { kind: "user", name: "mussa" } });
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: "fala alex", from: { kind: "user", name: "alex" } });
     ws.deliver({ id: "u2", kind: "user", at: 2, text: "minha própria" });
 
-    await screen.findByText("fala mussa");
+    await screen.findByText("fala alex");
     const bubbles = screen.getAllByTestId("chat-user");
     expect(bubbles[0]).toHaveAttribute("data-role", "user");
-    expect(screen.getByTestId("chat-sender")).toHaveTextContent("mussa");
+    expect(screen.getByTestId("chat-sender")).toHaveTextContent("alex");
     expect(screen.queryByTestId("chat-sender-link")).not.toBeInTheDocument(); // a person is not a card
     // The unattributed message renders exactly as before: no sender tag on it.
     expect(bubbles[1]).not.toHaveAttribute("data-role");
@@ -233,10 +233,10 @@ describe("ChatView", () => {
     renderChat();
     const ws = await socket();
     ws.accept();
-    ws.deliver({ id: "s1", kind: "system", at: 1, text: "Vigiar reconexão da Z-API completed" });
+    ws.deliver({ id: "s1", kind: "system", at: 1, text: "Vigiar reconexão do webhook completed" });
 
     const note = await screen.findByTestId("chat-system");
-    expect(note).toHaveTextContent("Vigiar reconexão da Z-API completed");
+    expect(note).toHaveTextContent("Vigiar reconexão do webhook completed");
     // The important part: it is NOT a user bubble (that was the bug).
     expect(screen.queryByTestId("chat-user")).not.toBeInTheDocument();
   });
@@ -335,12 +335,12 @@ describe("ChatView", () => {
     renderChat();
     const ws = await socket();
     ws.accept();
-    ws.deliver({ id: "u1", kind: "user", at: 1, text: "vê http://10.8.0.25:3010/preview/3100/ e javascript:alert(1)" });
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: "vê http://192.0.2.10:3010/preview/3100/ e javascript:alert(1)" });
 
     const bubble = await screen.findByTestId("chat-user");
     const anchor = bubble.querySelector("a");
     expect(anchor).not.toBeNull();
-    expect(anchor).toHaveAttribute("href", "http://10.8.0.25:3010/preview/3100/");
+    expect(anchor).toHaveAttribute("href", "http://192.0.2.10:3010/preview/3100/");
     expect(anchor).toHaveAttribute("target", "_blank");
     expect(anchor?.getAttribute("rel")).toContain("noopener");
     // the hostile scheme never becomes an anchor
