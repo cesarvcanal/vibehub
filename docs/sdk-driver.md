@@ -44,6 +44,7 @@ The websocket sends **one JSON text frame per event**:
 { "type": "tool_use", "id": "toolu_…", "name": "Write", "input": { … } }
 { "type": "permission", "tool": "Bash", "decision": "allow"|"deny", "sensitive": bool, "reason"?: "…", "id"?: "…", "timedOut"?: bool }
 { "type": "permission_request", "id": "perm_…", "tool": "Bash", "input"?: { … }, "reason"?: "…" }  // AWAITS a decision
+{ "type": "turn_absorbed" }                                // a send folded into the RUNNING turn (streaming input)
 { "type": "result", "isError": bool, "sessionId"?: "…", "subtype"?: "success", "result"?: "…", "permissionDenials"?: [ … ] }
 { "type": "error", "message": "…" }
 { "type": "parse_error", "raw": "<the bad line>" }          // back-synthesised; nothing is swallowed
@@ -329,6 +330,42 @@ Um card é **UMA conversa**, mesmo quando ela acontece em duas telas. As regras:
   do driver se fecha sozinho: um turno encerrado sem `result` (interrupt, erro, stall) emite
   `result{subtype:"aborted"}` no `finally` do `runTurn` — é também assim que o manager conta
   turnos pra saber quando o driver está ocioso.
+
+## Streaming input — mensagem no meio do turno entra NO turno (2026-09-01)
+
+A dor: o César mandava uma segunda mensagem com o agente trabalhando e ela só era vista quando o
+turno acabava (o driver antigo rodava UM `query({ prompt: string })` por turno e enfileirava o
+resto). Agora o driver usa o **modo de input streaming do SDK**: um `query()` de vida longa cujo
+`prompt` é um AsyncIterable de user messages (um channel interno). Mensagem que chega no MEIO do
+turno é empurrada pro stream vivo e o CLI **dobra ela no turno corrente** — o modelo absorve no
+próximo passo, exatamente como a fila da TUI.
+
+**Verificado ao vivo no SDK 0.3.246** (PoC + smoke do driver real): mensagem empurrada durante um
+`sleep` de turno em andamento → UM único `result`, cuja resposta final já honrava a mensagem
+mid-turn. Os types do SDK confirmam a semântica (fold-in-flight, "queued user message … absorbed
+mid-turn", batches coalescidos).
+
+Como as peças se mantêm coerentes:
+
+- **`turn_absorbed`** — quando um send chega com turno já rodando, o driver o injeta e emite este
+  evento: o send NÃO vai produzir `result` próprio. O **manager** devolve o +1 daquele send no
+  `activeTurns` (piso em 1 — absorvido implica turno em voo, com um result ainda devido), então
+  spinner/idle/inflight-marker continuam fechando no ÚNICO result do turno. O **front** marca a
+  bolha com o rótulo **"entrou no turno em andamento"** — a mensagem nunca parece perdida.
+  Live-only: não entra no `sdk-history` (num replay o turno já é passado).
+- **Sessão e resume** — o stream nasce com `resume: lastSessionId`; se o stream morre (erro do
+  SDK), o próximo send abre outro que resume a MESMA sessão. `session` agora é emitido só quando o
+  id MUDA (o modo streaming entrega muitos system messages por turno).
+- **Interrupt** — continua o `query().interrupt()` (é o modo onde ele é oficialmente suportado).
+  Todo send já está no CLI (não há mais fila no driver): o interrupt aborta o turno corrente; um
+  send empurrado no último instante e ainda não dobrado pode sobreviver e rodar como turno próprio
+  — o result extra é absorvido pelo piso-em-zero do manager.
+- **Corrida honesta (documentada)** — o driver decide "absorvido?" pelo SEU `turnActive` na hora do
+  push; se o result do CLI já estava em trânsito, o CLI enfileira o send como turno novo e chega um
+  result a mais que o esperado. O clamp em zero absorve; o pior sintoma é o spinner apagar entre os
+  dois results (o próximo delta reacende).
+- **Supersede (#65) e inflight (#64)** intocados: o manager segue embrulhando `edit_user` como user
+  turn normal, e o marker durável segue +1 por send / limpo quando `activeTurns` zera.
 
 ## O turno sobrevive à página (manager — o bug do reload no meio do turno)
 
