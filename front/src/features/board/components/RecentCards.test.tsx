@@ -144,3 +144,35 @@ describe("RecentCards", () => {
     expect(screen.queryByText("orphan")).toBeNull();
   });
 });
+
+describe("RecentCards — ten at a time", () => {
+  it("starts at ten and reveals the next ten per click, until nothing is hidden", async () => {
+    // 25 live conversations, newest first (higher statusAt = newer).
+    serve(
+      Array.from({ length: 25 }, (_, i) =>
+        card({ id: `c${i + 1}`, projectId: "p1", title: `conv ${i + 1}`, openedAt: 1, statusAt: 1000 - i }),
+      ),
+    );
+    renderApp(<RecentCards projects={projects} activeCardId={null} onOpenCard={vi.fn()} />);
+
+    const list = await screen.findByTestId("recent-cards-list");
+    expect(list.querySelectorAll("a")).toHaveLength(10);
+
+    const more = screen.getByTestId("recent-cards-more");
+    expect(more).toHaveTextContent(/show more \(15\)/i);
+    await userEvent.click(more);
+    expect(list.querySelectorAll("a")).toHaveLength(20);
+    expect(screen.getByTestId("recent-cards-more")).toHaveTextContent(/show more \(5\)/i);
+
+    await userEvent.click(screen.getByTestId("recent-cards-more"));
+    expect(list.querySelectorAll("a")).toHaveLength(25);
+    expect(screen.queryByTestId("recent-cards-more")).not.toBeInTheDocument();
+  });
+
+  it("shows no toggle when the history fits in ten", async () => {
+    serve([card({ id: "c1", projectId: "p1", title: "one", openedAt: 10 })]);
+    renderApp(<RecentCards projects={projects} activeCardId={null} onOpenCard={vi.fn()} />);
+    await screen.findByTestId("recent-cards-list");
+    expect(screen.queryByTestId("recent-cards-more")).not.toBeInTheDocument();
+  });
+});

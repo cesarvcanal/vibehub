@@ -56,12 +56,12 @@ describe("ProjectSidebar — the shell", () => {
     expect(brand.querySelector("svg")).toBeTruthy();
   });
 
-  it("carries the account row as its last row: theme, then the signed-in user", async () => {
+  it("carries the account row as its last row: the gear, then the signed-in user", async () => {
     renderSidebar();
     const nav = screen.getByRole("navigation", { name: "Projects" });
     const account = nav.lastElementChild as HTMLElement;
 
-    expect(account).toContainElement(screen.getByRole("button", { name: /^Theme:/ }));
+    expect(account).toContainElement(screen.getByRole("button", { name: "Preferences" }));
     expect(account).toContainElement(await screen.findByRole("button", { name: /sam/ }));
   });
 

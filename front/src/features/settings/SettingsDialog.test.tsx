@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderApp } from "@/test/render";
 import { SettingsDialog } from "./SettingsDialog";
@@ -215,5 +215,33 @@ describe("SettingsDialog — Cofre", () => {
     renderApp(<SettingsDialog open onOpenChange={() => {}} />);
     await userEvent.click(await screen.findByRole("button", { name: "Remove credential gone" }));
     await waitFor(() => expect(del).toHaveBeenCalledWith("/credentials/aa11"));
+  });
+});
+
+describe("SettingsDialog — the managers moved in", () => {
+  it("carries Claude accounts, MCP and the brain as a section of Settings", async () => {
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    const section = await screen.findByTestId("settings-managers");
+    const s = within(section);
+    expect(s.getByRole("button", { name: /Claude accounts/ })).toBeInTheDocument();
+    expect(s.getByRole("button", { name: /MCP/ })).toBeInTheDocument();
+    expect(s.getByRole("button", { name: /Brain/ })).toBeInTheDocument();
+  });
+
+  it("opens the brain editor from Settings", async () => {
+    get.mockImplementation(async (url: string) => {
+      if (url === "/settings") return SETTINGS;
+      if (url === "/github") return { connections: [] };
+      if (url === "/transcribe") return { available: false, proofread: false, language: "pt" };
+      if (url === "/credentials") return { credentials: [] };
+      if (url === "/brain") return { text: "" };
+      if (url === "/runner") return { running: true, exists: true, claudeInstalled: true, dockerReachable: true, container: "runner" };
+      throw new Error(`unexpected ${url}`);
+    });
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    const section = await screen.findByTestId("settings-managers");
+    await userEvent.click(within(section).getByRole("button", { name: /Brain/ }));
+    expect(await screen.findByLabelText("Brain text")).toBeInTheDocument();
+    await waitFor(() => expect(get).toHaveBeenCalledWith("/brain"));
   });
 });
