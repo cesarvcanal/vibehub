@@ -1,6 +1,9 @@
 import * as React from "react";
-import { AlertTriangle, Loader2, MonitorPlay, Plug } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { AlertTriangle, KeyRound, Loader2, MonitorPlay, Plug } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { wsUrl } from "@/lib/ws";
 import { apiErrorMessage } from "@/lib/apiError";
 import { boardApi } from "@/features/board/api";
@@ -113,6 +116,7 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
 
   return (
     <div className="flex min-h-[220px] min-w-0 flex-1 flex-col gap-1">
+      <CapturePrompt cardId={cardId} active={state === "live"} />
       <div className="flex items-center justify-between">
         <span className="inline-flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
           <MonitorPlay className="h-3.5 w-3.5" /> {t("vnc.header")}
@@ -167,6 +171,88 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
           </div>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The Chrome-style "save this login?" prompt. While the browser is live it polls the card's pending
+ * captures — logins vibehub noticed being submitted (by the person or the agent) — and offers to save
+ * the newest to the Cofre. The PASSWORD never reaches this component: the server holds it keyed by an
+ * opaque id, and "Save" only sends that id plus a chosen name.
+ */
+export function CapturePrompt({ cardId, active }: { cardId: string; active: boolean }) {
+  const t = useT();
+  const qc = useQueryClient();
+  const [name, setName] = React.useState("");
+  const [nameEdited, setNameEdited] = React.useState(false);
+
+  const captures = useQuery({
+    queryKey: ["captures", cardId],
+    queryFn: () => boardApi.cardCaptures(cardId),
+    enabled: active,
+    refetchInterval: active ? 4000 : false,
+  });
+
+  const top = captures.data?.[0];
+
+  // Seed the name field from the suggestion until the person edits it; reset when the capture changes.
+  React.useEffect(() => {
+    setNameEdited(false);
+    setName(top?.suggestedName ?? "");
+  }, [top?.id, top?.suggestedName]);
+
+  const save = useMutation({
+    mutationFn: () => boardApi.saveCapture(cardId, top!.id, name.trim() || undefined),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["captures", cardId] });
+      void qc.invalidateQueries({ queryKey: ["credentials"] });
+      toast.success(translate("capture.saved"));
+    },
+    onError: (e) => toast.error(apiErrorMessage(e)),
+  });
+
+  const dismiss = useMutation({
+    mutationFn: () => boardApi.dismissCapture(cardId, top!.id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["captures", cardId] }),
+  });
+
+  if (!active || !top) return null;
+
+  return (
+    <div
+      data-testid="capture-prompt"
+      className="flex flex-wrap items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs"
+    >
+      <KeyRound className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+      <span className="min-w-0 flex-1">{t("capture.prompt", { host: top.host })}</span>
+      <Input
+        aria-label={t("capture.saveAs")}
+        value={name}
+        onChange={(e) => { setName(e.target.value); setNameEdited(true); }}
+        onBlur={() => { if (!name.trim() && !nameEdited) setName(top.suggestedName); }}
+        className="h-7 w-40 font-mono text-xs"
+        maxLength={40}
+      />
+      <Button
+        type="button"
+        size="sm"
+        className="h-7 px-2 text-xs"
+        disabled={!name.trim() || save.isPending}
+        onClick={() => save.mutate()}
+      >
+        {t("capture.save")}
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-7 px-2 text-xs text-muted-foreground"
+        disabled={dismiss.isPending}
+        onClick={() => dismiss.mutate()}
+      >
+        {t("capture.dismiss")}
+      </Button>
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { hostExecutor, shQuote } from "../../runtime/host.js";
 import { getCard, getProject } from "../board/registry.js";
 import { logger } from "../../utils/logger.js";
 import { cardBrowserPorts, type CardBrowserPorts } from "./ports.js";
+import { startCapture, stopCapture } from "../credentials/capture.js";
 
 // Display/port derivation lives in ports.ts (no cycle with the card-open path); re-exported here so
 // callers that already import from browser.ts do not have to know about the split.
@@ -132,11 +133,15 @@ export async function startCardBrowser(
     { audit: true, action: "browser.start", card: cardId, display: ports.display, by },
     "card browser started",
   );
+  // Watch this browser for a login being submitted, so it can be offered to the Cofre. Idempotent
+  // and failure-isolated inside startCapture — it must never keep the browser from opening.
+  startCapture(cardId);
   return ports;
 }
 
 /** Tears the card's browser down (tab closed / idle timeout). Idempotent. */
 export async function stopCardBrowser(containerName: string, cardId: string, by?: string): Promise<void> {
+  stopCapture(cardId);
   const ports = cardBrowserPorts(cardId);
   await hostExecutor().runScript(buildBrowserStopScript({ containerName, ...ports }), { timeoutMs: 30_000 });
   logger.info(

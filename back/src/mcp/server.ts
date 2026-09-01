@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerMaestroTools } from "./tools.js";
+import { registerCredentialTools } from "./credentialTools.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -49,5 +50,6 @@ export const INSTRUCTIONS = loadInstructions();
 export function createMcpServer(actor = "mcp"): McpServer {
   const server = new McpServer({ name: "vibehub", version: "0.1.0" }, { instructions: INSTRUCTIONS });
   registerMaestroTools(server, actor);
+  registerCredentialTools(server, actor);
   return server;
 }

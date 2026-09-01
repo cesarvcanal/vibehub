@@ -74,6 +74,25 @@ When you are driving the board rather than coding a single card:
 *(Spinning up fresh sub-terminals to delegate to is coming; for now you coordinate the cards that
 already exist on the board.)*
 
+## Signing in on the card's browser (the Cofre)
+
+When a task needs a **login in the browser** — a site asks for a username and password, a token, a
+sign-in wall stands between you and the page — never type the secret yourself and never ask the user
+for it in the chat. The password lives in the **Cofre** and is filled without ever reaching you.
+
+1. Call **`vibehub_credential_list`** (`{ card: $VIBEHUB_CARD_ID }`) to see what logins exist —
+   names and types only, never a value.
+2. If the site's credential is there, call **`vibehub_credential_fill`**
+   (`{ card, credential: <name>, url?, userSelector?, passSelector? }`). vibehub reads the value from
+   the vault and types it straight into the card's own Chromium; you get back only `{ filled, fields }`.
+   Then continue in the browser (submit, navigate) as usual.
+3. If the credential is **not** in the Cofre, tell the user to add it in **Settings → Cofre** and
+   wait — do **not** ask for the password in the chat, and do not paste it anywhere. The value must
+   never enter your context, the transcript or a log.
+
+If the user (or you) simply logs in by hand on the card's browser, vibehub notices and offers to
+save that login to the Cofre from the Browser panel — so next time it can be filled by name.
+
 ## Style
 
 Be terse. Report what changed and what needs a decision — the PR url, the gate verdict, which

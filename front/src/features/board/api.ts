@@ -7,7 +7,9 @@ import type {
   BrainApplyResult,
   BrainWriteResult,
   Card,
+  CardCapture,
   CardColumn,
+  Credential,
   GithubConnection,
   GithubRepo,
   GithubState,
@@ -465,6 +467,16 @@ export const boardApi = {
 
   startCardBrowser: (id: string) => post<unknown>(`/cards/${encodeURIComponent(id)}/browser`),
   stopCardBrowser: (id: string) => del<unknown>(`/cards/${encodeURIComponent(id)}/browser`),
+
+  /* cofre — captures pending on a card's browser (values never come back) */
+  cardCaptures: (id: string) =>
+    get<{ captures?: CardCapture[] }>(`/cards/${encodeURIComponent(id)}/captures`).then((r) =>
+      Array.isArray(r?.captures) ? r.captures : [],
+    ),
+  saveCapture: (id: string, captureId: string, name?: string) =>
+    post<{ credential: Credential }>(`/cards/${encodeURIComponent(id)}/captures/save`, { captureId, name }),
+  dismissCapture: (id: string, captureId: string) =>
+    post<{ ok: boolean }>(`/cards/${encodeURIComponent(id)}/captures/dismiss`, { captureId }),
 
   /** Ports listening inside the runner right now — what the Preview menu offers to open. */
   previewPorts: () =>
