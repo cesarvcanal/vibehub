@@ -55,9 +55,14 @@ export interface DriverSession {
   activeTurns: number;
   idleTimer: NodeJS.Timeout | null;
   buffer: string;
+  /** Rolling tail of the driver's stderr — what a post-mortem has to say (see STDERR_TAIL_MAX). */
+  stderrTail: string;
   /** The session was stopped or its child closed — a new ensure must spawn anew. */
   closed: boolean;
 }
+
+/** How much stderr the post-mortem keeps. Enough for a stack trace, bounded against a chatty child. */
+export const STDERR_TAIL_MAX = 2000;
 
 const sessions = new Map<string, DriverSession>();
 
@@ -175,6 +180,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     activeTurns: 0,
     idleTimer: null,
     buffer: "",
+    stderrTail: "",
     closed: false,
   };
   sessions.set(opts.cardId, session);
@@ -191,23 +197,47 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     }
   });
   child.stderr?.on("data", (chunk: Buffer) => {
+    // KEEP the tail, don't just debug-log it: in the prompt-56fc incident the driver died with its
+    // stderr invisible (debug level) and its exit frame sent to an already-closed socket — a fully
+    // SILENT death. The tail is the post-mortem the exit handler below reports.
+    session.stderrTail = (session.stderrTail + chunk.toString()).slice(-STDERR_TAIL_MAX);
     logger.debug({ card: opts.label, stderr: chunk.toString().slice(0, 500) }, "sdk driver stderr");
   });
   child.on("error", (err) => {
     logger.warn({ card: opts.label, detail: err.message }, "sdk driver process error");
+    broadcast(session, { type: "error", message: `driver process error: ${err.message}` });
   });
   child.on("close", (code) => {
     // The driver died (idle stop, killCardSession, a crash): tell whoever is watching and close
     // their sockets — the front's reconnect loop spawns the successor on its next connect.
+    const deliberate = session.closed; // stopCardDriver stamped it BEFORE killing
     clearIdleTimer(session);
     session.closed = true;
     if (sessions.get(opts.cardId) === session) sessions.delete(opts.cardId);
-    broadcast(session, { type: "error", message: `driver exited (code ${code ?? "?"})` });
+    const stderrNote = session.stderrTail.trim() === "" ? "" : ` — stderr: ${session.stderrTail.trim().slice(-400)}`;
+    broadcast(session, { type: "error", message: `driver exited (code ${code ?? "?"})${stderrNote}` });
     for (const socket of session.sockets) {
       try { socket.close(); } catch { /* already closed */ }
     }
     session.sockets.clear();
-    logger.debug({ card: opts.label, code }, "sdk driver exited");
+    // A death nobody asked for is NEVER silent: warn with the exit code, the stderr tail and
+    // whether a turn was running — the log line that was missing from the incident.
+    if (deliberate && (code === 0 || code === null)) {
+      logger.debug({ card: opts.label, code }, "sdk driver exited");
+    } else {
+      logger.warn(
+        {
+          audit: true,
+          action: "sdk.driver.exit",
+          card: opts.label,
+          code,
+          deliberate,
+          turnsInFlight: session.activeTurns,
+          stderr: session.stderrTail.trim().slice(-STDERR_TAIL_MAX) || undefined,
+        },
+        "sdk driver exited unexpectedly",
+      );
+    }
   });
   return session;
 }

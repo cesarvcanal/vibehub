@@ -239,6 +239,20 @@ describe("end of life", () => {
     expect(hasDriverSession(CARD)).toBe(false);
   });
 
+  it("a crash is NEVER silent: the exit frame carries the code AND the stderr tail", () => {
+    // The prompt-56fc incident: the driver died with stderr at debug level and the exit frame on a
+    // closed socket — nothing anywhere said WHY. The post-mortem now travels in the frame itself.
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stderr.emit("data", Buffer.from("TypeError: boom at resume\n"));
+    spawned[0]!.emit("close", 1);
+    const last = JSON.parse(socket.sent[socket.sent.length - 1]!) as { type: string; message?: string };
+    expect(last.type).toBe("error");
+    expect(last.message).toContain("code 1");
+    expect(last.message).toContain("TypeError: boom");
+  });
+
   it("a dead driver tells the sockets and closes them (the front's reconnect takes over)", () => {
     const session = ensure();
     const socket = fakeSocket();

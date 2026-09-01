@@ -191,6 +191,12 @@ Agora o driver é **do CARD**, propriedade do back (`back/src/services/sdk/manag
   (com o resume-id mais novo) — sem ele o composer da página nova nunca habilitaria.
 - **Interrupt continua funcionando**: o botão manda o frame pro stdin do driver VIVO, de qualquer
   aba conectada.
+- **Morte silenciosa é proibida.** O manager guarda a cauda do stderr do driver
+  (`STDERR_TAIL_MAX`); uma saída que ninguém pediu (crash, código ≠ 0) vira log **warn** no back
+  (código de saída + stderr + turnos em voo) E frame de erro no chat com o mesmo post-mortem.
+  Investigação do incidente (2026-08-31, repro manual no runner): o `--resume` da sessão de 3,7MB
+  funciona normalmente — a morte era o socket fechando e levando o driver junto (Cmd+Shift+R,
+  troca de aba), com o stderr em nível debug e o frame de saída indo pra um socket já fechado.
 - **Fim de vida.** (1) `killCardSession` notifica o manager (`onCardSessionKill` em
   `workspace.ts`) — pausar, hibernar, reiniciar, deletar, trocar modelo/conta matam o driver
   junto com o tmux. (2) **Ocioso**: sem nenhum socket E sem turno rodando por `DRIVER_IDLE_MS`
