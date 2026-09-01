@@ -30,6 +30,18 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(INSTRUCTIONS).toContain("vibehub_report");
   });
 
+  it("carry the question doctrine (perguntas claras — feedback do dono da instalação)", () => {
+    // "A pergunta ficou horrível de entender": short, self-contained, ONE decision per question.
+    expect(INSTRUCTIONS).toContain("ONE decision per question");
+    expect(INSTRUCTIONS).toContain("rewrite it before");
+    // Blocking decisions are ALWAYS an AskUserQuestion call with 2-4 mutually exclusive options.
+    expect(INSTRUCTIONS).toContain("ALWAYS an AskUserQuestion");
+    expect(INSTRUCTIONS).toContain("mutually exclusive");
+    // "Sempre a primeira opção é o cenário recomendado", labelled with the literal suffix.
+    expect(INSTRUCTIONS).toContain("The FIRST option is the recommended one");
+    expect(INSTRUCTIONS).toContain("(recomendado)");
+  });
+
   it("build a server that carries those instructions", () => {
     let server: ReturnType<typeof createMcpServer> | undefined;
     expect(() => {
