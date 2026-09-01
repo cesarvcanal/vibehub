@@ -112,9 +112,11 @@ export function CardTile({
     ...(onHibernate && canPause
       ? [{ key: "hibernate", label: t("card.hibernateEndsSession"), icon: Moon, onSelect: () => onHibernate(card) }]
       : []),
-    ...(onAccount ? [{ key: "account", label: t("card.claudeAccountMenu"), icon: Users, onSelect: () => onAccount(card) }] : []),
+    // Switching the account, sharing and deleting are the OWNER's — the routes behind them (the
+    // account list, the shares, DELETE /api/cards/:id) all answer 403/owner-only to a member.
+    ...(onAccount && isOwner ? [{ key: "account", label: t("card.claudeAccountMenu"), icon: Users, onSelect: () => onAccount(card) }] : []),
     ...(isOwner ? [{ key: "share", label: t("card.share"), icon: Share2, onSelect: () => setShareOpen(true) }] : []),
-    ...(onDelete
+    ...(onDelete && isOwner
       ? [{ key: "delete", label: t("card.deleteCard"), icon: Trash2, danger: true, onSelect: () => onDelete(card) }]
       : []),
   ];

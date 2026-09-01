@@ -254,6 +254,7 @@ export const en: Record<string, string> = {
   "board.noProjectsBody":
     "Point a project at a repository and every card becomes a Claude terminal in its own worktree.",
   "board.createFirstProject": "Create the first project",
+  "board.noProjectsMemberBody": "Nothing has been shared with you yet — ask the owner to share a project or a card.",
   "board.openMenu": "Open the projects and cards",
   "board.projectsButton": "Projects",
   "board.defaultAccountFallback": "the runner default",

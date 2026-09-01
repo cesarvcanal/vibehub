@@ -85,6 +85,10 @@ describe("pt-BR — the board", () => {
 
   it("translates a card tile, chips and menu included", async () => {
     setLanguage("pt-BR");
+    // The ⋯ menu only carries Delete for the OWNER now, and owner-ness comes from /auth/me.
+    get.mockImplementation(async (url: string) =>
+      url === "/auth/me" ? { user: { id: "u1", username: "cesar", role: "owner" } } : {},
+    );
     renderApp(
       <CardTile
         card={card({ column: "paused", openedAt: 5 })}
@@ -97,7 +101,7 @@ describe("pt-BR — the board", () => {
     const tile = screen.getByRole("link", { name: "corrigir os totais" });
     expect(within(tile).getByTitle("Projeto: erp-aux")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Ações de corrigir os totais" }),
+      await screen.findByRole("button", { name: "Ações de corrigir os totais" }),
     ).toBeInTheDocument();
   });
 });

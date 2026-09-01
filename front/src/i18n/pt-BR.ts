@@ -255,6 +255,7 @@ export const ptBR: Record<string, string> = {
   "board.noProjectsBody":
     "Aponte um projeto pra um repositório e cada card vira um terminal do Claude no próprio worktree.",
   "board.createFirstProject": "Criar o primeiro projeto",
+  "board.noProjectsMemberBody": "Nada foi compartilhado com você ainda — peça ao dono pra compartilhar um projeto ou card.",
   "board.openMenu": "Abrir os projetos e cards",
   "board.projectsButton": "Projetos",
   "board.defaultAccountFallback": "o padrão do runner",
