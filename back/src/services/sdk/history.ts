@@ -72,6 +72,8 @@ export function replayableHistoryEvent(event: HistoryEvent): boolean {
     // The panel's own voice in the conversation ("o turno foi interrompido por uma atualização…"):
     // written by the backend, never by the driver — and worth re-drawing on every replay.
     case "system_note":
+    case "user_question":
+    case "question_result":
       return true;
     case "permission":
       return typeof (event as { id?: unknown }).id === "string";

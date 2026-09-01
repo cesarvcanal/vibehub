@@ -264,6 +264,17 @@ describe("interrupt — reaches the LIVE driver", () => {
   });
 });
 
+describe("question_answer — reaches the LIVE driver", () => {
+  it("funnels the answer frame into the driver's stdin without counting a turn", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"question_answer","id":"q_1","answers":[{"selected":["Summary"]}]}`));
+    expect(spawned[0]!.stdin.written.some((w) => w.includes(`"question_answer"`) && w.includes(`"Summary"`))).toBe(true);
+    expect(session.activeTurns).toBe(0); // an answer is not a new turn — the turn asking it is already counted
+  });
+});
+
 describe("end of life", () => {
   it("stopCardDriver ends stdin (the driver's liveness check) and kills the child", () => {
     ensure();

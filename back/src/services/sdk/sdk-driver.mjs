@@ -106,6 +106,100 @@ function resolvePermission(id, allow) {
 
 let permissionSeq = 0;
 
+/* --------------------------------------- question broker (mirror of createQuestionBroker) */
+// Keep in step with `createQuestionBroker` / QUESTION_TIMEOUT_MS / `buildAskUserAnswers` in
+// protocol.ts. AskUserQuestion is SPECIAL: the SDK routes it through `canUseTool` in EVERY
+// permission mode (bypassPermissions included) — it is a question to the human, not a permission.
+// The driver turns it into a `user_question` frame the chat renders as clickable options, waits
+// for the `question_answer` control on stdin, and answers the model through `updatedInput`.
+
+const QUESTION_TIMEOUT_MS = 30 * 60_000;
+const pendingQuestions = new Map();
+
+function waitQuestion(id, timeoutMs = QUESTION_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pendingQuestions.delete(id);
+      resolve({ answers: null, timedOut: true });
+    }, timeoutMs);
+    pendingQuestions.set(id, (result) => {
+      clearTimeout(timer);
+      pendingQuestions.delete(id);
+      resolve(result);
+    });
+  });
+}
+
+function resolveQuestion(id, answers) {
+  const deliver = pendingQuestions.get(id);
+  if (!deliver) return false;
+  deliver({ answers, timedOut: false });
+  return true;
+}
+
+// Mirror of `normalizeUserQuestions` in protocol.ts.
+function normalizeUserQuestions(input) {
+  if (!input || typeof input !== "object") return null;
+  const raw = input.questions;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const questions = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") return null;
+    if (typeof entry.question !== "string" || entry.question.trim() === "") return null;
+    const options = [];
+    if (Array.isArray(entry.options)) {
+      for (const opt of entry.options) {
+        if (!opt || typeof opt !== "object" || typeof opt.label !== "string" || opt.label.trim() === "") continue;
+        options.push({ label: opt.label, ...(typeof opt.description === "string" ? { description: opt.description } : {}) });
+      }
+    }
+    questions.push({
+      question: entry.question,
+      ...(typeof entry.header === "string" && entry.header.trim() !== "" ? { header: entry.header } : {}),
+      options,
+      ...(entry.multiSelect === true ? { multiSelect: true } : {}),
+    });
+  }
+  return questions;
+}
+
+// Mirror of `buildAskUserAnswers` in protocol.ts.
+function buildAskUserAnswers(questions, answers) {
+  const map = {};
+  questions.forEach((q, i) => {
+    const selected = (answers[i] && Array.isArray(answers[i].selected) ? answers[i].selected : []).filter(
+      (s) => typeof s === "string" && s.trim() !== "",
+    );
+    if (selected.length === 0) return;
+    map[q.question] = q.multiSelect ? selected : (selected.length === 1 ? selected[0] : selected.join(", "));
+  });
+  return map;
+}
+
+let questionSeq = 0;
+
+// canUseTool — the SDK invokes it for AskUserQuestion in every mode. Everything else that reaches
+// it (rare under bypassPermissions) is allowed unchanged: the PreToolUse gate above is the gate.
+async function canUseTool(toolName, input) {
+  if (toolName !== "AskUserQuestion") return { behavior: "allow", updatedInput: input };
+  const questions = normalizeUserQuestions(input);
+  if (!questions) {
+    // Not question-shaped: refuse rather than draw an empty card — the model rephrases.
+    return { behavior: "deny", message: "vibehub SDK driver: malformed AskUserQuestion input." };
+  }
+  const id = `q_${++questionSeq}_${Date.now()}`;
+  emit({ type: "user_question", id, questions });
+  const { answers, timedOut } = await waitQuestion(id);
+  if (!answers) {
+    emit({ type: "question_result", id, timedOut: !!timedOut });
+    return { behavior: "deny", message: timedOut
+      ? "The user did not answer the question within 30 minutes. Continue with your best judgment and note the open question."
+      : "The question was cancelled (the turn was interrupted)." };
+  }
+  emit({ type: "question_result", id, answers });
+  return { behavior: "allow", updatedInput: { questions: input.questions, answers: buildAskUserAnswers(questions, answers) } };
+}
+
 // PreToolUse hook — mirror of `sdkGateAction` in protocol.ts. "same-as-terminal": everything is
 // allowed (the Terminal tab's behaviour), only observability events are emitted. "ask-sensitive":
 // auto-allow the bulk; a SENSITIVE call becomes a `permission_request` in the chat and the agent's
@@ -168,6 +262,8 @@ function baseOptions() {
     // at the profile root and the repo's. Without it the driver ran on the bare SDK prompt.
     systemPrompt: { type: "preset", preset: "claude_code" },
     hooks: { PreToolUse: [{ hooks: [preToolUse] }] },
+    // AskUserQuestion always lands here (every permission mode) — the chat's question card.
+    canUseTool,
   };
   if (MODEL) opts.model = MODEL;
   return opts;
@@ -250,11 +346,18 @@ rl.on("line", (line) => {
     }
     return;
   }
+  if (control && control.type === "question_answer" && typeof control.id === "string" && Array.isArray(control.answers)) {
+    if (!resolveQuestion(control.id, control.answers)) {
+      emit({ type: "error", message: `no pending question with id ${control.id}` });
+    }
+    return;
+  }
   if (control && control.type === "interrupt") {
     // Abandon anything still queued (the interrupt means "stop what you are doing"), deny anything
     // still waiting for a click (the turn it belongs to is being killed), then interrupt the SDK.
     queue.length = 0;
     for (const id of [...pendingPermissions.keys()]) resolvePermission(id, false);
+    for (const id of [...pendingQuestions.keys()]) resolveQuestion(id, null);
     if (currentQuery && typeof currentQuery.interrupt === "function") {
       currentQuery.interrupt().catch((err) => {
         emit({ type: "error", message: "interrupt failed: " + (err && err.message ? err.message : String(err)) });

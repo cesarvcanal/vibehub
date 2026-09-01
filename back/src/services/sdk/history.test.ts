@@ -47,6 +47,11 @@ describe("replayableHistoryEvent", () => {
     ).toBe(true);
     // the panel's own voice (deploy interrupted a turn, boot resumed it) — re-drawn on every replay
     expect(replayableHistoryEvent({ type: "system_note", text: "turno interrompido" })).toBe(true);
+    // The question pair replays too: a pending card comes back clickable, a settled one settled.
+    expect(
+      replayableHistoryEvent({ type: "user_question", id: "q1", questions: [{ question: "Which?", options: [] }] }),
+    ).toBe(true);
+    expect(replayableHistoryEvent({ type: "question_result", id: "q1", answers: [{ selected: ["A"] }] })).toBe(true);
   });
 
   it("drops the connection's own chatter: deltas, ready, session, results, errors", () => {
