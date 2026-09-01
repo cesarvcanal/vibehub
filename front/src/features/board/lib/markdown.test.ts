@@ -65,9 +65,9 @@ describe("mdInline", () => {
 
 describe("linkifyTokens", () => {
   it("turns http(s) urls into link tokens and leaves everything else literal", () => {
-    expect(linkifyTokens("olha http://10.8.0.25:3010/preview/3100/ e https://x.dev tá?")).toEqual([
+    expect(linkifyTokens("olha http://192.0.2.10:3010/preview/3100/ e https://x.dev tá?")).toEqual([
       { type: "text", value: "olha " },
-      { type: "link", value: "http://10.8.0.25:3010/preview/3100/" },
+      { type: "link", value: "http://192.0.2.10:3010/preview/3100/" },
       { type: "text", value: " e " },
       { type: "link", value: "https://x.dev" },
       { type: "text", value: " tá?" },

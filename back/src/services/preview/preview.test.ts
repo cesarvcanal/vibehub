@@ -167,14 +167,14 @@ describe("buildProxyHead", () => {
     path: "/index.html",
     port: 5173,
     headers: {
-      host: "10.8.0.25:3010",
+      host: "192.0.2.10:3010",
       accept: "text/html",
       cookie: "vibehub_session=tok; app=1",
       connection: "keep-alive",
       "transfer-encoding": "chunked",
       "x-forwarded-for": "6.6.6.6",
     } as Record<string, string>,
-    clientIp: "10.8.0.2",
+    clientIp: "192.0.2.2",
   };
 
   it("rewrites the request line and host, forwards app headers, drops hop-by-hop ones", () => {
@@ -191,9 +191,9 @@ describe("buildProxyHead", () => {
 
   it("derives X-Forwarded-* itself instead of trusting the client's", () => {
     const head = buildProxyHead({ kind: "http", ...base });
-    expect(head).toContain("x-forwarded-host: 10.8.0.25:3010\r\n");
+    expect(head).toContain("x-forwarded-host: 192.0.2.10:3010\r\n");
     expect(head).toContain("x-forwarded-proto: http\r\n");
-    expect(head).toContain("x-forwarded-for: 10.8.0.2\r\n");
+    expect(head).toContain("x-forwarded-for: 192.0.2.2\r\n");
     expect(head).toContain("x-forwarded-prefix: /preview/5173\r\n");
     expect(head).not.toContain("6.6.6.6");
   });
