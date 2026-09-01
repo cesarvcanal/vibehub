@@ -241,9 +241,41 @@ try {
   process.exit(1);
 }
 
-let lastSessionId = INITIAL_RESUME; // resume target for the NEXT turn
-let busy = false;
-const queue = [];
+let lastSessionId = INITIAL_RESUME; // resume target for the NEXT stream
+
+/* ----------------------------------------------- streaming input (2026-09-01) */
+// ONE long-lived query() fed by an async channel of user messages, instead of one query() per
+// turn. The payoff is the TUI's own queue behaviour ("encavalar"): a message sent WHILE a turn is
+// running is pushed into the live stream and the CLI FOLDS it into the running turn — the model
+// absorbs it at its next step. Verified live on SDK 0.3.246: a message pushed mid-turn produced
+// ONE result whose final answer already honoured it (see docs/sdk-driver.md).
+
+function makeChannel() {
+  const buf = [];
+  let notify = null;
+  let done = false;
+  return {
+    push(m) {
+      buf.push(m);
+      if (notify) { const n = notify; notify = null; n(); }
+    },
+    end() {
+      done = true;
+      if (notify) { const n = notify; notify = null; n(); }
+    },
+    async *[Symbol.asyncIterator]() {
+      for (;;) {
+        while (buf.length) yield buf.shift();
+        if (done) return;
+        await new Promise((resolve) => { notify = resolve; });
+      }
+    },
+  };
+}
+
+function userMessage(text) {
+  return { type: "user", message: { role: "user", content: text }, parent_tool_use_id: null };
+}
 
 function baseOptions() {
   const opts = {
@@ -270,17 +302,25 @@ function baseOptions() {
 }
 
 let currentQuery = null; // the live query() iterator, so an interrupt can reach it mid-turn
+let channel = null; // feeds the live query's prompt stream (null = no stream running)
+let turnActive = false; // a turn is running, or a message is already fed and about to start one
+let announcedSessionId = null; // last session id emitted as a `session` event (dedupe)
 
-async function runTurn(text) {
+async function runStream() {
   const options = baseOptions();
   if (lastSessionId) options.resume = lastSessionId;
-  let closed = false; // did this turn emit its own end (a result, or an error)?
+  const myChannel = channel;
   try {
-    currentQuery = query({ prompt: text, options });
+    currentQuery = query({ prompt: myChannel, options });
     for await (const msg of currentQuery) {
       if (msg.type === "system" && msg.session_id) {
+        // Streaming mode delivers MANY system messages per turn (init, hooks…), all carrying the
+        // session id — announce it only when it actually changes, not once per hook.
+        if (msg.session_id !== announcedSessionId) {
+          announcedSessionId = msg.session_id;
+          emit({ type: "session", sessionId: msg.session_id });
+        }
         lastSessionId = msg.session_id;
-        emit({ type: "session", sessionId: msg.session_id });
       } else if (msg.type === "stream_event") {
         const ev = msg.event;
         if (ev && ev.type === "content_block_delta" && ev.delta && ev.delta.type === "text_delta") {
@@ -292,8 +332,10 @@ async function runTurn(text) {
           else if (block.type === "tool_use") emit({ type: "tool_use", id: block.id, name: block.name, input: block.input });
         }
       } else if (msg.type === "result") {
+        // In streaming input mode the CLI emits ONE result per turn and keeps running — the
+        // stream stays open for the next message. Absorbed sends never produce their own result.
         if (msg.session_id) lastSessionId = msg.session_id;
-        closed = true;
+        turnActive = false;
         emit({ type: "result", subtype: msg.subtype, isError: !!msg.is_error,
           sessionId: msg.session_id, result: msg.result, permissionDenials: msg.permission_denials });
       }
@@ -301,25 +343,34 @@ async function runTurn(text) {
   } catch (err) {
     emit({ type: "error", message: err && err.message ? err.message : String(err) });
   } finally {
-    // A turn can END without a result: `interrupt()` just stops the iterator, a stalled query can
-    // be torn down mid-stream, and an SDK error only produces the `error` event above. The front's
-    // "Trabalhando…" only clears on a result/error/ready — a turn that ends silently left it
-    // spinning FOREVER (a real incident) — and the backend MANAGER counts turns by their
-    // `result` events to know when the driver is idle. Every turn now closes itself with a result,
-    // whatever ended it.
-    if (!closed) emit({ type: "result", subtype: "aborted", isError: false, sessionId: lastSessionId });
+    // The STREAM died (an SDK error, a teardown mid-stream — never a normal turn end, which keeps
+    // the stream open). A turn can therefore END without a result, and the front's "Trabalhando…"
+    // only clears on a result/error/ready — a turn that ended silently left it spinning FOREVER (a
+    // real incident) — while the backend MANAGER counts turns by their `result` events to know
+    // when the driver is idle. Whatever killed the stream, an open turn closes itself here; the
+    // NEXT user message starts a fresh stream that resumes the same session (lastSessionId).
+    if (turnActive) {
+      turnActive = false;
+      emit({ type: "result", subtype: "aborted", isError: false, sessionId: lastSessionId });
+    }
+    if (channel === myChannel) channel = null;
     currentQuery = null;
   }
 }
 
-async function pump() {
-  if (busy) return;
-  busy = true;
-  while (queue.length) {
-    const text = queue.shift();
-    await runTurn(text);
+function sendUser(text) {
+  if (!channel) {
+    channel = makeChannel();
+    void runStream();
   }
-  busy = false;
+  const absorbed = turnActive;
+  turnActive = true;
+  channel.push(userMessage(text));
+  // Tell the SURVIVING side what happened to this send: absorbed = it folds into the turn already
+  // running (or coalesces with a queued one) and will NOT produce its own result — the manager
+  // takes back this send's +1 on its turn count, and the front labels the bubble ("entrou no
+  // turno em andamento"). Emitted AFTER the push so a result racing past can never precede it.
+  if (absorbed) emit({ type: "turn_absorbed" });
 }
 
 /* ------------------------------------------------------------- stdin */
@@ -336,8 +387,7 @@ rl.on("line", (line) => {
     return;
   }
   if (control && control.type === "user" && typeof control.text === "string") {
-    queue.push(control.text);
-    void pump();
+    sendUser(control.text);
     return;
   }
   if (control && control.type === "permission_decision" && typeof control.id === "string") {
@@ -353,9 +403,11 @@ rl.on("line", (line) => {
     return;
   }
   if (control && control.type === "interrupt") {
-    // Abandon anything still queued (the interrupt means "stop what you are doing"), deny anything
-    // still waiting for a click (the turn it belongs to is being killed), then interrupt the SDK.
-    queue.length = 0;
+    // Deny anything still waiting for a click (the turn it belongs to is being killed), then
+    // interrupt the SDK. With streaming input every send is already IN the CLI (no driver-side
+    // queue): the interrupt aborts the running turn; a send still queued CLI-side (pushed in the
+    // last instant, not yet folded in) can survive it and run as its own turn — its result is one
+    // more `result` frame, which the manager's floor-at-zero accounting absorbs.
     for (const id of [...pendingPermissions.keys()]) resolvePermission(id, false);
     for (const id of [...pendingQuestions.keys()]) resolveQuestion(id, null);
     if (currentQuery && typeof currentQuery.interrupt === "function") {

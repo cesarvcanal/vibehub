@@ -153,6 +153,12 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
       logger.warn({ card: session.label, detail: (err as Error).message }, "could not persist the sdk session id");
     });
   }
+  if (event.type === "turn_absorbed") {
+    // Streaming input: this send folded into the turn ALREADY running (the model absorbs it at its
+    // next step) — it will not produce its own `result`, so its +1 comes back off. Floor at 1: an
+    // absorbed send implies a turn IS in flight, and its own result is still owed.
+    session.activeTurns = Math.max(1, session.activeTurns - 1);
+  }
   if (event.type === "result") {
     session.activeTurns = Math.max(0, session.activeTurns - 1);
     // The last turn in flight CLOSED: the durable "turn in flight" marker comes off. A deploy that
@@ -295,9 +301,10 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
     // lost. attempts: 0 — a person's own turn always earns one automatic resume.
     void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(control.text), attempts: 0 });
   } else if (control.type === "interrupt") {
-    // The driver drops its QUEUE on interrupt — only the running turn will still produce a
-    // result. Forgetting the queued ones here keeps an abandoned queue from pinning the driver
-    // past the idle stop forever.
+    // Streaming input: every send is already in the CLI, and the interrupt aborts the running
+    // turn — at most ONE result is still owed. (A send queued CLI-side in the last instant can
+    // survive the interrupt and run; its extra result is absorbed by the floor-at-zero above.)
+    // Clamping here keeps an abandoned backlog from pinning the driver past the idle stop forever.
     session.activeTurns = Math.min(session.activeTurns, 1);
   }
 }

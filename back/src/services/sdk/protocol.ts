@@ -78,6 +78,15 @@ export interface QuestionResultEvent {
   timedOut?: boolean;
 }
 
+/**
+ * A user send arrived while a turn was ALREADY running: with streaming input the driver pushed it
+ * into the live stream and the CLI folds it into the running turn (the model absorbs it at its
+ * next step) — it will NOT produce its own `result`. The manager takes back that send's +1 on its
+ * turn count; the front labels the bubble ("entrou no turno em andamento") so the message never
+ * looks lost. Live-only feedback: it is not replayed (by the time of a replay the turn is history).
+ */
+export interface TurnAbsorbedEvent { type: "turn_absorbed" }
+
 /** End of a turn. */
 export interface ResultEvent {
   type: "result";
@@ -106,6 +115,7 @@ export type DriverEvent =
   | PermissionRequestEvent
   | UserQuestionEvent
   | QuestionResultEvent
+  | TurnAbsorbedEvent
   | ResultEvent
   | ReadyEvent
   | DriverErrorEvent
@@ -121,6 +131,7 @@ const DRIVER_EVENT_TYPES = new Set([
   "permission_request",
   "user_question",
   "question_result",
+  "turn_absorbed",
   "result",
   "ready",
   "error",
