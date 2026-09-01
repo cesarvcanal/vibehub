@@ -435,6 +435,45 @@ describe("mensagem editada (supersede)", () => {
   });
 });
 
+describe("mensagem no meio do turno (turn_absorbed — streaming input)", () => {
+  it("labels the LAST user row as absorbed (entrou no turno em andamento)", () => {
+    let state = appendUserRow(INITIAL_SDK_STATE, "faz a tarefa");
+    state = feed([{ type: "ready" }], state);
+    state = appendUserRow(state, "aproveita e ajusta o título", undefined, { awaiting: true });
+    state = feed([{ type: "turn_absorbed" }], state);
+    const users = state.rows.filter((r) => r.kind === "user");
+    expect(users[0]).toMatchObject({ text: "faz a tarefa" });
+    expect((users[0] as { absorbed?: boolean }).absorbed).toBeUndefined();
+    expect(users[1]).toMatchObject({ text: "aproveita e ajusta o título", absorbed: true });
+    // The driver reacted AND the turn keeps running: the ladder settles into plain "Trabalhando…".
+    expect(state.awaiting).toBe(false);
+    expect(state.turnActive).toBe(true);
+  });
+
+  it("two absorbed sends each get their own label (newest first, never re-labelling)", () => {
+    let state = feed([{ type: "ready" }], appendUserRow(INITIAL_SDK_STATE, "um"));
+    state = appendUserRow(state, "dois");
+    state = feed([{ type: "turn_absorbed" }], state);
+    state = appendUserRow(state, "três");
+    state = feed([{ type: "turn_absorbed" }], state);
+    const users = state.rows.filter((r) => r.kind === "user") as Array<{ text: string; absorbed?: boolean }>;
+    expect(users.map((u) => !!u.absorbed)).toEqual([false, true, true]);
+  });
+
+  it("a duplicated turn_absorbed with nothing newer to label changes nothing", () => {
+    let state = feed([{ type: "ready" }], appendUserRow(INITIAL_SDK_STATE, "um"));
+    state = appendUserRow(state, "dois");
+    state = feed([{ type: "turn_absorbed" }], state);
+    const again = feed([{ type: "turn_absorbed" }], state);
+    expect(again.rows).toEqual(state.rows);
+  });
+
+  it("with no user row at all it is a no-op", () => {
+    const state = feed([{ type: "ready" }, { type: "turn_absorbed" }]);
+    expect(state.rows).toEqual([]);
+  });
+});
+
 describe("escada de estados — awaiting (Preparando/Pensando antes do primeiro token)", () => {
   it("one's own live send lights `awaiting`; a replayed user event never does", () => {
     const live = appendUserRow(INITIAL_SDK_STATE, "oi", undefined, { awaiting: true });

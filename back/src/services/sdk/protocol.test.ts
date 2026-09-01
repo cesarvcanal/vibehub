@@ -38,6 +38,10 @@ describe("parseDriverLine", () => {
     expect(parseDriverLine(line)).toMatchObject({ type: "result", isError: false, sessionId: "abc" });
   });
 
+  it("recognises turn_absorbed (a mid-turn send folded into the running turn — streaming input)", () => {
+    expect(parseDriverLine(`{"type":"turn_absorbed"}`)).toEqual({ type: "turn_absorbed" });
+  });
+
   it("turns invalid JSON into a parse_error rather than swallowing it", () => {
     expect(parseDriverLine("not json")).toEqual({ type: "parse_error", raw: "not json" });
   });

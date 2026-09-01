@@ -275,6 +275,68 @@ describe("question_answer — reaches the LIVE driver", () => {
   });
 });
 
+describe("streaming input — mensagem no meio do turno (turn_absorbed)", () => {
+  it("a mid-turn send folded into the running turn closes on ONE result (marker off, count zeroed)", async () => {
+    // Two sends, ONE turn: the second arrived mid-turn and the driver folded it in (streaming
+    // input). The driver says so with `turn_absorbed`; without it the manager would wait forever
+    // for a second result — spinner pinned, idle stop never armed, marker never cleared.
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"faz a tarefa"}`));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"aproveita e ajusta o título"}`)); // mid-turn
+    expect(session.activeTurns).toBe(2);
+    // Wait for the SECOND send's marker write to land before the result clears it — the writes are
+    // fire-and-forget, and a late write racing past the clear would flake this test, not the code.
+    await vi.waitFor(async () => {
+      expect((await readInflightMarker(CARD))?.preview).toBe("aproveita e ajusta o título");
+    }, { timeout: 5000 });
+    spawned[0]!.stdout.emit("data", line({ type: "turn_absorbed" }));
+    expect(session.activeTurns).toBe(1); // the fold took the second send's +1 back — one result owed
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    expect(session.activeTurns).toBe(0);
+    await vi.waitFor(async () => expect(await readInflightMarker(CARD)).toBeNull(), { timeout: 5000 }); // ONE result closed the flight
+  });
+
+  it("broadcasts turn_absorbed to the sockets (the front labels the bubble)", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"um"}`));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"dois"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "turn_absorbed" }));
+    expect(sentTypes(socket)).toContain("turn_absorbed");
+  });
+
+  it("turn_absorbed floors at ONE — an absorbed send implies a turn in flight, its result still owed", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"um"}`));
+    expect(session.activeTurns).toBe(1);
+    // A stray/duplicated absorbed frame must not zero the count while the turn runs.
+    spawned[0]!.stdout.emit("data", line({ type: "turn_absorbed" }));
+    expect(session.activeTurns).toBe(1);
+  });
+
+  it("turn_absorbed is live-only: it never lands in the history (a replay has nothing to label)", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"um"}`));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"dois"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "turn_absorbed" }));
+    await new Promise((r) => setTimeout(r, 10));
+    const history = await readHistory(CARD);
+    expect(history.some((e) => e.type === "turn_absorbed")).toBe(false);
+    expect(history.filter((e) => e.type === "user").length).toBe(2); // both sends persisted normally
+  });
+});
+
 describe("end of life", () => {
   it("stopCardDriver ends stdin (the driver's liveness check) and kills the child", () => {
     ensure();
@@ -370,9 +432,9 @@ describe("idle shutdown — ocioso e sem ninguém olhando", () => {
     attachSocket(session, socket as never);
     spawned[0]!.stdout.emit("data", line({ type: "ready" }));
     socket.emit("message", Buffer.from(`{"type":"user","text":"um"}`));
-    socket.emit("message", Buffer.from(`{"type":"user","text":"dois"}`)); // queued in the driver
-    socket.emit("message", Buffer.from(`{"type":"interrupt"}`)); // driver drops the queue
-    // only the RUNNING turn will produce a result
+    socket.emit("message", Buffer.from(`{"type":"user","text":"dois"}`)); // already in the CLI's stream
+    socket.emit("message", Buffer.from(`{"type":"interrupt"}`)); // aborts the running turn
+    // at most the RUNNING turn still produces a result
     spawned[0]!.stdout.emit("data", line({ type: "result", subtype: "aborted", isError: false }));
     socket.emit("close");
     vi.advanceTimersByTime(DRIVER_IDLE_MS + 1);

@@ -661,6 +661,31 @@ describe("SdkChatView — editar mensagem enviada (supersede)", () => {
   });
 });
 
+describe("SdkChatView — mensagem no meio do turno (turn_absorbed)", () => {
+  it("labels the mid-turn bubble 'entrou no turno em andamento' when the driver folds it in", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.type(box, "faz a tarefa{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "Fazendo…" }); // the turn is visibly running
+
+    await userEvent.type(box, "aproveita e ajusta o título{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(2));
+    ws.deliver({ type: "turn_absorbed" }); // the driver folded the send into the RUNNING turn
+
+    const label = await screen.findByTestId("sdk-user-absorbed");
+    expect(label).toHaveTextContent(/entrou no turno em andamento|joined the running turn/);
+    // only the mid-turn bubble carries it — the first message opened the turn normally
+    expect(screen.getAllByTestId("sdk-user-absorbed")).toHaveLength(1);
+    const bubbles = screen.getAllByTestId("sdk-user");
+    expect(bubbles[1]).toHaveTextContent("aproveita e ajusta o título");
+  });
+});
+
 describe("SdkChatView — escada de estados (Preparando → Pensando → Trabalhando)", () => {
   it("cold driver: the send shows Preparando…, ready turns it into Pensando…, the first token into Trabalhando…", async () => {
     renderSdkChat();
