@@ -25,6 +25,9 @@ import { useT } from "@/i18n";
  * Empty means GONE, not an empty box: a fresh install has no conversations to go back to, and a
  * heading over nothing is a heading you learn to ignore.
  */
+/** How many conversations the list starts with, and how many each "show more" adds. */
+export const RECENT_PAGE = 10;
+
 export function RecentCards({
   projects,
   activeCardId,
@@ -57,6 +60,13 @@ export function RecentCards({
     [cards, projectName],
   );
 
+  // TEN at a time. The list is a way back, and the way back is almost always in the last handful;
+  // a hundred rows here buries the project list below. "Show more" reveals the next ten, and the
+  // choice resets when the install's history changes shape (a page load — it is plain state).
+  const [shown, setShown] = React.useState(RECENT_PAGE);
+  const visible = recent.slice(0, shown);
+  const hidden = recent.length - visible.length;
+
   if (recent.length === 0) return null;
 
   return (
@@ -70,7 +80,7 @@ export function RecentCards({
           project list below it out of the panel. `overscroll-contain` keeps a wheel that reaches
           the end from scrolling the page behind it. */}
       <div data-testid="recent-cards-list" className="max-h-[40dvh] overflow-y-auto overscroll-contain pb-1.5">
-        {recent.map((card) => (
+        {visible.map((card) => (
           <RecentRow
             key={card.id}
             card={card}
@@ -79,6 +89,16 @@ export function RecentCards({
             onOpen={() => onOpenCard(card.projectId, card.id)}
           />
         ))}
+        {hidden > 0 ? (
+          <button
+            type="button"
+            data-testid="recent-cards-more"
+            onClick={() => setShown((n) => n + RECENT_PAGE)}
+            className="w-full py-1.5 pl-3 pr-3 text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground/80 transition-colors hover:bg-card/60 hover:text-foreground"
+          >
+            {t("sidebar.showMore", { n: hidden })}
+          </button>
+        ) : null}
       </div>
     </div>
   );

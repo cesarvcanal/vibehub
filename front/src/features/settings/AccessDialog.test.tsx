@@ -126,26 +126,26 @@ describe("AccessDialog — the shared projects of one member", () => {
 
   it("lists which projects each member can reach, with the level", async () => {
     serve(OWNER, [OWNER, MEMBER], PROJECTS, {
-      p1: [{ userId: "u2", username: "mussa", level: "view" }],
+      p1: [{ userId: "u2", username: "alex", level: "view" }],
     });
     renderApp(<AccessDialog open onOpenChange={() => {}} />);
 
     const editor = await screen.findByTestId("shared-projects-u2");
     // The chip appears once the project's share list answers.
-    await screen.findByRole("button", { name: "Remove billing from mussa" });
+    await screen.findByRole("button", { name: "Remove billing from alex" });
     expect(editor).toHaveTextContent("billing");
     expect(editor).toHaveTextContent("Can view");
     // The one not shared is offered by the add select, not painted as a removable chip.
-    expect(screen.queryByRole("button", { name: "Remove gateway from mussa" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove gateway from alex" })).toBeNull();
   });
 
   it("adds a project share from the person's own row", async () => {
     serve(OWNER, [OWNER, MEMBER], PROJECTS, {});
-    post.mockResolvedValue({ share: { userId: "u2", username: "mussa", level: "work" } });
+    post.mockResolvedValue({ share: { userId: "u2", username: "alex", level: "work" } });
     renderApp(<AccessDialog open onOpenChange={() => {}} />);
 
-    await userEvent.selectOptions(await screen.findByLabelText("Add a project for mussa"), "p2");
-    await userEvent.click(screen.getByRole("button", { name: "Share with mussa" }));
+    await userEvent.selectOptions(await screen.findByLabelText("Add a project for alex"), "p2");
+    await userEvent.click(screen.getByRole("button", { name: "Share with alex" }));
 
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith("/projects/p2/shares", { userId: "u2", level: "work" }),
@@ -154,12 +154,12 @@ describe("AccessDialog — the shared projects of one member", () => {
 
   it("removes a project share with the chip's ×", async () => {
     serve(OWNER, [OWNER, MEMBER], PROJECTS, {
-      p1: [{ userId: "u2", username: "mussa", level: "work" }],
+      p1: [{ userId: "u2", username: "alex", level: "work" }],
     });
     del.mockResolvedValue({ ok: true });
     renderApp(<AccessDialog open onOpenChange={() => {}} />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Remove billing from mussa" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Remove billing from alex" }));
     await waitFor(() => expect(del).toHaveBeenCalledWith("/projects/p1/shares/u2"));
   });
 
