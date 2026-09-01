@@ -39,4 +39,16 @@ describe("MCP server instructions (the maestro persona)", () => {
     // The value handed to the SDK is the same non-empty persona.
     expect(INSTRUCTIONS.trim().length).toBeGreaterThan(0);
   });
+
+  it("register the Cofre tools and instruct on using them for logins", () => {
+    const server = createMcpServer("test") as unknown as {
+      _registeredTools?: Record<string, unknown>;
+    };
+    const names = Object.keys(server._registeredTools ?? {});
+    expect(names).toContain("vibehub_credential_list");
+    expect(names).toContain("vibehub_credential_fill");
+    // The persona tells the agent to use the Cofre and never to ask for a password in the chat.
+    expect(INSTRUCTIONS).toContain("vibehub_credential_fill");
+    expect(INSTRUCTIONS.toLowerCase()).toContain("cofre");
+  });
 });
