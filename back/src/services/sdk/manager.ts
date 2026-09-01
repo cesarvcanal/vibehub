@@ -132,7 +132,12 @@ function maybeScheduleIdleStop(session: DriverSession): void {
 
 /** One driver event, seen by the SURVIVING side: persist, remember, fan out. */
 function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
-  if (event.type === "ready") session.ready = true;
+  if (event.type === "ready") {
+    session.ready = true;
+    // Stamp the manager's live turn count on the frame: a message may already be queued on the
+    // fresh driver's stdin (sent before it booted) — the front's spinner must know it.
+    event = { ...event, turnActive: session.activeTurns > 0 };
+  }
   if ((event.type === "session" || event.type === "result") && event.sessionId && event.sessionId !== session.lastSessionId) {
     session.lastSessionId = event.sessionId;
     // Persist the resume key on the card (board.json) so the NEXT driver spawn — after an idle
@@ -253,9 +258,13 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
   session.sockets.add(socket);
 
   // The reconnect case: the driver said `ready` long ago (it only says it at boot). Without a
-  // synthesized one the fresh page would never enable its composer.
+  // synthesized one the fresh page would never enable its composer. `turnActive` carries the
+  // manager's REAL state: a view remounting mid-turn (Terminal↔Chat, reload — card prompt-56fc)
+  // reset its own turn flag and nothing re-lit the "Trabalhando…" spinner until much later.
   if (session.ready) {
-    try { socket.send(JSON.stringify({ type: "ready", resume: session.lastSessionId })); } catch { /* going away */ }
+    try {
+      socket.send(JSON.stringify({ type: "ready", resume: session.lastSessionId, turnActive: session.activeTurns > 0 }));
+    } catch { /* going away */ }
   }
 
   const keepalive = setInterval(() => {
