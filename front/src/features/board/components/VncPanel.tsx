@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, KeyRound, Loader2, MonitorPlay, Plug } from "lucide-react";
+import { AlertTriangle, Eye, KeyRound, Loader2, MonitorPlay, MousePointerClick, Plug } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { wsUrl } from "@/lib/ws";
@@ -17,14 +17,21 @@ import { t as translate, useT } from "@/i18n";
  *   WS     /api/cards/:id/vnc      → a raw RFB byte bridge (the server is the websockify)
  *   DELETE /api/cards/:id/browser  → tears it all down and gives the RAM back
  *
- * It is deliberately NOT view-only: the agent drives that same Chromium over CDP, and you can take
- * the keyboard whenever it hits a login or a captcha — without evicting it.
+ * TWO WAYS TO BE HERE, switchable live (no reconnect — `viewOnly` is a live RFB property):
+ *   - "Só assistir" (the DEFAULT): view-only — your mouse and keyboard do NOT reach the page, so
+ *     you can watch the agent click without bumping its cursor by accident.
+ *   - "Pilotar junto": input on — your clicks and typing land ALONGSIDE the agent's. The agent
+ *     drives this same Chromium over CDP (a separate channel from the VNC input), so neither side
+ *     evicts the other: take the keyboard for a login or a captcha, hand it back with one click.
  *
  * noVNC is imported lazily. It is a large browser-only bundle that touches the DOM on import, so it
  * has no business loading for anyone who never opens this panel.
  */
 
 type State = "idle" | "starting" | "connecting" | "live" | "error" | "closed";
+
+/** localStorage key remembering the display mode ("fit" | "real") — per browser, per user. */
+const VNC_DISPLAY_KEY = "vibehub.vnc.display";
 
 const STATE_TONE: Record<State, string> = {
   idle: "text-muted-foreground",
@@ -40,7 +47,51 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
   const [state, setState] = React.useState<State>("idle");
   const [error, setError] = React.useState<string | null>(null);
   const screenRef = React.useRef<HTMLDivElement | null>(null);
-  const rfbRef = React.useRef<{ disconnect: () => void } | null>(null);
+  const rfbRef = React.useRef<{ disconnect: () => void; viewOnly: boolean; scaleViewport: boolean; clipViewport: boolean } | null>(null);
+  // "Só assistir" by default: watching the agent must never interfere with it by accident.
+  const [viewOnly, setViewOnly] = React.useState(true);
+  // The connect callback reads the CURRENT choice without re-creating itself (a new callback would
+  // re-run the auto-connect effect).
+  const viewOnlyRef = React.useRef(viewOnly);
+  viewOnlyRef.current = viewOnly;
+
+  /** Flip watch/pilot LIVE: `viewOnly` is a plain RFB property, no reconnect involved. */
+  const toggleViewOnly = React.useCallback(() => {
+    setViewOnly((current) => {
+      const next = !current;
+      if (rfbRef.current) rfbRef.current.viewOnly = next;
+      return next;
+    });
+  }, []);
+
+  // DISPLAY mode, also live: "Ajustar" scales the Chromium screen to fit the pane (follow the agent
+  // with no scrolling); "Tamanho real" is 1:1 at the browser's own resolution (faithful front-end
+  // testing), panning inside the pane (`clipViewport`). Remembered per browser (localStorage).
+  const [fitScreen, setFitScreen] = React.useState(() => {
+    try {
+      return window.localStorage.getItem(VNC_DISPLAY_KEY) !== "real";
+    } catch {
+      return true;
+    }
+  });
+  const fitRef = React.useRef(fitScreen);
+  fitRef.current = fitScreen;
+
+  const toggleFit = React.useCallback(() => {
+    setFitScreen((current) => {
+      const next = !current;
+      if (rfbRef.current) {
+        rfbRef.current.scaleViewport = next;
+        rfbRef.current.clipViewport = !next;
+      }
+      try {
+        window.localStorage.setItem(VNC_DISPLAY_KEY, next ? "fit" : "real");
+      } catch {
+        /* private window / storage off — the toggle still works for this session */
+      }
+      return next;
+    });
+  }, []);
 
   /** Disconnect the client and stop the browser in the runner. Idempotent. */
   const teardown = React.useCallback(() => {
@@ -83,8 +134,9 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
     const rfb = new RFB(screenRef.current, wsUrl(`/api/cards/${encodeURIComponent(cardId)}/vnc`), {
       wsProtocols: [],
     });
-    rfb.viewOnly = false;
-    rfb.scaleViewport = true;
+    rfb.viewOnly = viewOnlyRef.current;
+    rfb.scaleViewport = fitRef.current;
+    rfb.clipViewport = !fitRef.current;
     rfb.focusOnClick = true;
     rfb.background = "#000";
     rfb.addEventListener("connect", () => setState("live"));
@@ -122,9 +174,34 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
           <MonitorPlay className="h-3.5 w-3.5" /> {t("vnc.header")}
         </span>
         <div className="flex items-center gap-2">
+          {/* Display mode, LEFT of the live indicator — quiet, text-only. Fit scales the screen to
+              the pane; real size is 1:1 at the Chromium's own resolution (pan to see the rest). */}
+          <button
+            type="button"
+            data-testid="vnc-display-toggle"
+            className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground/70 hover:text-muted-foreground"
+            title={fitScreen ? t("vnc.fitHint") : t("vnc.realSizeHint")}
+            onClick={toggleFit}
+          >
+            {fitScreen ? t("vnc.fit") : t("vnc.realSize")}
+          </button>
           <span role="status" className={`font-mono text-[10px] uppercase tracking-wider ${tone}`}>
             {t(`vnc.state.${state}`)}
           </span>
+          {/* Watch/pilot toggle — flips `viewOnly` on the LIVE connection, nobody is disconnected.
+              It shows the CURRENT mode; clicking it switches to the other one. */}
+          <Button
+            variant="outline"
+            size="sm"
+            data-testid="vnc-input-toggle"
+            aria-pressed={!viewOnly}
+            className="h-6 px-2 text-xs"
+            title={viewOnly ? t("vnc.watchOnlyHint") : t("vnc.pilotHint")}
+            onClick={toggleViewOnly}
+          >
+            {viewOnly ? <Eye className="h-3.5 w-3.5" /> : <MousePointerClick className="h-3.5 w-3.5" />}
+            {viewOnly ? t("vnc.watchOnly") : t("vnc.pilot")}
+          </Button>
           {/* A word, not an ✕. Closing this pane also KILLS the Chromium in the runner and gives the
               RAM back — that is a disconnection, and an icon that usually means "hide" undersells it. */}
           <Button
