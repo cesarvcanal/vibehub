@@ -19,6 +19,7 @@ import { boardRoutes } from "./routes/board.js";
 import { sessionRoutes } from "./routes/session.js";
 import { agentRoutes } from "./routes/agent.js";
 import { mcpRoutes } from "./routes/mcp.js";
+import { credentialsRoutes } from "./routes/credentials.js";
 import { cardSessionRoutes } from "./routes/cardSession.js";
 import { chatRoutes } from "./routes/chat.js";
 import { accountLoginRoutes } from "./routes/accountLogin.js";
@@ -61,6 +62,7 @@ export async function buildServer() {
   await app.register(sessionRoutes);
   await app.register(agentRoutes);
   await app.register(mcpRoutes);
+  await app.register(credentialsRoutes);
   await app.register(cardSessionRoutes);
   await app.register(chatRoutes);
   await app.register(accountLoginRoutes);
