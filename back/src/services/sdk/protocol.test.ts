@@ -10,6 +10,7 @@ import {
   buildAskUserAnswers,
   parseQuestionAnswers,
   parseSdkClientFrame,
+  buildSupersedeText,
 } from "./protocol.js";
 
 describe("parseDriverLine", () => {
@@ -329,5 +330,29 @@ describe("createQuestionBroker", () => {
     await expect(a).resolves.toEqual({ answers: null, timedOut: false });
     await expect(b).resolves.toEqual({ answers: null, timedOut: false });
     expect(broker.pendingCount()).toBe(0);
+  });
+});
+
+describe("edit_user — editar uma mensagem enviada (supersede)", () => {
+  it("parseSdkClientFrame accepts an edit_user frame and refuses malformed ones", () => {
+    expect(parseSdkClientFrame(`{"type":"edit_user","original":"roda os teste","text":"roda os testes"}`)).toEqual({
+      type: "edit_user",
+      original: "roda os teste",
+      text: "roda os testes",
+    });
+    // no original / no text / blank text: not an edit — refused, never guessed
+    expect(parseSdkClientFrame(`{"type":"edit_user","text":"nova"}`)).toBeNull();
+    expect(parseSdkClientFrame(`{"type":"edit_user","original":"velha"}`)).toBeNull();
+    expect(parseSdkClientFrame(`{"type":"edit_user","original":"velha","text":"  "}`)).toBeNull();
+  });
+
+  it("buildSupersedeText wraps the edit with the original quoted and the correction marked", () => {
+    const wrapped = buildSupersedeText("sobe pra prod", "sobe pra dev");
+    expect(wrapped).toContain("correção do usuário");
+    expect(wrapped).toContain("desconsidere a mensagem anterior");
+    expect(wrapped).toContain("«sobe pra prod»");
+    expect(wrapped.endsWith("sobe pra dev")).toBe(true);
+    // the wrapper is a NORMAL user turn on the wire: encodable like any other
+    expect(encodeControl({ type: "user", text: wrapped })).toContain("correção do usuário");
   });
 });

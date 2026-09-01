@@ -6,6 +6,7 @@ import {
   answerQuestion,
   decidePermission,
   groupSdkRows,
+  markUserEdited,
   parseSdkFrame,
   toolSummary,
   type SdkChatState,
@@ -391,5 +392,74 @@ describe("user questions (AskUserQuestion no chat)", () => {
   it("answerQuestion on an unknown id changes nothing", () => {
     const state = feed([{ type: "ready" }]);
     expect(answerQuestion(state, "ghost", [{ selected: ["A"] }])).toBe(state);
+  });
+});
+
+describe("mensagem editada (supersede)", () => {
+  it("markUserEdited dims the LAST user row with those words, once", () => {
+    let state = appendUserRow(INITIAL_SDK_STATE, "sobe pra prod");
+    state = appendUserRow(state, "outra coisa");
+    state = markUserEdited(state, "sobe pra prod");
+    expect(state.rows[0]).toMatchObject({ kind: "user", text: "sobe pra prod", edited: true });
+    expect((state.rows[1] as { edited?: boolean }).edited).toBeUndefined();
+  });
+
+  it("matches whitespace-insensitively and skips rows already edited", () => {
+    let state = appendUserRow(INITIAL_SDK_STATE, "roda  os testes");
+    state = appendUserRow(state, "roda os testes");
+    state = markUserEdited(state, "roda os testes"); // marks the LAST match
+    state = markUserEdited(state, "roda os testes"); // then the remaining one
+    expect(state.rows.every((r) => (r as { edited?: boolean }).edited === true)).toBe(true);
+  });
+
+  it("no match / blank target: the state comes back untouched (same object)", () => {
+    const state = appendUserRow(INITIAL_SDK_STATE, "oi");
+    expect(markUserEdited(state, "tchau")).toBe(state);
+    expect(markUserEdited(state, "   ")).toBe(state);
+  });
+
+  it("a replayed message_edited event settles the original and the new version stands", () => {
+    const state = feed([
+      { type: "user", text: "sobe pra prod" },
+      { type: "message_edited", originalText: "sobe pra prod" },
+      { type: "user", text: "sobe pra dev" },
+    ]);
+    expect(state.rows[0]).toMatchObject({ kind: "user", text: "sobe pra prod", edited: true });
+    expect(state.rows[1]).toMatchObject({ kind: "user", text: "sobe pra dev" });
+    expect((state.rows[1] as { edited?: boolean }).edited).toBeUndefined();
+  });
+
+  it("message_edited without originalText changes nothing", () => {
+    const state = appendUserRow(INITIAL_SDK_STATE, "oi");
+    expect(applySdkEvent(state, { type: "message_edited" })).toBe(state);
+  });
+});
+
+describe("escada de estados — awaiting (Preparando/Pensando antes do primeiro token)", () => {
+  it("one's own live send lights `awaiting`; a replayed user event never does", () => {
+    const live = appendUserRow(INITIAL_SDK_STATE, "oi", undefined, { awaiting: true });
+    expect(live.awaiting).toBe(true);
+    const replayed = applySdkEvent(INITIAL_SDK_STATE, { type: "user", text: "oi" });
+    expect(replayed.awaiting).toBe(false);
+  });
+
+  it("`ready` does NOT clear it (that is the Preparando→Pensando transition)", () => {
+    const state = feed([{ type: "ready" }], appendUserRow(INITIAL_SDK_STATE, "oi", undefined, { awaiting: true }));
+    expect(state.awaiting).toBe(true);
+    expect(state.ready).toBe(true);
+  });
+
+  it("the first delta clears it and the plain turn spinner takes over", () => {
+    let state = appendUserRow(INITIAL_SDK_STATE, "oi", undefined, { awaiting: true });
+    state = feed([{ type: "ready" }, { type: "assistant_delta", text: "olá" }], state);
+    expect(state.awaiting).toBe(false);
+    expect(state.turnActive).toBe(true);
+  });
+
+  it("a tool call, a result and an error all clear it", () => {
+    const base = appendUserRow(INITIAL_SDK_STATE, "oi", undefined, { awaiting: true });
+    expect(feed([{ type: "tool_use", id: "t1", name: "Bash" }], base).awaiting).toBe(false);
+    expect(feed([{ type: "result", isError: false }], base).awaiting).toBe(false);
+    expect(feed([{ type: "error", message: "boom" }], base).awaiting).toBe(false);
   });
 });

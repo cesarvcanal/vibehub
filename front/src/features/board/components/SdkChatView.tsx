@@ -7,6 +7,7 @@ import {
   ListTodo,
   Loader2,
   MessageSquare,
+  Pencil,
   ShieldAlert,
   Wrench,
 } from "lucide-react";
@@ -28,6 +29,7 @@ import {
   appendUserRow,
   decidePermission,
   groupSdkRows,
+  markUserEdited,
   parseSdkFrame,
   type SdkChatState,
   type SdkQuestionAnswer,
@@ -50,6 +52,9 @@ import { t as translate, useT } from "@/i18n";
  * says so instead of pretending.
  */
 
+/** How long an edit waits for the interrupted turn's result before going anyway (safety net). */
+export const EDIT_INTERRUPT_GRACE_MS = 15_000;
+
 export interface SdkChatViewProps {
   cardId: string;
   /** Is this card the one on screen? (see ChatView — the composer must not steal the keyboard) */
@@ -63,6 +68,8 @@ export interface SdkChatViewProps {
 
 export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ariaLabel, className }: SdkChatViewProps) {
   const t = useT();
+  // Whose screen this is — the edit affordance belongs only to one's own messages.
+  const viewer = useAuth().user?.username;
   const [state, setState] = React.useState<SdkChatState>(INITIAL_SDK_STATE);
   const socketRef = React.useRef<WebSocket | null>(null);
   const statusRef = React.useRef<SdkChatViewProps["onStatus"]>(onStatus);
@@ -150,9 +157,68 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     socket.send(JSON.stringify(frame));
   }, []);
 
+  /* -------------------------------------------------------------- editing */
+
+  /** The message being edited (a SUPERSEDE — the model read the original; see docs/sdk-driver.md). */
+  const [editing, setEditing] = React.useState<{ rowId: string; original: string } | null>(null);
+  /** An edit waiting for the interrupted turn to END (its result/aborted) before it goes. */
+  const [pendingEdit, setPendingEdit] = React.useState<{ original: string; text: string } | null>(null);
+
+  /** Push the edit frame. Returns whether the socket took it (a refusal is toasted, not thrown). */
+  const dispatchEditFrame = React.useCallback(
+    (original: string, text: string): boolean => {
+      try {
+        sendFrame({ type: "edit_user", original, text });
+        return true;
+      } catch (err) {
+        toast.error((err as Error).message);
+        return false;
+      }
+    },
+    [sendFrame],
+  );
+
+  // The deferred half of "interrupt first": the edit goes the moment the interrupted turn reports
+  // its result (turnActive falls). The timeout is the safety net — a turn that never closes must
+  // not hold the correction hostage forever (the driver queues user turns anyway).
+  React.useEffect(() => {
+    if (!pendingEdit) return;
+    if (!state.turnActive) {
+      setPendingEdit(null);
+      dispatchEditFrame(pendingEdit.original, pendingEdit.text);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setPendingEdit(null);
+      dispatchEditFrame(pendingEdit.original, pendingEdit.text);
+    }, EDIT_INTERRUPT_GRACE_MS);
+    return () => clearTimeout(timer);
+  }, [pendingEdit, state.turnActive, dispatchEditFrame]);
+
   const send = async (raw: string): Promise<void> => {
     const text = raw.replace(/\r$/, "").trim();
     if (!text) return;
+    if (editing) {
+      const { original } = editing;
+      if (state.turnActive) {
+        // The turn the original message fired is still running: stop it FIRST (the same frame as
+        // the stop button), and the edit follows when its result lands (the effect above).
+        try {
+          sendFrame({ type: "interrupt" });
+        } catch (err) {
+          toast.error((err as Error).message);
+          throw err; // the composer keeps the words
+        }
+        setPendingEdit({ original, text });
+      } else if (!dispatchEditFrame(original, text)) {
+        throw new Error(translate("sdk.offline")); // the composer keeps the words
+      }
+      // Drawn now, in both paths: the original dims with its "editada" badge, the new version is
+      // the standing message. The history writes the same two lines, so a replay agrees.
+      setState((prev) => appendUserRow(markUserEdited(prev, original), text, undefined, { awaiting: true }));
+      setEditing(null);
+      return;
+    }
     try {
       sendFrame({ type: "user", text });
     } catch (err) {
@@ -160,7 +226,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       throw err; // the composer keeps the words
     }
     // The frame is in the driver's stdin the moment send() accepted it — that IS the real state.
-    setState((prev) => appendUserRow(prev, text));
+    // `awaiting` starts the status ladder: "Preparando…"/"Pensando…" until the driver's first event.
+    setState((prev) => appendUserRow(prev, text, undefined, { awaiting: true }));
   };
 
   const interrupt = (): void => {
@@ -192,6 +259,18 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     // Optimistic only in DRAWING — the driver echoes a `question_result`; the first settlement wins.
     setState((prev) => answerQuestion(prev, id, answers));
   };
+
+  /** The terminal's Esc gesture: an empty field steps into editing the LAST message of one's own. */
+  const editLast = React.useCallback((): void => {
+    if (state.turnActive) return; // mid-turn the gesture would read as a stop — the button does that
+    for (let i = state.rows.length - 1; i >= 0; i -= 1) {
+      const row = state.rows[i]!;
+      if (row.kind === "user" && row.edited !== true && originRole(row.from, viewer) === "self") {
+        setEditing({ rowId: row.id, original: row.text });
+        return;
+      }
+    }
+  }, [state.rows, state.turnActive, viewer]);
 
   /* ------------------------------------------------------------ scrolling */
 
@@ -266,19 +345,30 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
             {entry.kind === "tools" ? (
               <SdkToolGroup rows={entry.rows} />
             ) : (
-              <SdkChatRow row={entry.row} onPermission={answerPermission} onAnswer={answerUserQuestion} />
+              <SdkChatRow
+                row={entry.row}
+                onPermission={answerPermission}
+                onAnswer={answerUserQuestion}
+                onEdit={(rowId, original) => setEditing({ rowId, original })}
+              />
             )}
           </div>
         ))}
 
-        {/* "Trabalhando…" only while the wire is UP. The driver now SURVIVES a dead socket (it is
-            card-owned in the back, not this connection's child), but a disconnected view cannot
-            vouch for what it is doing — so the spinner stays honest and yields to the reconnect:
-            the live stream relights it within the next delta if the turn is still running. */}
-        {connected && state.turnActive ? (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="sdk-chat-working">
+        {/* The STATUS LADDER — one indicator, three rungs, only while the wire is UP (a
+            disconnected view cannot vouch for anything; the reconnect relights it). The instant a
+            message goes, `awaiting` lights: "Preparando…" while the driver is still booting or
+            resuming the session (`ready` false — the cold start), "Pensando…" once the turn is in
+            the engine and no token has landed yet. The first driver event clears `awaiting` and the
+            plain "Trabalhando…" takes the same seat. Never stacked: one line, its label changes. */}
+        {connected && (state.awaiting || state.turnActive) ? (
+          <div
+            className="flex items-center gap-2 text-xs text-muted-foreground"
+            data-testid="sdk-chat-working"
+            data-phase={state.awaiting ? (state.ready ? "thinking" : "preparing") : "working"}
+          >
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            {t("chat.working")}
+            {state.awaiting ? (state.ready ? t("sdk.thinking") : t("sdk.preparing")) : t("chat.working")}
           </div>
         ) : null}
       </div>
@@ -298,6 +388,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         onSend={send}
         onUploadImage={onUploadImage}
         interrupt={{ active: state.turnActive, onInterrupt: interrupt, testId: "sdk-interrupt" }}
+        editing={editing ? { text: editing.original } : null}
+        onCancelEdit={() => setEditing(null)}
+        onEditLast={editLast}
       />
 
       {/* The footer says which conversation this IS (the resume key) and whether the wire is up. */}
@@ -408,10 +501,13 @@ function SdkChatRow({
   row,
   onPermission,
   onAnswer,
+  onEdit,
 }: {
   row: SdkRow;
   onPermission?: (id: string, allow: boolean) => void;
   onAnswer?: (id: string, answers: SdkQuestionAnswer[]) => void;
+  /** Offered only on one's OWN messages: the pencil that starts editing (a supersede). */
+  onEdit?: (rowId: string, original: string) => void;
 }) {
   const t = useT();
   // Whose screen this is — their own messages render unlabelled, everyone else's carry the sender.
@@ -512,29 +608,55 @@ function SdkChatRow({
     // bubble; another card's agent gets the green robot bubble (name links to its card), another
     // person a neutral one with their name.
     const role = originRole(row.from, viewer);
+    const editedBadge = row.edited ? (
+      <div data-testid="sdk-user-edited" className="mt-1 text-right text-[10px] italic text-muted-foreground/80">
+        {t("sdk.edited")}
+      </div>
+    ) : null;
     if (role !== "self" && row.from) {
       return (
-        <div className="flex flex-col items-start" data-testid="sdk-user" data-role={role}>
+        <div className="flex flex-col items-start" data-testid="sdk-user" data-role={role} data-edited={row.edited || undefined}>
           <div
             className={cn(
               "max-w-[85%] select-text whitespace-pre-wrap break-words rounded-lg border px-3 py-2 text-sm",
               role === "agent" ? "border-emerald-500/40 bg-emerald-500/10" : "border-border/70 bg-muted/50",
+              row.edited && "opacity-60",
             )}
           >
             <SenderTag from={row.from} />
             <LinkifiedText text={row.text} />
+            {editedBadge}
           </div>
         </div>
       );
     }
     return (
-      <div className="flex flex-col items-end">
+      <div className="group flex flex-col items-end">
         <div
           data-testid="sdk-user"
-          className="max-w-[85%] select-text whitespace-pre-wrap break-words rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-sm"
+          data-edited={row.edited || undefined}
+          className={cn(
+            "max-w-[85%] select-text whitespace-pre-wrap break-words rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-sm",
+            row.edited && "opacity-60",
+          )}
         >
           <LinkifiedText text={row.text} />
+          {editedBadge}
         </div>
+        {/* The pencil: hover-revealed on a desktop, simply there on touch (no hover to reveal it).
+            A superseded message offers no pencil — the standing version is the one to edit. */}
+        {!row.edited && onEdit ? (
+          <button
+            type="button"
+            data-testid="sdk-edit"
+            aria-label={t("sdk.edit")}
+            title={t("sdk.edit")}
+            onClick={() => onEdit(row.id, row.text)}
+            className="mt-0.5 rounded p-1 text-muted-foreground/70 transition-opacity hover:bg-muted hover:text-foreground md:opacity-0 md:focus-visible:opacity-100 md:group-hover:opacity-100"
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+        ) : null}
       </div>
     );
   }

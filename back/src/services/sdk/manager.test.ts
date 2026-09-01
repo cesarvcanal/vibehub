@@ -501,3 +501,77 @@ describe("harness filler — 'No response requested.' nunca vira resposta no cha
     });
   });
 });
+
+describe("edit_user — a edição de mensagem vira supersede no stdin", () => {
+  it("writes ONE wrapped user turn to stdin and never a raw edit_user control", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"edit_user","original":"sobe pra prod","text":"sobe pra dev"}`));
+    const written = spawned[0]!.stdin.written.join("");
+    expect(written).not.toContain("edit_user");
+    const turns = spawned[0]!.stdin.written.map((w) => JSON.parse(w) as { type: string; text: string });
+    expect(turns.length).toBe(1);
+    expect(turns[0]!.type).toBe("user");
+    expect(turns[0]!.text).toContain("correção do usuário");
+    expect(turns[0]!.text).toContain("«sobe pra prod»");
+    expect(turns[0]!.text.endsWith("sobe pra dev")).toBe(true);
+  });
+
+  it("counts a turn and writes the durable inflight marker with the CLEAN preview", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"edit_user","original":"velha","text":"nova versão"}`));
+    expect(session.activeTurns).toBe(1);
+    await vi.waitFor(async () => {
+      const marker = await readInflightMarker(CARD);
+      expect(marker).not.toBeNull();
+      expect(marker!.preview).toBe("nova versão");
+      expect(marker!.attempts).toBe(0);
+    });
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    await vi.waitFor(async () => expect(await readInflightMarker(CARD)).toBeNull());
+  });
+
+  it("history gets the marker line AND the new message with clean text + the wrapped `sent`", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"sobe pra prod"}`));
+    socket.emit("message", Buffer.from(`{"type":"edit_user","original":"sobe pra prod","text":"sobe pra dev"}`));
+    await vi.waitFor(async () => {
+      const events = await readHistory(CARD);
+      const types = events.map((e) => e.type);
+      expect(types).toEqual(["user", "message_edited", "user"]);
+      expect((events[1] as { originalText: string }).originalText).toBe("sobe pra prod");
+      const edited = events[2] as { text: string; sent?: string };
+      expect(edited.text).toBe("sobe pra dev");
+      expect(edited.sent).toContain("correção do usuário");
+      expect(edited.sent).toContain("«sobe pra prod»");
+    });
+  });
+
+  it("an interrupt then the edit: the queue forgets, the edit counts its own turn", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"primeira"}`));
+    socket.emit("message", Buffer.from(`{"type":"interrupt"}`));
+    expect(session.activeTurns).toBe(1); // only the running turn survives the interrupt
+    socket.emit("message", Buffer.from(`{"type":"edit_user","original":"primeira","text":"primeira, corrigida"}`));
+    expect(session.activeTurns).toBe(2);
+  });
+});
+
+describe("warm-up — subir o driver no connect não conta turno", () => {
+  it("ensure + attach alone: zero turns, no inflight marker, driver alive", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    expect(hasDriverSession(CARD)).toBe(true);
+    expect(session.activeTurns).toBe(0);
+    await new Promise((r) => setImmediate(r));
+    expect(await readInflightMarker(CARD)).toBeNull();
+  });
+});

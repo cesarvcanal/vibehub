@@ -50,10 +50,65 @@ The websocket sends **one JSON text frame per event**:
 ```
 
 The front sends, per message: a JSON object `{ "type": "user", "text": "…" }`,
-`{ "type": "interrupt" }`, or `{ "type": "permission_decision", "id": "…", "allow": true|false }`
-(the answer to a `permission_request`) — **or a bare string**, which is treated as a user message.
+`{ "type": "interrupt" }`, `{ "type": "permission_decision", "id": "…", "allow": true|false }`
+(the answer to a `permission_request`), or `{ "type": "edit_user", "original": "…", "text": "…" }`
+(editar uma mensagem enviada — ver a seção *Editar mensagem*) — **or a bare string**, which is
+treated as a user message.
 Multi-turn works by resume: the driver captures `session_id`, the route persists it on the card
 (`resumeSessionId`), and the next spawn continues the same session.
+
+## Editar mensagem (supersede) — só no chat nativo
+
+O usuário pode editar uma mensagem que já mandou (lápis na bolha; Esc com o campo vazio edita a
+última; Esc durante a edição cancela e devolve o rascunho). Como o modelo **já leu** a original, a
+edição não reescreve o passado — é um **supersede**:
+
+- O front manda `{ "type": "edit_user", "original", "text" }`. Se o turno disparado pela mensagem
+  original ainda está rodando, ele manda `interrupt` ANTES (o mesmo frame do botão parar) e segura a
+  edição até o `result`/`aborted` daquele turno (timeout de segurança de 15s — o driver enfileira
+  turnos de todo jeito).
+- O manager (`handleClientFrame`) embrulha o texto com `buildSupersedeText` (protocol.ts) e escreve
+  no stdin do driver **um turno `user` normal** — o driver não conhece `edit_user`:
+
+  ```
+  [correção do usuário — desconsidere a mensagem anterior:
+  «<original>»
+  e considere esta versão no lugar:]
+
+  <texto editado>
+  ```
+
+  A proveniência continua a do USUÁRIO — é fala dele, corrigida.
+- A história (ndjson) ganha duas linhas: `{ "type": "message_edited", "originalText" }` (a bolha
+  original é redesenhada atenuada com o selo "editada" — no replay também) e o novo
+  `{ "type": "user", "text": <limpo>, "sent": <embrulhado> }`. `text` é o que a TELA mostra;
+  `sent` é o que foi pro stdin — e é pelo `sent` que `replayDedupeKey` casa a linha embrulhada que
+  o transcript vai carregar, então o replay nunca desenha o embrulho nem duplica a mensagem.
+- Turno e marcador in-flight contam como um envio normal (deploy resume incluído).
+
+**O chat clássico (transcript/tmux) não tem edição**: o caminho dele é `send-keys` na TUI — não há
+como interromper semanticamente o turno nem falar de supersede com o motor; a tecla Esc lá já é o
+próprio stop do terminal. A edição é um recurso do driver SDK.
+
+## Escada de estados — feedback imediato ao enviar ("Preparando… → Pensando… → Trabalhando…")
+
+Entre o Enter e o primeiro token existem segundos reais (o driver roda `query()` por turno: subir o
+subprocess, carregar MCPs, resume da sessão). Para a mensagem nunca parecer perdida, o reducer
+marca `awaiting` no envio próprio (`appendUserRow` com `awaiting`) e a view mostra **um** indicador
+(nunca empilhado, mesmo assento do spinner):
+
+- `awaiting && !ready` → **"Preparando…"** (driver frio, ainda subindo/retomando a sessão);
+- `awaiting && ready` → **"Pensando…"** (o turno está no motor, nenhum token ainda);
+- primeiro evento do driver (delta/tool/result…) limpa `awaiting` → o **"Trabalhando…"** normal
+  assume (ou nada, se o turno acabou).
+
+Replay e mensagens externas nunca acendem a escada — ela narra o NOSSO envio.
+
+**Warm-up**: a rota já garante o driver de pé no CONNECT do websocket (`ensureDriverSession` roda a
+cada conexão, antes de qualquer mensagem) — o arranque frio do processo acontece enquanto o usuário
+digita, sem contar turno nem marcar in-flight (teste em manager.test.ts). A latência que resta é o
+`query()` por turno dentro do driver; eliminá-la de verdade pede o modo streaming-input do SDK (uma
+`query()` persistente por sessão) — anotado como próximo passo, fora deste incremento.
 
 ## Permission model — a configurable MODE (`sdkPermissionMode`)
 

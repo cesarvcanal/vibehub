@@ -28,6 +28,7 @@ export interface SdkEvent {
     | "permission_request"
     | "user_question"
     | "question_result"
+    | "message_edited"
     | "result"
     | "error"
     | "parse_error";
@@ -57,6 +58,8 @@ export interface SdkEvent {
   questions?: SdkQuestion[];
   /** On `question_result`: what the person picked (absent when it timed out / was cancelled). */
   answers?: SdkQuestionAnswer[];
+  /** On `message_edited`: the superseded message's text — the row it greys out. */
+  originalText?: string;
 }
 
 /** One question of a `user_question` (mirror of `UserQuestionItem` in the back's protocol). */
@@ -94,8 +97,9 @@ export type QuestionOutcome = "pending" | "answered" | "unanswered";
 
 export type SdkRow =
   /** A message the person sent. `sent` = it reached the driver's stdin (the socket was open).
-   *  `from` = provenance on replayed/external messages: another card's agent, another person. */
-  | { kind: "user"; id: string; text: string; state: "sent"; from?: MessageOrigin }
+   *  `from` = provenance on replayed/external messages: another card's agent, another person.
+   *  `edited` = a later version SUPERSEDED this one (drawn dimmed, with the "editada" badge). */
+  | { kind: "user"; id: string; text: string; state: "sent"; from?: MessageOrigin; edited?: boolean }
   /** Claude talking. `streaming` while deltas are still landing on it. */
   | { kind: "assistant"; id: string; text: string; streaming: boolean }
   /** One tool call, compact: the name plus a one-line summary of its input. */
@@ -122,11 +126,27 @@ export interface SdkChatState {
   /** The conversation's tail is coming from the TERMINAL mirror (one "atividade no terminal" note
    *  is drawn when a burst starts; the flag keeps the burst from noting every line). */
   terminalBurst: boolean;
+  /**
+   * A message of OUR OWN went out and the driver has not reacted yet — the window the status
+   * ladder fills: "Preparando…" while `ready` is still false (cold driver booting/resuming),
+   * "Pensando…" once it is (the turn is in the engine, no token yet). Any driver event — a delta,
+   * a tool, the result — clears it and the plain "Trabalhando…"/nothing takes over. Set only by
+   * the view's own send (`appendUserRow` with `awaiting`), never by replay or external messages:
+   * the ladder narrates OUR send, not someone else's.
+   */
+  awaiting: boolean;
   /** Monotonic counter for rows the driver did not name. */
   seq: number;
 }
 
-export const INITIAL_SDK_STATE: SdkChatState = { rows: [], ready: false, turnActive: false, terminalBurst: false, seq: 0 };
+export const INITIAL_SDK_STATE: SdkChatState = {
+  rows: [],
+  ready: false,
+  turnActive: false,
+  terminalBurst: false,
+  awaiting: false,
+  seq: 0,
+};
 
 /** The note row a terminal burst opens with (the view translates it). */
 export const TERMINAL_ACTIVITY_NOTE = "terminal-activity";
@@ -259,13 +279,14 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       const live = streamingRow(base.rows);
       if (live) {
         const rows = [...base.rows.slice(0, -1), { ...live, text: live.text + event.text }];
-        return { ...base, rows, turnActive: nextTurnActive(base, false) };
+        return { ...base, rows, turnActive: nextTurnActive(base, false), awaiting: false };
       }
       const { id, seq } = nextId(base, "a");
       return {
         ...base,
         seq,
         turnActive: nextTurnActive(base, false),
+        awaiting: false,
         rows: [...base.rows, { kind: "assistant", id, text: event.text, streaming: true }],
       };
     }
@@ -275,7 +296,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       if (live && !viaTerminal) {
         // The consolidated block REPLACES the deltas that built it — same words, now settled.
         const rows = [...state.rows.slice(0, -1), { ...live, text, streaming: false }];
-        return { ...state, rows, turnActive: nextTurnActive(state, viaTerminal) };
+        return { ...state, rows, turnActive: nextTurnActive(state, viaTerminal), awaiting: false };
       }
       if (text === "") return state;
       const marked = markSource(state, viaTerminal);
@@ -284,6 +305,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         ...marked,
         seq,
         turnActive: nextTurnActive(marked, viaTerminal),
+        awaiting: false,
         rows: [...settleStreaming(marked.rows), { kind: "assistant", id, text, streaming: false }],
       };
     }
@@ -295,6 +317,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         ...marked,
         seq,
         turnActive: nextTurnActive(marked, viaTerminal),
+        awaiting: false,
         rows: [
           ...rows,
           { kind: "tool", id: event.id ?? id, name: event.name ?? "?", summary: toolSummary(event.input), input: event.input },
@@ -307,6 +330,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       return {
         ...state,
         turnActive: nextTurnActive(state, viaTerminal),
+        awaiting: false,
         rows: [
           ...rows,
           {
@@ -333,6 +357,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       return {
         ...state,
         turnActive: nextTurnActive(state, viaTerminal),
+        awaiting: false,
         rows: [
           ...rows,
           { kind: "question", id: event.id, questions: event.questions, outcome: "pending" },
@@ -343,14 +368,21 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       if (!event.id) return state;
       return answerQuestion(state, event.id, event.answers);
     }
+    case "message_edited": {
+      // The user superseded a message he sent: the LAST user row with those words is drawn dimmed
+      // with the "editada" badge (the new version follows as its own row). Matching is by
+      // normalized text — the history has no row ids, and the same rule folds live and replay.
+      if (!event.originalText) return state;
+      return markUserEdited(state, event.originalText);
+    }
     case "result": {
-      const next: SdkChatState = { ...state, turnActive: false, rows: settleStreaming(state.rows) };
+      const next: SdkChatState = { ...state, turnActive: false, awaiting: false, rows: settleStreaming(state.rows) };
       if (event.sessionId) next.sessionId = event.sessionId;
       if (event.isError) return appendErrorRow(next, next.rows, event.result || "error");
       return next;
     }
     case "error":
-      return appendErrorRow({ ...state, turnActive: false }, settleStreaming(state.rows), event.message ?? "error");
+      return appendErrorRow({ ...state, turnActive: false, awaiting: false }, settleStreaming(state.rows), event.message ?? "error");
     case "parse_error":
       return appendErrorRow(state, state.rows, event.raw ?? "parse error");
     default:
@@ -358,10 +390,40 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
   }
 }
 
-/** Append a user message: one's own send (no `from`), or a replayed/external one with provenance. PURE. */
-export function appendUserRow(state: SdkChatState, text: string, from?: MessageOrigin): SdkChatState {
+/** Append a user message: one's own send (no `from`), or a replayed/external one with provenance.
+ *  `opts.awaiting` — a LIVE send of one's own: starts the status ladder ("Preparando…"/"Pensando…")
+ *  until the driver's first reaction. Replay and external messages never pass it. PURE. */
+export function appendUserRow(
+  state: SdkChatState,
+  text: string,
+  from?: MessageOrigin,
+  opts?: { awaiting?: boolean },
+): SdkChatState {
   const { id, seq } = nextId(state, "u");
-  return { ...state, seq, rows: [...state.rows, { kind: "user", id, text, state: "sent", from }] };
+  return {
+    ...state,
+    seq,
+    awaiting: opts?.awaiting === true ? true : state.awaiting,
+    rows: [...state.rows, { kind: "user", id, text, state: "sent", from }],
+  };
+}
+
+/** Whitespace-insensitive text identity — the same folding the back's dedupe key uses. */
+function normalizeMessageText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/** Mark the LAST not-yet-edited user row whose words match as superseded ("editada"). PURE. */
+export function markUserEdited(state: SdkChatState, originalText: string): SdkChatState {
+  const target = normalizeMessageText(originalText);
+  if (target === "") return state;
+  for (let i = state.rows.length - 1; i >= 0; i -= 1) {
+    const row = state.rows[i]!;
+    if (row.kind !== "user" || row.edited === true || normalizeMessageText(row.text) !== target) continue;
+    const rows = [...state.rows.slice(0, i), { ...row, edited: true }, ...state.rows.slice(i + 1)];
+    return { ...state, rows };
+  }
+  return state;
 }
 
 /** Settle a permission card's outcome (a click, or the driver's echo — idempotent). PURE. */

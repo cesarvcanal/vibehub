@@ -6,7 +6,7 @@ import { appendHistory, replayableHistoryEvent } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inflight.js";
 import { noteDriverEventFor } from "./mirror.js";
 import { isHarnessFiller } from "../chat/chat.js";
-import { parseDriverLine, parseSdkClientFrame, encodeControl, type DriverEvent } from "./protocol.js";
+import { buildSupersedeText, parseDriverLine, parseSdkClientFrame, encodeControl, type DriverEvent } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { logger } from "../../utils/logger.js";
 
@@ -266,6 +266,24 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
 export function handleClientFrame(session: DriverSession, raw: string, origin?: MessageOrigin): void {
   const control = parseSdkClientFrame(raw);
   if (!control) return;
+  if (control.type === "edit_user") {
+    // A SUPERSEDE: the model already read the original, so the edit goes to the driver as one more
+    // NORMAL user turn wearing the supersede wrapper (the driver knows no edit_user control). The
+    // history gets the truth in two lines — the marker that greys the original out, and the new
+    // message with its CLEAN text (`sent` keeps the wrapped words, the transcript dedupe key).
+    const wrapped = buildSupersedeText(control.original, control.text);
+    try { session.child.stdin.write(encodeControl({ type: "user", text: wrapped })); } catch { /* driver gone; close will fire */ }
+    session.activeTurns += 1;
+    clearIdleTimer(session);
+    // The transcript will carry the WRAPPED words — that is what the mirror must not re-emit.
+    noteDriverEventFor(session.cardId, { type: "user", text: wrapped });
+    const at = Date.now();
+    void appendHistory(session.cardId, { type: "message_edited", originalText: control.original, at });
+    void appendHistory(session.cardId, { type: "user", text: control.text, sent: wrapped, at, from: origin });
+    // Same durable in-flight promise a plain user turn earns (see #64's boot sweep).
+    void writeInflightMarker(session.cardId, { startedAt: at, preview: inflightPreview(control.text), attempts: 0 });
+    return;
+  }
   try { session.child.stdin.write(encodeControl(control)); } catch { /* driver gone; close will fire */ }
   if (control.type === "user") {
     session.activeTurns += 1;
