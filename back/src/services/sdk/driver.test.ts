@@ -65,6 +65,41 @@ describe("buildSdkDriverCommandLine", () => {
   it("rejects an unsafe cwd", () => {
     expect(() => buildSdkDriverCommandLine({ ...base, cwd: "/work/../etc" })).toThrow();
   });
+
+  it("exports the card environment the TUI session also carries (browser endpoint + status hooks)", () => {
+    const line = buildSdkDriverCommandLine({
+      ...base,
+      cdpEndpoint: "http://127.0.0.1:39222",
+      cardId: "card-1",
+      statusUrl: "https://hub.example.com/api/runner/status",
+    });
+    expect(line).toContain("PW_CDP_ENDPOINT=");
+    expect(line).toContain("http://127.0.0.1:39222");
+    expect(line).toContain("VIBEHUB_CARD_ID=");
+    expect(line).toContain("card-1");
+    expect(line).toContain("VIBEHUB_STATUS_URL=");
+    expect(line).toContain("https://hub.example.com/api/runner/status");
+    // Without them, nothing is exported — a driver spawned by an older path stays valid.
+    const bare = buildSdkDriverCommandLine(base);
+    expect(bare).not.toContain("PW_CDP_ENDPOINT");
+    expect(bare).not.toContain("VIBEHUB_CARD_ID");
+  });
+
+  it("rejects an unsafe cdp/status URL or card id rather than passing it to the shell", () => {
+    expect(() => buildSdkDriverCommandLine({ ...base, cdpEndpoint: "http://x'; rm -rf /" })).toThrow();
+    expect(() => buildSdkDriverCommandLine({ ...base, statusUrl: "ftp://nope" })).toThrow();
+    expect(() => buildSdkDriverCommandLine({ ...base, cardId: "c1; evil" })).toThrow();
+  });
+
+  it("threads the permission-gate mode as a driver flag", () => {
+    const same = buildSdkDriverCommandLine({ ...base, permissionGate: "same-as-terminal" });
+    expect(same).toContain("--permission-gate");
+    expect(same).toContain("same-as-terminal");
+    const ask = buildSdkDriverCommandLine({ ...base, permissionGate: "ask-sensitive" });
+    expect(ask).toContain("--permission-gate");
+    expect(ask).toContain("ask-sensitive");
+    expect(buildSdkDriverCommandLine(base)).not.toContain("--permission-gate");
+  });
 });
 
 describe("buildInstallDriverScript", () => {

@@ -205,6 +205,40 @@ export function sdkPermissionDecision(toolName: string, input: unknown): Permiss
   return { behavior: "allow", sensitive: false };
 }
 
+/* -------------------------------------------------------- gate modes */
+
+/**
+ * How the driver's PreToolUse gate behaves — the `sdkPermissionMode` install setting, carried to the
+ * driver as `--permission-gate`:
+ *
+ * - `"same-as-terminal"` — the native chat mirrors the permission behaviour the Terminal tab of the
+ *   same card already has (the runner's own Claude settings decide; no extra vibehub gate on top).
+ *   The hook only emits observability `permission` events. One card, two views, one permission
+ *   story — the install owner's product decision (2026-08-31).
+ * - `"ask-sensitive"` — the SENSITIVE set escalates to Permitir/Negar buttons in the chat and the
+ *   agent waits for the click. Kept for less-trusted chats (shared members).
+ */
+export type SdkPermissionGateMode = "same-as-terminal" | "ask-sensitive";
+
+/** Parse the `--permission-gate` argv value. Anything unrecognised falls back to the STRICTER mode. PURE. */
+export function parseGateMode(raw: unknown): SdkPermissionGateMode {
+  return raw === "same-as-terminal" ? "same-as-terminal" : "ask-sensitive";
+}
+
+/**
+ * What the PreToolUse hook should DO with one tool call under a gate mode. PURE — the driver embeds
+ * a mirror copy (see the file header); keep `sdk-driver.mjs` in step.
+ */
+export function sdkGateAction(
+  mode: SdkPermissionGateMode,
+  toolName: string,
+  input: unknown,
+): { action: "allow" | "escalate"; sensitive: boolean } {
+  const sensitive = classifySensitivity(toolName, input);
+  if (mode === "same-as-terminal") return { action: "allow", sensitive };
+  return { action: sensitive ? "escalate" : "allow", sensitive };
+}
+
 /* ------------------------------------------------- permission escalation */
 
 /**
