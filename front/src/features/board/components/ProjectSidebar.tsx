@@ -307,6 +307,7 @@ export function ProjectSidebar({
               onDragEnd={() => {}}
               onHover={() => {}}
               onDrop={() => {}}
+              onClosePane={onClosePane}
             />
           ) : (
             <>
@@ -343,6 +344,7 @@ export function ProjectSidebar({
                     onDragEnd={clear}
                     onHover={(i, below) => setDropAt({ index: i, below })}
                     onDrop={drop}
+                    onClosePane={onClosePane}
                   />
                 );
               })}
@@ -528,6 +530,7 @@ function ProjectRow({
   onDragEnd,
   onHover,
   onDrop,
+  onClosePane,
   focused = false,
   canManage = true,
 }: {
@@ -558,6 +561,13 @@ function ProjectRow({
   onDragEnd: () => void;
   onHover: (index: number, below: boolean) => void;
   onDrop: (index: number, below: boolean) => void;
+  /**
+   * Drops the card's pane from the terminal deck. Pause and hibernate LIVE HERE (the row owns the
+   * card menu), and both end the session in the runner — while the deck keeps every pane it has
+   * opened mounted and connected, so the socket reconnects and `tmux new-session -A` brings the
+   * card back. Navigating away is not enough; the pane has to go. See the same prop on the sidebar.
+   */
+  onClosePane?: (cardId: string) => void;
 }) {
   const t = useT();
   const queryClient = useQueryClient();
