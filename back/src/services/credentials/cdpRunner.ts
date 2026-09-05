@@ -51,10 +51,23 @@ const FOCUS_SRC = `function focusField(field) {
 }`;
 
 /**
- * Injected into the page: reports a login on form submit, and paints a short ripple where every
- * click lands — GUIDED VIEWING: the person watching over noVNC sees exactly where the agent (or the
- * co-pilot) clicked. The agent's Playwright/CDP clicks go through Chromium's real input pipeline,
- * so they fire the same pointer events a human's do. The ripple lives in a closed shadow root on a
+ * Injected into the page: reports a login on form submit, and — GUIDED VIEWING — draws what the
+ * agent is doing so the person watching over noVNC is not staring at a page that moves by itself.
+ *
+ * WHY IT HAS TO BE DRAWN AT ALL: the agent clicks over CDP, and CDP input is synthesised INSIDE
+ * Chromium — it never touches the X11 pointer. So there is no cursor on the VNC canvas to follow;
+ * on screen, links just open. This paints the missing mouse: a dot that follows every pointer move,
+ * a ripple where a click lands, and a brief outline around the element that was clicked ("it
+ * pressed THAT button").
+ *
+ * WHOSE POINTER IS IT: the page cannot tell an agent's synthetic event from a person's (both are
+ * trusted), and correlating them with the VNC input stream would be a lot of machinery for nothing.
+ * It does not need to: the panel opens in "Só assistir", where the person's mouse sends NOTHING
+ * into the page — so in the mode you watch from, every dot on screen IS the agent. In "Pilotar
+ * junto" the dot simply rides along under the real cursor.
+ *
+ * It also pings the binding (throttled) so the back knows this browser is BUSY and the card bar can
+ * say so without opening the pane. The overlay lives in a closed shadow root on a
  * pointer-events:none host, so it can never interfere with the page. The login value goes to the
  * Runtime binding (which THIS program reads on its own stdout), never into the DOM, a log or the
  * model. Browser JS.
@@ -63,32 +76,104 @@ const OBSERVER_SRC = `function installObserver() {
   var w = window;
   if (w.__vibehubCaptureInstalled) return;
   w.__vibehubCaptureInstalled = true;
+  var lastPing = 0;
+  function ping() {
+    // Throttled: a pointer move fires dozens of times a second and the back only needs to know
+    // "still busy", not the trajectory.
+    var now = Date.now();
+    if (now - lastPing < 400) return;
+    lastPing = now;
+    try { if (w.__vibehubCapture) w.__vibehubCapture(JSON.stringify({ act: 1 })); } catch (e) {}
+  }
+  /** The overlay's own layer, created on first use — at install time there may be no <html> yet. */
+  var layer = null;
+  function shadow() {
+    if (layer && layer.host.isConnected) return layer;
+    var parent = document.documentElement || document.body;
+    if (!parent) return null;
+    var host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;pointer-events:none;";
+    parent.appendChild(host);
+    var root = host.attachShadow ? host.attachShadow({ mode: "closed" }) : host;
+    layer = { host: host, root: root, cursor: null, hideAt: 0 };
+    return layer;
+  }
   function ripple(x, y) {
     try {
-      var host = document.createElement("div");
-      host.style.cssText = "position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;pointer-events:none;";
-      var root = host.attachShadow ? host.attachShadow({ mode: "closed" }) : host;
+      var l = shadow();
+      if (!l) return;
       var dot = document.createElement("div");
       dot.style.cssText =
         "position:fixed;left:" + (x - 14) + "px;top:" + (y - 14) + "px;width:28px;height:28px;" +
         "border-radius:50%;border:2px solid rgba(255,171,0,0.9);background:rgba(255,171,0,0.28);" +
         "pointer-events:none;z-index:2147483647;";
-      root.appendChild(dot);
-      var parent = document.documentElement || document.body;
-      if (!parent) return;
-      parent.appendChild(host);
+      l.root.appendChild(dot);
       if (dot.animate) {
         dot.animate(
           [{ transform: "scale(0.4)", opacity: 1 }, { transform: "scale(1.7)", opacity: 0 }],
           { duration: 500, easing: "ease-out" }
         );
       }
-      setTimeout(function () { try { host.remove(); } catch (e) {} }, 520);
+      setTimeout(function () { try { dot.remove(); } catch (e) {} }, 520);
+    } catch (e) {}
+  }
+  /** The agent's mouse. One node, moved — a node per event would thrash a busy page. */
+  function moveCursor(x, y) {
+    try {
+      var l = shadow();
+      if (!l) return;
+      if (!l.cursor || !l.cursor.isConnected) {
+        var c = document.createElement("div");
+        c.style.cssText =
+          "position:fixed;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;" +
+          "background:rgba(255,171,0,0.55);box-shadow:0 0 0 2px rgba(255,171,0,0.95),0 0 12px 4px rgba(255,171,0,0.35);" +
+          "pointer-events:none;z-index:2147483647;transition:left .08s linear,top .08s linear,opacity .25s;";
+        l.root.appendChild(c);
+        l.cursor = c;
+      }
+      l.cursor.style.left = x + "px";
+      l.cursor.style.top = y + "px";
+      l.cursor.style.opacity = "1";
+      // Fade out when the pointer goes quiet, so a page nobody is driving is not permanently marked.
+      l.hideAt = Date.now() + 2500;
+      if (!l.timer) {
+        l.timer = setInterval(function () {
+          if (l.cursor && Date.now() > l.hideAt) l.cursor.style.opacity = "0";
+        }, 500);
+      }
+    } catch (e) {}
+  }
+  /** Says WHAT was clicked, not only where — the outline sits on the element for a beat. */
+  function outline(el) {
+    try {
+      if (!el || !el.getBoundingClientRect) return;
+      var r = el.getBoundingClientRect();
+      if (!r.width && !r.height) return;
+      var l = shadow();
+      if (!l) return;
+      var box = document.createElement("div");
+      box.style.cssText =
+        "position:fixed;left:" + (r.left - 2) + "px;top:" + (r.top - 2) + "px;" +
+        "width:" + (r.width + 4) + "px;height:" + (r.height + 4) + "px;border-radius:4px;" +
+        "border:2px solid rgba(255,171,0,0.9);pointer-events:none;z-index:2147483647;";
+      l.root.appendChild(box);
+      if (box.animate) box.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 900, easing: "ease-out" });
+      setTimeout(function () { try { box.remove(); } catch (e) {} }, 920);
     } catch (e) {}
   }
   w.addEventListener("pointerdown", function (e) {
-    if (e && typeof e.clientX === "number") ripple(e.clientX, e.clientY);
+    if (!e || typeof e.clientX !== "number") return;
+    ping();
+    moveCursor(e.clientX, e.clientY);
+    ripple(e.clientX, e.clientY);
+    outline(e.target);
   }, true);
+  w.addEventListener("pointermove", function (e) {
+    if (!e || typeof e.clientX !== "number") return;
+    ping();
+    moveCursor(e.clientX, e.clientY);
+  }, true);
+  w.addEventListener("keydown", ping, true);
   function report(form) {
     try {
       var pw = form.querySelector("input[type=password]");
@@ -277,7 +362,10 @@ async function doCapture() {
     if (msg.method === "Runtime.bindingCalled" && msg.params && msg.params.name === "__vibehubCapture") {
       try {
         const c = JSON.parse(msg.params.payload);
-        process.stdout.write(JSON.stringify({ type: "capture", url: c.url, username: c.username, password: c.password }) + "\n");
+        // Two kinds of report ride this one binding: "someone is working in here" (no payload at
+        // all) and an actual captured login.
+        if (c.act) process.stdout.write(JSON.stringify({ type: "activity" }) + "\n");
+        else process.stdout.write(JSON.stringify({ type: "capture", url: c.url, username: c.username, password: c.password }) + "\n");
       } catch { /* ignore malformed */ }
     }
     // Re-install the observer after a navigation so a fresh document is watched too.

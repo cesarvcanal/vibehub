@@ -11,6 +11,7 @@ import {
 } from "../board/registry.js";
 import { cardWorkPaths } from "../board/workspace.js";
 import { listPortsScript, parseListeningPorts, type ListeningPort } from "./preview.js";
+import { probePreview, diagnosePreview } from "./probe.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -64,6 +65,12 @@ export interface AnnouncedPreview {
   hint: string;
   /** Host guidance: the path works on any panel host; `url` is only an example. */
   note: string;
+  /**
+   * What the end-to-end check saw and the user has to know (Portuguese — it is relayed verbatim):
+   * the page opens, but a 404, a redirect out of the prefix or absolute assets await them. Absent
+   * when the page is clean, or when the port did not answer HTTP at all.
+   */
+  warning?: string;
 }
 
 /** Scans the runner for listening ports — one round trip, same script as the Preview menu. */
@@ -116,6 +123,14 @@ export async function announcePreview(cardId: string, port: number, input: Annou
   const listening = await scanListeningPorts();
   if (!listening.some((l) => l.port === p)) throw portNotListeningError(p, listening);
 
+  // LISTENING is not OPENS. The port answering a TCP connect said nothing about the page, and that
+  // gap is exactly how a redirect-looping vite got announced as `registered: true` (see probe.ts).
+  // A page that cannot be opened is refused here, BEFORE anything is written to the card — an
+  // announcement is a promise to the user, and a broken link is worse than no link.
+  const probe = await probePreview(p);
+  const diagnosis = probe ? diagnosePreview(p, probe) : {};
+  if (diagnosis.fatal) throw new Error(diagnosis.fatal);
+
   const updated = await registerCardPreview(cardId, p, { label: input.label, command, cwd });
   if (!updated) throw new Error("card not found — pass your OWN card id ($VIBEHUB_CARD_ID)");
   const stored = (updated.previews ?? []).find((v): v is CardPreview => v.port === p);
@@ -133,5 +148,6 @@ export async function announcePreview(cardId: string, port: number, input: Annou
     url: previewPublicUrl(config.publicUrl, p),
     hint: PREVIEW_BASE_HINT,
     note: PREVIEW_HOST_NOTE,
+    ...(diagnosis.warning ? { warning: diagnosis.warning } : {}),
   };
 }

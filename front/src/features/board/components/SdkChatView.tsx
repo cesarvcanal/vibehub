@@ -4,12 +4,15 @@ import {
   AlertTriangle,
   ChevronRight,
   CircleHelp,
+  CornerDownLeft,
   ListTodo,
   Loader2,
   MessageSquare,
   Pencil,
+  Reply,
   ShieldAlert,
   Wrench,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { wsUrl } from "@/lib/ws";
@@ -20,7 +23,15 @@ import { LinkifiedText, Markdown, SenderTag } from "@/features/board/components/
 import { originRole } from "@/features/board/lib/chat";
 import { reconnectDelay, type ConnectionState } from "@/features/board/lib/reconnect";
 import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
-import { pendingDecisions, splitProseQuestion, type PendingDecision } from "@/features/board/lib/pendingDecisions";
+import {
+  buildDecisionReply,
+  decisionReplies,
+  decisionSummary,
+  parseDecisionReply,
+  pendingDecisions,
+  splitProseQuestion,
+  type PendingDecision,
+} from "@/features/board/lib/pendingDecisions";
 import {
   INITIAL_SDK_STATE,
   TERMINAL_ACTIVITY_NOTE,
@@ -195,9 +206,42 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     return () => clearTimeout(timer);
   }, [pendingEdit, state.turnActive, dispatchEditFrame]);
 
+  /* -------------------------------------------------------- replying to a decision */
+
+  /**
+   * The decision the composer is currently ANSWERING — the whole point of this screen's honesty:
+   * with it armed, what the person types goes to THAT question (and says so, with the question in
+   * view); with it null, the same words are a loose message. Nothing here is implicit — arming is
+   * always a click, and the X disarms.
+   */
+  const [replyTo, setReplyTo] = React.useState<PendingDecision | null>(null);
+
   const send = async (raw: string): Promise<void> => {
     const text = raw.replace(/\r$/, "").trim();
     if (!text) return;
+    if (replyTo && !editing) {
+      // A structured card is settled through its own channel (`question_answer`), so the driver
+      // stops waiting and the card itself shows what it got. A prose question has no such channel:
+      // the answer goes as a normal turn WRAPPED with the question it answers (see
+      // `buildDecisionReply`) — unambiguous for the model, and re-anchorable after a reload.
+      if (replyTo.kind === "question") {
+        if (!answerUserQuestion(replyTo.rowId, [{ selected: [text] }])) {
+          throw new Error(translate("sdk.offline")); // the composer keeps the words
+        }
+        setReplyTo(null);
+        return;
+      }
+      const wrapped = buildDecisionReply(replyTo.text, text);
+      try {
+        sendFrame({ type: "user", text: wrapped });
+      } catch (err) {
+        toast.error((err as Error).message);
+        throw err; // the composer keeps the words
+      }
+      setState((prev) => appendUserRow(prev, wrapped, undefined, { awaiting: true }));
+      setReplyTo(null);
+      return;
+    }
     if (editing) {
       const { original } = editing;
       if (state.turnActive) {
@@ -249,15 +293,17 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     setState((prev) => decidePermission(prev, id, allow ? "allowed" : "denied"));
   };
 
-  const answerUserQuestion = (id: string, answers: SdkQuestionAnswer[]): void => {
+  /** Returns whether the socket took the answer — a refusal must not disarm the reply composer. */
+  const answerUserQuestion = (id: string, answers: SdkQuestionAnswer[]): boolean => {
     try {
       sendFrame({ type: "question_answer", id, answers });
     } catch (err) {
       toast.error((err as Error).message);
-      return;
+      return false;
     }
     // Optimistic only in DRAWING — the driver echoes a `question_result`; the first settlement wins.
     setState((prev) => answerQuestion(prev, id, answers));
+    return true;
   };
 
   /** The terminal's Esc gesture: an empty field steps into editing the LAST message of one's own. */
@@ -265,7 +311,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     if (state.turnActive) return; // mid-turn the gesture would read as a stop — the button does that
     for (let i = state.rows.length - 1; i >= 0; i -= 1) {
       const row = state.rows[i]!;
-      if (row.kind === "user" && row.edited !== true && originRole(row.from, viewer) === "self") {
+      // A decision answer is skipped for the same reason its pencil is hidden (see the bubble).
+      if (row.kind === "user" && row.edited !== true && parseDecisionReply(row.text) === null
+        && originRole(row.from, viewer) === "self") {
+        setReplyTo(null); // editing and answering a decision are two different gestures
         setEditing({ rowId: row.id, original: row.text });
         return;
       }
@@ -290,14 +339,36 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   // Derived from the rows — which the sdk-history replays on every connect, so the tray survives
   // F5 exactly like the question cards do.
   const pending = React.useMemo(() => pendingDecisions(state.rows), [state.rows]);
+  /** The explicit replies already given — what anchors an answer under the question it answered. */
+  const replies = React.useMemo(() => decisionReplies(state.rows), [state.rows]);
+  /** Which rows are STILL waiting — only those offer "Responder" (a stale question must not arm). */
+  const pendingIds = React.useMemo(() => new Set(pending.map((d) => d.rowId)), [pending]);
 
-  /** Tray click: scroll to the message, flash it, and put the cursor in the composer. */
+  /**
+   * Tray click: scroll to the message, flash it, ARM the composer on it (when a typed line can
+   * answer it) and take the cursor there. Arming leaves edit mode — one thing at a time.
+   */
   const jumpToDecision = (decision: PendingDecision): void => {
     const el = rowRefs.current.get(decision.rowId);
     el?.scrollIntoView?.({ behavior: "smooth", block: "center" });
     setFlashId(decision.rowId);
+    if (decision.answerable) {
+      setEditing(null);
+      setReplyTo(decision);
+    }
     rootRef.current?.querySelector("textarea")?.focus();
   };
+
+  // THE OTHER TAB (and the agent that gave up waiting): the decision this composer is aimed at
+  // stopped being pending — someone answered it elsewhere, it timed out, or Claude moved on. The
+  // aim is dropped and said out loud, so the next Enter is never silently a loose message. Our own
+  // send clears `replyTo` first, so it never trips this.
+  React.useEffect(() => {
+    if (!replyTo) return;
+    if (pending.some((d) => d.rowId === replyTo.rowId)) return;
+    setReplyTo(null);
+    toast.message(translate("sdk.replyGone"));
+  }, [pending, replyTo]);
 
   const rendered = React.useMemo(() => groupSdkRows(state.rows), [state.rows]);
   const empty = state.rows.length === 0;
@@ -347,9 +418,15 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
             ) : (
               <SdkChatRow
                 row={entry.row}
+                replies={replies}
+                replyingTo={replyTo}
                 onPermission={answerPermission}
                 onAnswer={answerUserQuestion}
-                onEdit={(rowId, original) => setEditing({ rowId, original })}
+                onReply={pendingIds.has(entry.id) ? jumpToDecision : undefined}
+                onEdit={(rowId, original) => {
+                  setReplyTo(null);
+                  setEditing({ rowId, original });
+                }}
               />
             )}
           </div>
@@ -377,7 +454,34 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
 
       {/* PENDING DECISIONS — the questions still waiting on the user, surfaced right above the
           composer so they never drown in a long turn. Clicking one jumps to it in the chat. */}
-      {pending.length > 0 ? <PendingTray pending={pending} onJump={jumpToDecision} /> : null}
+      {pending.length > 0 ? <PendingTray pending={pending} active={replyTo} onJump={jumpToDecision} /> : null}
+
+      {/* ANSWERING A DECISION — the missing sentence on this screen: the question is in view, right
+          above the field, so what goes with the next Enter is not a guess. The X is the way OUT,
+          for the recado solto the person meant to send instead. */}
+      {replyTo ? (
+        <div
+          data-testid="sdk-reply-banner"
+          data-row={replyTo.rowId}
+          className="mt-1.5 flex items-start gap-1.5 rounded-md border border-sky-500/50 bg-sky-500/10 px-2.5 py-1.5 text-xs"
+        >
+          <Reply className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-500" />
+          <div className="min-w-0 flex-1">
+            <div className="font-medium text-sky-600 dark:text-sky-400">{t("sdk.replyingTo")}</div>
+            <div className="min-w-0 break-words text-muted-foreground">{replyTo.summary}</div>
+          </div>
+          <button
+            type="button"
+            data-testid="sdk-reply-cancel"
+            aria-label={t("sdk.replyCancel")}
+            title={t("sdk.replyCancel")}
+            onClick={() => setReplyTo(null)}
+            className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-sky-500/20 hover:text-foreground"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : null}
 
       {/* The interrupt button lives INSIDE the composer — right column, above the microphone —
           in the same seat as the transcript chat's stop. The interrupt frame is still this view's. */}
@@ -387,6 +491,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         active={active}
         onSend={send}
         onUploadImage={onUploadImage}
+        placeholder={replyTo ? t("sdk.replyPlaceholder") : undefined}
         interrupt={{ active: state.turnActive, onInterrupt: interrupt, testId: "sdk-interrupt" }}
         editing={editing ? { text: editing.original } : null}
         onCancelEdit={() => setEditing(null)}
@@ -413,7 +518,16 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
  * flashes) its message; answering — by the option card or by a plain message — removes it, because
  * the list is derived from the rows.
  */
-function PendingTray({ pending, onJump }: { pending: PendingDecision[]; onJump: (d: PendingDecision) => void }) {
+function PendingTray({
+  pending,
+  active,
+  onJump,
+}: {
+  pending: PendingDecision[];
+  /** The one the composer is aimed at right now — marked so a stack of decisions stays readable. */
+  active: PendingDecision | null;
+  onJump: (d: PendingDecision) => void;
+}) {
   const t = useT();
   const [open, setOpen] = React.useState(true);
   return (
@@ -443,15 +557,22 @@ function PendingTray({ pending, onJump }: { pending: PendingDecision[]; onJump: 
                 type="button"
                 data-testid="pending-tray-item"
                 data-kind={d.kind}
+                data-active={active?.rowId === d.rowId || undefined}
+                title={d.answerable ? t("sdk.replyAction") : undefined}
                 onClick={() => onJump(d)}
-                className="flex w-full min-w-0 items-center gap-1.5 rounded px-1.5 py-1 text-left text-muted-foreground hover:bg-amber-500/10 hover:text-foreground"
+                className={cn(
+                  "flex w-full min-w-0 items-center gap-1.5 rounded px-1.5 py-1 text-left text-muted-foreground hover:bg-amber-500/10 hover:text-foreground",
+                  active?.rowId === d.rowId && "bg-sky-500/15 text-foreground",
+                )}
               >
                 {d.kind === "question" ? (
                   <CircleHelp className="h-3 w-3 shrink-0 text-sky-500" />
                 ) : (
                   <MessageSquare className="h-3 w-3 shrink-0 text-amber-500/80" />
                 )}
-                <span className="min-w-0 truncate">{d.summary}</span>
+                <span className="min-w-0 flex-1 truncate">{d.summary}</span>
+                {/* The tray's whole promise in one glyph: clicking here points the composer AT this. */}
+                {d.answerable ? <CornerDownLeft className="h-3 w-3 shrink-0 opacity-70" /> : null}
               </button>
             </li>
           ))}
@@ -499,13 +620,22 @@ function SdkToolGroup({ rows }: { rows: SdkRow[] }) {
 
 function SdkChatRow({
   row,
+  replies,
+  replyingTo,
   onPermission,
   onAnswer,
+  onReply,
   onEdit,
 }: {
   row: SdkRow;
+  /** Explicit replies already given, by the row they answered — what a question shows it received. */
+  replies?: Map<string, string>;
+  /** The decision the composer is aimed at (so the question it points to says so, in place). */
+  replyingTo?: PendingDecision | null;
   onPermission?: (id: string, allow: boolean) => void;
   onAnswer?: (id: string, answers: SdkQuestionAnswer[]) => void;
+  /** Arms the composer on this row's question ("Responder"). */
+  onReply?: (decision: PendingDecision) => void;
   /** Offered only on one's OWN messages: the pencil that starts editing (a supersede). */
   onEdit?: (rowId: string, original: string) => void;
 }) {
@@ -620,6 +750,17 @@ function SdkChatRow({
         {t("sdk.absorbed")}
       </div>
     ) : null;
+    // An ANSWER to a decision, not a loose message: the bubble carries the question it answered, so
+    // "respondi ou só mandei um recado?" is settled by looking at what was sent. The wrapper the
+    // model received is unwrapped here — the person reads their own words, with the question above.
+    const reply = parseDecisionReply(row.text);
+    const replyHeader = reply ? (
+      <div data-testid="sdk-user-reply" className="mb-1 flex items-start gap-1 border-b border-current/15 pb-1 text-[10px] text-muted-foreground">
+        <Reply className="mt-px h-2.5 w-2.5 shrink-0" />
+        <span className="min-w-0 break-words italic">{reply.question}</span>
+      </div>
+    ) : null;
+    const bodyText = reply ? reply.answer : row.text;
     if (role !== "self" && row.from) {
       return (
         <div className="flex flex-col items-start" data-testid="sdk-user" data-role={role} data-edited={row.edited || undefined}>
@@ -631,7 +772,8 @@ function SdkChatRow({
             )}
           >
             <SenderTag from={row.from} />
-            <LinkifiedText text={row.text} />
+            {replyHeader}
+            <LinkifiedText text={bodyText} />
             {editedBadge}
             {absorbedTag}
           </div>
@@ -648,13 +790,16 @@ function SdkChatRow({
             row.edited && "opacity-60",
           )}
         >
-          <LinkifiedText text={row.text} />
+          {replyHeader}
+          <LinkifiedText text={bodyText} />
           {editedBadge}
           {absorbedTag}
         </div>
         {/* The pencil: hover-revealed on a desktop, simply there on touch (no hover to reveal it).
-            A superseded message offers no pencil — the standing version is the one to edit. */}
-        {!row.edited && onEdit ? (
+            A superseded message offers no pencil — the standing version is the one to edit. Neither
+            does an ANSWER to a decision: its text carries the wrapper, and putting that back in the
+            field would show the person plumbing instead of their own words. Answer again instead. */}
+        {!row.edited && !reply && onEdit ? (
           <button
             type="button"
             data-testid="sdk-edit"
@@ -674,14 +819,48 @@ function SdkChatRow({
   // paragraph gets a subtle amber frame so it never drowns in the text above it.
   const prose = row.kind === "assistant" && !row.streaming ? splitProseQuestion(row.text) : null;
   if (prose) {
+    // What this question RECEIVED, anchored to it — the third question the screen owes the person
+    // ("pronto, respondi"). Survives a reload: the answer is read back out of the sent message.
+    const answered = replies?.get(row.id);
+    const aiming = replyingTo?.rowId === row.id;
     return (
       <div data-testid="sdk-assistant" className="max-w-full select-text text-sm leading-relaxed">
         {prose.body !== "" ? <Markdown text={prose.body} /> : null}
         <div
           data-testid="sdk-prose-question"
-          className="mt-1.5 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5"
+          data-answered={answered !== undefined || undefined}
+          className={cn(
+            "mt-1.5 rounded-md border px-2.5 py-1.5",
+            answered !== undefined
+              ? "border-emerald-500/30 bg-emerald-500/5"
+              : "border-amber-500/30 bg-amber-500/5",
+          )}
         >
           <Markdown text={prose.question} />
+          {answered !== undefined ? (
+            <div data-testid="sdk-prose-answered" className="mt-1 border-t border-emerald-500/20 pt-1 text-xs text-emerald-600 dark:text-emerald-400">
+              {t("sdk.questionAnswered", { answers: answered })}
+            </div>
+          ) : onReply ? (
+            <Button
+              size="sm"
+              variant={aiming ? "default" : "outline"}
+              className="mt-1.5 h-6 text-[11px]"
+              data-testid="sdk-prose-reply"
+              aria-pressed={aiming}
+              onClick={() =>
+                onReply({
+                  kind: "prose",
+                  rowId: row.id,
+                  text: prose.question,
+                  summary: decisionSummary(prose.question),
+                  answerable: true,
+                })
+              }
+            >
+              {t("sdk.replyAction")}
+            </Button>
+          ) : null}
         </div>
       </div>
     );

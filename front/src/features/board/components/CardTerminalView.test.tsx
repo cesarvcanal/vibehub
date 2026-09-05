@@ -134,6 +134,10 @@ function serve() {
     if (/^\/cards\/[^/]+\/messages$/.test(url)) {
       return Promise.resolve({ pending: [], agent: "running" });
     }
+    // No browser running on this card — the quiet state every other suite here assumes.
+    if (/^\/cards\/[^/]+\/browser$/.test(url)) {
+      return Promise.resolve({ live: false, busy: false, control: "agent", controlBy: null });
+    }
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
 }
@@ -153,6 +157,22 @@ function serveSession(info: {
         modelLabel: info.modelLabel ?? null,
         account: info.account ?? { slug: null, name: "" },
         situation: info.situation ?? "waiting",
+      });
+    }
+    return (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest);
+  });
+}
+
+/** Serves the card-browser route with a live reading, on top of the usual fixtures. */
+function serveBrowser(browser: { live: boolean; busy?: boolean; control?: "agent" | "human"; controlBy?: string | null }) {
+  const base = mockGet.getMockImplementation();
+  mockGet.mockImplementation((url: string, ...rest: unknown[]) => {
+    if (/^\/cards\/[^/]+\/browser$/.test(url)) {
+      return Promise.resolve({
+        live: browser.live,
+        busy: browser.busy ?? false,
+        control: browser.control ?? "agent",
+        controlBy: browser.controlBy ?? null,
       });
     }
     return (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest);
@@ -1133,5 +1153,81 @@ describe("CardTerminalView — the Terminal | Chat switch", () => {
     // Chat is the default view now — no click needed to land in it.
     renderWithCache([card({ openedAt: 10, status: undefined })], testQueryClient(), null);
     await waitFor(() => expect(screen.getByTestId("chat")).toHaveAttribute("data-working", "true"));
+  });
+});
+
+
+/**
+ * THE AGENT IS BROWSING — the one thing the card used to hide completely. The agent drives the
+ * card's Chromium over CDP, which moves nothing at all on this screen, so the bar has to say so:
+ * a lit chip, and the pane opened for you when you are already looking at this card.
+ */
+describe("CardTerminalView — the card's browser", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    serve();
+    mockPost.mockResolvedValue({});
+    desktop();
+  });
+
+  function desktop(): void {
+    window.matchMedia = ((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+  }
+
+  const chip = () => screen.getByRole("button", { name: /browser/i });
+
+  it("stays quiet while no browser is running on the card", async () => {
+    renderWithCache([card({ openedAt: 10 })]);
+    await screen.findByTestId("xterm");
+    await waitFor(() => expect(chip()).not.toHaveAttribute("data-live"));
+    expect(screen.queryByTestId("vnc")).not.toBeInTheDocument();
+  });
+
+  it("lights the chip and opens the pane when a browser comes up on the card you are reading", async () => {
+    serveBrowser({ live: true, busy: true });
+    renderWithCache([card({ openedAt: 10 })]);
+    await screen.findByTestId("xterm");
+
+    // The pane opens BY ITSELF: this card is the thing on screen, so showing its browser costs
+    // nobody their place — and "the agent went off browsing" is exactly what you cannot follow
+    // from the terminal.
+    expect(await screen.findByTestId("vnc")).toBeInTheDocument();
+    await waitFor(() => expect(chip()).toHaveAttribute("data-live"));
+    expect(chip()).toHaveAttribute("data-busy");
+  });
+
+  it("never opens the pane on a card that is not the one on screen — it just lights the chip", async () => {
+    serveBrowser({ live: true });
+    const client = testQueryClient();
+    client.setQueryData(cardsKey(project.id), [card({ openedAt: 10 })]);
+    writeCardMode("c1", "terminal");
+    renderApp(
+      <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} active={false} />,
+      { queryClient: client },
+    );
+    await screen.findByTestId("xterm");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByTestId("vnc")).not.toBeInTheDocument();
+  });
+
+  it("does not re-open a pane you closed by hand while that same browser is still up", async () => {
+    serveBrowser({ live: true });
+    renderWithCache([card({ openedAt: 10 })]);
+    await screen.findByTestId("vnc");
+
+    await userEvent.click(chip());
+    expect(screen.queryByTestId("vnc")).not.toBeInTheDocument();
+    // The poll keeps answering "live" — an auto-open that argues with the person is worse than none.
+    await new Promise((r) => setTimeout(r, 60));
+    expect(screen.queryByTestId("vnc")).not.toBeInTheDocument();
   });
 });

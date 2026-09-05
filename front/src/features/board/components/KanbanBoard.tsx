@@ -75,6 +75,7 @@ export function KanbanBoard({
   onOpenCard,
   onNewCard,
   onNewBacklogCard,
+  onClosePane,
   headerExtra,
   headerLead,
 }: {
@@ -84,6 +85,17 @@ export function KanbanBoard({
   onNewCard: () => void;
   /** The Backlog column's "+": jots a card down without leaving the board. */
   onNewBacklogCard: () => void;
+  /**
+   * Drops a card's pane from the terminal deck.
+   *
+   * Pausing and hibernating END the session in the runner, but the deck keeps every pane it has
+   * ever opened MOUNTED with its socket live — that is what makes hopping between cards instant.
+   * That socket then sees its connection drop and reconnects (by design, `reconnect.ts` never gives
+   * up), and the attach is `tmux new-session -A`, which RECREATES the session it was supposed to
+   * have lost. The card comes back from the dead and lands in Waiting. So a pause fired from the
+   * board has to take the pane with it, exactly as the card's own screen already does.
+   */
+  onClosePane?: (cardId: string) => void;
   headerExtra?: React.ReactNode;
   /** Rendered FIRST in the header row — where the phone's drawer handle lives. */
   headerLead?: React.ReactNode;
@@ -154,8 +166,11 @@ export function KanbanBoard({
 
   const pauseMutation = useMutation({
     mutationFn: (id: string) => boardApi.pauseCard(id),
-    onSuccess: () => {
+    onSuccess: (updated) => {
       void queryClient.invalidateQueries({ queryKey: boardKey });
+      // The session is gone: the pane has to go with it, or its socket reconnects and revives the
+      // card (see `onClosePane`).
+      onClosePane?.(updated.id);
       toast.success(translate("toast.cardPaused"));
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardPauseError"))),
@@ -181,8 +196,10 @@ export function KanbanBoard({
    */
   const hibernateMutation = useMutation({
     mutationFn: (id: string) => boardApi.hibernateCard(id),
-    onSuccess: () => {
+    onSuccess: (updated) => {
       void queryClient.invalidateQueries({ queryKey: boardKey });
+      // Hibernating kills the session too — same reconnect problem, same answer.
+      onClosePane?.(updated.id);
       toast.success(translate("toast.cardHibernated"));
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardHibernateError"))),

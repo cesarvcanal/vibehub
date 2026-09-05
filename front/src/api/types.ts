@@ -192,6 +192,20 @@ export interface CardCapture {
   at: number;
 }
 
+/**
+ * `GET /api/cards/:id/browser` — whether the card's Chromium is up in the runner, and whether input
+ * landed in it in the last few seconds. This is what makes an agent's browser session visible from
+ * the card bar without opening the pane.
+ */
+export interface CardBrowserStatus {
+  live: boolean;
+  busy: boolean;
+  /** "agent" (the default) or "human" while a person has explicitly taken the wheel. */
+  control: "agent" | "human";
+  /** Which person holds it — so a second viewer reads a name, not a locked button. */
+  controlBy: string | null;
+}
+
 /** `GET /api/transcribe` — voice input status. Key values never come back. */
 export interface TranscribeStatus {
   available: boolean;

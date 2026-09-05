@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { config } from "../../config/env.js";
 import { hostExecutor } from "../../runtime/host.js";
 import { cardBrowserPorts } from "../browser/ports.js";
+import { markBrowserBusy } from "../browser/activity.js";
 import { logger } from "../../utils/logger.js";
 import { buildCdpHostScript, type FillResult } from "./fill.js";
 import { createCredential, suggestCredentialName, type Credential } from "./credentials.js";
@@ -131,6 +132,10 @@ function consumeLines(cardId: string, listener: Listener, chunk: string): void {
     }
     if (msg.type === "capture" && msg.url) {
       recordCapture(cardId, { url: msg.url, username: msg.username, password: msg.password });
+    } else if (msg.type === "activity") {
+      // Someone is clicking/typing in that browser right now — the card bar turns this into a lit
+      // "Navegador" chip, which is the only way a browser session is visible from outside the pane.
+      markBrowserBusy(cardId);
     } else if (msg.error) {
       logger.warn({ card: cardId, detail: msg.error }, "capture listener reported an error");
     }

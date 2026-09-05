@@ -12,7 +12,14 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <QueryProvider>
-      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      {/* `basename` is Vite's own base path, which is "/" in production — so this changes nothing
+          there. It matters when the app is served UNDER a prefix, as vibehub's own preview proxy
+          does (`/preview/<port>/`): without it every route misses, the catch-all redirects to "/",
+          and the preview throws you out into the real panel instead of showing itself. */}
+      <BrowserRouter
+        basename={import.meta.env.BASE_URL}
+        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+      >
         <AuthProvider>
           <TooltipProvider delayDuration={200} skipDelayDuration={300}>
             {children}

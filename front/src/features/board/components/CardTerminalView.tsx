@@ -50,6 +50,7 @@ import {
   accountInUseName,
   accountLabel,
   boardApi,
+  cardBrowserKey,
   cardKey,
   cardMessagesKey,
   cardNeedsOpen,
@@ -433,6 +434,62 @@ export function CardTerminalView({
   const showTerminal = instant || openMutation.isSuccess;
 
   /**
+   * Is this card's browser up in the runner, and is something clicking in it RIGHT NOW? The server
+   * answers from memory, so this is cheap to poll — and it is the only thing that puts an agent's
+   * browser session on this bar: the agent drives that Chromium over CDP, which moves nothing at
+   * all on this screen.
+   */
+  const { data: browserStatus } = useQuery({
+    queryKey: cardBrowserKey(cardId),
+    queryFn: () => boardApi.cardBrowserStatus(cardId),
+    refetchInterval: active && showTerminal ? 3_000 : false,
+    enabled: active && showTerminal,
+    retry: false,
+  });
+  const browserLive = Boolean(browserStatus?.live);
+  const browserBusy = Boolean(browserStatus?.busy);
+  // Who is clicking in there changes what the chip MEANS: the same blinking dot is "the agent is
+  // working" or "you have the wheel", and saying the wrong one is worse than saying nothing.
+  const browserTitle = !browserLive
+    ? t("cardView.browserHint")
+    : browserStatus?.control === "human"
+      ? t("cardView.browserHeld", { name: browserStatus.controlBy ?? "" })
+      : browserBusy
+        ? t("cardView.paneBusy", { label: t("cardView.browser").toLowerCase() })
+        : t("cardView.browserLiveHint");
+
+  /**
+   * A browser is up on this card and its pane is closed — open it, because "the agent went off
+   * browsing" is the one thing you cannot follow from the terminal.
+   *
+   * It never steals a screen: it only ever opens a pane INSIDE the card you are already reading
+   * (`active`), never on a background tab, and never on a phone, where the pane IS the screen.
+   * Everywhere it holds back, the lit chip in the bar is what tells you — so nothing is lost, it
+   * just waits for you. And once you close the pane by hand it stays closed until that browser is
+   * really gone: an auto-open that argues with the person is worse than no auto-open.
+   */
+  const autoOpenSuppressed = React.useRef(false);
+  React.useEffect(() => {
+    if (!browserLive) {
+      autoOpenSuppressed.current = false;
+      return;
+    }
+    if (browserOpen || autoOpenSuppressed.current || isMobile || !active) return;
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    setBrowserOpen(true);
+  }, [browserLive, browserOpen, isMobile, active]);
+
+  /** Closing the pane also kills the browser (VncPanel) — and disarms the auto-open until it is. */
+  const closeBrowserPane = React.useCallback(() => {
+    autoOpenSuppressed.current = true;
+    setBrowserOpen(false);
+  }, []);
+  const toggleBrowserPane = React.useCallback(() => {
+    if (browserOpen) closeBrowserPane();
+    else setBrowserOpen(true);
+  }, [browserOpen, closeBrowserPane]);
+
+  /**
    * Changing the account or the model ends the session server-side (applySessionChange); changing
    * this key makes the terminal drop and reattach, which recreates it with the new environment in
    * the SAME conversation. The nonce covers the rest: an explicit restart, and a switch on a card
@@ -777,10 +834,12 @@ export function CardTerminalView({
           <PaneToggle
             label={t("cardView.browser")}
             open={browserOpen}
+            live={browserLive}
+            busy={browserBusy}
             disabled={!showTerminal}
             icon={<MonitorPlay className="h-3.5 w-3.5" />}
-            onClick={() => setBrowserOpen((v) => !v)}
-            hint={t("cardView.browserHint")}
+            onClick={toggleBrowserPane}
+            hint={browserTitle}
           />
           <PaneToggle
             label={t("cardView.shell")}
@@ -904,9 +963,10 @@ export function CardTerminalView({
             <DropdownMenuCheckboxItem
               checked={browserOpen}
               disabled={!showTerminal}
-              onSelect={() => setBrowserOpen((v) => !v)}
+              onSelect={toggleBrowserPane}
             >
               {t("cardView.browser")}
+              {browserLive ? <ActivityDot busy={browserBusy} /> : null}
             </DropdownMenuCheckboxItem>
             <DropdownMenuCheckboxItem
               checked={shellOpen}
@@ -1133,7 +1193,7 @@ export function CardTerminalView({
           </div>
           {browserOpen ? (
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-              <VncPanel cardId={cardId} onClose={() => setBrowserOpen(false)} />
+              <VncPanel cardId={cardId} onClose={closeBrowserPane} />
             </div>
           ) : null}
         </div>
@@ -1155,10 +1215,18 @@ export function CardTerminalView({
  *
  * Deliberately the same quiet weight as the pills next to it. These open a pane; they are not the
  * thing you came here to do, and the terminal below is.
+ *
+ * The Browser one carries one thing more. A card's Chromium can be RUNNING with this pane closed —
+ * the agent drives it over CDP and nothing on this screen moves — so `live` gives it an amber skin
+ * ("there is a browser going on in here") and `busy` adds a blinking dot for the seconds when
+ * something is actually clicking in it. Without those two, an agent's whole browsing session is
+ * invisible from the card, which is exactly the complaint.
  */
 function PaneToggle({
   label,
   open,
+  live = false,
+  busy = false,
   disabled,
   icon,
   onClick,
@@ -1166,33 +1234,58 @@ function PaneToggle({
 }: {
   label: string;
   open: boolean;
+  /** The thing behind this pane is RUNNING (a card browser), pane open or not. */
+  live?: boolean;
+  /** …and it is being used right this second. */
+  busy?: boolean;
   disabled: boolean;
   icon: React.ReactNode;
   onClick: () => void;
-  /** Extra tooltip shown when the pane is CLOSED (e.g. "this card can drive a browser"). */
+  /** The whole tooltip, when the caller knows more than "open/close this pane". */
   hint?: string;
 }) {
   return (
     <button
       type="button"
       aria-pressed={open}
+      data-live={live ? "" : undefined}
+      data-busy={busy ? "" : undefined}
       disabled={disabled}
       onClick={onClick}
-          title={
-        open
+      title={
+        // `hint` is the caller's whole sentence (the Browser chip builds one from live/busy/who is
+        // driving); without one, the generic open/close wording.
+        hint ??
+        (open
           ? translate("cardView.closePane", { label: label.toLowerCase() })
-          : hint ?? translate("cardView.openPane", { label: label.toLowerCase() })
+          : translate("cardView.openPane", { label: label.toLowerCase() }))
       }
       className={cn(
         "inline-flex h-6 shrink-0 items-center gap-1 rounded-full border px-2 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
-        open
-          ? "border-primary/40 bg-primary/15 text-primary"
-          : "border-border/60 bg-muted/40 text-muted-foreground hover:border-border hover:text-foreground",
+        // Amber beats "pressed": a browser that is UP is news, whether or not you have its pane open.
+        live
+          ? "border-amber-500/50 bg-amber-500/15 text-amber-400"
+          : open
+            ? "border-primary/40 bg-primary/15 text-primary"
+            : "border-border/60 bg-muted/40 text-muted-foreground hover:border-border hover:text-foreground",
       )}
     >
       {icon}
       {label}
+      {live ? <ActivityDot busy={busy} /> : null}
     </button>
+  );
+}
+
+/** Steady while the browser is merely up, blinking while something is clicking in it. */
+function ActivityDot({ busy }: { busy: boolean }) {
+  return (
+    <span
+      data-testid="pane-activity"
+      data-busy={busy ? "" : undefined}
+      aria-hidden
+      className={cn("ml-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400", busy && "animate-pulse")}
+    />
   );
 }
 

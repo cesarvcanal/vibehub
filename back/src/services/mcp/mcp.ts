@@ -204,9 +204,26 @@ export async function builtinMaestroInjection(): Promise<McpInjection | undefine
   const url = `${config.publicUrl.replace(/\/+$/, "")}/mcp`;
   return {
     name: BUILTIN_MAESTRO_NAME,
-    json: JSON.stringify({ type: "http", url, headers: { Authorization: `Bearer ${token}` } }),
+    json: JSON.stringify({
+      type: "http",
+      url,
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: MAESTRO_MCP_TIMEOUT_MS,
+    }),
   };
 }
+
+/**
+ * How long the agent's MCP client waits on ONE call to this server before giving up.
+ *
+ * The client's default is 5 minutes, and `vibehub_deliver` blows through it: before merging, it runs
+ * the card's whole gate — a typecheck and the test suites — which on this repo is minutes of work.
+ * The call died mid-gate every time, so the branch was pushed and the PR opened but the merge never
+ * happened, and the agent could not even see WHY (the tool's own answer never arrived). A delivery
+ * that has to wait for the tests is the normal case here, not an edge one, so the ceiling is the
+ * gate's honest worst case with room to spare.
+ */
+export const MAESTRO_MCP_TIMEOUT_MS = 900_000;
 
 /** Reserved name of the built-in server, so a user-registered MCP cannot shadow it. */
 export const BUILTIN_MAESTRO_NAME = "vibehub";

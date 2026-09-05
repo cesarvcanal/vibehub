@@ -98,6 +98,7 @@ export function ProjectSidebar({
   onDeleteProject,
   canManage = true,
   onShowAllProjects,
+  onClosePane,
   inline = false,
 }: {
   projects: BoardProject[];
@@ -130,6 +131,13 @@ export function ProjectSidebar({
   onDeleteProject: (project: BoardProject) => void;
   /** Leave the focused project for the aggregated "all projects" board (the switcher's top item). */
   onShowAllProjects?: () => void;
+  /**
+   * Drops the card's pane from the terminal deck — required by pause and hibernate, which end the
+   * session in the runner. Navigating away is NOT enough: the deck deliberately keeps every pane it
+   * has opened mounted and connected, so the socket reconnects and `tmux new-session -A` brings the
+   * card back to life. See the same prop on `KanbanBoard`.
+   */
+  onClosePane?: (cardId: string) => void;
   /**
    * In-flow instead of a drawer: the panel becomes part of the page's own column rather than a
    * `fixed` overlay slid in from the left. This is the phone homepage, where the project/card list
@@ -299,6 +307,7 @@ export function ProjectSidebar({
               onDragEnd={() => {}}
               onHover={() => {}}
               onDrop={() => {}}
+              onClosePane={onClosePane}
             />
           ) : (
             <>
@@ -335,6 +344,7 @@ export function ProjectSidebar({
                     onDragEnd={clear}
                     onHover={(i, below) => setDropAt({ index: i, below })}
                     onDrop={drop}
+                    onClosePane={onClosePane}
                   />
                 );
               })}
@@ -382,14 +392,36 @@ function ProjectSwitcher({
   return (
     <div className="flex shrink-0 items-center gap-0.5 border-b border-border/60 py-1 pl-1.5 pr-1.5">
       <DropdownMenu open={open} onOpenChange={setOpen}>
+        {/* The trigger is also a REAL link to the project it names — the brand, the project rows and
+            the cards all are, and this was the one place in the sidebar where middle-clicking a
+            project name did nothing. It keeps `role="button"`, because that is what a plain click
+            and the keyboard do here: open the menu. The href only serves the browser's own gestures. */}
         <DropdownMenuTrigger
+          asChild
           aria-label={t("sidebar.switchProject")}
           title={t("sidebar.switchProject")}
-          className="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <FolderGit2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate text-sm font-semibold">{current.name}</span>
-          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <a
+            href={projectHref(current.id)}
+            role="button"
+            onPointerDown={(e) => {
+              // Radix opens the menu on POINTERDOWN of the left button, before the click that opens
+              // the new tab exists. Cmd/Shift-click would therefore open both; preventDefault is
+              // what makes Radix's composed handler stand down (it skips a defaultPrevented event).
+              // Middle-click it already ignores, so that gesture is left entirely to the browser.
+              if (e.button === 0 && isNewTabClick(e)) e.preventDefault();
+            }}
+            onClick={(e) => {
+              // New tab: let the browser follow the href. Plain click: the menu is the action, so
+              // the navigation must not happen.
+              if (!isNewTabClick(e)) e.preventDefault();
+            }}
+            className="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <FolderGit2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate text-sm font-semibold">{current.name}</span>
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          </a>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="max-h-[60vh] w-56 overflow-y-auto">
           {onShowAll ? (
@@ -498,6 +530,7 @@ function ProjectRow({
   onDragEnd,
   onHover,
   onDrop,
+  onClosePane,
   focused = false,
   canManage = true,
 }: {
@@ -528,6 +561,13 @@ function ProjectRow({
   onDragEnd: () => void;
   onHover: (index: number, below: boolean) => void;
   onDrop: (index: number, below: boolean) => void;
+  /**
+   * Drops the card's pane from the terminal deck. Pause and hibernate LIVE HERE (the row owns the
+   * card menu), and both end the session in the runner — while the deck keeps every pane it has
+   * opened mounted and connected, so the socket reconnects and `tmux new-session -A` brings the
+   * card back. Navigating away is not enough; the pane has to go. See the same prop on the sidebar.
+   */
+  onClosePane?: (cardId: string) => void;
 }) {
   const t = useT();
   const queryClient = useQueryClient();
@@ -597,7 +637,13 @@ function ProjectRow({
       mirror(updated);
       toast.success(translate("toast.cardPaused"));
       // Pausing the card you are looking at takes you up one level, exactly like clicking its row.
+      // FIRST, then drop the pane: while the URL still names the card, the deck legitimately puts
+      // it back (that is what makes a reload reattach), so a pane dropped before the navigation
+      // would be remounted by it.
       if (updated.id === activeCardId) onOpenCard(updated.id);
+      // The session is gone, so the pane goes too — otherwise its socket reconnects and revives the
+      // card. This is what actually stops the loop; leaving the view is only the navigation half.
+      onClosePane?.(updated.id);
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardPauseError"))),
   });
@@ -613,9 +659,11 @@ function ProjectRow({
     onSuccess: (updated) => {
       mirror(updated);
       toast.success(translate("toast.cardHibernated"));
-      // Hibernating the card you are IN kills its session; if the view stays open it just reconnects
-      // and reopens it — an endless loop. So take you up one level, exactly like pause.
+      // Hibernating the card you are IN kills its session; if the pane stays in the deck it just
+      // reconnects and reopens it — an endless loop. Leave the card first, then drop the pane (the
+      // deck re-adds a pane whose card is still named in the URL).
       if (updated.id === activeCardId) onOpenCard(updated.id);
+      onClosePane?.(updated.id);
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardHibernateError"))),
   });

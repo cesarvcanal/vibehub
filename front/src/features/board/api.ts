@@ -7,6 +7,7 @@ import type {
   BrainApplyResult,
   BrainWriteResult,
   Card,
+  CardBrowserStatus,
   CardCapture,
   CardColumn,
   Credential,
@@ -218,6 +219,17 @@ export const cardKey = (cardId: string) => ["board", "card", cardId] as const;
 export const cardSessionKey = (cardId: string) => ["board", "card", cardId, "session"] as const;
 /** The card's outbox: what was composed and has not reached the agent yet. */
 export const cardMessagesKey = (cardId: string) => ["board", "card", cardId, "messages"] as const;
+export const cardBrowserKey = (cardId: string) => ["board", "card", cardId, "browser"] as const;
+
+/** A server that predates the control flag still reads as "the agent drives" — never as locked. */
+function browserStatus(r: Partial<CardBrowserStatus> | undefined): CardBrowserStatus {
+  return {
+    live: Boolean(r?.live),
+    busy: Boolean(r?.busy),
+    control: r?.control === "human" ? "human" : "agent",
+    controlBy: r?.controlBy ?? null,
+  };
+}
 /** The repo/branch caches are keyed by CONNECTION too — the same name means a different repo per account. */
 export const githubReposKey = (connection: string, q: string) =>
   ["board", "github", "repos", connection, q] as const;
@@ -484,6 +496,21 @@ export const boardApi = {
 
   startCardBrowser: (id: string) => post<unknown>(`/cards/${encodeURIComponent(id)}/browser`),
   stopCardBrowser: (id: string) => del<unknown>(`/cards/${encodeURIComponent(id)}/browser`),
+
+  /**
+   * Is the card's Chromium up, is something clicking in it right now, and whose hands are on it?
+   * Answered from memory by the server, so it is cheap to poll.
+   */
+  cardBrowserStatus: (id: string) =>
+    get<Partial<CardBrowserStatus>>(`/cards/${encodeURIComponent(id)}/browser`).then(browserStatus),
+
+  /** Take the wheel: your noVNC input reaches the page, and the agent is asked to stand back. */
+  takeCardBrowserControl: (id: string) =>
+    post<Partial<CardBrowserStatus>>(`/cards/${encodeURIComponent(id)}/browser/control`).then(browserStatus),
+
+  /** Hand the browser back to the agent (back to the spectator seat). */
+  releaseCardBrowserControl: (id: string) =>
+    del<Partial<CardBrowserStatus>>(`/cards/${encodeURIComponent(id)}/browser/control`).then(browserStatus),
 
   /* cofre — captures pending on a card's browser (values never come back) */
   cardCaptures: (id: string) =>

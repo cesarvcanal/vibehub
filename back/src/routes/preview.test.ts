@@ -268,6 +268,87 @@ describe("/preview/:port proxy", () => {
     }
   });
 
+  /**
+   * The REDIRECT TRAP. A vite dev server with `base: '/preview/<port>/'` answers the path the proxy
+   * hands it (`/`, prefix stripped) with a 302 back to `/preview/<port>/` — where the browser
+   * already is. Left alone, the tab dies with ERR_TOO_MANY_REDIRECTS while the port is perfectly
+   * alive, which is exactly how this reached a user.
+   */
+  it("absorbs a redirect back onto its own prefix and serves the page instead of looping", async () => {
+    const paths: string[] = [];
+    let port = 0;
+    const upstream = createServer((req, res) => {
+      paths.push(req.url ?? "");
+      if (req.url === "/") {
+        res.writeHead(302, { location: `/preview/${port}/` });
+        res.end();
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(`<!doctype html><script src="/preview/${port}/@vite/client"></script>`);
+    });
+    port = await listen(upstream);
+    try {
+      const res = await fetch(`http://127.0.0.1:${appPort}/preview/${port}/`, {
+        headers: { cookie, accept: "text/html" },
+        redirect: "manual",
+      });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toContain("@vite/client");
+      // Two upstream requests, one browser request: the second is the app's own base path, verbatim.
+      expect(paths).toEqual(["/", `/preview/${port}/`]);
+    } finally {
+      upstream.close();
+    }
+  });
+
+  it("absorbs ONE hop only — an app that keeps redirecting gets its 302 relayed, not a hang", async () => {
+    let port = 0;
+    let hits = 0;
+    const upstream = createServer((_req, res) => {
+      hits += 1;
+      res.writeHead(302, { location: `/preview/${port}/` });
+      res.end();
+    });
+    port = await listen(upstream);
+    try {
+      const res = await fetch(`http://127.0.0.1:${appPort}/preview/${port}/`, {
+        headers: { cookie, accept: "text/html" },
+        redirect: "manual",
+      });
+      expect(res.status).toBe(302);
+      expect(res.headers.get("location")).toBe(`/preview/${port}/`);
+      expect(hits).toBe(2);
+    } finally {
+      upstream.close();
+    }
+  });
+
+  it("leaves an app that HONOURS x-forwarded-prefix alone — its redirect must reach the browser", async () => {
+    let port = 0;
+    const upstream = createServer((req, res) => {
+      const prefix = String(req.headers["x-forwarded-prefix"] ?? "");
+      if (req.url === "/") {
+        res.writeHead(302, { location: `${prefix}/login` });
+        res.end();
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("login page");
+    });
+    port = await listen(upstream);
+    try {
+      const res = await fetch(`http://127.0.0.1:${appPort}/preview/${port}/`, {
+        headers: { cookie, accept: "text/html" },
+        redirect: "manual",
+      });
+      expect(res.status).toBe(302);
+      expect(res.headers.get("location")).toBe(`/preview/${port}/login`);
+    } finally {
+      upstream.close();
+    }
+  });
+
   it("answers a JSON 502 when nothing is listening and the caller is not a navigation", async () => {
     const res = await fetch(`http://127.0.0.1:${appPort}/preview/59999/`, { headers: { cookie } });
     expect(res.status).toBe(502);
