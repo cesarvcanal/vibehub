@@ -30,6 +30,14 @@ export default defineConfig({
       },
     },
   },
+  // The dev server pre-bundles dependencies with esbuild, and that pass does NOT inherit `build.target`
+  // below — it falls back to esbuild's own default, which predates top-level await. noVNC ships one,
+  // so `vite` died on startup ("Top-level await is not available in the configured target
+  // environment") and the dev server never came up at all. Same target as the build, for the same
+  // reason: the card browser's noVNC client.
+  optimizeDeps: {
+    esbuildOptions: { target: "es2022" },
+  },
   build: {
     outDir: "dist",
     sourcemap: true,
