@@ -2,15 +2,20 @@
   "name": "vibehub",
   "private": true,
   "version": "0.1.0",
-  "description": "Hosted IDE for AI coding agents — a kanban of live Claude Code terminals running in containers on your own server",
+  "description": "Hosted IDE for AI coding agents \u2014 a kanban of live Claude Code terminals running in containers on your own server",
   "type": "module",
   "scripts": {
     "dev": "npm --prefix back run dev",
-    "build": "npm --prefix back run build && npm --prefix front run build",
-    "test": "npm --prefix back run test && npm --prefix front run test",
-    "install:all": "npm --prefix back install && npm --prefix front install"
+    "build": "npm --prefix back run build & B=$!; npm --prefix front run build & F=$!; wait $B; b=$?; wait $F; f=$?; exit $((b|f))",
+    "test": "npm --prefix back run test & B=$!; npm --prefix front run test & F=$!; wait $B; b=$?; wait $F; f=$?; exit $((b|f))",
+    "install:all": "npm --prefix back install && npm --prefix front install",
+    "test:seq": "npm --prefix back run test && npm --prefix front run test",
+    "build:seq": "npm --prefix back run build && npm --prefix front run build"
   },
   "license": "MIT",
-  "author": "César Canal",
-  "repository": { "type": "git", "url": "https://github.com/cesarvcanal/vibehub.git" }
+  "author": "C\u00e9sar Canal",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cesarvcanal/vibehub.git"
+  }
 }
