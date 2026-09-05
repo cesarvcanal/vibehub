@@ -293,13 +293,26 @@ describe("pause decisions (hasLiveSession / shouldEndSessionOnMove / shouldEndSe
     expect(shouldRestartOnStatus("waiting", true, false)).toBe(false);
   });
 
-  it("reactivatesOnActivity: only working, and only on paused/done", () => {
+  it("reactivatesOnActivity: only working, and only out of done", () => {
     expect(reactivatesOnActivity({ column: "done" }, "working")).toBe(true);
-    expect(reactivatesOnActivity({ column: "paused" }, "working")).toBe(true);
-    expect(reactivatesOnActivity({ column: "backlog", pausedAt: 1 }, "working")).toBe(true);
     expect(reactivatesOnActivity({ column: "done" }, "waiting")).toBe(false);
-    expect(reactivatesOnActivity({ column: "paused" }, "waiting")).toBe(false);
     expect(reactivatesOnActivity({ column: "backlog" }, "working")).toBe(false);
+  });
+
+  /**
+   * A PAUSE IS NOT UNDONE BY A HOOK. Ending a session makes the dying Claude (tmux, or the SDK
+   * driver on a native-chat card) fire its own hooks on the way out; they land after `pausedAt` is
+   * stamped. Treating that as "the user came back" is what sent a just-paused card to `working` and
+   * then to `waiting` — the card that never stayed paused however many times it was clicked.
+   */
+  it("reactivatesOnActivity: a paused card is never reactivated by a report", () => {
+    expect(reactivatesOnActivity({ column: "paused", pausedAt: 1 }, "working")).toBe(false);
+    expect(reactivatesOnActivity({ column: "paused", pausedAt: 1 }, "waiting")).toBe(false);
+    // Even parked in another column: what decides is the pause stamp, not where the card sits.
+    expect(reactivatesOnActivity({ column: "backlog", pausedAt: 1 }, "working")).toBe(false);
+    expect(reactivatesOnActivity({ column: "done", pausedAt: 1 }, "working")).toBe(false);
+    // A PENDING pause (moved to the column, session still alive) has no stamp yet — untouched.
+    expect(reactivatesOnActivity({ column: "paused" }, "working")).toBe(false);
   });
 });
 
@@ -703,16 +716,40 @@ describe("board registry (persisted)", () => {
       expect(after?.status).toBe("working");
     });
 
-    it("working on a PAUSED card sends it to working and clears pausedAt", async () => {
+    /**
+     * THE OPPOSITE of what this used to assert, deliberately.
+     *
+     * Reactivating a paused card on a `working` report assumed the report means "a person typed
+     * here". It does not: killing the session makes the dying Claude fire its own hooks on the way
+     * out — and on a native-chat card the SDK driver does the same — so the reports land right
+     * after `pausedAt` is stamped. The card walked itself out of the pause (paused -> working ->
+     * waiting) seconds after each click, which is the bug this replaces. Coming back is now an act:
+     * open the card, or drag it out of the column.
+     */
+    it("a report NEVER takes a paused card out of the pause — not even `working`", async () => {
       const p = await seedProject();
       const card = await reg.createCard({ projectId: p.id, title: "a" });
       await reg.applyOpenTerminal(card.id);
       await reg.pauseCard(card.id);
       const paused = await reg.getCard(card.id);
       expect(paused?.pausedAt).toBeGreaterThan(0);
+
       const after = await reg.applyCardStatus(card.id, "working");
-      expect(after?.column).toBe("working");
-      expect(after?.pausedAt).toBeNull();
+      expect(after?.column).toBe("paused");
+      expect(after?.pausedAt).toBe(paused?.pausedAt);
+      // And the dot stays off: a parked card with no session must not look busy.
+      expect(after?.status ?? null).toBeNull();
+    });
+
+    /** Opening it IS the way back — that path clears the pause and puts the card in `waiting`. */
+    it("opening a paused card is what resumes it", async () => {
+      const p = await seedProject();
+      const card = await reg.createCard({ projectId: p.id, title: "a" });
+      await reg.applyOpenTerminal(card.id);
+      await reg.pauseCard(card.id);
+      const resumed = await reg.applyOpenTerminal(card.id);
+      expect(resumed?.column).toBe("waiting");
+      expect(resumed?.pausedAt).toBeNull();
     });
 
     it("waiting never reactivates: done stays done, paused stays paused, backlog stays backlog", async () => {

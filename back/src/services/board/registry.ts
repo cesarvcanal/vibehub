@@ -653,14 +653,26 @@ export function columnAfterOpen(current: BoardColumn): BoardColumn {
 }
 
 /**
- * REACTIVATION BY ACTIVITY: a `working` report (= the user TYPED a prompt in that terminal) on a
- * PAUSED card or on a card in `done` proves the work came back — the card leaves the pause/done and
- * goes to `working`. Only `working` reactivates: `waiting` (SessionStart/Stop/Notification, which
- * fire without anybody asking for anything) still never moves a card out of done/backlog, so the
- * mirror rule stays intact. PURE.
+ * REACTIVATION BY ACTIVITY: a `working` report on a card in `done` proves the work came back — it
+ * leaves `done` and goes to `working`. Only `working` reactivates: `waiting` (SessionStart / Stop /
+ * Notification, which fire without anybody asking for anything) never moves a card out of
+ * done/backlog, so the mirror rule stays intact. PURE.
+ *
+ * A PAUSE IS NOT REACTIVATED BY A HOOK, and that is the whole point of this rule's shape.
+ *
+ * It used to include `pausedAt` / `paused`, on the premise that a `working` report means "the user
+ * typed a prompt in that terminal". That premise is false at exactly the wrong moment: ending a
+ * session makes the dying Claude — the tmux one and, on a native-chat card, the SDK driver — fire
+ * its own hooks on the way out. Those land AFTER `pausedAt` was stamped, so the card reactivated
+ * itself: paused, then `working`, then `waiting` when the last hook arrived. That is the card that
+ * "went back to Waiting on its own" and never stayed paused, however many times it was clicked.
+ *
+ * So leaving a pause is now always something a PERSON does — opening the card, dragging it out of
+ * the column — never something a report does. A hook cannot undo a decision it does not know about.
  */
 export function reactivatesOnActivity(card: Pick<Card, "column" | "pausedAt">, status: CardStatus): boolean {
-  return status === "working" && (!!card.pausedAt || card.column === "done" || card.column === "paused");
+  if (card.pausedAt) return false;
+  return status === "working" && card.column === "done";
 }
 
 /**
@@ -1358,6 +1370,12 @@ export async function applyCardStatus(cardId: string, status: CardStatus): Promi
       card.updatedAt = Date.now();
       return card;
     }
+    // A card whose pause ALREADY TOOK EFFECT (`pausedAt` stamped, session killed) ignores reports
+    // altogether. The hooks that arrive now are the death rattle of the process the pause just
+    // ended — the tmux Claude, or the SDK driver on a native-chat card — and writing them back
+    // would relight the dot on a card that is parked, which is how "Paused" started reading as
+    // "Aguardando". Nothing here is a lie the board has to show: the session is gone.
+    if (card.pausedAt) return card;
     card.status = status;
     card.statusAt = Date.now();
     // A hook fired, so there IS a session again — whoever started it. Hibernation is a statement
