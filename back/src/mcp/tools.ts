@@ -6,6 +6,7 @@ import { runGate } from "../services/maestro/gate.js";
 import { deliver } from "../services/maestro/deliver.js";
 import { announcePreview } from "../services/preview/announce.js";
 import { recordLearning } from "../services/brain/learn.js";
+import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX } from "./cardMove.js";
 
 /**
  * MAESTRO TOOLS — what one card's agent can do to the OTHER cards.
@@ -231,6 +232,48 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     async (a) => {
       try {
         return ok(await deliver(a.card, { branch: a.branch, authorized: a.authorized === true, by: actor }));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_move_cards",
+    {
+      description:
+        "Move one or MORE cards to a board column — how a card gets CONCLUDED. Use it when work is " +
+        "finished (merged/delivered) and the cards should leave the board's live columns: pass every " +
+        "card id at once instead of asking the user to drag them one by one. `column` is 'done' " +
+        "(finished — the column is sticky, so no terminal activity takes the card back out) or " +
+        "'backlog' (park it as not started). Pausing or resuming a card is NOT here: 'paused', " +
+        "'waiting' and 'working' kill or start that card's Claude session, so they stay a deliberate " +
+        "act on the board. Each card is processed on its own — an unknown id or a card you may not " +
+        "touch fails on its line and the others still move. Returns { column, moved, unchanged, " +
+        "failed, results }, one entry per card with { cardId, ok, title, project, was, column, " +
+        "changed } or an `error`. Moving a card that is already there is a no-op success, so " +
+        "re-running a batch is safe. `from` is YOUR OWN card id ($VIBEHUB_CARD_ID): it scopes the " +
+        "move to your own project — cards of other projects are refused.",
+      inputSchema: {
+        cards: z
+          .array(z.string())
+          .min(1)
+          .max(MOVE_BATCH_MAX)
+          .describe("card ids to move (from vibehub_list_terminals) — the whole batch in one call"),
+        column: z
+          .enum(AGENT_MOVABLE_COLUMNS as unknown as [string, ...string[]])
+          .describe("done = finished (sticky) | backlog = back to not started"),
+        from: z.string().optional().describe(
+          "YOUR OWN card id — the $VIBEHUB_CARD_ID of this terminal. Required when a card calls: it " +
+          "is what limits the move to the cards of your own project.",
+        ),
+      },
+    },
+    async (a) => {
+      try {
+        // A CARD must say who it is (that is what scopes the batch to its project); the owner's own
+        // browser session on the MCP endpoint is not a card and already sees the whole board.
+        return ok(await moveCards(a.cards, a.column, { from: a.from, requireFrom: actor === "card", by: actor }));
       } catch (e) {
         return fail(e);
       }

@@ -67,6 +67,25 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(INSTRUCTIONS.toLowerCase()).toContain("secret");
   });
 
+  it("register vibehub_move_cards and keep its contract explicit (bulk, done/backlog only, own project)", () => {
+    const server = createMcpServer("test") as unknown as {
+      _registeredTools?: Record<string, { description?: string }>;
+    };
+    const tools = server._registeredTools ?? {};
+    expect(Object.keys(tools)).toContain("vibehub_move_cards");
+    const description = tools["vibehub_move_cards"]?.description ?? "";
+    // It takes a LIST and reports per card — the whole reason it exists (ten merged cards to close).
+    expect(description).toContain("MORE cards");
+    expect(description).toContain("results");
+    // The two columns it may reach, and the one it deliberately does not.
+    expect(description).toContain("'done'");
+    expect(description).toContain("'backlog'");
+    expect(description).toContain("Pausing or resuming a card is NOT here");
+    // Authorization: the agent acts from its own card, inside its own project.
+    expect(description).toContain("$VIBEHUB_CARD_ID");
+    expect(description).toContain("your own project");
+  });
+
   it("register the Cofre tools and instruct on using them for logins", () => {
     const server = createMcpServer("test") as unknown as {
       _registeredTools?: Record<string, unknown>;
