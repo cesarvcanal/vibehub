@@ -12,6 +12,11 @@ import type { SdkRow } from "@/features/board/lib/sdkChat";
  *     directed at the user (conservative heuristic below). These have no structured answer: any
  *     user message sent afterwards counts as dealing with them.
  *
+ * A decision can also be ANSWERED ON PURPOSE: the composer aims at one, and the message it sends
+ * wears `buildDecisionReply`'s wrapper. That wrapper is the whole trick behind "pronto, respondi" —
+ * it travels to the model AND back out of the history, so the answer stays anchored to its question
+ * after a reload with no new field on the wire.
+ *
  * Everything here is PURE and derived from the row list — which itself is replayed from the
  * sdk-history on every connect, so the tray survives F5 for free.
  */
@@ -20,8 +25,16 @@ export interface PendingDecision {
   kind: "question" | "prose";
   /** The row to scroll to / highlight. */
   rowId: string;
+  /** The question, in full — what the composer banner shows while the reply is armed. */
+  text: string;
   /** Short line for the tray. */
   summary: string;
+  /**
+   * Can a message TYPED in the composer answer this one? False for a card that asks SEVERAL
+   * questions at once: one typed line cannot say which is which, so that card is answered by its
+   * own fields and the tray only jumps to it.
+   */
+  answerable: boolean;
 }
 
 /* ------------------------------------------------------------- heuristic */
@@ -81,32 +94,104 @@ export function splitProseQuestion(text: string): { body: string; question: stri
 
 const SUMMARY_MAX = 100;
 
+/** One tray-sized line out of a question — also what the composer banner shows. PURE. */
+export function decisionSummary(text: string): string {
+  return summarize(text);
+}
+
 function summarize(text: string): string {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > SUMMARY_MAX ? `${flat.slice(0, SUMMARY_MAX - 1)}…` : flat;
 }
 
 /**
- * The tray's content, oldest first. Structured questions stay pending until answered; a prose
- * question only counts while NO user message came after it (answering by message clears it). A
- * streaming row never enters (its text is still growing). PURE.
+ * The tray's content, oldest first. Structured questions stay pending until answered — several may
+ * legitimately stack. A prose question is far more fragile, so it only counts while it is the tail
+ * of the conversation: NO user message came after it (answering by message clears it) AND it is the
+ * NEWEST assistant message. The second rule is how "o agente seguiu sozinho" expires a guess — once
+ * Claude has spoken again, the old paragraph is not what it is waiting on. A streaming row never
+ * enters (its text is still growing). PURE.
  */
 export function pendingDecisions(rows: readonly SdkRow[]): PendingDecision[] {
   let lastUserAt = -1;
+  let lastAssistantAt = -1;
   rows.forEach((row, i) => {
     if (row.kind === "user") lastUserAt = i;
+    if (row.kind === "assistant") lastAssistantAt = i;
   });
   const out: PendingDecision[] = [];
   rows.forEach((row, i) => {
     if (row.kind === "question" && row.outcome === "pending") {
       const first = row.questions[0]?.question ?? "";
-      out.push({ kind: "question", rowId: row.id, summary: summarize(first) });
+      out.push({
+        kind: "question",
+        rowId: row.id,
+        text: first,
+        summary: summarize(first),
+        answerable: row.questions.length === 1,
+      });
       return;
     }
-    if (row.kind === "assistant" && !row.streaming && i > lastUserAt) {
+    if (row.kind === "assistant" && !row.streaming && i > lastUserAt && i === lastAssistantAt) {
       const question = proseQuestion(row.text);
-      if (question) out.push({ kind: "prose", rowId: row.id, summary: summarize(question) });
+      if (question) out.push({ kind: "prose", rowId: row.id, text: question, summary: summarize(question), answerable: true });
     }
   });
   return out;
+}
+
+/* --------------------------------------------------------- explicit reply */
+
+/**
+ * The wrapper an EXPLICIT reply wears on its way to the MODEL — the same idea as the supersede
+ * wrapper (protocol.ts `buildSupersedeText`), for the same reason: the user's intent must reach the
+ * conversation, not just the screen. Quoting the question makes the answer unambiguous for Claude
+ * ("o segundo" alone is a riddle two turns later) and, because the history log stores the text
+ * verbatim, it is ALSO what lets a reload re-anchor the answer to its question with no new wire
+ * field. pt-BR like the supersede wrapper: it is the user's own speech act. PURE.
+ */
+const REPLY_OPEN = "[resposta à decisão pendente:";
+
+export function buildDecisionReply(question: string, answer: string): string {
+  return `${REPLY_OPEN}\n«${question.replace(/\s+/g, " ").trim()}»]\n\n${answer}`;
+}
+
+const REPLY_RE = /^\[resposta à decisão pendente:\n«([\s\S]*?)»\]\n\n([\s\S]*)$/;
+
+/** Read a wrapped reply back: the question it answers and the words the person actually wrote. PURE. */
+export function parseDecisionReply(text: string): { question: string; answer: string } | null {
+  const match = REPLY_RE.exec(text.trim());
+  if (!match) return null;
+  const answer = match[2]!.trim();
+  if (answer === "") return null;
+  return { question: match[1]!, answer };
+}
+
+/** Question identity for anchoring — the wrapper flattens whitespace, so the match must too. PURE. */
+export function decisionKey(question: string): string {
+  return question.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/**
+ * Every explicit reply in the conversation, keyed by the ROW ID of the question it answered — how a
+ * prose question renders "Respondida: …" under itself, on this screen and after an F5 alike. Keyed
+ * by row, not by text: an agent that asks the same thing twice must not show the second answer
+ * under the first question. Each reply lands on the NEAREST question above it. PURE.
+ */
+export function decisionReplies(rows: readonly SdkRow[]): Map<string, string> {
+  const byRow = new Map<string, string>();
+  const lastAsked = new Map<string, string>();
+  for (const row of rows) {
+    if (row.kind === "assistant" && !row.streaming) {
+      const question = proseQuestion(row.text);
+      if (question) lastAsked.set(decisionKey(question), row.id);
+      continue;
+    }
+    if (row.kind !== "user") continue;
+    const parsed = parseDecisionReply(row.text);
+    if (!parsed) continue;
+    const rowId = lastAsked.get(decisionKey(parsed.question));
+    if (rowId) byRow.set(rowId, parsed.answer);
+  }
+  return byRow;
 }

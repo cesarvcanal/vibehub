@@ -724,3 +724,165 @@ describe("SdkChatView — escada de estados (Preparando → Pensando → Trabalh
     expect(indicators[0]).toHaveAttribute("data-phase", "thinking");
   });
 });
+
+/* ------------------------------------------------- respondendo a uma decisão */
+
+describe("SdkChatView — responder A decisão (não um recado solto)", () => {
+  const QUESTION = {
+    type: "user_question" as const,
+    id: "q_1",
+    questions: [{ question: "Formato do relatório?", options: [{ label: "Resumo" }, { label: "Detalhado" }] }],
+  };
+
+  async function chatWithProseQuestion() {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "assistant_text", text: "Fiz A e B.\n\nQual dos dois você prefere?" });
+    return ws;
+  }
+
+  it("a bandeja aponta o composer PRA decisão: o banner mostra a pergunta e o envio vai ancorado nela", async () => {
+    const ws = await chatWithProseQuestion();
+    expect(screen.queryByTestId("sdk-reply-banner")).toBeNull();
+
+    await userEvent.click(screen.getByTestId("pending-tray-item"));
+    const banner = screen.getByTestId("sdk-reply-banner");
+    expect(banner).toHaveTextContent("Qual dos dois você prefere?");
+    expect(screen.getByTestId("pending-tray-item")).toHaveAttribute("data-active", "true");
+
+    await userEvent.type(screen.getByRole("textbox"), "o B{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    const frame = JSON.parse(ws.sent[0]!);
+    expect(frame.type).toBe("user");
+    // what reaches the MODEL quotes the question — "o B" alone would be a riddle two turns later
+    expect(frame.text).toContain("Qual dos dois você prefere?");
+    expect(frame.text).toContain("o B");
+
+    // …the aim is released, the tray is empty and the answer is anchored to its question
+    expect(screen.queryByTestId("sdk-reply-banner")).toBeNull();
+    expect(screen.queryByTestId("pending-tray")).toBeNull();
+    expect(screen.getByTestId("sdk-prose-question")).toHaveAttribute("data-answered", "true");
+    expect(screen.getByTestId("sdk-prose-answered")).toHaveTextContent("o B");
+    // and the bubble reads as an answer, not as a loose message
+    expect(screen.getByTestId("sdk-user-reply")).toHaveTextContent("Qual dos dois você prefere?");
+    expect(screen.getByTestId("sdk-user")).toHaveTextContent("o B");
+  });
+
+  it("o botão 'Responder' na própria pergunta arma o mesmo alvo", async () => {
+    await chatWithProseQuestion();
+    await userEvent.click(screen.getByTestId("sdk-prose-reply"));
+    expect(screen.getByTestId("sdk-reply-banner")).toHaveTextContent("Qual dos dois você prefere?");
+  });
+
+  it("o X SAI da resposta: a mesma frase vira recado solto", async () => {
+    const ws = await chatWithProseQuestion();
+    await userEvent.click(screen.getByTestId("pending-tray-item"));
+    await userEvent.click(screen.getByTestId("sdk-reply-cancel"));
+    expect(screen.queryByTestId("sdk-reply-banner")).toBeNull();
+
+    await userEvent.type(screen.getByRole("textbox"), "depois eu penso{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    expect(JSON.parse(ws.sent[0]!)).toEqual({ type: "user", text: "depois eu penso" });
+    expect(screen.queryByTestId("sdk-user-reply")).toBeNull();
+  });
+
+  it("REPLAY: a resposta continua ancorada na pergunta depois do F5", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    // exactly what the history replays: the question, then the wrapped answer
+    ws.deliver({ type: "assistant_text", text: "Fiz A e B.\n\nQual dos dois você prefere?" });
+    ws.deliver({
+      type: "user",
+      text: "[resposta à decisão pendente:\n«Qual dos dois você prefere?»]\n\no B",
+      from: { kind: "user", name: "alex" },
+    });
+    ws.deliver({ type: "ready" });
+
+    expect(screen.getByTestId("sdk-prose-answered")).toHaveTextContent("o B");
+    expect(screen.getByTestId("sdk-user-reply")).toHaveTextContent("Qual dos dois você prefere?");
+  });
+
+  it("decisão ESTRUTURADA: o que se digita responde a pergunta (vai como question_answer)", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(QUESTION);
+
+    await userEvent.click(screen.getByTestId("pending-tray-item"));
+    expect(screen.getByTestId("sdk-reply-banner")).toHaveTextContent("Formato do relatório?");
+
+    const composer = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+    await userEvent.type(composer, "em tabela, por filial{Enter}");
+    const frame = ws.sent.map((s) => JSON.parse(s)).find((f) => f.type === "question_answer");
+    expect(frame).toEqual({ type: "question_answer", id: "q_1", answers: [{ selected: ["em tabela, por filial"] }] });
+    // the card itself says what it got — nothing to guess
+    expect(screen.getByTestId("sdk-question")).toHaveAttribute("data-outcome", "answered");
+    expect(screen.getByTestId("sdk-question")).toHaveTextContent("em tabela, por filial");
+    expect(screen.queryByTestId("sdk-reply-banner")).toBeNull();
+  });
+
+  it("OUTRA ABA respondeu: o alvo cai e o aviso aparece (o Enter seguinte não vira resposta muda)", async () => {
+    const { toast } = await import("sonner");
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(QUESTION);
+    await userEvent.click(screen.getByTestId("pending-tray-item"));
+    expect(screen.getByTestId("sdk-reply-banner")).toBeInTheDocument();
+
+    // the driver echoes the answer someone else clicked
+    ws.deliver({ type: "question_result", id: "q_1", answers: [{ selected: ["Resumo"] }] });
+    await waitFor(() => expect(screen.queryByTestId("sdk-reply-banner")).toBeNull());
+    expect(toast.message).toHaveBeenCalled();
+  });
+
+  it("VÁRIAS pendentes: o banner diz em qual você está, e clicar na outra troca o alvo", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(QUESTION);
+    ws.deliver({ type: "assistant_text", text: "Além disso:\n\nQual banco você prefere?" });
+
+    const items = screen.getAllByTestId("pending-tray-item");
+    await userEvent.click(items[0]!);
+    expect(screen.getByTestId("sdk-reply-banner")).toHaveTextContent("Formato do relatório?");
+    await userEvent.click(screen.getAllByTestId("pending-tray-item")[1]!);
+    expect(screen.getByTestId("sdk-reply-banner")).toHaveTextContent("Qual banco você prefere?");
+  });
+
+  it("card com VÁRIAS perguntas: a bandeja leva até ele, mas não arma o composer", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({
+      type: "user_question",
+      id: "q_9",
+      questions: [
+        { question: "Formato?", options: [{ label: "Resumo" }] },
+        { question: "Idioma?", options: [{ label: "pt-BR" }] },
+      ],
+    });
+
+    await userEvent.click(screen.getByTestId("pending-tray-item"));
+    expect(screen.queryByTestId("sdk-reply-banner")).toBeNull();
+  });
+
+  it("o AGENTE seguiu sozinho: a pergunta antiga sai da bandeja e o alvo cai junto", async () => {
+    const ws = await chatWithProseQuestion();
+    await userEvent.click(screen.getByTestId("pending-tray-item"));
+    expect(screen.getByTestId("sdk-reply-banner")).toBeInTheDocument();
+
+    ws.deliver({ type: "assistant_text", text: "Fui de A e já terminei." });
+    await waitFor(() => expect(screen.queryByTestId("pending-tray")).toBeNull());
+    expect(screen.queryByTestId("sdk-reply-banner")).toBeNull();
+    // and the stale question stops offering "Responder" — it would arm a dead target
+    expect(screen.queryByTestId("sdk-prose-reply")).toBeNull();
+  });
+});

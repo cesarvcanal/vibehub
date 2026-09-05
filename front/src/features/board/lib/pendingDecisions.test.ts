@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { pendingDecisions, proseQuestion, splitProseQuestion } from "./pendingDecisions";
+import {
+  buildDecisionReply,
+  decisionKey,
+  decisionReplies,
+  parseDecisionReply,
+  pendingDecisions,
+  proseQuestion,
+  splitProseQuestion,
+} from "./pendingDecisions";
 import type { SdkRow } from "./sdkChat";
 
 /* ------------------------------------------------------------ heuristic */
@@ -77,7 +85,13 @@ describe("pendingDecisions — a bandeja", () => {
   it("lists a pending user_question and drops it once answered", () => {
     const pendingRow: SdkRow = { kind: "question", id: "q_1", questions: QUESTIONS, outcome: "pending" };
     expect(pendingDecisions([pendingRow])).toEqual([
-      { kind: "question", rowId: "q_1", summary: "Formato do relatório?" },
+      {
+        kind: "question",
+        rowId: "q_1",
+        text: "Formato do relatório?",
+        summary: "Formato do relatório?",
+        answerable: true,
+      },
     ]);
     expect(pendingDecisions([{ ...pendingRow, outcome: "answered" }])).toEqual([]);
     expect(pendingDecisions([{ ...pendingRow, outcome: "unanswered" }])).toEqual([]);
@@ -97,7 +111,13 @@ describe("pendingDecisions — a bandeja", () => {
       assistant("a1", "Plano feito.\n\nQual layout você prefere?"),
     ];
     expect(pendingDecisions(rows)).toEqual([
-      { kind: "prose", rowId: "a1", summary: "Qual layout você prefere?" },
+      {
+        kind: "prose",
+        rowId: "a1",
+        text: "Qual layout você prefere?",
+        summary: "Qual layout você prefere?",
+        answerable: true,
+      },
     ]);
     expect(pendingDecisions([...rows, user("u2", "o segundo")])).toEqual([]);
   });
@@ -119,5 +139,89 @@ describe("pendingDecisions — a bandeja", () => {
     const [d] = pendingDecisions([assistant("a1", long)]);
     expect(d!.summary.length).toBeLessThanOrEqual(100);
     expect(d!.summary.endsWith("…")).toBe(true);
+  });
+
+  it("a multi-question card is NOT answerable by a typed line (its own fields are)", () => {
+    const rows: SdkRow[] = [
+      {
+        kind: "question",
+        id: "q_1",
+        questions: [
+          { question: "Formato?", options: [{ label: "Resumo" }] },
+          { question: "Idioma?", options: [{ label: "pt-BR" }] },
+        ],
+        outcome: "pending",
+      },
+    ];
+    expect(pendingDecisions(rows)[0]!.answerable).toBe(false);
+  });
+
+  it("STALE: the agent spoke again, so the older prose question stops being pending", () => {
+    const rows: SdkRow[] = [
+      assistant("a1", "Plano feito.\n\nQual layout você prefere?"),
+      assistant("a2", "Enquanto isso adiantei o CSS."),
+    ];
+    expect(pendingDecisions(rows)).toEqual([]);
+
+    // and when the NEWEST message is itself a question, that one is the pending decision
+    const asksAgain: SdkRow[] = [...rows, assistant("a3", "Agora sim: qual você prefere?")];
+    expect(pendingDecisions(asksAgain).map((d) => d.rowId)).toEqual(["a3"]);
+  });
+
+  it("a structured question survives the agent speaking again (it has a real channel)", () => {
+    const rows: SdkRow[] = [
+      { kind: "question", id: "q_1", questions: QUESTIONS, outcome: "pending" },
+      assistant("a1", "Fui adiantando o resto."),
+    ];
+    expect(pendingDecisions(rows).map((d) => d.rowId)).toEqual(["q_1"]);
+  });
+});
+
+/* -------------------------------------------------------- resposta explícita */
+
+describe("buildDecisionReply / parseDecisionReply — a resposta ancorada", () => {
+  it("round-trips the question and the answer", () => {
+    const wrapped = buildDecisionReply("Qual layout você prefere?", "o segundo");
+    expect(wrapped).toContain("Qual layout você prefere?");
+    expect(wrapped).toContain("o segundo");
+    expect(parseDecisionReply(wrapped)).toEqual({ question: "Qual layout você prefere?", answer: "o segundo" });
+  });
+
+  it("flattens a multi-line question so the anchor still matches", () => {
+    const wrapped = buildDecisionReply("Qual layout\n  você prefere?", "o segundo");
+    expect(parseDecisionReply(wrapped)!.question).toBe("Qual layout você prefere?");
+  });
+
+  it("keeps line breaks inside the answer", () => {
+    const wrapped = buildDecisionReply("Qual?", "primeiro isso\ndepois aquilo");
+    expect(parseDecisionReply(wrapped)!.answer).toBe("primeiro isso\ndepois aquilo");
+  });
+
+  it("a plain message is NOT a reply", () => {
+    expect(parseDecisionReply("o segundo")).toBeNull();
+    expect(parseDecisionReply("[resposta à decisão pendente: sem o resto")).toBeNull();
+  });
+
+  it("decisionReplies anchors each answer to the ROW it answered", () => {
+    const rows: SdkRow[] = [
+      assistant("a1", "Fiz A e B.\n\nQual dos dois você prefere?"),
+      user("u1", buildDecisionReply("Qual dos dois você prefere?", "o B")),
+      user("u2", "e roda os testes depois"),
+    ];
+    expect(decisionReplies(rows)).toEqual(new Map([["a1", "o B"]]));
+  });
+
+  it("the SAME question asked twice keeps each answer under its own message", () => {
+    const rows: SdkRow[] = [
+      assistant("a1", "Qual dos dois você prefere?"),
+      user("u1", buildDecisionReply("Qual dos dois você prefere?", "o B")),
+      assistant("a2", "Qual dos dois você prefere?"),
+      user("u2", buildDecisionReply("Qual dos dois você prefere?", "agora o A")),
+    ];
+    expect(decisionReplies(rows)).toEqual(new Map([["a1", "o B"], ["a2", "agora o A"]]));
+  });
+
+  it("decisionKey ignores case and spacing (the wrapper flattens the question)", () => {
+    expect(decisionKey("  QUAL dos dois   você prefere? ")).toBe(decisionKey("Qual dos dois você prefere?"));
   });
 });
