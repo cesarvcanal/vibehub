@@ -390,14 +390,36 @@ function ProjectSwitcher({
   return (
     <div className="flex shrink-0 items-center gap-0.5 border-b border-border/60 py-1 pl-1.5 pr-1.5">
       <DropdownMenu open={open} onOpenChange={setOpen}>
+        {/* The trigger is also a REAL link to the project it names — the brand, the project rows and
+            the cards all are, and this was the one place in the sidebar where middle-clicking a
+            project name did nothing. It keeps `role="button"`, because that is what a plain click
+            and the keyboard do here: open the menu. The href only serves the browser's own gestures. */}
         <DropdownMenuTrigger
+          asChild
           aria-label={t("sidebar.switchProject")}
           title={t("sidebar.switchProject")}
-          className="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <FolderGit2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate text-sm font-semibold">{current.name}</span>
-          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <a
+            href={projectHref(current.id)}
+            role="button"
+            onPointerDown={(e) => {
+              // Radix opens the menu on POINTERDOWN of the left button, before the click that opens
+              // the new tab exists. Cmd/Shift-click would therefore open both; preventDefault is
+              // what makes Radix's composed handler stand down (it skips a defaultPrevented event).
+              // Middle-click it already ignores, so that gesture is left entirely to the browser.
+              if (e.button === 0 && isNewTabClick(e)) e.preventDefault();
+            }}
+            onClick={(e) => {
+              // New tab: let the browser follow the href. Plain click: the menu is the action, so
+              // the navigation must not happen.
+              if (!isNewTabClick(e)) e.preventDefault();
+            }}
+            className="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <FolderGit2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate text-sm font-semibold">{current.name}</span>
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          </a>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="max-h-[60vh] w-56 overflow-y-auto">
           {onShowAll ? (

@@ -178,3 +178,86 @@ describe("ProjectSidebar — the logo is a link home", () => {
     expect(onShowAllProjects).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The project switcher — the header of an open project — is a link too. Its plain click opens the
+ * menu, as it always did, but the browser's "open it somewhere else" gestures now reach the project
+ * it NAMES, exactly like middle-clicking the brand reaches the aggregated board.
+ */
+describe("ProjectSidebar — the switcher opens the current project in a new tab", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    localStorage.clear();
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/setup/state") return Promise.resolve(setupState());
+      if (url === "/auth/me") return Promise.resolve({ user: { id: "u1", username: "sam", role: "owner" } });
+      if (url === "/projects/p1/cards") return Promise.resolve({ cards: [] });
+      if (url === "/accounts") return Promise.resolve({ accounts: [], defaultLabel: "Main" });
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+  });
+
+  function renderFocused(onSelectProject = vi.fn()) {
+    renderApp(
+      <ProjectSidebar
+        projects={[project]}
+        selectedProjectId="p1"
+        selectedCardId={null}
+        mobileOpen={false}
+        onCloseMobile={vi.fn()}
+        onSelectProject={onSelectProject}
+        onOpenCard={vi.fn()}
+        onReorder={vi.fn()}
+        onNewProject={vi.fn()}
+        onNewCard={vi.fn()}
+        onDeleteProject={vi.fn()}
+      />,
+    );
+    return onSelectProject;
+  }
+
+  /** Still a button to a screen reader and to the keyboard: pressing it opens the menu. */
+  const trigger = () => screen.getByRole("button", { name: "Switch project" });
+
+  it("carries the open project's own URL as its href", () => {
+    renderFocused();
+    expect(trigger()).toHaveAttribute("href", "?project=p1");
+  });
+
+  it("still opens the menu on a plain click, without navigating", async () => {
+    renderFocused();
+    const user = userEvent.setup();
+
+    await user.click(trigger());
+
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+  });
+
+  it("a plain click cancels the browser navigation", () => {
+    renderFocused();
+    // fireEvent returns false when the handler called preventDefault.
+    expect(fireEvent.click(trigger())).toBe(false);
+  });
+
+  it("lets the browser open the project on middle-click, and leaves the menu shut", () => {
+    renderFocused();
+    const el = trigger();
+
+    fireEvent.pointerDown(el, { button: 1 });
+    const notPrevented = fireEvent.click(el, { button: 1 });
+
+    expect(notPrevented).toBe(true);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("does the same for Cmd/Ctrl/Shift-click", () => {
+    renderFocused();
+    const el = trigger();
+
+    for (const modifier of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }]) {
+      fireEvent.pointerDown(el, { button: 0, ...modifier });
+      expect(fireEvent.click(el, modifier)).toBe(true);
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    }
+  });
+});
