@@ -1,10 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { listTerminals, sendToTerminal, readTerminal, reportState } from "../services/maestro/maestro.js";
+import { listTerminals, sendToTerminal, readTerminal, reportState, agentOriginFor } from "../services/maestro/maestro.js";
 import { DECLARED_STATES } from "../services/board/registry.js";
 import { runGate } from "../services/maestro/gate.js";
 import { deliver } from "../services/maestro/deliver.js";
 import { announcePreview } from "../services/preview/announce.js";
+import { recordLearning } from "../services/brain/learn.js";
 
 /**
  * MAESTRO TOOLS — what one card's agent can do to the OTHER cards.
@@ -54,11 +55,19 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
       inputSchema: {
         cardId: z.string().describe("id of the destination card (from vibehub_list_terminals)"),
         text: z.string().describe("the instruction to type at that terminal's prompt (submitted with Enter)"),
+        from: z.string().optional().describe(
+          "YOUR OWN card id — the $VIBEHUB_CARD_ID of this terminal. Always pass it: it is how the " +
+          "destination card's chat shows WHO sent the message (your card's name, linked back to it).",
+        ),
       },
     },
     async (a) => {
       try {
-        return ok(await sendToTerminal(a.cardId, a.text, { by: actor, respectHumanActive: true }));
+        return ok(await sendToTerminal(a.cardId, a.text, {
+          by: actor,
+          respectHumanActive: true,
+          origin: await agentOriginFor(a.from),
+        }));
       } catch (e) {
         return fail(e);
       }
@@ -113,13 +122,43 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
   );
 
   server.registerTool(
+    "vibehub_brain_learn",
+    {
+      description:
+        "Record a DURABLE learning about this card's PROJECT in the project's brain (the " +
+        "instructions every card of the project reads). Use it when you discover something lasting " +
+        "— an architecture fact, a business rule, a decision, a build gotcha — in 1-3 objective " +
+        "sentences. Do NOT record trivia, task status, or secrets/credentials. The entry is APPENDED " +
+        "as a dated bullet under the project brain's '## Aprendizados' section — this tool can never " +
+        "modify anything else in the brain (append-only; identical text is deduplicated). The user " +
+        "curates the section on the Brain screen. `card` is YOUR OWN card id ($VIBEHUB_CARD_ID) — it " +
+        "is how the learning is routed to the right project.",
+      inputSchema: {
+        card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this terminal"),
+        learning: z.string().max(600).describe(
+          "the learning, 1-3 objective sentences on ONE line (newlines are collapsed). No secrets.",
+        ),
+      },
+    },
+    async (a) => {
+      try {
+        return ok(await recordLearning(a.card, a.learning, actor));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
     "vibehub_preview",
     {
       description:
         "Announce a PREVIEW on your own card: you started a server inside the runner (a dev server, " +
         "an API) and the user should get a clickable link to it. vibehub verifies the port is " +
         "actually LISTENING, records the preview on the card (a visible chip the user clicks) and " +
-        "returns the full URL — answer the user with that exact URL. If the port is not listening " +
+        "returns the link: answer the user with `path` (/preview/<port>/ — it works on ANY host the " +
+        "vibehub panel is opened on; `url` is just that path on the configured public URL, one " +
+        "example host). If the port is not listening " +
         "yet, it refuses and tells you what is: start the server first (bound to 127.0.0.1 or " +
         "0.0.0.0) and wait until it listens. ALWAYS pass `command` (and `cwd` when it is not your " +
         "worktree): vibehub stores them so the preview can be RELAUNCHED in its own session after " +

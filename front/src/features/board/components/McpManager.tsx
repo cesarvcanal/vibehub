@@ -62,7 +62,7 @@ interface SecretDraft {
   value: string;
 }
 
-export function McpManager() {
+export function McpManager({ trigger = "icon" }: { trigger?: "icon" | "row" } = {}) {
   const t = useT();
   const queryClient = useQueryClient();
   const [open, setOpen] = React.useState(false);
@@ -174,16 +174,29 @@ export function McpManager() {
     <>
       {/* Icon only, beside Accounts and Brain: three settings sharing one quiet corner of a board
           full of live work. */}
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-7 w-7 text-muted-foreground hover:text-foreground"
-        aria-label={t("mcp.aria")}
-        title={t("mcp.buttonTitle")}
-        onClick={() => setOpen(true)}
-      >
-        <Plug className="h-4 w-4" />
-      </Button>
+      {trigger === "row" ? (
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full justify-start gap-2"
+          title={t("mcp.buttonTitle")}
+          onClick={() => setOpen(true)}
+        >
+          <Plug className="h-4 w-4 text-muted-foreground" />
+          {t("mcp.aria")}
+        </Button>
+      ) : (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 text-muted-foreground hover:text-foreground"
+          aria-label={t("mcp.aria")}
+          title={t("mcp.buttonTitle")}
+          onClick={() => setOpen(true)}
+        >
+          <Plug className="h-4 w-4" />
+        </Button>
+      )}
 
       <Dialog
         open={open}

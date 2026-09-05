@@ -7,7 +7,6 @@ import {
   Check,
   Loader2,
   Menu,
-  MessageSquare,
   MonitorPlay,
   MoreHorizontal,
   Pause,
@@ -59,6 +58,7 @@ import {
   cardSessionKey,
   cardsKey,
   defaultAccountLabelOr,
+  FEATURES_KEY,
   modelInUse,
   projectAccountSlug,
   whitelistModel,
@@ -152,6 +152,10 @@ export function CardTerminalView({
     queryFn: () => boardApi.listCards(project.id),
     enabled: false,
   });
+
+  // WHICH chat the Chat tab mounts is an INSTALL flag now, not a per-card opt-in: with the global
+  // sdkDriver switch on, every card's Chat tab is the native (SDK) chat; off is the classic chat.
+  const features = useQuery({ queryKey: FEATURES_KEY, queryFn: boardApi.features, staleTime: 60_000 });
 
   // Decided ONCE, on mount, before anything can refetch underneath us.
   const [cachedInstant] = React.useState(() =>
@@ -258,13 +262,6 @@ export function CardTerminalView({
     mutationFn: (title: string) => boardApi.patchCard(cardId, { title }),
     onSuccess: mirror,
     onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardRenameError"))),
-  });
-
-  /** Native chat (beta) opt-in — per card, so one guinea-pig card can try the SDK driver alone. */
-  const sdkChatMutation = useMutation({
-    mutationFn: (sdkChat: boolean) => boardApi.patchCard(cardId, { sdkChat }),
-    onSuccess: mirror,
-    onError: (error) => toast.error(apiErrorMessage(error)),
   });
 
   const pauseMutation = useMutation({
@@ -550,35 +547,31 @@ export function CardTerminalView({
   }, [active, isMobile]);
 
   /**
-   * TERMINAL | CHAT. The one control that is the same on a phone and on a desktop, in the same
-   * place, because it is the control you reach for precisely when the terminal is not behaving —
-   * and something you have to open a menu to find is not there when you need it. It never goes
-   * behind the `⋯`, and it is never decided for you by the width of the screen.
+   * The TERMINAL toggle. The chat is THE view of a card (and the native chat its default since
+   * 2026-08-31); the raw TUI is a utility you reach for when Claude parks on a raw screen —
+   * menus, /login, a permission dialog. So the old "Terminal | Chat" pair of labelled buttons
+   * became ONE quiet icon: pressed = the raw terminal is on screen, pressing again returns to the
+   * chat. No text, a "Terminal" tooltip, the same on a phone and on a desktop — and still never
+   * behind the `⋯`, because it is what you reach for precisely when things misbehave. A device
+   * that was left on the terminal reopens on it (the per-card memory in `readCardMode` stands);
+   * everything else opens on the chat.
    */
   const viewSwitch = (
-    <div
-      role="group"
-      data-testid="card-view-switch"
-      aria-label={t("cardView.viewMode")}
-      className="flex shrink-0 items-center gap-0.5 rounded-md border border-border/50 bg-card/40 p-0.5"
+    <button
+      type="button"
+      data-testid="card-view-terminal"
+      aria-pressed={mode === "terminal"}
+      aria-label={t("cardView.viewTerminal")}
+      title={t("cardView.viewTerminal")}
+      onClick={() => switchMode(mode === "terminal" ? "chat" : "terminal")}
+      className={cn(
+        "inline-flex shrink-0 items-center justify-center rounded-md border border-border/50 bg-card/40 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        isMobile ? "h-9 w-9" : "h-7 w-7",
+        mode === "terminal" ? "text-primary" : "text-muted-foreground hover:text-foreground",
+      )}
     >
-      <ModeButton
-        mode="terminal"
-        current={mode}
-        label={t("cardView.viewTerminal")}
-        icon={<TerminalSquare className="h-3.5 w-3.5" />}
-        compact={isMobile}
-        onSelect={switchMode}
-      />
-      <ModeButton
-        mode="chat"
-        current={mode}
-        label={t("cardView.viewChat")}
-        icon={<MessageSquare className="h-3.5 w-3.5" />}
-        compact={isMobile}
-        onSelect={switchMode}
-      />
-    </div>
+      <TerminalSquare className="h-4 w-4" />
+    </button>
   );
 
   /** The model rows, shared by the desktop pill and the phone's overflow menu. */
@@ -647,23 +640,6 @@ export function CardTerminalView({
                   </DropdownMenuCheckboxItem>
                 ))}
     </>
-  );
-
-  /**
-   * The NATIVE CHAT (beta) opt-in, shared by the desktop `⋯` and the phone's overflow menu. It is
-   * a per-card setting, and a per-card setting reachable from only one width of screen is a
-   * setting half the installs cannot flip — the first cut had it behind the phone menu only, and
-   * on a desktop there was simply no way to turn it on.
-   */
-  const nativeChatItem = (
-    <DropdownMenuCheckboxItem
-      data-testid="card-native-chat-toggle"
-      checked={Boolean(card?.sdkChat)}
-      disabled={!card || sdkChatMutation.isPending}
-      onSelect={() => card && sdkChatMutation.mutate(!card.sdkChat)}
-    >
-      {t("cardView.nativeChat")}
-    </DropdownMenuCheckboxItem>
   );
 
   /**
@@ -863,26 +839,6 @@ export function CardTerminalView({
               </DropdownMenuContent>
             </DropdownMenu>
           ) : null}
-          {/* The desktop `⋯`: the card options that are not worth a pill of their own. The phone
-              has had this menu since the two-row bar; the desktop needs it for the same reason —
-              the native-chat toggle has to exist HERE too, not only behind the phone's menu. */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                data-testid="card-bar-more"
-                aria-label={t("cardView.more")}
-                title={t("cardView.more")}
-                className="h-7 w-7 shrink-0 rounded-md border border-border/50 bg-card/40 text-muted-foreground"
-              >
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent side="bottom" align="end">
-              {nativeChatItem}
-            </DropdownMenuContent>
-          </DropdownMenu>
           {showTerminal ? <ConnectionIndicator state={connection} /> : null}
         </div>
     </>
@@ -959,7 +915,6 @@ export function CardTerminalView({
             >
               {t("cardView.shell")}
             </DropdownMenuCheckboxItem>
-            {nativeChatItem}
             {card ? (
               <>
                 <DropdownMenuSeparator />
@@ -1074,10 +1029,21 @@ export function CardTerminalView({
           className={cn("flex min-h-0 flex-1 flex-col", browserOpen && "lg:flex-row lg:gap-2")}
         >
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {mode === "chat" && card?.sdkChat ? (
-              /* NATIVE CHAT (beta): the Agent SDK driver socket — structured events, permission
-                 buttons in the chat. Per-card opt-in; the global sdkDriver setting still gates the
-                 server side, and with it off this view says so. */
+            {mode === "chat" && features.data === undefined ? (
+              /* The install flag is not here yet (cold cache). WHICH chat this install uses is that
+                 flag, so guessing would mount the WRONG view: the legacy chat flashed in, took the
+                 first message down the tmux path, and the person read it as "reabri o card e o modo
+                 nativo sumiu". A beat of spinner tells the truth. */
+              <div
+                data-testid="chat-mode-deciding"
+                className="flex min-h-0 flex-1 items-center justify-center rounded-md border border-border/60 bg-card/30"
+              >
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : mode === "chat" && features.data?.sdkChat ? (
+              /* NATIVE CHAT — the default for every card: the Agent SDK driver socket, structured
+                 events, permission buttons in the chat. The global sdkDriver setting is the one
+                 switch; off mounts the classic chat below instead. */
               <SdkChatView
                 cardId={cardId}
                 active={active}
@@ -1098,6 +1064,18 @@ export function CardTerminalView({
               />
             ) : (
               <>
+                {/* THE RULE of running both modes on one card: it is ONE conversation. The native
+                    chat resumes the NEWEST session in this worktree — including turns typed here —
+                    so the terminal stays available (permission prompts, /login) without forking
+                    the story. Said here, where the two modes meet. */}
+                {features.data?.sdkChat ? (
+                  <p
+                    data-testid="sdk-terminal-note"
+                    className="mb-1 rounded-md border border-border/60 bg-card/40 px-2 py-1 text-[11px] text-muted-foreground"
+                  >
+                    {t("cardView.sdkTerminalNote")}
+                  </p>
+                ) : null}
                 <XTerminal
                   zoomControl
                   wsPath={`/api/cards/${encodeURIComponent(cardId)}/terminal`}
@@ -1172,45 +1150,6 @@ export function CardTerminalView({
  * card, and a switch that greys out while a card is opening is a switch you cannot pre-set — which
  * matters most on the slow open that made you want the chat in the first place.
  */
-function ModeButton({
-  mode,
-  current,
-  label,
-  icon,
-  compact,
-  onSelect,
-}: {
-  mode: CardViewMode;
-  current: CardViewMode;
-  label: string;
-  icon: React.ReactNode;
-  compact?: boolean;
-  onSelect: (mode: CardViewMode) => void;
-}) {
-  const active = current === mode;
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={active}
-      aria-label={label}
-      title={label}
-      data-testid={`card-view-${mode}`}
-      onClick={() => onSelect(mode)}
-      className={cn(
-        "inline-flex shrink-0 items-center gap-1 rounded px-2 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-        compact ? "h-8" : "h-6",
-        active
-          ? "bg-primary/15 text-primary"
-          : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      {icon}
-      {compact ? null : label}
-    </button>
-  );
-}
-
 /**
  * Browser / Shell in the card bar: an icon and a word, pressed or not.
  *

@@ -35,7 +35,7 @@ async function boot() {
   vi.resetModules();
   const env = await import("../../config/env.js");
   env.config.dataDir = dir;
-  env.config.publicUrl = "http://10.8.0.25:3010/";
+  env.config.publicUrl = "http://192.0.2.10:3010/";
   vi.doMock("../../runtime/host.js", async () => {
     const actual = await vi.importActual<typeof import("../../runtime/host.js")>("../../runtime/host.js");
     return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript }) };
@@ -49,7 +49,7 @@ async function boot() {
 
 describe("previewPublicUrl (pure)", () => {
   it("joins publicUrl and the proxy path, tolerating trailing slashes", () => {
-    expect(previewPublicUrl("http://10.8.0.25:3010", 5173)).toBe("http://10.8.0.25:3010/preview/5173/");
+    expect(previewPublicUrl("http://192.0.2.10:3010", 5173)).toBe("http://192.0.2.10:3010/preview/5173/");
     expect(previewPublicUrl("http://vibehub.multi/", 3000)).toBe("http://vibehub.multi/preview/3000/");
   });
 
@@ -81,8 +81,12 @@ describe("announcePreview", () => {
       cardId,
       port: 5173,
       label: "front",
-      url: "http://10.8.0.25:3010/preview/5173/",
+      // The PATH is the canonical link — valid on every host the panel is reached through; the
+      // full URL is only that path on the configured public URL (one example host).
+      path: "/preview/5173/",
+      url: "http://192.0.2.10:3010/preview/5173/",
       hint: PREVIEW_BASE_HINT,
+      note: announce.PREVIEW_HOST_NOTE,
     });
     const card = await registry.getCard(cardId);
     expect(card?.previews).toEqual([{ port: 5173, label: "front", createdAt: expect.any(Number) }]);

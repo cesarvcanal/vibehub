@@ -273,6 +273,67 @@ describe("brain", () => {
   });
 });
 
+describe("project brain", () => {
+  /** The board is real: a project created through its own route, so the id is a genuine one. */
+  async function makeProject(name = "erp-aux"): Promise<string> {
+    const res = await app.inject({ method: "POST", url: "/api/projects", headers: { cookie }, payload: { name } });
+    return res.json().project.id as string;
+  }
+
+  it("round-trips one project's brain WITHOUT touching the global or another project's", async () => {
+    const p1 = await makeProject("alpha");
+    const p2 = await makeProject("beta");
+
+    expect((await app.inject({ method: "GET", url: `/api/brain/projects/${p1}`, headers: { cookie } })).json())
+      .toEqual({ text: "" });
+
+    const saved = await app.inject({
+      method: "POST", url: `/api/brain/projects/${p1}`, headers: { cookie }, payload: { text: "# Só do alpha" },
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toMatchObject({ text: "# Só do alpha", applied: true });
+
+    expect((await app.inject({ method: "GET", url: `/api/brain/projects/${p1}`, headers: { cookie } })).json().text)
+      .toBe("# Só do alpha");
+    expect((await app.inject({ method: "GET", url: `/api/brain/projects/${p2}`, headers: { cookie } })).json().text)
+      .toBe("");
+    expect((await app.inject({ method: "GET", url: "/api/brain", headers: { cookie } })).json().text)
+      .not.toContain("Só do alpha");
+    // the GLOBAL apply is not part of a project save
+    expect(applyBrainEverywhere).not.toHaveBeenCalled();
+  });
+
+  it("an EMPTY save clears the project brain", async () => {
+    const p1 = await makeProject("alpha");
+    await app.inject({ method: "POST", url: `/api/brain/projects/${p1}`, headers: { cookie }, payload: { text: "x" } });
+    const cleared = await app.inject({
+      method: "POST", url: `/api/brain/projects/${p1}`, headers: { cookie }, payload: { text: "" },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: `/api/brain/projects/${p1}`, headers: { cookie } })).json())
+      .toEqual({ text: "" });
+  });
+
+  it("404s an unknown project and 400s a text that would break the heredoc", async () => {
+    expect((await app.inject({ method: "GET", url: "/api/brain/projects/nope", headers: { cookie } })).statusCode).toBe(404);
+    expect((await app.inject({
+      method: "POST", url: "/api/brain/projects/nope", headers: { cookie }, payload: { text: "x" },
+    })).statusCode).toBe(404);
+
+    const p1 = await makeProject("alpha");
+    expect((await app.inject({
+      method: "POST", url: `/api/brain/projects/${p1}`, headers: { cookie }, payload: { text: "a\nVIBEHUB_BRAIN\nb" },
+    })).statusCode).toBe(400);
+  });
+
+  it("the manual re-push reports the worktrees it wrote", async () => {
+    const p1 = await makeProject("alpha");
+    const res = await app.inject({ method: "POST", url: `/api/brain/projects/${p1}/apply`, headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, cards: 0, bytes: 0 }); // no cards yet — nothing to write
+  });
+});
+
 describe("import", () => {
   it("adopts staged sessions as cards", async () => {
     importSessions.mockResolvedValueOnce({ results: [], created: 2, skipped: 1, failed: 0 });

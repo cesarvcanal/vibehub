@@ -1,5 +1,20 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { groupChatRows, mergeEvent, parseChatFrame, readCardMode, writeCardMode, readPending, writePending, type ChatEvent } from "@/features/board/lib/chat";
+import {
+  groupChatRows,
+  mergeEvent,
+  normalizeMessage,
+  originRole,
+  parseChatFrame,
+  parseOrigin,
+  pendingPhase,
+  readCardMode,
+  writeCardMode,
+  readPending,
+  writePending,
+  PENDING_TIMEOUT_MS,
+  type ChatEvent,
+  type MessageOrigin,
+} from "@/features/board/lib/chat";
 
 const event = (over: Partial<ChatEvent> = {}): ChatEvent => ({
   id: "a1",
@@ -32,6 +47,47 @@ describe("parseChatFrame", () => {
       text: "oi",
       tool: undefined,
     });
+  });
+});
+
+describe("message provenance (from)", () => {
+  const agent: MessageOrigin = { kind: "agent", name: "card preview", sourceCardId: "c1", sourceProjectId: "p1" };
+
+  it("parseChatFrame carries a valid `from` through and drops a malformed one", () => {
+    expect(parseChatFrame(JSON.stringify({ id: "u1", kind: "user", at: 1, text: "oi", from: agent }))?.from).toEqual(agent);
+    expect(parseChatFrame(JSON.stringify({ id: "u1", kind: "user", at: 1, text: "oi", from: { kind: "ghost", name: "x" } }))?.from).toBeUndefined();
+    expect(parseChatFrame(JSON.stringify({ id: "u1", kind: "user", at: 1, text: "oi", from: "junk" }))?.from).toBeUndefined();
+  });
+
+  it("parseOrigin validates the shape and keeps only the known fields", () => {
+    expect(parseOrigin({ kind: "user", name: "alex", extra: true })).toEqual({
+      kind: "user", name: "alex", sourceCardId: undefined, sourceProjectId: undefined,
+    });
+    expect(parseOrigin(null)).toBeUndefined();
+    expect(parseOrigin({ kind: "agent" })).toBeUndefined(); // a nameless origin is no origin
+  });
+
+  it("originRole: no provenance = the viewer's own message (the pre-provenance behaviour)", () => {
+    expect(originRole(undefined, "sam")).toBe("self");
+    expect(originRole(undefined, undefined)).toBe("self");
+  });
+
+  it("originRole: an agent is always an agent; a person is 'self' only on their own screen", () => {
+    expect(originRole(agent, "sam")).toBe("agent");
+    expect(originRole({ kind: "user", name: "alex" }, "sam")).toBe("user");
+    expect(originRole({ kind: "owner", name: "sam" }, "sam")).toBe("self");
+    // Viewer unknown (auth still loading): show the sender rather than silently claiming the message.
+    expect(originRole({ kind: "user", name: "alex" }, undefined)).toBe("user");
+  });
+
+  it("originRole/parseOrigin: the panel's own injected turn (system) is never 'self'", () => {
+    // The boot-resume continuation (#48 provenance): stamped system so it cannot read as the
+    // person's own words — even when the names happen to collide.
+    expect(parseOrigin({ kind: "system", name: "vibehub" })).toEqual({
+      kind: "system", name: "vibehub", sourceCardId: undefined, sourceProjectId: undefined,
+    });
+    expect(originRole({ kind: "system", name: "vibehub" }, "vibehub")).toBe("system");
+    expect(originRole({ kind: "system", name: "vibehub" }, undefined)).toBe("system");
   });
 });
 
@@ -121,8 +177,8 @@ describe("the remembered mode", () => {
 describe("durable pending messages", () => {
   it("round-trips per card and clears the key when empty", () => {
     expect(readPending("c1")).toEqual([]);
-    writePending("c1", [{ id: "a", text: "arruma o dre" }]);
-    expect(readPending("c1")).toEqual([{ id: "a", text: "arruma o dre" }]);
+    writePending("c1", [{ id: "a", text: "arruma o dre", at: 123 }]);
+    expect(readPending("c1")).toEqual([{ id: "a", text: "arruma o dre", at: 123 }]);
     expect(readPending("c2")).toEqual([]); // per card
     writePending("c1", []);
     expect(localStorage.getItem("vibehub.chatPending.c1")).toBeNull();
@@ -132,6 +188,32 @@ describe("durable pending messages", () => {
     localStorage.setItem("vibehub.chatPending.c1", "{not json");
     expect(readPending("c1")).toEqual([]);
     localStorage.setItem("vibehub.chatPending.c1", JSON.stringify([{ id: "a" }, { text: "x" }, { id: "b", text: "ok" }]));
-    expect(readPending("c1")).toEqual([{ id: "b", text: "ok" }]); // only well-formed entries survive
+    expect(readPending("c1")).toMatchObject([{ id: "b", text: "ok" }]); // only well-formed entries survive
+  });
+
+  it("stamps NOW on an entry written before `at` existed — its timeout clock starts, not never", () => {
+    localStorage.setItem("vibehub.chatPending.c1", JSON.stringify([{ id: "old", text: "antiga" }]));
+    const [entry] = readPending("c1");
+    expect(entry!.at).toBeGreaterThan(0);
+    expect(Math.abs(Date.now() - entry!.at)).toBeLessThan(5_000);
+  });
+});
+
+describe("pendingPhase — 'enviando' has a deadline", () => {
+  // THE BUG: the optimistic bubble was cleared ONLY by the transcript echoing the same text. When
+  // the echo never came (Claude exited to a shell, a menu ate the keystrokes, a restart dropped the
+  // input queue) the bubble spun as "enviando" forever, in card after card.
+  it("is 'sending' before the timeout and 'unconfirmed' at it", () => {
+    const at = 1_000_000;
+    expect(pendingPhase({ at }, at)).toBe("sending");
+    expect(pendingPhase({ at }, at + PENDING_TIMEOUT_MS - 1)).toBe("sending");
+    expect(pendingPhase({ at }, at + PENDING_TIMEOUT_MS)).toBe("unconfirmed");
+  });
+});
+
+describe("normalizeMessage — the echo match", () => {
+  it("collapses whitespace so a re-flowed echo still clears its bubble", () => {
+    expect(normalizeMessage("  arruma\n  o dre  ")).toBe("arruma o dre");
+    expect(normalizeMessage("arruma o dre")).toBe("arruma o dre");
   });
 });

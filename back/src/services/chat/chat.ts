@@ -115,10 +115,24 @@ export function unwrapSlashCommand(text: string): string {
  * A user-role line that is really the HARNESS talking, not the person: a background-task
  * notification and the "[SYSTEM NOTIFICATION - NOT USER INPUT]" envelope it arrives in. These land
  * in the transcript as `type:"user"` with no `toolUseResult`, so the chat used to draw them as the
- * user's own message — the thing that made a scheduled watcher's "task completed" look like Cesar
+ * user's own message — the thing that made a scheduled watcher's "task completed" look like the user
  * had typed it. Returns a SHORT human label to show as a muted event, or null when it is a real
  * message. PURE.
  */
+/**
+ * Claude Code's own transcript FILLER, not conversation: when a session dies mid-turn (the deploy
+ * killing the SDK driver, an interrupt), the harness closes the dangling turn on resume by writing
+ * a canned user line "[Request interrupted by user…]" and a canned assistant line "No response
+ * requested.". Lifted into the chat, that pair reads like Claude ANSWERING the person's next
+ * message with "No response requested." (seen twice in production after a deploy) — so both are
+ * dropped by exact rule, on every path that parses a transcript (old chat, replay merge, mirror). PURE.
+ */
+export function isHarnessFiller(kind: "user" | "assistant", text: string): boolean {
+  const t = text.trim();
+  if (kind === "user") return /^\[Request interrupted by user( for tool use)?\]$/i.test(t);
+  return t === "No response requested.";
+}
+
 export function systemNote(text: string): string | null {
   const t = text.trim();
   if (!/^\[SYSTEM NOTIFICATION\b/i.test(t) && !t.includes("<task-notification>")) return null;
@@ -184,6 +198,7 @@ export function parseChatEvents(jsonl: string): ChatEvent[] {
       // `<local-command-stdout>` is the terminal echoing a slash command's own output back into the
       // transcript. It belongs to the screen, not to the conversation.
       if (!text || text.startsWith("<local-command-stdout>")) continue;
+      if (isHarnessFiller("user", text)) continue;
       // A background-task notification / system envelope is the harness talking, not the person —
       // show it as a muted event, never as the user's own message.
       const note = systemNote(text);
@@ -198,13 +213,14 @@ export function parseChatEvents(jsonl: string): ChatEvent[] {
     const content = message.content;
     if (!Array.isArray(content)) {
       const text = textOf(content);
-      if (text) events.push({ id: uuid, kind: "assistant", at, text });
+      if (text && !isHarnessFiller("assistant", text)) events.push({ id: uuid, kind: "assistant", at, text });
       continue;
     }
     for (const item of content) {
       const block = item as { type?: unknown; text?: unknown; name?: unknown; id?: unknown; input?: unknown };
       if (!block || typeof block !== "object") continue;
       if (block.type === "text" && typeof block.text === "string" && block.text.trim()) {
+        if (isHarnessFiller("assistant", block.text)) continue;
         events.push({ id: `${uuid}#${str(block.id) || "t"}`, kind: "assistant", at, text: block.text.trim() });
       } else if (block.type === "tool_use" && typeof block.name === "string") {
         events.push({

@@ -43,6 +43,50 @@ export interface PermissionRequestEvent {
   input?: unknown;
   reason?: string;
 }
+/* ------------------------------------------------------- user questions */
+
+/** One selectable option of a question (mirror of AskUserQuestion's option shape). */
+export interface UserQuestionOption { label: string; description?: string }
+/** One question the agent asked, with its selectable options. */
+export interface UserQuestionItem {
+  question: string;
+  /** Short chip-like title ("Auth", "Deploy"…). */
+  header?: string;
+  options: UserQuestionOption[];
+  /** True = the person may pick several options. */
+  multiSelect?: boolean;
+}
+/**
+ * The agent called AskUserQuestion: instead of executing, the driver pauses the turn and asks the
+ * HUMAN — the front renders this as a question card with clickable options (plus a free-text
+ * "other answer" field). Answered by a `question_answer` control with the same `id`, or the
+ * timeout (QUESTION_TIMEOUT_MS) reports "no answer" to the model.
+ */
+export interface UserQuestionEvent {
+  type: "user_question";
+  id: string;
+  questions: UserQuestionItem[];
+}
+/** One question's answer: the chosen option labels (free text arrives as one more string). */
+export interface UserQuestionAnswer { selected: string[] }
+/** How a `user_question` ended — pairs by `id`, so a replayed card can settle. */
+export interface QuestionResultEvent {
+  type: "question_result";
+  id: string;
+  answers?: UserQuestionAnswer[];
+  /** True when nobody answered within the timeout (the model was told "no answer"). */
+  timedOut?: boolean;
+}
+
+/**
+ * A user send arrived while a turn was ALREADY running: with streaming input the driver pushed it
+ * into the live stream and the CLI folds it into the running turn (the model absorbs it at its
+ * next step) — it will NOT produce its own `result`. The manager takes back that send's +1 on its
+ * turn count; the front labels the bubble ("entrou no turno em andamento") so the message never
+ * looks lost. Live-only feedback: it is not replayed (by the time of a replay the turn is history).
+ */
+export interface TurnAbsorbedEvent { type: "turn_absorbed" }
+
 /** End of a turn. */
 export interface ResultEvent {
   type: "result";
@@ -52,8 +96,11 @@ export interface ResultEvent {
   result?: string;
   permissionDenials?: unknown[];
 }
-/** The driver is up and ready to accept the first user message. */
-export interface ReadyEvent { type: "ready"; resume?: string }
+/** The driver is up and ready to accept the first user message. The back stamps `turnActive` on
+ *  every `ready` it sends (real or synthesized on reattach) with the manager's live turn count, so
+ *  a view mounting mid-turn knows work is running (reattach mid-turn: Terminal↔Chat during a turn
+ *  remounted the view and the "Trabalhando…" spinner never lit). */
+export interface ReadyEvent { type: "ready"; resume?: string; turnActive?: boolean }
 /** The driver hit an error (SDK threw, auth missing, etc.). */
 export interface DriverErrorEvent { type: "error"; message: string }
 /** A line that was NOT valid JSON, or an unknown event — surfaced rather than swallowed. */
@@ -66,6 +113,9 @@ export type DriverEvent =
   | SessionEvent
   | PermissionEvent
   | PermissionRequestEvent
+  | UserQuestionEvent
+  | QuestionResultEvent
+  | TurnAbsorbedEvent
   | ResultEvent
   | ReadyEvent
   | DriverErrorEvent
@@ -79,6 +129,9 @@ const DRIVER_EVENT_TYPES = new Set([
   "session",
   "permission",
   "permission_request",
+  "user_question",
+  "question_result",
+  "turn_absorbed",
   "result",
   "ready",
   "error",
@@ -111,11 +164,73 @@ export interface UserControl { type: "user"; text: string }
 export interface InterruptControl { type: "interrupt" }
 /** The human's answer to a `permission_request` — `id` pairs it with the awaiting call. */
 export interface PermissionDecisionControl { type: "permission_decision"; id: string; allow: boolean }
-export type DriverControl = UserControl | InterruptControl | PermissionDecisionControl;
+/** The human's answer to a `user_question` — one entry per question, in order. */
+export interface QuestionAnswerControl { type: "question_answer"; id: string; answers: UserQuestionAnswer[] }
+/**
+ * The user EDITED a message he already sent — a SUPERSEDE, not a rewrite of the past: the model
+ * has read the original, so the edit reaches it as a new user turn wrapped by `buildSupersedeText`
+ * (the manager does the wrapping — the driver only ever sees a normal `user` control). `original`
+ * is the message being replaced (how the front marks it "editada"), `text` the version that now
+ * stands. Provenance stays the USER's: it is his speech, corrected.
+ */
+export interface EditUserControl { type: "edit_user"; original: string; text: string }
+export type DriverControl =
+  | UserControl
+  | InterruptControl
+  | PermissionDecisionControl
+  | QuestionAnswerControl
+  | EditUserControl;
+
+/**
+ * The supersede wrapper an EDITED message wears on its way to the MODEL. The original was already
+ * read — pretending it never existed would be lying to the context — so the edit says exactly what
+ * happened: disregard that version, this one stands. Kept in pt-BR deliberately: it is the user's
+ * own speech act, and this panel's users speak pt-BR to their agents. PURE.
+ */
+export function buildSupersedeText(original: string, text: string): string {
+  return (
+    `[correção do usuário — desconsidere a mensagem anterior:\n` +
+    `«${original}»\n` +
+    `e considere esta versão no lugar:]\n\n` +
+    text
+  );
+}
 
 /** Serialise a control message as one stdin line (with the trailing newline). PURE. */
 export function encodeControl(control: DriverControl): string {
   return JSON.stringify(control) + "\n";
+}
+
+/** Interpret a browser frame as a driver control message. A bare string = a user message. PURE. */
+export function parseSdkClientFrame(raw: string): DriverControl | null {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed) as { type?: unknown; text?: unknown; id?: unknown; allow?: unknown };
+      if (parsed.type === "interrupt") return { type: "interrupt" };
+      if (parsed.type === "user" && typeof parsed.text === "string") return { type: "user", text: parsed.text };
+      if (parsed.type === "permission_decision" && typeof parsed.id === "string" && typeof parsed.allow === "boolean") {
+        return { type: "permission_decision", id: parsed.id, allow: parsed.allow };
+      }
+      if (parsed.type === "question_answer" && typeof parsed.id === "string") {
+        const answers = parseQuestionAnswers((parsed as { answers?: unknown }).answers);
+        if (answers) return { type: "question_answer", id: parsed.id, answers };
+      }
+      if (
+        parsed.type === "edit_user" &&
+        typeof (parsed as { original?: unknown }).original === "string" &&
+        typeof parsed.text === "string" &&
+        parsed.text.trim() !== ""
+      ) {
+        return { type: "edit_user", original: (parsed as { original: string }).original, text: parsed.text };
+      }
+      return null;
+    } catch {
+      // not JSON — fall through and treat as a bare user message
+    }
+  }
+  return { type: "user", text: raw };
 }
 
 /* ------------------------------------------------------ permission gate */
@@ -127,7 +242,7 @@ export function encodeControl(control: DriverControl): string {
  * Increment 2: each of these ESCALATES to a "Permitir / Negar" card in the chat — the driver's
  * PreToolUse hook emits a `permission_request` and AWAITS the human's `permission_decision` (see
  * `createPermissionBroker`); the timeout denies. The bulk of tools auto-allow (bypass sandbox) —
- * César's call: "libera tudo, pergunta só o sensível".
+ * the maintainer chose to allow everything and ask only for the sensitive set.
  */
 export const SENSITIVE_BASH_PATTERNS: readonly RegExp[] = [
   /\brm\s+-[a-z]*[rf]/i, // rm -r / rm -f / rm -rf (recursive or forced delete)
@@ -182,6 +297,40 @@ export function sdkPermissionDecision(toolName: string, input: unknown): Permiss
   return { behavior: "allow", sensitive: false };
 }
 
+/* -------------------------------------------------------- gate modes */
+
+/**
+ * How the driver's PreToolUse gate behaves — the `sdkPermissionMode` install setting, carried to the
+ * driver as `--permission-gate`:
+ *
+ * - `"same-as-terminal"` — the native chat mirrors the permission behaviour the Terminal tab of the
+ *   same card already has (the runner's own Claude settings decide; no extra vibehub gate on top).
+ *   The hook only emits observability `permission` events. One card, two views, one permission
+ *   story — the install owner's product decision (2026-08-31).
+ * - `"ask-sensitive"` — the SENSITIVE set escalates to Permitir/Negar buttons in the chat and the
+ *   agent waits for the click. Kept for less-trusted chats (shared members).
+ */
+export type SdkPermissionGateMode = "same-as-terminal" | "ask-sensitive";
+
+/** Parse the `--permission-gate` argv value. Anything unrecognised falls back to the STRICTER mode. PURE. */
+export function parseGateMode(raw: unknown): SdkPermissionGateMode {
+  return raw === "same-as-terminal" ? "same-as-terminal" : "ask-sensitive";
+}
+
+/**
+ * What the PreToolUse hook should DO with one tool call under a gate mode. PURE — the driver embeds
+ * a mirror copy (see the file header); keep `sdk-driver.mjs` in step.
+ */
+export function sdkGateAction(
+  mode: SdkPermissionGateMode,
+  toolName: string,
+  input: unknown,
+): { action: "allow" | "escalate"; sensitive: boolean } {
+  const sensitive = classifySensitivity(toolName, input);
+  if (mode === "same-as-terminal") return { action: "allow", sensitive };
+  return { action: sensitive ? "escalate" : "allow", sensitive };
+}
+
 /* ------------------------------------------------- permission escalation */
 
 /**
@@ -233,6 +382,133 @@ export function createPermissionBroker(timeoutMs: number = PERMISSION_TIMEOUT_MS
       if (!deliver) return false;
       deliver({ allow, timedOut: false });
       return true;
+    },
+    pendingCount(): number {
+      return pending.size;
+    },
+  };
+}
+
+/* --------------------------------------------------------- user questions */
+
+/**
+ * How long a `user_question` waits for the human before the model is told "no answer". Generous
+ * (30 minutes): a question is a fork in the work, worth waiting for — but a forgotten card must
+ * not hold the agent's loop hostage forever (the canUseTool callback AWAITS this).
+ */
+export const QUESTION_TIMEOUT_MS = 30 * 60_000;
+
+/** Parse the `answers` payload of a `question_answer` frame. Null when it is not answer-shaped. PURE. */
+export function parseQuestionAnswers(raw: unknown): UserQuestionAnswer[] | null {
+  if (!Array.isArray(raw)) return null;
+  const answers: UserQuestionAnswer[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") return null;
+    const selected = (entry as { selected?: unknown }).selected;
+    if (!Array.isArray(selected) || selected.some((s) => typeof s !== "string")) return null;
+    answers.push({ selected: selected as string[] });
+  }
+  return answers;
+}
+
+/**
+ * Normalize the AskUserQuestion tool input into the wire's `questions` — refusing anything that is
+ * not question-shaped (the driver falls back to letting the SDK handle a malformed call). PURE.
+ */
+export function normalizeUserQuestions(input: unknown): UserQuestionItem[] | null {
+  if (!input || typeof input !== "object") return null;
+  const raw = (input as { questions?: unknown }).questions;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const questions: UserQuestionItem[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") return null;
+    const q = entry as { question?: unknown; header?: unknown; options?: unknown; multiSelect?: unknown };
+    if (typeof q.question !== "string" || q.question.trim() === "") return null;
+    const options: UserQuestionOption[] = [];
+    if (Array.isArray(q.options)) {
+      for (const opt of q.options) {
+        if (!opt || typeof opt !== "object") continue;
+        const o = opt as { label?: unknown; description?: unknown };
+        if (typeof o.label !== "string" || o.label.trim() === "") continue;
+        options.push({ label: o.label, ...(typeof o.description === "string" ? { description: o.description } : {}) });
+      }
+    }
+    questions.push({
+      question: q.question,
+      ...(typeof q.header === "string" && q.header.trim() !== "" ? { header: q.header } : {}),
+      options,
+      ...(q.multiSelect === true ? { multiSelect: true } : {}),
+    });
+  }
+  return questions;
+}
+
+/**
+ * Build the `answers` map the SDK's canUseTool response wants: question text → chosen label(s)
+ * (one string for a single choice, an array for multiSelect; free text is just one more string).
+ * Answers pair with questions BY INDEX; a question left without an answer is omitted. PURE — the
+ * driver embeds a mirror copy (see the file header); keep `sdk-driver.mjs` in step.
+ */
+export function buildAskUserAnswers(
+  questions: readonly UserQuestionItem[],
+  answers: readonly UserQuestionAnswer[],
+): Record<string, string | string[]> {
+  const map: Record<string, string | string[]> = {};
+  questions.forEach((q, i) => {
+    const selected = answers[i]?.selected.filter((s) => s.trim() !== "") ?? [];
+    if (selected.length === 0) return;
+    map[q.question] = q.multiSelect ? selected : (selected.length === 1 ? selected[0]! : selected.join(", "));
+  });
+  return map;
+}
+
+export interface QuestionWaitResult {
+  /** Null when nobody answered in time. */
+  answers: UserQuestionAnswer[] | null;
+  timedOut: boolean;
+}
+
+export interface QuestionBroker {
+  /** Await the human's answers for `id`. Resolves with `timedOut` when the clock fires first. */
+  wait(id: string): Promise<QuestionWaitResult>;
+  /** Deliver answers. Returns false when nothing was waiting under that id (late click, typo). */
+  resolve(id: string, answers: UserQuestionAnswer[]): boolean;
+  /** Resolve everything still pending as unanswered (an interrupt kills the turn they belong to). */
+  abandonAll(): void;
+  /** How many questions are still waiting (observability + tests). */
+  pendingCount(): number;
+}
+
+/**
+ * The pending-question ledger the driver keeps between "emitted a user_question" and "the stdin
+ * brought a question_answer" — the same shape as `createPermissionBroker`, with answers instead of
+ * a boolean. The driver embeds a MIRROR copy (see the file header) — keep them in step.
+ */
+export function createQuestionBroker(timeoutMs: number = QUESTION_TIMEOUT_MS): QuestionBroker {
+  const pending = new Map<string, (result: QuestionWaitResult) => void>();
+  return {
+    wait(id: string): Promise<QuestionWaitResult> {
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          resolve({ answers: null, timedOut: true });
+        }, timeoutMs);
+        pending.set(id, (result) => {
+          clearTimeout(timer);
+          pending.delete(id);
+          resolve(result);
+        });
+      });
+    },
+    resolve(id: string, answers: UserQuestionAnswer[]): boolean {
+      const deliver = pending.get(id);
+      if (!deliver) return false;
+      deliver({ answers, timedOut: false });
+      return true;
+    },
+    abandonAll(): void {
+      for (const deliver of [...pending.values()]) deliver({ answers: null, timedOut: false });
+      pending.clear();
     },
     pendingCount(): number {
       return pending.size;

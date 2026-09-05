@@ -57,6 +57,12 @@ vi.mock("@/features/board/components/VncPanel", () => ({
   VncPanel: ({ cardId }: { cardId: string }) => <div data-testid="vnc">{cardId}</div>,
 }));
 
+// The native (SDK) chat also owns a websocket and has its own test file; here the only question is
+// WHICH of the two chats got mounted — the bug was the legacy one flashing in on a beta card.
+vi.mock("@/features/board/components/SdkChatView", () => ({
+  SdkChatView: ({ cardId }: { cardId: string }) => <div data-testid="sdk-chat" data-card={cardId} />,
+}));
+
 const mockGet = vi.mocked(get);
 const mockPost = vi.mocked(post);
 const mockPatch = vi.mocked(patch);
@@ -102,6 +108,9 @@ function serve() {
       });
     }
     if (url === "/transcribe") return Promise.resolve({ available: false, proofread: false, language: null });
+    // Which chat the Chat tab mounts is this INSTALL flag now. Most suites here exercise the
+    // classic panes, so the base fixture answers "off"; the native-chat suite overrides it.
+    if (url === "/features") return Promise.resolve({ sdkChat: false });
     if (url === "/accounts/usage") {
       return Promise.resolve({
         bySlug: {
@@ -240,6 +249,7 @@ describe("CardTerminalView — instant open", () => {
     mockGet.mockImplementation((url: string) => {
       if (url === "/cards/c1") return Promise.resolve({ card: card({ openedAt: 10 }) });
       if (url === "/accounts") return Promise.resolve({ accounts: [], defaultLabel: "" });
+      if (url === "/features") return Promise.resolve({ sdkChat: false });
       if (url === "/transcribe") return Promise.resolve({ available: false, proofread: false, language: null });
       if (url === "/auth/me") return Promise.resolve({ user: { id: "1", username: "operator", role: "owner" } });
       if (url === "/setup/state") return Promise.reject(new Error("not needed"));
@@ -252,6 +262,64 @@ describe("CardTerminalView — instant open", () => {
     renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
     expect(await screen.findByTestId("xterm")).toBeInTheDocument();
     localStorage.clear();
+  });
+});
+
+describe("CardTerminalView — which chat the Chat tab mounts (the INSTALL flag, not the card)", () => {
+  beforeEach(() => {
+    serve();
+    mockPost.mockResolvedValue({ card: card({ openedAt: 10 }) });
+  });
+  afterEach(() => localStorage.clear());
+
+  /** The base fixture answers `/features` with off; this suite is about the flag being ON. */
+  function serveFeaturesOn() {
+    const base = mockGet.getMockImplementation();
+    mockGet.mockImplementation((url: string, ...rest: unknown[]) => {
+      if (url === "/features") return Promise.resolve({ sdkChat: true });
+      return (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest);
+    });
+  }
+
+  it("with the install flag on, ANY card opens the Chat tab in the NATIVE chat — no per-card opt-in", async () => {
+    serveFeaturesOn();
+    // A card that never set `sdkChat` (a TUI-only card): the native chat mounts anyway; its replay
+    // path (the manager's transcript merge, #43/#51) is what brings the TUI history along.
+    renderWithCache([card({ openedAt: 10 })], testQueryClient(), "chat");
+    expect(await screen.findByTestId("sdk-chat")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat")).toBeNull();
+  });
+
+  it("WAITS for the install flag before choosing a chat — the legacy view never flashes in", async () => {
+    // Regression (from the per-card era): while the answer was unknown the LEGACY chat mounted
+    // first — "reabri o card e o modo nativo sumiu" — then swapped, losing whatever the person had
+    // started doing in the wrong view.
+    let resolveFeatures: (value: unknown) => void = () => undefined;
+    const base = mockGet.getMockImplementation();
+    mockGet.mockImplementation((url: string, ...rest: unknown[]) => {
+      if (url === "/features") return new Promise((r) => { resolveFeatures = r; });
+      return (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest);
+    });
+
+    writeCardMode("c1", "chat");
+    renderWithCache([card({ openedAt: 10 })], testQueryClient(), "chat");
+
+    // While the flag is unknown: NEITHER chat is mounted (a spinner is what shows).
+    expect(await screen.findByTestId("chat-mode-deciding")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat")).toBeNull();
+    expect(screen.queryByTestId("sdk-chat")).toBeNull();
+
+    resolveFeatures({ sdkChat: true });
+    expect(await screen.findByTestId("sdk-chat")).toBeInTheDocument();
+    // the legacy chat was NEVER mounted along the way
+    expect(screen.queryByTestId("chat")).toBeNull();
+  });
+
+  it("with the install flag OFF, every card lands in the legacy chat — even one that once opted in", async () => {
+    // The vestigial per-card field must not resurrect the native chat when the global switch is off.
+    renderWithCache([card({ openedAt: 10, sdkChat: true })], testQueryClient(), "chat");
+    expect(await screen.findByTestId("chat")).toBeInTheDocument();
+    expect(screen.queryByTestId("sdk-chat")).toBeNull();
   });
 });
 
@@ -634,7 +702,7 @@ describe("CardTerminalView — the card bar", () => {
   });
 
   it("lists the install's OWN names: the default profile's label, then each account", async () => {
-    // The exact bug the owner hit: with the built-in profile signed in as cesarvcanal@gmail.com and
+    // The exact bug the owner hit: with the built-in profile signed in as owner@example.com and
     // one account "tech", the first row was labelled with whatever was in use — so he saw
     // "tech / ✓ tech", and picking one renamed the other.
     mockGet.mockImplementation((url: string) => {
@@ -642,7 +710,7 @@ describe("CardTerminalView — the card bar", () => {
       if (url === "/accounts") {
         return Promise.resolve({
           accounts: [{ slug: "tech", name: "tech", createdAt: 1 }],
-          defaultLabel: "cesarvcanal@gmail.com",
+          defaultLabel: "owner@example.com",
         });
       }
       if (url === "/cards/c1/session") {
@@ -655,7 +723,7 @@ describe("CardTerminalView — the card bar", () => {
     renderWithCache([card({ openedAt: 10 })]);
 
     const items = await openMenu(user, "Claude account");
-    expect(items.map((i) => i.textContent)).toEqual(["cesarvcanal@gmail.com", "tech"]);
+    expect(items.map((i) => i.textContent)).toEqual(["owner@example.com", "tech"]);
     // The check follows the account the SESSION is signed in to, not the card's (absent) pin.
     expect(items[1]).toHaveAttribute("aria-checked", "true");
     expect(items[0]).toHaveAttribute("aria-checked", "false");
@@ -925,25 +993,15 @@ describe("CardTerminalView — the phone", () => {
     expect(await screen.findByTestId("vnc")).toBeInTheDocument();
   });
 
-  it("offers the native chat toggle on BOTH widths — the desktop `⋯` too, not only the phone's menu", async () => {
-    // Regression: the toggle shipped inside the phone's overflow menu only, so on a desktop there
-    // was simply NO way to turn native chat on for a card.
-    for (const mobile of [true, false]) {
-      setViewport(mobile);
-      mockPatch.mockClear();
-      mockPatch.mockResolvedValue({ card: card({ openedAt: 10, sdkChat: true }) });
-      const user = userEvent.setup();
-      const { unmount } = renderApp(
-        <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />,
-      );
-
-      await user.click(await screen.findByTestId("card-bar-more"));
-      const toggle = await screen.findByTestId("card-native-chat-toggle");
-      expect(toggle).toHaveAttribute("aria-checked", "false");
-      await user.click(toggle);
-      await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/cards/c1", { sdkChat: true }));
-      unmount();
-    }
+  it("no longer offers a per-card native chat toggle — the choice is the install flag now", async () => {
+    // The "Chat nativo (beta)" opt-in was retired (2026-08-31): with the global flag on, EVERY
+    // card's Chat tab is the native chat; the `⋯` menus must not resurrect the per-card knob.
+    setViewport(true);
+    const user = userEvent.setup();
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    await user.click(await screen.findByTestId("card-bar-more"));
+    expect(screen.queryByTestId("card-native-chat-toggle")).toBeNull();
+    expect(screen.queryByText(/native chat/i)).toBeNull();
   });
 
   it("leaves the desktop bar as the single row it has always been", async () => {
@@ -1010,18 +1068,23 @@ describe("CardTerminalView — the Terminal | Chat switch", () => {
     expect(await screen.findByTestId("chat")).toBeInTheDocument();
     expect(screen.queryByTestId("xterm")).not.toBeInTheDocument();
 
+    // ONE icon now: pressed = raw terminal on screen; pressing again returns to the chat.
     await user.click(screen.getByTestId("card-view-terminal"));
     expect(await screen.findByTestId("xterm")).toBeInTheDocument();
     expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
+    expect(screen.getByTestId("card-view-terminal")).toHaveAttribute("aria-pressed", "true");
 
-    await user.click(screen.getByTestId("card-view-chat"));
+    await user.click(screen.getByTestId("card-view-terminal"));
     expect(await screen.findByTestId("chat")).toBeInTheDocument();
     expect(screen.queryByTestId("xterm")).not.toBeInTheDocument();
+    expect(screen.getByTestId("card-view-terminal")).toHaveAttribute("aria-pressed", "false");
   });
 
   it("remembers the choice for THAT card, on this device", async () => {
     const user = userEvent.setup({ delay: null });
-    const { unmount } = renderWithCache([card({ openedAt: 10 })]);
+    // Start from the app's own default (chat), press the terminal icon once.
+    const { unmount } = renderWithCache([card({ openedAt: 10 })], testQueryClient(), null);
+    await screen.findByTestId("chat");
     await user.click(await screen.findByTestId("card-view-terminal"));
     await screen.findByTestId("xterm");
     unmount();
@@ -1042,7 +1105,7 @@ describe("CardTerminalView — the Terminal | Chat switch", () => {
     const field = () => screen.getByTestId("terminal-composer").querySelector("textarea") as HTMLTextAreaElement;
     await user.type(field(), "meia frase que eu ainda vou terminar");
 
-    await user.click(screen.getByTestId("card-view-chat"));
+    await user.click(screen.getByTestId("card-view-terminal"));
     await screen.findByTestId("chat");
     expect(field()).toHaveValue("meia frase que eu ainda vou terminar");
 
@@ -1052,23 +1115,23 @@ describe("CardTerminalView — the Terminal | Chat switch", () => {
     expect(field()).toHaveValue("meia frase que eu ainda vou terminar");
   }, 20_000);
 
-  it("puts the switch in the bar on BOTH widths — never behind the overflow menu", async () => {
+  it("puts the terminal icon in the bar on BOTH widths — never behind the overflow menu", async () => {
     setViewport(true);
     const { unmount } = renderWithCache([card({ openedAt: 10 })]);
-    expect(await screen.findByTestId("card-view-switch")).toBeInTheDocument();
+    const phone = await screen.findByTestId("card-view-terminal");
+    expect(phone).toBeInTheDocument();
+    expect(phone).toHaveTextContent(""); // icon only, no "Terminal" label — the chat is THE view
     unmount();
 
     setViewport(false);
     renderWithCache([card({ openedAt: 10 })]);
-    expect(await screen.findByTestId("card-view-switch")).toBeInTheDocument();
+    expect(await screen.findByTestId("card-view-terminal")).toBeInTheDocument();
   });
 
   it("tells the chat whether the agent is working, from the session poll", async () => {
-    const user = userEvent.setup({ delay: null });
     serveSession({ situation: "working" });
-    renderWithCache([card({ openedAt: 10, status: undefined })]);
-
-    await user.click(await screen.findByTestId("card-view-chat"));
+    // Chat is the default view now — no click needed to land in it.
+    renderWithCache([card({ openedAt: 10, status: undefined })], testQueryClient(), null);
     await waitFor(() => expect(screen.getByTestId("chat")).toHaveAttribute("data-working", "true"));
   });
 });

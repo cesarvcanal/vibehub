@@ -10,6 +10,48 @@
 
 export type ChatEventKind = "user" | "assistant" | "tool" | "system";
 
+/**
+ * WHO put a message into this card — the server-recorded provenance (see
+ * back/src/services/chat/provenance.ts). `agent` = another card's AI (the green robot bubble,
+ * linked back to its card); `owner`/`user` = a person, by username. Absent = unattributed, drawn
+ * as the reader's own message (the pre-provenance behaviour).
+ */
+export interface MessageOrigin {
+  kind: "owner" | "user" | "agent" | "system";
+  name: string;
+  sourceCardId?: string;
+  sourceProjectId?: string;
+}
+
+/** Validates a frame's `from` field. Anything malformed reads as "no provenance", never as junk. PURE. */
+export function parseOrigin(value: unknown): MessageOrigin | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const o = value as Partial<MessageOrigin>;
+  if (o.kind !== "owner" && o.kind !== "user" && o.kind !== "agent" && o.kind !== "system") return undefined;
+  if (typeof o.name !== "string") return undefined;
+  return {
+    kind: o.kind,
+    name: o.name,
+    sourceCardId: typeof o.sourceCardId === "string" ? o.sourceCardId : undefined,
+    sourceProjectId: typeof o.sourceProjectId === "string" ? o.sourceProjectId : undefined,
+  };
+}
+
+/**
+ * How a message bubble should read for THIS viewer: their own (unlabelled, as always), another
+ * card's agent (robot + card name), or another person (name, no robot). A person's own messages
+ * are "self" wherever they typed them; an unattributed message defaults to "self" because that is
+ * what every message was before provenance existed. PURE.
+ */
+export function originRole(from: MessageOrigin | undefined, viewer: string | undefined): "self" | "agent" | "user" | "system" {
+  if (!from) return "self";
+  if (from.kind === "agent") return "agent";
+  // The panel's own injected turn (the boot-resume continuation): NEVER "self", whatever the
+  // viewer's name is — it must not read as something the person typed.
+  if (from.kind === "system") return "system";
+  return viewer !== undefined && from.name === viewer ? "self" : "user";
+}
+
 export interface ChatEvent {
   id: string;
   kind: ChatEventKind;
@@ -18,6 +60,8 @@ export interface ChatEvent {
   text: string;
   /** Tool name, on `tool` events only. */
   tool?: string;
+  /** Message provenance, on `user` events the server could attribute. */
+  from?: MessageOrigin;
 }
 
 /** One frame from the chat socket, or null when it is not an event (the heartbeat, junk). PURE. */
@@ -32,7 +76,14 @@ export function parseChatFrame(raw: string): ChatEvent | null {
   const e = obj as Partial<ChatEvent>;
   if (typeof e.id !== "string" || typeof e.text !== "string") return null;
   if (e.kind !== "user" && e.kind !== "assistant" && e.kind !== "tool" && e.kind !== "system") return null;
-  return { id: e.id, kind: e.kind, at: typeof e.at === "number" ? e.at : 0, text: e.text, tool: e.tool };
+  return {
+    id: e.id,
+    kind: e.kind,
+    at: typeof e.at === "number" ? e.at : 0,
+    text: e.text,
+    tool: e.tool,
+    from: parseOrigin(e.from),
+  };
 }
 
 /**
@@ -137,6 +188,29 @@ export function writeCardMode(cardId: string, mode: CardViewMode): void {
 export interface PendingMessage {
   id: string;
   text: string;
+  /** When it was sent — what tells a moment's "enviando" apart from a bubble stuck forever. */
+  at: number;
+}
+
+/**
+ * After this long with no transcript echo the bubble stops claiming "enviando" and says so —
+ * offering resend/discard instead of spinning forever. Long enough for a busy Claude to drain its
+ * input queue in the common case; the message is NOT dropped at the deadline, only re-labelled.
+ */
+export const PENDING_TIMEOUT_MS = 2 * 60_000;
+
+/** What a pending bubble is: still plausibly on its way, or overdue and owed an honest label. PURE. */
+export function pendingPhase(pending: Pick<PendingMessage, "at">, now: number): "sending" | "unconfirmed" {
+  return now - pending.at >= PENDING_TIMEOUT_MS ? "unconfirmed" : "sending";
+}
+
+/**
+ * The transcript's echo is matched by TEXT (it carries no client id), and the echo is not always
+ * byte-identical — Claude Code may re-flow whitespace. Comparing the collapsed form keeps a
+ * delivered message from haunting the screen as a forever-pending bubble. PURE.
+ */
+export function normalizeMessage(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
 }
 
 const PENDING_PREFIX = "vibehub.chatPending.";
@@ -155,10 +229,14 @@ export function readPending(cardId: string): PendingMessage[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (p): p is PendingMessage =>
-        Boolean(p) && typeof (p as PendingMessage).id === "string" && typeof (p as PendingMessage).text === "string",
-    );
+    return parsed
+      .filter(
+        (p): p is PendingMessage =>
+          Boolean(p) && typeof (p as PendingMessage).id === "string" && typeof (p as PendingMessage).text === "string",
+      )
+      // Entries written before `at` existed start their clock NOW: they become "unconfirmed" after
+      // one timeout instead of spinning as "enviando" until the end of time.
+      .map((p) => (typeof p.at === "number" ? p : { ...p, at: Date.now() }));
   } catch {
     return [];
   }

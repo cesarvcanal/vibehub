@@ -153,7 +153,7 @@ that card.
 | WS | `/api/cards/:id/terminal` | xterm bridge (`?shell=1` for a plain shell in the same worktree) |
 | WS | `/api/cards/:id/chat` | the SAME session read as a conversation: one JSON `ChatEvent` per frame (`{ id, kind: "user"\|"assistant"\|"tool", at, text, tool? }`), parsed from Claude Code's transcript. Opens with the last turns and streams what is appended; blank frames are the follower's heartbeat |
 | POST | `/api/cards/:id/chat` | `{ text }` — types it at that session's prompt and presses Enter (409 when the card has no live session) |
-| WS | `/api/cards/:id/sdk` | **native chat (beta)** — the Agent-SDK driver, gated by the `sdkDriver` setting. One JSON `DriverEvent` per frame (`ready`, `session`, `assistant_delta`, `assistant_text`, `tool_use`, `permission_request`, `permission`, `result`, `error`, `parse_error`); the client sends `{ type: "user", text }`, `{ type: "interrupt" }` or `{ type: "permission_decision", id, allow }`. The route persists each new `session_id` on the card (`resumeSessionId`) so a reconnect resumes the same conversation. Contract in `back/src/services/sdk/protocol.ts` + `docs/sdk-driver.md` |
+| WS | `/api/cards/:id/sdk` | **native chat (beta)** — the Agent-SDK driver, gated by the `sdkDriver` setting. One JSON `DriverEvent` per frame (`ready`, `session`, `assistant_delta`, `assistant_text`, `tool_use`, `permission_request`, `permission`, `result`, `error`, `parse_error`); the client sends `{ type: "user", text }`, `{ type: "interrupt" }` or `{ type: "permission_decision", id, allow }`. On connect the route **replays the conversation**: the newest TUI/SDK transcript tail (converted to frames, incl. `{ type: "user" }`) plus the per-card event log (`<dataDir>/sdk-history/<cardId>.ndjson`), then spawns the driver resuming the **newest session** in the card's worktree (falling back to `resumeSessionId`). The route persists each new `session_id` on the card (`resumeSessionId`) so a reconnect resumes the same conversation. Contract in `back/src/services/sdk/protocol.ts` + `docs/sdk-driver.md` |
 | POST | `/api/cards/:id/chat/key` | `{ key: "escape" \| "interrupt" }` — the chat's Stop button |
 | WS | `/api/cards/:id/vnc` | noVNC bridge for the card browser |
 
@@ -181,6 +181,9 @@ that card.
 | POST | `/api/brain` | `{ text }` — save it |
 | DELETE | `/api/brain` | back to the built-in default |
 | POST | `/api/brain/apply` | push it into every profile |
+| GET | `/api/brain/projects/:id` | `{ text, ... }` — the PROJECT's brain (CLAUDE.local.md in its card worktrees); `""` = none |
+| POST | `/api/brain/projects/:id` | `{ text }` — save it (empty text clears it); auto-applies to that project only |
+| POST | `/api/brain/projects/:id/apply` | rewrite it in that project's worktrees |
 | GET | `/api/transcribe` | `{ available, proofread, language }` — voice input status (keys are never returned) |
 | POST | `/api/transcribe/keys` | `{ openaiKey?, anthropicKey? }` — empty string clears; Whisper transcribes, Claude proofreads against the brain |
 | POST | `/api/cards/:id/transcribe` | `{ base64, mimeType }` → `{ text, proofread }`; 503 when voice input is not configured |

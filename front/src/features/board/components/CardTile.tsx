@@ -49,6 +49,8 @@ export function CardTile({
   onDelete,
   onDragStart,
   onDragEnd,
+  selected,
+  onToggleSelect,
   projectLabel,
 }: {
   card: BoardCard;
@@ -62,8 +64,13 @@ export function CardTile({
   /** Opens the dialog that switches this card's Claude account. */
   onAccount?: (card: BoardCard) => void;
   onDelete?: (card: BoardCard) => void;
-  onDragStart?: (card: BoardCard) => void;
+  /** The event rides along so the board can swap the drag ghost for a bulk move. */
+  onDragStart?: (card: BoardCard, e: React.DragEvent) => void;
   onDragEnd?: () => void;
+  /** Part of the board's multi-selection: draws the ring. Selection is the BOARD's state. */
+  selected?: boolean;
+  /** Shift-click — the card joins or leaves the selection instead of opening. */
+  onToggleSelect?: (card: BoardCard) => void;
   /** Owning project's name — only shown where cards from several projects are mixed. */
   projectLabel?: string;
 }) {
@@ -105,9 +112,11 @@ export function CardTile({
     ...(onHibernate && canPause
       ? [{ key: "hibernate", label: t("card.hibernateEndsSession"), icon: Moon, onSelect: () => onHibernate(card) }]
       : []),
-    ...(onAccount ? [{ key: "account", label: t("card.claudeAccountMenu"), icon: Users, onSelect: () => onAccount(card) }] : []),
+    // Switching the account, sharing and deleting are the OWNER's — the routes behind them (the
+    // account list, the shares, DELETE /api/cards/:id) all answer 403/owner-only to a member.
+    ...(onAccount && isOwner ? [{ key: "account", label: t("card.claudeAccountMenu"), icon: Users, onSelect: () => onAccount(card) }] : []),
     ...(isOwner ? [{ key: "share", label: t("card.share"), icon: Share2, onSelect: () => setShareOpen(true) }] : []),
-    ...(onDelete
+    ...(onDelete && isOwner
       ? [{ key: "delete", label: t("card.deleteCard"), icon: Trash2, danger: true, onSelect: () => onDelete(card) }]
       : []),
   ];
@@ -132,8 +141,17 @@ export function CardTile({
       // Named by its TITLE, not by everything printed on it: the chips and the pending-state line
       // are context for the eye, and reading them out as part of the link's name buries the title.
       aria-label={card.title}
+      data-card-id={card.id}
+      data-selected={selected ? "true" : undefined}
       draggable={draggable}
       onClick={(e) => {
+        // Shift-click is the selection's, where the board offers one — it BEATS the browser's
+        // shift-click-opens-a-window habit, which nobody uses on purpose on a kanban card.
+        if (e.shiftKey && onToggleSelect) {
+          e.preventDefault();
+          onToggleSelect(card);
+          return;
+        }
         if (isNewTabClick(e)) return;
         e.preventDefault();
         onOpen(card);
@@ -152,7 +170,7 @@ export function CardTile({
           ? (e) => {
               e.dataTransfer.effectAllowed = "move";
               e.dataTransfer.setData("text/plain", card.id);
-              onDragStart?.(card);
+              onDragStart?.(card, e);
             }
           : undefined
       }
@@ -160,6 +178,7 @@ export function CardTile({
       className={cn(
         "group flex w-full items-start gap-2 rounded-lg border border-border/60 bg-card/60 px-3 py-2 text-left transition-colors hover:border-border hover:bg-card",
         draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
+        selected && "border-primary/60 ring-2 ring-primary/60",
       )}
     >
       {/* No dot and no pause icon means no element at all: an empty 12px box in front of every

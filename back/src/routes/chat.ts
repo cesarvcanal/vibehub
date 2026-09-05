@@ -2,8 +2,10 @@ import { spawn } from "node:child_process";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import { requireCardAccess, requireCardWork } from "../auth/access.js";
+import { findUser } from "../auth/users.js";
 import { sendToTerminal } from "../services/maestro/maestro.js";
 import { chatSource, sendChatKey, parseChatEvents, CHAT_KEYS } from "../services/chat/chat.js";
+import { matchOrigin, primeProvenance, type MessageOrigin } from "../services/chat/provenance.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -25,6 +27,23 @@ function actorOf(req: FastifyRequest): string | undefined {
   return (req as FastifyRequest & { userId?: string }).userId;
 }
 
+/**
+ * The PROVENANCE of a person's send: their username, so the other people reading this card's chat
+ * see who said it (their OWN messages render unlabelled — the front compares the name). Null when
+ * the user cannot be resolved: an unattributed message beats a failed send.
+ */
+async function userOriginOf(req: FastifyRequest): Promise<MessageOrigin | undefined> {
+  const userId = actorOf(req);
+  if (!userId) return undefined;
+  try {
+    const user = await findUser(userId);
+    if (!user) return undefined;
+    return { kind: user.role === "owner" ? "owner" : "user", name: user.username };
+  } catch {
+    return undefined;
+  }
+}
+
 export async function chatRoutes(app: FastifyInstance): Promise<void> {
   /**
    * Live transcript of one card. Opens with the last turns and then streams what is appended.
@@ -39,6 +58,9 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       let source: Awaited<ReturnType<typeof chatSource>>;
       try {
         source = await chatSource(req.params.id);
+        // Load this card's provenance tail before the stream starts, so the sync matcher below can
+        // attribute the replayed history too (a restart must not strip the labels).
+        await primeProvenance(req.params.id);
       } catch (err) {
         logger.warn({ err: (err as Error).message }, "could not open a card chat");
         socket.close();
@@ -61,7 +83,11 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         if (pending.length > MAX_LINE_BYTES) pending = ""; // a line that long is not a message
         for (const line of lines) {
           for (const event of parseChatEvents(line)) {
-            try { socket.send(JSON.stringify(event)); } catch { /* going away; close tidies up */ }
+            // The transcript says "user" for EVERYTHING that was typed at the prompt. When the send
+            // was recorded (another card's agent, another person), attach who it really was — the
+            // best-effort text+time match documented in services/chat/provenance.ts.
+            const from = event.kind === "user" ? matchOrigin(source.cardId, event.text, event.at) : undefined;
+            try { socket.send(JSON.stringify(from ? { ...event, from } : event)); } catch { /* going away; close tidies up */ }
           }
         }
       });
@@ -93,13 +119,22 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       const text = String(req.body?.text ?? "");
       try {
         // The user's OWN send — never gate on human-active (their typing is what marks it active).
-        await sendToTerminal(req.params.id, text, { by: actorOf(req), guardInteractiveMenu: true });
+        // `requireAgent`: a pane where Claude EXITED still accepts keystrokes (bash does), so
+        // without the probe this answered 200 for a message no conversation would ever echo —
+        // the chat's forever-pending bubble. Better a visible 409 than a silent swallow.
+        await sendToTerminal(req.params.id, text, {
+          by: actorOf(req),
+          guardInteractiveMenu: true,
+          requireAgent: true,
+          origin: await userOriginOf(req),
+        });
         return await reply.send({ ok: true });
       } catch (err) {
         const message = (err as Error).message;
         // "no live session" is not a server fault and not a missing card: it is a card that has to
         // be opened first, and the UI says exactly that.
-        const code = /not found/i.test(message) ? 404 : /no live session|empty text|awaiting choice/i.test(message) ? 409 : 502;
+        const code = /not found/i.test(message) ? 404
+          : /no live session|empty text|awaiting choice|no agent running/i.test(message) ? 409 : 502;
         return await reply.code(code).send({ error: message });
       }
     },

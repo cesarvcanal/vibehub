@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderApp } from "@/test/render";
 import { SettingsDialog } from "./SettingsDialog";
@@ -26,6 +26,7 @@ beforeEach(() => {
     if (url === "/settings") return SETTINGS;
     if (url === "/github") return { connections: [] };
     if (url === "/transcribe") return { available: false, proofread: false, language: "pt" };
+    if (url === "/credentials") return { credentials: [] };
     throw new Error(`unexpected ${url}`);
   });
 });
@@ -90,6 +91,7 @@ describe("SettingsDialog — GitHub accounts", () => {
       if (url === "/settings") return SETTINGS;
       if (url === "/github") return { connections };
       if (url === "/transcribe") return { available: false, proofread: false, language: "pt" };
+      if (url === "/credentials") return { credentials: [] };
       throw new Error(`unexpected ${url}`);
     });
   }
@@ -155,5 +157,91 @@ describe("SettingsDialog — GitHub accounts", () => {
     renderApp(<SettingsDialog open onOpenChange={() => {}} />);
     await screen.findByTestId("github-connections");
     expect(screen.queryByDisplayValue(/ghp_/)).toBeNull();
+  });
+});
+
+describe("SettingsDialog — Cofre", () => {
+  function serveCredentials(credentials: unknown[]): void {
+    get.mockImplementation(async (url: string) => {
+      if (url === "/settings") return SETTINGS;
+      if (url === "/github") return { connections: [] };
+      if (url === "/transcribe") return { available: false, proofread: false, language: "pt" };
+      if (url === "/credentials") return { credentials };
+      throw new Error(`unexpected ${url}`);
+    });
+  }
+
+  it("lists saved credentials by name and type, never a value", async () => {
+    serveCredentials([{ id: "aa11", name: "erp-prod", type: "userpass", createdAt: 1 }]);
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    const list = await screen.findByTestId("cofre-list");
+    expect(list).toHaveTextContent("erp-prod");
+    expect(list).toHaveTextContent("User + password");
+    expect(screen.queryByDisplayValue(/erp-prod/)).toBeNull();
+  });
+
+  it("adds a userpass credential and clears the fields", async () => {
+    serveCredentials([]);
+    post.mockResolvedValue({ credential: { id: "x", name: "erp", type: "userpass", createdAt: 1 } });
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    await userEvent.type(await screen.findByLabelText("Credential name"), "erp");
+    const user = screen.getByLabelText("Username");
+    const pass = screen.getByLabelText("Password");
+    await userEvent.type(user, "ada");
+    await userEvent.type(pass, "s3cr3t");
+    await userEvent.click(screen.getByRole("button", { name: "Add credential" }));
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/credentials", { name: "erp", type: "userpass", username: "ada", password: "s3cr3t" }),
+    );
+    await waitFor(() => expect(pass).toHaveValue(""));
+  });
+
+  it("switches to a single value field for a token credential", async () => {
+    serveCredentials([]);
+    post.mockResolvedValue({ credential: { id: "x", name: "tok", type: "token", createdAt: 1 } });
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    await userEvent.type(await screen.findByLabelText("Credential name"), "tok");
+    await userEvent.selectOptions(screen.getByLabelText("Type"), "token");
+    await userEvent.type(screen.getByLabelText("Value"), "tok_123");
+    await userEvent.click(screen.getByRole("button", { name: "Add credential" }));
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/credentials", { name: "tok", type: "token", value: "tok_123" }),
+    );
+  });
+
+  it("removes a credential", async () => {
+    serveCredentials([{ id: "aa11", name: "gone", type: "token", createdAt: 1 }]);
+    del.mockResolvedValue({ ok: true });
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Remove credential gone" }));
+    await waitFor(() => expect(del).toHaveBeenCalledWith("/credentials/aa11"));
+  });
+});
+
+describe("SettingsDialog — the managers moved in", () => {
+  it("carries Claude accounts, MCP and the brain as a section of Settings", async () => {
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    const section = await screen.findByTestId("settings-managers");
+    const s = within(section);
+    expect(s.getByRole("button", { name: /Claude accounts/ })).toBeInTheDocument();
+    expect(s.getByRole("button", { name: /MCP/ })).toBeInTheDocument();
+    expect(s.getByRole("button", { name: /Brain/ })).toBeInTheDocument();
+  });
+
+  it("opens the brain editor from Settings", async () => {
+    get.mockImplementation(async (url: string) => {
+      if (url === "/settings") return SETTINGS;
+      if (url === "/github") return { connections: [] };
+      if (url === "/transcribe") return { available: false, proofread: false, language: "pt" };
+      if (url === "/credentials") return { credentials: [] };
+      if (url === "/brain") return { text: "" };
+      if (url === "/runner") return { running: true, exists: true, claudeInstalled: true, dockerReachable: true, container: "runner" };
+      throw new Error(`unexpected ${url}`);
+    });
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    const section = await screen.findByTestId("settings-managers");
+    await userEvent.click(within(section).getByRole("button", { name: /Brain/ }));
+    expect(await screen.findByLabelText("Brain text")).toBeInTheDocument();
+    await waitFor(() => expect(get).toHaveBeenCalledWith("/brain"));
   });
 });

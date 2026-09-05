@@ -56,8 +56,11 @@ export function sortPreviews(previews: readonly CardPreview[] | undefined): Card
 
 /**
  * A preview's state against the last port scan: `up` (listening), `down` (scanned, silent), or
- * `unknown` (no scan yet — treat as up: opening the tab is the optimistic default, and the dialog
- * exists for the KNOWN-stopped case). PURE.
+ * `unknown` (no scan data — nothing was verified yet, or the scan is failing). `unknown` must
+ * NEVER render as "no ar": the chip's honesty comes from the real port scan, and claiming green
+ * without a scan is how a dead preview kept its green chip. Clicking an unknown chip still opens
+ * the tab (the optimistic default) — a dead port now lands on the server's own "Preview parado"
+ * screen instead of raw JSON. PURE.
  */
 export type PreviewState = "up" | "down" | "unknown";
 
@@ -186,14 +189,14 @@ export function PreviewRestartDialog({
   );
 }
 
-/** The colored dot that says whether a preview's port answered the last scan. */
+/** The colored dot that says whether a preview's port answered the last scan — gray until it did. */
 function StateDot({ state }: { state: PreviewState }) {
   return (
     <span
       aria-hidden
       className={cn(
         "h-1.5 w-1.5 shrink-0 rounded-full",
-        state === "down" ? "bg-amber-500" : "bg-emerald-500",
+        state === "down" ? "bg-amber-500" : state === "up" ? "bg-emerald-500" : "bg-muted-foreground/50",
       )}
     />
   );
@@ -213,18 +216,29 @@ export function PreviewChip({ cardId, previews }: { cardId: string; previews?: C
   if (!latest) return null;
   const state = previewState(latest.port, scanned);
   const down = state === "down";
+  // Green is EARNED by a scan that saw the port; before that (or while the scan fails) the chip is
+  // neutral — a claim of "no ar" that no scan backed is exactly the lie this chip existed to avoid.
+  const up = state === "up";
   return (
     <>
       <button
         type="button"
         data-testid="preview-chip"
         onClick={() => (down ? setDialogOpen(true) : openPreviewTab(latest.port))}
-        title={down ? t("preview.chipDownHint", { name: previewName(latest) }) : t("preview.chipHint", { name: previewName(latest) })}
+        title={
+          down
+            ? t("preview.chipDownHint", { name: previewName(latest) })
+            : up
+              ? t("preview.chipHint", { name: previewName(latest) })
+              : t("preview.chipUnknownHint", { name: previewName(latest) })
+        }
         className={cn(
           "inline-flex h-6 max-w-[13rem] shrink-0 items-center gap-1.5 rounded-full border px-2 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
           down
             ? "border-amber-500/40 bg-amber-500/10 text-amber-600 hover:border-amber-500/70 hover:bg-amber-500/20 dark:text-amber-400"
-            : "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 hover:border-emerald-500/70 hover:bg-emerald-500/20 dark:text-emerald-400",
+            : up
+              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 hover:border-emerald-500/70 hover:bg-emerald-500/20 dark:text-emerald-400"
+              : "border-border/60 bg-muted/40 text-muted-foreground hover:border-border hover:text-foreground",
         )}
       >
         {down ? <RotateCw className="h-3.5 w-3.5 shrink-0" /> : <ExternalLink className="h-3.5 w-3.5 shrink-0" />}

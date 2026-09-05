@@ -2,16 +2,23 @@
  * NATIVE CHAT (SDK driver) — the state rules of `/api/cards/:id/sdk`, kept out of the component.
  *
  * This socket is NOT the transcript reader (`lib/chat.ts`): it is a live, structured stream from
- * the Agent SDK driver. Nothing replays — each connect starts a fresh driver that RESUMES the same
- * conversation by session id — so the reducer's job is folding a stream of typed events into rows,
- * not idempotent merging. The wire contract lives in `back/src/services/sdk/protocol.ts`.
+ * the Agent SDK driver. Each connect REPLAYS the conversation so far (the back keeps a per-card
+ * event log — see `back/src/services/sdk/history.ts`) and then starts a fresh driver that RESUMES
+ * the same conversation by session id. The view resets its state when the socket OPENS, so the
+ * reducer's job stays folding a stream of typed events into rows, not idempotent merging. The wire
+ * contract lives in `back/src/services/sdk/protocol.ts`.
  */
+
+import { parseOrigin, type MessageOrigin } from "@/features/board/lib/chat";
 
 /* ----------------------------------------------------------------- events */
 
-/** One frame from the SDK socket — the driver's event contract, verbatim. */
+/** One frame from the SDK socket — the driver's event contract, verbatim (`user` only on replay
+ *  and for external sends: another card's agent, another person's message). */
 export interface SdkEvent {
   type:
+    | "user"
+    | "system_note"
     | "ready"
     | "session"
     | "assistant_delta"
@@ -19,12 +26,18 @@ export interface SdkEvent {
     | "tool_use"
     | "permission"
     | "permission_request"
+    | "user_question"
+    | "question_result"
+    | "message_edited"
+    | "turn_absorbed"
     | "result"
     | "error"
     | "parse_error";
   text?: string;
   sessionId?: string;
   resume?: string;
+  /** On `ready`: the back's live turn count says a turn is ALREADY running (reattach mid-turn). */
+  turnActive?: boolean;
   id?: string;
   name?: string;
   tool?: string;
@@ -38,7 +51,28 @@ export interface SdkEvent {
   result?: string;
   message?: string;
   raw?: string;
+  /** Message provenance on `user` events — who sent it (see lib/chat.ts `MessageOrigin`). */
+  from?: MessageOrigin;
+  /** "terminal" = the event was MIRRORED from the card's TUI transcript, not spoken by the driver. */
+  source?: string;
+  /** On `user_question`: the questions with their selectable options. */
+  questions?: SdkQuestion[];
+  /** On `question_result`: what the person picked (absent when it timed out / was cancelled). */
+  answers?: SdkQuestionAnswer[];
+  /** On `message_edited`: the superseded message's text — the row it greys out. */
+  originalText?: string;
 }
+
+/** One question of a `user_question` (mirror of `UserQuestionItem` in the back's protocol). */
+export interface SdkQuestion {
+  question: string;
+  header?: string;
+  options: { label: string; description?: string }[];
+  multiSelect?: boolean;
+}
+
+/** One question's answer — the chosen labels (free text is one more string). */
+export interface SdkQuestionAnswer { selected: string[] }
 
 /** Parse one socket frame. Null for anything that is not a JSON object with a type. PURE. */
 export function parseSdkFrame(raw: string): SdkEvent | null {
@@ -51,7 +85,7 @@ export function parseSdkFrame(raw: string): SdkEvent | null {
   if (!obj || typeof obj !== "object") return null;
   const e = obj as Partial<SdkEvent>;
   if (typeof e.type !== "string") return null;
-  return e as SdkEvent;
+  return { ...e, from: parseOrigin(e.from) } as SdkEvent;
 }
 
 /* ------------------------------------------------------------------- rows */
@@ -59,15 +93,24 @@ export function parseSdkFrame(raw: string): SdkEvent | null {
 /** What one permission card is showing: still waiting, or how it ended. */
 export type PermissionOutcome = "pending" | "allowed" | "denied" | "timeout";
 
+/** What one question card is showing: still waiting, answered, or given up (timeout/cancel). */
+export type QuestionOutcome = "pending" | "answered" | "unanswered";
+
 export type SdkRow =
-  /** A message the person sent. `sent` = it reached the driver's stdin (the socket was open). */
-  | { kind: "user"; id: string; text: string; state: "sent" }
+  /** A message the person sent. `sent` = it reached the driver's stdin (the socket was open).
+   *  `from` = provenance on replayed/external messages: another card's agent, another person.
+   *  `edited` = a later version SUPERSEDED this one (drawn dimmed, with the "editada" badge).
+   *  `absorbed` = it arrived mid-turn and the driver folded it into the RUNNING turn (streaming
+   *  input) — drawn with the "entrou no turno em andamento" label so it never looks lost. */
+  | { kind: "user"; id: string; text: string; state: "sent"; from?: MessageOrigin; edited?: boolean; absorbed?: boolean }
   /** Claude talking. `streaming` while deltas are still landing on it. */
   | { kind: "assistant"; id: string; text: string; streaming: boolean }
   /** One tool call, compact: the name plus a one-line summary of its input. */
   | { kind: "tool"; id: string; name: string; summary: string; input?: unknown }
   /** The "Permitir / Negar" card — a sensitive call waiting on the human (or how it ended). */
   | { kind: "permission"; id: string; tool: string; summary: string; reason?: string; outcome: PermissionOutcome }
+  /** The agent's question with clickable options — waiting on the human, or how it was answered. */
+  | { kind: "question"; id: string; questions: SdkQuestion[]; outcome: QuestionOutcome; answers?: SdkQuestionAnswer[] }
   /** Something went wrong and saying so beats swallowing it. `count` > 1 = the SAME error again
       (a reconnect loop against a refused socket) — one banner that counts, not a stack of copies. */
   | { kind: "error"; id: string; text: string; count?: number }
@@ -80,13 +123,63 @@ export interface SdkChatState {
   sessionId?: string;
   /** The driver said `ready` — messages can go. */
   ready: boolean;
-  /** A turn is running (something arrived since the last `result`). */
+  /** A DRIVER turn is running (something arrived since the last `result`). Replayed history and
+   *  terminal-mirrored events never set it: the spinner only claims work the driver is doing. */
   turnActive: boolean;
+  /** The conversation's tail is coming from the TERMINAL mirror (one "atividade no terminal" note
+   *  is drawn when a burst starts; the flag keeps the burst from noting every line). */
+  terminalBurst: boolean;
+  /**
+   * A message of OUR OWN went out and the driver has not reacted yet — the window the status
+   * ladder fills: "Preparando…" while `ready` is still false (cold driver booting/resuming),
+   * "Pensando…" once it is (the turn is in the engine, no token yet). Any driver event — a delta,
+   * a tool, the result — clears it and the plain "Trabalhando…"/nothing takes over. Set only by
+   * the view's own send (`appendUserRow` with `awaiting`), never by replay or external messages:
+   * the ladder narrates OUR send, not someone else's.
+   */
+  awaiting: boolean;
   /** Monotonic counter for rows the driver did not name. */
   seq: number;
 }
 
-export const INITIAL_SDK_STATE: SdkChatState = { rows: [], ready: false, turnActive: false, seq: 0 };
+export const INITIAL_SDK_STATE: SdkChatState = {
+  rows: [],
+  ready: false,
+  turnActive: false,
+  terminalBurst: false,
+  awaiting: false,
+  seq: 0,
+};
+
+/** The note row a terminal burst opens with (the view translates it). */
+export const TERMINAL_ACTIVITY_NOTE = "terminal-activity";
+
+/**
+ * Marks which side of the card is talking. A terminal-mirrored event OPENS a burst: one system
+ * note ("atividade no terminal") so the reader knows the conversation moved to the Terminal tab;
+ * a driver event closes it. PURE.
+ */
+function markSource(state: SdkChatState, viaTerminal: boolean): SdkChatState {
+  if (!viaTerminal) return state.terminalBurst ? { ...state, terminalBurst: false } : state;
+  if (state.terminalBurst) return state;
+  const { id, seq } = nextId(state, "note");
+  return {
+    ...state,
+    seq,
+    terminalBurst: true,
+    rows: [...settleStreaming(state.rows), { kind: "note", id, text: TERMINAL_ACTIVITY_NOTE }],
+  };
+}
+
+/**
+ * Whether an event may light the "Trabalhando…" spinner: only a LIVE driver event (after `ready`).
+ * Replay arrives before `ready` and carries no turn ends, so it used to leave the spinner ON with
+ * nothing running — the "Trabalhando… pendurado" of the production incident. Terminal-mirrored
+ * events are the terminal's work, told by the burst note instead. PURE.
+ */
+function nextTurnActive(state: SdkChatState, viaTerminal: boolean): boolean {
+  return state.turnActive || (state.ready && !viaTerminal);
+}
 
 /** How much of a tool input is worth one compact line. */
 const SUMMARY_MAX = 120;
@@ -143,14 +236,40 @@ function settleStreaming(rows: SdkRow[]): SdkRow[] {
  * changes nothing, so React can skip the render.
  */
 export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatState {
+  const viaTerminal = event.source === "terminal";
   switch (event.type) {
+    case "user": {
+      // A replayed message (live sends of one's own are drawn by `appendUserRow` when the socket
+      // accepts the frame) — or a LIVE external one: another card's agent talking to this card,
+      // or a message the terminal mirror lifted from the TUI.
+      if (!event.text) return state;
+      const marked = markSource(state, viaTerminal);
+      return appendUserRow({ ...marked, rows: settleStreaming(marked.rows) }, event.text, event.from);
+    }
+    case "system_note": {
+      // The PANEL talking (a deploy interrupted a turn, the boot resumed it): one muted centered
+      // line, never a bubble — it is about the conversation, not part of it.
+      if (!event.text) return state;
+      const { id, seq } = nextId(state, "note");
+      return { ...state, seq, rows: [...settleStreaming(state.rows), { kind: "note", id, text: event.text }] };
+    }
     case "ready": {
-      const next: SdkChatState = { ...state, ready: true };
+      // The frame carries the manager's REAL turn state. `turnActive: true` = a turn is in flight
+      // in the card's live driver — the reattach mid-turn (Terminal↔Chat, reload) must light the
+      // spinner even though this view saw no live event yet (reattach mid-turn). Absent/false =
+      // nothing is running, whatever the replayed tail looked like (a turn cut mid-tool must not
+      // leave the spinner on forever).
+      const next: SdkChatState = {
+        ...state,
+        ready: true,
+        turnActive: event.turnActive === true,
+        rows: settleStreaming(state.rows),
+      };
       if (event.resume) {
         next.sessionId = event.resume;
         const { id, seq } = nextId(state, "note");
         next.seq = seq;
-        next.rows = [...state.rows, { kind: "note", id, text: `resume:${event.resume}` }];
+        next.rows = [...next.rows, { kind: "note", id, text: `resume:${event.resume}` }];
       }
       return next;
     }
@@ -159,43 +278,49 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       return { ...state, sessionId: event.sessionId };
     case "assistant_delta": {
       if (!event.text) return state;
-      const live = streamingRow(state.rows);
+      const base = markSource(state, false); // deltas are always the driver talking — closes a burst
+      const live = streamingRow(base.rows);
       if (live) {
-        const rows = [...state.rows.slice(0, -1), { ...live, text: live.text + event.text }];
-        return { ...state, rows, turnActive: true };
+        const rows = [...base.rows.slice(0, -1), { ...live, text: live.text + event.text }];
+        return { ...base, rows, turnActive: nextTurnActive(base, false), awaiting: false };
       }
-      const { id, seq } = nextId(state, "a");
+      const { id, seq } = nextId(base, "a");
       return {
-        ...state,
+        ...base,
         seq,
-        turnActive: true,
-        rows: [...state.rows, { kind: "assistant", id, text: event.text, streaming: true }],
+        turnActive: nextTurnActive(base, false),
+        awaiting: false,
+        rows: [...base.rows, { kind: "assistant", id, text: event.text, streaming: true }],
       };
     }
     case "assistant_text": {
       const text = event.text ?? "";
       const live = streamingRow(state.rows);
-      if (live) {
+      if (live && !viaTerminal) {
         // The consolidated block REPLACES the deltas that built it — same words, now settled.
         const rows = [...state.rows.slice(0, -1), { ...live, text, streaming: false }];
-        return { ...state, rows, turnActive: true };
+        return { ...state, rows, turnActive: nextTurnActive(state, viaTerminal), awaiting: false };
       }
       if (text === "") return state;
-      const { id, seq } = nextId(state, "a");
+      const marked = markSource(state, viaTerminal);
+      const { id, seq } = nextId(marked, "a");
       return {
-        ...state,
+        ...marked,
         seq,
-        turnActive: true,
-        rows: [...state.rows, { kind: "assistant", id, text, streaming: false }],
+        turnActive: nextTurnActive(marked, viaTerminal),
+        awaiting: false,
+        rows: [...settleStreaming(marked.rows), { kind: "assistant", id, text, streaming: false }],
       };
     }
     case "tool_use": {
-      const { id, seq } = nextId(state, "t");
-      const rows = settleStreaming(state.rows);
+      const marked = markSource(state, viaTerminal);
+      const { id, seq } = nextId(marked, "t");
+      const rows = settleStreaming(marked.rows);
       return {
-        ...state,
+        ...marked,
         seq,
-        turnActive: true,
+        turnActive: nextTurnActive(marked, viaTerminal),
+        awaiting: false,
         rows: [
           ...rows,
           { kind: "tool", id: event.id ?? id, name: event.name ?? "?", summary: toolSummary(event.input), input: event.input },
@@ -207,7 +332,8 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       const rows = settleStreaming(state.rows);
       return {
         ...state,
-        turnActive: true,
+        turnActive: nextTurnActive(state, viaTerminal),
+        awaiting: false,
         rows: [
           ...rows,
           {
@@ -228,14 +354,46 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         event.decision === "allow" ? "allowed" : event.timedOut ? "timeout" : "denied";
       return decidePermission(state, event.id, outcome);
     }
+    case "user_question": {
+      if (!event.id || !Array.isArray(event.questions) || event.questions.length === 0) return state;
+      const rows = settleStreaming(state.rows);
+      return {
+        ...state,
+        turnActive: nextTurnActive(state, viaTerminal),
+        awaiting: false,
+        rows: [
+          ...rows,
+          { kind: "question", id: event.id, questions: event.questions, outcome: "pending" },
+        ],
+      };
+    }
+    case "question_result": {
+      if (!event.id) return state;
+      return answerQuestion(state, event.id, event.answers);
+    }
+    case "turn_absorbed": {
+      // The driver's confirmation that the LAST send folded into the turn already running
+      // (streaming input): the newest not-yet-labelled user row gets the "entrou no turno em
+      // andamento" tag. Live-only — never replayed (by replay time the turn is history).
+      const next = markUserAbsorbed(state);
+      if (next === state && !state.awaiting) return state;
+      return { ...next, turnActive: nextTurnActive(next, false), awaiting: false };
+    }
+    case "message_edited": {
+      // The user superseded a message he sent: the LAST user row with those words is drawn dimmed
+      // with the "editada" badge (the new version follows as its own row). Matching is by
+      // normalized text — the history has no row ids, and the same rule folds live and replay.
+      if (!event.originalText) return state;
+      return markUserEdited(state, event.originalText);
+    }
     case "result": {
-      const next: SdkChatState = { ...state, turnActive: false, rows: settleStreaming(state.rows) };
+      const next: SdkChatState = { ...state, turnActive: false, awaiting: false, rows: settleStreaming(state.rows) };
       if (event.sessionId) next.sessionId = event.sessionId;
       if (event.isError) return appendErrorRow(next, next.rows, event.result || "error");
       return next;
     }
     case "error":
-      return appendErrorRow({ ...state, turnActive: false }, settleStreaming(state.rows), event.message ?? "error");
+      return appendErrorRow({ ...state, turnActive: false, awaiting: false }, settleStreaming(state.rows), event.message ?? "error");
     case "parse_error":
       return appendErrorRow(state, state.rows, event.raw ?? "parse error");
     default:
@@ -243,10 +401,52 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
   }
 }
 
-/** Append a message the person just sent (the socket accepted the frame). PURE. */
-export function appendUserRow(state: SdkChatState, text: string): SdkChatState {
+/** Append a user message: one's own send (no `from`), or a replayed/external one with provenance.
+ *  `opts.awaiting` — a LIVE send of one's own: starts the status ladder ("Preparando…"/"Pensando…")
+ *  until the driver's first reaction. Replay and external messages never pass it. PURE. */
+export function appendUserRow(
+  state: SdkChatState,
+  text: string,
+  from?: MessageOrigin,
+  opts?: { awaiting?: boolean },
+): SdkChatState {
   const { id, seq } = nextId(state, "u");
-  return { ...state, seq, rows: [...state.rows, { kind: "user", id, text, state: "sent" }] };
+  return {
+    ...state,
+    seq,
+    awaiting: opts?.awaiting === true ? true : state.awaiting,
+    rows: [...state.rows, { kind: "user", id, text, state: "sent", from }],
+  };
+}
+
+/** Whitespace-insensitive text identity — the same folding the back's dedupe key uses. */
+function normalizeMessageText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/** Mark the LAST not-yet-edited user row whose words match as superseded ("editada"). PURE. */
+export function markUserEdited(state: SdkChatState, originalText: string): SdkChatState {
+  const target = normalizeMessageText(originalText);
+  if (target === "") return state;
+  for (let i = state.rows.length - 1; i >= 0; i -= 1) {
+    const row = state.rows[i]!;
+    if (row.kind !== "user" || row.edited === true || normalizeMessageText(row.text) !== target) continue;
+    const rows = [...state.rows.slice(0, i), { ...row, edited: true }, ...state.rows.slice(i + 1)];
+    return { ...state, rows };
+  }
+  return state;
+}
+
+/** Mark the LAST not-yet-absorbed user row as folded into the running turn. PURE. */
+export function markUserAbsorbed(state: SdkChatState): SdkChatState {
+  for (let i = state.rows.length - 1; i >= 0; i -= 1) {
+    const row = state.rows[i]!;
+    if (row.kind !== "user") continue;
+    if (row.absorbed === true) return state; // the newest user row is already labelled — nothing newer to label
+    const rows = [...state.rows.slice(0, i), { ...row, absorbed: true }, ...state.rows.slice(i + 1)];
+    return { ...state, rows };
+  }
+  return state;
 }
 
 /** Settle a permission card's outcome (a click, or the driver's echo — idempotent). PURE. */
@@ -258,6 +458,20 @@ export function decidePermission(state: SdkChatState, id: string, outcome: Permi
     if (row.outcome !== "pending" && outcome === "pending") return row;
     changed = true;
     return { ...row, outcome };
+  });
+  return changed ? { ...state, rows } : state;
+}
+
+/** Settle a question card (a click, the driver's echo, or a replayed result — idempotent). PURE. */
+export function answerQuestion(state: SdkChatState, id: string, answers?: SdkQuestionAnswer[]): SdkChatState {
+  const outcome: QuestionOutcome = answers && answers.length > 0 ? "answered" : "unanswered";
+  let changed = false;
+  const rows = state.rows.map((row) => {
+    if (row.kind !== "question" || row.id !== id) return row;
+    // The first settlement wins on screen: an echo may confirm it, never flip it back to pending.
+    if (row.outcome !== "pending") return row;
+    changed = true;
+    return { ...row, outcome, answers };
   });
   return changed ? { ...state, rows } : state;
 }

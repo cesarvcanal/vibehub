@@ -1,6 +1,9 @@
 import * as React from "react";
-import { AlertTriangle, Loader2, MonitorPlay, Plug } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { AlertTriangle, Eye, KeyRound, Loader2, MonitorPlay, MousePointerClick, Plug } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { wsUrl } from "@/lib/ws";
 import { apiErrorMessage } from "@/lib/apiError";
 import { boardApi } from "@/features/board/api";
@@ -14,14 +17,21 @@ import { t as translate, useT } from "@/i18n";
  *   WS     /api/cards/:id/vnc      → a raw RFB byte bridge (the server is the websockify)
  *   DELETE /api/cards/:id/browser  → tears it all down and gives the RAM back
  *
- * It is deliberately NOT view-only: the agent drives that same Chromium over CDP, and you can take
- * the keyboard whenever it hits a login or a captcha — without evicting it.
+ * TWO WAYS TO BE HERE, switchable live (no reconnect — `viewOnly` is a live RFB property):
+ *   - "Só assistir" (the DEFAULT): view-only — your mouse and keyboard do NOT reach the page, so
+ *     you can watch the agent click without bumping its cursor by accident.
+ *   - "Pilotar junto": input on — your clicks and typing land ALONGSIDE the agent's. The agent
+ *     drives this same Chromium over CDP (a separate channel from the VNC input), so neither side
+ *     evicts the other: take the keyboard for a login or a captcha, hand it back with one click.
  *
  * noVNC is imported lazily. It is a large browser-only bundle that touches the DOM on import, so it
  * has no business loading for anyone who never opens this panel.
  */
 
 type State = "idle" | "starting" | "connecting" | "live" | "error" | "closed";
+
+/** localStorage key remembering the display mode ("fit" | "real") — per browser, per user. */
+const VNC_DISPLAY_KEY = "vibehub.vnc.display";
 
 const STATE_TONE: Record<State, string> = {
   idle: "text-muted-foreground",
@@ -37,7 +47,51 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
   const [state, setState] = React.useState<State>("idle");
   const [error, setError] = React.useState<string | null>(null);
   const screenRef = React.useRef<HTMLDivElement | null>(null);
-  const rfbRef = React.useRef<{ disconnect: () => void } | null>(null);
+  const rfbRef = React.useRef<{ disconnect: () => void; viewOnly: boolean; scaleViewport: boolean; clipViewport: boolean } | null>(null);
+  // "Só assistir" by default: watching the agent must never interfere with it by accident.
+  const [viewOnly, setViewOnly] = React.useState(true);
+  // The connect callback reads the CURRENT choice without re-creating itself (a new callback would
+  // re-run the auto-connect effect).
+  const viewOnlyRef = React.useRef(viewOnly);
+  viewOnlyRef.current = viewOnly;
+
+  /** Flip watch/pilot LIVE: `viewOnly` is a plain RFB property, no reconnect involved. */
+  const toggleViewOnly = React.useCallback(() => {
+    setViewOnly((current) => {
+      const next = !current;
+      if (rfbRef.current) rfbRef.current.viewOnly = next;
+      return next;
+    });
+  }, []);
+
+  // DISPLAY mode, also live: "Ajustar" scales the Chromium screen to fit the pane (follow the agent
+  // with no scrolling); "Tamanho real" is 1:1 at the browser's own resolution (faithful front-end
+  // testing), panning inside the pane (`clipViewport`). Remembered per browser (localStorage).
+  const [fitScreen, setFitScreen] = React.useState(() => {
+    try {
+      return window.localStorage.getItem(VNC_DISPLAY_KEY) !== "real";
+    } catch {
+      return true;
+    }
+  });
+  const fitRef = React.useRef(fitScreen);
+  fitRef.current = fitScreen;
+
+  const toggleFit = React.useCallback(() => {
+    setFitScreen((current) => {
+      const next = !current;
+      if (rfbRef.current) {
+        rfbRef.current.scaleViewport = next;
+        rfbRef.current.clipViewport = !next;
+      }
+      try {
+        window.localStorage.setItem(VNC_DISPLAY_KEY, next ? "fit" : "real");
+      } catch {
+        /* private window / storage off — the toggle still works for this session */
+      }
+      return next;
+    });
+  }, []);
 
   /** Disconnect the client and stop the browser in the runner. Idempotent. */
   const teardown = React.useCallback(() => {
@@ -80,8 +134,9 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
     const rfb = new RFB(screenRef.current, wsUrl(`/api/cards/${encodeURIComponent(cardId)}/vnc`), {
       wsProtocols: [],
     });
-    rfb.viewOnly = false;
-    rfb.scaleViewport = true;
+    rfb.viewOnly = viewOnlyRef.current;
+    rfb.scaleViewport = fitRef.current;
+    rfb.clipViewport = !fitRef.current;
     rfb.focusOnClick = true;
     rfb.background = "#000";
     rfb.addEventListener("connect", () => setState("live"));
@@ -113,14 +168,40 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
 
   return (
     <div className="flex min-h-[220px] min-w-0 flex-1 flex-col gap-1">
+      <CapturePrompt cardId={cardId} active={state === "live"} />
       <div className="flex items-center justify-between">
         <span className="inline-flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
           <MonitorPlay className="h-3.5 w-3.5" /> {t("vnc.header")}
         </span>
         <div className="flex items-center gap-2">
+          {/* Display mode, LEFT of the live indicator — quiet, text-only. Fit scales the screen to
+              the pane; real size is 1:1 at the Chromium's own resolution (pan to see the rest). */}
+          <button
+            type="button"
+            data-testid="vnc-display-toggle"
+            className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground/70 hover:text-muted-foreground"
+            title={fitScreen ? t("vnc.fitHint") : t("vnc.realSizeHint")}
+            onClick={toggleFit}
+          >
+            {fitScreen ? t("vnc.fit") : t("vnc.realSize")}
+          </button>
           <span role="status" className={`font-mono text-[10px] uppercase tracking-wider ${tone}`}>
             {t(`vnc.state.${state}`)}
           </span>
+          {/* Watch/pilot toggle — flips `viewOnly` on the LIVE connection, nobody is disconnected.
+              It shows the CURRENT mode; clicking it switches to the other one. */}
+          <Button
+            variant="outline"
+            size="sm"
+            data-testid="vnc-input-toggle"
+            aria-pressed={!viewOnly}
+            className="h-6 px-2 text-xs"
+            title={viewOnly ? t("vnc.watchOnlyHint") : t("vnc.pilotHint")}
+            onClick={toggleViewOnly}
+          >
+            {viewOnly ? <Eye className="h-3.5 w-3.5" /> : <MousePointerClick className="h-3.5 w-3.5" />}
+            {viewOnly ? t("vnc.watchOnly") : t("vnc.pilot")}
+          </Button>
           {/* A word, not an ✕. Closing this pane also KILLS the Chromium in the runner and gives the
               RAM back — that is a disconnection, and an icon that usually means "hide" undersells it. */}
           <Button
@@ -167,6 +248,88 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
           </div>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The Chrome-style "save this login?" prompt. While the browser is live it polls the card's pending
+ * captures — logins vibehub noticed being submitted (by the person or the agent) — and offers to save
+ * the newest to the Cofre. The PASSWORD never reaches this component: the server holds it keyed by an
+ * opaque id, and "Save" only sends that id plus a chosen name.
+ */
+export function CapturePrompt({ cardId, active }: { cardId: string; active: boolean }) {
+  const t = useT();
+  const qc = useQueryClient();
+  const [name, setName] = React.useState("");
+  const [nameEdited, setNameEdited] = React.useState(false);
+
+  const captures = useQuery({
+    queryKey: ["captures", cardId],
+    queryFn: () => boardApi.cardCaptures(cardId),
+    enabled: active,
+    refetchInterval: active ? 4000 : false,
+  });
+
+  const top = captures.data?.[0];
+
+  // Seed the name field from the suggestion until the person edits it; reset when the capture changes.
+  React.useEffect(() => {
+    setNameEdited(false);
+    setName(top?.suggestedName ?? "");
+  }, [top?.id, top?.suggestedName]);
+
+  const save = useMutation({
+    mutationFn: () => boardApi.saveCapture(cardId, top!.id, name.trim() || undefined),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["captures", cardId] });
+      void qc.invalidateQueries({ queryKey: ["credentials"] });
+      toast.success(translate("capture.saved"));
+    },
+    onError: (e) => toast.error(apiErrorMessage(e)),
+  });
+
+  const dismiss = useMutation({
+    mutationFn: () => boardApi.dismissCapture(cardId, top!.id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["captures", cardId] }),
+  });
+
+  if (!active || !top) return null;
+
+  return (
+    <div
+      data-testid="capture-prompt"
+      className="flex flex-wrap items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs"
+    >
+      <KeyRound className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+      <span className="min-w-0 flex-1">{t("capture.prompt", { host: top.host })}</span>
+      <Input
+        aria-label={t("capture.saveAs")}
+        value={name}
+        onChange={(e) => { setName(e.target.value); setNameEdited(true); }}
+        onBlur={() => { if (!name.trim() && !nameEdited) setName(top.suggestedName); }}
+        className="h-7 w-40 font-mono text-xs"
+        maxLength={40}
+      />
+      <Button
+        type="button"
+        size="sm"
+        className="h-7 px-2 text-xs"
+        disabled={!name.trim() || save.isPending}
+        onClick={() => save.mutate()}
+      >
+        {t("capture.save")}
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-7 px-2 text-xs text-muted-foreground"
+        disabled={dismiss.isPending}
+        onClick={() => dismiss.mutate()}
+      >
+        {t("capture.dismiss")}
+      </Button>
     </div>
   );
 }

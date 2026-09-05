@@ -25,7 +25,7 @@ describe("ProjectSidebar — the shell", () => {
     vi.resetAllMocks();
     mockGet.mockImplementation((url: string) => {
       if (url === "/setup/state") return Promise.resolve(setupState());
-      if (url === "/auth/me") return Promise.resolve({ user: { id: "u1", username: "cesar", role: "owner" } });
+      if (url === "/auth/me") return Promise.resolve({ user: { id: "u1", username: "sam", role: "owner" } });
       return Promise.reject(new Error(`unexpected GET ${url}`));
     });
   });
@@ -56,13 +56,13 @@ describe("ProjectSidebar — the shell", () => {
     expect(brand.querySelector("svg")).toBeTruthy();
   });
 
-  it("carries the account row as its last row: theme, then the signed-in user", async () => {
+  it("carries the account row as its last row: the gear, then the signed-in user", async () => {
     renderSidebar();
     const nav = screen.getByRole("navigation", { name: "Projects" });
     const account = nav.lastElementChild as HTMLElement;
 
-    expect(account).toContainElement(screen.getByRole("button", { name: /^Theme:/ }));
-    expect(account).toContainElement(await screen.findByRole("button", { name: /cesar/ }));
+    expect(account).toContainElement(screen.getByRole("button", { name: "Preferences" }));
+    expect(account).toContainElement(await screen.findByRole("button", { name: /sam/ }));
   });
 
   it("is a full-height sticky column, so the bottom row never scrolls out of reach", () => {

@@ -61,7 +61,7 @@ describe("settings", () => {
     // seeded default) failed its OWN validation and the settings form could not save ANYTHING.
     const seeded = (await s.getSettings()).git.email;
     expect((await s.updateSettings({ git: { email: seeded } })).git.email).toBe(seeded);
-    expect((await s.updateSettings({ git: { email: "cesar@localhost" } })).git.email).toBe("cesar@localhost");
+    expect((await s.updateSettings({ git: { email: "dev@localhost" } })).git.email).toBe("dev@localhost");
     expect((await s.updateSettings({ git: { email: "ada@example.com" } })).git.email).toBe("ada@example.com");
   });
 
@@ -71,17 +71,47 @@ describe("settings", () => {
     expect((await s.updateSettings({ defaultAccountLabel: " work " })).defaultAccountLabel).toBe("work");
   });
 
-  it("defaults the SDK driver flag to OFF and round-trips it", async () => {
+  it("defaults the native chat (sdkDriver) to ON and round-trips it", async () => {
+    // Since 2026-08-31 the native chat is the default of a new install; false is the fallback to
+    // the classic chat on every card.
     const s = await fresh();
-    expect((await s.getSettings()).sdkDriver).toBe(false);
-    expect((await s.updateSettings({ sdkDriver: true })).sdkDriver).toBe(true);
+    expect((await s.getSettings()).sdkDriver).toBe(true);
     expect((await s.updateSettings({ sdkDriver: false })).sdkDriver).toBe(false);
+    expect((await s.updateSettings({ sdkDriver: true })).sdkDriver).toBe(true);
   });
 
   it("rejects a non-boolean sdkDriver", async () => {
     const s = await fresh();
     // @ts-expect-error — exercising the runtime guard
     await expect(s.updateSettings({ sdkDriver: "yes" })).rejects.toThrow(/must be a boolean/);
+  });
+
+  it("defaults sdkPermissionMode to same-as-terminal and round-trips both modes", async () => {
+    const s = await fresh();
+    expect((await s.getSettings()).sdkPermissionMode).toBe("same-as-terminal");
+    expect((await s.updateSettings({ sdkPermissionMode: "ask-sensitive" })).sdkPermissionMode).toBe("ask-sensitive");
+    expect((await s.updateSettings({ sdkPermissionMode: "same-as-terminal" })).sdkPermissionMode).toBe("same-as-terminal");
+  });
+
+  it("defaults sdkAutoResume to ON and round-trips it", async () => {
+    // The deploy-resume switch: on = a panel restart that kills a native-chat turn is resumed
+    // automatically at the next boot; off = only the visible system line.
+    const s = await fresh();
+    expect((await s.getSettings()).sdkAutoResume).toBe(true);
+    expect((await s.updateSettings({ sdkAutoResume: false })).sdkAutoResume).toBe(false);
+    expect((await s.updateSettings({ sdkAutoResume: true })).sdkAutoResume).toBe(true);
+  });
+
+  it("rejects a non-boolean sdkAutoResume", async () => {
+    const s = await fresh();
+    // @ts-expect-error — exercising the runtime guard
+    await expect(s.updateSettings({ sdkAutoResume: "yes" })).rejects.toThrow(/must be a boolean/);
+  });
+
+  it("rejects an unknown sdkPermissionMode", async () => {
+    const s = await fresh();
+    // @ts-expect-error — exercising the runtime guard
+    await expect(s.updateSettings({ sdkPermissionMode: "yolo" })).rejects.toThrow(/same-as-terminal/);
   });
 
   it("stamps setup completion once — the first timestamp wins", async () => {

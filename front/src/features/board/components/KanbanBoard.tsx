@@ -17,6 +17,16 @@ import {
 import { Label } from "@/components/ui/label";
 import { CardTile } from "@/features/board/components/CardTile";
 import {
+  MarqueeSelect,
+  useClearSelectionOnEscape,
+} from "@/features/board/components/MarqueeSelect";
+import {
+  orderByBoard,
+  planGroupDrop,
+  setGroupDragGhost,
+  toggleId,
+} from "@/features/board/lib/selection";
+import {
   columnHint,
   columnLabel,
   dropPosition,
@@ -42,6 +52,7 @@ import {
   type BoardProject,
 } from "@/features/board/api";
 import type { CardColumn } from "@/api/types";
+import { useAuth } from "@/providers/auth";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -90,6 +101,9 @@ export function KanbanBoard({
   headerLead?: React.ReactNode;
 }) {
   const t = useT();
+  // Creating and deleting cards is the OWNER's (the routes answer 403 to a member); a member gets
+  // the board of what was shared, and works inside those cards.
+  const { isOwner } = useAuth();
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
   const [expanded, setExpanded] = useExpandedColumns();
@@ -111,6 +125,16 @@ export function KanbanBoard({
    * drop needs to know — the column alone could never express "third, not last".
    */
   const [dropAt, setDropAt] = React.useState<{ column: CardColumn; gap: number } | null>(null);
+  /**
+   * Multi-selection: the ids currently ringed. Pure UI state — it lives here, persists nowhere, and
+   * exists for one purpose: dragging any selected card drags them ALL. Filled by the marquee (a
+   * drag on empty board) or by shift-clicking cards; emptied by Esc, a plain click anywhere, or
+   * opening a card.
+   */
+  const [selected, setSelected] = React.useState<ReadonlySet<string>>(() => new Set());
+  const clearSelection = React.useCallback(() => setSelected(new Set()), []);
+  const replaceSelection = React.useCallback((ids: string[]) => setSelected(new Set(ids)), []);
+  useClearSelectionOnEscape(selected.size > 0, clearSelection);
   const [deleteTarget, setDeleteTarget] = React.useState<BoardCard | null>(null);
   // Switching a card's Claude account: the target card, plus the choice ("" = inherit).
   const [accountTarget, setAccountTarget] = React.useState<BoardCard | null>(null);
@@ -222,10 +246,41 @@ export function KanbanBoard({
    * arithmetic (`dropPosition`). It used to bail out whenever the column had not changed, which is
    * exactly why dragging a card up its own column did nothing at all.
    */
+  /**
+   * A drag begins. On a SELECTED card it is a bulk move — the ghost becomes a pill with the head
+   * count so the hand knows what it is holding. On any other card it is the ordinary single drag,
+   * and it dissolves whatever selection was standing: the gesture said "this one", not "these".
+   */
+  function startDrag(card: BoardCard, e: React.DragEvent) {
+    if (selected.has(card.id) && selected.size > 1) {
+      setGroupDragGhost(e.dataTransfer, translate("board.dragCount", { n: selected.size }));
+    } else if (selected.size > 0) {
+      clearSelection();
+    }
+    setDragging(card);
+  }
+
   function dropOn(column: CardColumn, gap: number) {
     const card = dragging;
     clearDrag();
     if (!card) return;
+    // Bulk drop: every selected card lands at the gap as one block, board order preserved. Each
+    // step is the SAME PATCH a lone drag sends, applied in order (awaited: the plan's positions
+    // assume sequential splicing, and so do the column rules — pausing, finishing — per card).
+    if (selected.has(card.id) && selected.size > 1) {
+      const moving = orderByBoard(cards ?? [], selected);
+      const steps = planGroupDrop(groups[column].map((c) => c.id), moving.map((c) => c.id), gap);
+      void (async () => {
+        for (const step of steps) {
+          try {
+            await moveMutation.mutateAsync({ id: step.id, column, position: step.position });
+          } catch {
+            break; // The toast told the story; the refetch re-syncs the board.
+          }
+        }
+      })();
+      return;
+    }
     const ordered = groups[column];
     const from = ordered.findIndex((c) => c.id === card.id);
     const position = dropPosition(gap, from, ordered.length);
@@ -265,9 +320,11 @@ export function KanbanBoard({
           {t("board.cards", { n: total })}
         </span>
         {headerExtra}
-        <Button size="sm" className="h-9 gap-0" title={t("board.newCardHint")} onClick={onNewCard}>
-          <Plus className="mr-1.5 h-4 w-4" /> {t("board.newCard")}
-        </Button>
+        {isOwner ? (
+          <Button size="sm" className="h-9 gap-0" title={t("board.newCardHint")} onClick={onNewCard}>
+            <Plus className="mr-1.5 h-4 w-4" /> {t("board.newCard")}
+          </Button>
+        ) : null}
       </div>
 
       {isLoading ? (
@@ -276,7 +333,9 @@ export function KanbanBoard({
         </div>
       ) : (
         // Five equal columns side by side from `xl`; two at `md`; on a phone, Waiting and Working
-        // with the rest behind "show more" (see `visibleColumns`).
+        // with the rest behind "show more" (see `visibleColumns`). The marquee layer owns drags
+        // that START on empty board; a drag starting on a card never reaches it.
+        <MarqueeSelect enabled={!isMobile} onSelect={replaceSelection} onClear={clearSelection}>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
           {visibleColumns(isMobile, expanded).map((column, index) => (
             <React.Fragment key={column.key}>
@@ -302,7 +361,7 @@ export function KanbanBoard({
                 }
                 onDragLeave={() => setDropAt((at) => (at?.column === column.key ? null : at))}
               >
-                {column.key === "backlog" ? (
+                {column.key === "backlog" && isOwner ? (
                   // Jot a card down right where it lands — no dialog trip to the top button, and it
                   // stays on the board (no jump into the card) because you are still filling the list.
                   <button
@@ -328,7 +387,12 @@ export function KanbanBoard({
                   >
                     <CardTile
                       card={card}
-                      onOpen={onOpenCard}
+                      selected={selected.has(card.id)}
+                      onToggleSelect={(c) => setSelected((s) => toggleId(s, c.id))}
+                      onOpen={(c) => {
+                        clearSelection();
+                        onOpenCard(c);
+                      }}
                       onDone={finish}
                       onPause={(c) => pauseMutation.mutate(c.id)}
                       onRestart={restart}
@@ -338,7 +402,7 @@ export function KanbanBoard({
                         setAccountTarget(c);
                       }}
                       onDelete={setDeleteTarget}
-                      onDragStart={setDragging}
+                      onDragStart={startDrag}
                       onDragEnd={clearDrag}
                     />
                   </CardDropSlot>
@@ -358,6 +422,7 @@ export function KanbanBoard({
             </React.Fragment>
           ))}
         </div>
+        </MarqueeSelect>
       )}
 
       {/* The card's Claude account. A dialog rather than a submenu: switching it ends the session

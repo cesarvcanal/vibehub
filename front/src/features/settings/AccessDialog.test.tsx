@@ -20,15 +20,23 @@ vi.mock("@/lib/api", () => ({
   del: (...a: unknown[]) => del(...a),
 }));
 
-const OWNER = { id: "u1", username: "cesar", role: "owner", createdAt: "2026-01-01T00:00:00.000Z" };
-const MEMBER = { id: "u2", username: "mussa", role: "member", createdAt: "2026-02-01T00:00:00.000Z" };
+const OWNER = { id: "u1", username: "sam", role: "owner", createdAt: "2026-01-01T00:00:00.000Z" };
+const MEMBER = { id: "u2", username: "alex", role: "member", createdAt: "2026-02-01T00:00:00.000Z" };
 
-/** Signs the dialog in as `me`, with `users` behind GET /users. */
-function serve(me: typeof OWNER | typeof MEMBER, users = [OWNER, MEMBER]) {
+/** Signs the dialog in as `me`, with `users` behind GET /users (plus projects and their shares). */
+function serve(
+  me: typeof OWNER | typeof MEMBER,
+  users = [OWNER, MEMBER],
+  projects: Array<{ id: string; name: string }> = [],
+  sharesByProject: Record<string, Array<{ userId: string; username: string; level: string }>> = {},
+) {
   get.mockImplementation(async (url: string) => {
     if (url === "/auth/me") return { user: me };
     if (url === "/setup/state") return setupState();
     if (url === "/users") return { users };
+    if (url === "/projects") return { projects };
+    const shares = /^\/projects\/([^/]+)\/shares$/.exec(url);
+    if (shares) return { shares: sharesByProject[shares[1]] ?? [] };
     throw new Error(`unexpected ${url}`);
   });
 }
@@ -41,22 +49,22 @@ describe("AccessDialog as the owner", () => {
     post.mockResolvedValue({ user: MEMBER });
     renderApp(<AccessDialog open onOpenChange={() => {}} />);
 
-    expect(await screen.findByText("mussa")).toBeInTheDocument();
+    expect(await screen.findByText("alex")).toBeInTheDocument();
 
-    await userEvent.type(screen.getByLabelText("Username"), "pamela");
+    await userEvent.type(screen.getByLabelText("Username"), "kim");
     await userEvent.type(screen.getByLabelText("Password"), "supersecret");
     await userEvent.click(screen.getByRole("button", { name: /Create account/ }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/users", {
-      username: "pamela", password: "supersecret", role: "member",
+      username: "kim", password: "supersecret", role: "member",
     }));
   });
 
   it("refuses to submit a password shorter than the server would accept", async () => {
     serve(OWNER);
     renderApp(<AccessDialog open onOpenChange={() => {}} />);
-    await screen.findByText("mussa");
-    await userEvent.type(screen.getByLabelText("Username"), "pamela");
+    await screen.findByText("alex");
+    await userEvent.type(screen.getByLabelText("Username"), "kim");
     await userEvent.type(screen.getByLabelText("Password"), "short");
     expect(screen.getByRole("button", { name: /Create account/ })).toBeDisabled();
   });
@@ -65,11 +73,11 @@ describe("AccessDialog as the owner", () => {
     serve(OWNER);
     patch.mockResolvedValue({ user: { ...MEMBER, role: "owner" } });
     renderApp(<AccessDialog open onOpenChange={() => {}} />);
-    await screen.findByText("mussa");
+    await screen.findByText("alex");
 
     // Each row's select names WHOSE role it is, so the test (and a screen reader) can tell the
     // rows apart from each other and from the create form's.
-    await userEvent.selectOptions(screen.getByLabelText("Role of mussa"), "owner");
+    await userEvent.selectOptions(screen.getByLabelText("Role of alex"), "owner");
     await waitFor(() => expect(patch).toHaveBeenCalledWith("/users/u2", { role: "owner" }));
   });
 
@@ -78,9 +86,9 @@ describe("AccessDialog as the owner", () => {
     del.mockResolvedValue({ ok: true });
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     renderApp(<AccessDialog open onOpenChange={() => {}} />);
-    await screen.findByText("mussa");
+    await screen.findByText("alex");
 
-    await userEvent.click(screen.getByRole("button", { name: "Remove mussa" }));
+    await userEvent.click(screen.getByRole("button", { name: "Remove alex" }));
     expect(confirm).toHaveBeenCalled();
     await waitFor(() => expect(del).toHaveBeenCalledWith("/users/u2"));
     confirm.mockRestore();
@@ -107,5 +115,58 @@ describe("AccessDialog as a member", () => {
     await userEvent.type(await screen.findByLabelText("New password"), "anothersecret");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(post).toHaveBeenCalledWith("/auth/password", { password: "anothersecret" }));
+  });
+});
+
+describe("AccessDialog — the shared projects of one member", () => {
+  const PROJECTS = [
+    { id: "p1", name: "billing" },
+    { id: "p2", name: "gateway" },
+  ];
+
+  it("lists which projects each member can reach, with the level", async () => {
+    serve(OWNER, [OWNER, MEMBER], PROJECTS, {
+      p1: [{ userId: "u2", username: "alex", level: "view" }],
+    });
+    renderApp(<AccessDialog open onOpenChange={() => {}} />);
+
+    const editor = await screen.findByTestId("shared-projects-u2");
+    // The chip appears once the project's share list answers.
+    await screen.findByRole("button", { name: "Remove billing from alex" });
+    expect(editor).toHaveTextContent("billing");
+    expect(editor).toHaveTextContent("Can view");
+    // The one not shared is offered by the add select, not painted as a removable chip.
+    expect(screen.queryByRole("button", { name: "Remove gateway from alex" })).toBeNull();
+  });
+
+  it("adds a project share from the person's own row", async () => {
+    serve(OWNER, [OWNER, MEMBER], PROJECTS, {});
+    post.mockResolvedValue({ share: { userId: "u2", username: "alex", level: "work" } });
+    renderApp(<AccessDialog open onOpenChange={() => {}} />);
+
+    await userEvent.selectOptions(await screen.findByLabelText("Add a project for alex"), "p2");
+    await userEvent.click(screen.getByRole("button", { name: "Share with alex" }));
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/projects/p2/shares", { userId: "u2", level: "work" }),
+    );
+  });
+
+  it("removes a project share with the chip's ×", async () => {
+    serve(OWNER, [OWNER, MEMBER], PROJECTS, {
+      p1: [{ userId: "u2", username: "alex", level: "work" }],
+    });
+    del.mockResolvedValue({ ok: true });
+    renderApp(<AccessDialog open onOpenChange={() => {}} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Remove billing from alex" }));
+    await waitFor(() => expect(del).toHaveBeenCalledWith("/projects/p1/shares/u2"));
+  });
+
+  it("does not draw the editor on an owner's row — owners already see everything", async () => {
+    serve(OWNER, [OWNER, MEMBER], PROJECTS, {});
+    renderApp(<AccessDialog open onOpenChange={() => {}} />);
+    await screen.findByTestId("shared-projects-u2");
+    expect(screen.queryByTestId("shared-projects-u1")).toBeNull();
   });
 });

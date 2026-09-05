@@ -159,11 +159,37 @@ export interface Settings {
   transcribeLanguage?: string | null;
   /** Minutes a terminal may sit idle before it is hibernated. 0 = never. */
   idleHibernateMinutes?: number;
-  /** EXPERIMENTAL: arms the Agent-SDK driver socket (`/api/cards/:id/sdk`). Off = nothing changes. */
+  /** Native chat as the Chat tab of every card (default on). Off = classic chat everywhere. */
   sdkDriver?: boolean;
+  /** Native chat permission gate: mirror the Terminal tab, or ask for the sensitive set in the chat. */
+  sdkPermissionMode?: "same-as-terminal" | "ask-sensitive";
+  /** Resume automatically a native-chat turn a panel deploy interrupted (default on). */
+  sdkAutoResume?: boolean;
   runner: RunnerSettings;
   /** Externally reachable base URL, when the install has one. */
   publicUrl?: string;
+}
+
+/* ------------------------------------------------------------------ cofre */
+
+export type CredentialType = "userpass" | "token";
+
+/** A named credential in the Cofre. The VALUE never comes back — only this metadata does. */
+export interface Credential {
+  id: string;
+  name: string;
+  type: CredentialType;
+  createdAt: number;
+  usedAt?: string;
+}
+
+/** A login captured on a card's browser, pending a save decision. NEVER carries the password. */
+export interface CardCapture {
+  id: string;
+  host: string;
+  suggestedName: string;
+  username: string;
+  at: number;
 }
 
 /** `GET /api/transcribe` — voice input status. Key values never come back. */
@@ -181,6 +207,8 @@ export interface SettingsPatch {
   transcribeLanguage?: string | null;
   idleHibernateMinutes?: number;
   sdkDriver?: boolean;
+  sdkPermissionMode?: "same-as-terminal" | "ask-sensitive";
+  sdkAutoResume?: boolean;
   runner?: Partial<RunnerSettings>;
 }
 
@@ -515,6 +543,25 @@ export type BrainWriteResult = Brain & ApplyOutcome;
 export interface BrainApplyResult extends ApplyOutcome {
   /** Runner profiles the text was written into. */
   runners?: number;
+}
+
+/**
+ * `GET /api/brain/projects/:id` — a PROJECT's own brain, delivered as CLAUDE.local.md at the root
+ * of each of that project's card worktrees. No seed: empty text = the project has none yet.
+ */
+export interface ProjectBrain {
+  text: string;
+  updatedAt?: string;
+  by?: string;
+}
+
+/** `POST /api/brain/projects/:id` — the saved view plus what the push achieved. */
+export type ProjectBrainWriteResult = ProjectBrain & ApplyOutcome;
+
+/** `POST /api/brain/projects/:id/apply` — the manual re-push into the project's worktrees. */
+export interface ProjectBrainApplyResult extends ApplyOutcome {
+  /** Card worktrees the text was written into. */
+  cards?: number;
 }
 
 /**

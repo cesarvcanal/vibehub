@@ -30,6 +30,18 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(INSTRUCTIONS).toContain("vibehub_report");
   });
 
+  it("carry the question doctrine (perguntas claras — feedback do dono da instalação)", () => {
+    // "A pergunta ficou horrível de entender": short, self-contained, ONE decision per question.
+    expect(INSTRUCTIONS).toContain("ONE decision per question");
+    expect(INSTRUCTIONS).toContain("rewrite it before");
+    // Blocking decisions are ALWAYS an AskUserQuestion call with 2-4 mutually exclusive options.
+    expect(INSTRUCTIONS).toContain("ALWAYS an AskUserQuestion");
+    expect(INSTRUCTIONS).toContain("mutually exclusive");
+    // "Sempre a primeira opção é o cenário recomendado", labelled with the literal suffix.
+    expect(INSTRUCTIONS).toContain("The FIRST option is the recommended one");
+    expect(INSTRUCTIONS).toContain("(recomendado)");
+  });
+
   it("build a server that carries those instructions", () => {
     let server: ReturnType<typeof createMcpServer> | undefined;
     expect(() => {
@@ -38,5 +50,32 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(server).toBeDefined();
     // The value handed to the SDK is the same non-empty persona.
     expect(INSTRUCTIONS.trim().length).toBeGreaterThan(0);
+  });
+
+  it("register vibehub_brain_learn and instruct on recording DURABLE learnings only", () => {
+    const server = createMcpServer("test") as unknown as {
+      _registeredTools?: Record<string, { description?: string }>;
+    };
+    const tools = server._registeredTools ?? {};
+    expect(Object.keys(tools)).toContain("vibehub_brain_learn");
+    // the tool's own contract: append-only into the Aprendizados section, never the rest
+    const description = tools["vibehub_brain_learn"]?.description ?? "";
+    expect(description).toContain("Aprendizados");
+    expect(description.toLowerCase()).toContain("append");
+    // the persona tells agents what belongs there — and what never does
+    expect(INSTRUCTIONS).toContain("vibehub_brain_learn");
+    expect(INSTRUCTIONS.toLowerCase()).toContain("secret");
+  });
+
+  it("register the Cofre tools and instruct on using them for logins", () => {
+    const server = createMcpServer("test") as unknown as {
+      _registeredTools?: Record<string, unknown>;
+    };
+    const names = Object.keys(server._registeredTools ?? {});
+    expect(names).toContain("vibehub_credential_list");
+    expect(names).toContain("vibehub_credential_fill");
+    // The persona tells the agent to use the Cofre and never to ask for a password in the chat.
+    expect(INSTRUCTIONS).toContain("vibehub_credential_fill");
+    expect(INSTRUCTIONS.toLowerCase()).toContain("cofre");
   });
 });

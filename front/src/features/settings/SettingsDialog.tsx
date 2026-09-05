@@ -10,8 +10,14 @@ import {
 } from "@/components/ui/dialog";
 import { get, patch, post, del } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
-import type { Settings, SettingsPatch, GithubConnection, GithubState, TranscribeStatus } from "@/api/types";
+import type {
+  Settings, SettingsPatch, GithubConnection, GithubState, TranscribeStatus, Credential, CredentialType,
+} from "@/api/types";
 import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
+import { AccountsManager } from "@/features/board/components/AccountsManager";
+import { McpManager } from "@/features/board/components/McpManager";
+import { BrainManager } from "@/features/board/components/BrainManager";
+import { RunnerBanner } from "@/features/board/components/RunnerBanner";
 import {
   LANGUAGES,
   getLanguage,
@@ -33,6 +39,7 @@ import {
 export const SETTINGS_KEY = ["settings"] as const;
 export const GITHUB_KEY = ["github"] as const;
 export const TRANSCRIBE_KEY = ["transcribe"] as const;
+export const CREDENTIALS_KEY = ["credentials"] as const;
 
 export interface SettingsDialogProps {
   open: boolean;
@@ -45,6 +52,11 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const settings = useQuery({ queryKey: SETTINGS_KEY, queryFn: () => get<Settings>("/settings"), enabled: open });
   const github = useQuery({ queryKey: GITHUB_KEY, queryFn: () => get<GithubState>("/github"), enabled: open });
   const voice = useQuery({ queryKey: TRANSCRIBE_KEY, queryFn: () => get<TranscribeStatus>("/transcribe"), enabled: open });
+  const credentials = useQuery({
+    queryKey: CREDENTIALS_KEY,
+    queryFn: () => get<{ credentials: Credential[] }>("/credentials").then((r) => r.credentials ?? []),
+    enabled: open,
+  });
 
   const connections = github.data?.connections ?? [];
 
@@ -52,6 +64,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [email, setEmail] = React.useState("");
   const [autonomous, setAutonomous] = React.useState(true);
   const [sdkDriver, setSdkDriver] = React.useState(false);
+  const [sdkPermissionMode, setSdkPermissionMode] = React.useState<"same-as-terminal" | "ask-sensitive">("same-as-terminal");
+  const [sdkAutoResume, setSdkAutoResume] = React.useState(true);
   const [defaultLabel, setDefaultLabel] = React.useState("");
   const [language, setLanguage] = React.useState("");
   // Kept as a STRING: the field has to be clearable while you retype it, and "" is not 0.
@@ -60,6 +74,12 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [githubToken, setGithubToken] = React.useState("");
   const [openaiKey, setOpenaiKey] = React.useState("");
   const [anthropicKey, setAnthropicKey] = React.useState("");
+  // Cofre — a write-only add form. Values are typed here, sent once, and never read back.
+  const [credName, setCredName] = React.useState("");
+  const [credType, setCredType] = React.useState<CredentialType>("userpass");
+  const [credUser, setCredUser] = React.useState("");
+  const [credPass, setCredPass] = React.useState("");
+  const [credValue, setCredValue] = React.useState("");
   // The language is a browser choice, not a server setting, so it has its own bit of state.
   const [uiLanguage, setUiLanguage] = React.useState<Language>(() => getLanguage());
 
@@ -70,6 +90,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     setEmail(settings.data.git.email);
     setAutonomous(settings.data.autonomous);
     setSdkDriver(settings.data.sdkDriver ?? false);
+    setSdkPermissionMode(settings.data.sdkPermissionMode ?? "same-as-terminal");
+    setSdkAutoResume(settings.data.sdkAutoResume ?? true);
     setDefaultLabel(settings.data.defaultAccountLabel ?? "");
     setLanguage(settings.data.transcribeLanguage ?? "");
     setIdleHibernate(String(settings.data.idleHibernateMinutes ?? 180));
@@ -128,12 +150,49 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     onError: (e) => toast.error(apiErrorMessage(e)),
   });
 
+  const addCredential = useMutation({
+    mutationFn: (body: { name: string; type: CredentialType; username?: string; password?: string; value?: string }) =>
+      post<{ credential: Credential }>("/credentials", body),
+    onSuccess: () => {
+      setCredName("");
+      setCredUser("");
+      setCredPass("");
+      setCredValue("");
+      void qc.invalidateQueries({ queryKey: CREDENTIALS_KEY });
+      toast.success(translate("cofre.saved"));
+    },
+    onError: (e) => toast.error(apiErrorMessage(e)),
+  });
+
+  const removeCredential = useMutation({
+    mutationFn: (id: string) => del<{ ok: true }>(`/credentials/${encodeURIComponent(id)}`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: CREDENTIALS_KEY });
+      toast.success(translate("cofre.removed"));
+    },
+    onError: (e) => toast.error(apiErrorMessage(e)),
+  });
+
+  const canAddCredential =
+    credName.trim() !== "" &&
+    (credType === "userpass" ? credUser.trim() !== "" && credPass !== "" : credValue !== "");
+
+  const submitCredential = () => {
+    addCredential.mutate(
+      credType === "userpass"
+        ? { name: credName.trim(), type: "userpass", username: credUser.trim(), password: credPass }
+        : { name: credName.trim(), type: "token", value: credValue },
+    );
+  };
+
   const submitGeneral = (e: React.FormEvent) => {
     e.preventDefault();
     save.mutate({
       git: { name: name.trim(), email: email.trim() },
       autonomous,
       sdkDriver,
+      sdkPermissionMode,
+      sdkAutoResume,
       defaultAccountLabel: defaultLabel.trim() || null,
       transcribeLanguage: language.trim() || null,
       // A blank field is not "never" — it is a field being typed in. Leave the stored value alone.
@@ -221,6 +280,39 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 </p>
               </div>
               <Switch id="settings-sdk-driver" checked={sdkDriver} onCheckedChange={setSdkDriver} />
+            </div>
+            {/* A deploy restarts the back and kills the drivers mid-turn: with this on, the next
+                boot resumes the interrupted turn automatically (once — never a loop). */}
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <Label htmlFor="settings-sdk-auto-resume">{t("settings.sdkAutoResume")}</Label>
+                <p className="text-xs text-muted-foreground">
+                  {t("settings.sdkAutoResumeHint")}
+                </p>
+              </div>
+              <Switch
+                id="settings-sdk-auto-resume"
+                checked={sdkAutoResume}
+                disabled={!sdkDriver}
+                onCheckedChange={setSdkAutoResume}
+              />
+            </div>
+            {/* How the native chat's gate behaves — one install-wide choice, only meaningful with
+                the native chat on, hence disabled together with the switch above. */}
+            <div className="space-y-1.5">
+              <Label htmlFor="settings-sdk-permission-mode">{t("settings.sdkPermissionMode")}</Label>
+              <select
+                id="settings-sdk-permission-mode"
+                data-testid="settings-sdk-permission-mode"
+                className={SELECT_CLASS}
+                value={sdkPermissionMode}
+                disabled={!sdkDriver}
+                onChange={(e) => setSdkPermissionMode(e.target.value as "same-as-terminal" | "ask-sensitive")}
+              >
+                <option value="same-as-terminal">{t("settings.sdkPermissionSame")}</option>
+                <option value="ask-sensitive">{t("settings.sdkPermissionAsk")}</option>
+              </select>
+              <p className="text-xs text-muted-foreground">{t("settings.sdkPermissionModeHint")}</p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="settings-idle-hibernate">{t("settings.idleHibernate")}</Label>
@@ -424,6 +516,121 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             >
               {t("settings.saveKeys")}
             </Button>
+          </div>
+        </section>
+
+        <section className="space-y-3 border-t border-border/60 pt-4" data-testid="settings-cofre">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            {t("cofre.title")}
+          </h3>
+          <p className="text-xs leading-relaxed text-muted-foreground">{t("cofre.hint")}</p>
+
+          {credentials.data && credentials.data.length > 0 ? (
+            <ul className="divide-y divide-border/60 rounded-md border border-border/60" data-testid="cofre-list">
+              {credentials.data.map((c) => (
+                <li key={c.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{c.name}</p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {c.type === "userpass" ? t("cofre.typeUserpass") : t("cofre.typeToken")}
+                      {" · "}
+                      {c.usedAt ? t("cofre.used", { when: new Date(c.usedAt).toLocaleDateString() }) : t("cofre.neverUsed")}
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    aria-label={t("cofre.removeAria", { name: c.name })}
+                    disabled={removeCredential.isPending}
+                    onClick={() => removeCredential.mutate(c.id)}
+                  >
+                    {t("common.remove")}
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-muted-foreground">{t("cofre.empty")}</p>
+          )}
+
+          <div className="space-y-2 rounded-md border border-dashed border-border/60 p-3">
+            <p className="text-xs font-medium">{t("cofre.add")}</p>
+            <div className="grid grid-cols-2 gap-2">
+              <Input
+                aria-label={t("cofre.name")}
+                value={credName}
+                onChange={(e) => setCredName(e.target.value)}
+                placeholder={t("cofre.namePlaceholder")}
+                autoComplete="off"
+                maxLength={40}
+              />
+              <select
+                aria-label={t("cofre.type")}
+                className={SELECT_CLASS}
+                value={credType}
+                onChange={(e) => setCredType(e.target.value as CredentialType)}
+              >
+                <option value="userpass">{t("cofre.typeUserpass")}</option>
+                <option value="token">{t("cofre.typeToken")}</option>
+              </select>
+            </div>
+            {credType === "userpass" ? (
+              <div className="grid grid-cols-2 gap-2">
+                <Input
+                  aria-label={t("cofre.username")}
+                  value={credUser}
+                  onChange={(e) => setCredUser(e.target.value)}
+                  placeholder={t("cofre.username")}
+                  autoComplete="off"
+                />
+                <Input
+                  aria-label={t("cofre.password")}
+                  type="password"
+                  value={credPass}
+                  onChange={(e) => setCredPass(e.target.value)}
+                  placeholder={t("cofre.password")}
+                  autoComplete="off"
+                  className="font-mono"
+                />
+              </div>
+            ) : (
+              <Input
+                aria-label={t("cofre.value")}
+                type="password"
+                value={credValue}
+                onChange={(e) => setCredValue(e.target.value)}
+                placeholder={t("cofre.value")}
+                autoComplete="off"
+                className="font-mono"
+              />
+            )}
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!canAddCredential || addCredential.isPending}
+                onClick={submitCredential}
+              >
+                {addCredential.isPending ? t("common.saving") : t("cofre.add")}
+              </Button>
+            </div>
+          </div>
+        </section>
+
+        {/* The install's agent managers and the runner, which used to crowd the board's header:
+            Claude accounts, MCP servers, the shared brain, and the runner chip with its shell.
+            They are settings — opened twice a month — so they live with the other settings. */}
+        <section className="space-y-3 border-t border-border/60 pt-4" data-testid="settings-managers">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            {t("settings.managers")}
+          </h3>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <AccountsManager trigger="row" />
+            <McpManager trigger="row" />
+            <BrainManager trigger="row" />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <RunnerBanner />
           </div>
         </section>
       </DialogContent>

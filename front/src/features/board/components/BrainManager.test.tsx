@@ -61,7 +61,7 @@ describe("formatBrainStamp", () => {
 
   it("names the author when there is one", () => {
     const at = new Date(2026, 7, 20, 9, 5, 3).toISOString();
-    expect(formatBrainStamp(at, "cesar")).toBe("saved 20/08/2026 09:05:03 by cesar");
+    expect(formatBrainStamp(at, "sam")).toBe("saved 20/08/2026 09:05:03 by sam");
   });
 
   it("does not render Invalid Date when the server sends something unparseable", () => {
@@ -204,6 +204,17 @@ describe("BrainManager", () => {
     );
   });
 
+  it("saving in the GLOBAL scope posts to /brain — never to a project route", async () => {
+    mockPost.mockResolvedValue({ ...BRAIN, text: "new", applied: true, restarted: 0, pending: 0 });
+    const user = await openDialog();
+    const textarea = screen.getByLabelText("Brain text");
+    await waitFor(() => expect((textarea as HTMLTextAreaElement).value).toBe(BRAIN.text));
+    await user.type(textarea, "x");
+    await user.click(screen.getByRole("button", { name: /save/i }));
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/brain", { text: `${BRAIN.text}x` }));
+    expect(mockPost).not.toHaveBeenCalledWith(expect.stringMatching(/^\/brain\/projects\//), expect.anything());
+  });
+
   it("re-seeds from the server on reopen, dropping an abandoned draft", async () => {
     const user = await openDialog();
     const textarea = screen.getByLabelText("Brain text");
@@ -216,5 +227,98 @@ describe("BrainManager", () => {
     await user.click(screen.getByRole("button", { name: "Brain" }));
     const reopened = await screen.findByLabelText("Brain text");
     await waitFor(() => expect((reopened as HTMLTextAreaElement).value).toBe(BRAIN.text));
+  });
+});
+
+describe("BrainManager — the per-project scope", () => {
+  const PROJECTS = [{ id: "p1", name: "erp-aux" }, { id: "p2", name: "api-space" }];
+  const P1_BRAIN = { text: "# Regras do erp-aux", updatedAt: "2026-08-21T10:00:00.000Z" };
+
+  /** GET routed by URL: the dialog reads the projects, the global brain and one project's brain. */
+  function routeGets(p1 = P1_BRAIN as { text: string; updatedAt?: string }) {
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/projects") return Promise.resolve({ projects: PROJECTS });
+      if (url === "/brain") return Promise.resolve(BRAIN);
+      if (url === "/brain/projects/p1") return Promise.resolve(p1);
+      if (url === "/brain/projects/p2") return Promise.resolve({ text: "" });
+      return Promise.resolve({});
+    });
+  }
+
+  async function openOnProject(projectName = "erp-aux") {
+    const user = await openDialog();
+    const select = await screen.findByLabelText("Brain scope");
+    await waitFor(() => expect(screen.getByRole("option", { name: projectName })).toBeInTheDocument());
+    await user.selectOptions(select, screen.getByRole("option", { name: projectName }));
+    return user;
+  }
+
+  beforeEach(() => routeGets());
+
+  it("lists Global plus every project, and switching seeds THAT project's text", async () => {
+    await openOnProject();
+    expect(screen.getByRole("option", { name: "Global — every card" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "api-space" })).toBeInTheDocument();
+    await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/brain/projects/p1"));
+    await waitFor(() =>
+      expect((screen.getByLabelText("Brain text") as HTMLTextAreaElement).value).toBe(P1_BRAIN.text),
+    );
+  });
+
+  it("saves to the PROJECT route — never to the global one", async () => {
+    mockPost.mockResolvedValue({ text: `${P1_BRAIN.text}x`, applied: true, restarted: 0, pending: 0 });
+    const user = await openOnProject();
+    const textarea = screen.getByLabelText("Brain text");
+    await waitFor(() => expect((textarea as HTMLTextAreaElement).value).toBe(P1_BRAIN.text));
+    await user.type(textarea, "x");
+    await user.click(screen.getByRole("button", { name: /save/i }));
+    await waitFor(() =>
+      expect(mockPost).toHaveBeenCalledWith("/brain/projects/p1", { text: `${P1_BRAIN.text}x` }),
+    );
+    expect(mockPost).not.toHaveBeenCalledWith("/brain", expect.anything());
+  });
+
+  it("a project with no brain yet: placeholder stamp, and Clear disabled (nothing to clear)", async () => {
+    await openOnProject("api-space");
+    await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/brain/projects/p2"));
+    expect(await screen.findByText("no project brain saved yet")).toBeInTheDocument();
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: /clear/i }) as HTMLButtonElement).disabled).toBe(true),
+    );
+  });
+
+  it("Clear removes the project brain through an EMPTY save (that is the protocol)", async () => {
+    mockPost.mockResolvedValue({ text: "", applied: true, restarted: 0, pending: 0 });
+    const user = await openOnProject();
+    await waitFor(() =>
+      expect((screen.getByLabelText("Brain text") as HTMLTextAreaElement).value).toBe(P1_BRAIN.text),
+    );
+    await user.click(screen.getByRole("button", { name: /clear/i }));
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/brain/projects/p1", { text: "" }));
+    expect(mockDel).not.toHaveBeenCalled(); // DELETE /brain is the GLOBAL reset, not this
+  });
+
+  it("Apply pushes into the project's worktrees; the restart-idle tick is a global-only affair", async () => {
+    mockPost.mockResolvedValue({ cards: 2, bytes: 10 });
+    const user = await openOnProject();
+    expect(screen.queryByRole("checkbox", { name: "Restart idle terminals" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /apply everywhere/i }));
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/brain/projects/p1/apply"));
+    expect(mockPost).not.toHaveBeenCalledWith("/brain/apply");
+  });
+
+  it("switching back to Global re-seeds the GLOBAL text, not the project draft", async () => {
+    const user = await openOnProject();
+    await waitFor(() =>
+      expect((screen.getByLabelText("Brain text") as HTMLTextAreaElement).value).toBe(P1_BRAIN.text),
+    );
+    await user.type(screen.getByLabelText("Brain text"), " scribble");
+    await user.selectOptions(
+      screen.getByLabelText("Brain scope"),
+      screen.getByRole("option", { name: "Global — every card" }),
+    );
+    await waitFor(() =>
+      expect((screen.getByLabelText("Brain text") as HTMLTextAreaElement).value).toBe(BRAIN.text),
+    );
   });
 });

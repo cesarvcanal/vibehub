@@ -7,7 +7,9 @@ import type {
   BrainApplyResult,
   BrainWriteResult,
   Card,
+  CardCapture,
   CardColumn,
+  Credential,
   GithubConnection,
   GithubRepo,
   GithubState,
@@ -18,6 +20,9 @@ import type {
   OutboxStatus,
   PreviewPort,
   Project,
+  ProjectBrain,
+  ProjectBrainApplyResult,
+  ProjectBrainWriteResult,
   QueueMessageResult,
   RestartAllResult,
   RestartedPreview,
@@ -192,10 +197,13 @@ export const ACCOUNT_USAGE_KEY = ["board", "accounts", "usage"] as const;
 export const MCPS_KEY = ["board", "mcps"] as const;
 export const MCP_SECRETS_KEY = ["board", "mcps", "secrets"] as const;
 export const BRAIN_KEY = ["board", "brain"] as const;
+/** One PROJECT's brain — under the brain prefix so invalidating BRAIN_KEY exactly never collides. */
+export const projectBrainKey = (projectId: string) => ["board", "brain", "project", projectId] as const;
 export const TRANSCRIBE_KEY = ["board", "transcribe"] as const;
 export const RUNNER_KEY = ["board", "runner"] as const;
 export const GITHUB_KEY = ["board", "github"] as const;
 export const PREVIEW_PORTS_KEY = ["board", "preview", "ports"] as const;
+export const FEATURES_KEY = ["board", "features"] as const;
 /** Prefix matching EVERY project's card list — for invalidating the whole board at once. */
 export const CARDS_PREFIX_KEY = ["board", "cards"] as const;
 /**
@@ -336,9 +344,20 @@ export interface CardPatchInput {
   sdkChat?: boolean | null;
 }
 
+/**
+ * `GET /api/features` — install-wide flags every signed-in user can read (settings stay
+ * owner-only). `sdkChat` true = the Chat tab of EVERY card is the native (SDK) chat; false = the
+ * classic transcript chat. It replaced the per-card `sdkChat` opt-in (2026-08-31).
+ */
+export interface InstallFeatures {
+  sdkChat: boolean;
+}
+
 /* --------------------------------------------------------------- requests */
 
 export const boardApi = {
+  /** Install-wide UI flags — which chat the Chat tab mounts, for one. */
+  features: () => get<InstallFeatures>("/features"),
   /* projects */
   listProjects: () => get<{ projects: BoardProject[] }>("/projects").then((r) => r.projects ?? []),
 
@@ -466,6 +485,16 @@ export const boardApi = {
   startCardBrowser: (id: string) => post<unknown>(`/cards/${encodeURIComponent(id)}/browser`),
   stopCardBrowser: (id: string) => del<unknown>(`/cards/${encodeURIComponent(id)}/browser`),
 
+  /* cofre — captures pending on a card's browser (values never come back) */
+  cardCaptures: (id: string) =>
+    get<{ captures?: CardCapture[] }>(`/cards/${encodeURIComponent(id)}/captures`).then((r) =>
+      Array.isArray(r?.captures) ? r.captures : [],
+    ),
+  saveCapture: (id: string, captureId: string, name?: string) =>
+    post<{ credential: Credential }>(`/cards/${encodeURIComponent(id)}/captures/save`, { captureId, name }),
+  dismissCapture: (id: string, captureId: string) =>
+    post<{ ok: boolean }>(`/cards/${encodeURIComponent(id)}/captures/dismiss`, { captureId }),
+
   /** Ports listening inside the runner right now — what the Preview menu offers to open. */
   previewPorts: () =>
     get<{ ports?: PreviewPort[] }>("/preview/ports").then((r) => (Array.isArray(r?.ports) ? r.ports : [])),
@@ -561,6 +590,17 @@ export const boardApi = {
 
   /** Manual re-push, for when a runner was down when the text was saved. */
   applyBrain: () => post<BrainApplyResult>("/brain/apply"),
+
+  /* project brain — one CLAUDE.local.md per project, at the root of each of its card worktrees */
+  projectBrain: (projectId: string) => get<ProjectBrain>(`/brain/projects/${encodeURIComponent(projectId)}`),
+
+  /** Saves AND pushes into the project's worktrees. An EMPTY text clears the project brain. */
+  saveProjectBrain: (projectId: string, text: string) =>
+    post<ProjectBrainWriteResult>(`/brain/projects/${encodeURIComponent(projectId)}`, { text }),
+
+  /** Manual re-push of one project's brain into its worktrees. */
+  applyProjectBrain: (projectId: string) =>
+    post<ProjectBrainApplyResult>(`/brain/projects/${encodeURIComponent(projectId)}/apply`),
 
   /* voice input */
 

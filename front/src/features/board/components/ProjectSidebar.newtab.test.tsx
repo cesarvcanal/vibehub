@@ -37,7 +37,7 @@ describe("ProjectSidebar — a project row is a navigable link", () => {
     localStorage.clear();
     mockGet.mockImplementation((url: string) => {
       if (url === "/setup/state") return Promise.resolve(setupState());
-      if (url === "/auth/me") return Promise.resolve({ user: { id: "u1", username: "cesar", role: "owner" } });
+      if (url === "/auth/me") return Promise.resolve({ user: { id: "u1", username: "sam", role: "owner" } });
       return Promise.reject(new Error(`unexpected GET ${url}`));
     });
   });
@@ -112,5 +112,69 @@ describe("ProjectSidebar — a project row is a navigable link", () => {
     expect(fireEvent.click(link, { shiftKey: true })).toBe(true);
     expect(fireEvent.click(link, { button: 1 })).toBe(true);
     expect(onSelectProject).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The brand at the top of the panel is a REAL link home (the aggregated board), for the same
+ * reason the project rows are: middle-click and Cmd/Ctrl/Shift-click must open a new tab natively,
+ * while a plain click stays an in-app navigation.
+ */
+describe("ProjectSidebar — the logo is a link home", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    localStorage.clear();
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/setup/state") return Promise.resolve(setupState());
+      if (url === "/auth/me") return Promise.resolve({ user: { id: "u1", username: "sam", role: "owner" } });
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+  });
+
+  function renderSidebar(onShowAllProjects = vi.fn()) {
+    renderApp(
+      <ProjectSidebar
+        projects={[project]}
+        selectedProjectId={null}
+        selectedCardId={null}
+        mobileOpen={false}
+        onCloseMobile={vi.fn()}
+        onSelectProject={vi.fn()}
+        onOpenCard={vi.fn()}
+        onReorder={vi.fn()}
+        onNewProject={vi.fn()}
+        onNewCard={vi.fn()}
+        onDeleteProject={vi.fn()}
+        onShowAllProjects={onShowAllProjects}
+      />,
+    );
+    return onShowAllProjects;
+  }
+
+  function logoLink(): HTMLElement {
+    return screen.getByRole("link", { name: "All projects" });
+  }
+
+  it("exposes the aggregated board's URL as its href", () => {
+    renderSidebar();
+    expect(logoLink()).toHaveAttribute("href", "?");
+  });
+
+  it("navigates in-app on a plain click, cancelling the browser navigation", () => {
+    const onShowAllProjects = renderSidebar();
+    const notPrevented = fireEvent.click(logoLink());
+    expect(notPrevented).toBe(false);
+    expect(onShowAllProjects).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets the browser open a new tab on Cmd/Ctrl/Shift/middle-click", () => {
+    const onShowAllProjects = renderSidebar();
+    const link = logoLink();
+
+    expect(fireEvent.click(link, { metaKey: true })).toBe(true);
+    expect(fireEvent.click(link, { ctrlKey: true })).toBe(true);
+    expect(fireEvent.click(link, { shiftKey: true })).toBe(true);
+    expect(fireEvent.click(link, { button: 1 })).toBe(true);
+    expect(onShowAllProjects).not.toHaveBeenCalled();
   });
 });

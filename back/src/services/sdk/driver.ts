@@ -7,6 +7,10 @@ import { cardWorkPaths } from "../board/workspace.js";
 import { accountConfigDir } from "../accounts/profiles.js";
 import { oauthTokenPath, DEFAULT_CLAUDE_DIR } from "../accounts/profiles.js";
 import { effectiveAccountSlug, isValidModel, assertSessionId, type Card, type Project } from "../board/registry.js";
+import { cardCdpEndpoint } from "../browser/ports.js";
+import { statusUrl } from "../../runtime/runner.js";
+import { getSettings } from "../settings/settings.js";
+import type { SdkPermissionGateMode } from "./protocol.js";
 
 /**
  * SDK DRIVER (service) — spawns and addresses the per-card Agent-SDK driver process inside the runner.
@@ -115,7 +119,28 @@ export interface SdkDriverCommandOpts {
   resumeSessionId?: string;
   /** The card's model (validated against the whitelist; invalid = account default). */
   model?: string;
+  /**
+   * CDP endpoint of the CARD's live Chromium (the one on the noVNC canvas). Exported as
+   * PW_CDP_ENDPOINT so the injected `navegador` MCP — whose stored config carries the literal
+   * `${PW_CDP_ENDPOINT:-…}` reference — resolves to THIS card's browser, exactly like the tmux
+   * session does for the TUI. Without it the MCP would fall back to the base port and drive the
+   * wrong (or no) browser.
+   */
+  cdpEndpoint?: string;
+  /** Card id + status URL for the runner settings' status hooks (VIBEHUB_CARD_ID / VIBEHUB_STATUS_URL). */
+  cardId?: string;
+  statusUrl?: string;
+  /** Gate mode for the driver's PreToolUse hook (`--permission-gate`). Default: ask-sensitive. */
+  permissionGate?: SdkPermissionGateMode;
 }
+
+/** http(s) URL safe to place (shQuoted) in the exec line — no quotes, spaces or control chars. */
+const SAFE_URL_RE = /^https?:\/\/[A-Za-z0-9._~:/?#[\]@!$&()*+,;=%-]+$/;
+function assertSafeUrl(url: string): string {
+  if (!SAFE_URL_RE.test(url)) throw new Error(`unsafe URL for the driver environment: '${url}'`);
+  return url;
+}
+const CARD_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
  * The remote command line that runs the driver in the runner: `docker exec -i <c> bash -c '<guard>;
@@ -130,8 +155,20 @@ export function buildSdkDriverCommandLine(opts: SdkDriverCommandOpts): string {
   const tokenFile = oauthTokenPath(opts.profileDir);
   const model = isValidModel(opts.model) ? ` --model ${shQuote(opts.model)}` : "";
   const resume = opts.resumeSessionId ? ` --resume ${shQuote(assertSessionId(opts.resumeSessionId))}` : "";
+  const gate = opts.permissionGate ? ` --permission-gate ${shQuote(opts.permissionGate)}` : "";
+  // Environment the TUI session also carries, so the driver's Claude behaves like the terminal's:
+  // PW_CDP_ENDPOINT points the `navegador` MCP at the card's own Chromium; VIBEHUB_CARD_ID +
+  // VIBEHUB_STATUS_URL feed the status hooks in the runner's settings.json (loaded via
+  // settingSources), so the activity dot follows the native chat too.
+  let cardEnv = "";
+  if (opts.cdpEndpoint) cardEnv += `export PW_CDP_ENDPOINT=${shQuote(assertSafeUrl(opts.cdpEndpoint))}; `;
+  if (opts.cardId) {
+    if (!CARD_ID_RE.test(opts.cardId)) throw new Error(`invalid card id: '${opts.cardId}'`);
+    cardEnv += `export VIBEHUB_CARD_ID=${shQuote(opts.cardId)}; `;
+  }
+  if (opts.statusUrl) cardEnv += `export VIBEHUB_STATUS_URL=${shQuote(assertSafeUrl(opts.statusUrl))}; `;
   const script =
-    // AUTH RULE (ordem do César): the driver signs in with CLAUDE_CODE_OAUTH_TOKEN (the Max
+    // AUTH RULE (project rule): the driver signs in with CLAUDE_CODE_OAUTH_TOKEN (the Max
     // subscription's setup-token, same as the TUI) and NEVER with an API key — an inherited
     // ANTHROPIC_API_KEY would silently swallow the token and bill the API, so it is unset first.
     `unset ANTHROPIC_API_KEY; ` +
@@ -139,17 +176,23 @@ export function buildSdkDriverCommandLine(opts: SdkDriverCommandOpts): string {
     `export NODE_PATH=${shQuote(`${SDK_DRIVER_DIR}/node_modules`)}; ` +
     `if [ -s ${shQuote(tokenFile)} ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${shQuote(tokenFile)})"; fi; ` +
     (opts.configDir ? `export CLAUDE_CONFIG_DIR=${shQuote(opts.configDir)}; ` : "") +
-    `exec node ${shQuote(SDK_DRIVER_PATH)} --cwd ${shQuote(opts.cwd)}${resume}${model}`;
+    cardEnv +
+    `exec node ${shQuote(SDK_DRIVER_PATH)} --cwd ${shQuote(opts.cwd)}${resume}${model}${gate}`;
   const argv = ["docker", "exec", "-i", opts.containerName, "bash", "-c", script];
   return argv.map(shQuote).join(" ");
 }
 
-/** Resolve the spawn command for a card's driver, from the board — cwd, account, resume, model. */
-export function sdkDriverCommand(project: Project, card: Card): { file: string; args: string[] } {
+/**
+ * Resolve the spawn command for a card's driver, from the board — cwd, account, resume, model,
+ * the card's browser endpoint, the status-hook environment and the install's permission-gate mode
+ * (read from settings here so every spawn site gets it without plumbing).
+ */
+export async function sdkDriverCommand(project: Project, card: Card): Promise<{ file: string; args: string[] }> {
   const { cwd } = cardWorkPaths(project, card);
   const slug = effectiveAccountSlug(card, project);
   const configDir = slug ? accountConfigDir(slug) : undefined;
   const profileDir = configDir ?? DEFAULT_CLAUDE_DIR;
+  const settings = await getSettings();
   const line = buildSdkDriverCommandLine({
     containerName: config.runner.container,
     cwd,
@@ -157,6 +200,10 @@ export function sdkDriverCommand(project: Project, card: Card): { file: string; 
     configDir,
     resumeSessionId: card.resumeSessionId,
     model: card.model,
+    cdpEndpoint: cardCdpEndpoint(card.id),
+    cardId: card.id,
+    statusUrl: statusUrl(),
+    permissionGate: settings.sdkPermissionMode,
   });
   return hostExecutor().ptyCommand(line);
 }

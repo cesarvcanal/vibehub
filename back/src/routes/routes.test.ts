@@ -145,6 +145,19 @@ describe("protected routes", () => {
   });
 });
 
+describe("features", () => {
+  it("requires a session and mirrors the global sdkDriver flag as sdkChat", async () => {
+    expect((await app.inject({ method: "GET", url: "/api/features" })).statusCode).toBe(401);
+    const cookie = await signUp(app);
+    // Default install: native chat on.
+    expect((await app.inject({ method: "GET", url: "/api/features", headers: { cookie } })).json()).toEqual({ sdkChat: true });
+    // The global switch off = classic chat everywhere.
+    await app.inject({ method: "PATCH", url: "/api/settings", headers: { cookie }, payload: { sdkDriver: false } });
+    expect((await app.inject({ method: "GET", url: "/api/features", headers: { cookie } })).json()).toEqual({ sdkChat: false });
+    await app.inject({ method: "PATCH", url: "/api/settings", headers: { cookie }, payload: { sdkDriver: true } });
+  });
+});
+
 describe("settings", () => {
   it("returns runner topology alongside the settings", async () => {
     const cookie = await signUp(app);

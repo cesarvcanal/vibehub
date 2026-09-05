@@ -19,6 +19,8 @@ async function load() {
   return {
     maestro: await import("./maestro.js"),
     registry: await import("../board/registry.js"),
+    provenance: await import("../chat/provenance.js"),
+    history: await import("../sdk/history.js"),
   };
 }
 
@@ -312,6 +314,66 @@ describe("reportState (declared state)", () => {
   });
 });
 
+describe("message provenance on send", () => {
+  it("agentOriginFor names the calling card, with the ids the chat links back to", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const sender = await registry.createCard({ projectId: p.id, title: "card preview" });
+    expect(await maestro.agentOriginFor(sender.id)).toEqual({
+      kind: "agent", name: "card preview", sourceCardId: sender.id, sourceProjectId: p.id,
+    });
+    // Self-declared and optional: an unknown or absent id degrades to a nameless agent, never an error.
+    expect(await maestro.agentOriginFor("nope")).toEqual({ kind: "agent", name: "" });
+    expect(await maestro.agentOriginFor(undefined)).toEqual({ kind: "agent", name: "" });
+  });
+
+  it("records who sent it and announces an agent's message to the native chat", async () => {
+    const { maestro, registry, provenance, history } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const sender = await registry.createCard({ projectId: p.id, title: "card preview" });
+    const dest = await registry.createCard({ projectId: p.id, title: "destino" });
+    await registry.applyOpenTerminal(dest.id);
+    const origin = await maestro.agentOriginFor(sender.id);
+
+    const live: unknown[] = [];
+    const off = history.onExternalMessage(dest.id, (e) => live.push(e));
+    await maestro.sendToTerminal(dest.id, "roda os testes", { origin });
+    off();
+
+    // Delivery is unchanged (same send-keys script), and the attribution is queryable right away.
+    expect(runScript).toHaveBeenCalledOnce();
+    expect(provenance.matchOrigin(dest.id, "roda  os\ntestes", Date.now())).toEqual(origin);
+    // The native chat heard it live, and the history log replays it with its sender.
+    expect(live).toHaveLength(1);
+    expect(live[0]).toMatchObject({ type: "user", text: "roda os testes", from: origin });
+    await history.appendHistory(dest.id, { type: "session", sessionId: "s" }); // barrier: the chain is serialized
+    const replay = await history.readHistory(dest.id);
+    expect(replay.find((e) => e.type === "user")).toMatchObject({ text: "roda os testes", from: origin });
+  });
+
+  it("a person's send records their username, and goes nowhere near the sdk history", async () => {
+    const { maestro, registry, provenance, history } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const dest = await registry.createCard({ projectId: p.id, title: "destino" });
+    await registry.applyOpenTerminal(dest.id);
+    const live: unknown[] = [];
+    const off = history.onExternalMessage(dest.id, (e) => live.push(e));
+    await maestro.sendToTerminal(dest.id, "oi", { origin: { kind: "user", name: "alex" } });
+    off();
+    expect(provenance.matchOrigin(dest.id, "oi", Date.now())).toEqual({ kind: "user", name: "alex" });
+    expect(live).toHaveLength(0); // their own websocket already draws it — no external announcement
+  });
+
+  it("a send without origin records nothing (the pre-provenance behaviour)", async () => {
+    const { maestro, registry, provenance } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const dest = await registry.createCard({ projectId: p.id, title: "destino" });
+    await registry.applyOpenTerminal(dest.id);
+    await maestro.sendToTerminal(dest.id, "sem origem");
+    expect(provenance.matchOrigin(dest.id, "sem origem", Date.now())).toBeUndefined();
+  });
+});
+
 describe("human-active lock (maestro-only)", () => {
   it("with respectHumanActive, refuses a send to a human-active card, sends nothing, but still allows a read", async () => {
     const { maestro, registry } = await load();
@@ -354,6 +416,44 @@ describe("human-active lock (maestro-only)", () => {
     const out = await maestro.sendToTerminal(c.id, "carry on", { respectHumanActive: true });
     expect(out).toMatchObject({ sent: true });
     expect(runScript).toHaveBeenCalledOnce();
+  });
+});
+
+describe("requireAgent guard — the chat's forever-pending bubble", () => {
+  // THE BUG: Claude exits, the pane is a bare shell that still accepts keystrokes; the chat send
+  // answered 200 and the message went to bash — never echoed, so the optimistic bubble hung as
+  // "enviando" forever. With `requireAgent` the send refuses instead, and the UI can say so.
+  it("refuses to type into a pane where Claude exited to a bare shell", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "claude saiu" });
+    await registry.applyOpenTerminal(c.id);
+    runScript.mockResolvedValueOnce({ stdout: "bash\n", stderr: "" }); // agent probe: only shells in the tree
+    await expect(maestro.sendToTerminal(c.id, "arruma o dre", { requireAgent: true })).rejects.toThrow(
+      /no agent running/i,
+    );
+    expect(runScript).toHaveBeenCalledOnce(); // only the probe — never the send-keys
+  });
+
+  it("refuses when the tmux session is gone entirely (probe sees nothing)", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "sessão sumiu" });
+    await registry.applyOpenTerminal(c.id);
+    runScript.mockResolvedValueOnce({ stdout: "", stderr: "" }); // agent probe: no panes at all
+    await expect(maestro.sendToTerminal(c.id, "oi", { requireAgent: true })).rejects.toThrow(/no agent running/i);
+  });
+
+  it("with Claude alive, the message goes through (probe + send)", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "vivo" });
+    await registry.applyOpenTerminal(c.id);
+    runScript.mockResolvedValueOnce({ stdout: "bash\nnode\n", stderr: "" }); // agent probe: claude under the shell
+    runScript.mockResolvedValueOnce({ stdout: "", stderr: "" }); // the send-keys
+    const out = await maestro.sendToTerminal(c.id, "roda os testes", { requireAgent: true });
+    expect(out).toMatchObject({ sent: true });
+    expect(runScript).toHaveBeenCalledTimes(2);
   });
 });
 

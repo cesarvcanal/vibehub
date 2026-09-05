@@ -75,6 +75,12 @@ export interface HostExecutor {
   /** Writes a file on the host atomically, mode-controlled, contents via STDIN. */
   writeFile(remotePath: string, content: string, opts?: { mode?: string; timeoutMs?: number }): Promise<void>;
   /**
+   * argv for a LONG-LIVED bash script fed over STDIN (`bash -s`) — same transport as `runScript`,
+   * but the caller owns the child (writes the script to stdin, reads stdout over time, kills it).
+   * Used by the credential CAPTURE listener, which stays connected to a card's browser.
+   */
+  scriptCommand(): { file: string; args: string[] };
+  /**
    * argv for an INTERACTIVE command (node-pty spawns this). `remoteCommand` is a single shell line
    * because ssh concatenates argv and re-parses it remotely — quoting must already be inside.
    */
@@ -177,6 +183,9 @@ class LocalExecutor implements HostExecutor {
   pipeCommand(remoteCommand: string): { file: string; args: string[] } {
     return { file: "bash", args: ["-lc", remoteCommand] };
   }
+  scriptCommand(): { file: string; args: string[] } {
+    return { file: "bash", args: ["-s"] };
+  }
 }
 
 class SshExecutor implements HostExecutor {
@@ -197,6 +206,10 @@ class SshExecutor implements HostExecutor {
   pipeCommand(remoteCommand: string): { file: string; args: string[] } {
     // Deliberately NO -tt: this stream is binary and a tty would rewrite line endings.
     return { file: "ssh", args: [...sshArgs(), remoteCommand] };
+  }
+  scriptCommand(): { file: string; args: string[] } {
+    // No -tt: the script is fed over stdin and its stdout is read as plain lines (NDJSON captures).
+    return { file: "ssh", args: [...sshArgs(), "bash -s"] };
   }
 }
 

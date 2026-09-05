@@ -110,6 +110,39 @@ describe("ChatView", () => {
     expect(screen.getByText("verde").tagName).toBe("STRONG");
   });
 
+  it("draws an AGENT's message as the green robot bubble, named and linked to its card", async () => {
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({
+      id: "u1", kind: "user", at: 1, text: "roda os testes",
+      from: { kind: "agent", name: "card preview", sourceCardId: "c9", sourceProjectId: "p1" },
+    });
+
+    const bubble = await screen.findByTestId("chat-user");
+    expect(bubble).toHaveAttribute("data-role", "agent");
+    expect(screen.getByTestId("chat-sender")).toHaveTextContent("card preview");
+    // The name is a real link to the sender card — the board's own ?project&card address.
+    expect(screen.getByTestId("chat-sender-link")).toHaveAttribute("href", "/?project=p1&card=c9");
+  });
+
+  it("draws ANOTHER PERSON's message with their name and no robot; one's own stays unlabelled", async () => {
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: "fala alex", from: { kind: "user", name: "alex" } });
+    ws.deliver({ id: "u2", kind: "user", at: 2, text: "minha própria" });
+
+    await screen.findByText("fala alex");
+    const bubbles = screen.getAllByTestId("chat-user");
+    expect(bubbles[0]).toHaveAttribute("data-role", "user");
+    expect(screen.getByTestId("chat-sender")).toHaveTextContent("alex");
+    expect(screen.queryByTestId("chat-sender-link")).not.toBeInTheDocument(); // a person is not a card
+    // The unattributed message renders exactly as before: no sender tag on it.
+    expect(bubbles[1]).not.toHaveAttribute("data-role");
+    expect(screen.getAllByTestId("chat-sender")).toHaveLength(1);
+  });
+
   it("copies a message's SOURCE text with its copy button", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
@@ -136,14 +169,74 @@ describe("ChatView", () => {
     expect(await screen.findByText("manda isso quando terminar")).toBeInTheDocument();
   });
 
+  it("an OVERDUE pending bubble stops claiming 'enviando' and offers Resend / Discard", async () => {
+    // THE BUG: the bubble was cleared only by the transcript echoing the exact text. When the echo
+    // never came (Claude exited, a menu ate the keys, a restart dropped the queue) it spun as
+    // "enviando" forever — in card after card. Overdue now means an honest label + a way out.
+    localStorage.setItem(
+      "vibehub.chatPending.c1",
+      JSON.stringify([{ id: "p1", text: "cadê você", at: Date.now() - 10 * 60_000 }]),
+    );
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+
+    const stuck = await screen.findByTestId("chat-pending-stuck");
+    expect(stuck).toHaveTextContent("cadê você");
+    expect(screen.queryByText("sending")).toBeNull();
+
+    // Resend: the same words go to the server again, as a fresh send.
+    await userEvent.click(screen.getByTestId("chat-pending-resend"));
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/cards/c1/chat", { text: "cadê você" }));
+    // the stuck bubble was replaced by a fresh "sending" one
+    expect(screen.queryByTestId("chat-pending-stuck")).toBeNull();
+    expect(await screen.findByText("cadê você")).toBeInTheDocument();
+  });
+
+  it("Discard drops the overdue bubble — and the storage entry with it", async () => {
+    localStorage.setItem(
+      "vibehub.chatPending.c1",
+      JSON.stringify([{ id: "p1", text: "some daqui", at: Date.now() - 10 * 60_000 }]),
+    );
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    await userEvent.click(await screen.findByTestId("chat-pending-discard"));
+    expect(screen.queryByTestId("chat-pending-stuck")).toBeNull();
+    expect(screen.queryByText("some daqui")).toBeNull();
+    await waitFor(() => expect(localStorage.getItem("vibehub.chatPending.c1")).toBeNull());
+  });
+
+  it("a fresh send still shows as 'sending', not as overdue", async () => {
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    await userEvent.type(screen.getByRole("textbox"), "agora vai{Enter}");
+    await screen.findByText("agora vai");
+    expect(screen.queryByTestId("chat-pending-stuck")).toBeNull();
+  });
+
+  it("the echo clears the bubble even when the transcript re-flowed its whitespace", async () => {
+    localStorage.setItem(
+      "vibehub.chatPending.c1",
+      JSON.stringify([{ id: "p1", text: "arruma  o\ndre", at: Date.now() }]),
+    );
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    await screen.findByText(/arruma/);
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: "arruma o dre" });
+    await waitFor(() => expect(localStorage.getItem("vibehub.chatPending.c1")).toBeNull());
+  });
+
   it("draws a system notification as a muted event, never as the user's message", async () => {
     renderChat();
     const ws = await socket();
     ws.accept();
-    ws.deliver({ id: "s1", kind: "system", at: 1, text: "Vigiar reconexão da Z-API completed" });
+    ws.deliver({ id: "s1", kind: "system", at: 1, text: "Vigiar reconexão do webhook completed" });
 
     const note = await screen.findByTestId("chat-system");
-    expect(note).toHaveTextContent("Vigiar reconexão da Z-API completed");
+    expect(note).toHaveTextContent("Vigiar reconexão do webhook completed");
     // The important part: it is NOT a user bubble (that was the bug).
     expect(screen.queryByTestId("chat-user")).not.toBeInTheDocument();
   });
@@ -238,6 +331,23 @@ describe("ChatView", () => {
     }
   });
 
+  it("a URL in a USER message is a clickable link (new tab, noopener); javascript: stays text", async () => {
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: "vê http://192.0.2.10:3010/preview/3100/ e javascript:alert(1)" });
+
+    const bubble = await screen.findByTestId("chat-user");
+    const anchor = bubble.querySelector("a");
+    expect(anchor).not.toBeNull();
+    expect(anchor).toHaveAttribute("href", "http://192.0.2.10:3010/preview/3100/");
+    expect(anchor).toHaveAttribute("target", "_blank");
+    expect(anchor?.getAttribute("rel")).toContain("noopener");
+    // the hostile scheme never becomes an anchor
+    expect(bubble.querySelectorAll("a")).toHaveLength(1);
+    expect(bubble).toHaveTextContent("javascript:alert(1)");
+  });
+
   it("does not duplicate history when the stream replays it (a reconnect)", async () => {
     renderChat();
     const ws = await socket();
@@ -267,11 +377,13 @@ describe("ChatView", () => {
   it("offers Stop only while the agent is working, and Stop presses Escape in the session", async () => {
     const user = userEvent.setup({ delay: null });
     const { rerender } = renderChat({ working: false });
-    expect(screen.queryByRole("button", { name: /stop/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("chat-stop")).not.toBeInTheDocument();
+    // The seat is reserved even while the button is away — the microphone never jumps.
+    expect(screen.getByTestId("composer-interrupt-slot")).toBeInTheDocument();
 
     rerender(<ChatView cardId="c1" working />);
     expect(screen.getByTestId("chat-working")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /stop/i }));
+    await user.click(screen.getByTestId("chat-stop"));
     expect(mockPost).toHaveBeenCalledWith("/cards/c1/chat/key", { key: "escape" });
   });
 
@@ -290,5 +402,39 @@ describe("ChatView", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("ChatView — 'ir pro fim' flutuante (mesmo comportamento do chat nativo)", () => {
+  it("appears when scrolled up, badges on a new message without auto-scroll, click returns and hides", async () => {
+    renderApp(<ChatView cardId="c1" working={false} />);
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ id: "a1", kind: "assistant", at: 1, text: "primeira resposta" });
+
+    expect(screen.queryByTestId("jump-latest")).toBeNull();
+
+    const scroller = screen.getByTestId("chat-scroller");
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 1000 });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 200 });
+    let top = 0;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => { top = v; },
+    });
+    fireEvent.scroll(scroller);
+    expect(screen.getByTestId("jump-latest")).toBeInTheDocument();
+    expect(screen.queryByTestId("jump-latest-new")).toBeNull();
+
+    ws.deliver({ id: "a2", kind: "assistant", at: 2, text: "mensagem nova" });
+    expect(screen.getByTestId("jump-latest-new")).toBeInTheDocument();
+    expect(scroller.scrollTop).toBe(0); // never yanked
+
+    const scrollTo = vi.fn(function (this: HTMLElement, opts: { top: number }) { this.scrollTop = opts.top; });
+    Object.defineProperty(scroller, "scrollTo", { configurable: true, value: scrollTo });
+    await userEvent.click(screen.getByTestId("jump-latest"));
+    expect(scrollTo).toHaveBeenCalledWith({ top: 1000, behavior: "smooth" });
+    expect(screen.queryByTestId("jump-latest")).toBeNull();
   });
 });

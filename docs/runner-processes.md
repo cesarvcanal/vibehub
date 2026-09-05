@@ -1,8 +1,9 @@
 # Higiene de processos do runner
 
-Contexto: incidente de 2026-08-29. O `vibehub-runner` acumulou ~800 processos — ~180 `claude`
-órfãos (ppid 1, rodando havia dias) e centenas de watchers de transcript vazados — e o load do
-host (8 vCPUs) chegou a 55, deixando o vibehub inutilizável.
+Contexto (racional de design): numa instalação real, o `vibehub-runner` chegou a acumular ~800
+processos — ~180 `claude` órfãos (ppid 1, rodando havia dias) e centenas de watchers de transcript
+vazados — e o load do host (8 vCPUs) chegou a 55, deixando o vibehub inutilizável. As defesas
+abaixo existem pra essa classe de vazamento nunca voltar.
 
 ## As três defesas (neste repo)
 
@@ -31,5 +32,6 @@ host (8 vCPUs) chegou a 55, deixando o vibehub inutilizável.
 O PID 1 do runner é `sleep infinity`, que nunca chama `wait()`: qualquer órfão morto vira zumbi
 para sempre (~176 observados no incidente). Zumbi não consome CPU/memória, só um slot de pid, e
 some no restart do container. A solução definitiva é **recriar o container do runner com
-`init: true`** (PID 1 vira um init de verdade que colhe filhos) — agendada à parte com o César;
-não fazer junto com deploy comum porque a recriação derruba todas as sessões tmux vivas.
+`init: true`** (PID 1 vira um init de verdade que colhe filhos) — operação agendada pelo operador
+da instalação; não fazer junto com deploy comum porque a recriação derruba todas as sessões tmux
+vivas.

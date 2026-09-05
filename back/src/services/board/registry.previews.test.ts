@@ -161,3 +161,32 @@ describe("pruneCardPreviews", () => {
     expect(await reg.pruneCardPreviews([])).toBe(0);
   });
 });
+
+describe("findCardPreviewByPort", () => {
+  it("finds the card that registered the port, with its preview", async () => {
+    const reg = await freshRegistry();
+    const cardId = await withCard(reg);
+    await reg.registerCardPreview(cardId, 3100, { label: "front", command: "npm run dev", cwd: "/work/app" });
+
+    const found = await reg.findCardPreviewByPort(3100);
+    expect(found?.card.id).toBe(cardId);
+    expect(found?.preview).toMatchObject({ port: 3100, label: "front", command: "npm run dev" });
+    expect(await reg.findCardPreviewByPort(3101)).toBeUndefined();
+  });
+
+  it("prefers the NEWEST registration when two cards claimed the same port", async () => {
+    const reg = await freshRegistry();
+    const older = await withCard(reg);
+    const newer = await withCard(reg);
+    await reg.registerCardPreview(older, 3100, {});
+    await new Promise((r) => setTimeout(r, 5)); // createdAt is a Date.now() stamp
+    await reg.registerCardPreview(newer, 3100, {});
+
+    expect((await reg.findCardPreviewByPort(3100))?.card.id).toBe(newer);
+  });
+
+  it("validates the port instead of scanning with garbage", async () => {
+    const reg = await freshRegistry();
+    await expect(reg.findCardPreviewByPort(0)).rejects.toThrow(/invalid preview port/);
+  });
+});

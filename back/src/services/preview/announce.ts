@@ -37,16 +37,33 @@ export const PREVIEW_BASE_HINT =
   "The app is served under /preview/<port>/ — if assets 404, set its base path " +
   "(vite: base '/preview/<port>/'; Next.js: basePath '/preview/<port>') or honour X-Forwarded-Prefix.";
 
+/**
+ * The host guidance that rides back with the link: the panel is reached through more than one host
+ * (a LAN IP, a domain behind a gateway), and the PATH is what is true on all of them — `url` is
+ * only the configured public URL, one example among the hosts the user may actually be on.
+ */
+export const PREVIEW_HOST_NOTE =
+  "The preview works on ANY host the vibehub panel is opened on: hand the user the PATH " +
+  "(/preview/<port>/) and tell them to open it on the panel host they already use — `url` is just " +
+  "that path on the configured public URL.";
+
 /** What `vibehub_preview` answers with: the link, ready to be relayed to the user. */
 export interface AnnouncedPreview {
   registered: true;
   cardId: string;
   port: number;
   label?: string;
-  /** Full clickable URL (publicUrl + /preview/<port>/). THIS is what the agent hands the user. */
+  /**
+   * Canonical same-origin path (`/preview/<port>/`) — valid on EVERY host the panel is reached
+   * through. THIS is what the agent hands the user.
+   */
+  path: string;
+  /** The path on the configured public URL — one example host, not the only one. */
   url: string;
   /** Base-path guidance for apps that emit absolute URLs. */
   hint: string;
+  /** Host guidance: the path works on any panel host; `url` is only an example. */
+  note: string;
 }
 
 /** Scans the runner for listening ports — one round trip, same script as the Preview menu. */
@@ -112,7 +129,9 @@ export async function announcePreview(cardId: string, port: number, input: Annou
     cardId: updated.id,
     port: p,
     ...(stored?.label ? { label: stored.label } : {}),
+    path: `/preview/${p}/`,
     url: previewPublicUrl(config.publicUrl, p),
     hint: PREVIEW_BASE_HINT,
+    note: PREVIEW_HOST_NOTE,
   };
 }

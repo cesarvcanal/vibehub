@@ -211,9 +211,23 @@ export function ProjectSidebar({
         )}
       >
         {/* The brand, at the top of the panel — inside it, so it never eats into the terminal. The
-            `+` beside it is a global new card: no project implied, the dialog asks which. */}
+            `+` beside it is a global new card: no project implied, the dialog asks which. The mark
+            is a REAL link to the aggregated board (the app's home): middle-click and
+            Cmd/Ctrl/Shift-click open it in a new tab natively, a plain click navigates in-app. */}
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/60 py-2.5 pl-3 pr-1.5">
-          <Logo size="side" />
+          <a
+            href="?"
+            aria-label={t("sidebar.allProjects")}
+            title={t("sidebar.allProjects")}
+            onClick={(e) => {
+              if (isNewTabClick(e)) return;
+              e.preventDefault();
+              onShowAllProjects?.();
+            }}
+            className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Logo size="side" />
+          </a>
           {onNewGlobalCard ? (
             <Button
               variant="ghost"
@@ -238,6 +252,7 @@ export function ProjectSidebar({
             onShowAll={onShowAllProjects}
             onNewCard={() => onNewCard(focusedProject)}
             onNewProject={onNewProject}
+            canManage={canManage}
           />
         ) : (
           <>
@@ -356,6 +371,7 @@ function ProjectSwitcher({
   onShowAll,
   onNewCard,
   onNewProject,
+  canManage = true,
 }: {
   current: BoardProject;
   projects: BoardProject[];
@@ -363,11 +379,14 @@ function ProjectSwitcher({
   onShowAll?: () => void;
   onNewCard: () => void;
   onNewProject: () => void;
+  /** false = a member: no "new project" row, no new-card `+` — the routes behind both answer 403. */
+  canManage?: boolean;
 }) {
   const t = useT();
   // Controlled: a plain click on a project link preventDefaults (to stop a full-page nav), and Radix
   // SKIPS its own onSelect when the click was defaultPrevented — so we close the menu ourselves.
   const [open, setOpen] = React.useState(false);
+  const [shareOpen, setShareOpen] = React.useState(false);
   return (
     <div className="flex shrink-0 items-center gap-0.5 border-b border-border/60 py-1 pl-1.5 pr-1.5">
       <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -410,22 +429,44 @@ function ProjectSwitcher({
               </a>
             </DropdownMenuItem>
           ))}
-          <DropdownMenuItem onSelect={onNewProject} className="gap-2 text-muted-foreground">
-            <Plus className="h-3.5 w-3.5 shrink-0" />
-            {t("sidebar.newProject")}
-          </DropdownMenuItem>
+          {canManage ? (
+            <DropdownMenuItem onSelect={onNewProject} className="gap-2 text-muted-foreground">
+              <Plus className="h-3.5 w-3.5 shrink-0" />
+              {t("sidebar.newProject")}
+            </DropdownMenuItem>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
-        aria-label={t("sidebar.newCardIn", { name: current.name })}
-        title={t("sidebar.newCardHint")}
-        onClick={onNewCard}
-      >
-        <Plus className="h-4 w-4" />
-      </Button>
+      {canManage ? (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+          aria-label={t("sidebar.newCardIn", { name: current.name })}
+          title={t("sidebar.newCardHint")}
+          onClick={onNewCard}
+        >
+          <Plus className="h-4 w-4" />
+        </Button>
+      ) : null}
+      {/* Sharing, IN THE OPEN: it lived only in the row's right-click menu, and the owner explored
+          the whole screen without finding it. The header of the open project is where the eye
+          looks for "who else sees this". Owner-only — the routes behind it are requireOwner. */}
+      {canManage ? (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+          aria-label={t("sidebar.shareProject", { name: current.name })}
+          title={t("sidebar.shareProject", { name: current.name })}
+          onClick={() => setShareOpen(true)}
+        >
+          <Share2 className="h-3.5 w-3.5" />
+        </Button>
+      ) : null}
+      {shareOpen ? (
+        <ShareDialog kind="project" targetId={current.id} title={current.name} open onOpenChange={setShareOpen} />
+      ) : null}
     </div>
   );
 }
@@ -439,9 +480,11 @@ function ProjectSwitcher({
  *
  * When UNFOLDED it lists its cards, and only then does it fetch them. Unfolded is not the same as
  * selected — several projects can be open at once, and each open one polls, because a list of cards
- * with stale dots is worse than no list. The cards that are working or waiting are always listed;
- * the rest hide behind "show more"; finished ones never appear, EXCEPT the card whose terminal is
- * open, which is always listed or the one thing on screen would be the one thing you cannot see.
+ * with stale dots is worse than no list. The LIVE conversations are always listed, newest first,
+ * along with any card created moments ago (see `splitSidebarCards`); everything abandoned — grey,
+ * paused, untouched backlog — hides behind "show more"; finished ones never appear, EXCEPT the card
+ * whose terminal is open, which is always listed or the one thing on screen would be the one thing
+ * you cannot see.
  */
 function ProjectRow({
   project,
@@ -684,7 +727,8 @@ function ProjectRow({
   return (
     <div
       data-project-row={project.id}
-      draggable
+      // Reordering projects is the owner's (the route answers 403 to a member).
+      draggable={canManage}
       onDragStart={(e) => {
         e.dataTransfer.effectAllowed = "move";
         e.dataTransfer.setData("text/plain", project.id);
@@ -778,17 +822,20 @@ function ProjectRow({
           </span>
         </a>
         {/* Always visible, on every row: writing down the next task is the most frequent thing
-            anyone does here, and it should not require selecting the project first. */}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="mr-1.5 h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
-          aria-label={t("sidebar.newCardIn", { name: project.name })}
-          title={t("sidebar.newCardHint")}
-          onClick={onNewCard}
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </Button>
+            anyone does here, and it should not require selecting the project first. Not for a
+            member — creating cards is the owner's, and the route answers 403. */}
+        {canManage ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="mr-1.5 h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
+            aria-label={t("sidebar.newCardIn", { name: project.name })}
+            title={t("sidebar.newCardHint")}
+            onClick={onNewCard}
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </Button>
+        ) : null}
       </div>
       )}
 

@@ -15,7 +15,9 @@ import { firstRunSeedCommand } from "../accounts/firstRun.js";
 import { resolveAccountToken, writeTokenLines, ghTokenPath, writeGhTokenLines, removeGhTokenLines } from "../accounts/token.js";
 import { cardCdpEndpoint } from "../browser/ports.js";
 import { mcpInjectLines, resolveMcpInjections, type McpInjection } from "../mcp/mcp.js";
-import { brainInjectLines, resolveBrainText } from "../brain/brain.js";
+import {
+  brainInjectLines, resolveBrainText, projectBrainWriteLines, resolveProjectBrainText, PROJECT_BRAIN_FILE,
+} from "../brain/brain.js";
 import { logger } from "../../utils/logger.js";
 
 export { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir };
@@ -221,6 +223,13 @@ export interface OpenScriptOpts {
    * when the text changed.
    */
   brain?: string;
+  /**
+   * The PROJECT brain, written as CLAUDE.local.md at the ROOT of the card's worktree — Claude Code
+   * loads it natively as project memory in both the TUI and the SDK driver. Written on EVERY open
+   * (a cat over stdin costs nothing next to the clone/fetch) so the file can never go stale; empty
+   * string = removed. `undefined` = do not touch it.
+   */
+  projectBrain?: string;
   /** Present = the project has a repository: clone/fetch/worktree before tmux. */
   repo?: {
     dir: string;
@@ -319,6 +328,18 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
   // The brain (global CLAUDE.md) seeded into the card's effective profile — idempotent by signature,
   // so reopening a card rewrites nothing; new text is picked up on the next open.
   if (opts.brain) inner.push(...brainInjectLines([opts.accountConfigDir], opts.brain));
+  // The PROJECT brain, as CLAUDE.local.md at the worktree root (project memory for both the TUI and
+  // the SDK driver). Kept OUT of git through the clone's info/exclude — shared by every worktree of
+  // the clone, and added idempotently even when the project has no brain yet, so a text saved while
+  // a card is already open never shows up as an untracked file.
+  if (opts.repo) {
+    inner.push(
+      `if [ -d "$REPO_DIR/.git" ] && ! grep -qxF ${shQuote(PROJECT_BRAIN_FILE)} "$REPO_DIR/.git/info/exclude" 2>/dev/null; then`,
+      `  mkdir -p "$REPO_DIR/.git/info" && echo ${shQuote(PROJECT_BRAIN_FILE)} >> "$REPO_DIR/.git/info/exclude"`,
+      `fi`,
+    );
+  }
+  if (opts.projectBrain !== undefined) inner.push(...projectBrainWriteLines(opts.cwd, opts.projectBrain));
   inner.push(
     // With no tty (bash -s through docker exec -i), `new-session -A` on an existing session becomes
     // an attach and exits with "open terminal failed" — the guard creates the session ONLY when it
@@ -340,7 +361,7 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
       ` -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8` +
       // Non-default account: the session's Claude uses the account profile (isolated credentials/state).
       (opts.accountConfigDir ? ` -e CLAUDE_CONFIG_DIR=${shQuote(opts.accountConfigDir)}` : "") +
-      ` ${shQuote(sessionCommand({ resume: !!opts.resume, resumeSessionId: opts.resumeSessionId, profileDir, model: opts.model, ghTokenFile: opts.ghToken ? ghTokenPath(opts.cardId) : undefined }))}`,
+      ` ${shQuote(sessionCommand({ resume: !!opts.resume, resumeSessionId: opts.resumeSessionId, profileDir, model: opts.model, ghTokenFile: ghTokenPath(opts.cardId) }))}`,
   );
   return [
     "set -e",
@@ -433,10 +454,12 @@ export function cardAttachArgs(
     resume: !!card.openedAt,
     resumeSessionId: card.resumeSessionId,
     model: card.model,
-    // Only when the project has a GitHub connection: the session then exports GH_TOKEN from the
-    // per-card file a prior /open wrote (the export is still `[ -s ]`-guarded). The PATH is safe in
-    // argv; the token itself never is. No connection = the runner's ambient gh login, unchanged.
-    ghTokenFile: project.githubConnectionId ? ghTokenPath(card.id) : undefined,
+    // Always the card's token file: the session exports GH_TOKEN from what a prior /open wrote
+    // (the export is `[ -s ]`-guarded, so no file = no export). The open writes it whenever ANY
+    // GitHub account is connected — projects with no explicit connection use the first one, same
+    // as the clone — so gh in the card acts as the configured account, never the ambient login.
+    // The PATH is safe in argv; the token itself never is.
+    ghTokenFile: ghTokenPath(card.id),
     shell: opts.shell,
   });
 }
@@ -576,16 +599,16 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
     // The account's long-lived token (vault) — seeded into the profile inside the script (stdin).
     const oauthToken = await resolveAccountToken(accountSlug);
     // The PROJECT's GitHub connection token, so the card's own git push / gh pr act as that identity
-    // (e.g. a personal repo the runner's org login can only read). BEST-EFFORT: a missing/unconfigured
-    // connection must not stop a card from opening — absent means the token file is removed and the
-    // card falls back to the runner's ambient gh login.
+    // — the SAME resolution the clone uses (`githubConnectionId`; absent = the first connected
+    // account), so a project that names no connection still operates as the configured account and
+    // NEVER as the runner's ambient gh login. BEST-EFFORT: a missing/unconfigured connection must
+    // not stop a card from opening — absent means the token file is removed and only then does the
+    // card fall back to the ambient login (install with no GitHub account connected).
     let ghToken: string | undefined;
-    if (project.githubConnectionId) {
-      try {
-        ghToken = await tokenFor(project.githubConnectionId);
-      } catch (e) {
-        logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "GitHub connection token not resolved on open (ambient gh login)");
-      }
+    try {
+      ghToken = await tokenFor(project.githubConnectionId);
+    } catch (e) {
+      logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "GitHub connection token not resolved on open (ambient gh login)");
     }
     // Managed MCPs: BEST-EFFORT on open (a missing secret must not stop a card from opening — the
     // "apply" button in the UI is the path that fails loudly and names what is missing).
@@ -603,6 +626,13 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
     } catch (e) {
       logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "brain not seeded on open (continuing)");
     }
+    // The PROJECT brain (CLAUDE.local.md in the worktree): same best-effort rule as the global one.
+    let projectBrain: string | undefined;
+    try {
+      projectBrain = await resolveProjectBrainText(project.id);
+    } catch (e) {
+      logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "project brain not seeded on open (continuing)");
+    }
 
     const script = buildOpenScript({
       containerName: config.runner.container,
@@ -618,6 +648,7 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
       ghToken,
       mcps,
       brain,
+      projectBrain,
       repo,
     });
     try {
@@ -771,6 +802,34 @@ export async function uploadCardImage(
 /** Heredoc delimiter of the kill script — a reserved word, never derived from input. */
 const KILL_DELIM = "VIBEHUB_KILL";
 
+/* ----------------------------------------------------- session-kill hooks */
+
+/**
+ * Listeners told whenever a card's session is being ENDED (pause, hibernate, restart, delete,
+ * model/account switch — every caller of `killCardSession`). Registration instead of an import so
+ * the SDK driver manager can hang its per-card driver's life on the same rule without a
+ * workspace → sdk → chat → maestro → workspace import cycle.
+ */
+type CardSessionKillListener = (cardId: string) => void;
+const cardSessionKillListeners = new Set<CardSessionKillListener>();
+
+/** Register a listener for card-session kills. Returns the unsubscribe. */
+export function onCardSessionKill(listener: CardSessionKillListener): () => void {
+  cardSessionKillListeners.add(listener);
+  return () => cardSessionKillListeners.delete(listener);
+}
+
+/** Tell every listener a card's session is being ended. Best-effort: a listener cannot break the kill. */
+export function notifyCardSessionKill(cardId: string): void {
+  for (const listener of cardSessionKillListeners) {
+    try {
+      listener(cardId);
+    } catch (err) {
+      logger.warn({ card: cardId, detail: (err as Error).message }, "card-session kill listener failed (continuing)");
+    }
+  }
+}
+
 /**
  * Script that ends tmux sessions AND the whole process tree of their panes.
  *
@@ -817,6 +876,9 @@ export function buildKillSessionScript(containerName: string, sessions: string[]
  * A runner that is missing or a host that is down is simply ignored.
  */
 export async function killCardSession(card: Card, opts: { includeShell?: boolean } = {}): Promise<void> {
+  // FIRST the listeners: the SDK driver manager ends the card's driver here, so every pause /
+  // hibernate / restart / delete / switch that kills the tmux session kills the driver too.
+  notifyCardSessionKill(card.id);
   try {
     const sessions = opts.includeShell ? [card.tmuxSession, `${card.tmuxSession}-sh`] : [card.tmuxSession];
     await hostExecutor().runScript(buildKillSessionScript(config.runner.container, sessions), { timeoutMs: 30_000 });
@@ -1239,8 +1301,13 @@ export async function restartAllCards(by?: string): Promise<{ restarted: number;
 export async function restartStaggered(
   reason: RestartReason,
   by?: string,
+  opts: { projectId?: string } = {},
 ): Promise<{ restarted: number; pending: number }> {
-  const live = (await listAllCards()).filter(hasLiveSession);
+  // `projectId` scopes the sweep (a PROJECT brain save only concerns that project's cards — bouncing
+  // every other project's terminals for it would be noise). Absent = the whole board, as before.
+  const live = (await listAllCards()).filter(
+    (c) => hasLiveSession(c) && (!opts.projectId || c.projectId === opts.projectId),
+  );
   const idle = cardsToRestart(live); // live session and NOT working
   const working = live.filter((c) => c.status === "working"); // live session AND working
   await Promise.allSettled(idle.map((c) => restartCard(c.id, by)));
@@ -1250,6 +1317,41 @@ export async function restartStaggered(
     "staggered restart after applying the brain/MCPs — idle cards restarted now, working cards flagged as pending",
   );
   return { restarted: idle.length, pending: working.length };
+}
+
+/**
+ * WRITES the PROJECT brain (CLAUDE.local.md) into every EXISTING worktree of that project's cards —
+ * and ONLY that project's: the sweep filters the board by projectId, and each write is guarded by
+ * `[ -d <worktree> ]` so a card whose workspace was never provisioned is skipped, not created. An
+ * empty text removes the file everywhere instead of leaving it stale. One host call. It lives here
+ * (not in brain.ts) because it needs the card→worktree mapping, and workspace already imports brain.
+ */
+export async function applyProjectBrainEverywhere(
+  projectId: string,
+  by?: string,
+): Promise<{ cards: number; bytes: number }> {
+  const project = await getProject(projectId);
+  if (!project) throw new Error("project not found");
+  const text = await resolveProjectBrainText(projectId);
+  const bytes = Buffer.byteLength(text);
+  const cards = (await listAllCards()).filter((c) => c.projectId === projectId);
+  if (cards.length) {
+    const lines = ["set -e", `docker exec -i ${shQuote(config.runner.container)} bash -s <<'${OPEN_DELIM}'`];
+    for (const card of cards) {
+      lines.push(...projectBrainWriteLines(cardWorkPaths(project, card).cwd, text));
+    }
+    lines.push(OPEN_DELIM);
+    try {
+      await hostExecutor().runScript(lines.join("\n"), { timeoutMs: 300_000 });
+    } catch (err) {
+      throw runnerUnreachable(err);
+    }
+  }
+  logger.info(
+    { audit: true, action: "brain.project.apply", project: projectId, cards: cards.length, bytes, by },
+    "project brain applied to the project's worktrees",
+  );
+  return { cards: cards.length, bytes };
 }
 
 /**

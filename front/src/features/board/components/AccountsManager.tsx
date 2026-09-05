@@ -50,7 +50,7 @@ interface TokenTarget {
  * profile: it goes into the server's vault and is planted in every runner profile. The value never
  * comes back, so the UI only ever knows whether one is stored.
  */
-export function AccountsManager() {
+export function AccountsManager({ trigger = "icon" }: { trigger?: "icon" | "row" } = {}) {
   const t = useT();
   const queryClient = useQueryClient();
   const [open, setOpen] = React.useState(false);
@@ -235,18 +235,30 @@ export function AccountsManager() {
 
   return (
     <>
-      {/* Icon only, and quiet: this is a setting you open twice a month, sitting next to a board
-          full of live work. A bordered, labelled button there reads as an action. */}
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-7 w-7 text-muted-foreground hover:text-foreground"
-        aria-label={t("accounts.aria")}
-        title={t("accounts.aria")}
-        onClick={() => setOpen(true)}
-      >
-        <Users className="h-4 w-4" />
-      </Button>
+      {/* Two homes: a quiet icon (legacy corners) or a labelled ROW inside Settings, where the
+          managers live now — a setting you open twice a month belongs with the other settings. */}
+      {trigger === "row" ? (
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full justify-start gap-2"
+          onClick={() => setOpen(true)}
+        >
+          <Users className="h-4 w-4 text-muted-foreground" />
+          {t("accounts.aria")}
+        </Button>
+      ) : (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 text-muted-foreground hover:text-foreground"
+          aria-label={t("accounts.aria")}
+          title={t("accounts.aria")}
+          onClick={() => setOpen(true)}
+        >
+          <Users className="h-4 w-4" />
+        </Button>
+      )}
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-md">

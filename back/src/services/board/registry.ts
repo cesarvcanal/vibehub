@@ -1192,7 +1192,11 @@ export interface CreateCardInput {
   title: string;
 }
 
-/** Creates a card at the end of the backlog, base inherited from the project, session/slug DERIVED. */
+/**
+ * Creates a card at the TOP of the backlog — the card you just named is the one you are about to
+ * look for, so it must be the first thing in the column rather than buried under everything jotted
+ * down before it. Base inherited from the project, session/slug DERIVED.
+ */
 export async function createCard(input: CreateCardInput): Promise<Card> {
   const title = String(input.title ?? "").trim();
   if (!title) throw new Error("title is required");
@@ -1207,7 +1211,7 @@ export async function createCard(input: CreateCardInput): Promise<Card> {
       projectId: project.id,
       title,
       column: "backlog",
-      position: doc.cards.filter((c) => c.projectId === project.id && c.column === "backlog").length,
+      position: 0,
       base: assertBranchName(project.baseBranch),
       tmuxSession: tmuxSessionFor(id),
       worktreeSlug: worktreeSlugFor(title, id),
@@ -1216,6 +1220,8 @@ export async function createCard(input: CreateCardInput): Promise<Card> {
       updatedAt: now,
     };
     doc.cards.push(card);
+    // Renumbers the backlog with the new card spliced in at 0, so positions stay 0..n-1.
+    placeCard(doc.cards, card, "backlog", 0);
     return card;
   });
 }
@@ -1441,6 +1447,24 @@ export async function registerCardPreview(
     card.updatedAt = Date.now();
     return card;
   });
+}
+
+/**
+ * The card that registered a preview on this PORT, with the preview itself — how the proxy's
+ * stopped-preview screen finds the restart recipe when all it knows is the URL's port. When two
+ * cards ever registered the same port, the NEWEST registration wins (it is the one whose server
+ * held the port last). Read-only; unknown port -> undefined.
+ */
+export async function findCardPreviewByPort(port: number): Promise<{ card: Card; preview: CardPreview } | undefined> {
+  const p = assertPreviewPort(port);
+  const doc = await store.load();
+  let best: { card: Card; preview: CardPreview } | undefined;
+  for (const card of doc.cards) {
+    for (const preview of card.previews ?? []) {
+      if (preview.port === p && (!best || preview.createdAt > best.preview.createdAt)) best = { card, preview };
+    }
+  }
+  return best;
 }
 
 /**

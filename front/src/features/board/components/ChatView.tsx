@@ -1,23 +1,32 @@
 import * as React from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Bell, Check, ChevronRight, Copy, Loader2, MessageSquare, Square, TerminalSquare, Wrench } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Bell, Bot, Check, ChevronRight, Copy, Loader2, MessageSquare, TerminalSquare, UserRound, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { wsUrl } from "@/lib/ws";
 import { apiErrorMessage } from "@/lib/apiError";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/providers/auth";
 import { boardApi } from "@/features/board/api";
+import { cardHref } from "@/features/board/lib/board";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
+import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
 import { reconnectDelay, type ConnectionState } from "@/features/board/lib/reconnect";
 import {
   groupChatRows,
   mergeEvent,
+  normalizeMessage,
+  originRole,
   parseChatFrame,
+  pendingPhase,
   readPending,
   writePending,
   type ChatEvent,
+  type MessageOrigin,
+  type PendingMessage,
 } from "@/features/board/lib/chat";
-import { mdBlocks, mdInline } from "@/features/board/lib/markdown";
+import { mdBlocks, mdInline, linkifyTokens } from "@/features/board/lib/markdown";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -82,7 +91,7 @@ export function ChatView({
    */
   // Seeded from localStorage so a message you sent while Claude was busy — queued by Claude Code,
   // not in the transcript yet — is still on screen after a tab switch, a remount or a reload.
-  const [pending, setPending] = React.useState<{ id: string; text: string }[]>(() => readPending(cardId));
+  const [pending, setPending] = React.useState<PendingMessage[]>(() => readPending(cardId));
   // Persist every change (keyed by card), so the bubbles outlive this component.
   React.useEffect(() => {
     writePending(cardId, pending);
@@ -172,12 +181,14 @@ export function ChatView({
     };
   }, [cardId]);
 
-  /** An optimistic bubble dies when the real message for it arrives. */
+  /** An optimistic bubble dies when the real message for it arrives. Matched on the COLLAPSED
+   * text: the transcript's echo may re-flow whitespace, and a mismatch here was one of the ways a
+   * delivered message kept spinning as "enviando" forever. */
   React.useEffect(() => {
     setPending((prev) => {
       if (!prev.length) return prev;
-      const said = new Set(events.filter((e) => e.kind === "user").map((e) => e.text.trim()));
-      const next = prev.filter((p) => !said.has(p.text.trim()));
+      const said = new Set(events.filter((e) => e.kind === "user").map((e) => normalizeMessage(e.text)));
+      const next = prev.filter((p) => !said.has(normalizeMessage(p.text)));
       return next.length === prev.length ? prev : next;
     });
   }, [events]);
@@ -204,39 +215,43 @@ export function ChatView({
     // The composer speaks terminal ("\r" submits); here the Enter is the server's job.
     const text = raw.replace(/\r$/, "").trim();
     if (!text) return;
-    setPending((prev) => [...prev, { id: `local:${Date.now()}:${prev.length}`, text }]);
+    setPending((prev) => [...prev, { id: `local:${Date.now()}:${prev.length}`, text, at: Date.now() }]);
     // Await so a REJECTED send (e.g. the terminal is on a menu) propagates to the composer, which
     // then keeps the draft instead of clearing it. onError still handles the toast + the pending row.
     await sendMutation.mutateAsync(text);
   };
 
+  /** The overdue bubble's "Reenviar": drop the stuck entry, send the same words again fresh. */
+  const resendPending = (message: PendingMessage): void => {
+    setPending((prev) => prev.filter((p) => p.id !== message.id));
+    void send(message.text).catch(() => undefined); // failures surface via the mutation's toast
+  };
+  const discardPending = (message: PendingMessage): void => {
+    setPending((prev) => prev.filter((p) => p.id !== message.id));
+  };
+
   /* ------------------------------------------------------------ scrolling */
 
-  const scrollerRef = React.useRef<HTMLDivElement | null>(null);
   /**
-   * Whether the reader is AT the bottom. Scrolling up to re-read something and being yanked back
-   * down by the next tool line is the single most annoying thing a live transcript can do.
+   * Sticky-bottom + the floating "jump to latest" arrow (shared with the native chat). Scrolling
+   * up to re-read something and being yanked back down by the next tool line is the single most
+   * annoying thing a live transcript can do — so away from the end nothing moves, and new content
+   * only badges the arrow.
    */
-  const stickRef = React.useRef(true);
-  const onScroll = (): void => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-  };
-  React.useLayoutEffect(() => {
-    const el = scrollerRef.current;
-    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
-  }, [events, pending, working]);
+  const scrollContent = React.useMemo(() => [events, pending, working] as const, [events, pending, working]);
+  const stick = useStickToBottom(scrollContent);
 
   /* --------------------------------------------------------------- quiet */
 
-  // A clock only while it can change something: working, and nothing new for a while.
+  // A clock only while it can change something: working (the quiet hint), or a pending bubble
+  // whose "enviando" has a deadline to keep honest.
   const [now, setNow] = React.useState(() => Date.now());
   React.useEffect(() => {
-    if (!working) return;
+    if (!working && pending.length === 0) return;
+    setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 15_000);
     return () => clearInterval(timer);
-  }, [working]);
+  }, [working, pending.length]);
   const quietFor = working ? now - lastEventAt : 0;
   const quiet = quietFor >= QUIET_HINT_MS;
 
@@ -245,9 +260,10 @@ export function ChatView({
 
   return (
     <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", className)}>
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <div
-        ref={scrollerRef}
-        onScroll={onScroll}
+        ref={stick.scrollerRef}
+        onScroll={stick.onScroll}
         role="log"
         aria-label={ariaLabel ?? t("chat.aria")}
         aria-live="polite"
@@ -283,9 +299,16 @@ export function ChatView({
             <ChatRow key={row.id} event={row.event} />
           ),
         )}
-        {pending.map((p) => (
-          <ChatRow key={p.id} event={{ id: p.id, kind: "user", at: 0, text: p.text }} sending />
-        ))}
+        {pending.map((p) =>
+          pendingPhase(p, now) === "sending" ? (
+            <ChatRow key={p.id} event={{ id: p.id, kind: "user", at: 0, text: p.text }} sending />
+          ) : (
+            /* OVERDUE: the transcript never echoed it. Claude may have restarted, the terminal may
+               have eaten it at a menu — whatever it was, an eternal "enviando" is a lie. The words
+               stay on screen with the honest label and the two ways out. */
+            <PendingStuck key={p.id} text={p.text} onResend={() => resendPending(p)} onDiscard={() => discardPending(p)} />
+          ),
+        )}
 
         {working ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="chat-working">
@@ -306,28 +329,59 @@ export function ChatView({
           </div>
         ) : null}
       </div>
+      <JumpToLatest stick={stick} />
+      </div>
 
-      <div className="mt-1.5 flex items-end gap-1.5">
-        <TerminalComposer
-          className="min-w-0 flex-1"
-          cardId={cardId}
-          active={active}
-          onSend={send}
-          onUploadImage={onUploadImage}
-        />
-        {working ? (
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-9 w-9 shrink-0 text-muted-foreground"
-            aria-label={t("chat.stop")}
-            title={t("chat.stopHint")}
-            disabled={stopMutation.isPending}
-            onClick={() => stopMutation.mutate()}
-          >
-            <Square className="h-3.5 w-3.5" />
-          </Button>
-        ) : null}
+      {/* The stop button lives INSIDE the composer now — right column, above the microphone —
+          instead of floating loose at the row's edge. The Escape round-trip is still this view's. */}
+      <TerminalComposer
+        className="mt-1.5"
+        cardId={cardId}
+        active={active}
+        onSend={send}
+        onUploadImage={onUploadImage}
+        interrupt={{
+          active: working,
+          disabled: stopMutation.isPending,
+          onInterrupt: () => stopMutation.mutate(),
+          testId: "chat-stop",
+        }}
+      />
+    </div>
+  );
+}
+
+/**
+ * A message that was sent but never confirmed by the transcript within the deadline. The bubble
+ * keeps the words (nothing is silently dropped) and hands the person the two honest moves.
+ */
+function PendingStuck({ text, onResend, onDiscard }: { text: string; onResend: () => void; onDiscard: () => void }) {
+  const t = useT();
+  return (
+    <div className="flex flex-col items-end gap-1" data-testid="chat-pending-stuck">
+      <div className="max-w-[85%] select-text whitespace-pre-wrap break-words rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
+        {text}
+      </div>
+      <div className="flex max-w-[85%] items-center gap-2 text-xs text-amber-500">
+        <span>{t("chat.pendingStuck")}</span>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-6 px-2 text-xs"
+          data-testid="chat-pending-resend"
+          onClick={onResend}
+        >
+          {t("chat.resend")}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-6 px-2 text-xs text-muted-foreground"
+          data-testid="chat-pending-discard"
+          onClick={onDiscard}
+        >
+          {t("chat.discard")}
+        </Button>
       </div>
     </div>
   );
@@ -379,9 +433,48 @@ function ToolGroup({ events }: { events: ChatEvent[] }) {
   );
 }
 
+/**
+ * The name tag on a message that came from somewhere else: robot + card name for an agent's send
+ * (clicking it goes to that card), a plain name for another person's. Exported for the native chat,
+ * which draws its bubbles with the same rules.
+ */
+export function SenderTag({ from }: { from: MessageOrigin }) {
+  const t = useT();
+  const isAgent = from.kind === "agent";
+  const isSystem = from.kind === "system";
+  const name = isSystem
+    ? t("chat.systemSender")
+    : from.name || (isAgent ? t("chat.agentFallback") : t("chat.userFallback"));
+  return (
+    <div
+      data-testid="chat-sender"
+      className={cn(
+        "mb-1 flex items-center gap-1 text-[11px] font-medium",
+        isAgent ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground",
+      )}
+    >
+      {isAgent ? <Bot className="h-3 w-3 shrink-0" /> : isSystem ? <Bell className="h-3 w-3 shrink-0" /> : <UserRound className="h-3 w-3 shrink-0" />}
+      {isAgent && from.sourceProjectId && from.sourceCardId ? (
+        <Link
+          to={cardHref(from.sourceProjectId, from.sourceCardId)}
+          data-testid="chat-sender-link"
+          title={t("chat.openSenderCard")}
+          className="min-w-0 truncate underline-offset-2 hover:underline"
+        >
+          {name}
+        </Link>
+      ) : (
+        <span className="min-w-0 truncate">{name}</span>
+      )}
+    </div>
+  );
+}
+
 /** One entry: a message from either side, or the one line a tool call is worth. */
 function ChatRow({ event, sending }: { event: ChatEvent; sending?: boolean }) {
   const t = useT();
+  // Whose screen this is: their own messages render unlabelled, everyone else's carry the sender.
+  const viewer = useAuth().user?.username;
   const when = event.at ? new Date(event.at).toLocaleString() : undefined;
 
   if (event.kind === "tool") {
@@ -400,7 +493,7 @@ function ChatRow({ event, sending }: { event: ChatEvent; sending?: boolean }) {
 
   if (event.kind === "system") {
     // The harness talking (a background-task notification), not the person. A quiet centered note,
-    // never a message bubble, so it reads as an event and not as something Cesar typed.
+    // never a message bubble, so it reads as an event and not as something the user typed.
     return (
       <div
         data-testid="chat-system"
@@ -414,6 +507,25 @@ function ChatRow({ event, sending }: { event: ChatEvent; sending?: boolean }) {
   }
 
   if (event.kind === "user") {
+    // WHO said it, for THIS reader: their own messages keep the familiar right-aligned primary
+    // bubble; an agent's (another card's AI) or another person's sit on the left with a name tag.
+    const role = originRole(event.from, viewer);
+    if (role !== "self" && event.from) {
+      return (
+        <div className="group flex flex-col items-start" title={when} data-testid="chat-user" data-role={role}>
+          <div
+            className={cn(
+              "max-w-[85%] select-text whitespace-pre-wrap break-words rounded-lg border px-3 py-2 text-sm",
+              role === "agent" ? "border-emerald-500/40 bg-emerald-500/10" : "border-border/70 bg-muted/50",
+            )}
+          >
+            <SenderTag from={event.from} />
+            <LinkifiedText text={event.text} />
+          </div>
+          <CopyButton text={event.text} />
+        </div>
+      );
+    }
     return (
       <div className="group flex flex-col items-end" title={when}>
         <div
@@ -423,7 +535,7 @@ function ChatRow({ event, sending }: { event: ChatEvent; sending?: boolean }) {
             sending && "opacity-60",
           )}
         >
-          {event.text}
+          <LinkifiedText text={event.text} />
           {sending ? <span className="ml-2 text-[10px] uppercase opacity-70">{t("chat.sending")}</span> : null}
         </div>
         {sending ? null : <CopyButton text={event.text} />}
@@ -472,6 +584,34 @@ function CopyButton({ text }: { text: string }) {
       {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
       {copied ? t("chat.copied") : t("chat.copy")}
     </button>
+  );
+}
+
+/**
+ * Plain text with its URLs (and the panel's own `/preview/<port>/` paths) clickable — the render
+ * for a USER'S message, where markdown must NOT be interpreted but a pasted link must still be a
+ * link. Only what `linkifyTokens` recognises (http/https, preview paths) ever becomes an href, so
+ * `javascript:` and friends stay literal text. Exported for the native SDK chat.
+ */
+export function LinkifiedText({ text }: { text: string }) {
+  return (
+    <>
+      {linkifyTokens(text).map((token, i) =>
+        token.type === "link" ? (
+          <a
+            key={i}
+            href={token.value}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="text-primary underline underline-offset-2"
+          >
+            {token.value}
+          </a>
+        ) : (
+          <React.Fragment key={i}>{token.value}</React.Fragment>
+        ),
+      )}
+    </>
   );
 }
 

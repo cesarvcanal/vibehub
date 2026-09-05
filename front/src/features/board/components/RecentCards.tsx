@@ -12,9 +12,11 @@ import { useT } from "@/i18n";
  * The projects list answers "what am I working on"; this answers "where was I two minutes ago", and
  * they are not the same question. With one terminal per card spread over several repositories, going
  * back to the thread you just left meant remembering which project owned it, selecting that project,
- * and finding the card — three steps to reach something you had open a moment ago. So the five most
- * recent conversations sit here, ACROSS projects, with the project's name under each title, and they
- * stay on screen while a terminal is open: from inside one conversation the next one is one click.
+ * and finding the card — three steps to reach something you had open a moment ago. So EVERY
+ * conversation sits here, ACROSS projects, newest first, with the project's name under each title,
+ * and they stay on screen while a terminal is open: from inside one conversation the next one is one
+ * click. The list scrolls inside its own bounded box rather than pushing the projects off screen —
+ * the last handful is what you reach for, the rest is one wheel-turn away.
  *
  * It reads `GET /api/cards` — one request for every card in the install, rather than one poll per
  * project — on a slower interval than the board itself. This list is a way back, not a monitor: the
@@ -23,6 +25,9 @@ import { useT } from "@/i18n";
  * Empty means GONE, not an empty box: a fresh install has no conversations to go back to, and a
  * heading over nothing is a heading you learn to ignore.
  */
+/** How many conversations the list starts with, and how many each "show more" adds. */
+export const RECENT_PAGE = 10;
+
 export function RecentCards({
   projects,
   activeCardId,
@@ -55,6 +60,13 @@ export function RecentCards({
     [cards, projectName],
   );
 
+  // TEN at a time. The list is a way back, and the way back is almost always in the last handful;
+  // a hundred rows here buries the project list below. "Show more" reveals the next ten, and the
+  // choice resets when the install's history changes shape (a page load — it is plain state).
+  const [shown, setShown] = React.useState(RECENT_PAGE);
+  const visible = recent.slice(0, shown);
+  const hidden = recent.length - visible.length;
+
   if (recent.length === 0) return null;
 
   return (
@@ -64,8 +76,11 @@ export function RecentCards({
           {t("sidebar.recent")}
         </span>
       </div>
-      <div className="pb-1.5">
-        {recent.map((card) => (
+      {/* Bounded and scrollable: the full history lives here, and the box must not squeeze the
+          project list below it out of the panel. `overscroll-contain` keeps a wheel that reaches
+          the end from scrolling the page behind it. */}
+      <div data-testid="recent-cards-list" className="max-h-[40dvh] overflow-y-auto overscroll-contain pb-1.5">
+        {visible.map((card) => (
           <RecentRow
             key={card.id}
             card={card}
@@ -74,6 +89,16 @@ export function RecentCards({
             onOpen={() => onOpenCard(card.projectId, card.id)}
           />
         ))}
+        {hidden > 0 ? (
+          <button
+            type="button"
+            data-testid="recent-cards-more"
+            onClick={() => setShown((n) => n + RECENT_PAGE)}
+            className="w-full py-1.5 pl-3 pr-3 text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground/80 transition-colors hover:bg-card/60 hover:text-foreground"
+          >
+            {t("sidebar.showMore", { n: hidden })}
+          </button>
+        ) : null}
       </div>
     </div>
   );
