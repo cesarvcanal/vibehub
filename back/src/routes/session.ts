@@ -167,6 +167,46 @@ export function needsProvisioning(card: Pick<registry.Card, "openedAt" | "prepar
   return !card.openedAt && !card.preparedAt;
 }
 
+/**
+ * How long an attach on a PAUSED card waits for the pause to be lifted before giving up.
+ *
+ * Opening a paused card is `POST /open` and the websocket racing each other: the card has been
+ * opened before, so the front attaches INSTANTLY (cardOpensInstantly) while the open call is still
+ * clearing `pausedAt` in the runner. The socket may therefore legitimately arrive while the record
+ * still says "paused". Waiting a moment tells the two apart without a flag in the protocol: a real
+ * open lifts the pause within a second or so, a reconnect never does.
+ */
+export const PAUSED_ATTACH_GRACE_MS = 3_000;
+const PAUSED_ATTACH_POLL_MS = 200;
+
+/** Injected in the tests, so the grace period costs no real time there. */
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Is this card still paused after the grace period? Answers false as soon as the pause is lifted.
+ *
+ * THE POINT: a terminal attach must never RESURRECT a paused card. The attach command is
+ * `tmux new-session -A` (attach-or-create), so a socket that reconnects into a card whose session
+ * was just killed recreates the session — with Claude in it — and the pause silently undoes itself.
+ * That is the "I pause it and it goes back to waiting" bug: the deck keeps every pane it has ever
+ * opened alive, its socket drops when the pause kills tmux, and `reconnect.ts` (which by design
+ * never gives up) attaches again 400ms later. Resuming has to be something the user ASKS for.
+ */
+export async function stillPausedAfterGrace(
+  cardId: string,
+  read: (id: string) => Promise<Pick<registry.Card, "pausedAt"> | undefined>,
+  sleep: (ms: number) => Promise<void>,
+  graceMs: number = PAUSED_ATTACH_GRACE_MS,
+): Promise<boolean> {
+  const deadline = Date.now() + graceMs;
+  for (;;) {
+    const card = await read(cardId);
+    if (!card?.pausedAt) return false;
+    if (Date.now() >= deadline) return true;
+    await sleep(PAUSED_ATTACH_POLL_MS);
+  }
+}
+
 export async function sessionRoutes(app: FastifyInstance): Promise<void> {
   /* -------------------------------------------------------------- lifecycle */
 
@@ -350,6 +390,20 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
         socket.close();
         return;
       }
+      // A PAUSED card is one whose session was deliberately ended. Attaching would recreate it
+      // (`tmux new-session -A`), so the pause would undo itself the moment any pane reconnects —
+      // see `stillPausedAfterGrace`. The grace period lets a genuine open (which clears `pausedAt`)
+      // win the race; anything else is turned away and the card stays parked.
+      if (card.pausedAt && (await stillPausedAfterGrace(card.id, registry.getCard, sleep))) {
+        logger.info(
+          { audit: true, action: "card.attach.refused", card: card.worktreeSlug, session: card.tmuxSession },
+          "terminal attach refused — the card is paused and an attach must not resurrect it",
+        );
+        socket.send("\r\n[vibehub] this card is paused — open it to resume\r\n");
+        socket.close();
+        return;
+      }
+
       if (needsProvisioning(snapshot)) {
         try {
           socket.send("\r\n[vibehub] preparing this card in the runner…\r\n");

@@ -290,6 +290,7 @@ export function BoardPage() {
       canManage={isOwner}
       onDeleteProject={setDeleteTarget}
       onShowAllProjects={() => go(null)}
+      onClosePane={closePane}
       inline={inline}
     />
   );
@@ -396,6 +397,7 @@ export function BoardPage() {
       onOpenCard={(card) => go(selected.id, card.id)}
       onNewCard={() => askCard(selected, true)}
       onNewBacklogCard={() => askCard(selected, false)}
+      onClosePane={closePane}
       headerExtra={headerExtra}
       headerLead={menuButton}
     />

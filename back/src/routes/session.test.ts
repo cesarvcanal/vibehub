@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
-import { parseTerminalFrame, isValidTermSize, needsProvisioning } from "./session.js";
+import { parseTerminalFrame, isValidTermSize, needsProvisioning, stillPausedAfterGrace } from "./session.js";
 
 describe("terminal frames", () => {
   it("treats plain keystrokes as data", () => {
@@ -202,6 +202,48 @@ describe("attaching a terminal to a card that has no workspace yet", () => {
     // Pre-provisioned at creation: the worktree and the session are already there.
     expect(needsProvisioning({ openedAt: undefined, preparedAt: 1 })).toBe(false);
     expect(needsProvisioning({ openedAt: 1, preparedAt: 1 })).toBe(false);
+  });
+});
+
+/**
+ * A PAUSE HAS TO STICK.
+ *
+ * The deck keeps every pane it has ever opened mounted and connected, so pausing a card drops that
+ * pane's socket and `reconnect.ts` dials again 400ms later — and the attach is `tmux new-session -A`,
+ * which RECREATES the very session the pause just killed. The card came back to life and, once its
+ * pane also re-ran `POST /open`, landed in Waiting: "I click pause and it goes to waiting; I click
+ * again and then it pauses". The attach now refuses a paused card instead of resurrecting it.
+ */
+describe("a terminal attach never resurrects a paused card", () => {
+  const noSleep = async () => {};
+
+  it("refuses when the card is still paused after the grace period", async () => {
+    const read = async () => ({ pausedAt: 1 });
+    expect(await stillPausedAfterGrace("c1", read, noSleep, 0)).toBe(true);
+  });
+
+  it("lets a card that was never paused through untouched", async () => {
+    const read = async () => ({ pausedAt: null });
+    expect(await stillPausedAfterGrace("c1", read, noSleep, 0)).toBe(false);
+  });
+
+  /**
+   * Opening a paused card is a RACE the open has to win: the card has been opened before, so the
+   * front attaches instantly while `POST /open` is still clearing `pausedAt`. The grace period is
+   * what tells a real open apart from a reconnect — without it, deliberately resuming a paused card
+   * would be refused by its own websocket.
+   */
+  it("lets the attach through as soon as an open in flight lifts the pause", async () => {
+    let calls = 0;
+    const read = async () => ({ pausedAt: ++calls < 3 ? 1 : null });
+    expect(await stillPausedAfterGrace("c1", read, noSleep, 10_000)).toBe(false);
+    expect(calls).toBe(3);
+  });
+
+  /** A card deleted mid-attach reads as undefined: nothing to keep parked, let the caller carry on. */
+  it("does not refuse a card that no longer exists", async () => {
+    const read = async () => undefined;
+    expect(await stillPausedAfterGrace("c1", read, noSleep, 0)).toBe(false);
   });
 });
 

@@ -98,6 +98,7 @@ export function ProjectSidebar({
   onDeleteProject,
   canManage = true,
   onShowAllProjects,
+  onClosePane,
   inline = false,
 }: {
   projects: BoardProject[];
@@ -130,6 +131,13 @@ export function ProjectSidebar({
   onDeleteProject: (project: BoardProject) => void;
   /** Leave the focused project for the aggregated "all projects" board (the switcher's top item). */
   onShowAllProjects?: () => void;
+  /**
+   * Drops the card's pane from the terminal deck — required by pause and hibernate, which end the
+   * session in the runner. Navigating away is NOT enough: the deck deliberately keeps every pane it
+   * has opened mounted and connected, so the socket reconnects and `tmux new-session -A` brings the
+   * card back to life. See the same prop on `KanbanBoard`.
+   */
+  onClosePane?: (cardId: string) => void;
   /**
    * In-flow instead of a drawer: the panel becomes part of the page's own column rather than a
    * `fixed` overlay slid in from the left. This is the phone homepage, where the project/card list
@@ -554,7 +562,13 @@ function ProjectRow({
       mirror(updated);
       toast.success(translate("toast.cardPaused"));
       // Pausing the card you are looking at takes you up one level, exactly like clicking its row.
+      // FIRST, then drop the pane: while the URL still names the card, the deck legitimately puts
+      // it back (that is what makes a reload reattach), so a pane dropped before the navigation
+      // would be remounted by it.
       if (updated.id === activeCardId) onOpenCard(updated.id);
+      // The session is gone, so the pane goes too — otherwise its socket reconnects and revives the
+      // card. This is what actually stops the loop; leaving the view is only the navigation half.
+      onClosePane?.(updated.id);
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardPauseError"))),
   });
@@ -570,9 +584,11 @@ function ProjectRow({
     onSuccess: (updated) => {
       mirror(updated);
       toast.success(translate("toast.cardHibernated"));
-      // Hibernating the card you are IN kills its session; if the view stays open it just reconnects
-      // and reopens it — an endless loop. So take you up one level, exactly like pause.
+      // Hibernating the card you are IN kills its session; if the pane stays in the deck it just
+      // reconnects and reopens it — an endless loop. Leave the card first, then drop the pane (the
+      // deck re-adds a pane whose card is still named in the URL).
       if (updated.id === activeCardId) onOpenCard(updated.id);
+      onClosePane?.(updated.id);
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardHibernateError"))),
   });
