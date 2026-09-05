@@ -1,12 +1,13 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, Eye, KeyRound, Loader2, MonitorPlay, MousePointerClick, Plug } from "lucide-react";
+import { AlertTriangle, Eye, Hand, KeyRound, Loader2, MonitorPlay, Plug } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { wsUrl } from "@/lib/ws";
 import { apiErrorMessage } from "@/lib/apiError";
-import { boardApi } from "@/features/board/api";
+import { boardApi, cardBrowserKey } from "@/features/board/api";
+import { useAuth } from "@/providers/auth";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -17,12 +18,19 @@ import { t as translate, useT } from "@/i18n";
  *   WS     /api/cards/:id/vnc      → a raw RFB byte bridge (the server is the websockify)
  *   DELETE /api/cards/:id/browser  → tears it all down and gives the RAM back
  *
- * TWO WAYS TO BE HERE, switchable live (no reconnect — `viewOnly` is a live RFB property):
- *   - "Só assistir" (the DEFAULT): view-only — your mouse and keyboard do NOT reach the page, so
- *     you can watch the agent click without bumping its cursor by accident.
- *   - "Pilotar junto": input on — your clicks and typing land ALONGSIDE the agent's. The agent
- *     drives this same Chromium over CDP (a separate channel from the VNC input), so neither side
- *     evicts the other: take the keyboard for a login or a captcha, hand it back with one click.
+ * YOU ARE A SPECTATOR UNTIL YOU SAY OTHERWISE. The pane connects view-only: the picture is live,
+ * your mouse and keys do not reach the page, and the amber cursor/ripple painted into the page (the
+ * observer in services/credentials) is how you follow what the agent is doing. Sharing the wheel
+ * was tried and it does not work — one Chromium with two pointers means both sides clicking over
+ * each other, so the handover is now explicit and one-at-a-time:
+ *
+ *   "Assumir controle" → the server records that a person holds this card's browser, the RFB client
+ *   flips out of view-only LIVE (no reconnect), and the agent side is expected to stand back.
+ *   "Devolver ao agente" → straight back to the spectator seat.
+ *
+ * Who holds it is SERVER state, not a local toggle, for two reasons: a second person on the same
+ * card sees a name instead of silently fighting for the mouse, and the agent side has something to
+ * ask (`agentMayDriveBrowser`) before it drives.
  *
  * noVNC is imported lazily. It is a large browser-only bundle that touches the DOM on import, so it
  * has no business loading for anyone who never opens this panel.
@@ -48,21 +56,46 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
   const [error, setError] = React.useState<string | null>(null);
   const screenRef = React.useRef<HTMLDivElement | null>(null);
   const rfbRef = React.useRef<{ disconnect: () => void; viewOnly: boolean; scaleViewport: boolean; clipViewport: boolean } | null>(null);
-  // "Só assistir" by default: watching the agent must never interfere with it by accident.
-  const [viewOnly, setViewOnly] = React.useState(true);
-  // The connect callback reads the CURRENT choice without re-creating itself (a new callback would
-  // re-run the auto-connect effect).
-  const viewOnlyRef = React.useRef(viewOnly);
-  viewOnlyRef.current = viewOnly;
+  const qc = useQueryClient();
+  const { user } = useAuth();
 
-  /** Flip watch/pilot LIVE: `viewOnly` is a plain RFB property, no reconnect involved. */
-  const toggleViewOnly = React.useCallback(() => {
-    setViewOnly((current) => {
-      const next = !current;
-      if (rfbRef.current) rfbRef.current.viewOnly = next;
-      return next;
-    });
-  }, []);
+  /**
+   * WHOSE HANDS ARE ON THIS BROWSER — server state, polled. The same query key the card bar reads,
+   * so taking control lights the chip there too without a second request.
+   */
+  const { data: status } = useQuery({
+    queryKey: cardBrowserKey(cardId),
+    queryFn: () => boardApi.cardBrowserStatus(cardId),
+    refetchInterval: 3_000,
+    retry: false,
+  });
+  const holder = status?.controlBy ?? null;
+  const iDrive = status?.control === "human" && holder === (user?.username ?? null);
+  const someoneElseDrives = status?.control === "human" && !iDrive;
+  const applyStatus = (next: Awaited<ReturnType<typeof boardApi.cardBrowserStatus>>) =>
+    qc.setQueryData(cardBrowserKey(cardId), next);
+
+  const takeControl = useMutation({
+    mutationFn: () => boardApi.takeCardBrowserControl(cardId),
+    onSuccess: applyStatus,
+    onError: (e) => toast.error(apiErrorMessage(e)),
+  });
+  const releaseControl = useMutation({
+    mutationFn: () => boardApi.releaseCardBrowserControl(cardId),
+    onSuccess: applyStatus,
+    onError: (e) => toast.error(apiErrorMessage(e)),
+  });
+
+  // The connect callback reads the CURRENT holder without re-creating itself (a new callback would
+  // re-run the auto-connect effect and reconnect the socket).
+  const iDriveRef = React.useRef(iDrive);
+  iDriveRef.current = iDrive;
+
+  // `viewOnly` is a plain RFB property: control changes hands on the LIVE connection, nobody is
+  // disconnected — which is what lets you grab the keyboard for a captcha mid-run and give it back.
+  React.useEffect(() => {
+    if (rfbRef.current) rfbRef.current.viewOnly = !iDrive;
+  }, [iDrive]);
 
   // DISPLAY mode, also live: "Ajustar" scales the Chromium screen to fit the pane (follow the agent
   // with no scrolling); "Tamanho real" is 1:1 at the browser's own resolution (faithful front-end
@@ -101,6 +134,8 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
       /* already gone */
     }
     rfbRef.current = null;
+    // Stopping the browser also drops any hold on it server-side, so a pane closed while driving
+    // never leaves the card locked to somebody who walked away.
     void boardApi.stopCardBrowser(cardId).catch(() => undefined);
   }, [cardId]);
 
@@ -134,7 +169,7 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
     const rfb = new RFB(screenRef.current, wsUrl(`/api/cards/${encodeURIComponent(cardId)}/vnc`), {
       wsProtocols: [],
     });
-    rfb.viewOnly = viewOnlyRef.current;
+    rfb.viewOnly = !iDriveRef.current;
     rfb.scaleViewport = fitRef.current;
     rfb.clipViewport = !fitRef.current;
     rfb.focusOnClick = true;
@@ -188,19 +223,31 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
           <span role="status" className={`font-mono text-[10px] uppercase tracking-wider ${tone}`}>
             {t(`vnc.state.${state}`)}
           </span>
-          {/* Watch/pilot toggle — flips `viewOnly` on the LIVE connection, nobody is disconnected.
-              It shows the CURRENT mode; clicking it switches to the other one. */}
+          {/* THE HANDOVER. One button, one question: are you watching, or are you driving? Somebody
+              else holding it is shown as a name and left alone — taking it from under them is a
+              worse surprise than waiting. */}
           <Button
-            variant="outline"
+            variant={iDrive ? "default" : "outline"}
             size="sm"
-            data-testid="vnc-input-toggle"
-            aria-pressed={!viewOnly}
+            data-testid="vnc-control-toggle"
+            aria-pressed={iDrive}
+            disabled={someoneElseDrives || takeControl.isPending || releaseControl.isPending}
             className="h-6 px-2 text-xs"
-            title={viewOnly ? t("vnc.watchOnlyHint") : t("vnc.pilotHint")}
-            onClick={toggleViewOnly}
+            title={
+              someoneElseDrives
+                ? t("vnc.otherDrivesHint", { name: holder ?? "" })
+                : iDrive
+                  ? t("vnc.releaseHint")
+                  : t("vnc.takeControlHint")
+            }
+            onClick={() => (iDrive ? releaseControl.mutate() : takeControl.mutate())}
           >
-            {viewOnly ? <Eye className="h-3.5 w-3.5" /> : <MousePointerClick className="h-3.5 w-3.5" />}
-            {viewOnly ? t("vnc.watchOnly") : t("vnc.pilot")}
+            {iDrive ? <Hand className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            {someoneElseDrives
+              ? t("vnc.otherDrives", { name: holder ?? "" })
+              : iDrive
+                ? t("vnc.release")
+                : t("vnc.takeControl")}
           </Button>
           {/* A word, not an ✕. Closing this pane also KILLS the Chromium in the runner and gives the
               RAM back — that is a disconnection, and an icon that usually means "hide" undersells it. */}

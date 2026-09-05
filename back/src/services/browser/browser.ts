@@ -4,10 +4,20 @@ import { getCard, getProject } from "../board/registry.js";
 import { logger } from "../../utils/logger.js";
 import { cardBrowserPorts, type CardBrowserPorts } from "./ports.js";
 import { startCapture, stopCapture } from "../credentials/capture.js";
+import { markBrowserDown, markBrowserLive } from "./activity.js";
 
 // Display/port derivation lives in ports.ts (no cycle with the card-open path); re-exported here so
 // callers that already import from browser.ts do not have to know about the split.
 export { cardBrowserPorts, cardBrowserSlot, cardCdpEndpoint, type CardBrowserPorts } from "./ports.js";
+// Who is in the card's browser right now (see activity.ts) — the card bar reads it through the
+// same route that starts and stops the browser, so it imports from here too.
+export {
+  cardBrowserActivity,
+  takeBrowserControl,
+  releaseBrowserControl,
+  agentMayDriveBrowser,
+  type CardBrowserActivity,
+} from "./activity.js";
 
 /**
  * THE CARD'S LIVE BROWSER — a HEADFUL Chromium inside the runner that the user watches (and can
@@ -262,6 +272,9 @@ export async function startCardBrowser(
   const run = (async () => {
     const ports = cardBrowserPorts(cardId);
     await hostExecutor().runScript(buildBrowserStartScript({ containerName, ...ports }), { timeoutMs: 60_000 });
+    // From here the card bar can SEE this browser: the chip lights up even for whoever did not open
+    // the pane themselves.
+    markBrowserLive(cardId);
     logger.info(
       { audit: true, action: "browser.start", card: cardId, display: ports.display, by },
       "card browser started",
@@ -289,6 +302,7 @@ export async function stopCardBrowser(containerName: string, cardId: string, by?
   // halfway through the launcher is how half-alive browsers are born.
   await startsInFlight.get(cardId)?.catch(() => undefined);
   stopCapture(cardId);
+  markBrowserDown(cardId);
   const ports = cardBrowserPorts(cardId);
   await hostExecutor().runScript(buildBrowserStopScript({ containerName, ...ports }), { timeoutMs: 30_000 });
   logger.info(

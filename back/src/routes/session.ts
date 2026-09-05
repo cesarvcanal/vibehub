@@ -3,7 +3,7 @@ import type { IPty } from "node-pty";
 import pty from "node-pty";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
-import { requireOwner, sessionUserId } from "../auth/session.js";
+import { currentUser, requireOwner, sessionUserId } from "../auth/session.js";
 import { requireCardAccess, requireCardWork, requestCardLevel } from "../auth/access.js";
 import * as registry from "../services/board/registry.js";
 import * as workspace from "../services/board/workspace.js";
@@ -337,6 +337,42 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
   );
 
   /* ---------------------------------------------------------------- browser */
+
+  /**
+   * Is this card's Chromium up, and is something clicking in it right now? Answered from memory (no
+   * docker exec), so the card bar can poll it and light the "Navegador" chip while the agent works
+   * in there — the whole point being that today a browser session is invisible from the card.
+   */
+  app.get<{ Params: { id: string } }>("/api/cards/:id/browser", { preHandler: requireCardAccess }, async (req, reply) => {
+    return await reply.send(browser.cardBrowserActivity(req.params.id));
+  });
+
+  /**
+   * TAKE THE WHEEL. Until someone does, the pane is a spectator seat (noVNC view-only) and the agent
+   * is the only driver — one Chromium with two pointers clicking over each other is what made
+   * co-piloting unusable. Taking control is therefore explicit, visible, and recorded per card so
+   * the agent side can ask before driving.
+   */
+  app.post<{ Params: { id: string } }>(
+    "/api/cards/:id/browser/control",
+    { preHandler: requireCardWork },
+    async (req, reply) => {
+      const user = await currentUser(req);
+      browser.takeBrowserControl(req.params.id, user?.username ?? "");
+      return await reply.send(browser.cardBrowserActivity(req.params.id));
+    },
+  );
+
+  /** Hand it back to the agent. Releases only your OWN hold (see releaseBrowserControl). */
+  app.delete<{ Params: { id: string } }>(
+    "/api/cards/:id/browser/control",
+    { preHandler: requireCardWork },
+    async (req, reply) => {
+      const user = await currentUser(req);
+      browser.releaseBrowserControl(req.params.id, user?.username ?? "");
+      return await reply.send(browser.cardBrowserActivity(req.params.id));
+    },
+  );
 
   app.post<{ Params: { id: string } }>("/api/cards/:id/browser", { preHandler: requireCardWork }, async (req, reply) => {
     try {

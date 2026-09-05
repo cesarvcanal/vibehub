@@ -3,6 +3,7 @@ import { config } from "../../config/env.js";
 import { hostExecutor } from "../../runtime/host.js";
 import { getCard } from "../board/registry.js";
 import { cardBrowserPorts } from "../browser/ports.js";
+import { agentMayDriveBrowser } from "../browser/activity.js";
 import { logger } from "../../utils/logger.js";
 import { resolveCredential, markCredentialUsed, type CredentialType } from "./credentials.js";
 import { CDP_RUNNER_SOURCE } from "./cdpRunner.js";
@@ -119,6 +120,11 @@ export async function fillCredential(
 ): Promise<FillResult> {
   const card = await getCard(cardId);
   if (!card) throw new Error("card not found");
+  // A person has the wheel: typing into the page underneath them is exactly the two-pointers mess
+  // that made co-piloting unusable. Say so plainly — the agent's move is to wait, not to retry.
+  if (!agentMayDriveBrowser(cardId)) {
+    throw new Error("someone has taken control of this card's browser — ask them to hand it back before driving it");
+  }
   const resolved = await resolveCredential(credentialName);
   const { cdpPort } = cardBrowserPorts(cardId);
   const plan = buildFillPlan(resolved.credential.type, opts);
