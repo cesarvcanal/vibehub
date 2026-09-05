@@ -6,8 +6,12 @@ import {
   isInfraPort,
   isValidPreviewPort,
   listPortsScript,
+  looksLikeHttpResponse,
+  loopingRedirectPath,
   parseListeningPorts,
+  parseResponseHead,
   parsePreviewTarget,
+  prefixRedirectPath,
   stripSessionCookie,
   stoppedPreviewPage,
   tunnelRemoteCommand,
@@ -234,6 +238,87 @@ describe("buildProxyHead", () => {
     // The CR/LF is flattened to a space, so no new header LINE can be forged.
     expect(head).not.toMatch(/\r\nx-injected: /);
     expect(head).toContain("x-evil: a x-injected: 1\r\n");
+  });
+});
+
+describe("parseResponseHead / looksLikeHttpResponse", () => {
+  it("parses the status line and lowercased headers, and points at the body", () => {
+    const raw = Buffer.from("HTTP/1.1 302 Found\r\nLocation: /preview/5183/\r\nX-A: 1\r\n\r\nbody-bytes");
+    const head = parseResponseHead(raw)!;
+    expect(head.status).toBe(302);
+    expect(head.headers.location).toBe("/preview/5183/");
+    expect(head.headers["x-a"]).toBe("1");
+    expect(raw.subarray(head.length).toString()).toBe("body-bytes");
+  });
+
+  it("is null while the head is still arriving, so the relay keeps buffering", () => {
+    expect(parseResponseHead("HTTP/1.1 200 OK\r\nContent-Type: text/")).toBeNull();
+    expect(parseResponseHead("")).toBeNull();
+  });
+
+  it("keeps binary bodies intact — the offset is a byte offset, not a character one", () => {
+    const body = Buffer.from([0xff, 0x00, 0xc3, 0x28]);
+    const raw = Buffer.concat([Buffer.from("HTTP/1.1 200 OK\r\nx-b: é\r\n\r\n", "latin1"), body]);
+    const head = parseResponseHead(raw)!;
+    expect(raw.subarray(head.length)).toEqual(body);
+  });
+
+  it("refuses anything that is not an HTTP response instead of guessing", () => {
+    expect(parseResponseHead("GARBAGE\r\n\r\n")).toBeNull();
+    expect(looksLikeHttpResponse("HTT")).toBe(true); // still could become HTTP/
+    expect(looksLikeHttpResponse("HTTP/1.1 200 OK")).toBe(true);
+    expect(looksLikeHttpResponse("\x00\x01raw tcp")).toBe(false);
+  });
+});
+
+describe("prefixRedirectPath / loopingRedirectPath", () => {
+  const look = (location: string, extra: Partial<{ status: number; method: string; path: string }> = {}) => ({
+    status: 302,
+    location,
+    method: "GET",
+    port: 5183,
+    path: "/",
+    ...extra,
+  });
+
+  it("spots the vite trap: / answered with a 302 back to the preview's own prefix", () => {
+    // The exact production failure — the proxy strips the prefix, so following this reproduces the
+    // request that just answered with it. Absorbing it is the only way out.
+    expect(loopingRedirectPath(look("/preview/5183/"))).toBe("/preview/5183/");
+    expect(loopingRedirectPath(look("http://vibehub.multi/preview/5183/"))).toBe("/preview/5183/");
+    expect(loopingRedirectPath(look("//other.host/preview/5183/"))).toBe("/preview/5183/");
+    expect(loopingRedirectPath(look("/preview/5183"))).toBe("/preview/5183");
+  });
+
+  it("leaves an HONEST prefixed redirect alone — an app honouring x-forwarded-prefix must reach the browser", () => {
+    // /  →  /preview/5183/login: the browser lands on /login, which makes progress. Not a loop.
+    expect(loopingRedirectPath(look("/preview/5183/login"))).toBeNull();
+    // …but it IS a redirect into our prefix, which is what the probe's second hop looks at.
+    expect(prefixRedirectPath(look("/preview/5183/login"))).toBe("/preview/5183/login");
+  });
+
+  it("ignores redirects that are not ours: another port, another path, another origin", () => {
+    expect(loopingRedirectPath(look("/preview/9999/"))).toBeNull();
+    expect(loopingRedirectPath(look("/login"))).toBeNull();
+    expect(prefixRedirectPath(look("https://example.com/preview/5183/"))).toBe("/preview/5183/");
+    expect(prefixRedirectPath(look("nonsense"))).toBeNull();
+    expect(prefixRedirectPath(look(""))).toBeNull();
+  });
+
+  it("only 3xx GET/HEAD can be absorbed — a 200 or a POST is never re-issued", () => {
+    expect(loopingRedirectPath(look("/preview/5183/", { status: 200 }))).toBeNull();
+    expect(loopingRedirectPath(look("/preview/5183/", { status: 404 }))).toBeNull();
+    expect(loopingRedirectPath(look("/preview/5183/", { method: "POST" }))).toBeNull();
+    expect(loopingRedirectPath(look("/preview/5183/", { method: "HEAD" }))).toBe("/preview/5183/");
+    for (const status of [301, 303, 307, 308]) {
+      expect(loopingRedirectPath(look("/preview/5183/", { status }))).toBe("/preview/5183/");
+    }
+  });
+
+  it("compares the FULL path, query included, so a deeper request is not mistaken for the loop", () => {
+    expect(loopingRedirectPath(look("/preview/5183/?a=1", { path: "/?a=1" }))).toBe("/preview/5183/?a=1");
+    expect(loopingRedirectPath(look("/preview/5183/", { path: "/app" }))).toBeNull();
+    expect(loopingRedirectPath(look("/preview/5183/app", { path: "/app" }))).toBe("/preview/5183/app");
   });
 });
 

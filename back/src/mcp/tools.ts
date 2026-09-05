@@ -155,12 +155,17 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
       description:
         "Announce a PREVIEW on your own card: you started a server inside the runner (a dev server, " +
         "an API) and the user should get a clickable link to it. vibehub verifies the port is " +
-        "actually LISTENING, records the preview on the card (a visible chip the user clicks) and " +
+        "actually LISTENING **and OPENS the page itself** through the same proxy the browser uses, " +
+        "records the preview on the card (a visible chip the user clicks) and " +
         "returns the link: answer the user with `path` (/preview/<port>/ — it works on ANY host the " +
         "vibehub panel is opened on; `url` is just that path on the configured public URL, one " +
         "example host). If the port is not listening " +
         "yet, it refuses and tells you what is: start the server first (bound to 127.0.0.1 or " +
-        "0.0.0.0) and wait until it listens. ALWAYS pass `command` (and `cwd` when it is not your " +
+        "0.0.0.0) and wait until it listens. It also REFUSES a page that cannot be opened (an app " +
+        "that redirects into /preview/<port>/ loops the browser, because the proxy strips that " +
+        "prefix) and returns a `warning` when the page opens but is visibly wrong (404 on /, " +
+        "absolute assets that will 404) — relay that warning to the user, or fix the app's base. " +
+        "ALWAYS pass `command` (and `cwd` when it is not your " +
         "worktree): vibehub stores them so the preview can be RELAUNCHED in its own session after " +
         "your card is paused or restarted — without them the link dies with your terminal. " +
         "`card` is YOUR OWN card id ($VIBEHUB_CARD_ID).",

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { previewPublicUrl, portNotListeningError, PREVIEW_BASE_HINT } from "./announce.js";
 import { PROC_MARKER } from "./preview.js";
+import type { PreviewProbe } from "./probe.js";
 
 /**
  * `vibehub_preview`'s engine: the pure URL/error builders, and announcePreview end to end against
@@ -31,7 +32,12 @@ function scanOutput(ports: number[]): string {
   return `sl local rem st tq tr re uid to inode\n${rows.join("\n")}\n${PROC_MARKER}\n`;
 }
 
-async function boot() {
+/**
+ * `probe` is what the end-to-end page check saw (null = it could not run, the pre-existing
+ * behaviour: announce on LISTENING alone). The probe's own I/O is tested in probe.test.ts against a
+ * real upstream; here it is injected so the ANNOUNCEMENT's reaction to it is what gets tested.
+ */
+async function boot(probe: PreviewProbe | null = null) {
   vi.resetModules();
   const env = await import("../../config/env.js");
   env.config.dataDir = dir;
@@ -39,6 +45,10 @@ async function boot() {
   vi.doMock("../../runtime/host.js", async () => {
     const actual = await vi.importActual<typeof import("../../runtime/host.js")>("../../runtime/host.js");
     return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript }) };
+  });
+  vi.doMock("./probe.js", async () => {
+    const actual = await vi.importActual<typeof import("./probe.js")>("./probe.js");
+    return { ...actual, probePreview: async () => probe };
   });
   const registry = await import("../board/registry.js");
   const announce = await import("./announce.js");
@@ -119,6 +129,37 @@ describe("announcePreview", () => {
 
     await expect(announce.announcePreview(cardId, 5173)).rejects.toThrow(/nothing is listening on port 5173/);
     expect((await registry.getCard(cardId))?.previews).toBeUndefined();
+  });
+
+  it("REFUSES a page that loops on its own prefix — LISTENING was never proof it opens", async () => {
+    // The bug this check exists for: a vite based at /preview/<port>/ answers the stripped "/" with
+    // a 302 back to the prefix, the port is up the whole time, and the user finds the dead tab.
+    const { registry, announce, cardId } = await boot({
+      status: 302,
+      loop: true,
+      location: "/preview/5173/",
+      body: "",
+    });
+    runScript.mockResolvedValue({ stdout: scanOutput([5173]), stderr: "", code: 0 });
+
+    await expect(announce.announcePreview(cardId, 5173)).rejects.toThrow(/loop de redirect/);
+    expect((await registry.getCard(cardId))?.previews).toBeUndefined();
+  });
+
+  it("announces a page that opens but is visibly wrong, carrying the warning to the user", async () => {
+    const { registry, announce, cardId } = await boot({
+      status: 200,
+      loop: false,
+      contentType: "text/html",
+      body: '<script type="module" src="/src/main.tsx"></script>',
+    });
+    runScript.mockResolvedValue({ stdout: scanOutput([5173]), stderr: "", code: 0 });
+
+    const out = await announce.announcePreview(cardId, 5173);
+    expect(out.warning).toMatch(/assets absolutos/);
+    expect(out.warning).toContain("/src/main.tsx");
+    // A warning is not a refusal: the chip exists and the link works, partially.
+    expect((await registry.getCard(cardId))?.previews).toHaveLength(1);
   });
 
   it("unknown card and invalid port fail with actionable errors (no scan for the bad port)", async () => {

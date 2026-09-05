@@ -261,6 +261,111 @@ function rawResponse(contentType: string, body: string): string {
   );
 }
 
+/* -------------------------------------------- upstream response / redirects */
+
+/**
+ * The REDIRECT TRAP this section exists for.
+ *
+ * The proxy strips `/preview/<port>` before handing the request to the app (parsePreviewTarget), so
+ * an app configured with that prefix as its base — a vite dev server with `base: '/preview/5183/'`
+ * is the case that burned us — sees a bare `/` and answers `302 Location: /preview/5183/`. The
+ * browser is ALREADY at that URL: it asks again, the proxy strips again, the app redirects again,
+ * and the tab dies with ERR_TOO_MANY_REDIRECTS.
+ *
+ * What tells a trap apart from an honest redirect is not "the Location has our prefix" — an app
+ * that correctly honours X-Forwarded-Prefix emits exactly that, and those redirects MUST reach the
+ * browser. It is whether following it would reproduce the very request we just sent upstream. That
+ * is the only shape that cannot make progress, and it is the one the proxy absorbs (routes/preview.ts
+ * re-issues it once, internally) instead of relaying.
+ */
+
+export interface UpstreamHead {
+  status: number;
+  /** Lowercased names, first value wins (Location and friends are single-valued). */
+  headers: Record<string, string>;
+  /** Byte length of the head, blank line included — where the body starts. */
+  length: number;
+}
+
+/**
+ * False as soon as the first bytes cannot be an HTTP/1 status line — a raw TCP app on the port, or
+ * socat's own noise. The relay uses it to stop buffering and go back to moving bytes. PURE, TOTAL.
+ */
+export function looksLikeHttpResponse(raw: Buffer | string): boolean {
+  const head = (typeof raw === "string" ? raw : raw.toString("latin1")).slice(0, 5);
+  return "HTTP/".startsWith(head);
+}
+
+/**
+ * Parses an upstream response HEAD, or null while it is still incomplete (or not HTTP). latin1 is
+ * deliberate: one char per byte, so `length` is a byte offset into the original buffer and the body
+ * that follows is never mangled by a decode. PURE, TOTAL.
+ */
+export function parseResponseHead(raw: Buffer | string): UpstreamHead | null {
+  const text = typeof raw === "string" ? raw : raw.toString("latin1");
+  const end = /\r?\n\r?\n/.exec(text);
+  if (!end) return null;
+  const lines = text.slice(0, end.index).split(/\r?\n/);
+  const status = /^HTTP\/\d(?:\.\d)?\s+(\d{3})/.exec(lines[0] ?? "");
+  if (!status) return null;
+  const headers: Record<string, string> = {};
+  for (const line of lines.slice(1)) {
+    const colon = line.indexOf(":");
+    if (colon <= 0) continue;
+    const name = line.slice(0, colon).trim().toLowerCase();
+    if (name in headers) continue;
+    headers[name] = line.slice(colon + 1).trim();
+  }
+  return { status: Number(status[1]), headers, length: end.index + end[0].length };
+}
+
+const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
+
+/** The path+query of a Location, absolute-URL or absolute-path; anything else → null. PURE, TOTAL. */
+function locationPath(location: string): string | null {
+  const value = location.trim();
+  if (!value) return null;
+  // scheme://host/path and protocol-relative //host/path — the host is irrelevant here: the proxy
+  // is the only way back in, so what matters is where on OUR origin the browser would land.
+  const stripped = /^(?:[a-zA-Z][a-zA-Z0-9+.-]*:)?\/\/[^/?#]*(.*)$/.exec(value);
+  const path = stripped ? stripped[1] || "/" : value;
+  return path.startsWith("/") ? path : null;
+}
+
+export interface RedirectLook {
+  status: number;
+  location?: string;
+  /** Only GET/HEAD can be absorbed — re-issuing a POST is not the proxy's call to make. */
+  method?: string;
+  port: number;
+}
+
+/**
+ * The Location path when the response is a 3xx pointing INTO this preview's own prefix (any path
+ * under it), else null. Says nothing about whether it loops — see loopingRedirectPath. PURE, TOTAL.
+ */
+export function prefixRedirectPath(o: RedirectLook): string | null {
+  if (!["GET", "HEAD"].includes((o.method ?? "GET").toUpperCase())) return null;
+  if (!REDIRECT_STATUS.has(o.status)) return null;
+  const path = locationPath(o.location ?? "");
+  if (!path) return null;
+  const target = parsePreviewTarget(path);
+  return target && target.port === o.port ? path : null;
+}
+
+/**
+ * The Location path when following the redirect would reproduce the request we just sent upstream —
+ * the loop, and the only case the proxy absorbs. `path` is what the app received (prefix already
+ * stripped); the answer is the path to re-issue upstream, which is the Location VERBATIM: for an
+ * app whose base is the prefix, that is the one path that actually serves content. PURE, TOTAL.
+ */
+export function loopingRedirectPath(o: RedirectLook & { path: string }): string | null {
+  const location = prefixRedirectPath(o);
+  if (!location) return null;
+  const target = parsePreviewTarget(location);
+  return target && target.path === o.path ? location : null;
+}
+
 /* ------------------------------------------------- stopped-preview screen */
 
 /**

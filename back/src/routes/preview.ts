@@ -9,7 +9,10 @@ import {
   badGatewayResponse,
   buildProxyHead,
   listPortsScript,
+  looksLikeHttpResponse,
+  loopingRedirectPath,
   parseListeningPorts,
+  parseResponseHead,
   parsePreviewTarget,
   stoppedPreviewPage,
   tunnelRemoteCommand,
@@ -40,6 +43,27 @@ function openTunnel(port: number): ChildProcessWithoutNullStreams {
   return spawn(file, args, { stdio: ["pipe", "pipe", "pipe"] });
 }
 
+/** One plain-HTTP exchange over one tunnel. */
+interface HttpExchange {
+  port: number;
+  /** Method, so only GET/HEAD can be re-issued internally (see the redirect absorption below). */
+  method: string;
+  /** Path sent upstream — prefix already stripped. What a looping redirect is compared against. */
+  path: string;
+  head: string;
+  body?: Buffer;
+  /** Response written when the tunnel produces no byte at all (dead port). */
+  fallback: string;
+  /**
+   * Rebuilds the request head for a path the proxy decides to fetch internally. Absent = this IS
+   * the internal hop, and whatever comes back is relayed as it is.
+   */
+  rehead?: (path: string) => string;
+}
+
+/** Enough for any sane response head; past it we stop looking and go back to moving bytes. */
+const MAX_HEAD_BYTES = 64 * 1024;
+
 /**
  * Relays one plain-HTTP exchange. The client socket is already hijacked: from here on, bytes only.
  *
@@ -53,34 +77,82 @@ function openTunnel(port: number): ChildProcessWithoutNullStreams {
  * listening" with the port alive (the prod bug). The request needs no EOF to be complete: it is
  * delimited by its content-length. The exchange ends from the OTHER side — the upstream closes
  * after responding (connection: close), the tunnel exits, and the close handler ends the client.
+ *
+ * The one thing NOT relayed verbatim is the redirect loop (loopingRedirectPath): an app based at
+ * `/preview/<port>/` answers the stripped `/` with a 302 back to `/preview/<port>/`, which the
+ * browser is already on — ERR_TOO_MANY_REDIRECTS, the bug the user hit in a real tab while the tool
+ * happily reported the port as up. The head is buffered just long enough to spot it, and the
+ * response is fetched again internally at the path the app asked for. ONE hop, always: if the
+ * second answer redirects too, it is relayed as it is and the browser decides.
  */
-function relayHttp(socket: Duplex, port: number, head: string, body: Buffer | undefined, fallback: string): void {
-  const child = openTunnel(port);
+function relayHttp(socket: Duplex, x: HttpExchange): void {
+  const child = openTunnel(x.port);
   let sawBytes = false;
   let stderr = "";
+  let pending: Buffer[] = [];
+  let pendingLength = 0;
+  /** The head is settled: from here the tunnel's bytes go straight to the client. */
+  let relaying = false;
+  /** An internal hop owns the socket now — this exchange must touch neither socket nor fallback. */
+  let abandoned = false;
+
+  const relayFrom = (buffered: Buffer): void => {
+    relaying = true;
+    pending = [];
+    if (buffered.length > 0) socket.write(buffered);
+    // end:false — a tunnel that dies WITHOUT producing a byte must still get to write the 502; an
+    // auto-ended socket races that write and the browser sees a bare connection reset instead.
+    child.stdout.pipe(socket, { end: false });
+  };
 
   child.stdin.on("error", () => { /* tunnel died first; the close handler reports */ });
-  child.stdin.write(head);
-  if (body && body.length > 0) child.stdin.write(body);
+  child.stdin.write(x.head);
+  if (x.body && x.body.length > 0) child.stdin.write(x.body);
 
-  child.stdout.on("data", () => { sawBytes = true; });
-  // end:false — a tunnel that dies WITHOUT producing a byte must still get to write the 502; an
-  // auto-ended socket races that write and the browser sees a bare connection reset instead.
-  child.stdout.pipe(socket, { end: false });
+  child.stdout.on("data", (chunk: Buffer) => {
+    sawBytes = true;
+    if (relaying || abandoned) return;
+    pending.push(chunk);
+    pendingLength += chunk.length;
+    const raw = Buffer.concat(pending);
+    if (!looksLikeHttpResponse(raw) || pendingLength >= MAX_HEAD_BYTES) {
+      relayFrom(raw);
+      return;
+    }
+    const parsed = parseResponseHead(raw);
+    if (!parsed) return; // head still arriving
+    const rehead = x.rehead;
+    const follow = rehead
+      ? loopingRedirectPath({ status: parsed.status, location: parsed.headers.location, method: x.method, port: x.port, path: x.path })
+      : null;
+    if (!follow || !rehead) {
+      relayFrom(raw);
+      return;
+    }
+    abandoned = true;
+    child.kill("SIGKILL");
+    logger.info({ port: x.port, from: x.path, to: follow }, "preview absorbed a redirect onto its own prefix");
+    // No body on the hop: only GET/HEAD get here, and the app already answered the original one.
+    relayHttp(socket, { ...x, path: follow, head: rehead(follow), body: undefined, rehead: undefined });
+  });
   child.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
 
   child.on("error", (err) => {
-    logger.warn({ err: err.message, port }, "preview tunnel failed to spawn");
-    socket.end(fallback);
+    if (abandoned) return;
+    logger.warn({ err: err.message, port: x.port }, "preview tunnel failed to spawn");
+    socket.end(x.fallback);
   });
   child.on("close", (code) => {
+    if (abandoned) return;
     if (sawBytes) {
-      socket.end();
+      // A response too short to complete a head (or cut mid-head) still has to reach the client.
+      if (!relaying && pendingLength > 0) socket.end(Buffer.concat(pending));
+      else socket.end();
       return;
     }
     // socat could not connect (nothing listening) — it exits without writing a byte.
-    if (code !== 0) logger.info({ port, detail: stderr.trim().slice(0, 300) }, "preview target unreachable");
-    socket.end(fallback);
+    if (code !== 0) logger.info({ port: x.port, detail: stderr.trim().slice(0, 300) }, "preview target unreachable");
+    socket.end(x.fallback);
   });
   // The browser gave up (tab closed, navigation) — the tunnel must not outlive it.
   socket.on("close", () => { child.kill("SIGKILL"); });
@@ -259,17 +331,28 @@ export async function previewRoutes(app: FastifyInstance): Promise<void> {
         });
       }
       const body = Buffer.isBuffer(req.body) ? req.body : undefined;
-      const head = buildProxyHead({
-        kind: "http",
-        method: req.raw.method ?? "GET",
-        path: target.path,
-        port: target.port,
-        headers: req.raw.headers,
-        clientIp: req.ip,
-        bodyLength: body?.length ?? 0,
-      });
+      const method = req.raw.method ?? "GET";
+      const headFor = (path: string, length: number): string =>
+        buildProxyHead({
+          kind: "http",
+          method,
+          path,
+          port: target.port,
+          headers: req.raw.headers,
+          clientIp: req.ip,
+          bodyLength: length,
+        });
       reply.hijack();
-      relayHttp(req.raw.socket, target.port, head, body, fallback);
+      relayHttp(req.raw.socket, {
+        port: target.port,
+        method,
+        path: target.path,
+        head: headFor(target.path, body?.length ?? 0),
+        body,
+        fallback,
+        // The internal hop carries no body — it only ever re-issues a GET/HEAD navigation.
+        rehead: (path) => headFor(path, 0),
+      });
     };
 
     scope.route({
