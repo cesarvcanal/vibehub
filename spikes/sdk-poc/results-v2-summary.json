@@ -1,0 +1,56 @@
+{
+  "D": {
+    "subtype": "success",
+    "result": "Step 3 foi bloqueado (política PoC negou o `rm`) — o arquivo continua em /tmp/poc-work2/hello.txt.",
+    "permission_denials": [
+      {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_014CWgnAbEKQP1BecqxuvbfP",
+        "tool_input": {
+          "command": "rm /tmp/poc-work2/hello.txt",
+          "description": "Remove hello.txt"
+        }
+      }
+    ],
+    "session_id": "e89661ac-694f-45e5-b4d8-10a6cee611c1",
+    "permCalls": [
+      {
+        "toolName": "Write",
+        "decision": "allow"
+      },
+      {
+        "toolName": "Bash",
+        "cmd": "rm /tmp/poc-work2/hello.txt",
+        "decision": "deny"
+      }
+    ],
+    "fileSurvived": true,
+    "finalText": "Step 3 foi bloqueado (política PoC negou o `rm`) — o arquivo continua em /tmp/poc-work2/hello.txt."
+  },
+  "E": {
+    "subtype": "success",
+    "result": "The rm was blocked — a PoC hook rejected it (\"rm blocked under bypass\"); keep.txt still exists.",
+    "permission_denials": [
+      {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_01TsqzDjYTroX93bmmwWBbDV",
+        "tool_input": {
+          "command": "rm /tmp/poc-work2/keep.txt",
+          "description": "Remove keep.txt"
+        }
+      }
+    ],
+    "hookHits": [
+      {
+        "name": "Write",
+        "block": false
+      },
+      {
+        "name": "Bash",
+        "cmd": "rm /tmp/poc-work2/keep.txt",
+        "block": true
+      }
+    ],
+    "keepSurvived": true
+  }
+}

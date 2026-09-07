@@ -1,0 +1,37 @@
+{
+  "sdk": "@anthropic-ai/claude-agent-sdk",
+  "observedTopLevelMessageTypes": [
+    "assistant",
+    "rate_limit_event",
+    "result",
+    "stream_event",
+    "system",
+    "user"
+  ],
+  "observedStreamEventTypes": [
+    "content_block_delta:input_json_delta",
+    "content_block_delta:signature_delta",
+    "content_block_delta:text_delta",
+    "content_block_delta:thinking_delta",
+    "content_block_start",
+    "content_block_stop",
+    "message_delta",
+    "message_start",
+    "message_stop"
+  ],
+  "scenarioA": {
+    "sessionId": "0d1b3864-4870-4141-8451-79d73de0bd96",
+    "permCalls": [],
+    "fileStillExists": false
+  },
+  "scenarioB": {
+    "sessionId": "0d1b3864-4870-4141-8451-79d73de0bd96",
+    "result": "Arquivo: `/tmp/poc-work/hello.txt` — conteúdo exato: `HELLO_FROM_SDK` (sem quebra de linha final).",
+    "remembered": true
+  },
+  "scenarioC": {
+    "sessionId": "3030df52-165a-407a-a871-4a96beeaaa02",
+    "canUseToolCalls": 0,
+    "bypassFileExists": true
+  }
+}
