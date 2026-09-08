@@ -195,6 +195,18 @@ export interface SdkChatState {
    * hand still reaches the CLI.
    */
   commands: SlashCommandInfo[];
+  /**
+   * THIS view asked the driver to stop (the composer's button, or stepping into editing a message
+   * mid-turn) and the aborted turn has not reported back yet.
+   *
+   * Why the state has to remember it: the SDK closes an interrupted turn with a `result` carrying
+   * `is_error` and NO text, which the chat used to draw as a red bubble reading literally "error"
+   * (the production screenshot: the answer cut mid-sentence, and a mute red "error" under it). A
+   * stop the person ASKED for is not a failure — the back's note already narrates the cut — so
+   * that result draws nothing at all. Cleared by the first `result` (or by `ready`, which means a
+   * fresh driver: whatever we interrupted is long gone).
+   */
+  interruptRequested: boolean;
   /** Monotonic counter for rows the driver did not name. */
   seq: number;
 }
@@ -206,11 +218,30 @@ export const INITIAL_SDK_STATE: SdkChatState = {
   terminalBurst: false,
   awaiting: false,
   commands: [],
+  interruptRequested: false,
   seq: 0,
 };
 
 /** The note row a terminal burst opens with (the view translates it). */
 export const TERMINAL_ACTIVITY_NOTE = "terminal-activity";
+
+/** Notes the BACK writes when a turn is cut short — codes, translated by the view. Must match
+ *  `back/src/services/sdk/protocol.ts` (`NOTE_TURN_INTERRUPTED*`). */
+export const TURN_INTERRUPTED_NOTE = "turn-interrupted";
+export const TURN_INTERRUPTED_EDIT_NOTE = "turn-interrupted-edit";
+
+/**
+ * Sentinels the reducer puts on an error row when the wire carried NO words of its own. The view
+ * turns them into a sentence in the reader's language (see `errorText` in SdkChatView) — the fix
+ * for the mute "error" bubble: every error in this chat says what happened and what to do.
+ */
+export const SDK_ERROR_TURN_FAILED = "sdk-error:turn-failed";
+export const SDK_ERROR_NO_DETAIL = "sdk-error:no-detail";
+
+/** Mark that WE asked for the stop (see `interruptRequested`). PURE. */
+export function markInterruptRequested(state: SdkChatState): SdkChatState {
+  return state.interruptRequested ? state : { ...state, interruptRequested: true };
+}
 
 /**
  * Marks which side of the card is talking. A terminal-mirrored event OPENS a burst: one system
@@ -349,6 +380,9 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         ...state,
         ready: true,
         turnActive: event.turnActive === true,
+        // A (re)connect: whatever this view interrupted belongs to a turn that is already over —
+        // the flag must not outlive it and swallow a later, REAL error result.
+        interruptRequested: false,
         rows: settleStreaming(state.rows),
       };
       if (event.resume) {
@@ -526,15 +560,37 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       return markUserEdited(state, event.originalText);
     }
     case "result": {
-      const next: SdkChatState = { ...state, turnActive: false, awaiting: false, rows: settleStreaming(state.rows) };
+      const next: SdkChatState = {
+        ...state,
+        turnActive: false,
+        awaiting: false,
+        interruptRequested: false,
+        rows: settleStreaming(state.rows),
+      };
       if (event.sessionId) next.sessionId = event.sessionId;
-      if (event.isError) return appendErrorRow(next, next.rows, event.result || "error");
-      return next;
+      if (!event.isError) return next;
+      // THE MUTE BUBBLE. An interrupted turn comes back as `is_error` with an empty `result`, and
+      // this line used to render it as the string "error" — a red balloon saying nothing, right
+      // under an answer chopped mid-sentence (the reported case: editing a message mid-turn). Two
+      // rules now: a stop WE asked for is not an error at all (the back's note tells that story),
+      // and a real failure gets a sentence instead of the word "error".
+      if (state.interruptRequested) return next;
+      const detail = (event.result ?? "").trim();
+      if (detail !== "") return appendErrorRow(next, next.rows, detail);
+      return appendErrorRow(next, next.rows, event.subtype ? `${SDK_ERROR_TURN_FAILED}|${event.subtype}` : SDK_ERROR_TURN_FAILED);
     }
-    case "error":
-      return appendErrorRow({ ...state, turnActive: false, awaiting: false }, settleStreaming(state.rows), event.message ?? "error");
-    case "parse_error":
-      return appendErrorRow(state, state.rows, event.raw ?? "parse error");
+    case "error": {
+      const text = (event.message ?? "").trim();
+      return appendErrorRow(
+        { ...state, turnActive: false, awaiting: false },
+        settleStreaming(state.rows),
+        text !== "" ? text : SDK_ERROR_NO_DETAIL,
+      );
+    }
+    case "parse_error": {
+      const raw = (event.raw ?? "").trim();
+      return appendErrorRow(state, state.rows, raw !== "" ? raw : SDK_ERROR_NO_DETAIL);
+    }
     default:
       return state;
   }

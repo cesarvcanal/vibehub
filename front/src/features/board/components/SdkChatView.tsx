@@ -35,7 +35,11 @@ import {
 } from "@/features/board/lib/pendingDecisions";
 import {
   INITIAL_SDK_STATE,
+  SDK_ERROR_NO_DETAIL,
+  SDK_ERROR_TURN_FAILED,
   TERMINAL_ACTIVITY_NOTE,
+  TURN_INTERRUPTED_EDIT_NOTE,
+  TURN_INTERRUPTED_NOTE,
   answerQuestion,
   applySdkEvent,
   appendUserRow,
@@ -43,6 +47,7 @@ import {
   deliveredUserTexts,
   dropUserRow,
   groupSdkRows,
+  markInterruptRequested,
   markUserEdited,
   parseSdkFrame,
   settleUserRow,
@@ -85,6 +90,16 @@ export const EDIT_INTERRUPT_GRACE_MS = 15_000;
 
 /** How often the outbox is checked for a send whose receipt never came. */
 export const OUTBOX_TICK_MS = 2_000;
+
+/**
+ * What "Continuar de onde parou" actually sends — a NEW turn asking the agent to pick the work up,
+ * because that is the only honest resume the SDK offers: an interrupted turn cannot be un-cut.
+ * Kept in pt-BR on purpose, like the supersede wrapper (see the back's `buildSupersedeText`): it is
+ * the user's own speech act to his agent, not panel chrome.
+ */
+export const RESUME_TURN_TEXT =
+  "[continuar] O turno anterior foi interrompido porque comecei a editar uma mensagem e depois " +
+  "cancelei a edição. Nada mudou no que eu pedi: continue de onde você parou.";
 
 export interface SdkChatViewProps {
   cardId: string;
@@ -152,6 +167,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         // history.ts), so the slate is wiped here — otherwise a reconnect would draw the whole
         // conversation twice. What was on screen comes right back, from disk instead of memory.
         setState(INITIAL_SDK_STATE);
+        // The replay tells the story again from disk (the interrupt note included) — a stale
+        // "continuar?" offer from before the drop would be guessing about a turn we no longer see.
+        setInterruptedForEdit(false);
       };
       next.onmessage = (event: MessageEvent) => {
         if (typeof event.data !== "string") return;
@@ -304,6 +322,32 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   const [editing, setEditing] = React.useState<{ rowId: string; original: string } | null>(null);
   /** An edit waiting for the interrupted turn to END (its result/aborted) before it goes. */
   const [pendingEdit, setPendingEdit] = React.useState<{ original: string; text: string; cid: string } | null>(null);
+  /**
+   * Entering edit mode STOPPED a running turn, and nothing has replaced it yet.
+   *
+   * This is the honest half of the reported bug. The agent no longer keeps answering the message
+   * being corrected — but an interrupted turn cannot be un-interrupted, so the screen must not
+   * pretend the pause was a freeze. Cancelling the edit surfaces the banner below: the turn WAS
+   * cut, and continuing is a deliberate click (a new turn), not magic.
+   */
+  const [interruptedForEdit, setInterruptedForEdit] = React.useState(false);
+
+  /** Stop the running turn. `reason` tells the back which note narrates the cut. */
+  const sendInterrupt = React.useCallback(
+    (reason?: "edit"): boolean => {
+      try {
+        sendFrame(reason ? { type: "interrupt", reason } : { type: "interrupt" });
+      } catch (err) {
+        toast.error((err as Error).message);
+        return false;
+      }
+      // The turn's `result` will come back as an error with no words — the reducer needs to know
+      // it was US who asked, so it draws nothing instead of a mute red "error" (see sdkChat.ts).
+      setState(markInterruptRequested);
+      return true;
+    },
+    [sendFrame],
+  );
 
   /** Push the edit frame. Returns whether the socket took it (a refusal is toasted, not thrown). */
   const dispatchEditFrame = React.useCallback(
@@ -346,9 +390,30 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    */
   const [replyTo, setReplyTo] = React.useState<PendingDecision | null>(null);
 
+  /**
+   * STEP INTO EDIT MODE — and PAUSE the agent while doing it.
+   *
+   * The bug this closes, in the owner's words: "mandei o texto sem querer, cliquei pra editar, e em
+   * vez de ele PAUSAR o raciocínio, ele continua respondendo normalmente". Opening the edit bar
+   * used to be a purely local gesture: the driver never heard about it and kept working on the very
+   * message being corrected — burning a turn on words that were about to be withdrawn. The stop now
+   * goes at the GESTURE, not at the send (which is what the deferred-edit path below already did).
+   */
+  const beginEdit = React.useCallback(
+    (rowId: string, original: string): void => {
+      setReplyTo(null); // editing and answering a decision are two different gestures
+      setEditing({ rowId, original });
+      if (!state.turnActive) return;
+      if (sendInterrupt("edit")) setInterruptedForEdit(true);
+    },
+    [state.turnActive, sendInterrupt],
+  );
+
   const send = async (raw: string): Promise<void> => {
     const text = raw.replace(/\r$/, "").trim();
     if (!text) return;
+    // Anything the person sends REPLACES the interrupted turn — the "continuar?" offer is moot.
+    setInterruptedForEdit(false);
     if (replyTo && !editing) {
       // A structured card is settled through its own channel (`question_answer`), so the driver
       // stops waiting and the card itself shows what it got. A prose question has no such channel:
@@ -377,13 +442,13 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       const { original } = editing;
       const editCid = newCid();
       if (state.turnActive) {
-        // The turn the original message fired is still running: stop it FIRST (the same frame as
-        // the stop button), and the edit follows when its result lands (the effect above).
-        try {
-          sendFrame({ type: "interrupt" });
-        } catch (err) {
-          toast.error((err as Error).message);
-          throw err; // the composer keeps the words
+        // Still running at send time. Either the stop `beginEdit` already sent has not reported
+        // back yet (nothing more to do — just wait for it), or a turn started meanwhile (another
+        // tab, a message folded in) and THAT one has to be stopped too. Either way the edit only
+        // goes when the turn ends (the effect above): it must never land as the answer to a turn
+        // the superseded message is still driving.
+        if (!interruptedForEdit && !sendInterrupt("edit")) {
+          throw new Error(translate("sdk.offline")); // the composer keeps the words
         }
         setPendingEdit({ original, text, cid: editCid });
       } else if (!dispatchEditFrame(original, text, editCid)) {
@@ -436,11 +501,25 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   };
 
   const interrupt = (): void => {
+    sendInterrupt();
+  };
+
+  /**
+   * "Continuar de onde parou" — the only truthful resume this wire has: a NEW turn asking the agent
+   * to pick the work back up. The SDK cannot un-interrupt a turn, so the screen says so (the banner)
+   * and makes continuing an explicit click instead of faking that nothing happened.
+   */
+  const resumeInterruptedTurn = (): void => {
+    // A turn like any other: drawn as "sending" and taken off the outbox only by its `user_ack`.
+    const cid = newCid();
+    setState((prev) => appendUserRow(prev, RESUME_TURN_TEXT, undefined, { awaiting: true, cid, state: "sending" }));
     try {
-      sendFrame({ type: "interrupt" });
+      sendTurn({ type: "user", text: RESUME_TURN_TEXT }, RESUME_TURN_TEXT, cid);
     } catch (err) {
       toast.error((err as Error).message);
+      return; // the offer stays on screen — the bubble is already marked undelivered
     }
+    setInterruptedForEdit(false);
   };
 
   const answerPermission = (id: string, allow: boolean): void => {
@@ -469,18 +548,20 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
 
   /** The terminal's Esc gesture: an empty field steps into editing the LAST message of one's own. */
   const editLast = React.useCallback((): void => {
-    if (state.turnActive) return; // mid-turn the gesture would read as a stop — the button does that
+    // Mid-turn Esc keeps meaning "stop", not "edit": the button owns that gesture, and stopping a
+    // turn is too big a consequence for a key you may have pressed to dismiss something. The pencil
+    // is the explicit way in — and IT does pause the turn (see `beginEdit`).
+    if (state.turnActive) return;
     for (let i = state.rows.length - 1; i >= 0; i -= 1) {
       const row = state.rows[i]!;
       // A decision answer is skipped for the same reason its pencil is hidden (see the bubble).
       if (row.kind === "user" && row.edited !== true && parseDecisionReply(row.text) === null
         && originRole(row.from, viewer) === "self") {
-        setReplyTo(null); // editing and answering a decision are two different gestures
-        setEditing({ rowId: row.id, original: row.text });
+        beginEdit(row.id, row.text);
         return;
       }
     }
-  }, [state.rows, state.turnActive, viewer]);
+  }, [state.rows, state.turnActive, viewer, beginEdit]);
 
   /* ------------------------------------------------------------ scrolling */
 
@@ -584,10 +665,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
                 onPermission={answerPermission}
                 onAnswer={answerUserQuestion}
                 onReply={pendingIds.has(entry.id) ? jumpToDecision : undefined}
-                onEdit={(rowId, original) => {
-                  setReplyTo(null);
-                  setEditing({ rowId, original });
-                }}
+                onEdit={beginEdit}
                 onResend={resendUndelivered}
                 onDiscard={discardUndelivered}
               />
@@ -640,6 +718,41 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
             title={t("sdk.replyCancel")}
             onClick={() => setReplyTo(null)}
             className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-sky-500/20 hover:text-foreground"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : null}
+
+      {/* THE TURN WAS CUT, AND SAYING SO BEATS PRETENDING. Entering edit mode stopped the agent;
+          the person then cancelled the edit. There is no un-interrupting a turn on this wire, so
+          instead of faking a seamless resume the screen states what happened and offers ONE
+          explicit way forward — a new turn asking the agent to pick the work back up. Hidden while
+          the edit bar is open (the send is the way forward there) and while a turn is running
+          (something IS working — there is nothing to continue). */}
+      {interruptedForEdit && !editing && !state.turnActive ? (
+        <div
+          data-testid="sdk-interrupted-banner"
+          className="mt-1.5 flex items-start gap-1.5 rounded-md border border-amber-500/50 bg-amber-500/10 px-2.5 py-1.5 text-xs"
+        >
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+          <div className="min-w-0 flex-1 break-words text-muted-foreground">{t("sdk.interruptedForEdit")}</div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-6 shrink-0 text-[11px]"
+            data-testid="sdk-resume-turn"
+            onClick={resumeInterruptedTurn}
+          >
+            {t("sdk.resumeTurn")}
+          </Button>
+          <button
+            type="button"
+            data-testid="sdk-interrupted-dismiss"
+            aria-label={t("sdk.interruptedDismiss")}
+            title={t("sdk.interruptedDismiss")}
+            onClick={() => setInterruptedForEdit(false)}
+            className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-amber-500/20 hover:text-foreground"
           >
             <X className="h-3.5 w-3.5" />
           </button>
@@ -934,12 +1047,8 @@ function SdkChatRow({
 
   if (row.kind === "note") {
     return (
-      <div data-testid="sdk-note" className="py-0.5 text-center text-xs italic text-muted-foreground/70">
-        {row.text.startsWith("resume:")
-          ? t("sdk.resumed", { id: row.text.slice("resume:".length, "resume:".length + 8) })
-          : row.text === TERMINAL_ACTIVITY_NOTE
-            ? t("sdk.terminalActivity")
-            : row.text}
+      <div data-testid="sdk-note" data-note={row.text} className="py-0.5 text-center text-xs italic text-muted-foreground/70">
+        {noteText(row.text, t)}
       </div>
     );
   }
@@ -1280,8 +1389,36 @@ function SdkQuestionCard({
   );
 }
 
-/** A server refusal worth translating: the flag is off. Anything else is shown as it came. */
+/**
+ * A note row's words. Some notes travel as CODES (the back writes them, the reader may be reading
+ * in either language); anything else is already a sentence and passes through. PURE.
+ */
+function noteText(text: string, t: ReturnType<typeof useT>): string {
+  if (text.startsWith("resume:")) return t("sdk.resumed", { id: text.slice("resume:".length, "resume:".length + 8) });
+  if (text === TERMINAL_ACTIVITY_NOTE) return t("sdk.terminalActivity");
+  if (text === TURN_INTERRUPTED_EDIT_NOTE) return t("sdk.noteInterruptedEdit");
+  if (text === TURN_INTERRUPTED_NOTE) return t("sdk.noteInterrupted");
+  return text;
+}
+
+/**
+ * WHAT WENT WRONG, IN WORDS. This chat once showed a red bubble reading literally "error" — the
+ * turn's failure had no text of its own and the raw value was drawn as-is. Nothing reaches the
+ * reader as jargon or as an empty word any more: the known refusals and the reducer's sentinels
+ * (see sdkChat.ts) become a sentence that says what happened AND what to do. Anything already
+ * written as a sentence by the driver passes through untouched. PURE.
+ */
 function errorText(text: string, t: ReturnType<typeof useT>): string {
   if (/sdkDriver setting/i.test(text)) return t("sdk.flagOff");
+  if (text === SDK_ERROR_NO_DETAIL) return t("sdk.errorNoDetail");
+  if (text.startsWith(SDK_ERROR_TURN_FAILED)) {
+    const subtype = text.slice(SDK_ERROR_TURN_FAILED.length + 1);
+    return subtype === "" ? t("sdk.turnFailed") : t("sdk.turnFailedWhy", { subtype });
+  }
+  // The driver's process died (idle stop, a crash, a deploy). The front reconnects on its own —
+  // which is exactly what the reader cannot tell from "driver exited (code 1)".
+  if (/^driver (exited|process error)/i.test(text)) return t("sdk.driverGone", { detail: text });
+  if (/^could not install the driver/i.test(text)) return t("sdk.driverInstallFailed", { detail: text });
+  if (/^this card no longer exists$/i.test(text)) return t("sdk.cardGone");
   return text;
 }

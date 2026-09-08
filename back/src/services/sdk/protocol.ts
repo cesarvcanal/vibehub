@@ -223,7 +223,14 @@ export function parseDriverLine(line: string): DriverEvent | null {
  * half-open socket looked identical to a delivered one, and the message vanished on the next F5.
  */
 export interface UserControl { type: "user"; text: string; cid?: string }
-export interface InterruptControl { type: "interrupt" }
+/**
+ * Stop the running turn. `reason` is the front saying WHY it stopped — today only `"edit"`: the
+ * person clicked the pencil to correct a message while the agent was still working on the old one
+ * (the reported bug: the edit bar opened and the agent kept answering the message being edited).
+ * The manager uses it to pick which note narrates the cut in the conversation; a plain stop (the
+ * composer's button) carries no reason and gets the plain note.
+ */
+export interface InterruptControl { type: "interrupt"; reason?: "edit" }
 /** The human's answer to a `permission_request` — `id` pairs it with the awaiting call. */
 export interface PermissionDecisionControl { type: "permission_decision"; id: string; allow: boolean }
 /** The human's answer to a `user_question` — one entry per question, in order. */
@@ -259,6 +266,19 @@ export function buildSupersedeText(original: string, text: string): string {
 }
 
 /**
+ * The conversation NOTES the back writes when a turn is cut short. They travel as CODES, not
+ * prose: the front translates them (like `terminal-activity`), so the same log reads in pt-BR and
+ * in English, and a replay after F5 still explains why the answer above stops mid-sentence.
+ */
+export const NOTE_TURN_INTERRUPTED = "turn-interrupted";
+export const NOTE_TURN_INTERRUPTED_EDIT = "turn-interrupted-edit";
+
+/** Which note narrates a stop. PURE. */
+export function interruptNote(control: InterruptControl): string {
+  return control.reason === "edit" ? NOTE_TURN_INTERRUPTED_EDIT : NOTE_TURN_INTERRUPTED;
+}
+
+/**
  * Serialise a control message as one stdin line (with the trailing newline). The browser's `cid`
  * is a back↔front receipt id and is STRIPPED here — the driver's protocol knows nothing about it
  * and an unknown field must never travel into the model's input. PURE.
@@ -282,7 +302,13 @@ export function parseSdkClientFrame(raw: string): DriverControl | null {
   if (trimmed.startsWith("{")) {
     try {
       const parsed = JSON.parse(trimmed) as { type?: unknown; text?: unknown; id?: unknown; allow?: unknown };
-      if (parsed.type === "interrupt") return { type: "interrupt" };
+      if (parsed.type === "interrupt") {
+        // Only the reason the manager knows how to narrate survives the wire — anything else
+        // degrades to a plain stop instead of becoming an unexplained note in the conversation.
+        return (parsed as { reason?: unknown }).reason === "edit"
+          ? { type: "interrupt", reason: "edit" }
+          : { type: "interrupt" };
+      }
       if (parsed.type === "user" && typeof parsed.text === "string") return { type: "user", text: parsed.text, cid: frameCid(parsed) };
       if (parsed.type === "permission_decision" && typeof parsed.id === "string" && typeof parsed.allow === "boolean") {
         return { type: "permission_decision", id: parsed.id, allow: parsed.allow };

@@ -6,6 +6,7 @@ import {
   answerQuestion,
   decidePermission,
   groupSdkRows,
+  markInterruptRequested,
   markUserEdited,
   parseSdkFrame,
   toolSummary,
@@ -122,6 +123,43 @@ describe("applySdkEvent", () => {
 
     const bad = feed([{ type: "result", isError: true, result: "boom" }]);
     expect(bad.rows[0]).toMatchObject({ kind: "error", text: "boom" });
+  });
+
+  /**
+   * The MUTE bubble: an interrupted turn comes back as `is_error` with no `result` text, and the
+   * reducer used to write the bare string "error" into a red row. Two rules replaced it.
+   */
+  it("an error result with no words carries a translatable sentinel, never the word 'error'", () => {
+    const state = feed([{ type: "result", isError: true, subtype: "error_during_execution" }]);
+    expect(state.rows[0]).toMatchObject({ kind: "error", text: "sdk-error:turn-failed|error_during_execution" });
+
+    const bare = feed([{ type: "result", isError: true }]);
+    expect(bare.rows[0]).toMatchObject({ kind: "error", text: "sdk-error:turn-failed" });
+  });
+
+  it("a stop WE asked for draws nothing: an aborted turn is not a failure", () => {
+    const stopped = markInterruptRequested(feed([{ type: "ready" }, { type: "assistant_delta", text: "indo…" }]));
+    const state = applySdkEvent(stopped, { type: "result", isError: true, subtype: "error_during_execution" });
+    expect(state.rows.filter((r) => r.kind === "error")).toHaveLength(0);
+    expect(state.turnActive).toBe(false);
+    expect(state.interruptRequested).toBe(false); // one result consumes the flag
+
+    // …and the NEXT failure, which nobody asked for, is drawn again
+    const after = applySdkEvent(state, { type: "result", isError: true });
+    expect(after.rows.filter((r) => r.kind === "error")).toHaveLength(1);
+  });
+
+  it("a reconnect drops the pending stop — it must not swallow a later real failure", () => {
+    const stopped = markInterruptRequested(feed([{ type: "ready" }]));
+    const reconnected = applySdkEvent(stopped, { type: "ready" });
+    expect(reconnected.interruptRequested).toBe(false);
+  });
+
+  it("an error/parse_error with no text falls back to a sentinel instead of an empty red box", () => {
+    const state = feed([{ type: "error", message: "" }, { type: "assistant_text", text: "x" }, { type: "parse_error", raw: "" }]);
+    const errors = state.rows.filter((r) => r.kind === "error");
+    expect(errors).toHaveLength(2);
+    expect(errors.every((r) => r.kind === "error" && r.text === "sdk-error:no-detail")).toBe(true);
   });
 
   it("error and parse_error rows are visible, never swallowed", () => {

@@ -476,6 +476,20 @@ export const en: Record<string, string> = {
   "sdk.thinking": "Thinking\u2026",
   "sdk.reasoning": "Reasoning",
   "sdk.flagOff": "The SDK driver is off for this install. Turn on \"SDK driver\" in Settings to use native chat.",
+  "sdk.noteInterrupted": "You stopped this turn — the answer above is cut short.",
+  "sdk.noteInterruptedEdit": "Turn stopped so you could edit the message — the answer above is cut short.",
+  "sdk.interruptedForEdit":
+    "The turn was stopped when you started editing. It does not pick itself back up — send the edited message, or ask it to continue.",
+  "sdk.resumeTurn": "Continue where it stopped",
+  "sdk.interruptedDismiss": "Dismiss — leave the turn stopped",
+  "sdk.turnFailed":
+    "The turn ended with an error and the driver gave no reason. The answer above may be incomplete — send the message again; if it repeats, check the card's Terminal tab.",
+  "sdk.turnFailedWhy":
+    "The turn ended with an error ({subtype}). The answer above may be incomplete — send the message again; if it repeats, check the card's Terminal tab.",
+  "sdk.errorNoDetail": "The driver reported an error with no detail at all. If it repeats, close and reopen the card to restart the driver.",
+  "sdk.driverGone": "Native chat lost the card's driver. The page reconnects on its own and resumes the conversation; if it does not come back, reopen the card. ({detail})",
+  "sdk.driverInstallFailed": "The native chat driver could not be installed in the runner. Check that the card is running and try reopening it. ({detail})",
+  "sdk.cardGone": "This card no longer exists — the conversation ends here. Close the tab.",
 
   "cardView.sdkTerminalNote": "Native chat is on for this card — it is the same conversation: the native chat always resumes the newest session, including what you type here.",
   "cardView.terminalFor": "Terminal for {title}",
@@ -496,6 +510,8 @@ export const en: Record<string, string> = {
   "composer.editing": "Editing message \u2014 Esc cancels",
   "composer.editingCancel": "Cancel editing",
   "composer.aria": "Write here — Enter sends, Shift+Enter starts a new line",
+  "composer.ariaMobile": "Write here — return starts a new line; tap send",
+  "composer.send": "Send message",
   "composer.recordingTooBig": "That recording is over 20 MB.",
   "composer.transcribing": "Transcribing…",
   "composer.nothingSaid": "Nothing was said in that recording.",
@@ -517,6 +533,7 @@ export const en: Record<string, string> = {
   "composer.tryAgain": "Try again",
   "composer.removeImage": "Remove {name} from the message",
   "composer.sendingAfterUpload": "sending as soon as the image lands…",
+  "composer.uploadingCount": "{done} of {total} images uploaded…",
   "composer.recording": "Recording",
   "composer.attach": "Attach",
   "composer.attachMenu": "Attach a photo or file",

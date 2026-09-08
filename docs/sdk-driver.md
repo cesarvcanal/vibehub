@@ -106,10 +106,26 @@ O usuário pode editar uma mensagem que já mandou (lápis na bolha; Esc com o c
 última; Esc durante a edição cancela e devolve o rascunho). Como o modelo **já leu** a original, a
 edição não reescreve o passado — é um **supersede**:
 
-- O front manda `{ "type": "edit_user", "original", "text" }`. Se o turno disparado pela mensagem
-  original ainda está rodando, ele manda `interrupt` ANTES (o mesmo frame do botão parar) e segura a
-  edição até o `result`/`aborted` daquele turno (timeout de segurança de 15s — o driver enfileira
-  turnos de todo jeito).
+- **Entrar na edição PAUSA o turno.** No clique do lápis (não no envio), com um turno rodando, o
+  front manda `{ "type": "interrupt", "reason": "edit" }`. O relato que originou isso: "cliquei pra
+  editar e, em vez de PAUSAR o raciocínio, ele continua respondendo normalmente" — o agente gastava
+  o turno em cima da mensagem que estava sendo corrigida.
+- O front manda `{ "type": "edit_user", "original", "text" }` e segura a edição até o
+  `result`/`aborted` do turno interrompido (timeout de segurança de 15s — o driver enfileira turnos
+  de todo jeito), pra que a edição nunca chegue como resposta de um turno que a mensagem antiga
+  ainda está tocando. Se um turno novo apareceu no meio (outra aba), ele também é interrompido.
+- **Cancelar a edição (Esc/X) NÃO ressuscita o turno** — o SDK não desinterrompe nada. A tela diz a
+  verdade: aparece uma faixa "o turno foi interrompido quando você entrou na edição" com um botão
+  **Continuar de onde parou**, que manda um turno NOVO pedindo pra retomar (`RESUME_TURN_TEXT`), e um
+  X pra dispensar. Enviar a edição substitui a oferta.
+- O manager NARRA o corte: no `result` do turno abortado (depois dos últimos deltas, nunca antes)
+  ele grava e transmite `{ "type": "system_note", "text": "turn-interrupted" | "turn-interrupted-edit" }`.
+  É código, não prosa — o front traduz (pt-BR/en) e a linha sobrevive ao F5, porque explica um texto
+  que ficou cortado no meio. Um stop sem turno rodando não gera nota.
+- **Nada de balão vermelho mudo.** Um turno interrompido volta como `result` com `is_error` e SEM
+  texto; o chat desenhava literalmente a palavra "error". Agora: se o stop foi NOSSO
+  (`interruptRequested` no reducer), o result não desenha nada — a nota acima já contou a história;
+  se foi falha de verdade, a linha vira frase traduzida com o `subtype` e o que fazer.
 - O manager (`handleClientFrame`) embrulha o texto com `buildSupersedeText` (protocol.ts) e escreve
   no stdin do driver **um turno `user` normal** — o driver não conhece `edit_user`:
 

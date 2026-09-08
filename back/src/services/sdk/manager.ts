@@ -7,7 +7,7 @@ import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inf
 import { noteDriverEventFor } from "./mirror.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
-  buildSupersedeText, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, encodeControl,
+  buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, encodeControl,
   type CatalogEvent, type DriverControl, type DriverEvent,
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
@@ -71,6 +71,13 @@ export interface DriverSession {
   stderrTail: string;
   /** The session was stopped or its child closed — a new ensure must spawn anew. */
   closed: boolean;
+  /**
+   * A stop was asked for and the aborted turn has not reported back yet: the note that will
+   * NARRATE the cut in the conversation (see `interruptNote`). It is flushed with the turn's
+   * `result` — not when the interrupt is sent — so it lands AFTER the last deltas the aborting turn
+   * still emits, right under the sentence that stops mid-way instead of on top of it.
+   */
+  pendingInterruptNote?: string;
 }
 
 /**
@@ -154,6 +161,17 @@ function broadcast(session: DriverSession, event: object): void {
   }
 }
 
+/**
+ * The PANEL's own line in the conversation — broadcast to every open tab AND written to the
+ * history, so a reload still reads it. Used for the interrupt notes: without them a turn cut
+ * mid-sentence looked like Claude simply trailing off.
+ */
+function emitSystemNote(session: DriverSession, text: string): void {
+  const at = Date.now();
+  broadcast(session, { type: "system_note", text, at });
+  void appendHistory(session.cardId, { type: "system_note", text, at });
+}
+
 function clearIdleTimer(session: DriverSession): void {
   if (session.idleTimer) {
     clearTimeout(session.idleTimer);
@@ -214,14 +232,20 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     // absorbed send implies a turn IS in flight, and its own result is still owed.
     session.activeTurns = Math.max(1, session.activeTurns - 1);
   }
+  // A stop the person asked for: the note goes out right AFTER this result (below), so the reader
+  // sees the truncated answer and then the line explaining why it stops there.
+  let interruptNoteToFlush: string | undefined;
   if (event.type === "result") {
     session.activeTurns = Math.max(0, session.activeTurns - 1);
+    interruptNoteToFlush = session.pendingInterruptNote;
+    session.pendingInterruptNote = undefined;
     // The last turn in flight CLOSED: the durable "turn in flight" marker comes off. A deploy that
     // lands after this point interrupts nothing — no marker, no boot-resume (see ./inflight.ts).
     if (session.activeTurns === 0) void clearInflightMarker(session.cardId);
     maybeScheduleIdleStop(session);
   }
   broadcast(session, event);
+  if (interruptNoteToFlush) emitSystemNote(session, interruptNoteToFlush);
   // History + mirror dedupe are MANAGER duties, not socket duties: they must keep happening while
   // no page is open — that is the whole point of the detach.
   noteDriverEventFor(session.cardId, event);
@@ -428,6 +452,9 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
     // survive the interrupt and run; its extra result is absorbed by the floor-at-zero above.)
     // Clamping here keeps an abandoned backlog from pinning the driver past the idle stop forever.
     session.activeTurns = Math.min(session.activeTurns, 1);
+    // Only a stop that actually CUT something gets narrated — a stop click with nothing running
+    // would otherwise write a note claiming a turn was interrupted when none was.
+    if (session.activeTurns > 0) session.pendingInterruptNote = interruptNote(control);
   }
   return { kind: "ignored" };
 }
