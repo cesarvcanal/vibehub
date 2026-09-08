@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Camera, Check, ImageIcon, Loader2, Mic, Paperclip, Pencil, Plus, RotateCw, Square, X } from "lucide-react";
+import { ArrowUp, Camera, Check, ImageIcon, Loader2, Mic, Paperclip, Pencil, Plus, RotateCw, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -27,10 +27,12 @@ import { t as translate, useT } from "@/i18n";
  * goes. So input ACCUMULATES in this field and only reaches the session when you confirm: ENTER.
  * Shift+Enter breaks the line, like the terminal itself.
  *
- * There is no Send button. It was a third control competing for a phone's width with the field and
- * the microphone, to do what Enter already does on every keyboard including the on-screen one — so
- * the field took the width back and the promise moved into the `aria-label`, where the people who
- * need telling actually read it.
+ * On a DESKTOP there is no Send button: it was a third control competing for width to do what Enter
+ * already does, so the promise lives in the `aria-label` instead. A PHONE is the opposite case. The
+ * iOS keyboard's return key is a line break to everyone who owns one, and binding it to "send" meant
+ * a message went out every time someone tried to start a paragraph — there was no way to write two
+ * lines at all. So below `md` the return key breaks the line, like the keyboard says it does, and
+ * the send button appears in the field's bottom-right corner, where every phone keeps it.
  *
  * Everything that arrives from somewhere other than the keyboard lands the same way — appended, not
  * sent. A RECORDING is transcribed and its text appended. Speak three times and you get one
@@ -434,6 +436,18 @@ export function TerminalComposer({
    */
   const filesRef = React.useRef(new Map<string, File>());
 
+  /**
+   * Files waiting their turn to go up, and whether the pump is already running.
+   *
+   * Picking a handful of photos out of a phone's library hands over every one of them at once, and
+   * the runner takes ONE IMAGE PER REQUEST (each is a whole base64 body pushed through a script on
+   * the host). Firing ten of those in parallel is the slowest way to get ten pictures there and the
+   * easiest way to have the last few time out, so they queue: the chips still appear in the same
+   * frame as the pick, the bytes just go in order behind them.
+   */
+  const queueRef = React.useRef<{ id: string; file: File }[]>([]);
+  const pumpingRef = React.useRef(false);
+
   // Switching cards swaps the whole field for that card's draft — including the one just restored
   // on mount, which is why this runs on `draftKey` and not only on the state initialiser.
   React.useEffect(() => {
@@ -443,6 +457,7 @@ export function TerminalComposer({
     setSendWhenReady(false);
     // The bytes belong to the chips that were on screen, not to the card that just arrived.
     filesRef.current.clear();
+    queueRef.current = [];
   }, [draftKey]);
 
   // Persisted on every change: what makes leaving the card safe. Uploads in flight are written too
@@ -517,6 +532,8 @@ export function TerminalComposer({
 
   const removeAttachment = React.useCallback((id: string) => {
     filesRef.current.delete(id);
+    // A picture dropped before its turn came must not go up anyway.
+    queueRef.current = queueRef.current.filter((job) => job.id !== id);
     setAttachments((prev) => {
       const gone = prev.find((a) => a.id === id);
       if (gone?.previewUrl) URL.revokeObjectURL(gone.previewUrl);
@@ -609,21 +626,41 @@ export function TerminalComposer({
    * comes from the local file, so it is on screen in the same frame as the paste — the upload only
    * decides whether the chip ends up carrying a path or an error.
    */
-  /** Runs (or re-runs) one chip's upload, leaving the chip itself exactly where it is. */
+  /** Empties the queue, one upload at a time. Re-entrant callers just return: there is one pump. */
+  const pump = React.useCallback(async () => {
+    if (pumpingRef.current) return;
+    pumpingRef.current = true;
+    try {
+      while (queueRef.current.length > 0) {
+        const job = queueRef.current.shift();
+        if (!job) break;
+        const handler = uploadRef.current;
+        if (!handler) break;
+        setAttachments((prev) => prev.map((a) => (a.id === job.id ? { ...a, status: "uploading" } : a)));
+        try {
+          const path = await handler(job.file);
+          setAttachments((prev) =>
+            prev.map((a) =>
+              a.id === job.id ? { ...a, path: path ?? undefined, status: path ? "ready" : "error" } : a,
+            ),
+          );
+        } catch {
+          setAttachments((prev) => prev.map((a) => (a.id === job.id ? { ...a, status: "error" } : a)));
+        }
+      }
+    } finally {
+      pumpingRef.current = false;
+    }
+  }, []);
+
+  /** Puts one chip's upload in line, leaving the chip itself exactly where it is. */
   const startUpload = React.useCallback(
     (id: string, file: File) => {
-      const handler = uploadRef.current;
-      if (!handler) return;
-      setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, status: "uploading" } : a)));
-      void handler(file).then(
-        (path) =>
-          setAttachments((prev) =>
-            prev.map((a) => (a.id === id ? { ...a, path: path ?? undefined, status: path ? "ready" : "error" } : a)),
-          ),
-        () => setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, status: "error" } : a))),
-      );
+      if (!uploadRef.current) return;
+      queueRef.current.push({ id, file });
+      void pump();
     },
-    [],
+    [pump],
   );
 
   const upload = (files: File[]): void => {
@@ -899,15 +936,21 @@ export function TerminalComposer({
         />
       ) : null}
 
-      {/* The field and the microphone. Vertically centred: the field grows with the text and a
-          bottom-aligned 48px circle drifts away from it as it does. */}
       {/* The "/" menu: skills and commands this session can run, above the field so it never covers
           what is being typed and never moves the caret. */}
       {menuOpen ? (
         <SlashMenu commands={matches} highlight={Math.min(highlight, matches.length - 1)} onPick={pickCommand} />
       ) : null}
 
-      <div data-testid="composer-row" className="flex items-center gap-2">
+      {/* The field and its buttons, all sharing the field's BOTTOM edge.
+          They used to be centred, and the microphone came out visibly low: the right column is two
+          seats tall (the stop's seat is reserved even while empty), so centring a 102px column
+          against a field that starts at 96px pushes the mic below the middle — and the taller the
+          field grows, the further the buttons drift from the line being typed. There is no
+          one-line case to centre for either: the field is three rows at its smallest. Anchoring
+          everything to the bottom puts the mic level with the last line of text and keeps it there
+          whether the stop button is showing or not, which is where every phone puts them. */}
+      <div data-testid="composer-row" className="flex items-end gap-2">
       {onUploadImage ? <AttachControl mobile={isMobile} onPick={upload} /> : null}
       <div className="relative min-w-0 flex-1">
         <textarea
@@ -941,7 +984,10 @@ export function TerminalComposer({
                 return;
               }
             }
-            if (e.key === "Enter" && !e.shiftKey) {
+            // The return key on a phone keyboard is a LINE BREAK — it is drawn as one and everyone
+            // uses it as one. Sending on it made a two-line message impossible to write. The send
+            // button below is the phone's way out; the desktop keeps Enter/Shift+Enter untouched.
+            if (e.key === "Enter" && !e.shiftKey && !isMobile) {
               e.preventDefault();
               send();
             } else if (e.key === "Escape") {
@@ -969,14 +1015,18 @@ export function TerminalComposer({
           }}
           placeholder={placeholder ?? t("composer.placeholder")}
           rows={3}
-          aria-label={t("composer.aria")}
+          aria-label={t(isMobile ? "composer.ariaMobile" : "composer.aria")}
           /*
            * `text-base` below `md` is not a type choice, it is the iOS keyboard fix: Safari zooms
            * the page in on any focused field under 16px and never zooms back out, which is exactly
            * the "everything goes strange when I open the keyboard" the owner hit. The desktop keeps
            * the 14px it always had.
            */
-          className="max-h-48 min-h-24 w-full resize-none overflow-y-auto rounded-md border border-border bg-card px-3 py-2 text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 md:text-sm"
+          className={cn(
+            "max-h-48 min-h-24 w-full resize-none overflow-y-auto rounded-md border border-border bg-card px-3 py-2 text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 md:text-sm",
+            // Room for the send button that sits in the corner, so no line ever runs under it.
+            isMobile && "pr-14",
+          )}
         />
         {/* While recording with nothing typed, the empty field is where the voice goes: the bars
             live there rather than crowding the microphone. They vanish the moment there is text. */}
@@ -994,6 +1044,24 @@ export function TerminalComposer({
               />
             ))}
           </div>
+        ) : null}
+
+        {/* The phone's send. IN the field's bottom-right corner rather than a fourth circle in the
+            row, because a 390px screen has no width left after the "+", the microphone and
+            something worth reading — and that corner is where a thumb already goes to send. */}
+        {isMobile ? (
+          <Button
+            type="button"
+            size="icon"
+            data-testid="composer-send"
+            aria-label={t("composer.send")}
+            title={t("composer.send")}
+            disabled={sending || isEmptyDraft(text, attachments)}
+            onClick={send}
+            className="absolute bottom-1.5 right-1.5 h-11 w-11 shrink-0 rounded-full"
+          >
+            <ArrowUp className="h-5 w-5" />
+          </Button>
         ) : null}
       </div>
 
@@ -1056,6 +1124,11 @@ export function TerminalComposer({
  * The uploads are wired to the image pipeline, so a non-image chosen through "a file" comes back as
  * a failed chip rather than an attachment — the honest outcome until the runner accepts arbitrary
  * files.
+ *
+ * The gallery and the file picker take MORE THAN ONE at a time. Attaching three screenshots used to
+ * mean opening the photo roll three times, because the picker closes on the first tap; `multiple`
+ * is the whole fix, and the strip was already built to hold a list. The camera stays single: it
+ * takes one photo and hands it over.
  */
 function AttachControl({ mobile, onPick }: { mobile: boolean; onPick: (files: File[]) => void }) {
   const t = useT();
@@ -1088,6 +1161,7 @@ function AttachControl({ mobile, onPick }: { mobile: boolean; onPick: (files: Fi
         ref={galleryRef}
         type="file"
         accept="image/*"
+        multiple
         className="hidden"
         data-testid="composer-input-gallery"
         onChange={() => handlePicked(galleryRef.current)}
@@ -1095,6 +1169,7 @@ function AttachControl({ mobile, onPick }: { mobile: boolean; onPick: (files: Fi
       <input
         ref={fileRef}
         type="file"
+        multiple
         className="hidden"
         data-testid="composer-input-file"
         onChange={() => handlePicked(fileRef.current)}
@@ -1168,6 +1243,9 @@ function AttachmentStrip({
   onRetry: (id: string) => void;
 }) {
   const t = useT();
+  // Several pictures go up one at a time, so a row of identical spinners says nothing about how far
+  // along it is. The count does, and it costs no state: it is just what the chips already say.
+  const pending = attachments.filter((a) => a.status === "uploading").length;
   return (
     <div data-testid="composer-attachments" className="flex flex-wrap items-center gap-2">
       {attachments.map((a) => (
@@ -1223,6 +1301,11 @@ function AttachmentStrip({
           </button>
         </div>
       ))}
+      {pending > 1 ? (
+        <span data-testid="composer-uploading-count" className="text-[11px] text-muted-foreground">
+          {t("composer.uploadingCount", { done: attachments.length - pending, total: attachments.length })}
+        </span>
+      ) : null}
       {waiting ? (
         <span data-testid="composer-waiting-upload" className="text-[11px] text-muted-foreground">
           {t("composer.sendingAfterUpload")}

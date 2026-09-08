@@ -187,13 +187,13 @@ describe("TerminalComposer", () => {
     expect(box).toHaveValue("first\nsecond");
   });
 
-  it("has no Send button at all — Enter is the only way, and the field keeps the width", () => {
+  it("has no Send button on a DESKTOP — Enter is the way, and the field keeps the width", () => {
     renderComposer(<TerminalComposer onSend={vi.fn()} />);
     expect(screen.queryByTestId("composer-send")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /send|enviar/i })).not.toBeInTheDocument();
   });
 
-  it("says how to send in the label, since there is no longer a button that says it", () => {
+  it("says how to send in the label, since on a desktop no button says it", () => {
     renderComposer(<TerminalComposer onSend={vi.fn()} />);
     expect(screen.getByRole("textbox")).toHaveAccessibleName(/Enter sends/i);
   });
@@ -643,7 +643,7 @@ describe("TerminalComposer — on a phone", () => {
 
   it("writes at 16px below md, which is what stops iOS zooming the page on focus", () => {
     renderComposer(<TerminalComposer onSend={vi.fn()} />);
-    const field = screen.getByRole("textbox", { name: "Write here — Enter sends, Shift+Enter starts a new line" });
+    const field = screen.getByRole("textbox");
     expect(field.className).toContain("text-base");
     // …and the desktop keeps the 14px it always had.
     expect(field.className).toContain("md:text-sm");
@@ -657,20 +657,140 @@ describe("TerminalComposer — on a phone", () => {
     expect(mic.className).toContain("md:h-9");
   });
 
-  it("centres the microphone against the field instead of hanging it off the bottom", () => {
-    renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
-    // The field grows with the text; a bottom-aligned 48px circle drifts away from it as it does.
-    // (The composer's own box is a column now — the attachments sit above this row.)
-    expect(screen.getByTestId("composer-row").className).toContain("items-center");
-    expect(screen.getByTestId("composer-row").className).not.toContain("items-end");
+  it("lines the buttons up with the BOTTOM of the field, so the mic stops sitting low", () => {
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" interrupt={{ active: false, onInterrupt: vi.fn() }} />);
+    // Centring was the bug: the right column is two seats tall (the stop keeps its seat even while
+    // empty), so a centred column against a three-row field pushes the microphone below the middle
+    // — and drifts further as the field grows. The bottom edge is the one that never moves.
+    expect(screen.getByTestId("composer-row").className).toContain("items-end");
+    expect(screen.getByTestId("composer-row").className).not.toContain("items-center");
   });
 
-  it("still sends on Enter, which is now the only way", async () => {
+  it("the return key breaks the line — it does NOT send", async () => {
     const user = userEvent.setup();
     const onSend = vi.fn();
     renderComposer(<TerminalComposer onSend={onSend} />);
-    await user.type(screen.getByRole("textbox"), "deploy{Enter}");
-    expect(onSend).toHaveBeenCalledWith("deploy");
+    const box = screen.getByRole("textbox");
+    await user.type(box, "first{Enter}second");
+    expect(onSend).not.toHaveBeenCalled();
+    expect(box).toHaveValue("first\nsecond");
+  });
+
+  it("sends from the button instead, and says so in the label", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    renderComposer(<TerminalComposer onSend={onSend} />);
+    expect(screen.getByRole("textbox")).toHaveAccessibleName(/return starts a new line/i);
+
+    // Nothing written yet: there is nothing to send, and the button says so.
+    const button = screen.getByTestId("composer-send");
+    expect(button).toBeDisabled();
+
+    await user.type(screen.getByRole("textbox"), "deploy it");
+    expect(button).toBeEnabled();
+    await user.click(button);
+    expect(onSend).toHaveBeenCalledWith("deploy it");
+  });
+
+  it("stays disabled for whitespace, and wakes up for an image with no words at all", async () => {
+    const onUploadImage = vi.fn(async () => "/work/.uploads/c1/shot.png");
+    renderComposer(<TerminalComposer onSend={vi.fn()} onUploadImage={onUploadImage} />);
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "   ");
+    expect(screen.getByTestId("composer-send")).toBeDisabled();
+
+    fireEvent.paste(box, {
+      clipboardData: { items: [], files: [new File(["x"], "shot.png", { type: "image/png" })] },
+    });
+    await screen.findByTestId("composer-attachment");
+    expect(screen.getByTestId("composer-send")).toBeEnabled();
+  });
+
+  it("keeps the send button clear of the text, and off the desktop entirely", () => {
+    const { unmount } = renderComposer(<TerminalComposer onSend={vi.fn()} />);
+    // The button sits IN the field's corner, so the field reserves the room.
+    expect(screen.getByRole("textbox").className).toContain("pr-14");
+    unmount();
+
+    setViewport(false);
+    renderComposer(<TerminalComposer onSend={vi.fn()} />);
+    expect(screen.queryByTestId("composer-send")).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox").className).not.toContain("pr-14");
+  });
+});
+
+/**
+ * Attaching several pictures at once.
+ *
+ * "I tap the photo library, it closes, and I tap it again for the next one" — the picker closes on
+ * the first tap because the input was single-file. The runner takes one image per request, so the
+ * pictures queue behind each other rather than racing.
+ */
+describe("TerminalComposer — several images at once", () => {
+  it("lets the gallery and the file picker take more than one (the camera takes one photo)", async () => {
+    const user = userEvent.setup();
+    renderComposer(<TerminalComposer onSend={vi.fn()} onUploadImage={vi.fn()} />);
+    await user.click(screen.getByTestId("composer-attach"));
+    await screen.findByTestId("composer-attach-gallery");
+
+    expect(screen.getByTestId("composer-input-gallery")).toHaveAttribute("multiple");
+    expect(screen.getByTestId("composer-input-file")).toHaveAttribute("multiple");
+    expect(screen.getByTestId("composer-input-camera")).not.toHaveAttribute("multiple");
+  });
+
+  it("puts every picked file in the strip and uploads them ONE AT A TIME", async () => {
+    const lands: ((path: string | null) => void)[] = [];
+    const onUploadImage = vi.fn(
+      () => new Promise<string | null>((resolve) => lands.push(resolve)),
+    );
+    const onSend = vi.fn();
+    renderComposer(<TerminalComposer onSend={onSend} onUploadImage={onUploadImage} />);
+
+    const files = ["a.png", "b.png", "c.png"].map((n) => new File(["x"], n, { type: "image/png" }));
+    fireEvent.change(screen.getByTestId("composer-input-gallery"), { target: { files } });
+
+    // Three chips immediately — the pick is never held up by the network...
+    expect(await screen.findAllByTestId("composer-attachment")).toHaveLength(3);
+    // ...but only the first one is actually flying.
+    expect(onUploadImage).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("composer-uploading-count")).toHaveTextContent("0 of 3");
+
+    lands[0]?.("/work/.uploads/c1/a.png");
+    await waitFor(() => expect(onUploadImage).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId("composer-uploading-count")).toHaveTextContent("1 of 3"));
+
+    lands[1]?.("/work/.uploads/c1/b.png");
+    await waitFor(() => expect(onUploadImage).toHaveBeenCalledTimes(3));
+    lands[2]?.("/work/.uploads/c1/c.png");
+    await waitFor(() => expect(screen.queryByTestId("composer-uploading-count")).not.toBeInTheDocument());
+
+    // All three paths ride out with the message, in the order they were picked.
+    await userEvent.type(screen.getByRole("textbox"), "olha essas{Enter}");
+    await waitFor(() =>
+      expect(onSend).toHaveBeenCalledWith(
+        "olha essas /work/.uploads/c1/a.png /work/.uploads/c1/b.png /work/.uploads/c1/c.png",
+      ),
+    );
+  });
+
+  it("a picture dropped before its turn never goes up", async () => {
+    const lands: ((path: string | null) => void)[] = [];
+    const onUploadImage = vi.fn(
+      () => new Promise<string | null>((resolve) => lands.push(resolve)),
+    );
+    renderComposer(<TerminalComposer onSend={vi.fn()} onUploadImage={onUploadImage} />);
+
+    const files = ["a.png", "b.png"].map((n) => new File(["x"], n, { type: "image/png" }));
+    fireEvent.change(screen.getByTestId("composer-input-gallery"), { target: { files } });
+    await screen.findAllByTestId("composer-attachment");
+
+    // The second is still in line: removing it takes it out of the queue, not just off the screen.
+    await userEvent.click(screen.getAllByTestId("composer-attachment-remove")[1] as HTMLElement);
+    lands[0]?.("/work/.uploads/c1/a.png");
+    await waitFor(() =>
+      expect(screen.getByTestId("composer-attachment").dataset.status).toBe("ready"),
+    );
+    expect(onUploadImage).toHaveBeenCalledTimes(1);
   });
 });
 
