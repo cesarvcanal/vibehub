@@ -1,67 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mdBlocks, mdInline, linkifyTokens } from "@/features/board/lib/markdown";
-
-describe("mdBlocks", () => {
-  it("splits prose, headings, bullets and fenced code", () => {
-    const text = [
-      "## Plano",
-      "",
-      "Vou fazer assim:",
-      "- primeiro isso",
-      "- depois aquilo",
-      "",
-      "```ts",
-      "const a = 1;",
-      "```",
-    ].join("\n");
-    expect(mdBlocks(text)).toEqual([
-      { type: "heading", level: 2, text: "Plano" },
-      { type: "paragraph", text: "Vou fazer assim:" },
-      { type: "bullets", items: ["primeiro isso", "depois aquilo"] },
-      { type: "code", lang: "ts", text: "const a = 1;" },
-    ]);
-  });
-
-  it("interprets NOTHING inside a fence", () => {
-    const text = ["```bash", "# not a heading", "- not a bullet", "```"].join("\n");
-    expect(mdBlocks(text)).toEqual([{ type: "code", lang: "bash", text: "# not a heading\n- not a bullet" }]);
-  });
-
-  it("still renders an unclosed fence as code — the message may be arriving", () => {
-    expect(mdBlocks("```\nhalf a diff")).toEqual([{ type: "code", lang: "", text: "half a diff" }]);
-  });
-
-  it("keeps consecutive prose lines in one block, so a wrapped sentence stays a sentence", () => {
-    expect(mdBlocks("uma linha\noutra linha")).toEqual([{ type: "paragraph", text: "uma linha\noutra linha" }]);
-  });
-
-  it("has nothing to say about an empty message", () => {
-    expect(mdBlocks("")).toEqual([]);
-    expect(mdBlocks("\n\n")).toEqual([]);
-  });
-});
-
-describe("mdInline", () => {
-  it("finds code, bold and bare urls, and leaves the rest literal", () => {
-    expect(mdInline("veja `api.ts` e **corrija** em https://x.dev/a, ok")).toEqual([
-      { type: "text", value: "veja " },
-      { type: "code", value: "api.ts" },
-      { type: "text", value: " e " },
-      { type: "strong", value: "corrija" },
-      { type: "text", value: " em " },
-      { type: "link", value: "https://x.dev/a" },
-      { type: "text", value: ", ok" },
-    ]);
-  });
-
-  it("does not eat an asterisk that is not markup", () => {
-    expect(mdInline("2 * 3 * 4")).toEqual([{ type: "text", value: "2 * 3 * 4" }]);
-  });
-
-  it("leaves a lone backtick alone", () => {
-    expect(mdInline("a ` b")).toEqual([{ type: "text", value: "a ` b" }]);
-  });
-});
+import { linkifyTokens, safeUrl } from "@/features/board/lib/markdown";
 
 describe("linkifyTokens", () => {
   it("turns http(s) urls into link tokens and leaves everything else literal", () => {
@@ -117,12 +55,32 @@ describe("linkifyTokens", () => {
   });
 });
 
-describe("mdInline — preview paths", () => {
-  it("links a relative /preview path inside an agent answer", () => {
-    expect(mdInline("no ar em /preview/3100/ — abre aí")).toEqual([
-      { type: "text", value: "no ar em " },
-      { type: "link", value: "/preview/3100/" },
-      { type: "text", value: " — abre aí" },
-    ]);
+describe("safeUrl", () => {
+  it("passes http(s), mailto and the panel's own preview paths", () => {
+    expect(safeUrl("https://x.dev/a")).toBe("https://x.dev/a");
+    expect(safeUrl("http://192.0.2.10:3010/")).toBe("http://192.0.2.10:3010/");
+    expect(safeUrl("mailto:tech@multiversoatacado.com")).toBe("mailto:tech@multiversoatacado.com");
+    expect(safeUrl("/preview/3100/admin")).toBe("/preview/3100/admin");
+  });
+
+  it("empties EVERY other scheme — the allowlist is the sanitiser", () => {
+    for (const hostile of [
+      "javascript:alert(1)",
+      "JaVaScRiPt:alert(1)",
+      " javascript:alert(1)",
+      "data:text/html,<b>x</b>",
+      "vbscript:x",
+      "file:///etc/passwd",
+      "//evil.dev",
+      "../../etc/passwd",
+      "/preview/notaport/x",
+    ]) {
+      expect(safeUrl(hostile)).toBe("");
+    }
+  });
+
+  it("is TOTAL: empty and undefined yield an empty href", () => {
+    expect(safeUrl("")).toBe("");
+    expect(safeUrl(undefined as unknown as string)).toBe("");
   });
 });

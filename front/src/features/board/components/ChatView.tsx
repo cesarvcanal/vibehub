@@ -3,6 +3,9 @@ import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
 import { Bell, Bot, Check, ChevronRight, Copy, Loader2, MessageSquare, TerminalSquare, UserRound, Wrench } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkBreaks from "remark-breaks";
 import { cn } from "@/lib/utils";
 import { wsUrl } from "@/lib/ws";
 import { apiErrorMessage } from "@/lib/apiError";
@@ -26,7 +29,7 @@ import {
   type MessageOrigin,
   type PendingMessage,
 } from "@/features/board/lib/chat";
-import { mdBlocks, mdInline, linkifyTokens } from "@/features/board/lib/markdown";
+import { linkifyTokens, remarkEscapeHtml, remarkPreviewPaths, safeUrl } from "@/features/board/lib/markdown";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -615,79 +618,116 @@ export function LinkifiedText({ text }: { text: string }) {
   );
 }
 
-/** The blocks of one answer. See `lib/markdown.ts` for what is understood — and what is not.
- * Exported so the native SDK chat renders answers exactly the way this view does. */
+/* `remark-breaks` keeps a single newline a line break. CommonMark folds it into a space, which is
+   right for a document and wrong for a chat: an agent listing three paths on three lines would come
+   back as one run-on sentence, and that is how the hand-rolled renderer used to behave. */
+const MD_PLUGINS = [remarkGfm, remarkBreaks, remarkEscapeHtml, remarkPreviewPaths];
+
+/**
+ * One answer, rendered as markdown.
+ *
+ * GFM, not CommonMark. Claude answers with tables (a comparison, a list of files, a plan with
+ * columns), `~~strike~~` and bare links all the time, and none of those three are standard
+ * markdown — a CommonMark-only renderer prints the `|---|---|` separator at the person, which is
+ * the bug this exists to close.
+ *
+ * Nothing here can inject HTML: react-markdown builds React nodes (never `dangerouslySetInnerHTML`),
+ * `remarkEscapeHtml` turns raw `<script>` in the source into visible, inert text, and `safeUrl`
+ * allowlists the only three href shapes we trust. Exported so the native SDK chat renders answers
+ * exactly the way this view does.
+ */
 export function Markdown({ text }: { text: string }) {
   return (
-    <div className="space-y-2">
-      {mdBlocks(text).map((block, i) => {
-        if (block.type === "code") {
-          return (
-            // Wide code scrolls INSIDE its own box: a chat that scrolls sideways as a whole is
-            // unreadable on the phone this view exists for.
-            <pre
-              key={i}
-              className="overflow-x-auto rounded-md border border-border/60 bg-background/60 p-2 text-xs"
-            >
-              <code className="font-mono">{block.text}</code>
-            </pre>
-          );
-        }
-        if (block.type === "heading") {
-          return (
-            <p key={i} className={cn("font-semibold", block.level <= 2 ? "text-sm" : "text-[13px]")}>
-              <Inline text={block.text} />
-            </p>
-          );
-        }
-        if (block.type === "bullets") {
-          return (
-            <ul key={i} className="ml-4 list-disc space-y-1">
-              {block.items.map((item, j) => (
-                <li key={j}>
-                  <Inline text={item} />
-                </li>
-              ))}
-            </ul>
-          );
-        }
-        return (
-          <p key={i} className="whitespace-pre-wrap break-words">
-            <Inline text={block.text} />
-          </p>
-        );
-      })}
+    <div className="space-y-2" data-testid="chat-markdown">
+      <ReactMarkdown remarkPlugins={MD_PLUGINS} urlTransform={safeUrl} components={MD_COMPONENTS}>
+        {String(text ?? "")}
+      </ReactMarkdown>
     </div>
   );
 }
 
-function Inline({ text }: { text: string }) {
-  return (
-    <>
-      {mdInline(text).map((token, i) => {
-        if (token.type === "code") {
-          return (
-            <code key={i} className="rounded bg-muted/60 px-1 py-0.5 font-mono text-[0.85em]">
-              {token.value}
-            </code>
-          );
-        }
-        if (token.type === "strong") return <strong key={i}>{token.value}</strong>;
-        if (token.type === "link") {
-          return (
-            <a
-              key={i}
-              href={token.value}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="text-primary underline underline-offset-2"
-            >
-              {token.value}
-            </a>
-          );
-        }
-        return <React.Fragment key={i}>{token.value}</React.Fragment>;
-      })}
-    </>
-  );
-}
+/**
+ * The element map. Headings stay visually modest on purpose — an `#` inside a chat bubble is a
+ * section of an answer, not a page title, and rendering it at document scale shouts.
+ */
+const MD_COMPONENTS: React.ComponentProps<typeof ReactMarkdown>["components"] = {
+  h1: ({ children }) => <p className="font-semibold text-sm">{children}</p>,
+  h2: ({ children }) => <p className="font-semibold text-sm">{children}</p>,
+  h3: ({ children }) => <p className="font-semibold text-[13px]">{children}</p>,
+  h4: ({ children }) => <p className="font-semibold text-[13px]">{children}</p>,
+  h5: ({ children }) => <p className="font-semibold text-[13px]">{children}</p>,
+  h6: ({ children }) => <p className="font-semibold text-[13px]">{children}</p>,
+  p: ({ children }) => <p className="break-words">{children}</p>,
+  /* A GFM task list is marked by remark-gfm; it drops the bullet (the checkbox IS the marker)
+     and the indent that goes with it. */
+  ul: ({ className, children }) =>
+    className?.includes("contains-task-list") ? (
+      <ul className="space-y-1 [&_input]:mr-1.5 [&_input]:align-[-0.1em]">{children}</ul>
+    ) : (
+      <ul className="ml-4 list-disc space-y-1">{children}</ul>
+    ),
+  ol: ({ children }) => <ol className="ml-4 list-decimal space-y-1">{children}</ol>,
+  li: ({ children }) => <li className="break-words">{children}</li>,
+  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+  em: ({ children }) => <em className="italic">{children}</em>,
+  del: ({ children }) => <del className="opacity-70">{children}</del>,
+  hr: () => <hr className="border-border/60" />,
+  blockquote: ({ children }) => (
+    <blockquote className="border-l-2 border-border/70 pl-3 text-muted-foreground">{children}</blockquote>
+  ),
+  /* Wide code scrolls INSIDE its own box: a chat that scrolls sideways as a whole is unreadable on
+     the phone this view exists for. `pre` owns the frame so the `code` inside stays unstyled. */
+  pre: ({ children }) => (
+    <pre className="overflow-x-auto rounded-md border border-border/60 bg-background/60 p-2 text-xs">{children}</pre>
+  ),
+  code: ({ className, children, ...rest }) => {
+    // A fenced block arrives as <pre><code>; inline code arrives bare. Only the second gets a chip.
+    const fenced = typeof className === "string" && className.includes("language-");
+    if (fenced) return <code className={cn("font-mono", className)} {...rest}>{children}</code>;
+    return (
+      <code className="rounded bg-muted/60 px-1 py-0.5 font-mono text-[0.85em]" {...rest}>
+        {children}
+      </code>
+    );
+  },
+  /* An href that `safeUrl` rejected (javascript:, data:, a stray relative path) arrives here
+     undefined. It degrades to plain text rather than a dead anchor — you can read what the agent
+     wrote, and there is nothing to click. */
+  a: ({ href, children }) =>
+    href ? (
+      <a href={href} target="_blank" rel="noreferrer noopener" className="text-primary underline underline-offset-2">
+        {children}
+      </a>
+    ) : (
+      <>{children}</>
+    ),
+  /* GFM tables. The wrapper is the important part: a table wider than the bubble scrolls on its
+     own, instead of stretching the whole transcript sideways on a phone. */
+  table: ({ children }) => (
+    <div className="-mx-1 overflow-x-auto px-1 py-0.5">
+      {/* `w-max` is what makes the scroller do its job: the table takes the width its content
+          wants, so a column is never squeezed into a three-line word stack while the row still
+          has room to the right. `min-w-full` keeps a narrow table from looking detached. */}
+      <table className="w-max min-w-full border-collapse rounded-md border border-border/60 text-xs">
+        {children}
+      </table>
+    </div>
+  ),
+  thead: ({ children }) => <thead className="border-b border-border/60 bg-muted/70">{children}</thead>,
+  tbody: ({ children }) => <tbody>{children}</tbody>,
+  /* Zebra as a tint of the FOREGROUND, not of `muted`: one value that reads the same in both
+     themes, instead of a stripe that vanishes into the dark background. */
+  tr: ({ children }) => <tr className="border-b border-border/40 last:border-0 even:bg-foreground/[0.045]">{children}</tr>,
+  /* `max-w-[42ch]` is the escape hatch for the other extreme — an agent putting a paragraph in a
+     cell. Short cells never wrap; a long one wraps instead of scrolling the row off the planet. */
+  th: ({ children, style }) => (
+    <th style={style} className="max-w-[42ch] px-2.5 py-1.5 text-left align-bottom font-semibold">
+      {children}
+    </th>
+  ),
+  td: ({ children, style }) => (
+    <td style={style} className="max-w-[42ch] border-r border-border/25 px-2.5 py-1.5 align-top last:border-r-0">
+      {children}
+    </td>
+  ),
+};
