@@ -137,6 +137,26 @@ function resolveQuestion(id, answers) {
   return true;
 }
 
+// Mirror de `supersedeAll` / QUESTION_SUPERSEDED_MESSAGE em protocol.ts.
+//
+// A pessoa não clicou: ela ESCREVEU. Enquanto um cartão de pergunta está de pé, o turno está parado
+// dentro do `canUseTool` — a mensagem nova entra na fila do CLI e fica lá, sem ninguém para lê-la,
+// até o timeout de 30 minutos. Era o "mando a mensagem e não acontece nada, fica preso nessa tela".
+// Falar é responder: a mensagem libera o cartão e passa a valer no lugar dele.
+function supersedePendingQuestions() {
+  const waiting = pendingQuestions.size;
+  for (const deliver of [...pendingQuestions.values()]) {
+    deliver({ answers: null, timedOut: false, superseded: true });
+  }
+  pendingQuestions.clear();
+  return waiting;
+}
+
+const QUESTION_SUPERSEDED_MESSAGE =
+  "The user did not pick any of the options: they answered by sending a message in the chat instead. " +
+  "That message is in this conversation — read it and follow it. It SUPERSEDES this question, " +
+  "so do not ask it again unless their message leaves you genuinely unable to proceed.";
+
 // Mirror of `normalizeUserQuestions` in protocol.ts.
 function normalizeUserQuestions(input) {
   if (!input || typeof input !== "object") return null;
@@ -189,12 +209,14 @@ async function canUseTool(toolName, input) {
   }
   const id = `q_${++questionSeq}_${Date.now()}`;
   emit({ type: "user_question", id, questions });
-  const { answers, timedOut } = await waitQuestion(id);
+  const { answers, timedOut, superseded } = await waitQuestion(id);
   if (!answers) {
-    emit({ type: "question_result", id, timedOut: !!timedOut });
+    emit({ type: "question_result", id, timedOut: !!timedOut, superseded: !!superseded });
     return { behavior: "deny", message: timedOut
       ? "The user did not answer the question within 30 minutes. Continue with your best judgment and note the open question."
-      : "The question was cancelled (the turn was interrupted)." };
+      : superseded
+        ? QUESTION_SUPERSEDED_MESSAGE
+        : "The question was cancelled (the turn was interrupted)." };
   }
   emit({ type: "question_result", id, answers });
   return { behavior: "allow", updatedInput: { questions: input.questions, answers: buildAskUserAnswers(questions, answers) } };
@@ -398,7 +420,11 @@ rl.on("line", (line) => {
     return;
   }
   if (control && control.type === "user" && typeof control.text === "string") {
+    // ORDEM IMPORTA: a mensagem entra na corrente ANTES de o cartão ser liberado. Liberar primeiro
+    // solta o turno, que pode seguir e responder à pergunta sem nunca ter visto a mensagem nova —
+    // exatamente o contrário do que a pessoa pediu ao escrever.
     sendUser(control.text);
+    supersedePendingQuestions();
     return;
   }
   if (control && control.type === "permission_decision" && typeof control.id === "string") {

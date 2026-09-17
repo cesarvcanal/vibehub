@@ -1184,7 +1184,11 @@ function SdkQuestionCard({
           <div key={i} className="min-w-0 text-muted-foreground">{q.question}</div>
         ))}
         <div className="text-foreground/90">
-          {row.outcome === "answered" ? t("sdk.questionAnswered", { answers: chosen.join(" · ") }) : t("sdk.questionUnanswered")}
+          {row.outcome === "answered"
+            ? t("sdk.questionAnswered", { answers: chosen.join(" · ") })
+            : row.outcome === "superseded"
+              ? t("sdk.questionSuperseded")
+              : t("sdk.questionUnanswered")}
         </div>
       </div>
     );

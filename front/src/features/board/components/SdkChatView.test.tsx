@@ -1231,3 +1231,44 @@ describe("SdkChatView — o raciocínio durante a espera", () => {
     expect(screen.getByTestId("sdk-assistant")).not.toHaveTextContent("vou responder curto");
   });
 });
+
+/**
+ * O cartão que prendia a tela (produção, 2026-09-17). O destravamento em si mora no driver — quem
+ * está parado esperando o clique é o turno dentro do `canUseTool` —, e o que a TELA deve é contar a
+ * verdade quando ele é liberado: a pessoa respondeu, só não pelo cartão.
+ */
+describe("SdkChatView — a pergunta respondida por mensagem", () => {
+  const question = {
+    type: "user_question",
+    id: "q1",
+    questions: [{ question: "Abro PR ou commito direto?", options: [{ label: "PR" }, { label: "direto" }] }],
+  } as unknown as SdkEvent;
+
+  it("o cartão diz que foi respondido por mensagem — não 'sem resposta'", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(question);
+    await screen.findByTestId("sdk-question");
+
+    ws.deliver({ type: "question_result", id: "q1", superseded: true } as unknown as SdkEvent);
+
+    // (a suíte roda no idioma padrão, en — o pt-BR diz "Você respondeu por mensagem")
+    await waitFor(() => expect(screen.getByTestId("sdk-question")).toHaveTextContent("You answered with a message"));
+    expect(screen.getByTestId("sdk-question")).not.toHaveTextContent("No answer");
+  });
+
+  it("e a bandeja de decisões pendentes esvazia (nada segue cobrando um clique)", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(question);
+    await waitFor(() => expect(screen.getByTestId("pending-tray")).toBeInTheDocument());
+
+    ws.deliver({ type: "question_result", id: "q1", superseded: true } as unknown as SdkEvent);
+
+    await waitFor(() => expect(screen.queryByTestId("pending-tray")).not.toBeInTheDocument());
+  });
+});

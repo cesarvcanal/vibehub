@@ -6,6 +6,7 @@ import {
   sdkPermissionDecision,
   createPermissionBroker,
   createQuestionBroker,
+  QUESTION_SUPERSEDED_MESSAGE,
   normalizeUserQuestions,
   buildAskUserAnswers,
   parseQuestionAnswers,
@@ -338,6 +339,39 @@ describe("createQuestionBroker", () => {
     expect(broker.resolve("q2", [{ selected: ["B"] }])).toBe(true);
     expect(broker.resolve("q2", [{ selected: ["C"] }])).toBe(false);
     await expect(waited).resolves.toEqual({ answers: [{ selected: ["B"] }], timedOut: false });
+  });
+
+  /**
+   * O BUG (produção, 2026-09-17): o agente propunha um plano com opções, o César não gostava do
+   * plano e mandava uma mensagem redirecionando — e não acontecia NADA. O turno estava parado
+   * dentro do `canUseTool` esperando um clique; a mensagem entrava na fila do CLI sem ninguém para
+   * lê-la, e a tela ficava presa até o timeout de 30 MINUTOS. Falar é responder.
+   */
+  it("supersedeAll: quem escreveu no chat respondeu — o cartão é liberado, não 'sem resposta'", async () => {
+    const broker = createQuestionBroker(60_000);
+    const waited = broker.wait("plano");
+    expect(broker.supersedeAll()).toBe(1);
+    await expect(waited).resolves.toEqual({ answers: null, timedOut: false, superseded: true });
+    expect(broker.pendingCount()).toBe(0);
+  });
+
+  it("supersedeAll sem cartão nenhum é 0 — o caminho de TODA mensagem comum, sem efeito colateral", () => {
+    const broker = createQuestionBroker(60_000);
+    expect(broker.supersedeAll()).toBe(0);
+  });
+
+  it("substituído é DIFERENTE de abandonado: o modelo precisa saber que existe uma mensagem a ler", async () => {
+    const broker = createQuestionBroker(60_000);
+    const superseded = broker.wait("a");
+    broker.supersedeAll();
+    const abandoned = broker.wait("b");
+    broker.abandonAll();
+    expect((await superseded).superseded).toBe(true);
+    expect((await abandoned).superseded).toBeUndefined();
+    // …e a mensagem que vai ao modelo diz as três coisas: não houve escolha, há mensagem, ela manda.
+    expect(QUESTION_SUPERSEDED_MESSAGE).toContain("did not pick any of the options");
+    expect(QUESTION_SUPERSEDED_MESSAGE).toContain("SUPERSEDES");
+    expect(QUESTION_SUPERSEDED_MESSAGE).toContain("do not ask it again");
   });
 
   it("abandonAll resolves every pending question as unanswered (the interrupt path)", async () => {

@@ -472,3 +472,24 @@ em acompanhamento.
 - **Na tela.** Aberto enquanto pensa, recolhido quando termina (um clique reabre) — durante a espera
   é o que se quer ler; depois, vira ruído entre a pergunta e a resposta. Uma escolha explícita da
   pessoa vence o automático, então abrir no meio do turno não é desfeito quando ele acaba.
+
+## Falar é responder (o cartão de pergunta não prende mais a tela)
+
+Com um `user_question` de pé, o turno está PARADO dentro do `canUseTool` esperando um clique. Uma
+mensagem escrita no chat nesse meio-tempo entrava na corrente do CLI e ficava lá, sem ninguém para
+lê-la, até o timeout de 30 minutos: na tela, "mandei a mensagem e não acontece nada, fica preso"
+(produção, 2026-09-17 — o caso é justamente NÃO gostar do plano proposto e querer outro rumo).
+
+- **Uma mensagem libera o cartão.** `supersedePendingQuestions()` no driver (`supersedeAll()` no
+  broker canônico de `protocol.ts`) resolve tudo que espera clique com `superseded: true`.
+- **A ordem é o bug.** A mensagem é empurrada (`sendUser`) ANTES de o cartão ser liberado. Liberar
+  primeiro solta o turno, que pode seguir e responder à pergunta sem nunca ter visto a mensagem
+  nova — o oposto do que a pessoa pediu ao escrever.
+- **O modelo lê o motivo.** `QUESTION_SUPERSEDED_MESSAGE` diz as três coisas que impedem o agente de
+  reabrir a mesma pergunta: não houve escolha, existe uma mensagem nesta conversa, e ela manda.
+- **A tela não mente.** O `question_result` sai com `superseded`, e o cartão diz "Você respondeu por
+  mensagem" — `unanswered` seria falso: a pessoa respondeu, só não pelo cartão. Ele também sai da
+  bandeja de decisões pendentes, que parava de cobrar um clique que já não fazia sentido.
+
+O cartão de PERMISSÃO (`permission_request`) tem a mesma forma de espera, e segue como estava: ali a
+decisão é binária, o botão Negar é o caminho explícito, e o relógio é de 5 minutos, não 30.

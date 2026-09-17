@@ -191,3 +191,38 @@ describe("sdk-driver.mjs — o raciocínio que a tela mostra", () => {
     expect(source).not.toContain('emit({ type: "thinking", text: block.data');
   });
 });
+
+/**
+ * A MENSAGEM QUE DESTRAVA O CARTÃO (produção, 2026-09-17): com um plano de opções na tela, escrever
+ * no chat não fazia nada — o turno estava parado dentro do `canUseTool` e a mensagem ficava na fila
+ * do CLI até o timeout de 30 minutos. O `.mjs` não é importável, então o que se cerca é o texto: as
+ * duas armadilhas aqui são a ORDEM (liberar antes de empurrar deixa o turno seguir sem ler a
+ * mensagem — o oposto do que a pessoa pediu) e a mensagem que o modelo lê no lugar da escolha.
+ */
+describe("sdk-driver.mjs — falar é responder (o cartão de pergunta não prende mais)", () => {
+  const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
+
+  it("uma mensagem do usuário libera as perguntas pendentes", () => {
+    expect(source).toContain("function supersedePendingQuestions()");
+    expect(source).toContain("superseded: true");
+    expect(source).toContain("supersedePendingQuestions();");
+  });
+
+  it("a mensagem entra na corrente ANTES de o cartão ser liberado (ordem é o bug)", () => {
+    const handler = source.slice(source.indexOf('control.type === "user"'));
+    const push = handler.indexOf("sendUser(control.text);");
+    const release = handler.indexOf("supersedePendingQuestions();");
+    expect(push).toBeGreaterThanOrEqual(0);
+    expect(release).toBeGreaterThan(push);
+  });
+
+  it("o modelo é instruído a LER a mensagem e a não repetir a pergunta", () => {
+    expect(source).toContain("QUESTION_SUPERSEDED_MESSAGE");
+    expect(source).toContain("SUPERSEDES this question");
+    expect(source).toContain("do not ask it again");
+  });
+
+  it("o resultado do cartão sai marcado como substituído (a tela não pode dizer 'sem resposta')", () => {
+    expect(source).toContain('emit({ type: "question_result", id, timedOut: !!timedOut, superseded: !!superseded })');
+  });
+});
