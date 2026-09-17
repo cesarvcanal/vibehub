@@ -283,6 +283,10 @@ function baseOptions() {
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
     includePartialMessages: true,
+    // O RACIOCÍNIO, ao vivo. `display: "summarized"` não é opcional: nos modelos atuais o padrão é
+    // "omitted", e aí os blocos de thinking CHEGAM VAZIOS — o driver encaminharia string vazia e a
+    // tela continuaria só com o spinner. Adaptive deixa o modelo decidir quando (e quanto) pensar.
+    thinking: { type: "adaptive", display: "summarized" },
     // The SAME configuration the card's TUI session loads, so the native chat has the same tools:
     // "user" brings the profile's managed MCPs (vibehub — whose MCP instructions ARE the maestro
     // persona —, navegador over ${PW_CDP_ENDPOINT}, and every registered one) plus the runner
@@ -325,10 +329,17 @@ async function runStream() {
         const ev = msg.event;
         if (ev && ev.type === "content_block_delta" && ev.delta && ev.delta.type === "text_delta") {
           emit({ type: "assistant_delta", text: ev.delta.text });
+        } else if (ev && ev.type === "content_block_delta" && ev.delta && ev.delta.type === "thinking_delta") {
+          // O campo é `thinking`, não `text` (ThinkingDelta da Messages API).
+          if (ev.delta.thinking) emit({ type: "thinking_delta", text: ev.delta.thinking });
         }
       } else if (msg.type === "assistant") {
         for (const block of msg.message.content) {
           if (block.type === "text") emit({ type: "assistant_text", text: block.text });
+          // `redacted_thinking` não entra aqui de propósito: ele não carrega texto legível (só o
+          // payload cifrado), então não há o que mostrar — emitir uma linha vazia seria pior que
+          // nada. Um bloco vazio também é descartado: o spinner já diz que há trabalho em curso.
+          else if (block.type === "thinking") { if (block.thinking) emit({ type: "thinking", text: block.thinking }); }
           else if (block.type === "tool_use") emit({ type: "tool_use", id: block.id, name: block.name, input: block.input });
         }
       } else if (msg.type === "result") {

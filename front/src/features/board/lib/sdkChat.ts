@@ -23,6 +23,8 @@ export interface SdkEvent {
     | "session"
     | "assistant_delta"
     | "assistant_text"
+    | "thinking"
+    | "thinking_delta"
     | "tool_use"
     | "permission"
     | "permission_request"
@@ -126,6 +128,13 @@ export type SdkRow =
     }
   /** Claude talking. `streaming` while deltas are still landing on it. */
   | { kind: "assistant"; id: string; text: string; streaming: boolean }
+  /**
+   * O RACIOCÍNIO do modelo, enquanto ele pensa. Mesma mecânica de streaming da linha do assistente
+   * (`streaming` enquanto os deltas caem), mas desenhada em segundo plano: é contexto de espera, não
+   * a resposta. Existe porque um turno longo mostrava só "Trabalhando…" e quem esperava não fazia
+   * ideia do que estava acontecendo. Vive na sessão: não é gravado no histórico nem replayado.
+   */
+  | { kind: "thinking"; id: string; text: string; streaming: boolean }
   /** One tool call, compact: the name plus a one-line summary of its input. */
   | { kind: "tool"; id: string; name: string; summary: string; input?: unknown }
   /** The "Permitir / Negar" card — a sensitive call waiting on the human (or how it ended). */
@@ -229,6 +238,16 @@ function streamingRow(rows: SdkRow[]): { kind: "assistant"; id: string; text: st
 }
 
 /**
+ * A linha de RACIOCÍNIO ainda aberta (a última, se for uma). Separada de `streamingRow` de
+ * propósito: pensamento e resposta são duas correntes distintas, e uma nunca escreve na outra —
+ * senão o primeiro token da resposta iria parar no fim do raciocínio. PURE.
+ */
+function streamingThinkingRow(rows: SdkRow[]): { kind: "thinking"; id: string; text: string; streaming: boolean } | null {
+  const last = rows[rows.length - 1];
+  return last && last.kind === "thinking" && last.streaming ? last : null;
+}
+
+/**
  * Append an error row — or COLLAPSE it into the previous one when it says the same thing.
  *
  * The reconnect loop makes this the common case, not the corner: with the global flag off (or the
@@ -247,7 +266,7 @@ function appendErrorRow(state: SdkChatState, rows: SdkRow[], text: string): SdkC
 
 /** Close any live streaming row (a tool call or the turn's end interrupts the text block). */
 function settleStreaming(rows: SdkRow[]): SdkRow[] {
-  const live = streamingRow(rows);
+  const live = streamingRow(rows) ?? streamingThinkingRow(rows);
   if (!live) return rows;
   return [...rows.slice(0, -1), { ...live, streaming: false }];
 }
@@ -319,7 +338,52 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         seq,
         turnActive: nextTurnActive(base, false),
         awaiting: false,
-        rows: [...base.rows, { kind: "assistant", id, text: event.text, streaming: true }],
+        // `settleStreaming` e não um append cru: o que pode estar aberto aqui é a linha de
+        // RACIOCÍNIO (o modelo pensou e agora responde), e deixá-la "pensando" para sempre é a
+        // pulsação que nunca para. Uma linha de resposta aberta já teria sido usada acima.
+        rows: [...settleStreaming(base.rows), { kind: "assistant", id, text: event.text, streaming: true }],
+      };
+    }
+    /**
+     * O RACIOCÍNIO ao vivo. Cai na sua própria linha, nunca na do assistente: são duas correntes
+     * (o modelo pensa, depois responde) e misturá-las colaria o primeiro token da resposta no fim
+     * do pensamento. Um delta de raciocínio FECHA uma resposta que ainda estivesse aberta — se o
+     * modelo voltou a pensar, aquele parágrafo acabou.
+     */
+    case "thinking_delta": {
+      if (!event.text) return state;
+      const base = markSource(state, false); // raciocínio é sempre o driver falando
+      const live = streamingThinkingRow(base.rows);
+      if (live) {
+        const rows = [...base.rows.slice(0, -1), { ...live, text: live.text + event.text }];
+        return { ...base, rows, turnActive: nextTurnActive(base, false), awaiting: false };
+      }
+      const { id, seq } = nextId(base, "t");
+      return {
+        ...base,
+        seq,
+        turnActive: nextTurnActive(base, false),
+        awaiting: false,
+        rows: [...settleStreaming(base.rows), { kind: "thinking", id, text: event.text, streaming: true }],
+      };
+    }
+    /** O bloco consolidado: mesmas palavras, agora fechadas — substitui os deltas que o montaram. */
+    case "thinking": {
+      const text = event.text ?? "";
+      const live = streamingThinkingRow(state.rows);
+      if (live) {
+        const rows = [...state.rows.slice(0, -1), { ...live, text, streaming: false }];
+        return { ...state, rows, turnActive: nextTurnActive(state, viaTerminal), awaiting: false };
+      }
+      if (text === "") return state;
+      const marked = markSource(state, viaTerminal);
+      const { id, seq } = nextId(marked, "t");
+      return {
+        ...marked,
+        seq,
+        turnActive: nextTurnActive(marked, viaTerminal),
+        awaiting: false,
+        rows: [...settleStreaming(marked.rows), { kind: "thinking", id, text, streaming: false }],
       };
     }
     case "assistant_text": {

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   buildSdkDriverCommandLine,
   buildInstallDriverScript,
@@ -155,5 +156,38 @@ describe("buildEnsureSdkScript — the automatic, idempotent SDK install", () =>
 
   it("rejects a malformed version rather than passing it to npm", () => {
     expect(() => buildEnsureSdkScript("vibehub-runner", "1.2; rm -rf /")).toThrow();
+  });
+});
+
+/**
+ * O DRIVER NÃO É IMPORTÁVEL (é um .mjs que roda dentro do runner, onde o SDK está instalado), então
+ * o que dá para cercar aqui é o SEU TEXTO. Não é preciosismo: este trecho tem duas armadilhas que
+ * não fazem barulho nenhum quando quebram.
+ *
+ * 1. `display: "summarized"` — nos modelos atuais o padrão é `omitted`, e aí os blocos de thinking
+ *    chegam VAZIOS. Sem essa linha o driver segue "funcionando", emitindo nada, e a tela volta a
+ *    mostrar só o spinner: um sumiço silencioso, do tipo que só aparece em produção.
+ * 2. O delta carrega o texto em `delta.thinking`, NÃO em `delta.text` (ThinkingDelta da Messages
+ *    API). Copiar a linha do texto e trocar o tipo devolve `undefined` a cada token.
+ */
+describe("sdk-driver.mjs — o raciocínio que a tela mostra", () => {
+  const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
+
+  it("pede o raciocínio ao SDK com display 'summarized' (o padrão 'omitted' vem vazio)", () => {
+    expect(source).toMatch(/thinking:\s*\{\s*type:\s*"adaptive",\s*display:\s*"summarized"\s*\}/);
+  });
+
+  it("encaminha o delta ao vivo lendo `delta.thinking` (não `delta.text`)", () => {
+    expect(source).toContain('ev.delta.type === "thinking_delta"');
+    expect(source).toContain('emit({ type: "thinking_delta", text: ev.delta.thinking })');
+  });
+
+  it("encaminha o bloco consolidado, e só quando ele tem texto", () => {
+    expect(source).toContain('block.type === "thinking"');
+    expect(source).toContain('emit({ type: "thinking", text: block.thinking })');
+  });
+
+  it("não inventa linha para `redacted_thinking` — ele não carrega texto legível", () => {
+    expect(source).not.toContain('emit({ type: "thinking", text: block.data');
   });
 });

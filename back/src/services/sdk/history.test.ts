@@ -56,6 +56,16 @@ describe("replayableHistoryEvent", () => {
     expect(replayableHistoryEvent({ type: "question_result", id: "q1", answers: [{ selected: ["A"] }] })).toBe(true);
   });
 
+  /**
+   * O RACIOCÍNIO é de MOMENTO, como o `turn_absorbed`: serve a quem está esperando agora. Gravá-lo
+   * encheria o log (limite de replay: 500 eventos) com o pensamento de ontem, empurrando a conversa
+   * de verdade — mensagem, ferramenta, resposta — para fora do replay. Em disco fica a conversa.
+   */
+  it("NÃO grava o raciocínio: ele é orientação ao vivo, não conversa", () => {
+    expect(replayableHistoryEvent({ type: "thinking", text: "vou ler o arquivo" })).toBe(false);
+    expect(replayableHistoryEvent({ type: "thinking_delta", text: "vou " })).toBe(false);
+  });
+
   it("drops the connection's own chatter: deltas, ready, session, results, errors", () => {
     expect(replayableHistoryEvent({ type: "assistant_delta", text: "oi" })).toBe(false);
     expect(replayableHistoryEvent({ type: "ready" })).toBe(false);

@@ -502,3 +502,85 @@ describe("escada de estados — awaiting (Preparando/Pensando antes do primeiro 
     expect(feed([{ type: "error", message: "boom" }], base).awaiting).toBe(false);
   });
 });
+
+/**
+ * O RACIOCÍNIO NA TELA (pedido do César, 2026-09-17): "só fica um loading escrito 'Trabalhando…' e
+ * eu não sei o que está acontecendo. Se ela estiver pensando, mostra o pensamento ali."
+ *
+ * O pensamento é a única coisa que o modelo produz ANTES da resposta, então é ele que transforma a
+ * espera em acompanhamento. Regra central: pensamento e resposta são DUAS correntes — uma nunca
+ * escreve na linha da outra.
+ */
+describe("raciocínio ao vivo (o que a espera mostra)", () => {
+  it("deltas de raciocínio se acumulam numa linha própria, marcada como em curso", () => {
+    const state = feed([
+      { type: "ready" },
+      { type: "thinking_delta", text: "Vou ler o " },
+      { type: "thinking_delta", text: "arquivo primeiro" },
+    ]);
+    expect(state.rows).toEqual([
+      { kind: "thinking", id: "t:1", text: "Vou ler o arquivo primeiro", streaming: true },
+    ]);
+    expect(state.turnActive).toBe(true);
+  });
+
+  it("o bloco consolidado FECHA a linha e substitui os deltas (mesmas palavras, sem duplicar)", () => {
+    const state = feed([
+      { type: "ready" },
+      { type: "thinking_delta", text: "Vou ler o " },
+      { type: "thinking", text: "Vou ler o arquivo primeiro." },
+    ]);
+    expect(state.rows).toEqual([
+      { kind: "thinking", id: "t:1", text: "Vou ler o arquivo primeiro.", streaming: false },
+    ]);
+  });
+
+  it("a RESPOSTA não é escrita na linha do raciocínio (as duas correntes não se misturam)", () => {
+    const state = feed([
+      { type: "ready" },
+      { type: "thinking_delta", text: "preciso checar o teste" },
+      { type: "assistant_delta", text: "Claro! " },
+      { type: "assistant_delta", text: "Já vou." },
+    ]);
+    expect(state.rows).toEqual([
+      { kind: "thinking", id: "t:1", text: "preciso checar o teste", streaming: false },
+      { kind: "assistant", id: "a:2", text: "Claro! Já vou.", streaming: true },
+    ]);
+  });
+
+  it("voltar a pensar depois de responder abre OUTRA linha, e fecha o parágrafo anterior", () => {
+    const state = feed([
+      { type: "ready" },
+      { type: "assistant_delta", text: "Vou verificar." },
+      { type: "thinking_delta", text: "o teste falhou, então…" },
+    ]);
+    expect(state.rows.map((r) => [r.kind, "streaming" in r ? r.streaming : null])).toEqual([
+      ["assistant", false],
+      ["thinking", true],
+    ]);
+  });
+
+  it("raciocínio vazio não vira linha nenhuma (bloco redigido/omitido não polui a conversa)", () => {
+    const state = feed([{ type: "ready" }, { type: "thinking", text: "" }, { type: "thinking_delta", text: "" }]);
+    expect(state.rows).toEqual([]);
+  });
+
+  it("pensar é sinal de trabalho: a escada de status sai de 'Pensando…' para o pensamento real", () => {
+    const after = feed([
+      { type: "ready" },
+      { type: "thinking_delta", text: "hmm" },
+    ], { ...INITIAL_SDK_STATE, awaiting: true });
+    expect(after.awaiting).toBe(false); // o texto na tela substitui a promessa do spinner
+    expect(after.turnActive).toBe(true);
+  });
+
+  it("o fim do turno fecha um raciocínio que ficou aberto (nada fica 'pensando' para sempre)", () => {
+    const state = feed([
+      { type: "ready" },
+      { type: "thinking_delta", text: "pensando alto" },
+      { type: "result", isError: false },
+    ]);
+    expect(state.turnActive).toBe(false);
+    expect(state.rows.every((r) => !("streaming" in r) || r.streaming === false)).toBe(true);
+  });
+});

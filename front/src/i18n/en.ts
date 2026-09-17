@@ -473,6 +473,7 @@ export const en: Record<string, string> = {
   "sdk.edited": "edited",
   "sdk.preparing": "Preparing\u2026",
   "sdk.thinking": "Thinking\u2026",
+  "sdk.reasoning": "Reasoning",
   "sdk.flagOff": "The SDK driver is off for this install. Turn on \"SDK driver\" in Settings to use native chat.",
 
   "cardView.sdkTerminalNote": "Native chat is on for this card — it is the same conversation: the native chat always resumes the newest session, including what you type here.",
