@@ -437,3 +437,11 @@ tivesse sido enviada. Reenviar o mesmo texto funciona. Dois furos, um em cada po
   estava vivo). No reconnect, `reconcileOutbox` compara o outbox com o replay do servidor: texto
   que está no replay foi entregue (só o recibo se perdeu); o que não está volta marcado, com o
   texto inteiro — inclusive depois de um F5.
+- **O veredito é dado UMA vez por envio.** A mensagem dada por não entregue CONTINUA no outbox (é a
+  cópia que o *Reenviar*/*Descartar* oferece) e o `at` dela não anda mais — então ela é marcada com
+  `undelivered`, e `overdueMessages` ignora quem já foi cobrado. Sem essa marca ela estaria vencida
+  em TODO tique do watchdog, que derrubava o socket a cada 2s: a tela entrava no loop "chat →
+  *Iniciando o agente…* → histórico inteiro → chat", piscando sem parar (produção, 2026-09-17, logo
+  depois do recibo entrar no ar). Um *Reenviar* zera o relógio e limpa a marca — o envio novo volta
+  a ser cobrável; um `user_nack` a estampa na hora, porque o servidor JÁ respondeu e derrubar essa
+  conexão não descobriria nada.
