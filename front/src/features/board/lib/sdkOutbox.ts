@@ -28,6 +28,15 @@ export interface OutboxMessage {
   at: number;
   /** Uma correção de mensagem já enviada carrega o original (o supersede do back). */
   original?: string;
+  /**
+   * Já foi dada por NÃO ENTREGUE (o back recusou, ou o prazo do recibo venceu).
+   *
+   * A entrada continua na fila — é a cópia recuperável que a bolha "reenviar/descartar" usa — mas o
+   * veredito já foi dado UMA vez: sem esta marca, a mensagem seguiria vencida para sempre e o
+   * watchdog derrubaria o socket a cada tique, de segundo em segundo (o loop de "Iniciando o
+   * agente…" de 2026-09-17). Um reenvio limpa a marca e o relógio volta a correr.
+   */
+  undelivered?: boolean;
 }
 
 /**
@@ -83,13 +92,44 @@ export function dropFromOutbox(messages: readonly OutboxMessage[], cid: string):
   return messages.filter((m) => m.cid !== cid);
 }
 
-/** As mensagens cujo recibo não chegou no prazo. PURE. */
+/**
+ * As mensagens cujo recibo não chegou no prazo E que ainda não foram cobradas.
+ *
+ * O `undelivered` é o que torna a cobrança ÚNICA: a mensagem vencida não sai da fila (a pessoa
+ * ainda pode reenviar), então sem a marca ela continuaria vencida em todo tique — e o watchdog
+ * derruba o socket a cada cobrança. Era esse o loop "chat → Iniciando o agente… → histórico
+ * inteiro → chat" a cada segundo. PURE.
+ */
 export function overdueMessages(
   messages: readonly OutboxMessage[],
   now: number,
   timeoutMs: number = OUTBOX_ACK_TIMEOUT_MS,
 ): OutboxMessage[] {
-  return messages.filter((m) => now - m.at >= timeoutMs);
+  return messages.filter((m) => !m.undelivered && now - m.at >= timeoutMs);
+}
+
+/** Dá por não entregues as mensagens citadas — o veredito já saiu, não se cobra de novo. PURE. */
+export function markUndelivered(
+  messages: readonly OutboxMessage[],
+  cids: readonly string[],
+): OutboxMessage[] {
+  const wanted = new Set(cids);
+  let changed = false;
+  const next = messages.map((m) => {
+    if (!wanted.has(m.cid) || m.undelivered === true) return m;
+    changed = true;
+    return { ...m, undelivered: true };
+  });
+  return changed ? next : (messages as OutboxMessage[]);
+}
+
+/** Um reenvio: mesmas palavras, mesmo recibo, relógio zerado e o veredito anterior apagado. PURE. */
+export function retryOutbox(
+  messages: readonly OutboxMessage[],
+  entry: OutboxMessage,
+  now: number,
+): OutboxMessage[] {
+  return addToOutbox(messages, { ...entry, at: now, undelivered: false });
 }
 
 /** Identidade de texto insensível a espaços — a mesma dobra que o dedupe do back usa. PURE. */

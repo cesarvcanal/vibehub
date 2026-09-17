@@ -4,9 +4,11 @@ import {
   addToOutbox,
   dropFromOutbox,
   newCid,
+  markUndelivered,
   overdueMessages,
   readOutbox,
   reconcileOutbox,
+  retryOutbox,
   writeOutbox,
   type OutboxMessage,
 } from "@/features/board/lib/sdkOutbox";
@@ -85,6 +87,41 @@ describe("a fila em si", () => {
       msg("nova", "acabou de sair", now - 500),
     ];
     expect(overdueMessages(list, now).map((m) => m.cid)).toEqual(["velha"]);
+  });
+
+  /**
+   * O BUG DO HOTFIX (produção, 2026-09-17): a bolha "não entregue" fica na fila de propósito — é a
+   * cópia que o reenviar/descartar usa — e o `at` dela não muda mais. Sem marcar o veredito, ela
+   * seguia VENCIDA em todo tique do watchdog, que derrubava o socket a cada vez: a tela piscava
+   * "chat → Iniciando o agente… → histórico → chat" de 2 em 2 segundos, sem parar.
+   */
+  it("uma vencida JÁ cobrada não vence de novo (era o loop de reconexão a cada tique)", () => {
+    const now = 100_000;
+    const list = [msg("velha", "sem recibo há muito", now - OUTBOX_ACK_TIMEOUT_MS - 1)];
+    const cobrada = markUndelivered(list, ["velha"]);
+    expect(cobrada[0]!.undelivered).toBe(true);
+    expect(overdueMessages(cobrada, now)).toEqual([]);
+    expect(overdueMessages(cobrada, now + 10 * OUTBOX_ACK_TIMEOUT_MS)).toEqual([]);
+    // …e a mensagem continua guardada: o veredito não apaga o texto.
+    expect(cobrada[0]!.text).toBe("sem recibo há muito");
+  });
+
+  it("markUndelivered: só mexe nos cids citados, e não recria a lista à toa", () => {
+    const list = [msg("c1", "a"), msg("c2", "b")];
+    const marked = markUndelivered(list, ["c1"]);
+    expect(marked.map((m) => m.undelivered)).toEqual([true, undefined]);
+    expect(markUndelivered(marked, ["c1"])).toBe(marked); // nada mudou: mesma referência
+    expect(markUndelivered(list, ["não-existe"])).toBe(list);
+  });
+
+  it("o reenvio rearma o relógio e apaga o veredito — o watchdog volta a cobrar esse envio", () => {
+    const now = 100_000;
+    const entry = msg("c1", "instrução longa", now - OUTBOX_ACK_TIMEOUT_MS - 1);
+    const cobrada = markUndelivered([entry], ["c1"]);
+    const reenviada = retryOutbox(cobrada, cobrada[0]!, now);
+    expect(reenviada).toHaveLength(1); // mesmo cid: uma bolha só, não duas
+    expect(overdueMessages(reenviada, now)).toEqual([]); // acabou de sair
+    expect(overdueMessages(reenviada, now + OUTBOX_ACK_TIMEOUT_MS).map((m) => m.cid)).toEqual(["c1"]);
   });
 
   it("newCid: ids distintos a cada envio", () => {

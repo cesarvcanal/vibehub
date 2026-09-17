@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { act } from "react";
 import { OUTBOX_TICK_MS, SdkChatView } from "@/features/board/components/SdkChatView";
 import { OUTBOX_ACK_TIMEOUT_MS } from "@/features/board/lib/sdkOutbox";
+import { RECONNECT_MAX_MS } from "@/features/board/lib/reconnect";
 import { renderApp } from "@/test/render";
 import type { SdkEvent } from "@/features/board/lib/sdkChat";
 
@@ -1031,6 +1032,125 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
 
     await waitFor(() => expect(screen.queryByTestId("sdk-user")).not.toBeInTheDocument());
     await waitFor(() => expect(localStorage.getItem("vibehub.sdkOutbox.c1")).toBeNull());
+  });
+
+  /**
+   * O BUG DO HOTFIX (produção, 2026-09-17, logo depois do recibo entrar no ar): com UMA mensagem
+   * não entregue na tela, o chat entrava num loop de ~2 em ~2 segundos — "chat → Iniciando o
+   * agente… → histórico inteiro de volta → chat", piscando sem parar até ficar inutilizável.
+   *
+   * A causa: a mensagem não entregue CONTINUA no outbox de propósito (é a cópia que o
+   * "reenviar/descartar" oferece), e o `at` dela nunca muda — então ela seguia vencida em TODO
+   * tique do watchdog, que a cada tique derrubava o socket "para descobrir se ele estava vivo".
+   * O veredito agora é dado uma vez por envio; só um reenvio volta a armar o relógio.
+   */
+  describe("o veredito é dado UMA vez (o loop de reconexão)", () => {
+    /** Quantos tiques um loop precisaria para se revelar — de sobra para vários prazos vencerem. */
+    const MANY_TICKS = (OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS) * 5;
+
+    it("user_nack e o tempo passando: o socket VIVO não é derrubado (sem loop de reconexão)", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderSdkChat();
+        const ws = await socket();
+        ws.accept();
+        ws.deliver({ type: "ready" });
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
+        await waitFor(() => expect(ws.sent.length).toBe(1));
+        const cid = (JSON.parse(ws.sent[0]!) as { cid: string }).cid;
+        ws.deliver({ type: "user_nack", cid, reason: "driver-gone" } as SdkEvent);
+        await waitFor(() => expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered"));
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(MANY_TICKS); });
+
+        expect(ws.readyState).not.toBe(3); // o socket que acabou de responder não é suspeito
+        expect(FakeSocket.instances).toHaveLength(1); // nenhuma reconexão: nada pisca
+        expect(screen.getByTestId("sdk-user-undelivered")).toBeInTheDocument(); // e a bolha continua lá
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("sem recibo: derruba UMA vez, e a conexão nova fica de pé com a bolha marcada", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderSdkChat();
+        const first = await socket();
+        first.accept();
+        first.deliver({ type: "ready" });
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
+        await waitFor(() => expect(first.sent.length).toBe(1));
+
+        // Vence o prazo: o socket suspeito cai (isso é o certo) e o navegador reconecta.
+        await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS); });
+        expect(first.readyState).toBe(3);
+        act(() => first.onclose?.());
+        await act(async () => { await vi.advanceTimersByTimeAsync(RECONNECT_MAX_MS); });
+        await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
+        const second = FakeSocket.instances[1] as FakeSocket;
+        second.accept();
+        second.deliver({ type: "ready" }); // o replay não traz a mensagem: o servidor nunca a teve
+        await waitFor(() => expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered"));
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(MANY_TICKS); });
+
+        expect(second.readyState).not.toBe(3); // a conexão nova não é derrubada de novo
+        expect(FakeSocket.instances).toHaveLength(2); // e nenhuma terceira nasce
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("F5 com a mensagem antiga em disco: a bolha volta marcada e a conexão fica quieta", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        localStorage.setItem(
+          "vibehub.sdkOutbox.c1",
+          JSON.stringify([{ cid: "c-antigo", text: "a instrução longa que sumia", at: Date.now() - 60_000 }]),
+        );
+        renderSdkChat();
+        const ws = await socket();
+        ws.accept();
+        ws.deliver({ type: "ready" });
+        await waitFor(() => expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered"));
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(MANY_TICKS); });
+
+        expect(ws.readyState).not.toBe(3);
+        expect(FakeSocket.instances).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("Reenviar volta a armar o relógio: o novo envio também é cobrado (o watchdog não fica mudo)", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderSdkChat();
+        const ws = await socket();
+        ws.accept();
+        ws.deliver({ type: "ready" });
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
+        await waitFor(() => expect(ws.sent.length).toBe(1));
+        const cid = (JSON.parse(ws.sent[0]!) as { cid: string }).cid;
+        ws.deliver({ type: "user_nack", cid, reason: "driver-gone" } as SdkEvent);
+        await screen.findByTestId("sdk-user-resend");
+
+        await user.click(screen.getByTestId("sdk-user-resend"));
+        await waitFor(() => expect(ws.sent.length).toBe(2));
+        expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sending");
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS); });
+
+        expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered");
+        expect(ws.readyState).toBe(3); // desta vez ninguém respondeu: o socket é suspeito de novo
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("socket fechado: a mensagem nem sai, o rascunho fica no campo e a bolha não mente", async () => {

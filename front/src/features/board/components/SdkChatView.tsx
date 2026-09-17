@@ -53,10 +53,12 @@ import {
   OUTBOX_ACK_TIMEOUT_MS,
   addToOutbox,
   dropFromOutbox,
+  markUndelivered,
   newCid,
   overdueMessages,
   readOutbox,
   reconcileOutbox,
+  retryOutbox,
   writeOutbox,
   type OutboxMessage,
 } from "@/features/board/lib/sdkOutbox";
@@ -160,6 +162,13 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
           const cid = parsed.cid;
           setOutbox((prev) => dropFromOutbox(prev, cid));
         }
+        // A recusa também é uma RESPOSTA: o veredito desta mensagem já saiu, e a fila precisa
+        // saber disso — senão ela seguiria "sem recibo" e o watchdog derrubaria este socket (que
+        // acabou de provar que está vivo) a cada tique.
+        if (parsed.type === "user_nack" && parsed.cid) {
+          const cid = parsed.cid;
+          setOutbox((prev) => markUndelivered(prev, [cid]));
+        }
         setState((prev) => applySdkEvent(prev, parsed));
       };
       next.onerror = () => {
@@ -218,7 +227,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       try {
         sendFrame({ ...frame, cid });
       } catch (err) {
-        // The socket refused it outright: no receipt is coming, so the bubble must not pretend.
+        // The socket refused it outright: no receipt is coming, so the bubble must not pretend —
+        // and the verdict is already given, so the watchdog has nothing left to chase here.
+        setOutbox((prev) => markUndelivered(prev, [cid]));
         setState((prev) => settleUserRow(prev, cid, "undelivered"));
         throw err;
       }
@@ -238,8 +249,14 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     const pending = outboxRef.current;
     if (pending.length === 0) return;
     const { delivered, missing } = reconcileOutbox(deliveredUserTexts(state.rows), pending);
-    if (delivered.length > 0) {
-      setOutbox((prev) => delivered.reduce((acc, m) => dropFromOutbox(acc, m.cid), prev));
+    if (delivered.length > 0 || missing.length > 0) {
+      // Entregue sai da fila; a que o servidor não tem FICA, já com o veredito dado — a fila é a
+      // cópia recuperável dela, e uma entrada vencida que ninguém marca é o que fazia o watchdog
+      // derrubar o socket em todo tique.
+      setOutbox((prev) => markUndelivered(
+        delivered.reduce((acc, m) => dropFromOutbox(acc, m.cid), prev),
+        missing.map((m) => m.cid),
+      ));
     }
     if (missing.length > 0) {
       setState((prev) => missing.reduce(
@@ -255,13 +272,22 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    * for minutes (in production, hours). A send with no receipt after `OUTBOX_ACK_TIMEOUT_MS` is
    * declared undelivered AND the socket is dropped, so the reconnect either proves the message
    * landed (the replay carries it) or brings it back marked, on a connection that works.
+   *
+   * O veredito é dado UMA vez por envio (`markUndelivered` na fila). A mensagem não entregue
+   * continua guardada — é o que a bolha "reenviar/descartar" oferece —, mas o relógio dela já
+   * venceu: sem essa marca ela estaria vencida em todo tique, e o watchdog derrubava a cada 2s um
+   * socket perfeitamente vivo. Era esse o loop "chat → Iniciando o agente… → histórico inteiro →
+   * chat" que deixava a tela piscando (produção, 2026-09-17). Um reenvio zera o relógio e volta a
+   * ser cobrável.
    */
   React.useEffect(() => {
     if (outbox.length === 0) return;
     const timer = setInterval(() => {
       const overdue = overdueMessages(outboxRef.current, Date.now(), OUTBOX_ACK_TIMEOUT_MS);
       if (overdue.length === 0) return;
-      setState((prev) => overdue.reduce((acc, m) => settleUserRow(acc, m.cid, "undelivered"), prev));
+      const cids = overdue.map((m) => m.cid);
+      setOutbox((prev) => markUndelivered(prev, cids));
+      setState((prev) => cids.reduce((acc, cid) => settleUserRow(acc, cid, "undelivered"), prev));
       const socket = socketRef.current;
       // Drop the socket: the reconnect is the only way to find out whether it was still alive.
       if (socket && socket.readyState === WebSocket.OPEN) {
@@ -390,13 +416,14 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     const entry = outboxRef.current.find((m) => m.cid === cid);
     if (!entry) return;
     setState((prev) => settleUserRow(prev, cid, "sending"));
-    setOutbox((prev) => addToOutbox(prev, { ...entry, at: Date.now() }));
+    setOutbox((prev) => retryOutbox(prev, entry, Date.now()));
     try {
       sendFrame(entry.original !== undefined
         ? { type: "edit_user", original: entry.original, text: entry.text, cid }
         : { type: "user", text: entry.text, cid });
     } catch (err) {
       toast.error((err as Error).message);
+      setOutbox((prev) => markUndelivered(prev, [cid]));
       setState((prev) => settleUserRow(prev, cid, "undelivered"));
     }
   };
