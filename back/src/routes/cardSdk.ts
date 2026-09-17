@@ -5,7 +5,7 @@ import { findUser } from "../auth/users.js";
 import * as registry from "../services/board/registry.js";
 import { getSettings } from "../services/settings/settings.js";
 import { installCardSdkDriver, sdkDriverCommand } from "../services/sdk/driver.js";
-import { attachSocket, ensureDriverSession, handleClientFrame, hasDriverSession } from "../services/sdk/manager.js";
+import { attachSocket, ensureDriverSession, handleClientFrame, hasDriverSession, replyFrameOutcome } from "../services/sdk/manager.js";
 import { onExternalMessage, readHistory } from "../services/sdk/history.js";
 import { matchOrigin, primeProvenance, type MessageOrigin } from "../services/chat/provenance.js";
 import {
@@ -190,7 +190,7 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       // Setup is done: hand the frames buffered during it to the SAME funnel the live listener
       // uses — user messages become normal user turns (queued by the driver until it is ready).
       socket.off("message", bufferFrame);
-      for (const raw of pendingFrames) handleClientFrame(session, raw, wsOrigin);
+      for (const raw of pendingFrames) replyFrameOutcome(socket, handleClientFrame(session, raw, wsOrigin));
       logger.info({ card: card.worktreeSlug, reattached: driverAlive, buffered: pendingFrames.length }, "sdk chat attached");
     },
   );

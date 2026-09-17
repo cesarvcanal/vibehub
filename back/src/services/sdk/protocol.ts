@@ -159,8 +159,15 @@ export function parseDriverLine(line: string): DriverEvent | null {
 
 /* ------------------------------------------------------- control (stdin) */
 
-/** A message the front sends TO the driver over stdin (one JSON object per line). */
-export interface UserControl { type: "user"; text: string }
+/**
+ * A message the front sends TO the driver over stdin (one JSON object per line).
+ *
+ * `cid` is the browser's DELIVERY RECEIPT id (see `ClientFrameOutcome` in ./manager.ts): it never
+ * reaches the driver — `encodeControl` strips it — and exists only so the back can answer
+ * "gravei esta mensagem" (`user_ack`) or "não peguei" (`user_nack`). Without it a send into a
+ * half-open socket looked identical to a delivered one, and the message vanished on the next F5.
+ */
+export interface UserControl { type: "user"; text: string; cid?: string }
 export interface InterruptControl { type: "interrupt" }
 /** The human's answer to a `permission_request` — `id` pairs it with the awaiting call. */
 export interface PermissionDecisionControl { type: "permission_decision"; id: string; allow: boolean }
@@ -173,7 +180,7 @@ export interface QuestionAnswerControl { type: "question_answer"; id: string; an
  * is the message being replaced (how the front marks it "editada"), `text` the version that now
  * stands. Provenance stays the USER's: it is his speech, corrected.
  */
-export interface EditUserControl { type: "edit_user"; original: string; text: string }
+export interface EditUserControl { type: "edit_user"; original: string; text: string; cid?: string }
 export type DriverControl =
   | UserControl
   | InterruptControl
@@ -196,9 +203,21 @@ export function buildSupersedeText(original: string, text: string): string {
   );
 }
 
-/** Serialise a control message as one stdin line (with the trailing newline). PURE. */
+/**
+ * Serialise a control message as one stdin line (with the trailing newline). The browser's `cid`
+ * is a back↔front receipt id and is STRIPPED here — the driver's protocol knows nothing about it
+ * and an unknown field must never travel into the model's input. PURE.
+ */
 export function encodeControl(control: DriverControl): string {
-  return JSON.stringify(control) + "\n";
+  const { cid: _cid, ...forDriver } = control as DriverControl & { cid?: string };
+  return JSON.stringify(forDriver) + "\n";
+}
+
+/** The receipt id the browser stamped on a frame, when it stamped one. PURE. */
+export function frameCid(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const cid = (raw as { cid?: unknown }).cid;
+  return typeof cid === "string" && cid !== "" && cid.length <= 64 ? cid : undefined;
 }
 
 /** Interpret a browser frame as a driver control message. A bare string = a user message. PURE. */
@@ -209,7 +228,7 @@ export function parseSdkClientFrame(raw: string): DriverControl | null {
     try {
       const parsed = JSON.parse(trimmed) as { type?: unknown; text?: unknown; id?: unknown; allow?: unknown };
       if (parsed.type === "interrupt") return { type: "interrupt" };
-      if (parsed.type === "user" && typeof parsed.text === "string") return { type: "user", text: parsed.text };
+      if (parsed.type === "user" && typeof parsed.text === "string") return { type: "user", text: parsed.text, cid: frameCid(parsed) };
       if (parsed.type === "permission_decision" && typeof parsed.id === "string" && typeof parsed.allow === "boolean") {
         return { type: "permission_decision", id: parsed.id, allow: parsed.allow };
       }
@@ -223,7 +242,7 @@ export function parseSdkClientFrame(raw: string): DriverControl | null {
         typeof parsed.text === "string" &&
         parsed.text.trim() !== ""
       ) {
-        return { type: "edit_user", original: (parsed as { original: string }).original, text: parsed.text };
+        return { type: "edit_user", original: (parsed as { original: string }).original, text: parsed.text, cid: frameCid(parsed) };
       }
       return null;
     } catch {

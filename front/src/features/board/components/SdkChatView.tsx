@@ -39,13 +39,27 @@ import {
   applySdkEvent,
   appendUserRow,
   decidePermission,
+  deliveredUserTexts,
+  dropUserRow,
   groupSdkRows,
   markUserEdited,
   parseSdkFrame,
+  settleUserRow,
   type SdkChatState,
   type SdkQuestionAnswer,
   type SdkRow,
 } from "@/features/board/lib/sdkChat";
+import {
+  OUTBOX_ACK_TIMEOUT_MS,
+  addToOutbox,
+  dropFromOutbox,
+  newCid,
+  overdueMessages,
+  readOutbox,
+  reconcileOutbox,
+  writeOutbox,
+  type OutboxMessage,
+} from "@/features/board/lib/sdkOutbox";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -65,6 +79,9 @@ import { t as translate, useT } from "@/i18n";
 
 /** How long an edit waits for the interrupted turn's result before going anyway (safety net). */
 export const EDIT_INTERRUPT_GRACE_MS = 15_000;
+
+/** How often the outbox is checked for a send whose receipt never came. */
+export const OUTBOX_TICK_MS = 2_000;
 
 export interface SdkChatViewProps {
   cardId: string;
@@ -86,11 +103,25 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   const statusRef = React.useRef<SdkChatViewProps["onStatus"]>(onStatus);
   statusRef.current = onStatus;
   const [connected, setConnected] = React.useState(false);
+  /**
+   * The sends this browser has not seen confirmed yet (see lib/sdkOutbox.ts). They live in
+   * localStorage, so the words survive the F5 that used to erase them — a message is only forgotten
+   * here when the SERVER says it has it (`user_ack`, or a replay carrying the same text).
+   */
+  const [outbox, setOutbox] = React.useState<OutboxMessage[]>(() => readOutbox(cardId));
+  const outboxRef = React.useRef(outbox);
+  outboxRef.current = outbox;
+  React.useEffect(() => {
+    writeOutbox(cardId, outbox);
+  }, [cardId, outbox]);
+  /** Reconciliation runs ONCE per connection, when the replay has landed (`ready`). */
+  const reconciledRef = React.useRef(false);
 
   /* ------------------------------------------------------------- websocket */
 
   React.useEffect(() => {
     setState(INITIAL_SDK_STATE);
+    setOutbox(readOutbox(cardId));
     let socket: WebSocket | null = null;
     let retry: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
@@ -113,6 +144,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         attempt = 0;
         setStatus("open");
         setConnected(true);
+        reconciledRef.current = false;
         // EVERY connect replays the card's history from the server log (see back/services/sdk/
         // history.ts), so the slate is wiped here — otherwise a reconnect would draw the whole
         // conversation twice. What was on screen comes right back, from disk instead of memory.
@@ -122,6 +154,12 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         if (typeof event.data !== "string") return;
         const parsed = parseSdkFrame(event.data);
         if (!parsed) return;
+        // The RECEIPT: `user_ack` means the back gravou — this browser no longer needs its copy.
+        // `user_nack` means it refused, so the copy STAYS (the bubble now says "não entregue").
+        if (parsed.type === "user_ack" && parsed.cid) {
+          const cid = parsed.cid;
+          setOutbox((prev) => dropFromOutbox(prev, cid));
+        }
         setState((prev) => applySdkEvent(prev, parsed));
       };
       next.onerror = () => {
@@ -168,25 +206,90 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     socket.send(JSON.stringify(frame));
   }, []);
 
+  /**
+   * A TURN goes out with a receipt: the words are written to the outbox (disk) BEFORE the frame
+   * leaves, and only a `user_ack` takes them off it. This is the whole difference between "o
+   * socket aceitou" (which a half-open connection also does, into the void) and "o servidor tem".
+   */
+  const sendTurn = React.useCallback(
+    (frame: { type: "user" | "edit_user"; text: string; original?: string }, shown: string, cid: string): void => {
+      const entry: OutboxMessage = { cid, text: shown, at: Date.now(), original: frame.original };
+      setOutbox((prev) => addToOutbox(prev, entry));
+      try {
+        sendFrame({ ...frame, cid });
+      } catch (err) {
+        // The socket refused it outright: no receipt is coming, so the bubble must not pretend.
+        setState((prev) => settleUserRow(prev, cid, "undelivered"));
+        throw err;
+      }
+    },
+    [sendFrame],
+  );
+
+  /**
+   * RECONCILE on reconnect: the server's replay is the truth about what was recorded. An outbox
+   * entry whose text is in the replay was delivered (only its receipt got lost); one that is not
+   * there never arrived, and comes back as a bubble marked "não entregue" with its text intact —
+   * which is exactly what the F5 used to throw away.
+   */
+  React.useEffect(() => {
+    if (!state.ready || reconciledRef.current) return;
+    reconciledRef.current = true;
+    const pending = outboxRef.current;
+    if (pending.length === 0) return;
+    const { delivered, missing } = reconcileOutbox(deliveredUserTexts(state.rows), pending);
+    if (delivered.length > 0) {
+      setOutbox((prev) => delivered.reduce((acc, m) => dropFromOutbox(acc, m.cid), prev));
+    }
+    if (missing.length > 0) {
+      setState((prev) => missing.reduce(
+        (acc, m) => appendUserRow(acc, m.text, undefined, { cid: m.cid, state: "undelivered" }),
+        prev,
+      ));
+    }
+  }, [state.ready, state.rows]);
+
+  /**
+   * THE WATCHDOG — the half-open socket, which is what made this bug so hard to see: `send()`
+   * succeeded, nothing ever came back, and the browser went on believing the connection was fine
+   * for minutes (in production, hours). A send with no receipt after `OUTBOX_ACK_TIMEOUT_MS` is
+   * declared undelivered AND the socket is dropped, so the reconnect either proves the message
+   * landed (the replay carries it) or brings it back marked, on a connection that works.
+   */
+  React.useEffect(() => {
+    if (outbox.length === 0) return;
+    const timer = setInterval(() => {
+      const overdue = overdueMessages(outboxRef.current, Date.now(), OUTBOX_ACK_TIMEOUT_MS);
+      if (overdue.length === 0) return;
+      setState((prev) => overdue.reduce((acc, m) => settleUserRow(acc, m.cid, "undelivered"), prev));
+      const socket = socketRef.current;
+      // Drop the socket: the reconnect is the only way to find out whether it was still alive.
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        try { socket.close(); } catch { /* already closing */ }
+      }
+    }, OUTBOX_TICK_MS);
+    return () => clearInterval(timer);
+  }, [outbox.length]);
+
   /* -------------------------------------------------------------- editing */
 
   /** The message being edited (a SUPERSEDE — the model read the original; see docs/sdk-driver.md). */
   const [editing, setEditing] = React.useState<{ rowId: string; original: string } | null>(null);
   /** An edit waiting for the interrupted turn to END (its result/aborted) before it goes. */
-  const [pendingEdit, setPendingEdit] = React.useState<{ original: string; text: string } | null>(null);
+  const [pendingEdit, setPendingEdit] = React.useState<{ original: string; text: string; cid: string } | null>(null);
 
   /** Push the edit frame. Returns whether the socket took it (a refusal is toasted, not thrown). */
   const dispatchEditFrame = React.useCallback(
-    (original: string, text: string): boolean => {
+    (original: string, text: string, cid: string = newCid()): boolean => {
       try {
-        sendFrame({ type: "edit_user", original, text });
+        sendTurn({ type: "edit_user", original, text }, text, cid);
         return true;
       } catch (err) {
         toast.error((err as Error).message);
         return false;
       }
     },
-    [sendFrame],
+    [sendTurn],
   );
 
   // The deferred half of "interrupt first": the edit goes the moment the interrupted turn reports
@@ -196,12 +299,12 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     if (!pendingEdit) return;
     if (!state.turnActive) {
       setPendingEdit(null);
-      dispatchEditFrame(pendingEdit.original, pendingEdit.text);
+      dispatchEditFrame(pendingEdit.original, pendingEdit.text, pendingEdit.cid);
       return;
     }
     const timer = setTimeout(() => {
       setPendingEdit(null);
-      dispatchEditFrame(pendingEdit.original, pendingEdit.text);
+      dispatchEditFrame(pendingEdit.original, pendingEdit.text, pendingEdit.cid);
     }, EDIT_INTERRUPT_GRACE_MS);
     return () => clearTimeout(timer);
   }, [pendingEdit, state.turnActive, dispatchEditFrame]);
@@ -232,18 +335,20 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         return;
       }
       const wrapped = buildDecisionReply(replyTo.text, text);
+      const cid = newCid();
+      setState((prev) => appendUserRow(prev, wrapped, undefined, { awaiting: true, cid, state: "sending" }));
       try {
-        sendFrame({ type: "user", text: wrapped });
+        sendTurn({ type: "user", text: wrapped }, wrapped, cid);
       } catch (err) {
         toast.error((err as Error).message);
         throw err; // the composer keeps the words
       }
-      setState((prev) => appendUserRow(prev, wrapped, undefined, { awaiting: true }));
       setReplyTo(null);
       return;
     }
     if (editing) {
       const { original } = editing;
+      const editCid = newCid();
       if (state.turnActive) {
         // The turn the original message fired is still running: stop it FIRST (the same frame as
         // the stop button), and the edit follows when its result lands (the effect above).
@@ -253,25 +358,53 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
           toast.error((err as Error).message);
           throw err; // the composer keeps the words
         }
-        setPendingEdit({ original, text });
-      } else if (!dispatchEditFrame(original, text)) {
+        setPendingEdit({ original, text, cid: editCid });
+      } else if (!dispatchEditFrame(original, text, editCid)) {
         throw new Error(translate("sdk.offline")); // the composer keeps the words
       }
       // Drawn now, in both paths: the original dims with its "editada" badge, the new version is
       // the standing message. The history writes the same two lines, so a replay agrees.
-      setState((prev) => appendUserRow(markUserEdited(prev, original), text, undefined, { awaiting: true }));
+      setState((prev) => appendUserRow(markUserEdited(prev, original), text, undefined, {
+        awaiting: true,
+        cid: editCid,
+        state: "sending",
+      }));
       setEditing(null);
       return;
     }
+    // Drawn FIRST, as "sending": the bubble exists the instant Enter is pressed, but it only
+    // claims to be sent when the back says it gravou (`user_ack`) — see lib/sdkOutbox.ts.
+    // `awaiting` starts the status ladder: "Preparando…"/"Pensando…" until the driver's first event.
+    const cid = newCid();
+    setState((prev) => appendUserRow(prev, text, undefined, { awaiting: true, cid, state: "sending" }));
     try {
-      sendFrame({ type: "user", text });
+      sendTurn({ type: "user", text }, text, cid);
     } catch (err) {
       toast.error((err as Error).message);
       throw err; // the composer keeps the words
     }
-    // The frame is in the driver's stdin the moment send() accepted it — that IS the real state.
-    // `awaiting` starts the status ladder: "Preparando…"/"Pensando…" until the driver's first event.
-    setState((prev) => appendUserRow(prev, text, undefined, { awaiting: true }));
+  };
+
+  /** "Reenviar": the same words, the same receipt id — the back never had them, so this is not a copy. */
+  const resendUndelivered = (cid: string): void => {
+    const entry = outboxRef.current.find((m) => m.cid === cid);
+    if (!entry) return;
+    setState((prev) => settleUserRow(prev, cid, "sending"));
+    setOutbox((prev) => addToOutbox(prev, { ...entry, at: Date.now() }));
+    try {
+      sendFrame(entry.original !== undefined
+        ? { type: "edit_user", original: entry.original, text: entry.text, cid }
+        : { type: "user", text: entry.text, cid });
+    } catch (err) {
+      toast.error((err as Error).message);
+      setState((prev) => settleUserRow(prev, cid, "undelivered"));
+    }
+  };
+
+  /** "Descartar": the person gave up on this send — the bubble and the stored copy both go. */
+  const discardUndelivered = (cid: string): void => {
+    setOutbox((prev) => dropFromOutbox(prev, cid));
+    setState((prev) => dropUserRow(prev, cid));
   };
 
   const interrupt = (): void => {
@@ -427,6 +560,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
                   setReplyTo(null);
                   setEditing({ rowId, original });
                 }}
+                onResend={resendUndelivered}
+                onDiscard={discardUndelivered}
               />
             )}
           </div>
@@ -626,6 +761,8 @@ function SdkChatRow({
   onAnswer,
   onReply,
   onEdit,
+  onResend,
+  onDiscard,
 }: {
   row: SdkRow;
   /** Explicit replies already given, by the row they answered — what a question shows it received. */
@@ -638,6 +775,10 @@ function SdkChatRow({
   onReply?: (decision: PendingDecision) => void;
   /** Offered only on one's OWN messages: the pencil that starts editing (a supersede). */
   onEdit?: (rowId: string, original: string) => void;
+  /** On a message the server never took: send the very same words again (same receipt id). */
+  onResend?: (cid: string) => void;
+  /** On a message the server never took: give up on it (bubble and stored copy both go). */
+  onDiscard?: (cid: string) => void;
 }) {
   const t = useT();
   // Whose screen this is — their own messages render unlabelled, everyone else's carry the sender.
@@ -761,6 +902,37 @@ function SdkChatRow({
       </div>
     ) : null;
     const bodyText = reply ? reply.answer : row.text;
+    /**
+     * A message the SERVER never took (it refused it, or the receipt never came). The bubble says
+     * so and hands back the two things the person actually needs: mandar de novo, ou desistir. The
+     * words are on disk until one of those happens — the F5 that used to erase them now brings
+     * this very bubble back (see lib/sdkOutbox.ts).
+     */
+    const undelivered = row.state === "undelivered" && row.cid ? (
+      <div
+        data-testid="sdk-user-undelivered"
+        className="mt-1 flex flex-wrap items-center justify-end gap-1.5 text-[10px] text-amber-500"
+      >
+        <AlertTriangle className="h-3 w-3 shrink-0" />
+        <span className="min-w-0 text-right italic">{t("sdk.undelivered")}</span>
+        <button
+          type="button"
+          data-testid="sdk-user-resend"
+          onClick={() => onResend?.(row.cid as string)}
+          className="rounded border border-current/40 px-1.5 py-0.5 font-medium hover:bg-amber-500/10"
+        >
+          {t("chat.resend")}
+        </button>
+        <button
+          type="button"
+          data-testid="sdk-user-discard"
+          onClick={() => onDiscard?.(row.cid as string)}
+          className="rounded px-1.5 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          {t("chat.discard")}
+        </button>
+      </div>
+    ) : null;
     if (role !== "self" && row.from) {
       return (
         <div className="flex flex-col items-start" data-testid="sdk-user" data-role={role} data-edited={row.edited || undefined}>
@@ -784,6 +956,7 @@ function SdkChatRow({
       <div className="group flex flex-col items-end">
         <div
           data-testid="sdk-user"
+          data-state={row.state}
           data-edited={row.edited || undefined}
           className={cn(
             "max-w-[85%] select-text whitespace-pre-wrap break-words rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-sm",
@@ -794,12 +967,13 @@ function SdkChatRow({
           <LinkifiedText text={bodyText} />
           {editedBadge}
           {absorbedTag}
+          {undelivered}
         </div>
         {/* The pencil: hover-revealed on a desktop, simply there on touch (no hover to reveal it).
             A superseded message offers no pencil — the standing version is the one to edit. Neither
             does an ANSWER to a decision: its text carries the wrapper, and putting that back in the
             field would show the person plumbing instead of their own words. Answer again instead. */}
-        {!row.edited && !reply && onEdit ? (
+        {!row.edited && !reply && row.state !== "undelivered" && onEdit ? (
           <button
             type="button"
             data-testid="sdk-edit"

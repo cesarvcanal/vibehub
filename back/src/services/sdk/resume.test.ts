@@ -31,7 +31,7 @@ const CARD = "eeee498d-98dd-44b6-97ee-c06a181c3769";
 interface FakeChild extends EventEmitter {
   stdout: EventEmitter;
   stderr: EventEmitter;
-  stdin: { write: (s: string) => boolean; end: () => void; written: string[]; ended: boolean };
+  stdin: EventEmitter & { write: (s: string) => boolean; end: () => void; written: string[]; ended: boolean; writable: boolean };
   kill: () => void;
   killed: boolean;
 }
@@ -41,7 +41,13 @@ function fakeChild(): FakeChild {
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   const written: string[] = [];
-  child.stdin = { written, ended: false, write: (s) => { written.push(s); return true; }, end: () => { child.stdin.ended = true; } };
+  const stdin = new EventEmitter() as FakeChild["stdin"];
+  stdin.written = written;
+  stdin.ended = false;
+  stdin.writable = true;
+  stdin.write = (s: string) => { written.push(s); return true; };
+  stdin.end = () => { stdin.ended = true; stdin.writable = false; };
+  child.stdin = stdin;
   child.killed = false;
   child.kill = () => { child.killed = true; };
   return child;

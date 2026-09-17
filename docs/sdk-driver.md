@@ -46,6 +46,8 @@ The websocket sends **one JSON text frame per event**:
 { "type": "permission_request", "id": "perm_…", "tool": "Bash", "input"?: { … }, "reason"?: "…" }  // AWAITS a decision
 { "type": "turn_absorbed" }                                // a send folded into the RUNNING turn (streaming input)
 { "type": "result", "isError": bool, "sessionId"?: "…", "subtype"?: "success", "result"?: "…", "permissionDenials"?: [ … ] }
+{ "type": "user_ack", "cid": "…" }                         // back-synthesised: a send is ON DISK
+{ "type": "user_nack", "cid": "…", "reason": "driver-gone" } // back-synthesised: the send was REFUSED
 { "type": "error", "message": "…" }
 { "type": "parse_error", "raw": "<the bad line>" }          // back-synthesised; nothing is swallowed
 ```
@@ -400,3 +402,38 @@ Agora o driver é **do CARD**, propriedade do back (`back/src/services/sdk/manag
   processo com `.vibehub-sdk/sdk-driver.mjs` na linha de comando (e os subprocessos do SDK pendem
   do driver, nunca ppid 1 enquanto ele vive). Um driver realmente morto sai sozinho no EOF do
   stdin (`rl.on("close") → exit 0`), inclusive quando o back reinicia.
+
+## Recibo de entrega — a mensagem que "sumia no F5" (2026-09-17)
+
+**O incidente** (três vezes num dia): a pessoa escreve uma instrução longa, dá Enter, o chat entra
+num carregando eterno — e no F5 (ou em outro computador) a mensagem não está lá, como se nunca
+tivesse sido enviada. Reenviar o mesmo texto funciona. Dois furos, um em cada ponta:
+
+1. **A hibernação matava a conversa.** `openedAt` é gravado só no PRIMEIRO open e uma conversa do
+   chat nativo nunca move o `statusAt` dos hooks — então o idle sweep media um card que a pessoa
+   estava usando como "sem sinal de vida há horas" e o hibernava, o que mata o driver
+   (`killCardSession` → `stopCardDriver`). Nos logs de produção: card aberto 00:57:34, hibernado
+   01:01:37 por `idle-sweep`, e de novo a cada passada de 5 min. A mensagem escrita no instante
+   seguinte era escrita num stdin morto dentro de um `try {} catch {}`, gravada no histórico e
+   respondida por ninguém — o "loop carregando" com a mensagem ainda lá depois do F5.
+2. **O navegador chamava `send()` de entrega.** Um socket meio-aberto (VPN caindo, proxy soltando,
+   o back reiniciando) aceita `send()` e joga os bytes no vácuo — e o `readyState` continua `OPEN`
+   por minutos. A bolha era só estado React: o F5 apagava a única testemunha da mensagem.
+
+**As três regras que fecham isso:**
+
+- **Card em uso não hiberna.** O manager registra um veto (`onCardInUseProbe` em `workspace.ts`) —
+  `isCardChatInUse`: há aba conectada, ou há turno rodando. Fechada a aba, o driver se encerra pelo
+  próprio idle stop e o card volta a ser hibernável. Além disso, `lastActivityAt` agora conta
+  `humanActiveAt`, e uma mensagem no chat nativo passa a estampá-lo — conversar É sinal de vida.
+- **Envio nunca é engolido.** `handleClientFrame` devolve um veredito (`ClientFrameOutcome`): com o
+  driver morto ele **recusa** (nada escrito, nada gravado, nenhum turno contado) e o socket recebe
+  `user_nack`; aceito, o `user_ack` sai **depois** do append no histórico — o ack promete
+  durabilidade, não intenção. EPIPE no stdin virou frame de erro, não silêncio.
+- **O navegador guarda o que enviou.** `front/src/features/board/lib/sdkOutbox.ts`: cada envio
+  nasce em `localStorage` (por card) com um `cid` ANTES de ir pro socket, e só sai de lá com o
+  `user_ack`. Sem recibo em `OUTBOX_ACK_TIMEOUT_MS` (12s) a bolha vira **"não entregue"** com
+  *Reenviar*/*Descartar* e o socket é derrubado (o reconnect é a única forma de descobrir se ele
+  estava vivo). No reconnect, `reconcileOutbox` compara o outbox com o replay do servidor: texto
+  que está no replay foi entregue (só o recibo se perdeu); o que não está volta marcado, com o
+  texto inteiro — inclusive depois de um F5.

@@ -360,3 +360,24 @@ describe("edit_user — editar uma mensagem enviada (supersede)", () => {
     expect(encodeControl({ type: "user", text: wrapped })).toContain("correção do usuário");
   });
 });
+
+describe("cid — o recibo de entrega (nada de mensagem 'enviada' que o back nunca viu)", () => {
+  it("carrega o cid de um user e de um edit_user", () => {
+    expect(parseSdkClientFrame(`{"type":"user","text":"oi","cid":"c1"}`)).toEqual({ type: "user", text: "oi", cid: "c1" });
+    expect(parseSdkClientFrame(`{"type":"edit_user","original":"a","text":"b","cid":"c2"}`))
+      .toEqual({ type: "edit_user", original: "a", text: "b", cid: "c2" });
+  });
+
+  it("um cid ausente, vazio, gigante ou não-string simplesmente não existe", () => {
+    expect(parseSdkClientFrame(`{"type":"user","text":"oi"}`)).toEqual({ type: "user", text: "oi", cid: undefined });
+    expect(parseSdkClientFrame(`{"type":"user","text":"oi","cid":""}`)?.cid).toBeUndefined();
+    expect(parseSdkClientFrame(`{"type":"user","text":"oi","cid":42}`)?.cid).toBeUndefined();
+    expect(parseSdkClientFrame(`{"type":"user","text":"oi","cid":"${"x".repeat(65)}"}`)?.cid).toBeUndefined();
+  });
+
+  it("encodeControl NÃO manda o cid pro driver (é assunto entre back e navegador)", () => {
+    const line = encodeControl({ type: "user", text: "oi", cid: "c1" });
+    expect(JSON.parse(line)).toEqual({ type: "user", text: "oi" });
+    expect(line.endsWith("\n")).toBe(true);
+  });
+});

@@ -31,6 +31,8 @@ export interface SdkEvent {
     | "message_edited"
     | "turn_absorbed"
     | "result"
+    | "user_ack"
+    | "user_nack"
     | "error"
     | "parse_error";
   text?: string;
@@ -61,6 +63,12 @@ export interface SdkEvent {
   answers?: SdkQuestionAnswer[];
   /** On `message_edited`: the superseded message's text — the row it greys out. */
   originalText?: string;
+  /**
+   * On `user_ack`/`user_nack`: the RECEIPT id of the send being answered (see lib/sdkOutbox.ts).
+   * `user_ack` = the back has the message on disk; `user_nack` = it refused it and nobody has it
+   * but this browser.
+   */
+  cid?: string;
 }
 
 /** One question of a `user_question` (mirror of `UserQuestionItem` in the back's protocol). */
@@ -102,7 +110,20 @@ export type SdkRow =
    *  `edited` = a later version SUPERSEDED this one (drawn dimmed, with the "editada" badge).
    *  `absorbed` = it arrived mid-turn and the driver folded it into the RUNNING turn (streaming
    *  input) — drawn with the "entrou no turno em andamento" label so it never looks lost. */
-  | { kind: "user"; id: string; text: string; state: "sent"; from?: MessageOrigin; edited?: boolean; absorbed?: boolean }
+  /** `state`: "sending" = no receipt yet (the socket took the frame, the back has not confirmed);
+   *  "sent" = the back gravou (a `user_ack`, or a replay — the only proofs an F5 respects);
+   *  "undelivered" = the back refused it (`user_nack`) or the receipt never came, so this browser
+   *  holds the only copy and the bubble offers reenviar/descartar. `cid` pairs it with the outbox. */
+  | {
+      kind: "user";
+      id: string;
+      text: string;
+      state: "sending" | "sent" | "undelivered";
+      cid?: string;
+      from?: MessageOrigin;
+      edited?: boolean;
+      absorbed?: boolean;
+    }
   /** Claude talking. `streaming` while deltas are still landing on it. */
   | { kind: "assistant"; id: string; text: string; streaming: boolean }
   /** One tool call, compact: the name plus a one-line summary of its input. */
@@ -273,6 +294,14 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       }
       return next;
     }
+    case "user_ack":
+      // The back has it on disk — the browser may finally forget its own copy (the view's caller
+      // drops it from the outbox).
+      return event.cid ? settleUserRow(state, event.cid, "sent") : state;
+    case "user_nack":
+      // The back REFUSED it (the card's driver had died — a hibernate, a crash). Nothing was
+      // written anywhere: say so, keep the words, offer the resend.
+      return event.cid ? settleUserRow(state, event.cid, "undelivered") : state;
     case "session":
       if (!event.sessionId || event.sessionId === state.sessionId) return state;
       return { ...state, sessionId: event.sessionId };
@@ -408,15 +437,49 @@ export function appendUserRow(
   state: SdkChatState,
   text: string,
   from?: MessageOrigin,
-  opts?: { awaiting?: boolean },
+  opts?: { awaiting?: boolean; cid?: string; state?: "sending" | "sent" | "undelivered" },
 ): SdkChatState {
   const { id, seq } = nextId(state, "u");
   return {
     ...state,
     seq,
     awaiting: opts?.awaiting === true ? true : state.awaiting,
-    rows: [...state.rows, { kind: "user", id, text, state: "sent", from }],
+    rows: [...state.rows, { kind: "user", id, text, state: opts?.state ?? "sent", cid: opts?.cid, from }],
   };
+}
+
+/**
+ * Settle one own send by its RECEIPT: delivered (the back gravou) or undelivered (it refused, or
+ * the receipt never came). Unknown cid = nothing to settle — a receipt for a row this view no
+ * longer holds (a reconnect wiped it) is not an error. PURE.
+ */
+export function settleUserRow(
+  state: SdkChatState,
+  cid: string,
+  next: "sending" | "sent" | "undelivered",
+): SdkChatState {
+  let changed = false;
+  const rows = state.rows.map((row) => {
+    if (row.kind !== "user" || row.cid !== cid || row.state === next) return row;
+    changed = true;
+    return { ...row, state: next };
+  });
+  if (!changed) return state;
+  // An undelivered message is not work in progress: the ladder must stop claiming the agent is on it.
+  const stuck = next === "undelivered";
+  return { ...state, rows, awaiting: stuck ? false : state.awaiting };
+}
+
+/** Forget one own send entirely (the person clicked "Descartar"). PURE. */
+export function dropUserRow(state: SdkChatState, cid: string): SdkChatState {
+  const rows = state.rows.filter((row) => !(row.kind === "user" && row.cid === cid));
+  return rows.length === state.rows.length ? state : { ...state, rows };
+}
+
+/** The texts of the messages the SERVER has (replayed/acked own sends) — what reconciles the outbox. PURE. */
+export function deliveredUserTexts(rows: readonly SdkRow[]): string[] {
+  return rows.filter((r): r is Extract<SdkRow, { kind: "user" }> => r.kind === "user" && r.state === "sent")
+    .map((r) => r.text);
 }
 
 /** Whitespace-insensitive text identity — the same folding the back's dedupe key uses. */

@@ -11,6 +11,7 @@ import {
   ensureDriverSession,
   handleClientFrame,
   hasDriverSession,
+  isCardChatInUse,
   injectSystemTurn,
   resetSdkSessionsForTesting,
   setDriverSpawnerForTesting,
@@ -29,13 +30,33 @@ import { notifyCardSessionKill } from "../board/workspace.js";
  * turn keeps running, keeps persisting, and the next connect reattaches to the SAME process.
  */
 
+/** The board writes the manager makes: observed, not performed (no board.json in a unit test). */
+const { humanActiveCalls } = vi.hoisted(() => ({ humanActiveCalls: [] as string[] }));
+vi.mock("../board/registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../board/registry.js")>();
+  return {
+    ...actual,
+    markCardHumanActive: (cardId: string) => { humanActiveCalls.push(cardId); return Promise.resolve(undefined); },
+  };
+});
+
 const CARD = "cccc498d-98dd-44b6-97ee-c06a181c3769";
 const CARD2 = "dddd498d-98dd-44b6-97ee-c06a181c3769";
+
+/** The stdin double is an EventEmitter (a real one is a stream): the manager listens for EPIPE. */
+interface FakeStdin extends EventEmitter {
+  write: (s: string) => boolean;
+  end: () => void;
+  written: string[];
+  ended: boolean;
+  writable: boolean;
+}
 
 interface FakeChild extends EventEmitter {
   stdout: EventEmitter;
   stderr: EventEmitter;
-  stdin: { write: (s: string) => boolean; end: () => void; written: string[]; ended: boolean };
+  stdin: FakeStdin;
+  exitCode: number | null;
   kill: () => void;
   killed: boolean;
 }
@@ -45,12 +66,14 @@ function fakeChild(): FakeChild {
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   const written: string[] = [];
-  child.stdin = {
-    written,
-    ended: false,
-    write: (s: string) => { written.push(s); return true; },
-    end: () => { child.stdin.ended = true; },
-  };
+  const stdin = new EventEmitter() as FakeStdin;
+  stdin.written = written;
+  stdin.ended = false;
+  stdin.writable = true;
+  stdin.write = (s: string) => { written.push(s); return true; };
+  stdin.end = () => { stdin.ended = true; stdin.writable = false; };
+  child.stdin = stdin;
+  child.exitCode = null;
   child.killed = false;
   child.kill = () => { child.killed = true; };
   return child;
@@ -85,6 +108,7 @@ let savedDataDir = "";
 let spawned: FakeChild[] = [];
 
 beforeEach(async () => {
+  humanActiveCalls.length = 0;
   dir = await mkdtemp(join(tmpdir(), "vibehub-sdk-manager-"));
   savedDataDir = config.dataDir;
   config.dataDir = dir;
@@ -635,5 +659,139 @@ describe("warm-up — subir o driver no connect não conta turno", () => {
     expect(session.activeTurns).toBe(0);
     await new Promise((r) => setImmediate(r));
     expect(await readInflightMarker(CARD)).toBeNull();
+  });
+});
+
+/**
+ * THE INCIDENT THIS BLOCK PINS (produção, 2026-09-17 — "mandei a mensagem e ficou carregando; dei
+ * F5 e era como se eu não tivesse enviado nada").
+ *
+ * A idle sweep hibernated the very card the person was chatting with, which killed its driver. The
+ * message typed a second later was written into the dead stdin inside a `try {} catch {}`,
+ * persisted to the history ANYWAY, counted as a turn in flight — and answered by nobody. On screen:
+ * "enviando…" para sempre. No F5: ou uma mensagem que ninguém respondeu, ou nada.
+ *
+ * The rule now: a turn is only ever recorded when the driver actually took it, and every send gets
+ * an explicit receipt (`user_ack` after it is on disk, `user_nack` when it was refused).
+ */
+describe("o recibo de entrega — nenhuma mensagem some em silêncio", () => {
+  it("driver MORTO (o card foi hibernado debaixo da conversa): recusa, não grava nada e devolve user_nack", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    stopCardDriver(CARD); // exactly what hibernateCard → killCardSession does
+
+    socket.emit("message", Buffer.from(`{"type":"user","text":"instrução longa","cid":"c-1"}`));
+
+    expect(session.activeTurns).toBe(0); // no phantom turn in flight
+    const nack = socket.sent.map((s) => JSON.parse(s) as { type: string; cid?: string });
+    expect(nack.some((f) => f.type === "user_nack" && f.cid === "c-1")).toBe(true);
+    await new Promise((r) => setImmediate(r));
+    expect(await readHistory(CARD)).toEqual([]); // nothing was written down
+    expect(await readInflightMarker(CARD)).toBeNull();
+  });
+
+  it("driver vivo: a mensagem vira user_ack — e SÓ depois de estar no histórico em disco", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"roda os testes","cid":"c-2"}`));
+
+    await vi.waitFor(() => {
+      const ack = socket.sent.map((s) => JSON.parse(s) as { type: string; cid?: string })
+        .find((f) => f.type === "user_ack");
+      expect(ack?.cid).toBe("c-2");
+    });
+    const events = await readHistory(CARD);
+    expect(events.map((e) => e.type)).toEqual(["user"]);
+    expect(spawned[0]!.stdin.written.join("")).toContain("roda os testes");
+  });
+
+  it("o `cid` é recibo entre back e front — nunca entra no stdin do driver", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"oi","cid":"c-3"}`));
+    expect(spawned[0]!.stdin.written.join("")).not.toContain("c-3");
+  });
+
+  it("uma edição também é recusada quando o driver morreu (nada de marcador 'editada' fantasma)", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    stopCardDriver(CARD);
+    socket.emit("message", Buffer.from(`{"type":"edit_user","original":"a","text":"b","cid":"c-4"}`));
+    await new Promise((r) => setImmediate(r));
+    expect(await readHistory(CARD)).toEqual([]);
+    expect(socket.sent.map((s) => (JSON.parse(s) as { type: string }).type)).toContain("user_nack");
+  });
+
+  it("um cliente antigo (sem cid) segue funcionando: entrega normal, sem recibo", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"sem cid"}`));
+    expect(session.activeTurns).toBe(1);
+    await vi.waitFor(async () => {
+      expect((await readHistory(CARD)).length).toBe(1);
+    });
+    expect(sentTypes(socket)).not.toContain("user_ack");
+  });
+
+  it("EPIPE no stdin (o docker exec caiu): o erro vira frame, não silêncio", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdin.emit("error", new Error("write EPIPE"));
+    const errors = socket.sent.map((s) => JSON.parse(s) as { type: string; message?: string })
+      .filter((f) => f.type === "error");
+    expect(errors.length).toBe(1);
+    expect(errors[0]!.message).toContain("EPIPE");
+  });
+
+  it("conversar no chat nativo é sinal de vida do card (o que impedia a hibernação de matar o driver)", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"oi"}`));
+    await vi.waitFor(() => expect(humanActiveCalls).toContain(CARD));
+    expect(session.activeTurns).toBe(1);
+  });
+});
+
+/**
+ * O VETO DE HIBERNAÇÃO (a causa-raiz do incidente): o idle sweep hibernava o card que a pessoa
+ * estava usando — e hibernar mata o driver. O card em uso agora é vetado; um driver ocioso, não.
+ */
+describe("isCardChatInUse — o que impede o idle sweep de matar a conversa", () => {
+  it("card com aba conectada: EM USO", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    expect(isCardChatInUse(CARD)).toBe(true);
+  });
+
+  it("aba fechada e nada rodando: liberado (o próprio idle stop o mataria de qualquer jeito)", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("close");
+    expect(isCardChatInUse(CARD)).toBe(false);
+  });
+
+  it("aba fechada MAS turno em voo: EM USO (não se mata trabalho em andamento)", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"trabalho longo"}`));
+    socket.emit("close");
+    expect(session.activeTurns).toBe(1);
+    expect(isCardChatInUse(CARD)).toBe(true);
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    expect(isCardChatInUse(CARD)).toBe(false);
+  });
+
+  it("card sem driver nenhum: liberado", () => {
+    expect(isCardChatInUse(CARD2)).toBe(false);
   });
 });
