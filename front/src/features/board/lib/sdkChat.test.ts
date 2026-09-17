@@ -12,6 +12,7 @@ import {
   type SdkChatState,
   type SdkEvent,
 } from "./sdkChat";
+import { pendingDecisions } from "./pendingDecisions";
 
 function feed(events: SdkEvent[], from: SdkChatState = INITIAL_SDK_STATE): SdkChatState {
   return events.reduce((state, event) => applySdkEvent(state, event), from);
@@ -582,5 +583,51 @@ describe("raciocínio ao vivo (o que a espera mostra)", () => {
     ]);
     expect(state.turnActive).toBe(false);
     expect(state.rows.every((r) => !("streaming" in r) || r.streaming === false)).toBe(true);
+  });
+});
+
+/**
+ * "MANDEI A MENSAGEM E NADA ACONTECE, FICA PRESO NESSA TELA" (produção, 2026-09-17): com um plano de
+ * opções na tela, quem não gostava do plano escrevia no chat para mudar o rumo — e o turno seguia
+ * parado, esperando um clique que não viria, até o timeout de 30 minutos.
+ *
+ * A regra agora: falar É responder. O cartão se resolve como SUBSTITUÍDO — que não é o mesmo que
+ * "sem resposta": a pessoa respondeu, só não pelo cartão, e a tela não pode dizer o contrário.
+ */
+describe("a mensagem substitui o cartão de pergunta", () => {
+  const question: SdkEvent = {
+    type: "user_question",
+    id: "q1",
+    questions: [{ question: "Abro PR ou commito direto?", options: [{ label: "PR" }, { label: "direto" }] }],
+  };
+
+  it("question_result com superseded resolve o cartão como substituído", () => {
+    const state = feed([{ type: "ready" }, question, { type: "question_result", id: "q1", superseded: true }]);
+    const card = state.rows.find((r) => r.kind === "question");
+    expect(card).toMatchObject({ kind: "question", outcome: "superseded" });
+  });
+
+  it("substituído NÃO é 'sem resposta' (o timeout continua dizendo o que é)", () => {
+    const superseded = feed([{ type: "ready" }, question, { type: "question_result", id: "q1", superseded: true }]);
+    const gaveUp = feed([{ type: "ready" }, question, { type: "question_result", id: "q1" }]);
+    expect((superseded.rows.find((r) => r.kind === "question") as { outcome: string }).outcome).toBe("superseded");
+    expect((gaveUp.rows.find((r) => r.kind === "question") as { outcome: string }).outcome).toBe("unanswered");
+  });
+
+  it("o cartão sai da bandeja de decisões pendentes — nada mais fica cobrando um clique", () => {
+    const before = feed([{ type: "ready" }, question]);
+    expect(pendingDecisions(before.rows)).toHaveLength(1);
+    const after = applySdkEvent(before, { type: "question_result", id: "q1", superseded: true });
+    expect(pendingDecisions(after.rows)).toHaveLength(0);
+  });
+
+  it("um clique que chegou primeiro ganha: a resposta real não é rebaixada a 'substituída'", () => {
+    const answered = feed([
+      { type: "ready" },
+      question,
+      { type: "question_result", id: "q1", answers: [{ selected: ["PR"] }] },
+      { type: "question_result", id: "q1", superseded: true },
+    ]);
+    expect((answered.rows.find((r) => r.kind === "question") as { outcome: string }).outcome).toBe("answered");
   });
 });

@@ -468,6 +468,7 @@ export const en: Record<string, string> = {
   "sdk.questionSend": "Answer",
   "sdk.questionAnswered": "Answered: {answers}",
   "sdk.questionUnanswered": "No answer — the agent moved on without it.",
+  "sdk.questionSuperseded": "You answered with a message — the agent followed it.",
   "sdk.questionTimeoutHint": "No answer and the agent moves on after 30 minutes.",
   "sdk.edit": "Edit message",
   "sdk.edited": "edited",

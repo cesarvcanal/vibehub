@@ -63,6 +63,11 @@ export interface SdkEvent {
   questions?: SdkQuestion[];
   /** On `question_result`: what the person picked (absent when it timed out / was cancelled). */
   answers?: SdkQuestionAnswer[];
+  /**
+   * On `question_result`: a pessoa respondeu POR MENSAGEM em vez de clicar numa opção. Não é o
+   * mesmo que "sem resposta" — ela respondeu, só não pelo cartão —, e a linha precisa dizer isso.
+   */
+  superseded?: boolean;
   /** On `message_edited`: the superseded message's text — the row it greys out. */
   originalText?: string;
   /**
@@ -103,8 +108,12 @@ export function parseSdkFrame(raw: string): SdkEvent | null {
 /** What one permission card is showing: still waiting, or how it ended. */
 export type PermissionOutcome = "pending" | "allowed" | "denied" | "timeout";
 
-/** What one question card is showing: still waiting, answered, or given up (timeout/cancel). */
-export type QuestionOutcome = "pending" | "answered" | "unanswered";
+/**
+ * What one question card is showing: still waiting, answered, given up (timeout/cancel) — ou
+ * SUBSTITUÍDO: a pessoa não clicou em opção nenhuma, escreveu no chat, e o que ela escreveu passou
+ * a valer. "unanswered" seria mentira nesse caso: ela respondeu, só não pelo cartão.
+ */
+export type QuestionOutcome = "pending" | "answered" | "unanswered" | "superseded";
 
 export type SdkRow =
   /** A message the person sent. `sent` = it reached the driver's stdin (the socket was open).
@@ -462,7 +471,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
     }
     case "question_result": {
       if (!event.id) return state;
-      return answerQuestion(state, event.id, event.answers);
+      return answerQuestion(state, event.id, event.answers, event.superseded === true);
     }
     case "turn_absorbed": {
       // The driver's confirmation that the LAST send folded into the turn already running
@@ -590,8 +599,15 @@ export function decidePermission(state: SdkChatState, id: string, outcome: Permi
 }
 
 /** Settle a question card (a click, the driver's echo, or a replayed result — idempotent). PURE. */
-export function answerQuestion(state: SdkChatState, id: string, answers?: SdkQuestionAnswer[]): SdkChatState {
-  const outcome: QuestionOutcome = answers && answers.length > 0 ? "answered" : "unanswered";
+export function answerQuestion(
+  state: SdkChatState,
+  id: string,
+  answers?: SdkQuestionAnswer[],
+  superseded: boolean = false,
+): SdkChatState {
+  const outcome: QuestionOutcome = answers && answers.length > 0
+    ? "answered"
+    : superseded ? "superseded" : "unanswered";
   let changed = false;
   const rows = state.rows.map((row) => {
     if (row.kind !== "question" || row.id !== id) return row;

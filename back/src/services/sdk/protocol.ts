@@ -89,6 +89,8 @@ export interface QuestionResultEvent {
   answers?: UserQuestionAnswer[];
   /** True when nobody answered within the timeout (the model was told "no answer"). */
   timedOut?: boolean;
+  /** A pessoa respondeu POR MENSAGEM em vez de clicar: o cartão foi substituído pelo que ela disse. */
+  superseded?: boolean;
 }
 
 /**
@@ -434,6 +436,17 @@ export function createPermissionBroker(timeoutMs: number = PERMISSION_TIMEOUT_MS
  */
 export const QUESTION_TIMEOUT_MS = 30 * 60_000;
 
+/**
+ * O que o MODELO lê quando a pessoa respondeu por mensagem em vez de clicar numa opção.
+ *
+ * Precisa dizer três coisas, senão o agente reabre a mesma pergunta em seguida e o incômodo volta:
+ * que não houve escolha, que existe uma mensagem nova, e que ela manda. PURE.
+ */
+export const QUESTION_SUPERSEDED_MESSAGE =
+  "The user did not pick any of the options: they answered by sending a message in the chat instead. " +
+  "That message is in this conversation — read it and follow it. It SUPERSEDES this question, " +
+  "so do not ask it again unless their message leaves you genuinely unable to proceed.";
+
 /** Parse the `answers` payload of a `question_answer` frame. Null when it is not answer-shaped. PURE. */
 export function parseQuestionAnswers(raw: unknown): UserQuestionAnswer[] | null {
   if (!Array.isArray(raw)) return null;
@@ -502,6 +515,15 @@ export interface QuestionWaitResult {
   /** Null when nobody answered in time. */
   answers: UserQuestionAnswer[] | null;
   timedOut: boolean;
+  /**
+   * A pessoa NÃO clicou em nada: ela escreveu no chat, e o que ela escreveu vale mais que o cartão.
+   *
+   * O bug que isto fecha (produção, 2026-09-17): o agente propunha um plano com opções, a pessoa
+   * não gostava do plano e mandava uma mensagem redirecionando — e não acontecia NADA. O turno
+   * estava parado dentro do `canUseTool` esperando um clique, a mensagem ficava na fila do CLI sem
+   * ninguém para lê-la, e a tela ficava presa até o timeout de 30 MINUTOS. Falar é responder.
+   */
+  superseded?: boolean;
 }
 
 export interface QuestionBroker {
@@ -511,6 +533,11 @@ export interface QuestionBroker {
   resolve(id: string, answers: UserQuestionAnswer[]): boolean;
   /** Resolve everything still pending as unanswered (an interrupt kills the turn they belong to). */
   abandonAll(): void;
+  /**
+   * Libera o que espera clique porque a PESSOA FALOU: a mensagem dela substitui o cartão. Devolve
+   * quantos cartões foram liberados (0 = não havia nenhum, o caminho comum de toda mensagem).
+   */
+  supersedeAll(): number;
   /** How many questions are still waiting (observability + tests). */
   pendingCount(): number;
 }
@@ -545,6 +572,12 @@ export function createQuestionBroker(timeoutMs: number = QUESTION_TIMEOUT_MS): Q
     abandonAll(): void {
       for (const deliver of [...pending.values()]) deliver({ answers: null, timedOut: false });
       pending.clear();
+    },
+    supersedeAll(): number {
+      const waiting = pending.size;
+      for (const deliver of [...pending.values()]) deliver({ answers: null, timedOut: false, superseded: true });
+      pending.clear();
+      return waiting;
     },
     pendingCount(): number {
       return pending.size;

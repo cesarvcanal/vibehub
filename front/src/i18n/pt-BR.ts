@@ -469,6 +469,7 @@ export const ptBR: Record<string, string> = {
   "sdk.questionSend": "Responder",
   "sdk.questionAnswered": "Respondida: {answers}",
   "sdk.questionUnanswered": "Sem resposta — o agente seguiu sem ela.",
+  "sdk.questionSuperseded": "Você respondeu por mensagem — o agente seguiu por ela.",
   "sdk.questionTimeoutHint": "Sem resposta, o agente segue sozinho em 30 minutos.",
   "sdk.edit": "Editar mensagem",
   "sdk.edited": "editada",
