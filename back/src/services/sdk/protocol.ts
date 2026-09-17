@@ -15,6 +15,19 @@
 export interface AssistantTextEvent { type: "assistant_text"; text: string }
 /** A live text delta (only when the driver runs with partial messages on). */
 export interface AssistantDeltaEvent { type: "assistant_delta"; text: string }
+/**
+ * O RACIOCÍNIO do modelo (bloco `thinking` consolidado) e o seu delta ao vivo.
+ *
+ * Por que existe: enquanto o agente trabalha, a tela só mostrava um spinner com "Trabalhando…" —
+ * podia ser meio segundo ou dez minutos, e quem esperava não tinha como saber se ele estava no
+ * caminho certo. O raciocínio é a única coisa que o modelo produz ANTES da resposta, então é ele
+ * que transforma a espera em acompanhamento.
+ *
+ * NÃO é persistido no histórico (veja `replayableHistoryEvent`): é orientação do momento, como o
+ * `turn_absorbed`. O que fica em disco é a conversa — mensagem, ferramenta, resposta.
+ */
+export interface ThinkingEvent { type: "thinking"; text: string }
+export interface ThinkingDeltaEvent { type: "thinking_delta"; text: string }
 /** A tool call the agent is about to run (or ran). */
 export interface ToolUseEvent { type: "tool_use"; id: string; name: string; input: unknown }
 /** The session id — emitted as soon as the driver learns it, and again on the result. */
@@ -109,6 +122,8 @@ export interface ParseErrorEvent { type: "parse_error"; raw: string }
 export type DriverEvent =
   | AssistantTextEvent
   | AssistantDeltaEvent
+  | ThinkingEvent
+  | ThinkingDeltaEvent
   | ToolUseEvent
   | SessionEvent
   | PermissionEvent
@@ -125,6 +140,8 @@ export type DriverEvent =
 const DRIVER_EVENT_TYPES = new Set([
   "assistant_text",
   "assistant_delta",
+  "thinking",
+  "thinking_delta",
   "tool_use",
   "session",
   "permission",

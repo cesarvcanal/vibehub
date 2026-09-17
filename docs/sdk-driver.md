@@ -46,6 +46,8 @@ The websocket sends **one JSON text frame per event**:
 { "type": "permission_request", "id": "perm_…", "tool": "Bash", "input"?: { … }, "reason"?: "…" }  // AWAITS a decision
 { "type": "turn_absorbed" }                                // a send folded into the RUNNING turn (streaming input)
 { "type": "result", "isError": bool, "sessionId"?: "…", "subtype"?: "success", "result"?: "…", "permissionDenials"?: [ … ] }
+{ "type": "thinking", "text": "…" }                        // o raciocínio do modelo (bloco fechado)
+{ "type": "thinking_delta", "text": "…" }                  // …e o mesmo, token a token, ao vivo
 { "type": "user_ack", "cid": "…" }                         // back-synthesised: a send is ON DISK
 { "type": "user_nack", "cid": "…", "reason": "driver-gone" } // back-synthesised: the send was REFUSED
 { "type": "error", "message": "…" }
@@ -445,3 +447,28 @@ tivesse sido enviada. Reenviar o mesmo texto funciona. Dois furos, um em cada po
   depois do recibo entrar no ar). Um *Reenviar* zera o relógio e limpa a marca — o envio novo volta
   a ser cobrável; um `user_nack` a estampa na hora, porque o servidor JÁ respondeu e derrubar essa
   conexão não descobriria nada.
+
+## O raciocínio na tela
+
+A espera mostrava só um spinner com "Trabalhando…" — um turno de dez minutos e um de meio segundo
+eram idênticos, e quem esperava não tinha como saber se o agente havia entendido o pedido. O
+pensamento é a única coisa que o modelo produz ANTES da resposta, então é ele que transforma espera
+em acompanhamento.
+
+- **O driver pede o resumo.** `thinking: { type: "adaptive", display: "summarized" }` em
+  `baseOptions()`. O `display` não é enfeite: nos modelos atuais o padrão é `omitted` e os blocos
+  chegam com texto VAZIO — sem ele o driver encaminharia nada, sem erro nenhum, e a tela continuaria
+  no spinner. `adaptive` deixa o modelo decidir quando e quanto pensar.
+- **Dois eventos, como no texto.** `thinking_delta` ao vivo (o texto vem em `delta.thinking`, NÃO em
+  `delta.text`) e `thinking` consolidado, que substitui os deltas que o montaram. `redacted_thinking`
+  é ignorado de propósito: não carrega texto legível, e uma linha vazia seria pior que nada.
+- **Duas correntes que não se misturam.** O raciocínio tem linha própria (`kind: "thinking"`); um
+  delta de resposta FECHA um raciocínio aberto e vice-versa. Sem isso o primeiro token da resposta
+  era colado no fim do pensamento — e uma linha ficava "pensando" para sempre.
+- **Não é gravado.** `replayableHistoryEvent` recusa os dois, como faz com o `turn_absorbed`: é
+  orientação do momento. Gravá-lo encheria o log (replay de 500 eventos) com o pensamento de ontem e
+  empurraria a conversa de verdade para fora do replay. Depois de um F5, o que volta é a conversa —
+  mensagem, ferramenta, resposta.
+- **Na tela.** Aberto enquanto pensa, recolhido quando termina (um clique reabre) — durante a espera
+  é o que se quer ler; depois, vira ruído entre a pergunta e a resposta. Uma escolha explícita da
+  pessoa vence o automático, então abrir no meio do turno não é desfeito quando ele acaba.

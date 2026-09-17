@@ -1167,3 +1167,67 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     await waitFor(() => expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered"));
   });
 });
+
+/**
+ * "SÓ FICA UM LOADING ESCRITO 'TRABALHANDO…'" (pedido do César, 2026-09-17): um turno de dez minutos
+ * e um de meio segundo eram idênticos na tela, e quem esperava não sabia se o agente tinha entendido
+ * o pedido. O raciocínio é a única coisa que existe antes da resposta — então é ele que vira notícia.
+ */
+describe("SdkChatView — o raciocínio durante a espera", () => {
+  it("o pensamento aparece ao vivo, aberto, enquanto o modelo pensa", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    ws.deliver({ type: "thinking_delta", text: "Primeiro vou ler o " } as SdkEvent);
+    ws.deliver({ type: "thinking_delta", text: "teste que falhou." } as SdkEvent);
+
+    const row = await screen.findByTestId("sdk-thinking");
+    expect(row).toHaveAttribute("data-streaming", "true");
+    expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("Primeiro vou ler o teste que falhou.");
+  });
+
+  it("terminado o pensamento, a linha se recolhe — e um clique traz o texto de volta", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "thinking_delta", text: "hmm" } as SdkEvent);
+    await screen.findByTestId("sdk-thinking-text");
+
+    ws.deliver({ type: "thinking", text: "O teste falha por causa do timeout." } as SdkEvent);
+
+    await waitFor(() => expect(screen.queryByTestId("sdk-thinking-text")).not.toBeInTheDocument());
+    await userEvent.click(screen.getByTestId("sdk-thinking-toggle"));
+    expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("O teste falha por causa do timeout.");
+  });
+
+  it("quem abriu o raciocínio no meio do turno NÃO o perde quando ele termina", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "thinking_delta", text: "pensando" } as SdkEvent);
+    await screen.findByTestId("sdk-thinking-text");
+    await userEvent.click(screen.getByTestId("sdk-thinking-toggle")); // fecha
+    await userEvent.click(screen.getByTestId("sdk-thinking-toggle")); // e reabre: escolha explícita
+
+    ws.deliver({ type: "thinking", text: "decidido" } as SdkEvent);
+
+    expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("decidido");
+  });
+
+  it("a resposta é desenhada separada do raciocínio (uma não vira a outra)", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "thinking_delta", text: "vou responder curto" } as SdkEvent);
+    ws.deliver({ type: "assistant_delta", text: "Pronto." } as SdkEvent);
+
+    await waitFor(() => expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("Pronto."));
+    expect(screen.getByTestId("sdk-thinking")).not.toHaveAttribute("data-streaming");
+    expect(screen.getByTestId("sdk-assistant")).not.toHaveTextContent("vou responder curto");
+  });
+});

@@ -56,6 +56,20 @@ describe("parseDriverLine", () => {
   });
 });
 
+/**
+ * O RACIOCÍNIO NO CHAT (pedido do César, 2026-09-17): a espera mostrava só "Trabalhando…". O
+ * pensamento do modelo é a única coisa que existe antes da resposta — sem ele, um turno de dez
+ * minutos e um de meio segundo são idênticos na tela.
+ */
+describe("raciocínio do modelo", () => {
+  it("reconhece o bloco consolidado e o delta ao vivo", () => {
+    expect(parseDriverLine(`{"type":"thinking","text":"Vou ler o arquivo primeiro."}`))
+      .toEqual({ type: "thinking", text: "Vou ler o arquivo primeiro." });
+    expect(parseDriverLine(`{"type":"thinking_delta","text":"Vou ler "}`))
+      .toEqual({ type: "thinking_delta", text: "Vou ler " });
+  });
+});
+
 describe("encodeControl", () => {
   it("serialises a user message as one newline-terminated line", () => {
     expect(encodeControl({ type: "user", text: "olá" })).toBe(`{"type":"user","text":"olá"}\n`);

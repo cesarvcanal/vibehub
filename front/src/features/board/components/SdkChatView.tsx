@@ -2,6 +2,7 @@ import * as React from "react";
 import { toast } from "sonner";
 import {
   AlertTriangle,
+  Brain,
   ChevronRight,
   CircleHelp,
   CornerDownLeft,
@@ -780,6 +781,47 @@ function SdkToolGroup({ rows }: { rows: SdkRow[] }) {
   );
 }
 
+/**
+ * O RACIOCÍNIO do modelo, enquanto ele trabalha.
+ *
+ * O que isto resolve: um turno longo mostrava só um spinner e a palavra "Trabalhando…" — podia ser
+ * meio segundo ou dez minutos, e quem esperava não tinha como saber se o agente entendeu o pedido.
+ * Agora o pensamento aparece ao vivo, em segundo plano (menor, em itálico, sem o peso da resposta).
+ *
+ * Aberto enquanto pensa, recolhido quando termina: durante a espera é exatamente o que se quer ler,
+ * depois vira ruído entre a pergunta e a resposta — e um clique traz de volta.
+ */
+function SdkThinkingRow({ text, streaming }: { text: string; streaming: boolean }): React.ReactElement {
+  const t = useT();
+  // Só a escolha EXPLÍCITA da pessoa manda; sem ela, o estado segue o turno (aberto pensando,
+  // recolhido depois). Sem isso, recolher no fim do turno apagaria um "quero ver" feito no meio.
+  const [choice, setChoice] = React.useState<boolean | null>(null);
+  const open = choice ?? streaming;
+  return (
+    <div data-testid="sdk-thinking" data-streaming={streaming || undefined} data-open={open || undefined}>
+      <button
+        type="button"
+        data-testid="sdk-thinking-toggle"
+        aria-expanded={open}
+        onClick={() => setChoice(!open)}
+        className="flex items-center gap-1.5 text-[11px] text-muted-foreground/80 hover:text-foreground"
+      >
+        <Brain className={cn("h-3 w-3 shrink-0", streaming && "animate-pulse")} />
+        <span>{t("sdk.reasoning")}</span>
+        <ChevronRight className={cn("h-3 w-3 shrink-0 transition-transform", open && "rotate-90")} />
+      </button>
+      {open ? (
+        <div
+          data-testid="sdk-thinking-text"
+          className="mt-1 select-text whitespace-pre-wrap break-words border-l-2 border-muted pl-2.5 text-xs italic leading-relaxed text-muted-foreground"
+        >
+          {text}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function SdkChatRow({
   row,
   replies,
@@ -899,6 +941,10 @@ function SdkChatRow({
             : row.text}
       </div>
     );
+  }
+
+  if (row.kind === "thinking") {
+    return <SdkThinkingRow text={row.text} streaming={row.streaming} />;
   }
 
   if (row.kind === "user") {
