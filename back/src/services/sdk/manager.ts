@@ -1,12 +1,12 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
-import { onCardSessionKill } from "../board/workspace.js";
+import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
 import { appendHistory, replayableHistoryEvent } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inflight.js";
 import { noteDriverEventFor } from "./mirror.js";
 import { isHarnessFiller } from "../chat/chat.js";
-import { buildSupersedeText, parseDriverLine, parseSdkClientFrame, encodeControl, type DriverEvent } from "./protocol.js";
+import { buildSupersedeText, parseDriverLine, parseSdkClientFrame, encodeControl, type DriverControl, type DriverEvent } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { logger } from "../../utils/logger.js";
 
@@ -63,6 +63,26 @@ export interface DriverSession {
   closed: boolean;
 }
 
+/**
+ * What became of ONE client frame, so the socket that sent it can be TOLD.
+ *
+ * The bug this exists for (produção, 2026-09-17): a send whose driver had just been killed — the
+ * idle sweep hibernating a card someone was chatting in — was written into a dead stdin inside a
+ * `try {} catch {}`, persisted to the history anyway, and answered with silence. On screen it was
+ * a message "enviada" that spun forever; on the next F5 it was either a message nobody ever
+ * answered or (when the socket itself was the dead end) no message at all. Nothing in the pipe
+ * could tell the difference, because nothing in the pipe ever ANSWERED.
+ *
+ * Now every user frame gets a verdict: `accepted` once the message is durably in the card's
+ * history AND in the driver's stdin, `refused` when the driver is gone (nothing written, nothing
+ * persisted — the browser keeps the words and may resend), or `ignored` for a frame that is not a
+ * turn (an interrupt, a permission click: those need no receipt).
+ */
+export type ClientFrameOutcome =
+  | { kind: "accepted"; cid?: string; persisted: Promise<void> }
+  | { kind: "refused"; cid?: string; reason: string }
+  | { kind: "ignored" };
+
 /** How much stderr the post-mortem keeps. Enough for a stack trace, bounded against a chatty child. */
 export const STDERR_TAIL_MAX = 2000;
 
@@ -92,6 +112,21 @@ export function resetSdkSessionsForTesting(): void {
 export function hasDriverSession(cardId: string): boolean {
   const session = sessions.get(cardId);
   return !!session && !session.closed;
+}
+
+/**
+ * Is this card's chat ACTUALLY in use — a page connected to it, or a turn running?
+ *
+ * This is the veto the idle sweep asks for (see `onCardInUseProbe` in services/board/workspace.ts).
+ * It is deliberately narrower than `hasDriverSession`: a driver nobody is connected to and that is
+ * doing nothing may be hibernated like any cold card (its own idle stop would kill it anyway), but
+ * a card with someone's chat OPEN is a card whose next keystroke can arrive at any instant — and
+ * hibernating it kills this driver right under that keystroke, which is exactly what ate messages.
+ */
+export function isCardChatInUse(cardId: string): boolean {
+  const session = sessions.get(cardId);
+  if (!session || session.closed) return false;
+  return session.sockets.size > 0 || session.activeTurns > 0;
 }
 
 /* ---------------------------------------------------------------- helpers */
@@ -217,6 +252,13 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
       if (event) handleDriverEvent(session, event);
     }
   });
+  // EPIPE on the way IN: the child (or the docker exec carrying it) is gone. Without this the
+  // error surfaced as an unhandled 'error' event at best and as silence at worst — and the next
+  // message was written into the same dead pipe.
+  child.stdin.on("error", (err: Error) => {
+    logger.warn({ card: opts.label, detail: err.message }, "sdk driver stdin died");
+    broadcast(session, { type: "error", message: `driver input closed: ${err.message}` });
+  });
   child.stderr?.on("data", (chunk: Buffer) => {
     // KEEP the tail, don't just debug-log it: in the original incident the driver died with its
     // stderr invisible (debug level) and its exit frame sent to an already-closed socket — a fully
@@ -264,49 +306,110 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
 }
 
 /**
+ * Can this session still TAKE a turn? A driver that died (killed by a hibernate, a crash, an idle
+ * stop) leaves a session object whose stdin is closed — and `write()` on it throws asynchronously,
+ * which is exactly how a message used to disappear: written nowhere, persisted anyway, answered
+ * never. Checked BEFORE anything is recorded.
+ */
+function canAcceptTurn(session: DriverSession): boolean {
+  // `== null` on purpose: a live child reports `exitCode: null`, and a stub/stream that never
+  // defines it must read as alive — only an actual exit code means gone.
+  const exited = session.child.exitCode != null;
+  return !session.closed && !exited && session.child.stdin.writable !== false;
+}
+
+/** Push one line into the driver's stdin. Returns false when the pipe refused it. */
+function writeToDriver(session: DriverSession, control: DriverControl): boolean {
+  try {
+    session.child.stdin.write(encodeControl(control));
+    return true;
+  } catch (err) {
+    logger.warn({ card: session.label, detail: (err as Error).message }, "sdk driver stdin refused a control frame");
+    return false;
+  }
+}
+
+/**
+ * The card is ALIVE because a person is talking to it — here, not in the terminal.
+ *
+ * `humanActiveAt` used to be stamped only by keystrokes on the tmux websocket, so a card whose
+ * whole conversation happened in the native chat looked untouched to the idle sweep, which
+ * hibernated it (killing this very driver) minutes after it was opened. Stamping it here is what
+ * makes "estou conversando com esse card" a sign of life the sweep can see (see
+ * `lastActivityAt`/`cardsToHibernate` in services/board/workspace.ts).
+ */
+function noteChatActivity(session: DriverSession): void {
+  void registry.markCardHumanActive(session.cardId).catch(() => { /* best effort, never fails a send */ });
+}
+
+/**
  * ONE client frame (raw text from a websocket — live or buffered while the route was still setting
  * the connection up) funneled into the card's driver. A user message is a TURN: it goes to the
  * driver's stdin AS a user message (never converted, never wrapped), the turn count and the durable
  * in-flight marker (see ./inflight.ts) both move, and the history gets the line with its sender.
+ *
+ * Returns the frame's VERDICT so the caller can answer the browser (see `ClientFrameOutcome`): a
+ * turn is only ever reported `accepted` when it is both in the driver's stdin and on its way to
+ * disk — never because a `write()` did not happen to throw.
  */
-export function handleClientFrame(session: DriverSession, raw: string, origin?: MessageOrigin): void {
+export function handleClientFrame(session: DriverSession, raw: string, origin?: MessageOrigin): ClientFrameOutcome {
   const control = parseSdkClientFrame(raw);
-  if (!control) return;
+  if (!control) return { kind: "ignored" };
+  if (control.type === "user" || control.type === "edit_user") {
+    // The driver is GONE: refuse out loud instead of writing into a closed pipe. Nothing is
+    // persisted and no turn is counted, so the browser's copy is the only one — it keeps the words
+    // and resends onto the successor driver (the socket's close is already on its way).
+    if (!canAcceptTurn(session)) {
+      logger.warn(
+        { audit: true, action: "sdk.send.refused", card: session.label },
+        "a chat message arrived for a driver that is no longer running — refused (the browser keeps it)",
+      );
+      return { kind: "refused", cid: control.cid, reason: "driver-gone" };
+    }
+  }
   if (control.type === "edit_user") {
     // A SUPERSEDE: the model already read the original, so the edit goes to the driver as one more
     // NORMAL user turn wearing the supersede wrapper (the driver knows no edit_user control). The
     // history gets the truth in two lines — the marker that greys the original out, and the new
     // message with its CLEAN text (`sent` keeps the wrapped words, the transcript dedupe key).
     const wrapped = buildSupersedeText(control.original, control.text);
-    try { session.child.stdin.write(encodeControl({ type: "user", text: wrapped })); } catch { /* driver gone; close will fire */ }
+    if (!writeToDriver(session, { type: "user", text: wrapped })) {
+      return { kind: "refused", cid: control.cid, reason: "driver-gone" };
+    }
     session.activeTurns += 1;
     clearIdleTimer(session);
+    noteChatActivity(session);
     // The transcript will carry the WRAPPED words — that is what the mirror must not re-emit.
     noteDriverEventFor(session.cardId, { type: "user", text: wrapped });
     const at = Date.now();
     void appendHistory(session.cardId, { type: "message_edited", originalText: control.original, at });
-    void appendHistory(session.cardId, { type: "user", text: control.text, sent: wrapped, at, from: origin });
+    const persisted = appendHistory(session.cardId, { type: "user", text: control.text, sent: wrapped, at, from: origin });
     // Same durable in-flight promise a plain user turn earns (see #64's boot sweep).
     void writeInflightMarker(session.cardId, { startedAt: at, preview: inflightPreview(control.text), attempts: 0 });
-    return;
+    return { kind: "accepted", cid: control.cid, persisted };
   }
-  try { session.child.stdin.write(encodeControl(control)); } catch { /* driver gone; close will fire */ }
   if (control.type === "user") {
+    if (!writeToDriver(session, control)) return { kind: "refused", cid: control.cid, reason: "driver-gone" };
     session.activeTurns += 1;
     clearIdleTimer(session);
+    noteChatActivity(session);
     noteDriverEventFor(session.cardId, control);
-    void appendHistory(session.cardId, { type: "user", text: control.text, at: Date.now(), from: origin });
+    const persisted = appendHistory(session.cardId, { type: "user", text: control.text, at: Date.now(), from: origin });
     // The durable "turn in flight" record: if a deploy kills the back (and this driver with it)
     // before the result arrives, the boot sweep finds this marker and the turn is not silently
     // lost. attempts: 0 — a person's own turn always earns one automatic resume.
     void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(control.text), attempts: 0 });
-  } else if (control.type === "interrupt") {
+    return { kind: "accepted", cid: control.cid, persisted };
+  }
+  writeToDriver(session, control);
+  if (control.type === "interrupt") {
     // Streaming input: every send is already in the CLI, and the interrupt aborts the running
     // turn — at most ONE result is still owed. (A send queued CLI-side in the last instant can
     // survive the interrupt and run; its extra result is absorbed by the floor-at-zero above.)
     // Clamping here keeps an abandoned backlog from pinning the driver past the idle stop forever.
     session.activeTurns = Math.min(session.activeTurns, 1);
   }
+  return { kind: "ignored" };
 }
 
 /**
@@ -322,6 +425,28 @@ export function injectSystemTurn(session: DriverSession, text: string, origin: M
   noteDriverEventFor(session.cardId, { type: "user", text });
   void appendHistory(session.cardId, { type: "user", text, at: Date.now(), from: origin });
   void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(text), attempts });
+}
+
+/**
+ * The RECEIPT a frame earns, sent back to the socket that sent it.
+ *
+ * `user_ack` means the message is in the card's history on disk — the thing an F5 reads back — so
+ * the browser may finally forget its own copy. `user_nack` means the back did NOT take it, and is
+ * the browser's cue to keep the words and resend them onto the next driver. A frame with no `cid`
+ * (an older client) gets no receipt and behaves exactly as before.
+ */
+export function replyFrameOutcome(socket: WebSocket, outcome: ClientFrameOutcome): void {
+  if (outcome.kind === "ignored" || !outcome.cid) return;
+  const cid = outcome.cid;
+  const send = (frame: object): void => {
+    try { socket.send(JSON.stringify(frame)); } catch { /* going away; the browser resends on reconnect */ }
+  };
+  if (outcome.kind === "refused") {
+    send({ type: "user_nack", cid, reason: outcome.reason });
+    return;
+  }
+  // AFTER the append: the ack promises durability, not intention.
+  void outcome.persisted.then(() => send({ type: "user_ack", cid }));
 }
 
 /**
@@ -349,7 +474,7 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
   }, KEEPALIVE_MS);
 
   socket.on("message", (raw: Buffer) => {
-    handleClientFrame(session, raw.toString(), origin);
+    replyFrameOutcome(socket, handleClientFrame(session, raw.toString(), origin));
   });
 
   const detach = (): void => {
@@ -406,3 +531,9 @@ export function shutdownAllDrivers(): void {
 // Every path that ends a card's terminal (pause, hibernate, restart, delete, model/account
 // switch) goes through killCardSession — the driver dies with it.
 onCardSessionKill((cardId) => stopCardDriver(cardId));
+
+// …and the reverse rule: a card whose native chat is IN USE (a page connected, or a turn running)
+// must not be hibernated — hibernating is one of those kill paths, and killing the driver under a
+// live conversation is precisely how a message got written into a dead pipe and answered by
+// nobody. Close the page and the driver idles out on its own; the card is hibernatable again.
+onCardInUseProbe((cardId) => isCardChatInUse(cardId));

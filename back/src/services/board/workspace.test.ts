@@ -747,6 +747,49 @@ describe("restart (single and all) — a working card is protected", () => {
     expect(ws.cardsToHibernate(cards, now, 0)).toEqual([]);
   });
 
+  /**
+   * THE INCIDENT (produção, 2026-09-17): `openedAt` is stamped on the FIRST open and never
+   * re-stamped, and a conversation held in the NATIVE CHAT never moves the hook-reported
+   * `statusAt`. So the sweep measured a card someone was actively typing into as "sem sinal de
+   * vida há horas" and hibernated it — which kills the SDK driver under a live conversation and
+   * ate the message the person had just sent. Two answers, both pinned here.
+   */
+  it("cardsToHibernate: quem acabou de digitar no card NÃO é hibernado (humanActiveAt conta)", () => {
+    const now = 1_700_000_000_000;
+    const old = now - 4 * 60 * 60_000;
+    const cards = [
+      // opened days ago, the chat never touches statusAt — but a message went in a minute ago
+      { id: "chat", openedAt: old, pausedAt: null, status: null, statusAt: undefined, humanActiveAt: now - 60_000 },
+      { id: "cold", openedAt: old, pausedAt: null, status: null, statusAt: undefined, humanActiveAt: old },
+    ];
+    expect(ws.cardsToHibernate(cards, now, 3 * 60 * 60_000).map((c) => c.id)).toEqual(["cold"]);
+    expect(ws.lastActivityAt(cards[0]!)).toBe(now - 60_000);
+  });
+
+  it("cardsToHibernate: um card com chat nativo VIVO é vetado, mesmo frio no relógio", () => {
+    const now = 1_700_000_000_000;
+    const old = now - 4 * 60 * 60_000;
+    const cards = [
+      { id: "driving", openedAt: old, pausedAt: null, status: null, statusAt: undefined },
+      { id: "cold", openedAt: old, pausedAt: null, status: null, statusAt: undefined },
+    ];
+    const inUse = (id: string) => id === "driving"; // what hasDriverSession answers in production
+    expect(ws.cardsToHibernate(cards, now, 3 * 60 * 60_000, inUse).map((c) => c.id)).toEqual(["cold"]);
+  });
+
+  it("isCardInUse: o veto é registrado (o manager do SDK pendura hasDriverSession aqui)", () => {
+    expect(ws.isCardInUse("qualquer")).toBe(false);
+    const off = ws.onCardInUseProbe((id) => id === "em-uso");
+    expect(ws.isCardInUse("em-uso")).toBe(true);
+    expect(ws.isCardInUse("outro")).toBe(false);
+    // a probe that throws must never break the sweep
+    const offBad = ws.onCardInUseProbe(() => { throw new Error("boom"); });
+    expect(ws.isCardInUse("outro")).toBe(false);
+    offBad();
+    off();
+    expect(ws.isCardInUse("em-uso")).toBe(false);
+  });
+
   it("hibernateCard: kills BOTH sessions and leaves the card in its column", async () => {
     const { card } = await seed();
     await ws.openCard(card.id);

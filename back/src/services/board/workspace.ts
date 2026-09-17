@@ -819,6 +819,39 @@ export function onCardSessionKill(listener: CardSessionKillListener): () => void
   return () => cardSessionKillListeners.delete(listener);
 }
 
+/* ------------------------------------------------------- in-use probes */
+
+/**
+ * Probes that answer "someone is USING this card right now, do not hibernate it".
+ *
+ * The incident (produção, 2026-09-17): a card whose whole conversation lives in the NATIVE CHAT
+ * never touches tmux, so nothing refreshed its `statusAt`/`openedAt` — and `openedAt` is stamped
+ * on the FIRST open and never re-stamped. The idle sweep therefore read a card the person was
+ * typing into as "sem sinal de vida há 3 horas" and hibernated it, killing the SDK driver under a
+ * live conversation, every five minutes. Registered (not imported) for the same reason the
+ * session-kill hook is: the sdk manager must not create an import cycle.
+ */
+type CardInUseProbe = (cardId: string) => boolean;
+const cardInUseProbes = new Set<CardInUseProbe>();
+
+/** Register a probe that vetoes hibernating a card. Returns the unsubscribe. */
+export function onCardInUseProbe(probe: CardInUseProbe): () => void {
+  cardInUseProbes.add(probe);
+  return () => cardInUseProbes.delete(probe);
+}
+
+/** Is any registered probe claiming this card? A probe that throws is ignored, never fatal. */
+export function isCardInUse(cardId: string): boolean {
+  for (const probe of cardInUseProbes) {
+    try {
+      if (probe(cardId)) return true;
+    } catch (err) {
+      logger.warn({ card: cardId, detail: (err as Error).message }, "card in-use probe failed (continuing)");
+    }
+  }
+  return false;
+}
+
 /** Tell every listener a card's session is being ended. Best-effort: a listener cannot break the kill. */
 export function notifyCardSessionKill(cardId: string): void {
   for (const listener of cardSessionKillListeners) {
@@ -1147,12 +1180,18 @@ export function startPauseReconciler(intervalMs: number = PAUSE_RECONCILE_MS): (
 }
 
 /**
- * When a card was last ALIVE: the newest of the last hook report and the first open. Not `updatedAt`
- * — renaming a card or dragging it between columns is something a HUMAN did to the board, not a sign
- * that the conversation is warm, and counting it would keep a dead terminal looking busy. PURE.
+ * When a card was last ALIVE: the newest of the last hook report, the last time a PERSON typed into
+ * it (terminal keystrokes AND native-chat messages both stamp `humanActiveAt`) and the first open.
+ * Not `updatedAt` — renaming a card or dragging it between columns is something a HUMAN did to the
+ * board, not a sign that the conversation is warm, and counting it would keep a dead terminal
+ * looking busy.
+ *
+ * `humanActiveAt` is in here because of the hibernation incident: `openedAt` is stamped ONCE, on
+ * the first open ever, and the native chat never moves the hook-reported `statusAt` — so a card
+ * someone had been chatting with all afternoon measured as idle since the day it was created. PURE.
  */
-export function lastActivityAt(card: Pick<Card, "statusAt" | "openedAt">): number {
-  return Math.max(card.statusAt ?? 0, card.openedAt ?? 0);
+export function lastActivityAt(card: Pick<Card, "statusAt" | "openedAt" | "humanActiveAt">): number {
+  return Math.max(card.statusAt ?? 0, card.openedAt ?? 0, card.humanActiveAt ?? 0);
 }
 
 /**
@@ -1162,14 +1201,15 @@ export function lastActivityAt(card: Pick<Card, "statusAt" | "openedAt">): numbe
  *
  * `idleMs <= 0` selects NOTHING: that is how the setting spells "never hibernate". PURE/testable.
  */
-export function cardsToHibernate<T extends Pick<Card, "openedAt" | "pausedAt" | "hibernatedAt" | "status" | "statusAt">>(
+export function cardsToHibernate<T extends Pick<Card, "id" | "openedAt" | "pausedAt" | "hibernatedAt" | "status" | "statusAt" | "humanActiveAt">>(
   cards: T[],
   now: number,
   idleMs: number,
+  inUse: (cardId: string) => boolean = () => false,
 ): T[] {
   if (!(idleMs > 0)) return [];
   return cards.filter(
-    (c) => hasLiveSession(c) && c.status !== "working" && now - lastActivityAt(c) >= idleMs,
+    (c) => hasLiveSession(c) && c.status !== "working" && !inUse(c.id) && now - lastActivityAt(c) >= idleMs,
   );
 }
 
@@ -1183,7 +1223,10 @@ export async function sweepIdleCards(now: number = Date.now()): Promise<number> 
   const { idleHibernateMinutes } = await getSettings();
   const idleMs = Math.max(0, Number(idleHibernateMinutes) || 0) * 60_000;
   if (idleMs <= 0) return 0;
-  const target = cardsToHibernate(await listAllCards(), now, idleMs);
+  // `isCardInUse` is the veto a LIVE native chat casts (the sdk manager registers it): hibernating
+  // a card kills its driver, and killing the driver under someone who is mid-conversation is what
+  // ate their message. The driver's own idle stop (DRIVER_IDLE_MS) releases the veto later.
+  const target = cardsToHibernate(await listAllCards(), now, idleMs, isCardInUse);
   if (target.length === 0) return 0;
   const results = await Promise.allSettled(target.map((c) => hibernateCard(c.id, "idle-sweep")));
   const hibernated = results.filter((r) => r.status === "fulfilled" && r.value).length;
