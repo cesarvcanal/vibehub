@@ -655,6 +655,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         onSend={send}
         onUploadImage={onUploadImage}
         placeholder={replyTo ? t("sdk.replyPlaceholder") : undefined}
+        commands={state.commands}
         interrupt={{ active: state.turnActive, onInterrupt: interrupt, testId: "sdk-interrupt" }}
         editing={editing ? { text: editing.original } : null}
         onCancelEdit={() => setEditing(null)}
@@ -939,6 +940,19 @@ function SdkChatRow({
           : row.text === TERMINAL_ACTIVITY_NOTE
             ? t("sdk.terminalActivity")
             : row.text}
+      </div>
+    );
+  }
+
+  if (row.kind === "command_output") {
+    // The CLI's own answer to a local command (/cost, /usage): monospaced and framed, so it reads
+    // as what it is — the session reporting, not Claude speaking.
+    return (
+      <div
+        data-testid="sdk-command-output"
+        className="whitespace-pre-wrap rounded-md border border-border/70 bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground"
+      >
+        {row.text}
       </div>
     );
   }

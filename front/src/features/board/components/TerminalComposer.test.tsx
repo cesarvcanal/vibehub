@@ -716,3 +716,77 @@ describe("interrupt button", () => {
     expect(screen.queryByTestId("composer-interrupt-slot")).toBeNull();
   });
 });
+
+describe("the \"/\" menu", () => {
+  const commands = [
+    { name: "code-review", description: "Review the current diff for correctness bugs", argumentHint: "[<pr#>]", source: "skill" as const },
+    { name: "simplify", description: "Simplify the changed code", source: "skill" as const },
+    { name: "compact", description: "Compact the conversation", source: "command" as const },
+  ];
+
+  beforeEach(() => mockGet.mockResolvedValue({ available: false }));
+
+  it("offers the session's skills the moment a slash is typed, and sends the one you pick", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    renderComposer(<TerminalComposer onSend={onSend} cardId="c1" commands={commands} />);
+    const field = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+
+    await user.type(field, "/");
+    expect(screen.getAllByTestId("composer-slash-item")).toHaveLength(3);
+
+    await user.type(field, "simpl");
+    const items = screen.getAllByTestId("composer-slash-item");
+    expect(items).toHaveLength(1);
+    await user.click(items[0]!);
+    // Picked: the field holds the command, ready for its arguments — nothing was sent yet.
+    expect(field).toHaveValue("/simplify ");
+    expect(onSend).not.toHaveBeenCalled();
+
+    await user.type(field, "{Enter}");
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("/simplify"));
+  });
+
+  it("Enter chooses while the menu is open — the message only goes on the next one", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    renderComposer(<TerminalComposer onSend={onSend} cardId="c1" commands={commands} />);
+    const field = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+
+    await user.type(field, "/code{Enter}");
+    expect(onSend).not.toHaveBeenCalled();
+    expect(field).toHaveValue("/code-review ");
+
+    await user.type(field, "high{Enter}");
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("/code-review high"));
+  });
+
+  it("closes once the name is settled — the arguments are not a search", async () => {
+    const user = userEvent.setup();
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" commands={commands} />);
+    const field = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+    await user.type(field, "/compact ");
+    expect(screen.queryByTestId("composer-slash-menu")).toBeNull();
+  });
+
+  it("Esc dismisses it without eating the draft, and never reaches the edit gesture", async () => {
+    const user = userEvent.setup();
+    const onEditLast = vi.fn();
+    renderComposer(
+      <TerminalComposer onSend={vi.fn()} cardId="c1" commands={commands} onEditLast={onEditLast} />,
+    );
+    const field = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+    await user.type(field, "/co{Escape}");
+    expect(screen.queryByTestId("composer-slash-menu")).toBeNull();
+    expect(field).toHaveValue("/co");
+    expect(onEditLast).not.toHaveBeenCalled();
+  });
+
+  it("stays out of the way of a card with no catalogue — a slash is just a slash", async () => {
+    const user = userEvent.setup();
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
+    const field = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+    await user.type(field, "/");
+    expect(screen.queryByTestId("composer-slash-menu")).toBeNull();
+  });
+});

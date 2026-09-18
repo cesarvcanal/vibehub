@@ -13,6 +13,9 @@ import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/lib/useIsMobile";
 import { apiErrorMessage } from "@/lib/apiError";
 import { AUDIO_MAX_BYTES, TRANSCRIBE_KEY, boardApi } from "@/features/board/api";
+import {
+  applySlashPick, filterSlashCommands, slashQuery, type SlashCommandInfo,
+} from "@/features/board/lib/slashMenu";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -114,6 +117,77 @@ export interface TerminalComposerProps {
    * parent decides whether there is a message to edit (and refuses while a turn is running).
    */
   onEditLast?: () => void;
+  /**
+   * Every skill and command the session can run (the native chat learns them from the driver —
+   * see `lib/slashMenu.ts`). With a list, typing "/" opens the menu; without one, "/" is just a
+   * character and the field behaves exactly as it always did.
+   */
+  commands?: SlashCommandInfo[];
+}
+
+
+/* ------------------------------------------------------------- the "/" menu */
+
+/**
+ * The list of commands the field is offering. Deliberately plain: each row is a name, what it
+ * takes, and one line of what it does — the description is the searchable part, so it has to be
+ * READABLE, and a skill's frontmatter paragraph would push everything else off the screen.
+ *
+ * It is not a dropdown component: a floating panel would need a portal, and this one lives with
+ * the field it belongs to (above it, so the caret and the phone keyboard never fight it).
+ */
+function SlashMenu({
+  commands,
+  highlight,
+  onPick,
+}: {
+  commands: SlashCommandInfo[];
+  highlight: number;
+  onPick: (command: SlashCommandInfo) => void;
+}) {
+  const t = useT();
+  const label = (source: SlashCommandInfo["source"]): string =>
+    source === "skill" ? t("composer.slashSkill") : source === "plugin" ? t("composer.slashPlugin") : t("composer.slashCommand");
+  return (
+    <div
+      data-testid="composer-slash-menu"
+      role="listbox"
+      aria-label={t("composer.slashAria")}
+      className="max-h-64 overflow-y-auto rounded-md border border-border bg-card p-1 shadow-lg"
+    >
+      {commands.map((command, i) => (
+        <button
+          key={command.name}
+          type="button"
+          role="option"
+          aria-selected={i === highlight}
+          data-testid="composer-slash-item"
+          data-active={i === highlight ? "true" : undefined}
+          /* The pointer must never steal focus from the field: mousedown would blur the textarea
+             (and on a phone close the keyboard) before the click ever landed. */
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => onPick(command)}
+          className={cn(
+            "flex w-full flex-col gap-0.5 rounded px-2 py-1.5 text-left",
+            i === highlight ? "bg-accent" : "hover:bg-accent/60",
+          )}
+        >
+          <span className="flex min-w-0 items-baseline gap-1.5">
+            <span className="shrink-0 font-mono text-xs text-foreground">/{command.name}</span>
+            {command.argumentHint ? (
+              <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground/70">{command.argumentHint}</span>
+            ) : null}
+            <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground/60">
+              {label(command.source)}
+            </span>
+          </span>
+          {command.description ? (
+            <span className="line-clamp-2 text-[11px] leading-snug text-muted-foreground">{command.description}</span>
+          ) : null}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 /** Image files in a paste or drop payload, ignoring everything else. */
@@ -333,6 +407,7 @@ export function TerminalComposer({
   editing,
   onCancelEdit,
   onEditLast,
+  commands,
 }: TerminalComposerProps) {
   const t = useT();
   const isMobile = useIsMobile();
@@ -486,6 +561,39 @@ export function TerminalComposer({
     }
     void deliver(text, attachments);
   };
+
+  /* ------------------------------------------------------- the "/" menu */
+
+  /**
+   * The command menu is derived, never stored: what is typed decides whether it is open (a draft
+   * that is one "/word") and what it offers. The only state is which entry is HIGHLIGHTED — and it
+   * resets to the first whenever the offer changes, so the highlight always points at something
+   * that is on screen.
+   */
+  const slashPrefix = commands && commands.length > 0 && !editing ? slashQuery(text) : null;
+  const matches = React.useMemo(
+    () => (slashPrefix === null ? [] : filterSlashCommands(commands ?? [], slashPrefix)),
+    [commands, slashPrefix],
+  );
+  /**
+   * Esc DISMISSES the menu for exactly what is typed right now (not forever): the draft is left
+   * alone — "/whatever" can still be sent as written — and typing one more character offers the
+   * menu again, which is the only behaviour that does not trap someone who dismissed it by reflex.
+   */
+  const [dismissed, setDismissed] = React.useState<string | null>(null);
+  const menuOpen = matches.length > 0 && dismissed !== slashPrefix;
+  const [highlight, setHighlight] = React.useState(0);
+  React.useEffect(() => { setHighlight(0); }, [slashPrefix]);
+  const selected = menuOpen ? matches[Math.min(highlight, matches.length - 1)] : undefined;
+
+  /** Pick an entry: the field becomes the command with the caret where its arguments go. */
+  const pickCommand = React.useCallback((command: SlashCommandInfo): void => {
+    setText(applySlashPick(command));
+    setHighlight(0);
+    setDismissed(null);
+    const el = ref.current;
+    if (el) setTimeout(() => { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }, 0);
+  }, []);
 
   // The deferred send, fired by the last upload finishing.
   React.useEffect(() => {
@@ -793,6 +901,12 @@ export function TerminalComposer({
 
       {/* The field and the microphone. Vertically centred: the field grows with the text and a
           bottom-aligned 48px circle drifts away from it as it does. */}
+      {/* The "/" menu: skills and commands this session can run, above the field so it never covers
+          what is being typed and never moves the caret. */}
+      {menuOpen ? (
+        <SlashMenu commands={matches} highlight={Math.min(highlight, matches.length - 1)} onPick={pickCommand} />
+      ) : null}
+
       <div data-testid="composer-row" className="flex items-center gap-2">
       {onUploadImage ? <AttachControl mobile={isMobile} onPick={upload} /> : null}
       <div className="relative min-w-0 flex-1">
@@ -801,6 +915,32 @@ export function TerminalComposer({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
+            // The menu takes the keys it needs FIRST — while it is open, Enter/Tab choose a
+            // command instead of sending, and the arrows walk the list instead of the text.
+            if (menuOpen) {
+              if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                e.preventDefault();
+                setHighlight((prev) => {
+                  const step = e.key === "ArrowDown" ? 1 : -1;
+                  return (prev + step + matches.length) % matches.length;
+                });
+                return;
+              }
+              if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+                if (selected) {
+                  e.preventDefault();
+                  pickCommand(selected);
+                  return;
+                }
+              }
+              if (e.key === "Escape") {
+                // Close the menu WITHOUT touching the draft: "/" plus what you typed stays, and the
+                // message can still go as written (the CLI takes an unknown command as text).
+                e.preventDefault();
+                setDismissed(slashPrefix);
+                return;
+              }
+            }
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               send();

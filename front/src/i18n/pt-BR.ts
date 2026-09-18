@@ -526,6 +526,10 @@ export const ptBR: Record<string, string> = {
   "composer.fromGallery": "Foto da galeria",
   "composer.attachFile": "Anexar um arquivo",
   "composer.interrupt": "Interromper",
+  "composer.slashAria": "Skills e comandos deste card",
+  "composer.slashSkill": "skill",
+  "composer.slashPlugin": "plugin",
+  "composer.slashCommand": "comando",
 
   /* ----------------------------------------------------------------- outbox */
   "outbox.waitingSession.one":

@@ -6,7 +6,10 @@ import { appendHistory, replayableHistoryEvent } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inflight.js";
 import { noteDriverEventFor } from "./mirror.js";
 import { isHarnessFiller } from "../chat/chat.js";
-import { buildSupersedeText, parseDriverLine, parseSdkClientFrame, encodeControl, type DriverControl, type DriverEvent } from "./protocol.js";
+import {
+  buildSupersedeText, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, encodeControl,
+  type CatalogEvent, type DriverControl, type DriverEvent,
+} from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { logger } from "../../utils/logger.js";
 
@@ -55,6 +58,13 @@ export interface DriverSession {
   lastSessionId?: string;
   /** Turns in flight or queued in the driver: +1 per user send, -1 per result. */
   activeTurns: number;
+  /**
+   * The session's command CATALOGUE (what the chat's "/" menu offers), as last reported by the
+   * driver. Kept HERE, next to `ready`: it is session state, not conversation — it is never
+   * written to the history, and a page that attaches later gets it replayed from this field
+   * instead of waiting for the next `init` (which only comes with the next turn).
+   */
+  catalog?: CatalogEvent;
   idleTimer: NodeJS.Timeout | null;
   buffer: string;
   /** Rolling tail of the driver's stderr — what a post-mortem has to say (see STDERR_TAIL_MAX). */
@@ -187,6 +197,16 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     void registry.updateCard(session.cardId, { resumeSessionId: event.sessionId }).catch((err: unknown) => {
       logger.warn({ card: session.label, detail: (err as Error).message }, "could not persist the sdk session id");
     });
+  }
+  if (event.type === "catalog") {
+    // Normalised HERE, on the side that talks to the browser: the driver forwards what the CLI
+    // said, and this is where names are validated, descriptions flattened and the list capped.
+    const raw = event as unknown as { commands?: unknown; skills?: unknown; plugins?: unknown; hidden?: unknown };
+    event = {
+      type: "catalog",
+      commands: normalizeSlashCommands(raw.commands, { skills: raw.skills, plugins: raw.plugins, hidden: raw.hidden }),
+    };
+    session.catalog = event;
   }
   if (event.type === "turn_absorbed") {
     // Streaming input: this send folded into the turn ALREADY running (the model absorbs it at its
@@ -467,6 +487,13 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
     try {
       socket.send(JSON.stringify({ type: "ready", resume: session.lastSessionId, turnActive: session.activeTurns > 0 }));
     } catch { /* going away */ }
+  }
+
+  // The "/" menu is state, not conversation: it is not in the replayed history, and the driver
+  // only announces it once per boot. Without this, a page opened on a card whose driver is already
+  // up had no command list until the next turn's `init` — an empty menu on a session full of skills.
+  if (session.catalog) {
+    try { socket.send(JSON.stringify(session.catalog)); } catch { /* going away */ }
   }
 
   const keepalive = setInterval(() => {

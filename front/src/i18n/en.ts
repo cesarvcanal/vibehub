@@ -524,6 +524,10 @@ export const en: Record<string, string> = {
   "composer.fromGallery": "Photo from gallery",
   "composer.attachFile": "Attach a file",
   "composer.interrupt": "Interrupt",
+  "composer.slashAria": "Skills and commands of this card",
+  "composer.slashSkill": "skill",
+  "composer.slashPlugin": "plugin",
+  "composer.slashCommand": "command",
 
   /* ----------------------------------------------------------------- outbox */
   "outbox.waitingSession.one": "1 message queued — open the card and it goes on its own",
