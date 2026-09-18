@@ -9,6 +9,9 @@ import { applyMcpsEverywhere, setMcpSecretById, mcpSecretsStatus } from "../serv
 import {
   brainView, setBrainText, resetBrain, applyBrainEverywhere, projectBrainView, setProjectBrainText,
 } from "../services/brain/brain.js";
+import {
+  pluginCatalog, enablePlugin, disablePlugin, applyPluginsEverywhere,
+} from "../services/plugins/plugins.js";
 import { importSessions, type ImportInput } from "../services/import/import.js";
 import { transcribeCardAudio, transcribeStatus, setTranscribeKeys, AUDIO_MAX_BYTES } from "../services/transcribe/transcribe.js";
 import { logger } from "../utils/logger.js";
@@ -47,7 +50,7 @@ interface AutoApplyResult {
  * explicit "apply now" button stays as the path that fails loudly.
  */
 async function autoApply(
-  reason: "brain" | "mcp",
+  reason: "brain" | "mcp" | "plugin",
   apply: () => Promise<unknown>,
   opts: { projectId?: string } = {},
 ): Promise<AutoApplyResult> {
@@ -199,6 +202,60 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   app.post("/api/brain/apply", { preHandler: requireOwner }, async (_req, reply) => {
     try {
       return await reply.send({ ok: true, ...(await applyBrainEverywhere()) });
+    } catch (err) {
+      const { code, body } = fail(err);
+      return await reply.code(code).send(body);
+    }
+  });
+
+  /* ---------------------------------------------------------------- plugins */
+
+  /**
+   * The official marketplace, marked up with what the runner HAS and what this install WANTS.
+   * Read straight from the runner (`claude plugin list --json --available`) rather than cached:
+   * the catalogue moves on Anthropic's side, and a stale list is a list that offers what no longer
+   * exists. It is a couple of hundred entries — the screen filters, the wire carries them once.
+   */
+  app.get("/api/plugins", { preHandler: requireOwner }, async (_req, reply) => {
+    try {
+      return await reply.send(await pluginCatalog());
+    } catch (err) {
+      const { code, body } = fail(err);
+      return await reply.code(code).send(body);
+    }
+  });
+
+  /**
+   * Install one plugin into EVERY profile, and remember that the install wants it (a Claude account
+   * added tomorrow gets the same set on its first card). Auto-applies like a brain save — Claude
+   * only reads its plugins when a session starts, so the staggered restart is what makes the new
+   * skills reachable without anybody restarting cards by hand.
+   */
+  app.post<{ Params: { name: string } }>("/api/plugins/:name", { preHandler: requireOwner }, async (req, reply) => {
+    try {
+      const enabled = await enablePlugin(req.params.name);
+      return await reply.send({ enabled, ...(await autoApply("plugin", applyPluginsEverywhere)) });
+    } catch (err) {
+      const { code, body } = fail(err);
+      return await reply.code(code).send(body);
+    }
+  });
+
+  /** Drop it from the wanted list and uninstall it from every profile (same auto-apply). */
+  app.delete<{ Params: { name: string } }>("/api/plugins/:name", { preHandler: requireOwner }, async (req, reply) => {
+    try {
+      const enabled = await disablePlugin(req.params.name);
+      return await reply.send({ enabled, ...(await autoApply("plugin", applyPluginsEverywhere)) });
+    } catch (err) {
+      const { code, body } = fail(err);
+      return await reply.code(code).send(body);
+    }
+  });
+
+  /** The manual force — the path that FAILS LOUDLY when the runner refuses. */
+  app.post("/api/plugins/apply", { preHandler: requireOwner }, async (_req, reply) => {
+    try {
+      return await reply.send({ ok: true, ...(await applyPluginsEverywhere()) });
     } catch (err) {
       const { code, body } = fail(err);
       return await reply.code(code).send(body);

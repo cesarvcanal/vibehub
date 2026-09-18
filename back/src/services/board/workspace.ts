@@ -15,6 +15,7 @@ import { firstRunSeedCommand } from "../accounts/firstRun.js";
 import { resolveAccountToken, writeTokenLines, ghTokenPath, writeGhTokenLines, removeGhTokenLines } from "../accounts/token.js";
 import { cardCdpEndpoint } from "../browser/ports.js";
 import { mcpInjectLines, resolveMcpInjections, type McpInjection } from "../mcp/mcp.js";
+import { pluginInstallLines, enabledPlugins } from "../plugins/plugins.js";
 import {
   brainInjectLines, resolveBrainText, projectBrainWriteLines, resolveProjectBrainText, PROJECT_BRAIN_FILE,
 } from "../brain/brain.js";
@@ -218,6 +219,13 @@ export interface OpenScriptOpts {
   /** Managed MCPs (JSON already resolved) to inject into the card's effective profile. */
   mcps?: McpInjection[];
   /**
+   * The OFFICIAL PLUGINS this install wants (names in Anthropic's marketplace), installed into the
+   * card's effective profile. Idempotent by signature (a `.plugins-<sig>` marker), so only the
+   * first open after the set changes pays for it — and a profile created later (a new Claude
+   * account) gets the same plugins on its first card without anybody pressing a button.
+   */
+  plugins?: string[];
+  /**
    * The BRAIN (global instructions, markdown) to seed as CLAUDE.md at the root of the card's
    * effective profile. Idempotent by signature (a `.brain-<sig>` marker): the open only rewrites it
    * when the text changed.
@@ -328,6 +336,9 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
   // The brain (global CLAUDE.md) seeded into the card's effective profile — idempotent by signature,
   // so reopening a card rewrites nothing; new text is picked up on the next open.
   if (opts.brain) inner.push(...brainInjectLines([opts.accountConfigDir], opts.brain));
+  // The official plugins, same idempotency rule. Each install carries `|| true`: a plugin whose
+  // clone fails must never stop a card from opening — the Plugins screen is where it is seen.
+  if (opts.plugins?.length) inner.push(...pluginInstallLines([opts.accountConfigDir], opts.plugins));
   // The PROJECT brain, as CLAUDE.local.md at the worktree root (project memory for both the TUI and
   // the SDK driver). Kept OUT of git through the clone's info/exclude — shared by every worktree of
   // the clone, and added idempotently even when the project has no brain yet, so a text saved while
@@ -626,6 +637,14 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
     } catch (e) {
       logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "brain not seeded on open (continuing)");
     }
+    // The plugins this install wants: best-effort like the brain — a store that cannot be read
+    // must not stop a card from opening.
+    let plugins: string[] | undefined;
+    try {
+      plugins = await enabledPlugins();
+    } catch (e) {
+      logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "plugins not installed on open (continuing)");
+    }
     // The PROJECT brain (CLAUDE.local.md in the worktree): same best-effort rule as the global one.
     let projectBrain: string | undefined;
     try {
@@ -648,6 +667,7 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
       ghToken,
       mcps,
       brain,
+      plugins,
       projectBrain,
       repo,
     });

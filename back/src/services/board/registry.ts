@@ -163,8 +163,8 @@ export function isHumanActive(card: Pick<Card, "humanActiveAt">, now: number = D
  * LABEL (so the UI can tell them apart in a badge); the restart mechanics are identical either way.
  * See `restartPendingAt` on the card and `shouldRestartOnStatus`.
  */
-export type RestartReason = "brain" | "mcp" | "config";
-export const RESTART_REASONS: readonly RestartReason[] = ["brain", "mcp", "config"] as const;
+export type RestartReason = "brain" | "mcp" | "plugin" | "config";
+export const RESTART_REASONS: readonly RestartReason[] = ["brain", "mcp", "plugin", "config"] as const;
 
 /**
  * Claude models a card may pin. When set, the session starts with `claude --model <id>`. Unset =

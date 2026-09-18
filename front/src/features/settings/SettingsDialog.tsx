@@ -17,6 +17,7 @@ import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
 import { AccountsManager } from "@/features/board/components/AccountsManager";
 import { McpManager } from "@/features/board/components/McpManager";
 import { BrainManager } from "@/features/board/components/BrainManager";
+import { PluginsManager } from "@/features/board/components/PluginsManager";
 import { RunnerBanner } from "@/features/board/components/RunnerBanner";
 import {
   LANGUAGES,
@@ -628,6 +629,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             <AccountsManager trigger="row" />
             <McpManager trigger="row" />
             <BrainManager trigger="row" />
+            <PluginsManager trigger="row" />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <RunnerBanner />
