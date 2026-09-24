@@ -15,6 +15,9 @@ import {
   parseQuestionAnswers,
   parseSdkClientFrame,
   buildSupersedeText,
+  interruptNote,
+  NOTE_TURN_INTERRUPTED,
+  NOTE_TURN_INTERRUPTED_EDIT,
 } from "./protocol.js";
 
 describe("parseDriverLine", () => {
@@ -274,6 +277,19 @@ describe("user questions — AskUserQuestion over the chat", () => {
     expect(parseSdkClientFrame(`{"type":"question_answer","id":"q_1"}`)).toBeNull();
     expect(parseSdkClientFrame(`{"type":"question_answer","id":"q_1","answers":[{"selected":[1]}]}`)).toBeNull();
     expect(parseSdkClientFrame(`{"type":"question_answer","answers":[]}`)).toBeNull();
+  });
+
+  it("parseSdkClientFrame carries the edit REASON on an interrupt, and only that one", () => {
+    // The reason is what tells the manager which note narrates the cut ("interrompido para você
+    // editar a mensagem"); an unknown reason must never become an unexplained note.
+    expect(parseSdkClientFrame(`{"type":"interrupt","reason":"edit"}`)).toEqual({ type: "interrupt", reason: "edit" });
+    expect(parseSdkClientFrame(`{"type":"interrupt"}`)).toEqual({ type: "interrupt" });
+    expect(parseSdkClientFrame(`{"type":"interrupt","reason":"whatever"}`)).toEqual({ type: "interrupt" });
+  });
+
+  it("interruptNote picks the line that matches the gesture", () => {
+    expect(interruptNote({ type: "interrupt", reason: "edit" })).toBe(NOTE_TURN_INTERRUPTED_EDIT);
+    expect(interruptNote({ type: "interrupt" })).toBe(NOTE_TURN_INTERRUPTED);
   });
 
   it("parseQuestionAnswers keeps only answer-shaped payloads", () => {

@@ -477,6 +477,20 @@ export const ptBR: Record<string, string> = {
   "sdk.thinking": "Pensando\u2026",
   "sdk.reasoning": "Raciocínio",
   "sdk.flagOff": "O driver SDK está desligado nesta instalação. Ligue \"Driver SDK\" nas Configurações para usar o chat nativo.",
+  "sdk.noteInterrupted": "Turno interrompido por você — a resposta acima ficou pela metade.",
+  "sdk.noteInterruptedEdit": "Turno interrompido para você editar a mensagem — a resposta acima ficou pela metade.",
+  "sdk.interruptedForEdit":
+    "O turno foi interrompido quando você entrou na edição. Ele não volta sozinho de onde parou — mande a mensagem editada, ou peça para continuar.",
+  "sdk.resumeTurn": "Continuar de onde parou",
+  "sdk.interruptedDismiss": "Dispensar — deixar o turno interrompido",
+  "sdk.turnFailed":
+    "O turno terminou com erro e o driver não disse qual. A resposta acima pode estar incompleta — reenvie a mensagem; se repetir, veja a aba Terminal do card.",
+  "sdk.turnFailedWhy":
+    "O turno terminou com erro ({subtype}). A resposta acima pode estar incompleta — reenvie a mensagem; se repetir, veja a aba Terminal do card.",
+  "sdk.errorNoDetail": "O driver relatou um erro sem detalhe nenhum. Se repetir, feche e reabra o card para reiniciar o driver.",
+  "sdk.driverGone": "O chat nativo perdeu o driver do card. A página reconecta sozinha e retoma a conversa; se não voltar, reabra o card. ({detail})",
+  "sdk.driverInstallFailed": "Não deu para instalar o driver do chat nativo no runner. Verifique se o card está rodando e tente reabrir. ({detail})",
+  "sdk.cardGone": "Este card não existe mais — a conversa acabou aqui. Feche a aba.",
 
   "cardView.sdkTerminalNote": "Chat nativo ativo neste card — é a mesma conversa: o chat nativo retoma sempre a sessão mais recente, inclusive o que você digitar aqui.",
   "cardView.terminalFor": "Terminal de {title}",
@@ -497,6 +511,8 @@ export const ptBR: Record<string, string> = {
   "composer.editing": "Editando mensagem \u2014 Esc cancela",
   "composer.editingCancel": "Cancelar a edi\u00e7\u00e3o",
   "composer.aria": "Escreva aqui — Enter envia, Shift+Enter quebra linha",
+  "composer.ariaMobile": "Escreva aqui — a tecla de retorno quebra linha; toque em enviar",
+  "composer.send": "Enviar mensagem",
   "composer.recordingTooBig": "Essa gravação passa de 20 MB.",
   "composer.transcribing": "Transcrevendo…",
   "composer.nothingSaid": "Não foi dito nada nessa gravação.",
@@ -519,6 +535,7 @@ export const ptBR: Record<string, string> = {
   "composer.tryAgain": "Tentar de novo",
   "composer.removeImage": "Tirar {name} da mensagem",
   "composer.sendingAfterUpload": "enviando assim que a imagem subir…",
+  "composer.uploadingCount": "{done} de {total} imagens enviadas…",
   "composer.recording": "Gravando",
   "composer.attach": "Anexar",
   "composer.attachMenu": "Anexar uma foto ou arquivo",

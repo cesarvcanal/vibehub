@@ -592,7 +592,9 @@ describe("SdkChatView — editar mensagem enviada (supersede)", () => {
     expect(screen.queryByTestId("composer-editing")).not.toBeInTheDocument();
   });
 
-  it("with the turn RUNNING the edit interrupts first and only goes after the result", async () => {
+  // THE REPORTED BUG: "cliquei pra editar e em vez de PAUSAR o raciocínio ele continua
+  // respondendo". The stop belongs to the GESTURE, not to the send.
+  it("clicking the pencil MID-TURN stops the turn right away (the edit bar is not a spectator)", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -604,16 +606,102 @@ describe("SdkChatView — editar mensagem enviada (supersede)", () => {
     ws.deliver({ type: "assistant_delta", text: "Subindo…" }); // the turn is visibly running
 
     await userEvent.click(screen.getByTestId("sdk-edit"));
+
+    // the stop went at the CLICK, before a single character of the new version was typed
+    await waitFor(() => expect(ws.sent.length).toBe(2));
+    expect(JSON.parse(ws.sent[1]!)).toEqual({ type: "interrupt", reason: "edit" });
+    expect(screen.getByTestId("composer-editing")).toBeInTheDocument();
+  });
+
+  it("with the turn RUNNING the edit only goes after the interrupted turn's result", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    const box = await textbox();
+    await userEvent.type(box, "sobe pra prod{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "Subindo…" }); // the turn is visibly running
+
+    await userEvent.click(screen.getByTestId("sdk-edit"));
+    await waitFor(() => expect(ws.sent.length).toBe(2)); // the stop of the pencil click
     await userEvent.clear(box);
     await userEvent.type(box, "sobe pra dev{Enter}");
 
-    // the STOP went; the edit is waiting for the interrupted turn's result
-    await waitFor(() => expect(ws.sent.length).toBe(2));
-    expect(JSON.parse(ws.sent[1]!)).toEqual({ type: "interrupt" });
+    // no SECOND stop — the turn is already being aborted; the edit waits for its result
+    expect(ws.sent.length).toBe(2);
+    expect(JSON.parse(ws.sent[1]!)).toEqual({ type: "interrupt", reason: "edit" });
 
     ws.deliver({ type: "result", isError: false, subtype: "aborted" });
     await waitFor(() => expect(ws.sent.length).toBe(3));
     expect(JSON.parse(ws.sent[2]!)).toMatchObject({ type: "edit_user", original: "sobe pra prod", text: "sobe pra dev" });
+    // the correction replaced the interrupted turn: no leftover offer to continue the old one
+    expect(screen.queryByTestId("sdk-interrupted-banner")).toBeNull();
+  });
+
+  // "Cancelar a edição retoma" — honestly: the turn was CUT, and continuing is a new turn.
+  it("cancelling an edit that stopped a turn offers to continue it — and continuing sends a turn", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    const box = await textbox();
+    await userEvent.type(box, "sobe pra prod{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "Subindo…" });
+
+    await userEvent.click(screen.getByTestId("sdk-edit"));
+    await waitFor(() => expect(ws.sent.length).toBe(2));
+    // while the aborted turn is still closing there is nothing to offer yet
+    expect(screen.queryByTestId("sdk-interrupted-banner")).toBeNull();
+
+    fireEvent.keyDown(box, { key: "Escape" }); // cancel the edit
+    ws.deliver({ type: "result", isError: true, subtype: "error_during_execution" }); // the abort's result
+
+    const banner = await screen.findByTestId("sdk-interrupted-banner");
+    expect(banner).toHaveTextContent(/interrompid|stopped/i);
+    // and it is NOT a mute red "error": an abort we asked for draws no error bubble at all
+    expect(screen.queryByTestId("sdk-error")).toBeNull();
+
+    await userEvent.click(screen.getByTestId("sdk-resume-turn"));
+    expect(JSON.parse(ws.sent[2]!)).toMatchObject({ type: "user" });
+    expect(JSON.parse(ws.sent[2]!).text).toMatch(/continue de onde/i);
+    expect(screen.queryByTestId("sdk-interrupted-banner")).toBeNull();
+  });
+
+  it("dismissing the offer leaves the turn stopped and sends nothing", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    const box = await textbox();
+    await userEvent.type(box, "sobe pra prod{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "Subindo…" });
+    await userEvent.click(screen.getByTestId("sdk-edit"));
+    await waitFor(() => expect(ws.sent.length).toBe(2));
+    fireEvent.keyDown(box, { key: "Escape" });
+    ws.deliver({ type: "result", isError: true });
+
+    await userEvent.click(await screen.findByTestId("sdk-interrupted-dismiss"));
+    expect(screen.queryByTestId("sdk-interrupted-banner")).toBeNull();
+    expect(ws.sent.length).toBe(2);
+  });
+
+  it("editing with NO turn running touches nothing — no stop, no offer", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "sobe pra prod" });
+
+    await userEvent.click(screen.getByTestId("sdk-edit"));
+    expect(ws.sent.length).toBe(0);
+    fireEvent.keyDown(await textbox(), { key: "Escape" });
+    expect(screen.queryByTestId("sdk-interrupted-banner")).toBeNull();
   });
 
   it("Esc cancels the edit and brings the interrupted draft back", async () => {
@@ -1270,5 +1358,60 @@ describe("SdkChatView — a pergunta respondida por mensagem", () => {
     ws.deliver({ type: "question_result", id: "q1", superseded: true } as unknown as SdkEvent);
 
     await waitFor(() => expect(screen.queryByTestId("pending-tray")).not.toBeInTheDocument());
+  });
+});
+
+/**
+ * THE MUTE RED BALLOON. The production screenshot: an answer chopped mid-sentence and, under it, a
+ * red bubble whose entire content was the word "error". It came from a turn that ended with
+ * `is_error` and no text of its own — the exact shape an INTERRUPT produces.
+ */
+describe("SdkChatView — todo erro diz o que houve", () => {
+  it("a failed turn with no words gets a sentence, never the bare word 'error'", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "assistant_delta", text: "Analisando…" });
+    ws.deliver({ type: "result", isError: true, subtype: "error_during_execution" });
+
+    const banner = await screen.findByTestId("sdk-error");
+    expect(banner.textContent).not.toBe("error");
+    expect(banner).toHaveTextContent(/error_during_execution/); // what the driver actually said
+    expect(banner).toHaveTextContent(/reenvie a mensagem|send the message again/i); // what to do
+  });
+
+  it("an error frame with no message says so instead of showing an empty red box", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "error", message: "" });
+
+    expect(await screen.findByTestId("sdk-error")).toHaveTextContent(/reabra o card|reopen the card/i);
+  });
+
+  it("'driver exited' stops being jargon: it says the page reconnects on its own", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "error", message: "driver exited (code 1)" });
+
+    const banner = await screen.findByTestId("sdk-error");
+    expect(banner).toHaveTextContent(/reconecta|reconnects/i);
+    expect(banner).toHaveTextContent(/code 1/); // the raw detail is kept, not hidden
+  });
+
+  it("the back's interrupt note is drawn in the reader's language, not as a code", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "assistant_text", text: "Estava indo até que…" });
+    ws.deliver({ type: "system_note", text: "turn-interrupted-edit" });
+
+    const note = await screen.findByTestId("sdk-note");
+    expect(note).toHaveTextContent(/editar a mensagem|edit the message/i);
+    expect(note.textContent).not.toContain("turn-interrupted-edit");
   });
 });

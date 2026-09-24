@@ -340,6 +340,56 @@ describe("interrupt — reaches the LIVE driver", () => {
   });
 });
 
+/**
+ * A turn cut short used to end in silence on the front: the answer stopped mid-sentence and the
+ * SDK's abort result (is_error, no text) drew a red bubble reading literally "error". The manager
+ * now NARRATES the cut — one system note, written when the aborted turn reports back, so it lands
+ * after the last deltas and survives an F5 (it goes to the history too).
+ */
+describe("interrupt — a nota que conta o que aconteceu com o turno", () => {
+  it("a plain stop notes the cut when the aborted turn's result lands, not before", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"faz a coisa"}`));
+    socket.emit("message", Buffer.from(`{"type":"interrupt"}`));
+    expect(sentTypes(socket)).not.toContain("system_note"); // the turn is still aborting
+
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: true, subtype: "error_during_execution" }));
+    const notes = socket.sent.map((s) => JSON.parse(s) as { type: string; text?: string }).filter((e) => e.type === "system_note");
+    expect(notes).toHaveLength(1);
+    expect(notes[0]!.text).toBe("turn-interrupted");
+    // the result comes FIRST — the note explains a truncation the reader has already seen
+    expect(sentTypes(socket).indexOf("result")).toBeLessThan(sentTypes(socket).indexOf("system_note"));
+    // and it is on disk: a reload still explains the cut
+    await vi.waitFor(async () => {
+      const history = await readHistory(CARD);
+      expect(history.some((e) => e.type === "system_note" && (e as { text: string }).text === "turn-interrupted")).toBe(true);
+    });
+  });
+
+  it("a stop for an EDIT says so — the note the edited message's reader needs", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"sobe pra prod"}`));
+    socket.emit("message", Buffer.from(`{"type":"interrupt","reason":"edit"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: true }));
+
+    const notes = socket.sent.map((s) => JSON.parse(s) as { type: string; text?: string }).filter((e) => e.type === "system_note");
+    expect(notes.map((n) => n.text)).toEqual(["turn-interrupted-edit"]);
+  });
+
+  it("a stop with NOTHING running notes nothing — no turn was cut", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"interrupt"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    expect(sentTypes(socket)).not.toContain("system_note");
+  });
+});
+
 describe("question_answer — reaches the LIVE driver", () => {
   it("funnels the answer frame into the driver's stdin without counting a turn", () => {
     const session = ensure();
