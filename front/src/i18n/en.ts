@@ -524,6 +524,10 @@ export const en: Record<string, string> = {
   "composer.fromGallery": "Photo from gallery",
   "composer.attachFile": "Attach a file",
   "composer.interrupt": "Interrupt",
+  "composer.slashAria": "Skills and commands of this card",
+  "composer.slashSkill": "skill",
+  "composer.slashPlugin": "plugin",
+  "composer.slashCommand": "command",
 
   /* ----------------------------------------------------------------- outbox */
   "outbox.waitingSession.one": "1 message queued — open the card and it goes on its own",
@@ -784,6 +788,28 @@ export const en: Record<string, string> = {
   "usage.error.unreachable": "could not read the usage right now",
 
   /* ------------------------------------------------------------------ brain */
+  /* ---------------------------------------------------------------- skills */
+  "plugins.aria": "Skills",
+  "plugins.buttonTitle": "Skills — Anthropic's official plugins, in every card",
+  "plugins.title": "Skills — Anthropic's official marketplace",
+  "plugins.description":
+    "Install a plugin here and it lands in every profile of the runner: any card can then invoke its skills and commands from the chat's \"/\" menu or from the terminal. A Claude account added later gets the same set.",
+  "plugins.searchAria": "Search the marketplace",
+  "plugins.searchPlaceholder": "search by name or by what it does…",
+  "plugins.refresh": "Reload the catalogue",
+  "plugins.loading": "reading the catalogue in the runner…",
+  "plugins.loadError": "could not read the catalogue in the runner",
+  "plugins.empty": "nothing by that name in the official marketplace",
+  "plugins.install": "Install",
+  "plugins.remove": "Installed",
+  "plugins.installs": "{n} installs",
+  "plugins.pending": "missing in the runner",
+  "plugins.subject": "{name}",
+  "plugins.removedSubject": "{name} (removed)",
+  "plugins.installError": "could not install the plugin",
+  "plugins.removeError": "could not remove the plugin",
+  "plugins.footer": "{marketplace} · {n} in use on this panel",
+
   "brain.aria": "Brain",
   "brain.buttonTitle": "Brain — instructions every card gets",
   "brain.title": "Brain — instructions every card gets",

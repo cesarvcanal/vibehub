@@ -19,6 +19,8 @@ import type {
   McpTransport,
   NewCard,
   OutboxStatus,
+  PluginCatalog,
+  PluginWriteResult,
   PreviewPort,
   Project,
   ProjectBrain,
@@ -198,6 +200,8 @@ export const ACCOUNT_USAGE_KEY = ["board", "accounts", "usage"] as const;
 export const MCPS_KEY = ["board", "mcps"] as const;
 export const MCP_SECRETS_KEY = ["board", "mcps", "secrets"] as const;
 export const BRAIN_KEY = ["board", "brain"] as const;
+/** The official plugin catalogue — read from the runner, so it is a query like any other. */
+export const PLUGINS_KEY = ["board", "plugins"] as const;
 /** One PROJECT's brain — under the brain prefix so invalidating BRAIN_KEY exactly never collides. */
 export const projectBrainKey = (projectId: string) => ["board", "brain", "project", projectId] as const;
 export const TRANSCRIBE_KEY = ["board", "transcribe"] as const;
@@ -617,6 +621,18 @@ export const boardApi = {
 
   /** Manual re-push, for when a runner was down when the text was saved. */
   applyBrain: () => post<BrainApplyResult>("/brain/apply"),
+
+  /* official plugins — Anthropic's marketplace, installed into every profile of the runner */
+  plugins: () => get<PluginCatalog>("/plugins"),
+
+  /** Installs it everywhere and remembers it (so a Claude account added later gets it too). */
+  installPlugin: (name: string) => post<PluginWriteResult>(`/plugins/${encodeURIComponent(name)}`),
+
+  /** Takes it off the list and uninstalls it from every profile. */
+  removePlugin: (name: string) => del<PluginWriteResult>(`/plugins/${encodeURIComponent(name)}`),
+
+  /** Manual re-push, for when the runner was down when a plugin was installed. */
+  applyPlugins: () => post<{ ok?: true; profiles?: number; plugins?: number }>("/plugins/apply"),
 
   /* project brain — one CLAUDE.local.md per project, at the root of each of its card worktrees */
   projectBrain: (projectId: string) => get<ProjectBrain>(`/brain/projects/${encodeURIComponent(projectId)}`),

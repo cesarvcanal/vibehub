@@ -14,6 +14,8 @@ const accountsTokenStatus = vi.fn();
 const applyMcpsEverywhere = vi.fn();
 const setMcpSecretById = vi.fn();
 const applyBrainEverywhere = vi.fn();
+const applyPluginsEverywhere = vi.fn();
+const pluginCatalog = vi.fn();
 const importSessions = vi.fn();
 const allAccountsUsage = vi.fn();
 
@@ -44,6 +46,10 @@ async function boot(): Promise<FastifyInstance> {
   vi.doMock("../services/brain/brain.js", async () => {
     const actual = await vi.importActual<typeof import("../services/brain/brain.js")>("../services/brain/brain.js");
     return { ...actual, applyBrainEverywhere };
+  });
+  vi.doMock("../services/plugins/plugins.js", async () => {
+    const actual = await vi.importActual<typeof import("../services/plugins/plugins.js")>("../services/plugins/plugins.js");
+    return { ...actual, applyPluginsEverywhere, pluginCatalog };
   });
   vi.doMock("../services/import/import.js", () => ({ importSessions }));
   vi.doMock("../services/accounts/usage.js", () => ({ allAccountsUsage }));
@@ -334,6 +340,62 @@ describe("project brain", () => {
   });
 });
 
+describe("plugins (the Skills screen)", () => {
+  it("serves the official catalogue as the runner answered it", async () => {
+    pluginCatalog.mockResolvedValueOnce({
+      marketplace: "claude-plugins-official",
+      plugins: [{ name: "code-review", description: "Reviews diffs", installed: [], wanted: false }],
+    });
+    const res = await app.inject({ method: "GET", url: "/api/plugins", headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().plugins.map((p: { name: string }) => p.name)).toEqual(["code-review"]);
+  });
+
+  it("a runner that cannot list is a 502, not an empty marketplace", async () => {
+    pluginCatalog.mockRejectedValueOnce(new Error("the runner is not running"));
+    const res = await app.inject({ method: "GET", url: "/api/plugins", headers: { cookie } });
+    expect(res.statusCode).toBe(502);
+  });
+
+  it("installing adds to the wanted list and AUTO-APPLIES; removing takes it off the same way", async () => {
+    const on = await app.inject({ method: "POST", url: "/api/plugins/code-review", headers: { cookie } });
+    expect(on.statusCode).toBe(200);
+    expect(on.json()).toMatchObject({ enabled: ["code-review"], applied: true, restarted: 0, pending: 0 });
+
+    const again = await app.inject({ method: "POST", url: "/api/plugins/code-review", headers: { cookie } });
+    expect(again.json().enabled).toEqual(["code-review"]); // idempotent
+
+    const off = await app.inject({ method: "DELETE", url: "/api/plugins/code-review", headers: { cookie } });
+    expect(off.json()).toMatchObject({ enabled: [], applied: true });
+    expect(applyPluginsEverywhere).toHaveBeenCalledTimes(3);
+  });
+
+  it("a name that could be a shell argument is a 400 and never reaches the apply", async () => {
+    for (const bad of ["a;rm", "..%2F..", "x y", "$(id)"]) {
+      const res = await app.inject({ method: "POST", url: `/api/plugins/${encodeURIComponent(bad)}`, headers: { cookie } });
+      expect(res.statusCode, bad).toBe(400);
+    }
+    expect(applyPluginsEverywhere).not.toHaveBeenCalled();
+  });
+
+  it("the list SURVIVES an unreachable runner — the plugin stays wanted, applied is false", async () => {
+    applyPluginsEverywhere.mockRejectedValueOnce(new Error("the runner is not provisioned"));
+    const res = await app.inject({ method: "POST", url: "/api/plugins/superpowers", headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ enabled: ["superpowers"], applied: false });
+  });
+
+  it("the manual apply fails loudly", async () => {
+    applyPluginsEverywhere.mockResolvedValueOnce({ profiles: 2, plugins: 1 });
+    const ok = await app.inject({ method: "POST", url: "/api/plugins/apply", headers: { cookie } });
+    expect(ok.json()).toEqual({ ok: true, profiles: 2, plugins: 1 });
+
+    applyPluginsEverywhere.mockRejectedValueOnce(new Error("the runner is not running"));
+    const down = await app.inject({ method: "POST", url: "/api/plugins/apply", headers: { cookie } });
+    expect(down.statusCode).toBe(502);
+  });
+});
+
 describe("import", () => {
   it("adopts staged sessions as cards", async () => {
     importSessions.mockResolvedValueOnce({ results: [], created: 2, skipped: 1, failed: 0 });
@@ -358,7 +420,8 @@ describe("import", () => {
 describe("agent routes require a session", () => {
   it("401s without a cookie", async () => {
     for (const [method, url] of [["GET", "/api/brain"], ["GET", "/api/mcps"], ["POST", "/api/mcps"],
-      ["POST", "/api/mcps/apply"], ["POST", "/api/import"]] as const) {
+      ["POST", "/api/mcps/apply"], ["GET", "/api/plugins"], ["POST", "/api/plugins/code-review"],
+      ["DELETE", "/api/plugins/code-review"], ["POST", "/api/plugins/apply"], ["POST", "/api/import"]] as const) {
       expect((await app.inject({ method, url })).statusCode, url).toBe(401);
     }
   });

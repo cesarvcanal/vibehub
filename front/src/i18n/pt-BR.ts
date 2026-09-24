@@ -526,6 +526,10 @@ export const ptBR: Record<string, string> = {
   "composer.fromGallery": "Foto da galeria",
   "composer.attachFile": "Anexar um arquivo",
   "composer.interrupt": "Interromper",
+  "composer.slashAria": "Skills e comandos deste card",
+  "composer.slashSkill": "skill",
+  "composer.slashPlugin": "plugin",
+  "composer.slashCommand": "comando",
 
   /* ----------------------------------------------------------------- outbox */
   "outbox.waitingSession.one":
@@ -791,6 +795,28 @@ export const ptBR: Record<string, string> = {
   "usage.error.unreachable": "não deu pra ler o uso agora",
 
   /* ---------------------------------------------------------------- cérebro */
+  /* ---------------------------------------------------------------- skills */
+  "plugins.aria": "Skills",
+  "plugins.buttonTitle": "Skills — plugins oficiais da Anthropic em todo card",
+  "plugins.title": "Skills — o marketplace oficial da Anthropic",
+  "plugins.description":
+    "Instale um plugin aqui e ele entra em todo profile do runner: qualquer card passa a poder invocar as skills e comandos dele pelo \"/\" do chat ou pelo terminal. Uma conta Claude criada depois recebe o mesmo conjunto.",
+  "plugins.searchAria": "Buscar no marketplace",
+  "plugins.searchPlaceholder": "buscar por nome ou pelo que faz…",
+  "plugins.refresh": "Recarregar o catálogo",
+  "plugins.loading": "lendo o catálogo no runner…",
+  "plugins.loadError": "não deu pra ler o catálogo no runner",
+  "plugins.empty": "nada com esse nome no marketplace oficial",
+  "plugins.install": "Instalar",
+  "plugins.remove": "Instalado",
+  "plugins.installs": "{n} instalações",
+  "plugins.pending": "falta no runner",
+  "plugins.subject": "{name}",
+  "plugins.removedSubject": "{name} (removido)",
+  "plugins.installError": "não deu pra instalar o plugin",
+  "plugins.removeError": "não deu pra remover o plugin",
+  "plugins.footer": "{marketplace} · {n} em uso neste painel",
+
   "brain.aria": "Cérebro",
   "brain.buttonTitle": "Cérebro — instruções que todo card recebe",
   "brain.title": "Cérebro — instruções que todo card recebe",

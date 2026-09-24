@@ -363,7 +363,7 @@ export interface Card {
    */
   restartPendingAt?: number | null;
   /** Which write scheduled the deferred restart. */
-  restartReason?: "brain" | "mcp" | "config";
+  restartReason?: "brain" | "mcp" | "plugin" | "config";
   /**
    * What the agent inside the card SAID about its own work (via `vibehub_report`): 'working' (still
    * on it), 'ready' (done, ready to deliver/review), 'needs_me' (wants a decision from the user) or
@@ -576,6 +576,31 @@ export type ProjectBrainWriteResult = ProjectBrain & ApplyOutcome;
 export interface ProjectBrainApplyResult extends ApplyOutcome {
   /** Card worktrees the text was written into. */
   cards?: number;
+}
+
+/**
+ * One entry of Anthropic's official plugin marketplace, as the Skills screen shows it.
+ * `installed` = the runner has it on disk right now; `enabled` = this install WANTS it (so a
+ * Claude account added later gets it too).
+ */
+export interface PluginEntry {
+  name: string;
+  description?: string;
+  /** Installs reported by the marketplace — the popularity signal the list sorts by. */
+  installs?: number;
+  installed: boolean;
+  enabled: boolean;
+}
+
+/** `GET /api/plugins` — the official catalogue, marked up with this install's state. */
+export interface PluginCatalog {
+  marketplace: string;
+  plugins: PluginEntry[];
+}
+
+/** `POST`/`DELETE /api/plugins/:name` — the new wanted list plus what the push achieved. */
+export interface PluginWriteResult extends ApplyOutcome {
+  enabled: string[];
 }
 
 /**

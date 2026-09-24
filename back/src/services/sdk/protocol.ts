@@ -111,6 +111,38 @@ export interface ResultEvent {
   result?: string;
   permissionDenials?: unknown[];
 }
+/**
+ * ONE invocable command of the card's session — a SKILL, a plugin command, a project command in
+ * `.claude/commands/`, or one of Claude Code's own. The CLI already knows all of them (it is what
+ * `/` lists in the TUI); the driver merely forwards the list so the chat can offer the same menu.
+ */
+export interface SlashCommandInfo {
+  /** Without the leading slash, as the CLI reports it (`code-review`, `plugin:command`). */
+  name: string;
+  description?: string;
+  /** What comes after the name (`[low|medium|high] [<pr#>]`) — shown as a hint, never sent. */
+  argumentHint?: string;
+  /** Alternate names that resolve to the same command (`/review` → `/code-review`). */
+  aliases?: string[];
+  /**
+   * WHERE the command comes from, so the menu can group it. `skill` = an Agent Skill (the CLI's
+   * init lists them by name), `plugin` = provided by an installed plugin, `command` = everything
+   * else (Claude Code's own and the repo's `.claude/commands/`).
+   */
+  source: "skill" | "plugin" | "command";
+}
+
+/**
+ * The session's command CATALOGUE, emitted when the driver learns it (the CLI's `init`) and again
+ * whenever it changes (`commands_changed` — a skill discovered mid-session). It is STATE, not
+ * conversation: never written to the history, always re-sent to a socket that attaches later.
+ */
+export interface CatalogEvent { type: "catalog"; commands: SlashCommandInfo[] }
+/**
+ * Output of a LOCAL slash command (`/cost`, `/usage`): the CLI answers it itself, without a model
+ * turn. Without this the chat swallowed the answer and the command looked like it did nothing.
+ */
+export interface LocalOutputEvent { type: "local_output"; text: string }
 /** The driver is up and ready to accept the first user message. The back stamps `turnActive` on
  *  every `ready` it sends (real or synthesized on reattach) with the manager's live turn count, so
  *  a view mounting mid-turn knows work is running (reattach mid-turn: Terminal↔Chat during a turn
@@ -133,6 +165,8 @@ export type DriverEvent =
   | UserQuestionEvent
   | QuestionResultEvent
   | TurnAbsorbedEvent
+  | CatalogEvent
+  | LocalOutputEvent
   | ResultEvent
   | ReadyEvent
   | DriverErrorEvent
@@ -151,6 +185,8 @@ const DRIVER_EVENT_TYPES = new Set([
   "user_question",
   "question_result",
   "turn_absorbed",
+  "catalog",
+  "local_output",
   "result",
   "ready",
   "error",
@@ -458,6 +494,80 @@ export function parseQuestionAnswers(raw: unknown): UserQuestionAnswer[] | null 
     answers.push({ selected: selected as string[] });
   }
   return answers;
+}
+
+/* ------------------------------------------------------- command catalogue */
+
+/** A slash command name as the CLI reports it: `code-review`, `plugin:command`. */
+const COMMAND_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,79}$/;
+/** Descriptions are skill frontmatter — some run to hundreds of words. The menu shows a line. */
+export const COMMAND_DESCRIPTION_MAX = 300;
+/** A session with more commands than this is a bug, not a menu: the catalogue is capped. */
+export const COMMAND_CATALOGUE_MAX = 400;
+
+/** Trim, collapse newlines, cap. Empty becomes undefined (the menu simply shows no description). */
+function commandText(raw: unknown, max: number): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const flat = raw.replace(/\s+/g, " ").trim();
+  if (flat === "") return undefined;
+  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
+}
+
+/**
+ * Turn what the CLI reports into the catalogue the chat may render: unknown-shaped entries and
+ * names that are not command names are DROPPED (this list ends up in a browser and is clicked to
+ * build a message), descriptions are flattened to one line, and the whole thing is capped.
+ *
+ * `skills` and `plugins` are the CLI's own init lists; they only decide the `source` LABEL the
+ * menu groups by. `hidden` is `terminal_slash_commands` — commands whose UX is bound to a real
+ * terminal (`/doctor`, `/color`); offering them in a web chat is offering something that cannot
+ * work. PURE.
+ */
+export function normalizeSlashCommands(
+  raw: unknown,
+  opts: { skills?: unknown; plugins?: unknown; hidden?: unknown } = {},
+): SlashCommandInfo[] {
+  if (!Array.isArray(raw)) return [];
+  const names = (value: unknown): Set<string> =>
+    new Set(Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : []);
+  const skills = names(opts.skills);
+  const hidden = names(opts.hidden);
+  const plugins = names(
+    Array.isArray(opts.plugins)
+      ? opts.plugins.map((p) => (p && typeof p === "object" ? (p as { name?: unknown }).name : p))
+      : opts.plugins,
+  );
+  const out: SlashCommandInfo[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const name = (entry as { name?: unknown }).name;
+    if (typeof name !== "string" || !COMMAND_NAME_RE.test(name)) continue;
+    if (hidden.has(name) || seen.has(name)) continue;
+    seen.add(name);
+    const rawAliases = (entry as { aliases?: unknown }).aliases;
+    const aliases = Array.isArray(rawAliases)
+      ? rawAliases.filter((a): a is string => typeof a === "string" && COMMAND_NAME_RE.test(a))
+      : [];
+    const source: SlashCommandInfo["source"] = skills.has(name)
+      ? "skill"
+      : plugins.has(name.split(":")[0] ?? "")
+        ? "plugin"
+        : "command";
+    out.push({
+      name,
+      source,
+      ...(commandText((entry as { description?: unknown }).description, COMMAND_DESCRIPTION_MAX)
+        ? { description: commandText((entry as { description?: unknown }).description, COMMAND_DESCRIPTION_MAX) }
+        : {}),
+      ...(commandText((entry as { argumentHint?: unknown }).argumentHint, 80)
+        ? { argumentHint: commandText((entry as { argumentHint?: unknown }).argumentHint, 80) }
+        : {}),
+      ...(aliases.length > 0 ? { aliases } : {}),
+    });
+    if (out.length >= COMMAND_CATALOGUE_MAX) break;
+  }
+  return out;
 }
 
 /**

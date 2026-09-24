@@ -10,6 +10,7 @@
  */
 
 import { parseOrigin, type MessageOrigin } from "@/features/board/lib/chat";
+import type { SlashCommandInfo } from "@/features/board/lib/slashMenu";
 
 /* ----------------------------------------------------------------- events */
 
@@ -32,6 +33,8 @@ export interface SdkEvent {
     | "question_result"
     | "message_edited"
     | "turn_absorbed"
+    | "catalog"
+    | "local_output"
     | "result"
     | "user_ack"
     | "user_nack"
@@ -59,6 +62,8 @@ export interface SdkEvent {
   from?: MessageOrigin;
   /** "terminal" = the event was MIRRORED from the card's TUI transcript, not spoken by the driver. */
   source?: string;
+  /** On `catalog`: every skill/command this session can run — what the composer's "/" offers. */
+  commands?: SlashCommandInfo[];
   /** On `user_question`: the questions with their selectable options. */
   questions?: SdkQuestion[];
   /** On `question_result`: what the person picked (absent when it timed out / was cancelled). */
@@ -154,7 +159,13 @@ export type SdkRow =
       (a reconnect loop against a refused socket) — one banner that counts, not a stack of copies. */
   | { kind: "error"; id: string; text: string; count?: number }
   /** A quiet note (resumed session, turn ended with an error result…). */
-  | { kind: "note"; id: string; text: string };
+  | { kind: "note"; id: string; text: string }
+  /**
+   * The answer to a LOCAL slash command (`/cost`, `/usage`): the CLI produced it itself, with no
+   * model turn. Drawn as its own row rather than as assistant text — nobody said it, the session
+   * reported it — and, like the terminal notes, it lives in the session only.
+   */
+  | { kind: "command_output"; id: string; text: string };
 
 export interface SdkChatState {
   rows: SdkRow[];
@@ -177,6 +188,13 @@ export interface SdkChatState {
    * the ladder narrates OUR send, not someone else's.
    */
   awaiting: boolean;
+  /**
+   * Every skill and command this card's session can run, as the driver reported it — the "/" menu
+   * of the composer. Empty until the catalogue lands (a driver still booting, or an older runner
+   * that does not report one): the field then behaves exactly as it did before, and a "/" typed by
+   * hand still reaches the CLI.
+   */
+  commands: SlashCommandInfo[];
   /** Monotonic counter for rows the driver did not name. */
   seq: number;
 }
@@ -187,6 +205,7 @@ export const INITIAL_SDK_STATE: SdkChatState = {
   turnActive: false,
   terminalBurst: false,
   awaiting: false,
+  commands: [],
   seq: 0,
 };
 
@@ -294,6 +313,24 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       if (!event.text) return state;
       const marked = markSource(state, viaTerminal);
       return appendUserRow({ ...marked, rows: settleStreaming(marked.rows) }, event.text, event.from);
+    }
+    case "catalog": {
+      // The session's "/" menu. Pure STATE, not a row: it never touches the conversation, and it
+      // REPLACES what was there (a refreshed catalogue is the whole truth, not an addition).
+      if (!Array.isArray(event.commands)) return state;
+      return { ...state, commands: event.commands };
+    }
+    case "local_output": {
+      // `/cost` and friends: answered by the CLI itself, outside any turn. Its own row, so it is
+      // never mistaken for something Claude said.
+      if (!event.text) return state;
+      const { id, seq } = nextId(state, "cmd");
+      return {
+        ...state,
+        seq,
+        awaiting: false,
+        rows: [...settleStreaming(state.rows), { kind: "command_output", id, text: event.text }],
+      };
     }
     case "system_note": {
       // The PANEL talking (a deploy interrupted a turn, the boot resumed it): one muted centered

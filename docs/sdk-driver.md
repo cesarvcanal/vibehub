@@ -46,6 +46,8 @@ The websocket sends **one JSON text frame per event**:
 { "type": "permission_request", "id": "perm_…", "tool": "Bash", "input"?: { … }, "reason"?: "…" }  // AWAITS a decision
 { "type": "turn_absorbed" }                                // a send folded into the RUNNING turn (streaming input)
 { "type": "result", "isError": bool, "sessionId"?: "…", "subtype"?: "success", "result"?: "…", "permissionDenials"?: [ … ] }
+{ "type": "catalog", "commands": [ { "name": "code-review", "description": "…", "argumentHint": "[<pr#>]", "aliases": ["review"], "source": "skill"|"plugin"|"command" } ] }
+{ "type": "local_output", "text": "…" }                    // resposta de um comando LOCAL (/cost, /usage)
 { "type": "thinking", "text": "…" }                        // o raciocínio do modelo (bloco fechado)
 { "type": "thinking_delta", "text": "…" }                  // …e o mesmo, token a token, ao vivo
 { "type": "user_ack", "cid": "…" }                         // back-synthesised: a send is ON DISK
@@ -61,6 +63,42 @@ The front sends, per message: a JSON object `{ "type": "user", "text": "…" }`,
 treated as a user message.
 Multi-turn works by resume: the driver captures `session_id`, the route persists it on the card
 (`resumeSessionId`), and the next spawn continues the same session.
+
+## O menu "/" — invocar skills e comandos pelo chat
+
+No Terminal você aperta `/` e a TUI oferece a lista; no chat nativo era preciso saber o nome de cor.
+A sessão JÁ conhece tudo que pode rodar — skills (`~/.claude/skills`, plugins, `.claude/skills` do
+repo), comandos de plugin, comandos do projeto (`.claude/commands`) e os built-ins do Claude Code —,
+porque o driver sobe com `settingSources: ["user","project","local"]`. O que faltava era o caminho
+até a tela:
+
+1. **Driver** — no `init` de cada stream, o driver pede `query.supportedCommands()` (nome,
+   descrição, `argumentHint`, aliases) e emite UM `catalog` com essa lista mais as listas do próprio
+   `init`: `skills` (quais nomes são skills), `plugins` (quais plugins estão instalados) e
+   `terminal_slash_commands` (os presos ao terminal — `/doctor`, `/color`). O pedido é feito uma vez
+   por processo (o `init` se repete a cada turno, e um round-trip de controle por turno não
+   compraria nada); um `commands_changed` do CLI — uma skill descoberta no meio da sessão — emite o
+   catálogo de novo. Falhou? o próximo `init` tenta outra vez.
+2. **Back** — `normalizeSlashCommands` (protocol.ts) é quem transforma isso no que pode ir pro
+   browser: nome válido ou fora, descrição achatada numa linha e limitada, catálogo com teto,
+   `source` calculado (`skill` / `plugin` / `command`) e os terminal-only removidos. O manager
+   guarda o resultado em `session.catalog` e **reenvia no attach** de cada socket — o catálogo é
+   ESTADO de sessão, não conversa: nunca entra no histórico, e uma aba que abre depois não pode
+   ficar sem menu esperando o `init` do próximo turno.
+3. **Front** — `lib/slashMenu.ts` tem as regras puras (quando o menu abre, o ranking da busca, como
+   o campo fica depois de escolher) e o `TerminalComposer` desenha a lista acima do campo. O menu só
+   existe enquanto o rascunho INTEIRO é uma palavra começada por `/`: digitou espaço, o nome está
+   fechado e o que vem depois são os argumentos. Enter/Tab escolhem, setas andam, Esc dispensa
+   **sem mexer no rascunho** (e um caractere a mais reabre). A busca casa nome, alias E descrição —
+   é o que faz "bug" achar a skill que caça bug.
+
+O envio não tem nada de especial: `/code-review high` vai como mensagem de usuário normal, e o CLI
+resolve o comando do outro lado (é o mesmo caminho da TUI). Quando o comando é LOCAL (`/cost`,
+`/usage`), não existe turno nem fala do modelo — a resposta chega como `local_command_output` e
+vira a linha `command_output` do chat, em vez de ser engolida.
+
+Um runner mais antigo, que não reporte catálogo, simplesmente não tem menu: o campo se comporta
+como antes e um `/` digitado à mão continua chegando no CLI.
 
 ## Editar mensagem (supersede) — só no chat nativo
 

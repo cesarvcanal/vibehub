@@ -184,6 +184,10 @@ that card.
 | GET | `/api/brain/projects/:id` | `{ text, ... }` — the PROJECT's brain (CLAUDE.local.md in its card worktrees); `""` = none |
 | POST | `/api/brain/projects/:id` | `{ text }` — save it (empty text clears it); auto-applies to that project only |
 | POST | `/api/brain/projects/:id/apply` | rewrite it in that project's worktrees |
+| GET | `/api/plugins` | `{ marketplace, plugins: [{ name, description, installs, installed, enabled }] }` — Anthropic's official plugin marketplace, read from the runner |
+| POST | `/api/plugins/:name` | install it into every profile and remember it (auto-applies + staggered restart) |
+| DELETE | `/api/plugins/:name` | drop it from the wanted list and uninstall it everywhere |
+| POST | `/api/plugins/apply` | reconcile every profile with the wanted list |
 | GET | `/api/transcribe` | `{ available, proofread, language }` — voice input status (keys are never returned) |
 | POST | `/api/transcribe/keys` | `{ openaiKey?, anthropicKey? }` — empty string clears; Whisper transcribes, Claude proofreads against the brain |
 | POST | `/api/cards/:id/transcribe` | `{ base64, mimeType }` → `{ text, proofread }`; 503 when voice input is not configured |

@@ -631,3 +631,36 @@ describe("a mensagem substitui o cartão de pergunta", () => {
     expect((answered.rows.find((r) => r.kind === "question") as { outcome: string }).outcome).toBe("answered");
   });
 });
+
+describe("the session's command catalogue", () => {
+  const commands = [
+    { name: "code-review", description: "Review the diff", source: "skill" as const },
+    { name: "compact", source: "command" as const },
+  ];
+
+  it("keeps the catalogue as state, out of the conversation", () => {
+    const state = feed([{ type: "catalog", commands }]);
+    expect(state.commands).toEqual(commands);
+    expect(state.rows).toEqual([]);
+  });
+
+  it("REPLACES it when it changes — a refreshed catalogue is the whole truth", () => {
+    const state = feed([
+      { type: "catalog", commands },
+      { type: "catalog", commands: [{ name: "simplify", source: "skill" as const }] },
+    ]);
+    expect(state.commands.map((c) => c.name)).toEqual(["simplify"]);
+  });
+
+  it("ignores a frame with no list rather than emptying the menu", () => {
+    const state = feed([{ type: "catalog", commands }, { type: "catalog" }]);
+    expect(state.commands).toEqual(commands);
+  });
+
+  it("draws a local command's answer as its own row, not as something Claude said", () => {
+    const state = feed([{ type: "local_output", text: "Session cost: $0.42" }]);
+    expect(state.rows).toEqual([{ kind: "command_output", id: expect.any(String), text: "Session cost: $0.42" }]);
+    // It also ends the waiting ladder: the command WAS answered, there is nothing to wait for.
+    expect(state.awaiting).toBe(false);
+  });
+});

@@ -327,6 +327,47 @@ function baseOptions() {
   return opts;
 }
 
+/* ------------------------------------------- the command catalogue (the chat's "/") */
+// What the TUI shows when you press "/": every skill, plugin command, project command and built-in
+// this session can run. The CLI already resolved all of it — `init` names the skills, the plugins
+// and the terminal-only commands, and `supportedCommands()` adds each one's description and
+// argument hint. The driver forwards it RAW; the back normalises and caps it (protocol.ts
+// `normalizeSlashCommands`) before any of it reaches a browser.
+
+let lastInit = null; // the newest `init` — where the skill/plugin/terminal-only lists come from
+let catalogAnnounced = false; // the catalogue was asked for once; `commands_changed` refreshes it
+
+/** A mid-session change (a skill discovered as the agent walks into a subdirectory). */
+function emitCatalogChanged(commands) {
+  if (!Array.isArray(commands)) return;
+  emit({
+    type: "catalog",
+    commands,
+    skills: lastInit?.skills,
+    plugins: lastInit?.plugins,
+    hidden: lastInit?.terminal_slash_commands,
+  });
+}
+
+/** Emit the catalogue for an `init` message. Never throws: a chat without a menu still works. */
+async function emitCatalogFrom(init, queryHandle) {
+  try {
+    const commands = await queryHandle.supportedCommands();
+    emit({
+      type: "catalog",
+      commands,
+      skills: init?.skills,
+      plugins: init?.plugins,
+      hidden: init?.terminal_slash_commands,
+    });
+  } catch (err) {
+    // The list is a convenience, not the conversation — say it in stderr, and let the NEXT init
+    // try again (a catalogue that failed once must not leave the chat without a menu forever).
+    catalogAnnounced = false;
+    process.stderr.write(`catalog unavailable: ${err && err.message ? err.message : String(err)}\n`);
+  }
+}
+
 let currentQuery = null; // the live query() iterator, so an interrupt can reach it mid-turn
 let channel = null; // feeds the live query's prompt stream (null = no stream running)
 let turnActive = false; // a turn is running, or a message is already fed and about to start one
@@ -339,14 +380,31 @@ async function runStream() {
   try {
     currentQuery = query({ prompt: myChannel, options });
     for await (const msg of currentQuery) {
-      if (msg.type === "system" && msg.session_id) {
-        // Streaming mode delivers MANY system messages per turn (init, hooks…), all carrying the
-        // session id — announce it only when it actually changes, not once per hook.
-        if (msg.session_id !== announcedSessionId) {
-          announcedSessionId = msg.session_id;
-          emit({ type: "session", sessionId: msg.session_id });
+      if (msg.type === "system") {
+        if (msg.session_id) {
+          // Streaming mode delivers MANY system messages per turn (init, hooks…), all carrying the
+          // session id — announce it only when it actually changes, not once per hook.
+          if (msg.session_id !== announcedSessionId) {
+            announcedSessionId = msg.session_id;
+            emit({ type: "session", sessionId: msg.session_id });
+          }
+          lastSessionId = msg.session_id;
         }
-        lastSessionId = msg.session_id;
+        if (msg.subtype === "init") {
+          // `init` repeats on EVERY turn; the catalogue is asked for once (a control round-trip per
+          // turn would buy nothing) and refreshed by `commands_changed` when it actually moves.
+          lastInit = msg;
+          if (!catalogAnnounced) {
+            catalogAnnounced = true;
+            void emitCatalogFrom(msg, currentQuery);
+          }
+        } else if (msg.subtype === "commands_changed") {
+          emitCatalogChanged(msg.commands);
+        } else if (msg.subtype === "local_command_output" && typeof msg.content === "string") {
+          // A command the CLI answers itself (/cost, /usage): no turn, no assistant message — the
+          // answer exists ONLY here, and swallowing it makes the command look broken.
+          if (msg.content.trim() !== "") emit({ type: "local_output", text: msg.content });
+        }
       } else if (msg.type === "stream_event") {
         const ev = msg.event;
         if (ev && ev.type === "content_block_delta" && ev.delta && ev.delta.type === "text_delta") {

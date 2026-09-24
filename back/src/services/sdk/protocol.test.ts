@@ -8,6 +8,9 @@ import {
   createQuestionBroker,
   QUESTION_SUPERSEDED_MESSAGE,
   normalizeUserQuestions,
+  normalizeSlashCommands,
+  COMMAND_CATALOGUE_MAX,
+  COMMAND_DESCRIPTION_MAX,
   buildAskUserAnswers,
   parseQuestionAnswers,
   parseSdkClientFrame,
@@ -427,5 +430,60 @@ describe("cid — o recibo de entrega (nada de mensagem 'enviada' que o back nun
     const line = encodeControl({ type: "user", text: "oi", cid: "c1" });
     expect(JSON.parse(line)).toEqual({ type: "user", text: "oi" });
     expect(line.endsWith("\n")).toBe(true);
+  });
+});
+
+describe("normalizeSlashCommands — the chat's \"/\" catalogue", () => {
+  it("labels where each command comes from, so the menu can say it", () => {
+    const out = normalizeSlashCommands(
+      [{ name: "code-review" }, { name: "superpowers:brainstorm" }, { name: "compact" }],
+      { skills: ["code-review"], plugins: [{ name: "superpowers" }] },
+    );
+    expect(out.map((c) => [c.name, c.source])).toEqual([
+      ["code-review", "skill"],
+      ["superpowers:brainstorm", "plugin"],
+      ["compact", "command"],
+    ]);
+  });
+
+  it("drops the terminal-only commands — offering /doctor in a web chat offers nothing", () => {
+    const out = normalizeSlashCommands([{ name: "doctor" }, { name: "usage" }], { hidden: ["doctor"] });
+    expect(out.map((c) => c.name)).toEqual(["usage"]);
+  });
+
+  it("refuses anything that is not a command name (this list is clicked to build a message)", () => {
+    const out = normalizeSlashCommands([
+      { name: "../../etc/passwd" },
+      { name: "rm -rf /" },
+      { name: "" },
+      "a string",
+      null,
+      { name: "ok-one" },
+      { name: "ok-one" },
+    ]);
+    expect(out.map((c) => c.name)).toEqual(["ok-one"]);
+  });
+
+  it("flattens a skill's paragraph into one readable line, and caps it", () => {
+    const long = "x".repeat(COMMAND_DESCRIPTION_MAX + 50);
+    const out = normalizeSlashCommands([
+      { name: "a", description: "  two\nlines   here " },
+      { name: "b", description: long },
+    ]);
+    expect(out[0]!.description).toBe("two lines here");
+    expect(out[1]!.description!.length).toBe(COMMAND_DESCRIPTION_MAX);
+    expect(out[1]!.description!.endsWith("\u2026")).toBe(true);
+  });
+
+  it("keeps only alias-shaped aliases, and caps the whole catalogue", () => {
+    const out = normalizeSlashCommands([{ name: "code-review", aliases: ["review", "bad name", 7] }]);
+    expect(out[0]!.aliases).toEqual(["review"]);
+    const many = Array.from({ length: COMMAND_CATALOGUE_MAX + 10 }, (_, i) => ({ name: `c${i}` }));
+    expect(normalizeSlashCommands(many).length).toBe(COMMAND_CATALOGUE_MAX);
+  });
+
+  it("an absent or malformed list is simply no menu", () => {
+    expect(normalizeSlashCommands(undefined)).toEqual([]);
+    expect(normalizeSlashCommands("nope")).toEqual([]);
   });
 });

@@ -243,6 +243,58 @@ describe("attachSocket — multiplexing (duas abas = uma sessão)", () => {
   });
 });
 
+describe("the command catalogue (the chat's \"/\" menu)", () => {
+  /** What the driver forwards from the CLI: the raw lists, before the back makes them a menu. */
+  const rawCatalog = {
+    type: "catalog",
+    commands: [
+      { name: "code-review", description: "Review the  diff\nfor bugs", argumentHint: "[<pr#>]", aliases: ["review"] },
+      { name: "doctor", description: "terminal-only" },
+      { name: "superpowers:brainstorm", description: "brainstorm" },
+      { name: "../../etc/passwd", description: "not a command name" },
+      "not an object",
+    ],
+    skills: ["code-review"],
+    plugins: [{ name: "superpowers", path: "/root/.claude/plugins/superpowers" }],
+    hidden: ["doctor"],
+  };
+
+  it("normalises what the driver forwards before any of it reaches a browser", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line(rawCatalog));
+    const frame = socket.sent.map((s) => JSON.parse(s) as { type: string; commands?: unknown[] })
+      .find((e) => e.type === "catalog")!;
+    expect(frame.commands).toEqual([
+      { name: "code-review", source: "skill", description: "Review the diff for bugs", argumentHint: "[<pr#>]", aliases: ["review"] },
+      { name: "superpowers:brainstorm", source: "plugin", description: "brainstorm" },
+    ]);
+  });
+
+  it("replays it to a page that attaches later — the driver only announces it at boot", () => {
+    const session = ensure();
+    const s1 = fakeSocket();
+    attachSocket(session, s1 as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    spawned[0]!.stdout.emit("data", line(rawCatalog));
+
+    const s2 = fakeSocket();
+    attachSocket(session, s2 as never);
+    const catalogs = s2.sent.map((s) => JSON.parse(s) as { type: string }).filter((e) => e.type === "catalog");
+    expect(catalogs.length).toBe(1);
+  });
+
+  it("never writes it to the conversation — it is state, not something anybody said", async () => {
+    const session = ensure();
+    attachSocket(session, fakeSocket() as never);
+    spawned[0]!.stdout.emit("data", line(rawCatalog));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const history = await readHistory(CARD);
+    expect(history.some((e) => e.type === "catalog")).toBe(false);
+  });
+});
+
 describe("the turn survives the page (o bug do Cmd+Shift+R)", () => {
   it("closing the last socket does NOT kill the driver mid-turn, and its events still persist", async () => {
     const session = ensure();
