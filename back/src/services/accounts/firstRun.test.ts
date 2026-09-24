@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, rm, mkdir, readFile, writeFile, stat } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, readFile, writeFile, stat, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { firstRunSeedCommand, claudeJsonPath, CLAUDE_JSON } from "./firstRun.js";
@@ -24,7 +24,8 @@ function runSeed(atCwd = cwd, atProfile = profile): void {
 const readConfig = async (p = profile) => JSON.parse(await readFile(claudeJsonPath(p), "utf8"));
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "vibehub-firstrun-"));
+  // realpath: on macOS the tmpdir is a symlink (/var → /private/var) and bash's `$PWD` resolves it
+  dir = await realpath(await mkdtemp(join(tmpdir(), "vibehub-firstrun-")));
   profile = join(dir, "profile");
   cwd = join(dir, "worktree");
   await mkdir(profile);
