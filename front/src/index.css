@@ -384,3 +384,38 @@ html.card-view-locked body {
 .rec-ring {
   animation: rec-ring 1.6s ease-out infinite;
 }
+
+/* ------------------------------------------------- the reserved words (ultrathink / ultracode) */
+
+/*
+ * Claude Code paints its two keywords in a seven-colour rainbow and runs a bright band through the
+ * letters, one letter every 50ms. The panel does the same — see
+ * `features/board/lib/ultraWords.ts` for the palette and the arithmetic — and does it in CSS so a
+ * screen full of highlighted words costs no renders at all: every letter runs THIS animation, and
+ * the only thing that differs between them is the negative `animation-delay` that decides when the
+ * band reaches it.
+ *
+ * The bright window is 10% of the cycle, which is the three lit letters out of the keyword's
+ * length-plus-twenty steps for words of the length these two happen to be. The cut is abrupt on
+ * purpose: in the terminal a letter is either under the band or it is not.
+ *
+ * The `prefers-reduced-motion` block further up stops the sweep (duration 0.01ms, one iteration),
+ * which leaves every letter on its base colour — the rainbow stays, the movement goes.
+ */
+@keyframes vh-ultra-glimmer {
+  0%,
+  10% {
+    color: var(--vh-ultra-shimmer);
+  }
+  10.01%,
+  100% {
+    color: var(--vh-ultra-base);
+  }
+}
+
+.vh-ultra-char {
+  color: var(--vh-ultra-base);
+  animation-name: vh-ultra-glimmer;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}

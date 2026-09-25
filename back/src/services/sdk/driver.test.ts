@@ -226,3 +226,74 @@ describe("sdk-driver.mjs — falar é responder (o cartão de pergunta não pren
     expect(source).toContain('emit({ type: "question_result", id, timedOut: !!timedOut, superseded: !!superseded })');
   });
 });
+
+/**
+ * AS DUAS PALAVRAS RESERVADAS. `ultrathink` e `ultracode` não são texto: o CLI lê as duas do que
+ * você escreve e age — a primeira pede raciocínio mais fundo no turno, a segunda opta o turno pela
+ * orquestração multi-agente. O que o CLI NÃO faz é subir o NÍVEL de esforço, e é isso que o painel
+ * promete quando pinta a palavra no compositor; o driver é quem cumpre.
+ *
+ * O `.mjs` não é importável, então a detecção — que precisa bater EXATAMENTE com
+ * `front/src/features/board/lib/ultraWords.ts`, senão a tela pinta uma palavra que o back ignora —
+ * é recortada do fonte e executada aqui. O resto são invariantes de fiação, incluindo a única que
+ * pode custar caro: a mensagem tem de ser empurrada mesmo quando a escalada falha.
+ */
+describe("sdk-driver.mjs — ultrathink / ultracode", () => {
+  const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
+
+  /** A detecção, recortada do driver e executada de verdade. */
+  const ultraKeywords = ((): ((text: string) => { ultrathink: boolean; ultracode: boolean; any: boolean }) => {
+    const from = source.indexOf("const ULTRA_CLOSERS");
+    const to = source.indexOf("/** Our escalation is currently");
+    expect(from).toBeGreaterThan(0);
+    expect(to).toBeGreaterThan(from);
+    const factory = new Function(`${source.slice(from, to)}\nreturn ultraKeywords;`);
+    return factory() as (text: string) => { ultrathink: boolean; ultracode: boolean; any: boolean };
+  })();
+
+  it("lê as duas palavras em qualquer caixa", () => {
+    expect(ultraKeywords("faz ULTRATHINK nisso")).toEqual({ ultrathink: true, ultracode: false, any: true });
+    expect(ultraKeywords("manda UltraCode")).toEqual({ ultrathink: false, ultracode: true, any: true });
+    expect(ultraKeywords("ultrathink e ultracode")).toEqual({ ultrathink: true, ultracode: true, any: true });
+  });
+
+  it("ignora o que a tela também ignora: comando, caminho, flag, arquivo e citação", () => {
+    for (const notAKeyword of [
+      "/review ultrathink",
+      "src/ultracode/index.ts",
+      "--ultrathink",
+      "ultracode.md",
+      "a palavra `ultracode`",
+      "ultrathinking",
+    ]) {
+      expect(ultraKeywords(notAKeyword).any).toBe(false);
+    }
+  });
+
+  it("escala para o máximo, e cai para o possível quando a sessão não permite", () => {
+    expect(source).toContain('{ effortLevel: "max", ultracode: true }');
+    expect(source).toContain('{ effortLevel: "max" }');
+    expect(source).toContain('{ effortLevel: "xhigh" }');
+    expect(source).toContain("applyFlagSettings");
+  });
+
+  it("devolve o esforço no fim do turno — a palavra valia para AQUELE turno", () => {
+    expect(source).toContain("void clearUltra(); // the keyword was for THIS turn");
+    expect(source).toContain("applyFlagSettings({ effortLevel: null, ultracode: null })");
+  });
+
+  it("a mensagem NUNCA é engolida por uma escalada que falhou (o push mora no finally)", () => {
+    const send = source.slice(source.indexOf("function sendUser(text)"));
+    const tryAt = send.indexOf("await raiseUltra(ultra, true);");
+    const finallyAt = send.indexOf("} finally {");
+    const pushAt = send.indexOf("myChannel.push(userMessage(text));", finallyAt);
+    expect(tryAt).toBeGreaterThan(0);
+    expect(finallyAt).toBeGreaterThan(tryAt);
+    expect(pushAt).toBeGreaterThan(finallyAt);
+  });
+
+  it("uma corrente recém-criada espera o CLI existir antes de mandar a configuração", () => {
+    expect(source).toContain("initializationResult()");
+    expect(source).toContain("ULTRA_INIT_TIMEOUT_MS");
+  });
+});

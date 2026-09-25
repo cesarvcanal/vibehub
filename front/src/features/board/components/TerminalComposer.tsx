@@ -16,6 +16,7 @@ import { AUDIO_MAX_BYTES, TRANSCRIBE_KEY, boardApi } from "@/features/board/api"
 import {
   applySlashPick, filterSlashCommands, slashQuery, type SlashCommandInfo,
 } from "@/features/board/lib/slashMenu";
+import { UltraFieldOverlay } from "@/features/board/components/UltraText";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -1028,6 +1029,12 @@ export function TerminalComposer({
             isMobile && "pr-14",
           )}
         />
+        {/* `ultrathink` / `ultracode` in colour, over the grey letters the field already drew.
+            The CLI answers these two words with a rainbow and a sweep, and until now that only
+            happened inside the terminal — you typed a reserved word up here and nothing said it
+            had been read. The padding override matches the field's, or the mirror wraps somewhere
+            the field does not. */}
+        <UltraFieldOverlay target={ref} text={text} className={cn(isMobile && "pr-14")} />
         {/* While recording with nothing typed, the empty field is where the voice goes: the bars
             live there rather than crowding the microphone. They vanish the moment there is text. */}
         {recordingNow && !text ? (
