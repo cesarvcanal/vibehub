@@ -47,6 +47,7 @@ const hibernateCard = vi.fn();
 const restartAllCards = vi.fn();
 const dropCardWorkspace = vi.fn();
 const uploadCardImage = vi.fn();
+const readCardUpload = vi.fn();
 
 async function boot(): Promise<FastifyInstance> {
   vi.resetModules();
@@ -72,7 +73,7 @@ async function boot(): Promise<FastifyInstance> {
     return {
       ...actual,
       openCard, prepareCard, pauseCard, restartCard, hibernateCard, restartAllCards, dropCardWorkspace,
-      uploadCardImage,
+      uploadCardImage, readCardUpload,
     };
   });
   const { buildServer } = await import("../index.js");
@@ -178,6 +179,29 @@ describe("card lifecycle routes", () => {
       payload: { name: "shot.png", content: "aGVsbG8=" },
     });
     expect(res.json()).toEqual({ path: "/work/.uploads/x/1-image.png" });
+  });
+
+  it("serves an uploaded image back, as the image, cached for good", async () => {
+    const id = await makeCard();
+    const body = Buffer.from("PNG-ish content");
+    readCardUpload.mockResolvedValueOnce({ body, contentType: "image/png" });
+    const res = await app.inject({
+      method: "GET", url: `/api/cards/${id}/uploads/1790375878344-shot.png`, headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toBe("image/png");
+    expect(res.headers["cache-control"]).toContain("immutable");
+    expect(res.rawPayload.equals(body)).toBe(true);
+    expect(readCardUpload).toHaveBeenCalledWith(id, "1790375878344-shot.png");
+  });
+
+  it("404s an upload that is not there — the chat falls back to printing the path", async () => {
+    const id = await makeCard();
+    readCardUpload.mockRejectedValueOnce(new Error("upload not found"));
+    const res = await app.inject({
+      method: "GET", url: `/api/cards/${id}/uploads/1790375878344-gone.png`, headers: { cookie },
+    });
+    expect(res.statusCode).toBe(404);
   });
 
   it("400s an upload the workspace rejects", async () => {

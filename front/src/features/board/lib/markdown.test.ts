@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { linkifyTokens, safeUrl } from "@/features/board/lib/markdown";
+import { linkifyTokens, parseUploadPath, safeUrl, uploadImageUrl } from "@/features/board/lib/markdown";
 
 describe("linkifyTokens", () => {
   it("turns http(s) urls into link tokens and leaves everything else literal", () => {
@@ -82,5 +82,46 @@ describe("safeUrl", () => {
   it("is TOTAL: empty and undefined yield an empty href", () => {
     expect(safeUrl("")).toBe("");
     expect(safeUrl(undefined as unknown as string)).toBe("");
+  });
+});
+
+describe("uploaded images", () => {
+  const CARD = "4ef6374b-6a1f-4fc1-b2c1-0ba4c377223f";
+  const PATH = `/work/.uploads/${CARD}/1790375878344-image.png`;
+
+  it("turns an upload path into an image token, not a link", () => {
+    expect(linkifyTokens(`olha ${PATH} aqui`)).toEqual([
+      { type: "text", value: "olha " },
+      { type: "image", value: PATH, cardId: CARD, file: "1790375878344-image.png" },
+      { type: "text", value: " aqui" },
+    ]);
+  });
+
+  it("takes every image extension the upload route accepts", () => {
+    for (const ext of ["png", "jpg", "jpeg", "gif", "webp", "bmp", "avif"]) {
+      const path = `/work/.uploads/${CARD}/1790375878344-shot.${ext}`;
+      expect(linkifyTokens(path)).toEqual([
+        { type: "image", value: path, cardId: CARD, file: `1790375878344-shot.${ext}` },
+      ]);
+    }
+  });
+
+  it("leaves anything that is not an upload of an image as plain text", () => {
+    for (const notAnImage of [
+      `/work/.uploads/${CARD}/1790375878344-notes.txt`, // not an image
+      `/work/.uploads/${CARD}/../../etc/passwd.png`, // not a name this server writes
+      "/work/.uploads/nope/1790375878344-image.png", // not a card id
+      `/etc/${CARD}/1790375878344-image.png`, // not the uploads directory
+    ]) {
+      expect(linkifyTokens(notAnImage)).toEqual([{ type: "text", value: notAnImage }]);
+    }
+  });
+
+  it("parses and builds the route the browser fetches", () => {
+    expect(parseUploadPath(PATH)).toEqual({ cardId: CARD, file: "1790375878344-image.png" });
+    expect(parseUploadPath("/work/.uploads/nope/x.png")).toBeNull();
+    expect(uploadImageUrl(CARD, "1790375878344-image.png")).toBe(
+      `/api/cards/${CARD}/uploads/1790375878344-image.png`,
+    );
   });
 });

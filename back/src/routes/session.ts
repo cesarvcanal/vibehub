@@ -292,6 +292,35 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  /**
+   * The other half of the upload: the image, back.
+   *
+   * What the composer puts in the message is the RUNNER path (`/work/.uploads/<card>/<file>`),
+   * because that is the only form Claude can open — the uploads live outside the card's worktree.
+   * For the person who attached it that read as a line of text and nothing else, so the chat now
+   * shows the picture and this is where it gets the bytes. Follows the card like the rest of the
+   * card-scoped routes: whoever may READ the conversation may see what was attached to it.
+   *
+   * Cached hard and forever on purpose — the name carries the upload's timestamp, so a given URL
+   * names one file that never changes.
+   */
+  app.get<{ Params: { id: string; file: string } }>(
+    "/api/cards/:id/uploads/:file", { preHandler: requireCardAccess },
+    async (req, reply) => {
+      try {
+        const { body, contentType } = await workspace.readCardUpload(req.params.id, req.params.file);
+        return await reply
+          .header("content-type", contentType)
+          .header("cache-control", "private, max-age=31536000, immutable")
+          .send(body);
+      } catch {
+        // Missing file, missing card, runner down: all one answer. The chat falls back to printing
+        // the path, which is still the truth, and nothing here is worth an alarming status.
+        return await reply.code(404).send({ error: "upload not found" });
+      }
+    },
+  );
+
   /* --------------------------------------------------------------- messages */
 
   /**

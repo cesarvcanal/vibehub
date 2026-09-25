@@ -146,6 +146,7 @@ that card.
 | POST | `/api/cards/:id/restart` | fresh Claude process in the same worktree |
 | POST | `/api/cards/restart-all` | `{ restarted, skipped }` |
 | POST | `/api/cards/:id/upload` | `{ name, content }` with bare base64 → `{ path }` inside the runner (10 MB cap) |
+| GET | `/api/cards/:id/uploads/:file` | the image back, as the image — the chat renders what was attached instead of the runner path. Only names the upload route itself writes (`<stamp>-<name>.<ext>`) and only image types; anything missing is a 404, cached `immutable` because the name carries the upload's timestamp |
 | POST | `/api/cards/:id/messages` | `{ text }` → `{ delivered, pending, agent }` — the composer's Enter. Delivered to a RUNNING Claude, otherwise QUEUED until there is one |
 | GET | `/api/cards/:id/messages` | `{ pending: OutboxMessage[], agent }` — `agent` is `running` / `shell` / `none` |
 | DELETE | `/api/cards/:id/messages/:messageId` | gives up on one queued message |
@@ -159,7 +160,7 @@ that card.
 
 ## Claude accounts, MCPs, brain, import
 
-**owner** only, except the card-scoped routes (`/api/cards/:id/upload`, `/api/cards/:id/transcribe`, `/api/cards/:id/paths`), which follow the card.
+**owner** only, except the card-scoped routes (`/api/cards/:id/upload`, `/api/cards/:id/uploads/:file`, `/api/cards/:id/transcribe`, `/api/cards/:id/paths`), which follow the card.
 
 | Method | Path | Body / notes |
 |---|---|---|

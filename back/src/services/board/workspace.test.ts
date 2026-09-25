@@ -1124,6 +1124,47 @@ describe("image upload into the card", () => {
     expect(runScript).not.toHaveBeenCalled();
   });
 
+  it("reads an upload back out of the runner, as the bytes plus what they are", async () => {
+    const { card } = await seed();
+    const bytes = Buffer.from("PNG-ish content");
+    runScript.mockResolvedValue({ stdout: `${bytes.toString("base64")}\n`, stderr: "" });
+
+    const { body, contentType } = await ws.readCardUpload(card.id, "1790375878344-shot.png");
+    expect(body.equals(bytes)).toBe(true);
+    expect(contentType).toBe("image/png");
+    const script = scriptAt(0);
+    expect(script).toContain(`docker exec -i '${CONTAINER}' bash -s`);
+    expect(script).toContain(`test -f '/work/.uploads/${card.id}/1790375878344-shot.png'`);
+    expect(script).toContain(`base64 -w0 '/work/.uploads/${card.id}/1790375878344-shot.png'`);
+  });
+
+  it("serves ONLY names this server writes, and only image types — nothing else reaches a shell", async () => {
+    const { card } = await seed();
+    for (const bad of [
+      "../../etc/passwd", // traversal
+      "1790375878344-notes.txt", // not an image
+      "1790375878344-x.png; rm -rf /", // injection
+      "shot.png", // no upload stamp
+      ".oauth-token", // a dotfile
+      "1790375878344-x.svg", // scriptable, deliberately not served
+    ]) {
+      expect(ws.uploadContentType(bad)).toBeNull();
+      await expect(ws.readCardUpload(card.id, bad)).rejects.toThrow(/upload not found/);
+    }
+    expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("an unknown card, a missing file or an unreadable runner all read as 'not found'", async () => {
+    const { card } = await seed();
+    await expect(ws.readCardUpload("nope", "1790375878344-x.png")).rejects.toThrow(/card not found/);
+    runScript.mockRejectedValue(new Error("exit 1"));
+    await expect(ws.readCardUpload(card.id, "1790375878344-x.png")).rejects.toThrow(/upload not found/);
+    runScript.mockResolvedValue({ stdout: "", stderr: "" });
+    await expect(ws.readCardUpload(card.id, "1790375878344-x.png")).rejects.toThrow(/upload not found/);
+    runScript.mockResolvedValue({ stdout: "not base64 at all !!", stderr: "" });
+    await expect(ws.readCardUpload(card.id, "1790375878344-x.png")).rejects.toThrow(/upload not found/);
+  });
+
   it("buildUploadScript refuses a payload that is not strict base64", () => {
     expect(() => ws.buildUploadScript({ containerName: "c", destDir: "/d", destPath: "/d/f", base64: "VIBEHUB_B64" }))
       .toThrow(/invalid base64/);
