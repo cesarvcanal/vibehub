@@ -342,6 +342,31 @@ describe("built-in maestro server", () => {
     expect((await mod.resolveMcpInjections()).some((i) => i.name === mod.BUILTIN_MAESTRO_NAME)).toBe(false);
   });
 
+  /**
+   * THE BUG THIS PINS: one registration whose secret is missing threw out of resolveMcpInjections,
+   * and the card-open path catches that throw and continues with NOTHING — so an expired API key on
+   * an unrelated MCP opened every fresh card with no `vibehub` MCP (no coordinating the board, no
+   * `vibehub_deliver`) and no browser MCP. Apply must still fail loudly and name it; opening a card
+   * must not. Same function, one flag.
+   */
+  it("skipUnresolved keeps the built-ins and the MCPs that DO resolve, dropping only the broken one", async () => {
+    const { mod, reg, vault } = await fresh();
+    await vault.secretSet("VIBEHUB_RUNNER_TOKEN", "runner-token-123");
+    const ok = await reg.createMcp({ name: "ok", kind: "stdio", command: "npx", envKeys: ["OK_TOKEN"] });
+    await mod.setMcpSecret(ok, "OK_TOKEN", "s3cret");
+    await reg.createMcp({ name: "expirada", kind: "stdio", command: "npx", envKeys: ["ERP_TOKEN"] });
+
+    // Opening a card: everything that resolves, nothing that does not.
+    const names = (await mod.resolveMcpInjections({ skipUnresolved: true })).map((i) => i.name);
+    expect(names).toContain(mod.BUILTIN_MAESTRO_NAME);
+    expect(names).toContain(mod.BUILTIN_BROWSER_NAME);
+    expect(names).toContain("ok");
+    expect(names).not.toContain("expirada");
+
+    // The apply button keeps naming what is missing.
+    await expect(mod.resolveMcpInjections()).rejects.toThrow("MCP 'expirada': value for 'ERP_TOKEN' is not configured");
+  });
+
   it("cannot be shadowed by a user-registered MCP with the same name", async () => {
     const { mod, reg, vault } = await fresh();
     await vault.secretSet("VIBEHUB_RUNNER_TOKEN", "runner-token-123");

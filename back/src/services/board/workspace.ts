@@ -632,7 +632,7 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
     // "apply" button in the UI is the path that fails loudly and names what is missing).
     let mcps: McpInjection[] = [];
     try {
-      mcps = await resolveMcpInjections();
+      mcps = await resolveMcpInjections({ skipUnresolved: true });
     } catch (e) {
       logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "managed MCPs not injected on open (continuing)");
     }

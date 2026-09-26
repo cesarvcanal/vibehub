@@ -262,8 +262,17 @@ export function builtinBrowserInjection(): McpInjection {
   };
 }
 
-/** Every registered MCP as a resolved injection (name + JSON), plus the built-in servers. */
-export async function resolveMcpInjections(): Promise<McpInjection[]> {
+/**
+ * Every registered MCP as a resolved injection (name + JSON), plus the built-in servers.
+ *
+ * `skipUnresolved` is the difference between the two callers. APPLY must fail loudly and name the
+ * secret that is missing — that is the button's whole job. OPENING A CARD must not: its caller
+ * already treats this as best-effort, but a throw took the WHOLE array with it, built-ins included,
+ * so one expired API key on an unrelated registration opened every fresh card with no `vibehub`
+ * MCP (no coordinating the board, no `vibehub_deliver`) and no browser MCP — and said so only in a
+ * warn line. Skipping the one that cannot resolve keeps the rest.
+ */
+export async function resolveMcpInjections(opts: { skipUnresolved?: boolean } = {}): Promise<McpInjection[]> {
   const out: McpInjection[] = [];
   const builtin = await builtinMaestroInjection();
   if (builtin) out.push(builtin);
@@ -273,7 +282,12 @@ export async function resolveMcpInjections(): Promise<McpInjection[]> {
   for (const mcp of await listMcps()) {
     // Never let a registration shadow a built-in (by name).
     if (mcp.name === BUILTIN_MAESTRO_NAME || mcp.name === BUILTIN_BROWSER_NAME) continue;
-    out.push({ name: mcp.name, json: mcpServerJson(mcp, await resolveMcpSecrets(mcp)) });
+    try {
+      out.push({ name: mcp.name, json: mcpServerJson(mcp, await resolveMcpSecrets(mcp)) });
+    } catch (err) {
+      if (!opts.skipUnresolved) throw err;
+      logger.warn({ mcp: mcp.name, detail: (err as Error).message }, "MCP not injected — its secret is not configured");
+    }
   }
   return out;
 }
