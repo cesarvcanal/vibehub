@@ -456,10 +456,15 @@ describe("streaming input — mensagem no meio do turno (turn_absorbed)", () => 
     socket.emit("message", Buffer.from(`{"type":"user","text":"um"}`));
     socket.emit("message", Buffer.from(`{"type":"user","text":"dois"}`));
     spawned[0]!.stdout.emit("data", line({ type: "turn_absorbed" }));
-    await new Promise((r) => setTimeout(r, 10));
+    // WAIT for the two sends to land instead of sleeping 10ms at them: the history write is
+    // fire-and-forget, and under a loaded suite it lost that race — the file was still empty and
+    // the run went red on code that was fine. Settling first is also what gives the negative
+    // assertion below its meaning.
+    await vi.waitFor(async () => {
+      expect((await readHistory(CARD)).filter((e) => e.type === "user").length).toBe(2);
+    });
     const history = await readHistory(CARD);
     expect(history.some((e) => e.type === "turn_absorbed")).toBe(false);
-    expect(history.filter((e) => e.type === "user").length).toBe(2); // both sends persisted normally
   });
 });
 
