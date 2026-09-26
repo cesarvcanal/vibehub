@@ -193,6 +193,40 @@ describe("sdk-driver.mjs — o raciocínio que a tela mostra", () => {
 });
 
 /**
+ * O MENU "/" DE UM CARD NOVO (produção, 26/09/2026): abrir um card, digitar "/code-re" e não ser
+ * oferecido nada. O catálogo vinha só do `init`, que só acontece quando um turno começa — então o
+ * card recém-aberto, que é exatamente onde se quer escolher um comando, ficava sem menu.
+ *
+ * O `.mjs` não é importável, então o que se cerca é o texto — e aqui há três armadilhas mudas:
+ * perguntar o catálogo sem encerrar a consulta descartável deixaria um CLI vivo por card; deixar
+ * `VIBEHUB_STATUS_URL` passar faria o hook de SessionStart mandar status de um card sem turno
+ * nenhum; e marcar `catalogAnnounced` aqui congelaria o catálogo provisório (sem skill/plugin) no
+ * lugar do completo que o primeiro `init` traz.
+ */
+describe("sdk-driver.mjs — o menu \"/\" antes da primeira mensagem", () => {
+  const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
+
+  it("pergunta o catálogo ao CLI assim que o driver sobe", () => {
+    expect(source).toContain("void warmCatalog();");
+    expect(source).toContain("await handle.supportedCommands()");
+  });
+
+  it("não deixa a consulta descartável mandar status do card (hook de SessionStart)", () => {
+    expect(source).toContain('options.env = { ...process.env, VIBEHUB_STATUS_URL: "" };');
+  });
+
+  it("encerra a consulta descartável — nada de um CLI a mais vivo por card", () => {
+    expect(source).toMatch(/finally\s*\{\s*\n\s*ch\.end\(\);/);
+    expect(source).toContain("if (warmChannel) warmChannel.end();");
+  });
+
+  it("não marca o catálogo como anunciado: o `init` de verdade ainda substitui este", () => {
+    expect(source).toContain("if (catalogAnnounced || channel || warmChannel) return;");
+    expect(source).not.toMatch(/warmCatalog[\s\S]{0,800}catalogAnnounced = true/);
+  });
+});
+
+/**
  * A MENSAGEM QUE DESTRAVA O CARTÃO (produção, 2026-09-17): com um plano de opções na tela, escrever
  * no chat não fazia nada — o turno estava parado dentro do `canUseTool` e a mensagem ficava na fila
  * do CLI até o timeout de 30 minutos. O `.mjs` não é importável, então o que se cerca é o texto: as
