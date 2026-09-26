@@ -3,7 +3,7 @@ import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.
 import { config, dataPath } from "../../config/env.js";
 import * as registry from "./registry.js";
 import type { Card, Project } from "./registry.js";
-import { cardWorkPaths, purgeCardWorkspace, killCardSession } from "./workspace.js";
+import { cardWorkPaths, purgeCardWorkspace, killCardSession, CARD_BRANCH_PREFIX } from "./workspace.js";
 import { cardsWithPending, purgeCardQueue } from "./outbox.js";
 import { removeHistory, SDK_HISTORY_DIR } from "../sdk/history.js";
 import { clearInflightMarker, SDK_INFLIGHT_DIR } from "../sdk/inflight.js";
@@ -377,7 +377,9 @@ export function buildOrphanPurgeScript(containerName: string, entries: readonly 
         inner.push(
           `git -C ${shQuote(repoDir)} worktree remove --force ${shQuote(entry.path)} 2>/dev/null || true`,
           `git -C ${shQuote(repoDir)} worktree prune 2>/dev/null || true`,
-          `git -C ${shQuote(repoDir)} branch -D ${shQuote(`card/${slug}`)} 2>/dev/null || true`,
+          // Always the `card/` namespace, derived from the directory's own name — the sweep can no
+          // more reach `dev`/`prod` than the card purge can (see CARD_BRANCH_PREFIX).
+          `git -C ${shQuote(repoDir)} branch -D ${shQuote(`${CARD_BRANCH_PREFIX}${slug}`)} 2>/dev/null || true`,
         );
       }
       inner.push(`rm -rf ${shQuote(entry.path)} 2>/dev/null || true`);

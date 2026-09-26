@@ -1878,6 +1878,28 @@ describe("buildCardPurgeScript (everything the card left on the runner's disk)",
     expect(script().split("\n").at(-2)).toBe("true");
   });
 
+  /**
+   * SÓ LOCAL — o medo aqui não é a worktree, é o GitHub: um card aberto numa branch que já existia
+   * não pode, de forma alguma, levar essa branch remota junto quando for excluído.
+   *
+   * A garantia é estrutural, não de intenção: `git branch -D` é local por definição (apagar remota
+   * exige `git push origin --delete`), e o script de purga não carrega UM comando que alcance a
+   * rede. Este teste é o cadeado: se algum dia entrar um `push`, um `fetch`, um `origin` ou um `gh`
+   * no caminho da exclusão, ele quebra aqui.
+   */
+  it("não alcança a rede: nada de push, fetch, origin ou gh — o remoto é intocável", () => {
+    const s = script();
+    for (const proibido of ["push", "fetch", "origin", "gh ", "remote ", "curl", "--delete"]) {
+      expect(s).not.toContain(proibido);
+    }
+    // O que ele faz com git é só isto, e as três coisas são locais.
+    const gitLines = s.split("\n").filter((l) => l.startsWith("git -C"));
+    expect(gitLines).toHaveLength(3);
+    expect(gitLines[0]).toContain("worktree remove --force");
+    expect(gitLines[1]).toContain("worktree prune");
+    expect(gitLines[2]).toContain("branch -D 'card/deletar-card'");
+  });
+
   it("a repo-less card purges the scratch directory and never mentions git", () => {
     const s = ws.buildCardPurgeScript({
       containerName: CONTAINER,
@@ -1913,9 +1935,44 @@ describe("ownBranch (what a delete may drop)", () => {
   });
 
   it("is undefined for a branch that already existed — nothing is dropped", () => {
-    expect(ws.ownBranch({ worktreeSlug: "pdv", branch: "feat/pdv" })).toBeUndefined();
-    expect(ws.ownBranch({ worktreeSlug: "pdv", branch: "dev" })).toBeUndefined();
-    expect(ws.ownBranch({ worktreeSlug: "pdv", branch: "card/outro" })).toBeUndefined();
+    for (const branch of ["feat/pdv", "dev", "prod", "main", "master", "card/outro"]) {
+      expect(ws.ownBranch({ worktreeSlug: "pdv", branch })).toBeUndefined();
+    }
+  });
+
+  /**
+   * THE HARD GUARD. `ownBranch` is the caller's rule; this is the one in the script builder, so a
+   * future caller cannot hand a delete the branch someone works on. `dev` and `prod` are not
+   * "unlikely" here — they are the two branches a card gets pointed at on purpose.
+   */
+  it("the purge script REFUSES to delete any branch outside card/ — dev and prod can never go", () => {
+    const base = {
+      containerName: CONTAINER,
+      cardId: "e3f1ab5a-9020-4748-b47a-20b30b1ed848",
+      cwd: "/work/acme--erp-aux-worktrees/x",
+      repoDir: "/work/acme--erp-aux",
+      browserDataDir: "/work/.browser/card-e3f1ab5a",
+    };
+    for (const branch of ["dev", "prod", "main", "master", "feat/pdv", "release/1.0"]) {
+      expect(() => ws.buildCardPurgeScript({ ...base, branch })).toThrow(/refusing to delete a branch/);
+    }
+    // And the card's own branch still goes, exactly as before.
+    expect(ws.buildCardPurgeScript({ ...base, branch: "card/x" })).toContain("branch -D 'card/x'");
+  });
+
+  it("a card sitting on dev/prod loses its worktree and NOTHING else of git", async () => {
+    const { project } = await seed();
+    for (const branch of ["dev", "prod"]) {
+      const card = await reg.createCard({ projectId: project.id, title: `no ${branch}` });
+      await reg.updateCard(card.id, { branch });
+      const pinned = await reg.getCard(card.id);
+      runScript.mockClear();
+      await ws.purgeCardWorkspace(pinned!);
+      const script = lastScript();
+      expect(script).toContain("worktree remove --force");
+      expect(script).not.toContain("branch -D");
+      expect(script).not.toContain(branch === "dev" ? "'dev'" : "'prod'");
+    }
   });
 
   it("purgeCardWorkspace on a card pointed at an existing branch deletes the worktree, NOT the branch", async () => {
