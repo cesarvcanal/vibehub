@@ -1415,3 +1415,109 @@ describe("SdkChatView — todo erro diz o que houve", () => {
     expect(note.textContent).not.toContain("turn-interrupted-edit");
   });
 });
+
+/**
+ * WHAT IS RUNNING, WITHOUT SCROLLING FOR IT.
+ *
+ * In the terminal the status line is always on screen: what the agent is doing and for how long.
+ * In the chat that was scattered through the scroll — a long turn (a skill, an agent, a build) put
+ * it far above the fold, and the person watching the card had to scroll to find out whether
+ * anything was still happening. The bar is pinned while the turn runs, carries the CURRENT step,
+ * the clock and the escalation, and jumps to the live edge when clicked.
+ */
+describe("SdkChatView — the activity bar", () => {
+  it("is absent at rest and appears with the turn, naming the newest step", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    expect(screen.queryByTestId("sdk-activity-bar")).toBeNull();
+
+    ws.deliver({ type: "user", text: "use code review no pdv" });
+    ws.deliver({ type: "thinking_delta", text: "pensando…" });
+    expect(screen.getByTestId("sdk-activity-bar")).toBeInTheDocument();
+    expect(screen.getByTestId("sdk-activity-label")).toHaveTextContent("Thinking…");
+
+    ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { description: "Measuring PDV module size", command: "ls" } });
+    expect(screen.getByTestId("sdk-activity-label")).toHaveTextContent("Measuring PDV module size");
+
+    ws.deliver({ type: "tool_use", id: "t2", name: "Skill", input: { skill: "code-review" } });
+    expect(screen.getByTestId("sdk-activity-label")).toHaveTextContent("Skill(code-review)");
+    expect(screen.getByTestId("sdk-activity-bar").getAttribute("data-kind")).toBe("tool");
+
+    // The turn ends: nothing is running, so nothing claims to be.
+    ws.deliver({ type: "result", isError: false });
+    expect(screen.queryByTestId("sdk-activity-bar")).toBeNull();
+  });
+
+  it("counts the seconds the turn has been running", async () => {
+    vi.useFakeTimers();
+    try {
+      renderSdkChat();
+      const ws = await vi.waitFor(() => {
+        expect(FakeSocket.instances.length).toBeGreaterThan(0);
+        return FakeSocket.instances[0] as FakeSocket;
+      });
+      ws.accept();
+      ws.deliver({ type: "ready" });
+      // A DRIVER event is what says a turn is running (a mirrored user line never does).
+      ws.deliver({ type: "thinking_delta", text: "pensando…" });
+      expect(screen.getByTestId("sdk-activity-elapsed")).toHaveTextContent("0s");
+      act(() => { vi.advanceTimersByTime(4_000); });
+      expect(screen.getByTestId("sdk-activity-elapsed")).toHaveTextContent("4s");
+      act(() => { vi.advanceTimersByTime(80_000); });
+      expect(screen.getByTestId("sdk-activity-elapsed")).toHaveTextContent("1m 24s");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says the turn was escalated — ultrathink/ultracode cost time and money in silence", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    const field = screen.getByRole("textbox");
+    fireEvent.change(field, { target: { value: "ultracode revisa o pdv" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+
+    await waitFor(() => expect(screen.getByTestId("sdk-activity-effort")).toHaveTextContent("ultracode"));
+    ws.deliver({ type: "result", isError: false });
+    await waitFor(() => expect(screen.queryByTestId("sdk-activity-effort")).toBeNull());
+  });
+
+  it("a click on the bar goes to the live edge of the conversation", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "thinking_delta", text: "pensando…" });
+    const scroller = screen.getByTestId("sdk-chat-scroller");
+    const scrollTo = vi.fn();
+    Object.defineProperty(scroller, "scrollTo", { value: scrollTo, configurable: true });
+    fireEvent.click(screen.getByTestId("sdk-activity-bar"));
+    expect(scrollTo).toHaveBeenCalled();
+  });
+});
+
+describe("SdkChatView — a tool call reads like the terminal's", () => {
+  it("shows the headline and the detail under it, and says when work went to the background", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({
+      type: "tool_use", id: "t1", name: "Bash",
+      input: { description: "Measuring PDV module size", command: "ls && find src" },
+    });
+    expect(screen.getByTestId("sdk-tool-title")).toHaveTextContent("Measuring PDV module size");
+    expect(screen.getByTestId("sdk-tool-detail")).toHaveTextContent("$ ls && find src");
+
+    ws.deliver({ type: "tool_use", id: "t2", name: "Skill", input: { skill: "code-review" } });
+    const details = screen.getAllByTestId("sdk-tool-detail");
+    const last = details[details.length - 1] as HTMLElement;
+    expect(last).toHaveTextContent("Running in the background");
+    expect(last.getAttribute("data-background")).toBe("true");
+  });
+});

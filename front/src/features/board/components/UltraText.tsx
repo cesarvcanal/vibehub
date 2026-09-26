@@ -6,6 +6,7 @@ import {
   ultraColor,
   ultraCycleMs,
   ultraDelayMs,
+  type UltraKeyword,
   type UltraMatch,
 } from "@/features/board/lib/ultraWords";
 
@@ -24,20 +25,23 @@ import {
  * the message bubble (what you sent). Everywhere else the words are ordinary text.
  */
 
-/** One keyword, letter by letter. The word's own spelling is kept — `ULTRATHINK` stays shouted. */
-function UltraWord({ word }: { word: string }) {
+/**
+ * One keyword, letter by letter. The word's own spelling is kept — `ULTRATHINK` stays shouted — and
+ * each keyword wears ITS OWN palette: the two are different requests and used to look the same.
+ */
+function UltraWord({ word, keyword }: { word: string; keyword: UltraKeyword }) {
   const letters = [...word];
   const durationMs = ultraCycleMs(letters.length);
   return (
-    <span data-testid="ultra-word" data-word={word.toLowerCase()}>
+    <span data-testid="ultra-word" data-word={word.toLowerCase()} data-keyword={keyword}>
       {letters.map((letter, i) => (
         <span
           key={i}
           className="vh-ultra-char"
           style={
             {
-              "--vh-ultra-base": ultraColor(i),
-              "--vh-ultra-shimmer": ultraColor(i, true),
+              "--vh-ultra-base": ultraColor(i, false, keyword),
+              "--vh-ultra-shimmer": ultraColor(i, true, keyword),
               animationDuration: `${durationMs}ms`,
               animationDelay: `${ultraDelayMs(i, letters.length)}ms`,
             } as React.CSSProperties
@@ -66,7 +70,7 @@ export function UltraText({ text }: { text: string }) {
     if (match.start > last) {
       parts.push(<React.Fragment key={`t${i}`}>{source.slice(last, match.start)}</React.Fragment>);
     }
-    parts.push(<UltraWord key={`w${i}`} word={match.word} />);
+    parts.push(<UltraWord key={`w${i}`} word={match.word} keyword={match.keyword} />);
     last = match.end;
   });
   if (last < source.length) parts.push(<React.Fragment key="tail">{source.slice(last)}</React.Fragment>);

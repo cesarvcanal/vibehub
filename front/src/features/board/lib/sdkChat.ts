@@ -292,6 +292,163 @@ export function toolSummary(input: unknown): string {
   return flat.length > SUMMARY_MAX ? `${flat.slice(0, SUMMARY_MAX - 1)}…` : flat;
 }
 
+/**
+ * THE HEADLINE OF A TOOL CALL — what the CLI shows in the terminal, ported to the chat.
+ *
+ * In the TUI a tool call reads as two lines: WHAT it is doing ("Measuring PDV module size",
+ * `Read(registry.ts)`, `Skill(code-review)`) and, indented under it, the detail — the command it
+ * ran, the path it opened, or "running in the background" for work that was handed to an agent.
+ * The chat used to show `Bash` plus a truncated blob of the input, which is the same information
+ * with the meaning taken out: the name of the tool is the least interesting part of the line.
+ *
+ * `background` is the third thing the TUI says and the chat could not: a Skill or a Task does not
+ * finish on this line — it goes off and keeps running while the turn continues, which is exactly
+ * when someone stares at the screen wondering whether anything is happening.
+ *
+ * PURE and i18n-free: it returns the title, the detail and the flag; the view translates the
+ * background line.
+ */
+export interface ToolHeadline {
+  /** The line that says what is going on. Never empty. */
+  title: string;
+  /** The indented second line: the command, the full path, the query. Absent = nothing to add. */
+  detail?: string;
+  /** The call was handed to an agent and keeps running (Skill, Task, Workflow). */
+  background?: boolean;
+}
+
+/** Trimmed string field, or "". PURE. */
+function field(o: Record<string, unknown>, key: string): string {
+  const v = o[key];
+  return typeof v === "string" ? v.trim() : "";
+}
+
+/** One line, collapsed and capped. PURE. */
+function line(value: string, max = SUMMARY_MAX): string {
+  const flat = value.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+/** The last path segment — what names a file in a headline. PURE. */
+function basename(path: string): string {
+  const parts = path.split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? path;
+}
+
+export function toolHeadline(name: string, input: unknown): ToolHeadline {
+  const tool = String(name ?? "").trim() || "?";
+  const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  const file = field(o, "file_path") || field(o, "path") || field(o, "notebook_path");
+  switch (tool) {
+    case "Bash":
+    case "BashOutput":
+      // The description is the agent's OWN headline for the command ("Measuring PDV module size")
+      // — the best line on the screen, and the one the chat was throwing away.
+      return {
+        title: field(o, "description") || tool,
+        ...(field(o, "command") ? { detail: line(`$ ${field(o, "command")}`) } : {}),
+      };
+    case "Read":
+    case "Write":
+    case "Edit":
+    case "NotebookEdit":
+      return {
+        title: file ? `${tool}(${basename(file)})` : tool,
+        ...(file && basename(file) !== file ? { detail: line(file) } : {}),
+      };
+    case "Glob":
+    case "Grep": {
+      const pattern = field(o, "pattern");
+      return {
+        title: pattern ? `${tool}(${line(pattern, 60)})` : tool,
+        ...(file ? { detail: line(file) } : {}),
+      };
+    }
+    case "WebFetch": {
+      const url = field(o, "url");
+      let host = url;
+      try {
+        host = new URL(url).host || url;
+      } catch {
+        /* not a URL we can parse: the raw value is the best label there is */
+      }
+      return { title: url ? `Fetch(${host})` : tool, ...(url ? { detail: line(url) } : {}) };
+    }
+    case "WebSearch": {
+      const query = field(o, "query");
+      return { title: query ? `Search(${line(query, 60)})` : tool };
+    }
+    case "TodoWrite":
+      return { title: tool };
+    case "Task": {
+      const agent = field(o, "subagent_type");
+      const what = field(o, "description") || agent;
+      return {
+        title: what ? `Task(${line(what, 60)})` : tool,
+        ...(agent && agent !== what ? { detail: line(agent) } : {}),
+        background: true,
+      };
+    }
+    case "Skill": {
+      const skill = field(o, "skill") || field(o, "name") || field(o, "command");
+      return {
+        title: skill ? `Skill(${line(skill, 60)})` : tool,
+        ...(field(o, "args") ? { detail: line(field(o, "args")) } : {}),
+        background: true,
+      };
+    }
+    case "Workflow": {
+      const what = field(o, "name") || field(o, "title") || field(o, "description");
+      return { title: what ? `Workflow(${line(what, 60)})` : tool, background: true };
+    }
+    default: {
+      const summary = toolSummary(input);
+      return { title: tool, ...(summary ? { detail: summary } : {}) };
+    }
+  }
+}
+
+/**
+ * WHAT THE TURN IS DOING RIGHT NOW — the line the sticky bar shows while work runs.
+ *
+ * Read backwards from the end of the conversation and stop at the message that started the turn:
+ * the newest tool call, the reasoning stream, or the answer already being written. Anything older
+ * than the last user message belongs to a turn that is over and is never reported as live. Returns
+ * null when there is nothing to name (the turn just started), and the caller falls back to the
+ * plain "Trabalhando…". PURE.
+ */
+export interface SdkActivity {
+  kind: "tool" | "thinking" | "answering";
+  /** Already human: a tool headline, or empty for thinking/answering (the view names those). */
+  label: string;
+  /** The row to jump to when the bar is clicked. */
+  rowId: string;
+  /** The activity is an agent/skill running in the background. */
+  background?: boolean;
+}
+
+export function currentActivity(state: SdkChatState): SdkActivity | null {
+  for (let i = state.rows.length - 1; i >= 0; i -= 1) {
+    const row = state.rows[i] as SdkRow;
+    if (row.kind === "user") return null; // the turn's own message: nothing after it to report
+    if (row.kind === "tool") {
+      const headline = toolHeadline(row.name, row.input);
+      return {
+        kind: "tool",
+        label: headline.title,
+        rowId: row.id,
+        ...(headline.background ? { background: true } : {}),
+      };
+    }
+    // A stream still open IS the activity; one that has settled is the turn's OUTPUT, and anything
+    // older than it is older still — so the walk stops there and the bar falls back to
+    // "Trabalhando…" rather than naming a thought that is already finished.
+    if (row.kind === "thinking") return row.streaming ? { kind: "thinking", label: "", rowId: row.id } : null;
+    if (row.kind === "assistant") return row.streaming ? { kind: "answering", label: "", rowId: row.id } : null;
+  }
+  return null;
+}
+
 function nextId(state: SdkChatState, prefix: string): { id: string; seq: number } {
   const seq = state.seq + 1;
   return { id: `${prefix}:${seq}`, seq };

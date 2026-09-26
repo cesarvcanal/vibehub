@@ -584,6 +584,33 @@ em acompanhamento.
   é o que se quer ler; depois, vira ruído entre a pergunta e a resposta. Uma escolha explícita da
   pessoa vence o automático, então abrir no meio do turno não é desfeito quando ele acaba.
 
+## O fluxo do agente na tela — a barra fixa e a manchete da ferramenta (2026-09-26)
+
+O terminal tem uma coisa que o chat não tinha: uma linha de status sempre visível dizendo o que o
+agente está fazendo e há quanto tempo. No chat essa informação existia, mas espalhada pelo scroll —
+num turno longo (uma skill, um agente, um build) ela ficava muito acima da dobra, e quem
+acompanhava o card tinha que rolar para saber se ainda havia algo rodando.
+
+- **A barra fixa** (`SdkActivityBar`, `sticky top-0` dentro do scroller) só existe enquanto o turno
+  está vivo, e carrega três fatos: **o quê** (`currentActivity` — a manchete da ferramenta mais
+  recente, o raciocínio em curso, ou a resposta sendo escrita), **há quanto tempo** (`useTurnClock`,
+  `4s`, `1m 24s` — "Trabalhando…" sem número é a mesma palavra no segundo 2 e no minuto 9) e **com
+  qual esforço** (a palavra reservada com que a mensagem foi enviada: `ultrathink` vira "esforço
+  alto", `ultracode` se anuncia por nome — a escalada acontecia em silêncio). Um clique vai para a
+  ponta viva da conversa. A escada de estados inline continua onde estava: ela marca o LUGAR do
+  trabalho na conversa, a barra é a que não sai da tela.
+- **A manchete da ferramenta** (`toolHeadline`, puro) porta o formato de duas linhas da TUI: o que
+  está sendo feito e, indentado sob ele, o detalhe. O `description` que o agente escreve para um
+  `Bash` ("Measuring PDV module size") é a melhor linha da tela e era exatamente o que o chat
+  jogava fora — mostrava `Bash` e um pedaço truncado do input. `Read(registry.ts)` com o caminho
+  embaixo, `Grep(padrão)`, `Fetch(host)`; e um `Skill(code-review)` ou um `Task(...)` diz
+  **"Rodando em segundo plano"**, que é a informação que faltava: aquela chamada não termina ali,
+  ela sai correndo enquanto o turno segue.
+- **Uma palavra, uma paleta.** `ultrathink` e `ultracode` eram pintados com o MESMO arco-íris da
+  TUI, letra a letra — iguais na tela, sendo pedidos diferentes (um compra raciocínio, o outro liga
+  orquestração multi-agente). O `ultracode` agora tem paleta própria (rampa fria ciano → violeta),
+  mesma varredura, mesma mecânica.
+
 ## Falar é responder (o cartão de pergunta não prende mais a tela)
 
 Com um `user_question` de pé, o turno está PARADO dentro do `canUseTool` esperando um clique. Uma

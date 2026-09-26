@@ -4,12 +4,14 @@ import {
   applySdkEvent,
   appendUserRow,
   answerQuestion,
+  currentActivity,
   decidePermission,
   dropRewoundRows,
   groupSdkRows,
   markInterruptRequested,
   markUserEdited,
   parseSdkFrame,
+  toolHeadline,
   toolSummary,
   type SdkChatState,
   type SdkEvent,
@@ -861,5 +863,107 @@ describe("evento `rewound` — a tela só esquece quando o modelo esqueceu", () 
 
   it("`rewound` é aceito pelo parser de frames — o back emite, a tela não pode chamar de lixo", () => {
     expect(parseSdkFrame(`{"type":"rewound","ok":true,"uuid":"abc"}`)).toEqual({ type: "rewound", ok: true, uuid: "abc" });
+  });
+});
+
+/**
+ * THE FLOW OF THE AGENT, as the terminal shows it. A tool call used to read `Bash` plus a
+ * truncated blob of its input: the agent's own headline for what it was doing was IN that input
+ * and never reached the screen, and a skill that goes off to run in the background looked exactly
+ * like a file being read.
+ */
+describe("toolHeadline", () => {
+  it("Bash: the agent's description is the headline, the command is the detail", () => {
+    expect(toolHeadline("Bash", { description: "Measuring PDV module size", command: "ls && find src" })).toEqual({
+      title: "Measuring PDV module size",
+      detail: "$ ls && find src",
+    });
+    // No description: the tool's name is the headline, never an empty line.
+    expect(toolHeadline("Bash", { command: "npm test" })).toEqual({ title: "Bash", detail: "$ npm test" });
+    expect(toolHeadline("Bash", {})).toEqual({ title: "Bash" });
+  });
+
+  it("files: the basename in the headline, the full path underneath", () => {
+    expect(toolHeadline("Read", { file_path: "/work/repo/src/registry.ts" })).toEqual({
+      title: "Read(registry.ts)",
+      detail: "/work/repo/src/registry.ts",
+    });
+    // A bare name has nothing to add on the second line.
+    expect(toolHeadline("Write", { file_path: "notes.md" })).toEqual({ title: "Write(notes.md)" });
+  });
+
+  it("search and fetch name what they are looking for", () => {
+    expect(toolHeadline("Grep", { pattern: "purgeCard", path: "back/src" })).toEqual({
+      title: "Grep(purgeCard)",
+      detail: "back/src",
+    });
+    expect(toolHeadline("WebFetch", { url: "https://docs.anthropic.com/x" })).toEqual({
+      title: "Fetch(docs.anthropic.com)",
+      detail: "https://docs.anthropic.com/x",
+    });
+    expect(toolHeadline("WebSearch", { query: "vibehub" })).toEqual({ title: "Search(vibehub)" });
+  });
+
+  it("a SKILL and a TASK say they are running in the background — that is the point of the line", () => {
+    expect(toolHeadline("Skill", { skill: "code-review", args: "high backend/src" })).toEqual({
+      title: "Skill(code-review)",
+      detail: "high backend/src",
+      background: true,
+    });
+    expect(toolHeadline("Task", { description: "audita o pdv", subagent_type: "Explore" })).toEqual({
+      title: "Task(audita o pdv)",
+      detail: "Explore",
+      background: true,
+    });
+    expect(toolHeadline("Workflow", { name: "review-changes" }).background).toBe(true);
+  });
+
+  it("an unknown tool keeps the old behaviour: its name and the one-line summary", () => {
+    expect(toolHeadline("SomeNewTool", { prompt: "faz  isso\naqui" })).toEqual({
+      title: "SomeNewTool",
+      detail: "faz isso aqui",
+    });
+    expect(toolHeadline("", null)).toEqual({ title: "?" });
+  });
+
+  it("caps a long line instead of letting it push the layout", () => {
+    const headline = toolHeadline("Bash", { command: "x".repeat(400) });
+    expect((headline.detail ?? "").length).toBeLessThanOrEqual(120);
+    expect(headline.detail?.endsWith("…")).toBe(true);
+  });
+});
+
+describe("currentActivity (what the sticky bar reports)", () => {
+  const ready = (): SdkChatState => applySdkEvent(INITIAL_SDK_STATE, { type: "ready" });
+
+  it("names the newest tool call of the turn", () => {
+    let state = ready();
+    state = appendUserRow(state, "faz a coisa", undefined, { awaiting: true });
+    state = applySdkEvent(state, { type: "tool_use", id: "t1", name: "Read", input: { file_path: "a/b.ts" } });
+    state = applySdkEvent(state, {
+      type: "tool_use", id: "t2", name: "Skill", input: { skill: "code-review" },
+    });
+    expect(currentActivity(state)).toEqual({
+      kind: "tool", label: "Skill(code-review)", rowId: "t2", background: true,
+    });
+  });
+
+  it("reports the reasoning while it streams and the answer while it is being written", () => {
+    let state = ready();
+    state = appendUserRow(state, "pensa", undefined, { awaiting: true });
+    state = applySdkEvent(state, { type: "thinking_delta", text: "hmm" });
+    expect(currentActivity(state)?.kind).toBe("thinking");
+    state = applySdkEvent(state, { type: "assistant_delta", text: "então" });
+    expect(currentActivity(state)?.kind).toBe("answering");
+    // A settled answer is not activity any more — the turn produced it.
+    state = applySdkEvent(state, { type: "assistant_text", text: "então: isso." });
+    expect(currentActivity(state)).toBeNull();
+  });
+
+  it("never reports work from a turn that is over (it stops at the last message)", () => {
+    let state = ready();
+    state = applySdkEvent(state, { type: "tool_use", id: "t1", name: "Bash", input: { command: "old" } });
+    state = appendUserRow(state, "outra pergunta", undefined, { awaiting: true });
+    expect(currentActivity(state)).toBeNull();
   });
 });

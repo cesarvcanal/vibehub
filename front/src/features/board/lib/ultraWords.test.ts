@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  ULTRA_CODE_PALETTE,
+  ULTRA_CODE_SHIMMER,
   ULTRA_RAINBOW,
   ULTRA_SHIMMER,
   findUltraWords,
@@ -86,5 +88,21 @@ describe("the sweep", () => {
       expect(delay).toBeGreaterThan(-cycle);
       if (i > 0) expect(delay - ultraDelayMs(i - 1, length)).toBe(50);
     }
+  });
+});
+
+describe("ultraColor — one palette per keyword", () => {
+  it("ultrathink keeps the TUI rainbow and is the default", () => {
+    expect(ultraColor(0, false, "ultrathink")).toBe(ULTRA_RAINBOW[0]);
+    expect(ultraColor(3)).toBe(ULTRA_RAINBOW[3]);
+    expect(ultraColor(3, true)).toBe(ULTRA_SHIMMER[3]);
+  });
+
+  it("ultracode gets its own cold ramp, and it rounds the same way", () => {
+    expect(ultraColor(0, false, "ultracode")).toBe(ULTRA_CODE_PALETTE[0]);
+    expect(ultraColor(7, false, "ultracode")).toBe(ULTRA_CODE_PALETTE[0]);
+    expect(ultraColor(2, true, "ultracode")).toBe(ULTRA_CODE_SHIMMER[2]);
+    // The whole point: the two words can never come out the same colour.
+    expect(ultraColor(0, false, "ultracode")).not.toBe(ultraColor(0, false, "ultrathink"));
   });
 });

@@ -22,6 +22,7 @@ import { useAuth } from "@/providers/auth";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
 import { LinkifiedText, Markdown, SenderTag } from "@/features/board/components/ChatView";
 import { originRole } from "@/features/board/lib/chat";
+import { ultraKeywords } from "@/features/board/lib/ultraWords";
 import { reconnectDelay, type ConnectionState } from "@/features/board/lib/reconnect";
 import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
 import {
@@ -46,11 +47,14 @@ import {
   decidePermission,
   deliveredUserTexts,
   dropUserRow,
+  currentActivity,
   groupSdkRows,
   markInterruptRequested,
   markUserEdited,
   parseSdkFrame,
   settleUserRow,
+  toolHeadline,
+  type SdkActivity,
   type SdkChatState,
   type SdkQuestionAnswer,
   type SdkRow,
@@ -331,6 +335,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    * cut, and continuing is a deliberate click (a new turn), not magic.
    */
   const [interruptedForEdit, setInterruptedForEdit] = React.useState(false);
+  /** The reserved word the CURRENT turn was sent with — what the activity bar reports as effort. */
+  const [escalation, setEscalation] = React.useState<{ ultrathink: boolean; ultracode: boolean } | null>(null);
 
   /** Stop the running turn. `reason` tells the back which note narrates the cut. */
   const sendInterrupt = React.useCallback(
@@ -412,6 +418,11 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   const send = async (raw: string): Promise<void> => {
     const text = raw.replace(/\r$/, "").trim();
     if (!text) return;
+    // `ultrathink` / `ultracode` in what was just sent: the driver raises the turn's effort for
+    // THIS turn only, and the activity bar is where that becomes visible — the panel used to
+    // escalate in silence (the word was painted in the bubble and nothing else ever said it took).
+    const ultra = ultraKeywords(text);
+    setEscalation(ultra.ultrathink || ultra.ultracode ? ultra : null);
     // Anything the person sends REPLACES the interrupted turn — the "continuar?" offer is moot.
     setInterruptedForEdit(false);
     if (replyTo && !editing) {
@@ -615,6 +626,17 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   const rendered = React.useMemo(() => groupSdkRows(state.rows), [state.rows]);
   const empty = state.rows.length === 0;
 
+  /* -------------------------------------------------- what is running, right now */
+
+  // The activity bar's three facts: WHAT (the newest tool/reasoning/answer of this turn), for HOW
+  // LONG, and whether the turn was escalated by a reserved word.
+  const working = connected && (state.awaiting || state.turnActive);
+  const activity = React.useMemo(() => (working ? currentActivity(state) : null), [working, state]);
+  const seconds = useTurnClock(working);
+  React.useEffect(() => {
+    if (!working) setEscalation(null);
+  }, [working]);
+
   return (
     <div ref={rootRef} className={cn("flex min-h-0 min-w-0 flex-1 flex-col", className)}>
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
@@ -627,6 +649,19 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         data-testid="sdk-chat-scroller"
         className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain rounded-md border border-border/60 bg-card/30 px-3 py-3"
       >
+        {/* WHAT IS RUNNING — pinned to the top of the conversation for as long as work runs, so a
+            long turn never leaves the person scrolling to find out whether anything is happening. */}
+        {working ? (
+          <SdkActivityBar
+            activity={activity}
+            seconds={seconds}
+            escalation={escalation}
+            awaiting={state.awaiting}
+            ready={state.ready}
+            onJump={stick.scrollToBottom}
+          />
+        ) : null}
+
         {empty && !state.ready ? (
           <div
             data-testid="sdk-chat-loading"
@@ -878,9 +913,8 @@ function SdkToolGroup({ rows }: { rows: SdkRow[] }) {
         <Wrench className="h-3 w-3 shrink-0 opacity-70" />
         <span className="shrink-0 font-medium">{t("chat.actions", { n: rows.length })}</span>
         {!open && last && last.kind === "tool" ? (
-          <span className="min-w-0 truncate font-mono opacity-70">
-            {last.name}
-            {last.summary ? ` ${last.summary}` : ""}
+          <span data-testid="sdk-tool-group-last" className="min-w-0 truncate opacity-70">
+            {toolHeadline(last.name, last.input).title}
           </span>
         ) : null}
       </button>
@@ -889,6 +923,146 @@ function SdkToolGroup({ rows }: { rows: SdkRow[] }) {
           {rows.map((row) => (
             <SdkChatRow key={row.id} row={row} />
           ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * THE TURN'S CLOCK — seconds since the work started, ticking while it runs.
+ *
+ * "Trabalhando…" with no number is the same word at second 2 and at minute 9, and the difference
+ * between those two is the whole question the person is asking the screen. Reset (and the interval
+ * dropped) the moment the work stops, so an idle chat holds no timer.
+ */
+function useTurnClock(active: boolean): number {
+  const [seconds, setSeconds] = React.useState(0);
+  React.useEffect(() => {
+    if (!active) {
+      setSeconds(0);
+      return;
+    }
+    const startedAt = Date.now();
+    setSeconds(0);
+    const timer = setInterval(() => setSeconds(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  return seconds;
+}
+
+/** Elapsed, the way the CLI writes it: `4s`, `1m 24s`. PURE. */
+export function formatElapsed(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
+/**
+ * THE ACTIVITY BAR — pinned to the top of the conversation while something is running.
+ *
+ * The problem it solves is the one the terminal does not have: in the TUI the status line is always
+ * on screen, at the bottom, saying what the agent is doing and for how long. In the chat that
+ * information was scattered through the scroll — and a long turn (an agent, a skill, a build) puts
+ * it far above the fold, so the person watching a card had to scroll to find out whether anything
+ * was still happening.
+ *
+ * So while a turn is live this bar carries three things and never moves: WHAT is running (the
+ * newest tool headline, the reasoning, the answer being written), for HOW LONG, and whether the
+ * turn was escalated (`ultrathink`/`ultracode` — the words that cost real money and time). A click
+ * jumps to the live edge of the conversation, which is where that work is being drawn.
+ */
+function SdkActivityBar({
+  activity,
+  seconds,
+  escalation,
+  awaiting,
+  ready,
+  onJump,
+}: {
+  activity: SdkActivity | null;
+  seconds: number;
+  escalation: { ultrathink: boolean; ultracode: boolean } | null;
+  awaiting: boolean;
+  ready: boolean;
+  onJump: () => void;
+}) {
+  const t = useT();
+  const label =
+    awaiting && !ready
+      ? t("sdk.preparing")
+      : activity?.kind === "tool"
+        ? activity.label
+        : activity?.kind === "thinking"
+          ? t("sdk.thinking")
+          : activity?.kind === "answering"
+            ? t("sdk.answering")
+            : awaiting
+              ? t("sdk.thinking")
+              : t("chat.working");
+  const effort = escalation ? (escalation.ultracode ? t("sdk.ultracodeOn") : t("sdk.effortHigh")) : null;
+  return (
+    <button
+      type="button"
+      onClick={onJump}
+      data-testid="sdk-activity-bar"
+      data-kind={activity?.kind ?? (awaiting ? "awaiting" : "working")}
+      aria-label={t("sdk.activityAria")}
+      className={cn(
+        "sticky top-0 z-10 -mx-3 -mt-3 flex w-[calc(100%+1.5rem)] items-center gap-2 border-b border-border/60",
+        "bg-card/95 px-3 py-1.5 text-left text-xs text-muted-foreground backdrop-blur",
+        "hover:text-foreground",
+      )}
+    >
+      <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+      <span data-testid="sdk-activity-label" className="min-w-0 flex-1 truncate font-medium text-foreground/90">
+        {label}
+      </span>
+      {activity?.background ? (
+        <span className="hidden shrink-0 opacity-70 sm:inline">{t("sdk.toolBackground")}</span>
+      ) : null}
+      <span data-testid="sdk-activity-elapsed" className="shrink-0 font-mono opacity-70">
+        {formatElapsed(seconds)}
+      </span>
+      {effort ? (
+        <span
+          data-testid="sdk-activity-effort"
+          className="shrink-0 rounded-full border border-border/70 px-1.5 py-0.5 text-[10px] uppercase tracking-wide opacity-80"
+        >
+          {effort}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+/**
+ * ONE TOOL CALL, the way the terminal draws it: the headline, and the detail under it.
+ *
+ * What it replaces: `Bash` followed by a truncated dump of the input. The agent's own description
+ * of what it is doing ("Measuring PDV module size") was in that input and never made it to the
+ * screen, and a `Skill(code-review)` that goes off to run in the background looked exactly like a
+ * file being read. See `toolHeadline` for the mapping.
+ */
+function SdkToolRow({ row }: { row: Extract<SdkRow, { kind: "tool" }> }) {
+  const t = useT();
+  const headline = toolHeadline(row.name, row.input);
+  const detail = headline.background ? t("sdk.toolBackground") : headline.detail;
+  return (
+    <div data-testid="sdk-tool" data-tool={row.name} className="min-w-0 pl-0.5 text-xs">
+      <div className="flex items-baseline gap-1.5 text-muted-foreground">
+        <Wrench className="h-3 w-3 shrink-0 translate-y-0.5 opacity-70" />
+        <span data-testid="sdk-tool-title" className="min-w-0 truncate font-medium text-foreground/90">
+          {headline.title}
+        </span>
+      </div>
+      {detail ? (
+        <div
+          data-testid="sdk-tool-detail"
+          data-background={headline.background || undefined}
+          className="mt-0.5 flex min-w-0 items-baseline gap-1 pl-[1.1rem] text-muted-foreground/75"
+        >
+          <span aria-hidden className="shrink-0 select-none opacity-60">⌊</span>
+          <span className={cn("min-w-0 truncate", !headline.background && "font-mono")}>{detail}</span>
         </div>
       ) : null}
     </div>
@@ -972,13 +1146,7 @@ function SdkChatRow({
   }
 
   if (row.kind === "tool") {
-    return (
-      <div data-testid="sdk-tool" className="flex items-baseline gap-1.5 pl-0.5 text-xs text-muted-foreground/80">
-        <Wrench className="h-3 w-3 shrink-0 translate-y-0.5 opacity-70" />
-        <span className="font-mono">{row.name}</span>
-        {row.summary ? <span className="min-w-0 truncate opacity-80">{row.summary}</span> : null}
-      </div>
-    );
+    return <SdkToolRow row={row} />;
   }
 
   if (row.kind === "permission") {
