@@ -53,7 +53,7 @@ describe("capture: binding -> pending -> save / discard", () => {
     capture.recordCapture("c1", { url: "https://erp.multi/login", username: "ada", password: "s3cr3t" });
     const pending = capture.listCaptures("c1")[0];
 
-    const credential = await capture.saveCapture(pending.id, "erp-prod");
+    const credential = await capture.saveCapture("c1", pending.id, "erp-prod");
     expect(credential.name).toBe("erp-prod");
     expect(credential.type).toBe("userpass");
 
@@ -68,7 +68,7 @@ describe("capture: binding -> pending -> save / discard", () => {
     const { capture, creds } = await fresh();
     capture.recordCapture("c1", { url: "https://tok.site/login", username: "", password: "just-a-token" });
     const pending = capture.listCaptures("c1")[0];
-    const credential = await capture.saveCapture(pending.id, undefined);
+    const credential = await capture.saveCapture("c1", pending.id, undefined);
     expect(credential.type).toBe("token");
     expect((await creds.resolveCredential(pending.suggestedName)).secret).toBe("just-a-token");
   });
@@ -77,11 +77,32 @@ describe("capture: binding -> pending -> save / discard", () => {
     const { capture, creds } = await fresh();
     capture.recordCapture("c1", { url: "https://x/login", username: "u", password: "p" });
     const pending = capture.listCaptures("c1")[0];
-    expect(capture.dismissCapture(pending.id)).toBe(true);
+    expect(capture.dismissCapture("c1", pending.id)).toBe(true);
     expect(capture.listCaptures("c1")).toHaveLength(0);
     expect(await creds.listCredentials()).toHaveLength(0);
     // Saving a dismissed capture fails clearly.
-    await expect(capture.saveCapture(pending.id, "x")).rejects.toThrow(/no longer available/);
+    await expect(capture.saveCapture("c1", pending.id, "x")).rejects.toThrow(/no longer available/);
+  });
+
+  /**
+   * THE HOLE THIS PINS: `pending` is ONE map for the whole install, and the routes authorize the
+   * card in the URL while acting on the capture id in the BODY. `listCaptures` was card-scoped and
+   * the two mutating paths were not, so `work` on any card was enough to mint another card's
+   * captured password into the vault — a password never shown to the caller — or to throw it away.
+   */
+  it("a capture belongs to its card: another card can neither save nor dismiss it", async () => {
+    const { capture, creds } = await fresh();
+    capture.recordCapture("c1", { url: "https://erp.multi/login", username: "ada", password: "s3cr3t" });
+    const pending = capture.listCaptures("c1")[0]!;
+
+    // Same id, wrong card.
+    await expect(capture.saveCapture("c2", pending.id, "roubada")).rejects.toThrow(/no longer available/);
+    expect(capture.dismissCapture("c2", pending.id)).toBe(false);
+
+    // Nothing was created, and the capture is still there for the card that owns it.
+    expect(await creds.listCredentials()).toHaveLength(0);
+    expect(capture.listCaptures("c1")).toHaveLength(1);
+    await expect(capture.saveCapture("c1", pending.id, "certa")).resolves.toMatchObject({ name: "certa" });
   });
 
   it("hostFromUrl and publicCapture are pure and password-free", async () => {

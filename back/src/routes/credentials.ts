@@ -52,7 +52,7 @@ export async function credentialsRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       try {
         const by = (await sessionUserId(req)) ?? undefined;
-        const credential = await saveCapture(String(req.body?.captureId ?? ""), req.body?.name, by);
+        const credential = await saveCapture(req.params.id, String(req.body?.captureId ?? ""), req.body?.name, by);
         return await reply.send({ credential });
       } catch (err) {
         return await reply.code(400).send({ error: (err as Error).message });
@@ -64,7 +64,7 @@ export async function credentialsRoutes(app: FastifyInstance): Promise<void> {
     "/api/cards/:id/captures/dismiss",
     { preHandler: requireCardWork },
     async (req, reply) => {
-      const ok = dismissCapture(String(req.body?.captureId ?? ""));
+      const ok = dismissCapture(req.params.id, String(req.body?.captureId ?? ""));
       return await reply.send({ ok });
     },
   );

@@ -95,8 +95,16 @@ export function listCaptures(cardId: string): ReturnType<typeof publicCapture>[]
     .map(publicCapture);
 }
 
-/** Discards a pending capture without saving it. Returns whether it existed. */
-export function dismissCapture(id: string): boolean {
+/**
+ * Discards a pending capture without saving it. Returns whether it existed.
+ *
+ * `cardId` is not decoration: `pending` is one map for the whole install, and the route that calls
+ * this authorizes the card in the URL — not the capture in the body. Without the match, someone
+ * with `work` on any card could name another card's capture id and act on it.
+ */
+export function dismissCapture(cardId: string, id: string): boolean {
+  const c = pending.get(id);
+  if (!c || c.cardId !== cardId) return false;
   return pending.delete(id);
 }
 
@@ -105,9 +113,16 @@ export function dismissCapture(id: string): boolean {
  * record — it was never sent to the front. A capture with a username becomes a userpass credential;
  * one without becomes a token.
  */
-export async function saveCapture(id: string, name: string | undefined, by?: string): Promise<Credential> {
+export async function saveCapture(
+  cardId: string,
+  id: string,
+  name: string | undefined,
+  by?: string,
+): Promise<Credential> {
   const c = pending.get(id);
-  if (!c) throw new Error("this capture is no longer available");
+  // Same card or nothing — and the SAME message either way, so this cannot be used to ask whether
+  // a capture id exists on a card the caller was never given. See `dismissCapture`.
+  if (!c || c.cardId !== cardId) throw new Error("this capture is no longer available");
   const finalName = (name?.trim() || c.suggestedName);
   const credential = c.username
     ? await createCredential({ name: finalName, type: "userpass", username: c.username, password: c.password }, by)
