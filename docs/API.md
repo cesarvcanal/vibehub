@@ -132,20 +132,20 @@ that card.
 | GET | `/api/projects` | `{ projects: Project[] }` |
 | POST | `/api/projects` | `{ name, repoFullName?, cloneUrl?, baseBranch?, defaultAccountSlug?, githubConnectionId? }` — `githubConnectionId` must name an existing GitHub connection; absent = the first |
 | PATCH | `/api/projects/:id` | partial update |
-| DELETE | `/api/projects/:id` | also removes its cards |
+| DELETE | `/api/projects/:id` | also removes its cards — and PURGES each of them (same teardown as `DELETE /api/cards/:id`), in the background. `{ ok: true, cards }` |
 | PATCH | `/api/projects/:id/order` | `{ position }` — sidebar position |
 | GET | `/api/projects/:id/cards` | `{ cards: Card[] }` |
 | GET | `/api/cards` | `{ cards: Card[] }` — every card in the install, for the views that cut across projects (the sidebar's Recent list) |
 | POST | `/api/cards` | `{ projectId, title }` plus any editable field (`branch`, `accountSlug`, `model`, `resumeSessionId`), applied through the same validation an edit uses. Answers immediately and **pre-provisions the workspace in the background** (clone, worktree, tmux), so the first open is instant |
 | GET | `/api/cards/:id` | `{ card }` |
 | PATCH | `/api/cards/:id` | `{ title?, column?, accountSlug?, model?, sdkChat? }` — `sdkChat` is the per-card "Chat nativo (beta)" opt-in (SDK driver socket) — moving to `done` is always manual. A column is not just a label: moving **into `paused` pauses the card for real** (same rules as the pause route) and moving a paused card into `waiting`/`working` **resumes it** (the session comes back in the background) |
-| DELETE | `/api/cards/:id` | kills the session and drops the worktree |
+| DELETE | `/api/cards/:id` | **owner** — a PURGE, not a hide: `{ ok: true, incomplete: string[], steps }`. Kills both tmux sessions and the SDK driver, the preview servers and the card's browser; then erases the native chat history, the provenance log, the in-flight marker, the queued messages, the worktree, **the `card/<slug>` branch the card created** (a branch that existed before the card — an imported session — is left alone), `/work/.uploads/<id>`, the browser profile, the gh-token file and the Claude Code transcripts/prompt history of the card's cwd in every account profile. The card leaves the board even when the runner is down — `incomplete` names the steps that did not finish and the daily orphan sweep collects them. Nothing pushed to GitHub is touched |
 | POST | `/api/cards/:id/open` | attach-or-create the tmux session; returns the card. Also resumes a paused or hibernated one |
 | POST | `/api/cards/:id/pause` | moves the card to `paused` and ends its tmux sessions. A card that is REALLY working (the runner is asked, not the dot) becomes a *pending* pause: the session lives until Claude finishes. A stale `working` dot — a card parked on Claude's "Resume from summary" screen never fires a Stop hook — does not defer anything: it is paused on the spot |
 | POST | `/api/cards/:id/hibernate` | kills tmux and stamps `hibernatedAt` — the card KEEPS its column and position and loses its dot; a card with nothing to hibernate (never opened, already cold, or `working`) comes back unchanged |
 | POST | `/api/cards/:id/restart` | fresh Claude process in the same worktree |
 | POST | `/api/cards/restart-all` | `{ restarted, skipped }` |
-| POST | `/api/cards/:id/upload` | `{ name, content }` with bare base64 → `{ path }` inside the runner (10 MB cap). Kept for **180 days** (`UPLOAD_RETENTION_DAYS`, swept daily) and deleted with the card |
+| POST | `/api/cards/:id/upload` | `{ name, content }` with bare base64 → `{ path }` inside the runner (10 MB cap). Kept for **180 days** (`UPLOAD_RETENTION_DAYS`, swept daily) and erased with the card (DELETE above) |
 | GET | `/api/cards/:id/uploads/:file` | the image back, as the image — the chat renders what was attached instead of the runner path. Only names the upload route itself writes (`<stamp>-<name>.<ext>`) and only image types; anything missing is a 404, cached `immutable` because the name carries the upload's timestamp |
 | POST | `/api/cards/:id/messages` | `{ text }` → `{ delivered, pending, agent }` — the composer's Enter. Delivered to a RUNNING Claude, otherwise QUEUED until there is one |
 | GET | `/api/cards/:id/messages` | `{ pending: OutboxMessage[], agent }` — `agent` is `running` / `shell` / `none` |

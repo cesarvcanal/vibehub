@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEvent, fireEvent, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { KanbanBoard, insertionLine } from "@/features/board/components/KanbanBoard";
 import { renderApp } from "@/test/render";
-import { get, patch } from "@/lib/api";
+import { del, get, patch } from "@/lib/api";
+import { toast } from "sonner";
 import type { BoardCard, BoardProject } from "@/features/board/api";
 
 vi.mock("@/lib/api", () => ({
@@ -18,6 +20,7 @@ vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), {
     success: vi.fn(),
     error: vi.fn(),
+    warning: vi.fn(),
     message: vi.fn(),
     loading: vi.fn(),
     dismiss: vi.fn(),
@@ -26,6 +29,7 @@ vi.mock("sonner", () => ({
 
 const mockGet = vi.mocked(get);
 const mockPatch = vi.mocked(patch);
+const mockDel = vi.mocked(del);
 
 const project: BoardProject = { id: "p1", name: "billing", baseBranch: "dev", position: 0, createdAt: 1 };
 
@@ -331,5 +335,65 @@ describe("insertionLine", () => {
   it("draws the last gap on the bottom edge of the last card", () => {
     expect(insertionLine(3, 2, 3)).toBe("bottom");
     expect(insertionLine(3, 0, 3)).toBeNull();
+  });
+});
+
+/**
+ * DELETING A CARD IS A PURGE, and the screen must not overstate it. The backend answers with the
+ * steps that did NOT complete (a runner that was down); a delete that left the conversation on the
+ * server must not read as "Card excluído".
+ */
+describe("KanbanBoard delete (what the screen promises)", () => {
+  /** Deleting is the owner's: the menu item only exists for them (the route is owner-only too). */
+  function serveAsOwner() {
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/auth/me") return Promise.resolve({ user: { id: "u1", username: "cesar", role: "owner" } });
+      if (/\/cards$/.test(url)) return Promise.resolve({ cards });
+      return Promise.resolve({});
+    });
+  }
+
+  async function openDeleteDialog() {
+    // Radix's dropdown needs real pointer events — fireEvent alone never opens it.
+    const user = userEvent.setup();
+    board();
+    await user.click(await screen.findByRole("button", { name: "Actions for first" }));
+    await user.click(await screen.findByText("Delete card"));
+    return user;
+  }
+
+  async function confirmDelete() {
+    const user = await openDeleteDialog();
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
+  }
+
+  beforeEach(() => serveAsOwner());
+
+  it("names everything that goes, and that GitHub keeps what was pushed", async () => {
+    await openDeleteDialog();
+    const body = await screen.findByText(/Erases the card and EVERYTHING of it/);
+    expect(body.textContent).toMatch(/conversation/);
+    expect(body.textContent).toMatch(/attached images/);
+    expect(body.textContent).toMatch(/card\/… branch the card created/);
+    expect(body.textContent).toMatch(/cannot be undone/);
+    expect(body.textContent).toMatch(/pushed to GitHub/);
+  });
+
+  it("says it plainly when nothing survived", async () => {
+    mockDel.mockResolvedValue({ ok: true, incomplete: [], steps: [] });
+    await confirmDelete();
+    await waitFor(() => expect(mockDel).toHaveBeenCalledWith("/cards/c1"));
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith("Card deleted — conversation, attachments and files erased."),
+    );
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
+  it("says WHAT survived when the purge was partial", async () => {
+    mockDel.mockResolvedValue({ ok: true, incomplete: ["runner", "browser"], steps: [] });
+    await confirmDelete();
+    await waitFor(() => expect(toast.warning).toHaveBeenCalled());
+    expect(String(vi.mocked(toast.warning).mock.calls[0]?.[0])).toContain("runner, browser");
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });

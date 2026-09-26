@@ -20,6 +20,8 @@ const pauseCard = vi.fn(async (id: string) => (await registry()).pauseCard(id, {
 const resumeCard = vi.fn(async (id: string) => ({ id }));
 /** Ending the tmux sessions of a card — what a pause that comes DUE has to do in the runner. */
 const killCardSession = vi.fn(async () => undefined);
+/** The card purge a deleted PROJECT cascades into (its own tests live next to the purge). */
+const purgeRemovedCards = vi.fn(async () => []);
 
 /** The registry the running app is using (same module instance — boot() resets the graph first). */
 async function registry(): Promise<typeof import("../services/board/registry.js")> {
@@ -45,6 +47,10 @@ async function boot(): Promise<FastifyInstance> {
   vi.doMock("../services/board/workspace.js", async () => {
     const actual = await vi.importActual<typeof import("../services/board/workspace.js")>("../services/board/workspace.js");
     return { ...actual, restartCard, prepareCard, pauseCard, resumeCard, killCardSession };
+  });
+  vi.doMock("../services/board/purge.js", async () => {
+    const actual = await vi.importActual<typeof import("../services/board/purge.js")>("../services/board/purge.js");
+    return { ...actual, purgeRemovedCards };
   });
   const { buildServer } = await import("../index.js");
   const server = await buildServer();
@@ -89,12 +95,20 @@ describe("projects", () => {
     expect((await app.inject({ method: "GET", url: "/api/projects", headers: { cookie } })).json().projects).toHaveLength(0);
   });
 
-  it("returns the cascaded cards so the session layer can tear them down", async () => {
+  it("cascades to its cards AND purges each of them (deleting a project is not a way around it)", async () => {
     const id = await makeProject();
     await makeCard(id, "one");
     await makeCard(id, "two");
     const del = await app.inject({ method: "DELETE", url: `/api/projects/${id}`, headers: { cookie } });
     expect(del.json().cards).toHaveLength(2);
+    // The purge runs in the background (a project with thirty cards must not hold the request
+    // open), so what is asserted here is that it was HANDED the cards and the project record —
+    // without that record their paths in the runner cannot be derived. The purge itself is pinned
+    // in services/board/purge.test.ts.
+    expect(purgeRemovedCards).toHaveBeenCalledTimes(1);
+    const [cards, project] = purgeRemovedCards.mock.calls[0] as [unknown[], { id: string }];
+    expect(cards).toHaveLength(2);
+    expect(project.id).toBe(id);
   });
 
   it("400s a project with no name and 404s an unknown id", async () => {

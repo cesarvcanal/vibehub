@@ -287,7 +287,10 @@ export const ptBR: Record<string, string> = {
   "kanban.accountDialog.switch": "Trocar conta",
   "kanban.deleteCard.title": "Excluir “{title}”?",
   "kanban.deleteCard.body":
-    "A sessão é encerrada e o worktree é descartado. A branch e os commits continuam no repositório — só se perde o que não foi commitado no worktree.",
+    "Apaga o card e TUDO dele: a conversa (histórico do chat e transcript do Claude), as imagens " +
+    "anexadas, o worktree, a branch card/… que o card criou, o perfil do navegador do card e os " +
+    "servidores de preview. Não dá pra desfazer. O que já foi pro GitHub (branch empurrada, PR) " +
+    "continua lá, e uma branch que já existia antes do card (sessão importada) não é tocada.",
 
   /* -------------------------------------------------------------- card tile */
   "card.finishToDone": "Concluir (mover pra Feito)",
@@ -476,6 +479,11 @@ export const ptBR: Record<string, string> = {
   "sdk.edited": "editada",
   "sdk.preparing": "Preparando\u2026",
   "sdk.thinking": "Pensando\u2026",
+  "sdk.answering": "Respondendo…",
+  "sdk.toolBackground": "Rodando em segundo plano",
+  "sdk.activityAria": "Ir para o que está rodando agora",
+  "sdk.effortHigh": "esforço alto",
+  "sdk.ultracodeOn": "ultracode",
   "sdk.reasoning": "Raciocínio",
   "sdk.flagOff": "O driver SDK está desligado nesta instalação. Ligue \"Driver SDK\" nas Configurações para usar o chat nativo.",
   "sdk.noteInterrupted": "Turno interrompido por você — a resposta acima ficou pela metade.",
@@ -940,7 +948,9 @@ export const ptBR: Record<string, string> = {
   "toast.cardRestartError": "Não deu pra reiniciar o card",
   "toast.cardHibernated": "Hibernado — o card fica onde está; abrir retoma a mesma conversa.",
   "toast.cardHibernateError": "Não deu pra hibernar o card",
-  "toast.cardDeleted": "Card excluído.",
+  "toast.cardDeleted": "Card excluído — conversa, anexos e arquivos apagados.",
+  "toast.cardDeletedPartial":
+    "Card excluído, mas parte dos dados resistiu ({steps}) — a faxina diária termina o serviço.",
   "toast.cardDeleteError": "Não deu pra excluir o card",
   "toast.cardAccountSwitched":
     "Conta trocada — a sessão do Claude reinicia na próxima abertura.",

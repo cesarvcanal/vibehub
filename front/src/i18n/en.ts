@@ -286,7 +286,10 @@ export const en: Record<string, string> = {
   "kanban.accountDialog.switch": "Switch account",
   "kanban.deleteCard.title": "Delete “{title}”?",
   "kanban.deleteCard.body":
-    "The session is killed and the worktree is dropped. The branch and any commits stay in the repository — only uncommitted work in the worktree is lost.",
+    "Erases the card and EVERYTHING of it: the conversation (chat history and Claude transcript), " +
+    "the attached images, the worktree, the card/… branch the card created, the card's browser " +
+    "profile and its preview servers. This cannot be undone. What was already pushed to GitHub " +
+    "(branch, PR) stays there, and a branch that existed before the card is left alone.",
 
   /* -------------------------------------------------------------- card tile */
   "card.finishToDone": "Finish (move to Done)",
@@ -475,6 +478,11 @@ export const en: Record<string, string> = {
   "sdk.edited": "edited",
   "sdk.preparing": "Preparing\u2026",
   "sdk.thinking": "Thinking\u2026",
+  "sdk.answering": "Answering…",
+  "sdk.toolBackground": "Running in the background",
+  "sdk.activityAria": "Jump to what is running now",
+  "sdk.effortHigh": "high effort",
+  "sdk.ultracodeOn": "ultracode",
   "sdk.reasoning": "Reasoning",
   "sdk.flagOff": "The SDK driver is off for this install. Turn on \"SDK driver\" in Settings to use native chat.",
   "sdk.noteInterrupted": "You stopped this turn — the answer above is cut short.",
@@ -931,7 +939,9 @@ export const en: Record<string, string> = {
   "toast.cardRestartError": "Could not restart the card",
   "toast.cardHibernated": "Hibernated — the card stays where it is; opening it resumes the same conversation.",
   "toast.cardHibernateError": "Could not hibernate the card",
-  "toast.cardDeleted": "Card deleted.",
+  "toast.cardDeleted": "Card deleted — conversation, attachments and files erased.",
+  "toast.cardDeletedPartial":
+    "Card deleted, but part of its data survived ({steps}) — the daily sweep will finish the job.",
   "toast.cardDeleteError": "Could not delete the card",
   "toast.cardAccountSwitched": "Account switched — the Claude session restarts on the next open.",
   "toast.cardAccountSwitchError": "Could not switch the card's account",

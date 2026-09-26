@@ -152,3 +152,59 @@ describe("stopPreview", () => {
     expect((await registry.getCard(cardId))?.previews).toBeUndefined();
   });
 });
+
+/**
+ * A DELETED CARD MUST NOT LEAVE ITS DEV SERVERS RUNNING.
+ *
+ * The preview lives outside the card pane's process tree on purpose — that is what makes it survive
+ * a pause. The same property made it survive the card's DELETION: a server still listening, still
+ * proxied at `/preview/<port>/` for any logged-in user, on a card nobody can see any more.
+ */
+describe("stopAllCardPreviews (the card is being deleted)", () => {
+  const CARD = "a1b2c3d4-e5f6-4a4a-8b8b-000011112222";
+
+  it("asks TMUX what is running in the card's name, by prefix", async () => {
+    const { lifecycle } = await boot();
+    expect(lifecycle.previewSessionPrefix(CARD)).toBe("preview-a1b2c3d4-");
+    const s = lifecycle.buildPreviewSessionListScript("vibehub-runner", CARD);
+    expect(s).toContain("tmux list-sessions -F");
+    expect(s).toContain("preview-a1b2c3d4-");
+    expect(s).toContain("|| true"); // no sessions at all is an empty answer, not an error
+    expect(() => lifecycle.previewSessionPrefix("../x")).toThrow(/invalid card id/);
+  });
+
+  it("keeps only this card's sessions out of the listing (never another card's)", async () => {
+    const { lifecycle } = await boot();
+    const parsed = lifecycle.parsePreviewSessions(
+      ["preview-a1b2c3d4-5173", "preview-a1b2c3d4-6006", "preview-ffffffff-5173", "card-a1b2c3d4", "", "junk; rm -rf /"]
+        .join("\n"),
+      CARD,
+    );
+    expect(parsed).toEqual(["preview-a1b2c3d4-5173", "preview-a1b2c3d4-6006"]);
+  });
+
+  it("tree-kills every one of them, and a card with no preview costs one read", async () => {
+    const { lifecycle } = await boot();
+    runScript.mockResolvedValueOnce({ stdout: "preview-a1b2c3d4-5173\npreview-a1b2c3d4-6006\n", stderr: "" });
+    runScript.mockResolvedValueOnce({ stdout: "", stderr: "" });
+
+    expect(await lifecycle.stopAllCardPreviews(CARD)).toEqual([
+      "preview-a1b2c3d4-5173", "preview-a1b2c3d4-6006",
+    ]);
+    const kill = String(runScript.mock.calls[1]?.[0]);
+    expect(kill).toContain("tmux kill-session -t 'preview-a1b2c3d4-5173'");
+    expect(kill).toContain("tmux kill-session -t 'preview-a1b2c3d4-6006'");
+    expect(kill).toContain("kill -TERM $PIDS"); // the same tree-kill discipline as a card session
+
+    runScript.mockReset();
+    runScript.mockResolvedValueOnce({ stdout: "", stderr: "" });
+    expect(await lifecycle.stopAllCardPreviews(CARD)).toEqual([]);
+    expect(runScript).toHaveBeenCalledTimes(1);
+  });
+
+  it("a runner that cannot be asked is not an error — the purge reports it and the sweep retries", async () => {
+    const { lifecycle } = await boot();
+    runScript.mockRejectedValue(new Error("runner down"));
+    expect(await lifecycle.stopAllCardPreviews(CARD)).toEqual([]);
+  });
+});

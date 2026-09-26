@@ -422,7 +422,15 @@ export const boardApi = {
   patchCardSession: (id: string, body: CardPatchInput) =>
     patch<{ card: BoardCard; session?: SessionChange }>(`/cards/${encodeURIComponent(id)}`, body),
 
-  deleteCard: (id: string) => del<{ ok: true }>(`/cards/${encodeURIComponent(id)}`),
+  /**
+   * DELETE = purge. The answer names the steps that did NOT complete (a runner that was down, a
+   * disk that refused), so the screen can say "the card is gone, part of its data still on the
+   * server" instead of claiming a clean deletion. Empty `incomplete` = nothing survived.
+   */
+  deleteCard: (id: string) =>
+    del<{ ok: true; incomplete: string[]; steps: Array<{ name: string; ok: boolean; detail?: string }> }>(
+      `/cards/${encodeURIComponent(id)}`,
+    ),
 
   openCard: (id: string) =>
     post<{ card: BoardCard }>(`/cards/${encodeURIComponent(id)}/open`).then((r) => r.card),

@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { dataPath } from "../../config/env.js";
@@ -252,4 +252,25 @@ function appendHistoryBarrier(cardId: string, work: () => Promise<void>): Promis
     });
   chains.set(cardId, next);
   return next;
+}
+
+/**
+ * DELETES a card's log — the card itself is being erased, and its conversation goes with it.
+ *
+ * Chained like an append (a delete must not race a line being written) and best-effort: no file is
+ * the desired end state, so "already gone" is success. The in-memory chain entry is dropped with
+ * it, so nothing keeps the card alive in this module.
+ */
+export async function removeHistory(cardId: string): Promise<void> {
+  // The barrier swallows what `work` throws (a compaction failure is not worth an exception on the
+  // hot path); a PURGE has to be able to say it failed, so the error is carried out by hand.
+  let failure: Error | undefined;
+  await appendHistoryBarrier(cardId, async () => {
+    try {
+      await rm(historyFile(cardId), { force: true });
+    } catch (err) {
+      failure = err as Error;
+    }
+  });
+  if (failure) throw failure;
 }

@@ -179,6 +179,24 @@ export function stopCapture(cardId: string): void {
   try { listener.child.kill("SIGKILL"); } catch { /* ignore */ }
 }
 
+/**
+ * Forgets every pending capture of a card and stops its listener — called when the card is DELETED.
+ * A pending capture holds a PLAINTEXT password in memory (it is the whole point: the user has not
+ * saved it yet), so a deleted card must not leave one behind for a `listCaptures` that only fails
+ * today because the card lookup 404s. Returns how many were dropped.
+ */
+export function dropPendingCaptures(cardId: string): number {
+  stopCapture(cardId);
+  let dropped = 0;
+  for (const [id, c] of pending) {
+    if (c.cardId === cardId) {
+      pending.delete(id);
+      dropped += 1;
+    }
+  }
+  return dropped;
+}
+
 export function resetCaptureForTesting(): void {
   for (const l of listeners.values()) { try { l.child.kill("SIGKILL"); } catch { /* ignore */ } }
   listeners.clear();

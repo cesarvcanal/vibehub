@@ -8,8 +8,10 @@
  *
  * The panel's composer is a different field from the TUI's input line, so none of that reached the
  * person typing here: the word went in as grey text and the effect only existed inside the
- * terminal. This module is the port — the same palette, the same sweep, the same rules for what
- * counts as the keyword — so the panel says the same thing the CLI does, in the same colours.
+ * terminal. This module is the port — the same sweep, the same rules for what counts as the
+ * keyword — so the panel says the same thing the CLI does. With one deliberate difference: the two
+ * words get DIFFERENT palettes here (the CLI paints both with its rainbow, which made them
+ * indistinguishable on screen even though they buy very different things).
  *
  * Everything here is PURE and framework-free; `UltraText` renders it and `sdk-driver.mjs` mirrors
  * the detection on the back end.
@@ -41,6 +43,37 @@ export const ULTRA_SHIMMER = [
   "rgb(180,205,240)",
   "rgb(195,180,230)",
   "rgb(230,180,210)",
+] as const;
+
+/**
+ * ULTRACODE's OWN PALETTE — cold, electric, unmistakably not the other word.
+ *
+ * Both keywords used to take the rainbow above, letter by letter, which made them IDENTICAL on
+ * screen: the same nine-ish letters in the same seven colours, and the only way to tell which one
+ * you had typed was to read it. They are not the same request — `ultrathink` buys deeper reasoning
+ * on the turn, `ultracode` turns the turn into multi-agent orchestration (many agents, real money)
+ * — so `ultracode` gets a palette of its own: the same sweep, the same mechanics, a cold ramp
+ * (cyan → blue → violet → magenta) against the warm rainbow of `ultrathink`.
+ */
+export const ULTRA_CODE_PALETTE = [
+  "rgb(80,215,215)",
+  "rgb(75,190,230)",
+  "rgb(95,160,240)",
+  "rgb(130,140,245)",
+  "rgb(165,125,240)",
+  "rgb(200,120,225)",
+  "rgb(225,120,195)",
+] as const;
+
+/** `ultracode`'s hues, lightened — its letter under the sweep. */
+export const ULTRA_CODE_SHIMMER = [
+  "rgb(165,245,245)",
+  "rgb(160,225,250)",
+  "rgb(175,205,255)",
+  "rgb(195,200,255)",
+  "rgb(215,190,255)",
+  "rgb(235,190,250)",
+  "rgb(250,190,230)",
 ] as const;
 
 /**
@@ -163,9 +196,17 @@ export function hasUltraWord(text: string): boolean {
   return findUltraWords(text).length > 0;
 }
 
-/** The colour a letter takes, by its position inside the keyword. PURE, TOTAL. */
-export function ultraColor(index: number, shimmer = false): string {
-  const palette = shimmer ? ULTRA_SHIMMER : ULTRA_RAINBOW;
+/**
+ * The colour a letter takes, by its position inside the keyword — and by WHICH keyword it is:
+ * `ultrathink` wears the TUI's rainbow, `ultracode` its own cold ramp (see ULTRA_CODE_PALETTE).
+ * The keyword defaults to `ultrathink`, so a caller that does not care keeps the rainbow.
+ * PURE, TOTAL.
+ */
+export function ultraColor(index: number, shimmer = false, keyword: UltraKeyword = "ultrathink"): string {
+  const palette =
+    keyword === "ultracode"
+      ? (shimmer ? ULTRA_CODE_SHIMMER : ULTRA_CODE_PALETTE)
+      : (shimmer ? ULTRA_SHIMMER : ULTRA_RAINBOW);
   return palette[((index % palette.length) + palette.length) % palette.length] as string;
 }
 

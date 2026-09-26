@@ -9,6 +9,7 @@ import * as registry from "../services/board/registry.js";
 import * as workspace from "../services/board/workspace.js";
 import * as browser from "../services/browser/browser.js";
 import * as outbox from "../services/board/outbox.js";
+import { purgeCard } from "../services/board/purge.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -263,20 +264,21 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
-   * Deleting a card tears down its runner side first (session, then worktree) and only then drops
-   * it from the board — the other order would leave an orphan session nothing points at.
+   * DELETING A CARD IS A PURGE, not a hide: the conversation (native chat history AND the Claude
+   * Code transcripts in the runner), the attached images, the worktree and the card's branch, the
+   * browser profile, the GitHub token, the preview servers, the queued messages — all of it goes.
+   * See services/board/purge.ts for the order and the reason for it.
+   *
+   * The answer carries the report: `ok` plus the steps that did NOT complete (a runner that was
+   * down, a disk that refused). The card is off the board either way — a runner that cannot be
+   * reached must never make a card undeletable — and whatever survived is collected by the orphan
+   * sweep. The UI says so instead of claiming a clean deletion.
    */
   app.delete<{ Params: { id: string } }>("/api/cards/:id", { preHandler: requireOwner }, async (req, reply) => {
-    const card = await registry.getCard(req.params.id);
-    if (!card) return await reply.code(404).send({ error: "card not found" });
-    try {
-      await workspace.dropCardWorkspace(card);
-    } catch (err) {
-      // Best-effort: a runner that is down must not make a card undeletable.
-      logger.warn({ err: (err as Error).message, card: card.worktreeSlug }, "could not clean the card workspace");
-    }
-    await registry.removeCard(card.id);
-    return await reply.send({ ok: true });
+    const by = (await sessionUserId(req)) ?? undefined;
+    const report = await purgeCard(req.params.id, by);
+    if (!report) return await reply.code(404).send({ error: "card not found" });
+    return await reply.send({ ok: true, incomplete: report.incomplete, steps: report.steps });
   });
 
   app.post<{ Params: { id: string }; Body: { name?: string; content?: string } }>(

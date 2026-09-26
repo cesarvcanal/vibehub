@@ -13,7 +13,8 @@ import { getSettings } from "../settings/settings.js";
 import { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir, profileDirFor, oauthTokenPath } from "../accounts/profiles.js";
 import { firstRunSeedCommand } from "../accounts/firstRun.js";
 import { resolveAccountToken, writeTokenLines, ghTokenPath, writeGhTokenLines, removeGhTokenLines } from "../accounts/token.js";
-import { cardCdpEndpoint } from "../browser/ports.js";
+import { cardBrowserPorts, cardCdpEndpoint } from "../browser/ports.js";
+import { claudeProjectsDirName } from "../import/import.js";
 import { mcpInjectLines, resolveMcpInjections, type McpInjection } from "../mcp/mcp.js";
 import { pluginInstallLines, enabledPlugins } from "../plugins/plugins.js";
 import {
@@ -43,6 +44,12 @@ export { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir };
  * every call. vibehub has exactly one runner (`config.runner.container`) reached through one host
  * executor, so the IP parameter and the per-server lookup are gone.
  */
+
+/**
+ * Card ids are UUIDs minted by the registry, and an id NAMES directories in the runner (its
+ * uploads, its gh-token file). Anything not plainly id-shaped is refused rather than resolved.
+ */
+const CARD_ID_RE = /^[0-9a-zA-Z-]{8,64}$/;
 
 /** Heredoc delimiters — reserved words, never derived from user input. */
 const OPEN_DELIM = "VIBEHUB_OPEN";
@@ -1559,38 +1566,172 @@ export async function applyProjectBrainEverywhere(
   return { cards: cards.length, bytes };
 }
 
+/** Heredoc delimiter of the purge script — a reserved word, never derived from input. */
+const PURGE_DELIM = "VIBEHUB_PURGE";
+
 /**
- * DROPS the card's workspace from the runner (used when a card is deleted): both tmux sessions plus
- * the git worktree and its directory. Best-effort — a card whose project has vanished, or a runner
- * that is down, must not stop the board from deleting the card.
+ * The node program that removes ONE cwd's entry from a profile's `.claude.json`.
+ *
+ * That entry is not just the trust flag the first-run seed writes: Claude Code keeps the PROMPT
+ * HISTORY typed in that directory under `projects[<cwd>]`. A deleted card whose entry stayed behind
+ * left its conversation's questions readable in the profile forever. One line, DOUBLE quotes only
+ * (it travels inside a single-quoted shell argument), atomic write through a temp file + rename.
  */
-export async function dropCardWorkspace(card: Card, by?: string): Promise<void> {
-  try {
-    const project = await getProject(card.projectId);
-    await killCardSession(card, { includeShell: true });
-    if (!project) return;
-    const paths = cardWorkPaths(project, card);
-    const container = config.runner.container;
-    const lines = ["set -e", `docker exec -i ${shQuote(container)} bash -s <<'${OPEN_DELIM}'`];
-    if (paths.repoDir) {
-      // `worktree remove --force` unregisters it in .git/worktrees; `prune` cleans a stale entry
-      // when the directory had already been deleted by hand. Both tolerate absence.
-      lines.push(
-        `git -C ${shQuote(paths.repoDir)} worktree remove --force ${shQuote(paths.cwd)} 2>/dev/null || true`,
-        `git -C ${shQuote(paths.repoDir)} worktree prune 2>/dev/null || true`,
-      );
-    }
-    // The card's uploads go with it. They live OUTSIDE the worktree (`/work/.uploads/<id>`), so
-    // `rm -rf cwd` never touched them and a deleted card left its images behind forever — and
-    // since `readCardUpload` resolves the card first, those files could not even be SHOWN any
-    // more. Disk held by something nothing can reach is not history, it is a leak.
-    lines.push(`rm -rf ${shQuote(paths.cwd)}`, `rm -rf ${shQuote(`/work/.uploads/${card.id}`)}`, OPEN_DELIM);
-    await hostExecutor().runScript(lines.join("\n"), { timeoutMs: 120_000 });
-    logger.info(
-      { audit: true, action: "card.drop", card: card.worktreeSlug, cwd: paths.cwd, by },
-      "card workspace dropped from the runner",
+const CLAUDE_JSON_PURGE_JS = [
+  'const fs=require("fs"),f=process.argv[1],w=process.argv[2];',
+  'let c={};try{c=JSON.parse(fs.readFileSync(f,"utf8"))}catch(e){process.exit(0)}',
+  "if(!c||!c.projects||!Object.prototype.hasOwnProperty.call(c.projects,w)){process.exit(0)}",
+  "delete c.projects[w];",
+  'const t=f+".vibehub-purge-tmp";fs.writeFileSync(t,JSON.stringify(c,null,2),{mode:0o600});fs.renameSync(t,f)',
+].join("");
+
+export interface CardPurgeScriptOpts {
+  containerName: string;
+  /** The card's id — names its uploads directory and its gh-token file. */
+  cardId: string;
+  /** cwd of the card (the git worktree or the scratch directory). */
+  cwd: string;
+  /** Main clone directory (absent = a project with no repository). */
+  repoDir?: string;
+  /**
+   * The card's branch in the clone, deleted WITH the card. `git worktree remove` only unregisters
+   * the worktree: the branch and its commits stayed in /work/<repo> forever, and a new card born on
+   * the same slug would open ON TOP of the deleted card's work. Nothing is touched on the remote —
+   * a branch or PR already pushed to GitHub is outside this machine (see the deletion docs).
+   */
+  branch?: string;
+  /** Chromium user-data-dir of the card's live browser (cookies, logins, history, cache). */
+  browserDataDir: string;
+}
+
+/**
+ * The branch the card OWNS — the derived `card/<worktreeSlug>` and nothing else.
+ *
+ * A card can be pointed at a branch that already existed (an imported session, a card opened on
+ * `feat/pdv`): that branch is not the card's work, it is work the card visited, and deleting the
+ * card must not delete it. So the purge only ever drops the branch it created itself. `undefined` =
+ * leave every branch alone. PURE.
+ */
+export function ownBranch(card: Pick<Card, "branch" | "worktreeSlug">): string | undefined {
+  const derived = `card/${card.worktreeSlug}`;
+  return cardBranch(card) === derived ? derived : undefined;
+}
+
+/**
+ * THE CARD PURGE SCRIPT: everything the card left on the runner's disk, in one pass.
+ *
+ * Deliberately WITHOUT `set -e` inside the container: a purge must attempt every line. One missing
+ * directory (a card that never opened) or one git that refuses must not leave the next artifact
+ * behind — which is exactly how a delete ends up half done. Every line is `|| true`-shaped and the
+ * script ends with `true`.
+ *
+ * What it erases, and why each one is part of the card:
+ *  - the git worktree, its directory and the card's branch — the code the card wrote;
+ *  - `/work/.uploads/<cardId>` — the images the user attached to the conversation;
+ *  - `/root/.vibehub/gh/<cardId>.token` — the card's GitHub token (a live credential);
+ *  - the Chromium user-data-dir — cookies and logged-in sessions of the card's browser;
+ *  - `<profile>/projects/<cwd-sanitized>` in EVERY account profile — the Claude Code TRANSCRIPTS:
+ *    the whole conversation, message by message, tool call by tool call. This is the leak that made
+ *    "deleted" a lie: the card vanished from the board and its transcript stayed on disk, readable,
+ *    and resumable by any new session opened on the same path;
+ *  - `<profile>/todos/<sessionId>*` — the task lists Claude Code keeps per session of that cwd;
+ *  - the `projects[<cwd>]` entry of each profile's `.claude.json` — the prompt history.
+ *
+ * Every path is DERIVED (board values, validated and shell-quoted) — nothing from a request reaches
+ * a shell. PURE/testable.
+ */
+export function buildCardPurgeScript(o: CardPurgeScriptOpts): string {
+  if (!CARD_ID_RE.test(o.cardId)) throw new Error(`invalid card id for a purge: '${o.cardId}'`);
+  assertSafeRemotePath(o.cwd);
+  assertSafeRemotePath(o.browserDataDir);
+  const uploads = `/work/.uploads/${o.cardId}`;
+  assertSafeRemotePath(uploads);
+  const transcriptDirName = claudeProjectsDirName(o.cwd);
+  const inner: string[] = [];
+  if (o.repoDir) {
+    assertSafeRemotePath(o.repoDir);
+    // `worktree remove --force` unregisters it in .git/worktrees; `prune` cleans a stale entry when
+    // the directory had already been deleted by hand. Both tolerate absence.
+    inner.push(
+      `git -C ${shQuote(o.repoDir)} worktree remove --force ${shQuote(o.cwd)} 2>/dev/null || true`,
+      `git -C ${shQuote(o.repoDir)} worktree prune 2>/dev/null || true`,
     );
-  } catch (e) {
-    logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "dropping the card workspace failed (best-effort)");
+    if (o.branch) {
+      // -D (not -d): the card is being erased, so "not merged anywhere" is not a reason to keep it.
+      inner.push(`git -C ${shQuote(o.repoDir)} branch -D ${shQuote(assertBranchName(o.branch))} 2>/dev/null || true`);
+    }
   }
+  inner.push(
+    `rm -rf ${shQuote(o.cwd)} 2>/dev/null || true`,
+    `rm -rf ${shQuote(uploads)} 2>/dev/null || true`,
+    // The card's GitHub token file (a LIVE credential): the shared builder's `rm -f` is already
+    // tolerant, but every line in this script carries the same guard — the invariant is checked.
+    ...removeGhTokenLines(o.cardId).map((l) => `${l} 2>/dev/null || true`),
+    `rm -rf ${shQuote(o.browserDataDir)} 2>/dev/null || true`,
+    // EVERY profile: a card can be moved between Claude accounts during its life, and each account
+    // that ran it wrote a transcript of its own under that account's profile.
+    `for P in ${DEFAULT_CLAUDE_DIR} ${CLAUDE_PROFILES_DIR}/*; do`,
+    '  [ -d "$P" ] || continue',
+    `  D="$P/projects/${transcriptDirName}"`,
+    '  if [ -d "$D" ]; then',
+    '    for F in "$D"/*.jsonl; do',
+    '      [ -f "$F" ] || continue',
+    '      S=$(basename "$F" .jsonl)',
+    '      rm -rf "$P/todos/$S"* 2>/dev/null || true',
+    "    done",
+    '    rm -rf "$D" 2>/dev/null || true',
+    "  fi",
+    '  if [ -f "$P/.claude.json" ]; then',
+    `    node -e ${shQuote(CLAUDE_JSON_PURGE_JS)} "$P/.claude.json" ${shQuote(o.cwd)} >/dev/null 2>&1 || true`,
+    "  fi",
+    "done",
+    "true",
+  );
+  return [
+    "set -e",
+    `docker exec -i ${shQuote(o.containerName)} bash -s <<'${PURGE_DELIM}'`,
+    ...inner,
+    PURGE_DELIM,
+  ].join("\n");
+}
+
+/**
+ * PURGES the card's side of the runner: both tmux sessions, then every file the card owns (see
+ * {@link buildCardPurgeScript}).
+ *
+ * THROWS when the runner could not be reached or the script failed — the caller (the card purge)
+ * turns that into a reported, retried step instead of a silent half-deletion. A card whose PROJECT
+ * has vanished AND was not handed over still gets its sessions killed: there is no `cardWorkPaths`
+ * without a project, so the file half is unreachable and the sweep (`sweepOrphanCardData`) is what
+ * eventually collects it.
+ */
+export async function purgeCardWorkspace(
+  card: Card,
+  opts: { project?: Project; by?: string } = {},
+): Promise<void> {
+  const { by } = opts;
+  // The project is taken as a PARAMETER when the caller has it: deleting a project removes it and
+  // its cards in ONE mutation, so by the time those cards are purged there is nothing to look up —
+  // and without the project there are no paths, which used to leave every worktree behind.
+  const project = opts.project ?? (await getProject(card.projectId));
+  await killCardSession(card, { includeShell: true });
+  if (!project) throw new Error("project for this card not found: its runner files cannot be resolved");
+  const paths = cardWorkPaths(project, card);
+  const script = buildCardPurgeScript({
+    containerName: config.runner.container,
+    cardId: card.id,
+    cwd: paths.cwd,
+    repoDir: paths.repoDir,
+    branch: paths.repoDir ? ownBranch(card) : undefined,
+    browserDataDir: cardBrowserPorts(card.id).userDataDir,
+  });
+  try {
+    await hostExecutor().runScript(script, { timeoutMs: 180_000 });
+  } catch (err) {
+    throw runnerUnreachable(err);
+  }
+  logger.info(
+    { audit: true, action: "card.purge", card: card.worktreeSlug, cwd: paths.cwd, by },
+    "card workspace purged from the runner (worktree, branch, uploads, browser profile, transcripts)",
+  );
 }
