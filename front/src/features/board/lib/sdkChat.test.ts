@@ -5,6 +5,7 @@ import {
   appendUserRow,
   answerQuestion,
   decidePermission,
+  dropRewoundRows,
   groupSdkRows,
   markInterruptRequested,
   markUserEdited,
@@ -700,5 +701,165 @@ describe("the session's command catalogue", () => {
     expect(state.rows).toEqual([{ kind: "command_output", id: expect.any(String), text: "Session cost: $0.42" }]);
     // It also ends the waiting ladder: the command WAS answered, there is nothing to wait for.
     expect(state.awaiting).toBe(false);
+  });
+});
+
+
+/**
+ * REBOBINAR NA TELA. Quando a edição rebobina a sessão, o modelo perde o original, a resposta pela
+ * metade e as ferramentas do meio — e a tela tem de perder também, ou ela fica mostrando uma
+ * conversa que o modelo não tem.
+ *
+ * Os dois erros aqui têm custos MUITO diferentes: apagar de menos deixa uma linha velha na tela
+ * (feio); apagar de mais some com a mensagem que a pessoa acabou de escrever (perda). Por isso a
+ * maior parte do que está abaixo tenta fazer a função apagar demais.
+ */
+describe("dropRewoundRows — apagar de menos é feio, apagar de mais é perda", () => {
+  const edited = (text: string) => markUserEdited(appendUserRow(INITIAL_SDK_STATE, text), text);
+
+  it("tira o original, a meia resposta e a nota, e mantém a mensagem nova", () => {
+    let state = edited("errada");
+    state = applySdkEvent(state, { type: "assistant_text", text: "meia resposta" });
+    state = applySdkEvent(state, { type: "system_note", text: "turn-interrupted-edit" });
+    state = appendUserRow(state, "certa");
+
+    const after = dropRewoundRows(state);
+    expect(after.rows.map((r) => r.kind)).toEqual(["user"]);
+    expect(after.rows[0]).toMatchObject({ kind: "user", text: "certa" });
+  });
+
+  it("o que veio DEPOIS da mensagem nova sobrevive — é mais novo que o rebobinar", () => {
+    let state = edited("errada");
+    state = applySdkEvent(state, { type: "assistant_text", text: "meia" });
+    state = appendUserRow(state, "certa");
+    state = applySdkEvent(state, { type: "assistant_text", text: "já respondendo a nova" });
+
+    const after = dropRewoundRows(state);
+    expect(after.rows.map((r) => (r.kind === "user" ? r.text : r.kind === "assistant" ? r.text : r.kind)))
+      .toEqual(["certa", "já respondendo a nova"]);
+  });
+
+  it("sem linha marcada como editada, devolve o MESMO objeto — nada é tocado por engano", () => {
+    let state = appendUserRow(INITIAL_SDK_STATE, "só uma mensagem");
+    state = applySdkEvent(state, { type: "assistant_text", text: "resposta" });
+    expect(dropRewoundRows(state)).toBe(state);
+  });
+
+  it("a conversa ANTES da mensagem editada fica intacta", () => {
+    let state = appendUserRow(INITIAL_SDK_STATE, "primeira");
+    state = applySdkEvent(state, { type: "assistant_text", text: "resposta da primeira" });
+    state = markUserEdited(appendUserRow(state, "errada"), "errada");
+    state = applySdkEvent(state, { type: "assistant_text", text: "meia" });
+    state = appendUserRow(state, "certa");
+
+    const after = dropRewoundRows(state);
+    expect(after.rows.map((r) => (r.kind === "user" ? `u:${r.text}` : r.kind === "assistant" ? `a:${r.text}` : r.kind)))
+      .toEqual(["u:primeira", "a:resposta da primeira", "u:certa"]);
+  });
+
+  it("com DUAS edições no histórico, corta só a mais recente", () => {
+    let state = markUserEdited(appendUserRow(INITIAL_SDK_STATE, "errada 1"), "errada 1");
+    state = appendUserRow(state, "certa 1");
+    state = applySdkEvent(state, { type: "assistant_text", text: "resposta da certa 1" });
+    state = markUserEdited(appendUserRow(state, "errada 2"), "errada 2");
+    state = applySdkEvent(state, { type: "assistant_text", text: "meia 2" });
+    state = appendUserRow(state, "certa 2");
+
+    const after = dropRewoundRows(state);
+    const texts = after.rows.map((r) => (r.kind === "user" ? `u:${r.text}` : r.kind === "assistant" ? `a:${r.text}` : r.kind));
+    // a edição antiga e sua resposta continuam lá; só o miolo da segunda sai
+    expect(texts).toEqual(["u:errada 1", "u:certa 1", "a:resposta da certa 1", "u:certa 2"]);
+  });
+
+  it("a linha editada sendo a ÚLTIMA mensagem, nada é cortado — nunca some a mensagem de quem escreveu", () => {
+    // Ordem que o fluxo real não produz (a nova mensagem é sempre acrescentada depois). Se um dia
+    // produzir, o pior resultado aceitável é NÃO cortar nada.
+    let state = edited("errada");
+    state = applySdkEvent(state, { type: "assistant_text", text: "meia" });
+    expect(dropRewoundRows(state)).toBe(state);
+    expect(dropRewoundRows(state).rows.some((r) => r.kind === "user" && r.text === "errada")).toBe(true);
+  });
+
+  it("uma tela vazia não vira erro", () => {
+    expect(dropRewoundRows(INITIAL_SDK_STATE)).toBe(INITIAL_SDK_STATE);
+  });
+
+  /**
+   * A trava de ordem (`editedAt >= lastUserAt`) é defendida DUAS vezes no código — pela própria
+   * checagem e pela de "não cortou nada" —, então nenhum caso isolado consegue provar que ela
+   * existe. Em vez de fingir que prova, este teste ataca a CLASSE do erro: monta centenas de
+   * conversas diferentes (determinísticas) e cobra as duas invariantes que, se quebrarem, custam
+   * uma mensagem de gente.
+   */
+  it("invariante, em centenas de conversas: a última mensagem do usuário e tudo antes da editada sobrevivem", () => {
+    let seed = 20260926;
+    const rnd = (n: number) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+    const KINDS = ["user", "assistant", "note", "tool"] as const;
+
+    for (let round = 0; round < 400; round += 1) {
+      let state = INITIAL_SDK_STATE;
+      const length = 1 + rnd(9);
+      for (let i = 0; i < length; i += 1) {
+        const kind = KINDS[rnd(KINDS.length)] as (typeof KINDS)[number];
+        if (kind === "user") {
+          state = appendUserRow(state, `u${round}-${i}`);
+          if (rnd(3) === 0) state = markUserEdited(state, `u${round}-${i}`);
+        } else if (kind === "assistant") {
+          state = applySdkEvent(state, { type: "assistant_text", text: `a${round}-${i}` });
+        } else if (kind === "note") {
+          state = applySdkEvent(state, { type: "system_note", text: "turn-interrupted-edit" });
+        } else {
+          state = applySdkEvent(state, { type: "tool_use", id: `t${i}`, name: "Bash", input: {} });
+        }
+      }
+      const before = state.rows;
+      const lastUser = [...before].reverse().find((r) => r.kind === "user");
+      const editedAt = before.map((r) => r.kind === "user" && r.edited === true).lastIndexOf(true);
+      const after = dropRewoundRows(state).rows;
+
+      // 1. a mensagem que a pessoa acabou de escrever NUNCA some
+      if (lastUser) expect(after).toContain(lastUser);
+      // 2. tudo que vem antes da linha editada é conversa que o modelo ainda tem — fica igual
+      if (editedAt > 0) expect(after.slice(0, editedAt)).toEqual(before.slice(0, editedAt));
+      // 3. nada é inventado nem duplicado
+      expect(after.length).toBeLessThanOrEqual(before.length);
+      expect(new Set(after).size).toBe(after.length);
+      for (const row of after) expect(before).toContain(row);
+    }
+  });
+});
+
+describe("evento `rewound` — a tela só esquece quando o modelo esqueceu", () => {
+  function conversaEditada(): SdkChatState {
+    let state = appendUserRow(INITIAL_SDK_STATE, "primeira");
+    state = applySdkEvent(state, { type: "assistant_text", text: "resposta" });
+    state = markUserEdited(appendUserRow(state, "errada"), "errada");
+    state = applySdkEvent(state, { type: "assistant_text", text: "meia" });
+    return appendUserRow(state, "certa");
+  }
+
+  it("ok: true corta as linhas que o modelo perdeu", () => {
+    const after = applySdkEvent(conversaEditada(), { type: "rewound", ok: true, uuid: "u1" } as SdkEvent);
+    expect(after.rows.some((r) => r.kind === "user" && r.text === "errada")).toBe(false);
+    expect(after.rows.some((r) => r.kind === "assistant" && r.text === "meia")).toBe(false);
+    expect(after.rows.some((r) => r.kind === "user" && r.text === "certa")).toBe(true);
+  });
+
+  it("ok: false NÃO corta nada — o driver mandou um supersede, tudo na tela ainda vale", () => {
+    const state = conversaEditada();
+    for (const reason of ["absorbed", "no-fork-point"] as const) {
+      const after = applySdkEvent(state, { type: "rewound", ok: false, reason } as SdkEvent);
+      expect(after).toBe(state);
+    }
+  });
+
+  it("um `rewound` sem `ok` (versão antiga, frame truncado) não corta nada", () => {
+    const state = conversaEditada();
+    expect(applySdkEvent(state, { type: "rewound" } as SdkEvent)).toBe(state);
+    expect(applySdkEvent(state, { type: "rewound", ok: "sim" } as unknown as SdkEvent)).toBe(state);
+  });
+
+  it("`rewound` é aceito pelo parser de frames — o back emite, a tela não pode chamar de lixo", () => {
+    expect(parseSdkFrame(`{"type":"rewound","ok":true,"uuid":"abc"}`)).toEqual({ type: "rewound", ok: true, uuid: "abc" });
   });
 });

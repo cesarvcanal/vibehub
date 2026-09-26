@@ -301,3 +301,102 @@ describe("sdk-driver.mjs — ultrathink / ultracode", () => {
     expect(source).toContain("ULTRA_INIT_TIMEOUT_MS");
   });
 });
+
+/**
+ * EDITAR = REBOBINAR. A edição leva a sessão de volta pra antes da mensagem corrigida
+ * (`resumeSessionAt`), e aí o modelo nunca leu a versão errada. Medido contra o SDK antes de
+ * escrever: rebobinar no uuid do ASSISTANT do turno mantido traz a resposta antiga de volta;
+ * rebobinar no uuid do `result` é recusado com `error_during_execution`.
+ *
+ * O que estes testes atacam é a única forma de PERDER dado aqui: rebobinar quando não se pode.
+ * Uma mensagem que entrou no meio do turno seria descartada junto, sem bolha e sem linha no log —
+ * e é uma mensagem que uma PESSOA escreveu. A decisão é uma função pura, e ela é executada aqui.
+ */
+describe("sdk-driver.mjs — editar rebobina, mas só quando é seguro", () => {
+  const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
+
+  /** A decisão, recortada do driver e executada de verdade. */
+  const rewindDecision = ((): ((s: unknown, f: unknown, a: unknown) => { rewind: boolean; reason?: string }) => {
+    const from = source.indexOf("function rewindDecision(");
+    expect(from).toBeGreaterThan(0);
+    const factory = new Function(`${source.slice(from, source.indexOf("\n}", from) + 2)}\nreturn rewindDecision;`);
+    return factory() as (s: unknown, f: unknown, a: unknown) => { rewind: boolean; reason?: string };
+  })();
+
+  it("rebobina quando há sessão, ponto de volta e nada foi absorvido", () => {
+    expect(rewindDecision("sess", "uuid", false)).toEqual({ rewind: true });
+  });
+
+  it("RECUSA quando uma mensagem entrou no meio do turno — ela seria descartada sem rastro", () => {
+    expect(rewindDecision("sess", "uuid", true)).toEqual({ rewind: false, reason: "absorbed" });
+  });
+
+  it("RECUSA sem ponto de volta: a primeira mensagem de uma sessão não tem pra onde voltar", () => {
+    expect(rewindDecision("sess", null, false)).toEqual({ rewind: false, reason: "no-fork-point" });
+    expect(rewindDecision(null, "uuid", false)).toEqual({ rewind: false, reason: "no-fork-point" });
+    expect(rewindDecision(null, null, false)).toEqual({ rewind: false, reason: "no-fork-point" });
+  });
+
+  it("qualquer valor vazio conta como ausente — string vazia não é um uuid", () => {
+    // O driver zera essas variáveis com null, mas uma string vazia vinda de um frame torto não
+    // pode virar um `resumeSessionAt` inválido: isso mata o turno com error_during_execution.
+    expect(rewindDecision("", "uuid", false).rewind).toBe(false);
+    expect(rewindDecision("sess", "", false).rewind).toBe(false);
+    expect(rewindDecision(undefined, undefined, undefined).rewind).toBe(false);
+  });
+
+  it("a recusa por absorção só vale quando HÁ como rebobinar — sem ponto de volta a razão é outra", () => {
+    // Ordem das travas importa pro que a tela mostra: "absorbed" é uma decisão, "no-fork-point" é
+    // uma impossibilidade, e trocá-las faria o painel explicar a coisa errada.
+    expect(rewindDecision(null, null, true)).toEqual({ rewind: false, reason: "no-fork-point" });
+  });
+
+  it("o ponto de volta é o uuid do ASSISTANT — o do result é recusado pelo CLI", () => {
+    expect(source).toContain("if (msg.uuid) lastAssistantUuid = msg.uuid;");
+    // e ele é gravado no ramo do assistant, não no do result
+    const assistantBranch = source.slice(source.indexOf('} else if (msg.type === "assistant")'), source.indexOf('} else if (msg.type === "result")'));
+    expect(assistantBranch).toContain("lastAssistantUuid");
+    const resultBranch = source.slice(source.indexOf('} else if (msg.type === "result")'));
+    expect(resultBranch.slice(0, 400)).not.toContain("lastAssistantUuid");
+  });
+
+  it("uma mensagem absorvida ARMA a trava e não move o ponto de volta", () => {
+    expect(source).toContain("if (absorbed) absorbedSinceFork = true;");
+    expect(source).toContain("else { forkPoint = lastAssistantUuid; absorbedSinceFork = false; }");
+  });
+
+  it("o truncamento vale por UM stream só — o seguinte continua da ponta nova", () => {
+    const run = source.slice(source.indexOf("async function runStream()"));
+    const set = run.indexOf("options.resumeSessionAt = pendingResumeAt;");
+    const clear = run.indexOf("pendingResumeAt = null;");
+    expect(set).toBeGreaterThan(0);
+    expect(clear).toBeGreaterThan(set); // consumido na hora em que é usado
+    // e nunca sem sessão: um resumeSessionAt sem resume não tem o que truncar
+    expect(run).toContain("if (pendingResumeAt && lastSessionId) {");
+  });
+
+  it("a edição NUNCA some: os dois caminhos terminam mandando a mensagem", () => {
+    const fn = source.slice(source.indexOf("async function rewindAndSend("), source.indexOf("/* ------------------------------------------------------------- stdin */"));
+    // recusa -> supersede; falha ao derrubar o stream -> supersede; sucesso -> texto limpo
+    expect(fn.match(/sendUser\(/g) ?? []).toHaveLength(3);
+    expect(fn).toContain("} catch {");
+    // e o plano B cai pro texto limpo se o manager não mandou fallback nenhum
+    expect(fn.match(/typeof fallback === "string" && fallback !== "" \? fallback : text/g) ?? []).toHaveLength(2);
+  });
+
+  it("a mensagem vai ANTES de liberar os cartões de pergunta (mesma ordem do envio normal)", () => {
+    const handler = source.slice(source.indexOf('control.type === "edit_user"'));
+    const send = handler.indexOf("void rewindAndSend(");
+    const release = handler.indexOf("supersedePendingQuestions();");
+    expect(send).toBeGreaterThanOrEqual(0);
+    expect(release).toBeGreaterThan(send);
+  });
+
+  it("derrubar o stream espera o anterior soltar a query — duas correntes na mesma sessão é corrida", () => {
+    const fn = source.slice(source.indexOf("async function endStream()"), source.indexOf("async function rewindAndSend("));
+    expect(fn).toContain("currentQuery === dying");
+    expect(fn).toContain("ch.end()");
+    // com teto: um stream que nunca solta não pode travar a edição pra sempre
+    expect(fn).toMatch(/i < \d+ && currentQuery === dying/);
+  });
+});

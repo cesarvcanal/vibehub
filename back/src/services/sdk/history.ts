@@ -159,6 +159,62 @@ export async function readHistory(cardId: string, limit: number = HISTORY_REPLAY
   return tail;
 }
 
+/**
+ * Rewrite a card's log to match a conversation that was REWOUND.
+ *
+ * When an edit rewinds the session (`resumeSessionAt`), the model loses the original message, the
+ * half answer it was writing and every tool that ran in between. The log has to lose them too:
+ * otherwise a reload replays a conversation the model does not have, and the screen and the model
+ * disagree about what was said — which is the bug the rewind existed to fix, wearing a different
+ * hat.
+ *
+ * What is cut is exactly the middle: from the ORIGINAL message (inclusive) to the `message_edited`
+ * marker (inclusive). Everything before survives untouched — it is the kept turn — and everything
+ * after survives too, because that is the edit's own new message, already written by the time the
+ * driver reports back.
+ *
+ * Conservative on purpose: if either end is missing (a compaction already dropped the original, a
+ * marker that never landed) NOTHING is rewritten. A log with a stale row is a cosmetic problem; a
+ * log missing rows it should have kept is a lost conversation.
+ *
+ * Returns how many events were dropped — 0 meaning "left alone".
+ */
+export function rewindHistory(cardId: string, originalText: string): Promise<number> {
+  let dropped = 0;
+  return appendHistoryBarrier(cardId, async () => {
+    const file = historyFile(cardId);
+    let raw: string;
+    try {
+      raw = await readFile(file, "utf8");
+    } catch {
+      return; // no log yet: nothing to rewind
+    }
+    const events: HistoryEvent[] = [];
+    for (const line of raw.split("\n")) {
+      if (line.trim() === "") continue;
+      try {
+        const parsed = JSON.parse(line) as HistoryEvent;
+        if (parsed && typeof parsed === "object" && typeof parsed.type === "string") events.push(parsed);
+      } catch { /* a torn line from a crash mid-append: keep the rest */ }
+    }
+    // The LAST occurrence of each end, because the same words can be said twice in a conversation
+    // and it is the most recent pair that was just edited.
+    let start = -1;
+    let mark = -1;
+    for (let i = 0; i < events.length; i += 1) {
+      const e = events[i] as HistoryEvent;
+      if (e.type === "user" && e.text === originalText) start = i;
+      if (e.type === "message_edited" && e.originalText === originalText) mark = i;
+    }
+    // One end missing, or an order that cannot be, and nothing is rewritten. Past this line the
+    // cut always removes at least the original and the marker — there is no zero-length case left.
+    if (start === -1 || mark === -1 || mark < start) return;
+    const kept = [...events.slice(0, start), ...events.slice(mark + 1)];
+    dropped = events.length - kept.length;
+    await writeFile(file, kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length ? "\n" : ""), "utf8");
+  }).then(() => dropped);
+}
+
 /* -------------------------------------------------------- external events */
 
 /**

@@ -102,6 +102,32 @@ export interface QuestionResultEvent {
  */
 export interface TurnAbsorbedEvent { type: "turn_absorbed" }
 
+/**
+ * An EDIT was applied, and how.
+ *
+ * `ok: true` means the conversation was REWOUND: the session resumed at `at` (the kept turn's
+ * assistant entry) and everything after it — the half answer, its tools, the original message —
+ * is gone from the model's context. The screen must drop those rows too, or it would be showing a
+ * conversation the model no longer has.
+ *
+ * `ok: false` means the driver refused to rewind and fell back to a SUPERSEDE (the edit went as a
+ * new turn saying "disregard that, this stands"). `reason` says why, and both reasons are real:
+ * `no-fork-point` = there is nothing to go back to yet (the first message of a session);
+ * `absorbed` = a message joined the turn in flight after the one being edited, and a rewind would
+ * throw that message away with no bubble and no trace. Live-only: never replayed, because a
+ * replay reads the history the edit already rewrote.
+ */
+export interface RewoundEvent {
+  type: "rewound";
+  ok: boolean;
+  /**
+   * The chain entry the session was resumed at. Only on `ok: true`. Named `uuid` and not `at`
+   * because a history event's `at` is a TIMESTAMP, and these two share a type.
+   */
+  uuid?: string;
+  reason?: "no-fork-point" | "absorbed";
+}
+
 /** End of a turn. */
 export interface ResultEvent {
   type: "result";
@@ -165,6 +191,7 @@ export type DriverEvent =
   | UserQuestionEvent
   | QuestionResultEvent
   | TurnAbsorbedEvent
+  | RewoundEvent
   | CatalogEvent
   | LocalOutputEvent
   | ResultEvent
@@ -185,6 +212,7 @@ const DRIVER_EVENT_TYPES = new Set([
   "user_question",
   "question_result",
   "turn_absorbed",
+  "rewound",
   "catalog",
   "local_output",
   "result",
@@ -236,13 +264,19 @@ export interface PermissionDecisionControl { type: "permission_decision"; id: st
 /** The human's answer to a `user_question` — one entry per question, in order. */
 export interface QuestionAnswerControl { type: "question_answer"; id: string; answers: UserQuestionAnswer[] }
 /**
- * The user EDITED a message he already sent — a SUPERSEDE, not a rewrite of the past: the model
- * has read the original, so the edit reaches it as a new user turn wrapped by `buildSupersedeText`
- * (the manager does the wrapping — the driver only ever sees a normal `user` control). `original`
- * is the message being replaced (how the front marks it "editada"), `text` the version that now
- * stands. Provenance stays the USER's: it is his speech, corrected.
+ * The user EDITED a message he already sent — a REWIND of the conversation when that is safe.
+ *
+ * The driver takes the session back to just before the original (`resumeSessionAt`) and sends
+ * `text` in its place, so the model never read the version being corrected. When a rewind is not
+ * safe — nothing to go back to, or a message joined the turn in flight and would be discarded
+ * with it — the driver falls back to `fallback`, the same edit written as a SUPERSEDE ("disregard
+ * that, this stands"), which is what this control did in every case before rewinding existed. The
+ * `rewound` event reports which path was taken.
+ *
+ * `original` is the message being replaced (how the front marks it "editada"), `text` the version
+ * that now stands. Provenance stays the USER's: it is his speech, corrected.
  */
-export interface EditUserControl { type: "edit_user"; original: string; text: string; cid?: string }
+export interface EditUserControl { type: "edit_user"; original: string; text: string; cid?: string; fallback?: string }
 export type DriverControl =
   | UserControl
   | InterruptControl

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { config } from "../../config/env.js";
@@ -9,6 +9,7 @@ import {
   publishExternalMessage,
   readHistory,
   replayableHistoryEvent,
+  rewindHistory,
   HISTORY_COMPACT_FACTOR,
   SDK_HISTORY_DIR,
   type HistoryEvent,
@@ -175,5 +176,187 @@ describe("external messages (an agent talking to this card)", () => {
     await publishExternalMessage(CARD, { type: "user", text: "para outro card", at: 1 });
     off();
     expect(seen).toEqual([]);
+  });
+});
+
+
+/**
+ * REBOBINAR O LOG. Editar uma mensagem rebobina a sessão (`resumeSessionAt`): o modelo perde o
+ * original, a resposta pela metade e as ferramentas do meio. O log TEM de perder também — senão um
+ * F5 replays uma conversa que o modelo não tem, e a tela e o modelo passam a discordar sobre o que
+ * foi dito, que é exatamente o bug que o rebobinar existia pra consertar.
+ *
+ * O que estes testes atacam é o corte: cortar demais perde conversa de verdade (irrecuperável),
+ * cortar de menos deixa a tela mentindo. Os casos abaixo são os que quebram um corte ingênuo.
+ */
+describe("rewindHistory — o corte tem de ser exato nos dois sentidos", () => {
+  const write = async (events: HistoryEvent[]) => {
+    for (const e of events) await appendHistory(CARD, e);
+  };
+  const read = async (): Promise<HistoryEvent[]> => {
+    const raw = await readFile(join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`), "utf8");
+    return raw.split("\n").filter((l) => l.trim() !== "").map((l) => JSON.parse(l) as HistoryEvent);
+  };
+
+  it("corta exatamente o miolo: o original, a resposta pela metade e a nota — e nada mais", async () => {
+    await write([
+      { type: "user", text: "primeira" },
+      { type: "assistant_text", text: "resposta da primeira" },
+      { type: "user", text: "errada" },
+      { type: "assistant_text", text: "meia resposta" },
+      { type: "tool_use", tool: "Bash" } as HistoryEvent,
+      { type: "system_note", text: "turn-interrupted-edit" },
+      { type: "message_edited", originalText: "errada" },
+      { type: "user", text: "certa" },
+    ]);
+    expect(await rewindHistory(CARD, "errada")).toBe(5);
+    expect(await read()).toEqual([
+      { type: "user", text: "primeira" },
+      { type: "assistant_text", text: "resposta da primeira" },
+      { type: "user", text: "certa" },
+    ]);
+  });
+
+  it("com a MESMA frase dita duas vezes, corta o par mais RECENTE — não o primeiro", async () => {
+    await write([
+      { type: "user", text: "roda os testes" },
+      { type: "assistant_text", text: "verde" },
+      { type: "user", text: "outra coisa" },
+      { type: "assistant_text", text: "ok" },
+      { type: "user", text: "roda os testes" },
+      { type: "assistant_text", text: "meia" },
+      { type: "message_edited", originalText: "roda os testes" },
+      { type: "user", text: "roda só o back" },
+    ]);
+    await rewindHistory(CARD, "roda os testes");
+    const kept = await read();
+    // a primeira vez que a frase foi dita, e a resposta dela, continuam lá
+    expect(kept.slice(0, 4)).toEqual([
+      { type: "user", text: "roda os testes" },
+      { type: "assistant_text", text: "verde" },
+      { type: "user", text: "outra coisa" },
+      { type: "assistant_text", text: "ok" },
+    ]);
+    expect(kept.at(-1)).toEqual({ type: "user", text: "roda só o back" });
+    expect(kept.some((e) => e.type === "assistant_text" && e.text === "meia")).toBe(false);
+  });
+
+  it("NÃO corta nada quando falta uma das duas pontas — perder conversa é pior que uma linha velha", async () => {
+    const base: HistoryEvent[] = [
+      { type: "user", text: "errada" },
+      { type: "assistant_text", text: "meia" },
+      { type: "user", text: "certa" },
+    ];
+    await write(base); // sem o marcador message_edited
+    expect(await rewindHistory(CARD, "errada")).toBe(0);
+    expect(await read()).toEqual(base);
+
+    // e sem o original (uma compactação já levou a mensagem embora)
+    await rm(join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`), { force: true });
+    const semOriginal: HistoryEvent[] = [
+      { type: "assistant_text", text: "meia" },
+      { type: "message_edited", originalText: "errada" },
+      { type: "user", text: "certa" },
+    ];
+    await write(semOriginal);
+    expect(await rewindHistory(CARD, "errada")).toBe(0);
+    expect(await read()).toEqual(semOriginal);
+  });
+
+  it("marcador ANTES do original não corta NEM DUPLICA — a ordem impossível não corrompe o log", async () => {
+    // Com um evento ENTRE o marcador e o original, um corte ingênuo (slice(0,start) + slice(mark+1))
+    // devolveria esse evento duas vezes. Duas travas impedem: a checagem de ordem e a de "cortou
+    // menos que zero" — a segunda sozinha já salva, então este teste mira no SINTOMA (log intacto,
+    // sem duplicata) e não em qual das duas agiu.
+    const fora: HistoryEvent[] = [
+      { type: "message_edited", originalText: "errada" },
+      { type: "assistant_text", text: "no meio" },
+      { type: "user", text: "errada" },
+      { type: "assistant_text", text: "meia" },
+    ];
+    await write(fora);
+    expect(await rewindHistory(CARD, "errada")).toBe(0);
+    const kept = await read();
+    expect(kept).toEqual(fora);
+    expect(kept.filter((e) => e.type === "assistant_text" && e.text === "no meio")).toHaveLength(1);
+  });
+
+  it("quando o corte leva TUDO, o arquivo fica vazio e utilizável — não meio-escrito", async () => {
+    await write([
+      { type: "user", text: "errada" },
+      { type: "assistant_text", text: "meia" },
+      { type: "message_edited", originalText: "errada" },
+    ]);
+    expect(await rewindHistory(CARD, "errada")).toBe(3);
+    expect(await readHistory(CARD)).toEqual([]);
+    await appendHistory(CARD, { type: "user", text: "recomeçando" });
+    expect(await readHistory(CARD)).toEqual([{ type: "user", text: "recomeçando" }]);
+  });
+
+  it("uma linha rasgada (crash no meio de um append) não sobrevive à reescrita — e nada mais se perde", async () => {
+    // Comportamento FIXADO aqui de propósito: a linha inválida já era invisível pro replay, e a
+    // reescrita a descarta. O que não pode é ela levar linhas boas junto.
+    await write([{ type: "user", text: "errada" }]);
+    const file = join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`);
+    await appendFile(file, '{"type":"assistant_text","text":"rasg\n', "utf8");
+    await write([
+      { type: "message_edited", originalText: "errada" },
+      { type: "user", text: "certa" },
+    ]);
+    await rewindHistory(CARD, "errada");
+    expect(await read()).toEqual([{ type: "user", text: "certa" }]);
+  });
+
+  it("o texto tem de bater INTEIRO: um prefixo ou um trecho não corta a conversa de ninguém", async () => {
+    const base: HistoryEvent[] = [
+      { type: "user", text: "roda os testes do back" },
+      { type: "assistant_text", text: "meia" },
+      { type: "message_edited", originalText: "roda os testes do back" },
+      { type: "user", text: "roda tudo" },
+    ];
+    await write(base);
+    for (const quaseIgual of ["roda os testes", "roda os testes do back ", "RODA OS TESTES DO BACK", ""]) {
+      expect(await rewindHistory(CARD, quaseIgual)).toBe(0);
+    }
+    expect(await read()).toEqual(base);
+  });
+
+  it("um card sem log nenhum não explode e não cria arquivo", async () => {
+    await expect(rewindHistory("0a9faddc-ec6f-44b2-a58c-fa4e6222686c", "seja o que for")).resolves.toBe(0);
+  });
+
+  it("uma mensagem que chega DURANTE o corte não se perde (appends e corte são serializados)", async () => {
+    await write([
+      { type: "user", text: "errada" },
+      { type: "assistant_text", text: "meia" },
+      { type: "message_edited", originalText: "errada" },
+      { type: "user", text: "certa" },
+    ]);
+    // disparadas juntas, sem await entre elas: a fila por card é o que impede o corte de
+    // sobrescrever um append que aconteceu no meio da leitura-escrita.
+    const corte = rewindHistory(CARD, "errada");
+    const chegando = appendHistory(CARD, { type: "user", text: "chegou no meio" });
+    await Promise.all([corte, chegando]);
+    const kept = await read();
+    expect(kept.some((e) => e.type === "user" && e.text === "chegou no meio")).toBe(true);
+    expect(kept.some((e) => e.type === "user" && e.text === "errada")).toBe(false);
+  });
+
+  it("o replay depois do corte devolve a conversa que o modelo tem, e o arquivo fica legível", async () => {
+    await write([
+      { type: "user", text: "errada" },
+      { type: "assistant_text", text: "meia" },
+      { type: "message_edited", originalText: "errada" },
+      { type: "user", text: "certa" },
+    ]);
+    await rewindHistory(CARD, "errada");
+    expect(await readHistory(CARD)).toEqual([{ type: "user", text: "certa" }]);
+    const raw = await readFile(join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`), "utf8");
+    expect(raw.endsWith("\n")).toBe(true); // NDJSON: o próximo append não pode colar na última linha
+    await appendHistory(CARD, { type: "assistant_text", text: "depois" });
+    expect(await readHistory(CARD)).toEqual([
+      { type: "user", text: "certa" },
+      { type: "assistant_text", text: "depois" },
+    ]);
   });
 });

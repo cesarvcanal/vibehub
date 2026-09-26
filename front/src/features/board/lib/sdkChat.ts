@@ -33,6 +33,7 @@ export interface SdkEvent {
     | "question_result"
     | "message_edited"
     | "turn_absorbed"
+    | "rewound"
     | "catalog"
     | "local_output"
     | "result"
@@ -75,6 +76,12 @@ export interface SdkEvent {
   superseded?: boolean;
   /** On `message_edited`: the superseded message's text — the row it greys out. */
   originalText?: string;
+  /**
+   * On `rewound`: the edit REWOUND the conversation (the model no longer has the original, the
+   * half answer, or the tools between them) and the screen has to drop those rows too. `false`
+   * means the driver fell back to a supersede and everything on screen still stands.
+   */
+  ok?: boolean;
   /**
    * On `user_ack`/`user_nack`: the RECEIPT id of the send being answered (see lib/sdkOutbox.ts).
    * `user_ack` = the back has the message on disk; `user_nack` = it refused it and nobody has it
@@ -552,6 +559,14 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       if (next === state && !state.awaiting) return state;
       return { ...next, turnActive: nextTurnActive(next, false), awaiting: false };
     }
+    case "rewound": {
+      // The conversation was taken back to before the edited message: what the model forgot, the
+      // screen forgets too. A `false` here is the driver saying it could NOT rewind (see
+      // `rewindAndSend`), and then nothing is dropped — the supersede it sent instead means every
+      // row on screen is still part of the conversation.
+      if (event.ok !== true) return state;
+      return dropRewoundRows(state);
+    }
     case "message_edited": {
       // The user superseded a message he sent: the LAST user row with those words is drawn dimmed
       // with the "editada" badge (the new version follows as its own row). Matching is by
@@ -664,6 +679,33 @@ export function markUserEdited(state: SdkChatState, originalText: string): SdkCh
     return { ...state, rows };
   }
   return state;
+}
+
+/**
+ * Drop the rows a REWIND erased: the edited message and everything the model answered to it.
+ *
+ * What survives is what the model still has — everything before the edited message — plus the
+ * edit's own new message, which is the LAST user row and was appended after the marker. Cutting
+ * "from the edited row to the last user row" is what keeps this correct even if a frame lands in
+ * between: anything after that new message is newer than the rewind and is not ours to remove.
+ *
+ * Total and conservative: no row marked `edited`, or an order that cannot be (the edited row at or
+ * after the new message), and the state comes back untouched. A screen with a stale row is a
+ * cosmetic bug; a screen missing rows the model still has is a lie about the conversation. PURE.
+ */
+export function dropRewoundRows(state: SdkChatState): SdkChatState {
+  let editedAt = -1;
+  let lastUserAt = -1;
+  for (let i = state.rows.length - 1; i >= 0; i -= 1) {
+    const row = state.rows[i]!;
+    if (row.kind !== "user") continue;
+    if (lastUserAt === -1) lastUserAt = i;
+    if (row.edited === true) { editedAt = i; break; }
+  }
+  // `editedAt >= lastUserAt` is the whole identity case: the edited row IS the newest message, so
+  // there is nothing between them to drop. Past it the cut always removes at least one row.
+  if (editedAt === -1 || lastUserAt === -1 || editedAt >= lastUserAt) return state;
+  return { ...state, rows: [...state.rows.slice(0, editedAt), ...state.rows.slice(lastUserAt)] };
 }
 
 /** Mark the LAST not-yet-absorbed user row as folded into the running turn. PURE. */

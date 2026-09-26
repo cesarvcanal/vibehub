@@ -373,9 +373,61 @@ let channel = null; // feeds the live query's prompt stream (null = no stream ru
 let turnActive = false; // a turn is running, or a message is already fed and about to start one
 let announcedSessionId = null; // last session id emitted as a `session` event (dedupe)
 
+/* ------------------------------------------------- rewind (editar = voltar no tempo) */
+// Editing a message REWINDS the conversation: the session resumes at the point right before that
+// message and everything after it — the half answer, the tools it ran, the message itself — stops
+// existing for the model. That is what `resumeSessionAt` does (verified against the SDK before
+// this was written: forking at the kept turn's ASSISTANT uuid brings the old answer back, forking
+// at the `result` uuid is rejected with `error_during_execution`).
+//
+// Two things have to be true for a rewind, and when either is not, the driver falls back to the
+// SUPERSEDE it always did (a new turn saying "disregard that, this stands") rather than guess:
+//
+//  - there must BE a point to go back to (an assistant message and a session id);
+//  - nothing may have been ABSORBED into the running turn since then. This is the one that would
+//    lose data: vibehub lets a second message join a turn already in flight, and a rewind past
+//    that point would discard it with no trace and no bubble. The SDK's own `resumeDropsTurn`
+//    guard exists for exactly this case; the driver cannot use it (it never sees the prompt uuid
+//    of its own sends), so it refuses the rewind instead.
+
+/** The last assistant message's uuid — the only chain entry the CLI accepts as a fork point. */
+let lastAssistantUuid = null;
+/** Where a rewind of the LAST user message would land: the fork point captured when it was sent. */
+let forkPoint = null;
+/** A send joined the turn in flight since `forkPoint` — rewinding past it would drop that message. */
+let absorbedSinceFork = false;
+/** Set for ONE stream: the chain entry that stream must resume at (and truncate after). */
+let pendingResumeAt = null;
+
+/**
+ * MAY this edit rewind? The whole safety of the feature is these three lines, so they are a pure
+ * function of the three pieces of state that decide it — testable without a session, a CLI or a
+ * clock (see driver.test.ts, which runs this very function).
+ *
+ *  - no session id: there is no conversation on disk to resume, so there is nothing to go back to;
+ *  - no fork point: nothing has been answered yet, so the message being edited is the first thing
+ *    in the session and a "rewind" would be a resume of nothing;
+ *  - absorbed: a message joined the turn in flight AFTER the one being edited. Rewinding past it
+ *    would discard it with no bubble, no history row and no way to get it back — and it is a
+ *    message a PERSON wrote. Refusing here is the difference between a feature and a data loss.
+ *
+ * PURE, TOTAL.
+ */
+function rewindDecision(sessionId, fork, absorbed) {
+  if (!sessionId || !fork) return { rewind: false, reason: "no-fork-point" };
+  if (absorbed) return { rewind: false, reason: "absorbed" };
+  return { rewind: true };
+}
+
 async function runStream() {
   const options = baseOptions();
   if (lastSessionId) options.resume = lastSessionId;
+  if (pendingResumeAt && lastSessionId) {
+    // The rewind itself: resume this session only up to that entry. Consumed here — one stream,
+    // one truncation; the streams after it continue normally from the new tip.
+    options.resumeSessionAt = pendingResumeAt;
+  }
+  pendingResumeAt = null;
   const myChannel = channel;
   try {
     currentQuery = query({ prompt: myChannel, options });
@@ -414,6 +466,9 @@ async function runStream() {
           if (ev.delta.thinking) emit({ type: "thinking_delta", text: ev.delta.thinking });
         }
       } else if (msg.type === "assistant") {
+        // The fork point a later rewind will use. Recorded for EVERY assistant message, so the
+        // point is always the tip of the last completed answer.
+        if (msg.uuid) lastAssistantUuid = msg.uuid;
         for (const block of msg.message.content) {
           if (block.type === "text") emit({ type: "assistant_text", text: block.text });
           // `redacted_thinking` não entra aqui de propósito: ele não carrega texto legível (só o
@@ -596,6 +651,11 @@ function sendUser(text) {
   const myChannel = channel;
   const absorbed = turnActive;
   turnActive = true;
+  // Where a rewind of THIS message would land, captured now: the tip of the last finished answer.
+  // A message that JOINS a turn already running shares that turn's fork point, and arms the guard
+  // — from here on a rewind would take it down with the message being edited.
+  if (absorbed) absorbedSinceFork = true;
+  else { forkPoint = lastAssistantUuid; absorbedSinceFork = false; }
   if (!ultra.any) {
     myChannel.push(userMessage(text));
   } else if (!fresh) {
@@ -621,6 +681,62 @@ function sendUser(text) {
   if (absorbed) emit({ type: "turn_absorbed" });
 }
 
+/**
+ * Stops the live stream so the next one can resume somewhere else. Interrupts a running turn,
+ * closes the prompt channel and waits for `runStream` to let go of the query — without that wait
+ * the new stream would race the old one onto the same session.
+ */
+async function endStream() {
+  const dying = currentQuery;
+  const ch = channel;
+  if (!dying) return;
+  try {
+    if (typeof dying.interrupt === "function") await dying.interrupt();
+  } catch { /* a turn that was not running cannot be interrupted, and that is fine */ }
+  if (ch) ch.end();
+  for (let i = 0; i < 120 && currentQuery === dying; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  if (channel === ch) channel = null;
+}
+
+/**
+ * EDIT = REWIND. Takes the conversation back to just before the message being edited and sends the
+ * corrected one in its place, so the model never saw the original — the behaviour of every chat
+ * the user has ever used.
+ *
+ * `fallback` is the same edit written as a SUPERSEDE (the manager builds it): the text used when a
+ * rewind is not safe, which keeps this operation total — an edit ALWAYS reaches the model, as one
+ * or as the other. The `rewound` event says which happened, because the screen has to agree with
+ * the model about what is still in the conversation.
+ */
+async function rewindAndSend(text, fallback) {
+  const decision = rewindDecision(lastSessionId, forkPoint, absorbedSinceFork);
+  if (!decision.rewind) {
+    emit({ type: "rewound", ok: false, reason: decision.reason });
+    sendUser(typeof fallback === "string" && fallback !== "" ? fallback : text);
+    return;
+  }
+  const at = forkPoint;
+  try {
+    await endStream();
+  } catch {
+    // Tearing the old stream down failed — but the edit is a MESSAGE, and a message that does not
+    // arrive is the worst outcome available. Give up on the rewind, keep the words.
+    emit({ type: "rewound", ok: false, reason: "no-fork-point" });
+    sendUser(typeof fallback === "string" && fallback !== "" ? fallback : text);
+    return;
+  }
+  pendingResumeAt = at;
+  // The rewind erases what came after this point, so nothing is absorbed into it any more and the
+  // next answer becomes the new fork point.
+  forkPoint = null;
+  absorbedSinceFork = false;
+  lastAssistantUuid = at;
+  emit({ type: "rewound", ok: true, uuid: at });
+  sendUser(text);
+}
+
 /* ------------------------------------------------------------- stdin */
 
 const rl = createInterface({ input: process.stdin });
@@ -639,6 +755,13 @@ rl.on("line", (line) => {
     // solta o turno, que pode seguir e responder à pergunta sem nunca ter visto a mensagem nova —
     // exatamente o contrário do que a pessoa pediu ao escrever.
     sendUser(control.text);
+    supersedePendingQuestions();
+    return;
+  }
+  if (control && control.type === "edit_user" && typeof control.text === "string") {
+    // Same ORDER as a plain user message: the message is on its way before the pending question
+    // cards are released, so a turn parked on a question never answers without having read it.
+    void rewindAndSend(control.text, control.fallback);
     supersedePendingQuestions();
     return;
   }
