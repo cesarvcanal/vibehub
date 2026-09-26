@@ -52,6 +52,7 @@ export function CardTile({
   selected,
   onToggleSelect,
   projectLabel,
+  deleting,
 }: {
   card: BoardCard;
   onOpen: (card: BoardCard) => void;
@@ -73,6 +74,8 @@ export function CardTile({
   onToggleSelect?: (card: BoardCard) => void;
   /** Owning project's name — only shown where cards from several projects are mixed. */
   projectLabel?: string;
+  /** This card's purge is running on the server: it is on its way out, and cannot be opened. */
+  deleting?: boolean;
 }) {
   const t = useT();
   // Sharing is the owner's: a member has been given this card, not the right to hand it on.
@@ -143,6 +146,8 @@ export function CardTile({
       aria-label={card.title}
       data-card-id={card.id}
       data-selected={selected ? "true" : undefined}
+      data-deleting={deleting ? "true" : undefined}
+      aria-busy={deleting || undefined}
       draggable={draggable}
       onClick={(e) => {
         // Shift-click is the selection's, where the board offers one — it BEATS the browser's
@@ -179,6 +184,9 @@ export function CardTile({
         "group flex w-full items-start gap-2 rounded-lg border border-border/60 bg-card/60 px-3 py-2 text-left transition-colors hover:border-border hover:bg-card",
         draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
         selected && "border-primary/60 ring-2 ring-primary/60",
+        /* Being purged: it fades and stops answering, so the delete that is already running is
+           visible on the board instead of only in a toast seconds later. */
+        deleting && "pointer-events-none animate-pulse opacity-50",
       )}
     >
       {/* No dot and no pause icon means no element at all: an empty 12px box in front of every

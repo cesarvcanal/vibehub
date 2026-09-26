@@ -389,6 +389,52 @@ describe("KanbanBoard delete (what the screen promises)", () => {
     expect(toast.warning).not.toHaveBeenCalled();
   });
 
+  /**
+   * The screen FROZE in production: a delete still running left the NEXT card's dialog with both
+   * buttons dead (one shared `isPending`), so the only way out was F5. One card's purge must never
+   * speak for another's dialog.
+   */
+  it("a delete in flight never freezes the next card's dialog", async () => {
+    let finishFirst: (value: { ok: boolean; incomplete: string[]; steps: never[] }) => void = () => {};
+    mockDel.mockImplementationOnce(
+      () => new Promise((resolve) => { finishFirst = resolve; }),
+    );
+    const user = await openDeleteDialog();
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
+    // The first card's purge is still running on the server...
+    await waitFor(() => expect(mockDel).toHaveBeenCalledWith("/cards/c1"));
+
+    // ...and the second card's dialog opens fully usable: no spinner, nothing disabled.
+    await user.click(await screen.findByRole("button", { name: "Actions for second" }));
+    await user.click(await screen.findByText("Delete card"));
+    const confirm = await screen.findByRole("button", { name: "Delete" });
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    expect(confirm).toBeEnabled();
+    expect(cancel).toBeEnabled();
+
+    await user.click(confirm);
+    await waitFor(() => expect(mockDel).toHaveBeenCalledWith("/cards/c2"));
+    finishFirst({ ok: true, incomplete: [], steps: [] });
+  });
+
+  /** And while a card IS being purged, its tile says so — the feedback that was missing. */
+  it("marks the tile that is being deleted", async () => {
+    let finish: (value: { ok: boolean; incomplete: string[]; steps: never[] }) => void = () => {};
+    mockDel.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const user = await openDeleteDialog();
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
+
+    const tileEl = await waitFor(() => {
+      const el = document.querySelector('[data-card-id="c1"][data-deleting="true"]');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(tileEl).toBeTruthy();
+
+    finish({ ok: true, incomplete: [], steps: [] });
+    await waitFor(() => expect(document.querySelector('[data-deleting="true"]')).toBeNull());
+  });
+
   it("says WHAT survived when the purge was partial", async () => {
     mockDel.mockResolvedValue({ ok: true, incomplete: ["runner", "browser"], steps: [] });
     await confirmDelete();

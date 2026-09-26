@@ -205,8 +205,26 @@ export function KanbanBoard({
     onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardHibernateError"))),
   });
 
+  /**
+   * WHICH cards are being purged right now — a SET, not the mutation's single `isPending`.
+   * The production symptom this removes: one delete still running left the next card's dialog with
+   * a spinning, disabled "Excluir" AND a disabled "Cancelar" — a screen with no way out but F5.
+   * A purge takes seconds (worktree, container, browser profile), so a second one starting while
+   * the first runs is normal use, not an edge case; each dialog now answers only for ITS card.
+   */
+  const [deletingIds, setDeletingIds] = React.useState<ReadonlySet<string>>(() => new Set());
   const deleteMutation = useMutation({
     mutationFn: (id: string) => boardApi.deleteCard(id),
+    onMutate: (id: string) => {
+      setDeletingIds((prev) => new Set(prev).add(id));
+    },
+    onSettled: (_data, _error, id: string) => {
+      setDeletingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    },
     onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: boardKey });
       // The card is always off the board; the purge is what can be partial (a runner that was
@@ -220,6 +238,8 @@ export function KanbanBoard({
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardDeleteError"))),
   });
+  /** Only THIS dialog's card counts: another card's purge must not disable this button. */
+  const targetDeleting = Boolean(deleteTarget && deletingIds.has(deleteTarget.id));
 
   /**
    * Switching the account PATCHes `accountSlug` ("" from the form becomes null = inherit). The
@@ -409,6 +429,7 @@ export function KanbanBoard({
                         setAccountTarget(c);
                       }}
                       onDelete={setDeleteTarget}
+                      deleting={deletingIds.has(card.id)}
                       onDragStart={startDrag}
                       onDragEnd={clearDrag}
                     />
@@ -496,18 +517,19 @@ export function KanbanBoard({
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setDeleteTarget(null)} disabled={deleteMutation.isPending}>
+            {/* Cancel is NEVER disabled: it closes a dialog, it does not touch the server. */}
+            <Button variant="ghost" onClick={() => setDeleteTarget(null)}>
               {t("common.cancel")}
             </Button>
             <Button
               variant="destructive"
-              disabled={deleteMutation.isPending}
+              disabled={targetDeleting}
               onClick={() => {
                 if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
                 setDeleteTarget(null);
               }}
             >
-              {deleteMutation.isPending ? <Loader2 className="animate-spin" /> : null}
+              {targetDeleting ? <Loader2 className="animate-spin" /> : null}
               {t("common.delete")}
             </Button>
           </DialogFooter>
