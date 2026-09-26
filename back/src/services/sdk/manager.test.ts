@@ -690,20 +690,30 @@ describe("harness filler — 'No response requested.' nunca vira resposta no cha
   });
 });
 
-describe("edit_user — a edição de mensagem vira supersede no stdin", () => {
-  it("writes ONE wrapped user turn to stdin and never a raw edit_user control", () => {
+describe("edit_user — a edição vai ao driver com as DUAS formas, e ele escolhe", () => {
+  it("escreve UM controle edit_user com o texto limpo e o supersede como plano B", () => {
     const session = ensure();
     const socket = fakeSocket();
     attachSocket(session, socket as never);
     socket.emit("message", Buffer.from(`{"type":"edit_user","original":"sobe pra prod","text":"sobe pra dev"}`));
-    const written = spawned[0]!.stdin.written.join("");
-    expect(written).not.toContain("edit_user");
-    const turns = spawned[0]!.stdin.written.map((w) => JSON.parse(w) as { type: string; text: string });
+    const turns = spawned[0]!.stdin.written.map((w) => JSON.parse(w) as { type: string; text: string; original?: string; fallback?: string });
     expect(turns.length).toBe(1);
-    expect(turns[0]!.type).toBe("user");
-    expect(turns[0]!.text).toContain("correção do usuário");
-    expect(turns[0]!.text).toContain("«sobe pra prod»");
-    expect(turns[0]!.text.endsWith("sobe pra dev")).toBe(true);
+    expect(turns[0]!.type).toBe("edit_user");
+    // o texto que o modelo lê num rebobinar é a versão LIMPA: o original deixou de existir
+    expect(turns[0]!.text).toBe("sobe pra dev");
+    expect(turns[0]!.original).toBe("sobe pra prod");
+    // e o plano B continua sendo o supersede de sempre — quem decide é o driver
+    expect(turns[0]!.fallback).toContain("correção do usuário");
+    expect(turns[0]!.fallback).toContain("«sobe pra prod»");
+    expect(turns[0]!.fallback!.endsWith("sobe pra dev")).toBe(true);
+  });
+
+  it("o cid do navegador NUNCA vaza pro driver (ele é recibo do back, não conversa)", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"edit_user","original":"velha","text":"nova","cid":"r-42"}`));
+    expect(spawned[0]!.stdin.written.join("")).not.toContain("r-42");
   });
 
   it("counts a turn and writes the durable inflight marker with the CLEAN preview", async () => {
@@ -895,5 +905,117 @@ describe("isCardChatInUse — o que impede o idle sweep de matar a conversa", ()
 
   it("card sem driver nenhum: liberado", () => {
     expect(isCardChatInUse(CARD2)).toBe(false);
+  });
+});
+
+
+/**
+ * REBOBINAR. Editar uma mensagem pode REBOBINAR a sessão: o modelo perde o original e tudo que veio
+ * depois. Quando isso acontece o LOG tem de perder também — um replay que devolve linhas que o
+ * modelo não tem faz a tela e o modelo discordarem sobre a conversa, que é o bug que o rebobinar
+ * existe pra consertar.
+ *
+ * O perigo aqui é o corte disparar quando NÃO devia: um `rewound` de outro turno, um frame
+ * repetido, ou o driver dizendo que não conseguiu rebobinar. Cada um desses apagaria conversa viva.
+ */
+describe("rewound — o log só é cortado quando o driver confirma que rebobinou", () => {
+  /** A conversa com a edição já ENVIADA e o log assentado — o estado de onde cada caso parte. */
+  const ANTES_DO_REWOUND = ["user", "assistant_text", "user", "assistant_text", "message_edited", "user"];
+
+  async function conversaComEdicao(): Promise<void> {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"primeira"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "resposta da primeira" }));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"errada"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "meia resposta" }));
+    socket.emit("message", Buffer.from(`{"type":"edit_user","original":"errada","text":"certa"}`));
+    // Esperar o log ASSENTAR antes de mandar o `rewound` é o que torna os casos negativos
+    // honestos: sem isso, "não cortou nada" e "o append ainda não chegou" são indistinguíveis.
+    await vi.waitFor(async () => expect((await readHistory(CARD)).map((e) => e.type)).toEqual(ANTES_DO_REWOUND));
+  }
+
+  const emit = (frame: unknown): void => { spawned[0]!.stdout.emit("data", line(frame as never)); };
+  /** Dá tempo de um corte indevido acontecer, para que o "não cortou" signifique alguma coisa. */
+  const deixaCortarSeForCortar = async (): Promise<void> => {
+    for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 10));
+  };
+
+  it("ok: true corta o miolo e deixa o log igual ao que o modelo tem", async () => {
+    await conversaComEdicao();
+    emit({ type: "rewound", ok: true, uuid: "abc" });
+    await vi.waitFor(async () => {
+      const events = await readHistory(CARD);
+      expect(events.map((e) => e.type)).toEqual(["user", "assistant_text", "user"]);
+      expect((events[0] as { text: string }).text).toBe("primeira");
+      expect((events[2] as { text: string }).text).toBe("certa");
+    });
+  });
+
+  it("ok: false NÃO corta nada — houve supersede, e tudo que está no log ainda vale", async () => {
+    for (const reason of ["absorbed", "no-fork-point"]) {
+      await conversaComEdicao();
+      emit({ type: "rewound", ok: false, reason });
+      await deixaCortarSeForCortar();
+      expect((await readHistory(CARD)).map((e) => e.type)).toEqual(ANTES_DO_REWOUND);
+      resetSdkSessionsForTesting();
+      spawned.length = 0;
+      await rm(join(dir, "sdk-history"), { recursive: true, force: true });
+    }
+  });
+
+  it("um `rewound` que não pertence a edição nenhuma não corta nada", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"errada"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "resposta" }));
+    await vi.waitFor(async () => expect((await readHistory(CARD)).length).toBe(2));
+    // nenhuma edição foi enviada: este frame é ruído (driver velho, reconexão, bug)
+    emit({ type: "rewound", ok: true, uuid: "abc" });
+    await deixaCortarSeForCortar();
+    expect((await readHistory(CARD)).map((e) => e.type)).toEqual(["user", "assistant_text"]);
+  });
+
+  /**
+   * O alvo ser consumido no primeiro frame é proteção DUPLA: mesmo que não fosse, o corte exige as
+   * duas pontas no log (a mensagem original E o marcador), e depois do primeiro corte nenhuma das
+   * duas existe mais. Este teste cobra o resultado observável — o log sobrevive a um frame
+   * repetido — e não qual das duas travas agiu.
+   */
+  it("um segundo `rewound` repetido não corta de novo", async () => {
+    await conversaComEdicao();
+    emit({ type: "rewound", ok: true, uuid: "abc" });
+    await vi.waitFor(async () => expect((await readHistory(CARD)).length).toBe(3));
+    // agora a conversa segue, e um frame repetido chega atrasado
+    emit({ type: "assistant_text", text: "resposta da certa" });
+    await vi.waitFor(async () => expect((await readHistory(CARD)).length).toBe(4));
+    emit({ type: "rewound", ok: true, uuid: "abc" });
+    await deixaCortarSeForCortar();
+    const events = await readHistory(CARD);
+    expect(events.map((e) => e.type)).toEqual(["user", "assistant_text", "user", "assistant_text"]);
+  });
+
+  it("o `rewound` chega na tela — ela precisa dele pra decidir se apaga as linhas", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.sent.length = 0;
+    spawned[0]!.stdout.emit("data", line({ type: "rewound", ok: false, reason: "absorbed" } as never));
+    expect(socket.sent.map((s) => JSON.parse(s) as { type: string })).toContainEqual(
+      expect.objectContaining({ type: "rewound", ok: false, reason: "absorbed" }),
+    );
+  });
+
+  it("o `rewound` NÃO vai pro log — é feedback do momento, não conversa", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"oi"}`));
+    emit({ type: "rewound", ok: true, uuid: "abc" });
+    await deixaCortarSeForCortar();
+    expect((await readHistory(CARD)).some((e) => e.type === "rewound")).toBe(false);
   });
 });

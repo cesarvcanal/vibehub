@@ -25,7 +25,7 @@ import { chatRoutes } from "./routes/chat.js";
 import { accountLoginRoutes } from "./routes/accountLogin.js";
 import { previewRoutes, installPreviewUpgrade } from "./routes/preview.js";
 import { cardSdkRoutes } from "./routes/cardSdk.js";
-import { startPauseReconciler, sweepIdleCards } from "./services/board/workspace.js";
+import { startPauseReconciler, sweepCardUploads, sweepIdleCards } from "./services/board/workspace.js";
 import { startOutboxFlusher } from "./services/board/outbox.js";
 import { startRunnerReaper } from "./services/reaper/reaper.js";
 import { shutdownAllDrivers } from "./services/sdk/manager.js";
@@ -128,6 +128,24 @@ function startIdleSweep(): NodeJS.Timeout {
   return timer;
 }
 
+/**
+ * How often the uploads sweep runs. ONCE A DAY, because what it deletes is six months old: there is
+ * no version of this that needs to be prompt, and every pass is a docker exec into the runner.
+ */
+const UPLOAD_SWEEP_MS = 24 * 60 * 60_000;
+
+/**
+ * The attached images that nobody can have wanted for six months (see `UPLOAD_RETENTION_DAYS`).
+ * Runs once at boot too: an install that is restarted more often than daily would otherwise never
+ * sweep at all.
+ */
+function startUploadSweep(): NodeJS.Timeout {
+  void sweepCardUploads();
+  const timer = setInterval(() => void sweepCardUploads(), UPLOAD_SWEEP_MS);
+  timer.unref?.();
+  return timer;
+}
+
 async function main(): Promise<void> {
   await mkdir(config.dataDir, { recursive: true });
   const app = await buildServer();
@@ -136,6 +154,9 @@ async function main(): Promise<void> {
   startOutboxFlusher();
   await app.listen({ port: config.port, host: config.host });
   startIdleSweep();
+  // The uploads sweep, for the same reason and in the same place as the others: a test that boots
+  // the app must not inherit a timer that deletes files in the runner.
+  startUploadSweep();
   // Pending pauses are normally closed by the Stop hook, but a session can go quiet without ever
   // firing one (Claude parked on the "Resume from summary" menu, on a permission question, or
   // killed). This asks the runner about those cards on a timer and finishes the pause — a card in

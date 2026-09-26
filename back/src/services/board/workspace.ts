@@ -907,6 +907,60 @@ export async function readCardUpload(
   return { body, contentType };
 }
 
+/* ------------------------------------------------------- the uploads sweep */
+
+/**
+ * How long an attached image is kept.
+ *
+ * SIX MONTHS is not a guess at what matters — it is the number that makes this sweep free to turn
+ * on. Measured on the install the day it was written: 103 MB of uploads, 206 files, NOTHING older
+ * than sixty days, on a disk with 226 GB free — and the repository clones and worktrees next door
+ * were sixty times larger. So the sweep deletes nothing today and will not for months; it exists
+ * to cap a number that only ever grows, not to reclaim one that hurts.
+ *
+ * What is lost when it finally fires is the THUMBNAIL of a months-old conversation: the bubble
+ * falls back to printing the path (see `UploadedImage`), which is still what was attached. That is
+ * the whole reason the fallback was built before this was.
+ */
+export const UPLOAD_RETENTION_DAYS = 180;
+
+/** Heredoc delimiter of the uploads sweep — a reserved word, never derived from input. */
+const SWEEP_DELIM = "VIBEHUB_SWEEP";
+
+/**
+ * Script that deletes uploads older than `days` and then the directories left empty.
+ *
+ * `-mtime +N` is whole days, which is what a retention measured in months wants. The `|| true` on
+ * the whole thing is deliberate: a runner mid-restart, a directory being written to as we walk it
+ * — none of that is worth an error, the next pass gets it. PURE/testable.
+ */
+export function buildUploadSweepScript(containerName: string, days: number): string {
+  if (!Number.isInteger(days) || days < 1) throw new Error(`invalid retention: ${days}`);
+  return [
+    "set -e",
+    `docker exec -i ${shQuote(containerName)} bash -s <<'${SWEEP_DELIM}'`,
+    "if [ -d /work/.uploads ]; then",
+    `  find /work/.uploads -mindepth 2 -type f -mtime +${days} -delete 2>/dev/null || true`,
+    "  find /work/.uploads -mindepth 1 -maxdepth 1 -type d -empty -delete 2>/dev/null || true",
+    "fi",
+    SWEEP_DELIM,
+  ].join("\n");
+}
+
+/**
+ * Deletes the uploads nobody can have wanted for six months. Best-effort and silent about it: a
+ * runner that is down means the sweep waits for the next pass, which is a day away and fine.
+ */
+export async function sweepCardUploads(days: number = UPLOAD_RETENTION_DAYS): Promise<void> {
+  try {
+    await hostExecutor().runScript(buildUploadSweepScript(config.runner.container, days), {
+      timeoutMs: 120_000,
+    });
+  } catch (err) {
+    logger.warn({ detail: (err as Error).message }, "the uploads sweep did not run this pass");
+  }
+}
+
 /** Heredoc delimiter of the kill script — a reserved word, never derived from input. */
 const KILL_DELIM = "VIBEHUB_KILL";
 
@@ -1526,7 +1580,11 @@ export async function dropCardWorkspace(card: Card, by?: string): Promise<void> 
         `git -C ${shQuote(paths.repoDir)} worktree prune 2>/dev/null || true`,
       );
     }
-    lines.push(`rm -rf ${shQuote(paths.cwd)}`, OPEN_DELIM);
+    // The card's uploads go with it. They live OUTSIDE the worktree (`/work/.uploads/<id>`), so
+    // `rm -rf cwd` never touched them and a deleted card left its images behind forever — and
+    // since `readCardUpload` resolves the card first, those files could not even be SHOWN any
+    // more. Disk held by something nothing can reach is not history, it is a leak.
+    lines.push(`rm -rf ${shQuote(paths.cwd)}`, `rm -rf ${shQuote(`/work/.uploads/${card.id}`)}`, OPEN_DELIM);
     await hostExecutor().runScript(lines.join("\n"), { timeoutMs: 120_000 });
     logger.info(
       { audit: true, action: "card.drop", card: card.worktreeSlug, cwd: paths.cwd, by },

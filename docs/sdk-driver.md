@@ -100,6 +100,37 @@ vira a linha `command_output` do chat, em vez de ser engolida.
 Um runner mais antigo, que não reporte catálogo, simplesmente não tem menu: o campo se comporta
 como antes e um `/` digitado à mão continua chegando no CLI.
 
+## Editar mensagem = REBOBINAR a conversa (2026-09-26)
+
+Editar passou a levar a sessão **de volta pra antes da mensagem corrigida**, como em qualquer chat:
+o modelo nunca leu a versão errada, a resposta pela metade deixa de existir e as ferramentas que
+rodaram no meio saem junto. Antes a edição só EMPILHAVA — a conversa ganhava as duas bolhas, a meia
+resposta e um supersede explicando a correção; o modelo lembrava de tudo.
+
+Como: `resume` + `resumeSessionAt` no `query()`. Medido contra o SDK antes de escrever (e depois
+ponta a ponta, com sessão real): rebobinar no uuid do **assistant** do turno mantido traz a
+resposta antiga de volta; rebobinar no uuid do `result` é recusado com `error_during_execution`. A
+sessão continua com o mesmo id — trunca no lugar.
+
+**Quando o driver RECUSA rebobinar** (e cai no supersede de sempre, que continua existindo):
+
+- **`no-fork-point`** — não há pra onde voltar (primeira mensagem da sessão, ou o stream morreu ao
+  ser derrubado).
+- **`absorbed`** — uma mensagem entrou **no meio do turno** depois da que está sendo editada (o
+  "encavalar" que o vibehub suporta). Rebobinar descartaria essa mensagem sem bolha, sem linha no
+  log e sem como recuperar — e é uma mensagem que uma PESSOA escreveu. O SDK tem um guard pra isso
+  (`resumeDropsTurn`), mas ele exige o prompt uuid do próprio envio, que o driver nunca vê; então
+  o driver recusa por conta própria.
+
+O evento `rewound` (`{ ok, uuid?, reason? }`) diz qual dos dois aconteceu, e **as três camadas têm
+de concordar**: o modelo (a sessão truncada), o log (`rewindHistory` corta do original até o
+marcador `message_edited`) e a tela (`dropRewoundRows` corta as mesmas linhas). Com `ok: false`
+ninguém corta nada — o supersede significa que tudo que está na tela ainda faz parte da conversa.
+
+Invariante que os testes cercam: **a edição sempre chega ao modelo**. Recusa, falha ao derrubar o
+stream, `applyFlagSettings` quebrado — todos os caminhos terminam mandando a mensagem, como rewind
+ou como supersede. Uma edição que não chega é o único resultado inaceitável.
+
 ## Editar mensagem (supersede) — só no chat nativo
 
 O usuário pode editar uma mensagem que já mandou (lápis na bolha; Esc com o campo vazio edita a

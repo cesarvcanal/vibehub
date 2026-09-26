@@ -1165,6 +1165,37 @@ describe("image upload into the card", () => {
     await expect(ws.readCardUpload(card.id, "1790375878344-x.png")).rejects.toThrow(/upload not found/);
   });
 
+  it("as imagens saem JUNTO com o card — uploads moram fora da worktree e ficavam órfãs", async () => {
+    const { card, project } = await seed();
+    await ws.dropCardWorkspace(card);
+    const script = lastScript();
+    expect(script).toContain(`rm -rf '/work/.uploads/${card.id}'`);
+    // e a worktree continua saindo, como sempre saiu
+    expect(script).toContain(`rm -rf '${ws.cardWorkPaths(project, card).cwd}'`);
+  });
+
+  it("a faxina apaga só arquivo velho e depois a pasta que ficou vazia", async () => {
+    await ws.sweepCardUploads();
+    const script = lastScript();
+    expect(script).toContain(`docker exec -i '${CONTAINER}' bash -s`);
+    // -mindepth 2: nunca apaga a própria /work/.uploads, só o que está dentro de uma pasta de card
+    expect(script).toContain(`find /work/.uploads -mindepth 2 -type f -mtime +${ws.UPLOAD_RETENTION_DAYS} -delete`);
+    expect(script).toContain("find /work/.uploads -mindepth 1 -maxdepth 1 -type d -empty -delete");
+    expect(script).toContain("if [ -d /work/.uploads ]; then");
+  });
+
+  it("seis meses é o padrão, e um prazo que não é um número de dias é recusado", () => {
+    expect(ws.UPLOAD_RETENTION_DAYS).toBe(180);
+    for (const bad of [0, -1, 1.5, Number.NaN]) {
+      expect(() => ws.buildUploadSweepScript("c", bad)).toThrow(/invalid retention/);
+    }
+  });
+
+  it("um runner fora do ar não derruba a faxina — ela espera a próxima passada", async () => {
+    runScript.mockRejectedValueOnce(new Error("runner unreachable"));
+    await expect(ws.sweepCardUploads()).resolves.toBeUndefined();
+  });
+
   it("buildUploadScript refuses a payload that is not strict base64", () => {
     expect(() => ws.buildUploadScript({ containerName: "c", destDir: "/d", destPath: "/d/f", base64: "VIBEHUB_B64" }))
       .toThrow(/invalid base64/);

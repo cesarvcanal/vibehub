@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
-import { appendHistory, replayableHistoryEvent } from "./history.js";
+import { appendHistory, replayableHistoryEvent, rewindHistory } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inflight.js";
 import { noteDriverEventFor } from "./mirror.js";
 import { isHarnessFiller } from "../chat/chat.js";
@@ -78,6 +78,12 @@ export interface DriverSession {
    * still emits, right under the sentence that stops mid-way instead of on top of it.
    */
   pendingInterruptNote?: string;
+  /**
+   * The message an edit in flight is replacing — the log's cut point if the driver answers that it
+   * REWOUND. Set when the edit is written to stdin, cleared by either answer, so a `rewound` that
+   * belongs to nothing (a driver that reports twice, a stale frame) cuts nothing.
+   */
+  rewindTarget?: string;
 }
 
 /**
@@ -244,6 +250,22 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     if (session.activeTurns === 0) void clearInflightMarker(session.cardId);
     maybeScheduleIdleStop(session);
   }
+  if (event.type === "rewound" && event.ok) {
+    // The session was taken back in time; the LOG has to follow, or a reload replays a
+    // conversation the model no longer has. `session.rewindTarget` is the original text the edit
+    // that caused this was replacing — set when the edit was sent, consumed here.
+    const original = session.rewindTarget;
+    session.rewindTarget = undefined;
+    if (original !== undefined) {
+      void rewindHistory(session.cardId, original).then((dropped) => {
+        logger.info(
+          { audit: true, action: "sdk.rewind", card: session.label, dropped },
+          "the conversation was rewound to before an edited message",
+        );
+      });
+    }
+  }
+  if (event.type === "rewound" && !event.ok) session.rewindTarget = undefined;
   broadcast(session, event);
   if (interruptNoteToFlush) emitSystemNote(session, interruptNoteToFlush);
   // History + mirror dedupe are MANAGER duties, not socket duties: they must keep happening while
@@ -417,9 +439,15 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
     // history gets the truth in two lines — the marker that greys the original out, and the new
     // message with its CLEAN text (`sent` keeps the wrapped words, the transcript dedupe key).
     const wrapped = buildSupersedeText(control.original, control.text);
-    if (!writeToDriver(session, { type: "user", text: wrapped })) {
+    // The DRIVER decides between the two shapes of an edit, because only it knows whether a rewind
+    // is safe (see `rewindAndSend` in sdk-driver.mjs): `text` is what the model reads when the
+    // conversation can be taken back to before the original, `fallback` the supersede used when it
+    // cannot. Either way the edit reaches the model — the choice is never "nothing happens".
+    if (!writeToDriver(session, { type: "edit_user", original: control.original, text: control.text, fallback: wrapped })) {
       return { kind: "refused", cid: control.cid, reason: "driver-gone" };
     }
+    // Which message a `rewound: ok` will cut the log back to. Set BEFORE the driver can answer.
+    session.rewindTarget = control.original;
     session.activeTurns += 1;
     clearIdleTimer(session);
     noteChatActivity(session);
