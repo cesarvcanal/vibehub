@@ -382,9 +382,15 @@ async function emitCatalogFrom(init, queryHandle) {
  *    consulta, e um card sem turno nenhum não pode sair mandando status pro painel;
  *  - nada de `resume`: é uma sessão jogada fora, e resumir a conversa real aqui seria carregá-la
  *    por nada;
- *  - `catalogAnnounced` fica FALSO: este catálogo é provisório (sem as listas do `init`, todo
- *    comando aparece como "comando"), e o primeiro `init` de verdade o substitui com os rótulos
- *    certos — skill, plugin, e os comandos que só fazem sentido num terminal, escondidos.
+ *  - `catalogAnnounced` fica FALSO: este catálogo é provisório e o primeiro `init` de verdade o
+ *    substitui.
+ *
+ * As três listas do `init` (skills, plugins e `terminal_slash_commands`) vêm do `system/init` DESTA
+ * consulta descartável, capturado no laço de descarte abaixo. Sem elas não era só o rótulo que se
+ * perdia: `hidden` vazio significa que `normalizeSlashCommands` não filtra NADA, e o menu de um
+ * card recém-aberto oferecia `/exit` — clicar encerrava o CLI e o primeiro turno do card terminava
+ * em `aborted`, sem resposta nenhuma. O SDK é explícito sobre isso: `terminal_slash_commands` é o
+ * subconjunto cuja UX depende de um terminal de verdade, e uma UI remota deve escondê-lo.
  */
 let warmChannel = null;
 async function warmCatalog() {
@@ -395,13 +401,28 @@ async function warmCatalog() {
     const options = baseOptions();
     options.env = { ...process.env, VIBEHUB_STATUS_URL: "" };
     const handle = query({ prompt: ch, options });
-    // A consulta só ganha vida sendo iterada — e nada do que ela diz interessa: o único objetivo é
-    // ter um CLI de pé para responder a pergunta abaixo.
-    void (async () => { try { for await (const _ of handle) { /* descartado */ } } catch { /* idem */ } })();
+    // A consulta só ganha vida sendo iterada. O `system/init` dela é a ÚNICA fonte das três listas
+    // (o `supportedCommands()` devolve só os comandos), então ele é guardado e o resto, descartado.
+    let warmInit = null;
+    void (async () => {
+      try {
+        for await (const message of handle) {
+          if (message && message.type === "system" && message.subtype === "init") warmInit = message;
+        }
+      } catch { /* idem */ }
+    })();
     const commands = await handle.supportedCommands();
     // Um turno de verdade começou no meio disso: o `init` dele traz o catálogo completo, e este
-    // aqui — sem rótulos — não tem por que passar na frente.
-    if (!catalogAnnounced && !channel && Array.isArray(commands)) emit({ type: "catalog", commands });
+    // aqui não tem por que passar na frente.
+    if (!catalogAnnounced && !channel && Array.isArray(commands)) {
+      emit({
+        type: "catalog",
+        commands,
+        skills: warmInit?.skills,
+        plugins: warmInit?.plugins,
+        hidden: warmInit?.terminal_slash_commands,
+      });
+    }
   } catch (err) {
     process.stderr.write(`warm catalog unavailable: ${err && err.message ? err.message : String(err)}\n`);
   } finally {

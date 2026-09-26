@@ -220,6 +220,20 @@ describe("sdk-driver.mjs — o menu \"/\" antes da primeira mensagem", () => {
     expect(source).toContain("if (warmChannel) warmChannel.end();");
   });
 
+  /**
+   * O BUG QUE ISTO PRENDE: o catálogo provisório saía SEM `hidden`, e `hidden` vazio faz
+   * `normalizeSlashCommands` não filtrar nada. O menu de um card recém-aberto oferecia `/exit`:
+   * clicar encerrava o CLI e o primeiro turno do card terminava em `aborted`, sem resposta — o
+   * menu errado exatamente na janela para a qual ele foi criado. As três listas só existem no
+   * `system/init`, então é o `init` da própria consulta descartável que tem de ser guardado.
+   */
+  it("o catálogo provisório esconde os comandos que só funcionam num terminal", () => {
+    expect(source).toContain('message.subtype === "init") warmInit = message;');
+    expect(source).toContain("hidden: warmInit?.terminal_slash_commands,");
+    expect(source).toContain("skills: warmInit?.skills,");
+    expect(source).toContain("plugins: warmInit?.plugins,");
+  });
+
   it("não marca o catálogo como anunciado: o `init` de verdade ainda substitui este", () => {
     expect(source).toContain("if (catalogAnnounced || channel || warmChannel) return;");
     expect(source).not.toMatch(/warmCatalog[\s\S]{0,800}catalogAnnounced = true/);
