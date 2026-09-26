@@ -430,7 +430,35 @@ describe("sweepOrphanCardData (the backstop: what earlier deletes left behind)",
     expect(runScript).not.toHaveBeenCalled();
   });
 
+  /**
+   * THE DISASTER THIS PINS: `JsonStore` seeds a missing board.json instead of throwing, so the
+   * "board could not be read" guard never fires for the way it actually goes wrong — the data dir
+   * is lost while the runner's bind mount survives, or a second backend is started against the
+   * same container with its own VIBEHUB_DATA_DIR (the default is `./data`, relative to the cwd).
+   * The live set is then empty, every worktree in the runner reads as an orphan, and the sweep
+   * answers with `git worktree remove --force` + `git branch -D` on work nobody pushed.
+   */
+  it("with a board that names NO cards, the runner is not touched at all", async () => {
+    const old = (Date.now() - 48 * 60 * 60_000) / 1000;
+    runScript.mockResolvedValue({
+      stdout: [
+        `worktree\t/work/acme--erp-worktrees/pagamentos-a1b2\t${old}`,
+        `worktree\t/work/acme--erp-worktrees/conciliacao-c3d4\t${old}`,
+        `browser\t/work/.browser/card-9f8e7d6c\t${old}`,
+        `gh\t/root/.vibehub/gh/dddddddd-0000-0000-0000-000000000000.token\t${old}`,
+      ].join("\n") + "\n",
+      stderr: "",
+    });
+
+    const summary = await purge.sweepOrphanCardData();
+
+    expect(summary.runnerArtifacts).toBe(0);
+    expect(summary.runnerFailed).toBe(false); // it declined, it did not fail
+    expect(runScript).not.toHaveBeenCalled(); // not even the listing
+  });
+
   it("sweeps the runner from the listing, and a dead runner still lets the data dir be cleaned", async () => {
+    await seed(); // a board that names at least one card is what licenses the runner half
     const ghost = "dddddddd-0000-0000-0000-000000000000";
     await stale(history.SDK_HISTORY_DIR, `${ghost}.ndjson`, "{}\n");
     const old = (Date.now() - 48 * 60 * 60_000) / 1000;

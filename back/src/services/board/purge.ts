@@ -479,7 +479,28 @@ export async function sweepOrphanCardData(
     logger.warn({ detail: (err as Error).message }, "could not sweep orphan outbox queues");
   }
 
-  // The runner half.
+  // The runner half — and ONLY when the board still names at least one card.
+  //
+  // The catch above is not the guard it looks like: `JsonStore` SEEDS a missing board.json instead
+  // of throwing, so "the board could not be read" never fires for the case that actually happens —
+  // the data dir was lost while the runner's bind mount survived (`docker compose down -v`), or a
+  // second instance was pointed at the same container with its own VIBEHUB_DATA_DIR, which is
+  // precisely what running the backend from another cwd does (`VIBEHUB_DATA_DIR` defaults to
+  // `./data`). An empty live set makes EVERY worktree, branch, transcript and browser profile in
+  // the runner an orphan, and this half answers that with `git worktree remove --force`,
+  // `git branch -D card/<slug>` and `rm -rf` — on real work that was never pushed.
+  //
+  // Nothing to attribute means nothing to delete. The data-dir half above stays unconditional:
+  // those files live under THIS instance's own VIBEHUB_DATA_DIR, so a board without cards is
+  // authority enough to clean them.
+  if (live.ids.size === 0) {
+    logger.warn(
+      { container: config.runner.container },
+      "orphan sweep left the runner alone — the board names no cards, so nothing there can be attributed to one",
+    );
+    return summary;
+  }
+
   try {
     const { stdout } = await hostExecutor().runScript(buildOrphanListScript(config.runner.container), {
       timeoutMs: 120_000,
