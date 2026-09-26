@@ -191,7 +191,13 @@ export function assertMaestroText(text: string, delimiter: string): void {
 export function buildSendKeysScript(containerName: string, tmuxSession: string, text: string): string {
   const delimiter = "VIBEHUB_MAESTRO_TEXT";
   assertMaestroText(text, delimiter);
+  // `set -e` is load-bearing, not hygiene. Without it a `send-keys -l` that FAILS — the text is one
+  // argv entry, and Linux caps that at 128 KB, so a pasted log is "Argument list too long" — still
+  // fell through to the Enter below. The pane got a bare Enter (which, at a permission prompt,
+  // accepts whatever is highlighted), the script exited with the Enter's status 0, and the sender
+  // was told `sent: true` for a message nobody ever received.
   const inner =
+    `set -e; ` +
     `VIBEHUB_TEXT="$(cat)"; ` +
     `tmux send-keys -t "$1" -l -- "$VIBEHUB_TEXT"; ` +
     `sleep 0.15; ` +

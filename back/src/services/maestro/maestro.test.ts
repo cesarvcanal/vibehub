@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -143,6 +144,44 @@ describe("buildSendKeysScript", () => {
     // ...and after the TUI's paste window, or the Enter is swallowed INTO the paste and the
     // message sits there typed but unsent.
     expect(script).toContain("sleep 0.15");
+  });
+
+  /**
+   * THE BUG THIS PINS: `send-keys -l` puts the whole message in ONE argv entry, and Linux caps that
+   * at 128 KB — a pasted log fails with "Argument list too long". Without `set -e` the script fell
+   * through to the Enter below anyway: the pane received a BARE ENTER (at a permission prompt, that
+   * accepts whatever is highlighted), the script exited with the Enter's status 0, and the sender
+   * was told `sent: true` for a message that was never typed.
+   *
+   * Executed, not asserted textually: a stub `tmux` that fails the `-l` call is the only way to
+   * show the Enter does not follow it.
+   */
+  it("a send-keys that FAILS never goes on to press Enter, and the failure propagates", async () => {
+    const { maestro } = await load();
+    const script = maestro.buildSendKeysScript("c", "card-1234abcd", "mensagem");
+    // The container-side script exactly as `bash -c` receives it (undo the shell quoting).
+    const quoted = /bash -c '((?:[^']|'\\'')*)'/.exec(script)?.[1] ?? "";
+    const inner = quoted.replace(/'\\''/g, "'");
+    expect(inner).not.toBe("");
+
+    const bin = await mkdtemp(join(tmpdir(), "vibehub-fake-tmux-"));
+    const log = join(bin, "calls.log");
+    await writeFile(
+      join(bin, "tmux"),
+      `#!/bin/sh\necho "$@" >> '${log}'\ncase "$*" in *' -l '*) exit 1;; esac\nexit 0\n`,
+      { mode: 0o755 },
+    );
+    const run = spawnSync("bash", ["-c", inner, "_", "card-1234abcd"], {
+      input: "mensagem",
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      encoding: "utf8",
+    });
+    const calls = await readFile(log, "utf8");
+    await rm(bin, { recursive: true, force: true });
+
+    expect(calls).toContain("-l"); // it did try to type the message
+    expect(calls).not.toContain("Enter"); // and stopped there
+    expect(run.status).not.toBe(0); // the caller is told, instead of being told "sent"
   });
 
   it("refuses text that would close the heredoc early", async () => {
