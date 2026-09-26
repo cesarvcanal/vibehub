@@ -165,6 +165,13 @@ export async function acquireTranscriptMirror(cardId: string, opts: AcquireMirro
         void publishExternalMessage(cardId, event);
       }
     });
+    // Same contract as `close`, except this one is a THROW when unhandled: a spawn that fails
+    // (no ssh, process table full) would take the server down instead of costing this card its
+    // live mirror. The mirror is best-effort by design — the replay merge covers the gap.
+    child.on("error", (err: Error) => {
+      logger.warn({ card: cardId, detail: err.message }, "the sdk transcript mirror died");
+      if (mirrors.get(cardId) === mirror) mirror.child = null;
+    });
     child.on("close", () => {
       // The follow died on its own (runner restart, reaper): live mirroring stops until the next
       // connect; the replay merge covers whatever happened in between.

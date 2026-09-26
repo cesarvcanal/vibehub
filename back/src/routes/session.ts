@@ -542,6 +542,16 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       }
       disableNagle(socket);
       const child = spawn(bridge.command.file, bridge.command.args, { stdio: ["pipe", "pipe", "ignore"] });
+      // Both guards exist because the failure lands on the CHILD, not in this async function, and
+      // an 'error' with no listener is a throw that takes the whole server with it — every other
+      // terminal and driver on the board included. `error` fires when the spawn itself fails (the
+      // process table is full, ssh is missing); `stdin.error` fires when the runner is restarted
+      // under a live session and the browser keeps sending RFB frames at a pipe nobody reads.
+      child.on("error", (err: Error) => {
+        logger.warn({ err: err.message, card: req.params.id }, "the vnc bridge died");
+        try { socket.close(); } catch { /* already closed */ }
+      });
+      child.stdin.on("error", () => { /* the bridge is gone; `close` tears the socket down */ });
       child.stdout.on("data", (chunk: Buffer) => {
         try { socket.send(chunk); } catch { child.kill(); }
       });

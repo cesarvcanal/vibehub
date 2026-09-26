@@ -68,6 +68,12 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const child = spawn(source.command.file, source.command.args, { stdio: ["pipe", "pipe", "ignore"] });
+      // A spawn that never starts emits 'error' on the child, and an 'error' nobody listens for is
+      // a throw out of the event loop: one card failing to open its chat would end the process.
+      child.on("error", (err: Error) => {
+        logger.warn({ err: err.message, card: req.params.id }, "could not follow the card transcript");
+        try { socket.close(); } catch { /* already closed */ }
+      });
       const keepalive = setInterval(() => {
         try { socket.ping?.(); } catch { /* the close handler cleans up */ }
       }, KEEPALIVE_MS);
