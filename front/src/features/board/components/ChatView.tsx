@@ -29,7 +29,8 @@ import {
   type MessageOrigin,
   type PendingMessage,
 } from "@/features/board/lib/chat";
-import { linkifyTokens, remarkEscapeHtml, remarkPreviewPaths, safeUrl } from "@/features/board/lib/markdown";
+import { linkifyTokens, remarkEscapeHtml, remarkPreviewPaths, safeUrl, uploadImageUrl } from "@/features/board/lib/markdown";
+import { UltraText } from "@/features/board/components/UltraText";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -591,10 +592,11 @@ function CopyButton({ text }: { text: string }) {
 }
 
 /**
- * Plain text with its URLs (and the panel's own `/preview/<port>/` paths) clickable — the render
- * for a USER'S message, where markdown must NOT be interpreted but a pasted link must still be a
- * link. Only what `linkifyTokens` recognises (http/https, preview paths) ever becomes an href, so
- * `javascript:` and friends stay literal text. Exported for the native SDK chat.
+ * Plain text with its URLs (and the panel's own `/preview/<port>/` paths) clickable, its uploaded
+ * images shown as images, and Claude Code's two reserved words in the colours the CLI gives them —
+ * the render for a USER'S message, where markdown must NOT be interpreted but a pasted link must
+ * still be a link. Only what `linkifyTokens` recognises (http/https, preview paths) ever becomes
+ * an href, so `javascript:` and friends stay literal text. Exported for the native SDK chat.
  */
 export function LinkifiedText({ text }: { text: string }) {
   return (
@@ -610,11 +612,44 @@ export function LinkifiedText({ text }: { text: string }) {
           >
             {token.value}
           </a>
+        ) : token.type === "image" ? (
+          <UploadedImage key={i} cardId={token.cardId} file={token.file} />
         ) : (
-          <React.Fragment key={i}>{token.value}</React.Fragment>
+          <UltraText key={i} text={token.value} />
         ),
       )}
     </>
+  );
+}
+
+/**
+ * An image this composer uploaded, shown as the image.
+ *
+ * What went into the message is a runner path — the only form Claude can open — so the bubble used
+ * to come back as `/work/.uploads/…/1790375978854-image.png` and you could not see what you had
+ * just attached. The thumbnail is a link to the full file: same route, opened in a tab, which is
+ * the cheapest "bigger, please" there is.
+ *
+ * `onError` is the case that matters: the card was deleted, the runner is down, the file was
+ * cleaned up. The path comes back as text then — still the truth, never a broken-image icon.
+ */
+function UploadedImage({ cardId, file }: { cardId: string; file: string }) {
+  const t = useT();
+  const [broken, setBroken] = React.useState(false);
+  const src = uploadImageUrl(cardId, file);
+  if (broken) return <>{`/work/.uploads/${cardId}/${file}`}</>;
+  return (
+    <a href={src} target="_blank" rel="noreferrer noopener" className="mt-1 block w-fit">
+      <img
+        src={src}
+        alt={t("chat.attachedImage")}
+        title={file}
+        data-testid="chat-image"
+        loading="lazy"
+        onError={() => setBroken(true)}
+        className="max-h-64 max-w-full rounded-md border border-border/70 object-contain"
+      />
+    </a>
   );
 }
 

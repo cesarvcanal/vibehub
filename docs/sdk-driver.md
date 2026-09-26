@@ -255,6 +255,32 @@ o mouse dele não interfere no agente) e **"Pilotar junto"** (input habilitado; 
 controle do agente — o agente dirige via CDP, canal separado do VNC, ninguém expulsa ninguém). O
 toggle troca `viewOnly` na conexão viva, sem reconectar.
 
+## As palavras reservadas — `ultrathink` e `ultracode`
+
+As duas não são texto: o CLI lê as duas do que você escreve e age sozinho — `ultrathink` injeta o
+pedido de raciocínio mais fundo naquele turno, `ultracode` opta o turno pela orquestração
+multi-agente (ferramenta Workflow). Isso vale **igual no terminal e no chat nativo**, porque quem
+faz é o CLI, e o driver entrega o texto verbatim.
+
+O que o CLI **não** faz é subir o NÍVEL de esforço — e é exatamente isso que o painel promete
+quando pinta a palavra no compositor. Então o driver:
+
+1. detecta a palavra na mensagem, com as MESMAS regras do front
+   (`front/src/features/board/lib/ultraWords.ts`: caixa livre, mas nada de `/comando`, caminho,
+   flag, nome de arquivo ou palavra entre aspas/parênteses — a tela só pinta o que o back vai
+   honrar, e vice-versa);
+2. fixa a camada de *flag settings* em `effortLevel: "max"` (mais `ultracode: true` quando a
+   palavra é essa: xhigh + orquestração), caindo para `max` puro e depois `xhigh` se a sessão não
+   permitir — plano com teto de esforço, workflows desligados, CLI antigo;
+3. **devolve** no `result` do turno (`applyFlagSettings({ effortLevel: null, ultracode: null })`):
+   limpa a camada de flags, então o que vale de novo é a configuração do próprio usuário. A palavra
+   valia para AQUELE turno.
+
+Duas armadilhas que o teste cerca: a mensagem é empurrada num `finally`, então nenhuma falha da
+escalada pode engoli-la; e a primeira mensagem de uma corrente nova espera o
+`initializationResult()` (com timeout) antes de mandar a configuração, porque um control request
+escrito num CLI que ainda não existe se perde.
+
 ## Auth — OAuth token ONLY (regra do projeto)
 
 The driver authenticates **exclusively** with `CLAUDE_CODE_OAUTH_TOKEN`, read from the card

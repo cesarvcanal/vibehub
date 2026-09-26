@@ -819,6 +819,94 @@ export async function uploadCardImage(
   return { path: destPath };
 }
 
+/* ------------------------------------------------- reading an upload back out of the runner */
+
+/**
+ * The image types the panel serves back, and what it calls them.
+ *
+ * An upload goes INTO the runner and the message carries its path — which is all Claude needs, and
+ * nothing at all for the person who attached it: the bubble read `/work/.uploads/…/shot.png` and
+ * there was no way to look at what had just been sent. Serving the bytes back closes that, and the
+ * allowlist is what keeps it boring: only these extensions are ever answered, each with the type
+ * it actually is, so nothing the browser might run can be reached through this route.
+ */
+const UPLOAD_CONTENT_TYPES: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+  avif: "image/avif",
+};
+
+/**
+ * The name of an upload, as `uploadCardImage` writes it: `<stamp>-<sanitized>.<ext>`. The check is
+ * deliberately stricter than "no traversal" — it is the exact shape this server produces, so a
+ * name that could not have come from the upload route is refused before it reaches a shell. PURE.
+ */
+const UPLOAD_FILE_RE = /^\d+-[a-z0-9][a-z0-9._-]*\.[a-z0-9]+$/;
+
+/** The content type for an upload name, or `null` when it is not one we serve. PURE, TOTAL. */
+export function uploadContentType(file: string): string | null {
+  const name = String(file ?? "");
+  if (!UPLOAD_FILE_RE.test(name) || name.includes("..")) return null;
+  const ext = name.slice(name.lastIndexOf(".") + 1);
+  return UPLOAD_CONTENT_TYPES[ext] ?? null;
+}
+
+/** Heredoc delimiter of the upload-read script — a reserved word, never derived from input. */
+const READ_DELIM = "VIBEHUB_READ";
+
+/**
+ * Script that reads one upload back as base64 (the transport is a text stdout, so the bytes have
+ * to travel encoded). `test -f` first, so a missing file fails as a non-zero exit rather than an
+ * empty answer that would reach the browser as a zero-byte image. PURE/testable.
+ */
+export function buildReadUploadScript(containerName: string, remotePath: string): string {
+  assertSafeRemotePath(remotePath);
+  return [
+    "set -e",
+    `docker exec -i ${shQuote(containerName)} bash -s <<'${READ_DELIM}'`,
+    "set -e",
+    `test -f ${shQuote(remotePath)}`,
+    `base64 -w0 ${shQuote(remotePath)}`,
+    READ_DELIM,
+  ].join("\n");
+}
+
+/**
+ * One uploaded image, back out of the runner, for the chat to show. The card is resolved first so
+ * the path can only ever be built from a card that exists — the id in the URL never reaches the
+ * filesystem as text.
+ */
+export async function readCardUpload(
+  cardId: string,
+  file: string,
+): Promise<{ body: Buffer; contentType: string }> {
+  const contentType = uploadContentType(file);
+  if (!contentType) throw new Error("upload not found");
+  const card = await getCard(cardId);
+  if (!card) throw new Error("card not found");
+
+  const remotePath = `/work/.uploads/${card.id}/${file}`;
+  let stdout: string;
+  try {
+    ({ stdout } = await hostExecutor().runScript(buildReadUploadScript(config.runner.container, remotePath), {
+      timeoutMs: 30_000,
+    }));
+  } catch (err) {
+    // A file that is not there is the ordinary case (a deleted card, a cleaned-up runner), not an
+    // outage: the chat falls back to printing the path, and nothing is worth a 502 here.
+    throw new Error("upload not found", { cause: err });
+  }
+  const b64 = stdout.replace(/\s+/g, "");
+  if (!b64 || !B64_RE.test(b64)) throw new Error("upload not found");
+  const body = Buffer.from(b64, "base64");
+  if (body.length === 0 || body.length > UPLOAD_MAX_BYTES) throw new Error("upload not found");
+  return { body, contentType };
+}
+
 /** Heredoc delimiter of the kill script — a reserved word, never derived from input. */
 const KILL_DELIM = "VIBEHUB_KILL";
 

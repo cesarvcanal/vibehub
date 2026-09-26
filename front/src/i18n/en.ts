@@ -422,6 +422,7 @@ export const en: Record<string, string> = {
   "chat.pendingStuck": "Sent, but never confirmed in the conversation — Claude may have restarted or the terminal was busy.",
   "chat.resend": "Resend",
   "chat.discard": "Discard",
+  "chat.attachedImage": "Attached image",
   "chat.copy": "Copy",
   "chat.copied": "Copied",
   "chat.copyError": "Could not copy",

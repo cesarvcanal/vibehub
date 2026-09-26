@@ -187,6 +187,34 @@ describe("TerminalComposer", () => {
     expect(box).toHaveValue("first\nsecond");
   });
 
+  it("paints ultrathink / ultracode as they are typed, and only then", async () => {
+    renderComposer(<TerminalComposer onSend={vi.fn()} />);
+    const box = screen.getByRole("textbox", { name: /enter sends/i });
+
+    await userEvent.type(box, "roda os testes");
+    expect(screen.queryByTestId("composer-ultra-mirror")).not.toBeInTheDocument();
+
+    await userEvent.clear(box);
+    await userEvent.type(box, "ULTRATHINK e ultracode nisso");
+    const mirror = screen.getByTestId("composer-ultra-mirror");
+    // The mirror carries the WHOLE draft (that is what keeps the colours on the letters)…
+    expect(mirror).toHaveTextContent("ULTRATHINK e ultracode nisso");
+    // …but only the two keywords are painted, and the field still holds the text itself.
+    expect(screen.getAllByTestId("ultra-word").map((w) => w.getAttribute("data-word")))
+      .toEqual(["ultrathink", "ultracode"]);
+    expect(box).toHaveValue("ULTRATHINK e ultracode nisso");
+
+    await userEvent.clear(box);
+    expect(screen.queryByTestId("composer-ultra-mirror")).not.toBeInTheDocument();
+  });
+
+  it("sends the reserved word exactly as typed — the highlight changes nothing on the wire", async () => {
+    const onSend = vi.fn();
+    renderComposer(<TerminalComposer onSend={onSend} />);
+    await userEvent.type(screen.getByRole("textbox", { name: /enter sends/i }), "ULTRATHINK isso{Enter}");
+    expect(onSend).toHaveBeenCalledWith("ULTRATHINK isso");
+  });
+
   it("has no Send button on a DESKTOP — Enter is the way, and the field keeps the width", () => {
     renderComposer(<TerminalComposer onSend={vi.fn()} />);
     expect(screen.queryByTestId("composer-send")).not.toBeInTheDocument();

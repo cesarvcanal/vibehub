@@ -427,6 +427,7 @@ async function runStream() {
         // stream stays open for the next message. Absorbed sends never produce their own result.
         if (msg.session_id) lastSessionId = msg.session_id;
         turnActive = false;
+        void clearUltra(); // the keyword was for THIS turn
         emit({ type: "result", subtype: msg.subtype, isError: !!msg.is_error,
           sessionId: msg.session_id, result: msg.result, permissionDenials: msg.permission_denials });
       }
@@ -446,17 +447,173 @@ async function runStream() {
     }
     if (channel === myChannel) channel = null;
     currentQuery = null;
+    // The next stream is a NEW CLI process: whatever we pinned in this one's flag layer died with
+    // it, so there is nothing left to give back.
+    ultraRaised = null;
   }
 }
 
+/* --------------------------------- the reserved words (ultrathink / ultracode) */
+// Claude Code treats both as KEYWORDS, not as text: `ultrathink` asks for deeper reasoning on the
+// turn it appears in, `ultracode` opts that turn into multi-agent orchestration (the Workflow
+// tool). The CLI does that part itself — the driver hands it the text verbatim, keywords included.
+//
+// What the CLI does NOT do is raise the REASONING LEVEL, and that is what the panel promises when
+// it paints the word in the composer. So the driver pins the flag-settings layer to `max` effort
+// for the turn the keyword arrived in and clears it again when that turn ends. Flag settings are
+// session-scoped and never written to any settings file, so nothing here outlives the driver.
+//
+// The detection mirrors `front/src/features/board/lib/ultraWords.ts` — the SAME rules, because the
+// word only gets painted up there when it will be acted on down here. Keep the two in step.
+
+const ULTRA_CLOSERS = { "`": "`", '"': '"', "<": ">", "{": "}", "[": "]", "(": ")", "'": "'" };
+const ULTRA_WORDISH = /[\p{L}\p{N}_]/u;
+
+/** The spans of `text` inside a quote, a bracket or a tag — a keyword in there is being quoted. */
+function ultraQuotedSpans(text) {
+  const spans = [];
+  const wordish = (c) => !!c && ULTRA_WORDISH.test(c);
+  let opener = null;
+  let from = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (opener) {
+      if (opener === "[" && c === "[") { from = i; continue; }
+      if (c !== ULTRA_CLOSERS[opener]) continue;
+      if (opener === "'" && wordish(text[i + 1])) continue;
+      spans.push({ start: from, end: i + 1 });
+      opener = null;
+    } else if (
+      (c === "<" && i + 1 < text.length && /[a-zA-Z/]/.test(text[i + 1])) ||
+      (c === "'" && !wordish(text[i - 1])) ||
+      (c !== "<" && c !== "'" && c in ULTRA_CLOSERS)
+    ) {
+      opener = c;
+      from = i;
+    }
+  }
+  return spans;
+}
+
+/** Is this keyword being USED in `text`? Case-insensitive; a path, a flag or a quote does not count. */
+function hasUltraKeyword(text, keyword) {
+  const source = String(text ?? "");
+  if (source.startsWith("/")) return false; // a slash command, not a sentence
+  const spans = ultraQuotedSpans(source);
+  const wordish = (c) => !!c && ULTRA_WORDISH.test(c);
+  for (const m of source.matchAll(new RegExp(`\\b${keyword}\\b`, "gi"))) {
+    if (m.index === undefined) continue;
+    const start = m.index;
+    const end = start + m[0].length;
+    if (spans.some((s) => start >= s.start && start < s.end)) continue;
+    const before = source[start - 1];
+    const after = source[end];
+    if (before === "/" || before === "\\" || before === "-") continue;
+    if (after === "/" || after === "\\" || after === "-" || after === "?") continue;
+    if (after === "." && wordish(source[end + 1])) continue;
+    return true;
+  }
+  return false;
+}
+
+/** What this message asks for, if anything. */
+function ultraKeywords(text) {
+  const ultrathink = hasUltraKeyword(text, "ultrathink");
+  const ultracode = hasUltraKeyword(text, "ultracode");
+  return { ultrathink, ultracode, any: ultrathink || ultracode };
+}
+
+/**
+ * The keys WE pinned in the flag layer, so the give-back clears exactly those and nothing else.
+ * `null` while we have pinned nothing. It matters that this is a record and not a boolean: an
+ * `ultrathink` turn must not switch off an `ultracode` the session already had.
+ */
+let ultraRaised = null;
+
+/** How long the first message of a fresh stream waits for the CLI to boot before going anyway. */
+const ULTRA_INIT_TIMEOUT_MS = 10_000;
+
+/**
+ * Raise the effort for the turn about to start. Best effort in the literal sense: every step is
+ * optional and a failure at any of them must NEVER cost the message — an older CLI without
+ * `applyFlagSettings`, an account whose plan caps effort below `max`, a session with dynamic
+ * workflows switched off (which is what refuses `ultracode`) all fall through to the next weaker
+ * attempt and finally to sending the message exactly as it would have gone anyway.
+ */
+async function raiseUltra(kinds, waitForInit) {
+  const handle = currentQuery;
+  if (!handle || typeof handle.applyFlagSettings !== "function") return;
+  if (waitForInit && typeof handle.initializationResult === "function") {
+    // A stream that has only just been created has no CLI behind it yet, and a control request
+    // written into nothing is lost. This is the handshake that says the CLI is listening.
+    try {
+      await Promise.race([
+        handle.initializationResult(),
+        new Promise((resolve) => setTimeout(resolve, ULTRA_INIT_TIMEOUT_MS)),
+      ]);
+    } catch { /* boot failed on its own terms; the message still goes */ }
+  }
+  if (currentQuery !== handle) return; // the stream died while we waited
+  // Strongest first. `ultracode` is xhigh PLUS standing workflow orchestration, which is exactly
+  // what the keyword means; where the session cannot have it, plain `max` effort still answers
+  // "o nível de raciocínio máximo".
+  const attempts = kinds.ultracode
+    ? [{ effortLevel: "max", ultracode: true }, { effortLevel: "max" }, { effortLevel: "xhigh" }]
+    : [{ effortLevel: "max" }, { effortLevel: "xhigh" }];
+  for (const settings of attempts) {
+    try {
+      await handle.applyFlagSettings(settings);
+      ultraRaised = settings;
+      return;
+    } catch { /* try the next, weaker one */ }
+  }
+}
+
+/** Give the effort back at the end of the turn: the keyword was for THAT turn, not for the session. */
+async function clearUltra() {
+  const raised = ultraRaised;
+  if (!raised) return;
+  ultraRaised = null;
+  const handle = currentQuery;
+  if (!handle || typeof handle.applyFlagSettings !== "function") return;
+  try {
+    // `null` clears the key from the flag layer, so whatever the user's own settings say takes
+    // over again — this restores a level, it does not impose one. Only the keys this driver
+    // actually set are cleared: an `ultrathink` turn never touches `ultracode`.
+    const give = {};
+    for (const key of Object.keys(raised)) give[key] = null;
+    await handle.applyFlagSettings(give);
+  } catch { /* the stream is gone, and a dead stream has no effort to give back */ }
+}
+
 function sendUser(text) {
-  if (!channel) {
+  const ultra = ultraKeywords(text);
+  const fresh = !channel;
+  if (fresh) {
     channel = makeChannel();
     void runStream();
   }
+  const myChannel = channel;
   const absorbed = turnActive;
   turnActive = true;
-  channel.push(userMessage(text));
+  if (!ultra.any) {
+    myChannel.push(userMessage(text));
+  } else if (!fresh) {
+    // A live CLI: the control frame is written before the push below, so the effort is already
+    // pinned by the time the message reaches the model.
+    void raiseUltra(ultra, false);
+    myChannel.push(userMessage(text));
+  } else {
+    // The FIRST message of a fresh stream has to wait for the CLI to exist. The push moves into
+    // the continuation — `finally`, so no failure up there can ever swallow the message.
+    void (async () => {
+      try {
+        await raiseUltra(ultra, true);
+      } finally {
+        myChannel.push(userMessage(text));
+      }
+    })();
+  }
   // Tell the SURVIVING side what happened to this send: absorbed = it folds into the turn already
   // running (or coalesces with a queued one) and will NOT produce its own result — the manager
   // takes back this send's +1 on its turn count, and the front labels the bubble ("entrou no

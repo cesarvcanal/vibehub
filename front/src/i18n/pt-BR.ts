@@ -423,6 +423,7 @@ export const ptBR: Record<string, string> = {
   "chat.pendingStuck": "Enviada, mas não confirmada na conversa — o Claude pode ter reiniciado ou o terminal estava ocupado.",
   "chat.resend": "Reenviar",
   "chat.discard": "Descartar",
+  "chat.attachedImage": "Imagem anexada",
   "chat.copy": "Copiar",
   "chat.copied": "Copiado",
   "chat.copyError": "Não deu pra copiar",

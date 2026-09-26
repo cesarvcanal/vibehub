@@ -110,6 +110,46 @@ describe("ChatView", () => {
     expect(screen.getByText("verde").tagName).toBe("STRONG");
   });
 
+  it("shows an attached image as the image, with the path behind it as the link", async () => {
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    const card = "4ef6374b-6a1f-4fc1-b2c1-0ba4c377223f";
+    const path = `/work/.uploads/${card}/1790375878344-image.png`;
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: `olha isso ${path}` });
+
+    const image = await screen.findByTestId("chat-image");
+    expect(image).toHaveAttribute("src", `/api/cards/${card}/uploads/1790375878344-image.png`);
+    expect(image.closest("a")).toHaveAttribute("href", `/api/cards/${card}/uploads/1790375878344-image.png`);
+    // The words around it are still the words: only the path became a picture.
+    expect(screen.getByTestId("chat-user")).toHaveTextContent("olha isso");
+  });
+
+  it("falls back to the path when the image cannot be fetched — never a broken-image icon", async () => {
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    const card = "4ef6374b-6a1f-4fc1-b2c1-0ba4c377223f";
+    const path = `/work/.uploads/${card}/1790375878344-image.png`;
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: path });
+
+    fireEvent.error(await screen.findByTestId("chat-image"));
+    await waitFor(() => expect(screen.queryByTestId("chat-image")).not.toBeInTheDocument());
+    expect(screen.getByTestId("chat-user")).toHaveTextContent(path);
+  });
+
+  it("paints ultrathink and ultracode in a sent message, the way the CLI does", async () => {
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: "ULTRATHINK e ultracode nisso" });
+
+    await waitFor(() => expect(screen.getAllByTestId("ultra-word")).toHaveLength(2));
+    expect(screen.getAllByTestId("ultra-word").map((w) => w.getAttribute("data-word")))
+      .toEqual(["ultrathink", "ultracode"]);
+    expect(screen.getByTestId("chat-user")).toHaveTextContent("ULTRATHINK e ultracode nisso");
+  });
+
   it("draws an AGENT's message as the green robot bubble, named and linked to its card", async () => {
     renderChat();
     const ws = await socket();
