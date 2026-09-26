@@ -55,6 +55,68 @@ export function previewSessionFor(cardId: string, port: number): string {
 }
 
 /**
+ * The session-name PREFIX of every preview a card owns (`preview-<card8>-`). Derived from the id
+ * like the session name itself, so it is always shell-safe. PURE.
+ */
+export function previewSessionPrefix(cardId: string): string {
+  const head = String(cardId ?? "").slice(0, 8);
+  if (!SESSION_CARD_RE.test(head)) throw new Error(`invalid card id for a preview session: '${cardId}'`);
+  return `preview-${head.toLowerCase()}-`;
+}
+
+/**
+ * Read-only script: the names of the tmux sessions that belong to this card's previews. PURE.
+ *
+ * Asking TMUX instead of reading the card's `previews` is deliberate — the record and the process
+ * can disagree (a server relaunched under a record that was later dropped, a session left by an
+ * older version), and when a card is being deleted the honest question is "what is still RUNNING
+ * in its name", not "what did we write down".
+ */
+export function buildPreviewSessionListScript(container: string, cardId: string): string {
+  const prefix = previewSessionPrefix(cardId);
+  const inner = `tmux list-sessions -F '#{session_name}' 2>/dev/null | grep ${shQuote(`^${prefix}`)} || true`;
+  return `docker exec ${shQuote(container)} bash -c ${shQuote(inner)}`;
+}
+
+/** The session names the list script printed, filtered to the card's own prefix. PURE. */
+export function parsePreviewSessions(stdout: string, cardId: string): string[] {
+  const prefix = previewSessionPrefix(cardId);
+  return String(stdout ?? "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith(prefix) && /^[A-Za-z0-9_-]+$/.test(l));
+}
+
+/**
+ * TREE-KILLS every preview server of a card — used when the card is DELETED.
+ *
+ * A preview lives OUTSIDE the card pane's process tree on purpose (that is what makes it survive a
+ * pause), which means deleting the card used to leave the dev server running forever: a process
+ * holding a port, and a `/preview/<port>/` URL that any logged-in user could still open after the
+ * card was gone. Best-effort and idempotent; returns the sessions it killed.
+ */
+export async function stopAllCardPreviews(cardId: string): Promise<string[]> {
+  const container = config.runner.container;
+  let sessions: string[] = [];
+  try {
+    const { stdout } = await hostExecutor().runScript(buildPreviewSessionListScript(container, cardId), {
+      timeoutMs: 20_000,
+    });
+    sessions = parsePreviewSessions(stdout, cardId);
+  } catch (e) {
+    logger.warn({ card: cardId, detail: (e as Error).message }, "could not list the card's preview sessions");
+    return [];
+  }
+  if (sessions.length === 0) return [];
+  await hostExecutor().runScript(buildKillSessionScript(container, sessions), { timeoutMs: 30_000 });
+  logger.info(
+    { audit: true, action: "preview.stop_all", card: cardId, sessions: sessions.length },
+    "preview servers of the card tree-killed",
+  );
+  return sessions;
+}
+
+/**
  * Script that (re)launches a preview server in its dedicated tmux session: any previous instance
  * of the session dies first (a relaunch is a replace, and a half-dead server holding the port is
  * exactly what the user is trying to fix), then a fresh detached session runs the command in its

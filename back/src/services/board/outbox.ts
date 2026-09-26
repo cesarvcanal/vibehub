@@ -95,6 +95,20 @@ export async function cancelMessage(cardId: string, messageId: string): Promise<
   });
 }
 
+/**
+ * DROPS everything queued for a card — the card is being deleted, and a queued message is content
+ * the user typed into it. `flushOnce` already clears the queue of a vanished card lazily, but
+ * "lazily" means the text sits in outbox.json until the next tick visits it; a delete says now.
+ * Returns how many messages were thrown away (for the purge report and the audit log).
+ */
+export async function purgeCardQueue(cardId: string): Promise<number> {
+  return await store.mutate((doc) => {
+    const dropped = doc.byCard[cardId]?.length ?? 0;
+    delete doc.byCard[cardId];
+    return dropped;
+  });
+}
+
 /** Every card that has something waiting. The ticker's work list — usually empty, and then cheap. */
 export async function cardsWithPending(): Promise<string[]> {
   const doc = await store.load();

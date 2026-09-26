@@ -8,6 +8,7 @@ import {
   onExternalMessage,
   publishExternalMessage,
   readHistory,
+  removeHistory,
   replayableHistoryEvent,
   rewindHistory,
   HISTORY_COMPACT_FACTOR,
@@ -358,5 +359,32 @@ describe("rewindHistory — o corte tem de ser exato nos dois sentidos", () => {
       { type: "user", text: "certa" },
       { type: "assistant_text", text: "depois" },
     ]);
+  });
+});
+
+describe("removeHistory (the card is being deleted)", () => {
+  it("deletes the log — not empties it — and a second call is fine", async () => {
+    await appendHistory(CARD, { type: "user", text: "segredo" });
+    await appendHistory(CARD, { type: "assistant_text", text: "resposta" });
+    expect(await readHistory(CARD)).toHaveLength(2);
+
+    await removeHistory(CARD);
+
+    expect(await readHistory(CARD)).toEqual([]);
+    await expect(readFile(join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`), "utf8")).rejects.toThrow();
+    await expect(removeHistory(CARD)).resolves.toBeUndefined();
+  });
+
+  it("does not race an append in flight: whatever was being written goes with the file", async () => {
+    // Both are queued on the card's chain, so the delete runs AFTER the append instead of leaving
+    // a file recreated behind it.
+    const appending = appendHistory(CARD, { type: "user", text: "última palavra" });
+    const deleting = removeHistory(CARD);
+    await Promise.all([appending, deleting]);
+    expect(await readHistory(CARD)).toEqual([]);
+  });
+
+  it("refuses an id that is not id-shaped — no path from a URL reaches the fs", async () => {
+    await expect(removeHistory("../../etc/passwd")).rejects.toThrow(/invalid card id/);
   });
 });

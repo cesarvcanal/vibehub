@@ -7,6 +7,7 @@ import {
   applySessionChange, killCardSession, pauseCard, prepareCard, restartCard, resumeCard,
 } from "../services/board/workspace.js";
 import * as outbox from "../services/board/outbox.js";
+import { purgeRemovedCards } from "../services/board/purge.js";
 import { runnerToken } from "../runtime/runner.js";
 import { logger } from "../utils/logger.js";
 
@@ -82,14 +83,34 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
   );
 
   /**
-   * Deleting a project cascades to its cards. The tmux sessions and worktrees of those cards are
-   * torn down by the session layer, which is why the removed cards come back in the response.
+   * Deleting a project cascades to its cards — and to EVERYTHING those cards own.
+   *
+   * The cascade used to stop at `board.json`: the cards vanished from the board and their sessions,
+   * worktrees, conversations, uploads and browsers stayed in the runner (the response handed the
+   * removed cards back "so the session layer could tear them down", and nothing ever did). Deleting
+   * the project was therefore the way AROUND the card purge. It now runs the same purge per card.
+   *
+   * Fire-and-forget on purpose: each card is a handful of docker execs, and a project with thirty
+   * of them must not hold an HTTP request open for minutes. The cards are already off the board
+   * (same mutation as the project), so nothing can write into them while the purge runs; what fails
+   * is logged and collected by the orphan sweep.
    */
   app.delete<{ Params: { id: string } }>("/api/projects/:id", { preHandler: requireOwner }, async (req, reply) => {
     try {
+      const by = (await currentUser(req))?.username;
       const removed = await registry.removeProject(req.params.id);
       logger.info({ audit: true, action: "project.remove", project: removed.project.id, cards: removed.cards.length },
         "project removed");
+      if (removed.cards.length > 0) {
+        void purgeRemovedCards(removed.cards, removed.project, by).then((reports) => {
+          const incomplete = reports.filter((r) => r.incomplete.length > 0);
+          logger.info(
+            { audit: true, action: "project.remove.purged", project: removed.project.id,
+              cards: reports.length, incomplete: incomplete.length },
+            "cards of the deleted project purged",
+          );
+        });
+      }
       return await reply.send({ ok: true, cards: removed.cards });
     } catch (err) {
       const { code, body } = badRequest(err);

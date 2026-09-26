@@ -287,7 +287,9 @@ export const ptBR: Record<string, string> = {
   "kanban.accountDialog.switch": "Trocar conta",
   "kanban.deleteCard.title": "Excluir “{title}”?",
   "kanban.deleteCard.body":
-    "A sessão é encerrada e o worktree é descartado. A branch e os commits continuam no repositório — só se perde o que não foi commitado no worktree.",
+    "Apaga o card e TUDO dele: a conversa (histórico do chat e transcript do Claude), as imagens " +
+    "anexadas, o worktree, a branch local card/…, o perfil do navegador do card e os servidores de " +
+    "preview. Não dá pra desfazer. O que já foi pro GitHub (branch empurrada, PR) continua lá.",
 
   /* -------------------------------------------------------------- card tile */
   "card.finishToDone": "Concluir (mover pra Feito)",
@@ -940,7 +942,9 @@ export const ptBR: Record<string, string> = {
   "toast.cardRestartError": "Não deu pra reiniciar o card",
   "toast.cardHibernated": "Hibernado — o card fica onde está; abrir retoma a mesma conversa.",
   "toast.cardHibernateError": "Não deu pra hibernar o card",
-  "toast.cardDeleted": "Card excluído.",
+  "toast.cardDeleted": "Card excluído — conversa, anexos e arquivos apagados.",
+  "toast.cardDeletedPartial":
+    "Card excluído, mas parte dos dados resistiu ({steps}) — a faxina diária termina o serviço.",
   "toast.cardDeleteError": "Não deu pra excluir o card",
   "toast.cardAccountSwitched":
     "Conta trocada — a sessão do Claude reinicia na próxima abertura.",

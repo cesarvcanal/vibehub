@@ -26,6 +26,7 @@ import { accountLoginRoutes } from "./routes/accountLogin.js";
 import { previewRoutes, installPreviewUpgrade } from "./routes/preview.js";
 import { cardSdkRoutes } from "./routes/cardSdk.js";
 import { startPauseReconciler, sweepCardUploads, sweepIdleCards } from "./services/board/workspace.js";
+import { sweepOrphanCardData } from "./services/board/purge.js";
 import { startOutboxFlusher } from "./services/board/outbox.js";
 import { startRunnerReaper } from "./services/reaper/reaper.js";
 import { shutdownAllDrivers } from "./services/sdk/manager.js";
@@ -146,6 +147,24 @@ function startUploadSweep(): NodeJS.Timeout {
   return timer;
 }
 
+/**
+ * How often the orphan sweep runs. ONCE A DAY, like the uploads sweep: what it collects is, by
+ * definition, data nobody can reach any more — there is no version of this that needs to be prompt.
+ */
+const ORPHAN_SWEEP_MS = 24 * 60 * 60_000;
+
+/**
+ * The backstop of the card purge (services/board/purge.ts): artifacts of cards that NO LONGER
+ * EXIST — a conversation left by a delete that could not reach the runner, and everything the
+ * deletes from before the purge existed left behind. Runs once at boot and then daily.
+ */
+function startOrphanSweep(): NodeJS.Timeout {
+  void sweepOrphanCardData();
+  const timer = setInterval(() => void sweepOrphanCardData(), ORPHAN_SWEEP_MS);
+  timer.unref?.();
+  return timer;
+}
+
 async function main(): Promise<void> {
   await mkdir(config.dataDir, { recursive: true });
   const app = await buildServer();
@@ -157,6 +176,9 @@ async function main(): Promise<void> {
   // The uploads sweep, for the same reason and in the same place as the others: a test that boots
   // the app must not inherit a timer that deletes files in the runner.
   startUploadSweep();
+  // The orphan sweep, same reasoning: a card that was deleted must not leave its conversation or
+  // its files on the server, and a delete that failed halfway is collected here.
+  startOrphanSweep();
   // Pending pauses are normally closed by the Stop hook, but a session can go quiet without ever
   // firing one (Claude parked on the "Resume from summary" menu, on a permission question, or
   // killed). This asks the runner about those cards on a timer and finishes the pause — a card in

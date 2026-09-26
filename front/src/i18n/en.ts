@@ -286,7 +286,10 @@ export const en: Record<string, string> = {
   "kanban.accountDialog.switch": "Switch account",
   "kanban.deleteCard.title": "Delete “{title}”?",
   "kanban.deleteCard.body":
-    "The session is killed and the worktree is dropped. The branch and any commits stay in the repository — only uncommitted work in the worktree is lost.",
+    "Erases the card and EVERYTHING of it: the conversation (chat history and Claude transcript), " +
+    "the attached images, the worktree, the local card/… branch, the card's browser profile and " +
+    "its preview servers. This cannot be undone. What was already pushed to GitHub (branch, PR) " +
+    "stays there.",
 
   /* -------------------------------------------------------------- card tile */
   "card.finishToDone": "Finish (move to Done)",
@@ -931,7 +934,9 @@ export const en: Record<string, string> = {
   "toast.cardRestartError": "Could not restart the card",
   "toast.cardHibernated": "Hibernated — the card stays where it is; opening it resumes the same conversation.",
   "toast.cardHibernateError": "Could not hibernate the card",
-  "toast.cardDeleted": "Card deleted.",
+  "toast.cardDeleted": "Card deleted — conversation, attachments and files erased.",
+  "toast.cardDeletedPartial":
+    "Card deleted, but part of its data survived ({steps}) — the daily sweep will finish the job.",
   "toast.cardDeleteError": "Could not delete the card",
   "toast.cardAccountSwitched": "Account switched — the Claude session restarts on the next open.",
   "toast.cardAccountSwitchError": "Could not switch the card's account",

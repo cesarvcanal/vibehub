@@ -151,6 +151,9 @@ No database. Under `VIBEHUB_DATA_DIR`:
 |---|---|
 | `board.json` | projects, cards, accounts, MCP servers |
 | `outbox.json` | messages composed for a card that its agent has not received yet |
+| `sdk-history/<cardId>.ndjson` | the native chat's conversation, per card — what a reconnect replays |
+| `sdk-inflight/<cardId>.json` | marker: this card had a turn in flight when the panel died |
+| `provenance/<cardId>.ndjson` | who sent each message into a card (the old chat's attribution) |
 | `settings.json` | git identity, autonomy, setup stamp, idle-hibernation threshold |
 | `users.json` | local accounts (scrypt hashes) |
 | `secrets.enc` | AES-256-GCM vault: GitHub token, Claude tokens, MCP secrets, runner token |
@@ -175,6 +178,42 @@ ticker as the backstop.
 
 Delivery is at-least-once (deliver, then remove): a crash between the two repeats a message, which
 is visible, while the alternative loses one silently.
+
+## Deleting a card deletes the card
+
+"Excluir card" used to drop the row from `board.json` and tear down the worktree. Everything else
+the card had accumulated stayed on the server: the conversation twice over (the native chat's
+`sdk-history/<id>.ndjson` here, and Claude Code's own transcripts
+`<profile>/projects/<cwd-sanitized>/<session>.jsonl` inside the runner), the provenance log, the
+in-flight marker, the messages still queued in the outbox, the attached images, the card's Chromium
+profile — cookies and logged-in sessions — with the browser itself still RUNNING, its GitHub token
+file, its preview servers still listening behind `/preview/<port>/`, and its branch and commits in
+the clone. A deleted card was fully readable, and a new card born on the same worktree path RESUMED
+its conversation.
+
+So the delete is a purge (`services/board/purge.ts`), in an order that has a reason:
+
+1. **Kill first** — both tmux sessions (tree-killed), the SDK driver, the preview sessions, the
+   browser and its credential-capture listener. Nothing may be writing while we delete.
+2. **Drop the card from the board** — every writer in vibehub resolves the card before it writes (an
+   upload, a message, a status hook), so a card that is off the board cannot gain new content
+   mid-purge. That is what makes "delete while an upload is in flight" safe, and what makes every
+   old address (`/api/cards/:id/uploads/...`, the chat sockets) answer 404 from that instant.
+3. **Erase the bytes** — data dir and runner, each step reported. `DELETE /api/cards/:id` answers
+   with `incomplete: []` when nothing survived, and names the steps that failed otherwise: a runner
+   that is down must never make a card undeletable, and must never be reported as a clean deletion.
+
+Deleting a PROJECT cascades into the same purge for each of its cards (it used to be the way around
+it). A **daily orphan sweep** is the backstop and the retroactive cleanup: it deletes only artifacts
+that belong to no card that exists, with three guards — the path must be unmistakably a card
+artifact, nothing younger than an hour is touched, and a pass is capped and logs what it left.
+
+What deliberately SURVIVES, and why: anything already pushed to **GitHub** (a branch, a PR — another
+machine's data), the **project brain** a card contributed to (`vibehub_learn` writes knowledge that
+belongs to the project), the **credentials saved to the vault** from a card's browser (they were
+saved on purpose, they belong to the install), and **log lines** already emitted (the audit trail
+carries card slugs). Filesystem backups of `VIBEHUB_DATA_DIR`, if the operator takes any, keep
+whatever they captured until they rotate.
 
 ## Who can see what
 

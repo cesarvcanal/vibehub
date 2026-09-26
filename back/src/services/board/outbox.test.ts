@@ -267,3 +267,24 @@ describe("cancelMessage", () => {
     expect(await outbox.cancelMessage(c.id, "not-a-message")).toBe(false);
   });
 });
+
+describe("purgeCardQueue (the card is being deleted)", () => {
+  it("drops everything queued for that card and nothing of the others", async () => {
+    const { outbox, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const doomed = await registry.createCard({ projectId: p.id, title: "doomed" });
+    const other = await registry.createCard({ projectId: p.id, title: "other" });
+    agentIs("none");
+    await outbox.queueMessage(doomed.id, "nunca entregue 1");
+    await outbox.queueMessage(doomed.id, "nunca entregue 2");
+    await outbox.queueMessage(other.id, "fica");
+
+    // What the user typed is CONTENT: it must not sit in outbox.json after the card is deleted.
+    expect(await outbox.purgeCardQueue(doomed.id)).toBe(2);
+    expect(await outbox.pendingMessages(doomed.id)).toEqual([]);
+    expect((await outbox.pendingMessages(other.id)).map((m) => m.text)).toEqual(["fica"]);
+    // The card is absent from the ticker's work list, not present with an empty array.
+    expect(await outbox.cardsWithPending()).toEqual([other.id]);
+    expect(await outbox.purgeCardQueue(doomed.id)).toBe(0);
+  });
+});

@@ -90,3 +90,18 @@ describe("capture: binding -> pending -> save / discard", () => {
     expect(capture.hostFromUrl("garbage")).toBe("garbage");
   });
 });
+
+describe("dropPendingCaptures (the card is being deleted)", () => {
+  it("forgets the captures of that card — they hold a PLAINTEXT password in memory", async () => {
+    const { capture } = await fresh();
+    capture.recordCapture("c1", { url: "https://erp.multi/login", username: "ada", password: "s3cr3t" });
+    capture.recordCapture("c1", { url: "https://space/login", username: "ada", password: "outro" });
+    capture.recordCapture("c2", { url: "https://erp.multi/login", username: "bob", password: "fica" });
+
+    expect(capture.dropPendingCaptures("c1")).toBe(2);
+    expect(capture.listCaptures("c1")).toEqual([]);
+    // Another card's pending login is none of this card's business.
+    expect(capture.listCaptures("c2")).toHaveLength(1);
+    expect(capture.dropPendingCaptures("c1")).toBe(0);
+  });
+});

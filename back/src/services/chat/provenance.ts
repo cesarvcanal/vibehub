@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { dataPath } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
@@ -181,6 +181,37 @@ export function pickOrigin(
 /** Sync matcher over the primed cache — what the chat stream calls per user event. */
 export function matchOrigin(cardId: string, text: string, at: number): MessageOrigin | undefined {
   return pickOrigin(cache.get(cardId) ?? [], text, at);
+}
+
+/**
+ * DELETES a card's provenance log — who sent what into a card is part of the card, so it goes when
+ * the card does. The in-memory tail is dropped in the same breath (the file is not the only copy:
+ * `cache` holds the last 200 entries, message text included), and the `primed` mark with it, so a
+ * card id that somehow came back would re-read from disk instead of from a ghost.
+ *
+ * Serialized against the append chain and idempotent — no file is the desired end state. THROWS
+ * only on a real filesystem failure, so a purge can report it.
+ */
+export async function removeProvenance(cardId: string): Promise<void> {
+  const file = provenanceFile(cardId); // validates the id before anything is deleted or forgotten
+  cache.delete(cardId);
+  primed.delete(cardId);
+  let failure: Error | undefined;
+  const prev = chains.get(cardId) ?? Promise.resolve();
+  const next = prev
+    .then(async () => {
+      try {
+        await rm(file, { force: true });
+      } catch (err) {
+        failure = err as Error;
+      }
+    })
+    .finally(() => {
+      if (chains.get(cardId) === next) chains.delete(cardId);
+    });
+  chains.set(cardId, next);
+  await next;
+  if (failure) throw failure;
 }
 
 /** Test hook: forget everything cached (the files on disk are untouched). */

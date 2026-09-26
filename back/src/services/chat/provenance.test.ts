@@ -12,6 +12,7 @@ import {
   pickOrigin,
   primeProvenance,
   recordOrigin,
+  removeProvenance,
   resetProvenanceCache,
   type MessageOrigin,
   type ProvenanceEntry,
@@ -103,5 +104,26 @@ describe("pickOrigin", () => {
   it("an event with no timestamp takes the newest entry for its text", () => {
     const entries = [entry(1_000, AGENT), entry(2_000, USER)];
     expect(pickOrigin(entries, "mesma frase", 0)).toEqual(USER);
+  });
+});
+
+describe("removeProvenance (the card is being deleted)", () => {
+  it("deletes the file AND forgets the in-memory tail (it holds the message text too)", async () => {
+    await recordOrigin(CARD, "olha isso", USER, 1000);
+    expect(matchOrigin(CARD, "olha isso", 1000)).toEqual(USER);
+
+    await removeProvenance(CARD);
+
+    // Not just the disk: the cache keeps the last 200 entries, message text included.
+    expect(matchOrigin(CARD, "olha isso", 1000)).toBeUndefined();
+    await expect(readFile(join(config.dataDir, PROVENANCE_DIR, `${CARD}.ndjson`), "utf8")).rejects.toThrow();
+    // And a card id that came back reads from disk instead of from a ghost cache.
+    await primeProvenance(CARD);
+    expect(matchOrigin(CARD, "olha isso", 1000)).toBeUndefined();
+    await expect(removeProvenance(CARD)).resolves.toBeUndefined();
+  });
+
+  it("refuses an id that is not id-shaped", async () => {
+    await expect(removeProvenance("../../etc/passwd")).rejects.toThrow(/invalid card id/);
   });
 });

@@ -1056,28 +1056,34 @@ describe("restart (single and all) — a working card is protected", () => {
     await expect(ws.killCardSession(card)).resolves.toBeUndefined();
   });
 
-  it("dropCardWorkspace: kills both sessions, removes the git worktree and the directory", async () => {
+  it("purgeCardWorkspace: kills both sessions, removes the git worktree, its directory AND the card's branch", async () => {
     const { card } = await seed();
     await ws.openCard(card.id);
     runScript.mockClear();
-    await ws.dropCardWorkspace(card, "tester");
+    await ws.purgeCardWorkspace(card, { by: "tester" });
 
     expect(scriptAt(0)).toContain(`tmux kill-session -t '${card.tmuxSession}-sh'`);
     const drop = scriptAt(1);
     expect(drop).toContain(`git -C '/work/acme--erp-aux' worktree remove --force '/work/acme--erp-aux-worktrees/${card.worktreeSlug}'`);
     expect(drop).toContain("worktree prune");
+    // The branch goes with the card: `worktree remove` only unregisters the worktree, and a new
+    // card on the same slug used to be born on top of the deleted card's commits.
+    expect(drop).toContain(`git -C '/work/acme--erp-aux' branch -D 'card/${card.worktreeSlug}'`);
     expect(drop).toContain(`rm -rf '/work/acme--erp-aux-worktrees/${card.worktreeSlug}'`);
   });
 
-  it("dropCardWorkspace on a repo-less card removes just the scratch directory; a dead host is swallowed", async () => {
+  it("purgeCardWorkspace on a repo-less card removes just the scratch directory (no branch, no worktree)", async () => {
     const scratch = await reg.createProject({ name: "loose" });
     const card = await reg.createCard({ projectId: scratch.id, title: "Idea" });
-    await ws.dropCardWorkspace(card);
+    await ws.purgeCardWorkspace(card);
     expect(lastScript()).toContain(`rm -rf '/work/scratch/${card.worktreeSlug}'`);
     expect(lastScript()).not.toContain("worktree remove");
+    expect(lastScript()).not.toContain("branch -D");
 
+    // A dead host is REPORTED now (the purge turns it into a failed step and a sweep later),
+    // instead of being swallowed into a silent half-deletion.
     runScript.mockRejectedValue(new Error("host is down"));
-    await expect(ws.dropCardWorkspace(card)).resolves.toBeUndefined();
+    await expect(ws.purgeCardWorkspace(card)).rejects.toThrow(/runner|host/i);
   });
 });
 
@@ -1167,7 +1173,7 @@ describe("image upload into the card", () => {
 
   it("as imagens saem JUNTO com o card — uploads moram fora da worktree e ficavam órfãs", async () => {
     const { card, project } = await seed();
-    await ws.dropCardWorkspace(card);
+    await ws.purgeCardWorkspace(card);
     const script = lastScript();
     expect(script).toContain(`rm -rf '/work/.uploads/${card.id}'`);
     // e a worktree continua saindo, como sempre saiu
@@ -1806,5 +1812,91 @@ describe("buildKillSessionScript (the whole pane process tree dies, not just the
     const script = ws.buildKillSessionScript(CONTAINER, ["s'; rm -rf /; '"]);
     expect(script).toContain(`'s'\\''; rm -rf /; '\\'''`);
     expect(script).not.toContain("-t s';");
+  });
+});
+
+/**
+ * THE PURGE SCRIPT — what "Excluir card" really erases inside the runner.
+ *
+ * The bug these tests pin: a deleted card left its whole life on disk. The worktree went, and the
+ * CONVERSATION (Claude Code's transcripts under `<profile>/projects/<cwd>`), the prompt history in
+ * `.claude.json`, the card's GitHub token, its Chromium profile with the cookies of whatever it had
+ * logged into, and its branch all stayed — a card that had "disappeared" was fully readable, and a
+ * new card born on the same slug resumed its conversation.
+ */
+describe("buildCardPurgeScript (everything the card left on the runner's disk)", () => {
+  const CARD_ID = "e3f1ab5a-9020-4748-b47a-20b30b1ed848";
+  const CWD = "/work/acme--erp-aux-worktrees/deletar-card";
+
+  const script = () =>
+    ws.buildCardPurgeScript({
+      containerName: CONTAINER,
+      cardId: CARD_ID,
+      cwd: CWD,
+      repoDir: "/work/acme--erp-aux",
+      branch: `card/deletar-card`,
+      browserDataDir: "/work/.browser/card-e3f1ab5a",
+    });
+
+  it("erases the worktree, the branch, the uploads, the gh token and the browser profile", () => {
+    const s = script();
+    expect(s).toContain(`docker exec -i '${CONTAINER}' bash -s <<'VIBEHUB_PURGE'`);
+    expect(s).toContain(`git -C '/work/acme--erp-aux' worktree remove --force '${CWD}'`);
+    expect(s).toContain("worktree prune");
+    expect(s).toContain(`git -C '/work/acme--erp-aux' branch -D 'card/deletar-card'`);
+    expect(s).toContain(`rm -rf '${CWD}'`);
+    expect(s).toContain(`rm -rf '/work/.uploads/${CARD_ID}'`);
+    // A LIVE CREDENTIAL: the per-card GitHub token file used to outlive the card it belonged to.
+    expect(s).toContain(`rm -f '/root/.vibehub/gh/${CARD_ID}.token'`);
+    // Cookies and logged-in sessions of the card's browser.
+    expect(s).toContain(`rm -rf '/work/.browser/card-e3f1ab5a'`);
+  });
+
+  it("erases the CONVERSATION: the transcripts of every account profile, their todos and the prompt history", () => {
+    const s = script();
+    // Sanitized cwd = Claude Code's own `projects/<dir>` rule (claudeProjectsDirName).
+    expect(s).toContain('D="$P/projects/-work-acme--erp-aux-worktrees-deletar-card"');
+    // EVERY profile, not just the default: a card can change Claude account during its life and
+    // each account that ran it wrote a transcript of its own.
+    expect(s).toContain("for P in /root/.claude /root/.claude-profiles/*; do");
+    expect(s).toContain('rm -rf "$D" 2>/dev/null || true');
+    // The per-session todo lists Claude Code keeps outside the projects directory.
+    expect(s).toContain('rm -rf "$P/todos/$S"*');
+    // `projects[<cwd>]` in .claude.json holds the PROMPT HISTORY typed in that directory.
+    expect(s).toContain('if [ -f "$P/.claude.json" ]; then');
+    expect(s).toContain(`"$P/.claude.json" '${CWD}'`);
+    expect(s).toContain("delete c.projects[w];");
+  });
+
+  it("attempts every line: no `set -e` inside the container, and nothing aborts the rest", () => {
+    const body = script().split("VIBEHUB_PURGE")[1] ?? "";
+    expect(body).not.toContain("set -e");
+    // Every deletion is tolerant — one missing directory must not leave the next artifact behind.
+    for (const line of body.split("\n").filter((l) => l.startsWith("rm -") || l.startsWith("git -C"))) {
+      expect(line).toMatch(/\|\| true$/);
+    }
+    expect(script().split("\n").at(-2)).toBe("true");
+  });
+
+  it("a repo-less card purges the scratch directory and never mentions git", () => {
+    const s = ws.buildCardPurgeScript({
+      containerName: CONTAINER,
+      cardId: CARD_ID,
+      cwd: "/work/scratch/ideia",
+      browserDataDir: "/work/.browser/card-e3f1ab5a",
+    });
+    expect(s).toContain(`rm -rf '/work/scratch/ideia'`);
+    expect(s).not.toContain("git -C");
+    expect(s).toContain('D="$P/projects/-work-scratch-ideia"');
+  });
+
+  it("refuses a card id or a path that is not id/path-shaped — nothing raw reaches a shell", () => {
+    const base = { containerName: CONTAINER, cwd: CWD, browserDataDir: "/work/.browser/card-x" };
+    expect(() => ws.buildCardPurgeScript({ ...base, cardId: "../../etc" })).toThrow(/invalid card id/);
+    expect(() => ws.buildCardPurgeScript({ ...base, cardId: "a; rm -rf /" })).toThrow(/invalid card id/);
+    expect(() => ws.buildCardPurgeScript({ ...base, cardId: CARD_ID, cwd: "/work/../etc" })).toThrow(/\.\./);
+    expect(() =>
+      ws.buildCardPurgeScript({ ...base, cardId: CARD_ID, repoDir: "/work/r", branch: "x; rm -rf /" }),
+    ).toThrow(/branch/i);
   });
 });

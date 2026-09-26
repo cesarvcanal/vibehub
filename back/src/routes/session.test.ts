@@ -45,7 +45,7 @@ const pauseCard = vi.fn();
 const restartCard = vi.fn();
 const hibernateCard = vi.fn();
 const restartAllCards = vi.fn();
-const dropCardWorkspace = vi.fn();
+const purgeCardWorkspace = vi.fn();
 const uploadCardImage = vi.fn();
 const readCardUpload = vi.fn();
 
@@ -72,7 +72,7 @@ async function boot(): Promise<FastifyInstance> {
     );
     return {
       ...actual,
-      openCard, prepareCard, pauseCard, restartCard, hibernateCard, restartAllCards, dropCardWorkspace,
+      openCard, prepareCard, pauseCard, restartCard, hibernateCard, restartAllCards, purgeCardWorkspace,
       uploadCardImage, readCardUpload,
     };
   });
@@ -155,19 +155,30 @@ describe("card lifecycle routes", () => {
     expect(res.json()).toEqual({ restarted: 3, skipped: 1 });
   });
 
-  it("deletes the runner side before dropping the card from the board", async () => {
+  it("DELETE is a PURGE: the runner side is erased and the card leaves the board, completely", async () => {
     const id = await makeCard();
     const res = await app.inject({ method: "DELETE", url: `/api/cards/${id}`, headers: { cookie } });
     expect(res.statusCode).toBe(200);
-    expect(dropCardWorkspace).toHaveBeenCalled();
+    expect(purgeCardWorkspace).toHaveBeenCalled();
+    // The answer carries the purge report, which is what the UI shows the user. (This test has no
+    // docker, so the browser teardown is the one step that cannot succeed here; the report's
+    // completeness with a runner is pinned in services/board/purge.test.ts.)
+    expect(res.json().ok).toBe(true);
+    expect(res.json().incomplete).not.toContain("runner");
+    expect(res.json().steps.map((s: { name: string }) => s.name)).toEqual(
+      ["sessions", "previews", "browser", "board", "runner", "chat-history", "provenance", "inflight", "outbox"],
+    );
     expect((await app.inject({ method: "GET", url: `/api/cards/${id}`, headers: { cookie } })).statusCode).toBe(404);
   });
 
-  it("still deletes the card when the runner cannot be cleaned", async () => {
+  it("still deletes the card when the runner cannot be cleaned — and SAYS what survived", async () => {
     const id = await makeCard();
-    dropCardWorkspace.mockRejectedValueOnce(new Error("runner unreachable"));
+    purgeCardWorkspace.mockRejectedValueOnce(new Error("runner unreachable"));
     const res = await app.inject({ method: "DELETE", url: `/api/cards/${id}`, headers: { cookie } });
     expect(res.statusCode).toBe(200);
+    // A dead runner must not make a card undeletable, and must not be reported as a clean delete:
+    // the orphan sweep is what finishes the job.
+    expect(res.json().incomplete).toContain("runner");
     expect((await app.inject({ method: "GET", url: `/api/cards/${id}`, headers: { cookie } })).statusCode).toBe(404);
   });
 
