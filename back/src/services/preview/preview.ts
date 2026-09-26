@@ -154,12 +154,21 @@ export interface PreviewTarget {
  * `/preview/<port>/<rest>?<query>` → the port and the path the upstream app should receive.
  * `/preview/<port>` (no slash) also matches — the route answers it with a redirect, but the upgrade
  * interceptor needs the match too. Anything else → null. PURE, TOTAL.
+ *
+ * INFRA PORTS ARE NOT A PREVIEW. `parseListeningPorts` has always hidden vibehub's own per-card
+ * plumbing from the listing, but the PROXY used to accept any port 1-65535 — and the tunnel goes to
+ * the runner's loopback, which is exactly where each card's Chromium DevTools endpoint (9222+) and
+ * x11vnc (5900+) bind. CDP has no authentication of its own (loopback IS its authentication), and
+ * the proxy even sends `Host: 127.0.0.1:<port>`, which is the value Chrome's DNS-rebinding guard
+ * trusts. So any session could sweep 900 ports, find another card's browser and drive it —
+ * `Runtime.evaluate`, `Network.getAllCookies` — on a card never shared with them. The listing and
+ * the proxy now agree on what a preview is.
  */
 export function parsePreviewTarget(url: string): PreviewTarget | null {
   const m = /^\/preview\/(\d{1,5})(\/[^\s]*)?$/.exec(url);
   if (!m) return null;
   const port = Number(m[1]);
-  if (!isValidPreviewPort(port)) return null;
+  if (!isValidPreviewPort(port) || isInfraPort(port)) return null;
   return { port, path: m[2] && m[2].length > 0 ? m[2] : "/" };
 }
 

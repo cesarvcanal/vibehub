@@ -3,6 +3,7 @@ import type { Server, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { requireSession, verifyToken, SESSION_COOKIE } from "../auth/session.js";
+import { requireCardWork } from "../auth/access.js";
 import { hostExecutor } from "../runtime/host.js";
 import { config } from "../config/env.js";
 import {
@@ -268,13 +269,15 @@ export async function previewRoutes(app: FastifyInstance): Promise<void> {
    * or no such preview) — the UI shows the message verbatim; 502 = the relaunch itself failed
    * (never started listening, runner unreachable).
    */
-  app.post<{ Params: { cardId: string; port: string } }>(
-    "/api/cards/:cardId/previews/:port/restart",
-    { preHandler: requireSession },
+  // `:id`, not `:cardId` — requireCardWork reads `req.params.id`, so a route that names it anything
+  // else authorizes the empty string and 404s every caller. The URL the client sends is unchanged.
+  app.post<{ Params: { id: string; port: string } }>(
+    "/api/cards/:id/previews/:port/restart",
+    { preHandler: requireCardWork },
     async (req, reply) => {
       const port = Number(req.params.port);
       try {
-        return await reply.send(await restartPreview(req.params.cardId, port));
+        return await reply.send(await restartPreview(req.params.id, port));
       } catch (err) {
         const message = (err as Error).message;
         const conflict = /no preview registered|no stored start command|card not found|invalid preview port/.test(message);
@@ -284,13 +287,13 @@ export async function previewRoutes(app: FastifyInstance): Promise<void> {
   );
 
   /** STOP a preview: tree-kill its dedicated session and remove the chip. Stopping twice is a 409. */
-  app.delete<{ Params: { cardId: string; port: string } }>(
-    "/api/cards/:cardId/previews/:port",
-    { preHandler: requireSession },
+  app.delete<{ Params: { id: string; port: string } }>(
+    "/api/cards/:id/previews/:port",
+    { preHandler: requireCardWork },
     async (req, reply) => {
       const port = Number(req.params.port);
       try {
-        return await reply.send(await stopPreview(req.params.cardId, port));
+        return await reply.send(await stopPreview(req.params.id, port));
       } catch (err) {
         const message = (err as Error).message;
         const known = /no preview registered|card not found|invalid preview port/.test(message);
