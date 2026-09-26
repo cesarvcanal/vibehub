@@ -131,6 +131,20 @@ export function appendHistory(cardId: string, event: HistoryEvent): Promise<void
  * has grown past several times the replay window is rewritten to just that window, so the hot
  * append path never pays for a rewrite. Never throws — no file simply means no history yet.
  */
+function parseHistoryLines(raw: string): HistoryEvent[] {
+  const events: HistoryEvent[] = [];
+  for (const line of raw.split("\n")) {
+    if (line.trim() === "") continue;
+    try {
+      const parsed = JSON.parse(line) as HistoryEvent;
+      if (parsed && typeof parsed === "object" && typeof parsed.type === "string") events.push(parsed);
+    } catch {
+      // a torn last line from a crash mid-append: skip it, keep the rest
+    }
+  }
+  return events;
+}
+
 export async function readHistory(cardId: string, limit: number = HISTORY_REPLAY_LIMIT): Promise<HistoryEvent[]> {
   let raw: string;
   const file = historyFile(cardId);
@@ -139,21 +153,26 @@ export async function readHistory(cardId: string, limit: number = HISTORY_REPLAY
   } catch {
     return [];
   }
-  const lines = raw.split("\n").filter((l) => l.trim() !== "");
-  const events: HistoryEvent[] = [];
-  for (const line of lines) {
-    try {
-      const parsed = JSON.parse(line) as HistoryEvent;
-      if (parsed && typeof parsed === "object" && typeof parsed.type === "string") events.push(parsed);
-    } catch {
-      // a torn last line from a crash mid-append: skip it, keep the rest
-    }
-  }
+  const events = parseHistoryLines(raw);
   const tail = events.slice(-limit);
   if (events.length > limit * HISTORY_COMPACT_FACTOR) {
-    // Chained like an append so a compaction never races one; best-effort like everything here.
     await appendHistoryBarrier(cardId, async () => {
-      await writeFile(file, tail.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
+      // RE-READ inside the barrier. Chaining alone was not enough — it is what made this lose
+      // data: the barrier waits for the appends already queued and then overwrote the file with a
+      // tail computed from the snapshot taken BEFORE them. A message sent from another tab while
+      // this connect was reading its replay was acknowledged, dropped from the browser's outbox,
+      // and erased from the log — gone on the next F5. `rewindHistory` reads inside the barrier
+      // for the same reason; this is the same rule.
+      let fresh: string;
+      try {
+        fresh = await readFile(file, "utf8");
+      } catch {
+        return;
+      }
+      const current = parseHistoryLines(fresh);
+      if (current.length <= limit) return;
+      const keep = current.slice(-limit);
+      await writeFile(file, keep.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
     });
   }
   return tail;
@@ -189,14 +208,7 @@ export function rewindHistory(cardId: string, originalText: string): Promise<num
     } catch {
       return; // no log yet: nothing to rewind
     }
-    const events: HistoryEvent[] = [];
-    for (const line of raw.split("\n")) {
-      if (line.trim() === "") continue;
-      try {
-        const parsed = JSON.parse(line) as HistoryEvent;
-        if (parsed && typeof parsed === "object" && typeof parsed.type === "string") events.push(parsed);
-      } catch { /* a torn line from a crash mid-append: keep the rest */ }
-    }
+    const events = parseHistoryLines(raw);
     // The LAST occurrence of each end, because the same words can be said twice in a conversation
     // and it is the most recent pair that was just edited.
     let start = -1;

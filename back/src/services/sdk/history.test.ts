@@ -123,6 +123,30 @@ describe("appendHistory / readHistory", () => {
     await expect(rm(join(dir, SDK_HISTORY_DIR, "../../etc"), { force: true })).resolves.toBeUndefined();
   });
 
+  /**
+   * THE BUG THIS PINS: the compaction read the log OUTSIDE the append barrier and then rewrote the
+   * file from that stale snapshot. A message sent from another tab while this connect was reading
+   * its replay was appended, acknowledged (so the browser dropped its outbox copy) — and then
+   * erased by the rewrite. "A mensagem que sumia no F5", arriving from the other end.
+   */
+  it("a compaction keeps what was appended while it was reading", async () => {
+    const limit = 5;
+    const total = limit * HISTORY_COMPACT_FACTOR + 3;
+    for (let i = 0; i < total; i += 1) {
+      await appendHistory(CARD, { type: "user", text: `m${i}` });
+    }
+    // In flight when the replay starts — the barrier will wait for it, which is exactly what made
+    // the old code overwrite it rather than race it.
+    const inFlight = appendHistory(CARD, { type: "user", text: "mandada-durante-o-replay" });
+    await readHistory(CARD, limit);
+    await inFlight;
+
+    const file = join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`);
+    expect(await readFile(file, "utf8")).toContain("mandada-durante-o-replay");
+    const replayed = await readHistory(CARD, limit);
+    expect(replayed.map((e) => (e as { text: string }).text)).toContain("mandada-durante-o-replay");
+  });
+
   it("replays only the last `limit` events and compacts a log that outgrew the window", async () => {
     const limit = 5;
     const total = limit * HISTORY_COMPACT_FACTOR + 3;
