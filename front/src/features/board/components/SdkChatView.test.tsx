@@ -779,8 +779,8 @@ describe("SdkChatView — mensagem no meio do turno (turn_absorbed)", () => {
   });
 });
 
-describe("SdkChatView — escada de estados (Preparando → Pensando → Trabalhando)", () => {
-  it("cold driver: the send shows Preparando…, ready turns it into Pensando…, the first token into Trabalhando…", async () => {
+describe("SdkChatView — escada de estados (Preparando → Pensando → Respondendo)", () => {
+  it("cold driver: the send shows Preparando…, ready turns it into Pensando…, the first token into Respondendo…", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept(); // socket open, driver still booting (no ready yet)
@@ -795,11 +795,47 @@ describe("SdkChatView — escada de estados (Preparando → Pensando → Trabalh
     ws.deliver({ type: "ready" });
     expect(screen.getByTestId("sdk-chat-working")).toHaveAttribute("data-phase", "thinking");
 
+    // O primeiro token JÁ É a resposta sendo escrita — o indicador diz isso, em vez do
+    // "Trabalhando…" genérico que não separava pensar de responder.
     ws.deliver({ type: "assistant_delta", text: "olá" });
-    expect(screen.getByTestId("sdk-chat-working")).toHaveAttribute("data-phase", "working");
+    expect(screen.getByTestId("sdk-chat-working")).toHaveAttribute("data-phase", "answering");
 
     ws.deliver({ type: "result", isError: false });
     expect(screen.queryByTestId("sdk-chat-working")).not.toBeInTheDocument();
+  });
+
+  /**
+   * O que o César não tinha: retorno visual. "Trabalhando…" é a mesma palavra no segundo 2 e no
+   * minuto 9 — o indicador agora carrega o relógio e a nota de estado, e ela ESCALA.
+   */
+  it("carrega o relógio e a nota de estado, e a nota escala com o tempo", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready" });
+
+      const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+      await userEvent.type(box, "oi{Enter}");
+      await waitFor(() => expect(ws.sent.length).toBe(1));
+
+      // O servidor confirma o recebimento, senão o outbox declara a mensagem não entregue no meio
+      // do relógio e o indicador some — o que este teste mede é o turno vivo, não o outbox.
+      const cid = (JSON.parse(ws.sent[0]!) as { cid: string }).cid;
+      ws.deliver({ type: "user_ack", cid });
+
+      const note = await screen.findByTestId("sdk-working-note");
+      expect(note).toHaveTextContent(/0s/);
+      expect(note).toHaveTextContent(/pensando|thinking/);
+
+      // Passados 30s o mesmo turno passa a dizer que AINDA está nisso.
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(screen.getByTestId("sdk-working-note")).toHaveTextContent(/30s/);
+      expect(screen.getByTestId("sdk-working-note")).toHaveTextContent(/ainda pensando|still thinking/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("warm driver: the send goes straight to Pensando… (one indicator, never stacked)", async () => {
@@ -1276,7 +1312,7 @@ describe("SdkChatView — o raciocínio durante a espera", () => {
     expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("Primeiro vou ler o teste que falhou.");
   });
 
-  it("terminado o pensamento, a linha se recolhe — e um clique traz o texto de volta", async () => {
+  it("terminado o pensamento, a linha CONTINUA aberta — e quem fecha, fecha", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -1286,9 +1322,12 @@ describe("SdkChatView — o raciocínio durante a espera", () => {
 
     ws.deliver({ type: "thinking", text: "O teste falha por causa do timeout." } as SdkEvent);
 
-    await waitFor(() => expect(screen.queryByTestId("sdk-thinking-text")).not.toBeInTheDocument());
+    // O fim do turno não esconde o raciocínio: é justamente aí que ele explica o que foi feito.
+    await waitFor(() =>
+      expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("O teste falha por causa do timeout."),
+    );
     await userEvent.click(screen.getByTestId("sdk-thinking-toggle"));
-    expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("O teste falha por causa do timeout.");
+    expect(screen.queryByTestId("sdk-thinking-text")).not.toBeInTheDocument();
   });
 
   it("quem abriu o raciocínio no meio do turno NÃO o perde quando ele termina", async () => {
