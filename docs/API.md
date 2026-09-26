@@ -145,7 +145,7 @@ that card.
 | POST | `/api/cards/:id/hibernate` | kills tmux and stamps `hibernatedAt` — the card KEEPS its column and position and loses its dot; a card with nothing to hibernate (never opened, already cold, or `working`) comes back unchanged |
 | POST | `/api/cards/:id/restart` | fresh Claude process in the same worktree |
 | POST | `/api/cards/restart-all` | `{ restarted, skipped }` |
-| POST | `/api/cards/:id/upload` | `{ name, content }` with bare base64 → `{ path }` inside the runner (10 MB cap) |
+| POST | `/api/cards/:id/upload` | `{ name, content }` with bare base64 → `{ path }` inside the runner (10 MB cap). Kept for **180 days** (`UPLOAD_RETENTION_DAYS`, swept daily) and deleted with the card |
 | GET | `/api/cards/:id/uploads/:file` | the image back, as the image — the chat renders what was attached instead of the runner path. Only names the upload route itself writes (`<stamp>-<name>.<ext>`) and only image types; anything missing is a 404, cached `immutable` because the name carries the upload's timestamp |
 | POST | `/api/cards/:id/messages` | `{ text }` → `{ delivered, pending, agent }` — the composer's Enter. Delivered to a RUNNING Claude, otherwise QUEUED until there is one |
 | GET | `/api/cards/:id/messages` | `{ pending: OutboxMessage[], agent }` — `agent` is `running` / `shell` / `none` |
