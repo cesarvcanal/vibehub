@@ -19,6 +19,7 @@ import {
 } from "./TerminalComposer";
 import { get, post } from "@/lib/api";
 import { MOBILE_QUERY } from "@/lib/useIsMobile";
+import { SLASH_MENU_LIMIT } from "@/features/board/lib/slashMenu";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -928,6 +929,55 @@ describe("the \"/\" menu", () => {
     expect(screen.queryByTestId("composer-slash-menu")).toBeNull();
     expect(field).toHaveValue("/co");
     expect(onEditLast).not.toHaveBeenCalled();
+  });
+
+  it("keeps the highlighted entry on screen — the arrows scroll the list, not just the highlight", async () => {
+    const user = userEvent.setup();
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      name: `cmd-${i}`,
+      description: `Command number ${i}`,
+      source: "skill" as const,
+    }));
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" commands={many} />);
+    const field = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+    await user.type(field, "/cmd");
+
+    // jsdom has no layout: give the list a viewport and the rows a height, so "is this row
+    // visible?" has an answer at all. Eight rows of 40px in a 256px box: the last two are below.
+    const ROW = 40;
+    const list = screen.getByTestId("composer-slash-menu");
+    const items = screen.getAllByTestId("composer-slash-item");
+    expect(items).toHaveLength(SLASH_MENU_LIMIT);
+    Object.defineProperty(list, "clientHeight", { configurable: true, value: 256 });
+    items.forEach((item, i) => {
+      Object.defineProperty(item, "offsetTop", { configurable: true, value: 4 + i * ROW });
+      Object.defineProperty(item, "offsetHeight", { configurable: true, value: ROW });
+    });
+    const active = (): number => items.findIndex((item) => item.dataset.active === "true");
+
+    // Walking down inside the rows that already show does not move the list...
+    await user.keyboard("{ArrowDown}{ArrowDown}");
+    expect(active()).toBe(2);
+    expect(list.scrollTop).toBe(0);
+
+    // ...but the first row past the bottom edge pulls the list along, and keeps pulling.
+    await user.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}");
+    expect(active()).toBe(6);
+    const atSix = list.scrollTop;
+    expect(atSix).toBeGreaterThan(0);
+    await user.keyboard("{ArrowDown}");
+    expect(active()).toBe(7);
+    expect(list.scrollTop).toBeGreaterThan(atSix);
+
+    // Wrapping round to the first entry brings the list back to the top with it.
+    await user.keyboard("{ArrowDown}");
+    expect(active()).toBe(0);
+    expect(list.scrollTop).toBe(0);
+
+    // And wrapping backwards goes straight to the bottom — the highlight is never off screen.
+    await user.keyboard("{ArrowUp}");
+    expect(active()).toBe(SLASH_MENU_LIMIT - 1);
+    expect(list.scrollTop).toBeGreaterThan(atSix);
   });
 
   it("stays out of the way of a card with no catalogue — a slash is just a slash", async () => {

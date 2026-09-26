@@ -23,6 +23,7 @@ import { TerminalComposer } from "@/features/board/components/TerminalComposer";
 import { LinkifiedText, Markdown, SenderTag } from "@/features/board/components/ChatView";
 import { originRole } from "@/features/board/lib/chat";
 import { ultraKeywords } from "@/features/board/lib/ultraWords";
+import { workingStage, type WorkingKind } from "@/features/board/lib/workingStage";
 import { reconnectDelay, type ConnectionState } from "@/features/board/lib/reconnect";
 import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
 import {
@@ -633,6 +634,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   const working = connected && (state.awaiting || state.turnActive);
   const activity = React.useMemo(() => (working ? currentActivity(state) : null), [working, state]);
   const seconds = useTurnClock(working);
+  /* O verbo e a nota deste instante: é o que troca "Trabalhando…" parado por algo que anda. */
+  const stage = workingStage(workingKindOf(activity, state.awaiting, state.ready), seconds);
   React.useEffect(() => {
     if (!working) setEscalation(null);
   }, [working]);
@@ -714,14 +717,23 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
             resuming the session (`ready` false — the cold start), "Pensando…" once the turn is in
             the engine and no token has landed yet. The first driver event clears `awaiting` and the
             plain "Trabalhando…" takes the same seat. Never stacked: one line, its label changes. */}
-        {connected && (state.awaiting || state.turnActive) ? (
+        {working ? (
           <div
             className="flex items-center gap-2 text-xs text-muted-foreground"
             data-testid="sdk-chat-working"
-            data-phase={state.awaiting ? (state.ready ? "thinking" : "preparing") : "working"}
+            data-phase={workingKindOf(activity, state.awaiting, state.ready)}
           >
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            {state.awaiting ? (state.ready ? t("sdk.thinking") : t("sdk.preparing")) : t("chat.working")}
+            <span className="text-foreground/90">{t(stage.verb)}</span>
+            <span data-testid="sdk-working-note" className="opacity-80">
+              {escalation
+                ? t("sdk.workingWithEffort", {
+                    elapsed: formatElapsed(seconds),
+                    note: t(stage.note),
+                    effort: escalation.ultracode ? t("sdk.ultracodeOn") : t("sdk.effortHigh"),
+                  })
+                : t("sdk.workingWith", { elapsed: formatElapsed(seconds), note: t(stage.note) })}
+            </span>
           </div>
         ) : null}
       </div>
@@ -951,6 +963,20 @@ function useTurnClock(active: boolean): number {
   return seconds;
 }
 
+/**
+ * QUAL FASE nomear agora. O que a barra sabe (a atividade viva, se a sessão ainda está subindo)
+ * vira a fase que `workingStage` sabe descrever. PURE.
+ */
+export function workingKindOf(
+  activity: { kind: "tool" | "thinking" | "answering" } | null,
+  awaiting: boolean,
+  ready: boolean,
+): WorkingKind {
+  if (awaiting && !ready) return "preparing";
+  if (activity) return activity.kind;
+  return awaiting ? "thinking" : "working";
+}
+
 /** Elapsed, the way the CLI writes it: `4s`, `1m 24s`. PURE. */
 export function formatElapsed(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
@@ -987,18 +1013,10 @@ function SdkActivityBar({
   onJump: () => void;
 }) {
   const t = useT();
-  const label =
-    awaiting && !ready
-      ? t("sdk.preparing")
-      : activity?.kind === "tool"
-        ? activity.label
-        : activity?.kind === "thinking"
-          ? t("sdk.thinking")
-          : activity?.kind === "answering"
-            ? t("sdk.answering")
-            : awaiting
-              ? t("sdk.thinking")
-              : t("chat.working");
+  /* O nome da ferramenta ganha do verbo — "Rodando testes" diz mais que "Executando…". Fora isso,
+     é o mesmo vocabulário do indicador lá embaixo (workingStage): verbo que troca, nota que escala. */
+  const stage = workingStage(workingKindOf(activity, awaiting, ready), seconds);
+  const label = activity?.kind === "tool" && !(awaiting && !ready) ? activity.label : t(stage.verb);
   const effort = escalation ? (escalation.ultracode ? t("sdk.ultracodeOn") : t("sdk.effortHigh")) : null;
   return (
     <button
@@ -1020,8 +1038,8 @@ function SdkActivityBar({
       {activity?.background ? (
         <span className="hidden shrink-0 opacity-70 sm:inline">{t("sdk.toolBackground")}</span>
       ) : null}
-      <span data-testid="sdk-activity-elapsed" className="shrink-0 font-mono opacity-70">
-        {formatElapsed(seconds)}
+      <span data-testid="sdk-activity-elapsed" className="shrink-0 opacity-70">
+        {t("sdk.workingWith", { elapsed: formatElapsed(seconds), note: t(stage.note) })}
       </span>
       {effort ? (
         <span
@@ -1076,15 +1094,17 @@ function SdkToolRow({ row }: { row: Extract<SdkRow, { kind: "tool" }> }) {
  * meio segundo ou dez minutos, e quem esperava não tinha como saber se o agente entendeu o pedido.
  * Agora o pensamento aparece ao vivo, em segundo plano (menor, em itálico, sem o peso da resposta).
  *
- * Aberto enquanto pensa, recolhido quando termina: durante a espera é exatamente o que se quer ler,
- * depois vira ruído entre a pergunta e a resposta — e um clique traz de volta.
+ * ABERTO POR PADRÃO, e continua aberto quando o turno acaba (pedido do César, 26/09/2026): ele lê
+ * o raciocínio pra saber o que a IA está fazendo, e recolher sozinho no fim escondia justamente a
+ * explicação do que acabou de acontecer. Quem não quer ler fecha — e o fechado daquela linha fica
+ * fechado.
  */
 function SdkThinkingRow({ text, streaming }: { text: string; streaming: boolean }): React.ReactElement {
   const t = useT();
-  // Só a escolha EXPLÍCITA da pessoa manda; sem ela, o estado segue o turno (aberto pensando,
-  // recolhido depois). Sem isso, recolher no fim do turno apagaria um "quero ver" feito no meio.
+  // Só a escolha EXPLÍCITA da pessoa manda; sem ela, fica aberto — antes ele seguia o turno e se
+  // recolhia sozinho no fim, que é exatamente o que estava escondendo o raciocínio.
   const [choice, setChoice] = React.useState<boolean | null>(null);
-  const open = choice ?? streaming;
+  const open = choice ?? true;
   return (
     <div data-testid="sdk-thinking" data-streaming={streaming || undefined} data-open={open || undefined}>
       <button

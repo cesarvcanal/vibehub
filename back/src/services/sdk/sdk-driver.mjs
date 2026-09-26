@@ -368,6 +368,48 @@ async function emitCatalogFrom(init, queryHandle) {
   }
 }
 
+/**
+ * O MENU "/" ANTES DA PRIMEIRA MENSAGEM (produção, 26/09/2026: card novo, digitar "/code-re" não
+ * oferecia nada). O catálogo só chegava pelo `init`, e o `init` só existe quando um turno começa —
+ * ou seja, num card recém-aberto o menu ficava vazio justamente na hora em que a pessoa quer
+ * escolher um comando.
+ *
+ * O CLI responde `supportedCommands()` sem nenhum turno (verificado contra o SDK 0.3.246 antes
+ * desta linha existir), então o driver sobe uma consulta DESCARTÁVEL só para perguntar isso e a
+ * encerra em seguida. Três cuidados:
+ *
+ *  - `VIBEHUB_STATUS_URL` vai VAZIO: os hooks de status do runner disparam no SessionStart desta
+ *    consulta, e um card sem turno nenhum não pode sair mandando status pro painel;
+ *  - nada de `resume`: é uma sessão jogada fora, e resumir a conversa real aqui seria carregá-la
+ *    por nada;
+ *  - `catalogAnnounced` fica FALSO: este catálogo é provisório (sem as listas do `init`, todo
+ *    comando aparece como "comando"), e o primeiro `init` de verdade o substitui com os rótulos
+ *    certos — skill, plugin, e os comandos que só fazem sentido num terminal, escondidos.
+ */
+let warmChannel = null;
+async function warmCatalog() {
+  if (catalogAnnounced || channel || warmChannel) return;
+  const ch = makeChannel();
+  warmChannel = ch;
+  try {
+    const options = baseOptions();
+    options.env = { ...process.env, VIBEHUB_STATUS_URL: "" };
+    const handle = query({ prompt: ch, options });
+    // A consulta só ganha vida sendo iterada — e nada do que ela diz interessa: o único objetivo é
+    // ter um CLI de pé para responder a pergunta abaixo.
+    void (async () => { try { for await (const _ of handle) { /* descartado */ } } catch { /* idem */ } })();
+    const commands = await handle.supportedCommands();
+    // Um turno de verdade começou no meio disso: o `init` dele traz o catálogo completo, e este
+    // aqui — sem rótulos — não tem por que passar na frente.
+    if (!catalogAnnounced && !channel && Array.isArray(commands)) emit({ type: "catalog", commands });
+  } catch (err) {
+    process.stderr.write(`warm catalog unavailable: ${err && err.message ? err.message : String(err)}\n`);
+  } finally {
+    ch.end(); // fecha a corrente de entrada: sem mais mensagens, o CLI descartável sai sozinho
+    warmChannel = null;
+  }
+}
+
 let currentQuery = null; // the live query() iterator, so an interrupt can reach it mid-turn
 let channel = null; // feeds the live query's prompt stream (null = no stream running)
 let turnActive = false; // a turn is running, or a message is already fed and about to start one
@@ -645,6 +687,9 @@ function sendUser(text) {
   const ultra = ultraKeywords(text);
   const fresh = !channel;
   if (fresh) {
+    // A consulta descartável do catálogo (se ainda estiver de pé) não tem mais razão de existir —
+    // e deixá-la viva gastaria um CLI inteiro ao lado do que vai responder de verdade.
+    if (warmChannel) warmChannel.end();
     channel = makeChannel();
     void runStream();
   }
@@ -796,3 +841,8 @@ rl.on("line", (line) => {
 rl.on("close", () => process.exit(0));
 
 emit({ type: "ready", resume: INITIAL_RESUME });
+
+// O menu "/" não espera a primeira mensagem: assim que o driver está de pé, ele pergunta ao CLI
+// quais comandos esta sessão tem. Nunca bloqueia o boot — falhou, o chat segue sem menu até o
+// primeiro `init`, que é exatamente o comportamento antigo.
+void warmCatalog();

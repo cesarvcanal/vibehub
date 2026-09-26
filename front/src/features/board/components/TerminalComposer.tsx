@@ -151,17 +151,38 @@ function SlashMenu({
   const t = useT();
   const label = (source: SlashCommandInfo["source"]): string =>
     source === "skill" ? t("composer.slashSkill") : source === "plugin" ? t("composer.slashPlugin") : t("composer.slashCommand");
+  /**
+   * The list is taller than its box, so walking it with the arrows has to DRAG THE BOX along: the
+   * highlight used to travel past the bottom edge and vanish, leaving a menu that looked frozen
+   * while the selection kept moving. Scrolled by hand instead of scrollIntoView() because that one
+   * also scrolls every ancestor — including the conversation behind the composer.
+   */
+  const listRef = React.useRef<HTMLDivElement | null>(null);
+  const activeRef = React.useRef<HTMLButtonElement | null>(null);
+  React.useEffect(() => {
+    const list = listRef.current;
+    const item = activeRef.current;
+    if (!list || !item) return;
+    const PAD = 4; // the list's own p-1: showing it keeps the row from looking glued to the edge
+    const top = item.offsetTop;
+    const bottom = top + item.offsetHeight;
+    if (top - PAD < list.scrollTop) list.scrollTop = Math.max(0, top - PAD);
+    else if (bottom + PAD > list.scrollTop + list.clientHeight) list.scrollTop = bottom + PAD - list.clientHeight;
+  }, [highlight, commands]);
   return (
     <div
+      ref={listRef}
       data-testid="composer-slash-menu"
       role="listbox"
       aria-label={t("composer.slashAria")}
-      className="max-h-64 overflow-y-auto rounded-md border border-border bg-card p-1 shadow-lg"
+      /* relative: the rows measure themselves against THIS box (offsetParent), not the page. */
+      className="relative max-h-64 overflow-y-auto rounded-md border border-border bg-card p-1 shadow-lg"
     >
       {commands.map((command, i) => (
         <button
           key={command.name}
           type="button"
+          ref={i === highlight ? activeRef : undefined}
           role="option"
           aria-selected={i === highlight}
           data-testid="composer-slash-item"
