@@ -451,3 +451,84 @@ describe("sweepOrphanCardData (the backstop: what earlier deletes left behind)",
     expect(second.dataFiles).toBe(1);
   });
 });
+
+/**
+ * A FAXINA TAMBÉM NÃO PODE ENCOSTAR EM dev/prod. O que ela apaga vem do NOME da pasta órfã
+ * (`/work/<repo>-worktrees/<slug>`), e o nome só produz `card/<slug>` — nunca a branch que estava
+ * dentro daquela worktree.
+ */
+describe("the sweep never deletes a person's branch", () => {
+  it("only ever forms card/<slug> from the directory name", () => {
+    const s = purge.buildOrphanPurgeScript(CONTAINER, [
+      { kind: "worktree", path: "/work/acme--erp-aux-worktrees/um-card", mtimeMs: 0 },
+    ]);
+    expect(s).toContain(`branch -D 'card/um-card'`);
+    for (const branch of ["'dev'", "'prod'", "'main'", "'master'"]) {
+      expect(s).not.toContain(`branch -D ${branch}`);
+    }
+  });
+
+  it("a worktree that had dev checked out loses the directory, not the branch", () => {
+    const s = purge.buildOrphanPurgeScript(CONTAINER, [
+      { kind: "worktree", path: "/work/acme--erp-aux-worktrees/dev", mtimeMs: 0 },
+    ]);
+    // The slug happens to be "dev" — the branch line is still namespaced, and `card/dev` is a
+    // vibehub branch, never the real `dev`.
+    expect(s).toContain(`branch -D 'card/dev'`);
+    expect(s).not.toContain(`branch -D 'dev'`);
+    expect(s).toContain(`rm -rf '/work/acme--erp-aux-worktrees/dev'`);
+  });
+});
+
+/**
+ * NUNCA `dev`, NUNCA `prod` — pelo caminho REAL da exclusão.
+ *
+ * Os testes acima cobrem as peças (a regra do chamador, a trava do construtor de script, a faxina).
+ * Este cobre o que o botão faz: `purgeCard` num card apontado para uma branch de verdade. Se algum
+ * dia alguém religar a exclusão de branch em outro ponto do caminho, é aqui que quebra.
+ */
+describe("purgeCard nunca apaga a branch de uma pessoa", () => {
+  const PROTEGIDAS = ["dev", "prod", "main", "master", "release/1.0", "feat/pdv", "hotfix/nfe"];
+
+  it("um card em dev/prod/main perde a worktree e NENHUMA branch", async () => {
+    const { project } = await seed();
+    for (const branch of PROTEGIDAS) {
+      const card = await reg.createCard({ projectId: project.id, title: `card em ${branch}` });
+      await reg.updateCard(card.id, { branch });
+      runScript.mockClear();
+
+      const report = await purge.purgeCard(card.id, "cesar");
+
+      // A exclusão acontece por inteiro...
+      expect(report?.incomplete).toEqual([]);
+      expect(await reg.getCard(card.id)).toBeUndefined();
+      const s = allScripts();
+      expect(s).toContain("worktree remove --force");
+      // ...e nenhum `branch -D` sai, de forma alguma: nem a protegida, nem qualquer outra.
+      expect(s).not.toContain("branch -D");
+      expect(s).not.toContain(`'${branch}'`);
+    }
+  });
+
+  it("o card comum continua perdendo a SUA branch — a trava não desligou a feature", async () => {
+    const { card } = await seed();
+    await purge.purgeCard(card.id);
+    expect(allScripts()).toContain(`branch -D 'card/${card.worktreeSlug}'`);
+  });
+
+  it("nenhum script que a purga manda pro runner pode carregar um `branch -D` fora de card/", async () => {
+    const { project } = await seed();
+    const emDev = await reg.createCard({ projectId: project.id, title: "em dev" });
+    await reg.updateCard(emDev.id, { branch: "dev" });
+    const normal = await reg.createCard({ projectId: project.id, title: "normal" });
+    runScript.mockClear();
+    await purge.purgeCard(emDev.id);
+    await purge.purgeCard(normal.id);
+
+    // Varre TODA linha de exclusão de branch de TODOS os scripts enviados: cada uma tem de estar
+    // no namespace `card/`. Uma linha nova em qualquer ponto do caminho cai neste laço.
+    const linhas = allScripts().split("\n").filter((l) => l.includes("branch -D"));
+    expect(linhas.length).toBeGreaterThan(0);
+    for (const linha of linhas) expect(linha).toMatch(/branch -D 'card\//);
+  });
+});

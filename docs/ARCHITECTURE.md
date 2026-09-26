@@ -208,9 +208,17 @@ it). A **daily orphan sweep** is the backstop and the retroactive cleanup: it de
 that belong to no card that exists, with three guards — the path must be unmistakably a card
 artifact, nothing younger than an hour is touched, and a pass is capped and logs what it left.
 
-The branch it drops is the one the card CREATED (`card/<worktreeSlug>`). A card pointed at a branch
-that already existed — an imported session, a card opened on `feat/pdv` — keeps it: that branch is
-not the card's work, it is work the card visited.
+The branch it drops is the one the card CREATED (`card/<worktreeSlug>`), and it drops it LOCALLY.
+Two guards, both structural:
+
+- **Only the `card/` namespace.** `ownBranch` decides it, and `buildCardPurgeScript` THROWS on
+  anything else (`CARD_BRANCH_PREFIX`) — so `dev`, `prod`, `main` or a `feat/...` a card was pointed
+  at cannot be deleted by any caller, present or future. A card opened on an existing branch keeps
+  it: that branch is not the card's work, it is work the card visited.
+- **Nothing remote.** `git branch -D` is local by definition (deleting a remote branch needs
+  `git push origin --delete`), and the purge script carries no command that reaches the network —
+  no `push`, no `fetch`, no `origin`, no `gh`. A branch or PR on GitHub is another machine's data
+  and the delete cannot touch it. Both rules are pinned by tests.
 
 What deliberately SURVIVES, and why: anything already pushed to **GitHub** (a branch, a PR — another
 machine's data), the **project brain** a card contributed to (`vibehub_learn` writes knowledge that

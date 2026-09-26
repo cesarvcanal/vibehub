@@ -1605,6 +1605,12 @@ export interface CardPurgeScriptOpts {
 }
 
 /**
+ * The ONLY branch namespace a card delete may ever touch. Everything vibehub creates for a card
+ * lives under it; everything a person made (`dev`, `prod`, `main`, `feat/...`) does not.
+ */
+export const CARD_BRANCH_PREFIX = "card/";
+
+/**
  * The branch the card OWNS — the derived `card/<worktreeSlug>` and nothing else.
  *
  * A card can be pointed at a branch that already existed (an imported session, a card opened on
@@ -1613,7 +1619,7 @@ export interface CardPurgeScriptOpts {
  * leave every branch alone. PURE.
  */
 export function ownBranch(card: Pick<Card, "branch" | "worktreeSlug">): string | undefined {
-  const derived = `card/${card.worktreeSlug}`;
+  const derived = `${CARD_BRANCH_PREFIX}${card.worktreeSlug}`;
   return cardBranch(card) === derived ? derived : undefined;
 }
 
@@ -1657,8 +1663,16 @@ export function buildCardPurgeScript(o: CardPurgeScriptOpts): string {
       `git -C ${shQuote(o.repoDir)} worktree prune 2>/dev/null || true`,
     );
     if (o.branch) {
+      // THE HARD GUARD, and the reason it lives HERE and not only in the caller: a delete must
+      // never be able to drop `dev`, `prod`, `main` or any branch a person works on. Only the
+      // `card/` namespace — the branches vibehub itself creates — can ever reach a `branch -D`.
+      // A caller that asks for anything else is a BUG, and this throws instead of obeying.
+      const branch = assertBranchName(o.branch);
+      if (!branch.startsWith(CARD_BRANCH_PREFIX)) {
+        throw new Error(`refusing to delete a branch outside '${CARD_BRANCH_PREFIX}': '${branch}'`);
+      }
       // -D (not -d): the card is being erased, so "not merged anywhere" is not a reason to keep it.
-      inner.push(`git -C ${shQuote(o.repoDir)} branch -D ${shQuote(assertBranchName(o.branch))} 2>/dev/null || true`);
+      inner.push(`git -C ${shQuote(o.repoDir)} branch -D ${shQuote(branch)} 2>/dev/null || true`);
     }
   }
   inner.push(
