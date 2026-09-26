@@ -166,7 +166,9 @@ function startOrphanSweep(): NodeJS.Timeout {
 }
 
 async function main(): Promise<void> {
-  await mkdir(config.dataDir, { recursive: true });
+  // 0700: the data dir holds users.json, secrets.enc and master.key. Only affects a dir being
+  // created — an existing install keeps whatever the operator gave it.
+  await mkdir(config.dataDir, { recursive: true, mode: 0o700 });
   const app = await buildServer();
   // The outbox backstop. Started HERE and not in buildServer(): tests build servers by the dozen
   // and none of them wants a timer poking at a runner.

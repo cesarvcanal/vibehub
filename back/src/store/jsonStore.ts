@@ -53,7 +53,10 @@ export class JsonStore<T extends object> {
   private async persist(doc: T): Promise<void> {
     await mkdir(dirname(this.file), { recursive: true });
     const tmp = `${this.file}.tmp`;
-    await writeFile(tmp, JSON.stringify(doc, null, 2), "utf8");
+    // `mode` on the write, not only the chmod after it: without it the file is created 0644 and
+    // every persist opens a readable window on users.json (scrypt hashes) and board.json. The
+    // chmod stays as the belt — `mode` is ignored when the tmp file already exists.
+    await writeFile(tmp, JSON.stringify(doc, null, 2), { encoding: "utf8", mode: 0o600 });
     await chmod(tmp, 0o600);
     await rename(tmp, this.file);
     this.cache = doc;
