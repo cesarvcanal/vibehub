@@ -449,7 +449,7 @@ async function runStream() {
     currentQuery = null;
     // The next stream is a NEW CLI process: whatever we pinned in this one's flag layer died with
     // it, so there is nothing left to give back.
-    ultraRaised = false;
+    ultraRaised = null;
   }
 }
 
@@ -523,8 +523,12 @@ function ultraKeywords(text) {
   return { ultrathink, ultracode, any: ultrathink || ultracode };
 }
 
-/** Our escalation is currently pinned in the flag layer, and the turn that asked for it is running. */
-let ultraRaised = false;
+/**
+ * The keys WE pinned in the flag layer, so the give-back clears exactly those and nothing else.
+ * `null` while we have pinned nothing. It matters that this is a record and not a boolean: an
+ * `ultrathink` turn must not switch off an `ultracode` the session already had.
+ */
+let ultraRaised = null;
 
 /** How long the first message of a fresh stream waits for the CLI to boot before going anyway. */
 const ULTRA_INIT_TIMEOUT_MS = 10_000;
@@ -559,7 +563,7 @@ async function raiseUltra(kinds, waitForInit) {
   for (const settings of attempts) {
     try {
       await handle.applyFlagSettings(settings);
-      ultraRaised = true;
+      ultraRaised = settings;
       return;
     } catch { /* try the next, weaker one */ }
   }
@@ -567,14 +571,18 @@ async function raiseUltra(kinds, waitForInit) {
 
 /** Give the effort back at the end of the turn: the keyword was for THAT turn, not for the session. */
 async function clearUltra() {
-  if (!ultraRaised) return;
-  ultraRaised = false;
+  const raised = ultraRaised;
+  if (!raised) return;
+  ultraRaised = null;
   const handle = currentQuery;
   if (!handle || typeof handle.applyFlagSettings !== "function") return;
   try {
     // `null` clears the key from the flag layer, so whatever the user's own settings say takes
-    // over again — this restores a level, it does not impose one.
-    await handle.applyFlagSettings({ effortLevel: null, ultracode: null });
+    // over again — this restores a level, it does not impose one. Only the keys this driver
+    // actually set are cleared: an `ultrathink` turn never touches `ultracode`.
+    const give = {};
+    for (const key of Object.keys(raised)) give[key] = null;
+    await handle.applyFlagSettings(give);
   } catch { /* the stream is gone, and a dead stream has no effort to give back */ }
 }
 

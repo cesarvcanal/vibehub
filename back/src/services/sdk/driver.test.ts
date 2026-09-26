@@ -244,7 +244,7 @@ describe("sdk-driver.mjs — ultrathink / ultracode", () => {
   /** A detecção, recortada do driver e executada de verdade. */
   const ultraKeywords = ((): ((text: string) => { ultrathink: boolean; ultracode: boolean; any: boolean }) => {
     const from = source.indexOf("const ULTRA_CLOSERS");
-    const to = source.indexOf("/** Our escalation is currently");
+    const to = source.indexOf("let ultraRaised"); // the detection ends where the escalation state begins
     expect(from).toBeGreaterThan(0);
     expect(to).toBeGreaterThan(from);
     const factory = new Function(`${source.slice(from, to)}\nreturn ultraKeywords;`);
@@ -279,7 +279,11 @@ describe("sdk-driver.mjs — ultrathink / ultracode", () => {
 
   it("devolve o esforço no fim do turno — a palavra valia para AQUELE turno", () => {
     expect(source).toContain("void clearUltra(); // the keyword was for THIS turn");
-    expect(source).toContain("applyFlagSettings({ effortLevel: null, ultracode: null })");
+    // A devolução limpa SÓ o que o driver fixou: um turno com `ultrathink` não pode desligar um
+    // `ultracode` que a sessão já tinha.
+    expect(source).toContain("ultraRaised = settings;");
+    expect(source).toContain("for (const key of Object.keys(raised)) give[key] = null;");
+    expect(source).toContain("await handle.applyFlagSettings(give);");
   });
 
   it("a mensagem NUNCA é engolida por uma escalada que falhou (o push mora no finally)", () => {
