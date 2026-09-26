@@ -125,6 +125,14 @@ function runProcess(file: string, args: string[], stdin: string, opts: ExecOpts)
       const detail = (stderr || `command exited with code ${code}`).trim();
       reject(new HostExecError(detail, { accessError: isAccessError(detail), exitCode: code }));
     });
+    // A child that dies before reading its stdin — ssh that cannot reach the host, bash that exits
+    // on line one — leaves this write facing a closed pipe. The EPIPE surfaces on the STREAM, not
+    // on the child, so `child.on("error")` never sees it and the unhandled stream error takes the
+    // WHOLE SERVER down: an unreachable runner plus any payload past the 64 KB pipe buffer (a
+    // pasted screenshot is megabytes) killed every terminal on the board. Swallowed on purpose —
+    // the exit code and stderr that `close` already collects are the real diagnosis, and rejecting
+    // here would replace "Connection timed out" with "EPIPE".
+    child.stdin.on("error", () => {});
     child.stdin.write(stdin);
     child.stdin.end();
   });

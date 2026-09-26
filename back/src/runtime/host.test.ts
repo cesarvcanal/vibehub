@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, readFile, stat } from "node:fs/promises";
+import { mkdtemp, rm, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { config } from "../config/env.js";
@@ -115,5 +115,48 @@ describe("ssh executor", () => {
     expect(args).toContain("-tt");
     expect(args[args.length - 1]).toBe("docker exec -it c sh");
     expect(args[args.length - 2]).toBe("root@10.0.0.5");
+  });
+});
+
+describe("a host that dies before reading the script", () => {
+  /**
+   * THE BUG THIS PINS: a runner host that was merely UNREACHABLE took the whole server with it.
+   * ssh exits without ever reading its stdin, so everything past the 64 KB pipe buffer lands on a
+   * closed pipe — and that EPIPE arrives on the STREAM, where `child.on("error")` cannot see it.
+   * An unhandled stream error ends the process: one pasted screenshot (megabytes of base64) at the
+   * wrong moment and every terminal on the board dropped. A fake `ssh` on PATH reproduces it with
+   * no network.
+   */
+  it("reports the ssh failure instead of killing the process", async () => {
+    const binDir = await mkdtemp(join(tmpdir(), "vibehub-fake-ssh-"));
+    await writeFile(
+      join(binDir, "ssh"),
+      "#!/bin/sh\nsleep 0.2\necho 'ssh: connect to host 10.0.0.5 port 22: Connection timed out' >&2\nexit 255\n",
+      { mode: 0o755 },
+    );
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${binDir}:${savedPath ?? ""}`;
+    config.runner.kind = "ssh";
+    config.runner.sshHost = "10.0.0.5";
+    config.runner.sshKeyPath = "";
+    resetHostExecutorForTesting();
+
+    // Catching it here is what keeps the failure legible: without the fix the worker simply dies.
+    const uncaught: NodeJS.ErrnoException[] = [];
+    const onUncaught = (e: NodeJS.ErrnoException): void => { uncaught.push(e); };
+    process.on("uncaughtException", onUncaught);
+    try {
+      // Past the pipe buffer on purpose: a payload that fits would be swallowed by the kernel and
+      // never reach the closed read end.
+      await expect(hostExecutor().runScript("#".repeat(5_000_000))).rejects.toMatchObject({
+        message: expect.stringContaining("Connection timed out"),
+      });
+      await new Promise((r) => setTimeout(r, 400)); // give a stray EPIPE time to surface
+    } finally {
+      process.off("uncaughtException", onUncaught);
+      process.env.PATH = savedPath;
+      await rm(binDir, { recursive: true, force: true });
+    }
+    expect(uncaught.map((e) => e.code)).toEqual([]);
   });
 });
