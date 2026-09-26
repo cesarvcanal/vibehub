@@ -208,6 +208,10 @@ it). A **daily orphan sweep** is the backstop and the retroactive cleanup: it de
 that belong to no card that exists, with three guards — the path must be unmistakably a card
 artifact, nothing younger than an hour is touched, and a pass is capped and logs what it left.
 
+The branch it drops is the one the card CREATED (`card/<worktreeSlug>`). A card pointed at a branch
+that already existed — an imported session, a card opened on `feat/pdv` — keeps it: that branch is
+not the card's work, it is work the card visited.
+
 What deliberately SURVIVES, and why: anything already pushed to **GitHub** (a branch, a PR — another
 machine's data), the **project brain** a card contributed to (`vibehub_learn` writes knowledge that
 belongs to the project), the **credentials saved to the vault** from a card's browser (they were

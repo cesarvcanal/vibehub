@@ -1605,6 +1605,19 @@ export interface CardPurgeScriptOpts {
 }
 
 /**
+ * The branch the card OWNS — the derived `card/<worktreeSlug>` and nothing else.
+ *
+ * A card can be pointed at a branch that already existed (an imported session, a card opened on
+ * `feat/pdv`): that branch is not the card's work, it is work the card visited, and deleting the
+ * card must not delete it. So the purge only ever drops the branch it created itself. `undefined` =
+ * leave every branch alone. PURE.
+ */
+export function ownBranch(card: Pick<Card, "branch" | "worktreeSlug">): string | undefined {
+  const derived = `card/${card.worktreeSlug}`;
+  return cardBranch(card) === derived ? derived : undefined;
+}
+
+/**
  * THE CARD PURGE SCRIPT: everything the card left on the runner's disk, in one pass.
  *
  * Deliberately WITHOUT `set -e` inside the container: a purge must attempt every line. One missing
@@ -1709,7 +1722,7 @@ export async function purgeCardWorkspace(
     cardId: card.id,
     cwd: paths.cwd,
     repoDir: paths.repoDir,
-    branch: paths.repoDir ? cardBranch(card) : undefined,
+    branch: paths.repoDir ? ownBranch(card) : undefined,
     browserDataDir: cardBrowserPorts(card.id).userDataDir,
   });
   try {

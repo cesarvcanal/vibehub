@@ -374,7 +374,7 @@ describe("KanbanBoard delete (what the screen promises)", () => {
     const body = await screen.findByText(/Erases the card and EVERYTHING of it/);
     expect(body.textContent).toMatch(/conversation/);
     expect(body.textContent).toMatch(/attached images/);
-    expect(body.textContent).toMatch(/local card\/… branch/);
+    expect(body.textContent).toMatch(/card\/… branch the card created/);
     expect(body.textContent).toMatch(/cannot be undone/);
     expect(body.textContent).toMatch(/pushed to GitHub/);
   });

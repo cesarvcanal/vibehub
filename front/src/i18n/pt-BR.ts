@@ -288,8 +288,9 @@ export const ptBR: Record<string, string> = {
   "kanban.deleteCard.title": "Excluir “{title}”?",
   "kanban.deleteCard.body":
     "Apaga o card e TUDO dele: a conversa (histórico do chat e transcript do Claude), as imagens " +
-    "anexadas, o worktree, a branch local card/…, o perfil do navegador do card e os servidores de " +
-    "preview. Não dá pra desfazer. O que já foi pro GitHub (branch empurrada, PR) continua lá.",
+    "anexadas, o worktree, a branch card/… que o card criou, o perfil do navegador do card e os " +
+    "servidores de preview. Não dá pra desfazer. O que já foi pro GitHub (branch empurrada, PR) " +
+    "continua lá, e uma branch que já existia antes do card (sessão importada) não é tocada.",
 
   /* -------------------------------------------------------------- card tile */
   "card.finishToDone": "Concluir (mover pra Feito)",

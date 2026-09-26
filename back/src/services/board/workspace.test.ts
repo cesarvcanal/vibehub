@@ -1900,3 +1900,33 @@ describe("buildCardPurgeScript (everything the card left on the runner's disk)",
     ).toThrow(/branch/i);
   });
 });
+
+/**
+ * WHOSE BRANCH IS IT — the purge drops the branch the card CREATED (`card/<slug>`) and never one
+ * the card was merely pointed at (an imported session, a card opened on `feat/pdv`). That branch is
+ * not the card's work; it is work the card visited.
+ */
+describe("ownBranch (what a delete may drop)", () => {
+  it("is the derived branch when the card has no branch of its own", () => {
+    expect(ws.ownBranch({ worktreeSlug: "deletar-card" })).toBe("card/deletar-card");
+    expect(ws.ownBranch({ worktreeSlug: "deletar-card", branch: "card/deletar-card" })).toBe("card/deletar-card");
+  });
+
+  it("is undefined for a branch that already existed — nothing is dropped", () => {
+    expect(ws.ownBranch({ worktreeSlug: "pdv", branch: "feat/pdv" })).toBeUndefined();
+    expect(ws.ownBranch({ worktreeSlug: "pdv", branch: "dev" })).toBeUndefined();
+    expect(ws.ownBranch({ worktreeSlug: "pdv", branch: "card/outro" })).toBeUndefined();
+  });
+
+  it("purgeCardWorkspace on a card pointed at an existing branch deletes the worktree, NOT the branch", async () => {
+    const { project } = await seed();
+    const card = await reg.createCard({ projectId: project.id, title: "PDV" });
+    await reg.updateCard(card.id, { branch: "feat/pdv" });
+    const pinned = await reg.getCard(card.id);
+    runScript.mockClear();
+    await ws.purgeCardWorkspace(pinned!);
+    const script = lastScript();
+    expect(script).toContain("worktree remove --force");
+    expect(script).not.toContain("branch -D");
+  });
+})

@@ -287,9 +287,9 @@ export const en: Record<string, string> = {
   "kanban.deleteCard.title": "Delete “{title}”?",
   "kanban.deleteCard.body":
     "Erases the card and EVERYTHING of it: the conversation (chat history and Claude transcript), " +
-    "the attached images, the worktree, the local card/… branch, the card's browser profile and " +
-    "its preview servers. This cannot be undone. What was already pushed to GitHub (branch, PR) " +
-    "stays there.",
+    "the attached images, the worktree, the card/… branch the card created, the card's browser " +
+    "profile and its preview servers. This cannot be undone. What was already pushed to GitHub " +
+    "(branch, PR) stays there, and a branch that existed before the card is left alone.",
 
   /* -------------------------------------------------------------- card tile */
   "card.finishToDone": "Finish (move to Done)",
