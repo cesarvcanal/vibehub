@@ -4,7 +4,7 @@ import * as registry from "../board/registry.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
 import { appendHistory, replayableHistoryEvent, rewindHistory } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inflight.js";
-import { noteDriverEventFor } from "./mirror.js";
+import { forgetDriverKeys, noteDriverEventFor } from "./mirror.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
   buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, encodeControl,
@@ -374,6 +374,8 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     clearIdleTimer(session);
     session.closed = true;
     if (sessions.get(opts.cardId) === session) sessions.delete(opts.cardId);
+    // A memória de dedupe é do DRIVER: ele acabou, ela acaba junto — o sucessor fala do zero.
+    forgetDriverKeys(opts.cardId);
     const stderrNote = session.stderrTail.trim() === "" ? "" : ` — stderr: ${session.stderrTail.trim().slice(-400)}`;
     broadcast(session, { type: "error", message: `driver exited (code ${code ?? "?"})${stderrNote}` });
     for (const socket of session.sockets) {

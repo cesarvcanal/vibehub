@@ -49,8 +49,17 @@ export interface MirrorState {
   driverKeys: Set<string>;
 }
 
-export function createMirrorState(cutoffAt: number, seenIds: Iterable<string> = []): MirrorState {
-  return { cutoffAt, seen: new Set(seenIds), driverKeys: new Set() };
+/**
+ * `driverKeys` é RECEBIDO, não criado: ele pertence ao card (ver `driverKeysFor`), não a este
+ * espelho. Um espelho nasce no primeiro connect e morre no último disconnect, mas o que o driver
+ * já foi mandado dizer segue tendo sido dito — com ou sem alguém olhando.
+ */
+export function createMirrorState(
+  cutoffAt: number,
+  seenIds: Iterable<string> = [],
+  driverKeys: Set<string> = new Set(),
+): MirrorState {
+  return { cutoffAt, seen: new Set(seenIds), driverKeys };
 }
 
 /** Sets have insertion order: dropping the oldest entries is how the dedupe memory stays bounded. */
@@ -64,11 +73,16 @@ function capSet(set: Set<string>, max: number = MIRROR_DEDUPE_MAX): void {
 
 /** Records what the driver said (stdout event) or was told (a user send) into the dedupe set. PURE-ish. */
 export function noteDriverEvent(state: MirrorState, event: DriverEvent | { type: "user"; text: string }): void {
+  noteDriverKeys(state.driverKeys, event);
+}
+
+/** O mesmo registro, sobre o Set cru — é ele que o card guarda entre um espelho e o próximo. PURE-ish. */
+function noteDriverKeys(keys: Set<string>, event: DriverEvent | { type: "user"; text: string }): void {
   const key = replayDedupeKey(event as { type: HistoryEvent["type"]; text?: string; id?: string });
   if (!key) return;
-  state.driverKeys.delete(key); // re-adding moves it to the newest slot
-  state.driverKeys.add(key);
-  capSet(state.driverKeys);
+  keys.delete(key); // re-adding moves it to the newest slot
+  keys.add(key);
+  capSet(keys);
 }
 
 /**
@@ -107,16 +121,42 @@ interface CardMirror {
 
 const mirrors = new Map<string, CardMirror>();
 
-/** Reports a driver event/user send of a card into its live mirror's dedupe (no-op with no mirror). */
+/**
+ * A memória de dedupe de um CARD — o que o driver dele já disse, ou já foi mandado dizer.
+ *
+ * Ela mora aqui, e não dentro do espelho, porque as duas vidas são diferentes: o espelho começa no
+ * primeiro chat conectado e acaba no último que fecha, enquanto o driver fala desde o boot. O sweep
+ * de retomada (`resumeInterruptedTurns`, logo depois do `listen`) injeta um turno quando nenhum
+ * browser conectou ainda — e com a memória presa ao espelho essa chave era jogada fora, o espelho
+ * nascia cego, e a linha que o CLI escreveu no transcript voltava como se fosse conversa nova: a
+ * mensagem de sistema do deploy aparecia DUAS vezes (produção, 2026-09-28).
+ */
+const driverKeysByCard = new Map<string, Set<string>>();
+
+/** A memória do card, criada na primeira vez que alguém tem algo a lembrar. */
+export function driverKeysFor(cardId: string): Set<string> {
+  const known = driverKeysByCard.get(cardId);
+  if (known) return known;
+  const keys = new Set<string>();
+  driverKeysByCard.set(cardId, keys);
+  return keys;
+}
+
+/** O card acabou (driver encerrado, card apagado): a memória dele vai junto. */
+export function forgetDriverKeys(cardId: string): void {
+  driverKeysByCard.delete(cardId);
+}
+
+/** Reports a driver event/user send of a card into its dedupe memory — haja espelho ou não. */
 export function noteDriverEventFor(cardId: string, event: DriverEvent | { type: "user"; text: string }): void {
-  const mirror = mirrors.get(cardId);
-  if (mirror) noteDriverEvent(mirror.state, event);
+  noteDriverKeys(driverKeysFor(cardId), event);
 }
 
 /** Test hook: forget every live mirror (children are killed). */
 export function resetMirrors(): void {
   for (const mirror of mirrors.values()) stopChild(mirror);
   mirrors.clear();
+  driverKeysByCard.clear();
 }
 
 function stopChild(mirror: CardMirror): void {
@@ -147,7 +187,13 @@ export async function acquireTranscriptMirror(cardId: string, opts: AcquireMirro
     existing.refs += 1;
     return () => release(cardId);
   }
-  const mirror: CardMirror = { refs: 1, state: createMirrorState(opts.cutoffAt ?? Date.now(), opts.seenIds), child: null };
+  // O espelho ADOTA a memória do card: o que o driver já foi mandado dizer antes de alguém abrir
+  // esta tela (o turno do sweep de boot, por exemplo) segue reconhecível quando voltar pelo arquivo.
+  const mirror: CardMirror = {
+    refs: 1,
+    state: createMirrorState(opts.cutoffAt ?? Date.now(), opts.seenIds, driverKeysFor(cardId)),
+    child: null,
+  };
   mirrors.set(cardId, mirror);
   try {
     await primeProvenance(cardId).catch(() => undefined);

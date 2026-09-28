@@ -7,6 +7,9 @@ import {
   createMirrorState,
   mirrorNewEvents,
   noteDriverEvent,
+  noteDriverEventFor,
+  driverKeysFor,
+  forgetDriverKeys,
 } from "./mirror.js";
 import { recordOrigin, resetProvenanceCache } from "../chat/provenance.js";
 import { config } from "../../config/env.js";
@@ -133,5 +136,69 @@ describe("noteDriverEvent", () => {
     const state = createMirrorState(T0);
     noteDriverEvent(state, { type: "ready" } as never);
     expect(state.driverKeys.size).toBe(0);
+  });
+});
+
+/**
+ * O BUG DO CÉSAR (produção, 2026-09-28): depois de um deploy, a mensagem de sistema "Continue de
+ * onde parou" aparecia DUAS VEZES — uma como `Sistema (vibehub)` e outra como bolha, precedida de
+ * "Atividade no terminal — a conversa seguiu na aba Terminal".
+ *
+ * A segunda cópia é o ESPELHO do transcript. Toda mensagem entregue ao driver é reportada em
+ * `noteDriverEventFor` justamente para o espelho reconhecê-la quando ela voltar pelo arquivo — só
+ * que esse registro era um NO-OP quando não havia espelho vivo, e o espelho só nasce no primeiro
+ * connect de um chat. O sweep de boot (`resumeInterruptedTurns`, disparado logo após o `listen`)
+ * injeta o turno de retomada quando nenhum browser conectou ainda: a chave era jogada fora, o
+ * espelho nascia com a memória vazia, e a linha que o CLI escreveu no transcript passava como se
+ * fosse conversa nova.
+ *
+ * A vida dessas chaves é a do DRIVER, não a do espelho: o que foi entregue ao driver segue tendo
+ * sido entregue, com ou sem alguém olhando. Elas moram por CARD e o espelho as adota ao nascer.
+ */
+describe("a memória de dedupe sobrevive ao espelho (a mensagem de sistema duplicada do deploy)", () => {
+  const RESUME = "Continue de onde parou: o processo anterior foi interrompido por um reinício do servidor do painel (deploy). Retome a tarefa em andamento e conclua o que estava fazendo.";
+
+  beforeEach(() => forgetDriverKeys(CARD));
+  afterEach(() => forgetDriverKeys(CARD));
+
+  it("reportada SEM espelho vivo, a chave não se perde: o espelho que nascer depois já a conhece", () => {
+    // o sweep de boot entrega o turno ao driver — nenhum chat conectado, nenhum espelho existe
+    noteDriverEventFor(CARD, { type: "user", text: RESUME });
+
+    // só AGORA alguém abre o card: o espelho nasce e adota o que o driver já foi mandado fazer
+    const state = createMirrorState(T0, [], driverKeysFor(CARD));
+    const out = mirrorNewEvents(
+      state,
+      userLine("u-resume", new Date(T0 + 5_000).toISOString(), RESUME),
+      CARD,
+    );
+
+    expect(out).toEqual([]); // nada a espelhar: essa fala já está na conversa
+  });
+
+  it("sem a adoção o duplicado apareceria — é exatamente essa a diferença", () => {
+    noteDriverEventFor(CARD, { type: "user", text: RESUME });
+
+    const cego = createMirrorState(T0); // um espelho que nasce de memória vazia
+    const out = mirrorNewEvents(cego, userLine("u-resume", new Date(T0 + 5_000).toISOString(), RESUME), CARD);
+
+    expect(out).toHaveLength(1); // a segunda cópia da print
+    expect(out[0]!.source).toBe("terminal");
+  });
+
+  it("o que o driver é mandado fazer COM espelho vivo continua sendo deduplicado", () => {
+    const state = createMirrorState(T0, [], driverKeysFor(CARD));
+    noteDriverEventFor(CARD, { type: "user", text: "roda os testes" });
+
+    const out = mirrorNewEvents(state, userLine("u1", new Date(T0 + 1_000).toISOString(), "roda os testes"), CARD);
+
+    expect(out).toEqual([]);
+  });
+
+  it("um card esquecido começa do zero — a memória não vaza entre cards nem para sempre", () => {
+    noteDriverEventFor(CARD, { type: "user", text: RESUME });
+    expect(driverKeysFor(CARD).size).toBe(1);
+    forgetDriverKeys(CARD);
+    expect(driverKeysFor(CARD).size).toBe(0);
   });
 });
