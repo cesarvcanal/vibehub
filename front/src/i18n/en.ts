@@ -445,6 +445,13 @@ export const en: Record<string, string> = {
   /* ------------------------------------------------------ native chat (SDK) */
   "sdk.undelivered": "not delivered to the server",
   "sdk.absorbed": "joined the running turn",
+  "sdk.queueTitle.one": "1 message waiting",
+  "sdk.queueTitle.other": "{n} messages waiting",
+  "sdk.queueHint": "goes when Claude is done",
+  "sdk.queueEdit": "Edit this message before it goes",
+  "sdk.queueRemove": "Drop this message from the queue",
+  "sdk.queueEditing": "editing a queued message — it does not go until you press Enter",
+  "sdk.queueBeingEdited": "in the field",
   "sdk.aria": "Native card conversation",
   "sdk.beta": "Native chat",
   "sdk.connecting": "Starting the agent…",
