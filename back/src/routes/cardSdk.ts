@@ -6,6 +6,7 @@ import * as registry from "../services/board/registry.js";
 import { getSettings } from "../services/settings/settings.js";
 import { installCardSdkDriver, sdkDriverCommand } from "../services/sdk/driver.js";
 import { attachSocket, ensureDriverSession, handleClientFrame, hasDriverSession, replyFrameOutcome } from "../services/sdk/manager.js";
+import { readCardCatalog } from "../services/sdk/catalog.js";
 import { onExternalMessage, readHistory } from "../services/sdk/history.js";
 import { matchOrigin, primeProvenance, type MessageOrigin } from "../services/chat/provenance.js";
 import {
@@ -186,6 +187,16 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
           resumeSessionId: resumeTargetFor(card, latestSessionId),
         }),
       });
+      // O MENU "/" ANTES DO DRIVER FALAR. `attachSocket` só reenvia o catálogo se a sessão já o
+      // tiver — e um driver recém-nascido ainda não anunciou nada, então o primeiro "/" abria vazio
+      // e a pessoa tinha que apagar e tentar de novo (produção, 2026-09-28). A última lista
+      // conhecida do card vale para este instante; o anúncio do driver, logo adiante, a atualiza.
+      if (!session.catalog) {
+        const remembered = await readCardCatalog(card.id);
+        if (remembered) {
+          try { socket.send(JSON.stringify(remembered)); } catch { /* going away */ }
+        }
+      }
       attachSocket(session, socket, wsOrigin);
       // Setup is done: hand the frames buffered during it to the SAME funnel the live listener
       // uses — user messages become normal user turns (queued by the driver until it is ready).

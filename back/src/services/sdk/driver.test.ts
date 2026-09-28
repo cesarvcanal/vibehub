@@ -291,9 +291,10 @@ describe("sdk-driver.mjs — ultrathink / ultracode", () => {
     expect(ultraKeywords("ultrathink e ultracode")).toEqual({ ultrathink: true, ultracode: true, any: true });
   });
 
-  it("ignora o que a tela também ignora: comando, caminho, flag, arquivo e citação", () => {
+  it("ignora o que a tela também ignora: caminho, flag, arquivo, citação e o NOME do comando", () => {
     for (const notAKeyword of [
-      "/review ultrathink",
+      "/ultrathink",
+      "/ultracode-review agora",
       "src/ultracode/index.ts",
       "--ultrathink",
       "ultracode.md",
@@ -302,6 +303,24 @@ describe("sdk-driver.mjs — ultrathink / ultracode", () => {
     ]) {
       expect(ultraKeywords(notAKeyword).any).toBe(false);
     }
+  });
+
+  /**
+   * O BUG DO CÉSAR (produção, 2026-09-28): uma mensagem que abria com
+   * `/superpowers:systematic-debugging`, trazia parágrafos de contexto e terminava em `ultracode`
+   * não escalava nada — a regra descartava a mensagem INTEIRA por causa da primeira letra.
+   *
+   * O que é comando é o PRIMEIRO TOKEN; o que vem depois são os argumentos, que o comando expande
+   * para dentro do prompt. Esta detecção é a que ESCALA de verdade (a da tela só pinta), então ela
+   * tem de concordar com `front/src/features/board/lib/ultraWords.ts` letra por letra.
+   */
+  it("argumento de slash command é prosa: a palavra reservada no fim ainda vale", () => {
+    const real = [
+      "/superpowers:systematic-debugging preciso que voce confira 2 coisas pra mim.",
+      "Confere as mensagens em massa e o disco do KVM1, sem deletar nada... ultracode",
+    ].join("\n");
+    expect(ultraKeywords(real)).toEqual({ ultrathink: false, ultracode: true, any: true });
+    expect(ultraKeywords("/review ultrathink").ultrathink).toBe(true);
   });
 
   it("escala para o máximo, e cai para o possível quando a sessão não permite", () => {

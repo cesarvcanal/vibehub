@@ -5,6 +5,7 @@ import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
 import { appendHistory, replayableHistoryEvent, rewindHistory } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inflight.js";
 import { forgetDriverKeys, noteDriverEventFor } from "./mirror.js";
+import { writeCardCatalog } from "./catalog.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
   buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, encodeControl,
@@ -261,6 +262,9 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
       commands: normalizeSlashCommands(raw.commands, { skills: raw.skills, plugins: raw.plugins, hidden: raw.hidden }),
     };
     session.catalog = event;
+    // EM DISCO também: o driver anuncia o catálogo uma vez, ao subir, e o menu "/" precisa existir
+    // no INSTANTE do connect — não depois do boot do driver seguinte (ver ./catalog.ts).
+    void writeCardCatalog(session.cardId, event);
   }
   if (event.type === "turn_absorbed") {
     // Streaming input: this send folded into the turn ALREADY running (the model absorbs it at its

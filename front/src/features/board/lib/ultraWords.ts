@@ -146,8 +146,29 @@ function quotedSpans(text: string): { start: number; end: number }[] {
 }
 
 /**
+ * Até onde vai o NOME de um slash command — 0 quando a mensagem não é um.
+ *
+ * A regra antiga descartava a mensagem INTEIRA por causa da primeira letra: "começou com barra,
+ * então nada aqui é palavra reservada". O preço apareceu em produção (2026-09-28): uma mensagem
+ * que abria com `/superpowers:systematic-debugging`, trazia parágrafos de contexto e terminava em
+ * `ultracode` não escalava nada — a palavra estava a duas linhas do comando e foi descartada junto
+ * com ele.
+ *
+ * O que é comando é o PRIMEIRO TOKEN. O que vem depois são os argumentos, que o comando expande
+ * para dentro do prompt — prosa, onde a palavra reservada vale como valeria em qualquer frase. O
+ * nome em si segue de fora: `/ultracode-review` é o nome de um comando, não um pedido de esforço.
+ * PURE, TOTAL.
+ */
+function commandNameEnd(text: string): number {
+  if (!text.startsWith("/")) return 0;
+  const space = text.search(/\s/);
+  return space === -1 ? text.length : space;
+}
+
+/**
  * Every occurrence of one keyword, under the CLI's rules:
- *  - a message that STARTS with `/` is a slash command, and nothing in it is a keyword;
+ *  - o NOME de um slash command não é palavra reservada — só ele, não a mensagem toda (ver
+ *    `commandNameEnd`);
  *  - a hit inside a quote/bracket/tag does not count (see `quotedSpans`);
  *  - a hit glued to a path or a flag does not count either — `-ultracode`, `ultracode/x`,
  *    `ultracode.ts` are a flag, a path and a filename, not the word.
@@ -156,7 +177,7 @@ function quotedSpans(text: string): { start: number; end: number }[] {
  */
 export function findKeyword(text: string, keyword: UltraKeyword): UltraMatch[] {
   const source = String(text ?? "");
-  if (source.startsWith("/")) return [];
+  const nameEnd = commandNameEnd(source);
   const spans = quotedSpans(source);
   const wordish = (c: string | undefined): boolean => !!c && WORDISH.test(c);
   const out: UltraMatch[] = [];
@@ -164,6 +185,7 @@ export function findKeyword(text: string, keyword: UltraKeyword): UltraMatch[] {
     if (m.index === undefined) continue;
     const start = m.index;
     const end = start + m[0].length;
+    if (start < nameEnd) continue; // dentro do nome do comando: é o nome, não o pedido
     if (spans.some((s) => start >= s.start && start < s.end)) continue;
     const before = source[start - 1];
     const after = source[end];

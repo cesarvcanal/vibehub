@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { config } from "../../config/env.js";
+import { readCardCatalog } from "./catalog.js";
 import { readHistory } from "./history.js";
 import {
   DRIVER_IDLE_MS,
@@ -932,6 +933,30 @@ describe("o recibo de entrega — nenhuma mensagem some em silêncio", () => {
 
       expect(await readHistory(CARD)).toHaveLength(2); // message_edited + user, uma vez cada
       expect(session.activeTurns).toBe(1);
+    });
+  });
+
+  /**
+   * O menu "/" precisa existir no INSTANTE do connect. O driver anuncia o catálogo uma vez, ao
+   * subir; guardá-lo em disco é o que faz a lista estar lá antes de o driver novo falar (ver
+   * ./catalog.ts e a rota, que o serve quando a sessão ainda não tem o seu).
+   */
+  it("o catálogo anunciado pelo driver é guardado em disco para o próximo connect", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+
+    spawned[0]!.stdout.emit(
+      "data",
+      Buffer.from(`${JSON.stringify({
+        type: "catalog",
+        commands: [{ name: "code-review", description: "Revisa o diff" }],
+      })}\n`),
+    );
+
+    await vi.waitFor(async () => {
+      const saved = await readCardCatalog(CARD);
+      expect(saved?.commands.map((c) => c.name)).toEqual(["code-review"]);
     });
   });
 

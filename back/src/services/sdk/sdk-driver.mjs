@@ -592,16 +592,33 @@ function ultraQuotedSpans(text) {
   return spans;
 }
 
+/**
+ * Até onde vai o NOME de um slash command — 0 quando a mensagem não é um.
+ *
+ * Espelha `commandNameEnd` em front/src/features/board/lib/ultraWords.ts, e tem de continuar
+ * espelhando: esta detecção é a que ESCALA o turno, a da tela só pinta a palavra. A regra antiga
+ * descartava a mensagem INTEIRA por causa da primeira letra, e uma mensagem que abria com
+ * `/superpowers:systematic-debugging` e terminava em `ultracode` não escalava nada (produção,
+ * 2026-09-28). O que é comando é o PRIMEIRO TOKEN; o resto são argumentos, que o comando expande
+ * para dentro do prompt — prosa, onde a palavra vale como valeria em qualquer frase.
+ */
+function ultraCommandNameEnd(text) {
+  if (!text.startsWith("/")) return 0;
+  const space = text.search(/\s/);
+  return space === -1 ? text.length : space;
+}
+
 /** Is this keyword being USED in `text`? Case-insensitive; a path, a flag or a quote does not count. */
 function hasUltraKeyword(text, keyword) {
   const source = String(text ?? "");
-  if (source.startsWith("/")) return false; // a slash command, not a sentence
+  const nameEnd = ultraCommandNameEnd(source);
   const spans = ultraQuotedSpans(source);
   const wordish = (c) => !!c && ULTRA_WORDISH.test(c);
   for (const m of source.matchAll(new RegExp(`\\b${keyword}\\b`, "gi"))) {
     if (m.index === undefined) continue;
     const start = m.index;
     const end = start + m[0].length;
+    if (start < nameEnd) continue; // dentro do nome do comando: é o nome, não o pedido
     if (spans.some((s) => start >= s.start && start < s.end)) continue;
     const before = source[start - 1];
     const after = source[end];
