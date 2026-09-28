@@ -603,6 +603,14 @@ ajuda:
   própria, e cada mensagem em espera em `max-h-24` — uma gigante rola no lugar dela em vez de
   esconder as outras. A espera é um aviso, não uma leitura: o lápis continua sendo o caminho para
   ler a mensagem inteira, no campo.
+- **A fila anda no RESPIRO do turno, não no fim dele.** Esperar o `result` fazia um turno de quinze
+  minutos segurar por quinze minutos um "para, tá errado". Só que um turno não é um bloco maciço:
+  entre uma ferramenta e a próxima o modelo FECHA um bloco de resposta, e é esse instante que o
+  Cursor e o Claude Code usam para puxar o que está esperando. `turnHasRoomForMore` (puro, em
+  `lib/sdkChat.ts`) lê o respiro na mesma ordem da barra de atividade: ferramenta rodando, não;
+  texto ou raciocínio ainda escorrendo, não; "Preparando…", não; bloco fechado, sim. Uma mensagem
+  recém-entregue não abre o respiro seguinte — senão a fila inteira sairia de uma vez, que é o
+  oposto de "uma por vez, e as outras continuam suas".
 - **Dá para atropelar a espera.** Cada mensagem da fila carrega o gesto de ir AGORA
   (`sdk-queued-send-now`): ela entra no turno em andamento pelo streaming input e volta marcada
   "entrou no turno em andamento" (o `turn_absorbed` acima). Esperar continua sendo o padrão — uma

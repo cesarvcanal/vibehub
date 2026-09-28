@@ -2093,6 +2093,30 @@ describe("SdkChatView — forçar o envio de uma mensagem da fila", () => {
     expect(bubbles[bubbles.length - 1]).toHaveTextContent("o que você tá fazendo ?");
   });
 
+  /**
+   * "ONDE EU CLICO EM ENVIAR AGORA?" (César, 2026-09-28) — a pergunta que condena um gesto.
+   *
+   * Os três botões da fila nasceram copiando o padrão das linhas da conversa: `md:opacity-0
+   * md:group-hover:opacity-100`, ou seja, invisíveis no desktop até o mouse passar por cima. Para
+   * um gesto que já se conhece isso é discrição; para um que acabou de existir é o mesmo que não
+   * ter sido feito. E "manda agora" é justamente o gesto com PRESSA — quem quer atropelar a espera
+   * não vai caçar um ícone escondido.
+   *
+   * A bandeja da fila não é a conversa: ela só aparece quando há algo esperando, e já existe para
+   * chamar atenção. Aqui os gestos ficam à vista.
+   */
+  it("os gestos da fila ficam À VISTA — não escondidos atrás do hover", async () => {
+    await queueOne();
+    for (const id of ["sdk-queued-send-now", "sdk-queued-edit", "sdk-queued-remove"]) {
+      expect(screen.getByTestId(id).className).not.toMatch(/opacity-0/);
+    }
+  });
+
+  it("o gesto de mandar agora tem RÓTULO, não só um ícone para adivinhar", async () => {
+    await queueOne();
+    expect(screen.getByTestId("sdk-queued-send-now")).toHaveTextContent(/agora|now/i);
+  });
+
   it("a mensagem que está NO CAMPO sendo reescrita não oferece o gesto (ela está cancelada)", async () => {
     await queueOne();
     await userEvent.click(screen.getByTestId("sdk-queued-edit"));
@@ -2109,5 +2133,83 @@ describe("SdkChatView — forçar o envio de uma mensagem da fila", () => {
     expect(ws.sent.length).toBe(1); // nada saiu
     expect(screen.getByTestId("sdk-queued")).toHaveTextContent("o que você tá fazendo ?"); // e continua guardada
     expect(screen.queryByTestId("sdk-user-undelivered")).not.toBeInTheDocument(); // sem bolha condenada
+  });
+});
+
+/**
+ * A FILA ANDA NO RESPIRO (pedido do César, 2026-09-28): "no Cursor e no Claude Code as mensagens
+ * ficam lá enquanto ele tá trabalhando, mas quando ele tiver tranquilo ele puxa as mensagens".
+ *
+ * Antes daqui a fila esperava o `result` — o fim do turno inteiro. Um turno de quinze minutos
+ * segurava por quinze minutos um "para, tá errado", e a pessoa ficava olhando a própria mensagem
+ * parada enquanto o agente seguia no caminho errado. Agora ela sai no primeiro bloco FECHADO: o
+ * turno continua de pé, e a mensagem entra nele pelo streaming input.
+ */
+describe("SdkChatView — a fila anda no respiro do turno, não só no fim", () => {
+  it("ferramenta rodando: a mensagem continua esperando", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    const box = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+    await userEvent.type(box, "primeira{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "vou olhar" });
+    ws.deliver({ type: "assistant_text", text: "vou olhar" });
+    ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } });
+
+    // escrita COM a ferramenta já rodando: não há respiro nenhum à vista
+    await userEvent.type(box, "o que você tá fazendo ?{Enter}");
+    await screen.findByTestId("sdk-queued");
+
+    expect(ws.sent.length).toBe(1); // nada saiu: ferramenta rodando é o oposto de tranquilo
+    expect(screen.getByTestId("sdk-queued")).toBeInTheDocument();
+  });
+
+  it("bloco FECHADO no meio do turno: ela vai — sem o turno ter acabado", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    const box = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+    await userEvent.type(box, "primeira{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "vou olhar" });
+
+    await userEvent.type(box, "o que você tá fazendo ?{Enter}");
+    await screen.findByTestId("sdk-queued");
+    ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } });
+    expect(ws.sent.length).toBe(1); // ainda ocupado
+
+    ws.deliver({ type: "assistant_text", text: "os testes passaram" }); // o respiro
+
+    await waitFor(() => expect(ws.sent.length).toBe(2));
+    expect(JSON.parse(ws.sent[1]!)).toMatchObject({ type: "user", text: "o que você tá fazendo ?" });
+    // e nada disso precisou do fim do turno: NENHUM `result` foi entregue nesta conversa
+    await waitFor(() => expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument());
+  });
+
+  it("uma por vez: o respiro entrega UMA, as outras seguem esperando o próximo", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    const box = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+    await userEvent.type(box, "primeira{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "vou olhar" });
+
+    await userEvent.type(box, "recado um{Enter}");
+    await userEvent.type(box, "recado dois{Enter}");
+    await waitFor(() => expect(screen.getAllByTestId("sdk-queued")).toHaveLength(2));
+
+    ws.deliver({ type: "assistant_text", text: "os testes passaram" }); // um respiro
+    ws.deliver({ type: "turn_absorbed" }); // o driver confirma a dobra da primeira
+
+    await waitFor(() => expect(ws.sent.length).toBe(2));
+    expect(JSON.parse(ws.sent[1]!)).toMatchObject({ text: "recado um" });
+    // a segunda NÃO foi junto: o respiro foi da primeira, e ela ainda é sua
+    expect(screen.getAllByTestId("sdk-queued")).toHaveLength(1);
+    expect(screen.getByTestId("sdk-queued")).toHaveTextContent("recado dois");
   });
 });

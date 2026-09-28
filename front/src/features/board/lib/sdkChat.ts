@@ -449,6 +449,36 @@ export function currentActivity(state: SdkChatState): SdkActivity | null {
   return null;
 }
 
+/**
+ * O turno tem ESPAÇO para mais uma mensagem — o RESPIRO em que a fila anda.
+ *
+ * A fila esperava o turno FECHAR, e um turno de quinze minutos segurava por quinze minutos um
+ * "para, tá errado". Só que um turno não é um bloco maciço: entre uma ferramenta e a próxima o
+ * modelo FECHA um bloco de resposta, e é esse instante que o Cursor e o Claude Code usam para puxar
+ * o que está esperando. Entregue aí, a mensagem entra no turno em andamento pelo streaming input
+ * (o `turn_absorbed`) em vez de virar uma interrupção do raciocínio em curso.
+ *
+ * Respiro é a AUSÊNCIA de algo em curso, lida na mesma ordem que a barra de atividade usa para
+ * dizer o que está acontecendo (ver `currentActivity`): ferramenta rodando, não; texto ou
+ * raciocínio ainda escorrendo, não; "Preparando…" — o turno nem começou —, não. Bloco fechado, sim.
+ *
+ * E uma mensagem recém-entregue NÃO abre o respiro seguinte: o `turn_absorbed` derruba o
+ * `awaiting`, e sem esta regra a fila inteira sairia de uma vez no mesmo instante, que é o oposto
+ * de "uma por vez, e as outras continuam suas". PURE.
+ */
+export function turnHasRoomForMore(state: SdkChatState): boolean {
+  if (state.awaiting) return false;
+  for (let i = state.rows.length - 1; i >= 0; i -= 1) {
+    const row = state.rows[i] as SdkRow;
+    // A última coisa dita é nossa: ou não há turno (a fila anda como sempre andou), ou ela acabou
+    // de ser entregue e o modelo ainda não reagiu — o respiro já foi dela.
+    if (row.kind === "user") return !state.turnActive;
+    if (row.kind === "tool") return false;
+    if (row.kind === "thinking" || row.kind === "assistant") return !row.streaming;
+  }
+  return true; // conversa vazia: não há nada em curso para atrapalhar
+}
+
 function nextId(state: SdkChatState, prefix: string): { id: string; seq: number } {
   const seq = state.seq + 1;
   return { id: `${prefix}:${seq}`, seq };

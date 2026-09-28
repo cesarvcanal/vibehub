@@ -13,6 +13,7 @@ import {
   markUserEdited,
   parseSdkFrame,
   toolHeadline,
+  turnHasRoomForMore,
   toolSummary,
   type SdkChatState,
   type SdkEvent,
@@ -989,5 +990,76 @@ describe("liveUserCids — o que esta conexão ainda está esperando", () => {
   it("uma linha do replay não tem cid — é justamente ela que a reconciliação compara por texto", () => {
     const state = appendUserRow(INITIAL_SDK_STATE, "veio do histórico");
     expect(liveUserCids(state.rows)).toEqual(new Set());
+  });
+});
+
+/**
+ * O RESPIRO DO TURNO (pedido do César, 2026-09-28): "no Cursor e no Claude Code as mensagens ficam
+ * lá enquanto ele tá trabalhando, mas quando ele tiver tranquilo ele puxa as mensagens da fila".
+ *
+ * A fila esperava o turno FECHAR — e um turno de quinze minutos segurava por quinze minutos um
+ * "para, tá errado". Mas um turno não é um bloco maciço: entre uma ferramenta e a próxima o modelo
+ * FECHA um bloco de resposta, e esse instante é o lugar certo de entregar. Uma mensagem entregue aí
+ * entra no turno em andamento pelo streaming input, exatamente como no Claude Code.
+ *
+ * O que conta como respiro: nada em curso. Ferramenta rodando, não; texto ou raciocínio ainda
+ * escorrendo, não; "Preparando…" (o turno nem começou), não. Bloco fechado, sim.
+ */
+describe("turnHasRoomForMore — o respiro em que a fila anda", () => {
+  const ready = (): SdkChatState => applySdkEvent(INITIAL_SDK_STATE, { type: "ready" });
+
+  it("conversa parada, sem turno: a fila anda como sempre andou", () => {
+    expect(turnHasRoomForMore(ready())).toBe(true);
+  });
+
+  it("'Preparando…' (a mensagem saiu, o modelo não reagiu): ninguém respira ainda", () => {
+    const state = appendUserRow(ready(), "primeira", undefined, { awaiting: true });
+    expect(turnHasRoomForMore(state)).toBe(false);
+  });
+
+  it("ferramenta rodando: espera — é o oposto de tranquilo", () => {
+    const state = feed([
+      { type: "ready" },
+      { type: "assistant_delta", text: "vou olhar" },
+      { type: "assistant_text", text: "vou olhar" },
+      { type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } },
+    ]);
+    expect(turnHasRoomForMore(state)).toBe(false);
+  });
+
+  it("texto ainda escorrendo: espera — ele está no meio de uma frase", () => {
+    const state = feed([{ type: "ready" }, { type: "assistant_delta", text: "estou vendo" }]);
+    expect(turnHasRoomForMore(state)).toBe(false);
+  });
+
+  it("raciocínio ainda aberto: espera", () => {
+    const state = feed([{ type: "ready" }, { type: "thinking_delta", text: "hmm" }]);
+    expect(turnHasRoomForMore(state)).toBe(false);
+  });
+
+  it("BLOCO FECHADO com o turno ainda rodando: é o respiro — a fila anda AQUI", () => {
+    const state = feed([
+      { type: "ready" },
+      { type: "assistant_delta", text: "vou olhar" },
+      { type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } },
+      { type: "assistant_text", text: "os testes passaram" },
+    ]);
+    expect(state.turnActive).toBe(true); // o turno NÃO acabou…
+    expect(turnHasRoomForMore(state)).toBe(true); // …e mesmo assim há espaço
+  });
+
+  it("mensagem recém-entregue no meio do turno: o respiro foi dela, a próxima espera a próxima", () => {
+    const base = feed([
+      { type: "ready" },
+      { type: "assistant_delta", text: "vou olhar" },
+      { type: "assistant_text", text: "os testes passaram" },
+    ]);
+    // entregamos uma da fila e o driver confirmou a dobra (o `awaiting` cai com o turn_absorbed)
+    const sent = applySdkEvent(appendUserRow(base, "o que você tá fazendo ?", undefined, { awaiting: true }), {
+      type: "turn_absorbed",
+    });
+    expect(sent.turnActive).toBe(true);
+    expect(sent.awaiting).toBe(false); // nada mais "preparando"…
+    expect(turnHasRoomForMore(sent)).toBe(false); // …mas o modelo ainda não reagiu a ela
   });
 });

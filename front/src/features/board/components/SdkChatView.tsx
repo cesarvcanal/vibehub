@@ -58,6 +58,7 @@ import {
   parseSdkFrame,
   settleUserRow,
   toolHeadline,
+  turnHasRoomForMore,
   type SdkActivity,
   type SdkChatState,
   type SdkQuestionAnswer,
@@ -575,7 +576,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     // para evitar. As duas pontas (o que entra na fila, o que sai dela) leem a MESMA verdade.
     if (!connected || socketRef.current?.readyState !== WebSocket.OPEN) return;
     if (!state.ready) return;
-    if (state.turnActive || state.awaiting) return; // ainda tem turno em cima da mesa
+    // O RESPIRO, não o fim do turno (ver `turnHasRoomForMore`): um turno de quinze minutos segurava
+    // por quinze minutos um "para, tá errado". Entre uma ferramenta e a próxima o modelo fecha um
+    // bloco, e é aí que a mensagem entra — no turno em andamento, pelo streaming input.
+    if (!turnHasRoomForMore(state)) return;
     if (editing || pendingEdit) return;
     const head = headOfQueue(queueRef.current);
     if (!head) return;
@@ -587,7 +591,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       // conversa, recuperável. Ela não volta pra fila — duas cópias da mesma mensagem é pior.
       toast.error((err as Error).message);
     }
-  }, [queue, connected, state.ready, state.turnActive, state.awaiting, editing, pendingEdit, dispatchTurn]);
+  }, [queue, connected, state, editing, pendingEdit, dispatchTurn]);
 
   const send = async (raw: string): Promise<void> => {
     const text = raw.replace(/\r$/, "").trim();
@@ -1075,9 +1079,10 @@ function SdkQueueTray({
                 aria-label={t("sdk.queueSendNow")}
                 title={t("sdk.queueSendNow")}
                 onClick={() => onSendNow(message.id)}
-                className="shrink-0 rounded p-0.5 text-muted-foreground transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100"
+                className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
               >
                 <SendHorizontal className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">{t("sdk.queueSendNowShort")}</span>
               </button>
               <button
                 type="button"
@@ -1085,7 +1090,7 @@ function SdkQueueTray({
                 aria-label={t("sdk.queueEdit")}
                 title={t("sdk.queueEdit")}
                 onClick={() => onEdit(message.id)}
-                className="shrink-0 rounded p-0.5 text-muted-foreground transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100"
+                className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
               >
                 <Pencil className="h-3.5 w-3.5" />
               </button>
@@ -1095,7 +1100,7 @@ function SdkQueueTray({
                 aria-label={t("sdk.queueRemove")}
                 title={t("sdk.queueRemove")}
                 onClick={() => onRemove(message.id)}
-                className="shrink-0 rounded p-0.5 text-muted-foreground transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100"
+                className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
