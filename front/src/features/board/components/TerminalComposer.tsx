@@ -112,12 +112,21 @@ export interface TerminalComposerProps {
    * indicator's X, the phone's only way out — restores the stashed draft and calls `onCancel`.
    * Terminal-style: like pressing Esc/up in the CLI to rewrite what you said.
    */
-  editing?: { text: string } | null;
+  editing?: {
+    text: string;
+    /**
+     * What the indicator says, when it is not the default "editando mensagem". The native chat
+     * uses it to name the OTHER thing that can be under the caret: uma mensagem que ainda está na
+     * FILA, que o agente nunca leu — editá-la não corrige nada, só reescreve o que vai ser dito.
+     */
+    hint?: string;
+  } | null;
   /** Leave edit mode without sending (Esc / the indicator's X). The parent clears `editing`. */
   onCancelEdit?: () => void;
   /**
-   * Esc on an EMPTY field outside edit mode — the terminal's "edit my last message" gesture. The
-   * parent decides whether there is a message to edit (and refuses while a turn is running).
+   * Esc — or the up arrow — on an EMPTY field outside edit mode: the terminal's "edit my last
+   * message" gesture. The parent decides WHAT that is (a message still in the queue comes before
+   * one already sent) and whether there is anything to edit at all.
    */
   onEditLast?: () => void;
   /**
@@ -934,7 +943,7 @@ export function TerminalComposer({
           className="flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-600 dark:text-amber-400"
         >
           <Pencil className="h-3 w-3 shrink-0" />
-          <span className="min-w-0 flex-1 truncate">{t("composer.editing")}</span>
+          <span className="min-w-0 flex-1 truncate">{editing.hint ?? t("composer.editing")}</span>
           <button
             type="button"
             data-testid="composer-editing-cancel"
@@ -1022,6 +1031,12 @@ export function TerminalComposer({
                 e.preventDefault();
                 onEditLast();
               }
+            } else if (e.key === "ArrowUp" && !editing && isEmptyDraft(text, attachments) && onEditLast) {
+              // A seta pra cima num campo VAZIO: a última mensagem volta pra edição — o "press up
+              // to edit queued messages" do Claude Code, e o histórico de qualquer terminal. Só
+              // com o campo vazio, porque aí não existe cursor pra ela mover.
+              e.preventDefault();
+              onEditLast();
             }
           }}
           onPaste={(e) => {

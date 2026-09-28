@@ -5,6 +5,7 @@ import {
   Brain,
   ChevronRight,
   CircleHelp,
+  Clock3,
   CornerDownLeft,
   ListTodo,
   Loader2,
@@ -73,6 +74,16 @@ import {
   writeOutbox,
   type OutboxMessage,
 } from "@/features/board/lib/sdkOutbox";
+import {
+  dequeue,
+  enqueue,
+  headOfQueue,
+  lastQueued,
+  newQueueId,
+  readQueue,
+  writeQueue,
+  type QueuedMessage,
+} from "@/features/board/lib/sdkQueue";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -139,12 +150,35 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   }, [cardId, outbox]);
   /** Reconciliation runs ONCE per connection, when the replay has landed (`ready`). */
   const reconciledRef = React.useRef(false);
+  /**
+   * A FILA — o que foi escrito com um turno ainda rodando (ver lib/sdkQueue.ts).
+   *
+   * Nada daqui foi para o servidor ainda: são mensagens ESPERANDO, desenhadas logo acima do campo
+   * de texto e ainda editáveis. Cada uma sai daqui uma de cada vez, quando o turno anterior fecha —
+   * e é só nesse instante que ela sobe pra conversa, como bolha de verdade, com recibo.
+   */
+  const [queue, setQueue] = React.useState<QueuedMessage[]>(() => readQueue(cardId));
+  React.useEffect(() => {
+    writeQueue(cardId, queue);
+  }, [cardId, queue]);
+  /**
+   * A mensagem da fila que está SENDO EDITADA — ela saiu da fila e está no campo de texto.
+   *
+   * Enquanto está aqui ela NÃO pode ser entregue: é exatamente isso que o dono pediu ("se eu clicar
+   * em editar e ela tiver na fila ela não pode ser enviada, pois é como se estivesse cancelada").
+   * Tirá-la da fila é o que torna essa promessa estrutural em vez de uma condição a mais no
+   * despacho — o turno pode terminar no meio da edição que não há o que despachar. O Enter a
+   * devolve para a fila com o texto novo; o X (cancelar) a devolve como estava.
+   */
+  const [queueEdit, setQueueEdit] = React.useState<QueuedMessage | null>(null);
 
   /* ------------------------------------------------------------- websocket */
 
   React.useEffect(() => {
     setState(INITIAL_SDK_STATE);
     setOutbox(readOutbox(cardId));
+    setQueue(readQueue(cardId));
+    setQueueEdit(null);
     let socket: WebSocket | null = null;
     let retry: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
@@ -416,16 +450,97 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     [state.turnActive, sendInterrupt],
   );
 
+  /* ------------------------------------------------------------ a fila */
+
+  /** O que a fila tem AGORA, sem re-armar os callbacks a cada mensagem escrita. */
+  const queueRef = React.useRef(queue);
+  queueRef.current = queue;
+
+  /**
+   * ENTREGAR um turno: a bolha nasce na conversa, o recibo é armado e as palavras vão pro socket.
+   * É o único ponto em que uma mensagem deixa de ser sua e vira conversa — venha ela direto do
+   * campo (nada rodando) ou da fila (o turno anterior acabou de fechar).
+   */
+  const dispatchTurn = React.useCallback(
+    (text: string): void => {
+      // `ultrathink` / `ultracode` no que está indo AGORA: o driver sobe o esforço DESTE turno, e a
+      // barra de atividade é onde isso fica visível — o painel escalava em silêncio. Lido na
+      // entrega, não na digitação: uma mensagem que esperou escala o turno que ELA abre.
+      const ultra = ultraKeywords(text);
+      setEscalation(ultra.ultrathink || ultra.ultracode ? ultra : null);
+      // Drawn FIRST, as "sending": the bubble exists the instant it goes, but it only claims to be
+      // sent when the back says it gravou (`user_ack`) — see lib/sdkOutbox.ts. `awaiting` starts
+      // the status ladder: "Preparando…"/"Pensando…" until the driver's first event.
+      const cid = newCid();
+      setState((prev) => appendUserRow(prev, text, undefined, { awaiting: true, cid, state: "sending" }));
+      sendTurn({ type: "user", text }, text, cid);
+    },
+    [sendTurn],
+  );
+
+  /** O lápis de uma mensagem da fila: ela SAI da fila e vai pro campo (ver `queueEdit`). */
+  const beginQueueEdit = React.useCallback((id: string): void => {
+    const target = queueRef.current.find((m) => m.id === id);
+    if (!target) return;
+    setReplyTo(null); // uma coisa de cada vez: editar, responder e corrigir são gestos diferentes
+    setEditing(null);
+    setQueueEdit(target);
+    setQueue((prev) => dequeue(prev, id));
+  }, []);
+
+  /** O X da fila: a pessoa desistiu dessa mensagem antes de o Claude a ler. */
+  const removeQueued = React.useCallback((id: string): void => {
+    setQueue((prev) => dequeue(prev, id));
+  }, []);
+
+  /**
+   * SAIR do modo edição sem enviar. Uma mensagem da fila VOLTA para a fila, intacta — o X aqui é
+   * "desisti de reescrever", nunca "joga fora o que eu tinha escrito".
+   */
+  const cancelEdit = React.useCallback((): void => {
+    if (queueEdit) {
+      setQueue((prev) => enqueue(prev, queueEdit));
+      setQueueEdit(null);
+      return;
+    }
+    setEditing(null);
+  }, [queueEdit]);
+
+  /**
+   * O DESPACHO — a fila anda sozinha, UMA mensagem por vez, assim que o turno anterior fecha.
+   *
+   * Uma por vez porque é o que "se o Claude ler a mensagem ela sobe" quer dizer: a que foi entregue
+   * vira bolha, as outras continuam esperando ali embaixo, ainda editáveis. Uma correção de
+   * mensagem já enviada (`editing`/`pendingEdit`) passa na frente: ela é dona do próximo turno.
+   */
+  React.useEffect(() => {
+    if (!connected || !state.ready) return; // sem fio ninguém entrega nada
+    if (state.turnActive || state.awaiting) return; // ainda tem turno em cima da mesa
+    if (editing || pendingEdit) return;
+    const head = headOfQueue(queueRef.current);
+    if (!head) return;
+    setQueue((prev) => dequeue(prev, head.id));
+    try {
+      dispatchTurn(head.text);
+    } catch (err) {
+      // `sendTurn` já marcou a bolha como NÃO ENTREGUE, com reenviar/descartar: o texto está na
+      // conversa, recuperável. Ela não volta pra fila — duas cópias da mesma mensagem é pior.
+      toast.error((err as Error).message);
+    }
+  }, [queue, connected, state.ready, state.turnActive, state.awaiting, editing, pendingEdit, dispatchTurn]);
+
   const send = async (raw: string): Promise<void> => {
     const text = raw.replace(/\r$/, "").trim();
     if (!text) return;
-    // `ultrathink` / `ultracode` in what was just sent: the driver raises the turn's effort for
-    // THIS turn only, and the activity bar is where that becomes visible — the panel used to
-    // escalate in silence (the word was painted in the bubble and nothing else ever said it took).
-    const ultra = ultraKeywords(text);
-    setEscalation(ultra.ultrathink || ultra.ultracode ? ultra : null);
     // Anything the person sends REPLACES the interrupted turn — the "continuar?" offer is moot.
     setInterruptedForEdit(false);
+    if (queueEdit) {
+      // Terminou de editar uma mensagem da fila: ela VOLTA pra fila com o texto novo. Só agora ela
+      // volta a ser entregável — enquanto estava no campo, nem um turno fechando a soltava.
+      setQueue((prev) => enqueue(prev, { ...queueEdit, text, at: Date.now() }));
+      setQueueEdit(null);
+      return;
+    }
     if (replyTo && !editing) {
       // A structured card is settled through its own channel (`question_answer`), so the driver
       // stops waiting and the card itself shows what it got. A prose question has no such channel:
@@ -438,11 +553,11 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         setReplyTo(null);
         return;
       }
+      // NUNCA enfileirada: a pergunta que ela responde é o que está segurando o turno. Guardar a
+      // resposta até o turno acabar seria esperar por algo que só acontece DEPOIS dela.
       const wrapped = buildDecisionReply(replyTo.text, text);
-      const cid = newCid();
-      setState((prev) => appendUserRow(prev, wrapped, undefined, { awaiting: true, cid, state: "sending" }));
       try {
-        sendTurn({ type: "user", text: wrapped }, wrapped, cid);
+        dispatchTurn(wrapped);
       } catch (err) {
         toast.error((err as Error).message);
         throw err; // the composer keeps the words
@@ -476,13 +591,15 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       setEditing(null);
       return;
     }
-    // Drawn FIRST, as "sending": the bubble exists the instant Enter is pressed, but it only
-    // claims to be sent when the back says it gravou (`user_ack`) — see lib/sdkOutbox.ts.
-    // `awaiting` starts the status ladder: "Preparando…"/"Pensando…" until the driver's first event.
-    const cid = newCid();
-    setState((prev) => appendUserRow(prev, text, undefined, { awaiting: true, cid, state: "sending" }));
+    // TEM TURNO RODANDO: a mensagem ESPERA, logo acima do campo, em vez de ir direto pro CLI e ser
+    // dobrada no raciocínio em curso (o antigo `turn_absorbed`). Enquanto espera ela ainda é sua —
+    // editável, descartável — e ela só sobe pra conversa quando for entregue de verdade.
+    if (state.turnActive || state.awaiting || pendingEdit) {
+      setQueue((prev) => enqueue(prev, { id: newQueueId(), text, at: Date.now() }));
+      return;
+    }
     try {
-      sendTurn({ type: "user", text }, text, cid);
+      dispatchTurn(text);
     } catch (err) {
       toast.error((err as Error).message);
       throw err; // the composer keeps the words
@@ -560,6 +677,14 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
 
   /** The terminal's Esc gesture: an empty field steps into editing the LAST message of one's own. */
   const editLast = React.useCallback((): void => {
+    // A FILA VEM PRIMEIRO. A última coisa que a pessoa escreveu é a que está ali embaixo esperando,
+    // e editá-la não custa nada — nenhum turno é interrompido, porque o Claude ainda não a leu. É
+    // também o único jeito de corrigi-la sem tirar a mão do teclado enquanto um turno roda.
+    const queued = lastQueued(queueRef.current);
+    if (queued) {
+      beginQueueEdit(queued.id);
+      return;
+    }
     // Mid-turn Esc keeps meaning "stop", not "edit": the button owns that gesture, and stopping a
     // turn is too big a consequence for a key you may have pressed to dismiss something. The pencil
     // is the explicit way in — and IT does pause the turn (see `beginEdit`).
@@ -573,7 +698,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         return;
       }
     }
-  }, [state.rows, state.turnActive, viewer, beginEdit]);
+  }, [state.rows, state.turnActive, viewer, beginEdit, beginQueueEdit]);
 
   /* ------------------------------------------------------------ scrolling */
 
@@ -806,6 +931,12 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         </div>
       ) : null}
 
+      {/* A FILA — o que foi escrito enquanto o Claude trabalha, de prontidão logo acima do campo,
+          na mesma faixa em que o status "Trabalhando… 1m20s" vive. Não está na conversa porque o
+          Claude ainda não a leu: ela sobe pra lá no instante em que for entregue. Até então é da
+          pessoa — o lápis a traz de volta pro campo, o X a joga fora. */}
+      {queue.length > 0 ? <SdkQueueTray queue={queue} onEdit={beginQueueEdit} onRemove={removeQueued} /> : null}
+
       {/* The interrupt button lives INSIDE the composer — right column, above the microphone —
           in the same seat as the transcript chat's stop. The interrupt frame is still this view's. */}
       <TerminalComposer
@@ -817,8 +948,14 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         placeholder={replyTo ? t("sdk.replyPlaceholder") : undefined}
         commands={state.commands}
         interrupt={{ active: state.turnActive, onInterrupt: interrupt, testId: "sdk-interrupt" }}
-        editing={editing ? { text: editing.original } : null}
-        onCancelEdit={() => setEditing(null)}
+        editing={
+          editing
+            ? { text: editing.original }
+            : queueEdit
+              ? { text: queueEdit.text, hint: t("sdk.queueEditing") }
+              : null
+        }
+        onCancelEdit={cancelEdit}
         onEditLast={editLast}
       />
 
@@ -832,6 +969,74 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
           </span>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * A FILA, desenhada — as mensagens escritas durante um turno, esperando de prontidão logo acima do
+ * campo de texto.
+ *
+ * Por que aqui e não na conversa: uma bolha na conversa afirma que o Claude leu aquilo. Enquanto a
+ * mensagem espera, ninguém leu nada — ela ainda é um rascunho entregue, e dizer o contrário é a
+ * mentira que esta tela existe pra não contar. Na hora em que for entregue ela sai daqui e nasce
+ * lá, como bolha, com recibo.
+ *
+ * Cada linha carrega os dois gestos que a fila promete: o lápis (volta pro campo, e SAI da fila —
+ * nada de ser enviada no meio da correção) e o X (desisti dessa).
+ */
+function SdkQueueTray({
+  queue,
+  onEdit,
+  onRemove,
+}: {
+  queue: readonly QueuedMessage[];
+  onEdit: (id: string) => void;
+  onRemove: (id: string) => void;
+}) {
+  const t = useT();
+  return (
+    <div
+      data-testid="sdk-queue"
+      className="mt-1.5 flex flex-col gap-1 rounded-md border border-border/60 bg-muted/40 px-2 py-1.5"
+    >
+      <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+        <Clock3 className="h-3 w-3 shrink-0" />
+        <span>{t("sdk.queueTitle", { n: queue.length })}</span>
+        <span className="min-w-0 truncate font-normal opacity-80">{t("sdk.queueHint")}</span>
+      </div>
+      {queue.map((message) => (
+        <div
+          key={message.id}
+          data-testid="sdk-queued"
+          className="group flex items-start gap-1.5 rounded px-1 py-0.5 text-xs hover:bg-background/60"
+        >
+          <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+          <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-foreground/90">
+            {message.text}
+          </span>
+          <button
+            type="button"
+            data-testid="sdk-queued-edit"
+            aria-label={t("sdk.queueEdit")}
+            title={t("sdk.queueEdit")}
+            onClick={() => onEdit(message.id)}
+            className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            data-testid="sdk-queued-remove"
+            aria-label={t("sdk.queueRemove")}
+            title={t("sdk.queueRemove")}
+            onClick={() => onRemove(message.id)}
+            className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ))}
     </div>
   );
 }
