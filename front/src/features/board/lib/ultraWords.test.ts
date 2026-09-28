@@ -30,8 +30,29 @@ describe("findUltraWords", () => {
     expect(findUltraWords("ultrathinking sobre ultracodes")).toEqual([]);
   });
 
-  it("ignores a message that is a slash command — nothing in one is a keyword", () => {
-    expect(findUltraWords("/review ultrathink")).toEqual([]);
+  /**
+   * O BUG DO CÉSAR (produção, 2026-09-28): ele mandou uma mensagem que começava com
+   * `/superpowers:systematic-debugging`, escreveu parágrafos de contexto e terminou com
+   * `ultracode` — e o painel não escalou nada. A regra antiga descartava a mensagem INTEIRA por
+   * causa da primeira letra: "começou com barra, então nada aqui é palavra reservada".
+   *
+   * O que é comando é o PRIMEIRO TOKEN, não a mensagem. O que vem depois dele são os argumentos —
+   * prosa, que o comando expande para dentro do prompt, e onde a palavra reservada vale como
+   * valeria em qualquer outra frase. O nome do comando segue de fora: `/ultracode-review` é o nome
+   * de um comando, não um pedido de esforço.
+   */
+  it("o NOME do comando não é palavra reservada — mas o que vem depois dele é prosa", () => {
+    expect(findUltraWords("/ultrathink")).toEqual([]);
+    expect(findUltraWords("/ultracode-review agora")).toEqual([]);
+    expect(findUltraWords("/review ultrathink").map((m) => m.keyword)).toEqual(["ultrathink"]);
+  });
+
+  it("o caso real: comando no começo, contexto no meio, palavra reservada no fim", () => {
+    const text = [
+      "/superpowers:systematic-debugging preciso que voce confira 2 coisas pra mim.",
+      "Confere as mensagens em massa e o disco do KVM1, sem deletar nada... ultracode",
+    ].join("\n");
+    expect(ultraKeywords(text)).toEqual({ ultrathink: false, ultracode: true });
   });
 
   it("ignores a keyword that is part of a path, a flag or a filename", () => {

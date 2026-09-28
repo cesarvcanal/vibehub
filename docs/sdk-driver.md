@@ -619,6 +619,24 @@ ajuda:
   da fila: forçar um envio que não pode acontecer só trocaria uma mensagem guardada por uma bolha
   condenada.
 
+## Duas palavras e um menu (2026-09-28)
+
+- **O NOME do slash command não é palavra reservada — a mensagem inteira, sim.** A regra antiga
+  descartava tudo por causa da primeira letra ("começou com barra, então nada aqui é keyword"), e
+  uma mensagem que abria com `/superpowers:systematic-debugging`, trazia parágrafos de contexto e
+  terminava em `ultracode` não escalava nada. O que é comando é o PRIMEIRO TOKEN; o resto são os
+  argumentos, que o comando expande para dentro do prompt — prosa, onde `ultrathink`/`ultracode`
+  valem como valeriam em qualquer frase. `/ultracode-review` segue de fora: é o nome de um comando.
+  A regra vive em DOIS lugares e tem de concordar letra por letra — `commandNameEnd` em
+  `front/src/features/board/lib/ultraWords.ts` (que pinta) e `ultraCommandNameEnd` em
+  `sdk-driver.mjs` (que ESCALA).
+- **O menu "/" existe no instante do connect.** O catálogo chega num evento que o driver anuncia UMA
+  vez, ao subir, e vivia só em `session.catalog`: num card cujo driver ainda estava bootando o
+  primeiro "/" abria vazio, e apagar e digitar de novo "resolvia" porque nesse meio-tempo o anúncio
+  chegava. Agora ele é gravado por card (`services/sdk/catalog.ts`, `<dataDir>/sdk-catalog/`) e a
+  rota serve a última lista conhecida quando a sessão ainda não tem a sua. Uma lista VAZIA nunca é
+  gravada: ela apagaria um menu bom por causa de um driver que subiu capenga.
+
 ## O raciocínio na tela
 
 A espera mostrava só um spinner com "Trabalhando…" — um turno de dez minutos e um de meio segundo
