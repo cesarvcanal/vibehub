@@ -8,6 +8,7 @@ import {
   decidePermission,
   dropRewoundRows,
   groupSdkRows,
+  liveActivityDetail,
   liveUserCids,
   markInterruptRequested,
   markUserEdited,
@@ -1061,5 +1062,79 @@ describe("turnHasRoomForMore — o respiro em que a fila anda", () => {
     expect(sent.turnActive).toBe(true);
     expect(sent.awaiting).toBe(false); // nada mais "preparando"…
     expect(turnHasRoomForMore(sent)).toBe(false); // …mas o modelo ainda não reagiu a ela
+  });
+});
+
+/**
+ * O PEDIDO DO CÉSAR (2026-09-28): "fica 'ferramenta demorada, ainda rodando' — parece mensagem
+ * genérica. Eu consigo ver o raciocínio dela; poderia mostrar o que a IA tá dizendo mesmo ali.
+ * Confere se não é pré-setada e sim dinâmica da IA."
+ *
+ * O indicador dizia só verbo + relógio + uma cauda enlatada, escolhida por uma tabela a partir do
+ * tempo decorrido. E o material de verdade estava ali do lado o tempo todo: a descrição que o
+ * PRÓPRIO agente escreveu para o comando ("Measuring PDV module size", via `toolHeadline`) e o
+ * raciocínio que ele está escrevendo agora. Nada disso precisa ser inventado — precisa ser lido.
+ *
+ * A regra: quando existe palavra do modelo, é ela que aparece. A frase enlatada vira o que sempre
+ * deveria ter sido — o fallback de quando não há nada a dizer.
+ */
+describe("liveActivityDetail — a palavra do modelo, não a frase pronta", () => {
+  it("ferramenta rodando: aparece a descrição que o AGENTE escreveu para o comando", () => {
+    const state = feed([
+      { type: "ready" },
+      {
+        type: "tool_use",
+        id: "t1",
+        name: "Bash",
+        input: { description: "Medindo o tamanho do módulo PDV", command: "du -sh src/pdv" },
+      },
+    ]);
+    expect(liveActivityDetail(state)).toBe("Medindo o tamanho do módulo PDV");
+  });
+
+  it("raciocínio ao vivo: aparece a ÚLTIMA linha do que ele está pensando agora", () => {
+    const state = feed([
+      { type: "ready" },
+      { type: "thinking_delta", text: "Primeiro vou ler o teste que falhou.\n" },
+      { type: "thinking_delta", text: "Agora vou conferir se o índice existe" },
+    ]);
+    expect(liveActivityDetail(state)).toBe("Agora vou conferir se o índice existe");
+  });
+
+  it("resposta sendo escrita: aparece a última linha dela", () => {
+    const state = feed([
+      { type: "ready" },
+      { type: "assistant_delta", text: "Achei o problema.\nO $inc é incondicional" },
+    ]);
+    expect(liveActivityDetail(state)).toBe("O $inc é incondicional");
+  });
+
+  it("bloco FECHADO não é atividade: nada a dizer, e a frase enlatada volta a valer", () => {
+    const state = feed([
+      { type: "ready" },
+      { type: "assistant_delta", text: "Achei o problema." },
+      { type: "assistant_text", text: "Achei o problema." },
+    ]);
+    expect(liveActivityDetail(state)).toBeNull();
+  });
+
+  it("ferramenta sem descrição do agente: o título dela serve, e nunca uma string vazia", () => {
+    const state = feed([
+      { type: "ready" },
+      { type: "tool_use", id: "t1", name: "Read", input: { file_path: "/app/src/estoque/service.js" } },
+    ]);
+    expect(liveActivityDetail(state)).toBe("Read(service.js)");
+  });
+
+  it("só espaços em branco no ar não viram detalhe — seria uma linha piscando vazia", () => {
+    const state = feed([{ type: "ready" }, { type: "thinking_delta", text: "   \n  " }]);
+    expect(liveActivityDetail(state)).toBeNull();
+  });
+
+  it("'Preparando…' (nada aconteceu ainda): não há palavra do modelo para mostrar", () => {
+    const state = appendUserRow(applySdkEvent(INITIAL_SDK_STATE, { type: "ready" }), "sobe pra prod", undefined, {
+      awaiting: true,
+    });
+    expect(liveActivityDetail(state)).toBeNull();
   });
 });

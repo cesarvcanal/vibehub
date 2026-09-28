@@ -2213,3 +2213,69 @@ describe("SdkChatView — a fila anda no respiro do turno, não só no fim", () 
     expect(screen.getByTestId("sdk-queued")).toHaveTextContent("recado dois");
   });
 });
+
+/**
+ * "PARECE MENSAGEM GENÉRICA" (César, 2026-09-28): o que mais se via num turno longo era
+ * "ferramenta demorada, ainda rodando" — a mesma frase para qualquer ferramenta, escolhida por uma
+ * tabela a partir do relógio. O raciocínio do modelo e a descrição que ele mesmo escreveu para o
+ * comando estavam a um passo dali, no estado, e nunca chegavam à tela.
+ *
+ * Agora a palavra do modelo ganha da frase pronta. A enlatada segue existindo para quando não há
+ * nada a dizer — o "Preparando…" de uma sessão subindo não tem raciocínio nenhum para mostrar.
+ */
+describe("SdkChatView — o indicador diz o que a IA está dizendo", () => {
+  it("ferramenta rodando: mostra a descrição do AGENTE, não 'rodando ferramenta'", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    const box = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+    await userEvent.type(box, "mede o pdv{Enter}");
+    ws.deliver({
+      type: "tool_use",
+      id: "t1",
+      name: "Bash",
+      input: { description: "Medindo o tamanho do módulo PDV", command: "du -sh src/pdv" },
+    } as SdkEvent);
+
+    const note = await screen.findByTestId("sdk-working-note");
+    expect(note).toHaveTextContent("Medindo o tamanho do módulo PDV");
+    expect(note).not.toHaveTextContent(/rodando ferramenta|ferramenta demorada/);
+  });
+
+  it("pensando: mostra a última linha do raciocínio, que é a que está mudando", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    const box = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+    await userEvent.type(box, "investiga{Enter}");
+    ws.deliver({ type: "thinking_delta", text: "Primeiro vou ler o teste que falhou.\n" } as SdkEvent);
+    ws.deliver({ type: "thinking_delta", text: "Agora vou conferir se o índice existe" } as SdkEvent);
+
+    const note = await screen.findByTestId("sdk-working-note");
+    expect(note).toHaveTextContent("Agora vou conferir se o índice existe");
+  });
+
+  it("o relógio continua ali — saber há quanto tempo é metade da informação", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    const box = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+    await userEvent.type(box, "investiga{Enter}");
+    ws.deliver({ type: "thinking_delta", text: "conferindo o índice" } as SdkEvent);
+
+    expect(await screen.findByTestId("sdk-working-note")).toHaveTextContent(/\ds/);
+  });
+
+  it("sem palavra do modelo ('Preparando…'), a frase enlatada segue valendo", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    const box = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+    await userEvent.type(box, "sobe pra prod{Enter}"); // sem `ready`: a sessão ainda está subindo
+
+    expect(await screen.findByTestId("sdk-working-note")).toHaveTextContent(/preparando a sessão|preparing the session/i);
+  });
+});
