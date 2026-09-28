@@ -12,6 +12,7 @@ import {
   MessageSquare,
   Pencil,
   Reply,
+  SendHorizontal,
   ShieldAlert,
   Wrench,
   X,
@@ -51,6 +52,7 @@ import {
   dropUserRow,
   currentActivity,
   groupSdkRows,
+  liveUserCids,
   markInterruptRequested,
   markUserEdited,
   parseSdkFrame,
@@ -110,16 +112,6 @@ export const EDIT_INTERRUPT_GRACE_MS = 15_000;
 /** How often the outbox is checked for a send whose receipt never came. */
 export const OUTBOX_TICK_MS = 2_000;
 
-/**
- * What "Continuar de onde parou" actually sends — a NEW turn asking the agent to pick the work up,
- * because that is the only honest resume the SDK offers: an interrupted turn cannot be un-cut.
- * Kept in pt-BR on purpose, like the supersede wrapper (see the back's `buildSupersedeText`): it is
- * the user's own speech act to his agent, not panel chrome.
- */
-export const RESUME_TURN_TEXT =
-  "[continuar] O turno anterior foi interrompido porque comecei a editar uma mensagem e depois " +
-  "cancelei a edição. Nada mudou no que eu pedi: continue de onde você parou.";
-
 export interface SdkChatViewProps {
   cardId: string;
   /** Is this card the one on screen? (see ChatView — the composer must not steal the keyboard) */
@@ -153,6 +145,16 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   }, [cardId, outbox]);
   /** Reconciliation runs ONCE per connection, when the replay has landed (`ready`). */
   const reconciledRef = React.useRef(false);
+  /**
+   * Desde quando esta conexão pode RESPONDER — o piso do relógio do recibo (ver lib/sdkOutbox.ts).
+   *
+   * `connected` só diz que o aperto de mão do websocket terminou; o servidor ainda leva segundos
+   * até ATENDER o socket (install do driver por SSH+docker, sonda de transcript com timeout de 15s,
+   * replay do histórico, spawn) e até lá guarda os frames num buffer, entregando-os depois. O
+   * `ready` é o instante em que ele assumiu esta conexão — e é dele, não do envio, que o prazo
+   * conta. `null` = nada aqui pode acusar ninguém.
+   */
+  const answerableSinceRef = React.useRef<number | null>(null);
   /**
    * A FILA — o que foi escrito com um turno ainda rodando (ver lib/sdkQueue.ts).
    *
@@ -213,7 +215,6 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         setState(INITIAL_SDK_STATE);
         // The replay tells the story again from disk (the interrupt note included) — a stale
         // "continuar?" offer from before the drop would be guessing about a turn we no longer see.
-        setInterruptedForEdit(false);
       };
       next.onmessage = (event: MessageEvent) => {
         if (typeof event.data !== "string") return;
@@ -309,7 +310,11 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   React.useEffect(() => {
     if (!state.ready || reconciledRef.current) return;
     reconciledRef.current = true;
-    const pending = outboxRef.current;
+    // Só os ÓRFÃOS: uma entrada cujo cid ainda tem bolha nesta tela pertence a ESTA conexão e tem
+    // dono (o watchdog). O `ready` chega antes dos recibos do que ficou bufferado no setup, então o
+    // replay não PODE trazer o envio em voo — julgá-lo aqui era duplicá-lo e condená-lo.
+    const live = liveUserCids(state.rows);
+    const pending = outboxRef.current.filter((m) => !live.has(m.cid));
     if (pending.length === 0) return;
     const { delivered, missing } = reconcileOutbox(deliveredUserTexts(state.rows), pending);
     if (delivered.length > 0 || missing.length > 0) {
@@ -330,6 +335,16 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   }, [state.ready, state.rows]);
 
   /**
+   * O relógio do recibo NASCE quando o SERVIDOR assume esta conexão (o `ready`, que ele só manda
+   * depois do setup inteiro), não quando o `onopen` do navegador dispara — e morre junto com ela.
+   * Enquanto não existe, nenhum silêncio é cobrável: não há de quem cobrar.
+   */
+  React.useEffect(() => {
+    const answerable = connected && state.ready;
+    answerableSinceRef.current = answerable ? (answerableSinceRef.current ?? Date.now()) : null;
+  }, [connected, state.ready]);
+
+  /**
    * THE WATCHDOG — the half-open socket, which is what made this bug so hard to see: `send()`
    * succeeded, nothing ever came back, and the browser went on believing the connection was fine
    * for minutes (in production, hours). A send with no receipt after `OUTBOX_ACK_TIMEOUT_MS` is
@@ -342,11 +357,20 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    * socket perfeitamente vivo. Era esse o loop "chat → Iniciando o agente… → histórico inteiro →
    * chat" que deixava a tela piscando (produção, 2026-09-17). Um reenvio zera o relógio e volta a
    * ser cobrável.
+   *
+   * E o veredito só é dado sobre uma conexão que PODIA ter respondido (`answerableSinceRef`):
+   * silêncio de um servidor que ainda está montando a conexão — ou de um fio que caiu — não é
+   * prova de nada, e tratá-lo como prova era o que marcava "não entregue" mensagens que o servidor
+   * tinha recebido, derrubando no meio do setup um socket cuja reconexão paga o setup inteiro de
+   * novo (produção, 2026-09-28). Com o fio caído quem dá o veredito é a reconciliação do reconnect,
+   * que pergunta ao replay o que o servidor realmente gravou — uma resposta, não um palpite.
    */
   React.useEffect(() => {
     if (outbox.length === 0) return;
     const timer = setInterval(() => {
-      const overdue = overdueMessages(outboxRef.current, Date.now(), OUTBOX_ACK_TIMEOUT_MS);
+      const answerableSince = answerableSinceRef.current;
+      if (answerableSince === null) return;
+      const overdue = overdueMessages(outboxRef.current, Date.now(), OUTBOX_ACK_TIMEOUT_MS, answerableSince);
       if (overdue.length === 0) return;
       const cids = overdue.map((m) => m.cid);
       setOutbox((prev) => markUndelivered(prev, cids));
@@ -366,15 +390,6 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   const [editing, setEditing] = React.useState<{ rowId: string; original: string } | null>(null);
   /** An edit waiting for the interrupted turn to END (its result/aborted) before it goes. */
   const [pendingEdit, setPendingEdit] = React.useState<{ original: string; text: string; cid: string } | null>(null);
-  /**
-   * Entering edit mode STOPPED a running turn, and nothing has replaced it yet.
-   *
-   * This is the honest half of the reported bug. The agent no longer keeps answering the message
-   * being corrected — but an interrupted turn cannot be un-interrupted, so the screen must not
-   * pretend the pause was a freeze. Cancelling the edit surfaces the banner below: the turn WAS
-   * cut, and continuing is a deliberate click (a new turn), not magic.
-   */
-  const [interruptedForEdit, setInterruptedForEdit] = React.useState(false);
   /** The reserved word the CURRENT turn was sent with — what the activity bar reports as effort. */
   const [escalation, setEscalation] = React.useState<{ ultrathink: boolean; ultracode: boolean } | null>(null);
 
@@ -445,15 +460,21 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    * message being corrected — burning a turn on words that were about to be withdrawn. The stop now
    * goes at the GESTURE, not at the send (which is what the deferred-edit path below already did).
    */
-  const beginEdit = React.useCallback(
-    (rowId: string, original: string): void => {
-      setReplyTo(null); // editing and answering a decision are two different gestures
-      setEditing({ rowId, original });
-      if (!state.turnActive) return;
-      if (sendInterrupt("edit")) setInterruptedForEdit(true);
-    },
-    [state.turnActive, sendInterrupt],
-  );
+  /**
+   * O lápis abre o campo — e SÓ. Ele não para o turno.
+   *
+   * Parava (o pedido anterior: "cliquei pra editar e ele continua respondendo"), e o preço apareceu
+   * em produção: clicar em editar e MUDAR DE IDEIA matava um turno que ninguém quis matar, e um
+   * turno cortado não se descorta — sobrava uma oferta de "continuar de onde parou" para consertar
+   * um estrago que a própria tela tinha feito. Clicar em editar não é uma decisão; é abrir a
+   * possibilidade de uma. Quem para o turno é a correção ENVIADA (ver `send`), e o custo dessa
+   * escolha é conhecido: entre o lápis e o Enter o agente segue trabalhando na mensagem antiga.
+   * Trabalho a mais é recuperável; um turno morto por engano, não.
+   */
+  const beginEdit = React.useCallback((rowId: string, original: string): void => {
+    setReplyTo(null); // editing and answering a decision are two different gestures
+    setEditing({ rowId, original });
+  }, []);
 
   /* ------------------------------------------------------------ a fila */
 
@@ -501,6 +522,33 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   }, []);
 
   /**
+   * FORÇAR O ENVIO: esta mensagem não espera o turno fechar, vai agora.
+   *
+   * Esperar é o padrão certo — uma mensagem dobrada no meio de um raciocínio entra como interrupção
+   * de contexto, não como pergunta nova. Mas nem todo recado quer esperar: "para, tá errado", "o
+   * que você tá fazendo?" são justamente para AGORA, e o driver aceita (a mensagem entra no turno
+   * em andamento e volta marcada "entrou no turno em andamento" — o `turn_absorbed`). Então a
+   * espera é uma ESCOLHA da pessoa, não uma sentença da tela.
+   *
+   * Sem fio de pé nada sai da fila: forçar um envio que não pode acontecer só trocaria uma mensagem
+   * guardada por uma bolha condenada — exatamente o que a fila existe para não fazer.
+   */
+  const sendQueuedNow = React.useCallback((id: string): void => {
+    const target = queueRef.current.find((m) => m.id === id);
+    if (!target) return;
+    if (!connected || socketRef.current?.readyState !== WebSocket.OPEN) {
+      toast.error(translate("sdk.offline"));
+      return;
+    }
+    setQueue((prev) => dequeue(prev, id));
+    try {
+      dispatchTurn(target.text);
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  }, [connected, dispatchTurn]);
+
+  /**
    * SAIR do modo edição sem enviar. Uma mensagem da fila volta a ser entregável, no lugar dela e
    * com o texto que tinha — o X aqui é "desisti de reescrever", nunca "joga fora o que escrevi".
    */
@@ -521,7 +569,12 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    * mensagem já enviada (`editing`/`pendingEdit`) passa na frente: ela é dona do próximo turno.
    */
   React.useEffect(() => {
-    if (!connected || !state.ready) return; // sem fio ninguém entrega nada
+    // Sem fio ninguém entrega nada — e "fio" é o `readyState`, não o `connected`. Um socket morto
+    // que o navegador ainda não percebeu passa por `connected`, e o despacho puxava a mensagem da
+    // fila para entregá-la nele: ela saía da espera e virava a bolha condenada que a fila existe
+    // para evitar. As duas pontas (o que entra na fila, o que sai dela) leem a MESMA verdade.
+    if (!connected || socketRef.current?.readyState !== WebSocket.OPEN) return;
+    if (!state.ready) return;
     if (state.turnActive || state.awaiting) return; // ainda tem turno em cima da mesa
     if (editing || pendingEdit) return;
     const head = headOfQueue(queueRef.current);
@@ -540,7 +593,6 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     const text = raw.replace(/\r$/, "").trim();
     if (!text) return;
     // Anything the person sends REPLACES the interrupted turn — the "continuar?" offer is moot.
-    setInterruptedForEdit(false);
     if (queueEdit) {
       // Terminou de editar uma mensagem da fila: o texto novo entra NO LUGAR do antigo, e só agora
       // ela volta a ser entregável — enquanto estava no campo, nem um turno fechando a soltava.
@@ -576,12 +628,12 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       const { original } = editing;
       const editCid = newCid();
       if (state.turnActive) {
-        // Still running at send time. Either the stop `beginEdit` already sent has not reported
-        // back yet (nothing more to do — just wait for it), or a turn started meanwhile (another
-        // tab, a message folded in) and THAT one has to be stopped too. Either way the edit only
-        // goes when the turn ends (the effect above): it must never land as the answer to a turn
-        // the superseded message is still driving.
-        if (!interruptedForEdit && !sendInterrupt("edit")) {
+        // AQUI é onde o turno para — no envio da correção, não no clique do lápis (ver `beginEdit`).
+        // A decisão foi tomada: a mensagem que está sendo respondida foi superada, e deixar o turno
+        // correr seria gastar raciocínio numa pergunta que já não existe. A correção só VAI quando
+        // esse turno reportar seu fim (o efeito acima): ela nunca pode aterrissar como resposta de
+        // um turno que a mensagem superada ainda está dirigindo.
+        if (!sendInterrupt("edit")) {
           throw new Error(translate("sdk.offline")); // the composer keeps the words
         }
         setPendingEdit({ original, text, cid: editCid });
@@ -606,7 +658,19 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     // bloqueado dentro do `canUseTool`/`waitQuestion` com o turno ainda contado como ativo, e a
     // única coisa que o solta é uma mensagem do usuário. Enfileirar aqui seria esperar por um fim
     // de turno que só a própria mensagem pode causar — trava de meia hora, até o timeout.
-    if ((state.turnActive || state.awaiting || pendingEdit) && pendingRef.current.length === 0) {
+    //
+    // E o FIO CAÍDO é a mesma espera. Um socket cai por motivos banais — deploy, tampa do notebook,
+    // proxy cortando conexão ociosa — e volta em 400ms a 15s (lib/reconnect.ts). Quem escreve não vê
+    // nada disso: até aqui a mensagem nascia instantaneamente condenada ("não entregue ao servidor",
+    // com reenviar/descartar) por um fio que voltava dois segundos depois, e o texto ficava em dois
+    // lugares ao mesmo tempo — na bolha e no campo, de onde o segundo Enter mandava a cópia. Quem só
+    // precisa esperar o fio não está perdido: espera na fila, e o despacho a entrega quando der.
+    // A exceção da decisão pendente vale para as DUAS esperas, e é o que a mantém segura: o despacho
+    // da fila só anda quando o turno fecha, então enfileirar com uma pergunta de pé — inclusive com
+    // o fio fora do ar — seria esperar por um fim de turno que só a própria mensagem pode causar.
+    const wireUp = connected && socketRef.current?.readyState === WebSocket.OPEN;
+    const waits = !wireUp || state.turnActive || state.awaiting || pendingEdit;
+    if (waits && pendingRef.current.length === 0) {
       setQueue((prev) => enqueue(prev, { id: newQueueId(), text, at: Date.now() }));
       return;
     }
@@ -645,23 +709,6 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     sendInterrupt();
   };
 
-  /**
-   * "Continuar de onde parou" — the only truthful resume this wire has: a NEW turn asking the agent
-   * to pick the work back up. The SDK cannot un-interrupt a turn, so the screen says so (the banner)
-   * and makes continuing an explicit click instead of faking that nothing happened.
-   */
-  const resumeInterruptedTurn = (): void => {
-    // A turn like any other: drawn as "sending" and taken off the outbox only by its `user_ack`.
-    const cid = newCid();
-    setState((prev) => appendUserRow(prev, RESUME_TURN_TEXT, undefined, { awaiting: true, cid, state: "sending" }));
-    try {
-      sendTurn({ type: "user", text: RESUME_TURN_TEXT }, RESUME_TURN_TEXT, cid);
-    } catch (err) {
-      toast.error((err as Error).message);
-      return; // the offer stays on screen — the bubble is already marked undelivered
-    }
-    setInterruptedForEdit(false);
-  };
 
   const answerPermission = (id: string, allow: boolean): void => {
     try {
@@ -910,46 +957,12 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         </div>
       ) : null}
 
-      {/* THE TURN WAS CUT, AND SAYING SO BEATS PRETENDING. Entering edit mode stopped the agent;
-          the person then cancelled the edit. There is no un-interrupting a turn on this wire, so
-          instead of faking a seamless resume the screen states what happened and offers ONE
-          explicit way forward — a new turn asking the agent to pick the work back up. Hidden while
-          the edit bar is open (the send is the way forward there) and while a turn is running
-          (something IS working — there is nothing to continue). */}
-      {interruptedForEdit && !editing && !state.turnActive ? (
-        <div
-          data-testid="sdk-interrupted-banner"
-          className="mt-1.5 flex items-start gap-1.5 rounded-md border border-amber-500/50 bg-amber-500/10 px-2.5 py-1.5 text-xs"
-        >
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
-          <div className="min-w-0 flex-1 break-words text-muted-foreground">{t("sdk.interruptedForEdit")}</div>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-6 shrink-0 text-[11px]"
-            data-testid="sdk-resume-turn"
-            onClick={resumeInterruptedTurn}
-          >
-            {t("sdk.resumeTurn")}
-          </Button>
-          <button
-            type="button"
-            data-testid="sdk-interrupted-dismiss"
-            aria-label={t("sdk.interruptedDismiss")}
-            title={t("sdk.interruptedDismiss")}
-            onClick={() => setInterruptedForEdit(false)}
-            className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-amber-500/20 hover:text-foreground"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      ) : null}
 
       {/* A FILA — o que foi escrito enquanto o Claude trabalha, de prontidão logo acima do campo,
           na mesma faixa em que o status "Trabalhando… 1m20s" vive. Não está na conversa porque o
           Claude ainda não a leu: ela sobe pra lá no instante em que for entregue. Até então é da
           pessoa — o lápis a traz de volta pro campo, o X a joga fora. */}
-      {queue.length > 0 ? <SdkQueueTray queue={queue} onEdit={beginQueueEdit} onRemove={removeQueued} /> : null}
+      {queue.length > 0 ? <SdkQueueTray queue={queue} onEdit={beginQueueEdit} onRemove={removeQueued} onSendNow={sendQueuedNow} /> : null}
 
       {/* The interrupt button lives INSIDE the composer — right column, above the microphone —
           in the same seat as the transcript chat's stop. The interrupt frame is still this view's. */}
@@ -1003,16 +1016,23 @@ function SdkQueueTray({
   queue,
   onEdit,
   onRemove,
+  onSendNow,
 }: {
   queue: readonly QueuedMessage[];
   onEdit: (id: string) => void;
   onRemove: (id: string) => void;
+  onSendNow: (id: string) => void;
 }) {
   const t = useT();
   return (
     <div
       data-testid="sdk-queue"
-      className="mt-1.5 flex flex-col gap-1 rounded-md border border-border/60 bg-muted/40 px-2 py-1.5"
+      // TETO. A bandeja é irmã do scroller da conversa num flex column: sem um limite ela cresce
+      // com o texto que está esperando e espreme o `flex-1` do scroller até quase zero — uma
+      // instrução de duzentas linhas empurrava a conversa inteira para fora da tela, e junto com
+      // ela a única forma de acompanhar o que o agente estava dizendo (produção, 2026-09-28).
+      // A espera é um aviso, não uma leitura: o que não couber rola aqui dentro.
+      className="mt-1.5 flex max-h-[28vh] shrink-0 flex-col gap-1 overflow-y-auto overscroll-contain rounded-md border border-border/60 bg-muted/40 px-2 py-1.5"
     >
       <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
         <Clock3 className="h-3 w-3 shrink-0" />
@@ -1030,7 +1050,13 @@ function SdkQueueTray({
           )}
         >
           <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
-          <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-foreground/90">
+          {/* Teto TAMBÉM por mensagem: com várias na fila, uma gigante empurraria as outras para
+              fora do teto da bandeja e elas sumiriam da vista. Cada uma rola no lugar dela — e o
+              lápis continua sendo o caminho para lê-la inteira, no campo de texto. */}
+          <span
+            data-testid="sdk-queued-text"
+            className="min-w-0 flex-1 max-h-24 overflow-y-auto overscroll-contain whitespace-pre-wrap break-words text-foreground/90"
+          >
             {message.text}
           </span>
           {/* NO CAMPO, sendo reescrita: ela guarda o lugar dela na fila e não oferece gesto nenhum —
@@ -1041,6 +1067,18 @@ function SdkQueueTray({
             </span>
           ) : (
             <>
+              {/* ATROPELAR A ESPERA: esta vai agora, no meio do turno. O padrão continua sendo
+                  esperar — mas "para, tá errado" não é uma pergunta para daqui a dez minutos. */}
+              <button
+                type="button"
+                data-testid="sdk-queued-send-now"
+                aria-label={t("sdk.queueSendNow")}
+                title={t("sdk.queueSendNow")}
+                onClick={() => onSendNow(message.id)}
+                className="shrink-0 rounded p-0.5 text-muted-foreground transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100"
+              >
+                <SendHorizontal className="h-3.5 w-3.5" />
+              </button>
               <button
                 type="button"
                 data-testid="sdk-queued-edit"

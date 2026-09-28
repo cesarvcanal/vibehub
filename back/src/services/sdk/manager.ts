@@ -84,6 +84,36 @@ export interface DriverSession {
    * belongs to nothing (a driver that reports twice, a stale frame) cuts nothing.
    */
   rewindTarget?: string;
+  /**
+   * OS RECIBOS JÁ EMITIDOS — `cid` → a mesma promessa de durabilidade que o primeiro envio ganhou.
+   *
+   * O "Reenviar" da bolha manda as MESMAS palavras com o MESMO `cid`, de propósito: ele existe para
+   * o caso em que o recibo se perdeu, não a mensagem (o socket caiu entre o append e o `user_ack`,
+   * que então é descartado em silêncio; ou o prazo do navegador venceu enquanto esta conexão ainda
+   * estava sendo montada). Sem esta memória o reenvio virava uma mensagem NOVA: segunda linha no
+   * histórico, segundo turno, e o agente executando duas vezes uma instrução que pode ser
+   * destrutiva. Um cid já aceito não é uma mensagem — é a cobrança de um recibo, e é só o recibo
+   * que ele recebe de volta.
+   */
+  acceptedCids: Map<string, Promise<void>>;
+}
+
+/**
+ * Quantos recibos uma sessão lembra. Alto o bastante para cobrir qualquer reenvio que uma pessoa
+ * ainda faria (o outbox do navegador guarda poucos), baixo o bastante para a memória não crescer
+ * com a conversa. O mais antigo sai primeiro: um cid esquecido só volta a ser uma mensagem nova.
+ */
+const ACCEPTED_CIDS_MAX = 256;
+
+/** Lembra o recibo deste envio, descartando os mais antigos. A ordem do `Map` é a de inserção. */
+function rememberCid(session: DriverSession, cid: string | undefined, persisted: Promise<void>): void {
+  if (!cid) return;
+  session.acceptedCids.set(cid, persisted);
+  while (session.acceptedCids.size > ACCEPTED_CIDS_MAX) {
+    const oldest = session.acceptedCids.keys().next();
+    if (oldest.done) break;
+    session.acceptedCids.delete(oldest.value);
+  }
 }
 
 /**
@@ -304,6 +334,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     buffer: "",
     stderrTail: "",
     closed: false,
+    acceptedCids: new Map(),
   };
   sessions.set(opts.cardId, session);
   logger.info({ card: opts.label }, "sdk driver spawned (card-owned, survives the page)");
@@ -422,6 +453,12 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
   const control = parseSdkClientFrame(raw);
   if (!control) return { kind: "ignored" };
   if (control.type === "user" || control.type === "edit_user") {
+    // UM RECIBO JÁ EMITIDO NÃO É UMA MENSAGEM NOVA — e vem ANTES de olhar para o driver, porque o
+    // recibo fala de DURABILIDADE, não de intenção: a mensagem está gravada, e isso segue verdade
+    // com o driver morto. Recusá-la aqui faria a bolha pedir uma terceira cópia de algo que o
+    // servidor tem. O "Reenviar" repete o mesmo `cid` de propósito: o que se perdeu foi o recibo.
+    const known = control.cid ? session.acceptedCids.get(control.cid) : undefined;
+    if (known) return { kind: "accepted", cid: control.cid, persisted: known };
     // The driver is GONE: refuse out loud instead of writing into a closed pipe. Nothing is
     // persisted and no turn is counted, so the browser's copy is the only one — it keeps the words
     // and resends onto the successor driver (the socket's close is already on its way).
@@ -458,6 +495,7 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
     const persisted = appendHistory(session.cardId, { type: "user", text: control.text, sent: wrapped, at, from: origin });
     // Same durable in-flight promise a plain user turn earns (see #64's boot sweep).
     void writeInflightMarker(session.cardId, { startedAt: at, preview: inflightPreview(control.text), attempts: 0 });
+    rememberCid(session, control.cid, persisted);
     return { kind: "accepted", cid: control.cid, persisted };
   }
   if (control.type === "user") {
@@ -471,6 +509,7 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
     // before the result arrives, the boot sweep finds this marker and the turn is not silently
     // lost. attempts: 0 — a person's own turn always earns one automatic resume.
     void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(control.text), attempts: 0 });
+    rememberCid(session, control.cid, persisted);
     return { kind: "accepted", cid: control.cid, persisted };
   }
   writeToDriver(session, control);

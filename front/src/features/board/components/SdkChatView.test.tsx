@@ -592,9 +592,20 @@ describe("SdkChatView — editar mensagem enviada (supersede)", () => {
     expect(screen.queryByTestId("composer-editing")).not.toBeInTheDocument();
   });
 
-  // THE REPORTED BUG: "cliquei pra editar e em vez de PAUSAR o raciocínio ele continua
-  // respondendo". The stop belongs to the GESTURE, not to the send.
-  it("clicking the pencil MID-TURN stops the turn right away (the edit bar is not a spectator)", async () => {
+  /**
+   * O PEDIDO DO CÉSAR (2026-09-28): "clico em editar, mudo de ideia, e o turno foi interrompido".
+   *
+   * O lápis abria o campo E MATAVA o turno na hora — antes de existir um único caractere da nova
+   * versão. Só que clicar em editar não é uma decisão: é abrir a possibilidade de uma. Quem
+   * desistiu não pediu nada, e um turno cortado não se descorta — a tela ficava oferecendo
+   * "continuar de onde parou" para consertar um estrago que ela mesma tinha feito, e o histórico
+   * ganhava uma nota explicando uma interrupção que ninguém quis.
+   *
+   * A regra agora: quem para o turno é a CORREÇÃO ENVIADA, nunca o gesto de abrir o campo. O preço
+   * é conhecido e é o menor dos dois: entre o lápis e o Enter o agente segue trabalhando na
+   * mensagem antiga. Trabalho a mais é recuperável; um turno morto por engano, não.
+   */
+  it("o lápis MID-TURN não para o turno — abrir o campo não é uma decisão", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -603,17 +614,16 @@ describe("SdkChatView — editar mensagem enviada (supersede)", () => {
     const box = await textbox();
     await userEvent.type(box, "sobe pra prod{Enter}");
     await waitFor(() => expect(ws.sent.length).toBe(1));
-    ws.deliver({ type: "assistant_delta", text: "Subindo…" }); // the turn is visibly running
+    ws.deliver({ type: "assistant_delta", text: "Subindo…" }); // o turno está visivelmente rodando
 
     await userEvent.click(screen.getByTestId("sdk-edit"));
 
-    // the stop went at the CLICK, before a single character of the new version was typed
-    await waitFor(() => expect(ws.sent.length).toBe(2));
-    expect(JSON.parse(ws.sent[1]!)).toEqual({ type: "interrupt", reason: "edit" });
-    expect(screen.getByTestId("composer-editing")).toBeInTheDocument();
+    expect(ws.sent.length).toBe(1); // nada saiu além da própria mensagem: nenhum interrupt
+    expect(screen.getByTestId("composer-editing")).toBeInTheDocument(); // o campo abriu
+    expect(screen.getByTestId("sdk-chat-working")).toBeInTheDocument(); // e o turno segue de pé
   });
 
-  it("with the turn RUNNING the edit only goes after the interrupted turn's result", async () => {
+  it("clicar em editar e DESISTIR não interrompe nada — não há estrago, nem o que continuar", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -622,73 +632,42 @@ describe("SdkChatView — editar mensagem enviada (supersede)", () => {
     const box = await textbox();
     await userEvent.type(box, "sobe pra prod{Enter}");
     await waitFor(() => expect(ws.sent.length).toBe(1));
-    ws.deliver({ type: "assistant_delta", text: "Subindo…" }); // the turn is visibly running
+    ws.deliver({ type: "assistant_delta", text: "Subindo…" });
+    await userEvent.click(screen.getByTestId("sdk-edit"));
+
+    fireEvent.keyDown(box, { key: "Escape" }); // mudei de ideia
+
+    expect(ws.sent.length).toBe(1); // o turno nunca foi tocado
+    expect(screen.getByTestId("sdk-chat-working")).toBeInTheDocument(); // e continua rodando
+    expect(screen.queryByTestId("composer-editing")).not.toBeInTheDocument();
+    // …e não sobra oferta nenhuma de "continuar": não houve o que interromper.
+    expect(screen.queryByTestId("sdk-interrupted-banner")).toBeNull();
+  });
+
+  it("é a correção ENVIADA que para o turno — e ela só vai depois do result da interrupção", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    const box = await textbox();
+    await userEvent.type(box, "sobe pra prod{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "Subindo…" });
 
     await userEvent.click(screen.getByTestId("sdk-edit"));
-    await waitFor(() => expect(ws.sent.length).toBe(2)); // the stop of the pencil click
     await userEvent.clear(box);
     await userEvent.type(box, "sobe pra dev{Enter}");
 
-    // no SECOND stop — the turn is already being aborted; the edit waits for its result
-    expect(ws.sent.length).toBe(2);
+    // AGORA sim: a decisão foi tomada, e ela para o turno que responde a mensagem superada.
+    await waitFor(() => expect(ws.sent.length).toBe(2));
     expect(JSON.parse(ws.sent[1]!)).toEqual({ type: "interrupt", reason: "edit" });
 
     ws.deliver({ type: "result", isError: false, subtype: "aborted" });
     await waitFor(() => expect(ws.sent.length).toBe(3));
     expect(JSON.parse(ws.sent[2]!)).toMatchObject({ type: "edit_user", original: "sobe pra prod", text: "sobe pra dev" });
-    // the correction replaced the interrupted turn: no leftover offer to continue the old one
+    // a correção substituiu o turno interrompido: nada de oferta para continuar o antigo
     expect(screen.queryByTestId("sdk-interrupted-banner")).toBeNull();
-  });
-
-  // "Cancelar a edição retoma" — honestly: the turn was CUT, and continuing is a new turn.
-  it("cancelling an edit that stopped a turn offers to continue it — and continuing sends a turn", async () => {
-    renderSdkChat();
-    const ws = await socket();
-    ws.accept();
-    ws.deliver({ type: "ready" });
-
-    const box = await textbox();
-    await userEvent.type(box, "sobe pra prod{Enter}");
-    await waitFor(() => expect(ws.sent.length).toBe(1));
-    ws.deliver({ type: "assistant_delta", text: "Subindo…" });
-
-    await userEvent.click(screen.getByTestId("sdk-edit"));
-    await waitFor(() => expect(ws.sent.length).toBe(2));
-    // while the aborted turn is still closing there is nothing to offer yet
-    expect(screen.queryByTestId("sdk-interrupted-banner")).toBeNull();
-
-    fireEvent.keyDown(box, { key: "Escape" }); // cancel the edit
-    ws.deliver({ type: "result", isError: true, subtype: "error_during_execution" }); // the abort's result
-
-    const banner = await screen.findByTestId("sdk-interrupted-banner");
-    expect(banner).toHaveTextContent(/interrompid|stopped/i);
-    // and it is NOT a mute red "error": an abort we asked for draws no error bubble at all
-    expect(screen.queryByTestId("sdk-error")).toBeNull();
-
-    await userEvent.click(screen.getByTestId("sdk-resume-turn"));
-    expect(JSON.parse(ws.sent[2]!)).toMatchObject({ type: "user" });
-    expect(JSON.parse(ws.sent[2]!).text).toMatch(/continue de onde/i);
-    expect(screen.queryByTestId("sdk-interrupted-banner")).toBeNull();
-  });
-
-  it("dismissing the offer leaves the turn stopped and sends nothing", async () => {
-    renderSdkChat();
-    const ws = await socket();
-    ws.accept();
-    ws.deliver({ type: "ready" });
-
-    const box = await textbox();
-    await userEvent.type(box, "sobe pra prod{Enter}");
-    await waitFor(() => expect(ws.sent.length).toBe(1));
-    ws.deliver({ type: "assistant_delta", text: "Subindo…" });
-    await userEvent.click(screen.getByTestId("sdk-edit"));
-    await waitFor(() => expect(ws.sent.length).toBe(2));
-    fireEvent.keyDown(box, { key: "Escape" });
-    ws.deliver({ type: "result", isError: true });
-
-    await userEvent.click(await screen.findByTestId("sdk-interrupted-dismiss"));
-    expect(screen.queryByTestId("sdk-interrupted-banner")).toBeNull();
-    expect(ws.sent.length).toBe(2);
   });
 
   it("editing with NO turn running touches nothing — no stop, no offer", async () => {
@@ -1285,7 +1264,225 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     });
   });
 
-  it("socket fechado: a mensagem nem sai, o rascunho fica no campo e a bolha não mente", async () => {
+  /**
+   * O BUG DO CÉSAR (produção, 2026-09-28): "toda hora" uma mensagem qualquer, no meio de uma
+   * conversa normal, nasce marcada "não entregue ao servidor" — com o servidor no ar 24h.
+   *
+   * A causa não é o servidor estar fora: é o RELÓGIO DO RECIBO correr num instante em que o
+   * servidor ainda não tem como responder. O `onopen` do navegador dispara no aperto de mão do
+   * websocket, mas o back só chega ao `handleClientFrame` DEPOIS de um setup que leva segundos —
+   * `installCardSdkDriver` (dois `docker exec` por SSH, com `npm install` quando a versão mudou), a
+   * sonda de transcript (timeout de 15s, sozinha maior que o prazo do recibo), a leitura e o replay
+   * do histórico, o spawn do driver. Até lá o frame fica em `pendingFrames` (routes/cardSdk.ts), e
+   * é entregue DE VERDADE quando o setup acaba.
+   *
+   * Ou seja: a bolha acusava "não entregue" uma mensagem que o servidor recebeu — e o "Reenviar"
+   * que a pessoa clica manda a segunda cópia. Pior, o watchdog derrubava esse socket no meio do
+   * setup, e a reconexão paga o setup inteiro de novo: é esse o "toda hora".
+   *
+   * A regra que estes testes fixam: a ausência de recibo só é PROVA quando a conexão estava em
+   * condições de responder. O prazo conta a partir do `ready` — o instante em que o servidor
+   * assumiu este socket —, nunca de antes dele.
+   */
+  describe("o prazo do recibo só corre quando o servidor pode responder", () => {
+    it("enviada enquanto o back ainda monta a conexão: o prazo não vence, a bolha não mente", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderSdkChat();
+        const ws = await socket();
+        ws.accept(); // o aperto de mão terminou — mas o back ainda está no setup, sem `ready`
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
+        await waitFor(() => expect(ws.sent.length).toBe(1));
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS); });
+
+        // Nada aqui é prova de nada: o servidor nem chegou a ouvir ainda.
+        expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sending");
+        expect(screen.queryByTestId("sdk-user-undelivered")).not.toBeInTheDocument();
+        expect(ws.readyState).not.toBe(3); // e o socket do setup em andamento NÃO é derrubado
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("o setup demorou e terminou: o recibo chega e a bolha vira 'sent', sem falso negativo", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderSdkChat();
+        const ws = await socket();
+        ws.accept();
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
+        await waitFor(() => expect(ws.sent.length).toBe(1));
+        const cid = (JSON.parse(ws.sent[0]!) as { cid: string }).cid;
+
+        // O setup do back (sonda de transcript + replay + spawn) demorou mais que o prazo…
+        await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS * 2); });
+        // …e então ele atende o socket e responde o frame que estava bufferado.
+        ws.deliver({ type: "ready" });
+        ws.deliver({ type: "user_ack", cid } as SdkEvent);
+
+        await waitFor(() => expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sent"));
+        await waitFor(() => expect(localStorage.getItem("vibehub.sdkOutbox.c1")).toBeNull());
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    /**
+     * O `ready` chega ANTES dos recibos do que ficou bufferado: o back manda `ready` no attach
+     * (manager.ts) e só DEPOIS processa `pendingFrames` (routes/cardSdk.ts). Então o replay não
+     * pode conter a mensagem em voo — e a reconciliação, que compara por TEXTO, a dava como
+     * perdida: bolha duplicada, marcada "não entregue", para uma mensagem a caminho.
+     *
+     * A fronteira: reconciliar é sobre o que sobrou de ANTES. Um envio que já tem bolha nesta tela
+     * tem dono — o watchdog — e a reconciliação não opina sobre ele.
+     */
+    it("a reconciliação não duplica nem condena o envio que ESTA conexão ainda espera", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderSdkChat();
+        const ws = await socket();
+        ws.accept();
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
+        await waitFor(() => expect(ws.sent.length).toBe(1));
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS * 2); });
+        ws.deliver({ type: "ready" }); // o replay vem sem ela: o back ainda nem leu o frame
+
+        expect(screen.getAllByTestId("sdk-user")).toHaveLength(1);
+        expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sending");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("depois do 'ready' o relógio começa DO ZERO — a espera do setup não é descontada do prazo", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderSdkChat();
+        const ws = await socket();
+        ws.accept();
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
+        await waitFor(() => expect(ws.sent.length).toBe(1));
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS * 2); });
+        ws.deliver({ type: "ready" }); // o servidor assumiu o socket AGORA: o prazo nasce aqui
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS / 2); });
+        expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sending");
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS); });
+        // Agora sim: houve uma conexão de pé, com prazo inteiro, e ninguém respondeu.
+        expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered");
+        expect(ws.readyState).toBe(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    /**
+     * A OUTRA METADE do "toda hora": escrever durante a reconexão.
+     *
+     * Um socket cai o tempo todo por motivos banais — deploy, tampa do notebook, proxy cortando uma
+     * conexão ociosa — e a reconexão leva de 400ms a 15s (lib/reconnect.ts). Quem está escrevendo
+     * não vê nada disso: dá Enter e, até aqui, a mensagem nascia INSTANTANEAMENTE condenada ("não
+     * entregue ao servidor", com reenviar/descartar) por um fio que voltaria dois segundos depois —
+     * e o texto ficava em DOIS lugares ao mesmo tempo, na bolha e no campo, de onde um segundo
+     * Enter mandava a cópia.
+     *
+     * Uma mensagem que só precisa esperar o fio não é uma mensagem perdida: é a FILA — o mesmo
+     * lugar onde espera quem escreveu durante um turno, editável, guardada em disco, e entregue
+     * sozinha assim que a conexão volta a poder carregá-la.
+     */
+    it("escrever com o fio caído: a mensagem espera na fila, e sobe sozinha quando o fio volta", async () => {
+      renderSdkChat();
+      const first = await socket();
+      first.accept();
+      first.deliver({ type: "ready" });
+      act(() => { first.readyState = 3; first.onclose?.(); }); // o fio caiu, sem ninguém perceber
+
+      await userEvent.type(screen.getByRole("textbox"), "instrução longa{Enter}");
+
+      expect(first.sent).toHaveLength(0);
+      expect(screen.queryByTestId("sdk-user")).not.toBeInTheDocument(); // nada nasce condenado
+      expect(screen.getByTestId("sdk-queued")).toHaveTextContent("instrução longa");
+      expect(screen.getByRole("textbox")).toHaveValue(""); // e o texto não fica em dois lugares
+
+      // O fio volta: a fila anda sozinha, e só agora a mensagem vira bolha de verdade.
+      await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
+      const second = FakeSocket.instances[1] as FakeSocket;
+      second.accept();
+      second.deliver({ type: "ready" });
+
+      await waitFor(() => expect(second.sent.length).toBe(1));
+      expect(JSON.parse(second.sent[0]!)).toMatchObject({ type: "user", text: "instrução longa" });
+      await waitFor(() => expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument());
+      expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sending");
+    });
+
+    /**
+     * A EXCEÇÃO QUE NÃO PODE CAIR: com uma pergunta do agente esperando resposta, NADA é
+     * enfileirado — nem com o fio fora do ar.
+     *
+     * Um `user_question` deixa o driver bloqueado com o turno ainda contado como ATIVO, e a única
+     * coisa que o solta é uma mensagem da pessoa. O despacho da fila só anda quando o turno fecha —
+     * então enfileirar aqui seria esperar por um fim de turno que só a própria mensagem enfileirada
+     * poderia causar: trava permanente, do tipo que fica meia hora até o timeout.
+     */
+    it("pergunta do agente na tela: a mensagem NÃO vai pra fila nem com o fio caído (seria deadlock)", async () => {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready", turnActive: true } as SdkEvent);
+      ws.deliver({
+        type: "user_question",
+        id: "q1",
+        questions: [{ question: "Sigo pelo caminho A?", options: [{ label: "A" }, { label: "B" }] }],
+      } as SdkEvent);
+      await screen.findByTestId("sdk-question");
+      act(() => { ws.readyState = 3; ws.onclose?.(); }); // o fio cai com a pergunta de pé
+
+      const composer = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+      await userEvent.type(composer, "vai pelo A mesmo{Enter}");
+
+      expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument();
+    });
+
+    it("conexão caída: o prazo não corre no escuro — quem decide é a reconciliação do reconnect", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderSdkChat();
+        const ws = await socket();
+        ws.accept();
+        ws.deliver({ type: "ready" });
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
+        await waitFor(() => expect(ws.sent.length).toBe(1));
+
+        // O fio cai logo depois do envio (deploy, VPN, wi-fi) — nada disso é culpa da mensagem.
+        act(() => { ws.readyState = 3; ws.onclose?.(); });
+        await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS); });
+
+        expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sending");
+        expect(screen.queryByTestId("sdk-user-undelivered")).not.toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  /**
+   * O socket morto que o navegador ainda não percebeu (`readyState` fechado sem o `onclose` ter
+   * corrido): nada sai por ele. A bolha condenada que nascia aqui era um falso negativo duas vezes
+   * — o servidor não recusou nada, ele nem foi consultado — e deixava o texto em dois lugares, na
+   * bolha e no campo, de onde o Enter seguinte mandava a cópia. Uma mensagem que só precisa de um
+   * fio ESPERA: guardada em disco, editável, entregue pelo despacho quando houver conexão.
+   */
+  it("socket morto: a mensagem nem sai, espera na fila, e ninguém acusa entrega nenhuma", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -1295,8 +1492,9 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     await userEvent.type(screen.getByRole("textbox"), "não vai sair{Enter}");
 
     expect(ws.sent.length).toBe(0);
-    expect(screen.getByRole("textbox")).toHaveValue("não vai sair"); // o composer guarda as palavras
-    await waitFor(() => expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered"));
+    expect(await screen.findByTestId("sdk-queued")).toHaveTextContent("não vai sair"); // guardada e editável
+    expect(screen.queryByTestId("sdk-user")).not.toBeInTheDocument(); // nada nasce condenado
+    expect(screen.getByRole("textbox")).toHaveValue(""); // e o texto não fica em dois lugares
   });
 });
 
@@ -1783,5 +1981,133 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
     await waitFor(() => expect(ws.sent.length).toBe(1));
     expect(JSON.parse(ws.sent[0]!).text).toContain("o B");
     expect(screen.queryByTestId("sdk-queue")).toBeNull();
+  });
+});
+
+/**
+ * O BUG DO LAYOUT (produção, 2026-09-28): "mensagem grande quebra o layout, ela tá na fila e eu
+ * não consigo subir para ver o que tá sendo dito".
+ *
+ * A bandeja da fila mora entre a conversa e o campo de texto, como IRMÃ do scroller da conversa
+ * num flex column. O texto da mensagem em espera era desenhado inteiro, sem teto — então uma
+ * instrução de duzentas linhas esticava a bandeja até ela ocupar a tela toda, e o scroller
+ * (`min-h-0 flex-1`) era espremido até quase zero. A conversa não sumiu: ela foi empurrada para
+ * fora, e com ela a única forma de acompanhar o que o agente estava dizendo.
+ *
+ * A regra: a espera nunca pode roubar a tela da conversa. A bandeja tem TETO e rolagem própria, e
+ * cada mensagem em espera também — uma gigante rola dentro do lugar dela em vez de empurrar as
+ * outras (e o lápis continua sendo o caminho para lê-la inteira, no campo).
+ *
+ * jsdom não calcula layout, então o que dá para travar aqui é a REGRA: os dois elementos carregam
+ * teto de altura e rolagem própria, e a bandeja fica FORA do scroller da conversa.
+ */
+describe("SdkChatView — a fila não rouba a tela da conversa", () => {
+  /** Uma instrução de verdade, do tamanho das que quebraram o layout. */
+  const HUGE = Array.from({ length: 120 }, (_, i) => `linha ${i + 1} da instrução gigante`).join("\n");
+
+  async function queueHuge() {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    const box = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+    await userEvent.type(box, "primeira{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "trabalhando…" }); // turno rodando: o resto espera
+    fireEvent.change(box, { target: { value: HUGE } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await screen.findByTestId("sdk-queued");
+    return ws;
+  }
+
+  it("a bandeja da fila tem teto de altura e rolagem própria", async () => {
+    await queueHuge();
+    const tray = screen.getByTestId("sdk-queue");
+    expect(tray.className).toMatch(/max-h-/); // sem teto ela cresce até engolir a conversa
+    expect(tray.className).toMatch(/overflow-y-auto/); // e o que não cabe rola AQUI dentro
+  });
+
+  it("uma mensagem em espera gigante rola dentro do lugar dela, sem empurrar as outras", async () => {
+    await queueHuge();
+    const body = screen.getByTestId("sdk-queued-text");
+    expect(body.className).toMatch(/max-h-/);
+    expect(body.className).toMatch(/overflow-y-auto/);
+    expect(body).toHaveTextContent("linha 1 da instrução gigante"); // e o texto continua inteiro
+    expect(body).toHaveTextContent("linha 120 da instrução gigante");
+  });
+
+  it("a bandeja fica FORA do scroller da conversa — ela não é uma linha do histórico", async () => {
+    await queueHuge();
+    const scroller = screen.getByTestId("sdk-chat-scroller");
+    expect(scroller.contains(screen.getByTestId("sdk-queue"))).toBe(false);
+    // e o scroller segue sendo quem rola a conversa
+    expect(scroller.className).toMatch(/overflow-y-auto/);
+    expect(scroller.className).toMatch(/min-h-0/); // o que o impede de ser espremido a zero
+  });
+});
+
+/**
+ * "FORÇAR ENVIO" (pedido do César, 2026-09-28): "eu mando a mensagem pra você, você ainda tá no
+ * turno mas pode receber a mensagem alguns segundos ou minutos depois — e não tem opção de forçar
+ * envio, de já mandar a mensagem da fila para a IA receber".
+ *
+ * A fila espera o turno FECHAR, e essa é a regra certa por padrão: uma mensagem dobrada no meio de
+ * um raciocínio em curso entra como interrupção de contexto, não como pergunta nova. Mas esperar
+ * nem sempre é o que a pessoa quer — às vezes o recado é justamente para agora ("para, tá errado",
+ * "o que você tá fazendo?"), e o driver ACEITA isso: a mensagem entra no turno em andamento e volta
+ * marcada "entrou no turno em andamento" (o `turn_absorbed`).
+ *
+ * Então a espera vira uma ESCOLHA, não uma sentença: cada mensagem da fila carrega o gesto de
+ * atropelar a espera e ir agora.
+ */
+describe("SdkChatView — forçar o envio de uma mensagem da fila", () => {
+  async function queueOne(text = "o que você tá fazendo ?") {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    const box = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+    await userEvent.type(box, "primeira{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "trabalhando…" }); // turno rodando: o resto espera
+    await userEvent.type(box, `${text}{Enter}`);
+    await screen.findByTestId("sdk-queued");
+    return ws;
+  }
+
+  it("o gesto existe em cada mensagem que espera", async () => {
+    await queueOne();
+    expect(screen.getByTestId("sdk-queued-send-now")).toBeInTheDocument();
+  });
+
+  it("clicar nele manda a mensagem AGORA, no meio do turno — ela sai da fila e vira bolha", async () => {
+    const ws = await queueOne();
+
+    await userEvent.click(screen.getByTestId("sdk-queued-send-now"));
+
+    await waitFor(() => expect(ws.sent.length).toBe(2));
+    expect(JSON.parse(ws.sent[1]!)).toMatchObject({ type: "user", text: "o que você tá fazendo ?" });
+    // saiu da espera e virou conversa: é isso que "foi entregue" significa nesta tela
+    await waitFor(() => expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument());
+    const bubbles = screen.getAllByTestId("sdk-user");
+    expect(bubbles[bubbles.length - 1]).toHaveTextContent("o que você tá fazendo ?");
+  });
+
+  it("a mensagem que está NO CAMPO sendo reescrita não oferece o gesto (ela está cancelada)", async () => {
+    await queueOne();
+    await userEvent.click(screen.getByTestId("sdk-queued-edit"));
+    await screen.findByTestId("sdk-queued-editing");
+    expect(screen.queryByTestId("sdk-queued-send-now")).not.toBeInTheDocument();
+  });
+
+  it("sem fio, forçar não perde a mensagem: ela CONTINUA na fila", async () => {
+    const ws = await queueOne();
+    act(() => { ws.readyState = 3; ws.onclose?.(); }); // o fio caiu antes do clique
+
+    await userEvent.click(screen.getByTestId("sdk-queued-send-now"));
+
+    expect(ws.sent.length).toBe(1); // nada saiu
+    expect(screen.getByTestId("sdk-queued")).toHaveTextContent("o que você tá fazendo ?"); // e continua guardada
+    expect(screen.queryByTestId("sdk-user-undelivered")).not.toBeInTheDocument(); // sem bolha condenada
   });
 });

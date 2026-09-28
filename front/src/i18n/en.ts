@@ -449,6 +449,7 @@ export const en: Record<string, string> = {
   "sdk.queueTitle.other": "{n} messages waiting",
   "sdk.queueHint": "goes when Claude is done",
   "sdk.queueEdit": "Edit this message before it goes",
+  "sdk.queueSendNow": "Send this one now, without waiting for the turn to end",
   "sdk.queueRemove": "Drop this message from the queue",
   "sdk.queueEditing": "editing a queued message — it does not go until you press Enter",
   "sdk.queueBeingEdited": "in the field",

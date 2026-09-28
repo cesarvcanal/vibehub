@@ -8,6 +8,7 @@ import {
   decidePermission,
   dropRewoundRows,
   groupSdkRows,
+  liveUserCids,
   markInterruptRequested,
   markUserEdited,
   parseSdkFrame,
@@ -965,5 +966,28 @@ describe("currentActivity (what the sticky bar reports)", () => {
     state = applySdkEvent(state, { type: "tool_use", id: "t1", name: "Bash", input: { command: "old" } });
     state = appendUserRow(state, "outra pergunta", undefined, { awaiting: true });
     expect(currentActivity(state)).toBeNull();
+  });
+});
+
+/**
+ * A RECONCILIAÇÃO é sobre o que sobrou de ANTES: as mensagens que um navegador anterior (ou uma
+ * conexão anterior) enviou e cujo destino esta tela não conhece. Um envio que ESTA conexão ainda
+ * espera não é assunto dela — ele tem bolha na tela e relógio próprio no watchdog.
+ *
+ * Sem essa fronteira a reconciliação condenava exatamente os envios em voo: o `ready` chega ANTES
+ * de o servidor responder os frames que ficaram bufferados durante o setup (back/routes/cardSdk.ts
+ * manda `ready` no attach e só depois processa o buffer), então o replay não podia conter a
+ * mensagem — e ela virava uma SEGUNDA bolha, marcada "não entregue" (produção, 2026-09-28).
+ */
+describe("liveUserCids — o que esta conexão ainda está esperando", () => {
+  it("lista os cids que já têm bolha na tela, entregues ou não", () => {
+    let state = appendUserRow(INITIAL_SDK_STATE, "em voo", undefined, { cid: "c1", state: "sending" });
+    state = appendUserRow(state, "marcada", undefined, { cid: "c2", state: "undelivered" });
+    expect(liveUserCids(state.rows)).toEqual(new Set(["c1", "c2"]));
+  });
+
+  it("uma linha do replay não tem cid — é justamente ela que a reconciliação compara por texto", () => {
+    const state = appendUserRow(INITIAL_SDK_STATE, "veio do histórico");
+    expect(liveUserCids(state.rows)).toEqual(new Set());
   });
 });

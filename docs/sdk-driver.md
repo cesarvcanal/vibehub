@@ -558,6 +558,58 @@ tivesse sido enviada. Reenviar o mesmo texto funciona. Dois furos, um em cada po
   depois do recibo entrar no ar). Um *Reenviar* zera o relógio e limpa a marca — o envio novo volta
   a ser cobrável; um `user_nack` a estampa na hora, porque o servidor JÁ respondeu e derrubar essa
   conexão não descobriria nada.
+- **O prazo só corre quando o servidor pode responder.** O `onopen` do navegador dispara no aperto
+  de mão do websocket, mas o back só chega a ATENDER frames depois de um setup de vários segundos
+  (`installCardSdkDriver` com dois `docker exec` por SSH, a sonda de transcript com timeout de 15s —
+  sozinha maior que o prazo de 12s —, `readHistory`, o replay, o spawn do driver); até lá os frames
+  esperam em `pendingFrames` e são entregues DE VERDADE quando o setup acaba. Contar esse tempo
+  contra a mensagem marcava "não entregue" o que o servidor tinha recebido — e o watchdog derrubava
+  o socket no meio do setup, cuja reconexão paga o setup inteiro de novo: era esse o "toda hora"
+  (produção, 2026-09-28). `overdueMessages` agora recebe um PISO (`answerableSince`, o instante do
+  `ready`) e o watchdog se cala enquanto não existe conexão em condições de responder — com o fio
+  caído quem dá o veredito é a reconciliação do reconnect, que pergunta ao replay.
+- **Reconciliar é sobre o que sobrou de ANTES.** O `ready` sai no attach e só DEPOIS o back responde
+  o que ficou bufferado, então o replay não pode conter o envio em voo — e a reconciliação, que
+  compara por texto, o dava por perdido: uma SEGUNDA bolha, marcada. Ela agora só julga os órfãos
+  (`liveUserCids`): um `cid` que já tem bolha nesta tela pertence a esta conexão e tem dono.
+- **Quem só precisa de fio ESPERA, não é condenada.** Um socket cai por motivos banais e volta em
+  400ms–15s; escrever nessa janela fazia a mensagem nascer condenada na hora, com o texto em dois
+  lugares (a bolha e o campo, de onde o Enter seguinte mandava a cópia). Com o fio fora do ar o
+  envio vai para a **fila** — o mesmo lugar de quem escreveu durante um turno: editável, em disco,
+  entregue sozinha pelo despacho quando houver conexão.
+- **`Reenviar` não roda o turno duas vezes.** O reenvio repete o MESMO `cid` de propósito: o que se
+  perdeu foi o recibo, não a mensagem. `handleClientFrame` lembra os recibos já emitidos
+  (`acceptedCids`, os últimos `ACCEPTED_CIDS_MAX`) e devolve o `user_ack` sem tocar no driver — sem
+  isso, reenviar "apaga a branch" executava a instrução duas vezes. Mesmas palavras com `cid` NOVO
+  seguem sendo mensagem nova: mandar duas vezes é um direito.
+
+## A espera é uma escolha, não uma sentença (2026-09-28)
+
+O que se escreve com um turno rodando espera na **fila**, logo acima do campo — editável, em disco,
+entregue sozinha quando o turno fecha. Três regras que faltavam para ela não atrapalhar mais do que
+ajuda:
+
+- **O lápis não para o turno.** Ele parava (o pedido anterior: "cliquei pra editar e ele continua
+  respondendo"), e o preço apareceu em produção: clicar em editar e MUDAR DE IDEIA matava um turno
+  que ninguém quis matar, e um turno cortado não se descorta — sobrava uma oferta de "continuar de
+  onde parou" para consertar um estrago que a própria tela havia feito. Clicar em editar não é uma
+  decisão; é abrir a possibilidade de uma. Quem para o turno é a **correção enviada** (`send`), e o
+  custo é conhecido: entre o lápis e o Enter o agente segue trabalhando na mensagem antiga.
+  Trabalho a mais é recuperável; um turno morto por engano, não. A oferta "continuar de onde parou"
+  saiu junto — sem o corte acidental ela não tinha mais o que consertar.
+- **A fila tem teto.** Ela é irmã do scroller da conversa num flex column: sem limite, uma
+  instrução de duzentas linhas esticava a bandeja até espremer o `flex-1` do scroller a quase zero
+  e empurrar a conversa para fora da tela. Agora a bandeja para em `max-h-[28vh]` com rolagem
+  própria, e cada mensagem em espera em `max-h-24` — uma gigante rola no lugar dela em vez de
+  esconder as outras. A espera é um aviso, não uma leitura: o lápis continua sendo o caminho para
+  ler a mensagem inteira, no campo.
+- **Dá para atropelar a espera.** Cada mensagem da fila carrega o gesto de ir AGORA
+  (`sdk-queued-send-now`): ela entra no turno em andamento pelo streaming input e volta marcada
+  "entrou no turno em andamento" (o `turn_absorbed` acima). Esperar continua sendo o padrão — uma
+  mensagem dobrada no meio de um raciocínio entra como interrupção de contexto, não como pergunta
+  nova —, mas "para, tá errado" não é uma pergunta para daqui a dez minutos. Sem fio de pé nada sai
+  da fila: forçar um envio que não pode acontecer só trocaria uma mensagem guardada por uma bolha
+  condenada.
 
 ## O raciocínio na tela
 

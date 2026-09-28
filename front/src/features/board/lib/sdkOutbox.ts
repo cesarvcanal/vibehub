@@ -98,14 +98,24 @@ export function dropFromOutbox(messages: readonly OutboxMessage[], cid: string):
  * O `undelivered` é o que torna a cobrança ÚNICA: a mensagem vencida não sai da fila (a pessoa
  * ainda pode reenviar), então sem a marca ela continuaria vencida em todo tique — e o watchdog
  * derruba o socket a cada cobrança. Era esse o loop "chat → Iniciando o agente… → histórico
- * inteiro → chat" a cada segundo. PURE.
+ * inteiro → chat" a cada segundo.
+ *
+ * `answerableSince` é o PISO do relógio: o instante em que a conexão passou a poder responder (o
+ * `ready` do servidor). O prazo é uma acusação — "mandei e ninguém respondeu" — e ela só vale se
+ * havia alguém em condições de responder. O `onopen` do navegador dispara no aperto de mão do
+ * websocket, mas o back só passa a ATENDER frames depois de um setup de vários segundos (install
+ * do driver por SSH+docker, sonda de transcript com timeout de 15s — sozinha maior que este prazo
+ * —, replay do histórico, spawn do driver); até lá o frame espera bufferado e é entregue DEPOIS.
+ * Contar esse tempo contra a mensagem é o que marcava "não entregue" o que o servidor recebeu, e
+ * fazia o "Reenviar" mandar a segunda cópia (produção, 2026-09-28). PURE.
  */
 export function overdueMessages(
   messages: readonly OutboxMessage[],
   now: number,
   timeoutMs: number = OUTBOX_ACK_TIMEOUT_MS,
+  answerableSince: number = 0,
 ): OutboxMessage[] {
-  return messages.filter((m) => !m.undelivered && now - m.at >= timeoutMs);
+  return messages.filter((m) => !m.undelivered && now - Math.max(m.at, answerableSince) >= timeoutMs);
 }
 
 /** Dá por não entregues as mensagens citadas — o veredito já saiu, não se cobra de novo. PURE. */
