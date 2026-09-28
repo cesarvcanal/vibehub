@@ -592,9 +592,20 @@ describe("SdkChatView — editar mensagem enviada (supersede)", () => {
     expect(screen.queryByTestId("composer-editing")).not.toBeInTheDocument();
   });
 
-  // THE REPORTED BUG: "cliquei pra editar e em vez de PAUSAR o raciocínio ele continua
-  // respondendo". The stop belongs to the GESTURE, not to the send.
-  it("clicking the pencil MID-TURN stops the turn right away (the edit bar is not a spectator)", async () => {
+  /**
+   * O PEDIDO DO CÉSAR (2026-09-28): "clico em editar, mudo de ideia, e o turno foi interrompido".
+   *
+   * O lápis abria o campo E MATAVA o turno na hora — antes de existir um único caractere da nova
+   * versão. Só que clicar em editar não é uma decisão: é abrir a possibilidade de uma. Quem
+   * desistiu não pediu nada, e um turno cortado não se descorta — a tela ficava oferecendo
+   * "continuar de onde parou" para consertar um estrago que ela mesma tinha feito, e o histórico
+   * ganhava uma nota explicando uma interrupção que ninguém quis.
+   *
+   * A regra agora: quem para o turno é a CORREÇÃO ENVIADA, nunca o gesto de abrir o campo. O preço
+   * é conhecido e é o menor dos dois: entre o lápis e o Enter o agente segue trabalhando na
+   * mensagem antiga. Trabalho a mais é recuperável; um turno morto por engano, não.
+   */
+  it("o lápis MID-TURN não para o turno — abrir o campo não é uma decisão", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -603,17 +614,16 @@ describe("SdkChatView — editar mensagem enviada (supersede)", () => {
     const box = await textbox();
     await userEvent.type(box, "sobe pra prod{Enter}");
     await waitFor(() => expect(ws.sent.length).toBe(1));
-    ws.deliver({ type: "assistant_delta", text: "Subindo…" }); // the turn is visibly running
+    ws.deliver({ type: "assistant_delta", text: "Subindo…" }); // o turno está visivelmente rodando
 
     await userEvent.click(screen.getByTestId("sdk-edit"));
 
-    // the stop went at the CLICK, before a single character of the new version was typed
-    await waitFor(() => expect(ws.sent.length).toBe(2));
-    expect(JSON.parse(ws.sent[1]!)).toEqual({ type: "interrupt", reason: "edit" });
-    expect(screen.getByTestId("composer-editing")).toBeInTheDocument();
+    expect(ws.sent.length).toBe(1); // nada saiu além da própria mensagem: nenhum interrupt
+    expect(screen.getByTestId("composer-editing")).toBeInTheDocument(); // o campo abriu
+    expect(screen.getByTestId("sdk-chat-working")).toBeInTheDocument(); // e o turno segue de pé
   });
 
-  it("with the turn RUNNING the edit only goes after the interrupted turn's result", async () => {
+  it("clicar em editar e DESISTIR não interrompe nada — não há estrago, nem o que continuar", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -622,73 +632,42 @@ describe("SdkChatView — editar mensagem enviada (supersede)", () => {
     const box = await textbox();
     await userEvent.type(box, "sobe pra prod{Enter}");
     await waitFor(() => expect(ws.sent.length).toBe(1));
-    ws.deliver({ type: "assistant_delta", text: "Subindo…" }); // the turn is visibly running
+    ws.deliver({ type: "assistant_delta", text: "Subindo…" });
+    await userEvent.click(screen.getByTestId("sdk-edit"));
+
+    fireEvent.keyDown(box, { key: "Escape" }); // mudei de ideia
+
+    expect(ws.sent.length).toBe(1); // o turno nunca foi tocado
+    expect(screen.getByTestId("sdk-chat-working")).toBeInTheDocument(); // e continua rodando
+    expect(screen.queryByTestId("composer-editing")).not.toBeInTheDocument();
+    // …e não sobra oferta nenhuma de "continuar": não houve o que interromper.
+    expect(screen.queryByTestId("sdk-interrupted-banner")).toBeNull();
+  });
+
+  it("é a correção ENVIADA que para o turno — e ela só vai depois do result da interrupção", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    const box = await textbox();
+    await userEvent.type(box, "sobe pra prod{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "Subindo…" });
 
     await userEvent.click(screen.getByTestId("sdk-edit"));
-    await waitFor(() => expect(ws.sent.length).toBe(2)); // the stop of the pencil click
     await userEvent.clear(box);
     await userEvent.type(box, "sobe pra dev{Enter}");
 
-    // no SECOND stop — the turn is already being aborted; the edit waits for its result
-    expect(ws.sent.length).toBe(2);
+    // AGORA sim: a decisão foi tomada, e ela para o turno que responde a mensagem superada.
+    await waitFor(() => expect(ws.sent.length).toBe(2));
     expect(JSON.parse(ws.sent[1]!)).toEqual({ type: "interrupt", reason: "edit" });
 
     ws.deliver({ type: "result", isError: false, subtype: "aborted" });
     await waitFor(() => expect(ws.sent.length).toBe(3));
     expect(JSON.parse(ws.sent[2]!)).toMatchObject({ type: "edit_user", original: "sobe pra prod", text: "sobe pra dev" });
-    // the correction replaced the interrupted turn: no leftover offer to continue the old one
+    // a correção substituiu o turno interrompido: nada de oferta para continuar o antigo
     expect(screen.queryByTestId("sdk-interrupted-banner")).toBeNull();
-  });
-
-  // "Cancelar a edição retoma" — honestly: the turn was CUT, and continuing is a new turn.
-  it("cancelling an edit that stopped a turn offers to continue it — and continuing sends a turn", async () => {
-    renderSdkChat();
-    const ws = await socket();
-    ws.accept();
-    ws.deliver({ type: "ready" });
-
-    const box = await textbox();
-    await userEvent.type(box, "sobe pra prod{Enter}");
-    await waitFor(() => expect(ws.sent.length).toBe(1));
-    ws.deliver({ type: "assistant_delta", text: "Subindo…" });
-
-    await userEvent.click(screen.getByTestId("sdk-edit"));
-    await waitFor(() => expect(ws.sent.length).toBe(2));
-    // while the aborted turn is still closing there is nothing to offer yet
-    expect(screen.queryByTestId("sdk-interrupted-banner")).toBeNull();
-
-    fireEvent.keyDown(box, { key: "Escape" }); // cancel the edit
-    ws.deliver({ type: "result", isError: true, subtype: "error_during_execution" }); // the abort's result
-
-    const banner = await screen.findByTestId("sdk-interrupted-banner");
-    expect(banner).toHaveTextContent(/interrompid|stopped/i);
-    // and it is NOT a mute red "error": an abort we asked for draws no error bubble at all
-    expect(screen.queryByTestId("sdk-error")).toBeNull();
-
-    await userEvent.click(screen.getByTestId("sdk-resume-turn"));
-    expect(JSON.parse(ws.sent[2]!)).toMatchObject({ type: "user" });
-    expect(JSON.parse(ws.sent[2]!).text).toMatch(/continue de onde/i);
-    expect(screen.queryByTestId("sdk-interrupted-banner")).toBeNull();
-  });
-
-  it("dismissing the offer leaves the turn stopped and sends nothing", async () => {
-    renderSdkChat();
-    const ws = await socket();
-    ws.accept();
-    ws.deliver({ type: "ready" });
-
-    const box = await textbox();
-    await userEvent.type(box, "sobe pra prod{Enter}");
-    await waitFor(() => expect(ws.sent.length).toBe(1));
-    ws.deliver({ type: "assistant_delta", text: "Subindo…" });
-    await userEvent.click(screen.getByTestId("sdk-edit"));
-    await waitFor(() => expect(ws.sent.length).toBe(2));
-    fireEvent.keyDown(box, { key: "Escape" });
-    ws.deliver({ type: "result", isError: true });
-
-    await userEvent.click(await screen.findByTestId("sdk-interrupted-dismiss"));
-    expect(screen.queryByTestId("sdk-interrupted-banner")).toBeNull();
-    expect(ws.sent.length).toBe(2);
   });
 
   it("editing with NO turn running touches nothing — no stop, no offer", async () => {
@@ -2002,5 +1981,133 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
     await waitFor(() => expect(ws.sent.length).toBe(1));
     expect(JSON.parse(ws.sent[0]!).text).toContain("o B");
     expect(screen.queryByTestId("sdk-queue")).toBeNull();
+  });
+});
+
+/**
+ * O BUG DO LAYOUT (produção, 2026-09-28): "mensagem grande quebra o layout, ela tá na fila e eu
+ * não consigo subir para ver o que tá sendo dito".
+ *
+ * A bandeja da fila mora entre a conversa e o campo de texto, como IRMÃ do scroller da conversa
+ * num flex column. O texto da mensagem em espera era desenhado inteiro, sem teto — então uma
+ * instrução de duzentas linhas esticava a bandeja até ela ocupar a tela toda, e o scroller
+ * (`min-h-0 flex-1`) era espremido até quase zero. A conversa não sumiu: ela foi empurrada para
+ * fora, e com ela a única forma de acompanhar o que o agente estava dizendo.
+ *
+ * A regra: a espera nunca pode roubar a tela da conversa. A bandeja tem TETO e rolagem própria, e
+ * cada mensagem em espera também — uma gigante rola dentro do lugar dela em vez de empurrar as
+ * outras (e o lápis continua sendo o caminho para lê-la inteira, no campo).
+ *
+ * jsdom não calcula layout, então o que dá para travar aqui é a REGRA: os dois elementos carregam
+ * teto de altura e rolagem própria, e a bandeja fica FORA do scroller da conversa.
+ */
+describe("SdkChatView — a fila não rouba a tela da conversa", () => {
+  /** Uma instrução de verdade, do tamanho das que quebraram o layout. */
+  const HUGE = Array.from({ length: 120 }, (_, i) => `linha ${i + 1} da instrução gigante`).join("\n");
+
+  async function queueHuge() {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    const box = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+    await userEvent.type(box, "primeira{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "trabalhando…" }); // turno rodando: o resto espera
+    fireEvent.change(box, { target: { value: HUGE } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await screen.findByTestId("sdk-queued");
+    return ws;
+  }
+
+  it("a bandeja da fila tem teto de altura e rolagem própria", async () => {
+    await queueHuge();
+    const tray = screen.getByTestId("sdk-queue");
+    expect(tray.className).toMatch(/max-h-/); // sem teto ela cresce até engolir a conversa
+    expect(tray.className).toMatch(/overflow-y-auto/); // e o que não cabe rola AQUI dentro
+  });
+
+  it("uma mensagem em espera gigante rola dentro do lugar dela, sem empurrar as outras", async () => {
+    await queueHuge();
+    const body = screen.getByTestId("sdk-queued-text");
+    expect(body.className).toMatch(/max-h-/);
+    expect(body.className).toMatch(/overflow-y-auto/);
+    expect(body).toHaveTextContent("linha 1 da instrução gigante"); // e o texto continua inteiro
+    expect(body).toHaveTextContent("linha 120 da instrução gigante");
+  });
+
+  it("a bandeja fica FORA do scroller da conversa — ela não é uma linha do histórico", async () => {
+    await queueHuge();
+    const scroller = screen.getByTestId("sdk-chat-scroller");
+    expect(scroller.contains(screen.getByTestId("sdk-queue"))).toBe(false);
+    // e o scroller segue sendo quem rola a conversa
+    expect(scroller.className).toMatch(/overflow-y-auto/);
+    expect(scroller.className).toMatch(/min-h-0/); // o que o impede de ser espremido a zero
+  });
+});
+
+/**
+ * "FORÇAR ENVIO" (pedido do César, 2026-09-28): "eu mando a mensagem pra você, você ainda tá no
+ * turno mas pode receber a mensagem alguns segundos ou minutos depois — e não tem opção de forçar
+ * envio, de já mandar a mensagem da fila para a IA receber".
+ *
+ * A fila espera o turno FECHAR, e essa é a regra certa por padrão: uma mensagem dobrada no meio de
+ * um raciocínio em curso entra como interrupção de contexto, não como pergunta nova. Mas esperar
+ * nem sempre é o que a pessoa quer — às vezes o recado é justamente para agora ("para, tá errado",
+ * "o que você tá fazendo?"), e o driver ACEITA isso: a mensagem entra no turno em andamento e volta
+ * marcada "entrou no turno em andamento" (o `turn_absorbed`).
+ *
+ * Então a espera vira uma ESCOLHA, não uma sentença: cada mensagem da fila carrega o gesto de
+ * atropelar a espera e ir agora.
+ */
+describe("SdkChatView — forçar o envio de uma mensagem da fila", () => {
+  async function queueOne(text = "o que você tá fazendo ?") {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    const box = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+    await userEvent.type(box, "primeira{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "trabalhando…" }); // turno rodando: o resto espera
+    await userEvent.type(box, `${text}{Enter}`);
+    await screen.findByTestId("sdk-queued");
+    return ws;
+  }
+
+  it("o gesto existe em cada mensagem que espera", async () => {
+    await queueOne();
+    expect(screen.getByTestId("sdk-queued-send-now")).toBeInTheDocument();
+  });
+
+  it("clicar nele manda a mensagem AGORA, no meio do turno — ela sai da fila e vira bolha", async () => {
+    const ws = await queueOne();
+
+    await userEvent.click(screen.getByTestId("sdk-queued-send-now"));
+
+    await waitFor(() => expect(ws.sent.length).toBe(2));
+    expect(JSON.parse(ws.sent[1]!)).toMatchObject({ type: "user", text: "o que você tá fazendo ?" });
+    // saiu da espera e virou conversa: é isso que "foi entregue" significa nesta tela
+    await waitFor(() => expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument());
+    const bubbles = screen.getAllByTestId("sdk-user");
+    expect(bubbles[bubbles.length - 1]).toHaveTextContent("o que você tá fazendo ?");
+  });
+
+  it("a mensagem que está NO CAMPO sendo reescrita não oferece o gesto (ela está cancelada)", async () => {
+    await queueOne();
+    await userEvent.click(screen.getByTestId("sdk-queued-edit"));
+    await screen.findByTestId("sdk-queued-editing");
+    expect(screen.queryByTestId("sdk-queued-send-now")).not.toBeInTheDocument();
+  });
+
+  it("sem fio, forçar não perde a mensagem: ela CONTINUA na fila", async () => {
+    const ws = await queueOne();
+    act(() => { ws.readyState = 3; ws.onclose?.(); }); // o fio caiu antes do clique
+
+    await userEvent.click(screen.getByTestId("sdk-queued-send-now"));
+
+    expect(ws.sent.length).toBe(1); // nada saiu
+    expect(screen.getByTestId("sdk-queued")).toHaveTextContent("o que você tá fazendo ?"); // e continua guardada
+    expect(screen.queryByTestId("sdk-user-undelivered")).not.toBeInTheDocument(); // sem bolha condenada
   });
 });

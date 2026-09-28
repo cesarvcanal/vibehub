@@ -12,6 +12,7 @@ import {
   MessageSquare,
   Pencil,
   Reply,
+  SendHorizontal,
   ShieldAlert,
   Wrench,
   X,
@@ -110,16 +111,6 @@ export const EDIT_INTERRUPT_GRACE_MS = 15_000;
 
 /** How often the outbox is checked for a send whose receipt never came. */
 export const OUTBOX_TICK_MS = 2_000;
-
-/**
- * What "Continuar de onde parou" actually sends — a NEW turn asking the agent to pick the work up,
- * because that is the only honest resume the SDK offers: an interrupted turn cannot be un-cut.
- * Kept in pt-BR on purpose, like the supersede wrapper (see the back's `buildSupersedeText`): it is
- * the user's own speech act to his agent, not panel chrome.
- */
-export const RESUME_TURN_TEXT =
-  "[continuar] O turno anterior foi interrompido porque comecei a editar uma mensagem e depois " +
-  "cancelei a edição. Nada mudou no que eu pedi: continue de onde você parou.";
 
 export interface SdkChatViewProps {
   cardId: string;
@@ -224,7 +215,6 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         setState(INITIAL_SDK_STATE);
         // The replay tells the story again from disk (the interrupt note included) — a stale
         // "continuar?" offer from before the drop would be guessing about a turn we no longer see.
-        setInterruptedForEdit(false);
       };
       next.onmessage = (event: MessageEvent) => {
         if (typeof event.data !== "string") return;
@@ -400,15 +390,6 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   const [editing, setEditing] = React.useState<{ rowId: string; original: string } | null>(null);
   /** An edit waiting for the interrupted turn to END (its result/aborted) before it goes. */
   const [pendingEdit, setPendingEdit] = React.useState<{ original: string; text: string; cid: string } | null>(null);
-  /**
-   * Entering edit mode STOPPED a running turn, and nothing has replaced it yet.
-   *
-   * This is the honest half of the reported bug. The agent no longer keeps answering the message
-   * being corrected — but an interrupted turn cannot be un-interrupted, so the screen must not
-   * pretend the pause was a freeze. Cancelling the edit surfaces the banner below: the turn WAS
-   * cut, and continuing is a deliberate click (a new turn), not magic.
-   */
-  const [interruptedForEdit, setInterruptedForEdit] = React.useState(false);
   /** The reserved word the CURRENT turn was sent with — what the activity bar reports as effort. */
   const [escalation, setEscalation] = React.useState<{ ultrathink: boolean; ultracode: boolean } | null>(null);
 
@@ -479,15 +460,21 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    * message being corrected — burning a turn on words that were about to be withdrawn. The stop now
    * goes at the GESTURE, not at the send (which is what the deferred-edit path below already did).
    */
-  const beginEdit = React.useCallback(
-    (rowId: string, original: string): void => {
-      setReplyTo(null); // editing and answering a decision are two different gestures
-      setEditing({ rowId, original });
-      if (!state.turnActive) return;
-      if (sendInterrupt("edit")) setInterruptedForEdit(true);
-    },
-    [state.turnActive, sendInterrupt],
-  );
+  /**
+   * O lápis abre o campo — e SÓ. Ele não para o turno.
+   *
+   * Parava (o pedido anterior: "cliquei pra editar e ele continua respondendo"), e o preço apareceu
+   * em produção: clicar em editar e MUDAR DE IDEIA matava um turno que ninguém quis matar, e um
+   * turno cortado não se descorta — sobrava uma oferta de "continuar de onde parou" para consertar
+   * um estrago que a própria tela tinha feito. Clicar em editar não é uma decisão; é abrir a
+   * possibilidade de uma. Quem para o turno é a correção ENVIADA (ver `send`), e o custo dessa
+   * escolha é conhecido: entre o lápis e o Enter o agente segue trabalhando na mensagem antiga.
+   * Trabalho a mais é recuperável; um turno morto por engano, não.
+   */
+  const beginEdit = React.useCallback((rowId: string, original: string): void => {
+    setReplyTo(null); // editing and answering a decision are two different gestures
+    setEditing({ rowId, original });
+  }, []);
 
   /* ------------------------------------------------------------ a fila */
 
@@ -535,6 +522,33 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   }, []);
 
   /**
+   * FORÇAR O ENVIO: esta mensagem não espera o turno fechar, vai agora.
+   *
+   * Esperar é o padrão certo — uma mensagem dobrada no meio de um raciocínio entra como interrupção
+   * de contexto, não como pergunta nova. Mas nem todo recado quer esperar: "para, tá errado", "o
+   * que você tá fazendo?" são justamente para AGORA, e o driver aceita (a mensagem entra no turno
+   * em andamento e volta marcada "entrou no turno em andamento" — o `turn_absorbed`). Então a
+   * espera é uma ESCOLHA da pessoa, não uma sentença da tela.
+   *
+   * Sem fio de pé nada sai da fila: forçar um envio que não pode acontecer só trocaria uma mensagem
+   * guardada por uma bolha condenada — exatamente o que a fila existe para não fazer.
+   */
+  const sendQueuedNow = React.useCallback((id: string): void => {
+    const target = queueRef.current.find((m) => m.id === id);
+    if (!target) return;
+    if (!connected || socketRef.current?.readyState !== WebSocket.OPEN) {
+      toast.error(translate("sdk.offline"));
+      return;
+    }
+    setQueue((prev) => dequeue(prev, id));
+    try {
+      dispatchTurn(target.text);
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  }, [connected, dispatchTurn]);
+
+  /**
    * SAIR do modo edição sem enviar. Uma mensagem da fila volta a ser entregável, no lugar dela e
    * com o texto que tinha — o X aqui é "desisti de reescrever", nunca "joga fora o que escrevi".
    */
@@ -579,7 +593,6 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     const text = raw.replace(/\r$/, "").trim();
     if (!text) return;
     // Anything the person sends REPLACES the interrupted turn — the "continuar?" offer is moot.
-    setInterruptedForEdit(false);
     if (queueEdit) {
       // Terminou de editar uma mensagem da fila: o texto novo entra NO LUGAR do antigo, e só agora
       // ela volta a ser entregável — enquanto estava no campo, nem um turno fechando a soltava.
@@ -615,12 +628,12 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       const { original } = editing;
       const editCid = newCid();
       if (state.turnActive) {
-        // Still running at send time. Either the stop `beginEdit` already sent has not reported
-        // back yet (nothing more to do — just wait for it), or a turn started meanwhile (another
-        // tab, a message folded in) and THAT one has to be stopped too. Either way the edit only
-        // goes when the turn ends (the effect above): it must never land as the answer to a turn
-        // the superseded message is still driving.
-        if (!interruptedForEdit && !sendInterrupt("edit")) {
+        // AQUI é onde o turno para — no envio da correção, não no clique do lápis (ver `beginEdit`).
+        // A decisão foi tomada: a mensagem que está sendo respondida foi superada, e deixar o turno
+        // correr seria gastar raciocínio numa pergunta que já não existe. A correção só VAI quando
+        // esse turno reportar seu fim (o efeito acima): ela nunca pode aterrissar como resposta de
+        // um turno que a mensagem superada ainda está dirigindo.
+        if (!sendInterrupt("edit")) {
           throw new Error(translate("sdk.offline")); // the composer keeps the words
         }
         setPendingEdit({ original, text, cid: editCid });
@@ -696,23 +709,6 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     sendInterrupt();
   };
 
-  /**
-   * "Continuar de onde parou" — the only truthful resume this wire has: a NEW turn asking the agent
-   * to pick the work back up. The SDK cannot un-interrupt a turn, so the screen says so (the banner)
-   * and makes continuing an explicit click instead of faking that nothing happened.
-   */
-  const resumeInterruptedTurn = (): void => {
-    // A turn like any other: drawn as "sending" and taken off the outbox only by its `user_ack`.
-    const cid = newCid();
-    setState((prev) => appendUserRow(prev, RESUME_TURN_TEXT, undefined, { awaiting: true, cid, state: "sending" }));
-    try {
-      sendTurn({ type: "user", text: RESUME_TURN_TEXT }, RESUME_TURN_TEXT, cid);
-    } catch (err) {
-      toast.error((err as Error).message);
-      return; // the offer stays on screen — the bubble is already marked undelivered
-    }
-    setInterruptedForEdit(false);
-  };
 
   const answerPermission = (id: string, allow: boolean): void => {
     try {
@@ -961,46 +957,12 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         </div>
       ) : null}
 
-      {/* THE TURN WAS CUT, AND SAYING SO BEATS PRETENDING. Entering edit mode stopped the agent;
-          the person then cancelled the edit. There is no un-interrupting a turn on this wire, so
-          instead of faking a seamless resume the screen states what happened and offers ONE
-          explicit way forward — a new turn asking the agent to pick the work back up. Hidden while
-          the edit bar is open (the send is the way forward there) and while a turn is running
-          (something IS working — there is nothing to continue). */}
-      {interruptedForEdit && !editing && !state.turnActive ? (
-        <div
-          data-testid="sdk-interrupted-banner"
-          className="mt-1.5 flex items-start gap-1.5 rounded-md border border-amber-500/50 bg-amber-500/10 px-2.5 py-1.5 text-xs"
-        >
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
-          <div className="min-w-0 flex-1 break-words text-muted-foreground">{t("sdk.interruptedForEdit")}</div>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-6 shrink-0 text-[11px]"
-            data-testid="sdk-resume-turn"
-            onClick={resumeInterruptedTurn}
-          >
-            {t("sdk.resumeTurn")}
-          </Button>
-          <button
-            type="button"
-            data-testid="sdk-interrupted-dismiss"
-            aria-label={t("sdk.interruptedDismiss")}
-            title={t("sdk.interruptedDismiss")}
-            onClick={() => setInterruptedForEdit(false)}
-            className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-amber-500/20 hover:text-foreground"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      ) : null}
 
       {/* A FILA — o que foi escrito enquanto o Claude trabalha, de prontidão logo acima do campo,
           na mesma faixa em que o status "Trabalhando… 1m20s" vive. Não está na conversa porque o
           Claude ainda não a leu: ela sobe pra lá no instante em que for entregue. Até então é da
           pessoa — o lápis a traz de volta pro campo, o X a joga fora. */}
-      {queue.length > 0 ? <SdkQueueTray queue={queue} onEdit={beginQueueEdit} onRemove={removeQueued} /> : null}
+      {queue.length > 0 ? <SdkQueueTray queue={queue} onEdit={beginQueueEdit} onRemove={removeQueued} onSendNow={sendQueuedNow} /> : null}
 
       {/* The interrupt button lives INSIDE the composer — right column, above the microphone —
           in the same seat as the transcript chat's stop. The interrupt frame is still this view's. */}
@@ -1054,16 +1016,23 @@ function SdkQueueTray({
   queue,
   onEdit,
   onRemove,
+  onSendNow,
 }: {
   queue: readonly QueuedMessage[];
   onEdit: (id: string) => void;
   onRemove: (id: string) => void;
+  onSendNow: (id: string) => void;
 }) {
   const t = useT();
   return (
     <div
       data-testid="sdk-queue"
-      className="mt-1.5 flex flex-col gap-1 rounded-md border border-border/60 bg-muted/40 px-2 py-1.5"
+      // TETO. A bandeja é irmã do scroller da conversa num flex column: sem um limite ela cresce
+      // com o texto que está esperando e espreme o `flex-1` do scroller até quase zero — uma
+      // instrução de duzentas linhas empurrava a conversa inteira para fora da tela, e junto com
+      // ela a única forma de acompanhar o que o agente estava dizendo (produção, 2026-09-28).
+      // A espera é um aviso, não uma leitura: o que não couber rola aqui dentro.
+      className="mt-1.5 flex max-h-[28vh] shrink-0 flex-col gap-1 overflow-y-auto overscroll-contain rounded-md border border-border/60 bg-muted/40 px-2 py-1.5"
     >
       <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
         <Clock3 className="h-3 w-3 shrink-0" />
@@ -1081,7 +1050,13 @@ function SdkQueueTray({
           )}
         >
           <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
-          <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-foreground/90">
+          {/* Teto TAMBÉM por mensagem: com várias na fila, uma gigante empurraria as outras para
+              fora do teto da bandeja e elas sumiriam da vista. Cada uma rola no lugar dela — e o
+              lápis continua sendo o caminho para lê-la inteira, no campo de texto. */}
+          <span
+            data-testid="sdk-queued-text"
+            className="min-w-0 flex-1 max-h-24 overflow-y-auto overscroll-contain whitespace-pre-wrap break-words text-foreground/90"
+          >
             {message.text}
           </span>
           {/* NO CAMPO, sendo reescrita: ela guarda o lugar dela na fila e não oferece gesto nenhum —
@@ -1092,6 +1067,18 @@ function SdkQueueTray({
             </span>
           ) : (
             <>
+              {/* ATROPELAR A ESPERA: esta vai agora, no meio do turno. O padrão continua sendo
+                  esperar — mas "para, tá errado" não é uma pergunta para daqui a dez minutos. */}
+              <button
+                type="button"
+                data-testid="sdk-queued-send-now"
+                aria-label={t("sdk.queueSendNow")}
+                title={t("sdk.queueSendNow")}
+                onClick={() => onSendNow(message.id)}
+                className="shrink-0 rounded p-0.5 text-muted-foreground transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100"
+              >
+                <SendHorizontal className="h-3.5 w-3.5" />
+              </button>
               <button
                 type="button"
                 data-testid="sdk-queued-edit"

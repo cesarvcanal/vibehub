@@ -583,6 +583,34 @@ tivesse sido enviada. Reenviar o mesmo texto funciona. Dois furos, um em cada po
   isso, reenviar "apaga a branch" executava a instrução duas vezes. Mesmas palavras com `cid` NOVO
   seguem sendo mensagem nova: mandar duas vezes é um direito.
 
+## A espera é uma escolha, não uma sentença (2026-09-28)
+
+O que se escreve com um turno rodando espera na **fila**, logo acima do campo — editável, em disco,
+entregue sozinha quando o turno fecha. Três regras que faltavam para ela não atrapalhar mais do que
+ajuda:
+
+- **O lápis não para o turno.** Ele parava (o pedido anterior: "cliquei pra editar e ele continua
+  respondendo"), e o preço apareceu em produção: clicar em editar e MUDAR DE IDEIA matava um turno
+  que ninguém quis matar, e um turno cortado não se descorta — sobrava uma oferta de "continuar de
+  onde parou" para consertar um estrago que a própria tela havia feito. Clicar em editar não é uma
+  decisão; é abrir a possibilidade de uma. Quem para o turno é a **correção enviada** (`send`), e o
+  custo é conhecido: entre o lápis e o Enter o agente segue trabalhando na mensagem antiga.
+  Trabalho a mais é recuperável; um turno morto por engano, não. A oferta "continuar de onde parou"
+  saiu junto — sem o corte acidental ela não tinha mais o que consertar.
+- **A fila tem teto.** Ela é irmã do scroller da conversa num flex column: sem limite, uma
+  instrução de duzentas linhas esticava a bandeja até espremer o `flex-1` do scroller a quase zero
+  e empurrar a conversa para fora da tela. Agora a bandeja para em `max-h-[28vh]` com rolagem
+  própria, e cada mensagem em espera em `max-h-24` — uma gigante rola no lugar dela em vez de
+  esconder as outras. A espera é um aviso, não uma leitura: o lápis continua sendo o caminho para
+  ler a mensagem inteira, no campo.
+- **Dá para atropelar a espera.** Cada mensagem da fila carrega o gesto de ir AGORA
+  (`sdk-queued-send-now`): ela entra no turno em andamento pelo streaming input e volta marcada
+  "entrou no turno em andamento" (o `turn_absorbed` acima). Esperar continua sendo o padrão — uma
+  mensagem dobrada no meio de um raciocínio entra como interrupção de contexto, não como pergunta
+  nova —, mas "para, tá errado" não é uma pergunta para daqui a dez minutos. Sem fio de pé nada sai
+  da fila: forçar um envio que não pode acontecer só trocaria uma mensagem guardada por uma bolha
+  condenada.
+
 ## O raciocínio na tela
 
 A espera mostrava só um spinner com "Trabalhando…" — um turno de dez minutos e um de meio segundo

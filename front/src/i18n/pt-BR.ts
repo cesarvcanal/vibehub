@@ -450,6 +450,7 @@ export const ptBR: Record<string, string> = {
   "sdk.queueTitle.other": "{n} mensagens esperando",
   "sdk.queueHint": "vai quando o Claude terminar",
   "sdk.queueEdit": "Editar esta mensagem antes de ela ir",
+  "sdk.queueSendNow": "Mandar esta agora, sem esperar o turno terminar",
   "sdk.queueRemove": "Tirar esta mensagem da fila",
   "sdk.queueEditing": "editando uma mensagem da fila — ela não vai até você dar Enter",
   "sdk.queueBeingEdited": "no campo",
