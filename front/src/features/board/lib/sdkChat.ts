@@ -814,6 +814,23 @@ export function dropUserRow(state: SdkChatState, cid: string): SdkChatState {
   return rows.length === state.rows.length ? state : { ...state, rows };
 }
 
+/**
+ * Os `cid` que ESTA tela já tem desenhados — os envios com dono, que a reconciliação não julga.
+ *
+ * Reconciliar é sobre o que sobrou de ANTES: mensagens de um navegador ou de uma conexão anterior,
+ * cujas bolhas o (re)connect apagou e cujo destino só o replay conhece. Um envio feito NESTA
+ * conexão já tem bolha e relógio próprio (o watchdog) — e o replay não pode contê-lo, porque o
+ * servidor manda `ready` no attach e só depois responde os frames que ficaram bufferados durante o
+ * setup. Sem esta fronteira, era exatamente a mensagem em voo que a reconciliação dava por perdida:
+ * uma SEGUNDA bolha, marcada "não entregue" (produção, 2026-09-28). Linhas vindas do replay não
+ * têm `cid` — são elas que a comparação por texto existe para casar. PURE.
+ */
+export function liveUserCids(rows: readonly SdkRow[]): Set<string> {
+  const cids = new Set<string>();
+  for (const row of rows) if (row.kind === "user" && row.cid) cids.add(row.cid);
+  return cids;
+}
+
 /** The texts of the messages the SERVER has (replayed/acked own sends) — what reconciles the outbox. PURE. */
 export function deliveredUserTexts(rows: readonly SdkRow[]): string[] {
   return rows.filter((r): r is Extract<SdkRow, { kind: "user" }> => r.kind === "user" && r.state === "sent")

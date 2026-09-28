@@ -1285,7 +1285,225 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     });
   });
 
-  it("socket fechado: a mensagem nem sai, o rascunho fica no campo e a bolha não mente", async () => {
+  /**
+   * O BUG DO CÉSAR (produção, 2026-09-28): "toda hora" uma mensagem qualquer, no meio de uma
+   * conversa normal, nasce marcada "não entregue ao servidor" — com o servidor no ar 24h.
+   *
+   * A causa não é o servidor estar fora: é o RELÓGIO DO RECIBO correr num instante em que o
+   * servidor ainda não tem como responder. O `onopen` do navegador dispara no aperto de mão do
+   * websocket, mas o back só chega ao `handleClientFrame` DEPOIS de um setup que leva segundos —
+   * `installCardSdkDriver` (dois `docker exec` por SSH, com `npm install` quando a versão mudou), a
+   * sonda de transcript (timeout de 15s, sozinha maior que o prazo do recibo), a leitura e o replay
+   * do histórico, o spawn do driver. Até lá o frame fica em `pendingFrames` (routes/cardSdk.ts), e
+   * é entregue DE VERDADE quando o setup acaba.
+   *
+   * Ou seja: a bolha acusava "não entregue" uma mensagem que o servidor recebeu — e o "Reenviar"
+   * que a pessoa clica manda a segunda cópia. Pior, o watchdog derrubava esse socket no meio do
+   * setup, e a reconexão paga o setup inteiro de novo: é esse o "toda hora".
+   *
+   * A regra que estes testes fixam: a ausência de recibo só é PROVA quando a conexão estava em
+   * condições de responder. O prazo conta a partir do `ready` — o instante em que o servidor
+   * assumiu este socket —, nunca de antes dele.
+   */
+  describe("o prazo do recibo só corre quando o servidor pode responder", () => {
+    it("enviada enquanto o back ainda monta a conexão: o prazo não vence, a bolha não mente", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderSdkChat();
+        const ws = await socket();
+        ws.accept(); // o aperto de mão terminou — mas o back ainda está no setup, sem `ready`
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
+        await waitFor(() => expect(ws.sent.length).toBe(1));
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS); });
+
+        // Nada aqui é prova de nada: o servidor nem chegou a ouvir ainda.
+        expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sending");
+        expect(screen.queryByTestId("sdk-user-undelivered")).not.toBeInTheDocument();
+        expect(ws.readyState).not.toBe(3); // e o socket do setup em andamento NÃO é derrubado
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("o setup demorou e terminou: o recibo chega e a bolha vira 'sent', sem falso negativo", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderSdkChat();
+        const ws = await socket();
+        ws.accept();
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
+        await waitFor(() => expect(ws.sent.length).toBe(1));
+        const cid = (JSON.parse(ws.sent[0]!) as { cid: string }).cid;
+
+        // O setup do back (sonda de transcript + replay + spawn) demorou mais que o prazo…
+        await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS * 2); });
+        // …e então ele atende o socket e responde o frame que estava bufferado.
+        ws.deliver({ type: "ready" });
+        ws.deliver({ type: "user_ack", cid } as SdkEvent);
+
+        await waitFor(() => expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sent"));
+        await waitFor(() => expect(localStorage.getItem("vibehub.sdkOutbox.c1")).toBeNull());
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    /**
+     * O `ready` chega ANTES dos recibos do que ficou bufferado: o back manda `ready` no attach
+     * (manager.ts) e só DEPOIS processa `pendingFrames` (routes/cardSdk.ts). Então o replay não
+     * pode conter a mensagem em voo — e a reconciliação, que compara por TEXTO, a dava como
+     * perdida: bolha duplicada, marcada "não entregue", para uma mensagem a caminho.
+     *
+     * A fronteira: reconciliar é sobre o que sobrou de ANTES. Um envio que já tem bolha nesta tela
+     * tem dono — o watchdog — e a reconciliação não opina sobre ele.
+     */
+    it("a reconciliação não duplica nem condena o envio que ESTA conexão ainda espera", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderSdkChat();
+        const ws = await socket();
+        ws.accept();
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
+        await waitFor(() => expect(ws.sent.length).toBe(1));
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS * 2); });
+        ws.deliver({ type: "ready" }); // o replay vem sem ela: o back ainda nem leu o frame
+
+        expect(screen.getAllByTestId("sdk-user")).toHaveLength(1);
+        expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sending");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("depois do 'ready' o relógio começa DO ZERO — a espera do setup não é descontada do prazo", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderSdkChat();
+        const ws = await socket();
+        ws.accept();
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
+        await waitFor(() => expect(ws.sent.length).toBe(1));
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS * 2); });
+        ws.deliver({ type: "ready" }); // o servidor assumiu o socket AGORA: o prazo nasce aqui
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS / 2); });
+        expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sending");
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS); });
+        // Agora sim: houve uma conexão de pé, com prazo inteiro, e ninguém respondeu.
+        expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered");
+        expect(ws.readyState).toBe(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    /**
+     * A OUTRA METADE do "toda hora": escrever durante a reconexão.
+     *
+     * Um socket cai o tempo todo por motivos banais — deploy, tampa do notebook, proxy cortando uma
+     * conexão ociosa — e a reconexão leva de 400ms a 15s (lib/reconnect.ts). Quem está escrevendo
+     * não vê nada disso: dá Enter e, até aqui, a mensagem nascia INSTANTANEAMENTE condenada ("não
+     * entregue ao servidor", com reenviar/descartar) por um fio que voltaria dois segundos depois —
+     * e o texto ficava em DOIS lugares ao mesmo tempo, na bolha e no campo, de onde um segundo
+     * Enter mandava a cópia.
+     *
+     * Uma mensagem que só precisa esperar o fio não é uma mensagem perdida: é a FILA — o mesmo
+     * lugar onde espera quem escreveu durante um turno, editável, guardada em disco, e entregue
+     * sozinha assim que a conexão volta a poder carregá-la.
+     */
+    it("escrever com o fio caído: a mensagem espera na fila, e sobe sozinha quando o fio volta", async () => {
+      renderSdkChat();
+      const first = await socket();
+      first.accept();
+      first.deliver({ type: "ready" });
+      act(() => { first.readyState = 3; first.onclose?.(); }); // o fio caiu, sem ninguém perceber
+
+      await userEvent.type(screen.getByRole("textbox"), "instrução longa{Enter}");
+
+      expect(first.sent).toHaveLength(0);
+      expect(screen.queryByTestId("sdk-user")).not.toBeInTheDocument(); // nada nasce condenado
+      expect(screen.getByTestId("sdk-queued")).toHaveTextContent("instrução longa");
+      expect(screen.getByRole("textbox")).toHaveValue(""); // e o texto não fica em dois lugares
+
+      // O fio volta: a fila anda sozinha, e só agora a mensagem vira bolha de verdade.
+      await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
+      const second = FakeSocket.instances[1] as FakeSocket;
+      second.accept();
+      second.deliver({ type: "ready" });
+
+      await waitFor(() => expect(second.sent.length).toBe(1));
+      expect(JSON.parse(second.sent[0]!)).toMatchObject({ type: "user", text: "instrução longa" });
+      await waitFor(() => expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument());
+      expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sending");
+    });
+
+    /**
+     * A EXCEÇÃO QUE NÃO PODE CAIR: com uma pergunta do agente esperando resposta, NADA é
+     * enfileirado — nem com o fio fora do ar.
+     *
+     * Um `user_question` deixa o driver bloqueado com o turno ainda contado como ATIVO, e a única
+     * coisa que o solta é uma mensagem da pessoa. O despacho da fila só anda quando o turno fecha —
+     * então enfileirar aqui seria esperar por um fim de turno que só a própria mensagem enfileirada
+     * poderia causar: trava permanente, do tipo que fica meia hora até o timeout.
+     */
+    it("pergunta do agente na tela: a mensagem NÃO vai pra fila nem com o fio caído (seria deadlock)", async () => {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready", turnActive: true } as SdkEvent);
+      ws.deliver({
+        type: "user_question",
+        id: "q1",
+        questions: [{ question: "Sigo pelo caminho A?", options: [{ label: "A" }, { label: "B" }] }],
+      } as SdkEvent);
+      await screen.findByTestId("sdk-question");
+      act(() => { ws.readyState = 3; ws.onclose?.(); }); // o fio cai com a pergunta de pé
+
+      const composer = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+      await userEvent.type(composer, "vai pelo A mesmo{Enter}");
+
+      expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument();
+    });
+
+    it("conexão caída: o prazo não corre no escuro — quem decide é a reconciliação do reconnect", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderSdkChat();
+        const ws = await socket();
+        ws.accept();
+        ws.deliver({ type: "ready" });
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
+        await waitFor(() => expect(ws.sent.length).toBe(1));
+
+        // O fio cai logo depois do envio (deploy, VPN, wi-fi) — nada disso é culpa da mensagem.
+        act(() => { ws.readyState = 3; ws.onclose?.(); });
+        await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS); });
+
+        expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sending");
+        expect(screen.queryByTestId("sdk-user-undelivered")).not.toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  /**
+   * O socket morto que o navegador ainda não percebeu (`readyState` fechado sem o `onclose` ter
+   * corrido): nada sai por ele. A bolha condenada que nascia aqui era um falso negativo duas vezes
+   * — o servidor não recusou nada, ele nem foi consultado — e deixava o texto em dois lugares, na
+   * bolha e no campo, de onde o Enter seguinte mandava a cópia. Uma mensagem que só precisa de um
+   * fio ESPERA: guardada em disco, editável, entregue pelo despacho quando houver conexão.
+   */
+  it("socket morto: a mensagem nem sai, espera na fila, e ninguém acusa entrega nenhuma", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -1295,8 +1513,9 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     await userEvent.type(screen.getByRole("textbox"), "não vai sair{Enter}");
 
     expect(ws.sent.length).toBe(0);
-    expect(screen.getByRole("textbox")).toHaveValue("não vai sair"); // o composer guarda as palavras
-    await waitFor(() => expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered"));
+    expect(await screen.findByTestId("sdk-queued")).toHaveTextContent("não vai sair"); // guardada e editável
+    expect(screen.queryByTestId("sdk-user")).not.toBeInTheDocument(); // nada nasce condenado
+    expect(screen.getByRole("textbox")).toHaveValue(""); // e o texto não fica em dois lugares
   });
 });
 

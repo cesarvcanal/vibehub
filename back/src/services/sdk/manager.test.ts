@@ -850,6 +850,91 @@ describe("o recibo de entrega — nenhuma mensagem some em silêncio", () => {
     expect(sentTypes(socket)).not.toContain("user_ack");
   });
 
+  /**
+   * "REENVIAR" NÃO PODE RODAR O TURNO DUAS VEZES.
+   *
+   * O botão existe para o caso em que o RECIBO se perdeu, não a mensagem: o socket caiu entre o
+   * `appendHistory` e o `user_ack` (a resposta é jogada fora em silêncio quando o socket já
+   * fechou), ou o prazo venceu enquanto o back ainda montava a conexão. Nos dois casos o servidor
+   * TEM a mensagem — e clicar em "Reenviar" mandava o mesmo texto ao driver outra vez: uma segunda
+   * linha no histórico, um segundo turno, e o agente executando duas vezes uma instrução que pode
+   * ser destrutiva ("apaga a branch", "faz o deploy").
+   *
+   * O `cid` é o que resolve: o front reenvia com o MESMO recibo, de propósito. Um cid já aceito não
+   * é uma mensagem nova — é a cobrança de um recibo que se perdeu. O back devolve o recibo e não
+   * toca no driver.
+   */
+  describe("o mesmo recibo, duas vezes — o Reenviar não duplica o trabalho", () => {
+    it("cid repetido: o recibo é reemitido, mas o driver não lê a mensagem de novo", async () => {
+      const session = ensure();
+      const socket = fakeSocket();
+      attachSocket(session, socket as never);
+      socket.emit("message", Buffer.from(`{"type":"user","text":"apaga a branch","cid":"c-r1"}`));
+      await vi.waitFor(async () => expect((await readHistory(CARD)).length).toBe(1));
+
+      // O ack se perdeu no socket derrubado; a pessoa clica "Reenviar" — mesmas palavras, mesmo cid.
+      socket.emit("message", Buffer.from(`{"type":"user","text":"apaga a branch","cid":"c-r1"}`));
+      await new Promise((r) => setImmediate(r));
+
+      expect(await readHistory(CARD)).toHaveLength(1); // uma linha só no histórico
+      expect(session.activeTurns).toBe(1); // um turno só em voo
+      const written = spawned[0]!.stdin.written.join("");
+      expect(written.match(/apaga a branch/g) ?? []).toHaveLength(1); // o driver leu uma vez
+      // …e o recibo, que era o que faltava, é devolvido.
+      await vi.waitFor(() => {
+        const acks = socket.sent
+          .map((s) => JSON.parse(s) as { type: string; cid?: string })
+          .filter((f) => f.type === "user_ack" && f.cid === "c-r1");
+        expect(acks.length).toBeGreaterThanOrEqual(2);
+      });
+    });
+
+    it("o driver morreu DEPOIS de a mensagem ter sido gravada: o reenvio ganha o recibo, não recusa", async () => {
+      const session = ensure();
+      const socket = fakeSocket();
+      attachSocket(session, socket as never);
+      socket.emit("message", Buffer.from(`{"type":"user","text":"já está no disco","cid":"c-r5"}`));
+      await vi.waitFor(async () => expect((await readHistory(CARD)).length).toBe(1));
+      stopCardDriver(CARD); // hibernação, deploy, crash — depois do append
+
+      socket.emit("message", Buffer.from(`{"type":"user","text":"já está no disco","cid":"c-r5"}`));
+
+      // O recibo fala de DURABILIDADE, não do driver: a mensagem está gravada, e é isso que ele diz.
+      await vi.waitFor(() => {
+        const acks = socket.sent
+          .map((s) => JSON.parse(s) as { type: string; cid?: string })
+          .filter((f) => f.type === "user_ack" && f.cid === "c-r5");
+        expect(acks.length).toBeGreaterThanOrEqual(2);
+      });
+      expect(sentTypes(socket)).not.toContain("user_nack"); // recusar seria pedir a terceira cópia
+      expect(await readHistory(CARD)).toHaveLength(1);
+    });
+
+    it("mesmas palavras com recibo NOVO são uma mensagem nova — mandar duas vezes é um direito", async () => {
+      const session = ensure();
+      const socket = fakeSocket();
+      attachSocket(session, socket as never);
+      socket.emit("message", Buffer.from(`{"type":"user","text":"continua","cid":"c-r2"}`));
+      socket.emit("message", Buffer.from(`{"type":"user","text":"continua","cid":"c-r3"}`));
+      await vi.waitFor(async () => expect((await readHistory(CARD)).length).toBe(2));
+      expect(session.activeTurns).toBe(2);
+    });
+
+    it("uma edição reenviada também não duplica o supersede nem o marcador 'editada'", async () => {
+      const session = ensure();
+      const socket = fakeSocket();
+      attachSocket(session, socket as never);
+      socket.emit("message", Buffer.from(`{"type":"edit_user","original":"a","text":"b","cid":"c-r4"}`));
+      await vi.waitFor(async () => expect((await readHistory(CARD)).length).toBe(2));
+
+      socket.emit("message", Buffer.from(`{"type":"edit_user","original":"a","text":"b","cid":"c-r4"}`));
+      await new Promise((r) => setImmediate(r));
+
+      expect(await readHistory(CARD)).toHaveLength(2); // message_edited + user, uma vez cada
+      expect(session.activeTurns).toBe(1);
+    });
+  });
+
   it("EPIPE no stdin (o docker exec caiu): o erro vira frame, não silêncio", () => {
     const session = ensure();
     const socket = fakeSocket();

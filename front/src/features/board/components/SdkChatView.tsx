@@ -51,6 +51,7 @@ import {
   dropUserRow,
   currentActivity,
   groupSdkRows,
+  liveUserCids,
   markInterruptRequested,
   markUserEdited,
   parseSdkFrame,
@@ -153,6 +154,16 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   }, [cardId, outbox]);
   /** Reconciliation runs ONCE per connection, when the replay has landed (`ready`). */
   const reconciledRef = React.useRef(false);
+  /**
+   * Desde quando esta conexão pode RESPONDER — o piso do relógio do recibo (ver lib/sdkOutbox.ts).
+   *
+   * `connected` só diz que o aperto de mão do websocket terminou; o servidor ainda leva segundos
+   * até ATENDER o socket (install do driver por SSH+docker, sonda de transcript com timeout de 15s,
+   * replay do histórico, spawn) e até lá guarda os frames num buffer, entregando-os depois. O
+   * `ready` é o instante em que ele assumiu esta conexão — e é dele, não do envio, que o prazo
+   * conta. `null` = nada aqui pode acusar ninguém.
+   */
+  const answerableSinceRef = React.useRef<number | null>(null);
   /**
    * A FILA — o que foi escrito com um turno ainda rodando (ver lib/sdkQueue.ts).
    *
@@ -309,7 +320,11 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   React.useEffect(() => {
     if (!state.ready || reconciledRef.current) return;
     reconciledRef.current = true;
-    const pending = outboxRef.current;
+    // Só os ÓRFÃOS: uma entrada cujo cid ainda tem bolha nesta tela pertence a ESTA conexão e tem
+    // dono (o watchdog). O `ready` chega antes dos recibos do que ficou bufferado no setup, então o
+    // replay não PODE trazer o envio em voo — julgá-lo aqui era duplicá-lo e condená-lo.
+    const live = liveUserCids(state.rows);
+    const pending = outboxRef.current.filter((m) => !live.has(m.cid));
     if (pending.length === 0) return;
     const { delivered, missing } = reconcileOutbox(deliveredUserTexts(state.rows), pending);
     if (delivered.length > 0 || missing.length > 0) {
@@ -330,6 +345,16 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   }, [state.ready, state.rows]);
 
   /**
+   * O relógio do recibo NASCE quando o SERVIDOR assume esta conexão (o `ready`, que ele só manda
+   * depois do setup inteiro), não quando o `onopen` do navegador dispara — e morre junto com ela.
+   * Enquanto não existe, nenhum silêncio é cobrável: não há de quem cobrar.
+   */
+  React.useEffect(() => {
+    const answerable = connected && state.ready;
+    answerableSinceRef.current = answerable ? (answerableSinceRef.current ?? Date.now()) : null;
+  }, [connected, state.ready]);
+
+  /**
    * THE WATCHDOG — the half-open socket, which is what made this bug so hard to see: `send()`
    * succeeded, nothing ever came back, and the browser went on believing the connection was fine
    * for minutes (in production, hours). A send with no receipt after `OUTBOX_ACK_TIMEOUT_MS` is
@@ -342,11 +367,20 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    * socket perfeitamente vivo. Era esse o loop "chat → Iniciando o agente… → histórico inteiro →
    * chat" que deixava a tela piscando (produção, 2026-09-17). Um reenvio zera o relógio e volta a
    * ser cobrável.
+   *
+   * E o veredito só é dado sobre uma conexão que PODIA ter respondido (`answerableSinceRef`):
+   * silêncio de um servidor que ainda está montando a conexão — ou de um fio que caiu — não é
+   * prova de nada, e tratá-lo como prova era o que marcava "não entregue" mensagens que o servidor
+   * tinha recebido, derrubando no meio do setup um socket cuja reconexão paga o setup inteiro de
+   * novo (produção, 2026-09-28). Com o fio caído quem dá o veredito é a reconciliação do reconnect,
+   * que pergunta ao replay o que o servidor realmente gravou — uma resposta, não um palpite.
    */
   React.useEffect(() => {
     if (outbox.length === 0) return;
     const timer = setInterval(() => {
-      const overdue = overdueMessages(outboxRef.current, Date.now(), OUTBOX_ACK_TIMEOUT_MS);
+      const answerableSince = answerableSinceRef.current;
+      if (answerableSince === null) return;
+      const overdue = overdueMessages(outboxRef.current, Date.now(), OUTBOX_ACK_TIMEOUT_MS, answerableSince);
       if (overdue.length === 0) return;
       const cids = overdue.map((m) => m.cid);
       setOutbox((prev) => markUndelivered(prev, cids));
@@ -521,7 +555,12 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    * mensagem já enviada (`editing`/`pendingEdit`) passa na frente: ela é dona do próximo turno.
    */
   React.useEffect(() => {
-    if (!connected || !state.ready) return; // sem fio ninguém entrega nada
+    // Sem fio ninguém entrega nada — e "fio" é o `readyState`, não o `connected`. Um socket morto
+    // que o navegador ainda não percebeu passa por `connected`, e o despacho puxava a mensagem da
+    // fila para entregá-la nele: ela saía da espera e virava a bolha condenada que a fila existe
+    // para evitar. As duas pontas (o que entra na fila, o que sai dela) leem a MESMA verdade.
+    if (!connected || socketRef.current?.readyState !== WebSocket.OPEN) return;
+    if (!state.ready) return;
     if (state.turnActive || state.awaiting) return; // ainda tem turno em cima da mesa
     if (editing || pendingEdit) return;
     const head = headOfQueue(queueRef.current);
@@ -606,7 +645,19 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     // bloqueado dentro do `canUseTool`/`waitQuestion` com o turno ainda contado como ativo, e a
     // única coisa que o solta é uma mensagem do usuário. Enfileirar aqui seria esperar por um fim
     // de turno que só a própria mensagem pode causar — trava de meia hora, até o timeout.
-    if ((state.turnActive || state.awaiting || pendingEdit) && pendingRef.current.length === 0) {
+    //
+    // E o FIO CAÍDO é a mesma espera. Um socket cai por motivos banais — deploy, tampa do notebook,
+    // proxy cortando conexão ociosa — e volta em 400ms a 15s (lib/reconnect.ts). Quem escreve não vê
+    // nada disso: até aqui a mensagem nascia instantaneamente condenada ("não entregue ao servidor",
+    // com reenviar/descartar) por um fio que voltava dois segundos depois, e o texto ficava em dois
+    // lugares ao mesmo tempo — na bolha e no campo, de onde o segundo Enter mandava a cópia. Quem só
+    // precisa esperar o fio não está perdido: espera na fila, e o despacho a entrega quando der.
+    // A exceção da decisão pendente vale para as DUAS esperas, e é o que a mantém segura: o despacho
+    // da fila só anda quando o turno fecha, então enfileirar com uma pergunta de pé — inclusive com
+    // o fio fora do ar — seria esperar por um fim de turno que só a própria mensagem pode causar.
+    const wireUp = connected && socketRef.current?.readyState === WebSocket.OPEN;
+    const waits = !wireUp || state.turnActive || state.awaiting || pendingEdit;
+    if (waits && pendingRef.current.length === 0) {
       setQueue((prev) => enqueue(prev, { id: newQueueId(), text, at: Date.now() }));
       return;
     }

@@ -124,6 +124,36 @@ describe("a fila em si", () => {
     expect(overdueMessages(reenviada, now + OUTBOX_ACK_TIMEOUT_MS).map((m) => m.cid)).toEqual(["c1"]);
   });
 
+
+  /**
+   * O BUG DO CÉSAR (produção, 2026-09-28): mensagens marcadas "não entregue" com o servidor no ar.
+   *
+   * O prazo do recibo é uma acusação — "mandei e ninguém respondeu" — e ela só vale se havia alguém
+   * em condições de responder. Não havia: o `onopen` do navegador dispara no aperto de mão do
+   * websocket, mas o back só passa a ATENDER frames depois de um setup de vários segundos (install
+   * do driver por SSH+docker, sonda de transcript com timeout de 15s — sozinha maior que este
+   * prazo —, replay do histórico, spawn). Até lá o frame espera bufferado e É entregue depois.
+   *
+   * Então o relógio tem um PISO: o instante em que a conexão passou a poder responder (o `ready`).
+   * Antes dele nenhum silêncio prova nada.
+   */
+  it("o prazo conta a partir do instante em que a conexão pôde responder, não do envio", () => {
+    const now = 100_000;
+    // Enviada 30s atrás, mas o servidor só assumiu o socket 2s atrás: ninguém deve nada ainda.
+    const list = [msg("c1", "instrução longa", now - 30_000)];
+    expect(overdueMessages(list, now, OUTBOX_ACK_TIMEOUT_MS, now - 2_000)).toEqual([]);
+    // Passado o prazo INTEIRO desde que a conexão está de pé, aí sim o silêncio é resposta.
+    expect(
+      overdueMessages(list, now, OUTBOX_ACK_TIMEOUT_MS, now - OUTBOX_ACK_TIMEOUT_MS - 1).map((m) => m.cid),
+    ).toEqual(["c1"]);
+  });
+
+  it("o piso nunca ENCURTA o prazo de quem foi enviado com a conexão já de pé", () => {
+    const now = 100_000;
+    // Conexão de pé há muito tempo; a mensagem é que acabou de sair — o prazo é dela, não do piso.
+    const list = [msg("c1", "instrução longa", now - 1_000)];
+    expect(overdueMessages(list, now, OUTBOX_ACK_TIMEOUT_MS, now - 600_000)).toEqual([]);
+  });
   it("newCid: ids distintos a cada envio", () => {
     expect(newCid(1, () => 0.1)).not.toBe(newCid(2, () => 0.1));
     expect(newCid(1, () => 0.1)).not.toBe(newCid(1, () => 0.9));

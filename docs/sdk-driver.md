@@ -558,6 +558,30 @@ tivesse sido enviada. Reenviar o mesmo texto funciona. Dois furos, um em cada po
   depois do recibo entrar no ar). Um *Reenviar* zera o relógio e limpa a marca — o envio novo volta
   a ser cobrável; um `user_nack` a estampa na hora, porque o servidor JÁ respondeu e derrubar essa
   conexão não descobriria nada.
+- **O prazo só corre quando o servidor pode responder.** O `onopen` do navegador dispara no aperto
+  de mão do websocket, mas o back só chega a ATENDER frames depois de um setup de vários segundos
+  (`installCardSdkDriver` com dois `docker exec` por SSH, a sonda de transcript com timeout de 15s —
+  sozinha maior que o prazo de 12s —, `readHistory`, o replay, o spawn do driver); até lá os frames
+  esperam em `pendingFrames` e são entregues DE VERDADE quando o setup acaba. Contar esse tempo
+  contra a mensagem marcava "não entregue" o que o servidor tinha recebido — e o watchdog derrubava
+  o socket no meio do setup, cuja reconexão paga o setup inteiro de novo: era esse o "toda hora"
+  (produção, 2026-09-28). `overdueMessages` agora recebe um PISO (`answerableSince`, o instante do
+  `ready`) e o watchdog se cala enquanto não existe conexão em condições de responder — com o fio
+  caído quem dá o veredito é a reconciliação do reconnect, que pergunta ao replay.
+- **Reconciliar é sobre o que sobrou de ANTES.** O `ready` sai no attach e só DEPOIS o back responde
+  o que ficou bufferado, então o replay não pode conter o envio em voo — e a reconciliação, que
+  compara por texto, o dava por perdido: uma SEGUNDA bolha, marcada. Ela agora só julga os órfãos
+  (`liveUserCids`): um `cid` que já tem bolha nesta tela pertence a esta conexão e tem dono.
+- **Quem só precisa de fio ESPERA, não é condenada.** Um socket cai por motivos banais e volta em
+  400ms–15s; escrever nessa janela fazia a mensagem nascer condenada na hora, com o texto em dois
+  lugares (a bolha e o campo, de onde o Enter seguinte mandava a cópia). Com o fio fora do ar o
+  envio vai para a **fila** — o mesmo lugar de quem escreveu durante um turno: editável, em disco,
+  entregue sozinha pelo despacho quando houver conexão.
+- **`Reenviar` não roda o turno duas vezes.** O reenvio repete o MESMO `cid` de propósito: o que se
+  perdeu foi o recibo, não a mensagem. `handleClientFrame` lembra os recibos já emitidos
+  (`acceptedCids`, os últimos `ACCEPTED_CIDS_MAX`) e devolve o `user_ack` sem tocar no driver — sem
+  isso, reenviar "apaga a branch" executava a instrução duas vezes. Mesmas palavras com `cid` NOVO
+  seguem sendo mensagem nova: mandar duas vezes é um direito.
 
 ## O raciocínio na tela
 
