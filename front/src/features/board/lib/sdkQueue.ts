@@ -27,6 +27,14 @@ export interface QueuedMessage {
   text: string;
   /** Quando entrou na fila (epoch ms) — a ordem é a da entrada. */
   at: number;
+  /**
+   * Está NO CAMPO, sendo reescrita — e por isso não pode ser entregue.
+   *
+   * Ela continua na fila, no lugar dela: é o que mantém a promessa de durabilidade (um F5 no meio
+   * da correção devolve o texto original em vez de perdê-lo) e a ordem (cancelar a edição não
+   * manda a mensagem pro fim da fila). O despacho simplesmente pula quem está aqui.
+   */
+  editing?: boolean;
 }
 
 const QUEUE_PREFIX = "vibehub.sdkQueue.";
@@ -80,12 +88,51 @@ export function dequeue(messages: readonly QueuedMessage[], id: string): QueuedM
   return messages.filter((m) => m.id !== id);
 }
 
-/** A próxima a ir, ou `null` com a fila vazia. PURE. */
+/** A próxima a ir: a primeira que não está sendo reescrita. PURE. */
 export function headOfQueue(messages: readonly QueuedMessage[]): QueuedMessage | null {
-  return messages[0] ?? null;
+  return messages.find((m) => m.editing !== true) ?? null;
 }
 
 /** A última que você escreveu — a que a seta pra cima abre pra editar. PURE. */
 export function lastQueued(messages: readonly QueuedMessage[]): QueuedMessage | null {
-  return messages.length === 0 ? null : messages[messages.length - 1]!;
+  const open = messages.filter((m) => m.editing !== true);
+  return open.length === 0 ? null : open[open.length - 1]!;
+}
+
+/**
+ * Põe UMA mensagem no campo (e tira de lá qualquer outra): só existe um campo de texto.
+ *
+ * Clicar o lápis de uma segunda mensagem devolve a primeira à fila, no lugar dela, com o texto que
+ * ela tinha — o que estava sendo digitado nela se perde, mas a mensagem não. PURE.
+ */
+export function markEditing(messages: readonly QueuedMessage[], id: string): QueuedMessage[] {
+  return messages.map((m) => {
+    const editing = m.id === id;
+    if ((m.editing === true) === editing) return m;
+    return editing ? { ...m, editing: true } : { ...m, editing: false };
+  });
+}
+
+/** Ninguém está no campo: o que estava sendo reescrito volta a ser entregável, onde estava. PURE. */
+export function releaseEditing(messages: readonly QueuedMessage[]): QueuedMessage[] {
+  return messages.some((m) => m.editing === true)
+    ? messages.map((m) => (m.editing === true ? { ...m, editing: false } : m))
+    : (messages as QueuedMessage[]);
+}
+
+/**
+ * Terminou de reescrever: o texto novo entra NO LUGAR do antigo — mesma posição na fila, porque
+ * uma correção não é uma mensagem nova e não pode furar a ordem de quem veio depois.
+ *
+ * Uma mensagem que não está mais na fila (a pessoa a descartou enquanto editava) entra como nova,
+ * no fim: um Enter nunca pode fazer palavras sumirem. PURE.
+ */
+export function updateQueued(
+  messages: readonly QueuedMessage[],
+  id: string,
+  text: string,
+  at: number,
+): QueuedMessage[] {
+  if (!messages.some((m) => m.id === id)) return [...messages, { id, text, at }];
+  return messages.map((m) => (m.id === id ? { ...m, text, at, editing: false } : m));
 }

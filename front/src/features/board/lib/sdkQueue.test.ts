@@ -4,8 +4,11 @@ import {
   enqueue,
   headOfQueue,
   lastQueued,
+  markEditing,
   newQueueId,
   readQueue,
+  releaseEditing,
+  updateQueued,
   writeQueue,
   type QueuedMessage,
 } from "@/features/board/lib/sdkQueue";
@@ -76,5 +79,55 @@ describe("sdkQueue — durabilidade (o F5 no meio de um turno longo)", () => {
   it("uma entrada sem relógio ganha um — a ordem nunca fica indefinida", () => {
     localStorage.setItem("vibehub.sdkQueue.card-1", JSON.stringify([{ id: "a", text: "antiga" }]));
     expect(readQueue("card-1")[0]!.at).toEqual(expect.any(Number));
+  });
+});
+
+/**
+ * EM EDIÇÃO — a mensagem que está no campo de texto.
+ *
+ * Ela não sai da fila: guarda o lugar dela (senão cancelar a edição a mandaria pro fim, atrás de
+ * quem chegou depois) e guarda o texto (senão um F5 no meio da correção apagaria justamente o que
+ * a fila existe pra não perder). O que muda é só isto: o despacho a pula.
+ */
+describe("sdkQueue — a mensagem que está no campo", () => {
+  it("o despacho pula quem está sendo reescrita, sem furar a ordem dos outros", () => {
+    const q = markEditing([msg("a", "um"), msg("b", "dois")], "a");
+    expect(headOfQueue(q)).toMatchObject({ id: "b" });
+    expect(q.map((m) => m.id)).toEqual(["a", "b"]); // ninguém saiu do lugar
+  });
+
+  it("uma fila inteiramente em edição não tem o que despachar", () => {
+    expect(headOfQueue(markEditing([msg("a", "um")], "a"))).toBeNull();
+    expect(lastQueued(markEditing([msg("a", "um")], "a"))).toBeNull();
+  });
+
+  it("só uma por vez: marcar a segunda devolve a primeira à fila, no lugar dela", () => {
+    const q = markEditing(markEditing([msg("a", "um"), msg("b", "dois")], "a"), "b");
+    expect(q.map((m) => [m.id, m.editing === true])).toEqual([
+      ["a", false],
+      ["b", true],
+    ]);
+  });
+
+  it("soltar devolve todo mundo ao jogo, sem remexer na ordem (o F5 no meio da correção)", () => {
+    const q = releaseEditing(markEditing([msg("a", "um"), msg("b", "dois")], "a"));
+    expect(headOfQueue(q)).toMatchObject({ id: "a" });
+    expect(releaseEditing(q)).toBe(q); // nada a soltar: a mesma lista, sem re-render à toa
+  });
+
+  it("o texto reescrito entra NO LUGAR do antigo — cancelar ou salvar não reordena nada", () => {
+    const q = updateQueued(markEditing([msg("a", "um"), msg("b", "dois")], "a"), "a", "um, corrigido", 9);
+    expect(q.map((m) => m.text)).toEqual(["um, corrigido", "dois"]);
+    expect(q[0]).toMatchObject({ at: 9, editing: false });
+  });
+
+  it("um Enter nunca faz palavras sumirem: sem a entrada original, o texto entra como nova", () => {
+    const q = updateQueued([msg("b", "dois")], "sumiu", "o que eu escrevi", 9);
+    expect(q.map((m) => m.text)).toEqual(["dois", "o que eu escrevi"]);
+  });
+
+  it("o que estava sendo reescrito sobrevive ao reload — com o texto de antes da correção", () => {
+    writeQueue("card-1", markEditing([msg("a", "o original")], "a"));
+    expect(releaseEditing(readQueue("card-1"))).toEqual([{ id: "a", text: "o original", at: 1, editing: false }]);
   });
 });

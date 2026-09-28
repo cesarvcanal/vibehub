@@ -79,8 +79,11 @@ import {
   enqueue,
   headOfQueue,
   lastQueued,
+  markEditing,
   newQueueId,
   readQueue,
+  releaseEditing,
+  updateQueued,
   writeQueue,
   type QueuedMessage,
 } from "@/features/board/lib/sdkQueue";
@@ -157,7 +160,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    * de texto e ainda editáveis. Cada uma sai daqui uma de cada vez, quando o turno anterior fecha —
    * e é só nesse instante que ela sobe pra conversa, como bolha de verdade, com recibo.
    */
-  const [queue, setQueue] = React.useState<QueuedMessage[]>(() => readQueue(cardId));
+  const [queue, setQueue] = React.useState<QueuedMessage[]>(() => releaseEditing(readQueue(cardId)));
   React.useEffect(() => {
     writeQueue(cardId, queue);
   }, [cardId, queue]);
@@ -166,18 +169,20 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    *
    * Enquanto está aqui ela NÃO pode ser entregue: é exatamente isso que o dono pediu ("se eu clicar
    * em editar e ela tiver na fila ela não pode ser enviada, pois é como se estivesse cancelada").
-   * Tirá-la da fila é o que torna essa promessa estrutural em vez de uma condição a mais no
-   * despacho — o turno pode terminar no meio da edição que não há o que despachar. O Enter a
-   * devolve para a fila com o texto novo; o X (cancelar) a devolve como estava.
+   * Ela CONTINUA na fila, marcada (`editing`) e pulada pelo despacho — nunca fora dela: é isso que
+   * faz um F5 no meio da correção devolver o texto em vez de apagá-lo, e que faz o cancelamento
+   * devolvê-la ao lugar dela em vez de mandá-la pro fim. Aqui fica só o que o CAMPO precisa saber.
    */
-  const [queueEdit, setQueueEdit] = React.useState<QueuedMessage | null>(null);
+  const [queueEdit, setQueueEdit] = React.useState<{ id: string; text: string } | null>(null);
 
   /* ------------------------------------------------------------- websocket */
 
   React.useEffect(() => {
     setState(INITIAL_SDK_STATE);
     setOutbox(readOutbox(cardId));
-    setQueue(readQueue(cardId));
+    // Um reload apaga o campo de texto, então nada está sendo reescrito: a mensagem que estava lá
+    // volta a ser uma espera normal, com o texto que tinha antes da correção.
+    setQueue(releaseEditing(readQueue(cardId)));
     setQueueEdit(null);
     let socket: WebSocket | null = null;
     let retry: ReturnType<typeof setTimeout> | null = null;
@@ -455,6 +460,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   /** O que a fila tem AGORA, sem re-armar os callbacks a cada mensagem escrita. */
   const queueRef = React.useRef(queue);
   queueRef.current = queue;
+  /** As decisões ainda paradas na pessoa (preenchido abaixo, onde elas são derivadas das linhas). */
+  const pendingRef = React.useRef<PendingDecision[]>([]);
 
   /**
    * ENTREGAR um turno: a bolha nasce na conversa, o recibo é armado e as palavras vão pro socket.
@@ -478,14 +485,14 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     [sendTurn],
   );
 
-  /** O lápis de uma mensagem da fila: ela SAI da fila e vai pro campo (ver `queueEdit`). */
+  /** O lápis de uma mensagem da fila: ela vai pro CAMPO, e fica marcada na fila (não sai dela). */
   const beginQueueEdit = React.useCallback((id: string): void => {
     const target = queueRef.current.find((m) => m.id === id);
     if (!target) return;
     setReplyTo(null); // uma coisa de cada vez: editar, responder e corrigir são gestos diferentes
     setEditing(null);
-    setQueueEdit(target);
-    setQueue((prev) => dequeue(prev, id));
+    setQueueEdit({ id, text: target.text });
+    setQueue((prev) => markEditing(prev, id)); // só uma por vez: só existe um campo de texto
   }, []);
 
   /** O X da fila: a pessoa desistiu dessa mensagem antes de o Claude a ler. */
@@ -494,12 +501,12 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   }, []);
 
   /**
-   * SAIR do modo edição sem enviar. Uma mensagem da fila VOLTA para a fila, intacta — o X aqui é
-   * "desisti de reescrever", nunca "joga fora o que eu tinha escrito".
+   * SAIR do modo edição sem enviar. Uma mensagem da fila volta a ser entregável, no lugar dela e
+   * com o texto que tinha — o X aqui é "desisti de reescrever", nunca "joga fora o que escrevi".
    */
   const cancelEdit = React.useCallback((): void => {
     if (queueEdit) {
-      setQueue((prev) => enqueue(prev, queueEdit));
+      setQueue(releaseEditing);
       setQueueEdit(null);
       return;
     }
@@ -535,9 +542,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     // Anything the person sends REPLACES the interrupted turn — the "continuar?" offer is moot.
     setInterruptedForEdit(false);
     if (queueEdit) {
-      // Terminou de editar uma mensagem da fila: ela VOLTA pra fila com o texto novo. Só agora ela
-      // volta a ser entregável — enquanto estava no campo, nem um turno fechando a soltava.
-      setQueue((prev) => enqueue(prev, { ...queueEdit, text, at: Date.now() }));
+      // Terminou de editar uma mensagem da fila: o texto novo entra NO LUGAR do antigo, e só agora
+      // ela volta a ser entregável — enquanto estava no campo, nem um turno fechando a soltava.
+      setQueue((prev) => updateQueued(prev, queueEdit.id, text, Date.now()));
       setQueueEdit(null);
       return;
     }
@@ -594,7 +601,12 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     // TEM TURNO RODANDO: a mensagem ESPERA, logo acima do campo, em vez de ir direto pro CLI e ser
     // dobrada no raciocínio em curso (o antigo `turn_absorbed`). Enquanto espera ela ainda é sua —
     // editável, descartável — e ela só sobe pra conversa quando for entregue de verdade.
-    if (state.turnActive || state.awaiting || pendingEdit) {
+    //
+    // MENOS quando o turno está PARADO esperando a pessoa. Um `user_question` deixa o driver
+    // bloqueado dentro do `canUseTool`/`waitQuestion` com o turno ainda contado como ativo, e a
+    // única coisa que o solta é uma mensagem do usuário. Enfileirar aqui seria esperar por um fim
+    // de turno que só a própria mensagem pode causar — trava de meia hora, até o timeout.
+    if ((state.turnActive || state.awaiting || pendingEdit) && pendingRef.current.length === 0) {
       setQueue((prev) => enqueue(prev, { id: newQueueId(), text, at: Date.now() }));
       return;
     }
@@ -718,6 +730,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   // Derived from the rows — which the sdk-history replays on every connect, so the tray survives
   // F5 exactly like the question cards do.
   const pending = React.useMemo(() => pendingDecisions(state.rows), [state.rows]);
+  // Lido pelo `send` (declarado acima): uma pergunta parada muda o que o Enter significa.
+  pendingRef.current = pending;
   /** The explicit replies already given — what anchors an answer under the question it answered. */
   const replies = React.useMemo(() => decisionReplies(state.rows), [state.rows]);
   /** Which rows are STILL waiting — only those offer "Responder" (a stale question must not arm). */
@@ -1009,32 +1023,46 @@ function SdkQueueTray({
         <div
           key={message.id}
           data-testid="sdk-queued"
-          className="group flex items-start gap-1.5 rounded px-1 py-0.5 text-xs hover:bg-background/60"
+          data-editing={message.editing === true || undefined}
+          className={cn(
+            "group flex items-start gap-1.5 rounded px-1 py-0.5 text-xs hover:bg-background/60",
+            message.editing === true && "opacity-60",
+          )}
         >
           <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
           <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-foreground/90">
             {message.text}
           </span>
-          <button
-            type="button"
-            data-testid="sdk-queued-edit"
-            aria-label={t("sdk.queueEdit")}
-            title={t("sdk.queueEdit")}
-            onClick={() => onEdit(message.id)}
-            className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
-          >
-            <Pencil className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            data-testid="sdk-queued-remove"
-            aria-label={t("sdk.queueRemove")}
-            title={t("sdk.queueRemove")}
-            onClick={() => onRemove(message.id)}
-            className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
+          {/* NO CAMPO, sendo reescrita: ela guarda o lugar dela na fila e não oferece gesto nenhum —
+              o campo é que manda agora (Enter grava por cima, o X de lá desiste da correção). */}
+          {message.editing === true ? (
+            <span data-testid="sdk-queued-editing" className="shrink-0 pt-0.5 italic text-muted-foreground">
+              {t("sdk.queueBeingEdited")}
+            </span>
+          ) : (
+            <>
+              <button
+                type="button"
+                data-testid="sdk-queued-edit"
+                aria-label={t("sdk.queueEdit")}
+                title={t("sdk.queueEdit")}
+                onClick={() => onEdit(message.id)}
+                className="shrink-0 rounded p-0.5 text-muted-foreground transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                data-testid="sdk-queued-remove"
+                aria-label={t("sdk.queueRemove")}
+                title={t("sdk.queueRemove")}
+                onClick={() => onRemove(message.id)}
+                className="shrink-0 rounded p-0.5 text-muted-foreground transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </>
+          )}
         </div>
       ))}
     </div>

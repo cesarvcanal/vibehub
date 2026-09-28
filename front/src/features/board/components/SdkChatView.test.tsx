@@ -1641,16 +1641,47 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
     expect(ws.sent).toHaveLength(1);
   });
 
-  it("o lápis traz a mensagem de volta pro campo — e ela SAI da fila", async () => {
+  it("o lápis traz a mensagem pro campo — e ela GUARDA o lugar dela na fila", async () => {
     const { ws } = await chatWithQueued();
     await userEvent.click(screen.getByTestId("sdk-queued-edit"));
 
     expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("aproveita e ajusta o título");
-    expect(screen.queryByTestId("sdk-queue")).toBeNull();
     expect(screen.getByTestId("composer-editing")).toHaveTextContent(/fila|queued/);
+    // continua na fila, marcada: é o que faz um F5 devolver o texto em vez de apagá-lo
+    expect(screen.getByTestId("sdk-queued")).toHaveAttribute("data-editing", "true");
+    expect(screen.getByTestId("sdk-queued-editing")).toBeInTheDocument();
+    expect(screen.queryByTestId("sdk-queued-edit")).toBeNull(); // o campo é que manda agora
     // e o texto NÃO está na conversa: o Claude continua sem ter lido nada disso
     expect(screen.getAllByTestId("sdk-user")).toHaveLength(1);
     expect(ws.sent).toHaveLength(1);
+  });
+
+  it("editar a PRIMEIRA não segura a segunda: o despacho pula só quem está no campo", async () => {
+    const { ws, box } = await chatWithQueued("primeiro isto");
+    await userEvent.type(box, "depois aquilo{Enter}");
+    await waitFor(() => expect(screen.getAllByTestId("sdk-queued")).toHaveLength(2));
+    await userEvent.click(screen.getAllByTestId("sdk-queued-edit")[0]!);
+
+    ws.deliver({ type: "result", isError: false });
+    await waitFor(() => expect(ws.sent.length).toBe(2));
+    expect(JSON.parse(ws.sent[1]!)).toMatchObject({ text: "depois aquilo" });
+    expect(screen.getByTestId("sdk-queued")).toHaveAttribute("data-editing", "true");
+  });
+
+  it("clicar o lápis de outra devolve a primeira à fila — nenhuma mensagem se perde", async () => {
+    const { box } = await chatWithQueued("primeiro isto");
+    await userEvent.type(box, "depois aquilo{Enter}");
+    await waitFor(() => expect(screen.getAllByTestId("sdk-queued")).toHaveLength(2));
+
+    await userEvent.click(screen.getAllByTestId("sdk-queued-edit")[0]!);
+    await userEvent.click(screen.getByTestId("sdk-queued-edit")); // o único visível agora é o outro
+
+    const rows = screen.getAllByTestId("sdk-queued");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("primeiro isto");
+    expect(rows[0]).not.toHaveAttribute("data-editing");
+    expect(rows[1]).toHaveAttribute("data-editing", "true");
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("depois aquilo");
   });
 
   it("EM EDIÇÃO ela não é entregue, nem quando o turno acaba no meio da correção", async () => {
@@ -1679,6 +1710,7 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
     await waitFor(() => expect(screen.getByTestId("sdk-queued")).toHaveTextContent("aproveita e ajusta o título agora"));
     expect(ws.sent).toHaveLength(1);
     expect(screen.getAllByTestId("sdk-queued")).toHaveLength(1); // volta como UMA, não como cópia
+    expect(screen.getByTestId("sdk-queued")).not.toHaveAttribute("data-editing");
   });
 
   it("cancelar a edição devolve a mensagem à fila, intacta", async () => {
@@ -1689,7 +1721,21 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
 
     expect(screen.getByTestId("sdk-queued")).toHaveTextContent("aproveita e ajusta o título");
     expect(screen.getByTestId("sdk-queued")).not.toHaveTextContent("e mais isto");
+    expect(screen.getByTestId("sdk-queued")).not.toHaveAttribute("data-editing");
     expect(ws.sent).toHaveLength(1);
+  });
+
+  it("cancelar NÃO reordena: a corrigida continua na frente de quem chegou depois", async () => {
+    const { ws, box } = await chatWithQueued("primeiro isto");
+    await userEvent.type(box, "depois aquilo{Enter}");
+    await waitFor(() => expect(screen.getAllByTestId("sdk-queued")).toHaveLength(2));
+
+    await userEvent.click(screen.getAllByTestId("sdk-queued-edit")[0]!);
+    await userEvent.click(screen.getByTestId("composer-editing-cancel"));
+
+    ws.deliver({ type: "result", isError: false });
+    await waitFor(() => expect(ws.sent.length).toBe(2));
+    expect(JSON.parse(ws.sent[1]!)).toMatchObject({ text: "primeiro isto" });
   });
 
   it("a seta pra cima num campo vazio abre a ÚLTIMA da fila pra edição", async () => {
@@ -1698,8 +1744,30 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
     await waitFor(() => expect(screen.getAllByTestId("sdk-queued")).toHaveLength(2));
 
     await userEvent.type(box, "{ArrowUp}");
-    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("depois aquilo");
-    expect(screen.getAllByTestId("sdk-queued")).toHaveLength(1);
+    expect(box.value).toBe("depois aquilo");
+    const rows = screen.getAllByTestId("sdk-queued");
+    expect(rows[1]).toHaveAttribute("data-editing", "true"); // guarda o lugar dela, no campo
+    expect(rows[0]).not.toHaveAttribute("data-editing");
+  });
+
+  it("com uma PERGUNTA parada, o recado solto também vai na hora (senão nada destrava o turno)", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    // AskUserQuestion: o driver fica bloqueado esperando, com o turno ainda contado como ativo —
+    // e a única coisa que o solta é uma mensagem do usuário. Enfileirar aqui travaria até o timeout.
+    ws.deliver({
+      type: "user_question",
+      id: "q1",
+      questions: [{ question: "Qual dos dois?", header: "Caminho", options: [{ label: "A" }, { label: "B" }], multiSelect: false }],
+    });
+    await screen.findByTestId("pending-tray");
+
+    // o campo do chat, não o "outra resposta" do próprio card da pergunta
+    await userEvent.type(screen.getByLabelText(/Enter/), "manda o A{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    expect(screen.queryByTestId("sdk-queue")).toBeNull();
   });
 
   it("responder uma decisão pendente NUNCA espera: é ela que destrava o turno", async () => {

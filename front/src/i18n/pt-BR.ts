@@ -452,6 +452,7 @@ export const ptBR: Record<string, string> = {
   "sdk.queueEdit": "Editar esta mensagem antes de ela ir",
   "sdk.queueRemove": "Tirar esta mensagem da fila",
   "sdk.queueEditing": "editando uma mensagem da fila — ela não vai até você dar Enter",
+  "sdk.queueBeingEdited": "no campo",
   "sdk.aria": "Conversa nativa do card",
   "sdk.beta": "Chat nativo",
   "sdk.connecting": "Iniciando o agente…",
