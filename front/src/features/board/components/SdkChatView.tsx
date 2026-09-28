@@ -52,6 +52,7 @@ import {
   dropUserRow,
   currentActivity,
   groupSdkRows,
+  liveActivityDetail,
   liveUserCids,
   markInterruptRequested,
   markUserEdited,
@@ -826,6 +827,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   const seconds = useTurnClock(working);
   /* O verbo e a nota deste instante: é o que troca "Trabalhando…" parado por algo que anda. */
   const stage = workingStage(workingKindOf(activity, state.awaiting, state.ready), seconds);
+  /* O que o modelo está dizendo AGORA (ver `liveActivityDetail`) — null quando não há palavra dele. */
+  const detail = liveActivityDetail(state);
   React.useEffect(() => {
     if (!working) setEscalation(null);
   }, [working]);
@@ -915,14 +918,19 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
           >
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             <span className="text-foreground/90">{t(stage.verb)}</span>
-            <span data-testid="sdk-working-note" className="opacity-80">
+            {/* A PALAVRA DO MODELO ganha da frase pronta. A cauda enlatada era a mesma em qualquer
+                ferramenta e em qualquer raciocínio — escolhida por uma tabela a partir do relógio —,
+                e o que a pessoa queria ler ("Medindo o tamanho do módulo PDV", o raciocínio em
+                curso) estava a um passo dali, no estado. A enlatada segue sendo o fallback de quando
+                não há nada a dizer: uma sessão subindo não tem raciocínio para mostrar. */}
+            <span data-testid="sdk-working-note" className="min-w-0 truncate opacity-80">
               {escalation
                 ? t("sdk.workingWithEffort", {
                     elapsed: formatElapsed(seconds),
-                    note: t(stage.note),
+                    note: detail ?? t(stage.note),
                     effort: escalation.ultracode ? t("sdk.ultracodeOn") : t("sdk.effortHigh"),
                   })
-                : t("sdk.workingWith", { elapsed: formatElapsed(seconds), note: t(stage.note) })}
+                : t("sdk.workingWith", { elapsed: formatElapsed(seconds), note: detail ?? t(stage.note) })}
             </span>
           </div>
         ) : null}

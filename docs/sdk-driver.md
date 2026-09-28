@@ -644,6 +644,20 @@ em acompanhamento.
   é o que se quer ler; depois, vira ruído entre a pergunta e a resposta. Uma escolha explícita da
   pessoa vence o automático, então abrir no meio do turno não é desfeito quando ele acaba.
 
+## O indicador diz o que a IA está dizendo (2026-09-28)
+
+O que mais se via num turno longo era "ferramenta demorada, ainda rodando" — a MESMA frase para
+qualquer ferramenta e qualquer raciocínio, escolhida por uma tabela a partir do relógio
+(`workingStage`). Ela não informava nada, e o material de verdade estava a um passo dali, no estado:
+a descrição que o PRÓPRIO agente escreveu para o comando (`toolHeadline` já a extrai — "Medindo o
+tamanho do módulo PDV") e o raciocínio que ele está escrevendo neste instante.
+
+`liveActivityDetail` (puro, em `lib/sdkChat.ts`) devolve a ÚLTIMA linha do que está em curso, porque
+é ela que está mudando: o começo de um raciocínio de dez linhas é história, o fim é notícia. Um
+bloco já FECHADO não é atividade — virou a saída do turno e já está desenhado logo acima —, e aí a
+função devolve `null`. A frase enlatada volta a ser o que sempre deveria ter sido: o fallback de
+quando não há nada a dizer, como o "Preparando…" de uma sessão subindo.
+
 ## O fluxo do agente na tela — a barra fixa e a manchete da ferramenta (2026-09-26)
 
 O terminal tem uma coisa que o chat não tinha: uma linha de status sempre visível dizendo o que o

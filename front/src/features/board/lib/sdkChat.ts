@@ -479,6 +479,43 @@ export function turnHasRoomForMore(state: SdkChatState): boolean {
   return true; // conversa vazia: não há nada em curso para atrapalhar
 }
 
+/**
+ * O QUE O MODELO ESTÁ DIZENDO AGORA — a palavra dele, para o indicador não falar por ele.
+ *
+ * O indicador dizia só verbo + relógio + uma cauda escolhida por tabela a partir do tempo
+ * decorrido ("ferramenta demorada, ainda rodando"). Sendo a mesma frase em qualquer ferramenta e em
+ * qualquer raciocínio, ela não informava nada — e o material de verdade estava ali do lado: a
+ * descrição que o PRÓPRIO agente escreveu para o comando (`toolHeadline`, que já a extrai) e o
+ * raciocínio que ele está escrevendo neste instante.
+ *
+ * Aqui sai a ÚLTIMA linha do que está em curso, porque é ela que está mudando — o começo de um
+ * raciocínio de dez linhas é história, o fim é notícia. Um bloco já FECHADO não é atividade: virou
+ * a saída do turno, e anunciá-lo seria anunciar algo que já está desenhado logo acima. Nesse caso
+ * devolve `null`, e a frase enlatada volta a ser o que sempre deveria ter sido: o fallback de
+ * quando não há nada a dizer. PURE.
+ */
+export function liveActivityDetail(state: SdkChatState): string | null {
+  for (let i = state.rows.length - 1; i >= 0; i -= 1) {
+    const row = state.rows[i] as SdkRow;
+    if (row.kind === "user") return null; // a mensagem do turno: nada depois dela para relatar
+    if (row.kind === "tool") return lastLine(toolHeadline(row.name, row.input).title);
+    if (row.kind === "thinking" || row.kind === "assistant") {
+      return row.streaming ? lastLine(row.text) : null;
+    }
+  }
+  return null;
+}
+
+/** A última linha não vazia de um texto em curso, dobrada em espaço simples. Vazio vira null. PURE. */
+function lastLine(text: string): string | null {
+  const lines = String(text ?? "").split("\n");
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = (lines[i] as string).replace(/\s+/g, " ").trim();
+    if (line !== "") return line;
+  }
+  return null;
+}
+
 function nextId(state: SdkChatState, prefix: string): { id: string; seq: number } {
   const seq = state.seq + 1;
   return { id: `${prefix}:${seq}`, seq };
