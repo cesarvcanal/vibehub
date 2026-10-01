@@ -86,6 +86,16 @@ export interface DriverSession {
    */
   rewindTarget?: string;
   /**
+   * The CORRECTED text of that same edit — the words the driver sends when it manages to rewind.
+   *
+   * It exists because the two shapes of an edit reach the model with DIFFERENT words (the clean
+   * text after a rewind, the supersede wrapper when the rewind is refused) and only the driver
+   * chooses. The mirror's dedupe is registered at send time with the wrapper, so a rewind left the
+   * transcript line unrecognised and the terminal mirror published the corrected message a second
+   * time — one more bubble UNDER the one that had just been corrected (produção, 2026-10-01).
+   */
+  rewindText?: string;
+  /**
    * OS RECIBOS JÁ EMITIDOS — `cid` → a mesma promessa de durabilidade que o primeiro envio ganhou.
    *
    * O "Reenviar" da bolha manda as MESMAS palavras com o MESMO `cid`, de propósito: ele existe para
@@ -289,9 +299,25 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     // conversation the model no longer has. `session.rewindTarget` is the original text the edit
     // that caused this was replacing — set when the edit was sent, consumed here.
     const original = session.rewindTarget;
+    const corrected = session.rewindText;
     session.rewindTarget = undefined;
+    session.rewindText = undefined;
+    // A REWIND means the CLEAN text went to the model — not the supersede wrapper this edit was
+    // registered with. The transcript will carry those words, and the mirror only drops a line it
+    // recognises as the driver's own: without this key it republished the corrected message as if
+    // the terminal had just said it, drawing a SECOND bubble under the corrected one.
+    if (corrected !== undefined && corrected !== "") {
+      noteDriverEventFor(session.cardId, { type: "user", text: corrected });
+    }
+    // A nota do corte ("o turno foi interrompido… a resposta acima ficou pela metade") perde o
+    // assunto: o rebobinar APAGOU essa meia resposta. No caminho comum ela já saiu antes daqui (a
+    // tela só manda a edição quando o turno fecha, e é o fechamento que a solta), mas quando a
+    // edição vai pelo prazo de carência — com o turno velho ainda aberto — ela ainda está na
+    // agulha, e escrevê-la agora a colocaria DEPOIS do marcador, fora do corte: um F5 traria de
+    // volta, pendurada sob a mensagem corrigida, uma linha falando de uma resposta que não existe.
+    session.pendingInterruptNote = undefined;
     if (original !== undefined) {
-      void rewindHistory(session.cardId, original).then((dropped) => {
+      void rewindHistory(session.cardId, original, corrected).then((dropped) => {
         logger.info(
           { audit: true, action: "sdk.rewind", card: session.label, dropped },
           "the conversation was rewound to before an edited message",
@@ -299,7 +325,10 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
       });
     }
   }
-  if (event.type === "rewound" && !event.ok) session.rewindTarget = undefined;
+  if (event.type === "rewound" && !event.ok) {
+    session.rewindTarget = undefined;
+    session.rewindText = undefined;
+  }
   broadcast(session, event);
   if (interruptNoteToFlush) emitSystemNote(session, interruptNoteToFlush);
   // History + mirror dedupe are MANAGER duties, not socket duties: they must keep happening while
@@ -489,8 +518,10 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
     if (!writeToDriver(session, { type: "edit_user", original: control.original, text: control.text, fallback: wrapped })) {
       return { kind: "refused", cid: control.cid, reason: "driver-gone" };
     }
-    // Which message a `rewound: ok` will cut the log back to. Set BEFORE the driver can answer.
+    // Which message a `rewound: ok` will cut the log back to, and which words went in its place.
+    // Set BEFORE the driver can answer.
     session.rewindTarget = control.original;
+    session.rewindText = control.text;
     session.activeTurns += 1;
     clearIdleTimer(session);
     noteChatActivity(session);

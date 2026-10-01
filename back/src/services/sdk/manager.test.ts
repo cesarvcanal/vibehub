@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { config } from "../../config/env.js";
 import { readCardCatalog } from "./catalog.js";
-import { readHistory } from "./history.js";
+import { readHistory, rewindHistory } from "./history.js";
 import {
   DRIVER_IDLE_MS,
   attachSocket,
@@ -20,6 +20,7 @@ import {
   stopCardDriver,
 } from "./manager.js";
 import { readInflightMarker } from "./inflight.js";
+import { createMirrorState, driverKeysFor, forgetDriverKeys, mirrorNewEvents } from "./mirror.js";
 import { notifyCardSessionKill } from "../board/workspace.js";
 
 /**
@@ -124,6 +125,13 @@ beforeEach(async () => {
 afterEach(async () => {
   resetSdkSessionsForTesting();
   setDriverSpawnerForTesting(null);
+  // DRENA a fila de appends do log antes de trocar a pasta de dados. `appendHistory` resolve o
+  // caminho do arquivo DENTRO da fila, já na hora de escrever: um append ainda enfileirado aqui
+  // acordaria no teste seguinte e escreveria na pasta temporária DELE (e, no caminho do rm,
+  // recriaria o diretório no meio da remoção — o ENOTEMPTY intermitente). `rewindHistory` com um
+  // texto que não existe não escreve nada: ele só entra na fila e espera a vez, que é o que
+  // precisamos. Um flake de ORDEM é pior que lento — ele muda de teste a cada rodada.
+  await Promise.all([rewindHistory(CARD, ""), rewindHistory(CARD2, "")]);
   config.dataDir = savedDataDir;
   await rm(dir, { recursive: true, force: true });
   vi.useRealTimers();
@@ -457,10 +465,13 @@ describe("streaming input — mensagem no meio do turno (turn_absorbed)", () => 
     socket.emit("message", Buffer.from(`{"type":"user","text":"um"}`));
     socket.emit("message", Buffer.from(`{"type":"user","text":"dois"}`));
     spawned[0]!.stdout.emit("data", line({ type: "turn_absorbed" }));
-    await new Promise((r) => setTimeout(r, 10));
+    // Esperar os DOIS envios assentarem, e não um prazo fixo: a fila de append por card é async, e
+    // um `setTimeout(10)` sob carga lia o log no meio (falha intermitente da suíte inteira).
+    await vi.waitFor(async () => {
+      expect((await readHistory(CARD)).filter((e) => e.type === "user").length).toBe(2);
+    });
     const history = await readHistory(CARD);
     expect(history.some((e) => e.type === "turn_absorbed")).toBe(false);
-    expect(history.filter((e) => e.type === "user").length).toBe(2); // both sends persisted normally
   });
 });
 
@@ -1048,6 +1059,11 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
   }
 
   const emit = (frame: unknown): void => { spawned[0]!.stdout.emit("data", line(frame as never)); };
+  /** O corte do log é disparado sem await: esperá-lo ASSENTAR evita um append caindo no tmp já
+   *  removido pelo afterEach (ENOTEMPTY) e, pior, um teste medindo o log do teste anterior. */
+  const logAssentado = async (): Promise<void> => {
+    await vi.waitFor(async () => expect((await readHistory(CARD)).map((e) => e.type)).toEqual(["user", "assistant_text", "user"]));
+  };
   /** Dá tempo de um corte indevido acontecer, para que o "não cortou" signifique alguma coisa. */
   const deixaCortarSeForCortar = async (): Promise<void> => {
     for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 10));
@@ -1117,6 +1133,104 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
     expect(socket.sent.map((s) => JSON.parse(s) as { type: string })).toContainEqual(
       expect.objectContaining({ type: "rewound", ok: false, reason: "absorbed" }),
     );
+  });
+
+  /**
+   * A SEGUNDA BOLHA (produção, 2026-10-01 — "era para a mensagem ali em cima atualizar e não gerar
+   * uma nova por baixo").
+   *
+   * Uma edição é escrita no stdin do driver com as DUAS formas, e só ele escolhe: o texto LIMPO se
+   * conseguir rebobinar, o invólucro de supersede se não. O espelho do transcript, porém, era
+   * avisado só do invólucro — então, quando o rebobinar dava certo, a linha que o CLI escrevia no
+   * transcript (com o texto limpo) não era reconhecida como fala do próprio driver e voltava para
+   * a conversa como se o TERMINAL tivesse acabado de dizê-la: uma segunda bolha, idêntica, logo
+   * abaixo da mensagem que acabara de ser corrigida.
+   */
+  it("depois de rebobinar, o texto LIMPO também é fala conhecida do driver", async () => {
+    forgetDriverKeys(CARD); // a memória do card é do MÓDULO: este caso parte de uma folha em branco
+    await conversaComEdicao();
+    const antes = new Set(driverKeysFor(CARD));
+    expect(antes.has("user:certa")).toBe(false); // antes do `rewound` só o invólucro é conhecido
+    expect([...antes].some((k) => k.includes("correção do usuário"))).toBe(true);
+
+    emit({ type: "rewound", ok: true, uuid: "abc" });
+    await vi.waitFor(() => expect(driverKeysFor(CARD).has("user:certa")).toBe(true));
+    // e o invólucro segue conhecido: um `rewound` não desfaz o que já foi registrado
+    expect([...driverKeysFor(CARD)].some((k) => k.includes("correção do usuário"))).toBe(true);
+    await logAssentado();
+  });
+
+  it("e por causa disso o espelho NÃO redesenha a mensagem corrigida vinda do transcript", async () => {
+    await conversaComEdicao();
+    emit({ type: "rewound", ok: true, uuid: "abc" });
+    await vi.waitFor(() => expect(driverKeysFor(CARD).has("user:certa")).toBe(true));
+    await logAssentado();
+
+    // o transcript do CLI carrega o texto limpo — é ele que o espelho vê a seguir
+    const state = createMirrorState(0, [], driverKeysFor(CARD));
+    const out = mirrorNewEvents(state, JSON.stringify({
+      type: "user", uuid: "u-certa", timestamp: "2026-10-01T12:00:00Z",
+      message: { role: "user", content: [{ type: "text", text: "certa" }] },
+    }), CARD);
+    expect(out).toEqual([]);
+  });
+
+  it("sem rebobinar (supersede), quem o espelho tem de calar é o INVÓLUCRO", async () => {
+    await conversaComEdicao();
+    emit({ type: "rewound", ok: false, reason: "absorbed" });
+    await deixaCortarSeForCortar();
+    const state = createMirrorState(0, [], driverKeysFor(CARD));
+    const wrapped = [...driverKeysFor(CARD)].find((k) => k.includes("correção do usuário"))!.slice("user:".length);
+    const out = mirrorNewEvents(state, JSON.stringify({
+      type: "user", uuid: "u-wrapped", timestamp: "2026-10-01T12:00:00Z",
+      message: { role: "user", content: [{ type: "text", text: wrapped }] },
+    }), CARD);
+    expect(out).toEqual([]);
+  });
+
+  /**
+   * A NOTA DO CORTE NÃO SOBREVIVE AO REBOBINAR.
+   *
+   * No caminho comum a nota já saiu antes do `rewound` (a tela só manda a edição quando o turno
+   * fecha, e é o fechamento que solta a nota). Mas a tela tem um prazo de carência: se o turno
+   * velho não fecha, ela manda a edição assim mesmo — e aí a nota ainda está na agulha. Escrevê-la
+   * depois a colocaria DEPOIS do marcador, fora do corte, e um F5 traria de volta "a resposta
+   * acima ficou pela metade" pendurada sob a mensagem corrigida, falando de uma resposta que o
+   * rebobinar apagou.
+   */
+  it("a edição pelo prazo de carência: a nota do corte não chega a ser escrita", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"errada"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "meia resposta" }));
+    // o turno NÃO fecha: a tela desiste de esperar e manda a edição com ele ainda aberto
+    socket.emit("message", Buffer.from(`{"type":"interrupt","reason":"edit"}`));
+    socket.emit("message", Buffer.from(`{"type":"edit_user","original":"errada","text":"certa"}`));
+    emit({ type: "rewound", ok: true, uuid: "abc" });
+    // só agora o turno velho reporta o fim — tarde demais para uma nota que perdeu o assunto
+    emit({ type: "result", isError: false });
+    await deixaCortarSeForCortar();
+    const events = await readHistory(CARD);
+    expect(events.some((e) => e.type === "system_note")).toBe(false);
+    expect(events.map((e) => e.type)).toEqual(["user"]);
+    expect((events[0] as { text: string }).text).toBe("certa");
+  });
+
+  it("mas um `rewound` RECUSADO deixa a nota sair — ali nada foi apagado", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"errada"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "meia resposta" }));
+    socket.emit("message", Buffer.from(`{"type":"interrupt","reason":"edit"}`));
+    socket.emit("message", Buffer.from(`{"type":"edit_user","original":"errada","text":"certa"}`));
+    emit({ type: "rewound", ok: false, reason: "absorbed" });
+    emit({ type: "result", isError: false });
+    await vi.waitFor(async () => {
+      const notes = (await readHistory(CARD)).filter((e) => e.type === "system_note");
+      expect(notes.map((e) => (e as { text: string }).text)).toEqual(["turn-interrupted-edit"]);
+    });
   });
 
   it("o `rewound` NÃO vai pro log — é feedback do momento, não conversa", async () => {

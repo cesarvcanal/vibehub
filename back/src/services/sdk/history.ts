@@ -174,12 +174,23 @@ export async function readHistory(cardId: string, limit: number = HISTORY_REPLAY
  * driver reports back.
  *
  * Conservative on purpose: if either end is missing (a compaction already dropped the original, a
- * marker that never landed) NOTHING is rewritten. A log with a stale row is a cosmetic problem; a
- * log missing rows it should have kept is a lost conversation.
+ * marker that never landed) nothing is CUT. A log with a stale row is a cosmetic problem; a log
+ * missing rows it should have kept is a lost conversation.
  *
- * Returns how many events were dropped — 0 meaning "left alone".
+ * `replacementText` is the edit's new message, and the second half of this repair: that line was
+ * written with `sent` = the supersede wrapper, because when it was written nobody yet knew which
+ * shape the edit would take. A rewind means the model read the CLEAN words, so the wrapper never
+ * existed — and leaving it there makes `replayDedupeKey` look for words no transcript contains, so
+ * the next connect replays the corrected message TWICE (once from the log, once from the
+ * transcript). Clearing it is done even when there is nothing to cut: the field is wrong either way.
+ *
+ * Returns how many events were dropped — 0 meaning "nothing cut".
  */
-export function rewindHistory(cardId: string, originalText: string): Promise<number> {
+export function rewindHistory(
+  cardId: string,
+  originalText: string,
+  replacementText?: string,
+): Promise<number> {
   let dropped = 0;
   return appendHistoryBarrier(cardId, async () => {
     const file = historyFile(cardId);
@@ -206,13 +217,32 @@ export function rewindHistory(cardId: string, originalText: string): Promise<num
       if (e.type === "user" && e.text === originalText) start = i;
       if (e.type === "message_edited" && e.originalText === originalText) mark = i;
     }
-    // One end missing, or an order that cannot be, and nothing is rewritten. Past this line the
-    // cut always removes at least the original and the marker — there is no zero-length case left.
-    if (start === -1 || mark === -1 || mark < start) return;
-    const kept = [...events.slice(0, start), ...events.slice(mark + 1)];
+    // One end missing, or an order that cannot be, and nothing is CUT — the `sent` repair below
+    // still applies, because that field is wrong whether or not the cut could be placed.
+    const cuttable = start !== -1 && mark !== -1 && mark >= start;
+    const kept = cuttable ? [...events.slice(0, start), ...events.slice(mark + 1)] : [...events];
     dropped = events.length - kept.length;
+    const unwrapped = clearSupersedeWrapper(kept, replacementText);
+    if (dropped === 0 && !unwrapped) return; // nothing to cut and nothing to repair
     await writeFile(file, kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length ? "\n" : ""), "utf8");
   }).then(() => dropped);
+}
+
+/**
+ * Drops the `sent` wrapper from the edit's new message, in place. The LAST matching line, because
+ * the same words can be said more than once and it is the most recent that was just rewound.
+ * Returns whether anything changed. MUTATES `events` (it is the caller's own freshly parsed copy).
+ */
+function clearSupersedeWrapper(events: HistoryEvent[], replacementText?: string): boolean {
+  if (replacementText === undefined || replacementText === "") return false;
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i] as HistoryEvent & { sent?: string };
+    if (event.type !== "user" || event.text !== replacementText || event.sent === undefined) continue;
+    const { sent: _dropped, ...rest } = event;
+    events[i] = rest as HistoryEvent;
+    return true;
+  }
+  return false;
 }
 
 /* -------------------------------------------------------- external events */

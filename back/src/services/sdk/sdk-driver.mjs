@@ -55,6 +55,59 @@ function emit(event) {
   process.stdout.write(JSON.stringify(event) + "\n");
 }
 
+/** Diagnostics for the driver's own log — stdout is the protocol and must carry nothing else. */
+function trace(line) {
+  try { process.stderr.write(`[sdk-driver] ${line}\n`); } catch { /* a closed stderr is not a reason to die */ }
+}
+
+/* ------------------------------------------------- errors a human can act on */
+
+/**
+ * Markers the CLI uses for its OWN engine diagnostics. They name an internal state
+ * (`[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use`), not something
+ * a person can do anything about, and the CLI filters them out of everything it shows a human.
+ *
+ * The driver has to filter them too because the Agent SDK does NOT: when a stream ends after a
+ * turn that reported an error, the SDK replaces the exit error with
+ * `Error("Claude Code returned an error result: " + errors.join("; "))` — diagnostics included. An
+ * INTERRUPTED turn is exactly that case (the CLI reports it as `error_during_execution` carrying
+ * only the diagnostic), so editing a message mid-turn ended with a red banner reading engine
+ * jargon under the note that had already explained the stop (produção, 2026-10-01).
+ */
+const INTERNAL_DIAGNOSTICS = ["[ede_diagnostic]", "[session_crash]"];
+
+/**
+ * The part of an error message worth showing — "" when every piece of it was an internal
+ * diagnostic, which means there is nothing to tell. PURE, TOTAL.
+ */
+function humanErrorText(message) {
+  const text = String(message ?? "").trim();
+  if (text === "") return "";
+  const MARKER = "Claude Code returned an error result:";
+  const at = text.indexOf(MARKER);
+  const head = at === -1 ? "" : text.slice(0, at + MARKER.length);
+  const body = at === -1 ? text : text.slice(at + MARKER.length);
+  // The SDK joins the CLI's `errors[]` with "; " — the same split puts them back, and a plain
+  // message with a semicolon in it is rejoined exactly as it came.
+  const kept = body
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => part !== "" && !INTERNAL_DIAGNOSTICS.some((marker) => part.startsWith(marker)));
+  if (kept.length === 0) return "";
+  return head === "" ? kept.join("; ") : `${head} ${kept.join("; ")}`;
+}
+
+/**
+ * Did the CLI END this turn because it was INTERRUPTED? `aborted_streaming`/`aborted_tools` is the
+ * CLI's own word for it, and it comes with `is_error: true` and an `error_during_execution`
+ * subtype — a stop someone ASKED for, wearing the clothes of a failure. The CLI does not show it
+ * to a human either (it only surfaces an `error_during_execution` when the reason is not an
+ * abort), and in vibehub the stop is already narrated by its own note. PURE, TOTAL.
+ */
+function wasAborted(terminalReason) {
+  return terminalReason === "aborted_streaming" || terminalReason === "aborted_tools";
+}
+
 /* --------------------------------------------- permission gate (mirror) */
 // Keep in step with SENSITIVE_BASH_PATTERNS / SENSITIVE_TOOLS in protocol.ts.
 
@@ -440,6 +493,13 @@ let forkPoint = null;
 let absorbedSinceFork = false;
 /** Set for ONE stream: the chain entry that stream must resume at (and truncate after). */
 let pendingResumeAt = null;
+/**
+ * The stream `endStream` is taking down ON PURPOSE. The SDK ends a closed stream by THROWING — and
+ * after an interrupted turn it throws the CLI's own error result verbatim — so without this the
+ * rewind's teardown painted a red banner in the chat for a stream the driver itself had just asked
+ * to close (produção, 2026-10-01).
+ */
+let closingQuery = null;
 
 /**
  * MAY this edit rewind? The whole safety of the feature is these three lines, so they are a pure
@@ -471,8 +531,10 @@ async function runStream() {
   }
   pendingResumeAt = null;
   const myChannel = channel;
+  let myQuery = null;
   try {
     currentQuery = query({ prompt: myChannel, options });
+    myQuery = currentQuery;
     for await (const msg of currentQuery) {
       if (msg.type === "system") {
         if (msg.session_id) {
@@ -525,12 +587,29 @@ async function runStream() {
         if (msg.session_id) lastSessionId = msg.session_id;
         turnActive = false;
         void clearUltra(); // the keyword was for THIS turn
-        emit({ type: "result", subtype: msg.subtype, isError: !!msg.is_error,
+        // An ABORTED turn is not a failed one: the turn ends because someone stopped it (the stop
+        // button, an edit, a deploy), and the conversation already says so in its own words.
+        const aborted = wasAborted(msg.terminal_reason);
+        emit({ type: "result", subtype: msg.subtype, isError: !!msg.is_error && !aborted,
           sessionId: msg.session_id, result: msg.result, permissionDenials: msg.permission_denials });
       }
     }
   } catch (err) {
-    emit({ type: "error", message: err && err.message ? err.message : String(err) });
+    const raw = err && err.message ? err.message : String(err);
+    // A stream WE tore down (the rewind closes the old one before resuming elsewhere) dies by our
+    // own hand: the SDK reports that death as an error, and it is not news to anybody.
+    //
+    // `myQuery !== null` is the whole guard, not decoration: `query()` itself throws SYNCHRONOUSLY
+    // on a bad option or a missing binary, and at that instant `myQuery` is still null — the same
+    // null `closingQuery` sits at when nothing is being torn down. Without it a stream that failed
+    // to START would be read as a stream we closed on purpose, and the message that was opening it
+    // would vanish with no error, no result and a spinner that never stops.
+    if (myQuery !== null && closingQuery === myQuery) trace(`stream closed on purpose: ${raw}`);
+    else {
+      const detail = humanErrorText(raw);
+      if (detail !== "") emit({ type: "error", message: detail });
+      else trace(`stream error with nothing to tell: ${raw}`);
+    }
   } finally {
     // The STREAM died (an SDK error, a teardown mid-stream — never a normal turn end, which keeps
     // the stream open). A turn can therefore END without a result, and the front's "Trabalhando…"
@@ -543,6 +622,7 @@ async function runStream() {
       emit({ type: "result", subtype: "aborted", isError: false, sessionId: lastSessionId });
     }
     if (channel === myChannel) channel = null;
+    if (closingQuery === myQuery) closingQuery = null;
     currentQuery = null;
     // The next stream is a NEW CLI process: whatever we pinned in this one's flag layer died with
     // it, so there is nothing left to give back.
@@ -752,6 +832,9 @@ async function endStream() {
   const dying = currentQuery;
   const ch = channel;
   if (!dying) return;
+  // Claimed BEFORE the first thing that can kill it: whatever this stream throws from here on is
+  // the teardown talking, not a problem the person needs to read about.
+  closingQuery = dying;
   try {
     if (typeof dying.interrupt === "function") await dying.interrupt();
   } catch { /* a turn that was not running cannot be interrupted, and that is fine */ }

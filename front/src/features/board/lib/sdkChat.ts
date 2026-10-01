@@ -930,6 +930,15 @@ export function markUserEdited(state: SdkChatState, originalText: string): SdkCh
  * "from the edited row to the last user row" is what keeps this correct even if a frame lands in
  * between: anything after that new message is newer than the rewind and is not ours to remove.
  *
+ * The note that NARRATED the stop goes with them, and only here does it look like an exception.
+ * On screen it lands AFTER the new bubble — the bubble is drawn the instant the person presses
+ * Enter, while the note still has to come back from the driver — so the cut would leave "a
+ * resposta acima ficou pela metade" standing under a corrected message with a COMPLETE answer
+ * above it, telling the reader something that is no longer true. The log agrees that it must go,
+ * by both of its routes: the cut swallows the note when it was already written (it sits between
+ * the original and the edit's marker), and the manager drops it unwritten when the rewind beat it
+ * to the punch (see `pendingInterruptNote`).
+ *
  * Total and conservative: no row marked `edited`, or an order that cannot be (the edited row at or
  * after the new message), and the state comes back untouched. A screen with a stale row is a
  * cosmetic bug; a screen missing rows the model still has is a lie about the conversation. PURE.
@@ -946,7 +955,13 @@ export function dropRewoundRows(state: SdkChatState): SdkChatState {
   // `editedAt >= lastUserAt` is the whole identity case: the edited row IS the newest message, so
   // there is nothing between them to drop. Past it the cut always removes at least one row.
   if (editedAt === -1 || lastUserAt === -1 || editedAt >= lastUserAt) return state;
-  return { ...state, rows: [...state.rows.slice(0, editedAt), ...state.rows.slice(lastUserAt)] };
+  const tail = state.rows.slice(lastUserAt).filter((row) => !narratesTheCutTurn(row));
+  return { ...state, rows: [...state.rows.slice(0, editedAt), ...tail] };
+}
+
+/** Is this row the note that explained the stop the rewind just erased? PURE. */
+function narratesTheCutTurn(row: SdkRow): boolean {
+  return row.kind === "note" && (row.text === TURN_INTERRUPTED_NOTE || row.text === TURN_INTERRUPTED_EDIT_NOTE);
 }
 
 /** Mark the LAST not-yet-absorbed user row as folded into the running turn. PURE. */

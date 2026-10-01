@@ -785,6 +785,50 @@ describe("dropRewoundRows — apagar de menos é feio, apagar de mais é perda",
     expect(dropRewoundRows(state).rows.some((r) => r.kind === "user" && r.text === "errada")).toBe(true);
   });
 
+  /**
+   * A NOTA ÓRFÃ. "Turno interrompido para você editar a mensagem — a resposta acima ficou pela
+   * metade" chega DEPOIS da bolha nova: a bolha é desenhada no instante do Enter, enquanto a nota
+   * ainda tem de voltar do driver. O rebobinar apaga a meia resposta que ela narra — e a nota
+   * sobrevivia, pendurada embaixo da mensagem corrigida, apontando para uma resposta COMPLETA.
+   * O log do back já corta essa nota (ela fica entre o original e o marcador), então mantê-la na
+   * tela também discordava do que um F5 mostraria.
+   */
+  it("a nota que narrava o turno cortado sai junto, mesmo tendo chegado depois da bolha nova", () => {
+    let state = appendUserRow(INITIAL_SDK_STATE, "primeira");
+    state = applySdkEvent(state, { type: "assistant_text", text: "resposta da primeira" });
+    state = markUserEdited(appendUserRow(state, "errada"), "errada");
+    state = applySdkEvent(state, { type: "assistant_text", text: "meia resposta" });
+    state = appendUserRow(state, "certa");
+    // ordem REAL: a nota do back chega depois que a bolha corrigida já está na tela
+    state = applySdkEvent(state, { type: "system_note", text: "turn-interrupted-edit" });
+
+    const after = dropRewoundRows(state);
+    expect(after.rows.map((r) => (r.kind === "user" ? `u:${r.text}` : r.kind === "assistant" ? `a:${r.text}` : r.kind)))
+      .toEqual(["u:primeira", "a:resposta da primeira", "u:certa"]);
+  });
+
+  it("o mesmo vale pro `turn-interrupted` simples — é a mesma meia resposta que sumiu", () => {
+    let state = markUserEdited(appendUserRow(INITIAL_SDK_STATE, "errada"), "errada");
+    state = applySdkEvent(state, { type: "assistant_text", text: "meia" });
+    state = appendUserRow(state, "certa");
+    state = applySdkEvent(state, { type: "system_note", text: "turn-interrupted" });
+
+    expect(dropRewoundRows(state).rows.map((r) => r.kind)).toEqual(["user"]);
+  });
+
+  it("mas as OUTRAS notas ficam — só a que narrava o turno cortado é que mentiria", () => {
+    let state = markUserEdited(appendUserRow(INITIAL_SDK_STATE, "errada"), "errada");
+    state = applySdkEvent(state, { type: "assistant_text", text: "meia" });
+    state = appendUserRow(state, "certa");
+    state = applySdkEvent(state, { type: "system_note", text: "terminal-activity" });
+    state = applySdkEvent(state, { type: "system_note", text: "O painel foi atualizado." });
+
+    const after = dropRewoundRows(state);
+    expect(after.rows.map((r) => (r.kind === "note" ? `n:${r.text}` : r.kind))).toEqual([
+      "user", "n:terminal-activity", "n:O painel foi atualizado.",
+    ]);
+  });
+
   it("uma tela vazia não vira erro", () => {
     expect(dropRewoundRows(INITIAL_SDK_STATE)).toBe(INITIAL_SDK_STATE);
   });

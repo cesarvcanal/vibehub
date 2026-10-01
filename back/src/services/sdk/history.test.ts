@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { appendFile, mkdtemp, readFile, rm } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { config } from "../../config/env.js";
@@ -320,6 +320,70 @@ describe("rewindHistory — o corte tem de ser exato nos dois sentidos", () => {
       expect(await rewindHistory(CARD, quaseIgual)).toBe(0);
     }
     expect(await read()).toEqual(base);
+  });
+
+  /**
+   * O `sent` DE UMA MENSAGEM EDITADA É UMA APOSTA, E O REBOBINAR DECIDE A APOSTA.
+   *
+   * A linha nova de uma edição é gravada com `sent` = o invólucro de supersede, porque na hora de
+   * gravar ninguém ainda sabe qual das duas formas a edição vai tomar — quem escolhe é o driver.
+   * Se ele conseguiu rebobinar, o modelo leu o texto LIMPO e o invólucro nunca existiu: deixá-lo
+   * ali faz o `replayDedupeKey` procurar no transcript palavras que não estão lá, e o próximo
+   * connect desenha a mensagem corrigida DUAS vezes — uma do log, outra do transcript.
+   */
+  it("limpa o `sent` da mensagem nova: depois de rebobinar, o invólucro nunca foi dito", async () => {
+    await write([
+      { type: "user", text: "primeira" },
+      { type: "assistant_text", text: "resposta" },
+      { type: "user", text: "errada" },
+      { type: "message_edited", originalText: "errada" },
+      { type: "user", text: "certa", sent: "[correção do usuário…] certa" } as HistoryEvent,
+    ]);
+    expect(await rewindHistory(CARD, "errada", "certa")).toBe(2);
+    expect(await read()).toEqual([
+      { type: "user", text: "primeira" },
+      { type: "assistant_text", text: "resposta" },
+      { type: "user", text: "certa" },
+    ]);
+  });
+
+  it("limpa o `sent` MESMO quando não há o que cortar — o campo está errado dos dois jeitos", async () => {
+    const base: HistoryEvent[] = [
+      { type: "user", text: "certa", sent: "[correção do usuário…] certa" } as HistoryEvent,
+    ];
+    await write(base); // sem original e sem marcador: nada a cortar
+    expect(await rewindHistory(CARD, "errada", "certa")).toBe(0);
+    expect(await read()).toEqual([{ type: "user", text: "certa" }]);
+  });
+
+  it("limpa a ocorrência mais RECENTE — a mesma frase pode ter sido dita antes", async () => {
+    await write([
+      { type: "user", text: "certa", sent: "envolvida antiga" } as HistoryEvent,
+      { type: "assistant_text", text: "resposta" },
+      { type: "user", text: "certa", sent: "envolvida nova" } as HistoryEvent,
+    ]);
+    await rewindHistory(CARD, "errada", "certa");
+    const kept = await read();
+    expect(kept[0]).toEqual({ type: "user", text: "certa", sent: "envolvida antiga" });
+    expect(kept[2]).toEqual({ type: "user", text: "certa" });
+  });
+
+  it("sem o texto novo (um `rewound` sem par) nada é tocado — nem o corte, nem o `sent`", async () => {
+    const base: HistoryEvent[] = [
+      { type: "user", text: "certa", sent: "envolvida" } as HistoryEvent,
+    ];
+    await write(base);
+    expect(await rewindHistory(CARD, "errada")).toBe(0);
+    expect(await read()).toEqual(base);
+  });
+
+  it("não reescreve o arquivo quando não há nada a cortar NEM a limpar", async () => {
+    const base: HistoryEvent[] = [{ type: "user", text: "certa" }];
+    await write(base);
+    const antes = await stat(join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`));
+    expect(await rewindHistory(CARD, "errada", "certa")).toBe(0);
+    const depois = await stat(join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`));
+    expect(depois.mtimeMs).toBe(antes.mtimeMs);
   });
 
   it("um card sem log nenhum não explode e não cria arquivo", async () => {
