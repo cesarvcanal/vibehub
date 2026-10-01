@@ -808,11 +808,13 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       };
       if (event.sessionId) next.sessionId = event.sessionId;
       if (!event.isError) return next;
-      // THE MUTE BUBBLE. An interrupted turn comes back as `is_error` with an empty `result`, and
-      // this line used to render it as the string "error" — a red balloon saying nothing, right
-      // under an answer chopped mid-sentence (the reported case: editing a message mid-turn). Two
-      // rules now: a stop WE asked for is not an error at all (the back's note tells that story),
-      // and a real failure gets a sentence instead of the word "error".
+      // THE MUTE BUBBLE. An interrupted turn used to come back as `is_error` with an empty
+      // `result`, and this line rendered it as the string "error" — a red balloon saying nothing,
+      // right under an answer chopped mid-sentence (the reported case: editing a message mid-turn).
+      // The DRIVER now de-arms `isError` for an aborted turn (`wasAborted`), which is the honest
+      // place for it: it survives an F5 and a second tab, which `interruptRequested` cannot. This
+      // flag stays as the second lock (an older CLI reports no `terminal_reason`), and a real
+      // failure still gets a sentence instead of the word "error".
       if (state.interruptRequested) return next;
       const detail = (event.result ?? "").trim();
       if (detail !== "") return appendErrorRow(next, next.rows, detail);
@@ -928,16 +930,20 @@ export function markUserEdited(state: SdkChatState, originalText: string): SdkCh
  * What survives is what the model still has — everything before the edited message — plus the
  * edit's own new message, which is the LAST user row and was appended after the marker. Cutting
  * "from the edited row to the last user row" is what keeps this correct even if a frame lands in
- * between: anything after that new message is newer than the rewind and is not ours to remove.
+ * between: anything after that new message is newer than the rewind and is not ours to remove —
+ * with ONE exception, the note that narrated the cut turn (below), which is newer only because the
+ * driver is slower than the keyboard.
  *
  * The note that NARRATED the stop goes with them, and only here does it look like an exception.
  * On screen it lands AFTER the new bubble — the bubble is drawn the instant the person presses
  * Enter, while the note still has to come back from the driver — so the cut would leave "a
  * resposta acima ficou pela metade" standing under a corrected message with a COMPLETE answer
  * above it, telling the reader something that is no longer true. The log agrees that it must go,
- * by both of its routes: the cut swallows the note when it was already written (it sits between
- * the original and the edit's marker), and the manager drops it unwritten when the rewind beat it
- * to the punch (see `pendingInterruptNote`).
+ * by both of its routes: when the note was written BEFORE the edit's marker the main cut swallows
+ * it, and when it landed after (the grace path — the screen gave up waiting for the turn to close,
+ * so the marker went first) `dropOrphanInterruptNotes` takes it there. The filter is over the
+ * whole tail on purpose: `rewound` is emitted before the new turn's first frame, so nothing in
+ * that tail can narrate a stop other than the one just undone.
  *
  * Total and conservative: no row marked `edited`, or an order that cannot be (the edited row at or
  * after the new message), and the state comes back untouched. A screen with a stale row is a

@@ -115,8 +115,10 @@ export function replayDedupeKey(
     return bare === "" ? null : `tool:${bare}`;
   }
   if (event.type !== "user" && event.type !== "assistant_text") return null;
-  // An EDITED message's history line shows the clean text but was SENT wrapped (the supersede
-  // wrapper, protocol.ts): the transcript carries the wrapped words, so the key must match those.
+  // An edited message's history line shows the clean text; `sent` is there when it went to the
+  // model WRAPPED (the supersede wrapper, protocol.ts) and the transcript therefore carries those
+  // words. On a successful REWIND the clean text is what was sent, and `rewindHistory` deletes the
+  // field — so "no `sent`" is not "never edited", it is "the wrapper was never used".
   const worded = typeof event.sent === "string" && event.sent !== "" ? event.sent : event.text;
   const norm = String(worded ?? "").replace(/\s+/g, " ").trim();
   return norm === "" ? null : `${event.type}:${norm}`;

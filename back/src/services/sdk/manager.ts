@@ -80,21 +80,23 @@ export interface DriverSession {
    */
   pendingInterruptNote?: string;
   /**
-   * The message an edit in flight is replacing — the log's cut point if the driver answers that it
-   * REWOUND. Set when the edit is written to stdin, cleared by either answer, so a `rewound` that
-   * belongs to nothing (a driver that reports twice, a stale frame) cuts nothing.
-   */
-  rewindTarget?: string;
-  /**
-   * The CORRECTED text of that same edit — the words the driver sends when it manages to rewind.
+   * THE EDITS IN FLIGHT, oldest first — one entry per `edit_user` written to stdin, consumed in
+   * order by the `rewound` answers that come back. A `rewound` that belongs to nothing (a driver
+   * reporting twice, a stale frame) finds the queue empty and cuts nothing.
    *
-   * It exists because the two shapes of an edit reach the model with DIFFERENT words (the clean
-   * text after a rewind, the supersede wrapper when the rewind is refused) and only the driver
-   * chooses. The mirror's dedupe is registered at send time with the wrapper, so a rewind left the
-   * transcript line unrecognised and the terminal mirror published the corrected message a second
-   * time — one more bubble UNDER the one that had just been corrected (produção, 2026-10-01).
+   * `original` is the message being replaced (the log's cut point); `text` is the CORRECTED
+   * version. Both are needed because the two shapes of an edit reach the model with DIFFERENT
+   * words — the clean text after a rewind, the supersede wrapper when the rewind is refused — and
+   * only the driver chooses. The mirror's dedupe is registered at send time with the wrapper, so
+   * a rewind left the transcript line unrecognised and the terminal mirror published the corrected
+   * message a second time: one more bubble UNDER the one just corrected (produção, 2026-10-01).
+   *
+   * A QUEUE and not one slot because nothing stops a second edit from going out before the first
+   * is answered (with no turn running the screen dispatches an edit immediately). With one slot
+   * the second overwrote the first, and then the first `rewound` cut the log at the WRONG message —
+   * deleting a correction the person wrote and the model had already read.
    */
-  rewindText?: string;
+  rewinds: Array<{ original: string; text: string }>;
   /**
    * OS RECIBOS JÁ EMITIDOS — `cid` → a mesma promessa de durabilidade que o primeiro envio ganhou.
    *
@@ -294,42 +296,46 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     if (session.activeTurns === 0) void clearInflightMarker(session.cardId);
     maybeScheduleIdleStop(session);
   }
-  if (event.type === "rewound" && event.ok) {
-    // The session was taken back in time; the LOG has to follow, or a reload replays a
-    // conversation the model no longer has. `session.rewindTarget` is the original text the edit
-    // that caused this was replacing — set when the edit was sent, consumed here.
-    const original = session.rewindTarget;
-    const corrected = session.rewindText;
-    session.rewindTarget = undefined;
-    session.rewindText = undefined;
-    // A REWIND means the CLEAN text went to the model — not the supersede wrapper this edit was
-    // registered with. The transcript will carry those words, and the mirror only drops a line it
-    // recognises as the driver's own: without this key it republished the corrected message as if
-    // the terminal had just said it, drawing a SECOND bubble under the corrected one.
-    if (corrected !== undefined && corrected !== "") {
-      noteDriverEventFor(session.cardId, { type: "user", text: corrected });
-    }
-    // A nota do corte ("o turno foi interrompido… a resposta acima ficou pela metade") perde o
-    // assunto: o rebobinar APAGOU essa meia resposta. No caminho comum ela já saiu antes daqui (a
-    // tela só manda a edição quando o turno fecha, e é o fechamento que a solta), mas quando a
-    // edição vai pelo prazo de carência — com o turno velho ainda aberto — ela ainda está na
-    // agulha, e escrevê-la agora a colocaria DEPOIS do marcador, fora do corte: um F5 traria de
-    // volta, pendurada sob a mensagem corrigida, uma linha falando de uma resposta que não existe.
-    session.pendingInterruptNote = undefined;
-    if (original !== undefined) {
-      void rewindHistory(session.cardId, original, corrected).then((dropped) => {
+  let silenced = false;
+  if (event.type === "rewound") {
+    // One answer, one edit: the oldest unanswered one. `ok: false` consumes its entry too (the
+    // driver fell back to a supersede — there is nothing to cut, but that edit IS answered).
+    const edit = session.rewinds.shift();
+    if (event.ok && edit) {
+      // A REWIND means the CLEAN text went to the model — not the supersede wrapper this edit was
+      // registered with. The transcript will carry those words, and the mirror only drops a line
+      // it recognises as the driver's own: without this key it republished the corrected message
+      // as if the terminal had just said it, drawing a SECOND bubble under the corrected one.
+      if (edit.text !== "") noteDriverEventFor(session.cardId, { type: "user", text: edit.text });
+      // A nota do corte ("…a resposta acima ficou pela metade") perde o assunto: o rebobinar
+      // APAGOU essa meia resposta. Quase sempre ela já saiu antes daqui — o `endStream` do driver
+      // ESPERA o `result` do stream morrendo antes de anunciar o rebobinar, então o result (e a
+      // nota com ele) vem primeiro, e quem a tira é o corte do log (`dropOrphanInterruptNotes`).
+      // Isto cobre a outra janela: o stream que não solta dentro do prazo do `endStream`, e o
+      // `rewound` chega na frente — evita escrever uma linha que já nasceria órfã. Dentro do `if`
+      // do dono, como o corte: um frame que não pertence a edição nenhuma não apaga a nota de uma
+      // parada que foi de outra pessoa.
+      session.pendingInterruptNote = undefined;
+      void rewindHistory(session.cardId, edit.original, edit.text).then((dropped) => {
         logger.info(
           { audit: true, action: "sdk.rewind", card: session.label, dropped },
           "the conversation was rewound to before an edited message",
         );
       });
+    } else if (event.ok) {
+      // Um `ok: true` SEM dono (driver repetindo, frame atrasado) não chega à tela: lá ele não é
+      // inofensivo como aqui. `dropRewoundRows` corta da última linha "editada" até a última
+      // mensagem — e uma edição RECUSADA deixa essa marca para sempre —, então um frame perdido
+      // apagaria turnos inteiros que o modelo ainda tem. O log já se protege sozinho (sem dono,
+      // sem corte); a tela não tem como.
+      silenced = true;
+      logger.warn(
+        { audit: true, action: "sdk.rewind.orphan", card: session.label },
+        "a rewind confirmation arrived for no edit in flight — not forwarded to the screen",
+      );
     }
   }
-  if (event.type === "rewound" && !event.ok) {
-    session.rewindTarget = undefined;
-    session.rewindText = undefined;
-  }
-  broadcast(session, event);
+  if (!silenced) broadcast(session, event);
   if (interruptNoteToFlush) emitSystemNote(session, interruptNoteToFlush);
   // History + mirror dedupe are MANAGER duties, not socket duties: they must keep happening while
   // no page is open — that is the whole point of the detach.
@@ -363,6 +369,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     sockets: new Set(),
     ready: false,
     activeTurns: 0,
+    rewinds: [],
     idleTimer: null,
     buffer: "",
     stderrTail: "",
@@ -393,8 +400,15 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     // KEEP the tail, don't just debug-log it: in the original incident the driver died with its
     // stderr invisible (debug level) and its exit frame sent to an already-closed socket — a fully
     // SILENT death. The tail is the post-mortem the exit handler below reports.
-    session.stderrTail = (session.stderrTail + chunk.toString()).slice(-STDERR_TAIL_MAX);
-    logger.debug({ card: opts.label, stderr: chunk.toString().slice(0, 500) }, "sdk driver stderr");
+    const text = chunk.toString();
+    session.stderrTail = (session.stderrTail + text).slice(-STDERR_TAIL_MAX);
+    // O driver fala por `[sdk-driver] …` quando ENGOLE alguma coisa de propósito (um erro de
+    // stream que era teardown nosso, um diagnóstico interno do CLI). Engolir em nível `debug` é
+    // invisível em produção — exatamente o ponto cego do incidente da morte silenciosa —, então
+    // essas linhas sobem para `warn`. O resto do stderr segue sendo ruído de boot.
+    const deliberate = text.includes("[sdk-driver] ");
+    const log = deliberate ? logger.warn.bind(logger) : logger.debug.bind(logger);
+    log({ card: opts.label, stderr: text.slice(0, 500) }, "sdk driver stderr");
   });
   child.on("error", (err) => {
     logger.warn({ card: opts.label, detail: err.message }, "sdk driver process error");
@@ -519,9 +533,9 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
       return { kind: "refused", cid: control.cid, reason: "driver-gone" };
     }
     // Which message a `rewound: ok` will cut the log back to, and which words went in its place.
-    // Set BEFORE the driver can answer.
-    session.rewindTarget = control.original;
-    session.rewindText = control.text;
+    // Enqueued BEFORE the driver can answer, and in send order — the answers come back in the same
+    // order, one per edit.
+    session.rewinds.push({ original: control.original, text: control.text });
     session.activeTurns += 1;
     clearIdleTimer(session);
     noteChatActivity(session);

@@ -73,8 +73,12 @@ function trace(line) {
  * INTERRUPTED turn is exactly that case (the CLI reports it as `error_during_execution` carrying
  * only the diagnostic), so editing a message mid-turn ended with a red banner reading engine
  * jargon under the note that had already explained the stop (produção, 2026-10-01).
+ *
+ * ONLY `[ede_diagnostic]`. The CLI hides `[session_crash]` from its own UI as well, but a crash is
+ * something that HAPPENED to this person's session: jargon they can act on (reopen the card) beats
+ * a turn that stops with no answer and no explanation at all.
  */
-const INTERNAL_DIAGNOSTICS = ["[ede_diagnostic]", "[session_crash]"];
+const INTERNAL_DIAGNOSTICS = ["[ede_diagnostic]"];
 
 /**
  * The part of an error message worth showing — "" when every piece of it was an internal
@@ -87,10 +91,12 @@ function humanErrorText(message) {
   const at = text.indexOf(MARKER);
   const head = at === -1 ? "" : text.slice(0, at + MARKER.length);
   const body = at === -1 ? text : text.slice(at + MARKER.length);
-  // The SDK joins the CLI's `errors[]` with "; " — the same split puts them back, and a plain
-  // message with a semicolon in it is rejoined exactly as it came.
+  // Split on the SDK's OWN separator ("; ", how it joins the CLI's `errors[]`) and not on a bare
+  // ";": a diagnostic that happened to contain one would otherwise be cut in half and have its
+  // tail shown as if it were an error. A plain message with a semicolon in it is rejoined exactly
+  // as it came, either way.
   const kept = body
-    .split(";")
+    .split("; ")
     .map((part) => part.trim())
     .filter((part) => part !== "" && !INTERNAL_DIAGNOSTICS.some((marker) => part.startsWith(marker)));
   if (kept.length === 0) return "";
@@ -617,13 +623,20 @@ async function runStream() {
     // real incident) — while the backend MANAGER counts turns by their `result` events to know
     // when the driver is idle. Whatever killed the stream, an open turn closes itself here; the
     // NEXT user message starts a fresh stream that resumes the same session (lastSessionId).
-    if (turnActive) {
+    //
+    // IDENTIDADE: só o stream VIGENTE encerra turno e larga o handle. `endStream` desiste de
+    // esperar depois de 3s, e aí o stream velho segue vivo ao lado do que o substituiu — estas
+    // duas linhas, sem guarda, fechavam o turno NOVO e zeravam o `currentQuery` VIVO (e com ele o
+    // botão de parar, que vira um no-op silencioso). Hazard anterior a esta mudança; a guarda
+    // custa uma comparação e no caminho normal não muda nada.
+    const stillOurs = currentQuery === myQuery;
+    if (stillOurs && turnActive) {
       turnActive = false;
       emit({ type: "result", subtype: "aborted", isError: false, sessionId: lastSessionId });
     }
     if (channel === myChannel) channel = null;
     if (closingQuery === myQuery) closingQuery = null;
-    currentQuery = null;
+    if (stillOurs) currentQuery = null;
     // The next stream is a NEW CLI process: whatever we pinned in this one's flag layer died with
     // it, so there is nothing left to give back.
     ultraRaised = null;
@@ -841,6 +854,13 @@ async function endStream() {
   if (ch) ch.end();
   for (let i = 0; i < 120 && currentQuery === dying; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  // GAVE UP waiting: the stream outlived the teardown, and from here the rewind proceeds alongside
+  // it. The quiet claim is released with the wait — a stream still alive after we stopped owning
+  // its death may yet hit a REAL failure, and that one has to reach the person.
+  if (currentQuery === dying && closingQuery === dying) {
+    closingQuery = null;
+    trace("stream did not let go within the teardown window — its errors are news again");
   }
   if (channel === ch) channel = null;
 }

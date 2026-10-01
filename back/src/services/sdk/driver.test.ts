@@ -491,7 +491,20 @@ describe("sdk-driver.mjs — um turno interrompido não é um turno que falhou",
 
   it("engole o diagnóstico cru, sem o prefixo do SDK", () => {
     expect(humanErrorText("[ede_diagnostic] result_type=assistant stop_reason=end_turn")).toBe("");
-    expect(humanErrorText("[session_crash] worker died")).toBe("");
+  });
+
+  it("um CRASH não é engolido: jargão que a pessoa pode agir em cima vale mais que silêncio", () => {
+    // O CLI esconde `[session_crash]` da própria UI, mas ali ele tem outras formas de contar. Aqui,
+    // engolir significaria um turno que para sem resposta, sem erro e sem explicação nenhuma.
+    expect(humanErrorText("[session_crash] worker died")).toBe("[session_crash] worker died");
+    expect(humanErrorText("Claude Code returned an error result: [session_crash] worker died"))
+      .toBe("Claude Code returned an error result: [session_crash] worker died");
+  });
+
+  it("um diagnóstico com ponto e vírgula dentro não vaza o rabo como se fosse erro", () => {
+    // O corte é no separador do SDK ("; "), não em qualquer ";": senão a metade de um diagnóstico
+    // virava uma frase vermelha sozinha na conversa.
+    expect(humanErrorText("Claude Code returned an error result: [ede_diagnostic] a;b stop_reason=x")).toBe("");
   });
 
   it("mas PRESERVA o que é erro de verdade quando os dois vêm juntos", () => {
@@ -554,6 +567,16 @@ describe("sdk-driver.mjs — um turno interrompido não é um turno que falhou",
     expect(run).toContain("closingQuery === myQuery) trace(");
     // e a reivindicação não vaza para a corrente seguinte
     expect(run).toContain("if (closingQuery === myQuery) closingQuery = null;");
+  });
+
+  it("só o stream VIGENTE encerra turno e larga o handle — o que sobreviveu ao teardown não manda", () => {
+    // Quando `endStream` desiste de esperar, o stream velho segue vivo ao lado do novo. Sem a
+    // guarda de identidade, o `finally` dele fechava o turno NOVO e zerava o `currentQuery` VIVO —
+    // e com ele o botão de parar, que vira um no-op sem dizer nada a ninguém.
+    const run = source.slice(source.indexOf("async function runStream()"));
+    expect(run).toContain("const stillOurs = currentQuery === myQuery;");
+    expect(run).toContain("if (stillOurs && turnActive) {");
+    expect(run).toContain("if (stillOurs) currentQuery = null;");
   });
 
   it("o que é engolido ainda é registrado — no stderr, nunca no stdout do protocolo", () => {

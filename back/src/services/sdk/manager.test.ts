@@ -1198,7 +1198,7 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
    * acima ficou pela metade" pendurada sob a mensagem corrigida, falando de uma resposta que o
    * rebobinar apagou.
    */
-  it("a edição pelo prazo de carência: a nota do corte não chega a ser escrita", async () => {
+  it("a edição pelo prazo de carência: a nota do corte não sobra no log", async () => {
     const session = ensure();
     const socket = fakeSocket();
     attachSocket(session, socket as never);
@@ -1207,14 +1207,24 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
     // o turno NÃO fecha: a tela desiste de esperar e manda a edição com ele ainda aberto
     socket.emit("message", Buffer.from(`{"type":"interrupt","reason":"edit"}`));
     socket.emit("message", Buffer.from(`{"type":"edit_user","original":"errada","text":"certa"}`));
-    emit({ type: "rewound", ok: true, uuid: "abc" });
-    // só agora o turno velho reporta o fim — tarde demais para uma nota que perdeu o assunto
+    await vi.waitFor(async () => {
+      expect((await readHistory(CARD)).map((e) => e.type))
+        .toEqual(["user", "assistant_text", "message_edited", "user"]);
+    });
+    // ORDEM REAL do driver: `endStream` ESPERA o `result` do stream morrendo antes de o
+    // `rewindAndSend` anunciar o rebobinar — então o result (e a nota que ele solta) vem PRIMEIRO,
+    // e a nota aterrissa DEPOIS do marcador, fora do alcance do corte. Inverter os dois aqui
+    // testaria uma sequência que o driver não produz.
     emit({ type: "result", isError: false });
-    await deixaCortarSeForCortar();
-    const events = await readHistory(CARD);
-    expect(events.some((e) => e.type === "system_note")).toBe(false);
-    expect(events.map((e) => e.type)).toEqual(["user"]);
-    expect((events[0] as { text: string }).text).toBe("certa");
+    await vi.waitFor(async () => {
+      expect((await readHistory(CARD)).some((e) => e.type === "system_note")).toBe(true);
+    });
+    emit({ type: "rewound", ok: true, uuid: "abc" });
+    await vi.waitFor(async () => {
+      const events = await readHistory(CARD);
+      expect(events.map((e) => e.type)).toEqual(["user"]);
+      expect((events[0] as { text: string }).text).toBe("certa");
+    });
   });
 
   it("mas um `rewound` RECUSADO deixa a nota sair — ali nada foi apagado", async () => {
@@ -1231,6 +1241,72 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
       const notes = (await readHistory(CARD)).filter((e) => e.type === "system_note");
       expect(notes.map((e) => (e as { text: string }).text)).toEqual(["turn-interrupted-edit"]);
     });
+  });
+
+  /**
+   * DUAS EDIÇÕES EM VOO. Nada impede a pessoa de corrigir uma segunda mensagem antes de a primeira
+   * ser respondida: sem turno rodando, a tela despacha a edição na hora. Com um ÚNICO slot, a
+   * segunda sobrescrevia a primeira — e aí o primeiro `rewound` cortava o log na mensagem ERRADA,
+   * apagando uma correção que a pessoa escreveu e o modelo já tinha lido.
+   */
+  it("duas edições em voo: cada `rewound` corta a SUA, na ordem em que foram mandadas", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"m1"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "a1" }));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"m2"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "a2" }));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    socket.emit("message", Buffer.from(`{"type":"edit_user","original":"m1","text":"n1"}`));
+    socket.emit("message", Buffer.from(`{"type":"edit_user","original":"m2","text":"n2"}`));
+    await vi.waitFor(async () => expect((await readHistory(CARD)).length).toBe(8));
+
+    // O primeiro `rewound` é da PRIMEIRA edição: ele corta em "m1" e deixa "n1" de pé. Com um slot
+    // só, ele cortaria em "m2" (a segunda edição teria sobrescrito o alvo) e levaria "n1" junto —
+    // uma correção que a pessoa escreveu e o modelo leu, apagada do histórico.
+    emit({ type: "rewound", ok: true, uuid: "u1" });
+    await vi.waitFor(async () => {
+      const texts = (await readHistory(CARD)).filter((e) => e.type === "user").map((e) => (e as { text: string }).text);
+      expect(texts).toContain("n1");
+      expect(texts).not.toContain("m1");
+    });
+    expect(driverKeysFor(CARD).has("user:n1")).toBe(true);
+    expect(driverKeysFor(CARD).has("user:n2")).toBe(false); // a segunda ainda não foi respondida
+
+    emit({ type: "rewound", ok: true, uuid: "u2" }); // e agora a SEGUNDA
+    await vi.waitFor(() => expect(driverKeysFor(CARD).has("user:n2")).toBe(true));
+    const texts = (await readHistory(CARD)).filter((e) => e.type === "user").map((e) => (e as { text: string }).text);
+    expect(texts).toEqual(["n1", "n2"]);
+  });
+
+  /**
+   * UM `rewound: ok` SEM DONO NÃO CHEGA À TELA. No log ele já era inofensivo (sem as duas pontas,
+   * nada é cortado), mas `dropRewoundRows` corta da última linha "editada" até a última mensagem —
+   * e uma edição RECUSADA deixa essa marca para sempre. Um frame perdido apagaria da tela turnos
+   * inteiros que o modelo ainda tem.
+   */
+  it("um `rewound: ok` que não pertence a edição nenhuma não é repassado à tela", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"oi"}`));
+    socket.sent.length = 0;
+    emit({ type: "rewound", ok: true, uuid: "abc" });
+    await deixaCortarSeForCortar();
+    expect(socket.sent.map((x) => JSON.parse(x) as { type: string }).some((e) => e.type === "rewound")).toBe(false);
+  });
+
+  it("mas o `ok: false` sem dono SEGUE indo — na tela ele não apaga nada, e cala o 'rebobinando'", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.sent.length = 0;
+    emit({ type: "rewound", ok: false, reason: "absorbed" });
+    expect(socket.sent.map((x) => JSON.parse(x) as { type: string })).toContainEqual(
+      expect.objectContaining({ type: "rewound", ok: false, reason: "absorbed" }),
+    );
   });
 
   it("o `rewound` NÃO vai pro log — é feedback do momento, não conversa", async () => {
