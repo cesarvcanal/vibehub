@@ -210,4 +210,32 @@ describe("edição (supersede) — o dedupe casa pelo texto EMBRULHADO", () => {
     expect(users.map((e) => (e as { text: string }).text)).toEqual(["velha", "nova"]);
     expect(merged.some((e) => e.type === "message_edited")).toBe(true);
   });
+
+  /**
+   * E QUANDO A EDIÇÃO REBOBINOU, o invólucro nunca foi dito: o transcript carrega o texto LIMPO.
+   * Por isso `rewindHistory` apaga o `sent` da linha nova ao cortar — este é o estado em que o log
+   * fica, e é ele que tem de casar. Sem isso o replay desenhava a mensagem corrigida duas vezes,
+   * a segunda marcada como se tivesse vindo do terminal.
+   */
+  it("rebobinada, a linha do transcript vem LIMPA — e o log sem `sent` casa com ela", () => {
+    const jsonl = JSON.stringify({
+      type: "user", uuid: "u1", timestamp: "2026-09-01T12:00:00Z",
+      message: { role: "user", content: "nova" },
+    });
+    // como o log fica DEPOIS do corte: sem o original, sem o marcador, e sem o `sent`
+    const history = [{ type: "user" as const, text: "nova", at: Date.parse("2026-09-01T12:00:00Z") }];
+    const merged = mergeTranscriptReplay(jsonl, history);
+    expect(merged.filter((e) => e.type === "user")).toHaveLength(1);
+    expect(merged[0]).toEqual(history[0]); // a versão do log vence — ela sabe quem mandou
+  });
+
+  it("o `sent` que ficou para trás é exatamente o que duplicava a bolha", () => {
+    // Fixa o DEFEITO que a limpeza do `sent` conserta: mesmo log, com o invólucro mentiroso.
+    const jsonl = JSON.stringify({
+      type: "user", uuid: "u1", timestamp: "2026-09-01T12:00:00Z",
+      message: { role: "user", content: "nova" },
+    });
+    const history = [{ type: "user" as const, text: "nova", sent: "embrulho que nunca foi dito", at: Date.parse("2026-09-01T12:00:00Z") }];
+    expect(mergeTranscriptReplay(jsonl, history).filter((e) => e.type === "user")).toHaveLength(2);
+  });
 });

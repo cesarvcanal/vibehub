@@ -2,7 +2,7 @@ import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { dataPath } from "../../config/env.js";
-import type { DriverEvent } from "./protocol.js";
+import { NOTE_TURN_INTERRUPTED, NOTE_TURN_INTERRUPTED_EDIT, type DriverEvent } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { logger } from "../../utils/logger.js";
 
@@ -43,10 +43,12 @@ export type HistoryEvent = (
       type: "user";
       text: string;
       /**
-       * On an EDITED message's new version: the text as it went to the driver's stdin (the
-       * supersede wrapper, see protocol.ts `buildSupersedeText`). `text` stays the CLEAN version —
-       * what the screen draws — while `sent` is what the transcript will carry, so the replay
-       * dedupe (`replayDedupeKey`) matches the transcript line instead of drawing it twice.
+       * On an EDITED message's new version: the text as it was EXPECTED to go to the driver's
+       * stdin (the supersede wrapper, see protocol.ts `buildSupersedeText`). `text` stays the
+       * CLEAN version — what the screen draws — while `sent` is what the transcript will carry, so
+       * the replay dedupe (`replayDedupeKey`) matches the transcript line instead of drawing it
+       * twice. Written before the driver chooses between the two shapes of an edit: when it
+       * REWINDS, the clean text is what went, and `rewindHistory` deletes this field.
        */
       sent?: string;
     }
@@ -174,12 +176,26 @@ export async function readHistory(cardId: string, limit: number = HISTORY_REPLAY
  * driver reports back.
  *
  * Conservative on purpose: if either end is missing (a compaction already dropped the original, a
- * marker that never landed) NOTHING is rewritten. A log with a stale row is a cosmetic problem; a
- * log missing rows it should have kept is a lost conversation.
+ * marker that never landed) nothing is CUT. A log with a stale row is a cosmetic problem; a log
+ * missing rows it should have kept is a lost conversation.
  *
- * Returns how many events were dropped — 0 meaning "left alone".
+ * `replacementText` is the edit's new message, and the second half of this repair: that line was
+ * written with `sent` = the supersede wrapper, because when it was written nobody yet knew which
+ * shape the edit would take. A rewind means the model read the CLEAN words, so the wrapper never
+ * existed — and leaving it there makes `replayDedupeKey` look for words no transcript contains, so
+ * the next connect replays the corrected message TWICE (once from the log, once from the
+ * transcript). The repair is ANCHORED to the cut, and happens only when the cut could be placed:
+ * the edit's own line is the one right after the marker, and an unanchored search would walk back
+ * into an OLDER edit whose wrapper was correct — stripping it there recreates the duplicate bubble
+ * on a message nobody touched.
+ *
+ * Returns how many events were dropped — 0 meaning "nothing cut".
  */
-export function rewindHistory(cardId: string, originalText: string): Promise<number> {
+export function rewindHistory(
+  cardId: string,
+  originalText: string,
+  replacementText?: string,
+): Promise<number> {
   let dropped = 0;
   return appendHistoryBarrier(cardId, async () => {
     const file = historyFile(cardId);
@@ -206,13 +222,57 @@ export function rewindHistory(cardId: string, originalText: string): Promise<num
       if (e.type === "user" && e.text === originalText) start = i;
       if (e.type === "message_edited" && e.originalText === originalText) mark = i;
     }
-    // One end missing, or an order that cannot be, and nothing is rewritten. Past this line the
-    // cut always removes at least the original and the marker — there is no zero-length case left.
+    // One end missing, or an order that cannot be: NOTHING is rewritten — not the cut, not the
+    // repair. The old rule, and still the right one; the file keeps even its torn lines.
     if (start === -1 || mark === -1 || mark < start) return;
-    const kept = [...events.slice(0, start), ...events.slice(mark + 1)];
+    const tail = dropOrphanInterruptNotes(events.slice(mark + 1));
+    const unwrapped = clearSupersedeWrapper(tail, replacementText);
+    const kept = [...events.slice(0, start), ...tail];
     dropped = events.length - kept.length;
+    if (dropped === 0 && !unwrapped) return; // a cut that removes nothing and nothing to repair
     await writeFile(file, kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length ? "\n" : ""), "utf8");
   }).then(() => dropped);
+}
+
+/**
+ * Drops the "turno interrompido" notes left STRANDED after the cut.
+ *
+ * The note narrates a half answer ("a resposta acima ficou pela metade") that the rewind has just
+ * erased. On the ordinary path it sits between the original and the edit's marker, so the cut
+ * above already takes it. On the GRACE path it does not: when the old turn refuses to close, the
+ * screen sends the edit anyway (`EDIT_INTERRUPT_GRACE_MS`), the marker and the new message are
+ * written first, and only then does the aborted turn report back — the driver's own teardown
+ * guarantees that order, because `endStream` WAITS for the dying stream's `result` before
+ * `rewindAndSend` announces the rewind. The note therefore lands after the marker, outside the
+ * cut, and a reload brought it back hanging under the corrected message with a COMPLETE answer
+ * above it.
+ *
+ * Only these two codes, and only in the tail: everything after the marker is newer than the edit,
+ * so a stop narrated there can only be the stop the rewind just undid. PURE.
+ */
+function dropOrphanInterruptNotes(tail: HistoryEvent[]): HistoryEvent[] {
+  return tail.filter(
+    (event) => !(event.type === "system_note"
+      && (event.text === NOTE_TURN_INTERRUPTED || event.text === NOTE_TURN_INTERRUPTED_EDIT)),
+  );
+}
+
+/**
+ * Drops the `sent` wrapper from the edit's new message, in place, searching only the TAIL the cut
+ * kept (everything after the marker) — the edit's own line is there, and nothing older is. The
+ * LAST matching line of that tail, because the same words can be said more than once. Returns
+ * whether anything changed. MUTATES the array it is given (the caller's own freshly built tail).
+ */
+function clearSupersedeWrapper(tail: HistoryEvent[], replacementText?: string): boolean {
+  if (replacementText === undefined || replacementText === "") return false;
+  for (let i = tail.length - 1; i >= 0; i -= 1) {
+    const event = tail[i] as HistoryEvent & { sent?: string };
+    if (event.type !== "user" || event.text !== replacementText || event.sent === undefined) continue;
+    const { sent: _dropped, ...rest } = event;
+    tail[i] = rest as HistoryEvent;
+    return true;
+  }
+  return false;
 }
 
 /* -------------------------------------------------------- external events */
