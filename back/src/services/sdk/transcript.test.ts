@@ -3,6 +3,8 @@ import {
   buildLatestTranscriptScript,
   mergeTranscriptReplay,
   parseLatestTranscript,
+  dedupeLookupKeys,
+  dedupeNoteKeys,
   replayDedupeKey,
   resumeTargetFor,
   transcriptToSdkHistory,
@@ -189,6 +191,28 @@ describe("mergeTranscriptReplay (one timeline, nothing lost, nothing twice)", ()
 });
 
 describe("edição (supersede) — o dedupe casa pelo texto EMBRULHADO", () => {
+  it("comando de barra: o eco qualificado do transcript reconhece o que foi mandado sem prefixo", () => {
+    // O BUG (produção, 02/10/2026): a pessoa manda `/systematic-debugging …` pelo chat; o Claude Code
+    // reescreve pra forma qualificada do plugin antes de gravar no transcript; o espelho não
+    // reconhecia e desenhava a MESMA mensagem outra vez.
+    const mandado = dedupeNoteKeys({ type: "user", text: "/systematic-debugging apaga cards de 180 dias" });
+    const eco = dedupeLookupKeys({ type: "user", text: "/superpowers:systematic-debugging apaga cards de 180 dias" });
+    expect(eco.some((k) => mandado.includes(k))).toBe(true);
+  });
+
+  it("dois plugins com o MESMO comando não se confundem — mensagem diferente nunca é engolida", () => {
+    // Por que o casamento é assimétrico: colapsar o prefixo dos dois lados faria `/a:cmd x` e
+    // `/b:cmd x` dividirem uma chave, e o dedupe responde sim/não — a segunda mensagem sumiria.
+    const mandado = dedupeNoteKeys({ type: "user", text: "/a:cmd mesmo texto" });
+    const outra = dedupeLookupKeys({ type: "user", text: "/b:cmd mesmo texto" });
+    expect(outra.some((k) => mandado.includes(k))).toBe(false);
+  });
+
+  it("texto comum com barra não é comando e não ganha apelido", () => {
+    expect(dedupeNoteKeys({ type: "user", text: "olha isso a/b: aqui" })).toEqual(["user:olha isso a/b: aqui"]);
+    expect(dedupeLookupKeys({ type: "user", text: "olha isso a/b: aqui" })).toEqual(["user:olha isso a/b: aqui"]);
+  });
+
   it("replayDedupeKey uses `sent` (the wrapped words) when present, `text` otherwise", () => {
     expect(replayDedupeKey({ type: "user", text: "limpa", sent: "embrulhada limpa" })).toBe("user:embrulhada limpa");
     expect(replayDedupeKey({ type: "user", text: "limpa" })).toBe("user:limpa");

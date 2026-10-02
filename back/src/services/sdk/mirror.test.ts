@@ -85,6 +85,20 @@ describe("mirrorNewEvents", () => {
     expect(mirrorNewEvents(state, userLine("u1", "2026-08-31T21:31:00Z", "oi"), CARD)).toHaveLength(0);
   });
 
+  it("comando de barra mandado pelo chat NÃO volta do transcript como mensagem nova", () => {
+    // O INCIDENTE (produção, 02/10/2026): a pessoa mandou "/systematic-debugging …" pelo chat
+    // nativo e viu a MESMA mensagem duas vezes. O Claude Code reescreve o comando para a forma
+    // qualificada do plugin antes de gravar no transcript, e o dedupe comparava texto literal.
+    const state = createMirrorState(T0);
+    noteDriverEvent(state, { type: "user", text: "/systematic-debugging apaga cards de 180 dias" });
+    const out = mirrorNewEvents(
+      state,
+      userLine("u9", "2026-08-31T21:31:00Z", "/superpowers:systematic-debugging apaga cards de 180 dias"),
+      CARD,
+    );
+    expect(out).toHaveLength(0);
+  });
+
   it("what the DRIVER already said on stdout is not mirrored back from the transcript", () => {
     const state = createMirrorState(T0);
     noteDriverEvent(state, { type: "user", text: "roda os testes" });

@@ -127,3 +127,16 @@ describe("removeProvenance (the card is being deleted)", () => {
     await expect(removeProvenance("../../etc/passwd")).rejects.toThrow(/invalid card id/);
   });
 });
+
+describe("comando de barra na chave de proveniência", () => {
+  it("o que foi digitado casa com o que o transcript devolve qualificado", () => {
+    // O Claude Code expande `/foo` pra `/ns:foo` antes de gravar no transcript, e é contra essa
+    // linha que a atribuição é casada — sem isso, TODO comando de barra ficava sem dono.
+    expect(normalizeProvenanceKey("/superpowers:systematic-debugging apaga cards"))
+      .toBe(normalizeProvenanceKey("/systematic-debugging apaga cards"));
+  });
+
+  it("barra no meio de texto comum não é tocada", () => {
+    expect(normalizeProvenanceKey("olha isso a/b: aqui")).toBe("olha isso a/b: aqui");
+  });
+});

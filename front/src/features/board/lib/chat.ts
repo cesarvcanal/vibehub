@@ -213,6 +213,19 @@ export function normalizeMessage(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * The same text with a leading slash command's PLUGIN NAMESPACE stripped: `/superpowers/foo` stays,
+ * `/superpowers:foo` becomes `/foo`.
+ *
+ * Claude Code expands a slash command into its plugin-qualified form before it reaches the
+ * transcript, so the echo of `/foo …` comes back as `/ns:foo …`. The optimistic bubble is matched on
+ * text, so without this it never recognised its own echo and span as "enviando" forever while the
+ * real message sat right under it. Only the first token is touched.
+ */
+export function matchKeyOf(text: string): string {
+  return normalizeMessage(text).replace(/^\/[A-Za-z0-9_.-]+:([A-Za-z0-9_.-]+)/, "/$1");
+}
+
 const PENDING_PREFIX = "vibehub.chatPending.";
 
 /**

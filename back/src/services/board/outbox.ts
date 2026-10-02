@@ -3,6 +3,8 @@ import { JsonStore } from "../../store/jsonStore.js";
 import { config, dataPath } from "../../config/env.js";
 import { hostExecutor } from "../../runtime/host.js";
 import { getCard, type Card } from "./registry.js";
+import { findUser } from "../../auth/users.js";
+import { recordOrigin } from "../chat/provenance.js";
 import { buildSendKeysScript } from "../maestro/maestro.js";
 import { cardAgentState, type AgentState } from "./agentState.js";
 import { logger } from "../../utils/logger.js";
@@ -51,6 +53,13 @@ export interface OutboxMessage {
   /** Delivery attempts that did not land — surfaced so a stuck queue is not a silent one. */
   attempts: number;
   lastError?: string;
+  /**
+   * WHO composed it (user id). Travels with the message because the chat's attribution is matched
+   * against the transcript line, and that line is written when the message is DELIVERED — which may
+   * be hours after it was queued (Claude down, card paused). Recording the sender at enqueue put it
+   * outside the match window in exactly the case the queue exists for.
+   */
+  by?: string;
 }
 
 interface OutboxDoc {
@@ -115,8 +124,8 @@ export async function cardsWithPending(): Promise<string[]> {
   return Object.keys(doc.byCard).filter((id) => (doc.byCard[id]?.length ?? 0) > 0);
 }
 
-async function appendMessage(cardId: string, text: string): Promise<OutboxMessage> {
-  const message: OutboxMessage = { id: randomUUID(), text, createdAt: Date.now(), attempts: 0 };
+async function appendMessage(cardId: string, text: string, by?: string): Promise<OutboxMessage> {
+  const message: OutboxMessage = { id: randomUUID(), text, createdAt: Date.now(), attempts: 0, ...(by ? { by } : {}) };
   await store.mutate((doc) => {
     doc.byCard[cardId] = [...(doc.byCard[cardId] ?? []), message];
   });
@@ -197,6 +206,7 @@ async function flushOnce(cardId: string): Promise<FlushResult> {
         );
         await removeMessage(cardId, message.id);
         delivered += 1;
+        await noteSender(cardId, message);
         logger.info(
           {
             audit: true, action: "card.message.delivered", card: card.worktreeSlug,
@@ -239,7 +249,7 @@ export async function queueMessage(cardId: string, text: string, by?: string): P
   const card = await getCard(cardId);
   if (!card) throw new Error("card not found");
 
-  const message = await appendMessage(cardId, body);
+  const message = await appendMessage(cardId, body, by);
   logger.info(
     {
       audit: true, action: "card.message.queued", card: card.worktreeSlug,
@@ -298,4 +308,27 @@ export function stopOutboxFlusher(): void {
 export function resetOutboxForTesting(): void {
   store.resetForTesting();
   flushLocks.clear();
+}
+
+/**
+ * Records WHO sent a message that just landed in the terminal.
+ *
+ * A message typed in the Terminal tab reaches Claude through tmux, so the transcript line carries no
+ * sender and the chat drew it unattributed — with two people on one card, one person's work read as
+ * the other's. This is the only moment the sender is still known AND the transcript line is about to
+ * exist: the chat matches attribution by text and timestamp, so recording at enqueue would fall
+ * outside the window whenever the queue did its job and held the message.
+ *
+ * Best-effort: losing this degrades a label, never a message.
+ */
+async function noteSender(cardId: string, message: OutboxMessage): Promise<void> {
+  if (!message.by) return;
+  try {
+    const user = await findUser(message.by);
+    if (!user) return;
+    void recordOrigin(cardId, message.text, {
+      kind: user.role === "owner" ? "owner" : "user",
+      name: user.username,
+    });
+  } catch { /* unattributed beats broken */ }
 }

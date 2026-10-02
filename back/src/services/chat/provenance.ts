@@ -64,7 +64,11 @@ function provenanceFile(cardId: string): string {
 
 /** The matching key: whitespace collapsed, exactly like the front's `normalizeMessage`. PURE. */
 export function normalizeProvenanceKey(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
+  // The plugin namespace of a leading slash command is dropped: Claude Code expands `/foo` into
+  // `/ns:foo` on its way into the transcript, and this key is what the chat matches a transcript
+  // line against. Without it, attribution silently missed for every slash command — the one kind of
+  // message most likely to be a real instruction.
+  return text.replace(/\s+/g, " ").trim().replace(/^\/[A-Za-z0-9_.-]+:([A-Za-z0-9_.-]+)/, "/$1");
 }
 
 /** In-memory tail per card: what the sync matcher consults. Loaded lazily, appended on record. */

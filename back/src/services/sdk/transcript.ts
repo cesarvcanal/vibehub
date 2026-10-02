@@ -102,6 +102,45 @@ export function chatEventToHistory(event: ChatEvent): HistoryEvent | null {
 }
 
 /**
+ * SLASH COMMANDS ARE REWRITTEN ON THE WAY TO THE TRANSCRIPT. Claude Code expands `/foo` into its
+ * plugin-qualified form `/superpowers:foo` before writing the line, so the echo that comes back from
+ * the file is not byte-for-byte what the person sent. Comparing text alone therefore failed to
+ * recognise the echo and the SAME message was drawn twice (production, 02/10/2026).
+ *
+ * The match is deliberately ASYMMETRIC rather than a canonical form on both sides. Collapsing the
+ * namespace everywhere would make `/a:cmd x` and `/b:cmd x` share one key, and because the dedupe
+ * set only answers yes/no, a genuinely different message would be DROPPED instead of shown — a lost
+ * message is worse than the duplicate this fixes. So:
+ *
+ *  - what was SENT registers an extra key only when it was typed BARE (`/foo …`);
+ *  - a TRANSCRIPT line looks up that extra key only when it arrives QUALIFIED (`/ns:foo …`).
+ *
+ * Two qualified forms never meet: `/a:cmd x` registers no alias, and `/b:cmd x` looks for one that
+ * was never registered. PURE.
+ */
+const BARE_SLASH = /^\/[A-Za-z0-9_.-]+(?:\s|$)/;
+const QUALIFIED_SLASH = /^\/[A-Za-z0-9_.-]+:([A-Za-z0-9_.-]+)/;
+const ALIAS = "~slash:";
+
+/** Keys to REGISTER for something that was sent (history line, driver stdout). PURE. */
+export function dedupeNoteKeys(event: Parameters<typeof replayDedupeKey>[0]): string[] {
+  const key = replayDedupeKey(event);
+  if (!key) return [];
+  const text = key.slice(key.indexOf(":") + 1);
+  return BARE_SLASH.test(text) ? [key, `${ALIAS}${key}`] : [key];
+}
+
+/** Keys to LOOK UP for a line read back from the transcript. PURE. */
+export function dedupeLookupKeys(event: Parameters<typeof replayDedupeKey>[0]): string[] {
+  const key = replayDedupeKey(event);
+  if (!key) return [];
+  const head = key.slice(0, key.indexOf(":") + 1);
+  const text = key.slice(key.indexOf(":") + 1);
+  if (!QUALIFIED_SLASH.test(text)) return [key];
+  return [key, `${ALIAS}${head}${text.replace(QUALIFIED_SLASH, "/$1")}`];
+}
+
+/**
  * The dedupe key of one replayable event: the tool id when there is one, else kind+text. Transcript
  * tool events are id'd `<line uuid>#<tool_use id>` while the driver emits the bare tool_use id —
  * the LAST `#` segment is the id the API minted, the same on both sides. PURE.
@@ -149,8 +188,9 @@ export function mergeTranscriptReplay(jsonl: string, history: HistoryEvent[]): H
   for (const event of history) {
     const tid = (event as { tid?: unknown }).tid;
     if (typeof tid === "string" && tid !== "") tids.add(tid);
-    const key = replayDedupeKey(event as HistoryEvent & { text?: string; id?: string });
-    if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+    for (const key of dedupeNoteKeys(event as HistoryEvent & { text?: string; id?: string })) {
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
   }
   const firstHistoryAt = history.find((e) => typeof e.at === "number" && e.at > 0)?.at ?? Number.POSITIVE_INFINITY;
 
@@ -160,13 +200,13 @@ export function mergeTranscriptReplay(jsonl: string, history: HistoryEvent[]): H
     const converted = chatEventToHistory(event);
     if (!converted) continue;
     if (converted.tid && tids.has(converted.tid)) continue;
-    const key = replayDedupeKey(converted as HistoryEvent & { text?: string; id?: string });
-    if (key) {
-      const left = counts.get(key) ?? 0;
-      if (left > 0) {
-        counts.set(key, left - 1);
-        continue;
-      }
+    const keys = dedupeLookupKeys(converted as HistoryEvent & { text?: string; id?: string });
+    const hit = keys.find((k) => (counts.get(k) ?? 0) > 0);
+    if (hit) {
+      // Every key of that ONE send goes down together — the exact one and its bare-slash alias are
+      // two names for the same message, and leaving the other behind would swallow the next real one.
+      for (const k of new Set([hit, ...keys])) counts.set(k, Math.max(0, (counts.get(k) ?? 0) - 1));
+      continue;
     }
     fromTranscript.push(converted.at !== undefined && converted.at >= firstHistoryAt ? { ...converted, source: "terminal" } : converted);
   }
