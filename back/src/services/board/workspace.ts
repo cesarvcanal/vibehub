@@ -223,16 +223,22 @@ export function buildIdentityScript(opts: {
   const name = assertGitName(identity.name);
   const email = assertGitEmail(identity.email);
   const file = ghTokenPath(cardId);
-  const git = `git -C ${shQuote(cwd)} config --local`;
+  const git = `git -C ${shQuote(cwd)} config --worktree`;
   const body = [
     "set -e",
     "umask 077",
     ...(token ? writeGhTokenLines(cardId, token) : removeGhTokenLines(cardId)),
+    // `--worktree`, NEVER `--local`. Every card of a project is a WORKTREE OF THE SAME CLONE, and
+    // worktrees SHARE `.git/config` — a `--local` write here would hand this person's identity to
+    // every other card of that project, including the ones somebody else is working. The scope only
+    // exists once the repository opts in, hence the extension flag first (idempotent, repo-wide).
+    `git -C ${shQuote(cwd)} config --local extensions.worktreeConfig true || true`,
     // `|| true`: the worktree may not exist yet on a card whose clone is still running. The open
     // applies the identity again right after the clone, so a miss here is never the last word.
     `${git} user.name ${shQuote(name)} || true`,
     `${git} user.email ${shQuote(email)} || true`,
-    // RESET first, then install ours — see the note above about helper order.
+    // RESET first, then install ours — see the note above about helper order. Worktree scope is read
+    // LAST (system -> global -> local -> worktree), so the reset here clears the whole list.
     `${git} credential.helper '' || true`,
     `${git} --add credential.helper ` +
       shQuote(`!f() { [ -s ${file} ] && echo username=x-access-token && echo "password=$(cat ${file})"; }; f`) +
