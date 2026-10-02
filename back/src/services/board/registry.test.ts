@@ -1264,6 +1264,34 @@ describe("board registry (persisted)", () => {
       await expect(reg.removeMcp(mcp.id)).rejects.toThrow(/MCP not found/);
     });
   });
+  it("stampCardActor: registra quem está trabalhando e diz quando MUDOU", async () => {
+    const p = await seedProject();
+    const card = await reg.createCard({ projectId: p.id, title: "um card" });
+    expect(card.actorUserId).toBeUndefined();
+
+    const first = await reg.stampCardActor(card.id, "u-cesar");
+    expect(first?.changed).toBe(true);
+    expect(first?.card.actorUserId).toBe("u-cesar");
+    expect(first?.card.actorAt).toBeGreaterThan(0);
+
+    // Mesmo ator de novo: nada mudou — o chamador pula a reaplicação no runner.
+    expect((await reg.stampCardActor(card.id, "u-cesar"))?.changed).toBe(false);
+
+    const switched = await reg.stampCardActor(card.id, "u-mussa");
+    expect(switched?.changed).toBe(true);
+    expect(switched?.card.actorUserId).toBe("u-mussa");
+    expect((await reg.getCard(card.id))!.actorUserId).toBe("u-mussa");
+    });
+
+  it("stampCardActor: card inexistente ou usuário vazio devolve null, nunca estoura", async () => {
+    const p = await seedProject();
+    const card = await reg.createCard({ projectId: p.id, title: "um card" });
+    expect(await reg.stampCardActor("nao-existe", "u1")).toBeNull();
+    expect(await reg.stampCardActor(card.id, "")).toBeNull();
+    expect((await reg.getCard(card.id))!.actorUserId).toBeUndefined();
+    });
+
+
   describe("GitHub connections", () => {
     async function connect(label: string, login: string) {
       return await reg.addGithubConnection({ label, login });
