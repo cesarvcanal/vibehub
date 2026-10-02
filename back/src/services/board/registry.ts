@@ -348,6 +348,14 @@ export interface Card {
    * card. Absent = nobody has typed here (or not since the field existed).
    */
   humanActiveAt?: number;
+  /**
+   * WHEN THE CARD WAS FINISHED — the moment it ENTERED `done` (epoch ms), cleared the moment it
+   * leaves. It exists because `updatedAt` cannot answer "done since when": a rename, an account
+   * switch or a model pin moves it, and the RETENTION SWEEP (services/board/retention.ts) deletes
+   * cards that have been done for six months. Absent on a card finished before this field existed
+   * — the sweep falls back to `updatedAt` there, which is the honest approximation.
+   */
+  doneAt?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -787,6 +795,14 @@ function normalizeColumns(cards: Card[], projectId: string, columns: BoardColumn
 /** Puts the card in the target column at the requested (clamped) position, renumbering both columns. */
 function placeCard(cards: Card[], card: Card, column: BoardColumn, position?: number): void {
   const from = card.column;
+  // The "done since" clock, stamped at the single funnel every column change goes through (the
+  // patch, the mirror rule, the pause). Only CROSSING the border counts: reordering inside `done`
+  // must not buy a finished card another six months, and leaving `done` throws the stamp away.
+  if (column === "done") {
+    if (from !== "done") card.doneAt = Date.now();
+  } else if (card.doneAt !== undefined) {
+    card.doneAt = undefined;
+  }
   card.column = column;
   const dest = cards
     .filter((c) => c.projectId === card.projectId && c.column === column && c.id !== card.id)
