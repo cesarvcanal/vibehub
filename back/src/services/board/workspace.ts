@@ -674,7 +674,9 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
     const identity = await cardIdentity(card, project);
     let ghToken: string | undefined;
     try {
-      if (identity.connectionId) ghToken = await tokenFor(identity.connectionId);
+      // Passed even when undefined: `tokenFor` owns the LAST resort ("the first connected account"),
+      // and routing that through here instead would be the same rule written twice.
+      ghToken = await tokenFor(identity.connectionId);
     } catch (e) {
       logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "GitHub connection token not resolved on open (ambient gh login)");
     }
@@ -1847,7 +1849,7 @@ export async function reapplyCardIdentity(cardId: string): Promise<void> {
   const identity = await cardIdentity(card, project);
   let token: string | undefined;
   try {
-    if (identity.connectionId) token = await tokenFor(identity.connectionId);
+    token = await tokenFor(identity.connectionId);
   } catch {
     /* no usable connection -> the token file is removed and the card falls back to ambient gh */
   }

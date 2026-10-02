@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { KeyRound, Plus, Trash2, UserPlus, X } from "lucide-react";
+import { GitBranch, KeyRound, Plus, Trash2, UserPlus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,7 +13,7 @@ import { apiErrorMessage } from "@/lib/apiError";
 import { useAuth } from "@/providers/auth";
 import { sharesKey } from "@/features/board/components/ShareDialog";
 import { PROJECTS_KEY, boardApi } from "@/features/board/api";
-import type { Role, Share, ShareLevel, SharesResponse, User, UsersResponse } from "@/api/types";
+import type { GithubState, Role, Share, ShareLevel, SharesResponse, User, UserGit, UsersResponse } from "@/api/types";
 import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
 import { t as translate, useT } from "@/i18n";
 
@@ -36,6 +36,13 @@ export interface AccessDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
+/** The patch shape: null CLEARS a field (back to inheriting), which an empty input means. */
+interface NullableGit {
+  githubConnectionId: string | null;
+  gitName: string | null;
+  gitEmail: string | null;
+}
+
 export function AccessDialog({ open, onOpenChange }: AccessDialogProps) {
   const t = useT();
   const qc = useQueryClient();
@@ -53,6 +60,17 @@ export function AccessDialog({ open, onOpenChange }: AccessDialogProps) {
   /** Which user's password is being reset right now (the row with the field open), and to what. */
   const [resetting, setResetting] = React.useState<string | null>(null);
   const [resetPassword, setResetPassword] = React.useState("");
+  /** Which row has its GitHub identity open for editing, and the values being typed into it. */
+  const [editingGit, setEditingGit] = React.useState<string | null>(null);
+  const [gitDraft, setGitDraft] = React.useState<UserGit>({});
+
+  // The accounts a person can be pointed at — the same list the project picker reads.
+  const github = useQuery({
+    queryKey: ["github"] as const,
+    queryFn: () => get<GithubState>("/github"),
+    enabled: open && isOwner,
+  });
+  const connections = github.data?.connections ?? [];
 
   const create = useMutation({
     mutationFn: (body: { username: string; password: string; role: Role }) =>
@@ -68,11 +86,12 @@ export function AccessDialog({ open, onOpenChange }: AccessDialogProps) {
   });
 
   const update = useMutation({
-    mutationFn: ({ id, ...body }: { id: string; password?: string; role?: Role }) =>
+    mutationFn: ({ id, ...body }: { id: string; password?: string; role?: Role } & Partial<NullableGit>) =>
       patch<{ user: User }>(`/users/${encodeURIComponent(id)}`, body),
     onSuccess: () => {
       setResetting(null);
       setResetPassword("");
+      setEditingGit(null);
       void qc.invalidateQueries({ queryKey: USERS_KEY });
       toast.success(translate("access.updated"));
     },
@@ -134,6 +153,20 @@ export function AccessDialog({ open, onOpenChange }: AccessDialogProps) {
                           type="button"
                           variant="ghost"
                           size="sm"
+                          title={t("access.gitSection")}
+                          aria-label={t("access.gitSectionFor", { name: u.username })}
+                          data-testid={`user-git-open-${u.id}`}
+                          onClick={() => {
+                            setGitDraft(u.git ?? {});
+                            setEditingGit(editingGit === u.id ? null : u.id);
+                          }}
+                        >
+                          <GitBranch className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
                           title={t("access.resetPassword")}
                           aria-label={t("access.resetPasswordFor", { name: u.username })}
                           onClick={() => {
@@ -161,6 +194,58 @@ export function AccessDialog({ open, onOpenChange }: AccessDialogProps) {
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
+                      {editingGit === u.id ? (
+                        <form
+                          className="mt-2 space-y-2 rounded-md bg-muted/40 p-2"
+                          data-testid={`user-git-form-${u.id}`}
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            // Empty means INHERIT, so empty travels as null (clear) and not as "".
+                            update.mutate({
+                              id: u.id,
+                              githubConnectionId: gitDraft.githubConnectionId || null,
+                              gitName: gitDraft.gitName?.trim() || null,
+                              gitEmail: gitDraft.gitEmail?.trim() || null,
+                            });
+                          }}
+                        >
+                          <p className="text-[11px] text-muted-foreground">{t("access.gitHint")}</p>
+                          <select
+                            aria-label={t("access.gitConnection")}
+                            data-testid={`user-git-connection-${u.id}`}
+                            className={`${SELECT_CLASS} w-full`}
+                            value={gitDraft.githubConnectionId ?? ""}
+                            onChange={(e) => setGitDraft((d) => ({ ...d, githubConnectionId: e.target.value }))}
+                          >
+                            <option value="">{t("access.gitConnectionInherit")}</option>
+                            {connections.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.label}{c.login ? ` (${c.login})` : ""}
+                              </option>
+                            ))}
+                          </select>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Input
+                              aria-label={t("access.gitName")}
+                              placeholder={t("access.gitName")}
+                              data-testid={`user-git-name-${u.id}`}
+                              value={gitDraft.gitName ?? ""}
+                              onChange={(e) => setGitDraft((d) => ({ ...d, gitName: e.target.value }))}
+                            />
+                            <Input
+                              type="email"
+                              aria-label={t("access.gitEmail")}
+                              placeholder={t("access.gitEmail")}
+                              data-testid={`user-git-email-${u.id}`}
+                              value={gitDraft.gitEmail ?? ""}
+                              onChange={(e) => setGitDraft((d) => ({ ...d, gitEmail: e.target.value }))}
+                            />
+                            <Button type="submit" size="sm" disabled={update.isPending} data-testid={`user-git-save-${u.id}`}>
+                              {t("common.save")}
+                            </Button>
+                          </div>
+                        </form>
+                      ) : null}
                       {resetting === u.id ? (
                         <form
                           className="mt-2 flex items-center gap-2"
