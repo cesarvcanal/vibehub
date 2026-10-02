@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { requireOwner, requireSession, sessionUserId, clearSessionCookie } from "../auth/session.js";
 import { getUserGit, setUserGit, removeUserGit, type UserGitIdentity } from "../auth/userGit.js";
 import { listGithubConnections } from "../services/board/registry.js";
+import { reapplyIdentityForUser } from "../services/board/workspace.js";
 import { createUser, listUsers, changePassword, removeUser, setRole, assertRole } from "../auth/users.js";
 import { removeSharesForUser } from "../services/board/registry.js";
 import { logger } from "../utils/logger.js";
@@ -49,7 +50,11 @@ async function applyGitPatch(
       throw new Error(`GitHub connection '${githubConnectionId}' does not exist`);
     }
   }
-  return { touched: true, identity: await setUserGit(userId, { githubConnectionId, gitName, gitEmail }) };
+  const identity = await setUserGit(userId, { githubConnectionId, gitName, gitEmail });
+  // The cards this person is ALREADY working pick it up now, not on their next open. Fire and
+  // forget: a wedged runner must not fail the save the screen is waiting on.
+  void reapplyIdentityForUser(userId).catch(() => undefined);
+  return { touched: true, identity };
 }
 
 export async function usersRoutes(app: FastifyInstance): Promise<void> {
