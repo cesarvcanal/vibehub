@@ -1851,6 +1851,27 @@ async function applyIdentity(
  * Only for cards that HAVE been opened: one that never was gets its identity from the open itself.
  * Best-effort and fire-and-forget by design — the next open applies it again anyway.
  */
+/**
+ * Re-applies the identity of EVERY OPEN CARD this person is working — called when their identity
+ * itself changes (the owner bound their GitHub account, they rotated their own token).
+ *
+ * Without this the binding only reached a card the next time it was OPENED: the per-card write
+ * happens on open and on actor CHANGE, and the person who just got an identity is usually already
+ * the actor of the card they are sitting in. So the owner saved, the screen said saved, and the next
+ * commit still came out as the install's default — exactly what happened in production right after
+ * the feature shipped.
+ *
+ * Best-effort and parallel: one unreachable card must not hold up the others, and the next open
+ * applies it anyway. Returns how many cards were touched, for the audit line.
+ */
+export async function reapplyIdentityForUser(userId: string): Promise<number> {
+  const id = String(userId ?? "");
+  if (!id) return 0;
+  const cards = (await listAllCards()).filter((c) => c.actorUserId === id && c.openedAt);
+  await Promise.all(cards.map((c) => reapplyCardIdentity(c.id)));
+  return cards.length;
+}
+
 export async function reapplyCardIdentity(cardId: string): Promise<void> {
   const card = await getCard(cardId);
   if (!card || !card.openedAt) return;

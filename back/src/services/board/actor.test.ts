@@ -19,7 +19,12 @@ async function load() {
   vi.resetModules();
   const env = await import("../../config/env.js");
   env.config.dataDir = dir;
-  vi.doMock("./workspace.js", () => ({ reapplyCardIdentity: reapply }));
+  // O módulo REAL, com só o reapply por card trocado: o teste de propagação chama
+  // `reapplyIdentityForUser` de verdade e precisa que ele exista.
+  vi.doMock("./workspace.js", async () => {
+    const actual = await vi.importActual<typeof import("./workspace.js")>("./workspace.js");
+    return { ...actual, reapplyCardIdentity: reapply };
+  });
   const registry = await import("./registry.js");
   registry.resetForTesting();
   const { recordCardActor, authorsTheTurn } = await import("./actor.js");
@@ -150,5 +155,30 @@ describe("authorsTheTurn (pura) — que frame do chat é um pedido de trabalho",
     expect(authorsTheTurn("")).toBe(false);
     expect(authorsTheTurn("   ")).toBe(false);
     expect(authorsTheTurn('{"type":"weird"}')).toBe(false);
+  });
+});
+
+describe("vincular identidade alcança os cards já abertos", () => {
+  it("salvar a identidade de alguém reaplica nos cards em que essa pessoa é o ator", async () => {
+    const { registry } = await load();
+    const workspace = await import("./workspace.js");
+    const project = await registry.createProject({ name: "widgets" });
+
+    const aberto = await registry.createCard({ projectId: project.id, title: "aberto" });
+    const outro = await registry.createCard({ projectId: project.id, title: "de outra pessoa" });
+    const nuncaAberto = await registry.createCard({ projectId: project.id, title: "nunca aberto" });
+    await registry.applyOpenTerminal(aberto.id);
+    await registry.applyOpenTerminal(outro.id);
+    await registry.stampCardActor(aberto.id, "u-mussa");
+    await registry.stampCardActor(outro.id, "u-cesar");
+    await registry.stampCardActor(nuncaAberto.id, "u-mussa");
+
+    // O BUG: a identidade só era escrita na ABERTURA ou na troca de ator, e quem acabou de ganhar
+    // identidade JÁ É o ator do card em que está sentado. O dono salvava, a tela dizia salvo, e o
+    // commit seguinte continuava saindo com o padrão da instalação.
+    expect(await workspace.reapplyIdentityForUser("u-mussa")).toBe(1);
+    expect(await workspace.reapplyIdentityForUser("u-cesar")).toBe(1);
+    expect(await workspace.reapplyIdentityForUser("u-ninguem")).toBe(0);
+    expect(await workspace.reapplyIdentityForUser("")).toBe(0);
   });
 });
