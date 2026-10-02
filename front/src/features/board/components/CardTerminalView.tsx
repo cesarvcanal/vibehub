@@ -428,7 +428,14 @@ export function CardTerminalView({
   // Claude EXITED and left a bare shell (server probed the tree). The card still looks "open", so
   // without this it is a mute terminal that silently queues whatever you type — J. The banner turns
   // that into "Claude parou — Reiniciar".
-  const stopped = session?.situation === "stopped";
+  //
+  // Only where the bare shell is the thing being TYPED INTO, though (produção, 2026-10-02): the
+  // native chat talks to a driver that is a child of the back, not to this pane, and its next
+  // message spawns one and resumes the same conversation. On that screen the banner was a false
+  // alarm hanging over a session that was answering normally — so in the native chat it is not
+  // drawn. The Terminal tab (and the classic chat, which really does type into the pane) keeps it.
+  const typesIntoThePane = mode === "terminal" || !features.data?.sdkChat;
+  const stopped = session?.situation === "stopped" && typesIntoThePane;
   const hasLiveSession = Boolean(card?.openedAt && !card.pausedAt);
   const canFinish = Boolean(card && card.column !== "done");
   const showTerminal = instant || openMutation.isSuccess;

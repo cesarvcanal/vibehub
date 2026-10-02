@@ -21,6 +21,7 @@ async function load() {
     registry: await import("../board/registry.js"),
     provenance: await import("../chat/provenance.js"),
     history: await import("../sdk/history.js"),
+    agentState: await import("../board/agentState.js"),
   };
 }
 
@@ -551,7 +552,7 @@ describe("session introspection", () => {
   it("a live card whose Claude EXITED to a bare shell reads as 'stopped' (J: 'Claude parou')", async () => {
     // The registry still calls this card 'waiting' (openedAt set, not paused); only a live probe
     // knows Claude is gone and the pane is a bare shell. sessionInfo runs it: transcript first, then
-    // the probe.
+    // the probe. CLASSIC chat: the conversation really is the tmux one, so the pane is the truth.
     const { maestro, registry } = await load();
     const p = await registry.createProject({ name: "billing" });
     const c = await registry.createCard({ projectId: p.id, title: "claude left" });
@@ -582,6 +583,40 @@ describe("session introspection", () => {
       .mockResolvedValueOnce({ stdout: "", stderr: "" }) // transcript
       .mockResolvedValueOnce({ stdout: "bash\nclaude\n", stderr: "" }); // probe: claude is there
     expect((await maestro.sessionInfo(c.id)).situation).toBe("waiting");
+  });
+
+  // ---- the native chat (SDK driver): its claude is NOT in the tmux tree ----
+
+  it("a driver with a turn in flight reads as 'working', even with the status hooks unreachable", async () => {
+    const { maestro, registry, agentState } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "busy" });
+    await registry.applyOpenTerminal(c.id);
+    const off = agentState.onCardDriverProbe((cardId) => (cardId === c.id ? "turn" : "none"));
+    try {
+      runScript.mockResolvedValueOnce({ stdout: "", stderr: "" });
+      expect((await maestro.sessionInfo(c.id)).situation).toBe("working");
+    } finally {
+      off();
+    }
+  });
+
+  it("a live driver at its prompt is 'waiting' — never the bare-shell verdict", async () => {
+    // Produção, 2026-10-02: the native chat's claude is a child of the BACK, invisible to the tmux
+    // probe — which read the bare pane under it as "Claude exited" and hung the "Claude parou"
+    // banner over a session that was answering normally. A card being driven is being driven.
+    const { maestro, registry, agentState } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "idle driver" });
+    await registry.applyOpenTerminal(c.id);
+    const off = agentState.onCardDriverProbe(() => "idle" as const);
+    try {
+      runScript.mockResolvedValueOnce({ stdout: "", stderr: "" });
+      expect((await maestro.sessionInfo(c.id)).situation).toBe("waiting");
+      expect(runScript).toHaveBeenCalledOnce();
+    } finally {
+      off();
+    }
   });
 });
 

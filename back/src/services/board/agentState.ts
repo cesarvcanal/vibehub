@@ -133,3 +133,48 @@ export async function cardAwaitingChoice(
     return false;
   }
 }
+
+/* ------------------------------------------------- the NATIVE CHAT's agent (the SDK driver) */
+
+/**
+ * What a card's NATIVE CHAT driver is doing, as the backend already knows it in memory: `turn` = a
+ * turn is in flight, `idle` = the driver is up and at the prompt, `none` = no driver right now.
+ *
+ * Why this exists (produção, 2026-10-02 — "Claude parou" com o Claude respondendo): the probe above
+ * walks the TMUX pane tree, and the native chat's claude is NOT in it — it is a child of the BACK
+ * (docker exec, see services/sdk/driver.ts). A card whose conversation lives in the chat therefore
+ * reads as "only shells in the tree" = Claude exited, and the chat hung a "Claude parou — Reiniciar"
+ * banner over a session that was answering normally. The tmux probe cannot see this agent; this can.
+ *
+ * REGISTERED, not imported — same rule (and the same cycle) as `onCardInUseProbe` in workspace.ts:
+ * the sdk manager imports the board, so the board must never import the sdk manager.
+ */
+export type DriverActivity = "turn" | "idle" | "none";
+
+type DriverProbe = (cardId: string) => DriverActivity;
+const driverProbes = new Set<DriverProbe>();
+
+/** Register the probe that answers for the native chat's driver. Returns the unsubscribe. */
+export function onCardDriverProbe(probe: DriverProbe): () => void {
+  driverProbes.add(probe);
+  return () => driverProbes.delete(probe);
+}
+
+/**
+ * What the card's driver is doing. With no probe registered (sdk layer not loaded, or a test that
+ * only exercises tmux) the answer is `none` — the caller then falls back to the tmux probe exactly
+ * as before. A probe that throws is ignored, never fatal: this decides a label on a header.
+ */
+export function cardDriverActivity(cardId: string): DriverActivity {
+  let best: DriverActivity = "none";
+  for (const probe of driverProbes) {
+    try {
+      const activity = probe(cardId);
+      if (activity === "turn") return "turn";
+      if (activity === "idle") best = "idle";
+    } catch {
+      /* a broken probe must not break the session view */
+    }
+  }
+  return best;
+}
