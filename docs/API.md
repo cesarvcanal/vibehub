@@ -41,9 +41,11 @@ an install with no owner is an install nobody can administer.
 
 | Method | Path | Body / notes |
 |---|---|---|
-| GET | `/api/users` | `{ users: [{ id, username, role, createdAt }] }` — never a hash or a salt |
+| GET | `/api/users` | `{ users: [{ id, username, role, createdAt, git? }] }` — never a hash or a salt |
 | POST | `/api/users` | `{ username, password, role? }` → `{ user }`; `role` defaults to `"member"` |
-| PATCH | `/api/users/:id` | `{ password?, role? }` → `{ user }` — reset a password, change a role, or both |
+| PATCH | `/api/users/:id` | `{ password?, role?, githubConnectionId?, gitName?, gitEmail? }` → `{ user, git? }`. The last three are that person's git identity; `null` CLEARS one (back to inheriting), an absent field is untouched. A `githubConnectionId` that does not exist is a 400 |
+| GET | `/api/me/git` | `{ git? }` — my own git identity. Any session, not just the owner's |
+| PATCH | `/api/me/git` | `{ githubConnectionId?, gitName?, gitEmail? }` → `{ git }`. The same write as above, for MYSELF: a PAT expires, and rotating it must not be the owner's task. `role`/`password` are ignored here — those stay the owner's |
 | DELETE | `/api/users/:id` | `{ ok: true, user }`; removing YOURSELF also clears your session cookie |
 
 ## Settings

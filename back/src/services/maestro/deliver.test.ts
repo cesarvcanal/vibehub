@@ -164,3 +164,48 @@ describe("deliver orchestration", () => {
     expect(scripts().some((s) => s.includes("--base 'main'"))).toBe(true);
   });
 });
+
+describe("deliver sobe na conta de QUEM trabalhou o card", () => {
+  it("o PR usa a conexão do ATOR, não a do projeto", async () => {
+    const { deliver, registry } = await load();
+    const { addGithubConnection } = registry;
+    const cesar = await addGithubConnection({ label: "pessoal", login: "cesarvcanal" });
+    const mussa = await addGithubConnection({ label: "mussa", login: "wellesley-mussolini" });
+    const p = await registry.createProject({ name: "billing", githubConnectionId: cesar.id });
+    const card = await registry.createCard({ projectId: p.id, title: "the fix" });
+
+    const { setUserGit } = await import("../../auth/userGit.js");
+    await setUserGit("u-mussa", {
+      githubConnectionId: mussa.id, gitName: "wellesley-mussolini", gitEmail: "xerif.off@gmail.com",
+    });
+    await registry.stampCardActor(card.id, "u-mussa");
+
+    wire();
+    await deliver.deliver(card.id, { branch: "dev" });
+    expect(tokenFor).toHaveBeenCalledWith(mussa.id);
+    expect(tokenFor).not.toHaveBeenCalledWith(cesar.id);
+  });
+
+  it("card sem ator mantém o comportamento de sempre: a conexão do projeto", async () => {
+    const { deliver, registry } = await load();
+    const cesar = await registry.addGithubConnection({ label: "pessoal", login: "cesarvcanal" });
+    const p = await registry.createProject({ name: "billing", githubConnectionId: cesar.id });
+    const card = await registry.createCard({ projectId: p.id, title: "the fix" });
+
+    wire();
+    await deliver.deliver(card.id, { branch: "dev" });
+    expect(tokenFor).toHaveBeenCalledWith(cesar.id);
+  });
+
+  it("ator SEM identidade própria também cai na conexão do projeto", async () => {
+    const { deliver, registry } = await load();
+    const cesar = await registry.addGithubConnection({ label: "pessoal", login: "cesarvcanal" });
+    const p = await registry.createProject({ name: "billing", githubConnectionId: cesar.id });
+    const card = await registry.createCard({ projectId: p.id, title: "the fix" });
+    await registry.stampCardActor(card.id, "u-sem-nada");
+
+    wire();
+    await deliver.deliver(card.id, { branch: "dev" });
+    expect(tokenFor).toHaveBeenCalledWith(cesar.id);
+  });
+});

@@ -19,8 +19,8 @@ Resultado prático: o Mussa trabalha, e o gráfico de contribuição do César c
 
 ## Objetivo
 
-Cada pessoa commita e empurra como ela mesma, no mesmo card, sem reiniciar sessão — e só vê projetos
-cujo repositório ela de fato alcança no GitHub.
+Cada pessoa commita e empurra como ela mesma, no mesmo card, sem reiniciar sessão. Nada é tirado do
+César: quem trabalha nos repositórios dele continua vendo e usando tudo igual — só a autoria muda.
 
 ### Critérios de sucesso
 
@@ -28,15 +28,16 @@ cujo repositório ela de fato alcança no GitHub.
   com o token do Mussa. O César volta, digita, e a identidade volta pra ele. **Sem matar a sessão.**
 - Um usuário sem identidade própria se comporta exatamente como hoje (conexão do projeto →
   `settings.git`). Nada que funciona hoje muda de comportamento.
-- Um membro não vê projeto cujo repositório seu PAT não alcança, mesmo que esteja compartilhado.
-- Queda da API do GitHub não apaga o board de ninguém.
+- O Mussa, logado como `mussa`, troca o próprio PAT sem depender do César.
 
 ### Fora de escopo
 
-- Tela de autoatendimento pra pessoa cadastrar o próprio PAT (decisão do César: o cadastro fica na
-  tela de usuários que o owner já usa).
-- Trocar o modelo de compartilhamento do vibehub pelo do GitHub. O acesso do GitHub **filtra**, não
-  **concede** — ver "Decisões".
+- **Filtrar os projetos pelo acesso no GitHub** — era a seção F e foi CORTADA em 02/10/2026 a pedido
+  do Mussa: "eu não vou ver meus repositórios nem nada, a conta vai continuar pegando os repositórios
+  tudo do César". Ele quer só a autoria. O registro de por que o filtro seria um filtro, e não uma
+  concessão, fica no histórico deste arquivo caso a ideia volte.
+- Trocar o modelo de compartilhamento do vibehub. Quem vê o quê continua decidido pelos
+  compartilhamentos do owner, exatamente como hoje.
 
 ## Decisões tomadas no briefing
 
@@ -44,21 +45,17 @@ cujo repositório ela de fato alcança no GitHub.
 |---|---|
 | Senha mínima | Fica em 8+ (`assertPassword` intocado). O `54321` pedido não entra. |
 | Escopo da identidade | Token de push **e** nome/e-mail do commit. |
-| Cadastro do PAT | Sem tela nova: a lista de usuários do owner ganha o vínculo. O PAT é colado pelo dono dele na tela de GitHub que já existe — token não passa por chat. |
+| Cadastro do PAT | Duas portas: o owner configura a de qualquer um na lista de usuários, e cada pessoa configura a sua. Sem autoatendimento, toda rotação de token do Mussa viraria tarefa do César. O PAT é colado na tela de Contas do GitHub — token não passa por chat. |
 | Precedência | Identidade do **ator** do card → conexão do projeto → `settings.git`. |
 | Quem é o ator | Quem mexeu por último no card (abrir, anexar terminal, mandar prompt). |
-| Acesso GitHub | **Filtra** o que já foi compartilhado. Não concede acesso por si. |
-| GitHub indisponível | Mostra (último resultado em cache) com aviso. Fail-open. |
+| Acesso GitHub | Não entra na visibilidade. Cortado do escopo (ver "Fora de escopo"). |
 
-### Por que filtrar e não conceder
+### Por que o cadastro do PAT tem duas portas
 
-O runner é **um container compartilhado por todos os cards**. De dentro do terminal de qualquer card
-se lê `/root/.vibehub/gh/*.token` (o token GitHub de todos os outros cards), os tokens OAuth das
-contas Claude em `/root/.claude-profiles/` e as worktrees dos outros projetos em `/work`. Hoje isso é
-aceitável porque entrar num card é um ato deliberado do owner. Se o convite num repositório
-concedesse acesso sozinho, ser colaborador de **um** repo passaria a dar, na prática, a credencial de
-todos. O filtro entrega o que foi pedido (não ver projeto de repo que você não alcança) sem essa
-troca.
+O PAT é da pessoa e vence. Se só o owner pudesse gravá-lo, toda rotação de token do Mussa seria uma
+tarefa do César — e o jeito de contornar isso seria o Mussa mandar o token pra ele, que é exatamente
+o que não se quer. `PATCH /api/users/:id` (owner, qualquer um) e `PATCH /api/me/git` (cada um, o seu)
+são a mesma gravação com dono diferente. Papel e senha seguem só do owner.
 
 ## Desenho
 
@@ -163,54 +160,25 @@ sozinha.
 Fica registrado como pendência do César, não como escopo: se ele quiser a etiqueta **também** nas
 próprias mensagens, é mudar `originRole`.
 
-### F. Visibilidade filtrada pelo GitHub
-
-Checagem de acesso: `GET /repos/{owner}/{repo}` com o PAT da pessoa — 200 = alcança, 404 = não
-alcança. Uma chamada por projeto, não a listagem paginada de repos.
-
-Cache em memória, chave `${connectionId}:${repoFullName}`:
-
-```ts
-interface RepoAccessEntry { ok: boolean; at: number }   // TTL 5 min
-```
-
-Fail-open, como decidido: erro de rede/401/403 **não** vira "não alcança" — devolve a última entrada
-conhecida; sem nenhuma, devolve `ok: true` com `stale: true`, e o front mostra o aviso de "não deu
-pra conferir no GitHub". Só o **404 explícito** esconde.
-
-Aplicado em `back/src/auth/access.ts`, nos cinco pontos, não só nas listas — esconder o projeto da
-lista e deixar a URL direta funcionando seria uma falsa trava: `canAccessProject`, `cardLevel`,
-`canAccessCard`, `visibleProjects`, `visibleCards`.
-
-Regras:
-- **Owner não é filtrado.** A instalação é dele.
-- **Membro sem identidade GitHub própria não é filtrado** — nada a checar, comportamento de hoje.
-- **Projeto sem repositório** (`repoFullName` ausente, projeto scratch): nada a checar, visível.
-
 ## Testes
 
 Unitário, nas partes puras:
 - `resolveIdentity` — campo por campo: ator completo, ator só com conexão, ator só com nome, ator
   vazio, projeto sem conexão.
 - O script de aplicação (`git config` + helper) — inclusive que ele zera a lista de helpers antes.
-- `pickRepoAccess` sobre o cache — fresco, vencido, 404, erro de rede com e sem entrada anterior.
+- A validação de nome/e-mail que vai pra dentro de script bash.
 
 Integração, nas rotas:
 - Estampa de ator nos quatro pontos, e **não** estampa em acesso `view`.
 - O caso do briefing, ponta a ponta: card aberto pelo César → Mussa manda prompt → a worktree fica
   com `user.email` do Mussa e o arquivo de token com o PAT do Mussa; o César digita → volta.
 - `deliver` abre o PR na conta do ator, não na do projeto.
-- Visibilidade: membro com PAT que não alcança o repo não vê o projeto nem na lista nem pela URL
-  direta; GitHub fora do ar mantém a lista com `stale`.
+- Autoatendimento: o membro grava a PRÓPRIA identidade e não a de outro; e não consegue mudar papel
+  nem senha de ninguém por essa rota.
 
 ## Entrega
 
-**Dois PRs**, porque são duas unidades lógicas e a regra da casa é PR pequeno e específico:
-
-1. **Identidade por usuário** (seções A–D): o que resolve o commit/push sair na pessoa certa. Entrega
-   valor sozinho.
-2. **Filtro de visibilidade pelo GitHub** (seção F): depende de (1) só porque reusa a identidade
-   GitHub do usuário. Separado, dá pra reverter sem desfazer a identidade.
+**Um PR** — com a seção F cortada, sobrou uma unidade lógica só.
 
 Branch `card/mussa-user-vibehub-6930` → PR pra `main`, merge commit. Commits atômicos, como
 César Canal.

@@ -270,6 +270,18 @@ is `requireCardWork`.
 - The **GitHub token** is handed to `git clone/fetch` per command as an environment-scoped http
   header. It never lands in `/work/<repo>/.git/config`, which the agent can read — and the agent
   processes untrusted repository content with network egress.
+- **Whose** token and whose commit author: resolved field by field as **card actor → project →
+  install** (`services/github/identity.ts`). The actor is whoever touched the card last at `work`
+  level (`services/board/actor.ts`); a card with no actor resolves exactly as it did before actors
+  existed. So two people sharing a card each commit as themselves.
+- That identity is applied **per worktree** and READ AT CALL TIME, never exported into the session:
+  `GH_TOKEN` is exported once when the tmux session is born, so rewriting the card's token file
+  would not reach a session somebody else opened — the push would silently go out as the previous
+  person. Instead the commit author is `--local` git config in the worktree, the credential helper
+  `cat`s the card's token file on every git call (with the helper list RESET first, or the global
+  `gh auth git-credential` answers earlier with the stale token), and a `gh` shim in `/root/.bashrc`
+  re-exports `GH_TOKEN` from that file before delegating. Switching actor is two `git config` calls
+  and one file write — no session restart, no lost conversation.
 - The **runner service token** is written host-side into the `/root` bind mount at mode 600, so it
   survives a container recreate, and the status hook reads it from disk at call time rather than
   having it baked into `settings.json`.
