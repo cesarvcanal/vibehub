@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SecretInput } from "@/components/ui/secret-input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { patch } from "@/lib/api";
@@ -507,7 +508,9 @@ function GithubConnectBox({
           github.com/settings/tokens
         </a>
       </p>
-      <Input
+      <SecretInput
+        name="vibehub-github-account-label"
+        type="text"
         aria-label={t("github.accountName")}
         value={label}
         onChange={(e) => setLabel(e.target.value)}
@@ -518,12 +521,11 @@ function GithubConnectBox({
           }
         }}
         placeholder={t("github.accountNamePlaceholder")}
-        autoComplete="off"
         maxLength={40}
       />
-      <Input
+      <SecretInput
+        name="vibehub-github-token"
         aria-label={t("github.accessToken")}
-        type="password"
         value={token}
         onChange={(e) => setToken(e.target.value)}
         onKeyDown={(e) => {

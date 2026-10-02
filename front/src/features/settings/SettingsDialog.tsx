@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SecretInput } from "@/components/ui/secret-input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -434,21 +435,25 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
           <div className="space-y-2 rounded-md border border-dashed border-border/60 p-3">
             <p className="text-xs font-medium">{t("settings.addAccount")}</p>
-            <Input
+            {/* SecretInput on BOTH: the label sits right above a password field, which is exactly
+                what a password manager fills as the username (it arrived as "cesar" in production). */}
+            <SecretInput
+              name="vibehub-github-account-label"
+              type="text"
               aria-label={t("settings.accountLabel")}
+              data-testid="github-account-label"
               value={githubLabel}
               onChange={(e) => setGithubLabel(e.target.value)}
               placeholder={t("settings.accountLabelPlaceholder")}
-              autoComplete="off"
               maxLength={40}
             />
-            <Input
+            <SecretInput
+              name="vibehub-github-token"
               aria-label={t("settings.githubToken")}
-              type="password"
+              data-testid="github-account-token"
               value={githubToken}
               onChange={(e) => setGithubToken(e.target.value)}
               placeholder={t("github.tokenPlaceholder")}
-              autoComplete="off"
               className="font-mono"
             />
             <div className="flex justify-end">
