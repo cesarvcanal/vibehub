@@ -453,7 +453,6 @@ export const ptBR: Record<string, string> = {
 
   /* ------------------------------------------------------ chat nativo (SDK) */
   "sdk.undelivered": "não entregue ao servidor",
-  "sdk.absorbed": "entrou no turno em andamento",
   "sdk.queueTitle.one": "1 mensagem esperando",
   "sdk.queueTitle.other": "{n} mensagens esperando",
   "sdk.queueHint": "vai no primeiro respiro do Claude",
@@ -523,6 +522,15 @@ export const ptBR: Record<string, string> = {
   "sdk.note.workingLong": "turno longo, ainda trabalhando",
   "sdk.workingWith": "{elapsed} · {note}",
   "sdk.workingWithEffort": "{elapsed} · {note} com {effort}",
+  "sdk.workflowFallbackName": "Workflow",
+  "sdk.workflowAgents": "{done}/{total} agentes",
+  "sdk.workflowRunning": "rodando",
+  "sdk.workflowDone": "concluído",
+  "sdk.workflowPlan": "Plano:",
+  "sdk.workflowStarting": "subindo a frota…",
+  "sdk.workflowAgentUnnamed": "subagente",
+  "sdk.workflowAgentWorking": "ainda trabalhando — o que ele devolver aparece aqui.",
+  "sdk.workflowNoResult": "terminou sem devolver nada.",
   "sdk.toolBackground": "Rodando em segundo plano",
   "sdk.activityAria": "Ir para o que está rodando agora",
   "sdk.effortHigh": "esforço alto",

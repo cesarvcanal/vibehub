@@ -6,7 +6,7 @@ import {
   type Card, type Project, type BoardColumn, type CardStatus, type DeclaredState,
 } from "../board/registry.js";
 import { cardWorkPaths } from "../board/workspace.js";
-import { cardAgentState, cardAwaitingChoice } from "../board/agentState.js";
+import { cardAgentState, cardAwaitingChoice, cardDriverActivity } from "../board/agentState.js";
 import { profileDirFor } from "../accounts/profiles.js";
 import { seedDestDir } from "../import/import.js";
 import { recordOrigin, type MessageOrigin } from "../chat/provenance.js";
@@ -611,11 +611,25 @@ export async function sessionInfo(cardId: string): Promise<SessionInfo> {
   // what confused people. A probe turns it into "stopped" (the chat shows "Claude parou — Reiniciar")
   // or "no session" when the runner lost the session entirely. Only "waiting" is refined, so working/
   // paused/done never pay for the probe.
+  //
+  // WHO the probe may speak for, though, is the native chat's undoing (produção, 2026-10-02): the
+  // conversation's claude is a child of the BACK, not of the tmux pane — the pane under it is a bare
+  // `bash`, which the probe reads as "Claude exited". The chat then hung a "Claude parou —
+  // Reiniciar" banner over a session that was answering normally. So the DRIVER is asked first (free,
+  // in memory) and the tmux probe only speaks when there is no driver to speak for the card. The
+  // banner itself is the Terminal's (and the classic chat's) business — that is decided on screen,
+  // where it is known which pane the person is looking at.
   let situation = terminalSituation(card);
   if (situation === "waiting") {
-    const agent = await cardAgentState(card);
-    if (agent === "shell") situation = "stopped";
-    else if (agent === "none") situation = "no session";
+    const driver = cardDriverActivity(card.id);
+    // A turn in flight is the one thing the registry cannot know with the status hooks unreachable
+    // (they POST from the runner) — and it is what the chat header's "trabalhando" is made of.
+    if (driver === "turn") situation = "working";
+    else if (driver === "none") {
+      const agent = await cardAgentState(card);
+      if (agent === "shell") situation = "stopped";
+      else if (agent === "none") situation = "no session";
+    }
   }
   return {
     model,

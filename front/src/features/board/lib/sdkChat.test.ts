@@ -13,6 +13,8 @@ import {
   markInterruptRequested,
   markUserEdited,
   parseSdkFrame,
+  formatAgentResult,
+  parseWorkflowScriptMeta,
   toolHeadline,
   turnHasRoomForMore,
   toolSummary,
@@ -481,7 +483,7 @@ describe("mensagem editada (supersede)", () => {
 });
 
 describe("mensagem no meio do turno (turn_absorbed — streaming input)", () => {
-  it("labels the LAST user row as absorbed (entrou no turno em andamento)", () => {
+  it("marks the LAST user row as absorbed — bookkeeping, no label on screen", () => {
     let state = appendUserRow(INITIAL_SDK_STATE, "faz a tarefa");
     state = feed([{ type: "ready" }], state);
     state = appendUserRow(state, "aproveita e ajusta o título", undefined, { awaiting: true });
@@ -495,7 +497,7 @@ describe("mensagem no meio do turno (turn_absorbed — streaming input)", () => 
     expect(state.turnActive).toBe(true);
   });
 
-  it("two absorbed sends each get their own label (newest first, never re-labelling)", () => {
+  it("two absorbed sends each get their own mark (newest first, never re-marking)", () => {
     let state = feed([{ type: "ready" }], appendUserRow(INITIAL_SDK_STATE, "um"));
     state = appendUserRow(state, "dois");
     state = feed([{ type: "turn_absorbed" }], state);
@@ -1180,5 +1182,151 @@ describe("liveActivityDetail — a palavra do modelo, não a frase pronta", () =
       awaiting: true,
     });
     expect(liveActivityDetail(state)).toBeNull();
+  });
+});
+
+describe("workflow — a frota visível no chat", () => {
+  const SCRIPT = [
+    "export const meta = {",
+    "  name: 'golden-image-vm-local',",
+    "  description: 'Como gerar a ISO e o que bloqueia o embarque',",
+    "  phases: [",
+    "    { title: 'Mapear', detail: 'leitores paralelos' },",
+    "    { title: 'Verificar', detail: \"céticos tentando refutar\" },",
+    "    { title: 'Montar' },",
+    "  ],",
+    "}",
+    "phase('Mapear')",
+  ].join("\n");
+
+  const call = (script: string): SdkEvent => ({ type: "tool_use", id: "t1", name: "Workflow", input: { script } });
+  const progress = (over: Partial<SdkEvent> = {}): SdkEvent => ({
+    type: "workflow_progress",
+    runId: "wf_abc",
+    name: "golden-image-vm-local",
+    at: 10,
+    finished: false,
+    agents: [{ id: "a1", label: "ler o build da ISO", status: "done", result: "está em devices.ts" }],
+    ...over,
+  });
+
+  describe("parseWorkflowScriptMeta", () => {
+    it("reads the plan the script declares — nome, descrição e fases", () => {
+      expect(parseWorkflowScriptMeta(SCRIPT)).toEqual({
+        name: "golden-image-vm-local",
+        description: "Como gerar a ISO e o que bloqueia o embarque",
+        phases: [
+          { title: "Mapear", detail: "leitores paralelos" },
+          { title: "Verificar", detail: "céticos tentando refutar" },
+          { title: "Montar" },
+        ],
+      });
+    });
+
+    it("um script sem meta (ou sem nome) não vira plano nenhum — e nada explode", () => {
+      expect(parseWorkflowScriptMeta("const x = 1")).toBeNull();
+      expect(parseWorkflowScriptMeta("export const meta = { description: 'sem nome' }")).toBeNull();
+      expect(parseWorkflowScriptMeta(undefined)).toBeNull();
+      expect(parseWorkflowScriptMeta(42)).toBeNull();
+    });
+
+    it("aspas escapadas dentro do texto não cortam a leitura", () => {
+      const meta = parseWorkflowScriptMeta("export const meta = { name: 'o\\'script', description: \"diz \\\"oi\\\"\" }");
+      expect(meta).toEqual({ name: "o'script", description: 'diz "oi"' });
+    });
+  });
+
+  it("o progresso vira UMA linha, com o plano da chamada da tool grudado nela", () => {
+    const state = feed([call(SCRIPT), progress()]);
+    const row = state.rows.find((r) => r.kind === "workflow");
+    expect(row).toMatchObject({
+      kind: "workflow",
+      runId: "wf_abc",
+      name: "golden-image-vm-local",
+      description: "Como gerar a ISO e o que bloqueia o embarque",
+      finished: false,
+    });
+    expect((row as { phases?: unknown[] }).phases).toHaveLength(3);
+    expect((row as { agents: unknown[] }).agents).toHaveLength(1);
+  });
+
+  it("quadro novo da MESMA rodada substitui o anterior, no lugar dele — nunca empilha", () => {
+    let state = feed([call(SCRIPT), progress()]);
+    state = feed([{ type: "assistant_text", text: "sigo quando voltar" }], state);
+    const before = state.rows.length;
+    state = feed([progress({ at: 20, agents: [
+      { id: "a1", label: "ler o build da ISO", status: "done", result: "está em devices.ts" },
+      { id: "a2", label: "refutar a afirmação", status: "running" },
+    ] })], state);
+    expect(state.rows.length).toBe(before);
+    expect(state.rows.filter((r) => r.kind === "workflow")).toHaveLength(1);
+    // e continua ANTES da fala do assistente: a linha fica onde nasceu, não pula para o fim
+    expect(state.rows.findIndex((r) => r.kind === "workflow")).toBeLessThan(
+      state.rows.findIndex((r) => r.kind === "assistant"),
+    );
+    const row = state.rows.find((r) => r.kind === "workflow") as { agents: unknown[] };
+    expect(row.agents).toHaveLength(2);
+  });
+
+  it("não acende o spinner do turno: o turno que disparou a frota JÁ acabou", () => {
+    const state = feed([call(SCRIPT), { type: "result" }, progress()]);
+    expect(state.turnActive).toBe(false);
+    expect(state.awaiting).toBe(false);
+  });
+
+  it("sem o nome, mas com um único workflow nesta sessão, o plano ainda é encontrado", () => {
+    const state = feed([call(SCRIPT), progress({ name: "" })]);
+    expect(state.rows.find((r) => r.kind === "workflow")).toMatchObject({
+      description: "Como gerar a ISO e o que bloqueia o embarque",
+    });
+  });
+
+  it("um quadro sem rodada é descartado em silêncio", () => {
+    const state = feed([progress({ runId: undefined })]);
+    expect(state.rows).toHaveLength(0);
+  });
+
+  it("um quadro que cai em cima de uma resposta em streaming não duplica a frase", () => {
+    // O painel chega por fora do turno e pode cair entre o último delta e o bloco consolidado.
+    // Fechando a linha aberta ali, o bloco virava uma SEGUNDA linha com o mesmo texto.
+    let state = feed([call(SCRIPT), { type: "assistant_delta", text: "Disparei a " }]);
+    state = feed([progress()], state);
+    state = feed([{ type: "assistant_delta", text: "frota." }], state);
+    state = feed([{ type: "assistant_text", text: "Disparei a frota." }], state);
+    const falas = state.rows.filter((r) => r.kind === "assistant");
+    expect(falas).toHaveLength(1);
+    expect(falas[0]).toMatchObject({ text: "Disparei a frota.", streaming: false });
+    expect(state.rows.filter((r) => r.kind === "workflow")).toHaveLength(1);
+  });
+
+  it("a contagem vem do diário inteiro, não da lista desenhada", () => {
+    const state = feed([call(SCRIPT), progress({ total: 260, done: 200 })]);
+    expect(state.rows.find((r) => r.kind === "workflow")).toMatchObject({ total: 260, done: 200 });
+  });
+
+  describe("formatAgentResult", () => {
+    it("um resultado com schema vira chave: valor, uma por linha", () => {
+      const raw = JSON.stringify({ resumo: "o ticket mora em devices.ts", bloqueios: ["ISO não está em cache", "agente velho"] });
+      expect(formatAgentResult(raw)).toBe(
+        "resumo: o ticket mora em devices.ts\nbloqueios: ISO não está em cache · agente velho",
+      );
+    });
+
+    it("texto puro passa intacto, e um JSON cortado volta cru em vez de sumir", () => {
+      expect(formatAgentResult("achei 3 bugs")).toBe("achei 3 bugs");
+      expect(formatAgentResult('{"resumo":"cortado no meio')).toBe('{"resumo":"cortado no meio');
+      expect(formatAgentResult("")).toBe("");
+    });
+  });
+
+  it("a linha da frota corta a dobra das ferramentas — ela não é mais uma ferramenta na pilha", () => {
+    const state = feed([
+      { type: "tool_use", id: "t1", name: "Read", input: { file_path: "a.ts" } },
+      { type: "tool_use", id: "t2", name: "Read", input: { file_path: "b.ts" } },
+      progress(),
+    ]);
+    const rendered = groupSdkRows(state.rows);
+    expect(rendered.at(-1)).toMatchObject({ kind: "row" });
+    expect((rendered.at(-1) as { row: { kind: string } }).row.kind).toBe("workflow");
   });
 });

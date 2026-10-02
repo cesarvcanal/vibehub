@@ -110,8 +110,11 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       const mirrorCutoffAt = Date.now();
       let latestSessionId: string | null = null;
       let tuiJsonl = "";
+      // Hoisted out of the probe: the manager needs it too — it is the root under which the harness
+      // writes a workflow's journal (the fleet panel's only source, see services/sdk/workflow.ts).
+      const transcriptDir = transcriptDirFor(project, card, effectiveAccountSlug(card, project));
       try {
-        const dir = transcriptDirFor(project, card, effectiveAccountSlug(card, project));
+        const dir = transcriptDir;
         const { stdout } = await hostExecutor().runScript(
           buildLatestTranscriptScript(config.runner.container, dir),
           { timeoutMs: 15_000 },
@@ -185,6 +188,7 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       const session = ensureDriverSession({
         cardId: card.id,
         label: card.worktreeSlug,
+        transcriptDir,
         command: await sdkDriverCommand(project, {
           ...card,
           resumeSessionId: resumeTargetFor(card, latestSessionId),

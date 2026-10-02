@@ -301,6 +301,25 @@ describe("CardTerminalView — which chat the Chat tab mounts (the INSTALL flag,
     });
   }
 
+  it("no chat NATIVO não existe 'Claude parou': o painel do tmux não é com quem se está falando", async () => {
+    // Produção, 2026-10-02: o claude do chat nativo é filho do BACK, não do painel do tmux — a sonda
+    // do servidor lê o `bash` pelado embaixo dele como "Claude saiu" e o aviso ficava pendurado por
+    // cima de uma conversa que estava respondendo normalmente. Aqui ele não se desenha: a próxima
+    // mensagem sobe um driver e retoma a mesma conversa; não há terminal mudo para avisar.
+    serveFeaturesOn();
+    serveSession({ situation: "stopped" });
+    renderWithCache([card({ openedAt: 10 })], testQueryClient(), "chat");
+    expect(await screen.findByTestId("sdk-chat")).toBeInTheDocument();
+    expect(screen.queryByTestId("claude-stopped-banner")).toBeNull();
+  });
+
+  it("…mas na aba Terminal, onde se digita NO painel, o aviso continua", async () => {
+    serveFeaturesOn();
+    serveSession({ situation: "stopped" });
+    renderWithCache([card({ openedAt: 10 })], testQueryClient(), "terminal");
+    expect(await screen.findByTestId("claude-stopped-banner")).toBeInTheDocument();
+  });
+
   it("with the install flag on, ANY card opens the Chat tab in the NATIVE chat — no per-card opt-in", async () => {
     serveFeaturesOn();
     // A card that never set `sdkChat` (a TUI-only card): the native chat mounts anyway; its replay

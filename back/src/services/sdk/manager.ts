@@ -1,11 +1,13 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
+import { onCardDriverProbe, type DriverActivity } from "../board/agentState.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
 import { appendHistory, replayableHistoryEvent, rewindHistory } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inflight.js";
 import { forgetDriverKeys, noteDriverEventFor } from "./mirror.js";
 import { writeCardCatalog } from "./catalog.js";
+import { forgetCardWorkflows, lastWorkflowRuns, watchCardWorkflows } from "./workflow.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
   buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, encodeControl,
@@ -57,6 +59,13 @@ export interface DriverSession {
   ready: boolean;
   /** Latest session id the driver reported — the resume key (also persisted on the card). */
   lastSessionId?: string;
+  /**
+   * The card's transcript directory inside the runner (`/root/.claude/projects/<slug>`). It is the
+   * root of where the harness writes a workflow's journal, and the ONLY reason the manager knows
+   * it: see `workflowDirs` below. Absent = this driver was spawned without it and the fleet simply
+   * is not watched.
+   */
+  transcriptDir?: string;
   /** Turns in flight or queued in the driver: +1 per user send, -1 per result. */
   activeTurns: number;
   /**
@@ -195,6 +204,17 @@ export function isCardChatInUse(cardId: string): boolean {
   return session.sockets.size > 0 || session.activeTurns > 0;
 }
 
+/**
+ * What this card's driver is doing right now, for the board's session view (see
+ * `onCardDriverProbe` in services/board/agentState.ts): `turn` while a turn is in flight, `idle`
+ * for a live driver at the prompt, `none` when there is no driver. Read-only and in-memory.
+ */
+export function driverActivity(cardId: string): DriverActivity {
+  const session = sessions.get(cardId);
+  if (!session || session.closed) return "none";
+  return session.activeTurns > 0 ? "turn" : "idle";
+}
+
 /* ---------------------------------------------------------------- helpers */
 
 /** ws sockets expose the raw TCP socket as `_socket`; flushing small frames beats batching them. */
@@ -278,6 +298,11 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     // no INSTANTE do connect — não depois do boot do driver seguinte (ver ./catalog.ts).
     void writeCardCatalog(session.cardId, event);
   }
+  // A FROTA FICOU VISÍVEL. A tool `Workflow` devolve na hora e trabalha em segundo plano: o turno
+  // acaba, o modelo diz "te trago quando voltar" e o chat ficava mudo por minutos — lido do outro
+  // lado como "ele terminou" (produção, 2026-10-02). A sondagem do diário começa aqui, no instante
+  // da chamada, e se encerra sozinha (ver services/sdk/workflow.ts): é ela quem alimenta o painel.
+  if (event.type === "tool_use" && event.name === "Workflow") startWorkflowWatch(session);
   if (event.type === "turn_absorbed") {
     // Streaming input: this send folded into the turn ALREADY running (the model absorbs it at its
     // next step) — it will not produce its own `result`, so its +1 comes back off. Floor at 1: an
@@ -343,6 +368,29 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   if (replayableHistoryEvent(event)) void appendHistory(session.cardId, { ...event, at: Date.now() });
 }
 
+/**
+ * Onde a sessão ATUAL deste card guarda as rodadas de workflow e os scripts delas. Os dois caminhos
+ * são do harness (`<transcriptDir>/<sessionId>/…`) e dependem do id de sessão, que só existe depois
+ * do primeiro `session`/`result` — antes disso não há o que sondar. PURE (dado o estado da sessão).
+ */
+export function workflowDirs(session: Pick<DriverSession, "transcriptDir" | "lastSessionId">): { runs: string; scripts: string } | null {
+  const dir = session.transcriptDir;
+  const sessionId = session.lastSessionId;
+  if (!dir || !sessionId) return null;
+  const base = `${dir.replace(/\/+$/, "")}/${sessionId}`;
+  return { runs: `${base}/subagents/workflows`, scripts: `${base}/workflows/scripts` };
+}
+
+/** Liga a sondagem da frota deste card (idempotente — ver `watchCardWorkflows`). */
+function startWorkflowWatch(session: DriverSession): void {
+  watchCardWorkflows(session.cardId, {
+    label: session.label,
+    dirs: () => workflowDirs(session),
+    watchers: () => session.sockets.size,
+    publish: (run) => broadcast(session, { type: "workflow_progress", ...run }),
+  });
+}
+
 /* ------------------------------------------------------------------- API */
 
 export interface EnsureDriverOpts {
@@ -351,6 +399,8 @@ export interface EnsureDriverOpts {
   label: string;
   /** The spawn command (built by the route via `sdkDriverCommand` + `resumeTargetFor`). */
   command: { file: string; args: string[] };
+  /** The card's transcript dir in the runner — where a workflow's journal lives (optional). */
+  transcriptDir?: string;
 }
 
 /**
@@ -375,6 +425,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     stderrTail: "",
     closed: false,
     acceptedCids: new Map(),
+    ...(opts.transcriptDir ? { transcriptDir: opts.transcriptDir } : {}),
   };
   sessions.set(opts.cardId, session);
   logger.info({ card: opts.label }, "sdk driver spawned (card-owned, survives the page)");
@@ -423,6 +474,9 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     if (sessions.get(opts.cardId) === session) sessions.delete(opts.cardId);
     // A memória de dedupe é do DRIVER: ele acabou, ela acaba junto — o sucessor fala do zero.
     forgetDriverKeys(opts.cardId);
+    // A sondagem da frota também: ela publica NESTA sessão. Deixada de pé, ela ainda recusaria ser
+    // substituída pela do driver seguinte (a segunda chamada só estende a primeira).
+    forgetCardWorkflows(opts.cardId);
     const stderrNote = session.stderrTail.trim() === "" ? "" : ` — stderr: ${session.stderrTail.trim().slice(-400)}`;
     broadcast(session, { type: "error", message: `driver exited (code ${code ?? "?"})${stderrNote}` });
     for (const socket of session.sockets) {
@@ -641,6 +695,14 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
     try { socket.send(JSON.stringify(session.catalog)); } catch { /* going away */ }
   }
 
+  // A frota do workflow é da mesma natureza do catálogo: estado, não conversa. Ela não está no
+  // histórico replayado, e uma aba que abre no meio de uma rodada (ou logo depois dela) precisa
+  // desenhar o painel no primeiro quadro — senão a tela volta a dizer, por 4 segundos ou para
+  // sempre, que não há nada acontecendo.
+  for (const run of lastWorkflowRuns(session.cardId)) {
+    try { socket.send(JSON.stringify({ type: "workflow_progress", ...run })); } catch { /* going away */ }
+  }
+
   const keepalive = setInterval(() => {
     try { socket.ping?.(); } catch { /* the close handler cleans up */ }
   }, KEEPALIVE_MS);
@@ -674,6 +736,8 @@ export function stopCardDriver(cardId: string): void {
   // A DELIBERATE stop (pause, hibernate, restart, delete, model switch, idle) abandons the turn on
   // purpose — the marker comes off so the next boot does not "resume" something a person ended.
   void clearInflightMarker(cardId);
+  // A sondagem da frota é filha deste driver: sem ele não há a quem publicar nem sessão para ler.
+  forgetCardWorkflows(cardId);
   logger.debug({ card: session.label }, "sdk driver stopped");
 }
 
@@ -709,3 +773,8 @@ onCardSessionKill((cardId) => stopCardDriver(cardId));
 // live conversation is precisely how a message got written into a dead pipe and answered by
 // nobody. Close the page and the driver idles out on its own; the card is hibernatable again.
 onCardInUseProbe((cardId) => isCardChatInUse(cardId));
+
+// …e a terceira: QUEM responde por este card. A sondagem do tmux não enxerga o driver (ele é filho
+// do back, não do painel do tmux), então sem isto a visão de sessão lia o card como "Claude saiu" —
+// o banner "Claude parou" por cima de uma conversa que estava respondendo.
+onCardDriverProbe((cardId) => driverActivity(cardId));
