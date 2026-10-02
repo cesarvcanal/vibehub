@@ -14,11 +14,22 @@
  */
 export type Role = "owner" | "member";
 
+/** A person's GitHub identity: whose account the card pushes as, and who signs its commits. */
+export interface UserGit {
+  /** Id of a connection in `GET /api/github`. Absent = the project's account. */
+  githubConnectionId?: string;
+  /** Commit author. Absent = the install's `settings.git`. */
+  gitName?: string;
+  gitEmail?: string;
+}
+
 export interface User {
   id: string;
   username: string;
   role: Role;
   createdAt?: string;
+  /** Absent = nothing configured, so this person inherits the project's and the install's. */
+  git?: UserGit;
 }
 
 /** `GET /api/users` — owner only. */

@@ -1987,3 +1987,111 @@ describe("ownBranch (what a delete may drop)", () => {
     expect(script).not.toContain("branch -D");
   });
 })
+
+// ---------------------------------------------------------------------------
+// Identity applied to the worktree — the actor can change MID-CARD
+// ---------------------------------------------------------------------------
+
+describe("aplicar identidade na worktree", () => {
+  const base = {
+    containerName: CONTAINER,
+    cardId: "card-1",
+    cwd: "/work/widgets/um-card-ab12",
+    identity: { connectionId: "c-mussa", name: "wellesley-mussolini", email: "xerif.off@gmail.com" },
+  };
+
+  it("grava o autor por WORKTREE, nunca global nem local", async () => {
+    const { buildIdentityScript } = await import("./workspace.js");
+    const s = buildIdentityScript(base);
+    expect(s).toContain("git -C '/work/widgets/um-card-ab12' config --worktree user.name 'wellesley-mussolini'");
+    expect(s).toContain("git -C '/work/widgets/um-card-ab12' config --worktree user.email 'xerif.off@gmail.com'");
+    expect(s).not.toContain("--global");
+    // `--local` só pode aparecer pra LIGAR a extensão; jamais pra gravar identidade.
+    expect(s).not.toContain("--local user.");
+    expect(s).toContain("config --local extensions.worktreeConfig true");
+  });
+
+  it("GIT DE VERDADE: a identidade de um card não vaza para outro card do MESMO projeto", async () => {
+    // Cada card é uma worktree do MESMO clone, e worktrees compartilham .git/config. Um `--local`
+    // aqui entregaria a identidade de uma pessoa a todos os outros cards daquele projeto. Este
+    // teste roda git de verdade porque o bug é de SEMÂNTICA do git, não do texto do comando — a
+    // asserção de string acima passava com o código errado.
+    const { buildIdentityScript } = await import("./workspace.js");
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const { mkdtemp: mkTemp } = await import("node:fs/promises");
+    const run = promisify(execFile);
+    const root = await mkTemp(join(tmpdir(), "vibehub-wt-"));
+    const repo = join(root, "repo");
+
+    await run("git", ["init", "-q", repo]);
+    const inRepo = (args: string[]) => run("git", ["-C", repo, ...args]);
+    await inRepo(["config", "user.email", "instalacao@x.com"]);
+    await inRepo(["config", "user.name", "César Canal"]);
+    await inRepo(["commit", "-q", "--allow-empty", "-m", "base"]);
+    const cardA = join(root, "card-a");
+    const cardB = join(root, "card-b");
+    await inRepo(["worktree", "add", "-q", cardA, "-b", "a"]);
+    await inRepo(["worktree", "add", "-q", cardB, "-b", "b"]);
+
+    /** The identity script, minus the docker wrapper: the lines that actually touch git. */
+    const apply = async (cwd: string, name: string, email: string) => {
+      const script = buildIdentityScript({
+        containerName: "x", cardId: "card-1", cwd: "/work/placeholder", identity: { name, email },
+      });
+      for (const line of script.split("\n")) {
+        const m = /^git -C '\/work\/placeholder' config (.*?)(?: \|\| true)?$/.exec(line);
+        if (!m) continue;
+        const args = m[1]!.match(/'[^']*'|\S+/g)!.map((a) => a.replace(/^'|'$/g, ""));
+        await run("git", ["-C", cwd, "config", ...args]);
+      }
+    };
+
+    await apply(cardA, "wellesley-mussolini", "xerif.off@gmail.com");
+    await apply(cardB, "César Canal", "cesarvcanal@gmail.com");
+
+    const emailOf = async (cwd: string) =>
+      (await run("git", ["-C", cwd, "config", "user.email"])).stdout.trim();
+    expect(await emailOf(cardA)).toBe("xerif.off@gmail.com");
+    expect(await emailOf(cardB)).toBe("cesarvcanal@gmail.com");
+
+    // E o commit de cada card sai com o autor do card, não com o da instalação.
+    await run("git", ["-C", cardA, "commit", "-q", "--allow-empty", "-m", "do mussa"]);
+    const author = (await run("git", ["-C", cardA, "log", "-1", "--format=%an <%ae>"])).stdout.trim();
+    expect(author).toBe("wellesley-mussolini <xerif.off@gmail.com>");
+
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("ZERA a lista de helpers ANTES de instalar o que lê o arquivo do card", async () => {
+    const { buildIdentityScript } = await import("./workspace.js");
+    const s = buildIdentityScript(base);
+    const reset = s.indexOf("credential.helper ''");
+    const install = s.indexOf("--add credential.helper");
+    // Sem o reset primeiro, o `gh auth git-credential` global responde antes, com o GH_TOKEN que a
+    // sessão exportou no boot — e o push sai como a pessoa ANTERIOR, sem erro nenhum.
+    expect(reset).toBeGreaterThan(-1);
+    expect(install).toBeGreaterThan(reset);
+  });
+
+  it("o helper LÊ o arquivo a cada chamada; o token não entra no script do helper", async () => {
+    const { buildIdentityScript } = await import("./workspace.js");
+    const s = buildIdentityScript({ ...base, token: TOKEN });
+    expect(s).toContain("cat /root/.vibehub/gh/card-1.token");
+    // O token aparece UMA vez só: na escrita do arquivo (stdin do docker exec), nunca no helper.
+    expect(s.split(TOKEN).length - 1).toBe(1);
+  });
+
+  it("com token escreve o arquivo do card; sem token REMOVE (nada obsoleto sobra)", async () => {
+    const { buildIdentityScript } = await import("./workspace.js");
+    expect(buildIdentityScript({ ...base, token: TOKEN })).toContain("> '/root/.vibehub/gh/card-1.token'");
+    expect(buildIdentityScript(base)).toContain("rm -f '/root/.vibehub/gh/card-1.token'");
+  });
+
+  it("nome ou e-mail com caractere de shell nunca chega cru ao script", async () => {
+    const { buildIdentityScript } = await import("./workspace.js");
+    expect(() => buildIdentityScript({ ...base, identity: { ...base.identity, name: "x'; rm -rf /" } })).toThrow();
+    expect(() => buildIdentityScript({ ...base, identity: { ...base.identity, name: "x$(id)" } })).toThrow();
+    expect(() => buildIdentityScript({ ...base, identity: { ...base.identity, email: "a b@x.com" } })).toThrow();
+  });
+});

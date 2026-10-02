@@ -4,6 +4,7 @@ import pty from "node-pty";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import { currentUser, requireOwner, sessionUserId } from "../auth/session.js";
+import { recordCardActor } from "../services/board/actor.js";
 import { requireCardAccess, requireCardWork, requestCardLevel } from "../auth/access.js";
 import * as registry from "../services/board/registry.js";
 import * as workspace from "../services/board/workspace.js";
@@ -213,6 +214,10 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{ Params: { id: string } }>("/api/cards/:id/open", { preHandler: requireCardWork }, async (req, reply) => {
     try {
+      // BEFORE the open: the open itself resolves the identity to write into the worktree, so the
+      // actor has to be on the card by then or the first commit of a card somebody else opened
+      // would still be attributed to them.
+      await recordCardActor(await currentUser(req), req.params.id);
       return await reply.send({ card: await workspace.openCard(req.params.id) });
     } catch (err) {
       const message = (err as Error).message;
@@ -336,6 +341,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       try {
         const by = (await sessionUserId(req)) ?? undefined;
+        await recordCardActor(await currentUser(req), req.params.id);
         return await reply.send(await outbox.queueMessage(req.params.id, String(req.body?.text ?? ""), by));
       } catch (err) {
         const message = (err as Error).message;
@@ -438,6 +444,9 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
         return;
       }
       const shell = req.query?.shell === "1";
+      // Attaching the terminal IS working the card — unless the share is `view`, which
+      // recordCardActor checks for (this route's guard is requireCardAccess, not requireCardWork).
+      await recordCardActor(await currentUser(req), req.params.id);
       // SNAPSHOT: `getCard` hands back the live cached record, which the provisioning below mutates
       // in place. The attach command has to be built from the card as it is NOW — a card that never
       // had a conversation must be born with a plain `claude`, never with `claude -c` (which prints

@@ -1,17 +1,21 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
-import { getCard, getProject, assertBranchName } from "../board/registry.js";
+import { getCard, getProject, assertBranchName, listGithubConnections } from "../board/registry.js";
 import { cardWorkPaths, cardBranch } from "../board/workspace.js";
 import { tokenFor } from "../github/client.js";
+import { resolveIdentity } from "../github/identity.js";
+import { getUserGit } from "../../auth/userGit.js";
+import { getSettings } from "../settings/settings.js";
 import { ghTokenPath, writeGhTokenLines } from "../accounts/token.js";
 import { runGate, cleanOutput, type GateResult } from "./gate.js";
 import { logger } from "../../utils/logger.js";
 
 /**
- * DELIVER — "sobe pra X": take a card's branch and ship it, as the PROJECT's GitHub connection.
+ * DELIVER — "sobe pra X": take a card's branch and ship it, as the card's ACTOR.
  *
  * The whole flow runs SERVER-SIDE and every git/gh command runs in the runner authenticated as the
- * project's connection — the token is fetched with `tokenFor(project.githubConnectionId)` and passed
+ * person who worked the card last (falling back to the project's connection, which is what every
+ * card did before actors existed) — the token is fetched with `tokenFor(identity.connectionId)` and passed
  * to the runner over STDIN inside the script (the same per-card `GH_TOKEN` file the card session
  * already uses), NEVER in argv and never in a log line. The runner's git credential helper is
  * `gh auth git-credential`, so a set `GH_TOKEN` steers both `git push` and `gh`.
@@ -156,8 +160,15 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
   const { cwd } = cardWorkPaths(project, card);
   const container = config.runner.container;
 
-  // The connection token — deliver acts as the project's GitHub identity, or not at all.
-  const token = await tokenFor(project.githubConnectionId);
+  // The connection token of the identity IN FORCE on this card: the ACTOR's (whoever worked it
+  // last), falling back to the project's and the install's — the SAME resolution the card's open
+  // uses, so the PR opens under the account whose name is already on the commits. A card with no
+  // actor behaves exactly as before: the project's connection.
+  const actor = card.actorUserId ? await getUserGit(card.actorUserId) : null;
+  const identity = resolveIdentity({
+    actor, project, settings: await getSettings(), connections: await listGithubConnections(),
+  });
+  const token = await tokenFor(identity.connectionId);
 
   // (a)+(b) push and resolve the PR.
   const prOut = await hostExecutor().runScript(
