@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { chatSource, parseChatEvents } from "../chat/chat.js";
 import { matchOrigin, primeProvenance } from "../chat/provenance.js";
 import { publishExternalMessage } from "./history.js";
-import { chatEventToHistory, replayDedupeKey } from "./transcript.js";
+import { chatEventToHistory, dedupeLookupKeys, dedupeNoteKeys } from "./transcript.js";
 import type { HistoryEvent } from "./history.js";
 import type { DriverEvent } from "./protocol.js";
 import { logger } from "../../utils/logger.js";
@@ -78,10 +78,10 @@ export function noteDriverEvent(state: MirrorState, event: DriverEvent | { type:
 
 /** O mesmo registro, sobre o Set cru — é ele que o card guarda entre um espelho e o próximo. PURE-ish. */
 function noteDriverKeys(keys: Set<string>, event: DriverEvent | { type: "user"; text: string }): void {
-  const key = replayDedupeKey(event as { type: HistoryEvent["type"]; text?: string; id?: string });
-  if (!key) return;
-  keys.delete(key); // re-adding moves it to the newest slot
-  keys.add(key);
+  for (const key of dedupeNoteKeys(event as { type: HistoryEvent["type"]; text?: string; id?: string })) {
+    keys.delete(key); // re-adding moves it to the newest slot
+    keys.add(key);
+  }
   capSet(keys);
 }
 
@@ -99,8 +99,10 @@ export function mirrorNewEvents(state: MirrorState, jsonl: string, cardId: strin
     capSet(state.seen);
     const converted = chatEventToHistory(event);
     if (!converted) continue;
-    const key = replayDedupeKey(converted as { type: HistoryEvent["type"]; text?: string; id?: string });
-    if (key && state.driverKeys.has(key)) continue; // the driver already said this on stdout
+    // The driver already said this on stdout — including the case where Claude Code rewrote a slash
+    // command on its way into the transcript (see dedupeLookupKeys).
+    const keys = dedupeLookupKeys(converted as { type: HistoryEvent["type"]; text?: string; id?: string });
+    if (keys.some((k) => state.driverKeys.has(k))) continue;
     const mirrored: HistoryEvent = { ...converted, source: "terminal" };
     if (mirrored.type === "user" && !mirrored.from) {
       const from = matchOrigin(cardId, mirrored.text, mirrored.at ?? 0);

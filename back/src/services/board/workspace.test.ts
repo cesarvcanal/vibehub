@@ -2043,12 +2043,19 @@ describe("aplicar identidade na worktree", () => {
         const m = /^git -C '\/work\/placeholder' config (.*?)(?: \|\| true)?$/.exec(line);
         if (!m) continue;
         const args = m[1]!.match(/'[^']*'|\S+/g)!.map((a) => a.replace(/^'|'$/g, ""));
-        await run("git", ["-C", cwd, "config", ...args]);
+        // `|| true` no script de verdade: `--unset-all` de uma chave que não existe sai 5.
+        await run("git", ["-C", cwd, "config", ...args]).catch(() => undefined);
       }
     };
 
     await apply(cardA, "wellesley-mussolini", "xerif.off@gmail.com");
     await apply(cardB, "César Canal", "cesarvcanal@gmail.com");
+    // Roda de novo (toda abertura de card e toda troca de ator rodam): não pode acumular helper.
+    await apply(cardA, "wellesley-mussolini", "xerif.off@gmail.com");
+    // `--worktree`: sem escopo, isso contaria também os helpers do sistema e do global da máquina.
+    const helpers = (await run("git", ["-C", cardA, "config", "--worktree", "--get-all", "credential.helper"])).stdout
+      .split("\n").filter((l) => l.trim() !== "");
+    expect(helpers).toHaveLength(1);
 
     const emailOf = async (cwd: string) =>
       (await run("git", ["-C", cwd, "config", "user.email"])).stdout.trim();
@@ -2061,16 +2068,20 @@ describe("aplicar identidade na worktree", () => {
     expect(author).toBe("wellesley-mussolini <xerif.off@gmail.com>");
 
     await rm(root, { recursive: true, force: true });
-  });
+    // Git de verdade: init + duas worktrees + três aplicações = ~20 processos. O orçamento padrão
+    // de 5s é apertado numa máquina ocupada, e o que importa aqui é a asserção, não o relógio.
+  }, 60_000);
 
   it("ZERA a lista de helpers ANTES de instalar o que lê o arquivo do card", async () => {
     const { buildIdentityScript } = await import("./workspace.js");
     const s = buildIdentityScript(base);
-    const reset = s.indexOf("credential.helper ''");
-    const install = s.indexOf("--add credential.helper");
+    const unsetAll = s.indexOf("--unset-all credential.helper");
+    const reset = s.indexOf("--add credential.helper ''");
+    const install = s.indexOf("--add credential.helper '!f()");
     // Sem o reset primeiro, o `gh auth git-credential` global responde antes, com o GH_TOKEN que a
     // sessão exportou no boot — e o push sai como a pessoa ANTERIOR, sem erro nenhum.
-    expect(reset).toBeGreaterThan(-1);
+    expect(unsetAll).toBeGreaterThan(-1);
+    expect(reset).toBeGreaterThan(unsetAll);
     expect(install).toBeGreaterThan(reset);
   });
 

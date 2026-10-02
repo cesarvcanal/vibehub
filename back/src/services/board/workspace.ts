@@ -239,7 +239,12 @@ export function buildIdentityScript(opts: {
     `${git} user.email ${shQuote(email)} || true`,
     // RESET first, then install ours — see the note above about helper order. Worktree scope is read
     // LAST (system -> global -> local -> worktree), so the reset here clears the whole list.
-    `${git} credential.helper '' || true`,
+    //
+    // `--unset-all` BEFORE the reset: this script runs again on every open and on every actor
+    // switch, and a plain `--add` appended one more copy of the helper each time (seen in
+    // production with three identical entries). Unset-all makes the whole block idempotent.
+    `${git} --unset-all credential.helper || true`,
+    `${git} --add credential.helper '' || true`,
     `${git} --add credential.helper ` +
       shQuote(`!f() { [ -s ${file} ] && echo username=x-access-token && echo "password=$(cat ${file})"; }; f`) +
       " || true",

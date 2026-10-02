@@ -19,7 +19,6 @@ import { reconnectDelay, type ConnectionState } from "@/features/board/lib/recon
 import {
   groupChatRows,
   mergeEvent,
-  normalizeMessage,
   originRole,
   parseChatFrame,
   pendingPhase,
@@ -28,6 +27,7 @@ import {
   type ChatEvent,
   type MessageOrigin,
   type PendingMessage,
+  matchKeyOf,
 } from "@/features/board/lib/chat";
 import { linkifyTokens, remarkEscapeHtml, remarkPreviewPaths, safeUrl, uploadImageUrl } from "@/features/board/lib/markdown";
 import { UltraText } from "@/features/board/components/UltraText";
@@ -191,8 +191,10 @@ export function ChatView({
   React.useEffect(() => {
     setPending((prev) => {
       if (!prev.length) return prev;
-      const said = new Set(events.filter((e) => e.kind === "user").map((e) => normalizeMessage(e.text)));
-      const next = prev.filter((p) => !said.has(normalizeMessage(p.text)));
+      // `matchKeyOf`, not `normalizeMessage`: a slash command comes back from the transcript in its
+      // plugin-qualified form, so the raw text of the echo never equalled what was typed.
+      const said = new Set(events.filter((e) => e.kind === "user").map((e) => matchKeyOf(e.text)));
+      const next = prev.filter((p) => !said.has(matchKeyOf(p.text)));
       return next.length === prev.length ? prev : next;
     });
   }, [events]);
