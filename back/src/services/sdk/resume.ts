@@ -5,6 +5,8 @@ import { appendHistory } from "./history.js";
 import { clearInflightMarker, listInflightMarkers, type InflightMarker } from "./inflight.js";
 import { installCardSdkDriver, sdkDriverCommand } from "./driver.js";
 import { ensureDriverSession, injectSystemTurn } from "./manager.js";
+import { transcriptDirFor } from "../maestro/maestro.js";
+import { effectiveAccountSlug } from "../board/registry.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -140,7 +142,12 @@ export async function resumeInterruptedTurns(deps: ResumeDeps = realDeps): Promi
       // session/result). O probe de transcript do connect não roda aqui: é o mesmo alvo na prática,
       // e o boot não deve depender de um ls no runner para cada card.
       const command = await deps.commandFor(project, card);
-      const session = deps.ensureSession({ cardId: card.id, label: card.worktreeSlug, command });
+      const session = deps.ensureSession({
+        cardId: card.id,
+        label: card.worktreeSlug,
+        command,
+        transcriptDir: transcriptDirFor(project, card, effectiveAccountSlug(card, project)),
+      });
       // attempts: marker.attempts + 1 — o marcador do turno retomado nasce já gastando a única
       // retomada automática; se ESTE turno morrer por outro deploy, o próximo boot só anota.
       deps.inject(session, RESUME_CONTINUATION_TEXT, SYSTEM_ORIGIN, marker.attempts + 1);

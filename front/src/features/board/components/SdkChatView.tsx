@@ -14,6 +14,7 @@ import {
   Reply,
   SendHorizontal,
   ShieldAlert,
+  Waypoints,
   Wrench,
   X,
 } from "lucide-react";
@@ -51,6 +52,7 @@ import {
   deliveredUserTexts,
   dropUserRow,
   currentActivity,
+  formatAgentResult,
   groupSdkRows,
   liveActivityDetail,
   liveUserCids,
@@ -1191,6 +1193,144 @@ function PendingTray({
 }
 
 /** A folded run of tool calls — same reading rules as the transcript chat's fold. */
+
+/**
+ * O PAINEL DA FROTA — o workflow deixando de ser invisível.
+ *
+ * A tool `Workflow` devolve na hora e trabalha em segundo plano: o turno acaba, o modelo diz "te
+ * trago quando voltar" e, até agora, a tela não dizia mais nada — por minutos. Quem estava do outro
+ * lado lia aquilo como "ele terminou" (produção, 2026-10-02). Este cartão é a frota em movimento:
+ * quantos subagentes já responderam, quais ainda correm, o que cada um devolveu, e o plano que o
+ * script declarou. Enquanto roda ele fica ABERTO — é a resposta à pergunta que a pessoa está
+ * fazendo à tela naquele instante; terminado, fecha e vira uma linha de resumo que não ocupa a
+ * conversa. O conteúdo vem do back lendo o diário da rodada (back/src/services/sdk/workflow.ts).
+ */
+function SdkWorkflowCard({ row }: { row: Extract<SdkRow, { kind: "workflow" }> }) {
+  const t = useT();
+  const [open, setOpen] = React.useState(!row.finished);
+  // Um subagente por vez aberto: a lista é o mapa, o resultado é o detalhe que se vai buscar nela.
+  const [openAgent, setOpenAgent] = React.useState<string | null>(null);
+  // Terminou: o cartão se recolhe sozinho. Só uma vez — reabrir e continuar lendo é direito de quem
+  // está lendo, e um efeito que "corrige" isso a cada quadro fecharia o painel na cara da pessoa.
+  const collapsed = React.useRef(false);
+  React.useEffect(() => {
+    if (row.finished && !collapsed.current) {
+      collapsed.current = true;
+      setOpen(false);
+    }
+  }, [row.finished]);
+
+  // A contagem vem do diário inteiro (o back a manda pronta); a lista desenhada tem teto.
+  const done = row.done;
+  const total = row.total;
+  const percent = total > 0 ? Math.round((done / total) * 100) : 0;
+  const title = row.name || t("sdk.workflowFallbackName");
+
+  return (
+    <div
+      data-testid="sdk-workflow"
+      data-run={row.runId}
+      data-finished={row.finished || undefined}
+      className="rounded-md border border-border/70 bg-muted/40 px-3 py-2 text-xs"
+    >
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full min-w-0 items-center gap-1.5 text-left"
+      >
+        <ChevronRight className={cn("h-3 w-3 shrink-0 transition-transform", open && "rotate-90")} />
+        {row.finished ? (
+          <Waypoints className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+        ) : (
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+        )}
+        <span className="min-w-0 flex-1 truncate font-medium text-foreground/90">{title}</span>
+        <span data-testid="sdk-workflow-count" className="shrink-0 tabular-nums text-muted-foreground">
+          {t("sdk.workflowAgents", { done, total })}
+        </span>
+        <span className="shrink-0 text-muted-foreground/80">
+          {row.finished ? t("sdk.workflowDone") : t("sdk.workflowRunning")}
+        </span>
+      </button>
+
+      {/* A barra: a mesma informação do contador, legível sem ler. Some quando não há frota ainda. */}
+      {total > 0 ? (
+        <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-border/60">
+          <div
+            data-testid="sdk-workflow-bar"
+            className={cn("h-full rounded-full transition-all", row.finished ? "bg-emerald-500" : "bg-primary")}
+            style={{ width: `${percent}%` }}
+          />
+        </div>
+      ) : null}
+
+      {open ? (
+        <div className="mt-2 space-y-2">
+          {row.description ? <p className="text-muted-foreground">{row.description}</p> : null}
+          {row.phases?.length ? (
+            <div data-testid="sdk-workflow-phases" className="flex flex-wrap items-center gap-1 text-[11px]">
+              <span className="text-muted-foreground/70">{t("sdk.workflowPlan")}</span>
+              {row.phases.map((phase, i) => (
+                <span
+                  key={`${phase.title}-${i}`}
+                  title={phase.detail}
+                  className="rounded border border-border/70 bg-background/60 px-1.5 py-px text-muted-foreground"
+                >
+                  {phase.title}
+                </span>
+              ))}
+            </div>
+          ) : null}
+
+          {total === 0 ? (
+            <p className="text-muted-foreground/80">{t("sdk.workflowStarting")}</p>
+          ) : (
+            <ul className="space-y-0.5">
+              {row.agents.map((agent, i) => {
+                const showing = openAgent === agent.id;
+                return (
+                  <li key={agent.id}>
+                    <button
+                      type="button"
+                      data-testid="sdk-workflow-agent"
+                      data-status={agent.status}
+                      aria-expanded={showing}
+                      onClick={() => setOpenAgent(showing ? null : agent.id)}
+                      className="flex w-full min-w-0 items-start gap-1.5 rounded px-1 py-0.5 text-left hover:bg-muted/60"
+                    >
+                      <span
+                        className={cn(
+                          "mt-1 h-1.5 w-1.5 shrink-0 rounded-full",
+                          agent.status === "done" ? "bg-emerald-500" : "animate-pulse bg-primary",
+                        )}
+                      />
+                      <span className="shrink-0 tabular-nums text-muted-foreground/60">{i + 1}</span>
+                      <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                        {agent.label || t("sdk.workflowAgentUnnamed")}
+                      </span>
+                    </button>
+                    {showing ? (
+                      <div
+                        data-testid="sdk-workflow-result"
+                        className="ml-4 mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded border border-border/60 bg-background/70 px-2 py-1 text-[11px] text-muted-foreground"
+                      >
+                        {agent.result
+                          ? formatAgentResult(agent.result)
+                          : t(agent.status === "done" ? "sdk.workflowNoResult" : "sdk.workflowAgentWorking")}
+                      </div>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function SdkToolGroup({ rows }: { rows: SdkRow[] }) {
   const t = useT();
   const [open, setOpen] = React.useState(false);
@@ -1453,6 +1593,10 @@ function SdkChatRow({
     return <SdkToolRow row={row} />;
   }
 
+  if (row.kind === "workflow") {
+    return <SdkWorkflowCard row={row} />;
+  }
+
   if (row.kind === "permission") {
     return (
       <div
@@ -1552,13 +1696,6 @@ function SdkChatRow({
         {t("sdk.edited")}
       </div>
     ) : null;
-    // Streaming input: the driver confirmed this send FOLDED into the turn already running — the
-    // label says it entered the current turn, so a mid-turn message never looks lost or ignored.
-    const absorbedTag = row.absorbed ? (
-      <div data-testid="sdk-user-absorbed" className="mt-1 text-right text-[10px] italic text-muted-foreground/80">
-        {t("sdk.absorbed")}
-      </div>
-    ) : null;
     // An ANSWER to a decision, not a loose message: the bubble carries the question it answered, so
     // "respondi ou só mandei um recado?" is settled by looking at what was sent. The wrapper the
     // model received is unwrapped here — the person reads their own words, with the question above.
@@ -1615,7 +1752,6 @@ function SdkChatRow({
             {replyHeader}
             <LinkifiedText text={bodyText} />
             {editedBadge}
-            {absorbedTag}
           </div>
         </div>
       );
@@ -1634,7 +1770,6 @@ function SdkChatRow({
           {replyHeader}
           <LinkifiedText text={bodyText} />
           {editedBadge}
-          {absorbedTag}
           {undelivered}
         </div>
         {/* The pencil: hover-revealed on a desktop, simply there on touch (no hover to reveal it).

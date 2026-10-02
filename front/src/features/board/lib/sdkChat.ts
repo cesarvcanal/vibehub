@@ -37,6 +37,7 @@ export interface SdkEvent {
     | "catalog"
     | "local_output"
     | "result"
+    | "workflow_progress"
     | "user_ack"
     | "user_nack"
     | "error"
@@ -57,6 +58,15 @@ export interface SdkEvent {
   isError?: boolean;
   subtype?: string;
   result?: string;
+  /** On `workflow_progress` (synthesised by the BACK, see back/src/services/sdk/workflow.ts): the
+   *  live snapshot of a Workflow's fleet of subagents. `name` carries the script's name. */
+  runId?: string;
+  agents?: Array<{ id: string; label: string; status: "running" | "done"; result?: string }>;
+  /** A contagem do diário INTEIRO — a lista de `agents` tem teto, ela não. */
+  total?: number;
+  done?: number;
+  at?: number;
+  finished?: boolean;
   message?: string;
   raw?: string;
   /** Message provenance on `user` events — who sent it (see lib/chat.ts `MessageOrigin`). */
@@ -132,7 +142,8 @@ export type SdkRow =
    *  `from` = provenance on replayed/external messages: another card's agent, another person.
    *  `edited` = a later version SUPERSEDED this one (drawn dimmed, with the "editada" badge).
    *  `absorbed` = it arrived mid-turn and the driver folded it into the RUNNING turn (streaming
-   *  input) — drawn with the "entrou no turno em andamento" label so it never looks lost. */
+   *  input). Bookkeeping only — the bubble is NOT labelled: quem está na conversa vê a mensagem
+   *  entrar no turno em andamento na própria tela, e a etiqueta só repetia isso por escrito. */
   /** `state`: "sending" = no receipt yet (the socket took the frame, the back has not confirmed);
    *  "sent" = the back gravou (a `user_ack`, or a replay — the only proofs an F5 respects);
    *  "undelivered" = the back refused it (`user_nack`) or the receipt never came, so this browser
@@ -172,7 +183,31 @@ export type SdkRow =
    * model turn. Drawn as its own row rather than as assistant text — nobody said it, the session
    * reported it — and, like the terminal notes, it lives in the session only.
    */
-  | { kind: "command_output"; id: string; text: string };
+  | { kind: "command_output"; id: string; text: string }
+  /**
+   * A FROTA DE UM WORKFLOW, ao vivo — a linha que faltava.
+   *
+   * A tool `Workflow` devolve na hora e trabalha em segundo plano: o turno acabava, o chat ficava
+   * mudo por minutos e quem estava do outro lado lia aquilo como "ele terminou" (produção,
+   * 2026-10-02). Esta linha é o instantâneo que o back lê do diário da rodada: quantos subagentes
+   * já responderam, quais ainda correm, o que cada um devolveu. `phases` é o plano declarado no
+   * script (`meta.phases`), que chega pela chamada da tool. Vive só na sessão — como o raciocínio,
+   * não é conversa gravada; quem reabre a aba recebe o último quadro do back.
+   */
+  | {
+      kind: "workflow";
+      id: string;
+      runId: string;
+      name: string;
+      description?: string;
+      phases?: Array<{ title: string; detail?: string }>;
+      agents: Array<{ id: string; label: string; status: "running" | "done"; result?: string }>;
+      /** Quantos subagentes a rodada tem e quantos já responderam, contados no diário inteiro. */
+      total: number;
+      done: number;
+      at: number;
+      finished: boolean;
+    };
 
 export interface SdkChatState {
   rows: SdkRow[];
@@ -214,12 +249,20 @@ export interface SdkChatState {
    * fresh driver: whatever we interrupted is long gone).
    */
   interruptRequested: boolean;
+  /**
+   * O PLANO de cada workflow que esta sessão disparou, por `meta.name` — a descrição e as fases
+   * declaradas no script. Vem da CHAMADA da tool (o script inteiro está no `input`), e o progresso
+   * vem do back minutos depois, pelo nome: os dois lados se encontram aqui. Guardado no estado, e
+   * não na linha, porque a chamada acontece antes de existir linha de progresso alguma.
+   */
+  workflowMeta: Record<string, { description?: string; phases?: Array<{ title: string; detail?: string }> }>;
   /** Monotonic counter for rows the driver did not name. */
   seq: number;
 }
 
 export const INITIAL_SDK_STATE: SdkChatState = {
   rows: [],
+  workflowMeta: {},
   ready: false,
   turnActive: false,
   terminalBurst: false,
@@ -333,6 +376,88 @@ function line(value: string, max = SUMMARY_MAX): string {
 function basename(path: string): string {
   const parts = path.split("/").filter(Boolean);
   return parts[parts.length - 1] ?? path;
+}
+
+/** O que o script de um workflow DECLARA sobre si mesmo: o bloco `meta` do topo. */
+export interface WorkflowScriptMeta {
+  name: string;
+  description?: string;
+  phases?: Array<{ title: string; detail?: string }>;
+}
+
+/**
+ * Uma string literal de JS, aspas simples ou duplas, com escapes — DOIS grupos de captura. Crases
+ * não entram de propósito: o `meta` é, por contrato do harness, um literal puro (sem interpolação).
+ */
+const LITERAL = "(?:'((?:[^'\\\\]|\\\\.)*)'|\"((?:[^\"\\\\]|\\\\.)*)\")";
+
+/** O conteúdo do primeiro dos dois grupos que casou, com os escapes mais comuns desfeitos. PURE. */
+function literal(match: RegExpMatchArray | null | undefined, first: number): string | undefined {
+  if (!match) return undefined;
+  const raw = match[first] ?? match[first + 1];
+  if (raw === undefined) return undefined;
+  return raw.replace(/\\(['"\\])/g, "$1").replace(/\\n/g, " ").trim();
+}
+
+/**
+ * Lê o `meta` do script do workflow — o PLANO que o modelo declarou ao disparar a frota: nome,
+ * descrição e fases. O script chega inteiro no `input` da chamada da tool, e o `meta` é, por
+ * contrato do harness, um literal puro no topo dele: nada é avaliado aqui, só lido.
+ *
+ * Tolerante por desenho: um script sem `meta` (ou com um `meta` que esta leitura não entende)
+ * devolve o que deu para entender e a tela desenha o resto — um painel sem as fases ainda é
+ * infinitamente melhor do que a tela muda que existia antes dele. PURE.
+ */
+export function parseWorkflowScriptMeta(script: unknown): WorkflowScriptMeta | null {
+  const text = typeof script === "string" ? script.slice(0, 20_000) : "";
+  const start = text.indexOf("export const meta");
+  if (start < 0) return null;
+  const block = text.slice(start, start + 8_000);
+  const name = literal(block.match(new RegExp("\\bname:\\s*" + LITERAL)), 1);
+  if (!name) return null;
+  const description = literal(block.match(new RegExp("\\bdescription:\\s*" + LITERAL)), 1);
+  const phases: Array<{ title: string; detail?: string }> = [];
+  const phasesAt = block.indexOf("phases:");
+  if (phasesAt >= 0) {
+    const closes = block.indexOf("]", phasesAt);
+    const list = block.slice(phasesAt, closes < 0 ? undefined : closes + 1);
+    const entry = new RegExp("\\btitle:\\s*" + LITERAL + "(?:\\s*,\\s*detail:\\s*" + LITERAL + ")?", "g");
+    for (const match of list.matchAll(entry)) {
+      const title = literal(match, 1);
+      if (!title) continue;
+      const detail = literal(match, 3);
+      phases.push({ title, ...(detail ? { detail } : {}) });
+    }
+  }
+  return { name, ...(description ? { description } : {}), ...(phases.length ? { phases } : {}) };
+}
+
+/**
+ * O que um subagente devolveu, legível. Quase todo `agent()` de workflow volta com `schema`, então o
+ * diário guarda um OBJETO — e cru na tela isso é uma linha de JSON cortada no meio. Vira
+ * `chave: valor`, uma por linha, que é como a pessoa leria. Texto puro passa intacto, e um JSON que
+ * esta leitura não entende volta exatamente como veio: melhor cru do que escondido. PURE.
+ */
+export function formatAgentResult(raw: string): string {
+  const text = String(raw ?? "").trim();
+  if (!text.startsWith("{") && !text.startsWith("[")) return text;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return text; // cortado em 400 caracteres pela sonda, por exemplo
+  }
+  const one = (value: unknown): string => {
+    if (value === null || value === undefined) return "";
+    if (Array.isArray(value)) return value.map(one).filter(Boolean).join(" · ");
+    if (typeof value === "object") return JSON.stringify(value);
+    return String(value);
+  };
+  if (Array.isArray(parsed)) return parsed.map(one).filter(Boolean).join("\n");
+  if (!parsed || typeof parsed !== "object") return text;
+  return Object.entries(parsed as Record<string, unknown>)
+    .map(([key, value]) => `${key}: ${one(value)}`)
+    .join("\n");
 }
 
 export function toolHeadline(name: string, input: unknown): ToolHeadline {
@@ -720,15 +845,61 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       const marked = markSource(state, viaTerminal);
       const { id, seq } = nextId(marked, "t");
       const rows = settleStreaming(marked.rows);
+      // A chamada do Workflow carrega o PLANO (o `meta` do script). O progresso vem do back muito
+      // depois, só com o nome da rodada — é aqui que o plano fica guardado para encontrá-lo. Vale
+      // também no replay: um F5 no meio da frota reconstrói as fases a partir desta mesma linha.
+      const meta = event.name === "Workflow" ? parseWorkflowScriptMeta((event.input as { script?: unknown })?.script) : null;
+      const workflowMeta = meta
+        ? { ...marked.workflowMeta, [meta.name]: { description: meta.description, phases: meta.phases } }
+        : marked.workflowMeta;
       return {
         ...marked,
         seq,
+        workflowMeta,
         turnActive: nextTurnActive(marked, viaTerminal),
         awaiting: false,
         rows: [
           ...rows,
           { kind: "tool", id: event.id ?? id, name: event.name ?? "?", summary: toolSummary(event.input), input: event.input },
         ],
+      };
+    }
+    case "workflow_progress": {
+      // O back lendo o diário da frota (services/sdk/workflow.ts). NÃO mexe em `turnActive`: o
+      // turno que disparou o workflow já acabou — é exatamente por isso que esta linha existe.
+      // Uma rodada tem UMA linha: o quadro novo substitui o anterior, no lugar onde ele já estava.
+      const runId = event.runId;
+      if (!runId) return state;
+      const name = event.name ?? "";
+      const metas = Object.keys(state.workflowMeta);
+      // Pelo nome; e quando o back não conseguiu lê-lo (script apagado, nome estranho) mas esta
+      // sessão só disparou UM workflow, é esse — melhor o plano certo do que painel sem plano.
+      const meta = state.workflowMeta[name] ?? (metas.length === 1 ? state.workflowMeta[metas[0]!] : undefined);
+      const agents = Array.isArray(event.agents) ? event.agents : [];
+      const row: SdkRow = {
+        kind: "workflow",
+        id: `wf:${runId}`,
+        runId,
+        name,
+        ...(meta?.description ? { description: meta.description } : {}),
+        ...(meta?.phases?.length ? { phases: meta.phases } : {}),
+        agents,
+        total: typeof event.total === "number" ? event.total : agents.length,
+        done: typeof event.done === "number" ? event.done : agents.filter((a) => a.status === "done").length,
+        at: typeof event.at === "number" ? event.at : 0,
+        finished: event.finished === true,
+      };
+      const at = state.rows.findIndex((r) => r.kind === "workflow" && r.runId === runId);
+      if (at >= 0) return { ...state, rows: [...state.rows.slice(0, at), row, ...state.rows.slice(at + 1)] };
+      // A frota chega por fora do turno, e pode cair EM CIMA de uma resposta em streaming. Fechar
+      // essa linha aqui (o `settleStreaming` de todas as outras) faria o bloco consolidado que vem
+      // logo depois virar uma SEGUNDA linha: a mesma frase duas vezes, com o painel no meio. Então
+      // a linha aberta continua sendo a última — o painel entra logo antes dela.
+      const last = state.rows[state.rows.length - 1];
+      const stillWriting = last && (last.kind === "assistant" || last.kind === "thinking") && last.streaming;
+      return {
+        ...state,
+        rows: stillWriting ? [...state.rows.slice(0, -1), row, last] : [...state.rows, row],
       };
     }
     case "permission_request": {
@@ -777,8 +948,9 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
     }
     case "turn_absorbed": {
       // The driver's confirmation that the LAST send folded into the turn already running
-      // (streaming input): the newest not-yet-labelled user row gets the "entrou no turno em
-      // andamento" tag. Live-only — never replayed (by replay time the turn is history).
+      // (streaming input): the newest unmarked user row is recorded as absorbed — no label is
+      // drawn, the mark is what keeps this fold idempotent. Live-only — never replayed (by replay
+      // time the turn is history).
       const next = markUserAbsorbed(state);
       if (next === state && !state.awaiting) return state;
       return { ...next, turnActive: nextTurnActive(next, false), awaiting: false };
@@ -970,12 +1142,13 @@ function narratesTheCutTurn(row: SdkRow): boolean {
   return row.kind === "note" && (row.text === TURN_INTERRUPTED_NOTE || row.text === TURN_INTERRUPTED_EDIT_NOTE);
 }
 
-/** Mark the LAST not-yet-absorbed user row as folded into the running turn. PURE. */
+/** Mark the LAST not-yet-absorbed user row as folded into the running turn (no label; the mark is
+ * what makes a repeated `turn_absorbed` a no-op). PURE. */
 export function markUserAbsorbed(state: SdkChatState): SdkChatState {
   for (let i = state.rows.length - 1; i >= 0; i -= 1) {
     const row = state.rows[i]!;
     if (row.kind !== "user") continue;
-    if (row.absorbed === true) return state; // the newest user row is already labelled — nothing newer to label
+    if (row.absorbed === true) return state; // the newest user row is already marked — nothing newer to mark
     const rows = [...state.rows.slice(0, i), { ...row, absorbed: true }, ...state.rows.slice(i + 1)];
     return { ...state, rows };
   }

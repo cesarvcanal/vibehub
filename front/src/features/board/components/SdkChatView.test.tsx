@@ -737,9 +737,10 @@ describe("SdkChatView — mensagem dobrada no turno por OUTRO remetente (turn_ab
   /**
    * O próprio campo não dobra mais nada em turno rodando — o que ele escreve ESPERA na fila (ver o
    * bloco "fila"). Mas a dobra continua existindo para quem manda por fora (o maestro, o MCP, outra
-   * aba), e essa mensagem tem de chegar rotulada: ela entrou no meio de um raciocínio em curso.
+   * aba): a bolha sobe na conversa, SEM etiqueta. Quem está na tela vê a mensagem entrar no turno
+   * em andamento; o "entrou no turno em andamento" por escrito só repetia o que já estava à vista.
    */
-  it("labels the bubble 'entrou no turno em andamento' when the driver folds an outside send in", async () => {
+  it("shows the folded bubble WITHOUT an 'entrou no turno em andamento' label", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -754,12 +755,10 @@ describe("SdkChatView — mensagem dobrada no turno por OUTRO remetente (turn_ab
     ws.deliver({ type: "user", text: "aproveita e ajusta o título", from: { kind: "agent", name: "maestro" } });
     ws.deliver({ type: "turn_absorbed" });
 
-    const label = await screen.findByTestId("sdk-user-absorbed");
-    expect(label).toHaveTextContent(/entrou no turno em andamento|joined the running turn/);
-    // only the folded bubble carries it — the first message opened the turn normally
-    expect(screen.getAllByTestId("sdk-user-absorbed")).toHaveLength(1);
-    const bubbles = screen.getAllByTestId("sdk-user");
+    const bubbles = await screen.findAllByTestId("sdk-user");
     expect(bubbles[1]).toHaveTextContent("aproveita e ajusta o título");
+    expect(screen.queryByTestId("sdk-user-absorbed")).toBeNull();
+    expect(screen.queryByText(/entrou no turno em andamento|joined the running turn/)).toBeNull();
   });
 });
 
@@ -2277,5 +2276,105 @@ describe("SdkChatView — o indicador diz o que a IA está dizendo", () => {
     await userEvent.type(box, "sobe pra prod{Enter}"); // sem `ready`: a sessão ainda está subindo
 
     expect(await screen.findByTestId("sdk-working-note")).toHaveTextContent(/preparando a sessão|preparing the session/i);
+  });
+});
+
+describe("SdkChatView — o painel da frota do Workflow", () => {
+  const SCRIPT = [
+    "export const meta = {",
+    "  name: 'auditoria-do-pdv',",
+    "  description: 'Varre o PDV atrás de bugs e verifica cada achado',",
+    "  phases: [{ title: 'Achar' }, { title: 'Verificar' }],",
+    "}",
+  ].join("\n");
+
+  async function fleetOnScreen() {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "t1", name: "Workflow", input: { script: SCRIPT } });
+    ws.deliver({ type: "assistant_text", text: "Disparei a frota — te trago quando voltar." });
+    ws.deliver({ type: "result" });
+    return ws;
+  }
+
+  it("desenha a frota em movimento: nome, plano, contagem e barra", async () => {
+    const ws = await fleetOnScreen();
+    ws.deliver({
+      type: "workflow_progress",
+      runId: "wf_1",
+      name: "auditoria-do-pdv",
+      at: 1,
+      finished: false,
+      agents: [
+        { id: "a1", label: "achar bugs em pdv/caixa", status: "done", result: "2 bugs: estoque negativo e troco" },
+        { id: "a2", label: "achar bugs em pdv/pagamento", status: "running" },
+      ],
+    });
+    const card = await screen.findByTestId("sdk-workflow");
+    expect(card).toHaveAttribute("data-run", "wf_1");
+    expect(card).not.toHaveAttribute("data-finished");
+    expect(screen.getByTestId("sdk-workflow-count")).toHaveTextContent(/1\/2/);
+    expect(card).toHaveTextContent("auditoria-do-pdv");
+    expect(card).toHaveTextContent("Varre o PDV atrás de bugs");
+    expect(screen.getByTestId("sdk-workflow-phases")).toHaveTextContent("Achar");
+    expect(screen.getByTestId("sdk-workflow-bar")).toHaveStyle({ width: "50%" });
+    expect(screen.getAllByTestId("sdk-workflow-agent")).toHaveLength(2);
+  });
+
+  it("clicar num subagente mostra o que ele devolveu", async () => {
+    const ws = await fleetOnScreen();
+    ws.deliver({
+      type: "workflow_progress",
+      runId: "wf_1",
+      name: "auditoria-do-pdv",
+      at: 1,
+      finished: false,
+      agents: [{ id: "a1", label: "achar bugs em pdv/caixa", status: "done", result: "2 bugs: estoque negativo e troco" }],
+    });
+    const agent = await screen.findByTestId("sdk-workflow-agent");
+    expect(screen.queryByTestId("sdk-workflow-result")).toBeNull();
+    await userEvent.click(agent);
+    expect(await screen.findByTestId("sdk-workflow-result")).toHaveTextContent("estoque negativo");
+    await userEvent.click(agent); // e fecha de novo
+    expect(screen.queryByTestId("sdk-workflow-result")).toBeNull();
+  });
+
+  it("um subagente ainda rodando diz isso em vez de mentir um resultado", async () => {
+    const ws = await fleetOnScreen();
+    ws.deliver({
+      type: "workflow_progress", runId: "wf_1", name: "auditoria-do-pdv", at: 1, finished: false,
+      agents: [{ id: "a2", label: "achar bugs em pdv/pagamento", status: "running" }],
+    });
+    await userEvent.click(await screen.findByTestId("sdk-workflow-agent"));
+    expect(await screen.findByTestId("sdk-workflow-result")).toHaveTextContent(/ainda trabalhando|still working/);
+  });
+
+  it("terminada, a frota se recolhe sozinha e vira uma linha de resumo", async () => {
+    const ws = await fleetOnScreen();
+    const run = {
+      type: "workflow_progress" as const, runId: "wf_1", name: "auditoria-do-pdv",
+      agents: [{ id: "a1", label: "achar bugs", status: "done" as const, result: "ok" }],
+    };
+    ws.deliver({ ...run, at: 1, finished: false });
+    expect(await screen.findByTestId("sdk-workflow-agent")).toBeInTheDocument();
+    ws.deliver({ ...run, at: 2, finished: true });
+    await waitFor(() => expect(screen.getByTestId("sdk-workflow")).toHaveAttribute("data-finished", "true"));
+    expect(screen.queryByTestId("sdk-workflow-agent")).toBeNull(); // recolhida
+    expect(screen.getByTestId("sdk-workflow-count")).toHaveTextContent(/1\/1/);
+    expect(screen.getByTestId("sdk-workflow")).toHaveTextContent(/concluído|done/);
+  });
+
+  it("dois quadros da mesma rodada desenham UM cartão, não dois", async () => {
+    const ws = await fleetOnScreen();
+    const base = { type: "workflow_progress" as const, runId: "wf_1", name: "auditoria-do-pdv", finished: false };
+    ws.deliver({ ...base, at: 1, agents: [{ id: "a1", label: "um", status: "running" as const }] });
+    ws.deliver({ ...base, at: 2, agents: [
+      { id: "a1", label: "um", status: "done" as const, result: "r" },
+      { id: "a2", label: "dois", status: "running" as const },
+    ] });
+    await waitFor(() => expect(screen.getByTestId("sdk-workflow-count")).toHaveTextContent(/1\/2/));
+    expect(screen.getAllByTestId("sdk-workflow")).toHaveLength(1);
   });
 });
