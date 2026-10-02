@@ -27,6 +27,7 @@ import { previewRoutes, installPreviewUpgrade } from "./routes/preview.js";
 import { cardSdkRoutes } from "./routes/cardSdk.js";
 import { startPauseReconciler, sweepCardUploads, sweepIdleCards } from "./services/board/workspace.js";
 import { sweepOrphanCardData } from "./services/board/purge.js";
+import { sweepDoneCards } from "./services/board/retention.js";
 import { startOutboxFlusher } from "./services/board/outbox.js";
 import { startRunnerReaper } from "./services/reaper/reaper.js";
 import { shutdownAllDrivers } from "./services/sdk/manager.js";
@@ -165,6 +166,24 @@ function startOrphanSweep(): NodeJS.Timeout {
   return timer;
 }
 
+/**
+ * How often the done-card retention runs. ONCE A DAY, like the other retention sweeps: what it
+ * deletes has been finished for six months, so there is no version of this that needs to be prompt.
+ */
+const DONE_RETENTION_SWEEP_MS = 24 * 60 * 60_000;
+
+/**
+ * The cards nobody has touched in `done` for six months (see `DONE_RETENTION_DAYS`): purged, not
+ * hidden — with their worktree, their branch and their conversation. Runs once at boot too, so an
+ * install restarted more often than daily still sweeps; the pass is capped and logged.
+ */
+function startDoneRetentionSweep(): NodeJS.Timeout {
+  void sweepDoneCards();
+  const timer = setInterval(() => void sweepDoneCards(), DONE_RETENTION_SWEEP_MS);
+  timer.unref?.();
+  return timer;
+}
+
 async function main(): Promise<void> {
   await mkdir(config.dataDir, { recursive: true });
   const app = await buildServer();
@@ -179,6 +198,10 @@ async function main(): Promise<void> {
   // The orphan sweep, same reasoning: a card that was deleted must not leave its conversation or
   // its files on the server, and a delete that failed halfway is collected here.
   startOrphanSweep();
+  // The done-card retention, same reasoning again: a card finished six months ago is deleted with
+  // everything that belonged to it, and a test that boots the app must not inherit a timer that
+  // deletes cards.
+  startDoneRetentionSweep();
   // Pending pauses are normally closed by the Stop hook, but a session can go quiet without ever
   // firing one (Claude parked on the "Resume from summary" menu, on a permission question, or
   // killed). This asks the runner about those cards on a timer and finishes the pause — a card in
