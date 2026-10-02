@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -22,8 +22,8 @@ async function load() {
   vi.doMock("./workspace.js", () => ({ reapplyCardIdentity: reapply }));
   const registry = await import("./registry.js");
   registry.resetForTesting();
-  const { recordCardActor } = await import("./actor.js");
-  return { registry, recordCardActor };
+  const { recordCardActor, authorsTheTurn } = await import("./actor.js");
+  return { registry, recordCardActor, authorsTheTurn };
 }
 
 const owner = { id: "u-cesar", username: "cesar", role: "owner" as const, createdAt: "" };
@@ -87,5 +87,68 @@ describe("o ator do card decide a identidade do commit", () => {
     const card = await seed(registry);
     await recordCardActor(null, card.id);
     expect((await registry.getCard(card.id))?.actorUserId).toBeUndefined();
+  });
+});
+
+/**
+ * AUTORIA POR MENSAGEM. O chat nativo carimbava o ator no CONNECT: com o César e o Mussa no mesmo
+ * card ao mesmo tempo, o commit saía no nome de quem tinha aberto por último, não no de quem
+ * mandou o pedido. Agora cada mensagem carimba — e por isso ela precisa ser BARATA: o board.json
+ * inteiro é reescrito a cada mutação, e um write por mensagem (mais um docker exec) é justamente a
+ * sobrecarga a evitar.
+ */
+describe("autoria por mensagem — barata quando nada muda", () => {
+  it("mensagem repetida do mesmo autor NÃO reescreve o board.json", async () => {
+    const { registry, recordCardActor } = await load();
+    const card = await seed(registry);
+    const file = join(dir, "board.json");
+
+    await recordCardActor(owner, card.id);
+    const before = (await stat(file)).mtimeMs;
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Dez mensagens seguidas da mesma pessoa: nada mudou, nada é escrito.
+    for (let i = 0; i < 10; i += 1) await recordCardActor(owner, card.id);
+
+    expect((await stat(file)).mtimeMs).toBe(before);
+    expect((await registry.getCard(card.id))?.actorUserId).toBe(owner.id);
+  });
+
+  it("a troca real continua escrevendo e reaplicando — uma vez", async () => {
+    const { registry, recordCardActor } = await load();
+    const card = await seed(registry);
+    await registry.shareWith({ kind: "card", targetId: card.id, userId: mussa.id, level: "work" });
+
+    await recordCardActor(owner, card.id);
+    reapply.mockClear();
+    await recordCardActor(mussa, card.id);
+    await recordCardActor(mussa, card.id);
+
+    expect((await registry.getCard(card.id))?.actorUserId).toBe(mussa.id);
+    expect(reapply.mock.calls.length).toBe(1);
+  });
+});
+
+describe("authorsTheTurn (pura) — que frame do chat é um pedido de trabalho", () => {
+  it("mensagem do usuário (objeto ou texto cru) e edição de mensagem SIM", async () => {
+    const { authorsTheTurn } = await load();
+    expect(authorsTheTurn('{"type":"user","text":"commita isso"}')).toBe(true);
+    expect(authorsTheTurn("commita isso")).toBe(true);
+    expect(authorsTheTurn('{"type":"edit_user","original":"a","text":"b"}')).toBe(true);
+  });
+
+  it("interromper, responder permissão ou pergunta NÃO troca a autoria", async () => {
+    const { authorsTheTurn } = await load();
+    // Clicar em "permitir" no pedido de quem está trabalhando não torna o espectador o autor.
+    expect(authorsTheTurn('{"type":"interrupt"}')).toBe(false);
+    expect(authorsTheTurn('{"type":"permission_decision","id":"perm_1","allow":true}')).toBe(false);
+    expect(authorsTheTurn('{"type":"question_answer","id":"q1","answers":[{"selected":["a"]}]}')).toBe(false);
+  });
+
+  it("frame vazio ou quebrado não carimba ninguém", async () => {
+    const { authorsTheTurn } = await load();
+    expect(authorsTheTurn("")).toBe(false);
+    expect(authorsTheTurn("   ")).toBe(false);
+    expect(authorsTheTurn('{"type":"weird"}')).toBe(false);
   });
 });
