@@ -185,6 +185,17 @@ export function buildSetupScript(opts: {
     `git config --global user.name ${shQuote(git.name)}`,
     `git config --global user.email ${shQuote(git.email)}`,
     "git config --global --add safe.directory '*'",
+    // `gh` SHIM. The install-wide identity above is only the FALLBACK: a card's real author and
+    // credential are written per-worktree when the card opens, and rewritten whenever the person
+    // working it changes (see services/board/workspace.ts buildIdentityScript). `git` picks that up
+    // by itself — it reads config and runs the credential helper on every call. `gh` does not: it
+    // reads GH_TOKEN from the environment, which the tmux session exported ONCE when it was born.
+    // Without this shim, a `gh pr create` typed into a session that was opened by somebody else
+    // would open the PR as that person, silently. Reading the file at call time fixes it.
+    "grep -q VIBEHUB_GH_SHIM /root/.bashrc 2>/dev/null || cat >> /root/.bashrc <<'VIBEHUB_GH_SHIM'",
+    "# VIBEHUB_GH_SHIM",
+    'gh() { local f="/root/.vibehub/gh/$VIBEHUB_CARD_ID.token"; if [ -n "$VIBEHUB_CARD_ID" ] && [ -s "$f" ]; then GH_TOKEN="$(cat "$f")" command gh "$@"; else command gh "$@"; fi; }',
+    "VIBEHUB_GH_SHIM",
     "cat > /root/.claude/settings.json <<'VIBEHUB_SETTINGS'",
     settingsJson,
     "VIBEHUB_SETTINGS",

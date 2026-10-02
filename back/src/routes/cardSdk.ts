@@ -1,8 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import { requireCardWork } from "../auth/access.js";
+import { currentUser } from "../auth/session.js";
 import { findUser } from "../auth/users.js";
 import * as registry from "../services/board/registry.js";
+import { recordCardActor } from "../services/board/actor.js";
 import { getSettings } from "../services/settings/settings.js";
 import { installCardSdkDriver, sdkDriverCommand } from "../services/sdk/driver.js";
 import { attachSocket, ensureDriverSession, handleClientFrame, hasDriverSession, replyFrameOutcome } from "../services/sdk/manager.js";
@@ -72,6 +74,7 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       const pendingFrames: string[] = [];
       const bufferFrame = (raw: Buffer): void => { pendingFrames.push(raw.toString()); };
       socket.on("message", bufferFrame);
+      await recordCardActor(await currentUser(req), req.params.id);
       const settings = await getSettings();
       if (!settings.sdkDriver) {
         try { socket.send(JSON.stringify({ type: "error", message: "the SDK driver is off (enable the sdkDriver setting)" })); } catch { /* ignore */ }
