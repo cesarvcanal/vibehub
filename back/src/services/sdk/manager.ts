@@ -1,11 +1,13 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
+import { onCardDriverProbe, type DriverActivity } from "../board/agentState.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
 import { appendHistory, replayableHistoryEvent, rewindHistory } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inflight.js";
 import { forgetDriverKeys, noteDriverEventFor } from "./mirror.js";
 import { writeCardCatalog } from "./catalog.js";
+import { forgetCardWorkflows, lastWorkflowRuns, watchCardWorkflows } from "./workflow.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
   buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, encodeControl,
@@ -57,6 +59,13 @@ export interface DriverSession {
   ready: boolean;
   /** Latest session id the driver reported — the resume key (also persisted on the card). */
   lastSessionId?: string;
+  /**
+   * The card's transcript directory inside the runner (`/root/.claude/projects/<slug>`). It is the
+   * root of where the harness writes a workflow's journal, and the ONLY reason the manager knows
+   * it: see `workflowDirs` below. Absent = this driver was spawned without it and the fleet simply
+   * is not watched.
+   */
+  transcriptDir?: string;
   /** Turns in flight or queued in the driver: +1 per user send, -1 per result. */
   activeTurns: number;
   /**
@@ -80,11 +89,23 @@ export interface DriverSession {
    */
   pendingInterruptNote?: string;
   /**
-   * The message an edit in flight is replacing — the log's cut point if the driver answers that it
-   * REWOUND. Set when the edit is written to stdin, cleared by either answer, so a `rewound` that
-   * belongs to nothing (a driver that reports twice, a stale frame) cuts nothing.
+   * THE EDITS IN FLIGHT, oldest first — one entry per `edit_user` written to stdin, consumed in
+   * order by the `rewound` answers that come back. A `rewound` that belongs to nothing (a driver
+   * reporting twice, a stale frame) finds the queue empty and cuts nothing.
+   *
+   * `original` is the message being replaced (the log's cut point); `text` is the CORRECTED
+   * version. Both are needed because the two shapes of an edit reach the model with DIFFERENT
+   * words — the clean text after a rewind, the supersede wrapper when the rewind is refused — and
+   * only the driver chooses. The mirror's dedupe is registered at send time with the wrapper, so
+   * a rewind left the transcript line unrecognised and the terminal mirror published the corrected
+   * message a second time: one more bubble UNDER the one just corrected (produção, 2026-10-01).
+   *
+   * A QUEUE and not one slot because nothing stops a second edit from going out before the first
+   * is answered (with no turn running the screen dispatches an edit immediately). With one slot
+   * the second overwrote the first, and then the first `rewound` cut the log at the WRONG message —
+   * deleting a correction the person wrote and the model had already read.
    */
-  rewindTarget?: string;
+  rewinds: Array<{ original: string; text: string }>;
   /**
    * OS RECIBOS JÁ EMITIDOS — `cid` → a mesma promessa de durabilidade que o primeiro envio ganhou.
    *
@@ -183,6 +204,17 @@ export function isCardChatInUse(cardId: string): boolean {
   return session.sockets.size > 0 || session.activeTurns > 0;
 }
 
+/**
+ * What this card's driver is doing right now, for the board's session view (see
+ * `onCardDriverProbe` in services/board/agentState.ts): `turn` while a turn is in flight, `idle`
+ * for a live driver at the prompt, `none` when there is no driver. Read-only and in-memory.
+ */
+export function driverActivity(cardId: string): DriverActivity {
+  const session = sessions.get(cardId);
+  if (!session || session.closed) return "none";
+  return session.activeTurns > 0 ? "turn" : "idle";
+}
+
 /* ---------------------------------------------------------------- helpers */
 
 /** ws sockets expose the raw TCP socket as `_socket`; flushing small frames beats batching them. */
@@ -266,6 +298,11 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     // no INSTANTE do connect — não depois do boot do driver seguinte (ver ./catalog.ts).
     void writeCardCatalog(session.cardId, event);
   }
+  // A FROTA FICOU VISÍVEL. A tool `Workflow` devolve na hora e trabalha em segundo plano: o turno
+  // acaba, o modelo diz "te trago quando voltar" e o chat ficava mudo por minutos — lido do outro
+  // lado como "ele terminou" (produção, 2026-10-02). A sondagem do diário começa aqui, no instante
+  // da chamada, e se encerra sozinha (ver services/sdk/workflow.ts): é ela quem alimenta o painel.
+  if (event.type === "tool_use" && event.name === "Workflow") startWorkflowWatch(session);
   if (event.type === "turn_absorbed") {
     // Streaming input: this send folded into the turn ALREADY running (the model absorbs it at its
     // next step) — it will not produce its own `result`, so its +1 comes back off. Floor at 1: an
@@ -284,28 +321,74 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     if (session.activeTurns === 0) void clearInflightMarker(session.cardId);
     maybeScheduleIdleStop(session);
   }
-  if (event.type === "rewound" && event.ok) {
-    // The session was taken back in time; the LOG has to follow, or a reload replays a
-    // conversation the model no longer has. `session.rewindTarget` is the original text the edit
-    // that caused this was replacing — set when the edit was sent, consumed here.
-    const original = session.rewindTarget;
-    session.rewindTarget = undefined;
-    if (original !== undefined) {
-      void rewindHistory(session.cardId, original).then((dropped) => {
+  let silenced = false;
+  if (event.type === "rewound") {
+    // One answer, one edit: the oldest unanswered one. `ok: false` consumes its entry too (the
+    // driver fell back to a supersede — there is nothing to cut, but that edit IS answered).
+    const edit = session.rewinds.shift();
+    if (event.ok && edit) {
+      // A REWIND means the CLEAN text went to the model — not the supersede wrapper this edit was
+      // registered with. The transcript will carry those words, and the mirror only drops a line
+      // it recognises as the driver's own: without this key it republished the corrected message
+      // as if the terminal had just said it, drawing a SECOND bubble under the corrected one.
+      if (edit.text !== "") noteDriverEventFor(session.cardId, { type: "user", text: edit.text });
+      // A nota do corte ("…a resposta acima ficou pela metade") perde o assunto: o rebobinar
+      // APAGOU essa meia resposta. Quase sempre ela já saiu antes daqui — o `endStream` do driver
+      // ESPERA o `result` do stream morrendo antes de anunciar o rebobinar, então o result (e a
+      // nota com ele) vem primeiro, e quem a tira é o corte do log (`dropOrphanInterruptNotes`).
+      // Isto cobre a outra janela: o stream que não solta dentro do prazo do `endStream`, e o
+      // `rewound` chega na frente — evita escrever uma linha que já nasceria órfã. Dentro do `if`
+      // do dono, como o corte: um frame que não pertence a edição nenhuma não apaga a nota de uma
+      // parada que foi de outra pessoa.
+      session.pendingInterruptNote = undefined;
+      void rewindHistory(session.cardId, edit.original, edit.text).then((dropped) => {
         logger.info(
           { audit: true, action: "sdk.rewind", card: session.label, dropped },
           "the conversation was rewound to before an edited message",
         );
       });
+    } else if (event.ok) {
+      // Um `ok: true` SEM dono (driver repetindo, frame atrasado) não chega à tela: lá ele não é
+      // inofensivo como aqui. `dropRewoundRows` corta da última linha "editada" até a última
+      // mensagem — e uma edição RECUSADA deixa essa marca para sempre —, então um frame perdido
+      // apagaria turnos inteiros que o modelo ainda tem. O log já se protege sozinho (sem dono,
+      // sem corte); a tela não tem como.
+      silenced = true;
+      logger.warn(
+        { audit: true, action: "sdk.rewind.orphan", card: session.label },
+        "a rewind confirmation arrived for no edit in flight — not forwarded to the screen",
+      );
     }
   }
-  if (event.type === "rewound" && !event.ok) session.rewindTarget = undefined;
-  broadcast(session, event);
+  if (!silenced) broadcast(session, event);
   if (interruptNoteToFlush) emitSystemNote(session, interruptNoteToFlush);
   // History + mirror dedupe are MANAGER duties, not socket duties: they must keep happening while
   // no page is open — that is the whole point of the detach.
   noteDriverEventFor(session.cardId, event);
   if (replayableHistoryEvent(event)) void appendHistory(session.cardId, { ...event, at: Date.now() });
+}
+
+/**
+ * Onde a sessão ATUAL deste card guarda as rodadas de workflow e os scripts delas. Os dois caminhos
+ * são do harness (`<transcriptDir>/<sessionId>/…`) e dependem do id de sessão, que só existe depois
+ * do primeiro `session`/`result` — antes disso não há o que sondar. PURE (dado o estado da sessão).
+ */
+export function workflowDirs(session: Pick<DriverSession, "transcriptDir" | "lastSessionId">): { runs: string; scripts: string } | null {
+  const dir = session.transcriptDir;
+  const sessionId = session.lastSessionId;
+  if (!dir || !sessionId) return null;
+  const base = `${dir.replace(/\/+$/, "")}/${sessionId}`;
+  return { runs: `${base}/subagents/workflows`, scripts: `${base}/workflows/scripts` };
+}
+
+/** Liga a sondagem da frota deste card (idempotente — ver `watchCardWorkflows`). */
+function startWorkflowWatch(session: DriverSession): void {
+  watchCardWorkflows(session.cardId, {
+    label: session.label,
+    dirs: () => workflowDirs(session),
+    watchers: () => session.sockets.size,
+    publish: (run) => broadcast(session, { type: "workflow_progress", ...run }),
+  });
 }
 
 /* ------------------------------------------------------------------- API */
@@ -316,6 +399,8 @@ export interface EnsureDriverOpts {
   label: string;
   /** The spawn command (built by the route via `sdkDriverCommand` + `resumeTargetFor`). */
   command: { file: string; args: string[] };
+  /** The card's transcript dir in the runner — where a workflow's journal lives (optional). */
+  transcriptDir?: string;
 }
 
 /**
@@ -334,11 +419,13 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     sockets: new Set(),
     ready: false,
     activeTurns: 0,
+    rewinds: [],
     idleTimer: null,
     buffer: "",
     stderrTail: "",
     closed: false,
     acceptedCids: new Map(),
+    ...(opts.transcriptDir ? { transcriptDir: opts.transcriptDir } : {}),
   };
   sessions.set(opts.cardId, session);
   logger.info({ card: opts.label }, "sdk driver spawned (card-owned, survives the page)");
@@ -364,8 +451,15 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     // KEEP the tail, don't just debug-log it: in the original incident the driver died with its
     // stderr invisible (debug level) and its exit frame sent to an already-closed socket — a fully
     // SILENT death. The tail is the post-mortem the exit handler below reports.
-    session.stderrTail = (session.stderrTail + chunk.toString()).slice(-STDERR_TAIL_MAX);
-    logger.debug({ card: opts.label, stderr: chunk.toString().slice(0, 500) }, "sdk driver stderr");
+    const text = chunk.toString();
+    session.stderrTail = (session.stderrTail + text).slice(-STDERR_TAIL_MAX);
+    // O driver fala por `[sdk-driver] …` quando ENGOLE alguma coisa de propósito (um erro de
+    // stream que era teardown nosso, um diagnóstico interno do CLI). Engolir em nível `debug` é
+    // invisível em produção — exatamente o ponto cego do incidente da morte silenciosa —, então
+    // essas linhas sobem para `warn`. O resto do stderr segue sendo ruído de boot.
+    const deliberate = text.includes("[sdk-driver] ");
+    const log = deliberate ? logger.warn.bind(logger) : logger.debug.bind(logger);
+    log({ card: opts.label, stderr: text.slice(0, 500) }, "sdk driver stderr");
   });
   child.on("error", (err) => {
     logger.warn({ card: opts.label, detail: err.message }, "sdk driver process error");
@@ -380,6 +474,9 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     if (sessions.get(opts.cardId) === session) sessions.delete(opts.cardId);
     // A memória de dedupe é do DRIVER: ele acabou, ela acaba junto — o sucessor fala do zero.
     forgetDriverKeys(opts.cardId);
+    // A sondagem da frota também: ela publica NESTA sessão. Deixada de pé, ela ainda recusaria ser
+    // substituída pela do driver seguinte (a segunda chamada só estende a primeira).
+    forgetCardWorkflows(opts.cardId);
     const stderrNote = session.stderrTail.trim() === "" ? "" : ` — stderr: ${session.stderrTail.trim().slice(-400)}`;
     broadcast(session, { type: "error", message: `driver exited (code ${code ?? "?"})${stderrNote}` });
     for (const socket of session.sockets) {
@@ -489,8 +586,10 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
     if (!writeToDriver(session, { type: "edit_user", original: control.original, text: control.text, fallback: wrapped })) {
       return { kind: "refused", cid: control.cid, reason: "driver-gone" };
     }
-    // Which message a `rewound: ok` will cut the log back to. Set BEFORE the driver can answer.
-    session.rewindTarget = control.original;
+    // Which message a `rewound: ok` will cut the log back to, and which words went in its place.
+    // Enqueued BEFORE the driver can answer, and in send order — the answers come back in the same
+    // order, one per edit.
+    session.rewinds.push({ original: control.original, text: control.text });
     session.activeTurns += 1;
     clearIdleTimer(session);
     noteChatActivity(session);
@@ -596,6 +695,14 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
     try { socket.send(JSON.stringify(session.catalog)); } catch { /* going away */ }
   }
 
+  // A frota do workflow é da mesma natureza do catálogo: estado, não conversa. Ela não está no
+  // histórico replayado, e uma aba que abre no meio de uma rodada (ou logo depois dela) precisa
+  // desenhar o painel no primeiro quadro — senão a tela volta a dizer, por 4 segundos ou para
+  // sempre, que não há nada acontecendo.
+  for (const run of lastWorkflowRuns(session.cardId)) {
+    try { socket.send(JSON.stringify({ type: "workflow_progress", ...run })); } catch { /* going away */ }
+  }
+
   const keepalive = setInterval(() => {
     try { socket.ping?.(); } catch { /* the close handler cleans up */ }
   }, KEEPALIVE_MS);
@@ -629,6 +736,8 @@ export function stopCardDriver(cardId: string): void {
   // A DELIBERATE stop (pause, hibernate, restart, delete, model switch, idle) abandons the turn on
   // purpose — the marker comes off so the next boot does not "resume" something a person ended.
   void clearInflightMarker(cardId);
+  // A sondagem da frota é filha deste driver: sem ele não há a quem publicar nem sessão para ler.
+  forgetCardWorkflows(cardId);
   logger.debug({ card: session.label }, "sdk driver stopped");
 }
 
@@ -664,3 +773,8 @@ onCardSessionKill((cardId) => stopCardDriver(cardId));
 // live conversation is precisely how a message got written into a dead pipe and answered by
 // nobody. Close the page and the driver idles out on its own; the card is hibernatable again.
 onCardInUseProbe((cardId) => isCardChatInUse(cardId));
+
+// …e a terceira: QUEM responde por este card. A sondagem do tmux não enxerga o driver (ele é filho
+// do back, não do painel do tmux), então sem isto a visão de sessão lia o card como "Claude saiu" —
+// o banner "Claude parou" por cima de uma conversa que estava respondendo.
+onCardDriverProbe((cardId) => driverActivity(cardId));

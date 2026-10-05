@@ -1264,6 +1264,34 @@ describe("board registry (persisted)", () => {
       await expect(reg.removeMcp(mcp.id)).rejects.toThrow(/MCP not found/);
     });
   });
+  it("stampCardActor: registra quem está trabalhando e diz quando MUDOU", async () => {
+    const p = await seedProject();
+    const card = await reg.createCard({ projectId: p.id, title: "um card" });
+    expect(card.actorUserId).toBeUndefined();
+
+    const first = await reg.stampCardActor(card.id, "u-cesar");
+    expect(first?.changed).toBe(true);
+    expect(first?.card.actorUserId).toBe("u-cesar");
+    expect(first?.card.actorAt).toBeGreaterThan(0);
+
+    // Mesmo ator de novo: nada mudou — o chamador pula a reaplicação no runner.
+    expect((await reg.stampCardActor(card.id, "u-cesar"))?.changed).toBe(false);
+
+    const switched = await reg.stampCardActor(card.id, "u-mussa");
+    expect(switched?.changed).toBe(true);
+    expect(switched?.card.actorUserId).toBe("u-mussa");
+    expect((await reg.getCard(card.id))!.actorUserId).toBe("u-mussa");
+    });
+
+  it("stampCardActor: card inexistente ou usuário vazio devolve null, nunca estoura", async () => {
+    const p = await seedProject();
+    const card = await reg.createCard({ projectId: p.id, title: "um card" });
+    expect(await reg.stampCardActor("nao-existe", "u1")).toBeNull();
+    expect(await reg.stampCardActor(card.id, "")).toBeNull();
+    expect((await reg.getCard(card.id))!.actorUserId).toBeUndefined();
+    });
+
+
   describe("GitHub connections", () => {
     async function connect(label: string, login: string) {
       return await reg.addGithubConnection({ label, login });
@@ -1327,5 +1355,65 @@ describe("board registry (persisted)", () => {
       expect(await reg.listGithubConnections()).toEqual([]);
       expect((await reg.getProject(project.id))!.githubConnectionId).toBeUndefined();
     });
+  });
+});
+
+/**
+ * WHEN THE CARD WAS FINISHED — the stamp the retention sweep (services/board/retention.ts) reads.
+ * `updatedAt` cannot answer it: it moves on every rename and every account switch, so "done since"
+ * had to become a field of its own.
+ */
+describe("doneAt — the stamp of entering (and leaving) Done", () => {
+  let reg: Registry;
+
+  beforeEach(async () => {
+    reg = await freshRegistry();
+  });
+
+  async function seedCard() {
+    const project = await reg.createProject({ name: "widgets" });
+    const card = await reg.createCard({ projectId: project.id, title: "Tarefa" });
+    return { project, card };
+  }
+
+  it("a new card has no doneAt", async () => {
+    const { card } = await seedCard();
+    expect(card.doneAt).toBeUndefined();
+  });
+
+  it("entering Done stamps it; leaving Done clears it", async () => {
+    const { card } = await seedCard();
+    const done = await reg.updateCard(card.id, { column: "done" });
+    expect(done.doneAt).toBeGreaterThan(0);
+
+    const back = await reg.updateCard(card.id, { column: "working" });
+    expect(back.doneAt).toBeUndefined();
+  });
+
+  it("a move INSIDE Done (reordering) does not restart the clock", async () => {
+    const { project, card } = await seedCard();
+    const other = await reg.createCard({ projectId: project.id, title: "Outra" });
+    await reg.updateCard(other.id, { column: "done" });
+    const stamped = await reg.updateCard(card.id, { column: "done" });
+    const at = stamped.doneAt;
+
+    const moved = await reg.updateCard(card.id, { column: "done", position: 0 });
+    expect(moved.position).toBe(0);
+    expect(moved.doneAt).toBe(at);
+  });
+
+  it("a rename while in Done does not restart the clock either", async () => {
+    const { card } = await seedCard();
+    const at = (await reg.updateCard(card.id, { column: "done" })).doneAt;
+    const renamed = await reg.updateCard(card.id, { title: "Outro nome" });
+    expect(renamed.doneAt).toBe(at);
+    expect(renamed.updatedAt).toBeGreaterThanOrEqual(at!);
+  });
+
+  it("survives a reload — it is persisted, not derived", async () => {
+    const { card } = await seedCard();
+    const at = (await reg.updateCard(card.id, { column: "done" })).doneAt;
+    const reloaded = await freshRegistry();
+    expect((await reloaded.getCard(card.id))!.doneAt).toBe(at);
   });
 });

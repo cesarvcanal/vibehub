@@ -2,7 +2,7 @@ import * as React from "react";
 import { get, post } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { SecretInput } from "@/components/ui/secret-input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { StepError, StepFrame } from "@/features/setup/StepFrame";
@@ -93,10 +93,10 @@ export function GithubStep({
 
           <div className="space-y-1.5">
             <Label htmlFor="github-label">{t("github.accountName")}</Label>
-            <Input
+            <SecretInput
               id="github-label"
-              autoComplete="off"
-              spellCheck={false}
+              name="vibehub-github-account-label"
+              type="text"
               placeholder={t("github.accountNamePlaceholder")}
               maxLength={40}
               value={label}
@@ -111,11 +111,9 @@ export function GithubStep({
 
           <div className="space-y-1.5">
             <Label htmlFor="github-token">{t("github.accessToken")}</Label>
-            <Input
+            <SecretInput
               id="github-token"
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
+              name="vibehub-github-token"
               placeholder={t("github.tokenPlaceholder")}
               className="font-mono"
               value={token}

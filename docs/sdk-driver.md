@@ -151,6 +151,19 @@ de concordar**: o modelo (a sessão truncada), o log (`rewindHistory` corta do o
 marcador `message_edited`) e a tela (`dropRewoundRows` corta as mesmas linhas). Com `ok: false`
 ninguém corta nada — o supersede significa que tudo que está na tela ainda faz parte da conversa.
 
+Três detalhes que fazem as camadas realmente baterem:
+
+- **A nota do corte sai junto.** "A resposta acima ficou pela metade" fala de uma meia resposta que
+  o rebobinar apagou. No caminho comum ela está entre o original e o marcador, e o corte a leva; no
+  caminho do prazo de carência (a tela desiste de esperar o turno fechar e manda a edição assim
+  mesmo) ela aterrissa DEPOIS do marcador, e quem a tira é `dropOrphanInterruptNotes`. Na tela,
+  `dropRewoundRows` faz o mesmo na cauda.
+- **O `rewound: ok` tem dono.** O manager mantém uma FILA das edições em voo (`session.rewinds`) e
+  casa cada resposta com a sua, na ordem — duas edições antes da primeira resposta cortavam o log na
+  mensagem errada. Um `ok: true` sem dono (driver repetindo, frame atrasado) **não é repassado à
+  tela**: lá ele apagaria turnos inteiros que o modelo ainda tem.
+- **A chave de dedupe do espelho muda com o resultado.** Ver a seção da edição, abaixo.
+
 Invariante que os testes cercam: **a edição sempre chega ao modelo**. Recusa, falha ao derrubar o
 stream, `applyFlagSettings` quebrado — todos os caminhos terminam mandando a mensagem, como rewind
 ou como supersede. Uma edição que não chega é o único resultado inaceitável.
@@ -177,10 +190,21 @@ edição não reescreve o passado — é um **supersede**:
   ele grava e transmite `{ "type": "system_note", "text": "turn-interrupted" | "turn-interrupted-edit" }`.
   É código, não prosa — o front traduz (pt-BR/en) e a linha sobrevive ao F5, porque explica um texto
   que ficou cortado no meio. Um stop sem turno rodando não gera nota.
-- **Nada de balão vermelho mudo.** Um turno interrompido volta como `result` com `is_error` e SEM
-  texto; o chat desenhava literalmente a palavra "error". Agora: se o stop foi NOSSO
-  (`interruptRequested` no reducer), o result não desenha nada — a nota acima já contou a história;
-  se foi falha de verdade, a linha vira frase traduzida com o `subtype` e o que fazer.
+- **Nada de balão vermelho mudo.** O CLI encerra um turno interrompido como `error_during_execution`
+  com `terminal_reason: aborted_streaming | aborted_tools` e um diagnóstico interno
+  (`[ede_diagnostic] …`) no lugar de texto; o chat desenhava literalmente a palavra "error", e
+  depois o jargão. Agora a filtragem acontece no DRIVER, que é a camada que sobrevive ao F5 e à
+  segunda aba:
+  - `wasAborted(terminal_reason)` ⇒ o `result` vai com `isError: false`. Interrupção não é falha, e
+    a nota acima já contou a história. (`interruptRequested` no reducer continua como segunda
+    trava, mas ele é estado de uma aba só.)
+  - `humanErrorText` tira os diagnósticos internos do CLI (`[ede_diagnostic]`) de qualquer mensagem
+    de erro; se não sobrar nada, nada é emitido. `[session_crash]` NÃO é filtrado — jargão que a
+    pessoa pode agir em cima vale mais que um turno que para sem explicação.
+  - O stream que o próprio driver derruba (`endStream`, no rebobinar) não vira erro na tela: o SDK
+    reporta essa morte como exceção, e ela é nossa. O que é engolido vai pro stderr com o prefixo
+    `[sdk-driver]`, que o manager loga em `warn`.
+  - Falha de verdade continua virando frase traduzida com o `subtype` e o que fazer.
 - O manager (`handleClientFrame`) embrulha o texto com `buildSupersedeText` (protocol.ts) e escreve
   no stdin do driver **um turno `user` normal** — o driver não conhece `edit_user`:
 
@@ -196,8 +220,14 @@ edição não reescreve o passado — é um **supersede**:
 - A história (ndjson) ganha duas linhas: `{ "type": "message_edited", "originalText" }` (a bolha
   original é redesenhada atenuada com o selo "editada" — no replay também) e o novo
   `{ "type": "user", "text": <limpo>, "sent": <embrulhado> }`. `text` é o que a TELA mostra;
-  `sent` é o que foi pro stdin — e é pelo `sent` que `replayDedupeKey` casa a linha embrulhada que
-  o transcript vai carregar, então o replay nunca desenha o embrulho nem duplica a mensagem.
+  `sent` é a APOSTA de o que vai pro stdin, feita antes de o driver escolher — e é pelo `sent` que
+  `replayDedupeKey` casa a linha embrulhada que o transcript vai carregar.
+- **Quem decide a aposta é o `rewound`**, e as duas pontas são acertadas quando ele chega:
+  - `ok: true` ⇒ foi o texto LIMPO que o modelo leu. O manager registra esse texto na memória de
+    dedupe do espelho (sem isso o espelho republicava a mensagem corrigida como se o TERMINAL a
+    tivesse dito — uma segunda bolha embaixo da que acabara de ser corrigida) e `rewindHistory`
+    apaga o `sent`, que virou mentira. Sem isso o F5 desenhava a mensagem duas vezes.
+  - `ok: false` ⇒ foi mesmo o embrulho; `sent` fica e tudo segue como antes.
 - Turno e marcador in-flight contam como um envio normal (deploy resume incluído).
 
 **O chat clássico (transcript/tmux) não tem edição**: o caminho dele é `send-keys` na TUI — não há

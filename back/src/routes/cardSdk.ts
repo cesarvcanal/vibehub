@@ -1,8 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import { requireCardWork } from "../auth/access.js";
+import { currentUser } from "../auth/session.js";
 import { findUser } from "../auth/users.js";
 import * as registry from "../services/board/registry.js";
+import { recordCardActor, authorsTheTurn } from "../services/board/actor.js";
 import { getSettings } from "../services/settings/settings.js";
 import { installCardSdkDriver, sdkDriverCommand } from "../services/sdk/driver.js";
 import { attachSocket, ensureDriverSession, handleClientFrame, hasDriverSession, replyFrameOutcome } from "../services/sdk/manager.js";
@@ -72,6 +74,10 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       const pendingFrames: string[] = [];
       const bufferFrame = (raw: Buffer): void => { pendingFrames.push(raw.toString()); };
       socket.on("message", bufferFrame);
+      // Quem está deste lado do socket. Resolvido UMA vez: a sessão do cookie não muda no meio da
+      // conexão, então cada mensagem que chegar por aqui é desta pessoa, sem nova consulta.
+      const author = await currentUser(req);
+      await recordCardActor(author, req.params.id);
       const settings = await getSettings();
       if (!settings.sdkDriver) {
         try { socket.send(JSON.stringify({ type: "error", message: "the SDK driver is off (enable the sdkDriver setting)" })); } catch { /* ignore */ }
@@ -107,8 +113,11 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       const mirrorCutoffAt = Date.now();
       let latestSessionId: string | null = null;
       let tuiJsonl = "";
+      // Hoisted out of the probe: the manager needs it too — it is the root under which the harness
+      // writes a workflow's journal (the fleet panel's only source, see services/sdk/workflow.ts).
+      const transcriptDir = transcriptDirFor(project, card, effectiveAccountSlug(card, project));
       try {
-        const dir = transcriptDirFor(project, card, effectiveAccountSlug(card, project));
+        const dir = transcriptDir;
         const { stdout } = await hostExecutor().runScript(
           buildLatestTranscriptScript(config.runner.container, dir),
           { timeoutMs: 15_000 },
@@ -182,6 +191,7 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       const session = ensureDriverSession({
         cardId: card.id,
         label: card.worktreeSlug,
+        transcriptDir,
         command: await sdkDriverCommand(project, {
           ...card,
           resumeSessionId: resumeTargetFor(card, latestSessionId),
@@ -197,11 +207,27 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
           try { socket.send(JSON.stringify(remembered)); } catch { /* going away */ }
         }
       }
+      /**
+       * A AUTORIA SEGUE A ÚLTIMA MENSAGEM, não quem abriu o card. Com duas pessoas no mesmo card ao
+       * mesmo tempo, o carimbo no connect fazia o commit sair no nome de quem tinha conectado por
+       * último — quem mandou o pedido é que manda. Só mensagem conta (`authorsTheTurn`): responder
+       * permissão ou interromper não transfere autoria.
+       *
+       * Barato de propósito: a pessoa já está resolvida, `recordCardActor` sai na hora quando ela
+       * já é a autora (sem escrita, sem docker exec), e nada aqui volta para o chat — não há laço.
+       */
+      const noteAuthor = (raw: string): void => {
+        if (author && authorsTheTurn(raw)) void recordCardActor(author, card.id);
+      };
+      socket.on("message", (raw: Buffer) => noteAuthor(raw.toString()));
       attachSocket(session, socket, wsOrigin);
       // Setup is done: hand the frames buffered during it to the SAME funnel the live listener
       // uses — user messages become normal user turns (queued by the driver until it is ready).
       socket.off("message", bufferFrame);
-      for (const raw of pendingFrames) replyFrameOutcome(socket, handleClientFrame(session, raw, wsOrigin));
+      for (const raw of pendingFrames) {
+        noteAuthor(raw);
+        replyFrameOutcome(socket, handleClientFrame(session, raw, wsOrigin));
+      }
       logger.info({ card: card.worktreeSlug, reattached: driverAlive, buffered: pendingFrames.length }, "sdk chat attached");
     },
   );

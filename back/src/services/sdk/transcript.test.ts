@@ -3,6 +3,8 @@ import {
   buildLatestTranscriptScript,
   mergeTranscriptReplay,
   parseLatestTranscript,
+  dedupeLookupKeys,
+  dedupeNoteKeys,
   replayDedupeKey,
   resumeTargetFor,
   transcriptToSdkHistory,
@@ -189,6 +191,28 @@ describe("mergeTranscriptReplay (one timeline, nothing lost, nothing twice)", ()
 });
 
 describe("edição (supersede) — o dedupe casa pelo texto EMBRULHADO", () => {
+  it("comando de barra: o eco qualificado do transcript reconhece o que foi mandado sem prefixo", () => {
+    // O BUG (produção, 02/10/2026): a pessoa manda `/systematic-debugging …` pelo chat; o Claude Code
+    // reescreve pra forma qualificada do plugin antes de gravar no transcript; o espelho não
+    // reconhecia e desenhava a MESMA mensagem outra vez.
+    const mandado = dedupeNoteKeys({ type: "user", text: "/systematic-debugging apaga cards de 180 dias" });
+    const eco = dedupeLookupKeys({ type: "user", text: "/superpowers:systematic-debugging apaga cards de 180 dias" });
+    expect(eco.some((k) => mandado.includes(k))).toBe(true);
+  });
+
+  it("dois plugins com o MESMO comando não se confundem — mensagem diferente nunca é engolida", () => {
+    // Por que o casamento é assimétrico: colapsar o prefixo dos dois lados faria `/a:cmd x` e
+    // `/b:cmd x` dividirem uma chave, e o dedupe responde sim/não — a segunda mensagem sumiria.
+    const mandado = dedupeNoteKeys({ type: "user", text: "/a:cmd mesmo texto" });
+    const outra = dedupeLookupKeys({ type: "user", text: "/b:cmd mesmo texto" });
+    expect(outra.some((k) => mandado.includes(k))).toBe(false);
+  });
+
+  it("texto comum com barra não é comando e não ganha apelido", () => {
+    expect(dedupeNoteKeys({ type: "user", text: "olha isso a/b: aqui" })).toEqual(["user:olha isso a/b: aqui"]);
+    expect(dedupeLookupKeys({ type: "user", text: "olha isso a/b: aqui" })).toEqual(["user:olha isso a/b: aqui"]);
+  });
+
   it("replayDedupeKey uses `sent` (the wrapped words) when present, `text` otherwise", () => {
     expect(replayDedupeKey({ type: "user", text: "limpa", sent: "embrulhada limpa" })).toBe("user:embrulhada limpa");
     expect(replayDedupeKey({ type: "user", text: "limpa" })).toBe("user:limpa");
@@ -209,5 +233,33 @@ describe("edição (supersede) — o dedupe casa pelo texto EMBRULHADO", () => {
     const users = merged.filter((e) => e.type === "user");
     expect(users.map((e) => (e as { text: string }).text)).toEqual(["velha", "nova"]);
     expect(merged.some((e) => e.type === "message_edited")).toBe(true);
+  });
+
+  /**
+   * E QUANDO A EDIÇÃO REBOBINOU, o invólucro nunca foi dito: o transcript carrega o texto LIMPO.
+   * Por isso `rewindHistory` apaga o `sent` da linha nova ao cortar — este é o estado em que o log
+   * fica, e é ele que tem de casar. Sem isso o replay desenhava a mensagem corrigida duas vezes,
+   * a segunda marcada como se tivesse vindo do terminal.
+   */
+  it("rebobinada, a linha do transcript vem LIMPA — e o log sem `sent` casa com ela", () => {
+    const jsonl = JSON.stringify({
+      type: "user", uuid: "u1", timestamp: "2026-09-01T12:00:00Z",
+      message: { role: "user", content: "nova" },
+    });
+    // como o log fica DEPOIS do corte: sem o original, sem o marcador, e sem o `sent`
+    const history = [{ type: "user" as const, text: "nova", at: Date.parse("2026-09-01T12:00:00Z") }];
+    const merged = mergeTranscriptReplay(jsonl, history);
+    expect(merged.filter((e) => e.type === "user")).toHaveLength(1);
+    expect(merged[0]).toEqual(history[0]); // a versão do log vence — ela sabe quem mandou
+  });
+
+  it("o `sent` que ficou para trás é exatamente o que duplicava a bolha", () => {
+    // Fixa o DEFEITO que a limpeza do `sent` conserta: mesmo log, com o invólucro mentiroso.
+    const jsonl = JSON.stringify({
+      type: "user", uuid: "u1", timestamp: "2026-09-01T12:00:00Z",
+      message: { role: "user", content: "nova" },
+    });
+    const history = [{ type: "user" as const, text: "nova", sent: "embrulho que nunca foi dito", at: Date.parse("2026-09-01T12:00:00Z") }];
+    expect(mergeTranscriptReplay(jsonl, history).filter((e) => e.type === "user")).toHaveLength(2);
   });
 });

@@ -170,3 +170,76 @@ describe("AccessDialog — the shared projects of one member", () => {
     expect(screen.queryByTestId("shared-projects-u1")).toBeNull();
   });
 });
+
+/**
+ * The GitHub identity of one person: which account their cards push as, and who signs their commits.
+ * Empty means INHERIT, so it must travel as null — "" would store an empty author.
+ */
+describe("AccessDialog — a identidade no GitHub de uma pessoa", () => {
+  const CONNECTIONS = [
+    { id: "c-cesar", label: "pessoal", login: "cesarvcanal", ok: true },
+    { id: "c-mussa", label: "mussa", login: "wellesley-mussolini", ok: true },
+  ];
+
+  function serveWithGithub(me: typeof OWNER, users = [OWNER, MEMBER], git?: unknown) {
+    get.mockImplementation(async (url: string) => {
+      if (url === "/auth/me") return { user: me };
+      if (url === "/setup/state") return setupState();
+      if (url === "/users") return { users: users.map((u) => (u.id === "u2" && git ? { ...u, git } : u)) };
+      if (url === "/projects") return { projects: [] };
+      if (url === "/github") return { connections: CONNECTIONS };
+      if (/^\/projects\/[^/]+\/shares$/.test(url)) return { shares: [] };
+      throw new Error(`unexpected ${url}`);
+    });
+  }
+
+  it("o owner escolhe a conta e o autor do commit de um membro", async () => {
+    serveWithGithub(OWNER);
+    patch.mockResolvedValue({ user: MEMBER });
+    renderApp(<AccessDialog open onOpenChange={() => {}} />);
+
+    await userEvent.click(await screen.findByTestId("user-git-open-u2"));
+    await userEvent.selectOptions(screen.getByTestId("user-git-connection-u2"), "c-mussa");
+    await userEvent.type(screen.getByTestId("user-git-name-u2"), "wellesley-mussolini");
+    await userEvent.type(screen.getByTestId("user-git-email-u2"), "xerif.off@gmail.com");
+    await userEvent.click(screen.getByTestId("user-git-save-u2"));
+
+    await waitFor(() => expect(patch).toHaveBeenCalledWith("/users/u2", {
+      githubConnectionId: "c-mussa",
+      gitName: "wellesley-mussolini",
+      gitEmail: "xerif.off@gmail.com",
+    }));
+  });
+
+  it("campo em branco volta a HERDAR: viaja como null, nunca como string vazia", async () => {
+    serveWithGithub(OWNER, [OWNER, MEMBER], {
+      githubConnectionId: "c-mussa", gitName: "wellesley-mussolini", gitEmail: "xerif.off@gmail.com",
+    });
+    patch.mockResolvedValue({ user: MEMBER });
+    renderApp(<AccessDialog open onOpenChange={() => {}} />);
+
+    await userEvent.click(await screen.findByTestId("user-git-open-u2"));
+    await userEvent.clear(screen.getByTestId("user-git-name-u2"));
+    await userEvent.clear(screen.getByTestId("user-git-email-u2"));
+    await userEvent.selectOptions(screen.getByTestId("user-git-connection-u2"), "");
+    await userEvent.click(screen.getByTestId("user-git-save-u2"));
+
+    await waitFor(() => expect(patch).toHaveBeenCalledWith("/users/u2", {
+      githubConnectionId: null, gitName: null, gitEmail: null,
+    }));
+  });
+
+  it("o bloco abre JÁ com o que a pessoa tem hoje", async () => {
+    serveWithGithub(OWNER, [OWNER, MEMBER], { githubConnectionId: "c-mussa", gitName: "wellesley-mussolini" });
+    renderApp(<AccessDialog open onOpenChange={() => {}} />);
+    await userEvent.click(await screen.findByTestId("user-git-open-u2"));
+    expect(screen.getByTestId<HTMLSelectElement>("user-git-connection-u2").value).toBe("c-mussa");
+    expect(screen.getByTestId<HTMLInputElement>("user-git-name-u2").value).toBe("wellesley-mussolini");
+  });
+
+  it("o membro não vê o bloco de ninguém — a lista inteira é do owner", async () => {
+    serveWithGithub(MEMBER as unknown as typeof OWNER, [OWNER, MEMBER]);
+    renderApp(<AccessDialog open onOpenChange={() => {}} />);
+    await waitFor(() => expect(screen.queryByTestId("user-git-open-u2")).toBeNull());
+  });
+});

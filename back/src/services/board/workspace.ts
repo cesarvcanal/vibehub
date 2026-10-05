@@ -2,8 +2,11 @@ import { hostExecutor, shQuote, assertSafeRemotePath, HostExecError } from "../.
 import { config } from "../../config/env.js";
 import { statusUrl } from "../../runtime/runner.js";
 import { gitAuthHeaderFor, tokenFor } from "../github/client.js";
+import { resolveIdentity, type EffectiveIdentity } from "../github/identity.js";
+import { getUserGit, assertGitName, assertGitEmail } from "../../auth/userGit.js";
 import {
   getCard, getProject, applyOpenTerminal, markPrepared, pauseCard as registryPauseCard,
+  listGithubConnections,
   hibernateCard as registryHibernateCard,
   listAllCards, assertBranchName, assertSessionId, effectiveAccountSlug, isValidModel, hasLiveSession,
   markRestartPending,
@@ -190,6 +193,64 @@ export function cardWorkPaths(project: Project, card: Pick<Card, "worktreeSlug">
   const repo = repoDirName(project);
   if (repo) return { repoDir: `/work/${repo}`, cwd: `/work/${repo}-worktrees/${card.worktreeSlug}` };
   return { cwd: `/work/scratch/${card.worktreeSlug}` };
+}
+
+/**
+ * Applies an identity to a card's worktree — the whole reason the actor can change MID-CARD.
+ *
+ * `GH_TOKEN` is exported ONCE, when the tmux session is born (see {@link sessionCommand}). Rewriting
+ * the card's token file therefore does NOT change what a live session already exported: the actor
+ * would switch on the board and the push would still go out as the previous person, SILENTLY. So
+ * nothing here leans on session env. Both halves are read AT CALL TIME:
+ *
+ *  - the commit author is `--local` config in the worktree, and git reads it when the commit happens.
+ *  - the credential helper CATS the card's token file on every git call. The helper list is RESET
+ *    first (`credential.helper ""`): git consults system -> global -> local in order and takes the
+ *    first helper that answers, and the global `gh auth git-credential` would answer with the stale
+ *    `GH_TOKEN` from the session's boot.
+ *
+ * `gh` itself (a `gh pr create` typed into a live terminal) is covered by the shim the runner setup
+ * plants in /root/.bashrc, which re-exports GH_TOKEN from this same file before delegating.
+ *
+ * Name and e-mail are RE-VALIDATED here even though the route validated them: they are interpolated
+ * into bash, and this is the last gate before that. PURE.
+ */
+export function buildIdentityScript(opts: {
+  containerName: string; cardId: string; cwd: string; identity: EffectiveIdentity; token?: string;
+}): string {
+  const { containerName, cardId, cwd, identity, token } = opts;
+  assertSafeRemotePath(cwd);
+  const name = assertGitName(identity.name);
+  const email = assertGitEmail(identity.email);
+  const file = ghTokenPath(cardId);
+  const git = `git -C ${shQuote(cwd)} config --worktree`;
+  const body = [
+    "set -e",
+    "umask 077",
+    ...(token ? writeGhTokenLines(cardId, token) : removeGhTokenLines(cardId)),
+    // `--worktree`, NEVER `--local`. Every card of a project is a WORKTREE OF THE SAME CLONE, and
+    // worktrees SHARE `.git/config` — a `--local` write here would hand this person's identity to
+    // every other card of that project, including the ones somebody else is working. The scope only
+    // exists once the repository opts in, hence the extension flag first (idempotent, repo-wide).
+    `git -C ${shQuote(cwd)} config --local extensions.worktreeConfig true || true`,
+    // `|| true`: the worktree may not exist yet on a card whose clone is still running. The open
+    // applies the identity again right after the clone, so a miss here is never the last word.
+    `${git} user.name ${shQuote(name)} || true`,
+    `${git} user.email ${shQuote(email)} || true`,
+    // RESET first, then install ours — see the note above about helper order. Worktree scope is read
+    // LAST (system -> global -> local -> worktree), so the reset here clears the whole list.
+    //
+    // `--unset-all` BEFORE the reset: this script runs again on every open and on every actor
+    // switch, and a plain `--add` appended one more copy of the helper each time (seen in
+    // production with three identical entries). Unset-all makes the whole block idempotent.
+    `${git} --unset-all credential.helper || true`,
+    `${git} --add credential.helper '' || true`,
+    `${git} --add credential.helper ` +
+      shQuote(`!f() { [ -s ${file} ] && echo username=x-access-token && echo "password=$(cat ${file})"; }; f`) +
+      " || true",
+  ];
+  const DELIM = "VIBEHUB_IDENTITY";
+  return ["set -e", `docker exec -i ${shQuote(containerName)} bash -s <<'${DELIM}'`, ...body, DELIM].join("\n");
 }
 
 export interface OpenScriptOpts {
@@ -616,15 +677,17 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
 
     // The account's long-lived token (vault) — seeded into the profile inside the script (stdin).
     const oauthToken = await resolveAccountToken(accountSlug);
-    // The PROJECT's GitHub connection token, so the card's own git push / gh pr act as that identity
-    // — the SAME resolution the clone uses (`githubConnectionId`; absent = the first connected
-    // account), so a project that names no connection still operates as the configured account and
-    // NEVER as the runner's ambient gh login. BEST-EFFORT: a missing/unconfigured connection must
-    // not stop a card from opening — absent means the token file is removed and only then does the
-    // card fall back to the ambient login (install with no GitHub account connected).
+    // The identity IN FORCE for this card: the ACTOR's (whoever touched it last), falling back to
+    // the project's connection and the install's `settings.git` — see services/github/identity.ts.
+    // A card with no actor resolves to exactly what it resolved to before actors existed.
+    // BEST-EFFORT: a missing/unconfigured connection must not stop a card from opening — absent
+    // means the token file is removed and only then does the card fall back to the ambient login.
+    const identity = await cardIdentity(card, project);
     let ghToken: string | undefined;
     try {
-      ghToken = await tokenFor(project.githubConnectionId);
+      // Passed even when undefined: `tokenFor` owns the LAST resort ("the first connected account"),
+      // and routing that through here instead would be the same rule written twice.
+      ghToken = await tokenFor(identity.connectionId);
     } catch (e) {
       logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "GitHub connection token not resolved on open (ambient gh login)");
     }
@@ -684,6 +747,10 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
     } catch (err) {
       throw runnerUnreachable(err);
     }
+    // The worktree exists NOW, so the author and the credential helper can be written into it. Kept
+    // out of the open script on purpose: the exact same call re-runs on every actor switch, and one
+    // code path for both is one behaviour for both.
+    await applyIdentity(card, paths.cwd, identity, ghToken);
     return { card, project, accountSlug };
   });
 }
@@ -1748,4 +1815,75 @@ export async function purgeCardWorkspace(
     { audit: true, action: "card.purge", card: card.worktreeSlug, cwd: paths.cwd, by },
     "card workspace purged from the runner (worktree, branch, uploads, browser profile, transcripts)",
   );
+}
+
+// ---------------------------------------------------------------------------
+// Identity in force on a card
+// ---------------------------------------------------------------------------
+
+/** The identity this card operates with right now (actor -> project -> install). */
+async function cardIdentity(card: Card, project: Project): Promise<EffectiveIdentity> {
+  const actor = card.actorUserId ? await getUserGit(card.actorUserId) : null;
+  return resolveIdentity({
+    actor, project, settings: await getSettings(), connections: await listGithubConnections(),
+  });
+}
+
+/** Runs the identity script in the runner. Never throws: a wedged runner must not fail a prompt. */
+async function applyIdentity(
+  card: Card, cwd: string, identity: EffectiveIdentity, token?: string,
+): Promise<void> {
+  try {
+    await hostExecutor().runScript(
+      buildIdentityScript({ containerName: config.runner.container, cardId: card.id, cwd, identity, token }),
+      { timeoutMs: 30_000 },
+    );
+  } catch (e) {
+    logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "card identity not applied (runner unreachable)");
+  }
+}
+
+/**
+ * Re-applies the identity after the ACTOR CHANGED on an already-open card — the case the whole
+ * feature exists for: somebody picks up a card another person opened, and the next commit has to be
+ * theirs without the session being restarted.
+ *
+ * Only for cards that HAVE been opened: one that never was gets its identity from the open itself.
+ * Best-effort and fire-and-forget by design — the next open applies it again anyway.
+ */
+/**
+ * Re-applies the identity of EVERY OPEN CARD this person is working — called when their identity
+ * itself changes (the owner bound their GitHub account, they rotated their own token).
+ *
+ * Without this the binding only reached a card the next time it was OPENED: the per-card write
+ * happens on open and on actor CHANGE, and the person who just got an identity is usually already
+ * the actor of the card they are sitting in. So the owner saved, the screen said saved, and the next
+ * commit still came out as the install's default — exactly what happened in production right after
+ * the feature shipped.
+ *
+ * Best-effort and parallel: one unreachable card must not hold up the others, and the next open
+ * applies it anyway. Returns how many cards were touched, for the audit line.
+ */
+export async function reapplyIdentityForUser(userId: string): Promise<number> {
+  const id = String(userId ?? "");
+  if (!id) return 0;
+  const cards = (await listAllCards()).filter((c) => c.actorUserId === id && c.openedAt);
+  await Promise.all(cards.map((c) => reapplyCardIdentity(c.id)));
+  return cards.length;
+}
+
+export async function reapplyCardIdentity(cardId: string): Promise<void> {
+  const card = await getCard(cardId);
+  if (!card || !card.openedAt) return;
+  const project = await getProject(card.projectId);
+  if (!project) return;
+  const { cwd } = cardWorkPaths(project, card);
+  const identity = await cardIdentity(card, project);
+  let token: string | undefined;
+  try {
+    token = await tokenFor(identity.connectionId);
+  } catch {
+    /* no usable connection -> the token file is removed and the card falls back to ambient gh */
+  }
+  await applyIdentity(card, cwd, identity, token);
 }

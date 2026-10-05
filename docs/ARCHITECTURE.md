@@ -204,7 +204,14 @@ So the delete is a purge (`services/board/purge.ts`), in an order that has a rea
    that is down must never make a card undeletable, and must never be reported as a clean deletion.
 
 Deleting a PROJECT cascades into the same purge for each of its cards (it used to be the way around
-it). A **daily orphan sweep** is the backstop and the retroactive cleanup: it deletes only artifacts
+it). So does the **done-card retention** (`services/board/retention.ts`): a card that has sat in
+`done` for 180 days without a single sign of life — no move, no rename, no hook status, no
+keystroke — is purged by a daily sweep, because `done` is the column nobody cleans and every card
+left there keeps a worktree, a branch, a transcript and a browser profile in the runner. Only
+`done` is swept, touching a finished card buys it another six months, a pass is capped (and logs
+what it left for the next one), and a retention of `0` turns it off.
+
+A **daily orphan sweep** is the backstop and the retroactive cleanup: it deletes only artifacts
 that belong to no card that exists, with three guards — the path must be unmistakably a card
 artifact, nothing younger than an hour is touched, and a pass is capped and logs what it left.
 
@@ -270,6 +277,18 @@ is `requireCardWork`.
 - The **GitHub token** is handed to `git clone/fetch` per command as an environment-scoped http
   header. It never lands in `/work/<repo>/.git/config`, which the agent can read — and the agent
   processes untrusted repository content with network egress.
+- **Whose** token and whose commit author: resolved field by field as **card actor → project →
+  install** (`services/github/identity.ts`). The actor is whoever touched the card last at `work`
+  level (`services/board/actor.ts`); a card with no actor resolves exactly as it did before actors
+  existed. So two people sharing a card each commit as themselves.
+- That identity is applied **per worktree** and READ AT CALL TIME, never exported into the session:
+  `GH_TOKEN` is exported once when the tmux session is born, so rewriting the card's token file
+  would not reach a session somebody else opened — the push would silently go out as the previous
+  person. Instead the commit author is `--local` git config in the worktree, the credential helper
+  `cat`s the card's token file on every git call (with the helper list RESET first, or the global
+  `gh auth git-credential` answers earlier with the stale token), and a `gh` shim in `/root/.bashrc`
+  re-exports `GH_TOKEN` from that file before delegating. Switching actor is two `git config` calls
+  and one file write — no session restart, no lost conversation.
 - The **runner service token** is written host-side into the `/root` bind mount at mode 600, so it
   survives a container recreate, and the status hook reads it from disk at call time rather than
   having it baked into `settings.json`.

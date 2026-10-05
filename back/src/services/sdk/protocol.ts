@@ -180,6 +180,24 @@ export interface ReadyEvent { type: "ready"; resume?: string; turnActive?: boole
 export interface DriverErrorEvent { type: "error"; message: string }
 /** A line that was NOT valid JSON, or an unknown event — surfaced rather than swallowed. */
 export interface ParseErrorEvent { type: "parse_error"; raw: string }
+/**
+ * A FROTA DO WORKFLOW, ao vivo. Sintetizado pelo BACK (como o `parse_error`), nunca pelo driver: a
+ * tool `Workflow` devolve na hora e trabalha em segundo plano, então entre a chamada e a resposta
+ * final o stream não traz nada — quem sabe o que está acontecendo é o diário em disco, lido pela
+ * sondagem em services/sdk/workflow.ts. Vive só na tela: não entra no histórico (um instantâneo que
+ * se move não é conversa), e uma aba que conecta no meio recebe o último de memória.
+ */
+export interface WorkflowProgressEvent {
+  type: "workflow_progress";
+  runId: string;
+  /** `meta.name` do script, quando dá pra saber pelo nome do arquivo. */
+  name: string;
+  agents: Array<{ id: string; label: string; status: "running" | "done"; result?: string }>;
+  /** mtime do diário (ms). */
+  at: number;
+  /** A rodada acabou — o painel para o spinner. */
+  finished: boolean;
+}
 
 export type DriverEvent =
   | AssistantTextEvent
@@ -199,6 +217,7 @@ export type DriverEvent =
   | ResultEvent
   | ReadyEvent
   | DriverErrorEvent
+  | WorkflowProgressEvent
   | ParseErrorEvent;
 
 /** The event `type` values the driver is allowed to emit (parse_error is synthesised by the back). */

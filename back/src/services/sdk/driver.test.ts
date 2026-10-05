@@ -618,3 +618,135 @@ describe("sdk-driver.mjs — forkPointFromTranscript acha o ponto de volta no di
     expect(forkPointFromTranscript(conversa, "   ")).toEqual({ found: false });
   });
 });
+
+/**
+ * A EDIÇÃO NÃO DEIXA UM ERRO VERMELHO PRA TRÁS.
+ *
+ * Editar uma mensagem no meio de um turno termina em dois balões vermelhos que não deveriam
+ * existir, e os dois saem do mesmo lugar: o CLI encerra um turno INTERROMPIDO como
+ * `error_during_execution` carregando só um diagnóstico interno
+ * (`[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use`), e o Agent SDK,
+ * quando a corrente fecha depois disso, troca o erro de saída por
+ * `Error("Claude Code returned an error result: " + errors.join("; "))`. O rebobinar FECHA a
+ * corrente de propósito — logo, ele mesmo provocava o banner (produção, 2026-10-01).
+ *
+ * O próprio CLI não mostra nada disso a ninguém: ele filtra `[ede_diagnostic]` da sua saída e só
+ * exibe um `error_during_execution` quando o fim NÃO foi um abort. Estes testes rodam as duas
+ * funções puras que põem o driver na mesma régua.
+ */
+describe("sdk-driver.mjs — um turno interrompido não é um turno que falhou", () => {
+  const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
+
+  /** Recorta uma função pura do driver e a executa de verdade (como o `rewindDecision` acima). */
+  function cut<T>(name: string): T {
+    const from = source.indexOf(`function ${name}(`);
+    expect(from).toBeGreaterThan(0);
+    const body = source.slice(from, source.indexOf("\n}", from) + 2);
+    const deps = source.slice(source.indexOf("const INTERNAL_DIAGNOSTICS = ["), source.indexOf("\n", source.indexOf("const INTERNAL_DIAGNOSTICS = [")));
+    return new Function(`${deps}\n${body}\nreturn ${name};`)() as T;
+  }
+
+  const humanErrorText = cut<(m: unknown) => string>("humanErrorText");
+  const wasAborted = cut<(r: unknown) => boolean>("wasAborted");
+
+  it("engole o erro do SDK quando ele é só o diagnóstico interno do CLI", () => {
+    const sdkError = "Claude Code returned an error result: [ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use";
+    expect(humanErrorText(sdkError)).toBe("");
+  });
+
+  it("engole o diagnóstico cru, sem o prefixo do SDK", () => {
+    expect(humanErrorText("[ede_diagnostic] result_type=assistant stop_reason=end_turn")).toBe("");
+  });
+
+  it("um CRASH não é engolido: jargão que a pessoa pode agir em cima vale mais que silêncio", () => {
+    // O CLI esconde `[session_crash]` da própria UI, mas ali ele tem outras formas de contar. Aqui,
+    // engolir significaria um turno que para sem resposta, sem erro e sem explicação nenhuma.
+    expect(humanErrorText("[session_crash] worker died")).toBe("[session_crash] worker died");
+    expect(humanErrorText("Claude Code returned an error result: [session_crash] worker died"))
+      .toBe("Claude Code returned an error result: [session_crash] worker died");
+  });
+
+  it("um diagnóstico com ponto e vírgula dentro não vaza o rabo como se fosse erro", () => {
+    // O corte é no separador do SDK ("; "), não em qualquer ";": senão a metade de um diagnóstico
+    // virava uma frase vermelha sozinha na conversa.
+    expect(humanErrorText("Claude Code returned an error result: [ede_diagnostic] a;b stop_reason=x")).toBe("");
+  });
+
+  it("mas PRESERVA o que é erro de verdade quando os dois vêm juntos", () => {
+    const mixed = "Claude Code returned an error result: [ede_diagnostic] result_type=user; prompt is too long";
+    expect(humanErrorText(mixed)).toBe("Claude Code returned an error result: prompt is too long");
+  });
+
+  it("um erro comum passa inteiro — inclusive com ponto e vírgula no meio", () => {
+    expect(humanErrorText("spawn ENOENT; the driver is not installed")).toBe("spawn ENOENT; the driver is not installed");
+    expect(humanErrorText("driver exited (code 1)")).toBe("driver exited (code 1)");
+  });
+
+  it("é total: nada, vazio ou lixo não viram um banner", () => {
+    expect(humanErrorText(undefined)).toBe("");
+    expect(humanErrorText(null)).toBe("");
+    expect(humanErrorText("   ")).toBe("");
+    expect(humanErrorText("Claude Code returned an error result:   ")).toBe("");
+  });
+
+  it("abort é a palavra do CLI pra interrupção — e interrupção não é falha", () => {
+    expect(wasAborted("aborted_streaming")).toBe(true);
+    expect(wasAborted("aborted_tools")).toBe(true);
+  });
+
+  it("qualquer outro fim continua sendo erro — a filtragem não pode virar um silenciador", () => {
+    expect(wasAborted("api_error")).toBe(false);
+    expect(wasAborted("prompt_too_long")).toBe(false);
+    expect(wasAborted("completed")).toBe(false);
+    expect(wasAborted(undefined)).toBe(false);
+    expect(wasAborted(null)).toBe(false);
+  });
+
+  it("o `isError` do result é desarmado pelo abort, não pelo subtype", () => {
+    const at = source.indexOf('} else if (msg.type === "result")');
+    const branch = source.slice(at, at + 900);
+    expect(branch).toContain("const aborted = wasAborted(msg.terminal_reason);");
+    expect(branch).toContain("isError: !!msg.is_error && !aborted");
+  });
+
+  it("uma corrente que nem CHEGOU a nascer continua virando erro — null não é 'fechada de propósito'", () => {
+    // `query()` estoura SÍNCRONO (opção inválida, binário faltando) e nessa hora `myQuery` ainda é
+    // null — o mesmo valor de `closingQuery` em repouso. Sem a trava, o erro de partida seria lido
+    // como teardown nosso: sem `error`, sem `result` (o `finally` não fecha um turno que ainda não
+    // tinha sido marcado) e a mensagem sumindo com o spinner preso.
+    const run = source.slice(source.indexOf("async function runStream()"));
+    expect(run).toContain("let myQuery = null;");
+    expect(run).toContain("if (myQuery !== null && closingQuery === myQuery) trace(");
+    // e `myQuery` só existe DEPOIS de `query()` ter devolvido sem estourar
+    const assign = run.indexOf("currentQuery = query({ prompt: myChannel, options });");
+    expect(run.indexOf("myQuery = currentQuery;")).toBeGreaterThan(assign);
+  });
+
+  it("a corrente derrubada pelo rebobinar não vira erro na tela", () => {
+    const teardown = source.slice(source.indexOf("async function endStream()"), source.indexOf("async function rewindAndSend("));
+    expect(teardown).toContain("closingQuery = dying;");
+    // reivindicada ANTES do primeiro passo que pode matá-la
+    expect(teardown.indexOf("closingQuery = dying;")).toBeLessThan(teardown.indexOf("dying.interrupt()"));
+
+    const run = source.slice(source.indexOf("async function runStream()"));
+    expect(run).toContain("closingQuery === myQuery) trace(");
+    // e a reivindicação não vaza para a corrente seguinte
+    expect(run).toContain("if (closingQuery === myQuery) closingQuery = null;");
+  });
+
+  it("só o stream VIGENTE encerra turno e larga o handle — o que sobreviveu ao teardown não manda", () => {
+    // Quando `endStream` desiste de esperar, o stream velho segue vivo ao lado do novo. Sem a
+    // guarda de identidade, o `finally` dele fechava o turno NOVO e zerava o `currentQuery` VIVO —
+    // e com ele o botão de parar, que vira um no-op sem dizer nada a ninguém.
+    const run = source.slice(source.indexOf("async function runStream()"));
+    expect(run).toContain("const stillOurs = currentQuery === myQuery;");
+    expect(run).toContain("if (stillOurs && turnActive) {");
+    expect(run).toContain("if (stillOurs) currentQuery = null;");
+  });
+
+  it("o que é engolido ainda é registrado — no stderr, nunca no stdout do protocolo", () => {
+    expect(source).toContain("process.stderr.write(`[sdk-driver] ${line}\\n`)");
+    const run = source.slice(source.indexOf("async function runStream()"));
+    expect(run).toContain("trace(`stream error with nothing to tell:");
+  });
+});

@@ -298,6 +298,17 @@ export interface Card {
    * Null/absent = nothing pending. It mirrors the PENDING pause (`pausedAt`), but a PAUSE BEATS it.
    */
   restartPendingAt?: number | null;
+  /**
+   * WHO is working this card — the person whose git identity its commits and pushes use. Stamped by
+   * opening it, attaching its terminal, or sending it a prompt; `view` access NEVER stamps, because
+   * somebody who cannot work the card must not become the author of its commits.
+   *
+   * Absent = nobody has been recorded (every card before this field existed), and the identity falls
+   * back to the project's connection and the install's `settings.git` — the behaviour of always.
+   */
+  actorUserId?: string;
+  /** When the actor above was recorded (epoch ms). */
+  actorAt?: number;
   /** Where the pending restart came from — a label for the badge only: "brain" | "mcp" | "config". */
   restartReason?: RestartReason;
   /**
@@ -337,6 +348,14 @@ export interface Card {
    * card. Absent = nobody has typed here (or not since the field existed).
    */
   humanActiveAt?: number;
+  /**
+   * WHEN THE CARD WAS FINISHED — the moment it ENTERED `done` (epoch ms), cleared the moment it
+   * leaves. It exists because `updatedAt` cannot answer "done since when": a rename, an account
+   * switch or a model pin moves it, and the RETENTION SWEEP (services/board/retention.ts) deletes
+   * cards that have been done for six months. Absent on a card finished before this field existed
+   * — the sweep falls back to `updatedAt` there, which is the honest approximation.
+   */
+  doneAt?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -776,6 +795,14 @@ function normalizeColumns(cards: Card[], projectId: string, columns: BoardColumn
 /** Puts the card in the target column at the requested (clamped) position, renumbering both columns. */
 function placeCard(cards: Card[], card: Card, column: BoardColumn, position?: number): void {
   const from = card.column;
+  // The "done since" clock, stamped at the single funnel every column change goes through (the
+  // patch, the mirror rule, the pause). Only CROSSING the border counts: reordering inside `done`
+  // must not buy a finished card another six months, and leaving `done` throws the stamp away.
+  if (column === "done") {
+    if (from !== "done") card.doneAt = Date.now();
+  } else if (card.doneAt !== undefined) {
+    card.doneAt = undefined;
+  }
   card.column = column;
   const dest = cards
     .filter((c) => c.projectId === card.projectId && c.column === column && c.id !== card.id)
@@ -1254,6 +1281,30 @@ export interface UpdateCardInput {
   branch?: string | null;
   /** Base branch of the worktree (just the label the next open/worktree uses); validated. */
   base?: string;
+}
+
+/**
+ * Records who is working the card NOW. Returns `changed: false` when the actor is already that
+ * person, so the caller can skip reapplying the identity inside the runner — this is called on every
+ * websocket attach and every prompt, and a runner round-trip per frame would be pure noise.
+ *
+ * Null = no such card. An attach racing a deletion must not throw.
+ */
+export async function stampCardActor(
+  cardId: string,
+  userId: string,
+): Promise<{ changed: boolean; card: Card } | null> {
+  const id = String(cardId ?? "");
+  const user = String(userId ?? "");
+  if (!id || !user) return null;
+  return await store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === id);
+    if (!card) return null;
+    if (card.actorUserId === user) return { changed: false, card: { ...card } };
+    card.actorUserId = user;
+    card.actorAt = Date.now();
+    return { changed: true, card: { ...card } };
+  });
 }
 
 /**

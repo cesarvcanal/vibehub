@@ -67,6 +67,131 @@ async function addMember(server: FastifyInstance, owner: string, username = "ale
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "vibehub-users-")); app = await boot(); });
 afterEach(async () => { await app?.close(); await rm(dir, { recursive: true, force: true }); vi.unstubAllGlobals(); });
 
+describe("a person's git identity (commit author + GitHub connection)", () => {
+  /** Connects a GitHub account so there is a real connection id to point at. */
+  async function connect(owner: string, label: string, login: string): Promise<string> {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      JSON.stringify({ login, name: login, email: `${login}@users.noreply.github.com` }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )));
+    const res = await app.inject({
+      method: "POST", url: "/api/github/connections", headers: { cookie: owner },
+      payload: { label, token: "ghp_abcdefghijklmnopqrstuvwxyz123456" },
+    });
+    expect(res.statusCode).toBe(201);
+    return res.json().connection.id as string;
+  }
+
+  async function memberId(owner: string, username: string): Promise<string> {
+    const list = await app.inject({ method: "GET", url: "/api/users", headers: { cookie: owner } });
+    return list.json().users.find((u: { username: string }) => u.username === username).id as string;
+  }
+
+  it("o owner vincula conexão e autor do commit; a lista passa a devolver junto", async () => {
+    const owner = await signUpOwner(app);
+    await addMember(app, owner, "mussa");
+    const id = await memberId(owner, "mussa");
+    const connection = await connect(owner, "mussa", "wellesley-mussolini");
+
+    const res = await app.inject({
+      method: "PATCH", url: `/api/users/${id}`, headers: { cookie: owner },
+      payload: { githubConnectionId: connection, gitName: "wellesley-mussolini", gitEmail: "xerif.off@gmail.com" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().git).toEqual({
+      githubConnectionId: connection, gitName: "wellesley-mussolini", gitEmail: "xerif.off@gmail.com",
+    });
+
+    const list = await app.inject({ method: "GET", url: "/api/users", headers: { cookie: owner } });
+    expect(list.json().users.find((u: { id: string }) => u.id === id).git.gitEmail).toBe("xerif.off@gmail.com");
+  });
+
+  it("conexão que não existe é recusada ANTES de gravar qualquer coisa", async () => {
+    const owner = await signUpOwner(app);
+    await addMember(app, owner, "mussa");
+    const id = await memberId(owner, "mussa");
+    const res = await app.inject({
+      method: "PATCH", url: `/api/users/${id}`, headers: { cookie: owner },
+      payload: { githubConnectionId: "nao-existe", gitName: "mussa" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/GitHub connection/i);
+
+    const list = await app.inject({ method: "GET", url: "/api/users", headers: { cookie: owner } });
+    expect(list.json().users.find((u: { id: string }) => u.id === id).git).toBeUndefined();
+  });
+
+  it("e-mail inválido é recusado — ele vai pra dentro de um script no runner", async () => {
+    const owner = await signUpOwner(app);
+    await addMember(app, owner, "mussa");
+    const id = await memberId(owner, "mussa");
+    const res = await app.inject({
+      method: "PATCH", url: `/api/users/${id}`, headers: { cookie: owner },
+      payload: { gitEmail: "a$(whoami)@x.com" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("cada um troca a PRÓPRIA identidade sem depender do owner", async () => {
+    const owner = await signUpOwner(app);
+    const member = await addMember(app, owner, "mussa");
+    const connection = await connect(owner, "mussa", "wellesley-mussolini");
+
+    const res = await app.inject({
+      method: "PATCH", url: "/api/me/git", headers: { cookie: member },
+      payload: { githubConnectionId: connection, gitName: "wellesley-mussolini", gitEmail: "xerif.off@gmail.com" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().git.gitName).toBe("wellesley-mussolini");
+
+    const mine = await app.inject({ method: "GET", url: "/api/me/git", headers: { cookie: member } });
+    expect(mine.json().git.gitEmail).toBe("xerif.off@gmail.com");
+  });
+
+  it("o membro NÃO grava a identidade de outro, nem vira owner por essa porta", async () => {
+    const owner = await signUpOwner(app);
+    const member = await addMember(app, owner, "mussa");
+    const ownerId = await memberId(owner, "owner");
+
+    // A rota do owner continua fechada pra ele...
+    const other = await app.inject({
+      method: "PATCH", url: `/api/users/${ownerId}`, headers: { cookie: member },
+      payload: { gitName: "mussa" },
+    });
+    expect(other.statusCode).toBe(403);
+
+    // ...e a dele próprio NÃO aceita papel nem senha de carona.
+    const escalate = await app.inject({
+      method: "PATCH", url: "/api/me/git", headers: { cookie: member },
+      payload: { role: "owner", password: "outrasenha123", gitName: "mussa" },
+    });
+    expect(escalate.statusCode).toBe(200);
+    const me = await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: member } });
+    expect(me.json().user.role).toBe("member");
+    // a senha antiga continua valendo: o PATCH de identidade não a trocou
+    const login = await app.inject({
+      method: "POST", url: "/api/auth/login", payload: { username: "mussa", password: "supersecret" },
+    });
+    expect(login.statusCode).toBe(200);
+  });
+
+  it("remover o usuário leva a identidade dele embora", async () => {
+    const owner = await signUpOwner(app);
+    await addMember(app, owner, "mussa");
+    const id = await memberId(owner, "mussa");
+    await app.inject({
+      method: "PATCH", url: `/api/users/${id}`, headers: { cookie: owner }, payload: { gitName: "mussa" },
+    });
+    await app.inject({ method: "DELETE", url: `/api/users/${id}`, headers: { cookie: owner } });
+
+    // Recriado com o MESMO nome, ganha id novo e NÃO herda a identidade antiga.
+    await addMember(app, owner, "mussa");
+    const again = await memberId(owner, "mussa");
+    const list = await app.inject({ method: "GET", url: "/api/users", headers: { cookie: owner } });
+    expect(list.json().users.find((u: { id: string }) => u.id === again).git).toBeUndefined();
+  });
+});
+
 describe("the owner's user list", () => {
   it("makes the setup wizard's account an owner", async () => {
     const owner = await signUpOwner(app);

@@ -288,3 +288,62 @@ describe("purgeCardQueue (the card is being deleted)", () => {
     expect(await outbox.purgeCardQueue(doomed.id)).toBe(0);
   });
 });
+
+describe("quem mandou a mensagem fica registrado", () => {
+  it("a proveniência é gravada na ENTREGA, não no enfileiramento", async () => {
+    // O chat casa a atribuição com a LINHA DO TRANSCRIPT, que só existe quando a mensagem é
+    // entregue. Uma mensagem que ficou na fila (Claude fora do ar) e saiu horas depois cairia fora
+    // da janela de casamento — justamente o caso pro qual a fila existe.
+    const { registry, outbox } = await load();
+    const users = await import("../../auth/users.js");
+    const prov = await import("../chat/provenance.js");
+    const mussa = await users.createUser("mussa", "Multi@102030", "member");
+    const project = await registry.createProject({ name: "widgets" });
+    const card = await registry.createCard({ projectId: project.id, title: "um card" });
+    await registry.applyOpenTerminal(card.id);
+
+    // Resposta FIXA da sonda (não `agentIs`): `mockClear` não esvazia a fila de `…Once`, e uma
+    // sobra de teste anterior comia esta resposta.
+    runScript.mockReset();
+    runScript.mockResolvedValue({ stdout: "bash\n", stderr: "" }); // Claude fora: a mensagem fica na fila
+    await outbox.queueMessage(card.id, "roda os testes", mussa.id);
+    await prov.primeProvenance(card.id);
+    expect(prov.matchOrigin(card.id, "roda os testes", Date.now())).toBeUndefined();
+
+    runScript.mockReset();
+    runScript.mockResolvedValue({ stdout: "node\n", stderr: "" }); // Claude voltou: agora entrega
+    expect((await outbox.flushCard(card.id)).delivered).toBe(1);
+    expect(prov.matchOrigin(card.id, "roda os testes", Date.now()))
+      .toMatchObject({ kind: "user", name: "mussa" });
+  });
+
+  it("mensagem da aba Terminal grava a proveniência, pro chat mostrar o nome de quem enviou", async () => {
+    const { registry, outbox } = await load();
+    const users = await import("../../auth/users.js");
+    const prov = await import("../chat/provenance.js");
+    const mussa = await users.createUser("mussa", "Multi@102030", "member");
+
+    const project = await registry.createProject({ name: "widgets" });
+    const card = await registry.createCard({ projectId: project.id, title: "um card" });
+    await registry.applyOpenTerminal(card.id);
+    runScript.mockReset();
+    runScript.mockResolvedValue({ stdout: "node\n", stderr: "" });
+    expect((await outbox.queueMessage(card.id, "roda os testes", mussa.id)).delivered).toBe(true);
+
+    await prov.primeProvenance(card.id);
+    expect(prov.matchOrigin(card.id, "roda os testes", Date.now()))
+      .toMatchObject({ kind: "user", name: "mussa" });
+  });
+
+  it("sem remetente conhecido não inventa dono", async () => {
+    const { registry, outbox } = await load();
+    const prov = await import("../chat/provenance.js");
+    const project = await registry.createProject({ name: "widgets" });
+    const card = await registry.createCard({ projectId: project.id, title: "um card" });
+    await registry.applyOpenTerminal(card.id);
+    runScript.mockReset();
+    runScript.mockResolvedValue({ stdout: "node\n", stderr: "" });
+    await outbox.queueMessage(card.id, "sem dono", undefined);
+    expect(prov.matchOrigin(card.id, "sem dono", Date.now())).toBeUndefined();
+  });
+});
