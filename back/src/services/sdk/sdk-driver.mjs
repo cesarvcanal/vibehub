@@ -51,6 +51,15 @@ const INITIAL_RESUME = argOf("--resume"); // a stored session_id to continue on 
 const MODEL = argOf("--model");
 // Mirror of `parseGateMode` in protocol.ts: anything unrecognised falls back to the STRICTER mode.
 const GATE_MODE = argOf("--permission-gate") === "same-as-terminal" ? "same-as-terminal" : "ask-sensitive";
+/**
+ * EM QUE IDIOMA O MODELO PENSA. O raciocínio aparece na tela ("Raciocínio") e vinha em inglês para
+ * todo mundo — numa equipe em que nem todos leem inglês, é tela morta.
+ *
+ * Segue o idioma da INTERFACE, que mora no NAVEGADOR (localStorage) e por isso não existe na hora
+ * do spawn: ele chega pelo controle `language` assim que um chat conecta, e vale do turno seguinte
+ * (`baseOptions()` é relido a cada `runStream`) — sem respawn. Começa nulo: o padrão do modelo.
+ */
+let reasoningLanguage = null;
 
 /* ------------------------------------------------------------- output */
 
@@ -361,6 +370,35 @@ function userMessage(text) {
   return { type: "user", message: { role: "user", content: text }, parent_tool_use_id: null };
 }
 
+/**
+ * O idioma pedido, reduzido ao que o painel tem tradução (ver front/src/i18n). Qualquer outra coisa
+ * — undefined, lixo, um tag que não conhecemos — vira `null`: o padrão do modelo, nunca um palpite.
+ * PURA, TOTAL.
+ */
+function normalizeLanguage(tag) {
+  if (typeof tag !== "string") return null;
+  const t = tag.trim().toLowerCase();
+  if (t === "pt" || t.startsWith("pt-")) return "pt-BR";
+  if (t === "en" || t.startsWith("en-")) return "en";
+  return null;
+}
+
+/**
+ * A instrução que faz o RACIOCÍNIO sair no idioma da interface, anexada ao system prompt do preset.
+ * Fala só do raciocínio: a resposta já segue o idioma de quem escreveu, e mandar no texto visível
+ * atropelaria quem pede resposta em outra língua. Inglês (e desconhecido) não anexa nada — é o
+ * padrão do modelo, e um parágrafo a mais no system prompt tem custo sem troco. PURA, TOTAL.
+ */
+function reasoningInstruction(language) {
+  if (language !== "pt-BR") return "";
+  return (
+    "Escreva seu raciocínio (os blocos de thinking) SEMPRE em português do Brasil, mesmo que o " +
+    "código, as mensagens de erro, a documentação ou a pergunta estejam em inglês. Quem lê o " +
+    "raciocínio nesta tela não necessariamente lê inglês. Termos técnicos e nomes próprios " +
+    "(arquivos, comandos, APIs) ficam como são — traduza o raciocínio, não o vocabulário."
+  );
+}
+
 function baseOptions() {
   const opts = {
     cwd: CWD,
@@ -380,7 +418,11 @@ function baseOptions() {
     settingSources: ["user", "project", "local"],
     // The TUI's system prompt (Claude Code's own), which is also what loads CLAUDE.md — the brain
     // at the profile root and the repo's. Without it the driver ran on the bare SDK prompt.
-    systemPrompt: { type: "preset", preset: "claude_code" },
+    // `append` e não um prompt próprio: trocar o preset custaria o CLAUDE.md e as ferramentas do
+    // Claude Code. Relido a cada `runStream`, então trocar o idioma vale do turno seguinte.
+    systemPrompt: reasoningInstruction(reasoningLanguage) === ""
+      ? { type: "preset", preset: "claude_code" }
+      : { type: "preset", preset: "claude_code", append: reasoningInstruction(reasoningLanguage) },
     hooks: { PreToolUse: [{ hooks: [preToolUse] }] },
     // AskUserQuestion always lands here (every permission mode) — the chat's question card.
     canUseTool,
@@ -511,6 +553,21 @@ let pendingResumeAt = null;
  * to close (produção, 2026-10-01).
  */
 let closingQuery = null;
+/**
+ * A CONVERSA ANDOU FORA DO CHAT — e a corrente aberta não sabe disso.
+ *
+ * A aba Terminal fala com a MESMA sessão por OUTRO processo do CLI. A nossa corrente carrega a
+ * conversa em MEMÓRIA: enquanto ela estiver aberta, a próxima mensagem continua do ponto que ela
+ * guarda, não do fim do arquivo — e escreve um galho irmão, deixando o turno do terminal ÓRFÃO.
+ * Uma mensagem órfã não está no ramo vivo, então `forkPointFromTranscript` não acha ponto de volta
+ * e editá-la caía no supersede: a tela mostrava a mensagem, mas editar não rebobinava nada (bug do
+ * César, produção 2026-10-05).
+ *
+ * A marca é PREGUIÇOSA de propósito: derrubar a corrente a cada linha que o terminal escreve
+ * custaria um CLI novo por linha. Ela é paga no próximo envio, que é o único momento em que estar
+ * no ponto certo importa.
+ */
+let staleView = false;
 
 /**
  * MAY this edit rewind? The whole safety of the feature is these three lines, so they are a pure
@@ -973,6 +1030,32 @@ async function endStream() {
  * or as the other. The `rewound` event says which happened, because the screen has to agree with
  * the model about what is still in the conversation.
  */
+/**
+ * Religa a conversa no FIM REAL do arquivo, quando ela andou por fora (ver `staleView`).
+ *
+ * Derrubar a corrente é tudo o que é preciso: sem `pendingResumeAt`, o próximo `runStream` abre com
+ * `resume: lastSessionId` e o CLI retoma do fim do transcript — que já inclui o que o terminal
+ * escreveu. O ponto de volta em memória morre junto: ele aponta para uma linha do tempo que não é
+ * mais a vigente, e usá-lo rebobinaria para o lugar errado.
+ *
+ * Um turno NOSSO em voo manda mais que a marca: ele É o fim da conversa, e derrubá-lo perderia a
+ * resposta que está sendo escrita. A marca fica para o próximo envio. Se o teardown falhar, a marca
+ * TAMBÉM fica — religar na próxima é melhor que seguir achando que já religou.
+ */
+async function reanchorIfStale() {
+  if (!staleView || turnActive) return;
+  if (!currentQuery) { staleView = false; return; } // sem corrente aberta: o próximo stream já nasce do fim do arquivo
+  try {
+    await endStream();
+  } catch {
+    return; // a corrente velha sobreviveu — tenta de novo no envio seguinte
+  }
+  staleView = false;
+  forkPoint = null;
+  forkText = null;
+  absorbedSinceFork = false;
+}
+
 async function rewindAndSend(text, fallback, original, releaseQuestions = () => {}) {
   const supersede = (reason) => {
     emit({ type: "rewound", ok: false, reason });
@@ -1062,8 +1145,10 @@ rl.on("line", (line) => {
   if (control && control.type === "user" && typeof control.text === "string") {
     // ORDEM IMPORTA: a mensagem entra na corrente ANTES de o cartão ser liberado. Liberar primeiro
     // solta o turno, que pode seguir e responder à pergunta sem nunca ter visto a mensagem nova —
-    // exatamente o contrário do que a pessoa pediu ao escrever.
-    serialized(() => {
+    // exatamente o contrário do que a pessoa pediu ao escrever. E ANTES das duas coisas, religar no
+    // fim real do arquivo: uma mensagem enviada de um ponto velho órfã o que o terminal escreveu.
+    serialized(async () => {
+      await reanchorIfStale();
       sendUser(control.text);
       supersedePendingQuestions();
     });
@@ -1073,7 +1158,22 @@ rl.on("line", (line) => {
     // Same ORDER as a plain user message: the message is on its way before the pending question
     // cards are released, so a turn parked on a question never answers without having read it.
     // rewindAndSend releases them itself, at the right moment of whichever path it takes.
-    serialized(() => rewindAndSend(control.text, control.fallback, control.original, supersedePendingQuestions));
+    // Religar ANTES de decidir: um supersede escrito na corrente velha órfã o turno do terminal
+    // outra vez, e o ponto em memória que a decisão consultaria é de uma linha do tempo vencida.
+    serialized(async () => {
+      await reanchorIfStale();
+      await rewindAndSend(control.text, control.fallback, control.original, supersedePendingQuestions);
+    });
+    return;
+  }
+  if (control && control.type === "reanchor") {
+    // O back viu o transcript andar fora do chat (espelho da aba Terminal). Só marca — ver `staleView`.
+    staleView = true;
+    return;
+  }
+  if (control && control.type === "language") {
+    // Idioma da interface, ao vivo: vale do próximo turno, sem respawn.
+    reasoningLanguage = normalizeLanguage(control.language);
     return;
   }
   if (control && control.type === "permission_decision" && typeof control.id === "string") {

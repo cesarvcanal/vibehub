@@ -298,12 +298,25 @@ export interface QuestionAnswerControl { type: "question_answer"; id: string; an
  * that now stands. Provenance stays the USER's: it is his speech, corrected.
  */
 export interface EditUserControl { type: "edit_user"; original: string; text: string; cid?: string; fallback?: string }
+/**
+ * A conversa andou FORA do chat (a aba Terminal escreveu na mesma sessão): a corrente aberta do
+ * driver não está mais no fim do arquivo. Ele marca e religa no PRÓXIMO envio — ver `staleView` no
+ * sdk-driver.mjs. Nasce no back (espelho), nunca no navegador.
+ */
+export interface ReanchorControl { type: "reanchor" }
+/**
+ * O idioma da INTERFACE, que decide em que língua o modelo escreve o RACIOCÍNIO. Mora no navegador
+ * (localStorage), então chega pelo socket e vale do turno seguinte, sem respawn do driver.
+ */
+export interface LanguageControl { type: "language"; language: string }
 export type DriverControl =
   | UserControl
   | InterruptControl
   | PermissionDecisionControl
   | QuestionAnswerControl
-  | EditUserControl;
+  | EditUserControl
+  | ReanchorControl
+  | LanguageControl;
 
 /**
  * The supersede wrapper an EDITED message wears on its way to the MODEL. The original was already
@@ -379,6 +392,13 @@ export function parseSdkClientFrame(raw: string): DriverControl | null {
         parsed.text.trim() !== ""
       ) {
         return { type: "edit_user", original: (parsed as { original: string }).original, text: parsed.text, cid: frameCid(parsed) };
+      }
+      if (parsed.type === "language") {
+        // Um tag curto e nada mais: ele vai parar num system prompt, e o driver só reconhece os
+        // idiomas que o painel traduz (o resto vira o padrão do modelo). Nunca vem do driver.
+        const language = (parsed as { language?: unknown }).language;
+        if (typeof language === "string" && language.length <= 32) return { type: "language", language };
+        return null;
       }
       return null;
     } catch {

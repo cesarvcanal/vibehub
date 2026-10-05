@@ -10,6 +10,7 @@ import {
   noteDriverEventFor,
   driverKeysFor,
   forgetDriverKeys,
+  onOutsideTurn,
 } from "./mirror.js";
 import { recordOrigin, resetProvenanceCache } from "../chat/provenance.js";
 import { config } from "../../config/env.js";
@@ -214,5 +215,66 @@ describe("a memória de dedupe sobrevive ao espelho (a mensagem de sistema dupli
     expect(driverKeysFor(CARD).size).toBe(1);
     forgetDriverKeys(CARD);
     expect(driverKeysFor(CARD).size).toBe(0);
+  });
+});
+
+/**
+ * O AVISO QUE IMPEDE O GALHO MORTO (produção, 2026-10-05).
+ *
+ * O espelho é o único que enxerga conversa entrando por OUTRO processo do CLI (a aba Terminal, na
+ * MESMA sessão). O driver do chat mantém a conversa em memória enquanto a corrente está aberta: sem
+ * este aviso a próxima mensagem dele continua de um ponto velho e deixa o turno do terminal órfão —
+ * e turno órfão não está no ramo vivo do transcript, então editar aquela mensagem não rebobinava.
+ */
+describe("o espelho avisa quando a conversa anda FORA do chat", () => {
+  const CARD_OUT = "card-fora";
+  const falaNoTerminal = (tid: string, texto: string): string => userLine(tid, "2026-08-31T21:31:00Z", texto);
+
+  it("uma mensagem de usuário vinda do transcript acorda os inscritos daquele card", () => {
+    let avisos = 0;
+    const off = onOutsideTurn(CARD_OUT, () => { avisos += 1; });
+    const state = createMirrorState(T0);
+    mirrorNewEvents(state, falaNoTerminal("t1", "oi pelo terminal"), CARD_OUT);
+    off();
+    expect(avisos).toBe(1);
+  });
+
+  it("cancelar a inscrição realmente cala: um driver morto não pode ser escrito", () => {
+    let avisos = 0;
+    const off = onOutsideTurn(CARD_OUT, () => { avisos += 1; });
+    off();
+    const state = createMirrorState(T0);
+    mirrorNewEvents(state, falaNoTerminal("t2", "depois do adeus"), CARD_OUT);
+    expect(avisos).toBe(0);
+  });
+
+  it("o aviso é POR CARD: o terminal de um card não religa o chat de outro", () => {
+    let outro = 0;
+    const off = onOutsideTurn("card-vizinho", () => { outro += 1; });
+    const state = createMirrorState(T0);
+    mirrorNewEvents(state, falaNoTerminal("t3", "no meu card"), CARD_OUT);
+    off();
+    expect(outro).toBe(0);
+  });
+
+  it("o que o PRÓPRIO chat mandou não conta como conversa de fora — senão religaria a cada turno", () => {
+    let avisos = 0;
+    const off = onOutsideTurn(CARD_OUT, () => { avisos += 1; });
+    const state = createMirrorState(T0);
+    noteDriverEvent(state, { type: "user", text: "fui eu pelo chat" });
+    mirrorNewEvents(state, falaNoTerminal("t4", "fui eu pelo chat"), CARD_OUT);
+    off();
+    expect(avisos).toBe(0);
+  });
+
+  it("um ouvinte que explode não derruba o espelho — a conversa na tela vale mais que o aviso", () => {
+    const off1 = onOutsideTurn(CARD_OUT, () => { throw new Error("ouvinte quebrado"); });
+    let depois = 0;
+    const off2 = onOutsideTurn(CARD_OUT, () => { depois += 1; });
+    const state = createMirrorState(T0);
+    const out = mirrorNewEvents(state, falaNoTerminal("t5", "sobrevive"), CARD_OUT);
+    off1(); off2();
+    expect(depois).toBe(1);
+    expect(out).toHaveLength(1);
   });
 });

@@ -108,6 +108,11 @@ export function mirrorNewEvents(state: MirrorState, jsonl: string, cardId: strin
       const from = matchOrigin(cardId, mirrored.text, mirrored.at ?? 0);
       if (from) mirrored.from = from;
     }
+    // CONVERSA QUE O CHAT NÃO PRODUZIU: ela entrou no transcript por outro processo do CLI (a aba
+    // Terminal). Quem mantém uma corrente aberta precisa saber — ver `onOutsideTurn`. O aviso sai
+    // daqui, e não de quem lê o stdout do follow, porque é AQUI que se decide que a linha é nova,
+    // externa e de uma pessoa: o leitor só repassa o que esta função já julgou.
+    if (mirrored.type === "user") noteOutsideTurn(cardId);
     out.push(mirrored);
   }
   return out;
@@ -142,6 +147,40 @@ export function driverKeysFor(cardId: string): Set<string> {
   const keys = new Set<string>();
   driverKeysByCard.set(cardId, keys);
   return keys;
+}
+
+/**
+ * A CONVERSA ANDOU FORA DO CHAT — quem precisa saber se inscreve aqui.
+ *
+ * O espelho é o único que enxerga isso: ele lê o transcript e reconhece o que o driver já disse, de
+ * modo que o que sobra veio de OUTRO processo do CLI (a aba Terminal, falando com a MESMA sessão).
+ * O driver do chat mantém a conversa em memória enquanto a corrente está aberta; sem este aviso a
+ * próxima mensagem dele continua de um ponto velho e deixa o turno do terminal órfão — e mensagem
+ * órfã não tem ponto de volta, então editá-la não rebobinava (ver `staleView` no sdk-driver.mjs).
+ *
+ * O sentido é mirror → manager, nunca o contrário: `manager.ts` já importa este módulo, e um
+ * import de volta fecharia um ciclo.
+ */
+const outsideListeners = new Map<string, Set<() => void>>();
+
+/** Avisa que o card teve conversa vinda de fora do chat. Nunca deixa um ouvinte derrubar o espelho. */
+function noteOutsideTurn(cardId: string): void {
+  for (const listener of outsideListeners.get(cardId) ?? []) {
+    try { listener(); } catch { /* um ouvinte quebrado não para o espelho */ }
+  }
+}
+
+/** Escuta a conversa que entra por fora neste card. Devolve o cancelamento. */
+export function onOutsideTurn(cardId: string, listener: () => void): () => void {
+  const set = outsideListeners.get(cardId) ?? new Set<() => void>();
+  outsideListeners.set(cardId, set);
+  set.add(listener);
+  return () => {
+    const live = outsideListeners.get(cardId);
+    if (!live) return;
+    live.delete(listener);
+    if (live.size === 0) outsideListeners.delete(cardId);
+  };
 }
 
 /** O card acabou (driver encerrado, card apagado): a memória dele vai junto. */

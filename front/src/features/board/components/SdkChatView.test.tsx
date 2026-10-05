@@ -7,6 +7,7 @@ import { OUTBOX_ACK_TIMEOUT_MS } from "@/features/board/lib/sdkOutbox";
 import { RECONNECT_MAX_MS } from "@/features/board/lib/reconnect";
 import { renderApp } from "@/test/render";
 import type { SdkEvent } from "@/features/board/lib/sdkChat";
+import { resetLanguage, setLanguage } from "@/i18n";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -34,7 +35,17 @@ class FakeSocket {
   static OPEN = 1;
 
   readyState = 0;
-  sent: string[] = [];
+  /** TUDO que saiu pelo socket, handshake incluído — o que os testes do handshake leem. */
+  rawSent: string[] = [];
+  /**
+   * Os frames da CONVERSA. O idioma do raciocínio é dito uma vez na abertura (setup de sessão, não
+   * fala de ninguém): contá-lo aqui faria cada teste que mede "saiu UMA mensagem" medir duas.
+   */
+  get sent(): string[] {
+    return this.rawSent.filter((raw) => {
+      try { return (JSON.parse(raw) as { type?: string }).type !== "language"; } catch { return true; }
+    });
+  }
   onopen: (() => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: (() => void) | null = null;
@@ -44,7 +55,7 @@ class FakeSocket {
     FakeSocket.instances.push(this);
   }
   send(data: string): void {
-    this.sent.push(data);
+    this.rawSent.push(data);
   }
   close(): void {
     this.readyState = 3;
@@ -2376,5 +2387,58 @@ describe("SdkChatView — o painel da frota do Workflow", () => {
     ] });
     await waitFor(() => expect(screen.getByTestId("sdk-workflow-count")).toHaveTextContent(/1\/2/));
     expect(screen.getAllByTestId("sdk-workflow")).toHaveLength(1);
+  });
+});
+
+/**
+ * EM QUE IDIOMA A IA PENSA. O bloco "Raciocínio" saía sempre em inglês, e nem todo mundo na
+ * operação lê inglês. O idioma mora NESTE navegador (localStorage), e o driver é do servidor: se o
+ * chat não contar, ninguém conta.
+ */
+describe("SdkChatView — o idioma do raciocínio", () => {
+  // O idioma é global e persistido: deixá-lo trocado vazaria para os outros arquivos de teste.
+  afterEach(() => { resetLanguage(); });
+
+  it("conta o idioma ao abrir, ANTES de qualquer mensagem — o socket entrega em ordem", async () => {
+    setLanguage("pt-BR");
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    await waitFor(() => expect(ws.rawSent.length).toBeGreaterThan(0));
+    expect(JSON.parse(ws.rawSent[0]!)).toEqual({ type: "language", language: "pt-BR" });
+
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "oi{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    // o idioma veio primeiro: o PRIMEIRO turno já pensa no idioma certo
+    expect(JSON.parse(ws.rawSent[0]!).type).toBe("language");
+    expect(JSON.parse(ws.rawSent[1]!)).toMatchObject({ type: "user", text: "oi" });
+  });
+
+  it("trocar o idioma com o card ABERTO reconta na hora — sem esperar um reconnect", async () => {
+    setLanguage("pt-BR");
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    await waitFor(() => expect(ws.rawSent.length).toBe(1));
+
+    act(() => setLanguage("en"));
+
+    await waitFor(() => expect(ws.rawSent.length).toBe(2));
+    expect(JSON.parse(ws.rawSent[1]!)).toEqual({ type: "language", language: "en" });
+  });
+
+  it("o handshake não é conversa: ele não vira bolha nem conta como mensagem enviada", async () => {
+    setLanguage("pt-BR");
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    await waitFor(() => expect(ws.rawSent.length).toBe(1));
+    expect(ws.sent).toHaveLength(0);
+    expect(screen.queryByText(/language/i)).toBeNull();
   });
 });
