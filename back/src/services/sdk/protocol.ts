@@ -126,6 +126,8 @@ export interface RewoundEvent {
    */
   uuid?: string;
   reason?: "no-fork-point" | "absorbed";
+  /** On `ok: true`: the edited message's original words — the screen cuts from THAT row. */
+  originalText?: string;
 }
 
 /** End of a turn. */

@@ -735,6 +735,23 @@ describe("dropRewoundRows — apagar de menos é feio, apagar de mais é perda",
     expect(after.rows[0]).toMatchObject({ kind: "user", text: "certa" });
   });
 
+  it("com o texto do original, corta da mensagem DESTA edição — não de uma editada (supersede) mais abaixo", () => {
+    // A, B, C; C foi editada por supersede (fica na tela, "editada") e virou C'. Agora B é editada e
+    // o driver rebobina para antes de B: B, a resposta, C, C' — tudo some; fica A e a B nova.
+    let state = appendUserRow(INITIAL_SDK_STATE, "A");
+    state = applySdkEvent(state, { type: "assistant_text", text: "resposta A" });
+    state = appendUserRow(state, "B");
+    state = applySdkEvent(state, { type: "assistant_text", text: "resposta B" });
+    state = markUserEdited(appendUserRow(state, "C"), "C");
+    state = appendUserRow(state, "C'");
+    state = markUserEdited(state, "B");
+    state = appendUserRow(state, "B nova");
+
+    const after = applySdkEvent(state, { type: "rewound", ok: true, originalText: "B" });
+    expect(after.rows.map((r) => (r.kind === "user" || r.kind === "assistant" ? r.text : r.kind)))
+      .toEqual(["A", "resposta A", "B nova"]);
+  });
+
   it("o que veio DEPOIS da mensagem nova sobrevive — é mais novo que o rebobinar", () => {
     let state = edited("errada");
     state = applySdkEvent(state, { type: "assistant_text", text: "meia" });

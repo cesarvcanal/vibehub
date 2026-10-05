@@ -34,6 +34,9 @@
 // in the environment would silently bill the API instead of the Max subscription.
 
 import { createInterface } from "node:readline";
+import { readdir, readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 delete process.env.ANTHROPIC_API_KEY;
 
@@ -495,6 +498,8 @@ let announcedSessionId = null; // last session id emitted as a `session` event (
 let lastAssistantUuid = null;
 /** Where a rewind of the LAST user message would land: the fork point captured when it was sent. */
 let forkPoint = null;
+/** The words of the message `forkPoint` belongs to — the memory path only rewinds THAT message. */
+let forkText = null;
 /** A send joined the turn in flight since `forkPoint` — rewinding past it would drop that message. */
 let absorbedSinceFork = false;
 /** Set for ONE stream: the chain entry that stream must resume at (and truncate after). */
@@ -515,16 +520,109 @@ let closingQuery = null;
  *  - no session id: there is no conversation on disk to resume, so there is nothing to go back to;
  *  - no fork point: nothing has been answered yet, so the message being edited is the first thing
  *    in the session and a "rewind" would be a resume of nothing;
+ *  - not the last: the in-memory point belongs to the LAST message sent; for any other message it
+ *    would rewind the wrong one (only the disk — `forkPointFromTranscript` — knows older points);
  *  - absorbed: a message joined the turn in flight AFTER the one being edited. Rewinding past it
  *    would discard it with no bubble, no history row and no way to get it back — and it is a
  *    message a PERSON wrote. Refusing here is the difference between a feature and a data loss.
  *
  * PURE, TOTAL.
  */
-function rewindDecision(sessionId, fork, absorbed) {
-  if (!sessionId || !fork) return { rewind: false, reason: "no-fork-point" };
+function rewindDecision(sessionId, fork, absorbed, isLast) {
+  if (!sessionId || !fork || isLast === false) return { rewind: false, reason: "no-fork-point" };
   if (absorbed) return { rewind: false, reason: "absorbed" };
   return { rewind: true };
+}
+
+/**
+ * WHERE does a rewind of `original` land — read from the session's own transcript on disk.
+ *
+ * The in-memory `forkPoint` only knows the LAST message sent in THIS process's life: a driver
+ * stopped for idleness or a deploy comes back with nothing, and a message further up never had a
+ * point at all. Both fell back to the supersede, which drew the edit as a NEW message under the old
+ * conversation instead of replacing it (the reported bug). The transcript has the whole chain.
+ *
+ * Walks the LIVE branch only — from the newest entry up through `parentUuid` — because a previous
+ * rewind leaves its dead branch in the same file. The newest user prompt with those words is the
+ * message; the first assistant above it is the fork point.
+ *
+ * `{ found: true, uuid: null }` = the message is the very first of the session: the rewind is a
+ * brand-new session. Only claimed when the chain truly ends there — a compaction boundary or a
+ * parent missing from the file is NOT the start of the conversation, and treating it as one would
+ * throw the whole context away, so those answer `found: false` and the driver keeps its plan B.
+ *
+ * PURE, TOTAL.
+ */
+function forkPointFromTranscript(jsonl, original) {
+  const fold = (s) => String(s).replace(/\s+/g, " ").trim();
+  const target = fold(original ?? "");
+  if (target === "") return { found: false };
+  const byUuid = new Map();
+  let leaf = null;
+  for (const raw of String(jsonl ?? "").split("\n")) {
+    if (raw.trim() === "") continue;
+    let entry;
+    try { entry = JSON.parse(raw); } catch { continue; }
+    if (!entry || typeof entry !== "object" || typeof entry.uuid !== "string" || entry.isSidechain === true) continue;
+    byUuid.set(entry.uuid, entry);
+    leaf = entry;
+  }
+  // A real prompt's words: a string, or text blocks. A tool_result is the CLI talking, not a person.
+  const promptText = (entry) => {
+    const content = entry.message && entry.message.content;
+    if (typeof content === "string") return content;
+    if (!Array.isArray(content) || content.some((b) => b && b.type === "tool_result")) return null;
+    return content.filter((b) => b && b.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n");
+  };
+  let hit = null;
+  let entry = leaf;
+  for (let steps = 0; entry && steps <= byUuid.size; steps += 1) {
+    if (hit === null) {
+      // A message that JOINED a running turn is written as a `queued_command` attachment, not as a
+      // user prompt. The same words newer than any prompt = the screen is editing THAT one, which
+      // has no fork point of its own: matching an older prompt would cut what the screen keeps.
+      const queued = entry.type === "attachment" && entry.attachment && entry.attachment.type === "queued_command"
+        ? entry.attachment.prompt : null;
+      if (typeof queued === "string" && fold(queued) === target) return { found: false };
+      const words = entry.type === "user" ? promptText(entry) : null;
+      if (words !== null && fold(words) === target) hit = entry;
+    } else if (entry.type === "assistant") {
+      return { found: true, uuid: entry.uuid };
+    } else if (entry.type === "system" && entry.subtype === "compact_boundary") {
+      return { found: false };
+    }
+    if (entry.parentUuid === null || entry.parentUuid === undefined) {
+      return hit ? { found: true, uuid: null } : { found: false };
+    }
+    entry = byUuid.get(entry.parentUuid);
+  }
+  return { found: false };
+}
+
+/** Whitespace-insensitive identity of a message's words (the screen's and the history's folding). */
+function foldText(text) {
+  return typeof text === "string" ? text.replace(/\s+/g, " ").trim() : "";
+}
+
+/** Session ids are UUIDs minted by Claude Code — anything else never becomes a path. */
+const SESSION_FILE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The session's transcript (`<config>/projects/<cwd-slug>/<sessionId>.jsonl`), or "" when there is
+ * none to read. The slug is not recomputed here — Claude Code's rule for it is its own business —
+ * the file is looked for by NAME across the project dirs, which a session id makes unique.
+ */
+async function readSessionTranscript(sessionId) {
+  if (typeof sessionId !== "string" || !SESSION_FILE_ID_RE.test(sessionId)) return "";
+  try {
+    const root = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
+    for (const dir of await readdir(root)) {
+      try {
+        return await readFile(join(root, dir, `${sessionId}.jsonl`), "utf8");
+      } catch { /* not in this project dir */ }
+    }
+  } catch { /* no projects dir: nothing to read */ }
+  return "";
 }
 
 async function runStream() {
@@ -810,7 +908,7 @@ function sendUser(text) {
   // A message that JOINS a turn already running shares that turn's fork point, and arms the guard
   // — from here on a rewind would take it down with the message being edited.
   if (absorbed) absorbedSinceFork = true;
-  else { forkPoint = lastAssistantUuid; absorbedSinceFork = false; }
+  else { forkPoint = lastAssistantUuid; forkText = text; absorbedSinceFork = false; }
   if (!ultra.any) {
     myChannel.push(userMessage(text));
   } else if (!fresh) {
@@ -875,31 +973,77 @@ async function endStream() {
  * or as the other. The `rewound` event says which happened, because the screen has to agree with
  * the model about what is still in the conversation.
  */
-async function rewindAndSend(text, fallback) {
-  const decision = rewindDecision(lastSessionId, forkPoint, absorbedSinceFork);
-  if (!decision.rewind) {
-    emit({ type: "rewound", ok: false, reason: decision.reason });
+async function rewindAndSend(text, fallback, original, releaseQuestions = () => {}) {
+  const supersede = (reason) => {
+    emit({ type: "rewound", ok: false, reason });
     sendUser(typeof fallback === "string" && fallback !== "" ? fallback : text);
-    return;
+    releaseQuestions(); // same order as a plain send: the words are in, THEN the cards let go
+  };
+  // The DISK knows where any message of the live branch forks — after a restart, and for a message
+  // that is not the last. Whatever sat below it (an absorbed send included) is cut on the screen
+  // too, which is exactly what editing a message above it means. Only when the disk has no answer
+  // does the in-memory point decide — and only for the message it belongs to (the last one sent).
+  // Decided BEFORE any teardown: an edit that ends as a supersede keeps the live CLI, as it always
+  // did. (The front sends an edit only after the interrupted turn reported its end, so the
+  // transcript already holds the message being edited.)
+  const disk = lastSessionId ? forkPointFromTranscript(await readSessionTranscript(lastSessionId), original) : { found: false };
+  let at;
+  if (disk.found) {
+    at = disk.uuid;
+  } else {
+    const decision = rewindDecision(lastSessionId, forkPoint, absorbedSinceFork, foldText(original) === foldText(forkText));
+    if (!decision.rewind) {
+      supersede(decision.reason);
+      return;
+    }
+    at = forkPoint;
   }
-  const at = forkPoint;
+  // A turn parked on a question card is about to be killed by the teardown — let the card go first,
+  // or the interrupt could wait on a callback nobody will ever answer.
+  releaseQuestions();
   try {
     await endStream();
   } catch {
     // Tearing the old stream down failed — but the edit is a MESSAGE, and a message that does not
     // arrive is the worst outcome available. Give up on the rewind, keep the words.
-    emit({ type: "rewound", ok: false, reason: "no-fork-point" });
-    sendUser(typeof fallback === "string" && fallback !== "" ? fallback : text);
+    supersede("no-fork-point");
     return;
   }
-  pendingResumeAt = at;
+  if (at === null) {
+    // The very first message was edited: there is nothing before it to keep, so the conversation
+    // starts over as a new session.
+    lastSessionId = null;
+    pendingResumeAt = null;
+  } else {
+    pendingResumeAt = at;
+  }
   // The rewind erases what came after this point, so nothing is absorbed into it any more and the
   // next answer becomes the new fork point.
   forkPoint = null;
+  forkText = null;
   absorbedSinceFork = false;
   lastAssistantUuid = at;
-  emit({ type: "rewound", ok: true, uuid: at });
+  // `originalText` tells the screen WHICH message this rewind cut back to (the newest row with those
+  // words) — a supersede-edited row further down must not be mistaken for it.
+  emit(at === null
+    ? { type: "rewound", ok: true, originalText: original }
+    : { type: "rewound", ok: true, uuid: at, originalText: original });
   sendUser(text);
+}
+
+/**
+ * Runs a user/edit control IN ORDER behind a rewind still in flight. A rewind awaits (the transcript
+ * read, the stream teardown); a message landing in that window would open a stream of its own at
+ * the old tip and the edit would fold into it — no rewind for the model, a stale `pendingResumeAt`
+ * for the next stream. With no rewind running, `fn` runs right now, synchronously, as always.
+ */
+let rewindInFlight = null;
+function serialized(fn) {
+  const run = rewindInFlight ? rewindInFlight.then(fn) : fn();
+  if (!run || typeof run.then !== "function") return;
+  const tracked = Promise.resolve(run).catch(() => { /* rewindAndSend never throws; a chain must not die */ });
+  rewindInFlight = tracked;
+  void tracked.then(() => { if (rewindInFlight === tracked) rewindInFlight = null; });
 }
 
 /* ------------------------------------------------------------- stdin */
@@ -919,15 +1063,17 @@ rl.on("line", (line) => {
     // ORDEM IMPORTA: a mensagem entra na corrente ANTES de o cartão ser liberado. Liberar primeiro
     // solta o turno, que pode seguir e responder à pergunta sem nunca ter visto a mensagem nova —
     // exatamente o contrário do que a pessoa pediu ao escrever.
-    sendUser(control.text);
-    supersedePendingQuestions();
+    serialized(() => {
+      sendUser(control.text);
+      supersedePendingQuestions();
+    });
     return;
   }
   if (control && control.type === "edit_user" && typeof control.text === "string") {
     // Same ORDER as a plain user message: the message is on its way before the pending question
     // cards are released, so a turn parked on a question never answers without having read it.
-    void rewindAndSend(control.text, control.fallback);
-    supersedePendingQuestions();
+    // rewindAndSend releases them itself, at the right moment of whichever path it takes.
+    serialized(() => rewindAndSend(control.text, control.fallback, control.original, supersedePendingQuestions));
     return;
   }
   if (control && control.type === "permission_decision" && typeof control.id === "string") {
