@@ -93,7 +93,7 @@ import {
   writeQueue,
   type QueuedMessage,
 } from "@/features/board/lib/sdkQueue";
-import { t as translate, useT } from "@/i18n";
+import { getLanguage, t as translate, useT } from "@/i18n";
 
 /**
  * NATIVE CHAT (beta) — the card's conversation over the Agent SDK driver, not the tmux transcript.
@@ -219,6 +219,11 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         setState(INITIAL_SDK_STATE);
         // The replay tells the story again from disk (the interrupt note included) — a stale
         // "continuar?" offer from before the drop would be guessing about a turn we no longer see.
+        // EM QUE IDIOMA A IA PENSA: o "Raciocínio" na tela saía sempre em inglês, e nem todo mundo
+        // aqui lê inglês. O idioma mora NESTE navegador (localStorage), então o driver — que é do
+        // servidor e nasceu sem ele — só fica sabendo por aqui. Antes de qualquer mensagem, porque
+        // o socket entrega em ordem: o primeiro turno já pensa no idioma certo.
+        try { next.send(JSON.stringify({ type: "language", language: getLanguage() })); } catch { /* o close já vem */ }
       };
       next.onmessage = (event: MessageEvent) => {
         if (typeof event.data !== "string") return;
@@ -271,6 +276,18 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       setStatus("closed");
     };
   }, [cardId]);
+
+  /**
+   * Trocar o idioma com o card ABERTO também troca o idioma do raciocínio — sem esperar um
+   * reconnect. `useT()` reassina este componente a cada troca, então `getLanguage()` relido no
+   * render é o gatilho. Socket fechado não faz nada: o `onopen` manda de novo ao reconectar.
+   */
+  const language = getLanguage();
+  React.useEffect(() => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    try { socket.send(JSON.stringify({ type: "language", language })); } catch { /* o close já vem */ }
+  }, [language]);
 
   /* ------------------------------------------------------------- sending */
 

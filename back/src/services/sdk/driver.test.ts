@@ -820,3 +820,63 @@ describe("sdk-driver.mjs — religar no fim real quando a conversa anda fora do 
     expect(fn).toContain("if (!currentQuery) { staleView = false; return; }");
   });
 });
+
+/**
+ * O RACIOCÍNIO NA LÍNGUA DE QUEM LÊ. O bloco "Raciocínio" saía sempre em inglês — e nem todo mundo
+ * na operação lê inglês, então era tela morta. Segue o idioma da INTERFACE, que mora no navegador.
+ */
+describe("sdk-driver.mjs — em que idioma o modelo pensa", () => {
+  const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
+
+  function cut<T>(name: string): T {
+    const from = source.indexOf(`function ${name}(`);
+    expect(from).toBeGreaterThan(0);
+    return new Function(`${source.slice(from, source.indexOf("\n}", from) + 2)}\nreturn ${name};`)() as T;
+  }
+  const normalizeLanguage = cut<(t: unknown) => string | null>("normalizeLanguage");
+  const reasoningInstruction = cut<(l: unknown) => string>("reasoningInstruction");
+
+  it("reconhece as duas línguas do painel, com ou sem região", () => {
+    expect(normalizeLanguage("pt-BR")).toBe("pt-BR");
+    expect(normalizeLanguage("pt")).toBe("pt-BR");
+    expect(normalizeLanguage("PT-br")).toBe("pt-BR");
+    expect(normalizeLanguage("en-US")).toBe("en");
+    expect(normalizeLanguage("en")).toBe("en");
+  });
+
+  it("qualquer outra coisa é o PADRÃO do modelo, nunca um palpite", () => {
+    expect(normalizeLanguage("fr")).toBe(null);
+    expect(normalizeLanguage("")).toBe(null);
+    expect(normalizeLanguage(undefined)).toBe(null);
+    expect(normalizeLanguage(null)).toBe(null);
+    expect(normalizeLanguage(42)).toBe(null);
+  });
+
+  it("em português, manda escrever o RACIOCÍNIO em português — e só ele", () => {
+    const instruction = reasoningInstruction("pt-BR");
+    expect(instruction).toContain("racioc");
+    expect(instruction).toContain("portugu");
+  });
+
+  it("inglês (e desconhecido) não anexa nada: é o padrão do modelo, e parágrafo tem custo", () => {
+    expect(reasoningInstruction("en")).toBe("");
+    expect(reasoningInstruction(null)).toBe("");
+    expect(reasoningInstruction(undefined)).toBe("");
+  });
+
+  it("o idioma entra como APPEND do preset — trocar o preset custaria o CLAUDE.md e as ferramentas", () => {
+    const opts = source.slice(source.indexOf("function baseOptions()"), source.indexOf("/* ------------------------------------------- the command catalogue"));
+    expect(opts).toContain('{ type: "preset", preset: "claude_code", append: reasoningInstruction(reasoningLanguage) }');
+    // sem idioma, o objeto é exatamente o de antes — nenhuma chave `append` vazia
+    expect(opts).toContain('{ type: "preset", preset: "claude_code" }');
+  });
+
+  it("trocar o idioma vale do turno seguinte, sem respawn: o controle só move a variável", () => {
+    const at = source.indexOf('control.type === "language"');
+    expect(at).toBeGreaterThan(0);
+    const branch = source.slice(at, at + 260);
+    expect(branch).toContain("reasoningLanguage = normalizeLanguage(control.language);");
+    // `baseOptions()` é relido a cada stream, então nada precisa ser derrubado aqui
+    expect(branch).not.toContain("endStream(");
+  });
+});
