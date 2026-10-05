@@ -5,7 +5,7 @@ import { onCardDriverProbe, type DriverActivity } from "../board/agentState.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
 import { appendHistory, replayableHistoryEvent, rewindHistory } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inflight.js";
-import { forgetDriverKeys, noteDriverEventFor } from "./mirror.js";
+import { forgetDriverKeys, noteDriverEventFor, onOutsideTurn } from "./mirror.js";
 import { writeCardCatalog } from "./catalog.js";
 import { forgetCardWorkflows, lastWorkflowRuns, watchCardWorkflows } from "./workflow.js";
 import { isHarnessFiller } from "../chat/chat.js";
@@ -118,6 +118,8 @@ export interface DriverSession {
    * que ele recebe de volta.
    */
   acceptedCids: Map<string, Promise<void>>;
+  /** Cancela a inscrição no espelho (conversa vinda da aba Terminal). Vive o que o driver viver. */
+  offOutside?: () => void;
 }
 
 /**
@@ -428,6 +430,10 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     ...(opts.transcriptDir ? { transcriptDir: opts.transcriptDir } : {}),
   };
   sessions.set(opts.cardId, session);
+  // Conversa que entrou pela aba Terminal: a corrente aberta do driver está num ponto que já não é o
+  // fim do arquivo. Seguir dela órfã o turno do terminal, e turno órfão não tem ponto de volta — era
+  // por isso que editar aquela mensagem não rebobinava. O driver só MARCA; religa no próximo envio.
+  session.offOutside = onOutsideTurn(opts.cardId, () => { writeToDriver(session, { type: "reanchor" }); });
   logger.info({ card: opts.label }, "sdk driver spawned (card-owned, survives the page)");
 
   child.stdout.on("data", (chunk: Buffer) => {
@@ -474,6 +480,9 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     if (sessions.get(opts.cardId) === session) sessions.delete(opts.cardId);
     // A memória de dedupe é do DRIVER: ele acabou, ela acaba junto — o sucessor fala do zero.
     forgetDriverKeys(opts.cardId);
+    // A inscrição no espelho também: deixada de pé, ela escreveria no stdin de um driver morto.
+    session.offOutside?.();
+    delete session.offOutside;
     // A sondagem da frota também: ela publica NESTA sessão. Deixada de pé, ela ainda recusaria ser
     // substituída pela do driver seguinte (a segunda chamada só estende a primeira).
     forgetCardWorkflows(opts.cardId);

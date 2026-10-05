@@ -441,8 +441,10 @@ describe("sdk-driver.mjs — editar rebobina, mas só quando é seguro", () => {
   });
 
   it("a mensagem vai ANTES de liberar os cartões de pergunta (mesma ordem do envio normal)", () => {
-    const handler = source.slice(source.indexOf('control.type === "edit_user"'));
-    expect(handler.slice(0, 600)).toContain("rewindAndSend(control.text, control.fallback, control.original, supersedePendingQuestions)");
+    // A janela é o RAMO do `edit_user`, não um número de caracteres: um comentário a mais ali
+    // dentro não é uma regressão, e foi o que esta medida de 600 chars passou a chamar de uma.
+    const handler = source.slice(source.indexOf('control.type === "edit_user"'), source.indexOf('control.type === "permission_decision"'));
+    expect(handler).toContain("rewindAndSend(control.text, control.fallback, control.original, supersedePendingQuestions)");
     // supersede: as palavras entram ANTES de soltar; rebobinar: solta antes de derrubar o turno
     const fn = source.slice(source.indexOf("async function rewindAndSend("), source.indexOf("/* ------------------------------------------------------------- stdin */"));
     const sup = fn.slice(fn.indexOf("const supersede = "), fn.indexOf("};", fn.indexOf("const supersede = ")));
@@ -748,5 +750,73 @@ describe("sdk-driver.mjs — um turno interrompido não é um turno que falhou",
     expect(source).toContain("process.stderr.write(`[sdk-driver] ${line}\\n`)");
     const run = source.slice(source.indexOf("async function runStream()"));
     expect(run).toContain("trace(`stream error with nothing to tell:");
+  });
+});
+
+/**
+ * A CONVERSA QUE ANDOU FORA DO CHAT (produção, 2026-10-05). O César editou uma mensagem e nada
+ * rebobinou: ela tinha vindo da aba Terminal, que fala com a MESMA sessão por OUTRO processo do
+ * CLI. A corrente aberta do chat carrega a conversa em memória, então a mensagem seguinte do chat
+ * continuou de um ponto ANTERIOR e deixou o turno do terminal num galho morto — e galho morto não
+ * tem ponto de volta (`forkPointFromTranscript` só anda no ramo vivo, de propósito), então a edição
+ * caía no supersede.
+ *
+ * O conserto não é afrouxar o fork point: é não deixar o galho morto nascer. O back avisa
+ * (`reanchor`), o driver MARCA, e o próximo envio reabre a corrente no fim real do arquivo.
+ */
+describe("sdk-driver.mjs — religar no fim real quando a conversa anda fora do chat", () => {
+  const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
+
+  it("o controle `reanchor` só MARCA — derrubar a corrente a cada linha do terminal custaria um CLI por linha", () => {
+    const at = source.indexOf('control.type === "reanchor"');
+    expect(at).toBeGreaterThan(0);
+    const branch = source.slice(at, at + 260);
+    expect(branch).toContain("staleView = true;");
+    expect(branch).not.toContain("endStream(");
+  });
+
+  it("a marca é paga ANTES de a mensagem entrar na corrente — depois já seria o galho irmão", () => {
+    const handler = source.slice(source.indexOf('rl.on("line"'));
+    const userBranch = handler.slice(handler.indexOf('control.type === "user"'), handler.indexOf('control.type === "edit_user"'));
+    expect(userBranch).toContain("await reanchorIfStale();");
+    expect(userBranch.indexOf("await reanchorIfStale();")).toBeLessThan(userBranch.indexOf("sendUser("));
+  });
+
+  it("a edição também religa antes de decidir: um supersede na corrente velha órfã o terminal de novo", () => {
+    const handler = source.slice(source.indexOf('rl.on("line"'));
+    const editBranch = handler.slice(handler.indexOf('control.type === "edit_user"'), handler.indexOf('control.type === "permission_decision"'));
+    expect(editBranch).toContain("await reanchorIfStale();");
+    expect(editBranch.indexOf("await reanchorIfStale();")).toBeLessThan(editBranch.indexOf("rewindAndSend("));
+  });
+
+  it("religar NÃO fixa ponto de retomada: sem pendingResumeAt o CLI retoma do fim do arquivo", () => {
+    const fn = source.slice(source.indexOf("async function reanchorIfStale()"), source.indexOf("async function rewindAndSend("));
+    expect(fn).toContain("await endStream();");
+    expect(fn).not.toContain("pendingResumeAt");
+  });
+
+  it("um turno NOSSO em voo manda mais que a marca — derrubá-lo perderia a resposta sendo escrita", () => {
+    const fn = source.slice(source.indexOf("async function reanchorIfStale()"), source.indexOf("async function rewindAndSend("));
+    expect(fn).toContain("if (!staleView || turnActive) return;");
+  });
+
+  it("teardown que falha MANTÉM a marca — religar na próxima é melhor que achar que já religou", () => {
+    const fn = source.slice(source.indexOf("async function reanchorIfStale()"), source.indexOf("async function rewindAndSend("));
+    const catchAt = fn.indexOf("} catch {");
+    expect(catchAt).toBeGreaterThan(0);
+    // o `return` do catch vem ANTES de a marca ser baixada
+    expect(fn.indexOf("return;", catchAt)).toBeLessThan(fn.indexOf("staleView = false;", catchAt));
+  });
+
+  it("o ponto de volta em memória morre junto: ele aponta para uma linha do tempo vencida", () => {
+    const fn = source.slice(source.indexOf("async function reanchorIfStale()"), source.indexOf("async function rewindAndSend("));
+    expect(fn).toContain("forkPoint = null;");
+    expect(fn).toContain("forkText = null;");
+    expect(fn).toContain("absorbedSinceFork = false;");
+  });
+
+  it("sem corrente aberta a marca cai sem custo — o próximo stream já nasce do fim do arquivo", () => {
+    const fn = source.slice(source.indexOf("async function reanchorIfStale()"), source.indexOf("async function rewindAndSend("));
+    expect(fn).toContain("if (!currentQuery) { staleView = false; return; }");
   });
 });

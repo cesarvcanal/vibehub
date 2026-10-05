@@ -503,3 +503,13 @@ describe("normalizeSlashCommands — the chat's \"/\" catalogue", () => {
     expect(normalizeSlashCommands("nope")).toEqual([]);
   });
 });
+
+/**
+ * `reanchor` nasce no BACK (o espelho viu a conversa andar fora do chat), nunca no navegador.
+ */
+describe("parseSdkClientFrame — religar no tip real", () => {
+  it("o navegador não inventa um reanchor; o back sabe escrevê-lo", () => {
+    expect(parseSdkClientFrame(JSON.stringify({ type: "reanchor" }))).toBe(null);
+    expect(encodeControl({ type: "reanchor" })).toBe('{"type":"reanchor"}\n');
+  });
+});

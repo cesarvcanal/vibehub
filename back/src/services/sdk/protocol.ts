@@ -298,12 +298,19 @@ export interface QuestionAnswerControl { type: "question_answer"; id: string; an
  * that now stands. Provenance stays the USER's: it is his speech, corrected.
  */
 export interface EditUserControl { type: "edit_user"; original: string; text: string; cid?: string; fallback?: string }
+/**
+ * A conversa andou FORA do chat (a aba Terminal escreveu na mesma sessão): a corrente aberta do
+ * driver não está mais no fim do arquivo. Ele marca e religa no PRÓXIMO envio — ver `staleView` no
+ * sdk-driver.mjs. Nasce no back (espelho), nunca no navegador.
+ */
+export interface ReanchorControl { type: "reanchor" }
 export type DriverControl =
   | UserControl
   | InterruptControl
   | PermissionDecisionControl
   | QuestionAnswerControl
-  | EditUserControl;
+  | EditUserControl
+  | ReanchorControl;
 
 /**
  * The supersede wrapper an EDITED message wears on its way to the MODEL. The original was already
