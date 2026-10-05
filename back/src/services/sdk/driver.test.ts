@@ -369,11 +369,11 @@ describe("sdk-driver.mjs — editar rebobina, mas só quando é seguro", () => {
   const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
 
   /** A decisão, recortada do driver e executada de verdade. */
-  const rewindDecision = ((): ((s: unknown, f: unknown, a: unknown) => { rewind: boolean; reason?: string }) => {
+  const rewindDecision = ((): ((s: unknown, f: unknown, a: unknown, last?: unknown) => { rewind: boolean; reason?: string }) => {
     const from = source.indexOf("function rewindDecision(");
     expect(from).toBeGreaterThan(0);
     const factory = new Function(`${source.slice(from, source.indexOf("\n}", from) + 2)}\nreturn rewindDecision;`);
-    return factory() as (s: unknown, f: unknown, a: unknown) => { rewind: boolean; reason?: string };
+    return factory() as (s: unknown, f: unknown, a: unknown, last?: unknown) => { rewind: boolean; reason?: string };
   })();
 
   it("rebobina quando há sessão, ponto de volta e nada foi absorvido", () => {
@@ -415,7 +415,8 @@ describe("sdk-driver.mjs — editar rebobina, mas só quando é seguro", () => {
 
   it("uma mensagem absorvida ARMA a trava e não move o ponto de volta", () => {
     expect(source).toContain("if (absorbed) absorbedSinceFork = true;");
-    expect(source).toContain("else { forkPoint = lastAssistantUuid; absorbedSinceFork = false; }");
+    // e guarda DE QUEM é o ponto: a memória só rebobina essa mensagem
+    expect(source).toContain("else { forkPoint = lastAssistantUuid; forkText = text; absorbedSinceFork = false; }");
   });
 
   it("o truncamento vale por UM stream só — o seguinte continua da ponta nova", () => {
@@ -431,18 +432,48 @@ describe("sdk-driver.mjs — editar rebobina, mas só quando é seguro", () => {
   it("a edição NUNCA some: os dois caminhos terminam mandando a mensagem", () => {
     const fn = source.slice(source.indexOf("async function rewindAndSend("), source.indexOf("/* ------------------------------------------------------------- stdin */"));
     // recusa -> supersede; falha ao derrubar o stream -> supersede; sucesso -> texto limpo
-    expect(fn.match(/sendUser\(/g) ?? []).toHaveLength(3);
+    expect(fn.match(/sendUser\(/g) ?? []).toHaveLength(2); // o do supersede e o do sucesso
+    expect(fn.match(/\bsupersede\("/g) ?? []).toHaveLength(1); // falha ao derrubar
+    expect(fn).toContain("supersede(decision.reason)"); // recusa
     expect(fn).toContain("} catch {");
     // e o plano B cai pro texto limpo se o manager não mandou fallback nenhum
-    expect(fn.match(/typeof fallback === "string" && fallback !== "" \? fallback : text/g) ?? []).toHaveLength(2);
+    expect(fn.match(/typeof fallback === "string" && fallback !== "" \? fallback : text/g) ?? []).toHaveLength(1);
   });
 
   it("a mensagem vai ANTES de liberar os cartões de pergunta (mesma ordem do envio normal)", () => {
     const handler = source.slice(source.indexOf('control.type === "edit_user"'));
-    const send = handler.indexOf("void rewindAndSend(");
-    const release = handler.indexOf("supersedePendingQuestions();");
-    expect(send).toBeGreaterThanOrEqual(0);
-    expect(release).toBeGreaterThan(send);
+    expect(handler.slice(0, 600)).toContain("rewindAndSend(control.text, control.fallback, control.original, supersedePendingQuestions)");
+    // supersede: as palavras entram ANTES de soltar; rebobinar: solta antes de derrubar o turno
+    const fn = source.slice(source.indexOf("async function rewindAndSend("), source.indexOf("/* ------------------------------------------------------------- stdin */"));
+    const sup = fn.slice(fn.indexOf("const supersede = "), fn.indexOf("};", fn.indexOf("const supersede = ")));
+    expect(sup.indexOf("releaseQuestions()")).toBeGreaterThan(sup.indexOf("sendUser("));
+    expect(fn).toMatch(/releaseQuestions\(\);\s*try \{\s*await endStream\(\)/);
+  });
+
+  it("o ponto de volta vem do DISCO, decidido ANTES de derrubar o stream — supersede não reinicia o CLI", () => {
+    const fn = source.slice(source.indexOf("async function rewindAndSend("), source.indexOf("/* ------------------------------------------------------------- stdin */"));
+    const disk = fn.indexOf("forkPointFromTranscript(await readSessionTranscript(");
+    const memory = fn.indexOf("rewindDecision(");
+    const teardown = fn.indexOf("await endStream()");
+    expect(disk).toBeGreaterThan(0);
+    expect(memory).toBeGreaterThan(disk); // a memória só decide quando o disco não achou
+    expect(teardown).toBeGreaterThan(memory); // e o stream só cai quando VAI rebobinar
+    expect(fn.match(/await endStream\(\)/g) ?? []).toHaveLength(1);
+  });
+
+  it("a memória só vale para a ÚLTIMA mensagem enviada — editar outra pela memória rebobinaria a errada", () => {
+    expect(rewindDecision("sess", "uuid", false, false)).toEqual({ rewind: false, reason: "no-fork-point" });
+    expect(rewindDecision("sess", "uuid", false, true)).toEqual({ rewind: true });
+    const fn = source.slice(source.indexOf("async function rewindAndSend("), source.indexOf("/* ------------------------------------------------------------- stdin */"));
+    expect(fn).toContain("rewindDecision(lastSessionId, forkPoint, absorbedSinceFork, foldText(original) === foldText(forkText))");
+  });
+
+  it("enquanto um rebobinar está no meio, mensagens e outras edições ESPERAM a vez — sem corrida no stream", () => {
+    const handler = source.slice(source.indexOf('rl.on("line"'));
+    const userBranch = handler.slice(handler.indexOf('control.type === "user"'), handler.indexOf('control.type === "edit_user"'));
+    const editBranch = handler.slice(handler.indexOf('control.type === "edit_user"'), handler.indexOf('control.type === "permission_decision"'));
+    expect(userBranch).toContain("serialized(");
+    expect(editBranch).toContain("serialized(");
   });
 
   it("derrubar o stream espera o anterior soltar a query — duas correntes na mesma sessão é corrida", () => {
@@ -451,5 +482,139 @@ describe("sdk-driver.mjs — editar rebobina, mas só quando é seguro", () => {
     expect(fn).toContain("ch.end()");
     // com teto: um stream que nunca solta não pode travar a edição pra sempre
     expect(fn).toMatch(/i < \d+ && currentQuery === dying/);
+  });
+});
+
+/**
+ * EDITAR = VOLTAR NO TEMPO, para QUALQUER mensagem e depois de QUALQUER reinício. O bug reportado:
+ * editar uma mensagem criava uma mensagem nova embaixo (supersede) em vez de apagar o que veio
+ * depois — porque o ponto de volta só existia na memória do driver, só para a última mensagem, e
+ * sumia quando o driver era derrubado por ociosidade ou deploy. O transcript da sessão em disco tem
+ * a cadeia inteira; daqui sai o ponto de volta de qualquer mensagem.
+ */
+describe("sdk-driver.mjs — forkPointFromTranscript acha o ponto de volta no disco", () => {
+  const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
+  type Fork = { found: false } | { found: true; uuid: string | null };
+  const forkPointFromTranscript = ((): ((jsonl: string, original: string) => Fork) => {
+    const from = source.indexOf("function forkPointFromTranscript(");
+    expect(from).toBeGreaterThan(0);
+    const factory = new Function(`${source.slice(from, source.indexOf("\n}", from) + 2)}\nreturn forkPointFromTranscript;`);
+    return factory() as (jsonl: string, original: string) => Fork;
+  })();
+
+  const line = (o: Record<string, unknown>): string => JSON.stringify({ isSidechain: false, sessionId: "s", ...o });
+  const user = (uuid: string, parentUuid: string | null, content: unknown): string =>
+    line({ type: "user", uuid, parentUuid, message: { role: "user", content } });
+  const assistant = (uuid: string, parentUuid: string | null, text = "ok"): string =>
+    line({ type: "assistant", uuid, parentUuid, message: { role: "assistant", content: [{ type: "text", text }] } });
+
+  const conversa = [
+    user("u1", null, "primeira pergunta"),
+    assistant("a1", "u1"),
+    user("u2", "a1", "segunda pergunta"),
+    assistant("a2a", "u2", "pensando"),
+    user("t2", "a2a", [{ type: "tool_result", tool_use_id: "x", content: "saida" }]),
+    assistant("a2b", "t2", "resposta final"),
+    user("u3", "a2b", "terceira pergunta"),
+    assistant("a3", "u3"),
+  ].join("\n");
+
+  it("a ÚLTIMA mensagem volta para o fim da resposta anterior (o último assistant antes dela)", () => {
+    expect(forkPointFromTranscript(conversa, "terceira pergunta")).toEqual({ found: true, uuid: "a2b" });
+  });
+
+  it("uma mensagem do MEIO também tem ponto de volta — tudo abaixo dela some", () => {
+    expect(forkPointFromTranscript(conversa, "segunda pergunta")).toEqual({ found: true, uuid: "a1" });
+  });
+
+  it("a PRIMEIRA mensagem volta para o nada: sessão nova (uuid null)", () => {
+    expect(forkPointFromTranscript(conversa, "primeira pergunta")).toEqual({ found: true, uuid: null });
+  });
+
+  it("compara sem ligar pra espaços — a mesma dobra da tela", () => {
+    expect(forkPointFromTranscript(conversa, "  segunda\n pergunta ")).toEqual({ found: true, uuid: "a1" });
+  });
+
+  it("conteúdo em blocos de texto conta como a mensagem", () => {
+    const jsonl = [user("u1", null, "oi"), assistant("a1", "u1"), user("u2", "a1", [{ type: "text", text: "em blocos" }]), assistant("a2", "u2")].join("\n");
+    expect(forkPointFromTranscript(jsonl, "em blocos")).toEqual({ found: true, uuid: "a1" });
+  });
+
+  it("só olha o RAMO VIVO: um rewind anterior deixa um galho morto no arquivo que não pode ser achado", () => {
+    // "velha" foi editada antes: a sessão voltou para a1 e seguiu por "nova". O arquivo guarda os dois.
+    const jsonl = [
+      user("u1", null, "oi"),
+      assistant("a1", "u1"),
+      user("old", "a1", "velha"),
+      assistant("aold", "old"),
+      user("new", "a1", "nova"),
+      assistant("anew", "new"),
+    ].join("\n");
+    expect(forkPointFromTranscript(jsonl, "velha")).toEqual({ found: false });
+    expect(forkPointFromTranscript(jsonl, "nova")).toEqual({ found: true, uuid: "a1" });
+  });
+
+  it("a mesma frase dita duas vezes: vale a MAIS RECENTE", () => {
+    const jsonl = [user("u1", null, "de novo"), assistant("a1", "u1"), user("u2", "a1", "de novo"), assistant("a2", "u2")].join("\n");
+    expect(forkPointFromTranscript(jsonl, "de novo")).toEqual({ found: true, uuid: "a1" });
+  });
+
+  it("ignora sidechains (subagentes) e linhas tortas", () => {
+    const jsonl = [
+      user("u1", null, "oi"),
+      assistant("a1", "u1"),
+      "{ isto não é json",
+      line({ type: "assistant", uuid: "side", parentUuid: "a1", isSidechain: true, message: { content: [] } }),
+      user("u2", "a1", "alvo"),
+      assistant("a2", "u2"),
+    ].join("\n");
+    expect(forkPointFromTranscript(jsonl, "alvo")).toEqual({ found: true, uuid: "a1" });
+  });
+
+  it("NUNCA confunde o início de uma compactação com o início da conversa — sessão nova perderia tudo", () => {
+    const jsonl = [
+      line({ type: "system", subtype: "compact_boundary", uuid: "cb", parentUuid: null, logicalParentUuid: "x" }),
+      user("sum", "cb", "resumo da conversa anterior"),
+      user("u1", "sum", "logo depois do resumo"),
+      assistant("a1", "u1"),
+    ].join("\n");
+    expect(forkPointFromTranscript(jsonl, "logo depois do resumo")).toEqual({ found: false });
+  });
+
+  it("uma mensagem ABSORVIDA mais nova com o mesmo texto é a que foi editada — e o disco não a vê como prompt: não achou", () => {
+    // "continua" foi um turno (u2) e depois entrou de novo no meio de outro turno (queued_command).
+    // A tela edita a MAIS NOVA; casar com u2 rebobinaria turnos que a tela vai manter.
+    const jsonl = [
+      user("u1", null, "oi"),
+      assistant("a1", "u1"),
+      user("u2", "a1", "continua"),
+      assistant("a2", "u2"),
+      user("u3", "a2", "outra coisa"),
+      line({ type: "attachment", uuid: "q1", parentUuid: "u3", attachment: { type: "queued_command", prompt: "continua" } }),
+      assistant("a3", "q1"),
+    ].join("\n");
+    expect(forkPointFromTranscript(jsonl, "continua")).toEqual({ found: false });
+  });
+
+  it("uma absorvida com OUTRO texto abaixo da editada some junto — está abaixo dela na tela também", () => {
+    const jsonl = [
+      user("u1", null, "oi"),
+      assistant("a1", "u1"),
+      user("u2", "a1", "alvo"),
+      line({ type: "attachment", uuid: "q1", parentUuid: "u2", attachment: { type: "queued_command", prompt: "veio junto" } }),
+      assistant("a2", "q1"),
+    ].join("\n");
+    expect(forkPointFromTranscript(jsonl, "alvo")).toEqual({ found: true, uuid: "a1" });
+  });
+
+  it("um pai que não está no arquivo (cadeia cortada) também não é o começo da conversa", () => {
+    const jsonl = [user("u1", "sumiu", "orfã"), assistant("a1", "u1")].join("\n");
+    expect(forkPointFromTranscript(jsonl, "orfã")).toEqual({ found: false });
+  });
+
+  it("texto que não está na conversa, ou transcript vazio: não achou (o driver cai no plano B)", () => {
+    expect(forkPointFromTranscript(conversa, "nunca dita")).toEqual({ found: false });
+    expect(forkPointFromTranscript("", "oi")).toEqual({ found: false });
+    expect(forkPointFromTranscript(conversa, "   ")).toEqual({ found: false });
   });
 });

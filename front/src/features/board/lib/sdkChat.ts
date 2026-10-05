@@ -74,7 +74,10 @@ export interface SdkEvent {
    * mesmo que "sem resposta" — ela respondeu, só não pelo cartão —, e a linha precisa dizer isso.
    */
   superseded?: boolean;
-  /** On `message_edited`: the superseded message's text — the row it greys out. */
+  /**
+   * On `message_edited`: the superseded message's text — the row it greys out. On `rewound`: the
+   * text of the message the rewind cut back to, so the cut starts at THAT row.
+   */
   originalText?: string;
   /**
    * On `rewound`: the edit REWOUND the conversation (the model no longer has the original, the
@@ -789,7 +792,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       // `rewindAndSend`), and then nothing is dropped — the supersede it sent instead means every
       // row on screen is still part of the conversation.
       if (event.ok !== true) return state;
-      return dropRewoundRows(state);
+      return dropRewoundRows(state, event.originalText);
     }
     case "message_edited": {
       // The user superseded a message he sent: the LAST user row with those words is drawn dimmed
@@ -932,16 +935,21 @@ export function markUserEdited(state: SdkChatState, originalText: string): SdkCh
  *
  * Total and conservative: no row marked `edited`, or an order that cannot be (the edited row at or
  * after the new message), and the state comes back untouched. A screen with a stale row is a
- * cosmetic bug; a screen missing rows the model still has is a lie about the conversation. PURE.
+ * cosmetic bug; a screen missing rows the model still has is a lie about the conversation.
+ *
+ * `originalText` (the driver says which message it rewound) picks the edited row BY ITS WORDS: an
+ * edit of an older message must not stop at a row further down that an earlier supersede already
+ * marked "editada" — that row is gone for the model too. Without it, the newest edited row. PURE.
  */
-export function dropRewoundRows(state: SdkChatState): SdkChatState {
+export function dropRewoundRows(state: SdkChatState, originalText?: string): SdkChatState {
+  const target = originalText === undefined ? "" : normalizeMessageText(originalText);
   let editedAt = -1;
   let lastUserAt = -1;
   for (let i = state.rows.length - 1; i >= 0; i -= 1) {
     const row = state.rows[i]!;
     if (row.kind !== "user") continue;
     if (lastUserAt === -1) lastUserAt = i;
-    if (row.edited === true) { editedAt = i; break; }
+    if (row.edited === true && (target === "" || normalizeMessageText(row.text) === target)) { editedAt = i; break; }
   }
   // `editedAt >= lastUserAt` is the whole identity case: the edited row IS the newest message, so
   // there is nothing between them to drop. Past it the cut always removes at least one row.

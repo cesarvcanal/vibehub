@@ -112,7 +112,31 @@ ponta a ponta, com sessão real): rebobinar no uuid do **assistant** do turno ma
 resposta antiga de volta; rebobinar no uuid do `result` é recusado com `error_during_execution`. A
 sessão continua com o mesmo id — trunca no lugar.
 
-**Quando o driver RECUSA rebobinar** (e cai no supersede de sempre, que continua existindo):
+**De onde vem o ponto de volta (hotfix 2026-10-05).** Primeiro do **transcript da sessão em
+disco** (`forkPointFromTranscript` + `readSessionTranscript` no driver): andando só pelo ramo vivo
+(da entrada mais nova subindo por `parentUuid`), acha o prompt com aquele texto e o primeiro
+`assistant` acima dele. Isso vale para **qualquer** mensagem (não só a última) e sobrevive ao driver
+ser derrubado por ociosidade ou deploy — antes o ponto vivia só na memória do processo, e qualquer
+um desses casos caía no supersede (a edição aparecia como mensagem nova embaixo, sem apagar nada).
+Editar a **primeira** mensagem abre uma sessão nova (`rewound` com `ok: true` e sem `uuid`). Um
+`compact_boundary` ou um pai ausente no arquivo **não** contam como início da conversa: aí o disco
+responde "não achei". Também "não achei" quando a mesma frase aparece mais abaixo como mensagem
+absorvida (`attachment` `queued_command`) — a tela está editando essa, que não tem ponto próprio.
+Sem resposta do disco, o ponto em memória só vale se a mensagem editada for **a última enviada**
+(senão rebobinaria a errada); fora isso, supersede. O que estava abaixo da mensagem editada —
+inclusive uma mensagem absorvida — some da tela e do modelo, que é o que editar acima dela significa.
+
+A decisão é tomada **antes** de derrubar o stream: uma edição que termina em supersede não reinicia o
+CLI. `user`/`edit_user` que chegam enquanto um rebobinar está em curso esperam a vez (`serialized`),
+senão abririam um stream na ponta velha e a edição cairia dentro dele. O `rewound` com `ok: true`
+leva `originalText`, e a tela corta a partir da linha com essas palavras (não da editada mais nova —
+um supersede anterior mais abaixo também fica "editada").
+
+Risco residual conhecido: editar a **primeira** mensagem abre sessão nova; se o driver morrer antes
+de essa sessão gravar o primeiro arquivo (~1s), o próximo spawn retoma a sessão antiga.
+
+**Quando o driver RECUSA rebobinar** (só quando o disco não achou o ponto; cai no supersede de
+sempre, que continua existindo):
 
 - **`no-fork-point`** — não há pra onde voltar (primeira mensagem da sessão, ou o stream morreu ao
   ser derrubado).
