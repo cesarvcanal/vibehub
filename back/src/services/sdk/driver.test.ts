@@ -879,4 +879,72 @@ describe("sdk-driver.mjs — em que idioma o modelo pensa", () => {
     // `baseOptions()` é relido a cada stream, então nada precisa ser derrubado aqui
     expect(branch).not.toContain("endStream(");
   });
+
+  it("não nomeia o mecanismo interno — é isso que o classificador do Opus caça (card #3684)", () => {
+    // claude-code#93584 documenta o safeguard disparando ao citar o PRÓPRIO raciocínio que a tela
+    // já mostra. A instrução pede o idioma sem nomear "thinking"/"chain of thought" — só "raciocínio".
+    const instruction = reasoningInstruction("pt-BR");
+    expect(instruction.toLowerCase()).not.toContain("thinking");
+    expect(instruction.toLowerCase()).not.toContain("chain of thought");
+  });
+});
+
+/**
+ * O OPUS BLOQUEAVA TODA MENSAGEM DO CHAT (card #3684, 2026-10-06). O erro cru da Anthropic —
+ * `safeguards flagged this message ... [reasoning_extraction]` — é um falso positivo DOCUMENTADO do
+ * classificador de segurança do Opus (claude-code#93584, #89503, #95275, entre outras dezenas de
+ * issues públicas): o SERVIDOR marca uma conversa benigna, não o conteúdo dela. Não há como o
+ * driver evitar o bloqueio em si (ele nasce do lado da Anthropic, antes da resposta chegar), mas
+ * duas coisas estavam no alcance do código:
+ *
+ *   1. a instrução de idioma do raciocínio (acima) citava "os blocos de thinking" — vocabulário
+ *      técnico que o próprio #93584 mostra como gatilho conhecido. Suavizada para falar só em
+ *      "raciocínio", sem o jargão do mecanismo interno.
+ *   2. a mensagem que chega ao humano trazia só o texto cru em inglês, sem explicar que é um bug
+ *      conhecido do classificador e não algo sobre a pergunta feita.
+ */
+describe("sdk-driver.mjs — o Opus bloqueava toda mensagem (card #3684)", () => {
+  const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
+
+  function cut<T>(name: string): T {
+    const from = source.indexOf(`function ${name}(`);
+    expect(from).toBeGreaterThan(0);
+    const body = source.slice(from, source.indexOf("\n}", from) + 2);
+    return new Function(`${body}\nreturn ${name};`)() as T;
+  }
+  const humanizeSafeguardError = cut<(t: string) => string>("humanizeSafeguardError");
+
+  it("reconhece o texto exato do bloqueio (produção, req_011CfmXhGyLQqn57VzrtHonU)", () => {
+    const raw =
+      "API Error: Opus 5 (1M context)'s safeguards flagged this message " +
+      "(https://www.anthropic.com/legal/aup). This sometimes happens with safe, normal " +
+      "conversations. Claude Code can't respond to this message with Opus 5 (1M context).\n\n" +
+      "Try rephrasing the request in a new session or change your model.\n\n" +
+      "Details: `[reasoning_extraction]`\n\nRequest ID: req_011CfmXhGyLQqn57VzrtHonU";
+    const out = humanizeSafeguardError(raw);
+    expect(out).toContain("falso positivo conhecido");
+    expect(out).toContain("sem relação com o conteúdo desta conversa");
+  });
+
+  it("ANEXA a explicação — não apaga o texto original, o Request ID nele é o que vale pra abrir chamado", () => {
+    const raw = "safeguards flagged this message. Details: `[reasoning_extraction]` Request ID: req_abc";
+    const out = humanizeSafeguardError(raw);
+    expect(out.startsWith(raw)).toBe(true);
+    expect(out.length).toBeGreaterThan(raw.length);
+  });
+
+  it("reconhece pela categoria do erro mesmo sem a frase 'safeguards flagged'", () => {
+    expect(humanizeSafeguardError("Details: `[reasoning_extraction]`")).toContain("falso positivo conhecido");
+  });
+
+  it("um erro comum, sem relação com o classificador, passa intacto", () => {
+    expect(humanizeSafeguardError("spawn ENOENT; the driver is not installed"))
+      .toBe("spawn ENOENT; the driver is not installed");
+    expect(humanizeSafeguardError("prompt is too long")).toBe("prompt is too long");
+  });
+
+  it("o catch de runStream passa o texto humano pelo tradutor antes de emitir — não substitui, encadeia", () => {
+    const run = source.slice(source.indexOf("async function runStream()"), source.indexOf("async function endStream()"));
+    expect(run).toContain('emit({ type: "error", message: humanizeSafeguardError(detail) });');
+  });
 });

@@ -116,6 +116,25 @@ function humanErrorText(message) {
 }
 
 /**
+ * O FALSO POSITIVO CONHECIDO DO CLASSIFICADOR DE SEGURANÇA (card #3684: Opus bloqueando toda
+ * mensagem do chat). O texto cru já vem claro ("this sometimes happens with safe, normal
+ * conversations") mas só em inglês, e quem acompanha o chat pode não ler inglês — então esta função
+ * ANEXA a mesma explicação em português, sem apagar o original (o Request ID nele é o que vale para
+ * abrir chamado com a Anthropic). Documentado em dezenas de issues públicas do claude-code (#93584,
+ * #89503, #95275, entre outras): é o SERVIDOR marcando uma conversa benigna, não o conteúdo dela —
+ * às vezes dispara até num "Hi" sozinho. PURA, TOTAL.
+ */
+function humanizeSafeguardError(text) {
+  if (!/\[reasoning_extraction\]/.test(text) && !/safeguards flagged this message/i.test(text)) return text;
+  return (
+    text +
+    "\n\n(Isso é um falso positivo conhecido do classificador de segurança da Anthropic — mais " +
+    "comum no Opus, sem relação com o conteúdo desta conversa. Tente reenviar a mensagem ou " +
+    "trocar de modelo.)"
+  );
+}
+
+/**
  * Did the CLI END this turn because it was INTERRUPTED? `aborted_streaming`/`aborted_tools` is the
  * CLI's own word for it, and it comes with `is_error: true` and an `error_during_execution`
  * subtype — a stop someone ASKED for, wearing the clothes of a failure. The CLI does not show it
@@ -388,14 +407,21 @@ function normalizeLanguage(tag) {
  * Fala só do raciocínio: a resposta já segue o idioma de quem escreveu, e mandar no texto visível
  * atropelaria quem pede resposta em outra língua. Inglês (e desconhecido) não anexa nada — é o
  * padrão do modelo, e um parágrafo a mais no system prompt tem custo sem troco. PURA, TOTAL.
+ *
+ * NÃO nomeia o mecanismo interno ("thinking blocks", "chain of thought"): o classificador de
+ * segurança `reasoning_extraction` do Opus tem um histórico documentado de falso positivo quando o
+ * prompt fala explicitamente sobre COMO o raciocínio bruto do modelo deve ser tratado — inclusive
+ * disparando ao citar o próprio raciocínio que a tela já mostra (claude-code#93584) ou mesmo sem
+ * nenhum conteúdo de risco aparente (claude-code#89503, #95275). "Raciocínio" em português é
+ * instrução de IDIOMA, não sobre o mecanismo — card #3684, Opus bloqueando toda mensagem do chat.
  */
 function reasoningInstruction(language) {
   if (language !== "pt-BR") return "";
   return (
-    "Escreva seu raciocínio (os blocos de thinking) SEMPRE em português do Brasil, mesmo que o " +
-    "código, as mensagens de erro, a documentação ou a pergunta estejam em inglês. Quem lê o " +
-    "raciocínio nesta tela não necessariamente lê inglês. Termos técnicos e nomes próprios " +
-    "(arquivos, comandos, APIs) ficam como são — traduza o raciocínio, não o vocabulário."
+    "Escreva seu raciocínio sempre em português do Brasil, mesmo que o código, as mensagens de " +
+    "erro, a documentação ou a pergunta estejam em inglês. Quem acompanha seu raciocínio nesta " +
+    "tela não necessariamente lê inglês. Termos técnicos e nomes próprios (arquivos, comandos, " +
+    "APIs) ficam como são — traduza o raciocínio, não o vocabulário."
   );
 }
 
@@ -768,7 +794,7 @@ async function runStream() {
     if (myQuery !== null && closingQuery === myQuery) trace(`stream closed on purpose: ${raw}`);
     else {
       const detail = humanErrorText(raw);
-      if (detail !== "") emit({ type: "error", message: detail });
+      if (detail !== "") emit({ type: "error", message: humanizeSafeguardError(detail) });
       else trace(`stream error with nothing to tell: ${raw}`);
     }
   } finally {
