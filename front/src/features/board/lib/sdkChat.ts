@@ -40,6 +40,7 @@ export interface SdkEvent {
     | "workflow_progress"
     | "user_ack"
     | "user_nack"
+    | "peer_typing"
     | "error"
     | "parse_error";
   text?: string;
@@ -101,6 +102,11 @@ export interface SdkEvent {
    * but this browser.
    */
   cid?: string;
+  /**
+   * On `peer_typing` (relayed by the BACK from the card's other sockets, never persisted): whether
+   * the person in `name` is typing. Handled by the view (see lib/peerTyping.ts), not the reducer.
+   */
+  active?: boolean;
 }
 
 /** One question of a `user_question` (mirror of `UserQuestionItem` in the back's protocol). */

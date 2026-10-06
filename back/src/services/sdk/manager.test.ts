@@ -8,6 +8,7 @@ import { readCardCatalog } from "./catalog.js";
 import { readHistory, rewindHistory } from "./history.js";
 import {
   DRIVER_IDLE_MS,
+  TYPING_RELAY_MIN_MS,
   attachSocket,
   ensureDriverSession,
   handleClientFrame,
@@ -1317,5 +1318,121 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
     emit({ type: "rewound", ok: true, uuid: "abc" });
     await deixaCortarSeForCortar();
     expect((await readHistory(CARD)).some((e) => e.type === "rewound")).toBe(false);
+  });
+});
+
+describe("attachSocket — \"está digitando\" entre as abas do card", () => {
+  const CESAR = { kind: "user" as const, name: "cesar" };
+  const MUSSA = { kind: "owner" as const, name: "mussa" };
+  const typing = (active: boolean): Buffer => Buffer.from(JSON.stringify({ type: "typing", active }));
+  const peerFrames = (socket: FakeSocket): Array<{ type: string; name?: string; active?: boolean }> =>
+    socket.sent.map((s) => JSON.parse(s) as { type: string; name?: string; active?: boolean }).filter((e) => e.type === "peer_typing");
+
+  it("repassa o nome de quem digita para as OUTRAS abas — nunca de volta para quem digita", () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    const mussa = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    attachSocket(session, mussa as never, MUSSA);
+    cesar.emit("message", typing(true));
+    expect(peerFrames(mussa)).toEqual([{ type: "peer_typing", name: "cesar", active: true }]);
+    expect(peerFrames(cesar)).toEqual([]);
+  });
+
+  it("é efêmero: não vira turno no driver nem linha no histórico", async () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    attachSocket(session, fakeSocket() as never, MUSSA);
+    cesar.emit("message", typing(true));
+    cesar.emit("message", typing(false));
+    expect(spawned[0]!.stdin.written.join("")).not.toContain("typing");
+    expect(session.activeTurns).toBe(0);
+    expect(await readHistory(CARD)).toEqual([]);
+  });
+
+  it("não sobrecarrega: dentro da janela mínima, um segundo \"digitando\" da mesma aba não é repassado", () => {
+    vi.useFakeTimers();
+    const session = ensure();
+    const cesar = fakeSocket();
+    const mussa = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    attachSocket(session, mussa as never, MUSSA);
+    cesar.emit("message", typing(true));
+    cesar.emit("message", typing(true));
+    cesar.emit("message", typing(true));
+    expect(peerFrames(mussa).length).toBe(1);
+    vi.advanceTimersByTime(TYPING_RELAY_MIN_MS);
+    cesar.emit("message", typing(true));
+    expect(peerFrames(mussa).length).toBe(2);
+  });
+
+  it("alternar digitando/parou em loop NÃO fura o teto: o recomeço também respeita a janela", () => {
+    vi.useFakeTimers();
+    const session = ensure();
+    const cesar = fakeSocket();
+    const mussa = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    attachSocket(session, mussa as never, MUSSA);
+    for (let i = 0; i < 10; i += 1) {
+      cesar.emit("message", typing(true));
+      cesar.emit("message", typing(false));
+    }
+    // um "digitando" e o seu "parou" — o resto do loop, dentro da janela, não sai do servidor
+    expect(peerFrames(mussa)).toEqual([
+      { type: "peer_typing", name: "cesar", active: true },
+      { type: "peer_typing", name: "cesar", active: false },
+    ]);
+    vi.advanceTimersByTime(TYPING_RELAY_MIN_MS);
+    cesar.emit("message", typing(true));
+    expect(peerFrames(mussa).length).toBe(3);
+  });
+
+  it("o \"parou\" passa sempre (fura a janela) — e só quando havia um \"digitando\" no ar", () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    const mussa = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    attachSocket(session, mussa as never, MUSSA);
+    cesar.emit("message", typing(false)); // nada no ar: nada a apagar
+    expect(peerFrames(mussa)).toEqual([]);
+    cesar.emit("message", typing(true));
+    cesar.emit("message", typing(false));
+    expect(peerFrames(mussa)).toEqual([
+      { type: "peer_typing", name: "cesar", active: true },
+      { type: "peer_typing", name: "cesar", active: false },
+    ]);
+  });
+
+  it("a aba que fecha no meio da digitação apaga o próprio indicador nas outras", () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    const mussa = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    attachSocket(session, mussa as never, MUSSA);
+    cesar.emit("message", typing(true));
+    cesar.emit("close");
+    expect(peerFrames(mussa).at(-1)).toEqual({ type: "peer_typing", name: "cesar", active: false });
+  });
+
+  it("enviar a mensagem encerra a digitação para os outros (o \"parou\" do front pode se perder)", () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    const mussa = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    attachSocket(session, mussa as never, MUSSA);
+    cesar.emit("message", typing(true));
+    cesar.emit("message", Buffer.from(`{"type":"user","text":"pronto"}`));
+    expect(peerFrames(mussa).at(-1)).toEqual({ type: "peer_typing", name: "cesar", active: false });
+  });
+
+  it("um socket sem autor conhecido não anuncia ninguém (não há nome para mostrar)", () => {
+    const session = ensure();
+    const anon = fakeSocket();
+    const mussa = fakeSocket();
+    attachSocket(session, anon as never);
+    attachSocket(session, mussa as never, MUSSA);
+    anon.emit("message", typing(true));
+    expect(peerFrames(mussa)).toEqual([]);
   });
 });

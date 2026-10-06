@@ -18,7 +18,7 @@ import {
   resumeTargetFor,
 } from "../services/sdk/transcript.js";
 import { acquireTranscriptMirror } from "../services/sdk/mirror.js";
-import { parseSdkClientFrame } from "../services/sdk/protocol.js";
+import { parseSdkClientFrame, parseTypingFrame } from "../services/sdk/protocol.js";
 import { transcriptDirFor } from "../services/maestro/maestro.js";
 import { effectiveAccountSlug } from "../services/board/registry.js";
 import { config } from "../config/env.js";
@@ -49,12 +49,16 @@ import { logger } from "../utils/logger.js";
  *   { "type": "result", "isError": boolean, "sessionId"?: string, "subtype"?: string, "result"?: string, "permissionDenials"?: unknown[] }
  *   { "type": "error", "message": string }
  *   { "type": "parse_error", "raw": string }              // synthesised by the back for a bad line
+ *   { "type": "peer_typing", "name": string, "active": boolean } // another socket of this card is typing (ephemeral)
  *
  * The front sends, per message: either a JSON object { "type": "user", "text": "..." },
  * { "type": "interrupt" }, { "type": "permission_decision", "id": string, "allow": boolean }
  * (the answer to a `permission_request`), or { "type": "question_answer", "id": string,
  * "answers": [{ "selected": string[] }] } (the answer to a `user_question`) — or a bare string,
- * treated as a user message.
+ * treated as a user message. `{ "type": "typing", "active": boolean }` is the "está digitando"
+ * signal: relayed to the card's OTHER sockets as `peer_typing` with this socket's author, and
+ * nothing else — never the driver, never the history (see `attachSocket` in services/sdk/manager.ts);
+ * one buffered during the setup below is stale by the attach and is dropped.
  */
 
 // Re-exported for compatibility (tests, callers): the parser moved into the pure protocol module.
@@ -225,6 +229,9 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       // uses — user messages become normal user turns (queued by the driver until it is ready).
       socket.off("message", bufferFrame);
       for (const raw of pendingFrames) {
+        // A "digitando" from before the attach is stale by now: dropped on purpose (the front
+        // renews it every few seconds while the person keeps typing).
+        if (parseTypingFrame(raw) !== null) continue;
         noteAuthor(raw);
         replyFrameOutcome(socket, handleClientFrame(session, raw, wsOrigin));
       }
