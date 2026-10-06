@@ -777,3 +777,49 @@ lê-la, até o timeout de 30 minutos: na tela, "mandei a mensagem e não acontec
 
 O cartão de PERMISSÃO (`permission_request`) tem a mesma forma de espera, e segue como estava: ali a
 decisão é binária, o botão Negar é o caminho explícito, e o relógio é de 5 minutos, não 30.
+
+## Quem escreveu e quem está digitando — duas contas no mesmo card (2026-10-06)
+
+**O bug.** A conta "mussa" mandou "continua nao para"; a aba trocou para "cesar" e a barra lateral
+mudou (o `SessionGuard` revalida o `/auth/me` no foco) — mas a bolha continuou desenhada como do
+leitor, sem nome, até um F5. Eram dois furos juntos:
+
+1. **A bolha própria nascia sem autor.** `appendUserRow(..., undefined)` + `originRole(undefined)`
+   = `"self"` para QUEM estivesse logado. Agora o envio (e a cópia no outbox, `OutboxMessage.from`)
+   leva o autor da conta que escreveu; o `readOutbox` valida esse campo com `parseOrigin`
+   (localStorage é entrada não confiável).
+2. **O socket continuava falando pela conta antiga.** O back resolve o autor UMA vez por conexão
+   (`wsOrigin` em `routes/cardSdk.ts`), e o effect do socket dependia só de `cardId`. Agora depende
+   também de `identity.epoch` (`lib/viewerIdentity.ts`), que só anda numa troca REAL entre duas
+   contas conhecidas — o `/auth/me` chegando ou a sessão caindo não reconectam (a conversa não pisca).
+3. **O que outra conta deixou esperando não sai por esta conexão.** Fila (`QueuedMessage.from`) e
+   outbox guardam o autor; quando o leitor muda, `foreignToOutbox` tira da fila o que é de outra
+   conta e o transforma em cópia "não entregue" — na tela com o nome de quem escreveu, descartável,
+   SEM "Reenviar" (só quem escreveu reenvia; daqui sairia no nome errado). Edição em curso é limpa
+   na troca. O `onclose` de um socket já descartado não mexe mais no estado da conexão nova.
+
+**"Cesar está digitando…".** Presença efêmera sobre o mesmo websocket do card (o projeto não usa
+socket.io: o "room" é o `session.sockets` do manager):
+
+- O front manda `{ "type": "typing", "active": boolean }` — um na primeira tecla, no máximo um a cada
+  `TYPING_SEND_EVERY_MS` (2,5 s) enquanto a pessoa escreve, e o "parou" depois de `TYPING_IDLE_MS`
+  (3 s) sem tecla, ao apagar o campo ou ao enviar (`lib/peerTyping.ts` `createTypingSignal`). Só
+  teclas da pessoa contam (`TerminalComposer` `onDraftInput`), não rascunho restaurado nem modo edição.
+- O back (`attachSocket`) intercepta o frame ANTES do `parseSdkClientFrame` — cujo fallthrough
+  transforma texto desconhecido em turno — e o repassa como `{ "type": "peer_typing", "name",
+  "active" }` só para os OUTROS sockets do card. Nunca vai ao driver nem ao histórico. Guarda própria
+  contra abuso: `TYPING_RELAY_MIN_MS` (1 s) entre dois "digitando" do mesmo socket — mesmo com um
+  "parou" no meio, senão um loop digitando/parou repassaria cada frame (o "parou" em si nunca espera).
+  Um "digitando" que chega no buffer do setup (antes do attach) é descartado: já está velho.
+  Um envio aceito e o fechamento do socket também mandam o "parou"; socket sem autor não anuncia.
+- O front expira cada nome em `PEER_TYPING_TTL_MS` (6 s) sem renovação — um "parou" perdido nunca
+  deixa o indicador preso —, esconde o próprio nome (mesma conta em duas abas) e limpa tudo a cada
+  reconexão. O desenho (`PeerTypingIndicator`) são os três pontos do LoaderOne da Aceternity (y em
+  loop, ease-in-out, 1 s, 0,2 s de defasagem) feitos em CSS (`animate-typing-dot`), sem biblioteca de
+  animação no bundle, e parados com `prefers-reduced-motion`.
+
+Limitação conhecida: o estado é por SOCKET no back e por NOME no front — a mesma pessoa digitando
+em duas abas e fechando uma apaga o indicador por até 2,5 s (até a próxima renovação da outra).
+
+Custo no servidor: um frame de poucos bytes a cada ~2,5 s por pessoa digitando, fan-out só para as
+abas abertas NAQUELE card. Nada em disco, nenhum timer no back.

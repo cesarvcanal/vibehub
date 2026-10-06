@@ -1,13 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { act } from "react";
 import { OUTBOX_TICK_MS, SdkChatView } from "@/features/board/components/SdkChatView";
 import { OUTBOX_ACK_TIMEOUT_MS } from "@/features/board/lib/sdkOutbox";
 import { RECONNECT_MAX_MS } from "@/features/board/lib/reconnect";
+import { PEER_TYPING_TTL_MS } from "@/features/board/lib/peerTyping";
 import { renderApp } from "@/test/render";
 import type { SdkEvent } from "@/features/board/lib/sdkChat";
 import { resetLanguage, setLanguage } from "@/i18n";
+import { get } from "@/lib/api";
+import { ME_KEY } from "@/providers/auth";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -43,7 +46,20 @@ class FakeSocket {
    */
   get sent(): string[] {
     return this.rawSent.filter((raw) => {
-      try { return (JSON.parse(raw) as { type?: string }).type !== "language"; } catch { return true; }
+      try {
+        const type = (JSON.parse(raw) as { type?: string }).type;
+        // `typing` é da mesma natureza: sinal efêmero entre abas, não fala de ninguém.
+        return type !== "language" && type !== "typing";
+      } catch { return true; }
+    });
+  }
+  /** Só os sinais de "está digitando" que esta aba mandou, em ordem. */
+  get typingSent(): boolean[] {
+    return this.rawSent.flatMap((raw) => {
+      try {
+        const frame = JSON.parse(raw) as { type?: string; active?: boolean };
+        return frame.type === "typing" ? [frame.active === true] : [];
+      } catch { return []; }
     });
   }
   onopen: (() => void) | null = null;
@@ -2412,9 +2428,13 @@ describe("SdkChatView — o idioma do raciocínio", () => {
     const box = screen.getByRole("textbox");
     await userEvent.type(box, "oi{Enter}");
     await waitFor(() => expect(ws.sent.length).toBe(1));
-    // o idioma veio primeiro: o PRIMEIRO turno já pensa no idioma certo
-    expect(JSON.parse(ws.rawSent[0]!).type).toBe("language");
-    expect(JSON.parse(ws.rawSent[1]!)).toMatchObject({ type: "user", text: "oi" });
+    // o idioma veio primeiro: o PRIMEIRO turno já pensa no idioma certo (o "digitando", efêmero,
+    // pode sair entre os dois — o que importa é a ordem idioma → turno)
+    const frames = ws.rawSent.map((raw) => JSON.parse(raw) as { type: string });
+    expect(frames[0]!.type).toBe("language");
+    const turn = frames.findIndex((f) => f.type === "user");
+    expect(turn).toBeGreaterThan(0);
+    expect(frames[turn]).toMatchObject({ type: "user", text: "oi" });
   });
 
   it("trocar o idioma com o card ABERTO reconta na hora — sem esperar um reconnect", async () => {
@@ -2440,5 +2460,203 @@ describe("SdkChatView — o idioma do raciocínio", () => {
     await waitFor(() => expect(ws.rawSent.length).toBe(1));
     expect(ws.sent).toHaveLength(0);
     expect(screen.queryByText(/language/i)).toBeNull();
+  });
+});
+
+/* ------------------------------------------- duas pessoas no mesmo card */
+
+describe("SdkChatView — quem escreve e quem está digitando", () => {
+  const OPERATOR = { id: "1", username: "operator", role: "owner" };
+  const CESAR = { id: "2", username: "cesar", role: "user" };
+  let me: typeof OPERATOR = OPERATOR;
+
+  beforeEach(() => {
+    me = OPERATOR;
+    localStorage.clear();
+    // os blocos anteriores podem deixar o idioma em pt-BR; as frases aqui são afirmadas em inglês
+    setLanguage("en");
+    vi.mocked(get).mockImplementation(((url: string) =>
+      url === "/auth/me"
+        ? Promise.resolve({ user: me })
+        : Promise.resolve({ available: false, proofread: false, language: null })) as never);
+  });
+
+  afterEach(() => {
+    vi.mocked(get).mockImplementation((() => Promise.resolve({ available: false, proofread: false, language: null })) as never);
+    localStorage.clear();
+    resetLanguage();
+  });
+
+  /** Espera a tela saber quem é o leitor (o `/auth/me` resolveu). */
+  async function signedIn(): Promise<void> {
+    await waitFor(() => expect(vi.mocked(get)).toHaveBeenCalledWith("/auth/me"));
+    await act(async () => { await Promise.resolve(); });
+  }
+
+  it("abrir a tela não reconecta à toa quando o /auth/me chega (só UMA conexão)", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    await signedIn();
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(FakeSocket.instances.length).toBe(1);
+  });
+
+  it("TROCAR DE CONTA reconecta o chat — o servidor carimba o autor por conexão (o bug do F5)", async () => {
+    const { queryClient } = renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    await signedIn();
+    me = CESAR;
+    await act(async () => { await queryClient.invalidateQueries({ queryKey: ME_KEY }); });
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
+    expect(ws.readyState).toBe(3);
+  });
+
+  it("a mensagem que ficou sem recibo continua sendo de QUEM a escreveu depois da troca de conta", async () => {
+    const { queryClient } = renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    await signedIn();
+    await userEvent.type(screen.getByRole("textbox"), "continua nao para{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    // para quem escreveu, é a própria bolha: sem nome de autor
+    expect(screen.getByTestId("sdk-user")).not.toHaveAttribute("data-role");
+    // troca de conta antes do recibo: o outbox guarda a cópia, e a nova conexão a redesenha
+    me = CESAR;
+    await act(async () => { await queryClient.invalidateQueries({ queryKey: ME_KEY }); });
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
+    const next = FakeSocket.instances[1]!;
+    next.accept();
+    next.deliver({ type: "ready" });
+    await waitFor(() => expect(screen.getByTestId("sdk-user")).toHaveTextContent("continua nao para"));
+    // para o cesar, ela é do operator — com o nome, não como se fosse dele
+    expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-role", "user");
+    expect(screen.getByTestId("sdk-user")).toHaveTextContent("operator");
+  });
+
+  it("o close ATRASADO do socket antigo não derruba a conexão nova (a mensagem sai, não fica na espera)", async () => {
+    const { queryClient } = renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    await signedIn();
+    me = CESAR;
+    await act(async () => { await queryClient.invalidateQueries({ queryKey: ME_KEY }); });
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
+    const next = FakeSocket.instances[1]!;
+    next.accept();
+    next.deliver({ type: "ready" });
+    // só agora o navegador entrega o close do socket velho
+    act(() => ws.onclose?.());
+    await userEvent.type(screen.getByRole("textbox"), "oi do cesar{Enter}");
+    await waitFor(() => expect(next.sent.some((raw) => raw.includes("oi do cesar"))).toBe(true));
+  });
+
+  it("a mensagem que ESPERAVA NA FILA da conta anterior não sai pela conexão da conta nova", async () => {
+    const { queryClient } = renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    await signedIn();
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "faz a tarefa{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "Fazendo…" });
+    await userEvent.type(box, "isto é do operator{Enter}");
+    await screen.findByTestId("sdk-queue");
+    // troca de conta com a mensagem ainda esperando
+    me = CESAR;
+    await act(async () => { await queryClient.invalidateQueries({ queryKey: ME_KEY }); });
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
+    const next = FakeSocket.instances[1]!;
+    next.accept();
+    next.deliver({ type: "ready" });
+    next.deliver({ type: "result", isError: false });
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    // nada do operator saiu assinado pela conexão do cesar
+    expect(next.sent.some((raw) => raw.includes("isto é do operator"))).toBe(false);
+    // ela continua na tela, como do operator, não entregue — e sem "Reenviar" para o cesar
+    const bubble = screen.getAllByTestId("sdk-user").find((el) => el.textContent?.includes("isto é do operator"));
+    expect(bubble).toBeDefined();
+    expect(bubble).toHaveTextContent("operator");
+    // (a primeira, sem recibo, também é do operator: nenhuma das duas oferece "Reenviar" ao cesar)
+    expect(screen.queryByTestId("sdk-user-resend")).toBeNull();
+    expect(within(bubble!).getByTestId("sdk-user-undelivered")).toBeInTheDocument();
+    expect(screen.queryByTestId("sdk-queue")).toBeNull();
+  });
+
+  it("mostra \"Cesar is typing\" quando outra pessoa digita neste card, e some quando ela para", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    await signedIn();
+    ws.deliver({ type: "peer_typing", name: "cesar", active: true });
+    expect(screen.getByTestId("sdk-peer-typing")).toHaveTextContent("Cesar is typing");
+    ws.deliver({ type: "peer_typing", name: "cesar", active: false });
+    expect(screen.queryByTestId("sdk-peer-typing")).toBeNull();
+  });
+
+  it("em português: \"Cesar está digitando\"", async () => {
+    setLanguage("pt-BR");
+    try {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      await signedIn();
+      ws.deliver({ type: "peer_typing", name: "cesar", active: true });
+      expect(screen.getByTestId("sdk-peer-typing")).toHaveTextContent("Cesar está digitando");
+    } finally {
+      resetLanguage();
+    }
+  });
+
+  it("duas pessoas digitando ao mesmo tempo aparecem juntas", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    await signedIn();
+    ws.deliver({ type: "peer_typing", name: "rafa", active: true });
+    ws.deliver({ type: "peer_typing", name: "cesar", active: true });
+    expect(screen.getByTestId("sdk-peer-typing")).toHaveTextContent("Cesar and Rafa are typing");
+  });
+
+  it("o indicador EXPIRA sozinho se o \"parou\" nunca chegar", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      await signedIn();
+      ws.deliver({ type: "peer_typing", name: "cesar", active: true });
+      expect(screen.getByTestId("sdk-peer-typing")).toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(PEER_TYPING_TTL_MS + 50); });
+      expect(screen.queryByTestId("sdk-peer-typing")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uma reconexão limpa quem estava digitando (o estado é do socket que caiu)", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    await signedIn();
+    ws.deliver({ type: "peer_typing", name: "cesar", active: true });
+    act(() => ws.onclose?.());
+    expect(screen.queryByTestId("sdk-peer-typing")).toBeNull();
+  });
+
+  it("digitar avisa as outras abas; enviar avisa que parou", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    await signedIn();
+    await userEvent.type(screen.getByRole("textbox"), "oi");
+    expect(ws.typingSent).toEqual([true]);
+    await userEvent.type(screen.getByRole("textbox"), "{Enter}");
+    await waitFor(() => expect(ws.typingSent).toEqual([true, false]));
   });
 });

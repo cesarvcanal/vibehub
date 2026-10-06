@@ -19,6 +19,9 @@
  * Tudo aqui é puro ou trivialmente falsificável — as regras são testes, não capturas de tela.
  */
 
+import { parseOrigin, type MessageOrigin } from "@/features/board/lib/chat";
+import type { OutboxMessage } from "@/features/board/lib/sdkOutbox";
+
 /** Uma mensagem escrita, ainda não entregue, ainda editável. */
 export interface QueuedMessage {
   /** Identidade local desta espera — some quando a mensagem é despachada. */
@@ -35,6 +38,12 @@ export interface QueuedMessage {
    * manda a mensagem pro fim da fila). O despacho simplesmente pula quem está aqui.
    */
   editing?: boolean;
+  /**
+   * QUEM escreveu. A fila mora no navegador, não na conta: sem isto, uma espera da conta anterior
+   * saía pela conexão da conta nova depois de uma troca de conta — e o servidor a gravava no nome
+   * errado (ver `foreignToOutbox`).
+   */
+  from?: MessageOrigin;
 }
 
 const QUEUE_PREFIX = "vibehub.sdkQueue.";
@@ -58,7 +67,12 @@ export function readQueue(cardId: string): QueuedMessage[] {
           typeof (m as QueuedMessage).id === "string" &&
           typeof (m as QueuedMessage).text === "string",
       )
-      .map((m) => (typeof m.at === "number" ? m : { ...m, at: Date.now() }));
+      .map((m) => ({
+        ...m,
+        at: typeof m.at === "number" ? m.at : Date.now(),
+        // localStorage é entrada não confiável: um autor malformado vira "sem autor", nunca lixo.
+        from: parseOrigin(m.from),
+      }));
   } catch {
     return [];
   }
@@ -135,4 +149,30 @@ export function updateQueued(
 ): QueuedMessage[] {
   if (!messages.some((m) => m.id === id)) return [...messages, { id, text, at }];
   return messages.map((m) => (m.id === id ? { ...m, text, at, editing: false } : m));
+}
+
+/**
+ * A TROCA DE CONTA com mensagens esperando: o que é de OUTRA conta não pode sair por esta conexão
+ * (o servidor carimba o autor pela conexão, e a mensagem ficaria no nome de quem não a escreveu).
+ * Ela vira uma cópia "não entregue" no outbox — continua na tela, com o nome de quem escreveu, e
+ * pode ser descartada; só a conta dona dela pode reenviá-la.
+ *
+ * Sem autor (gravada antes desta versão) segue com quem está na aba, como sempre foi; sem leitor
+ * conhecido ainda (`/auth/me` em voo) nada é separado — não se decide no escuro. PURE.
+ */
+export function foreignToOutbox(
+  messages: readonly QueuedMessage[],
+  viewer: string | undefined,
+): { own: QueuedMessage[]; foreign: OutboxMessage[] } {
+  if (viewer === undefined) return { own: [...messages], foreign: [] };
+  const own: QueuedMessage[] = [];
+  const foreign: OutboxMessage[] = [];
+  for (const m of messages) {
+    if (m.from && m.from.name !== viewer) {
+      foreign.push({ cid: m.id, text: m.text, at: m.at, from: m.from, undelivered: true });
+    } else {
+      own.push(m);
+    }
+  }
+  return { own, foreign };
 }

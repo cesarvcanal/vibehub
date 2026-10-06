@@ -14,6 +14,7 @@ import {
   buildAskUserAnswers,
   parseQuestionAnswers,
   parseSdkClientFrame,
+  parseTypingFrame,
   buildSupersedeText,
   interruptNote,
   NOTE_TURN_INTERRUPTED,
@@ -534,5 +535,28 @@ describe("parseSdkClientFrame — o controle de idioma", () => {
     expect(parseSdkClientFrame(JSON.stringify({ type: "reanchor" }))).toBe(null);
     // mas o back sabe escrevê-lo
     expect(encodeControl({ type: "reanchor" })).toBe('{"type":"reanchor"}\n');
+  });
+});
+
+describe("parseTypingFrame — o sinal efêmero de \"está digitando\"", () => {
+  it("lê o começo e o fim da digitação", () => {
+    expect(parseTypingFrame(`{"type":"typing","active":true}`)).toBe(true);
+    expect(parseTypingFrame(`{"type":"typing","active":false}`)).toBe(false);
+  });
+
+  it("não é um frame de digitação: qualquer outra coisa devolve null (segue o funil normal)", () => {
+    expect(parseTypingFrame(`{"type":"user","text":"oi"}`)).toBe(null);
+    expect(parseTypingFrame("typing")).toBe(null);
+    expect(parseTypingFrame("")).toBe(null);
+    expect(parseTypingFrame("{quebrado")).toBe(null);
+  });
+
+  it("um frame de digitação malformado é DESCARTADO, nunca vira mensagem para a IA", () => {
+    // `active` ausente ou com o tipo errado: ainda é um frame de digitação (o front errou), então
+    // é consumido como "parou" — o pior caso é um indicador que some cedo, não um turno fantasma.
+    expect(parseTypingFrame(`{"type":"typing"}`)).toBe(false);
+    expect(parseTypingFrame(`{"type":"typing","active":"sim"}`)).toBe(false);
+    // e o parser de controles não o confunde com uma mensagem do usuário
+    expect(parseSdkClientFrame(`{"type":"typing","active":true}`)).toBe(null);
   });
 });

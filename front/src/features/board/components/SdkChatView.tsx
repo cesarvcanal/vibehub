@@ -24,7 +24,17 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/providers/auth";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
 import { LinkifiedText, Markdown, SenderTag } from "@/features/board/components/ChatView";
-import { originRole } from "@/features/board/lib/chat";
+import { originRole, type MessageOrigin } from "@/features/board/lib/chat";
+import {
+  applyPeerTyping,
+  createTypingSignal,
+  nextPeerExpiry,
+  typingNames,
+  type PeerTyping,
+  type TypingSignal,
+} from "@/features/board/lib/peerTyping";
+import { nextIdentity, type ViewerIdentity } from "@/features/board/lib/viewerIdentity";
+import { PeerTypingIndicator } from "@/features/board/components/PeerTypingIndicator";
 import { ultraKeywords } from "@/features/board/lib/ultraWords";
 import { workingStage, type WorkingKind } from "@/features/board/lib/workingStage";
 import { reconnectDelay, type ConnectionState } from "@/features/board/lib/reconnect";
@@ -83,6 +93,7 @@ import {
 import {
   dequeue,
   enqueue,
+  foreignToOutbox,
   headOfQueue,
   lastQueued,
   markEditing,
@@ -130,7 +141,33 @@ export interface SdkChatViewProps {
 export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ariaLabel, className }: SdkChatViewProps) {
   const t = useT();
   // Whose screen this is — the edit affordance belongs only to one's own messages.
-  const viewer = useAuth().user?.username;
+  const me = useAuth().user;
+  const viewer = me?.username;
+  /**
+   * Who THIS tab's sends are from, stamped on its own bubbles and outbox copies. An unstamped own
+   * bubble read as "self" for WHOEVER was signed in — so after a switch of account the old
+   * account's message showed as the new one's until an F5 replayed it with its real author.
+   */
+  const selfOrigin = React.useMemo<MessageOrigin | undefined>(
+    () => (me ? { kind: me.role === "owner" ? "owner" : "user", name: me.username } : undefined),
+    [me],
+  );
+  const selfOriginRef = React.useRef(selfOrigin);
+  selfOriginRef.current = selfOrigin;
+  /**
+   * The account this socket speaks for. The back stamps the author ONCE per connection, so a switch
+   * of account (SessionGuard revalidates `/auth/me` on focus) must open a NEW connection — the
+   * `epoch` moves only on a real switch between two known accounts (see lib/viewerIdentity.ts).
+   */
+  const [identity, setIdentity] = React.useState<ViewerIdentity>({ id: null, epoch: 0 });
+  React.useEffect(() => {
+    setIdentity((prev) => nextIdentity(prev, me?.id));
+  }, [me?.id]);
+  /** "Cesar está digitando…" — who else is writing in this card (see lib/peerTyping.ts). */
+  const [peers, setPeers] = React.useState<PeerTyping>({});
+  const [peersNow, setPeersNow] = React.useState(() => Date.now());
+  /** This tab's own outbound typing signal (created below, once `sendFrame` exists). */
+  const typingRef = React.useRef<TypingSignal | null>(null);
   const [state, setState] = React.useState<SdkChatState>(INITIAL_SDK_STATE);
   const socketRef = React.useRef<WebSocket | null>(null);
   const statusRef = React.useRef<SdkChatViewProps["onStatus"]>(onStatus);
@@ -185,6 +222,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
 
   React.useEffect(() => {
     setState(INITIAL_SDK_STATE);
+    setPeers({});
+    // The old socket's close no longer reports (it is disposed): this connection starts offline.
+    setConnected(false);
     setOutbox(readOutbox(cardId));
     // Um reload apaga o campo de texto, então nada está sendo reescrito: a mensagem que estava lá
     // volta a ser uma espera normal, com o texto que tinha antes da correção.
@@ -229,6 +269,16 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         if (typeof event.data !== "string") return;
         const parsed = parseSdkFrame(event.data);
         if (!parsed) return;
+        // Ephemeral presence, not conversation: it never reaches the reducer or the rows.
+        if (parsed.type === "peer_typing") {
+          if (typeof parsed.name === "string") {
+            const name = parsed.name;
+            const now = Date.now();
+            setPeersNow(now);
+            setPeers((prev) => applyPeerTyping(prev, name, parsed.active === true, now));
+          }
+          return;
+        }
         // The RECEIPT: `user_ack` means the back gravou — this browser no longer needs its copy.
         // `user_nack` means it refused, so the copy STAYS (the bubble now says "não entregue").
         if (parsed.type === "user_ack" && parsed.cid) {
@@ -250,8 +300,14 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       next.onclose = () => {
         if (socket === next) socket = null;
         if (socketRef.current === next) socketRef.current = null;
-        setConnected(false);
+        // A DISPOSED socket's close lands late — after a reconnect (account switch, card switch) the
+        // NEW connection may already be open, and its state is not this one's to clear.
         if (disposed) return;
+        setConnected(false);
+        // Who was typing belonged to THAT connection; the next one starts from silence — and so
+        // does this tab's own signal (the back already told the others this socket stopped).
+        setPeers({});
+        typingRef.current?.stop();
         scheduleRetry();
       };
     };
@@ -275,7 +331,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       socketRef.current = null;
       setStatus("closed");
     };
-  }, [cardId]);
+  }, [cardId, identity.epoch]);
 
   /**
    * Trocar o idioma com o card ABERTO também troca o idioma do raciocínio — sem esperar um
@@ -289,6 +345,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     try { socket.send(JSON.stringify({ type: "language", language })); } catch { /* o close já vem */ }
   }, [language]);
 
+
   /* ------------------------------------------------------------- sending */
 
   /** Push one control frame. Throws when the socket is not open — the composer keeps the draft. */
@@ -301,13 +358,34 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   }, []);
 
   /**
+   * "Está digitando" para as outras abas do card: um frame na primeira tecla, um a cada poucos
+   * segundos enquanto a pessoa escreve, e o "parou" — nunca um por tecla (ver lib/peerTyping.ts).
+   */
+  const typingSignal = React.useMemo(
+    () => createTypingSignal((active) => sendFrame({ type: "typing", active })),
+    [sendFrame],
+  );
+  typingRef.current = typingSignal;
+  // Leaving the card (or unmounting) is stopping.
+  React.useEffect(() => () => typingSignal.stop(), [cardId, typingSignal]);
+
+  /** The soonest typing indicator to expire re-renders the view, so a lost "parou" clears itself. */
+  React.useEffect(() => {
+    const expiry = nextPeerExpiry(peers, peersNow);
+    if (expiry === null) return;
+    const timer = setTimeout(() => setPeersNow(Date.now()), Math.max(0, expiry - Date.now()));
+    return () => clearTimeout(timer);
+  }, [peers, peersNow]);
+  const typingPeers = typingNames(peers, peersNow, viewer);
+
+  /**
    * A TURN goes out with a receipt: the words are written to the outbox (disk) BEFORE the frame
    * leaves, and only a `user_ack` takes them off it. This is the whole difference between "o
    * socket aceitou" (which a half-open connection also does, into the void) and "o servidor tem".
    */
   const sendTurn = React.useCallback(
     (frame: { type: "user" | "edit_user"; text: string; original?: string }, shown: string, cid: string): void => {
-      const entry: OutboxMessage = { cid, text: shown, at: Date.now(), original: frame.original };
+      const entry: OutboxMessage = { cid, text: shown, at: Date.now(), original: frame.original, from: selfOriginRef.current };
       setOutbox((prev) => addToOutbox(prev, entry));
       try {
         sendFrame({ ...frame, cid });
@@ -349,7 +427,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     }
     if (missing.length > 0) {
       setState((prev) => missing.reduce(
-        (acc, m) => appendUserRow(acc, m.text, undefined, { cid: m.cid, state: "undelivered" }),
+        (acc, m) => appendUserRow(acc, m.text, m.from, { cid: m.cid, state: "undelivered" }),
         prev,
       ));
     }
@@ -502,6 +580,23 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   /** O que a fila tem AGORA, sem re-armar os callbacks a cada mensagem escrita. */
   const queueRef = React.useRef(queue);
   queueRef.current = queue;
+
+  /**
+   * A TROCA DE CONTA com mensagens esperando na fila: as de OUTRA conta saem da fila e viram cópias
+   * "não entregue" no outbox (ver `foreignToOutbox`) — na tela com o nome de quem escreveu, nunca
+   * despachadas por esta conexão. E uma edição em curso era da conta anterior: some junto.
+   */
+  React.useEffect(() => {
+    const { own, foreign } = foreignToOutbox(queueRef.current, viewer);
+    if (foreign.length === 0) return;
+    setQueue(own);
+    setOutbox((prev) => foreign.reduce((acc, m) => addToOutbox(acc, m), prev));
+  }, [viewer]);
+  React.useEffect(() => {
+    if (identity.epoch === 0) return;
+    setEditing(null);
+    setPendingEdit(null);
+  }, [identity.epoch]);
   /** As decisões ainda paradas na pessoa (preenchido abaixo, onde elas são derivadas das linhas). */
   const pendingRef = React.useRef<PendingDecision[]>([]);
 
@@ -521,7 +616,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       // sent when the back says it gravou (`user_ack`) — see lib/sdkOutbox.ts. `awaiting` starts
       // the status ladder: "Preparando…"/"Pensando…" until the driver's first event.
       const cid = newCid();
-      setState((prev) => appendUserRow(prev, text, undefined, { awaiting: true, cid, state: "sending" }));
+      setState((prev) => appendUserRow(prev, text, selfOriginRef.current, { awaiting: true, cid, state: "sending" }));
       sendTurn({ type: "user", text }, text, cid);
     },
     [sendTurn],
@@ -601,7 +696,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     // bloco, e é aí que a mensagem entra — no turno em andamento, pelo streaming input.
     if (!turnHasRoomForMore(state)) return;
     if (editing || pendingEdit) return;
-    const head = headOfQueue(queueRef.current);
+    // Só o que é DESTA conta sai por esta conexão (o servidor carimba o autor pela conexão).
+    const head = headOfQueue(foreignToOutbox(queueRef.current, viewer).own);
     if (!head) return;
     setQueue((prev) => dequeue(prev, head.id));
     try {
@@ -611,11 +707,13 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       // conversa, recuperável. Ela não volta pra fila — duas cópias da mesma mensagem é pior.
       toast.error((err as Error).message);
     }
-  }, [queue, connected, state, editing, pendingEdit, dispatchTurn]);
+  }, [queue, connected, state, editing, pendingEdit, dispatchTurn, viewer]);
 
   const send = async (raw: string): Promise<void> => {
     const text = raw.replace(/\r$/, "").trim();
     if (!text) return;
+    // Pressed Enter: whatever happens to the words next (sent, queued, an edit), the typing is over.
+    typingSignal.stop();
     // Anything the person sends REPLACES the interrupted turn — the "continuar?" offer is moot.
     if (queueEdit) {
       // Terminou de editar uma mensagem da fila: o texto novo entra NO LUGAR do antigo, e só agora
@@ -666,7 +764,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       }
       // Drawn now, in both paths: the original dims with its "editada" badge, the new version is
       // the standing message. The history writes the same two lines, so a replay agrees.
-      setState((prev) => appendUserRow(markUserEdited(prev, original), text, undefined, {
+      setState((prev) => appendUserRow(markUserEdited(prev, original), text, selfOriginRef.current, {
         awaiting: true,
         cid: editCid,
         state: "sending",
@@ -695,7 +793,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     const wireUp = connected && socketRef.current?.readyState === WebSocket.OPEN;
     const waits = !wireUp || state.turnActive || state.awaiting || pendingEdit;
     if (waits && pendingRef.current.length === 0) {
-      setQueue((prev) => enqueue(prev, { id: newQueueId(), text, at: Date.now() }));
+      setQueue((prev) => enqueue(prev, { id: newQueueId(), text, at: Date.now(), from: selfOriginRef.current }));
       return;
     }
     try {
@@ -710,6 +808,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   const resendUndelivered = (cid: string): void => {
     const entry = outboxRef.current.find((m) => m.cid === cid);
     if (!entry) return;
+    // Reenviar a mensagem de OUTRA conta a gravaria no nome de quem está na aba agora.
+    if (entry.from && entry.from.name !== viewer) return;
     setState((prev) => settleUserRow(prev, cid, "sending"));
     setOutbox((prev) => retryOutbox(prev, entry, Date.now()));
     try {
@@ -997,6 +1097,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
 
       {/* The interrupt button lives INSIDE the composer — right column, above the microphone —
           in the same seat as the transcript chat's stop. The interrupt frame is still this view's. */}
+      <PeerTypingIndicator names={typingPeers} className="mt-1.5" />
+
       <TerminalComposer
         className="mt-1.5"
         cardId={cardId}
@@ -1015,6 +1117,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         }
         onCancelEdit={cancelEdit}
         onEditLast={editLast}
+        onDraftInput={typingSignal.input}
       />
 
       {/* The footer says which conversation this IS (the resume key) and whether the wire is up. */}
@@ -1737,14 +1840,17 @@ function SdkChatRow({
       >
         <AlertTriangle className="h-3 w-3 shrink-0" />
         <span className="min-w-0 text-right italic">{t("sdk.undelivered")}</span>
-        <button
-          type="button"
-          data-testid="sdk-user-resend"
-          onClick={() => onResend?.(row.cid as string)}
-          className="rounded border border-current/40 px-1.5 py-0.5 font-medium hover:bg-amber-500/10"
-        >
-          {t("chat.resend")}
-        </button>
+        {/* Só quem escreveu reenvia: daqui a mensagem sairia no nome de quem está na aba. */}
+        {role === "self" ? (
+          <button
+            type="button"
+            data-testid="sdk-user-resend"
+            onClick={() => onResend?.(row.cid as string)}
+            className="rounded border border-current/40 px-1.5 py-0.5 font-medium hover:bg-amber-500/10"
+          >
+            {t("chat.resend")}
+          </button>
+        ) : null}
         <button
           type="button"
           data-testid="sdk-user-discard"
@@ -1769,6 +1875,7 @@ function SdkChatRow({
             {replyHeader}
             <LinkifiedText text={bodyText} />
             {editedBadge}
+            {undelivered}
           </div>
         </div>
       );

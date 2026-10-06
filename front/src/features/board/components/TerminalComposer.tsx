@@ -130,6 +130,12 @@ export interface TerminalComposerProps {
    */
   onEditLast?: () => void;
   /**
+   * The field's text after each KEYSTROKE of the person — and only then: a draft restored on
+   * remount, the original loaded by edit mode, a dictation or a "/" pick are not someone typing.
+   * The native chat turns it into the "está digitando" signal for the card's other readers.
+   */
+  onDraftInput?: (text: string) => void;
+  /**
    * Every skill and command the session can run (the native chat learns them from the driver —
    * see `lib/slashMenu.ts`). With a list, typing "/" opens the menu; without one, "/" is just a
    * character and the field behaves exactly as it always did.
@@ -440,6 +446,7 @@ export function TerminalComposer({
   editing,
   onCancelEdit,
   onEditLast,
+  onDraftInput,
   commands,
 }: TerminalComposerProps) {
   const t = useT();
@@ -987,7 +994,10 @@ export function TerminalComposer({
         <textarea
           ref={ref}
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            onDraftInput?.(e.target.value);
+          }}
           onKeyDown={(e) => {
             // The menu takes the keys it needs FIRST — while it is open, Enter/Tab choose a
             // command instead of sending, and the arrows walk the list instead of the text.

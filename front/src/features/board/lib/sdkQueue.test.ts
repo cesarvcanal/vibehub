@@ -7,6 +7,7 @@ import {
   markEditing,
   newQueueId,
   readQueue,
+  foreignToOutbox,
   releaseEditing,
   updateQueued,
   writeQueue,
@@ -129,5 +130,34 @@ describe("sdkQueue — a mensagem que está no campo", () => {
   it("o que estava sendo reescrito sobrevive ao reload — com o texto de antes da correção", () => {
     writeQueue("card-1", markEditing([msg("a", "o original")], "a"));
     expect(releaseEditing(readQueue("card-1"))).toEqual([{ id: "a", text: "o original", at: 1, editing: false }]);
+  });
+});
+
+describe("a fila de OUTRA conta (a aba trocou de conta com mensagens esperando)", () => {
+  const MUSSA = { kind: "owner" as const, name: "mussa" };
+
+  it("guarda quem escreveu, e um autor corrompido vira \"sem autor\"", () => {
+    writeQueue("card-q-autor", [{ id: "q1", text: "oi", at: 1, from: MUSSA }]);
+    expect(readQueue("card-q-autor")[0]!.from).toEqual(MUSSA);
+    writeQueue("card-q-autor", [{ id: "q1", text: "oi", at: 1, from: { kind: "x", name: 1 } as never }]);
+    expect(readQueue("card-q-autor")[0]!.from).toBeUndefined();
+    writeQueue("card-q-autor", []);
+  });
+
+  it("separa o que é de outra conta: vira cópia NÃO ENTREGUE dela, nunca um envio da conta atual", () => {
+    const queue = [
+      { id: "q1", text: "da mussa", at: 1, from: MUSSA },
+      { id: "q2", text: "do cesar", at: 2, from: { kind: "user" as const, name: "cesar" } },
+      { id: "q3", text: "antiga, sem autor", at: 3 },
+    ];
+    const { own, foreign } = foreignToOutbox(queue, "cesar");
+    // sem autor = de antes desta versão: continua com quem está na aba (o comportamento de sempre)
+    expect(own.map((m) => m.id)).toEqual(["q2", "q3"]);
+    expect(foreign).toEqual([{ cid: "q1", text: "da mussa", at: 1, from: MUSSA, undelivered: true }]);
+  });
+
+  it("sem leitor conhecido ainda, nada é separado (não se decide no escuro)", () => {
+    const queue = [{ id: "q1", text: "da mussa", at: 1, from: MUSSA }];
+    expect(foreignToOutbox(queue, undefined)).toEqual({ own: queue, foreign: [] });
   });
 });

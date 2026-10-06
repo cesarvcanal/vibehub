@@ -408,6 +408,26 @@ export function parseSdkClientFrame(raw: string): DriverControl | null {
   return { type: "user", text: raw };
 }
 
+/**
+ * The "está digitando" signal — `{ "type": "typing", "active": boolean }`. EPHEMERAL: it is relayed
+ * to the card's other sockets and nothing else (never the driver, never the history), so it lives
+ * outside `parseSdkClientFrame`, whose fallthrough turns unknown text into a user turn.
+ *
+ * `true`/`false` = a typing frame (a malformed `active` reads as "parou": the worst case is an
+ * indicator that vanishes early, never a phantom turn); `null` = not a typing frame. PURE.
+ */
+export function parseTypingFrame(raw: string): boolean | null {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as { type?: unknown; active?: unknown };
+    if (parsed.type !== "typing") return null;
+    return parsed.active === true;
+  } catch {
+    return null;
+  }
+}
+
 /* ------------------------------------------------------ permission gate */
 
 /**

@@ -10,7 +10,7 @@ import { writeCardCatalog } from "./catalog.js";
 import { forgetCardWorkflows, lastWorkflowRuns, watchCardWorkflows } from "./workflow.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
-  buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, encodeControl,
+  buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, parseTypingFrame, encodeControl,
   type CatalogEvent, type DriverControl, type DriverEvent,
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
@@ -48,6 +48,13 @@ export const DRIVER_IDLE_MS = 15 * 60_000;
 
 /** Websocket keepalive — same cadence as the terminal socket (proxies drop idle websockets). */
 const KEEPALIVE_MS = 25_000;
+
+/**
+ * The floor between two "está digitando" relays from ONE socket. The front already throttles; this
+ * is the server's own guard, so a misbehaving tab can never turn keystrokes into a fan-out storm.
+ * The "parou" is never held back by it (a stale indicator is the visible bug, not a busy wire).
+ */
+export const TYPING_RELAY_MIN_MS = 1_000;
 
 export interface DriverSession {
   cardId: string;
@@ -716,13 +723,53 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
     try { socket.ping?.(); } catch { /* the close handler cleans up */ }
   }, KEEPALIVE_MS);
 
+  // "ESTÁ DIGITANDO": who types on THIS socket, relayed to the card's OTHER sockets only — the
+  // sender knows it is typing. Ephemeral by design: no driver write, no history line, no state
+  // beyond these two locals. An unattributed socket has no name to show, so it announces nothing.
+  let typingOn = false;
+  let typingRelayedAt = 0;
+  const relayTyping = (active: boolean): void => {
+    if (!origin) return;
+    const frame = JSON.stringify({ type: "peer_typing", name: origin.name, active });
+    for (const other of session.sockets) {
+      if (other === socket) continue;
+      try { other.send(frame); } catch { /* that socket is going away */ }
+    }
+  };
+  const noteTyping = (active: boolean): void => {
+    if (active) {
+      const now = Date.now();
+      // The floor holds for EVERY "digitando", not only a repeat: a "parou" in between must not
+      // reopen the window, or a true/false loop would fan out every frame it sends.
+      if (now - typingRelayedAt < TYPING_RELAY_MIN_MS) return;
+      typingOn = true;
+      typingRelayedAt = now;
+      relayTyping(true);
+      return;
+    }
+    if (!typingOn) return;
+    typingOn = false;
+    relayTyping(false);
+  };
+
   socket.on("message", (raw: Buffer) => {
-    replyFrameOutcome(socket, handleClientFrame(session, raw.toString(), origin));
+    const text = raw.toString();
+    const typing = parseTypingFrame(text);
+    if (typing !== null) {
+      noteTyping(typing);
+      return;
+    }
+    const outcome = handleClientFrame(session, text, origin);
+    // The message is out: whoever wrote it stopped typing — even if the front's own "parou" is lost.
+    if (outcome.kind === "accepted") noteTyping(false);
+    replyFrameOutcome(socket, outcome);
   });
 
   const detach = (): void => {
     clearInterval(keepalive);
     session.sockets.delete(socket);
+    // A tab closed mid-sentence must not leave "Cesar está digitando…" on everyone else's screen.
+    noteTyping(false);
     if (session.sockets.size === 0) maybeScheduleIdleStop(session);
   };
   socket.on("close", detach);

@@ -18,6 +18,8 @@
  * Tudo aqui é puro ou trivialmente falsificável: as regras são testes, não capturas de tela.
  */
 
+import { parseOrigin, type MessageOrigin } from "@/features/board/lib/chat";
+
 /** Uma mensagem enviada por este navegador e ainda sem recibo do servidor. */
 export interface OutboxMessage {
   /** O id do recibo (`cid` no protocolo) — o que o `user_ack`/`user_nack` cita de volta. */
@@ -37,6 +39,12 @@ export interface OutboxMessage {
    * agente…" de 2026-09-17). Um reenvio limpa a marca e o relógio volta a correr.
    */
   undelivered?: boolean;
+  /**
+   * QUEM escreveu. A cópia mora no navegador, não na conta: se a aba troca de conta antes do
+   * recibo, a bolha redesenhada no reconnect continua sendo de quem a escreveu — sem isto ela
+   * aparecia como "minha" para a conta nova (o bug do F5, 2026-10-06).
+   */
+  from?: MessageOrigin;
 }
 
 /**
@@ -67,7 +75,12 @@ export function readOutbox(cardId: string): OutboxMessage[] {
         Boolean(m) &&
         typeof (m as OutboxMessage).cid === "string" &&
         typeof (m as OutboxMessage).text === "string",
-    ).map((m) => (typeof m.at === "number" ? m : { ...m, at: Date.now() }));
+    ).map((m) => ({
+      ...m,
+      at: typeof m.at === "number" ? m.at : Date.now(),
+      // localStorage é entrada não confiável: um autor malformado vira "sem autor", nunca lixo.
+      from: parseOrigin(m.from),
+    }));
   } catch {
     return [];
   }

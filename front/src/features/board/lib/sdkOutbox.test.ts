@@ -188,3 +188,17 @@ describe("reconciliação no reconnect — quem foi gravado e quem morreu no cam
     expect(reconcileOutbox(["oi"], [])).toEqual({ delivered: [], missing: [] });
   });
 });
+
+describe("o AUTOR da mensagem guardada (troca de conta na mesma aba)", () => {
+  it("guarda quem escreveu e o devolve depois do F5", () => {
+    writeOutbox("card-autor", [{ cid: "c1", text: "oi", at: 1, from: { kind: "owner", name: "mussa" } }]);
+    expect(readOutbox("card-autor")[0]!.from).toEqual({ kind: "owner", name: "mussa" });
+    writeOutbox("card-autor", []);
+  });
+
+  it("um autor corrompido no localStorage vira \"sem autor\", nunca lixo na tela", () => {
+    localStorage.setItem("vibehub.sdkOutbox.card-lixo", JSON.stringify([{ cid: "c1", text: "oi", at: 1, from: { kind: "hacker", name: 3 } }]));
+    expect(readOutbox("card-lixo")[0]!.from).toBeUndefined();
+    localStorage.removeItem("vibehub.sdkOutbox.card-lixo");
+  });
+});
