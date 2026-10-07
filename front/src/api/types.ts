@@ -387,6 +387,11 @@ export interface Card {
   /** Last time a human typed into this card's terminal (epoch ms). */
   humanActiveAt?: number;
   /**
+   * When the card was moved to `done` (epoch ms); cleared when it leaves. One of the stamps the
+   * done-card retention counts from — see `features/board/lib/doneRetention`.
+   */
+  doneAt?: number;
+  /**
    * Previews the agent registered (via `vibehub_preview`): ports to open through `/preview/<port>/`.
    * The chip on the card bar and the first section of the Preview menu render from this. Absent =
    * the agent registered none. The server prunes entries whose port stopped listening.
