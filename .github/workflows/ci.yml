@@ -5,12 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+# The runner image is PINNED (not ubuntu-latest): an OS upgrade under the build is a decision to
+# make on purpose, in a PR of its own, not something that lands silently on a Monday.
 jobs:
   back:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - run: npm ci
@@ -21,10 +23,10 @@ jobs:
         working-directory: back
 
   front:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - run: npm ci
