@@ -9,7 +9,7 @@ import { PublicRoute } from "@/components/PublicRoute";
 import { Paths } from "@/lib/paths";
 import { apiReject, renderApp, setupState } from "@/test/render";
 import { get, setUnauthorizedHandler } from "@/lib/api";
-import { ME_KEY } from "@/providers/auth";
+import { ME_KEY, rotateSession } from "@/providers/auth";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -152,6 +152,40 @@ describe("SessionGuard — a 401", () => {
     expect(await screen.findByText("login form")).toBeInTheDocument();
     await settle();
     expect(paths).toEqual([Paths.SETUP, Paths.LOGIN]);
+  });
+
+  /**
+   * Changing your OWN password revokes every cookie signed before it — including the one a poll
+   * already in flight carries. That poll 401s while the fresh cookie is still on its way back, and
+   * confirming right then sends `/auth/me` with the old cookie too: a second 401, and the person who
+   * just changed their password was signed out. The confirmation waits for the change to settle.
+   */
+  it("a 401 racing your OWN password change does not sign you out — the check waits for the new cookie", async () => {
+    const { paths } = mount(Paths.BOARD);
+    expect(await screen.findByText("the board")).toBeInTheDocument();
+    await settle();
+
+    let finishChange: () => void = () => {};
+    let newCookie = false;
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/setup/state") return Promise.resolve(setupState());
+      if (url === "/auth/me") {
+        return newCookie
+          ? Promise.resolve({ user: { id: "u1", username: "cesar", role: "owner" } })
+          : Promise.reject(apiReject(401, "revoked"));
+      }
+      return Promise.resolve({});
+    });
+    void rotateSession(new Promise<void>((resolve) => { finishChange = resolve; }));
+
+    a401(); // a poll that carried the old cookie
+    await settle();
+    newCookie = true; // the change's response arrived, with the fresh cookie
+    act(() => finishChange());
+    await settle();
+
+    expect(screen.getByText("the board")).toBeInTheDocument();
+    expect(paths).toEqual([Paths.BOARD]);
   });
 
   it("a late 401 of the OLD session, arriving while the person signs in again, does not undo the new one", async () => {

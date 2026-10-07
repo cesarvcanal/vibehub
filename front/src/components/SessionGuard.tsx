@@ -3,7 +3,7 @@ import { matchPath, useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { get, setUnauthorizedHandler } from "@/lib/api";
 import type { MeResponse } from "@/api/types";
-import { dropSession, useAuth } from "@/providers/auth";
+import { dropSession, sessionRotationSettled, useAuth } from "@/providers/auth";
 import { Paths } from "@/lib/paths";
 
 /**
@@ -72,8 +72,11 @@ export function SessionGuard() {
       // One confirmation for a burst of 401s (every poll on the page fails together).
       if (confirming.current) return;
       confirming.current = true;
-      // `/auth/me` is a silent route: its own 401 never re-enters this handler.
-      void get<MeResponse>("/auth/me")
+      // `/auth/me` is a silent route: its own 401 never re-enters this handler. It is asked only
+      // once a change of this tab's own cookie (your own password) has settled: asked during it,
+      // it would carry the revoked cookie too, and sign out the person who made the change.
+      void sessionRotationSettled()
+        .then(() => get<MeResponse>("/auth/me"))
         .then(({ user }) => {
           if (!user) return signOutHere();
           // Still signed in: what 401'd only raced a cookie swap — fetch it again with the new one.

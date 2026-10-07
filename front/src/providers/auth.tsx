@@ -30,6 +30,33 @@ export async function dropSession(queryClient: QueryClient): Promise<void> {
   queryClient.getMutationCache().clear();
 }
 
+/** The change of this tab's OWN session cookie in flight — see {@link rotateSession}. */
+let rotation: Promise<unknown> | null = null;
+
+/**
+ * Marks `work` as changing this tab's own session cookie (changing your own password): every cookie
+ * signed before it is revoked the moment the server records the change, so a poll still carrying
+ * the old cookie 401s while the fresh one is on its way back. SessionGuard waits for this to
+ * settle before asking `/auth/me` — asked earlier, `/auth/me` goes out with the old cookie as well,
+ * and the person who just changed their password is signed out.
+ */
+export function rotateSession<T>(work: Promise<T>): Promise<T> {
+  const settled = work.then(
+    () => undefined,
+    () => undefined,
+  );
+  rotation = settled;
+  void settled.then(() => {
+    if (rotation === settled) rotation = null;
+  });
+  return work;
+}
+
+/** Resolves once no change of this tab's session cookie is in flight (never rejects). */
+export function sessionRotationSettled(): Promise<void> {
+  return rotation ? rotation.then(() => undefined) : Promise.resolve();
+}
+
 export interface AuthValue {
   user: User | null;
   isAuthenticated: boolean;

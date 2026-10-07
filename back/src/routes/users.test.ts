@@ -364,6 +364,22 @@ describe("the owner's user list", () => {
       .toBe(401);
   });
 
+  /**
+   * A `/me` sent with the OLD cookie — a poll that raced your own password change — answers 401 but
+   * must NOT clear the cookie: its Set-Cookie could land AFTER the change's, and erase the fresh
+   * cookie the browser just received, signing out the very person who made the change. A revoked
+   * cookie is refused on every route anyway; only a cookie with no account behind it is cleared.
+   */
+  it("/me with a cookie revoked by a password change is a 401 that clears NOTHING", async () => {
+    const owner = await signUpOwner(app);
+    await app.inject({
+      method: "POST", url: "/api/auth/password", headers: { cookie: owner }, payload: { password: "anothersecret" },
+    });
+    const me = await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: owner } });
+    expect(me.statusCode).toBe(401);
+    expect(me.headers["set-cookie"]).toBeUndefined();
+  });
+
   it("refuses to demote or remove the last owner", async () => {
     const owner = await signUpOwner(app);
     const id = (await app.inject({ method: "GET", url: "/api/users", headers: { cookie: owner } }))

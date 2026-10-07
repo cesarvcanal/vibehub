@@ -1,10 +1,11 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import {
   createUser, verifyCredentials, isFreshInstall, isUsername, changePassword, publicUser, InstallAlreadySetUpError,
+  findUser,
 } from "../auth/users.js";
 import {
   setSessionCookie, clearSessionCookie, requireSession, requestUser, currentUser,
-  deviceCookieName, SESSION_COOKIE, knownDeviceId, setDeviceCookie,
+  deviceCookieName, SESSION_COOKIE, knownDeviceId, setDeviceCookie, verifyToken,
 } from "../auth/session.js";
 import { endRevokedSessionSockets } from "../auth/sessionSockets.js";
 import { config } from "../config/env.js";
@@ -161,8 +162,17 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/auth/me", async (req, reply) => {
     const user = await currentUser(req);
     if (!user) {
-      // A cookie that no longer opens a session (account gone, password reset, restored backup).
-      if (req.cookies?.[SESSION_COOKIE] !== undefined) clearSessionCookie(reply);
+      // Clear a cookie only when NOTHING can ever stand behind it: a forged or expired one, or one
+      // whose account is gone — it would be replayed (and refused) on every request until it
+      // expires. A cookie that is merely REVOKED (a password change) is left alone: it is refused
+      // everywhere anyway, and this answer can be a poll that raced the change of the person's own
+      // password — landing after the change's response, its Set-Cookie would erase the fresh cookie
+      // the browser just got, and sign out the very person who made the change.
+      const token = req.cookies?.[SESSION_COOKIE];
+      if (token !== undefined) {
+        const userId = await verifyToken(token);
+        if (!userId || !(await findUser(userId))) clearSessionCookie(reply);
+      }
       return await reply.code(401).send({ error: "not authenticated" });
     }
     return await reply.send({ user });
