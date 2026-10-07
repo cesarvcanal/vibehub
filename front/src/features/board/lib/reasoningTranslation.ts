@@ -63,10 +63,11 @@ const MIN_CONFIDENCE = 0.5;
 /** Blocos já traduzidos guardados: reabrir a conversa não refaz o trabalho. */
 const CACHE_LIMIT = 300;
 
-// "me" e "do" ficam de fora: são palavras portuguesas comuníssimas ("Me ajuda aqui", "o log do build").
+// "me", "do", "so" e "to" ficam de fora: são português comuníssimo, inclusive sem acento ("Me ajuda
+// aqui", "o log do build", "so falta testar" = só, "to indo" = tô).
 const EN_WORDS = new Set(
-  ("the and to of is that with this it for be need will what how should let from are not on i " +
-    "i'll i'm we can if then which there have has was but so does first now").split(" "),
+  ("the and of is that with this it for be need will what how should let from are not on i " +
+    "i'll i'm we can if then which there have has was but does first now").split(" "),
 );
 // Só palavras que NÃO existem em inglês ("do", "as", "no", "se", "pro", "algo" existem e seguravam
 // linhas inglesas à toa) — incluindo o português informal, sem acento, de quem digita rápido.
@@ -132,12 +133,15 @@ const CODE_LINE = [
   /^\s*File\s+".*",\s+line\s+\d+/, // traceback Python
   /^\s*[\w.]*(?:Error|Exception)\b[^:]*:/, // "TypeError: ..."
   /^\s*[\w.$[\]]+\s*[-+*/]?=(?!=)/, // atribuição
-  /^\s*[\w.$]+\([^()]*\)\s*;?\s*$/, // uma chamada sozinha
+  /^\s*[\w.$]+\([^()]*\)(?:\s*;)?\s*$/, // uma chamada sozinha (`\s*;?\s*` era quadrático)
   /^\s*(?:\$\s|(?:npm|pnpm|npx|yarn|git|node|python3?|pip|cd|ls|cat|grep|curl|docker|make|cargo|go)\s)/, // shell
 ];
 const FENCE = /^\s*(?:```|~~~)/;
-/** Marcador de lista/checkbox/numeração: fica intacto ("- [ ]" virava "- []"). Sem backtracking. */
-const LIST_MARKER = /^(?:[-*+]\s+(?:\[[ xX]\](?:\s+|$))?|\d+[.)]\s+)/;
+/**
+ * Marcador de citação/título/lista/checkbox/numeração: fica intacto ("- [ ]" virava "- []"; ">" e
+ * "##" iam junto para o tradutor). Sem backtracking.
+ */
+const LIST_MARKER = /^(?:(?:>\s?)+|#{1,6}\s+|[-*+]\s+(?:\[[ xX]\](?:\s+|$))?|\d+[.)]\s+)/;
 
 /**
  * Traduz LINHA por linha: o tradutor local junta as linhas de um mesmo pedaço ("- a - b", provado no
@@ -150,12 +154,13 @@ async function translateLines(translator: TranslatorLike, text: string): Promise
   const out: string[] = [];
   let inFence = false;
   for (const line of text.split("\n")) {
-    if (line.length > MAX_LINE) {
+    // a fence ANTES do limite de tamanho: uma linha ``` gigante ainda abre/fecha o bloco de código
+    if (FENCE.test(line)) {
+      inFence = !inFence;
       out.push(line);
       continue;
     }
-    if (FENCE.test(line)) {
-      inFence = !inFence;
+    if (line.length > MAX_LINE) {
       out.push(line);
       continue;
     }
@@ -262,7 +267,9 @@ export function createReasoningTranslator(env: TranslationEnv): ReasoningTransla
       const cached = cache.get(text);
       if (cached !== undefined) return cached;
       const source = await sourceLanguageOf(text);
-      if (source === null || source === TARGET) return null;
+      // Só inglês → português: o filtro de linha (`isEnglishLine`) é de inglês, e com outro idioma
+      // detectado ele mandaria linhas inglesas a um tradutor es→pt (4ª revisão).
+      if (source !== DEFAULT_SOURCE) return null;
       const translator = await getTranslator(source);
       if (!translator) return null;
       let out: string;

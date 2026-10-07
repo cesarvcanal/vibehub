@@ -215,6 +215,57 @@ describe("createReasoningTranslator", () => {
     );
   });
 
+  // 4ª revisão (a): "so" (só) e "to" (tô) sem acento contavam como inglês.
+  it("'so falta testar' e 'to indo testar' (português sem acento) ficam como vieram", async () => {
+    const t = fakeTranslator();
+    const tr = createReasoningTranslator({ translator: t.factory });
+    await expect(tr.translate("I need to check the tests first.\nso falta testar\nto indo testar login")).resolves.toBe(
+      "PT(I need to check the tests first.)\nso falta testar\nto indo testar login",
+    );
+    await expect(tr.translate("so falta testar\nto indo almoçar? nao")).resolves.toBe(null);
+    expect(t.translate).toHaveBeenCalledTimes(1);
+  });
+
+  // 4ª revisão (d): com o detector dizendo "es", linhas inglesas iam para um tradutor es→pt.
+  it("só traduz inglês → português: outro idioma detectado fica como veio", async () => {
+    const t = fakeTranslator();
+    const tr = createReasoningTranslator({
+      translator: t.factory,
+      detector: fakeDetector([{ detectedLanguage: "es", confidence: 0.9 }]).factory,
+    });
+    await expect(tr.translate("Necesito revisar los tests.\nThe build is failing on CI.")).resolves.toBe(null);
+    expect(t.create).not.toHaveBeenCalled();
+  });
+
+  // 4ª revisão (c): ">" e "##" iam junto para o tradutor.
+  it("citação '>' e título '##' ficam intactos — só o texto depois deles é traduzido", async () => {
+    const t = fakeTranslator();
+    const tr = createReasoningTranslator({ translator: t.factory });
+    await expect(tr.translate("> I need to check the build.\n## Then check the logs")).resolves.toBe(
+      "> PT(I need to check the build.)\n## PT(Then check the logs)",
+    );
+  });
+
+  it("fence com linha gigante ainda abre/fecha o bloco de código", async () => {
+    const t = fakeTranslator();
+    const tr = createReasoningTranslator({ translator: t.factory });
+    const fence = "```" + "x".repeat(2100);
+    const input = `I will check the code now.\n${fence}\nI need to keep this line.\n\`\`\``;
+    await expect(tr.translate(input)).resolves.toBe(
+      `PT(I will check the code now.)\n${fence}\nI need to keep this line.\n\`\`\``,
+    );
+  });
+
+  it("muitas linhas 'f()   ...' não travam (a regex de chamada é linear)", async () => {
+    const t = fakeTranslator();
+    const tr = createReasoningTranslator({ translator: t.factory });
+    const line = "f()" + " ".repeat(1990) + "x";
+    const input = ["I will check what the call does.", ...Array(200).fill(line)].join("\n");
+    const start = performance.now();
+    await tr.translate(input);
+    expect(performance.now() - start).toBeLessThan(300);
+  });
+
   it("checkbox vazio '- [ ]' fica intacto", async () => {
     const t = fakeTranslator();
     const tr = createReasoningTranslator({ translator: t.factory });
