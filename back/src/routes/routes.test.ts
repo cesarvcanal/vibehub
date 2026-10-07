@@ -150,11 +150,18 @@ describe("features", () => {
     expect((await app.inject({ method: "GET", url: "/api/features" })).statusCode).toBe(401);
     const cookie = await signUp(app);
     // Default install: native chat on.
-    expect((await app.inject({ method: "GET", url: "/api/features", headers: { cookie } })).json()).toEqual({ sdkChat: true });
+    expect((await app.inject({ method: "GET", url: "/api/features", headers: { cookie } })).json()).toMatchObject({ sdkChat: true });
     // The global switch off = classic chat everywhere.
     await app.inject({ method: "PATCH", url: "/api/settings", headers: { cookie }, payload: { sdkDriver: false } });
-    expect((await app.inject({ method: "GET", url: "/api/features", headers: { cookie } })).json()).toEqual({ sdkChat: false });
+    expect((await app.inject({ method: "GET", url: "/api/features", headers: { cookie } })).json()).toMatchObject({ sdkChat: false });
     await app.inject({ method: "PATCH", url: "/api/settings", headers: { cookie }, payload: { sdkDriver: true } });
+  });
+
+  it("tells every signed-in user how long a done card lives — the countdown on the card reads it", async () => {
+    const cookie = await signUp(app);
+    const { DONE_RETENTION_DAYS } = await import("../services/board/retention.js");
+    const body = (await app.inject({ method: "GET", url: "/api/features", headers: { cookie } })).json();
+    expect(body.doneRetentionDays).toBe(DONE_RETENTION_DAYS);
   });
 });
 
