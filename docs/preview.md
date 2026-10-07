@@ -6,7 +6,8 @@ port. **Preview** puts that server in your own browser tab.
 ## How to use it
 
 1. In a card, click **Preview** in the card bar (on a phone: the globe next to the connection dot).
-2. The menu scans the runner and lists every port that is listening, with the process name.
+2. The menu scans the runner and lists every port that is listening, with the process name (a
+   member sees only the ports their cards announced — see [Who reaches what](#who-reaches-what)).
 3. Click a port — or type one — and it opens in a new tab at `/preview/<port>/` on the **same
    origin you are using**: the panel is reachable through more than one host (a VPN IP, a domain
    behind a gateway) and every preview link is relative, so it works on all of them.
@@ -78,12 +79,34 @@ your browser ──HTTP/WS──▶ vibehub  ──docker exec socat──▶ 12
   Next.js, etc.) are reachable without `--host`.
 - **WebSockets are relayed** byte-for-byte, so vite HMR / live reload works.
 - Auth is your vibehub session: the preview URL is same-origin, the cookie rides along, and nobody
-  without a session can reach the proxied app. The `vibehub_session` cookie itself is stripped
-  before requests cross into your app.
+  without a session can reach the proxied app — what a session reaches is narrower still, see
+  [Who reaches what](#who-reaches-what). The `vibehub_session` cookie itself is stripped before
+  requests cross into your app.
 - The proxy sends `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Forwarded-For` and
   `X-Forwarded-Prefix: /preview/<port>`.
 - The port list comes from the runner's `/proc/net/tcp`, so it needs no tools installed; vibehub's
   own per-card browser ports (VNC 5900–6799, CDP 9222–10121) are hidden from it.
+
+## Who reaches what
+
+A port in the runner can be anything — including the per-card Chromium's CDP endpoint, which hands
+out the open tabs and takes full remote control of a browser holding someone's logged-in sessions.
+So a session alone is not the gate:
+
+- **vibehub's own browser plumbing is never a preview.** VNC (5900–6799) and CDP (9222–10121) are
+  refused by the HTTP proxy and the websocket relay alike (404), **for the owner too** — the card's
+  browser is reached through its Browser tab, not through `/preview/`.
+- **The owner** opens any other port, and the port list shows everything listening.
+- **A member** opens only a port whose **current** card is **visible to them** (shared at any
+  level, directly or through its project); any other port answers 404, as if nothing were there,
+  and the port list is narrowed to those same ports. "Current" is the newest `vibehub_preview`
+  registration of that port — the same card the stopped screen and Restart use — so a shared card
+  that once registered 5173 does not open the private card's server holding 5173 today.
+- **Restart and Stop** change the card's work, so they follow the card's own rule: 404 for a card
+  you cannot see, 403 on a read-only share.
+- A cookie that is correctly signed but belongs to a **deleted account**, or was **revoked by a
+  password change**, opens nothing (401) — over HTTP and over a websocket alike. A tunnel that was
+  already open when the account was removed or the password changed is closed at that moment.
 
 ## Limitations
 
@@ -99,4 +122,5 @@ your browser ──HTTP/WS──▶ vibehub  ──docker exec socat──▶ 12
   not a benchmark environment. WebSockets are one tunnel per socket and unaffected.
 - **One runner**: the scan and the proxy target the configured runner container. There is no
   multi-runner routing.
-- No HTTPS termination, per-port subdomains or per-preview auth — the vibehub session is the gate.
+- No HTTPS termination, per-port subdomains or per-preview auth — the vibehub session, narrowed by
+  card access as above, is the gate.

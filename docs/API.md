@@ -27,10 +27,10 @@ caller may see rather than refused. `/mcp` accepts the runner token or an **owne
 | Method | Path | Body / notes |
 |---|---|---|
 | GET | `/api/setup/state` | **public** — `{ fresh, steps: { owner, runner, claude, github }, runner: RunnerStatus }`. Drives the wizard. |
-| POST | `/api/setup/owner` | **public, only while `fresh`** — `{ username, password }` → creates the owner and signs in. |
-| POST | `/api/auth/login` | **public** — `{ username, password }` → sets the session cookie. |
+| POST | `/api/setup/owner` | **public, only while `fresh`** — `{ username, password }` → creates the owner and signs in. **409** once the install has an owner (also when two setups race: the check runs inside the write). With `VIBEHUB_TRUST_PROXY` set, every try — 409s included — counts toward the 30/min address ceiling it shares with sign-in. |
+| POST | `/api/auth/login` | **public** — `{ username, password }` → sets the session cookie. **429** + `retry-after` after 10 failed tries for one username from one client in 15 min — a browser that signed in as that username before (its `vibehub_device_<digest>` cookie — one per username, scoped to this path) is its own client, whatever its address; and, only when `VIBEHUB_TRUST_PROXY` is set, after 30 failed tries from one client in a minute across usernames (shared with setup). Only failures count; a successful sign-in clears that username's count. |
 | POST | `/api/auth/logout` | — |
-| POST | `/api/auth/password` | `{ password }` — change your own password |
+| POST | `/api/auth/password` | `{ password }` — change your own password. Revokes every other session: their requests 401 and the websockets they hold open (terminals, chat, VNC, preview tunnels) are closed; this one gets a fresh cookie, and its own sockets reconnect with it |
 | GET | `/api/auth/me` | `{ user: { id, username, role, createdAt } }` |
 
 ## Access — the install's people
@@ -46,14 +46,15 @@ an install with no owner is an install nobody can administer.
 | PATCH | `/api/users/:id` | `{ password?, role?, githubConnectionId?, gitName?, gitEmail? }` → `{ user, git? }`. The last three are that person's git identity; `null` CLEARS one (back to inheriting), an absent field is untouched. A `githubConnectionId` that does not exist is a 400 |
 | GET | `/api/me/git` | `{ git? }` — my own git identity. Any session, not just the owner's |
 | PATCH | `/api/me/git` | `{ githubConnectionId?, gitName?, gitEmail? }` → `{ git }`. The same write as above, for MYSELF: a PAT expires, and rotating it must not be the owner's task. `role`/`password` are ignored here — those stay the owner's |
-| DELETE | `/api/users/:id` | `{ ok: true, user }`; removing YOURSELF also clears your session cookie |
+| DELETE | `/api/users/:id` | `{ ok: true, user }`; removing YOURSELF also clears your session cookie. The removed account's open websockets are closed |
 
 ## Settings
 
-**owner** only.
+**owner** only, except `/api/features`.
 
 | Method | Path | Body / notes |
 |---|---|---|
+| GET | `/api/features` | **any session** — `{ sdkChat }`: the install-wide flags every user needs to render the right UI (`sdkChat` mirrors the `sdkDriver` setting: on = the native chat IS every card's Chat tab). The settings themselves stay owner-only |
 | GET | `/api/settings` | `{ git: { name, email }, autonomous, defaultAccountLabel, setupCompletedAt, transcribeLanguage, idleHibernateMinutes, sdkDriver, runner: { kind, container, host, image, baseDir }, publicUrl }` |
 | PATCH | `/api/settings` | `{ git?, autonomous?, defaultAccountLabel?, transcribeLanguage?, idleHibernateMinutes?, sdkDriver? }` — `idleHibernateMinutes` is a whole number of minutes, 0..10080 (0 = never hibernate) |
 | POST | `/api/settings/setup-complete` | stamps the install as set up so the wizard stops taking over |
@@ -140,7 +141,7 @@ that card.
 | GET | `/api/cards` | `{ cards: Card[] }` — every card in the install, for the views that cut across projects (the sidebar's Recent list) |
 | POST | `/api/cards` | `{ projectId, title }` plus any editable field (`branch`, `accountSlug`, `model`, `resumeSessionId`), applied through the same validation an edit uses. Answers immediately and **pre-provisions the workspace in the background** (clone, worktree, tmux), so the first open is instant |
 | GET | `/api/cards/:id` | `{ card }` |
-| PATCH | `/api/cards/:id` | `{ title?, column?, accountSlug?, model?, sdkChat? }` — `sdkChat` is the per-card "Chat nativo (beta)" opt-in (SDK driver socket) — moving to `done` is always manual. A column is not just a label: moving **into `paused` pauses the card for real** (same rules as the pause route) and moving a paused card into `waiting`/`working` **resumes it** (the session comes back in the background) |
+| PATCH | `/api/cards/:id` | `{ title?, column?, position?, model?, accountSlug?, branch?, base?, resumeSessionId?, sdkChat? }` → `{ card, session }`. All-or-nothing: one invalid field and nothing is applied. A **member** (with `work`) may send only `title`, `column`, `position` and `model` — any other field refuses the whole patch with `403 { error: "only the owner can change: …" }`. `accountSlug`/`branch`/`resumeSessionId`: `null` clears (back to the project's account / `card/<slug>` / `claude -c`); `model`: `null`/`""` clears. `sdkChat` is the per-card "Chat nativo (beta)" opt-in (SDK driver socket) — moving to `done` is always manual. A column is not just a label: moving **into `paused` pauses the card for real** (same rules as the pause route) and moving a paused card into `waiting`/`working` **resumes it** (the session comes back in the background) |
 | DELETE | `/api/cards/:id` | **owner** — a PURGE, not a hide: `{ ok: true, incomplete: string[], steps }`. Kills both tmux sessions and the SDK driver, the preview servers and the card's browser; then erases the native chat history, the provenance log, the in-flight marker, the queued messages, the worktree, **the `card/<slug>` branch the card created, LOCALLY** (a branch that existed before the card — `dev`, `prod`, an imported session — is left alone, and nothing remote is ever touched: the script carries no `push`/`fetch`/`gh`), `/work/.uploads/<id>`, the browser profile, the gh-token file and the Claude Code transcripts/prompt history of the card's cwd in every account profile. The card leaves the board even when the runner is down — `incomplete` names the steps that did not finish and the daily orphan sweep collects them. Nothing pushed to GitHub is touched |
 | POST | `/api/cards/:id/open` | attach-or-create the tmux session; returns the card. Also resumes a paused or hibernated one |
 | POST | `/api/cards/:id/pause` | moves the card to `paused` and ends its tmux sessions. A card that is REALLY working (the runner is asked, not the dot) becomes a *pending* pause: the session lives until Claude finishes. A stale `working` dot — a card parked on Claude's "Resume from summary" screen never fires a Stop hook — does not defer anything: it is paused on the spot |
@@ -152,13 +153,50 @@ that card.
 | POST | `/api/cards/:id/messages` | `{ text }` → `{ delivered, pending, agent }` — the composer's Enter. Delivered to a RUNNING Claude, otherwise QUEUED until there is one |
 | GET | `/api/cards/:id/messages` | `{ pending: OutboxMessage[], agent }` — `agent` is `running` / `shell` / `none` |
 | DELETE | `/api/cards/:id/messages/:messageId` | gives up on one queued message |
+| GET | `/api/cards/:id/browser` | `{ live, liveSince, busy, control: "agent"\|"human", controlBy }` — answered from memory, cheap enough to poll |
 | POST/DELETE | `/api/cards/:id/browser` | start/stop the card's live browser |
+| POST | `/api/cards/:id/browser/control` | **take the wheel**: the browser pane stops being view-only and the agent is asked before it drives. Answers the same shape as the GET |
+| DELETE | `/api/cards/:id/browser/control` | hand it back to the agent — releases only YOUR own hold |
 | WS | `/api/cards/:id/terminal` | xterm bridge (`?shell=1` for a plain shell in the same worktree) |
 | WS | `/api/cards/:id/chat` | the SAME session read as a conversation: one JSON `ChatEvent` per frame (`{ id, kind: "user"\|"assistant"\|"tool", at, text, tool? }`), parsed from Claude Code's transcript. Opens with the last turns and streams what is appended; blank frames are the follower's heartbeat |
 | POST | `/api/cards/:id/chat` | `{ text }` — types it at that session's prompt and presses Enter (409 when the card has no live session) |
 | WS | `/api/cards/:id/sdk` | **native chat (beta)** — the Agent-SDK driver, gated by the `sdkDriver` setting. One JSON `DriverEvent` per frame (`ready`, `session`, `assistant_delta`, `assistant_text`, `tool_use`, `permission_request`, `permission`, `result`, `error`, `parse_error`); the client sends `{ type: "user", text }`, `{ type: "interrupt" }` or `{ type: "permission_decision", id, allow }`. On connect the route **replays the conversation**: the newest TUI/SDK transcript tail (converted to frames, incl. `{ type: "user" }`) plus the per-card event log (`<dataDir>/sdk-history/<cardId>.ndjson`), then spawns the driver resuming the **newest session** in the card's worktree (falling back to `resumeSessionId`). The route persists each new `session_id` on the card (`resumeSessionId`) so a reconnect resumes the same conversation. Contract in `back/src/services/sdk/protocol.ts` + `docs/sdk-driver.md` |
 | POST | `/api/cards/:id/chat/key` | `{ key: "escape" \| "interrupt" }` — the chat's Stop button |
 | WS | `/api/cards/:id/vnc` | noVNC bridge for the card browser |
+
+## Preview
+
+An app running inside the runner, opened in your own tab through vibehub — see `docs/preview.md`.
+Access is narrower than "has a session": vibehub's own browser ports (VNC 5900–6799, CDP
+9222–10121) are never proxied, for anyone; the **owner** reaches every other port; a **member**
+reaches only a port whose **current** card — the newest `vibehub_preview` registration of it — is
+visible to them, at any share level.
+Anything else answers **404**, like a card you cannot see.
+
+| Method | Path | Body / notes |
+|---|---|---|
+| GET | `/api/preview/ports` | `{ ports: [{ port, address: "loopback"\|"all"\|"other", process?, pid? }] }` — what is listening in the runner, minus vibehub's plumbing; a member gets only the ports whose current card is visible to them. Also prunes registered previews whose port went silent and that store no start command. 502 when the runner cannot be scanned |
+| POST | `/api/cards/:id/previews/:port/restart` | **work** on the card — relaunches the stored command in the preview's own tmux session and waits for the port → `{ restarted: true, port, path, url }`. **409** = nothing to relaunch (no such preview, no stored command); **502** = the relaunch failed (never listened — the error carries the pane's last lines) |
+| DELETE | `/api/cards/:id/previews/:port` | **work** on the card — tree-kills the preview's session and removes the chip → `{ stopped: true, port }`; stopping twice is a **409** |
+| ANY | `/preview/:port/*` | **the proxy** (outside `/api`; GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS) — relays the request to `127.0.0.1:<port>` in the runner with the prefix stripped, and the app's response back verbatim. `/preview/:port` redirects to the trailing slash; a malformed port is a 400; a port the caller may not reach is a 404; a dead port is a 502 — JSON for assets/API calls, the "Preview parado" HTML screen for a navigation. The `vibehub_session` cookie never reaches the app |
+| WS | `/preview/:port/*` | the same, for websockets (vite HMR), relayed byte-for-byte. Same access rule: 401 without a live session (a deleted account or a cookie revoked by a password change included), 404 for a port the caller may not reach |
+
+## Cofre — credentials and captured logins
+
+Credential CRUD and **saving** a capture are the **owner**'s (both create a credential for the whole
+install). Values go in and never come back: listings carry names, types and timestamps only.
+Listing and dismissing captures follow **work** on the card, and a capture is reachable only
+through the card whose browser saw it — another card's capture id is a 404 on save and
+`{ ok: false }` on dismiss.
+
+| Method | Path | Body / notes |
+|---|---|---|
+| GET | `/api/credentials` | `{ credentials: [{ id, name, type: "userpass"\|"token", createdAt, usedAt? }] }` |
+| POST | `/api/credentials` | `{ name, type, username?, password?, value? }` — `userpass` takes `username` + `password`, `token` takes `value` → `{ credential }`; 400 on a bad or duplicate name |
+| DELETE | `/api/credentials/:id` | `{ ok: true }`; 404 when unknown |
+| GET | `/api/cards/:id/captures` | `{ captures: [{ id, host, suggestedName, username, at }] }` — logins the card's browser saw and nobody decided on yet. Never the password |
+| POST | `/api/cards/:id/captures/save` | **owner** — `{ captureId, name? }` → `{ credential }`; `name` defaults to the suggested one. The password goes from the server-held capture straight to the vault |
+| POST | `/api/cards/:id/captures/dismiss` | `{ captureId }` → `{ ok }` — forgets it without saving |
 
 ## Claude accounts, MCPs, brain, import
 
@@ -177,9 +215,9 @@ that card.
 | GET | `/api/mcps` | `{ mcps: Mcp[] }` — `{ id, name, kind: "stdio"\|"http"\|"sse", command?, args?, url?, envKeys?, headerKeys? }` |
 | POST | `/api/mcps` | `{ name, kind, command?, args?, url?, envKeys?, headerKeys? }` — names only; values go in one at a time |
 | GET | `/api/mcps/secrets` | `{ byMcp: { [mcpId]: { [name]: boolean } } }` — which declared secrets already have a value |
-| DELETE | `/api/mcps/:id` | |
+| DELETE | `/api/mcps/:id` | its secrets leave the vault at once; its removal from the runner's profiles is recorded on the board and paid by this apply — or, with the runner down, by the next one |
 | POST | `/api/mcps/:id/secret` | `{ key, value }` |
-| POST | `/api/mcps/apply` | re-injects every MCP into every profile |
+| POST | `/api/mcps/apply` | removes the deleted MCPs still owed, then re-injects every MCP into every profile |
 | GET | `/api/brain` | `{ text, ... }` — shared CLAUDE.md planted in each card |
 | POST | `/api/brain` | `{ text }` — save it |
 | DELETE | `/api/brain` | back to the built-in default |

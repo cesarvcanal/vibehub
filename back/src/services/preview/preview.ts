@@ -1,5 +1,6 @@
 import { SLOT_SPACE, VNC_PORT_BASE, CDP_PORT_BASE } from "../browser/ports.js";
 import { shQuote } from "../../runtime/host.js";
+import { SESSION_COOKIE } from "../../auth/session.js";
 
 /**
  * PREVIEW — open, in the USER'S OWN BROWSER, an app that a card's agent started inside the runner
@@ -139,6 +140,9 @@ export function isValidPreviewPort(port: number): boolean {
  */
 export function tunnelRemoteCommand(container: string, port: number): string {
   if (!isValidPreviewPort(port)) throw new Error(`invalid preview port: ${port}`);
+  // The last line of defence for the access rule in routes/preview.ts: a tunnel into Chromium's
+  // CDP is full remote control of a card's browser (its tabs, its logged-in sessions), not an app.
+  if (isInfraPort(port)) throw new Error(`port ${port} is reserved for vibehub's browser plumbing`);
   return `docker exec -i ${shQuote(container)} socat STDIO TCP:127.0.0.1:${port}`;
 }
 
@@ -182,7 +186,7 @@ export function stripSessionCookie(cookieHeader: string): string {
   return cookieHeader
     .split(";")
     .map((p) => p.trim())
-    .filter((p) => p && !p.startsWith("vibehub_session="))
+    .filter((p) => p && !p.startsWith(`${SESSION_COOKIE}=`))
     .join("; ");
 }
 

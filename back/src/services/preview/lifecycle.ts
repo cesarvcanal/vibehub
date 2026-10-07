@@ -93,20 +93,16 @@ export function parsePreviewSessions(stdout: string, cardId: string): string[] {
  * A preview lives OUTSIDE the card pane's process tree on purpose (that is what makes it survive a
  * pause), which means deleting the card used to leave the dev server running forever: a process
  * holding a port, and a `/preview/<port>/` URL that any logged-in user could still open after the
- * card was gone. Best-effort and idempotent; returns the sessions it killed.
+ * card was gone. Idempotent; returns the sessions it killed. THROWS when the runner cannot be asked:
+ * "could not look" is not "nothing running", and the purge reports a step as failed only when it
+ * throws — an empty answer here would read as a clean deletion with the server still listening.
  */
 export async function stopAllCardPreviews(cardId: string): Promise<string[]> {
   const container = config.runner.container;
-  let sessions: string[] = [];
-  try {
-    const { stdout } = await hostExecutor().runScript(buildPreviewSessionListScript(container, cardId), {
-      timeoutMs: 20_000,
-    });
-    sessions = parsePreviewSessions(stdout, cardId);
-  } catch (e) {
-    logger.warn({ card: cardId, detail: (e as Error).message }, "could not list the card's preview sessions");
-    return [];
-  }
+  const { stdout } = await hostExecutor().runScript(buildPreviewSessionListScript(container, cardId), {
+    timeoutMs: 20_000,
+  });
+  const sessions = parsePreviewSessions(stdout, cardId);
   if (sessions.length === 0) return [];
   await hostExecutor().runScript(buildKillSessionScript(container, sessions), { timeoutMs: 30_000 });
   logger.info(

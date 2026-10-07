@@ -131,6 +131,12 @@ describe("tunnelRemoteCommand", () => {
       expect(() => tunnelRemoteCommand("c", port)).toThrow();
     }
   });
+
+  it("refuses vibehub's own browser plumbing — CDP and VNC are remote control, never a preview", () => {
+    for (const port of [9222, 10121, 5900, 6799]) {
+      expect(() => tunnelRemoteCommand("c", port)).toThrow(/reserved/);
+    }
+  });
 });
 
 describe("parsePreviewTarget", () => {
