@@ -125,6 +125,21 @@ describe("SessionGuard — a 401", () => {
     expect(paths).toEqual([Paths.SETUP, Paths.LOGIN]);
   });
 
+  // The router matches "/setup" case-insensitively and with a trailing slash — so must the guard,
+  // or a wizard opened from a typed URL is left with no way to the login.
+  it.each(["/setup/", "/SETUP"])("on the setup wizard reached as %s, signed in, lands on the login", async (at) => {
+    const { paths } = mount(at);
+    expect(await screen.findByText("the wizard")).toBeInTheDocument();
+    await settle();
+
+    sessionAlive = false;
+    a401();
+
+    expect(await screen.findByText("login form")).toBeInTheDocument();
+    await settle();
+    expect(paths).toEqual([at, Paths.LOGIN]);
+  });
+
   it("on the setup wizard with NO session already lands on the login too", async () => {
     sessionAlive = false;
     const { paths } = mount(Paths.SETUP);
