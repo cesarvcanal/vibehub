@@ -85,7 +85,6 @@ export const ULTRA_CODE_SHIMMER = [
  */
 export const ULTRA_STEP_MS = 50;
 export const ULTRA_PAD = 10;
-export const ULTRA_BAND = 3;
 
 /** One keyword found in the text, with where it sits. */
 export interface UltraMatch {

@@ -27,8 +27,3 @@ export function applyTheme(choice: ThemeChoice): void {
     /* private mode: the attribute still applies for this session */
   }
 }
-
-/** Cycle order for the toolbar button. */
-export function nextTheme(choice: ThemeChoice): ThemeChoice {
-  return choice === "system" ? "dark" : choice === "dark" ? "light" : "system";
-}

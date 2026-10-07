@@ -1,4 +1,4 @@
-import type { AccountUsage, UsageError, UsageWindow } from "@/features/board/api";
+import type { AccountUsage, UsageWindow } from "@/features/board/api";
 import { t } from "@/i18n";
 
 /**
@@ -118,9 +118,4 @@ export function usageRows(usage: AccountUsage): { key: string; label: string; wi
 export function pillPercent(usage: AccountUsage | undefined): string | null {
   if (!usage?.available || !usage.fiveHour) return null;
   return formatPercent(usage.fiveHour.utilization);
-}
-
-/** Convenience for a caller that only has the error kind. PURE. */
-export function isUsageError(usage: AccountUsage | undefined): usage is AccountUsage & { error: UsageError } {
-  return Boolean(usage?.error);
 }
