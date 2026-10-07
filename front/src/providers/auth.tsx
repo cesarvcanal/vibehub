@@ -1,10 +1,34 @@
 import * as React from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { hashKey, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { get, post } from "@/lib/api";
 import type { MeResponse, SetupState, User } from "@/api/types";
 
 export const SETUP_STATE_KEY = ["setup", "state"] as const;
 export const ME_KEY = ["auth", "me"] as const;
+
+/**
+ * Forget the session on this tab: after a logout, or when any request 401s.
+ *
+ * Not `queryClient.clear()`: that drops queries WITHOUT telling their observers. The
+ * `useQuery(ME_KEY)` below then rebuilt an EMPTY session query that nothing fetched — `isLoading`
+ * stayed true, the route guards sat on "Checking session" for good, and only a reload brought the
+ * login back (production, 2026-10-07). Writing `null` into ME_KEY is the server's own answer ("no
+ * session") and it does notify. Everything else is dropped, so no screen renders data from a dead
+ * session; the setup probe stays, it is public and not tied to who is signed in.
+ *
+ * - A `/auth/me` already in flight is CANCELLED first, and awaited: its answer predates the logout,
+ *   and landing after the `null` it would put the board back. (Cancelling restores the previous
+ *   state in a microtask — written before that settles, the `null` would be undone.)
+ * - Only those two EXACT keys are kept: a future `["auth", …]` must not outlive a session by accident.
+ * - The mutation cache goes too, as `clear()` did: mutation variables hold passwords and tokens.
+ */
+export async function dropSession(queryClient: QueryClient): Promise<void> {
+  await queryClient.cancelQueries({ queryKey: ME_KEY, exact: true });
+  queryClient.setQueryData<User | null>(ME_KEY, null);
+  const kept = [hashKey(ME_KEY), hashKey(SETUP_STATE_KEY)];
+  queryClient.removeQueries({ predicate: ({ queryHash }) => !kept.includes(queryHash) });
+  queryClient.getMutationCache().clear();
+}
 
 export interface AuthValue {
   user: User | null;
@@ -45,7 +69,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // and no bounce (the interceptor deliberately ignores 401 on this route).
   const meQuery = useQuery({
     queryKey: ME_KEY,
-    queryFn: () => get<MeResponse>("/auth/me").then((r) => r.user),
+    // `null` is "no session" written by dropSession(); a 401 here lands as an error instead.
+    queryFn: () => get<MeResponse>("/auth/me").then((r): User | null => r.user),
     retry: false,
     staleTime: 30_000,
   });
@@ -58,13 +83,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await queryClient.invalidateQueries({ queryKey: ME_KEY });
   }, [queryClient]);
 
+  /**
+   * Leaves only once the SERVER says the session is over. A logout that failed (network, 5xx) left
+   * the cookie valid: showing the login anyway told someone on a shared computer they had signed
+   * out when a reload put the board right back. So the session is asked again — a 401 means it is
+   * gone after all (drop it, the login follows); anything else keeps the person signed in and the
+   * error goes to the caller, who says the sign-out failed.
+   */
   const signOut = React.useCallback(async () => {
     try {
       await post("/auth/logout");
-    } finally {
-      queryClient.clear();
-      await queryClient.invalidateQueries({ queryKey: ME_KEY });
+    } catch (err) {
+      const stillSignedIn = await get<MeResponse>("/auth/me").then(
+        (r) => Boolean(r.user),
+        (check: { response?: { status?: number } }) => check?.response?.status !== 401,
+      );
+      if (stillSignedIn) throw err;
     }
+    await dropSession(queryClient);
   }, [queryClient]);
 
   const value = React.useMemo<AuthValue>(

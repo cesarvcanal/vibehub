@@ -63,6 +63,7 @@ export const ptBR: Record<string, string> = {
   "account.signedIn": "Conectado como",
   "account.settings": "Configurações",
   "account.signOut": "Sair",
+  "account.signOutFailed": "Não foi possível sair — você continua conectado. Tente de novo.",
   "account.preferences": "Preferências",
   "account.editUser": "Editar usuário",
   "account.editUserHint": "Sua conta ({name}): defina uma nova senha.",
