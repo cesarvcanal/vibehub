@@ -21,6 +21,13 @@ export const OPENAI_KEY = "TRANSCRIBE_OPENAI_API_KEY";
 export const ANTHROPIC_KEY = "TRANSCRIBE_ANTHROPIC_API_KEY";
 const CLEANUP_MODEL = "claude-haiku-4-5-20251001";
 
+/**
+ * Ceiling on each external call. Without one, an API that accepts the connection and never answers
+ * holds the request (and the person staring at the microphone button) forever. Generous because a
+ * 20 MB upload to Whisper is not instant; the GitHub client's 8 s would cut real recordings.
+ */
+export const EXTERNAL_TIMEOUT_MS = 60_000;
+
 /** Whisper accepts up to 25 MB; 20 MB leaves room for a recording of several minutes. */
 export const AUDIO_MAX_BYTES = 20 * 1024 * 1024;
 
@@ -69,13 +76,17 @@ function extFor(mimeType: string): string {
 
 async function whisper(apiKey: string, audio: Buffer, mimeType: string, language: string | null): Promise<string> {
   const form = new FormData();
-  form.append("file", new Blob([Uint8Array.from(audio)], { type: mimeType }), `audio.${extFor(mimeType)}`);
+  // A view over the Buffer's own bytes, not `Uint8Array.from` — that walks up to 20 MB one element
+  // at a time to build a copy nobody needs.
+  const bytes = new Uint8Array(audio.buffer, audio.byteOffset, audio.byteLength);
+  form.append("file", new Blob([bytes], { type: mimeType }), `audio.${extFor(mimeType)}`);
   form.append("model", "whisper-1");
   if (language) form.append("language", language);
   const resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}` },
     body: form,
+    signal: AbortSignal.timeout(EXTERNAL_TIMEOUT_MS),
   });
   if (!resp.ok) {
     throw new Error(`transcription failed (${resp.status}): ${(await resp.text().catch(() => "")).slice(0, 300)}`);
@@ -127,8 +138,12 @@ export function proofreadIsSafe(raw: string, revised: string): boolean {
   return r.length <= raw.trim().length * 1.6 + 40;
 }
 
-async function proofread(apiKey: string, raw: string, language: string | null): Promise<string> {
-  if (!raw) return raw;
+/**
+ * The proofread text, or null when there is none to give — the call failed, or the reply was not a
+ * correction — and the caller keeps the raw Whisper text without claiming it was proofread.
+ */
+async function proofread(apiKey: string, raw: string, language: string | null): Promise<string | null> {
+  if (!raw) return null;
   const brain = await resolveBrainText();
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -139,10 +154,11 @@ async function proofread(apiKey: string, raw: string, language: string | null): 
       system: cleanupSystemPrompt(brain, language),
       messages: [{ role: "user", content: raw }],
     }),
+    signal: AbortSignal.timeout(EXTERNAL_TIMEOUT_MS),
   });
   if (!resp.ok) {
     logger.warn({ status: resp.status }, "transcription proofreading failed — returning the raw text");
-    return raw;
+    return null;
   }
   const data = (await resp.json()) as { content?: { type: string; text?: string }[] };
   const revised = revisedText(data);
@@ -150,7 +166,7 @@ async function proofread(apiKey: string, raw: string, language: string | null): 
   // of correcting. Any reply that is not plausibly a nudge of the same text is thrown away for the
   // raw Whisper transcription — what the person actually said always beats a chatbot's meta-reply.
   const cleaned = revised ? stripCleanupArtifacts(revised) : "";
-  return cleaned && proofreadIsSafe(raw, cleaned) ? cleaned : raw;
+  return cleaned && proofreadIsSafe(raw, cleaned) ? cleaned : null;
 }
 
 /** The first text block of an Anthropic messages response, trimmed. PURE. */
@@ -196,8 +212,11 @@ export async function transcribeCardAudio(
   const anthropicKey = settings.transcribeProofread ? await secretGet(ANTHROPIC_KEY) : null;
   if (anthropicKey) {
     try {
-      text = await proofread(anthropicKey, raw, language);
-      didProofread = true;
+      const revised = await proofread(anthropicKey, raw, language);
+      if (revised !== null) {
+        text = revised;
+        didProofread = true;
+      }
     } catch (err) {
       logger.warn({ detail: (err as Error).message }, "proofreading unavailable — using the raw transcription");
     }

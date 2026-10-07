@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, mkdir, readdir, rm, writeFile, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 
 /**
  * DELETING A CARD MUST ERASE THE CARD — the fear this file exists to answer: "eu deleto, ele
@@ -28,6 +29,11 @@ vi.mock("../../runtime/host.js", async (orig) => ({
   hostExecutor: vi.fn(),
 }));
 vi.mock("../github/client.js", () => ({ gitAuthHeaderFor: vi.fn(), tokenFor: vi.fn() }));
+// Pass-through, so a test can hand a new card an id whose hashed browser slot collides on purpose.
+vi.mock("node:crypto", async (orig) => {
+  const actual = await orig<typeof import("node:crypto")>();
+  return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
+});
 
 let dir = "";
 let runScript: ReturnType<typeof vi.fn>;
@@ -221,6 +227,64 @@ describe("purgeCard — the card and everything that belonged to it", () => {
     await expect(outbox.queueMessage(card.id, "oi")).rejects.toThrow(/card not found/);
   });
 
+  it("a KILL THAT FAILS is reported — the sessions step does not claim ok over a live claude", async () => {
+    const { card } = await seed();
+    // Only the kill fails (the runner answered everything else): the session may still be alive,
+    // and no sweep kills tmux sessions — so the report is the only place this can surface.
+    runScript.mockImplementation(async (script: string) => {
+      if (script.includes("tmux kill-session")) throw new Error("docker exec timed out");
+      return { stdout: "", stderr: "" };
+    });
+
+    const report = await purge.purgeCard(card.id);
+
+    expect(report?.incomplete).toContain("sessions");
+    expect(report?.steps.find((s) => s.name === "sessions")?.detail).toMatch(/timed out/);
+    // The card still leaves the board: a stuck kill must never make a card undeletable.
+    expect(await reg.getCard(card.id)).toBeUndefined();
+  });
+
+  it("previews that could not even be LISTED are reported, not assumed gone", async () => {
+    vi.doMock("../preview/lifecycle.js", () => ({
+      stopAllCardPreviews: vi.fn(async () => {
+        throw new Error("could not list the card's preview sessions");
+      }),
+    }));
+    try {
+      await fresh();
+      const { card } = await seed();
+      const report = await purge.purgeCard(card.id);
+      expect(report?.incomplete).toContain("previews");
+      expect(report?.steps.find((s) => s.name === "previews")?.detail).toMatch(/could not list/);
+      expect(await reg.getCard(card.id)).toBeUndefined();
+    } finally {
+      vi.doUnmock("../preview/lifecycle.js");
+    }
+  });
+
+  it("a card DELETED WHILE ITS WORKSPACE IS BEING PROVISIONED does not leave a claude running forever", async () => {
+    const { card } = await seed();
+    // The pre-provisioning (fired by the card's creation) is mid-clone when the delete lands.
+    let finishClone!: () => void;
+    const cloning = new Promise<void>((resolve) => (finishClone = resolve));
+    runScript.mockImplementation(async (script: string) => {
+      if (script.includes("git") && script.includes("clone") && script.includes("new-session")) await cloning;
+      return { stdout: "", stderr: "" };
+    });
+    const preparing = ws.prepareCard(card.id, "card.create");
+    await vi.waitFor(() => expect(runScript).toHaveBeenCalled());
+
+    await purge.purgeCard(card.id);
+    const before = runScript.mock.calls.length;
+    finishClone(); // the clone finishes AFTER the purge: worktree + tmux session now exist
+
+    await expect(preparing).rejects.toThrow(/card not found/);
+    const after = scripts().slice(before).join("\n");
+    // The provisioning that outlived its card tears down what it just built.
+    expect(after).toContain(`tmux kill-session -t '${card.tmuxSession}'`);
+    expect(after).toContain(`rm -rf '/work/.uploads/${card.id}'`);
+  });
+
   it("purgeRemovedCards: deleting a PROJECT purges each of its cards (not just the board rows)", async () => {
     const { card, project } = await seed();
     const second = await reg.createCard({ projectId: project.id, title: "Outro card" });
@@ -236,6 +300,88 @@ describe("purgeCard — the card and everything that belonged to it", () => {
     expect(await dataFiles(provenance.PROVENANCE_DIR)).toEqual([]);
     expect(allScripts()).toContain(`rm -rf '/work/.uploads/${card.id}'`);
     expect(allScripts()).toContain(`rm -rf '/work/.uploads/${second.id}'`);
+  });
+});
+
+/**
+ * A DELETED CARD'S BROWSER SLOT IS NOT FREE UNTIL ITS BROWSER IS DOWN. The slot is what keeps one
+ * card's agent off another card's Chromium (and its logged-in sessions). A card leaving the board
+ * while its browser could not be stopped (runner down), or before it was (a project's cards leave
+ * the board first and are purged after), used to free the slot at once — and the next card handed
+ * it found that Chromium already up on its display/CDP port.
+ */
+describe("browser slots of deleted cards", () => {
+  /** An id that hashes to the same preferred slot as `id` (same leading hex) — a forced collision. */
+  const collidingWith = (id: string): string => `${id.slice(0, 35)}${id.endsWith("f") ? "e" : "f"}`;
+  const failBrowserStop = (): void => {
+    runScript.mockImplementation(async (script: string) => {
+      if (script.includes("vibehub-browser-down")) throw new Error("the runner is not running");
+      return { stdout: "", stderr: "" };
+    });
+  };
+
+  it("a browser that could not be stopped keeps its slot away from the next card", async () => {
+    const { project, card } = await seed();
+    failBrowserStop();
+    const report = await purge.purgeCard(card.id);
+    expect(report?.incomplete).toContain("browser");
+
+    vi.mocked(randomUUID).mockReturnValueOnce(collidingWith(card.id) as ReturnType<typeof randomUUID>);
+    const next = await reg.createCard({ projectId: project.id, title: "Novo" });
+    expect(next.browserSlot).not.toBe(card.browserSlot);
+  });
+
+  it("a deleted project's cards hold their slots until their browsers are stopped — then free them", async () => {
+    const { project, card } = await seed();
+    const other = await reg.createProject({ name: "outro" });
+    const removed = await reg.removeProject(project.id);
+
+    vi.mocked(randomUUID).mockReturnValueOnce(collidingWith(card.id) as ReturnType<typeof randomUUID>);
+    const during = await reg.createCard({ projectId: other.id, title: "Durante o purge" });
+    expect(during.browserSlot).not.toBe(card.browserSlot);
+
+    await purge.purgeRemovedCards(removed.cards, removed.project);
+    // Its browser is down now: a card hashing to that slot gets it back.
+    vi.mocked(randomUUID).mockReturnValueOnce(`${collidingWith(card.id).slice(0, 34)}aa` as ReturnType<typeof randomUUID>);
+    const after = await reg.createCard({ projectId: other.id, title: "Depois do purge" });
+    expect(after.browserSlot).toBe(card.browserSlot);
+  });
+
+  it("a hold the purge could not release is retried by the sweep — on the HELD slot, after a restart", async () => {
+    const { project, card } = await seed();
+    // A card whose slot is NOT its hashed one: after a restart, deriving it from the id would aim
+    // the stop at the wrong display and leave the deleted card's Chromium running.
+    vi.mocked(randomUUID).mockReturnValueOnce(collidingWith(card.id) as ReturnType<typeof randomUUID>);
+    const moved = await reg.createCard({ projectId: project.id, title: "Deslocado" });
+    expect(moved.browserSlot).not.toBe(card.browserSlot);
+    failBrowserStop();
+    expect((await purge.purgeCard(moved.id))?.incomplete).toContain("browser");
+
+    await fresh(); // vibehub restarted; the runner is back
+    const summary = await purge.sweepOrphanCardData();
+
+    expect(allScripts()).toContain(`remote-debugging-port=${9222 + (moved.browserSlot ?? -1)}`);
+    expect(summary.browserSlots).toBe(1);
+    expect(await reg.listBrowserSlotHolds()).toEqual([]);
+  });
+
+  it("a hold whose browser still cannot be stopped stays held for the next pass", async () => {
+    const { card } = await seed();
+    failBrowserStop();
+    await purge.purgeCard(card.id);
+
+    const summary = await purge.sweepOrphanCardData();
+    expect(summary.browserSlots).toBe(0);
+    expect(await reg.listBrowserSlotHolds()).toEqual([{ cardId: card.id, slot: card.browserSlot }]);
+  });
+
+  it("once the browser is confirmed down, the slot is free again", async () => {
+    const { project, card } = await seed();
+    await purge.purgeCard(card.id);
+
+    vi.mocked(randomUUID).mockReturnValueOnce(collidingWith(card.id) as ReturnType<typeof randomUUID>);
+    const next = await reg.createCard({ projectId: project.id, title: "Novo" });
+    expect(next.browserSlot).toBe(card.browserSlot);
   });
 });
 

@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AddressInfo } from "node:net";
 import type { FastifyInstance } from "fastify";
+import { WebSocket } from "ws";
 import { parseTerminalFrame, isValidTermSize, needsProvisioning, stillPausedAfterGrace } from "./session.js";
 
 describe("terminal frames", () => {
@@ -48,6 +50,18 @@ const restartAllCards = vi.fn();
 const purgeCardWorkspace = vi.fn();
 const uploadCardImage = vi.fn();
 const readCardUpload = vi.fn();
+/** The terminal websocket's pty — never a real process here; see `fakeTerm`. */
+const ptySpawn = vi.fn();
+/** The VNC bridge's argv; each test picks the process standing in for `docker exec … socat`. */
+const cardVncBridge = vi.fn();
+/**
+ * Fire-and-forget board write from the websocket; a test makes it reject (a disk that refused).
+ * A PLAIN function on purpose: a `vi.fn` subscribes to the promises it returns to record them,
+ * which would mark the rejection handled and hide exactly what the test is looking for.
+ */
+let markCardHumanActive: (cardId: string) => Promise<unknown> = async () => undefined;
+/** Records the status writes the websocket makes (the real write still happens behind it). */
+const appliedStatus = vi.fn();
 
 async function boot(): Promise<FastifyInstance> {
   vi.resetModules();
@@ -74,6 +88,26 @@ async function boot(): Promise<FastifyInstance> {
       ...actual,
       openCard, prepareCard, pauseCard, restartCard, hibernateCard, restartAllCards, purgeCardWorkspace,
       uploadCardImage, readCardUpload,
+    };
+  });
+  vi.doMock("node-pty", () => ({ default: { spawn: ptySpawn } }));
+  vi.doMock("../services/browser/browser.js", async () => {
+    const actual = await vi.importActual<typeof import("../services/browser/browser.js")>(
+      "../services/browser/browser.js",
+    );
+    return { ...actual, cardVncBridge };
+  });
+  vi.doMock("../services/board/registry.js", async () => {
+    const actual = await vi.importActual<typeof import("../services/board/registry.js")>(
+      "../services/board/registry.js",
+    );
+    return {
+      ...actual,
+      markCardHumanActive: (cardId: string) => markCardHumanActive(cardId),
+      applyCardStatus: async (cardId: string, status: Parameters<typeof actual.applyCardStatus>[1]) => {
+        appliedStatus(cardId, status);
+        return await actual.applyCardStatus(cardId, status);
+      },
     };
   });
   const { buildServer } = await import("../index.js");
@@ -322,5 +356,205 @@ describe("human-active stamping throttle", () => {
     expect(shouldStampHumanActive("card-a", t0 + HUMAN_ACTIVE_THROTTLE_MS)).toBe(true); // window passed
     // the gate is per-card
     expect(shouldStampHumanActive("card-b", t0 + 100)).toBe(true);
+  });
+});
+
+/* ------------------------------------------------------------------ websockets */
+
+/** A pty that records what the bridge does to it. */
+function fakeTerm(): { onData: ReturnType<typeof vi.fn>; onExit: ReturnType<typeof vi.fn>; write: ReturnType<typeof vi.fn>; resize: ReturnType<typeof vi.fn>; kill: ReturnType<typeof vi.fn> } {
+  return { onData: vi.fn(), onExit: vi.fn(), write: vi.fn(), resize: vi.fn(), kill: vi.fn() };
+}
+
+async function connect(path: string): Promise<WebSocket> {
+  await app.listen({ port: 0, host: "127.0.0.1" });
+  const port = (app.server.address() as AddressInfo).port;
+  const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`, { headers: { cookie } });
+  await new Promise<void>((resolve, reject) => {
+    ws.once("open", () => resolve());
+    ws.once("error", reject);
+  });
+  return ws;
+}
+
+function closed(ws: WebSocket): Promise<void> {
+  return new Promise((resolve) => {
+    if (ws.readyState === WebSocket.CLOSED) resolve();
+    else ws.once("close", () => resolve());
+  });
+}
+
+/** Lets the server drain what is in flight (socket events, settled promises). */
+const settle = (ms = 150): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * The terminal's setup can take seconds (the paused-card grace) or minutes (provisioning a card
+ * that was never opened). Whatever the browser does in that window must not be lost.
+ */
+describe("terminal websocket setup", () => {
+  /** A card that was never opened: the attach provisions it first, and the test holds that open. */
+  function holdTheOpen(): () => void {
+    let release = (): void => {};
+    openCard.mockImplementationOnce(() => new Promise<void>((resolve) => { release = () => resolve(); }));
+    return () => release();
+  }
+
+  it("a socket that closes while the card is being prepared never spawns a pty — it would be orphaned for good", async () => {
+    const id = await makeCard();
+    const release = holdTheOpen();
+    const ws = await connect(`/api/cards/${id}/terminal`);
+    await settle();
+    ws.close();
+    await closed(ws);
+    await settle();
+    release();
+    await settle();
+    expect(openCard).toHaveBeenCalledWith(id);
+    expect(ptySpawn).not.toHaveBeenCalled();
+  });
+
+  it("the resize the browser sends on open, before the pty exists, still sizes the pty", async () => {
+    const term = fakeTerm();
+    ptySpawn.mockReturnValueOnce(term);
+    const id = await makeCard();
+    const release = holdTheOpen();
+    const ws = await connect(`/api/cards/${id}/terminal`);
+    ws.send(JSON.stringify({ type: "resize", cols: 200, rows: 50 }));
+    await settle();
+    release();
+    await vi.waitFor(() => expect(ptySpawn).toHaveBeenCalled());
+    expect(term.resize).toHaveBeenCalledWith(200, 50);
+    ws.close();
+    await closed(ws);
+  });
+
+  /**
+   * What the setup keeps for the bridge is bounded: provisioning can take minutes, and an unbounded
+   * buffer let one socket grow the server's memory for as long as the clone ran (each frame can be
+   * up to maxPayload). Past the cap the socket is closed 1009 — and never attached.
+   */
+  it("frames piling up while the card is prepared close the socket 1009 instead of growing memory", async () => {
+    const { EARLY_FRAMES_MAX_BYTES } = await import("./session.js");
+    const id = await makeCard();
+    const release = holdTheOpen();
+    const ws = await connect(`/api/cards/${id}/terminal`);
+    const code = new Promise<number>((resolve) => ws.once("close", (c: number) => resolve(c)));
+    const chunk = "x".repeat(Math.ceil(EARLY_FRAMES_MAX_BYTES / 2));
+    for (let i = 0; i < 3; i++) ws.send(chunk);
+    expect(await code).toBe(1009);
+    release();
+    await settle();
+    expect(ptySpawn).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The 1009 close is a HANDSHAKE: the server's `close` event only fires once the peer answers (up to
+   * ws's 30s closeTimeout). A setup that ends inside that window must not attach to a socket that
+   * is already closing. Pausing the client's reads holds the handshake open deterministically.
+   */
+  it("a setup that ends while the 1009 close is still in flight does not spawn a pty", async () => {
+    const { EARLY_FRAMES_MAX_BYTES } = await import("./session.js");
+    const id = await makeCard();
+    const release = holdTheOpen();
+    const ws = await connect(`/api/cards/${id}/terminal`);
+    const chunk = "x".repeat(Math.ceil(EARLY_FRAMES_MAX_BYTES / 2));
+    for (let i = 0; i < 3; i++) ws.send(chunk);
+    const raw = (ws as unknown as { _socket: { pause(): void; resume(): void } })._socket;
+    raw.pause(); // the server's close frame is never read, so its handshake never completes
+    await settle();
+    release();
+    await settle();
+    expect(ptySpawn).not.toHaveBeenCalled();
+    raw.resume();
+    ws.terminate();
+  });
+
+  /**
+   * The setup's slow path IS the paused card's grace — exactly when a person types before the pty
+   * exists. What they typed reaches the pty through the replay; it must revive the card as well,
+   * or the card sits in `done`/`paused` (and the idle sweep treats it as parked) while it works.
+   */
+  it("typing into a finished card before the pty exists revives it, like typing after", async () => {
+    const term = fakeTerm();
+    ptySpawn.mockReturnValueOnce(term);
+    const id = await makeCard();
+    const moved = await app.inject({
+      method: "PATCH", url: `/api/cards/${id}`, headers: { cookie }, payload: { column: "done" },
+    });
+    expect(moved.statusCode).toBe(200);
+    const release = holdTheOpen();
+    const ws = await connect(`/api/cards/${id}/terminal`);
+    ws.send("ls\r");
+    await settle();
+    release();
+    await vi.waitFor(() => expect(term.write).toHaveBeenCalledWith("ls\r"));
+    await vi.waitFor(() => expect(appliedStatus).toHaveBeenCalledWith(id, "working"));
+    ws.close();
+    await closed(ws);
+  });
+
+  it("a board write that fails behind a keystroke never becomes an unhandled rejection", async () => {
+    const { resetHumanStampThrottleForTesting } = await import("./session.js");
+    resetHumanStampThrottleForTesting();
+    const term = fakeTerm();
+    ptySpawn.mockReturnValueOnce(term);
+    openCard.mockResolvedValueOnce(undefined);
+    const stamped = vi.fn();
+    markCardHumanActive = (cardId) => {
+      stamped(cardId);
+      return Promise.reject(new Error("disk full"));
+    };
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const id = await makeCard();
+      const ws = await connect(`/api/cards/${id}/terminal`);
+      await vi.waitFor(() => expect(ptySpawn).toHaveBeenCalled());
+      ws.send("x");
+      await vi.waitFor(() => expect(stamped).toHaveBeenCalled());
+      await settle();
+      expect(term.write).toHaveBeenCalledWith("x");
+      expect(unhandled).not.toHaveBeenCalled();
+      ws.close();
+      await closed(ws);
+    } finally {
+      process.off("unhandledRejection", unhandled);
+      markCardHumanActive = async () => undefined;
+    }
+  });
+});
+
+/**
+ * The VNC relay pipes the browser's frames into a child process. A child that cannot start, or
+ * that dies while frames keep arriving, must cost that one socket — never the whole server.
+ */
+describe("vnc websocket", () => {
+  it("a bridge that cannot even start closes the socket instead of crashing the process", async () => {
+    cardVncBridge.mockResolvedValueOnce({
+      command: { file: "vibehub-no-such-binary-for-the-test", args: [] },
+      ports: { display: 1, vncPort: 5901, cdpPort: 9301 },
+    });
+    const id = await makeCard();
+    const ws = await connect(`/api/cards/${id}/vnc`);
+    ws.on("error", () => { /* the server hanging up is the point */ });
+    await closed(ws);
+  });
+
+  it("frames that keep coming after the bridge died do not take the server down (EPIPE)", async () => {
+    // Exits at once without reading stdin: every frame written after that is a write to a dead pipe.
+    cardVncBridge.mockResolvedValueOnce({
+      command: { file: process.execPath, args: ["-e", "process.exit(0)"] },
+      ports: { display: 1, vncPort: 5901, cdpPort: 9301 },
+    });
+    const id = await makeCard();
+    const ws = await connect(`/api/cards/${id}/vnc`);
+    ws.on("error", () => { /* the server hanging up is the point */ });
+    const frame = Buffer.alloc(256 * 1024, 1);
+    for (let i = 0; i < 20 && ws.readyState === WebSocket.OPEN; i++) {
+      ws.send(frame);
+      await settle(20);
+    }
+    await closed(ws);
+    await settle();
   });
 });

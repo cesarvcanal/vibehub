@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { config } from "../config/env.js";
 import {
   hostExecutor, resetHostExecutorForTesting, shQuote, assertSafeRemotePath, writeFileScript,
-  isAccessError, sshArgs, HostExecError,
+  isAccessError, sshArgs, HostExecError, containerScriptCommand, CONTAINER_DEADLINE_MARGIN_MS,
 } from "./host.js";
 
 let dir = "";
@@ -38,6 +38,22 @@ describe("writeFileScript", () => {
     expect(script).toContain("mv -f");
   });
   it("rejects a bogus mode", () => expect(() => writeFileScript("/opt/x", "rwx")).toThrow(/invalid file mode/));
+});
+
+describe("containerScriptCommand", () => {
+  // Killing the local `docker exec`/ssh on a timeout does NOT kill what runs inside the container,
+  // so the work carries its own deadline there — shorter than the Node one, so it is already dead
+  // when runProcess gives up and the caller releases whatever lock it held.
+  it("runs bash -s inside the container under a KILL deadline shorter than the Node one", () => {
+    const cmd = containerScriptCommand("vibehub-runner", 600_000);
+    expect(cmd).toBe(`docker exec -i 'vibehub-runner' timeout -s KILL ${600 - CONTAINER_DEADLINE_MARGIN_MS / 1000} bash -s`);
+  });
+  it("quotes the container name", () => {
+    expect(containerScriptCommand("a'b", 600_000)).toContain(`docker exec -i 'a'\\''b' timeout`);
+  });
+  it("refuses a Node deadline too short to leave the margin", () => {
+    expect(() => containerScriptCommand("c", CONTAINER_DEADLINE_MARGIN_MS)).toThrow(/too short/);
+  });
 });
 
 describe("isAccessError", () => {
@@ -82,6 +98,17 @@ describe("local executor", () => {
 
   it("times out instead of hanging forever", async () => {
     await expect(hostExecutor().runScript("sleep 5", { timeoutMs: 100 })).rejects.toBeInstanceOf(HostExecError);
+  });
+
+  /**
+   * A host that exits WITHOUT reading its stdin (ssh with the runner down, a script that bails
+   * early) leaves our pending write with nowhere to go: EPIPE on the stdin stream. Unhandled, that
+   * error event is an uncaught exception — the whole vibehub process died on an image upload. The
+   * command must just fail with its exit code like any other.
+   */
+  it("survives a host that exits without reading the rest of stdin (EPIPE)", async () => {
+    const unread = `exit 7\n${"#".repeat(4 * 1024 * 1024)}\n`;
+    await expect(hostExecutor().runScript(unread)).rejects.toMatchObject({ exitCode: 7 });
   });
 
   it("never puts the payload in argv — the script arrives over stdin", async () => {

@@ -148,7 +148,36 @@ describe("transcribeCardAudio", () => {
     const c = await reg.createCard({ projectId: p.id, title: "c" });
     vi.stubGlobal("fetch", vi.fn(async (url: string) =>
       url.includes("openai") ? json({ text: "raw words" }) : json({ error: "down" }, 500)));
-    expect((await mod.transcribeCardAudio(c.id, AUDIO, "audio/webm")).text).toBe("raw words");
+    // ...and does not CLAIM a proofread that never happened: the text is the raw Whisper one.
+    expect(await mod.transcribeCardAudio(c.id, AUDIO, "audio/webm")).toEqual({ text: "raw words", proofread: false });
+  });
+
+  it("a proofreader reply that is thrown away (it answered instead of correcting) is not a proofread", async () => {
+    const { mod, reg, settings } = await fresh();
+    await mod.setTranscribeKeys({ openaiKey: "sk-openai-x", anthropicKey: "sk-ant-x" });
+    await settings.updateSettings({ transcribeProofread: true });
+    const p = await reg.createProject({ name: "p" });
+    const c = await reg.createCard({ projectId: p.id, title: "c" });
+    const meta = "I'm a proofreader and cannot help with that request. ".repeat(5);
+    vi.stubGlobal("fetch", vi.fn(async (url: string) =>
+      url.includes("openai") ? json({ text: "oi" }) : json({ content: [{ type: "text", text: meta }] })));
+    expect(await mod.transcribeCardAudio(c.id, AUDIO, "audio/webm")).toEqual({ text: "oi", proofread: false });
+  });
+
+  it("BOTH external calls carry a timeout — an API that never answers must not hang the request", async () => {
+    const { mod, reg, settings } = await fresh();
+    await mod.setTranscribeKeys({ openaiKey: "sk-openai-x", anthropicKey: "sk-ant-x" });
+    await settings.updateSettings({ transcribeProofread: true });
+    const p = await reg.createProject({ name: "p" });
+    const c = await reg.createCard({ projectId: p.id, title: "c" });
+    const signals: (AbortSignal | null | undefined)[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
+      signals.push(init.signal);
+      return url.includes("openai") ? json({ text: "raw words" }) : json({ content: [{ type: "text", text: "raw words" }] });
+    }));
+    await mod.transcribeCardAudio(c.id, AUDIO, "audio/webm");
+    expect(signals).toHaveLength(2);
+    for (const signal of signals) expect(signal).toBeInstanceOf(AbortSignal);
   });
 
   it("does NOT proofread by default even with both keys — raw Whisper, the person's exact words", async () => {

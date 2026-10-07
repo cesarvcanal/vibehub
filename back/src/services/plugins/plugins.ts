@@ -1,7 +1,7 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config, dataPath } from "../../config/env.js";
 import { JsonStore } from "../../store/jsonStore.js";
-import { allProfiles, type McpProfile } from "../mcp/mcp.js";
+import { allProfiles, markedSetupLines, type McpProfile } from "../mcp/mcp.js";
 import { DEFAULT_CLAUDE_DIR } from "../accounts/profiles.js";
 import { logger } from "../../utils/logger.js";
 
@@ -60,6 +60,9 @@ export function pluginsSignature(names: string[]): string {
   return h.toString(16);
 }
 
+/** Shell variable that records a failed step of {@link pluginInstallLines} — a reserved name. */
+const INSTALL_FAILED_FLAG = "VIBEHUB_PLUGINS_FAILED";
+
 /** `CLAUDE_CONFIG_DIR=… ` for a named profile; empty for the default one (which writes /root/.claude). */
 function profilePrefix(profile: McpProfile): string {
   return profile ? `CLAUDE_CONFIG_DIR=${shQuote(profile)} ` : "";
@@ -71,8 +74,10 @@ function profilePrefix(profile: McpProfile): string {
  * `force=false` is the HOT path (opening a card): the whole block is guarded by a
  * `.plugins-<signature>` marker, so reopening a card costs nothing and a profile created later
  * picks the set up on its first open. Installing is NEVER allowed to break the enclosing script
- * (`|| true`): a plugin that fails to clone must not stop a card from opening — the Plugins screen
- * is where a failure is meant to be seen.
+ * (every command ends in an `||` that cannot fail): a plugin that fails to clone must not stop a
+ * card from opening — the Plugins screen is where a failure is meant to be seen. But the marker is
+ * only written when every step succeeded; a failure leaves a retry stamp instead, so a later open
+ * tries again without every open paying the clone (markedSetupLines).
  *
  * It only ADDS. Removing is the explicit apply's job (`reconcileLines`), which knows what a runner
  * actually has. PURE.
@@ -86,17 +91,15 @@ export function pluginInstallLines(profiles: McpProfile[], names: string[], forc
     const dir = profile || DEFAULT_CLAUDE_DIR;
     assertSafeRemotePath(dir);
     const prefix = profilePrefix(profile);
-    const marker = `${dir}/.plugins-${signature}`;
-    const inner: string[] = [
-      `mkdir -p ${shQuote(dir)}`,
+    // A failure never breaks the open (`|| <flag>`), but it is REMEMBERED: the marker promises the
+    // set is installed, and one written over a failed clone (network down) made the hot path skip
+    // this block forever — the plugin never arrived until somebody pressed "apply".
+    const body = [
       // Idempotent: an already-known marketplace exits 0 saying so.
-      `${prefix}claude plugin marketplace add ${shQuote(OFFICIAL_MARKETPLACE_SOURCE)} >/dev/null 2>&1 || true`,
-      ...wanted.map((name) => `${prefix}claude plugin install ${shQuote(pluginId(name))} >/dev/null 2>&1 || true`),
-      `rm -f ${shQuote(dir)}/.plugins-* 2>/dev/null || true`,
-      `: > ${shQuote(marker)}`,
+      `${prefix}claude plugin marketplace add ${shQuote(OFFICIAL_MARKETPLACE_SOURCE)} >/dev/null 2>&1 || ${INSTALL_FAILED_FLAG}=1`,
+      ...wanted.map((name) => `${prefix}claude plugin install ${shQuote(pluginId(name))} >/dev/null 2>&1 || ${INSTALL_FAILED_FLAG}=1`),
     ];
-    if (force) lines.push(...inner);
-    else lines.push(`if [ ! -f ${shQuote(marker)} ]; then`, ...inner, "fi");
+    lines.push(...markedSetupLines({ dir, family: ".plugins-", signature, flag: INSTALL_FAILED_FLAG, body, force }));
   }
   return lines;
 }

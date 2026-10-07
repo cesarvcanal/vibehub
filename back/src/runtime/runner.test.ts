@@ -90,6 +90,10 @@ describe("buildRunScript", () => {
     expect(script).toContain("sleep infinity");
     expect(script).toContain("--restart unless-stopped");
   });
+  it("runs a REAL init as PID 1 — `sleep infinity` never reaps, so every orphan killed became a zombie", () => {
+    const script = buildRunScript(opts);
+    expect(script).toMatch(/docker run -d --name 'vibehub-runner' \\\n\s+--init \\/);
+  });
   it("joins the configured network on create AND on an existing container — a fresh compose install must reach `vibehub:3010`", () => {
     const script = buildRunScript({ ...opts, network: "vibehub" });
     expect(script).toContain("--network 'vibehub'");

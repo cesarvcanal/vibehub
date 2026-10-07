@@ -31,17 +31,24 @@ export function claudeJsonPath(profileDir: string): string {
 /**
  * The node program that does the merge. One line, DOUBLE quotes only — it travels inside a
  * single-quoted shell argument. Writes through a temp file + rename so a concurrent reader never
- * sees a half-written config.
+ * sees a half-written config; the temp file carries the PID, because two cards of one account
+ * opening together run two seeds on the same file.
+ *
+ * Only a MISSING or EMPTY file starts from `{}` — neither holds anything to lose. One that cannot be
+ * read or parsed is left exactly as it is (exit 0): it may be Claude halfway through writing it, and
+ * it holds the account's login, its MCP servers and every project's history — rewriting it as a
+ * minimal seed erased all of that, while skipping the seed costs at most a wizard. Same rule as the
+ * purge's `.claude.json` edit.
  */
 const SEED_JS = [
   'const fs=require("fs"),f=process.argv[1],w=process.argv[2];',
-  'let c={};try{c=JSON.parse(fs.readFileSync(f,"utf8"))}catch(e){}',
+  'let c={};try{const s=fs.readFileSync(f,"utf8");if(s.trim())c=JSON.parse(s)}catch(e){if(e.code!=="ENOENT")process.exit(0)}',
   "let d=0;",
   "if(c.hasCompletedOnboarding!==true){c.hasCompletedOnboarding=true;d=1}",
   'if(!c.theme){c.theme="dark";d=1}',
   "if(w){const p=c.projects||(c.projects={});const e=p[w]||(p[w]={});",
   "if(e.hasTrustDialogAccepted!==true){e.hasTrustDialogAccepted=true;d=1}}",
-  'if(d){const t=f+".vibehub-tmp";fs.writeFileSync(t,JSON.stringify(c,null,2),{mode:0o600});fs.renameSync(t,f)}',
+  'if(d){const t=f+".vibehub-tmp-"+process.pid;fs.writeFileSync(t,JSON.stringify(c,null,2),{mode:0o600});fs.renameSync(t,f)}',
 ].join("");
 
 /**

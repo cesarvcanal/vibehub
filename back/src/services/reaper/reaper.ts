@@ -23,11 +23,12 @@ import { logger } from "../../utils/logger.js";
  * Resilience: a runner that is down or missing `ps` only produces a warn log — the reaper never
  * takes the backend down and never throws out of a tick.
  *
- * KNOWN LIMIT — zombies need init:true: the runner's PID 1 is `sleep infinity`, which never calls
- * wait(): a process this reaper (or anything else) kills whose parent is already PID 1 becomes a
- * zombie FOREVER (defunct entries; ~176 observed in the incident). Zombies hold no CPU/memory,
- * only a pid slot, but the real fix is recreating the container with `init: true` so PID 1 is a
- * real init that reaps children — scheduled separately by the operator (see docs/runner-processes.md).
+ * Zombies are NOT this reaper's job: what it kills is reparented to PID 1, and only PID 1 can reap
+ * it. A runner created by buildRunScript (runtime/runner.ts) runs with `--init`, so PID 1 is
+ * docker-init and every kill here is reaped. A runner created BEFORE that still has `sleep infinity`
+ * as PID 1, which never calls wait(): there every kill leaves a defunct entry for good (~176 in the
+ * incident) — no CPU/memory, only a pid slot — until the operator recreates the container, because
+ * an existing runner is only ever started, never recreated (see docs/runner-processes.md).
  */
 
 /** Minimum age (seconds) before an orphan is reaped. */

@@ -1,9 +1,18 @@
 /**
- * PURE derivation of the display number, ports and user-data-dir for a card's live browser.
+ * Display number, ports and user-data-dir for a card's live browser.
  *
  * It lives apart from browser.ts so the card-open path (which builds the tmux environment and needs
  * the CDP port to hand to the Playwright MCP) can import it WITHOUT pulling in browser.ts — that
  * would be a module cycle. Nothing here does I/O.
+ *
+ * THE SLOT IS ALLOCATED, NOT DERIVED. Deriving it from the id alone (`hex6 % 900`) collides about
+ * one time in five on a board with twenty cards, and a collision is not "harmless-ish": the two
+ * cards share display, VNC and CDP port, so card B's agent drives card A's logged-in Chromium,
+ * opening B's browser finds A's already up, and deleting B kills A's. So the registry hands each
+ * card the first FREE slot when the card is created (and to cards older than that on load), stores
+ * it on the card, and reports it here ({@link rememberBrowserSlot}); every reader below asks this
+ * table first. The table only grows: a card that has just left the board (a project purge stops its
+ * browser after `removeProject`) must still resolve to the slot its browser runs on.
  */
 
 /** Slot space per card — keeps display/ports in ranges that never cross each other. */
@@ -34,10 +43,12 @@ export interface CardBrowserPorts {
 }
 
 /**
- * Deterministic slot for a card (0..SLOT_SPACE-1). Normal path: the leading hex of the id (card ids
- * are uuids, so pure hex). It is TOTAL — it never throws: an unusual id (non-hex) falls back to a
- * deterministic hash of the whole id, so deriving ports can NEVER be the thing that breaks opening
- * a card. Two cards colliding is unlikely (1/900) and harmless-ish: they would share a display.
+ * The HASHED slot of a card (0..SLOT_SPACE-1) — its PREFERRED slot, not a guaranteed one: two ids
+ * can hash to the same slot, which is why {@link allocateBrowserSlot} only takes it when it is free.
+ * Every card created before slots were allocated has its browser running here, which is why it
+ * stays the first choice. Normal path: the leading hex of the id (card ids are uuids, so pure hex).
+ * It is TOTAL — it never throws: an unusual id (non-hex) falls back to a deterministic hash of the
+ * whole id, so deriving ports can NEVER be the thing that breaks opening a card.
  */
 export function cardBrowserSlot(cardId: string): number {
   const hex = cardId.replace(/-/g, "").slice(0, 6);
@@ -47,9 +58,33 @@ export function cardBrowserSlot(cardId: string): number {
   return h;
 }
 
-/** Display/ports/user-data-dir of a card — all derived from its slot. PURE. */
+/** Slots the registry allocated, by card id. See the header: it only grows. */
+const allocatedSlots = new Map<string, number>();
+
+/** Records the slot the registry allocated to a card — the one every reader below will use. */
+export function rememberBrowserSlot(cardId: string, slot: number): void {
+  allocatedSlots.set(cardId, slot);
+}
+
+/**
+ * Picks a slot for a card nobody else holds: its hashed slot when that one is free (a browser
+ * already running there keeps its display), otherwise the lowest free one. Only when all
+ * SLOT_SPACE slots are taken does it settle for the hashed slot anyway — sharing a display is
+ * the old behaviour, and opening a card must never fail over a browser. PURE.
+ */
+export function allocateBrowserSlot(cardId: string, taken: ReadonlySet<number>): number {
+  const preferred = cardBrowserSlot(cardId);
+  if (!taken.has(preferred)) return preferred;
+  for (let slot = 0; slot < SLOT_SPACE; slot++) if (!taken.has(slot)) return slot;
+  return preferred;
+}
+
+/**
+ * Display/ports/user-data-dir of a card — all derived from its slot: the allocated one, or the
+ * hashed one for a card the registry has not reported (it always does before a card can be opened).
+ */
 export function cardBrowserPorts(cardId: string): CardBrowserPorts {
-  const slot = cardBrowserSlot(cardId);
+  const slot = allocatedSlots.get(cardId) ?? cardBrowserSlot(cardId);
   return {
     display: DISPLAY_BASE + slot,
     vncPort: VNC_PORT_BASE + slot,

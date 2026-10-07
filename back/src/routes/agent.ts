@@ -5,7 +5,9 @@ import * as registry from "../services/board/registry.js";
 import { cardWorkPaths, restartStaggered, applyProjectBrainEverywhere } from "../services/board/workspace.js";
 import { setAccountToken, removeAccountToken, accountsTokenStatus } from "../services/accounts/token.js";
 import { allAccountsUsage } from "../services/accounts/usage.js";
-import { applyMcpsEverywhere, setMcpSecretById, mcpSecretsStatus } from "../services/mcp/mcp.js";
+import {
+  applyMcpsEverywhere, setMcpSecretById, mcpSecretsStatus, deleteMcpSecrets,
+} from "../services/mcp/mcp.js";
 import {
   brainView, setBrainText, resetBrain, applyBrainEverywhere, projectBrainView, setProjectBrainText,
 } from "../services/brain/brain.js";
@@ -128,8 +130,14 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete<{ Params: { id: string } }>("/api/mcps/:id", { preHandler: requireOwner }, async (req, reply) => {
     try {
+      // Leaves the board together with the record that the runner still owes its removal by name
+      // (re-applying the rest never touches a server that is no longer registered).
       const mcp = await registry.removeMcp(req.params.id);
-      // Auto-applied on save (best-effort): drops the MCP from the runner right away + staggered restart.
+      // Its values leave the vault NOW, runner or no runner: nothing can use them any more.
+      await deleteMcpSecrets(mcp);
+      // Auto-applied on save (best-effort): the apply pays the removal first (dropDeletedMcps), then
+      // the staggered restart. A runner that is down keeps the debt on the board, and the next apply
+      // — "apply now" included — pays it.
       return await reply.send({ mcp, ...(await autoApply("mcp", applyMcpsEverywhere)) });
     } catch (err) {
       const { code, body } = fail(err);

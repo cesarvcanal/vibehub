@@ -196,16 +196,47 @@ describe("path derivation (pure)", () => {
 // ---------------------------------------------------------------------------
 
 describe("openCard", () => {
+  /**
+   * A card DELETED while its open script runs: the purge did not wait for the provisioning lock, so
+   * whatever the script went on to create (worktree, tmux with claude) belongs to nobody. Whoever
+   * provisioned tears it down — also when the script then FAILED or timed out, which it may well do
+   * after creating half of it.
+   */
+  for (const outcome of ["succeeds", "fails"] as const) {
+    it(`a card deleted while its open script runs is torn down when the script ${outcome}`, async () => {
+      const { card } = await seed();
+      runScript.mockImplementationOnce(async () => {
+        await reg.removeCard(card.id);
+        if (outcome === "fails") throw new Error("host command timed out");
+        return { stdout: "", stderr: "" };
+      });
+      await expect(ws.openCard(card.id)).rejects.toThrow(/deleted while its workspace was being provisioned/);
+      const purge = runScript.mock.calls.map((c) => String(c[0])).slice(1).join("\n");
+      expect(purge).toContain(`rm -rf '/work/acme--erp-aux-worktrees/${card.worktreeSlug}'`);
+    });
+  }
+
+  it("a script that fails on a card that still exists is a runner error — nothing is purged", async () => {
+    const { card } = await seed();
+    runScript.mockRejectedValueOnce(new Error("host command timed out"));
+    await expect(ws.openCard(card.id)).rejects.toThrow(/host command timed out/);
+    expect(runScript).toHaveBeenCalledTimes(1);
+  });
+
   it("clone/fetch/worktree/tmux in the runner — the credential rides IN THE SCRIPT (stdin)", async () => {
     const { card } = await seed();
     const updated = await ws.openCard(card.id, "local:tester");
 
     expect(runScript).toHaveBeenCalledTimes(1);
     const [script, opts] = runScript.mock.calls[0]!;
-    expect((opts as { timeoutMs: number }).timeoutMs).toBeGreaterThan(60_000);
+    const { timeoutMs } = opts as { timeoutMs: number };
+    expect(timeoutMs).toBeGreaterThan(60_000);
 
-    // runs INSIDE the runner container
-    expect(script).toContain(`docker exec -i '${CONTAINER}' bash -s`);
+    // runs INSIDE the runner container, under a deadline of its OWN derived from the Node one: the
+    // Node timeout only kills the local docker exec, and a clone left running in the container
+    // would race the next open the moment the provisioning lock is released.
+    expect(script).toContain(host.containerScriptCommand(CONTAINER, timeoutMs));
+    expect(script).toContain("timeout -s KILL");
     // the ephemeral credential lives in the script body, which travels over stdin
     expect(script).toContain(`GIT_AUTH='${AUTH_HEADER}'`);
     expect(script).toContain("git clone");
@@ -934,14 +965,129 @@ describe("restart (single and all) — a working card is protected", () => {
     expect(scriptAt(0)).not.toContain(busy.tmuxSession);
   });
 
-  it("restartAllCards: a host failure on one card does not take the others down (best-effort)", async () => {
+  it("restartAllCards: a host that is down RESOLVES (best-effort) and says nothing was restarted", async () => {
     const p = await reg.createProject({ name: "y" });
     const c1 = await reg.createCard({ projectId: p.id, title: "c1" });
     const c2 = await reg.createCard({ projectId: p.id, title: "c2" });
     await ws.openCard(c1.id);
     await ws.openCard(c2.id);
     runScript.mockRejectedValue(new Error("host is down"));
-    expect(await ws.restartAllCards()).toEqual({ restarted: 2, skipped: 0 });
+    expect(await ws.restartAllCards()).toEqual({ restarted: 0, skipped: 0 });
+  });
+
+  /**
+   * One exec for every card means one exec can fail HALFWAY — a timeout after the script already
+   * ended some sessions. Counting all-or-nothing reported "0 restarted" for Claudes that were in
+   * fact taken down, with no trace of which: the count (and the per-card audit) follow what the
+   * runner said it ended.
+   */
+  it("restartAllCards / restartStaggered: a run cut short counts — and audits — the sessions it DID end", async () => {
+    const p = await reg.createProject({ name: "half" });
+    const cards = [];
+    for (const title of ["a", "b", "c"]) {
+      const c = await reg.createCard({ projectId: p.id, title });
+      await ws.openCard(c.id);
+      cards.push(c);
+    }
+    const [first, second] = cards as [typeof cards[number], typeof cards[number]];
+    const halfway = async (script: string, opts?: import("../../runtime/host.js").ExecOpts) => {
+      // What the real script prints right after each kill-session, split across chunks on purpose.
+      const lines = [first, second].map((c) => `vibehub-session-ended ${c.tmuxSession}\n`).join("");
+      opts?.onChunk?.(lines.slice(0, 10));
+      opts?.onChunk?.(lines.slice(10));
+      expect(script).toContain("vibehub-session-ended");
+      throw new host.HostExecError("host command timed out", { timedOut: true });
+    };
+    const { logger } = await import("../../utils/logger.js");
+    const infoSpy = vi.spyOn(logger, "info");
+    runScript.mockImplementation(halfway);
+    expect(await ws.restartAllCards("tester")).toEqual({ restarted: 2, skipped: 0 });
+    const restartedSlugs = infoSpy.mock.calls
+      .map(([fields]) => fields as unknown as { action?: string; card?: string })
+      .filter((f) => f.action === "card.restart")
+      .map((f) => f.card);
+    expect(restartedSlugs).toEqual([first.worktreeSlug, second.worktreeSlug]);
+
+    expect(await ws.restartStaggered("mcp")).toEqual({ restarted: 2, pending: 0 });
+  });
+
+  it("restartAllCards / restartStaggered: ONE docker exec for every card, not one per card", async () => {
+    const p = await reg.createProject({ name: "z" });
+    const cards = [];
+    for (const title of ["a", "b", "c"]) {
+      const c = await reg.createCard({ projectId: p.id, title });
+      await ws.openCard(c.id);
+      cards.push(c);
+    }
+    runScript.mockClear();
+    expect(await ws.restartAllCards()).toEqual({ restarted: 3, skipped: 0 });
+    expect(runScript).toHaveBeenCalledTimes(1);
+    for (const c of cards) expect(scriptAt(0)).toContain(`tmux kill-session -t '${c.tmuxSession}'`);
+
+    runScript.mockClear();
+    expect(await ws.restartStaggered("mcp")).toEqual({ restarted: 3, pending: 0 });
+    expect(runScript).toHaveBeenCalledTimes(1);
+  });
+
+  it("sweepIdleCards: hibernates one card at a time — never a burst of docker execs at the runner", async () => {
+    const p = await reg.createProject({ name: "w" });
+    for (const title of ["a", "b", "c"]) {
+      const c = await reg.createCard({ projectId: p.id, title });
+      await ws.openCard(c.id);
+      await reg.applyCardStatus(c.id, "waiting");
+    }
+    const settings = await import("../settings/settings.js");
+    await settings.updateSettings({ idleHibernateMinutes: 180 });
+    let inFlight = 0;
+    let peak = 0;
+    runScript.mockImplementation(async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return { stdout: "", stderr: "" };
+    });
+    expect(await ws.sweepIdleCards(Date.now() + 4 * 60 * 60_000)).toBe(3);
+    expect(peak).toBe(1);
+  });
+
+  it("sweepIdleCards: a tick that lands while the previous pass is still running does NOT start a second one", async () => {
+    const p = await reg.createProject({ name: "w2" });
+    for (const title of ["a", "b"]) {
+      const c = await reg.createCard({ projectId: p.id, title });
+      await ws.openCard(c.id);
+      await reg.applyCardStatus(c.id, "waiting");
+    }
+    const settings = await import("../settings/settings.js");
+    await settings.updateSettings({ idleHibernateMinutes: 180 });
+    // The runner is slow: the first pass parks on its first hibernate until the test lets it go.
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let entered = (): void => {};
+    const firstExec = new Promise<void>((resolve) => { entered = resolve; });
+    let inFlight = 0;
+    let peak = 0;
+    runScript.mockImplementation(async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      entered();
+      await gate;
+      inFlight -= 1;
+      return { stdout: "", stderr: "" };
+    });
+    const later = Date.now() + 4 * 60 * 60_000;
+    const first = ws.sweepIdleCards(later);
+    await firstExec;
+    // The interval's next tick, while the first pass is still on the runner.
+    expect(await ws.sweepIdleCards(later)).toBe(0);
+    release();
+    expect(await first).toBe(2);
+    expect(peak).toBe(1);
+    // The lock is released with the pass: the next tick sweeps again (and finds nothing left).
+    const card = await reg.createCard({ projectId: p.id, title: "c" });
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "waiting");
+    expect(await ws.sweepIdleCards(later)).toBe(1);
   });
 
   it("restartStaggered: idle cards restart NOW, working cards are FLAGGED instead of interrupted", async () => {
@@ -1045,15 +1191,17 @@ describe("restart (single and all) — a working card is protected", () => {
     expect((await reg.getCard(doomedBusy.id))?.restartPendingAt ?? null).toBeNull();
   });
 
-  it("killCardSession: uses the session FROM THE BOARD and swallows a dead host", async () => {
+  it("killCardSession: uses the session FROM THE BOARD and swallows a dead host (saying so)", async () => {
     const { card } = await seed();
-    await ws.killCardSession(card);
+    await expect(ws.killCardSession(card)).resolves.toBe(true);
     expect(scriptAt(0)).toContain(`tmux kill-session -t '${card.tmuxSession}'`);
     expect(scriptAt(0)).toContain(`docker exec -i '${CONTAINER}'`);
     expect(scriptAt(0)).not.toContain(`${card.tmuxSession}-sh`);
 
     runScript.mockRejectedValue(new Error("host is down"));
-    await expect(ws.killCardSession(card)).resolves.toBeUndefined();
+    await expect(ws.killCardSession(card)).resolves.toBe(false);
+    // The strict one — what the card delete uses — does not swallow it.
+    await expect(ws.killCardSessionOrThrow(card)).rejects.toThrow(/host is down/);
   });
 
   it("purgeCardWorkspace: kills both sessions, removes the git worktree, its directory AND the card's branch", async () => {

@@ -112,6 +112,11 @@ export function buildRunScript(opts: { container: string; image: string; baseDir
     ...(network ? [`  docker network connect ${shQuote(network)} ${shQuote(container)} >/dev/null 2>&1 || true`] : []),
     "else",
     `  docker run -d --name ${shQuote(container)} \\`,
+    // A real init as PID 1. The command below is `sleep infinity`, which never calls wait(): every
+    // orphan that dies under it (a killed `claude` tree, a reaped watcher) stays a zombie until the
+    // container restarts — ~176 of them in the incident (docs/runner-processes.md). Only a NEW
+    // container gets it: an existing one is started as it is, never recreated here.
+    "    --init \\",
     "    --restart unless-stopped \\",
     // The compose network, so `http://vibehub:3010` resolves from inside the runner. Without this
     // the runner lands on the default bridge, the status hooks post into the void, and a fresh

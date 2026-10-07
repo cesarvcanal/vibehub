@@ -16,10 +16,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const runScript = vi.fn();
 const ptyCommand = vi.fn();
+const pipeCommand = vi.fn();
 
 vi.mock("../../runtime/host.js", async (orig) => ({
   ...(await orig<typeof import("../../runtime/host.js")>()),
-  hostExecutor: () => ({ kind: "local", label: "this machine", runScript, ptyCommand, writeFile: vi.fn() }),
+  hostExecutor: () => ({ kind: "local", label: "this machine", runScript, ptyCommand, pipeCommand, writeFile: vi.fn() }),
 }));
 vi.mock("../board/registry.js", () => ({ getCard: vi.fn(), getProject: vi.fn() }));
 
@@ -45,6 +46,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   runScript.mockResolvedValue({ stdout: "vibehub-browser-up\n", stderr: "" });
   ptyCommand.mockImplementation((line: string) => ({ file: "bash", args: ["-lc", line] }));
+  pipeCommand.mockImplementation((line: string) => ({ file: "bash", args: ["-lc", line] }));
 });
 
 describe("buildBrowserStartScript", () => {
@@ -246,12 +248,18 @@ describe("the vnc bridge", () => {
     );
   });
 
-  it("vncBridgeCommand: argv comes from the host executor, remote command LAST", async () => {
+  /**
+   * RFB is BINARY and the route relays it over plain pipes: a tty in the middle (`ssh -tt`, which is
+   * what the PTY command adds across a hop) echoes it back, turns \n into \r\n and reads 0x03 as
+   * Ctrl-C. The bridge is a pipe command, like the preview tunnel.
+   */
+  it("vncBridgeCommand: a PIPE command from the host executor (never a tty), remote command LAST", async () => {
     const { mod } = await load();
     const cmd = mod.vncBridgeCommand("vibehub-runner", 6404);
     expect(cmd.file).toBe("bash");
     expect(cmd.args[cmd.args.length - 1]).toBe("docker exec -i 'vibehub-runner' socat STDIO TCP:127.0.0.1:6404");
-    expect(ptyCommand).toHaveBeenCalledOnce();
+    expect(pipeCommand).toHaveBeenCalledOnce();
+    expect(ptyCommand).not.toHaveBeenCalled();
   });
 });
 
