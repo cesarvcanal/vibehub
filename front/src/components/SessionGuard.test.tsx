@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, screen } from "@testing-library/react";
-import { Route, Routes } from "react-router-dom";
+import * as React from "react";
+import { Route, Routes, useLocation } from "react-router-dom";
 import { SessionGuard } from "@/components/SessionGuard";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { PublicRoute } from "@/components/PublicRoute";
@@ -25,6 +26,13 @@ const mockSetUnauthorizedHandler = vi.mocked(setUnauthorizedHandler);
  * login. Dropping the cache with `queryClient.clear()` rebuilt the session query EMPTY and never
  * fetched it, so the guards sat on "Checking session" until a reload (production, 2026-10-07).
  */
+/** Every path the router went through — a bounce shows up here whatever the render timing. */
+function PathLog({ into }: { into: string[] }) {
+  const { pathname } = useLocation();
+  React.useEffect(() => { if (into[into.length - 1] !== pathname) into.push(pathname); }, [pathname, into]);
+  return null;
+}
+
 describe("SessionGuard — a 401 under an open board", () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -39,8 +47,10 @@ describe("SessionGuard — a 401 under an open board", () => {
       }
       return Promise.resolve({});
     });
+    const paths: string[] = [];
     renderApp(
       <>
+        <PathLog into={paths} />
         <SessionGuard />
         <Routes>
           <Route path={Paths.LOGIN} element={<PublicRoute><p>login form</p></PublicRoute>} />
@@ -58,5 +68,10 @@ describe("SessionGuard — a 401 under an open board", () => {
 
     expect(await screen.findByText("login form")).toBeInTheDocument();
     expect(screen.queryByText("Checking session")).not.toBeInTheDocument();
+    // ONE trip to the login. Navigating before React had seen the dropped session made PublicRoute
+    // (still reading the old user) send the board back, and the guards bounced: "/" → "/login" →
+    // "/" → "/login" — a flicker for a person, a detached login node for a test under load.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(paths).toEqual([Paths.BOARD, Paths.LOGIN]);
   });
 });

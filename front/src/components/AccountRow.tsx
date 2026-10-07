@@ -1,9 +1,9 @@
 import * as React from "react";
-import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
+import { apiErrorMessage } from "@/lib/apiError";
 import { Check, LogOut, Monitor, Moon, Settings2, Sun, UserRound, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/providers/auth";
-import { Paths } from "@/lib/paths";
 import { applyTheme, readTheme, type ThemeChoice } from "@/lib/theme";
 import { SettingsDialog } from "@/features/settings/SettingsDialog";
 import { AccessDialog, OwnPasswordForm } from "@/features/settings/AccessDialog";
@@ -36,11 +36,19 @@ export function AccountRow({ className }: { className?: string }) {
   const [theme, setTheme] = React.useState<ThemeChoice>(() => readTheme());
   const t = useT();
   const { user, signOut, isOwner } = useAuth();
-  const navigate = useNavigate();
 
+  /**
+   * No `navigate` here: once the session is dropped, ProtectedRoute (around this menu) sends the
+   * person to the login itself. Navigating from here ran BEFORE React had seen the dropped session
+   * — PublicRoute, still reading the old user, sent the board back and the guards bounced.
+   */
   async function onSignOut() {
-    await signOut();
-    navigate(Paths.LOGIN, { replace: true });
+    try {
+      await signOut();
+    } catch (err) {
+      // The server did not end the session: stay, and say so — never a login screen over a live cookie.
+      toast.error(apiErrorMessage(err, t("account.signOutFailed")));
+    }
   }
 
   function chooseTheme(next: ThemeChoice) {

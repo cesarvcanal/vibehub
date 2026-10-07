@@ -63,6 +63,7 @@ export const en: Record<string, string> = {
   "account.signedIn": "Signed in",
   "account.settings": "Settings",
   "account.signOut": "Sign out",
+  "account.signOutFailed": "Could not sign out — you are still signed in. Try again.",
   "account.preferences": "Preferences",
   "account.editUser": "Edit user",
   "account.editUserHint": "Your account ({name}): set a new password.",
