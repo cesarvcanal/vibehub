@@ -54,7 +54,7 @@ an install with no owner is an install nobody can administer.
 
 | Method | Path | Body / notes |
 |---|---|---|
-| GET | `/api/features` | **any session** — `{ sdkChat }`: the install-wide flags every user needs to render the right UI (`sdkChat` mirrors the `sdkDriver` setting: on = the native chat IS every card's Chat tab). The settings themselves stay owner-only |
+| GET | `/api/features` | **any session** — `{ sdkChat, doneRetentionDays }`: the install-wide flags every user needs to render the right UI (`sdkChat` mirrors the `sdkDriver` setting: on = the native chat IS every card's Chat tab; `doneRetentionDays` is how long a card sits untouched in `done` before the hourly retention sweep purges it — the countdown on a done card reads it). The settings themselves stay owner-only |
 | GET | `/api/settings` | `{ git: { name, email }, autonomous, defaultAccountLabel, setupCompletedAt, transcribeLanguage, idleHibernateMinutes, sdkDriver, runner: { kind, container, host, image, baseDir }, publicUrl }` |
 | PATCH | `/api/settings` | `{ git?, autonomous?, defaultAccountLabel?, transcribeLanguage?, idleHibernateMinutes?, sdkDriver? }` — `idleHibernateMinutes` is a whole number of minutes, 0..10080 (0 = never hibernate) |
 | POST | `/api/settings/setup-complete` | stamps the install as set up so the wizard stops taking over |
