@@ -137,6 +137,12 @@ export interface DriverSession {
   ownQuestions: Set<string>;
   /** Órfãs que este manager já encerrou — duas abas clicando a mesma viram UMA mensagem. */
   settledOrphans: Set<string>;
+  /**
+   * A varredura de órfãs por mensagem já rodou. Órfã é pergunta de um driver ANTERIOR: depois que
+   * este driver subiu nenhuma nova pode nascer, então uma varredura basta — sem ler o histórico
+   * inteiro a cada mensagem da vida da sessão.
+   */
+  orphansSwept: boolean;
 }
 
 /**
@@ -458,6 +464,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     acceptedCids: new Map(),
     ownQuestions: new Set(),
     settledOrphans: new Set(),
+    orphansSwept: false,
     ...(opts.transcriptDir ? { transcriptDir: opts.transcriptDir } : {}),
   };
   sessions.set(opts.cardId, session);
@@ -712,7 +719,16 @@ function settleQuestionCard(session: DriverSession, result: Extract<DriverEvent,
  * no histórico e a bandeja voltava a pedir uma resposta que a pessoa acabara de dar.
  */
 async function settleOrphanQuestions(session: DriverSession): Promise<void> {
-  const orphans = await orphanQuestions(session);
+  if (session.orphansSwept) return;
+  session.orphansSwept = true;
+  let orphans: Map<string, UserQuestionItem[]>;
+  try {
+    orphans = await orphanQuestions(session);
+  } catch (err) {
+    session.orphansSwept = false; // a próxima mensagem tenta de novo
+    logger.warn({ card: session.label, detail: (err as Error).message }, "could not sweep orphaned question cards");
+    return;
+  }
   for (const id of orphans.keys()) {
     if (session.settledOrphans.has(id)) continue;
     session.settledOrphans.add(id);
@@ -731,15 +747,32 @@ async function answerOrphanQuestion(session: DriverSession, control: QuestionAns
   // leitura do disco e precisa encontrar a vaga já tomada.
   if (session.settledOrphans.has(control.id)) return;
   session.settledOrphans.add(control.id);
-  const questions = (await orphanQuestions(session)).get(control.id) ?? null;
-  if (!canAcceptTurn(session)) {
-    // Sem driver não há a quem entregar: o cartão segue pendente e o próximo driver o recebe.
+  const release = (message: string): void => {
     session.settledOrphans.delete(control.id);
+    broadcast(session, { type: "error", message });
+  };
+  let orphans: Map<string, UserQuestionItem[]>;
+  try {
+    orphans = await orphanQuestions(session);
+  } catch (err) {
+    release(`could not read the question card: ${(err as Error).message}`);
+    return;
+  }
+  const questions = orphans.get(control.id);
+  if (!questions) {
+    // Não está pendente no disco: já encerrada (aba velha) ou nunca existiu. Nada vai ao modelo —
+    // o mesmo veredito que o driver dava antes.
+    release(`no pending question with id ${control.id}`);
+    return;
+  }
+  if (!canAcceptTurn(session)) {
+    // Sem driver não há a quem entregar: a tela é avisada e o cartão segue pendente para o próximo.
+    release("driver exited before the answer reached it — answer again once the chat reconnects");
     return;
   }
   const text = buildOrphanAnswerText(questions, control.answers);
   if (!writeToDriver(session, { type: "user", text })) {
-    session.settledOrphans.delete(control.id);
+    release("driver exited before the answer reached it — answer again once the chat reconnects");
     return;
   }
   session.activeTurns += 1;
@@ -747,7 +780,7 @@ async function answerOrphanQuestion(session: DriverSession, control: QuestionAns
   noteChatActivity(session);
   noteDriverEventFor(session.cardId, { type: "user", text });
   void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(text), attempts: 0 });
-  settleQuestionCard(session, { type: "question_result", id: control.id, answers: control.answers });
+  settleQuestionCard(session, { type: "question_result", id: control.id, answers: control.answers, sent: text });
   logger.info(
     { audit: true, action: "sdk.question.orphan", card: session.label },
     "an answer to a question whose driver died was delivered as a message",

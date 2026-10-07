@@ -525,6 +525,36 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
     expect(screen.getAllByTestId("sdk-question-other")[1]).toHaveValue("72h pulando domingo");
   });
 
+  /** Achado F3 da revisão do PR #98: a resposta saiu, o driver morreu antes de recebê-la. */
+  it("respondeu e o fio caiu antes da confirmação: o cartão volta pendente COM o que foi marcado", async () => {
+    renderSdkChat();
+    const first = await socket();
+    first.accept();
+    first.deliver({ type: "ready" });
+    const MULTI = {
+      type: "user_question" as const,
+      id: "q_4_1",
+      questions: [
+        { question: "Onde entra a busca?", options: [{ label: "No cabeçalho" }, { label: "No item" }] },
+        { question: "Como conto o prazo?", options: [{ label: "72h corridas" }] },
+      ],
+    };
+    first.deliver(MULTI);
+    await userEvent.click(screen.getByRole("button", { name: "No item" }));
+    await userEvent.type(screen.getAllByTestId("sdk-question-other")[1]!, "72h pulando domingo");
+    await userEvent.click(screen.getByTestId("sdk-question-send"));
+
+    act(() => { first.readyState = 3; first.onclose?.(); }); // nenhum question_result voltou
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: RECONNECT_MAX_MS });
+    const second = FakeSocket.instances[1] as FakeSocket;
+    second.accept();
+    second.deliver(MULTI);
+    second.deliver({ type: "ready" });
+
+    expect(screen.getByRole("button", { name: "No item" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getAllByTestId("sdk-question-other")[1]).toHaveValue("72h pulando domingo");
+  });
+
   it("a timed-out question replays settled as unanswered", async () => {
     renderSdkChat();
     const ws = await socket();

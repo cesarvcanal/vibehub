@@ -95,6 +95,12 @@ export interface QuestionResultEvent {
   timedOut?: boolean;
   /** A pessoa respondeu POR MENSAGEM em vez de clicar: o cartão foi substituído pelo que ela disse. */
   superseded?: boolean;
+  /**
+   * PERGUNTA ÓRFÃ: as palavras com que a resposta chegou ao modelo (`buildOrphanAnswerText`). Não há
+   * linha `user` no histórico para ela — o cartão assentado é o registro visível —, então é ESTA a
+   * chave que impede o transcript de republicá-la como fala do terminal num replay.
+   */
+  sent?: string;
 }
 
 /**

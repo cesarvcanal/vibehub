@@ -23,6 +23,7 @@ import {
 import { readInflightMarker } from "./inflight.js";
 import { createMirrorState, driverKeysFor, forgetDriverKeys, mirrorNewEvents } from "./mirror.js";
 import { notifyCardSessionKill } from "../board/workspace.js";
+import { mergeTranscriptReplay } from "./transcript.js";
 
 /**
  * THE BUG THIS FILE PINS (the reload-mid-turn bug): the SDK driver was a CHILD OF THE
@@ -516,6 +517,51 @@ describe("pergunta órfã — o cartão sobreviveu ao driver que o abriu", () =>
       expect(result).toMatchObject({ id: "q_3_1791402112898", superseded: true });
     });
     expect(sentTypes(socket)).toContain("question_result");
+  });
+
+  // ---- achados da revisão adversarial do PR #98 ----
+
+  it("F1: depois de um F5, a resposta da órfã NÃO volta do transcript como bolha 'do terminal'", async () => {
+    const { socket } = await orphanedCard();
+    socket.emit("message", Buffer.from(JSON.stringify({
+      type: "question_answer", id: "q_3_1791402112898", answers: [{ selected: ["No item"] }, { selected: [] }],
+    })));
+    let sent = "";
+    await vi.waitFor(() => {
+      const user = spawned[1]!.stdin.written.map((w) => JSON.parse(w) as { type: string; text?: string }).find((c) => c.type === "user");
+      expect(user?.text).toBeTruthy();
+      sent = user!.text!;
+    });
+    await vi.waitFor(async () => expect((await readHistory(CARD)).some((e) => e.type === "question_result")).toBe(true));
+    // o CLI grava a mensagem no transcript; o próximo connect funde transcript + histórico
+    const jsonl = JSON.stringify({ type: "user", uuid: "t-1", timestamp: new Date(Date.now() + 1000).toISOString(), message: { role: "user", content: sent } });
+    expect(mergeTranscriptReplay(jsonl, await readHistory(CARD)).filter((e) => e.type === "user")).toEqual([]);
+  });
+
+  it("F2: uma pergunta JÁ encerrada no disco (aba velha) não vira turno — volta o erro de antes", async () => {
+    ensure();
+    spawned[0]!.stdout.emit("data", line({ type: "user_question", id: "q_9_1", questions: QUESTIONS }));
+    spawned[0]!.stdout.emit("data", line({ type: "question_result", id: "q_9_1", answers: [{ selected: ["No item"] }] }));
+    await vi.waitFor(async () => expect((await readHistory(CARD)).some((e) => e.type === "question_result")).toBe(true));
+    spawned[0]!.exitCode = 1;
+    spawned[0]!.emit("close", 1);
+    const successor = ensure();
+    const socket = fakeSocket();
+    attachSocket(successor, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"question_answer","id":"q_9_1","answers":[{"selected":["No cabeçalho"]}]}`));
+    socket.emit("message", Buffer.from(`{"type":"question_answer","id":"bogus","answers":[{"selected":["rm -rf"]}]}`));
+    await vi.waitFor(() => expect(socket.sent.filter((s) => s.includes("no pending question")).length).toBe(2));
+    expect(spawned[1]!.stdin.written.some((w) => w.includes(`"type":"user"`))).toBe(false);
+    expect(successor.activeTurns).toBe(0);
+    expect((await readHistory(CARD)).filter((e) => e.type === "question_result")).toHaveLength(1);
+  });
+
+  it("F4: clicar a órfã com o driver já morto avisa a tela — a resposta não some calada", async () => {
+    const { successor, socket } = await orphanedCard();
+    spawned[1]!.exitCode = 1; // morreu, e o close ainda não chegou
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "question_answer", id: "q_3_1791402112898", answers: [{ selected: ["No item"] }] })));
+    await vi.waitFor(() => expect(sentTypes(socket)).toContain("error"));
+    expect(successor.settledOrphans.has("q_3_1791402112898")).toBe(false); // o próximo driver ainda a recebe
   });
 
   it("a pergunta que o driver VIVO acabou de encerrar não vira órfã na corrida com o disco", async () => {

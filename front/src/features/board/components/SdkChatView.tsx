@@ -2115,13 +2115,12 @@ function SdkQuestionCard({
   const t = useT();
   const [picked, setPicked] = React.useState<string[][]>(() => questionDrafts.get(row.id)?.picked ?? row.questions.map(() => []));
   const [other, setOther] = React.useState<string[]>(() => questionDrafts.get(row.id)?.other ?? row.questions.map(() => ""));
-  const pending = row.outcome === "pending";
+  // Guardado também DEPOIS do clique: o "respondida" da tela é otimista, e se o fio cair junto com o
+  // driver antes da confirmação o replay redesenha o cartão pendente — com o que já estava marcado.
+  // Cada entrada é um punhado de rótulos por pergunta da sessão: não há o que limpar.
   React.useEffect(() => {
-    // Um cartão encerrado (respondido aqui, em outra aba, por mensagem, por timeout) não tem mais
-    // rascunho a guardar.
-    if (pending) questionDrafts.set(row.id, { picked, other });
-    else questionDrafts.delete(row.id);
-  }, [row.id, pending, picked, other]);
+    questionDrafts.set(row.id, { picked, other });
+  }, [row.id, picked, other]);
 
   const single = row.questions.length === 1 && row.questions[0]?.multiSelect !== true;
 
