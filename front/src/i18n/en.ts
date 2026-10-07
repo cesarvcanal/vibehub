@@ -54,6 +54,9 @@ export const en: Record<string, string> = {
   "auth.signingIn": "Signing in…",
   "auth.signIn": "Sign in",
   "auth.invalidCredentials": "Invalid username or password",
+  "auth.tooManyAttempts.one": "Too many sign-in attempts. Try again in {n} minute.",
+  "auth.tooManyAttempts.other": "Too many sign-in attempts. Try again in {n} minutes.",
+  "auth.tooManyAttemptsLater": "Too many sign-in attempts. Wait a few minutes and try again.",
   "auth.forgot":
     "Forgot the password? There is no reset by email — recover it from the server, where the data directory lives.",
 
@@ -127,16 +130,11 @@ export const en: Record<string, string> = {
   "share.revoked": "Access removed",
   "card.share": "Share…",
   "project.share": "Share…",
-  "share.readOnly": "read-only",
-  "share.readOnlyHint": "This card was shared with you read-only: you can read it, but nothing you type reaches the agent.",
 
   /* ------------------------------------------------------------------ theme */
   "theme.system": "System",
   "theme.dark": "Dark",
   "theme.light": "Light",
-  "theme.labelSystem": "Theme: follow system",
-  "theme.labelDark": "Theme: dark",
-  "theme.labelLight": "Theme: light",
   "theme.menuLabel": "Theme",
 
   /* ------------------------------------------------------------------ setup */
@@ -418,9 +416,7 @@ export const en: Record<string, string> = {
   "cardView.preparing": "Preparing the worktree and session…",
   "cardView.firstCardNote":
     "The first card in a project clones the whole repository into the runner, which can take a few minutes. Every card after that opens in seconds.",
-  "cardView.viewMode": "View mode",
   "cardView.viewTerminal": "Terminal",
-  "cardView.viewChat": "Chat",
   "chat.aria": "Card conversation",
   "chat.ariaFor": "Conversation for {title}",
   "chat.loading": "Loading the conversation…",
@@ -497,8 +493,6 @@ export const en: Record<string, string> = {
   "sdk.edit": "Edit message",
   "sdk.edited": "edited",
   "sdk.preparing": "Preparing\u2026",
-  "sdk.thinking": "Thinking\u2026",
-  "sdk.answering": "Answering…",
   /* The working indicator's verbs and notes (lib/workingStage.ts): the verb rotates, the note
      escalates — that is what tells a four-minute turn apart from a frozen screen. */
   "sdk.verb.thinking": "Thinking…",
@@ -542,10 +536,6 @@ export const en: Record<string, string> = {
   "sdk.flagOff": "The SDK driver is off for this install. Turn on \"SDK driver\" in Settings to use native chat.",
   "sdk.noteInterrupted": "You stopped this turn — the answer above is cut short.",
   "sdk.noteInterruptedEdit": "Turn stopped so you could edit the message — the answer above is cut short.",
-  "sdk.interruptedForEdit":
-    "The turn was stopped when you started editing. It does not pick itself back up — send the edited message, or ask it to continue.",
-  "sdk.resumeTurn": "Continue where it stopped",
-  "sdk.interruptedDismiss": "Dismiss — leave the turn stopped",
   "sdk.turnFailed":
     "The turn ended with an error and the driver gave no reason. The answer above may be incomplete — send the message again; if it repeats, check the card's Terminal tab.",
   "sdk.turnFailedWhy":
@@ -592,7 +582,6 @@ export const en: Record<string, string> = {
   "composer.recordHint": "Record a message — it is transcribed into the field, not sent",
   "composer.voiceUnavailable": "Voice input is not configured — add an OpenAI key in Settings",
   "composer.pastedImage": "pasted image",
-  "composer.uploadFailed": "failed",
   "composer.retryUpload": "Upload {name} again",
   "composer.tryAgain": "Try again",
   "composer.removeImage": "Remove {name} from the message",

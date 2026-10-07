@@ -148,8 +148,16 @@ export function CardTile({
       data-selected={selected ? "true" : undefined}
       data-deleting={deleting ? "true" : undefined}
       aria-busy={deleting || undefined}
-      draggable={draggable}
+      // `pointer-events-none` (below) only stops the mouse: out of the Tab order and announced as
+      // disabled too, or Enter would still open a card the server is already purging.
+      aria-disabled={deleting || undefined}
+      tabIndex={deleting ? -1 : undefined}
+      draggable={draggable && !deleting}
       onClick={(e) => {
+        if (deleting) {
+          e.preventDefault();
+          return;
+        }
         // Shift-click is the selection's, where the board offers one — it BEATS the browser's
         // shift-click-opens-a-window habit, which nobody uses on purpose on a kanban card.
         if (e.shiftKey && onToggleSelect) {
@@ -163,13 +171,13 @@ export function CardTile({
       }}
       onKeyDown={(e) => {
         // Enter/Space coming from INSIDE (the `⋯` menu) is not "open the card".
-        if (e.target !== e.currentTarget) return;
+        if (e.target !== e.currentTarget || deleting) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onOpen(card);
         }
       }}
-      onContextMenu={contextItems.length > 0 ? openAt : undefined}
+      onContextMenu={contextItems.length > 0 && !deleting ? openAt : undefined}
       onDragStart={
         draggable
           ? (e) => {
@@ -265,7 +273,7 @@ export function CardTile({
       {/* Stays visible while the menu is OPEN (`aria-expanded`), or moving the mouse to it would
           dismiss the thing being used. The wrapper cuts click/keyboard/drag off from the link, so
           choosing an item never also opens the card. */}
-      {menuItems.length > 0 ? (
+      {menuItems.length > 0 && !deleting ? (
         <span
           draggable={false}
           onClick={(e) => {

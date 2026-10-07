@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useQuery } from "@tanstack/react-query";
 import { renderApp } from "@/test/render";
+import { TRANSCRIBE_KEY, boardApi } from "@/features/board/api";
 import { SettingsDialog } from "./SettingsDialog";
 
 const get = vi.fn();
@@ -78,6 +80,43 @@ describe("SettingsDialog", () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith("/transcribe/keys", { openaiKey: "sk-openai-123" }));
   });
 
+  // The dialog and the composer asked the same endpoint under two different keys, so saving the
+  // OpenAI key refreshed only the dialog: the composer's microphone stayed off for its whole
+  // staleTime. One key, one cache entry, and the save reaches both.
+  it("a saved OpenAI key turns the composer's microphone on, not just the dialog's line", async () => {
+    let keyStored = false;
+    get.mockImplementation(async (url: string) => {
+      if (url === "/settings") return SETTINGS;
+      if (url === "/github") return { connections: [] };
+      if (url === "/transcribe") return { available: keyStored, proofread: false, language: "pt" };
+      if (url === "/credentials") return { credentials: [] };
+      throw new Error(`unexpected ${url}`);
+    });
+    post.mockImplementation(async () => {
+      keyStored = true;
+      return { available: true, proofread: false, language: null };
+    });
+    /** What the composer reads to decide whether the microphone works — same key, same staleTime. */
+    function Microphone() {
+      const { data } = useQuery({
+        queryKey: TRANSCRIBE_KEY,
+        queryFn: boardApi.transcribeStatus,
+        staleTime: 60_000,
+      });
+      return <p>{data?.available ? "mic on" : "mic off"}</p>;
+    }
+    renderApp(
+      <>
+        <Microphone />
+        <SettingsDialog open onOpenChange={() => {}} />
+      </>,
+    );
+    expect(await screen.findByText("mic off")).toBeInTheDocument();
+
+    await userEvent.type(await screen.findByLabelText("OpenAI API key"), "sk-openai-123");
+    await userEvent.click(screen.getByRole("button", { name: "Save keys" }));
+    expect(await screen.findByText("mic on")).toBeInTheDocument();
+  });
 });
 
 describe("SettingsDialog — GitHub accounts", () => {

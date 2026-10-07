@@ -54,6 +54,9 @@ export const ptBR: Record<string, string> = {
   "auth.signingIn": "Entrando…",
   "auth.signIn": "Entrar",
   "auth.invalidCredentials": "Usuário ou senha inválidos",
+  "auth.tooManyAttempts.one": "Muitas tentativas de entrar. Tente de novo em {n} minuto.",
+  "auth.tooManyAttempts.other": "Muitas tentativas de entrar. Tente de novo em {n} minutos.",
+  "auth.tooManyAttemptsLater": "Muitas tentativas de entrar. Espere alguns minutos e tente de novo.",
   "auth.forgot":
     "Esqueceu a senha? Não tem recuperação por e-mail — recupere pelo servidor, onde fica o diretório de dados.",
 
@@ -127,16 +130,11 @@ export const ptBR: Record<string, string> = {
   "share.revoked": "Acesso removido",
   "card.share": "Compartilhar…",
   "project.share": "Compartilhar…",
-  "share.readOnly": "somente leitura",
-  "share.readOnlyHint": "Este card foi compartilhado com você somente para leitura: dá pra acompanhar, mas nada que você digitar chega no agente.",
 
   /* ------------------------------------------------------------------- tema */
   "theme.system": "Sistema",
   "theme.dark": "Escuro",
   "theme.light": "Claro",
-  "theme.labelSystem": "Tema: seguir o sistema",
-  "theme.labelDark": "Tema: escuro",
-  "theme.labelLight": "Tema: claro",
   "theme.menuLabel": "Tema",
 
   /* ---------------------------------------------------------- configuração */
@@ -419,9 +417,7 @@ export const ptBR: Record<string, string> = {
   "cardView.preparing": "Preparando o worktree e a sessão…",
   "cardView.firstCardNote":
     "O primeiro card de um projeto clona o repositório inteiro dentro do runner, e isso pode levar alguns minutos. Todo card depois desse abre em segundos.",
-  "cardView.viewMode": "Modo de exibição",
   "cardView.viewTerminal": "Terminal",
-  "cardView.viewChat": "Chat",
   "chat.aria": "Conversa do card",
   "chat.ariaFor": "Conversa de {title}",
   "chat.loading": "Carregando a conversa…",
@@ -498,8 +494,6 @@ export const ptBR: Record<string, string> = {
   "sdk.edit": "Editar mensagem",
   "sdk.edited": "editada",
   "sdk.preparing": "Preparando\u2026",
-  "sdk.thinking": "Pensando\u2026",
-  "sdk.answering": "Respondendo…",
   /* Verbos e notas do indicador de trabalho (lib/workingStage.ts): o verbo troca com o tempo e a
      nota escala — é o que diz, num turno de 4 minutos, que a coisa continua viva. */
   "sdk.verb.thinking": "Pensando…",
@@ -543,10 +537,6 @@ export const ptBR: Record<string, string> = {
   "sdk.flagOff": "O driver SDK está desligado nesta instalação. Ligue \"Driver SDK\" nas Configurações para usar o chat nativo.",
   "sdk.noteInterrupted": "Turno interrompido por você — a resposta acima ficou pela metade.",
   "sdk.noteInterruptedEdit": "Turno interrompido para você editar a mensagem — a resposta acima ficou pela metade.",
-  "sdk.interruptedForEdit":
-    "O turno foi interrompido quando você entrou na edição. Ele não volta sozinho de onde parou — mande a mensagem editada, ou peça para continuar.",
-  "sdk.resumeTurn": "Continuar de onde parou",
-  "sdk.interruptedDismiss": "Dispensar — deixar o turno interrompido",
   "sdk.turnFailed":
     "O turno terminou com erro e o driver não disse qual. A resposta acima pode estar incompleta — reenvie a mensagem; se repetir, veja a aba Terminal do card.",
   "sdk.turnFailedWhy":
@@ -594,7 +584,6 @@ export const ptBR: Record<string, string> = {
   "composer.voiceUnavailable":
     "Entrada por voz não configurada — adicione uma chave da OpenAI em Configurações",
   "composer.pastedImage": "imagem colada",
-  "composer.uploadFailed": "falhou",
   "composer.retryUpload": "Enviar {name} de novo",
   "composer.tryAgain": "Tentar de novo",
   "composer.removeImage": "Tirar {name} da mensagem",

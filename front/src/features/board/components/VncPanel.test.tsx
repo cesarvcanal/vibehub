@@ -1,8 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { VncPanel } from "@/features/board/components/VncPanel";
 import { renderApp } from "@/test/render";
+import { post } from "@/lib/api";
 
 /**
  * The Navegador pane, where the whole question is WHOSE HANDS ARE ON THE BROWSER:
@@ -139,5 +141,41 @@ describe("VncPanel — display mode", () => {
     expect(rfb.scaleViewport).toBe(false);
     expect(rfb.clipViewport).toBe(true);
     expect(screen.getByTestId("vnc-display-toggle")).toHaveTextContent(/real size/i);
+  });
+});
+
+describe("VncPanel — one client per pane", () => {
+  // StrictMode (on in main.tsx) mounts, unmounts and mounts again while the first connect is still
+  // awaiting the runner. Both attempts used to reach `new RFB(...)` on the same screen: two
+  // sockets, and the first one leaked open with nobody holding it.
+  it("a connect overtaken by a remount never builds its own RFB client", async () => {
+    // The runner answers each start when the test says so, one attempt at a time.
+    const starts: (() => void)[] = [];
+    const routes = vi.mocked(post).getMockImplementation();
+    onTestFinished(() => {
+      if (routes) vi.mocked(post).mockImplementation(routes);
+    });
+    vi.mocked(post).mockImplementation((url: string, body?: unknown) =>
+      url === "/cards/c1/browser"
+        ? new Promise((resolve) => starts.push(() => resolve({})))
+        : (routes?.(url, body) ?? Promise.resolve({})),
+    );
+    renderApp(
+      <StrictMode>
+        <VncPanel cardId="c1" onClose={() => undefined} />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(starts).toHaveLength(2)); // mounted, unmounted, mounted again
+
+    // The overtaken attempt lands first and gets every chance to build a client...
+    await act(async () => {
+      starts[0]!();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(instances).toHaveLength(0);
+
+    // ...and only the current one does.
+    await act(async () => starts[1]!());
+    await waitFor(() => expect(instances).toHaveLength(1));
   });
 });

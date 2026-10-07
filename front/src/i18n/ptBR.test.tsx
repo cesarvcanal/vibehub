@@ -110,6 +110,8 @@ describe("pt-BR — the card bar", () => {
   it("translates the actions, the panes and the pills", async () => {
     setLanguage("pt-BR");
     get.mockImplementation(async (url: string) => {
+      // The OWNER: the account pill is theirs only (a member gets the model pill alone).
+      if (url === "/auth/me") return { user: { id: "1", username: "dona", role: "owner" } };
       if (url === "/accounts") return { accounts: [], defaultLabel: "" };
       if (url.endsWith("/session")) return { model: null, modelLabel: null, account: null };
       return {};
@@ -127,7 +129,7 @@ describe("pt-BR — the card bar", () => {
     expect(screen.getByRole("button", { name: "Navegador" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Shell" })).toBeInTheDocument();
     expect(screen.getByLabelText("Modelo")).toBeInTheDocument();
-    expect(screen.getByLabelText("Conta Claude")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Conta Claude")).toBeInTheDocument();
   });
 
   it("leaves the composer's placeholder empty and puts the instructions in its label", async () => {

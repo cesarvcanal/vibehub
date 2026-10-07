@@ -252,6 +252,19 @@ export function appendFragment(current: string, fragment: string): string {
   return current ? `${current} ${t}` : t;
 }
 
+/**
+ * What is left in the field once `sent` has gone. PURE.
+ *
+ * The field stays editable while the message is on its way (a round trip can take seconds), so the
+ * field at that moment may hold more than what was sent: what was typed after Enter is the start
+ * of the NEXT message and stays. If the sent words themselves were edited meanwhile, nothing is
+ * cleared — losing words someone is looking at is worse than leaving a few already sent.
+ */
+export function textAfterSend(current: string, sent: string): string {
+  if (!current.startsWith(sent)) return current;
+  return current.slice(sent.length).trimStart();
+}
+
 /* ------------------------------------------------------------- attachments */
 
 /** An image sitting in the field, from the instant it is pasted to the moment it is sent. */
@@ -304,8 +317,18 @@ export interface StoredDraft {
  * only the finished uploads (name + runner path) are written there.
  *
  * Nothing here is a cache to invalidate: the composer writes on every keystroke and clears on send.
+ * Only the memory layer is written at keystroke speed, though: the localStorage one is a parse and
+ * a stringify of EVERY card's draft, so its writes are batched until the typing pauses
+ * (`DRAFT_WRITE_DELAY_MS`) and flushed at once when the page is going away.
  */
 const memoryDrafts = new Map<string, { text: string; attachments: Attachment[] }>();
+
+export const DRAFT_WRITE_DELAY_MS = 400;
+
+/** Stored-layer writes not on disk yet, per card. `null` = remove that card's draft. */
+const pendingWrites = new Map<string, StoredDraft | null>();
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+let flushOnLeave = false;
 
 function readStoredDrafts(): Record<string, StoredDraft> {
   try {
@@ -325,6 +348,46 @@ function writeStoredDrafts(drafts: Record<string, StoredDraft>): void {
   }
 }
 
+/** Puts every pending stored-layer write on disk, in one read and one write. */
+export function flushDrafts(): void {
+  if (flushTimer !== null) clearTimeout(flushTimer);
+  flushTimer = null;
+  if (pendingWrites.size === 0) return;
+  const drafts = readStoredDrafts();
+  // An empty composer "clears" its card on every mount; most of those clears have nothing to remove.
+  let changed = false;
+  for (const [cardId, draft] of pendingWrites) {
+    if (draft) {
+      drafts[cardId] = draft;
+      changed = true;
+    } else if (cardId in drafts) {
+      delete drafts[cardId];
+      changed = true;
+    }
+  }
+  pendingWrites.clear();
+  if (changed) writeStoredDrafts(drafts);
+}
+
+/**
+ * Queues a stored-layer write; the timer restarts on every call, so a burst of typing is one write.
+ * `pagehide` (and a tab going to the background, which on mobile may be the last chance) flush what
+ * is pending — the timer would not get to run on a closing page. An unmounted composer needs
+ * nothing: the timer lives in this module, not in the component.
+ */
+function scheduleStoredWrite(cardId: string, draft: StoredDraft | null): void {
+  pendingWrites.set(cardId, draft);
+  if (flushTimer !== null) clearTimeout(flushTimer);
+  flushTimer = setTimeout(flushDrafts, DRAFT_WRITE_DELAY_MS);
+  if (!flushOnLeave && typeof window !== "undefined") {
+    flushOnLeave = true;
+    window.addEventListener("pagehide", flushDrafts);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") flushDrafts();
+    });
+  }
+}
+
 /** Remembers a card's unsent field. Called on every change — cheap, and the point of the feature. */
 export function saveDraft(cardId: string, text: string, attachments: readonly Attachment[]): void {
   const list = [...attachments];
@@ -333,20 +396,20 @@ export function saveDraft(cardId: string, text: string, attachments: readonly At
     return;
   }
   memoryDrafts.set(cardId, { text, attachments: list });
-  const drafts = readStoredDrafts();
-  drafts[cardId] = {
+  scheduleStoredWrite(cardId, {
     text,
     attachments: list
       .filter((a) => a.status === "ready" && a.path)
       .map((a) => ({ id: a.id, name: a.name, path: a.path as string })),
-  };
-  writeStoredDrafts(drafts);
+  });
 }
 
 /** The draft to restore for a card: the live one if this session wrote it, else the stored one. */
 export function loadDraft(cardId: string): { text: string; attachments: Attachment[] } {
   const live = memoryDrafts.get(cardId);
   if (live) return { text: live.text, attachments: [...live.attachments] };
+  // The disk is about to be read: what is still queued for it (a clear, most likely) goes first.
+  flushDrafts();
   const stored = readStoredDrafts()[cardId];
   if (!stored) return { text: "", attachments: [] };
   return {
@@ -362,6 +425,9 @@ export function loadDraft(cardId: string): { text: string; attachments: Attachme
 /** Tests only: forget every draft, in both layers. */
 export function resetDraftsForTesting(): void {
   memoryDrafts.clear();
+  pendingWrites.clear();
+  if (flushTimer !== null) clearTimeout(flushTimer);
+  flushTimer = null;
   try {
     localStorage.removeItem(DRAFTS_KEY);
   } catch {
@@ -372,10 +438,7 @@ export function resetDraftsForTesting(): void {
 /** Forgets a card's draft — on send, and when the card itself is gone. */
 export function clearDraft(cardId: string): void {
   memoryDrafts.delete(cardId);
-  const drafts = readStoredDrafts();
-  if (!(cardId in drafts)) return;
-  delete drafts[cardId];
-  writeStoredDrafts(drafts);
+  scheduleStoredWrite(cardId, null);
 }
 
 /** Ids that do not depend on `crypto.randomUUID` (absent in some jsdom/webview combinations). */
@@ -582,7 +645,8 @@ export function TerminalComposer({
   /**
    * The one place a message leaves this component. Everything it needs is already decided: the
    * paths are appended by `composeMessage`, and the field is only cleared once the caller has
-   * accepted the message — a queue that rejected it leaves the words where you can see them.
+   * accepted the message — a queue that rejected it leaves the words where you can see them — and
+   * then only of what was SENT (see `textAfterSend`).
    */
   const deliver = React.useCallback(
     async (value: string, attached: Attachment[]) => {
@@ -591,10 +655,15 @@ export function TerminalComposer({
       setSending(true);
       try {
         await onSend(body);
-        attached.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl));
-        filesRef.current.clear();
-        setText("");
-        setAttachments([]);
+        // Only what went is cleared: what was typed or pasted during the round trip is the next
+        // message. The draft effect re-saves that remainder right after this clear.
+        const sentIds = new Set(attached.map((a) => a.id));
+        attached.forEach((a) => {
+          if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+          filesRef.current.delete(a.id);
+        });
+        setText((current) => textAfterSend(current, value));
+        setAttachments((current) => current.filter((a) => !sentIds.has(a.id)));
         if (draftKey) clearDraft(draftKey);
         if (!isMobile) ref.current?.focus();
       } catch {

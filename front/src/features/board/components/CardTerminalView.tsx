@@ -140,8 +140,9 @@ export function CardTerminalView({
   onClose?: () => void;
 }) {
   const t = useT();
-  // A member has been given this card to work on, not the install around it: the two pills below
-  // read the owner's accounts and plan usage, and those routes answer 403 to anybody else.
+  // A member has been given this card to work on, not the install around it: the account pill reads
+  // the owner's accounts and plan usage, and switching it is a `PATCH` with `accountSlug` — all
+  // three answer 403 to anybody else. So a member gets the MODEL pill and no account pill at all.
   const { isOwner } = useAuth();
   const isMobile = useIsMobile();
   const queryClient = useQueryClient();
@@ -350,7 +351,7 @@ export function CardTerminalView({
 
   // The install's Claude accounts are the OWNER's: which profile a card runs on, and how much of
   // whose plan is left, is their business and their route (403 for anybody else). A member
-  // working on a card they were given simply does not get the two pills.
+  // working on a card they were given simply does not get the account pill, nor its usage reading.
   const { data: accountsData } = useQuery({
     queryKey: ACCOUNTS_KEY, queryFn: boardApi.listAccounts, enabled: isOwner,
   });
@@ -874,7 +875,9 @@ export function CardTerminalView({
               </DropdownMenuContent>
             </DropdownMenu>
           ) : null}
-          {card ? (
+          {/* The account is the OWNER's call (a member's PATCH with `accountSlug` answers 403), so a
+              member gets the model pill and nothing here — see the `isOwner` note at the top. */}
+          {card && isOwner ? (
             <DropdownMenu>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -987,9 +990,13 @@ export function CardTerminalView({
                 <DropdownMenuSeparator />
                 <DropdownMenuLabel>{t("cardView.model")}</DropdownMenuLabel>
                 {modelItems}
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel>{t("cardView.claudeAccount")}</DropdownMenuLabel>
-                {accountItems}
+                {isOwner ? (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel>{t("cardView.claudeAccount")}</DropdownMenuLabel>
+                    {accountItems}
+                  </>
+                ) : null}
               </>
             ) : null}
           </DropdownMenuContent>

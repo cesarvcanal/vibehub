@@ -14,6 +14,24 @@ interface LocationState {
   from?: { pathname?: string };
 }
 
+/**
+ * What to tell somebody the sign-in door has throttled, or null when `err` is not that.
+ *
+ * Past a few tries the server answers 429 with `Retry-After` in seconds (see `routes/auth.ts`) and
+ * stops checking passwords until it runs out. Its `{ error }` is a fixed English sentence, and the
+ * generic path would show it as-is — or worse, a person who now types the RIGHT password reads it
+ * as another wrong one. So this is said in the page's language, with the wait in whole minutes
+ * (rounded up: "in 0 minutes" is a lie for anything under 60s). A header that is missing or not a
+ * plain number of seconds still gets the honest sentence, just without the number.
+ */
+function throttledMessage(err: unknown, t: (key: string, vars?: { n: number }) => string): string | null {
+  const response = (err as { response?: { status?: number; headers?: Record<string, unknown> } })?.response;
+  if (response?.status !== 429) return null;
+  const seconds = Number(response.headers?.["retry-after"]);
+  if (!Number.isFinite(seconds) || seconds <= 0) return t("auth.tooManyAttemptsLater");
+  return t("auth.tooManyAttempts", { n: Math.ceil(seconds / 60) });
+}
+
 export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -38,7 +56,7 @@ export function LoginPage() {
       await Promise.all([refreshSession(), refreshSetup()]);
       navigate(from, { replace: true });
     } catch (err) {
-      setError(apiErrorMessage(err, t("auth.invalidCredentials")));
+      setError(throttledMessage(err, t) ?? apiErrorMessage(err, t("auth.invalidCredentials")));
       setBusy(false);
     }
   }
