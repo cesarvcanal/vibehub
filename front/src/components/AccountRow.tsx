@@ -1,6 +1,5 @@
 import * as React from "react";
 import { toast } from "sonner";
-import { apiErrorMessage } from "@/lib/apiError";
 import { Check, LogOut, Monitor, Moon, Settings2, Sun, UserRound, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/providers/auth";
@@ -45,9 +44,11 @@ export function AccountRow({ className }: { className?: string }) {
   async function onSignOut() {
     try {
       await signOut();
-    } catch (err) {
+    } catch {
       // The server did not end the session: stay, and say so — never a login screen over a live cookie.
-      toast.error(apiErrorMessage(err, t("account.signOutFailed")));
+      // The sentence is ours, not the transport's: "you are still signed in" is the whole point, and
+      // a proxy's 502 body is an HTML page nobody should be shown.
+      toast.error(t("account.signOutFailed"));
     }
   }
 

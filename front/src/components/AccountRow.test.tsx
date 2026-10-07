@@ -165,13 +165,18 @@ describe("AccountRow — the user", () => {
    */
   it("a sign-out the server refused keeps the board and says so — the session is still alive", async () => {
     serveAs("owner");
-    vi.mocked(post).mockRejectedValue(Object.assign(new Error("boom"), { response: { status: 502, data: {} } }));
+    // What a proxy answers when the back is down: a 502 whose body is an HTML page.
+    vi.mocked(post).mockRejectedValue(Object.assign(new Error("Request failed with status code 502"), {
+      response: { status: 502, data: "<html><body>502 Bad Gateway</body></html>" },
+    }));
     boardWithAccountMenu();
     await userEvent.click(await screen.findByRole("button", { name: /cesar/ }));
     const meCallsBefore = mockGet.mock.calls.filter(([url]) => url === "/auth/me").length;
     await userEvent.click(await screen.findByRole("menuitem", { name: "Sign out" }));
 
     await vi.waitFor(() => expect(vi.mocked(toast.error)).toHaveBeenCalled());
+    // The point of the message is "you are still signed in" — never the transport's words or HTML.
+    expect(vi.mocked(toast.error).mock.calls[0]![0]).toBe("Could not sign out — you are still signed in. Try again.");
     expect(mockGet.mock.calls.filter(([url]) => url === "/auth/me").length).toBeGreaterThan(meCallsBefore);
     expect(screen.getByText("the board")).toBeInTheDocument();
     expect(screen.queryByText("login form")).not.toBeInTheDocument();
