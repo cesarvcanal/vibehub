@@ -2716,18 +2716,18 @@ describe("SdkChatView — o raciocínio traduzido no navegador", () => {
 
   it("\"ver original\" mostra o texto como veio, e volta para a tradução", async () => {
     setLanguage("pt-BR");
-    await thinkingDone("Plain English reasoning.");
+    await thinkingDone("I will check the reasoning.");
     const toggle = await screen.findByTestId("sdk-thinking-original-toggle");
     await userEvent.click(toggle);
-    expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent(/^Plain English reasoning\.$/);
+    expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent(/^I will check the reasoning\.$/);
     await userEvent.click(screen.getByTestId("sdk-thinking-original-toggle"));
-    expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("[pt] Plain English reasoning.");
+    expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("[pt] I will check the reasoning.");
   });
 
   it("interface em inglês: o original, e o tradutor nem é chamado", async () => {
     setLanguage("en");
-    await thinkingDone("Plain English reasoning.");
-    await waitFor(() => expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("Plain English reasoning."));
+    await thinkingDone("I will check the reasoning.");
+    await waitFor(() => expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("I will check the reasoning."));
     expect(translate).not.toHaveBeenCalled();
     expect(screen.queryByTestId("sdk-thinking-original-toggle")).toBeNull();
   });
@@ -2737,8 +2737,8 @@ describe("SdkChatView — o raciocínio traduzido no navegador", () => {
     vi.stubGlobal("LanguageDetector", undefined);
     resetReasoningTranslatorForTesting();
     setLanguage("pt-BR");
-    await thinkingDone("Plain English reasoning.");
-    await waitFor(() => expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("Plain English reasoning."));
+    await thinkingDone("I will check the reasoning.");
+    await waitFor(() => expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("I will check the reasoning."));
     expect(screen.queryByTestId("sdk-thinking-original-toggle")).toBeNull();
   });
 
@@ -2757,7 +2757,7 @@ describe("SdkChatView — o raciocínio traduzido no navegador", () => {
 
   it("o socket não manda mais idioma nenhum — nada sobre o raciocínio chega ao modelo", async () => {
     setLanguage("pt-BR");
-    const ws = await thinkingDone("Plain English reasoning.");
+    const ws = await thinkingDone("I will check the reasoning.");
     await userEvent.type(screen.getByRole("textbox"), "oi{Enter}");
     await waitFor(() => expect(ws.rawSent.some((raw) => raw.includes('"user"'))).toBe(true));
     expect(ws.rawSent.some((raw) => raw.includes('"language"'))).toBe(false);

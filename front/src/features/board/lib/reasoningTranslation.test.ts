@@ -54,16 +54,16 @@ describe("createReasoningTranslator", () => {
   it("parágrafo por parágrafo: a quebra entre eles sobrevive à tradução", async () => {
     const t = fakeTranslator();
     const tr = createReasoningTranslator({ translator: t.factory, detector: fakeDetector(EN).factory });
-    const out = await tr.translate("First paragraph.\n\nSecond one.\n");
-    expect(out).toBe("PT(First paragraph.)\n\nPT(Second one.)\n");
+    const out = await tr.translate("First paragraph.\n\nThen the second one.\n");
+    expect(out).toBe("PT(First paragraph.)\n\nPT(Then the second one.)\n");
     expect(t.translate).toHaveBeenCalledTimes(2);
   });
 
   it("o mesmo texto é traduzido UMA vez: reabrir a conversa não refaz o trabalho", async () => {
     const t = fakeTranslator();
     const tr = createReasoningTranslator({ translator: t.factory, detector: fakeDetector(EN).factory });
-    await tr.translate("Same block.");
-    await tr.translate("Same block.");
+    await tr.translate("I will do the same block.");
+    await tr.translate("I will do the same block.");
     expect(t.translate).toHaveBeenCalledTimes(1);
     expect(t.create).toHaveBeenCalledTimes(1);
   });
@@ -108,15 +108,15 @@ describe("createReasoningTranslator", () => {
     let fail = true;
     const t = fakeTranslator({ translate: async (s) => { if (fail) throw new Error("boom"); return `ok:${s}`; } });
     const tr = createReasoningTranslator({ translator: t.factory, detector: fakeDetector(EN).factory });
-    await expect(tr.translate("Some text here.")).resolves.toBe(null);
+    await expect(tr.translate("I will fix the text here.")).resolves.toBe(null);
     fail = false;
-    await expect(tr.translate("Some text here.")).resolves.toBe("ok:Some text here.");
+    await expect(tr.translate("I will fix the text here.")).resolves.toBe("ok:I will fix the text here.");
   });
 
   it("idioma indisponível no tradutor: null, sem quebrar", async () => {
     const t = fakeTranslator({ availability: "unavailable" });
     const tr = createReasoningTranslator({ translator: t.factory, detector: fakeDetector(EN).factory });
-    await expect(tr.translate("Some text here.")).resolves.toBe(null);
+    await expect(tr.translate("I will fix the text here.")).resolves.toBe(null);
     expect(t.create).not.toHaveBeenCalled();
   });
 
@@ -171,9 +171,67 @@ describe("createReasoningTranslator", () => {
   it("linha por linha: listas e passos continuam um por linha", async () => {
     const t = fakeTranslator();
     const tr = createReasoningTranslator({ translator: t.factory, detector: fakeDetector(EN).factory });
-    await expect(tr.translate("I will read the file.\n- first item\n- second item")).resolves.toBe(
-      "PT(I will read the file.)\n- PT(first item)\n- PT(second item)",
+    await expect(tr.translate("I will read the file.\n- read the logs\n- fix the test")).resolves.toBe(
+      "PT(I will read the file.)\n- PT(read the logs)\n- PT(fix the test)",
     );
+  });
+
+  // 3ª revisão (1, 2): português informal sem palavra da lista nem acento, e "me"/"do" contados
+  // como inglês. A LINHA precisa de prova positiva de inglês — sem ela, fica como veio.
+  it("linha sem prova de inglês fica como veio — português informal, 'Me ajuda aqui'", async () => {
+    const t = fakeTranslator();
+    const tr = createReasoningTranslator({ translator: t.factory });
+    const input =
+      "Let me check what the user wants.\nThe user wrote:\nnao funciona aqui, testa ai pra mim\n" +
+      "Me ajuda aqui\nI should run the tests first.";
+    await expect(tr.translate(input)).resolves.toBe(
+      "PT(Let me check what the user wants.)\nPT(The user wrote:)\nnao funciona aqui, testa ai pra mim\n" +
+        "Me ajuda aqui\nPT(I should run the tests first.)",
+    );
+  });
+
+  it("fence ~~~ também é código: marcadores e conteúdo ficam como vieram", async () => {
+    const t = fakeTranslator();
+    const tr = createReasoningTranslator({ translator: t.factory });
+    await expect(tr.translate("Let me write the code:\n~~~\nif the user is set:\n~~~\nthen I will check it")).resolves.toBe(
+      "PT(Let me write the code:)\n~~~\nif the user is set:\n~~~\nPT(then I will check it)",
+    );
+  });
+
+  it("linhas de código fora de fence ficam como vieram (atribuição, chamada, shell, erro, traceback)", async () => {
+    const t = fakeTranslator();
+    const tr = createReasoningTranslator({ translator: t.factory });
+    const code = [
+      "    if x:",
+      "x = foo(bar)",
+      "foo.bar(baz)",
+      "npm run test",
+      "git push origin main",
+      "TypeError: Cannot read properties of undefined (reading 'map')",
+      '  File "app.py", line 3, in main',
+    ];
+    await expect(tr.translate(["I will check what is failing here.", ...code].join("\n"))).resolves.toBe(
+      ["PT(I will check what is failing here.)", ...code].join("\n"),
+    );
+  });
+
+  it("checkbox vazio '- [ ]' fica intacto", async () => {
+    const t = fakeTranslator();
+    const tr = createReasoningTranslator({ translator: t.factory });
+    await expect(tr.translate("I will do the following now:\n- [ ]")).resolves.toBe(
+      "PT(I will do the following now:)\n- [ ]",
+    );
+  });
+
+  it("linha gigante não trava a tela (sem regex quadrática) e fica como veio", async () => {
+    const t = fakeTranslator();
+    const tr = createReasoningTranslator({ translator: t.factory });
+    const huge = "the test is" + " ".repeat(40000) + "x";
+    const stack = "at x " + "(".repeat(20000);
+    const start = performance.now();
+    const out = await tr.translate(`I will check what the test is doing.\n${huge}\n${stack}`);
+    expect(performance.now() - start).toBeLessThan(300);
+    expect(out).toBe(`PT(I will check what the test is doing.)\n${huge}\n${stack}`);
   });
 
   // Re-revisão adversarial (MEDIUM-A), provado no Chrome 154: português que CITA saída em inglês

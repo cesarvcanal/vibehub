@@ -63,14 +63,19 @@ const MIN_CONFIDENCE = 0.5;
 /** Blocos já traduzidos guardados: reabrir a conversa não refaz o trabalho. */
 const CACHE_LIMIT = 300;
 
+// "me" e "do" ficam de fora: são palavras portuguesas comuníssimas ("Me ajuda aqui", "o log do build").
 const EN_WORDS = new Set(
-  ("the and to of is that with this it for be need will what how should let me from are not on i " +
-    "i'll i'm we can if then which there have has was but so do does first now").split(" "),
+  ("the and to of is that with this it for be need will what how should let from are not on i " +
+    "i'll i'm we can if then which there have has was but so does first now").split(" "),
 );
-// Só palavras que NÃO existem em inglês: "do", "as", "no", "se" seguravam linhas inglesas à toa.
+// Só palavras que NÃO existem em inglês ("do", "as", "no", "se", "pro", "algo" existem e seguravam
+// linhas inglesas à toa) — incluindo o português informal, sem acento, de quem digita rápido.
 const PT_WORDS = new Set(
-  ("o os de da dos das que não para com um uma é em na nos nas por mais vou preciso isso está " +
-    "esse essa este esta mas como já também ao pelo pela foi ser tem").split(" "),
+  ("o os de da dos das que não nao para pra pras pros com um uma é em na nos nas por mais vou " +
+    "preciso isso está esse essa este esta mas como já ja também tambem ao pelo pela foi ser tem " +
+    "mim aqui agora sem ou eu ele ela vamos depois quando onde porque ainda muito então entao só " +
+    "tá ta né ne faz fazer vai ver olha funciona testa ajuda manda roda deu ficou tudo nada meu " +
+    "minha seu sua dele dela aí ai").split(" "),
 );
 const PT_ACCENT = /[ãõçáéíóúâêô]/;
 
@@ -90,51 +95,80 @@ function score(text: string): { en: number; pt: number } {
  * O PALPITE LOCAL para o BLOCO quando o detector não existe (Chrome com `LanguageDetector`
  * "unavailable" é real) ou não tem certeza: conta palavras-função de cada língua (e acento, que
  * inglês não tem). Na dúvida, `null` — e aí NÃO se traduz: passar português pelo tradutor en→pt o
- * estraga ("...os testes do VOLTAR", revisão adversarial HIGH-1). Pode ser brando com o inglês porque
- * cada LINHA ainda tem veto (`hasPortuguese`). PURA.
+ * estraga ("...os testes do VOLTAR", revisão adversarial HIGH-1). "en" basta haver UMA linha que
+ * prove ser inglês: quem decide o que vai ao tradutor é cada linha (`isEnglishLine`), então um bloco
+ * misto traduz só as linhas inglesas. PURA.
  */
 export function guessLanguage(text: string): "en" | "pt" | null {
   const { en, pt } = score(text);
-  if (en >= 2 && en > pt) return "en";
-  if (pt >= 2 && pt >= en) return "pt";
+  if (en >= 2 && text.split("\n").some(isEnglishLine)) return "en";
+  if (pt >= 2) return "pt";
   return null;
 }
 
-/** Qualquer sinal de português na linha — palavra-função ou acento. Ela fica como veio. PURA. */
-function hasPortuguese(line: string): boolean {
-  return score(line).pt > 0;
+/**
+ * A LINHA vai para o tradutor só com prova POSITIVA de inglês (alguma palavra-função inglesa) e
+ * NENHUM sinal de português. Sem prova, fica como veio: português informal sem palavra conhecida
+ * ("nao funciona aqui, testa ai pra mim") ou português citando inglês ("O teste falhou com:
+ * Expected...") nunca passam por en→pt. Uma linha curta em inglês ficar em inglês é o preço. PURA.
+ */
+function isEnglishLine(line: string): boolean {
+  const { en, pt } = score(line);
+  return en >= 1 && pt === 0;
 }
 
+/** Linha maior que isto fica como veio: nenhuma regex roda sobre ela (nada de travar a tela). */
+const MAX_LINE = 2000;
+
 /**
- * Linha com cara de CÓDIGO ou de stack trace: o tradutor a estragaria ("await" → "aguarde", provado
- * no Chrome 154). Só palavras-chave em minúscula, seguidas de sintaxe — "If the test fails" é prosa.
+ * Linha com cara de CÓDIGO, comando ou erro: o tradutor a estragaria ("await" → "aguarde", provado no
+ * Chrome 154). Palavras-chave só em minúscula e seguidas de sintaxe — "If the test fails" é prosa.
  */
-const CODE_LINE =
-  /[;{}]\s*$|=>|^\s*(?:const|let|var|function|import|export|return|if|for|while|class|def|async|await|try|catch)\b.*[=(;{]|^\s*at\s+\S.*\(.*:\d+(?::\d+)?\)\s*$|^\s*\$\s/;
-/** Indentação + marcador de lista/checkbox/numeração: fica intacto ("- [ ]" virava "- []"). */
-const LINE_PREFIX = /^(\s*(?:[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)?)([\s\S]*?)(\s*)$/;
+const CODE_LINE = [
+  /[;{}]\s*$/,
+  /=>/,
+  /^\s*(?:const|let|var|function|import|export|return|if|elif|else|for|while|class|def|async|await|try|catch|except|with)\b.*(?:[=(;{]|:\s*$)/,
+  /^\s*at\s+\S.*:\d+(?::\d+)?\)?\s*$/, // stack trace JS
+  /^\s*File\s+".*",\s+line\s+\d+/, // traceback Python
+  /^\s*[\w.]*(?:Error|Exception)\b[^:]*:/, // "TypeError: ..."
+  /^\s*[\w.$[\]]+\s*[-+*/]?=(?!=)/, // atribuição
+  /^\s*[\w.$]+\([^()]*\)\s*;?\s*$/, // uma chamada sozinha
+  /^\s*(?:\$\s|(?:npm|pnpm|npx|yarn|git|node|python3?|pip|cd|ls|cat|grep|curl|docker|make|cargo|go)\s)/, // shell
+];
+const FENCE = /^\s*(?:```|~~~)/;
+/** Marcador de lista/checkbox/numeração: fica intacto ("- [ ]" virava "- []"). Sem backtracking. */
+const LIST_MARKER = /^(?:[-*+]\s+(?:\[[ xX]\](?:\s+|$))?|\d+[.)]\s+)/;
 
 /**
  * Traduz LINHA por linha: o tradutor local junta as linhas de um mesmo pedaço ("- a - b", provado no
  * Chrome 154), e o raciocínio é desenhado com `whitespace-pre-wrap` — listas e passos precisam
- * continuar um por linha. Fica como veio: bloco ```, linha de código, e linha com qualquer sinal de
- * português (português que CITA saída em inglês virava "o testo falhou com:" — re-revisão MEDIUM-A).
+ * continuar um por linha. Fica como veio: bloco ``` / ~~~, linha de código, linha gigante e linha
+ * sem prova de inglês. Indentação, marcador e espaço final sobrevivem (cortados com trim, sem regex
+ * preguiçosa — ela era quadrática numa linha com muito espaço).
  */
 async function translateLines(translator: TranslatorLike, text: string): Promise<string> {
   const out: string[] = [];
   let inFence = false;
   for (const line of text.split("\n")) {
-    if (/^\s*```/.test(line)) {
+    if (line.length > MAX_LINE) {
+      out.push(line);
+      continue;
+    }
+    if (FENCE.test(line)) {
       inFence = !inFence;
       out.push(line);
       continue;
     }
-    if (inFence || line.trim() === "" || CODE_LINE.test(line) || hasPortuguese(line)) {
+    if (inFence || line.trim() === "" || CODE_LINE.some((re) => re.test(line)) || !isEnglishLine(line)) {
       out.push(line);
       continue;
     }
-    const [, lead, core, trail] = LINE_PREFIX.exec(line)!;
-    out.push(core === "" ? line : lead! + (await translator.translate(core!)) + trail!);
+    const body = line.trimStart();
+    const indent = line.slice(0, line.length - body.length);
+    const marker = LIST_MARKER.exec(body)?.[0] ?? "";
+    const rest = body.slice(marker.length);
+    const core = rest.trimEnd();
+    out.push(core === "" ? line : indent + marker + (await translator.translate(core)) + rest.slice(core.length));
   }
   return out.join("\n");
 }
