@@ -67,45 +67,74 @@ const EN_WORDS = new Set(
   ("the and to of is that with this it for be need will what how should let me from are not on i " +
     "i'll i'm we can if then which there have has was but so do does first now").split(" "),
 );
+// Só palavras que NÃO existem em inglês: "do", "as", "no", "se" seguravam linhas inglesas à toa.
 const PT_WORDS = new Set(
-  ("o os as de do da dos das que não para com um uma é em no na nos nas se por mais vou preciso " +
-    "isso está esse essa este esta mas como já também ao pelo pela foi ser tem").split(" "),
+  ("o os de da dos das que não para com um uma é em na nos nas por mais vou preciso isso está " +
+    "esse essa este esta mas como já também ao pelo pela foi ser tem").split(" "),
 );
+const PT_ACCENT = /[ãõçáéíóúâêô]/;
 
-/**
- * O PALPITE LOCAL quando o detector não existe (Chrome com `LanguageDetector` "unavailable" é real)
- * ou não tem certeza: conta palavras-função de cada língua (e acento, que inglês não tem). Só
- * responde com folga; na dúvida, `null` — e aí NÃO se traduz: passar português pelo tradutor en→pt
- * o estraga ("...os testes do VOLTAR", revisão adversarial HIGH-1). PURA.
- */
-export function guessLanguage(text: string): "en" | "pt" | null {
+function score(text: string): { en: number; pt: number } {
   const words = text.toLowerCase().match(/[\p{L}']+/gu) ?? [];
   let en = 0;
   let pt = 0;
   for (const w of words) {
     if (EN_WORDS.has(w)) en++;
     if (PT_WORDS.has(w)) pt++;
-    if (/[ãõçáéíóúâêô]/.test(w)) pt += 2;
+    if (PT_ACCENT.test(w)) pt += 2;
   }
-  if (en >= 2 && en > 2 * pt) return "en";
-  if (pt >= 2 && pt > en) return "pt";
+  return { en, pt };
+}
+
+/**
+ * O PALPITE LOCAL para o BLOCO quando o detector não existe (Chrome com `LanguageDetector`
+ * "unavailable" é real) ou não tem certeza: conta palavras-função de cada língua (e acento, que
+ * inglês não tem). Na dúvida, `null` — e aí NÃO se traduz: passar português pelo tradutor en→pt o
+ * estraga ("...os testes do VOLTAR", revisão adversarial HIGH-1). Pode ser brando com o inglês porque
+ * cada LINHA ainda tem veto (`hasPortuguese`). PURA.
+ */
+export function guessLanguage(text: string): "en" | "pt" | null {
+  const { en, pt } = score(text);
+  if (en >= 2 && en > pt) return "en";
+  if (pt >= 2 && pt >= en) return "pt";
   return null;
 }
+
+/** Qualquer sinal de português na linha — palavra-função ou acento. Ela fica como veio. PURA. */
+function hasPortuguese(line: string): boolean {
+  return score(line).pt > 0;
+}
+
+/**
+ * Linha com cara de CÓDIGO ou de stack trace: o tradutor a estragaria ("await" → "aguarde", provado
+ * no Chrome 154). Só palavras-chave em minúscula, seguidas de sintaxe — "If the test fails" é prosa.
+ */
+const CODE_LINE =
+  /[;{}]\s*$|=>|^\s*(?:const|let|var|function|import|export|return|if|for|while|class|def|async|await|try|catch)\b.*[=(;{]|^\s*at\s+\S.*\(.*:\d+(?::\d+)?\)\s*$|^\s*\$\s/;
+/** Indentação + marcador de lista/checkbox/numeração: fica intacto ("- [ ]" virava "- []"). */
+const LINE_PREFIX = /^(\s*(?:[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)?)([\s\S]*?)(\s*)$/;
 
 /**
  * Traduz LINHA por linha: o tradutor local junta as linhas de um mesmo pedaço ("- a - b", provado no
  * Chrome 154), e o raciocínio é desenhado com `whitespace-pre-wrap` — listas e passos precisam
- * continuar um por linha. O espaço nas pontas de cada linha (indentação) sobrevive.
+ * continuar um por linha. Fica como veio: bloco ```, linha de código, e linha com qualquer sinal de
+ * português (português que CITA saída em inglês virava "o testo falhou com:" — re-revisão MEDIUM-A).
  */
 async function translateLines(translator: TranslatorLike, text: string): Promise<string> {
   const out: string[] = [];
+  let inFence = false;
   for (const line of text.split("\n")) {
-    if (line.trim() === "") {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
       out.push(line);
       continue;
     }
-    const [, lead, core, trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(line)!;
-    out.push(lead + (await translator.translate(core!)) + trail);
+    if (inFence || line.trim() === "" || CODE_LINE.test(line) || hasPortuguese(line)) {
+      out.push(line);
+      continue;
+    }
+    const [, lead, core, trail] = LINE_PREFIX.exec(line)!;
+    out.push(core === "" ? line : lead! + (await translator.translate(core!)) + trail!);
   }
   return out.join("\n");
 }

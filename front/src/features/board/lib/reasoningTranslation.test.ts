@@ -172,7 +172,60 @@ describe("createReasoningTranslator", () => {
     const t = fakeTranslator();
     const tr = createReasoningTranslator({ translator: t.factory, detector: fakeDetector(EN).factory });
     await expect(tr.translate("I will read the file.\n- first item\n- second item")).resolves.toBe(
-      "PT(I will read the file.)\nPT(- first item)\nPT(- second item)",
+      "PT(I will read the file.)\n- PT(first item)\n- PT(second item)",
+    );
+  });
+
+  // Re-revisão adversarial (MEDIUM-A), provado no Chrome 154: português que CITA saída em inglês
+  // ("O teste falhou com: Expected...") era classificado como inglês no bloco e virava
+  // "o testo falhou com:". O idioma é decidido por bloco, mas a tradução é por linha — então a linha
+  // também tem voto: qualquer sinal de português, ela fica como veio.
+  it("linha com sinal de português fica como veio, mesmo num bloco majoritariamente em inglês", async () => {
+    const t = fakeTranslator();
+    const tr = createReasoningTranslator({ translator: t.factory });
+    const out = await tr.translate(
+      "I will check why the test is failing and then fix it.\n" +
+        "O teste falhou com: Expected the value to be true but it was false.\n" +
+        "Vou rodar os testes do back e depois ajustar o botao de enviar.",
+    );
+    expect(out).toBe(
+      "PT(I will check why the test is failing and then fix it.)\n" +
+        "O teste falhou com: Expected the value to be true but it was false.\n" +
+        "Vou rodar os testes do back e depois ajustar o botao de enviar.",
+    );
+  });
+
+  it("palavras que existem nas duas línguas (do, as, no, se) não seguram uma linha em inglês", async () => {
+    const t = fakeTranslator();
+    const tr = createReasoningTranslator({ translator: t.factory });
+    await expect(tr.translate("I do not know as much as I should, so no guessing.")).resolves.toBe(
+      "PT(I do not know as much as I should, so no guessing.)",
+    );
+  });
+
+  // LOW-B, provado no Chrome 154: "await" virava "aguarde" e "- [ ]" virava "- []".
+  it("código não é traduzido: bloco ``` e linha com cara de código ficam como vieram", async () => {
+    const t = fakeTranslator();
+    const tr = createReasoningTranslator({ translator: t.factory });
+    const out = await tr.translate(
+      "I need to check what the loader does here.\n" +
+        "```ts\nreturn the value to the caller\n```\n" +
+        "const x = await this.load(id); if (!x) return;\n" +
+        "    at Object.<anonymous> (src/app.ts:12:5)",
+    );
+    expect(out).toBe(
+      "PT(I need to check what the loader does here.)\n" +
+        "```ts\nreturn the value to the caller\n```\n" +
+        "const x = await this.load(id); if (!x) return;\n" +
+        "    at Object.<anonymous> (src/app.ts:12:5)",
+    );
+  });
+
+  it("o marcador de lista/checkbox fica intacto — só o texto depois dele é traduzido", async () => {
+    const t = fakeTranslator();
+    const tr = createReasoningTranslator({ translator: t.factory });
+    await expect(tr.translate("I will do the following now:\n- [ ] run the tests\n2. check the logs")).resolves.toBe(
+      "PT(I will do the following now:)\n- [ ] PT(run the tests)\n2. PT(check the logs)",
     );
   });
 
