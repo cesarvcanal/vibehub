@@ -50,6 +50,10 @@ export function SessionGuard() {
     setUnauthorizedHandler(() => {
       // Never clear(): see dropSession — it froze the login on a spinner.
       const signedIn = rendered.current.isAuthenticated;
+      // No session on screen and no page that needs one: nothing to drop. Typically a request of
+      // the session that just ended, answering late while the person signs in AGAIN — dropping
+      // here would cancel the new session's `/auth/me` and send them back to the login.
+      if (!signedIn && !isUnguarded(rendered.current.pathname)) return;
       void dropSession(queryClient).then(() => {
         // Signed out ALREADY (a setup step whose cookie never took): React shows no session, so no
         // guard can bounce back — go now. And owe nothing: a late 401 of a session that just ended

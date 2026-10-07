@@ -9,6 +9,7 @@ import { PublicRoute } from "@/components/PublicRoute";
 import { Paths } from "@/lib/paths";
 import { apiReject, renderApp, setupState } from "@/test/render";
 import { get, setUnauthorizedHandler } from "@/lib/api";
+import { ME_KEY } from "@/providers/auth";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -59,7 +60,7 @@ function mount(route: string) {
     }
     return Promise.resolve({});
   });
-  renderApp(
+  const { queryClient } = renderApp(
     <>
       <PathLog paths={paths} states={states} />
       <SessionGuard />
@@ -71,7 +72,7 @@ function mount(route: string) {
     </>,
     { route },
   );
-  return { paths, states };
+  return { paths, states, queryClient };
 }
 
 /** What any request does when the server answers 401. */
@@ -151,6 +152,31 @@ describe("SessionGuard — a 401", () => {
     expect(await screen.findByText("login form")).toBeInTheDocument();
     await settle();
     expect(paths).toEqual([Paths.SETUP, Paths.LOGIN]);
+  });
+
+  it("a late 401 of the OLD session, arriving while the person signs in again, does not undo the new one", async () => {
+    sessionAlive = false;
+    const { paths, queryClient } = mount(Paths.LOGIN);
+    expect(await screen.findByText("login form")).toBeInTheDocument();
+    await settle();
+
+    // Signing in again: the new session is being confirmed (`/auth/me` in flight)…
+    let confirm: (body: unknown) => void = () => {};
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/setup/state") return Promise.resolve(setupState());
+      if (url === "/auth/me") return new Promise((resolve) => { confirm = resolve; });
+      return Promise.resolve({});
+    });
+    void queryClient.invalidateQueries({ queryKey: ME_KEY });
+    await settle();
+    // …when a request of the session that just ended answers 401, late. There is no session in
+    // React to drop and the login is not a page that needs one: it must not cancel the new one.
+    a401();
+    confirm({ user: { id: "u1", username: "cesar", role: "owner" } });
+
+    expect(await screen.findByText("the board")).toBeInTheDocument();
+    await settle();
+    expect(paths).toEqual([Paths.LOGIN, Paths.BOARD]);
   });
 
   it("a late 401 on the login page owes nothing — it does not hijack the next navigation", async () => {
