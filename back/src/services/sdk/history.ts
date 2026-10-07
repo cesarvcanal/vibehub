@@ -108,14 +108,22 @@ export function replayableHistoryEvent(event: HistoryEvent): boolean {
  */
 const chains = new Map<string, Promise<void>>();
 
-/** Append one event to a card's log. Fire-and-forget safe: never throws, never blocks the stream. */
-export function appendHistory(cardId: string, event: HistoryEvent): Promise<void> {
+/**
+ * Append one event to a card's log and REPORT whether it reached the disk: `true` once the line is
+ * written, `false` when the write failed (logged here). Never rejects, so it is as fire-and-forget
+ * safe as `appendHistory` — but a RECEIPT has to be built on this form: `user_ack` promises the
+ * message is ON DISK, and a full disk used to earn an ack anyway. The browser dropped its own copy,
+ * and the message was gone on the next F5.
+ */
+export function appendHistoryReported(cardId: string, event: HistoryEvent): Promise<boolean> {
+  let written = false;
   const prev = chains.get(cardId) ?? Promise.resolve();
   const next = prev
     .then(async () => {
       const file = historyFile(cardId);
       await mkdir(join(file, ".."), { recursive: true });
       await appendFile(file, `${JSON.stringify(event)}\n`, "utf8");
+      written = true;
     })
     .catch((err: unknown) => {
       logger.warn({ card: cardId, detail: (err as Error).message }, "could not append sdk chat history");
@@ -124,7 +132,12 @@ export function appendHistory(cardId: string, event: HistoryEvent): Promise<void
       if (chains.get(cardId) === next) chains.delete(cardId);
     });
   chains.set(cardId, next);
-  return next;
+  return next.then(() => written);
+}
+
+/** Append one event to a card's log. Fire-and-forget safe: never throws, never blocks the stream. */
+export function appendHistory(cardId: string, event: HistoryEvent): Promise<void> {
+  return appendHistoryReported(cardId, event).then(() => undefined);
 }
 
 /**
@@ -141,24 +154,33 @@ export async function readHistory(cardId: string, limit: number = HISTORY_REPLAY
   } catch {
     return [];
   }
-  const lines = raw.split("\n").filter((l) => l.trim() !== "");
+  const events = parseHistory(raw);
+  const compactAbove = limit * HISTORY_COMPACT_FACTOR;
+  if (events.length > compactAbove) {
+    // Chained like an append so a compaction never races one; best-effort like everything here.
+    // The rewrite RE-READS the file inside the chain: the read above ran outside it, and whatever
+    // was queued in between (an answer landing while someone opens the card, a rewind already
+    // applied) would be overwritten by a tail computed before it existed.
+    await appendHistoryBarrier(cardId, async () => {
+      const current = parseHistory(await readFile(file, "utf8"));
+      if (current.length <= compactAbove) return; // a rewind already shrank it
+      await writeFile(file, current.slice(-limit).map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
+    });
+  }
+  return events.slice(-limit);
+}
+
+/** The log's lines as events. A torn line (a crash mid-append) is skipped, the rest kept. PURE. */
+function parseHistory(raw: string): HistoryEvent[] {
   const events: HistoryEvent[] = [];
-  for (const line of lines) {
+  for (const line of raw.split("\n")) {
+    if (line.trim() === "") continue;
     try {
       const parsed = JSON.parse(line) as HistoryEvent;
       if (parsed && typeof parsed === "object" && typeof parsed.type === "string") events.push(parsed);
-    } catch {
-      // a torn last line from a crash mid-append: skip it, keep the rest
-    }
+    } catch { /* a torn line from a crash mid-append: skip it, keep the rest */ }
   }
-  const tail = events.slice(-limit);
-  if (events.length > limit * HISTORY_COMPACT_FACTOR) {
-    // Chained like an append so a compaction never races one; best-effort like everything here.
-    await appendHistoryBarrier(cardId, async () => {
-      await writeFile(file, tail.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
-    });
-  }
-  return tail;
+  return events;
 }
 
 /**
@@ -205,14 +227,7 @@ export function rewindHistory(
     } catch {
       return; // no log yet: nothing to rewind
     }
-    const events: HistoryEvent[] = [];
-    for (const line of raw.split("\n")) {
-      if (line.trim() === "") continue;
-      try {
-        const parsed = JSON.parse(line) as HistoryEvent;
-        if (parsed && typeof parsed === "object" && typeof parsed.type === "string") events.push(parsed);
-      } catch { /* a torn line from a crash mid-append: keep the rest */ }
-    }
+    const events = parseHistory(raw);
     // The LAST occurrence of each end, because the same words can be said twice in a conversation
     // and it is the most recent pair that was just edited.
     let start = -1;

@@ -326,7 +326,9 @@ export async function chatSource(cardId: string): Promise<ChatSource> {
   return {
     cardId: card.id,
     title: card.title,
-    command: hostExecutor().ptyCommand(buildFollowCommand(config.runner.container, dir)),
+    // A PIPE command: both consumers read it over plain pipes, and the follow's liveness check is
+    // its stdin being the pipe from the backend — a tty (`ssh -tt`) has no business in between.
+    command: hostExecutor().pipeCommand(buildFollowCommand(config.runner.container, dir)),
   };
 }
 

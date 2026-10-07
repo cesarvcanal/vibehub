@@ -1,14 +1,42 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
+import { hostExecutor, type HostExecutor } from "../../runtime/host.js";
+import type { Card, Project } from "../board/registry.js";
 import {
   buildSdkDriverCommandLine,
   buildInstallDriverScript,
   buildEnsureSdkScript,
+  installCardSdkDriver,
+  sdkDriverCommand,
   SDK_DRIVER_PATH,
   SDK_DRIVER_DIR,
   SDK_PACKAGE_VERSION,
   SDK_VERSION_MARKER,
 } from "./driver.js";
+
+vi.mock("../../runtime/host.js", async (orig) => ({
+  ...(await orig<typeof import("../../runtime/host.js")>()),
+  hostExecutor: vi.fn(),
+}));
+vi.mock("../settings/settings.js", () => ({ getSettings: vi.fn(async () => ({ sdkPermissionMode: "ask-sensitive" })) }));
+
+describe("sdkDriverCommand — o driver fala NDJSON por pipes, nunca por um tty", () => {
+  afterEach(() => vi.mocked(hostExecutor).mockReset());
+
+  it("usa o transporte de PIPE do executor (no ssh, o de pty põe -tt: eco, CRLF e linha > 4095 bytes cortada)", async () => {
+    // The two transports as the ssh executor builds them: what tells them apart is the tty.
+    vi.mocked(hostExecutor).mockReturnValue({
+      ptyCommand: (line: string) => ({ file: "ssh", args: ["-tt", "runner", line] }),
+      pipeCommand: (line: string) => ({ file: "ssh", args: ["runner", line] }),
+    } as unknown as HostExecutor);
+    const project = { id: "p1", name: "scratch" } as unknown as Project;
+    const card = { id: "card-1", projectId: "p1", worktreeSlug: "card-1" } as unknown as Card;
+    const { file, args } = await sdkDriverCommand(project, card);
+    expect(file).toBe("ssh");
+    expect(args).not.toContain("-tt");
+    expect(args[args.length - 1]).toContain("exec node");
+  });
+});
 
 describe("buildSdkDriverCommandLine", () => {
   const base = { containerName: "vibehub-runner", cwd: "/work/o--r-worktrees/card-1", profileDir: "/root/.claude" };
@@ -108,11 +136,91 @@ describe("buildInstallDriverScript", () => {
     const script = buildInstallDriverScript("vibehub-runner", "console.log('hi')\n");
     expect(script).toContain("docker exec -i 'vibehub-runner' bash -s");
     expect(script).toContain(`mkdir -p '${SDK_DRIVER_DIR}'`);
-    expect(script).toContain(`chmod 755 '${SDK_DRIVER_PATH}.tmp'`);
-    expect(script).toContain(`mv -f '${SDK_DRIVER_PATH}.tmp' '${SDK_DRIVER_PATH}'`);
+    expect(script).toContain('chmod 755 "$tmp"');
+    expect(script).toContain(`mv -f "$tmp" '${SDK_DRIVER_PATH}'`);
     expect(script).toContain("console.log('hi')");
     // quoted heredoc delimiter => the source is written literally, not expanded
     expect(script).toContain("<<'VIBEHUB_SDK_DRIVER_SRC'");
+  });
+
+  it("each install writes its OWN tmp file — two installs at once never share (nor steal) one", () => {
+    // Um deploy derruba todos os drivers e as abas reconectam juntas: com um `.tmp` fixo, a
+    // segunda instalação truncava o arquivo que a primeira estava escrevendo e tomava ENOENT no
+    // chmod/mv do tmp que a primeira já tinha movido (set -e) — "could not install the driver".
+    const script = buildInstallDriverScript("vibehub-runner", "x\n");
+    expect(script).toContain(`tmp="$(mktemp '${SDK_DRIVER_PATH}.XXXXXX')"`);
+    expect(script).not.toContain(`'${SDK_DRIVER_PATH}.tmp'`);
+  });
+});
+
+describe("installCardSdkDriver — uma instalação por vez (single-flight)", () => {
+  let runScript: ReturnType<typeof vi.fn>;
+  /** Releases every script still parked (each one waits for the test, like a slow runner). */
+  let release: () => void = () => {};
+
+  beforeEach(() => {
+    runScript = vi.fn(() => new Promise((resolve) => {
+      const previous = release;
+      release = () => { previous(); resolve({ stdout: "", stderr: "" }); };
+    }));
+    vi.mocked(hostExecutor).mockReturnValue({ runScript } as unknown as HostExecutor);
+  });
+  afterEach(() => {
+    release = () => {};
+    vi.mocked(hostExecutor).mockReset();
+  });
+
+  /** Lets the install in flight walk through its scripts (each step awaits the previous one). */
+  async function drain(): Promise<void> {
+    for (let i = 0; i < 4; i += 1) {
+      const pending = release;
+      release = () => {};
+      pending();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
+  it("connects que se sobrepõem DIVIDEM a instalação em voo — N abas não viram N npm install no mesmo node_modules", async () => {
+    const all = Promise.all([installCardSdkDriver(), installCardSdkDriver(), installCardSdkDriver()]);
+    await drain();
+    await all;
+    // one plant + one ensure, not three of each
+    expect(runScript).toHaveBeenCalledTimes(2);
+  });
+
+  it("uma instalação TERMINADA não fica em cache: o próximo connect confere de novo (o marcador deixa isso barato)", async () => {
+    const first = installCardSdkDriver();
+    await drain();
+    await first;
+    const second = installCardSdkDriver();
+    await drain();
+    await second;
+    expect(runScript).toHaveBeenCalledTimes(4);
+  });
+
+  it("uma instalação que FALHOU falha para todos que esperavam, e o connect seguinte tenta de novo", async () => {
+    runScript.mockImplementationOnce(() => Promise.reject(new Error("runner down")));
+    const a = installCardSdkDriver();
+    const b = installCardSdkDriver();
+    await expect(a).rejects.toThrow("runner down");
+    await expect(b).rejects.toThrow("runner down");
+    expect(runScript).toHaveBeenCalledTimes(1);
+    const retry = installCardSdkDriver();
+    await drain();
+    await retry;
+    expect(runScript).toHaveBeenCalledTimes(3);
+  });
+
+  it("uma falha SÍNCRONA (antes do primeiro await) também não fica em cache", async () => {
+    // O corpo async roda síncrono até o primeiro await: se o executor (ou a leitura do fonte do
+    // driver) estoura ali, o finally roda ANTES do set no mapa — e a promessa rejeitada ficava
+    // guardada como "em voo" para sempre: todo connect seguinte recebia a mesma falha velha.
+    vi.mocked(hostExecutor).mockImplementationOnce(() => { throw new Error("no executor"); });
+    await expect(installCardSdkDriver()).rejects.toThrow("no executor");
+    const retry = installCardSdkDriver();
+    await drain();
+    await retry;
+    expect(runScript).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -742,8 +850,10 @@ describe("sdk-driver.mjs — um turno interrompido não é um turno que falhou",
     // e com ele o botão de parar, que vira um no-op sem dizer nada a ninguém.
     const run = source.slice(source.indexOf("async function runStream()"));
     expect(run).toContain("const stillOurs = currentQuery === myQuery;");
-    expect(run).toContain("if (stillOurs && turnActive) {");
-    expect(run).toContain("if (stillOurs) currentQuery = null;");
+    expect(run).toContain("if (stillOurs) closeTurnAborted();");
+    expect(run).toMatch(/if \(stillOurs\) \{\s*currentQuery = null;/);
+    // e o CORPO do laço também: o que um stream deserdado diz é só drenado (ver sdk-driver.test.ts)
+    expect(run).toContain("if (currentQuery !== myQuery) continue;");
   });
 
   it("o que é engolido ainda é registrado — no stderr, nunca no stdout do protocolo", () => {

@@ -194,6 +194,11 @@ function resolvePermission(id, allow) {
   return true;
 }
 
+/** Denies everything still waiting for a click — the turn it belongs to is being killed. */
+function denyPendingPermissions() {
+  for (const id of [...pendingPermissions.keys()]) resolvePermission(id, false);
+}
+
 let permissionSeq = 0;
 
 /* --------------------------------------- question broker (mirror of createQuestionBroker) */
@@ -723,6 +728,12 @@ async function runStream() {
     currentQuery = query({ prompt: myChannel, options });
     myQuery = currentQuery;
     for await (const msg of currentQuery) {
+      // IDENTIDADE, de novo — agora no CORPO do laço. Um stream que `endStream` desistiu de esperar
+      // foi deserdado (ver lá) e pode seguir falando ao lado do que o substituiu: o `result` tardio
+      // dele fechava o turno NOVO (a próxima mensagem deixava de ser absorvida e o manager ficava
+      // com um turno a mais para sempre), devolvia o esforço do ultrathink do stream novo, e o
+      // `assistant` dele movia o ponto de volta para um galho morto. O que ele diz é só drenado.
+      if (currentQuery !== myQuery) continue;
       if (msg.type === "system") {
         if (msg.session_id) {
           // Streaming mode delivers MANY system messages per turn (init, hooks…), all carrying the
@@ -811,17 +822,28 @@ async function runStream() {
     // botão de parar, que vira um no-op silencioso). Hazard anterior a esta mudança; a guarda
     // custa uma comparação e no caminho normal não muda nada.
     const stillOurs = currentQuery === myQuery;
-    if (stillOurs && turnActive) {
-      turnActive = false;
-      emit({ type: "result", subtype: "aborted", isError: false, sessionId: lastSessionId });
-    }
+    if (stillOurs) closeTurnAborted();
     if (channel === myChannel) channel = null;
     if (closingQuery === myQuery) closingQuery = null;
-    if (stillOurs) currentQuery = null;
-    // The next stream is a NEW CLI process: whatever we pinned in this one's flag layer died with
-    // it, so there is nothing left to give back.
-    ultraRaised = null;
+    if (stillOurs) {
+      currentQuery = null;
+      // The next stream is a NEW CLI process: whatever we pinned in this one's flag layer died with
+      // it, so there is nothing left to give back. (A disowned stream ending late must not wipe
+      // what its SUCCESSOR pinned — that effort would never be given back.)
+      ultraRaised = null;
+    }
   }
+}
+
+/**
+ * Closes the turn in flight, if any, with the `aborted` result it still owes: the front's
+ * "Trabalhando…" clears only on a result, and the manager counts turns by results — a turn that
+ * ends without one leaves the driver "busy" forever (no idle stop, the in-flight marker kept).
+ */
+function closeTurnAborted() {
+  if (!turnActive) return;
+  turnActive = false;
+  emit({ type: "result", subtype: "aborted", isError: false, sessionId: lastSessionId });
 }
 
 /* --------------------------------- the reserved words (ultrathink / ultracode) */
@@ -1017,6 +1039,9 @@ function sendUser(text) {
   if (absorbed) emit({ type: "turn_absorbed" });
 }
 
+/** How long the teardown waits for the CLI to acknowledge an interrupt before closing the channel anyway. */
+const INTERRUPT_TIMEOUT_MS = 3_000;
+
 /**
  * Stops the live stream so the next one can resume somewhere else. Interrupts a running turn,
  * closes the prompt channel and waits for `runStream` to let go of the query — without that wait
@@ -1029,19 +1054,35 @@ async function endStream() {
   // Claimed BEFORE the first thing that can kill it: whatever this stream throws from here on is
   // the teardown talking, not a problem the person needs to read about.
   closingQuery = dying;
+  // A turn parked on a permission card is being killed: deny it first, like the stop button does.
+  // The CLI answers the interrupt only after the hook it is waiting on returns, so without this
+  // the edit (and every message queued behind it) waited for the 5-minute permission timeout.
+  denyPendingPermissions();
   try {
-    if (typeof dying.interrupt === "function") await dying.interrupt();
+    if (typeof dying.interrupt === "function") {
+      // Bounded: an interrupt the CLI never answers must not hold the teardown — the channel is
+      // closed below and the wait for the stream to let go has its own ceiling anyway.
+      await Promise.race([
+        dying.interrupt(),
+        new Promise((resolve) => setTimeout(resolve, INTERRUPT_TIMEOUT_MS)),
+      ]);
+    }
   } catch { /* a turn that was not running cannot be interrupted, and that is fine */ }
   if (ch) ch.end();
   for (let i = 0; i < 120 && currentQuery === dying; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  // GAVE UP waiting: the stream outlived the teardown, and from here the rewind proceeds alongside
-  // it. The quiet claim is released with the wait — a stream still alive after we stopped owning
-  // its death may yet hit a REAL failure, and that one has to reach the person.
-  if (currentQuery === dying && closingQuery === dying) {
-    closingQuery = null;
-    trace("stream did not let go within the teardown window — its errors are news again");
+  if (currentQuery === dying) {
+    // GAVE UP waiting: the stream outlived the teardown, and from here the rewind proceeds alongside
+    // it. It is DISOWNED now — `runStream` only drains what it still says — so the turn it carried
+    // is closed here, with the result the manager is owed (its own late result would no longer
+    // count). The quiet claim is released with the wait: a stream still alive after we stopped
+    // owning its death may yet hit a REAL failure, and that one has to reach the person.
+    currentQuery = null;
+    ultraRaised = null; // pinned in that CLI's flag layer, which is no longer ours to give back
+    closeTurnAborted();
+    if (closingQuery === dying) closingQuery = null;
+    trace("stream did not let go within the teardown window — disowned, its errors are news again");
   }
   if (channel === ch) channel = null;
 }
@@ -1220,7 +1261,7 @@ rl.on("line", (line) => {
     // queue): the interrupt aborts the running turn; a send still queued CLI-side (pushed in the
     // last instant, not yet folded in) can survive it and run as its own turn — its result is one
     // more `result` frame, which the manager's floor-at-zero accounting absorbs.
-    for (const id of [...pendingPermissions.keys()]) resolvePermission(id, false);
+    denyPendingPermissions();
     for (const id of [...pendingQuestions.keys()]) resolveQuestion(id, null);
     if (currentQuery && typeof currentQuery.interrupt === "function") {
       currentQuery.interrupt().catch((err) => {

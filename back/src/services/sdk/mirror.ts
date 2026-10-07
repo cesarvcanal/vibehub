@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { chatSource, parseChatEvents } from "../chat/chat.js";
 import { matchOrigin, primeProvenance } from "../chat/provenance.js";
 import { publishExternalMessage } from "./history.js";
@@ -120,10 +121,46 @@ export function mirrorNewEvents(state: MirrorState, jsonl: string, cardId: strin
 
 /* ---------------------------------------------------------------- runtime */
 
+/**
+ * COMPLETE LINES out of a child's stdout, chunk by chunk — the NDJSON reader shared by this follow
+ * and the SDK driver's stdout (see manager.ts).
+ *
+ * Two things a naive `buffer += chunk.toString()` gets wrong:
+ *  - the pipe cuts wherever it likes, the middle of a multibyte character included: decoded chunk
+ *    by chunk, that "ç" became two U+FFFD, persisted as-is — and the dedupe by text no longer
+ *    matched, so the same sentence came back as a second bubble. The decoder holds an incomplete
+ *    character's bytes until the rest of it arrives;
+ *  - a line of several MB (a big tool result) arrives in hundreds of chunks: searching the WHOLE
+ *    pending text for "\n" on every chunk is quadratic. Only the new piece is searched; the pending
+ *    text is split once, when its line finally ends.
+ *
+ * `maxPending` (optional) drops an unfinished line that grows past it — for a reader that would
+ * rather lose a pathological line than hold it in memory (the legacy chat route, see routes/chat.ts).
+ */
+export function createLineReader(maxPending: number = Number.POSITIVE_INFINITY): (chunk: Buffer) => string[] {
+  const decoder = new StringDecoder("utf8");
+  let pending = "";
+  return (chunk) => {
+    const text = decoder.write(chunk);
+    if (!text.includes("\n")) {
+      pending += text;
+      if (pending.length > maxPending) pending = "";
+      return [];
+    }
+    const lines = (pending + text).split("\n");
+    pending = lines.pop() ?? "";
+    if (pending.length > maxPending) pending = "";
+    return lines;
+  };
+}
+
 interface CardMirror {
   refs: number;
   state: MirrorState;
+  /** The live follow process — null before it starts, after it dies, and after the last release. */
   child: ChildProcess | null;
+  /** A follow is being spawned right now (its setup awaits): a concurrent acquire must not spawn a second. */
+  starting: boolean;
 }
 
 const mirrors = new Map<string, CardMirror>();
@@ -183,9 +220,17 @@ export function onOutsideTurn(cardId: string, listener: () => void): () => void 
   };
 }
 
-/** O card acabou (driver encerrado, card apagado): a memória dele vai junto. */
+/**
+ * O card acabou (driver encerrado, card apagado): a memória dele vai junto.
+ *
+ * ESVAZIADA, não trocada: um espelho vivo adotou este MESMO Set ao nascer (`createMirrorState`) e
+ * segue lendo dele. Trocar o Set do mapa deixava o espelho com a memória do driver morto, enquanto
+ * o sucessor escrevia num Set novo que ninguém lia — e cada fala do sucessor voltava pelo transcript
+ * como se fosse do terminal, uma bolha duplicada. A entrada só sai do mapa sem espelho que a use.
+ */
 export function forgetDriverKeys(cardId: string): void {
-  driverKeysByCard.delete(cardId);
+  driverKeysByCard.get(cardId)?.clear();
+  if (!mirrors.has(cardId)) driverKeysByCard.delete(cardId);
 }
 
 /** Reports a driver event/user send of a card into its dedupe memory — haja espelho ou não. */
@@ -213,7 +258,10 @@ function stopChild(mirror: CardMirror): void {
 export interface AcquireMirrorOpts {
   /** Events at or before this instant are the connect replay's business, not the mirror's. */
   cutoffAt?: number;
-  /** Transcript ids the connect replay already drew — pre-seeds the dedupe on the FIRST acquire. */
+  /**
+   * Transcript ids the connect replay already drew — pre-seeds the dedupe on the FIRST acquire, and
+   * again when a later acquire has to restart a follow that died (that tab's replay drew them too).
+   */
   seenIds?: Iterable<string>;
 }
 
@@ -226,6 +274,15 @@ export async function acquireTranscriptMirror(cardId: string, opts: AcquireMirro
   const existing = mirrors.get(cardId);
   if (existing) {
     existing.refs += 1;
+    // A follow that died on its own (runner restart, reaper) left the mirror ALIVE but deaf: while
+    // any older tab held a ref, every new connect joined a mirror that mirrored nothing, and live
+    // mirroring never came back. A connect is the moment to start it again — unless one is already
+    // starting (two tabs connecting together still get ONE follow).
+    if (!existing.child && !existing.starting) {
+      for (const id of opts.seenIds ?? []) existing.state.seen.add(id);
+      capSet(existing.state.seen);
+      await startFollow(cardId, existing);
+    }
     return () => release(cardId);
   }
   // O espelho ADOTA a memória do card: o que o driver já foi mandado dizer antes de alguém abrir
@@ -234,34 +291,49 @@ export async function acquireTranscriptMirror(cardId: string, opts: AcquireMirro
     refs: 1,
     state: createMirrorState(opts.cutoffAt ?? Date.now(), opts.seenIds, driverKeysFor(cardId)),
     child: null,
+    starting: false,
   };
   mirrors.set(cardId, mirror);
+  await startFollow(cardId, mirror);
+  return () => release(cardId);
+}
+
+/** Spawns the mirror's follow process and wires its stdout into the conversation. Never throws. */
+async function startFollow(cardId: string, mirror: CardMirror): Promise<void> {
+  mirror.starting = true;
   try {
     await primeProvenance(cardId).catch(() => undefined);
     const source = await chatSource(cardId);
     const child = spawn(source.command.file, source.command.args, { stdio: ["pipe", "pipe", "ignore"] });
     mirror.child = child;
-    let pending = "";
+    const readLines = createLineReader();
     child.stdout?.on("data", (chunk: Buffer) => {
-      pending += chunk.toString("utf8");
-      const lines = pending.split("\n");
-      pending = lines.pop() ?? "";
-      const batch = lines.join("\n");
+      const batch = readLines(chunk).join("\n");
       if (batch.trim() === "") return;
       for (const event of mirrorNewEvents(mirror.state, batch, cardId)) {
         void publishExternalMessage(cardId, event);
       }
     });
-    child.on("close", () => {
-      // The follow died on its own (runner restart, reaper): live mirroring stops until the next
-      // connect; the replay merge covers whatever happened in between.
-      if (mirrors.get(cardId) === mirror) mirror.child = null;
+    // The follow died on its own (runner restart, reaper, a spawn that failed): the mirror forgets
+    // it, and the next acquire starts a fresh one; the replay merge covers whatever happened between.
+    const forgetChild = (): void => {
+      if (mirrors.get(cardId) === mirror && mirror.child === child) mirror.child = null;
+    };
+    child.on("close", forgetChild);
+    // A spawn that fails asynchronously (EAGAIN, EMFILE) arrives as 'error' — and an 'error' with no
+    // listener is rethrown by Node as an uncaught exception that takes the whole back down. Same for
+    // the EPIPE `stopChild`'s `stdin.end()` can raise on a follow that is already gone.
+    child.on("error", (err) => {
+      logger.warn({ card: cardId, detail: err.message }, "sdk transcript mirror follow failed");
+      forgetChild();
     });
+    child.stdin?.on("error", () => { /* the follow is gone; `close`/`error` above already tell it */ });
     logger.debug({ card: cardId }, "sdk transcript mirror attached");
   } catch (err) {
     logger.warn({ card: cardId, detail: (err as Error).message }, "could not start the sdk transcript mirror");
+  } finally {
+    mirror.starting = false;
   }
-  return () => release(cardId);
 }
 
 function release(cardId: string): void {
