@@ -317,6 +317,16 @@ export const ptBR: Record<string, string> = {
   "card.updatingWhenFinishesHint":
     "O cérebro, os MCPs ou o modelo/conta deste card mudou enquanto ele trabalhava — reinicia sozinho no novo quando ficar livre, sem interromper.",
   "card.projectChip": "Projeto: {name}",
+  "card.purgeIn": "Apagado em {time}",
+  "card.purgeSoon": "Será apagado a qualquer momento",
+  "card.purgeMinutes": "{n} min",
+  "card.purgeHours": "{n} h",
+  "card.purgeDays.one": "{n} dia",
+  "card.purgeDays.other": "{n} dias",
+  "card.purgeHint.one":
+    "Cards em Feito são apagados — com worktree, branch e anexos no servidor — após {n} dia sem atividade. Qualquer atividade no card (conversar com o agente, renomear) reinicia a contagem.",
+  "card.purgeHint.other":
+    "Cards em Feito são apagados — com worktree, branch e anexos no servidor — após {n} dias sem atividade. Qualquer atividade no card (conversar com o agente, renomear) reinicia a contagem.",
   "card.ownAccount": "A conta Claude deste card",
   "card.actionsFor": "Ações de {title}",
   "card.declaredState.working": "Em andamento",

@@ -367,6 +367,11 @@ export interface CardPatchInput {
  */
 export interface InstallFeatures {
   sdkChat: boolean;
+  /**
+   * How long a card sits untouched in `done` before the server purges it (days; 0 = never).
+   * Absent on a server older than the countdown — the card then shows none.
+   */
+  doneRetentionDays?: number;
 }
 
 /* --------------------------------------------------------------- requests */
