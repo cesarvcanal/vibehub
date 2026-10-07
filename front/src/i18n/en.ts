@@ -323,9 +323,9 @@ export const en: Record<string, string> = {
   "card.purgeDays.one": "{n} day",
   "card.purgeDays.other": "{n} days",
   "card.purgeHint.one":
-    "Done cards are deleted — with their worktree, branch and attachments on the server — after {n} day without activity. Any activity on the card (talking to the agent, a rename) restarts the count.",
+    "Done cards are deleted — with their worktree, branch and attachments on the server — after {n} day without activity. Activity on the card (talking to the agent, typing in the terminal, a rename) restarts the count — just opening it does not.",
   "card.purgeHint.other":
-    "Done cards are deleted — with their worktree, branch and attachments on the server — after {n} days without activity. Any activity on the card (talking to the agent, a rename) restarts the count.",
+    "Done cards are deleted — with their worktree, branch and attachments on the server — after {n} days without activity. Activity on the card (talking to the agent, typing in the terminal, a rename) restarts the count — just opening it does not.",
   "card.ownAccount": "This card's Claude account",
   "card.actionsFor": "Actions for {title}",
   "card.declaredState.working": "On it",

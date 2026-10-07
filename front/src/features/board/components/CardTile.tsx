@@ -316,6 +316,26 @@ export function CardTile({
 const COUNTDOWN_TICK_MS = 30_000;
 
 /**
+ * ONE clock for every countdown on the board: a column of 128 done cards runs one interval, not
+ * 128, and their updates land in the same callback, so React renders them as one batch. The timer
+ * exists only while some countdown is mounted.
+ */
+const countdownListeners = new Set<() => void>();
+let countdownTimer: ReturnType<typeof setInterval> | null = null;
+
+function onCountdownTick(listener: () => void): () => void {
+  countdownListeners.add(listener);
+  countdownTimer ??= setInterval(() => countdownListeners.forEach((l) => l()), COUNTDOWN_TICK_MS);
+  return () => {
+    countdownListeners.delete(listener);
+    if (countdownListeners.size === 0 && countdownTimer) {
+      clearInterval(countdownTimer);
+      countdownTimer = null;
+    }
+  };
+}
+
+/**
  * "Deleted in 22 h" under a done card — the server's retention (GET /api/features), counted from
  * the same stamps the server counts from (lib/doneRetention). Mounted only on done cards, so the
  * other columns run neither the query nor the timer. Renders NOTHING while the retention is
@@ -330,8 +350,7 @@ function PurgeCountdownLine({ card }: { card: BoardCard }) {
   React.useEffect(() => {
     if (purgeAt === null) return undefined;
     setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), COUNTDOWN_TICK_MS);
-    return () => clearInterval(timer);
+    return onCountdownTick(() => setNow(Date.now()));
   }, [purgeAt]);
   if (purgeAt === null || retentionDays === undefined) return null;
 

@@ -338,6 +338,8 @@ describe("CardTile — the countdown on a done card", () => {
     const line = await screen.findByText(/Deleted in/);
     expect(line).toHaveAttribute("title", expect.stringMatching(/1 day without activity/));
     expect(line).toHaveAttribute("title", expect.stringMatching(/attachments/));
+    // Opening a card is not activity on the server's clock — the tooltip must not let anyone think so.
+    expect(line).toHaveAttribute("title", expect.stringMatching(/just opening it does not/));
   });
 
   it("past the deadline it says 'any moment now' (the hourly sweep has not reached it yet)", async () => {

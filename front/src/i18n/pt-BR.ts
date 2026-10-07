@@ -324,9 +324,9 @@ export const ptBR: Record<string, string> = {
   "card.purgeDays.one": "{n} dia",
   "card.purgeDays.other": "{n} dias",
   "card.purgeHint.one":
-    "Cards em Feito são apagados — com worktree, branch e anexos no servidor — após {n} dia sem atividade. Qualquer atividade no card (conversar com o agente, renomear) reinicia a contagem.",
+    "Cards em Feito são apagados — com worktree, branch e anexos no servidor — após {n} dia sem atividade. Atividade no card (conversar com o agente, digitar no terminal, renomear) reinicia a contagem — só abrir não conta.",
   "card.purgeHint.other":
-    "Cards em Feito são apagados — com worktree, branch e anexos no servidor — após {n} dias sem atividade. Qualquer atividade no card (conversar com o agente, renomear) reinicia a contagem.",
+    "Cards em Feito são apagados — com worktree, branch e anexos no servidor — após {n} dias sem atividade. Atividade no card (conversar com o agente, digitar no terminal, renomear) reinicia a contagem — só abrir não conta.",
   "card.ownAccount": "A conta Claude deste card",
   "card.actionsFor": "Ações de {title}",
   "card.declaredState.working": "Em andamento",
