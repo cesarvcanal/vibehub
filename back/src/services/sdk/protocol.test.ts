@@ -506,31 +506,18 @@ describe("normalizeSlashCommands — the chat's \"/\" catalogue", () => {
 });
 
 /**
- * O IDIOMA DO RACIOCÍNIO vem do NAVEGADOR (localStorage), então ele atravessa o socket como um
- * frame comum — e um frame comum é entrada não confiável: ele termina num system prompt.
+ * O CONTROLE DE IDIOMA MORREU: ele só existia para pôr uma instrução de idioma no system prompt do
+ * driver, o gatilho do bloqueio do Opus. Uma aba aberta ANTES do deploy ainda manda o frame ao
+ * conectar — ele precisa sumir em silêncio: nem chegar ao driver, nem virar mensagem do usuário.
  */
-describe("parseSdkClientFrame — o controle de idioma", () => {
-  it("aceita um tag de idioma", () => {
-    expect(parseSdkClientFrame(JSON.stringify({ type: "language", language: "pt-BR" })))
-      .toEqual({ type: "language", language: "pt-BR" });
-  });
-
-  it("recusa o que não é tag: nada disso pode virar texto de system prompt", () => {
+describe("parseSdkClientFrame — o frame de idioma de uma aba antiga", () => {
+  it("é descartado (null), com ou sem tag", () => {
+    expect(parseSdkClientFrame(JSON.stringify({ type: "language", language: "pt-BR" }))).toBe(null);
     expect(parseSdkClientFrame(JSON.stringify({ type: "language" }))).toBe(null);
-    expect(parseSdkClientFrame(JSON.stringify({ type: "language", language: 42 }))).toBe(null);
-    expect(parseSdkClientFrame(JSON.stringify({ type: "language", language: { toString: 1 } }))).toBe(null);
   });
+});
 
-  it("um tag absurdamente longo é recusado — tag de idioma é curto, parágrafo não é", () => {
-    expect(parseSdkClientFrame(JSON.stringify({ type: "language", language: "x".repeat(33) }))).toBe(null);
-    expect(parseSdkClientFrame(JSON.stringify({ type: "language", language: "x".repeat(32) })))
-      .toEqual({ type: "language", language: "x".repeat(32) });
-  });
-
-  it("o driver recebe o controle inteiro (o encode não derruba o campo)", () => {
-    expect(encodeControl({ type: "language", language: "pt-BR" })).toBe('{"type":"language","language":"pt-BR"}\n');
-  });
-
+describe("parseSdkClientFrame — reanchor", () => {
   it("`reanchor` nasce no BACK, nunca no navegador: o parser de frames não o inventa", () => {
     expect(parseSdkClientFrame(JSON.stringify({ type: "reanchor" }))).toBe(null);
     // mas o back sabe escrevê-lo
