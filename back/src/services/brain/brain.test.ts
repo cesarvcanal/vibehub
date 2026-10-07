@@ -391,6 +391,25 @@ describe("appendProjectLearning (store)", () => {
     expect(text.match(/novo fato/g)?.length).toBe(1);
   });
 
+  it("two simultaneous learnings both land — neither overwrites the other", async () => {
+    const { mod } = await fresh();
+    await mod.setProjectBrainText("p1", "# P1");
+    await Promise.all([mod.appendProjectLearning("p1", "fato um"), mod.appendProjectLearning("p1", "fato dois")]);
+    const text = await mod.resolveProjectBrainText("p1");
+    expect(text).toContain("fato um");
+    expect(text).toContain("fato dois");
+  });
+
+  it("a learning does not revert the operator's save that raced with it", async () => {
+    const { mod } = await fresh();
+    await mod.setProjectBrainText("p1", "# P1 velho");
+    // The save is queued first; the learning must append to IT, not to the text it saw before.
+    await Promise.all([mod.setProjectBrainText("p1", "# P1 novo"), mod.appendProjectLearning("p1", "fato")]);
+    const text = await mod.resolveProjectBrainText("p1");
+    expect(text).toContain("# P1 novo");
+    expect(text).toContain("fato");
+  });
+
   it("bootstraps a project that has no brain yet with just the section", async () => {
     const { mod } = await fresh();
     const r = await mod.appendProjectLearning("novo", "primeira lição");

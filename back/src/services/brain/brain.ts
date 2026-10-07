@@ -416,13 +416,14 @@ export async function appendProjectLearning(
 ): Promise<{ added: boolean; entry: string; text: string }> {
   const id = String(projectId ?? "").trim();
   if (!id) throw new Error("project id is required");
-  const current = await resolveProjectBrainText(id);
-  const result = appendLearning(current, learning);
+  // Read-modify-write INSIDE the mutation: reading the text before it let an operator's save that
+  // landed in between be reverted, and two simultaneous learnings each drop the other's line.
+  const result = await store.mutate((doc) => {
+    const appended = appendLearning(doc.projects[id]?.text ?? "", learning);
+    if (appended.added) doc.projects[id] = { text: appended.text, updatedAt: new Date().toISOString(), by: by ?? null };
+    return appended;
+  });
   if (result.added) {
-    const rec: BrainRecord = { text: result.text, updatedAt: new Date().toISOString(), by: by ?? null };
-    await store.mutate((doc) => {
-      doc.projects[id] = rec;
-    });
     logger.info(
       { audit: true, action: "brain.project.learn", project: id, bytes: Buffer.byteLength(result.text), by },
       "learning appended to the project brain",
