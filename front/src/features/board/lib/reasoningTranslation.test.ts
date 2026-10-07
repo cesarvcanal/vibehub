@@ -246,6 +246,15 @@ describe("createReasoningTranslator", () => {
     );
   });
 
+  // 5ª revisão: marcadores empilhados e espaços depois de ">" ainda chegavam ao tradutor.
+  it("marcadores empilhados ('> - [ ]', '## 1.') e espaços depois de '>' ficam intactos", async () => {
+    const t = fakeTranslator();
+    const tr = createReasoningTranslator({ translator: t.factory });
+    await expect(
+      tr.translate("> - [ ] the task is this\n## 1. the step is first\n  >  the indented quote is it   "),
+    ).resolves.toBe("> - [ ] PT(the task is this)\n## 1. PT(the step is first)\n  >  PT(the indented quote is it)   ");
+  });
+
   it("fence com linha gigante ainda abre/fecha o bloco de código", async () => {
     const t = fakeTranslator();
     const tr = createReasoningTranslator({ translator: t.factory });

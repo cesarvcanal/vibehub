@@ -141,7 +141,7 @@ const FENCE = /^\s*(?:```|~~~)/;
  * Marcador de citação/título/lista/checkbox/numeração: fica intacto ("- [ ]" virava "- []"; ">" e
  * "##" iam junto para o tradutor). Sem backtracking.
  */
-const LIST_MARKER = /^(?:(?:>\s?)+|#{1,6}\s+|[-*+]\s+(?:\[[ xX]\](?:\s+|$))?|\d+[.)]\s+)/;
+const LIST_MARKER = /^(?:(?:>[ \t]*)+|#{1,6}\s+|[-*+]\s+(?:\[[ xX]\](?:\s+|$))?|\d+[.)]\s+)/;
 
 /**
  * Traduz LINHA por linha: o tradutor local junta as linhas de um mesmo pedaço ("- a - b", provado no
@@ -170,8 +170,13 @@ async function translateLines(translator: TranslatorLike, text: string): Promise
     }
     const body = line.trimStart();
     const indent = line.slice(0, line.length - body.length);
-    const marker = LIST_MARKER.exec(body)?.[0] ?? "";
-    const rest = body.slice(marker.length);
+    // marcadores EMPILHADOS ("> - [ ]", "## 1.") — consome um de cada vez; cada volta come ≥1 char
+    let marker = "";
+    let rest = body;
+    for (let m = LIST_MARKER.exec(rest)?.[0]; m; m = LIST_MARKER.exec(rest)?.[0]) {
+      marker += m;
+      rest = rest.slice(m.length);
+    }
     const core = rest.trimEnd();
     out.push(core === "" ? line : indent + marker + (await translator.translate(core)) + rest.slice(core.length));
   }
