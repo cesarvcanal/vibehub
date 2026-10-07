@@ -21,6 +21,8 @@ vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 
 let dir = "";
 let app: FastifyInstance;
+/** How many times the GitHub connection list was read (see boot). */
+let connectionLookups = 0;
 
 async function boot(): Promise<FastifyInstance> {
   vi.resetModules();
@@ -38,6 +40,15 @@ async function boot(): Promise<FastifyInstance> {
       container: "vibehub-runner", host: "this machine",
     })),
   }));
+  // The REAL registry, with its connection list counted: one patch should look the list up once.
+  connectionLookups = 0;
+  vi.doMock("../services/board/registry.js", async (importOriginal) => {
+    const real = await importOriginal<typeof import("../services/board/registry.js")>();
+    return {
+      ...real,
+      listGithubConnections: async () => { connectionLookups += 1; return await real.listGithubConnections(); },
+    };
+  });
   const { buildServer } = await import("../index.js");
   const server = await buildServer();
   await server.ready();
@@ -106,6 +117,19 @@ describe("a person's git identity (commit author + GitHub connection)", () => {
     expect(list.json().users.find((u: { id: string }) => u.id === id).git.gitEmail).toBe("xerif.off@gmail.com");
   });
 
+  it("um PATCH valida a conexão UMA vez — não de novo na hora de gravar", async () => {
+    const owner = await signUpOwner(app);
+    await addMember(app, owner, "mussa");
+    const id = await memberId(owner, "mussa");
+    const connection = await connect(owner, "mussa", "wellesley-mussolini");
+    connectionLookups = 0;
+    const res = await app.inject({
+      method: "PATCH", url: `/api/users/${id}`, headers: { cookie: owner }, payload: { githubConnectionId: connection },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(connectionLookups).toBe(1);
+  });
+
   it("conexão que não existe é recusada ANTES de gravar qualquer coisa", async () => {
     const owner = await signUpOwner(app);
     await addMember(app, owner, "mussa");
@@ -130,6 +154,26 @@ describe("a person's git identity (commit author + GitHub connection)", () => {
       payload: { gitEmail: "a$(whoami)@x.com" },
     });
     expect(res.statusCode).toBe(400);
+  });
+
+  it("um PATCH com um campo inválido não grava NADA — nem o papel, nem a senha", async () => {
+    const owner = await signUpOwner(app);
+    await addMember(app, owner, "mussa");
+    const id = await memberId(owner, "mussa");
+    for (const payload of [
+      { role: "owner", password: "brandnewsecret", gitEmail: "a$(whoami)@x.com" },
+      { role: "owner", password: "brandnewsecret", githubConnectionId: "nao-existe" },
+      { role: "owner", password: "short" },
+    ]) {
+      const res = await app.inject({ method: "PATCH", url: `/api/users/${id}`, headers: { cookie: owner }, payload });
+      expect(res.statusCode).toBe(400);
+    }
+    const list = await app.inject({ method: "GET", url: "/api/users", headers: { cookie: owner } });
+    expect(list.json().users.find((u: { id: string }) => u.id === id).role).toBe("member");
+    const login = await app.inject({
+      method: "POST", url: "/api/auth/login", payload: { username: "mussa", password: "supersecret" },
+    });
+    expect(login.statusCode).toBe(200);
   });
 
   it("cada um troca a PRÓPRIA identidade sem depender do owner", async () => {
@@ -193,6 +237,17 @@ describe("a person's git identity (commit author + GitHub connection)", () => {
 });
 
 describe("the owner's user list", () => {
+  it("two setup requests racing on a fresh install create ONE owner — the other gets 409", async () => {
+    // Both pass a "nobody exists yet" check made BEFORE the scrypt hash unless the check lives in
+    // the same serialized mutation that writes the user.
+    const [a, b] = await Promise.all(["first", "second"].map((username) => app.inject({
+      method: "POST", url: "/api/setup/owner", payload: { username, password: "supersecret" },
+    })));
+    expect([a!.statusCode, b!.statusCode].sort()).toEqual([200, 409]);
+    const { listUsers } = await import("../auth/users.js");
+    expect(await listUsers()).toHaveLength(1);
+  });
+
   it("makes the setup wizard's account an owner", async () => {
     const owner = await signUpOwner(app);
     const me = await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: owner } });
@@ -251,7 +306,61 @@ describe("the owner's user list", () => {
     expect((await app.inject({ method: "DELETE", url: `/api/users/${id}`, headers: { cookie: owner } })).statusCode)
       .toBe(200);
     // The session of a removed user stops working, because there is no account behind it any more.
+    const me = await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: member } });
+    expect(me.statusCode).toBe(401);
+    // ...and /me — the route the app asks on boot — tells the browser to drop the dead cookie,
+    // instead of it being replayed (and refused) on every request until it expires.
+    expect(String(me.headers["set-cookie"])).toMatch(/vibehub_session=;/);
+  });
+
+  it("/me with NO cookie is a plain 401 — nothing to clear", async () => {
+    const me = await app.inject({ method: "GET", url: "/api/auth/me" });
+    expect(me.statusCode).toBe(401);
+    expect(me.headers["set-cookie"]).toBeUndefined();
+  });
+
+  it("a removed member's cookie opens NO session route — and cannot recreate their records", async () => {
+    const owner = await signUpOwner(app);
+    const member = await addMember(app, owner);
+    const id = (await app.inject({ method: "GET", url: "/api/users", headers: { cookie: owner } }))
+      .json().users.find((u: { username: string }) => u.username === "alex").id;
+    await app.inject({ method: "DELETE", url: `/api/users/${id}`, headers: { cookie: owner } });
+
+    const write = await app.inject({
+      method: "PATCH", url: "/api/me/git", headers: { cookie: member }, payload: { gitName: "ghost" },
+    });
+    expect(write.statusCode).toBe(401);
+    const { getUserGit } = await import("../auth/userGit.js");
+    expect(await getUserGit(id)).toBeNull();
+    expect((await app.inject({ method: "GET", url: "/api/projects", headers: { cookie: member } })).statusCode)
+      .toBe(401);
+  });
+
+  it("a password reset by the owner ends the sessions that were already open", async () => {
+    const owner = await signUpOwner(app);
+    const member = await addMember(app, owner);
+    const id = (await app.inject({ method: "GET", url: "/api/users", headers: { cookie: owner } }))
+      .json().users.find((u: { username: string }) => u.username === "alex").id;
+    await app.inject({
+      method: "PATCH", url: `/api/users/${id}`, headers: { cookie: owner }, payload: { password: "brandnewsecret" },
+    });
     expect((await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: member } })).statusCode)
+      .toBe(401);
+    // The owner did it to somebody else: the owner's own session is untouched.
+    expect((await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: owner } })).statusCode)
+      .toBe(200);
+  });
+
+  it("changing YOUR OWN password keeps you signed in on the new cookie, and the old one stops", async () => {
+    const owner = await signUpOwner(app);
+    const res = await app.inject({
+      method: "POST", url: "/api/auth/password", headers: { cookie: owner }, payload: { password: "anothersecret" },
+    });
+    expect(res.statusCode).toBe(200);
+    const fresh = cookieOf(res);
+    expect((await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: fresh } })).statusCode)
+      .toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: owner } })).statusCode)
       .toBe(401);
   });
 

@@ -21,6 +21,10 @@ services:
     container_name: vibehub
     restart: unless-stopped
     ports:
+      # Every interface, so a bare LAN install is reachable. Behind a gateway on this host with
+      # VIBEHUB_TRUST_PROXY set, publish "127.0.0.1:3010:3010" instead: a client that reaches the port
+      # directly arrives from docker's bridge address, which the trust setting believes, and could
+      # forge X-Forwarded-For to dodge the sign-in throttle.
       - "3010:3010"
     environment:
       # How the runner reaches vibehub back (status hooks). On a server, use the address the runner
@@ -35,6 +39,9 @@ services:
       VIBEHUB_INSECURE_COOKIES: "${VIBEHUB_INSECURE_COOKIES:-1}"
       # Set this to pin the vault key instead of letting vibehub generate one into the data volume.
       VIBEHUB_SECRET_KEY: "${VIBEHUB_SECRET_KEY:-}"
+      # Behind Caddy/Traefik/nginx: name the gateway (its address/CIDR, "loopback", "uniquelocal", or
+      # a hop count) so the sign-in throttle sees each client, not the gateway. See .env.example.
+      VIBEHUB_TRUST_PROXY: "${VIBEHUB_TRUST_PROXY:-}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - vibehub-data:/data

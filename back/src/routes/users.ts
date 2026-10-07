@@ -1,9 +1,16 @@
 import type { FastifyInstance } from "fastify";
-import { requireOwner, requireSession, sessionUserId, clearSessionCookie } from "../auth/session.js";
-import { getUserGit, setUserGit, removeUserGit, type UserGitIdentity } from "../auth/userGit.js";
+import {
+  requireOwner, requireSession, sessionUserId, clearSessionCookie, setSessionCookie,
+} from "../auth/session.js";
+import { endRevokedSessionSockets } from "../auth/sessionSockets.js";
+import {
+  getUserGit, setUserGit, removeUserGit, assertGitName, assertGitEmail, type UserGitIdentity,
+} from "../auth/userGit.js";
 import { listGithubConnections } from "../services/board/registry.js";
 import { reapplyIdentityForUser } from "../services/board/workspace.js";
-import { createUser, listUsers, changePassword, removeUser, setRole, assertRole } from "../auth/users.js";
+import {
+  createUser, listUsers, findUser, changePassword, removeUser, setRole, assertRole, assertPassword,
+} from "../auth/users.js";
 import { removeSharesForUser } from "../services/board/registry.js";
 import { logger } from "../utils/logger.js";
 
@@ -34,9 +41,27 @@ function publicGit(git: UserGitIdentity): Omit<UserGitIdentity, "userId"> {
 }
 
 /**
- * Applies the git fields of a patch, if it carries any. A DANGLING connection id would make every
+ * Checks the git fields of a patch WITHOUT storing anything — so a route that writes other things
+ * too can refuse the whole patch before the first write. A DANGLING connection id would make every
  * push of that person fail with a credential that is not in the vault — the same guard
- * `Project.githubConnectionId` already has, which is why it is checked before anything is stored.
+ * `Project.githubConnectionId` already has. THROWS on the first bad field.
+ */
+async function assertGitPatch(body: UserPatchBody): Promise<void> {
+  const { githubConnectionId, gitName, gitEmail } = body;
+  if (gitName !== undefined && gitName !== null) assertGitName(gitName);
+  if (gitEmail !== undefined && gitEmail !== null) assertGitEmail(gitEmail);
+  if (githubConnectionId !== undefined && githubConnectionId !== null) {
+    const connections = await listGithubConnections();
+    if (!connections.some((c) => c.id === githubConnectionId)) {
+      throw new Error(`GitHub connection '${githubConnectionId}' does not exist`);
+    }
+  }
+}
+
+/**
+ * Applies the git fields of a patch, if it carries any. Does NOT validate: every caller runs
+ * {@link assertGitPatch} first — the owner's PATCH before its first write of anything — and checking
+ * again here only read the connection list a second time.
  */
 async function applyGitPatch(
   userId: string, body: UserPatchBody,
@@ -44,12 +69,6 @@ async function applyGitPatch(
   const { githubConnectionId, gitName, gitEmail } = body;
   const touched = githubConnectionId !== undefined || gitName !== undefined || gitEmail !== undefined;
   if (!touched) return { touched: false, identity: await getUserGit(userId) };
-  if (githubConnectionId !== undefined && githubConnectionId !== null) {
-    const connections = await listGithubConnections();
-    if (!connections.some((c) => c.id === githubConnectionId)) {
-      throw new Error(`GitHub connection '${githubConnectionId}' does not exist`);
-    }
-  }
   const identity = await setUserGit(userId, { githubConnectionId, gitName, gitEmail });
   // The cards this person is ALREADY working pick it up now, not on their next open. Fire and
   // forget: a wedged runner must not fail the save the screen is waiting on.
@@ -80,16 +99,35 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  /** Reset a password, change a role, or both. Either field may be absent. */
+  /**
+   * Reset a password, change a role, edit the git identity — any subset. ALL OR NOTHING: every field
+   * is validated before the first write, so a bad e-mail cannot answer 400 over a role that was
+   * already promoted. The one refusal that depends on state — the last-owner guard — belongs to
+   * `setRole`, which is therefore the FIRST write: when it refuses, nothing has been stored yet.
+   */
   app.patch<{ Params: { id: string }; Body: UserPatchBody }>(
     "/api/users/:id", { preHandler: requireOwner },
     async (req, reply) => {
-      const { password, role } = req.body ?? {};
+      const body = req.body ?? {};
+      const { password, role } = body;
+      const me = await sessionUserId(req);
       try {
-        if (role !== undefined) await setRole(req.params.id, assertRole(role));
-        if (password !== undefined) await changePassword(req.params.id, password);
-        const git = await applyGitPatch(req.params.id, req.body ?? {});
-        const user = (await listUsers()).find((u) => u.id === req.params.id);
+        if (!(await findUser(req.params.id))) return await reply.code(404).send({ error: "user not found" });
+        const nextRole = role !== undefined ? assertRole(role) : undefined;
+        if (password !== undefined) assertPassword(password);
+        await assertGitPatch(body);
+
+        if (nextRole !== undefined) await setRole(req.params.id, nextRole);
+        if (password !== undefined) {
+          await changePassword(req.params.id, password);
+          // The reset revoked that person's open sessions. When the owner reset their OWN password
+          // through this screen, the session that did it is one of them: hand it a fresh cookie.
+          if (me === req.params.id) await setSessionCookie(reply, req.params.id);
+          // ...and what the revoked sessions already have open (terminals, tunnels) ends now too.
+          await endRevokedSessionSockets(req.params.id);
+        }
+        const git = await applyGitPatch(req.params.id, body);
+        const user = await findUser(req.params.id);
         if (!user) return await reply.code(404).send({ error: "user not found" });
         logger.info(
           {
@@ -122,6 +160,7 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
     const me = await sessionUserId(req);
     if (!me) return await reply.code(401).send({ error: "not authenticated" });
     try {
+      await assertGitPatch(req.body ?? {});
       const git = await applyGitPatch(me, req.body ?? {});
       logger.info({ audit: true, action: "user.git.self", user: me, git: git.touched }, "own git identity updated");
       return await reply.send({ git: git.identity ? publicGit(git.identity) : undefined });
@@ -144,6 +183,8 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       // id would inherit somebody else's GitHub connection.
       await removeUserGit(removed.id);
       if (me === removed.id) clearSessionCookie(reply);
+      // A removed account's sockets outlive the cookie check they passed at the handshake: end them.
+      await endRevokedSessionSockets(removed.id);
       logger.info({ audit: true, action: "user.remove", user: removed.username }, "user removed");
       return await reply.send({ ok: true, user: removed });
     } catch (err) {

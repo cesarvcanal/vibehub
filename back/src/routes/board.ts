@@ -1,6 +1,5 @@
-import { timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { requireSession, requireOwner, currentUser } from "../auth/session.js";
+import { requireSession, requireOwner, requestUser, tokenMatches } from "../auth/session.js";
 import { requireCardAccess, requireCardWork, visibleCards, visibleProjects } from "../auth/access.js";
 import * as registry from "../services/board/registry.js";
 import {
@@ -26,13 +25,19 @@ function badRequest(err: unknown): { code: number; body: { error: string } } {
   return { code, body: { error: message } };
 }
 
-/** Constant-time token comparison — a length-safe wrapper around timingSafeEqual. */
-export function tokenMatches(provided: string | undefined, expected: string | undefined): boolean {
-  if (!provided || !expected) return false;
-  const a = Buffer.from(provided);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
+/**
+ * What a MEMBER with a `work` share may change through PATCH /api/cards/:id — exactly what the card
+ * screen offers them: rename, move, pick the model. The other fields decide what the INSTALL runs
+ * and where it pushes — the Claude account (accounts are the owner's), the branch and its base, an
+ * imported session, the native-chat opt-in — and a share hands over a piece of work, not that.
+ */
+const MEMBER_CARD_FIELDS: ReadonlySet<string> = new Set<keyof registry.UpdateCardInput>([
+  "title", "column", "position", "model",
+]);
+
+/** The fields of a card patch a member may not send (empty = the patch is theirs to make). PURE. */
+function fieldsRefusedToMember(patch: registry.UpdateCardInput): string[] {
+  return Object.keys(patch).filter((key) => !MEMBER_CARD_FIELDS.has(key));
 }
 
 export async function boardRoutes(app: FastifyInstance): Promise<void> {
@@ -41,7 +46,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
   // The listings are the only board routes a member may call: they answer with what has been
   // shared with that person (today: nothing), never with the whole install.
   app.get("/api/projects", { preHandler: requireSession }, async (req, reply) => {
-    const projects = await visibleProjects(await currentUser(req), await registry.listProjects());
+    const projects = await visibleProjects(await requestUser(req), await registry.listProjects());
     return await reply.send({ projects });
   });
 
@@ -97,7 +102,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
    */
   app.delete<{ Params: { id: string } }>("/api/projects/:id", { preHandler: requireOwner }, async (req, reply) => {
     try {
-      const by = (await currentUser(req))?.username;
+      const by = (await requestUser(req))?.username;
       const removed = await registry.removeProject(req.params.id);
       logger.info({ audit: true, action: "project.remove", project: removed.project.id, cards: removed.cards.length },
         "project removed");
@@ -119,14 +124,14 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get<{ Params: { id: string } }>("/api/projects/:id/cards", { preHandler: requireSession }, async (req, reply) => {
-    const cards = await visibleCards(await currentUser(req), await registry.listCards(req.params.id));
+    const cards = await visibleCards(await requestUser(req), await registry.listCards(req.params.id));
     return await reply.send({ cards });
   });
 
   /* ------------------------------------------------------------------- cards */
 
   app.get("/api/cards", { preHandler: requireSession }, async (req, reply) => {
-    const cards = await visibleCards(await currentUser(req), await registry.listAllCards());
+    const cards = await visibleCards(await requestUser(req), await registry.listAllCards());
     return await reply.send({ cards });
   });
 
@@ -182,6 +187,14 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
   app.patch<{ Params: { id: string }; Body: registry.UpdateCardInput }>(
     "/api/cards/:id", { preHandler: requireCardWork },
     async (req, reply) => {
+      // requireCardWork answered "may touch this card"; WHICH fields is a second question, and the
+      // whole patch is refused (nothing applied) when it reaches past what a share hands over.
+      if ((await requestUser(req))?.role !== "owner") {
+        const refused = fieldsRefusedToMember(req.body ?? {});
+        if (refused.length > 0) {
+          return await reply.code(403).send({ error: `only the owner can change: ${refused.join(", ")}` });
+        }
+      }
       // SNAPSHOT before the write. `getCard` hands back the LIVE cached record and `updateCard`
       // mutates that very object, so a "before" that is not copied is really the "after": both
       // things that compare the two — which column the card came from, and whether the model or the

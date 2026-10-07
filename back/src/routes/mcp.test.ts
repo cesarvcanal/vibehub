@@ -109,3 +109,48 @@ describe("/mcp tools", () => {
     expect(res.body).toContain("WHO sent the message");
   });
 });
+
+describe("/mcp actor — who the audit says did it", () => {
+  /** Records the actor each request's server was built for, delegating to the real factory. */
+  async function bootRecordingActors(): Promise<string[]> {
+    const actors: string[] = [];
+    await app.close();
+    vi.resetModules();
+    vi.doMock("../mcp/server.js", async () => {
+      const actual = await vi.importActual<typeof import("../mcp/server.js")>("../mcp/server.js");
+      return {
+        ...actual,
+        createMcpServer: (actor?: string) => { actors.push(String(actor)); return actual.createMcpServer(actor); },
+      };
+    });
+    app = await boot();
+    vi.doUnmock("../mcp/server.js");
+    return actors;
+  }
+
+  it("is the browser when the OWNER'S COOKIE is what authenticated — a junk bearer beside it changes nothing", async () => {
+    const actors = await bootRecordingActors();
+    const setup = await app.inject({
+      method: "POST", url: "/api/setup/owner", payload: { username: "owner", password: "supersecret" },
+    });
+    const cookie = `vibehub_session=${setup.cookies.find((c) => c.name === "vibehub_session")?.value ?? ""}`;
+    const res = await app.inject({
+      method: "POST", url: "/mcp",
+      headers: { cookie, authorization: "Bearer not-the-runner-token", accept: "application/json, text/event-stream" },
+      payload: INITIALIZE,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(actors).toEqual(["browser"]);
+  });
+
+  it("is the card when the runner's token is what authenticated", async () => {
+    const actors = await bootRecordingActors();
+    const res = await app.inject({
+      method: "POST", url: "/mcp",
+      headers: { authorization: `Bearer ${TOKEN}`, accept: "application/json, text/event-stream" },
+      payload: INITIALIZE,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(actors).toEqual(["card"]);
+  });
+});

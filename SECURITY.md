@@ -40,11 +40,21 @@ answer.
 
 ## Deployment expectations
 
-- **Put it behind something.** vibehub has local accounts and signed session cookies, but no rate
-  limiting, MFA or audit console. Expose it on a VPN, a private network, or behind an authenticating
+- **Put it behind something.** vibehub has local accounts, signed session cookies and a sign-in
+  throttle, but no general rate limiting, MFA or audit console. Expose it on a VPN, a private network, or behind an authenticating
   proxy — not on the open internet.
 - **Serve it over TLS.** `VIBEHUB_INSECURE_COOKIES=1` exists for LAN and localhost installs; on
   anything public it means session cookies travel in the clear.
+- **Behind a gateway (the usual way to get TLS), set `VIBEHUB_TRUST_PROXY`** to the gateway's
+  address/CIDR (or `loopback`/`uniquelocal`, or a hop count). Without it vibehub trusts no
+  `X-Forwarded-For` and sees every client as the gateway: the per-address sign-in ceiling stays off
+  and the per-account limit is keyed by `ip|account` — the gateway's ip — so somebody else's wrong
+  passwords can keep a browser that never signed in before out of that account for 15 minutes. A
+  direct install (no gateway) sets `0`, which turns the per-address ceiling on. **Once a gateway is
+  trusted it must be the only way in**: publish the port to it alone (`127.0.0.1:3010:3010` in
+  `docker-compose.yml` with the gateway on the same host). A client reaching the port directly
+  arrives from docker's bridge address — trusted by a hop count and by `uniquelocal` — and can forge
+  `X-Forwarded-For` for a fresh sign-in count on every try. vibehub logs a warning at boot.
 - **The Docker socket is root.** A `local` runner means vibehub can create containers on that host.
   If that is too much authority for the box, use `VIBEHUB_RUNNER_KIND=ssh` and point it at a machine
   you are willing to hand over.
