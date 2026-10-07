@@ -38,6 +38,7 @@ import { PeerTypingIndicator } from "@/features/board/components/PeerTypingIndic
 import { ultraKeywords } from "@/features/board/lib/ultraWords";
 import { workingStage, type WorkingKind } from "@/features/board/lib/workingStage";
 import { createReconnectBackoff, type ConnectionState } from "@/features/board/lib/reconnect";
+import { reasoningTranslator, useReasoningTranslation } from "@/features/board/lib/reasoningTranslation";
 import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
 import {
   buildDecisionReply,
@@ -268,11 +269,6 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         setState(INITIAL_SDK_STATE);
         // The replay tells the story again from disk (the interrupt note included) — a stale
         // "continuar?" offer from before the drop would be guessing about a turn we no longer see.
-        // EM QUE IDIOMA A IA PENSA: o "Raciocínio" na tela saía sempre em inglês, e nem todo mundo
-        // aqui lê inglês. O idioma mora NESTE navegador (localStorage), então o driver — que é do
-        // servidor e nasceu sem ele — só fica sabendo por aqui. Antes de qualquer mensagem, porque
-        // o socket entrega em ordem: o primeiro turno já pensa no idioma certo.
-        try { next.send(JSON.stringify({ type: "language", language: getLanguage() })); } catch { /* o close já vem */ }
       };
       next.onmessage = (event: MessageEvent) => {
         if (typeof event.data !== "string") return;
@@ -343,16 +339,21 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   }, [cardId, identity.epoch]);
 
   /**
-   * Trocar o idioma com o card ABERTO também troca o idioma do raciocínio — sem esperar um
-   * reconnect. `useT()` reassina este componente a cada troca, então `getLanguage()` relido no
-   * render é o gatilho. Socket fechado não faz nada: o `onopen` manda de novo ao reconectar.
+   * O tradutor local do navegador só BAIXA o pacote de idioma dentro de um gesto (clique, tecla) —
+   * então o primeiro gesto na página, com a interface em português, já o prepara. Depois de pronto,
+   * `prime()` não faz nada; o raciocínio que esperava se traduz sozinho (`onReady`).
    */
-  const language = getLanguage();
   React.useEffect(() => {
-    const socket = socketRef.current;
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    try { socket.send(JSON.stringify({ type: "language", language })); } catch { /* o close já vem */ }
-  }, [language]);
+    const prime = (): void => {
+      if (getLanguage() === "pt-BR") reasoningTranslator().prime();
+    };
+    window.addEventListener("pointerdown", prime, true);
+    window.addEventListener("keydown", prime, true);
+    return () => {
+      window.removeEventListener("pointerdown", prime, true);
+      window.removeEventListener("keydown", prime, true);
+    };
+  }, []);
 
 
   /* ------------------------------------------------------------- sending */
@@ -1734,6 +1735,12 @@ function SdkThinkingRow({ text, streaming }: { text: string; streaming: boolean 
   // recolhia sozinho no fim, que é exatamente o que estava escondendo o raciocínio.
   const [choice, setChoice] = React.useState<boolean | null>(null);
   const open = choice ?? true;
+  // EM PORTUGUÊS, traduzido no navegador (zero token — ver lib/reasoningTranslation). Só o bloco
+  // TERMINADO: traduzir pedaço a pedaço faria o texto pular enquanto chega. `useT()` reassina
+  // este componente quando o idioma troca, então `getLanguage()` aqui acompanha.
+  const translated = useReasoningTranslation(text, !streaming && getLanguage() === "pt-BR");
+  const [showOriginal, setShowOriginal] = React.useState(false);
+  const shown = translated !== null && !showOriginal ? translated : text;
   return (
     <div data-testid="sdk-thinking" data-streaming={streaming || undefined} data-open={open || undefined}>
       <button
@@ -1752,8 +1759,18 @@ function SdkThinkingRow({ text, streaming }: { text: string; streaming: boolean 
           data-testid="sdk-thinking-text"
           className="mt-1 select-text whitespace-pre-wrap break-words border-l-2 border-muted pl-2.5 text-xs italic leading-relaxed text-muted-foreground"
         >
-          {text}
+          {shown}
         </div>
+      ) : null}
+      {open && translated !== null ? (
+        <button
+          type="button"
+          data-testid="sdk-thinking-original-toggle"
+          onClick={() => setShowOriginal(!showOriginal)}
+          className="mt-0.5 pl-3 text-[10px] text-muted-foreground/60 hover:text-foreground"
+        >
+          {showOriginal ? t("sdk.reasoningShowTranslation") : t("sdk.reasoningShowOriginal")}
+        </button>
       ) : null}
     </div>
   );

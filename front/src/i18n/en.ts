@@ -534,6 +534,8 @@ export const en: Record<string, string> = {
   "sdk.effortHigh": "high effort",
   "sdk.ultracodeOn": "ultracode",
   "sdk.reasoning": "Reasoning",
+  "sdk.reasoningShowOriginal": "show original",
+  "sdk.reasoningShowTranslation": "show translation",
   "sdk.flagOff": "The SDK driver is off for this install. Turn on \"SDK driver\" in Settings to use native chat.",
   "sdk.noteInterrupted": "You stopped this turn — the answer above is cut short.",
   "sdk.noteInterruptedEdit": "Turn stopped so you could edit the message — the answer above is cut short.",

@@ -535,6 +535,8 @@ export const ptBR: Record<string, string> = {
   "sdk.effortHigh": "esforço alto",
   "sdk.ultracodeOn": "ultracode",
   "sdk.reasoning": "Raciocínio",
+  "sdk.reasoningShowOriginal": "ver original (traduzido no navegador)",
+  "sdk.reasoningShowTranslation": "ver tradução",
   "sdk.flagOff": "O driver SDK está desligado nesta instalação. Ligue \"Driver SDK\" nas Configurações para usar o chat nativo.",
   "sdk.noteInterrupted": "Turno interrompido por você — a resposta acima ficou pela metade.",
   "sdk.noteInterruptedEdit": "Turno interrompido para você editar a mensagem — a resposta acima ficou pela metade.",

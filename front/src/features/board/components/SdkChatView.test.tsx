@@ -9,6 +9,7 @@ import { PEER_TYPING_TTL_MS } from "@/features/board/lib/peerTyping";
 import { renderApp } from "@/test/render";
 import type { SdkEvent } from "@/features/board/lib/sdkChat";
 import { resetLanguage, setLanguage } from "@/i18n";
+import { resetReasoningTranslatorForTesting } from "@/features/board/lib/reasoningTranslation";
 import { get } from "@/lib/api";
 import { LinkifiedText } from "@/features/board/components/ChatView";
 import { resetDraftsForTesting } from "@/features/board/components/TerminalComposer";
@@ -50,15 +51,14 @@ class FakeSocket {
   /** TUDO que saiu pelo socket, handshake incluído — o que os testes do handshake leem. */
   rawSent: string[] = [];
   /**
-   * Os frames da CONVERSA. O idioma do raciocínio é dito uma vez na abertura (setup de sessão, não
-   * fala de ninguém): contá-lo aqui faria cada teste que mede "saiu UMA mensagem" medir duas.
+   * Os frames da CONVERSA. O `typing` é sinal efêmero entre abas, não fala de ninguém: contá-lo aqui
+   * faria cada teste que mede "saiu UMA mensagem" medir duas.
    */
   get sent(): string[] {
     return this.rawSent.filter((raw) => {
       try {
         const type = (JSON.parse(raw) as { type?: string }).type;
-        // `typing` é da mesma natureza: sinal efêmero entre abas, não fala de ninguém.
-        return type !== "language" && type !== "typing";
+        return type !== "typing";
       } catch { return true; }
     });
   }
@@ -2656,59 +2656,98 @@ describe("SdkChatView — o painel da frota do Workflow", () => {
 });
 
 /**
- * EM QUE IDIOMA A IA PENSA. O bloco "Raciocínio" saía sempre em inglês, e nem todo mundo na
- * operação lê inglês. O idioma mora NESTE navegador (localStorage), e o driver é do servidor: se o
- * chat não contar, ninguém conta.
+ * O RACIOCÍNIO TRADUZIDO NA TELA. O modelo não recebe mais instrução de idioma (era o gatilho do
+ * bloqueio do Opus, e nem funcionava sempre): o navegador traduz o bloco TERMINADO, com o tradutor
+ * local do Chrome/Edge — zero token. Sem a API, o original, e nada quebra.
  */
-describe("SdkChatView — o idioma do raciocínio", () => {
+describe("SdkChatView — o raciocínio traduzido no navegador", () => {
+  const translate = vi.fn(async (text: string) => `[pt] ${text}`);
+  const Translator = {
+    availability: vi.fn(async () => "available"),
+    create: vi.fn(async () => ({ translate })),
+  };
+  const LanguageDetector = {
+    availability: vi.fn(async () => "available"),
+    create: vi.fn(async () => ({ detect: async () => [{ detectedLanguage: "en", confidence: 0.99 }] })),
+  };
+
+  beforeEach(() => {
+    resetReasoningTranslatorForTesting();
+    translate.mockClear();
+    vi.stubGlobal("Translator", Translator);
+    vi.stubGlobal("LanguageDetector", LanguageDetector);
+  });
   // O idioma é global e persistido: deixá-lo trocado vazaria para os outros arquivos de teste.
-  afterEach(() => { resetLanguage(); });
-
-  it("conta o idioma ao abrir, ANTES de qualquer mensagem — o socket entrega em ordem", async () => {
-    setLanguage("pt-BR");
-    renderSdkChat();
-    const ws = await socket();
-    ws.accept();
-    ws.deliver({ type: "ready" });
-
-    await waitFor(() => expect(ws.rawSent.length).toBeGreaterThan(0));
-    expect(JSON.parse(ws.rawSent[0]!)).toEqual({ type: "language", language: "pt-BR" });
-
-    const box = screen.getByRole("textbox");
-    await userEvent.type(box, "oi{Enter}");
-    await waitFor(() => expect(ws.sent.length).toBe(1));
-    // o idioma veio primeiro: o PRIMEIRO turno já pensa no idioma certo (o "digitando", efêmero,
-    // pode sair entre os dois — o que importa é a ordem idioma → turno)
-    const frames = ws.rawSent.map((raw) => JSON.parse(raw) as { type: string });
-    expect(frames[0]!.type).toBe("language");
-    const turn = frames.findIndex((f) => f.type === "user");
-    expect(turn).toBeGreaterThan(0);
-    expect(frames[turn]).toMatchObject({ type: "user", text: "oi" });
+  // os globais (Translator, LanguageDetector) o afterEach de fora desfaz, junto com o WebSocket
+  afterEach(() => {
+    resetReasoningTranslatorForTesting();
+    resetLanguage();
   });
 
-  it("trocar o idioma com o card ABERTO reconta na hora — sem esperar um reconnect", async () => {
-    setLanguage("pt-BR");
+  async function thinkingDone(text: string): Promise<FakeSocket> {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
     ws.deliver({ type: "ready" });
-    await waitFor(() => expect(ws.rawSent.length).toBe(1));
+    ws.deliver({ type: "thinking_delta", text: "Let me" } as SdkEvent);
+    await screen.findByTestId("sdk-thinking-text");
+    ws.deliver({ type: "thinking", text } as SdkEvent);
+    return ws;
+  }
 
-    act(() => setLanguage("en"));
-
-    await waitFor(() => expect(ws.rawSent.length).toBe(2));
-    expect(JSON.parse(ws.rawSent[1]!)).toEqual({ type: "language", language: "en" });
+  it("em pt-BR, o bloco TERMINADO aparece traduzido", async () => {
+    setLanguage("pt-BR");
+    await thinkingDone("I need to check how roles work.");
+    await waitFor(() =>
+      expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("[pt] I need to check how roles work."),
+    );
   });
 
-  it("o handshake não é conversa: ele não vira bolha nem conta como mensagem enviada", async () => {
+  it("enquanto o bloco ainda chega, mostra o original — traduzir pedaço a pedaço faria o texto pular", async () => {
     setLanguage("pt-BR");
     renderSdkChat();
     const ws = await socket();
     ws.accept();
     ws.deliver({ type: "ready" });
-    await waitFor(() => expect(ws.rawSent.length).toBe(1));
-    expect(ws.sent).toHaveLength(0);
-    expect(screen.queryByText(/language/i)).toBeNull();
+    ws.deliver({ type: "thinking_delta", text: "Still thinking" } as SdkEvent);
+    expect(await screen.findByTestId("sdk-thinking-text")).toHaveTextContent("Still thinking");
+    expect(translate).not.toHaveBeenCalled();
+  });
+
+  it("\"ver original\" mostra o texto como veio, e volta para a tradução", async () => {
+    setLanguage("pt-BR");
+    await thinkingDone("Plain English reasoning.");
+    const toggle = await screen.findByTestId("sdk-thinking-original-toggle");
+    await userEvent.click(toggle);
+    expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent(/^Plain English reasoning\.$/);
+    await userEvent.click(screen.getByTestId("sdk-thinking-original-toggle"));
+    expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("[pt] Plain English reasoning.");
+  });
+
+  it("interface em inglês: o original, e o tradutor nem é chamado", async () => {
+    setLanguage("en");
+    await thinkingDone("Plain English reasoning.");
+    await waitFor(() => expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("Plain English reasoning."));
+    expect(translate).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("sdk-thinking-original-toggle")).toBeNull();
+  });
+
+  it("navegador sem a API (Firefox): o original, sem botão e sem erro", async () => {
+    vi.stubGlobal("Translator", undefined);
+    vi.stubGlobal("LanguageDetector", undefined);
+    resetReasoningTranslatorForTesting();
+    setLanguage("pt-BR");
+    await thinkingDone("Plain English reasoning.");
+    await waitFor(() => expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("Plain English reasoning."));
+    expect(screen.queryByTestId("sdk-thinking-original-toggle")).toBeNull();
+  });
+
+  it("o socket não manda mais idioma nenhum — nada sobre o raciocínio chega ao modelo", async () => {
+    setLanguage("pt-BR");
+    const ws = await thinkingDone("Plain English reasoning.");
+    await userEvent.type(screen.getByRole("textbox"), "oi{Enter}");
+    await waitFor(() => expect(ws.rawSent.some((raw) => raw.includes('"user"'))).toBe(true));
+    expect(ws.rawSent.some((raw) => raw.includes('"language"'))).toBe(false);
   });
 });
 
