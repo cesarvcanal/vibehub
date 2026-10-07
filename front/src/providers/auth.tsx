@@ -1,10 +1,28 @@
 import * as React from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { get, post } from "@/lib/api";
 import type { MeResponse, SetupState, User } from "@/api/types";
 
 export const SETUP_STATE_KEY = ["setup", "state"] as const;
 export const ME_KEY = ["auth", "me"] as const;
+
+/**
+ * Forget the session on this tab: after a logout, or when any request 401s.
+ *
+ * Not `queryClient.clear()`: that drops queries WITHOUT telling their observers. The
+ * `useQuery(ME_KEY)` below then rebuilt an EMPTY session query that nothing fetched — `isLoading`
+ * stayed true, the route guards sat on "Checking session" for good, and only a reload brought the
+ * login back (production, 2026-10-07). Writing `null` into ME_KEY is the server's own answer ("no
+ * session") and it does notify. Everything else is dropped, so no screen renders data from a dead
+ * session; the setup probe stays, it is public and not tied to who is signed in.
+ */
+export function dropSession(queryClient: QueryClient): void {
+  queryClient.setQueryData<User | null>(ME_KEY, null);
+  queryClient.removeQueries({
+    predicate: ({ queryKey }) =>
+      queryKey[0] !== ME_KEY[0] && queryKey[0] !== SETUP_STATE_KEY[0],
+  });
+}
 
 export interface AuthValue {
   user: User | null;
@@ -45,7 +63,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // and no bounce (the interceptor deliberately ignores 401 on this route).
   const meQuery = useQuery({
     queryKey: ME_KEY,
-    queryFn: () => get<MeResponse>("/auth/me").then((r) => r.user),
+    // `null` is "no session" written by dropSession(); a 401 here lands as an error instead.
+    queryFn: () => get<MeResponse>("/auth/me").then((r): User | null => r.user),
     retry: false,
     staleTime: 30_000,
   });
@@ -62,8 +81,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       await post("/auth/logout");
     } finally {
-      queryClient.clear();
-      await queryClient.invalidateQueries({ queryKey: ME_KEY });
+      dropSession(queryClient);
     }
   }, [queryClient]);
 
