@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { act } from "react";
-import { OUTBOX_TICK_MS, SdkChatView } from "@/features/board/components/SdkChatView";
+import { OUTBOX_TICK_MS, SdkChatView, resetQuestionDraftsForTesting } from "@/features/board/components/SdkChatView";
 import { OUTBOX_ACK_TIMEOUT_MS } from "@/features/board/lib/sdkOutbox";
 import { RECONNECT_MAX_MS } from "@/features/board/lib/reconnect";
 import { PEER_TYPING_TTL_MS } from "@/features/board/lib/peerTyping";
@@ -103,6 +103,7 @@ beforeEach(() => {
   // propósito) — e todo teste aqui é o card "c1": o que um teste deixou no campo era digitado no
   // seguinte ("vai pelo A mesmoinstrução longa", com a ordem embaralhada).
   resetDraftsForTesting();
+  resetQuestionDraftsForTesting();
   FakeSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeSocket);
 });
@@ -489,6 +490,39 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
     await userEvent.click(screen.getByRole("button", { name: "Detalhado" }));
     const frame = ws.sent.map((s) => JSON.parse(s)).find((f) => f.type === "question_answer");
     expect(frame).toEqual({ type: "question_answer", id: "q_1", answers: [{ selected: ["Detalhado"] }] });
+  });
+
+  /**
+   * O RECONNECT APAGAVA O CARTÃO (produção, 2026-10-07). Todo connect limpa a tela e o replay a
+   * redesenha do disco — o cartão desmonta e remonta, e o que a pessoa já tinha marcado e escrito
+   * vivia no estado local dele. Um deploy no meio de três perguntas = tudo de novo, do zero.
+   */
+  it("o que foi marcado e escrito no cartão sobrevive ao reconnect", async () => {
+    renderSdkChat();
+    const first = await socket();
+    first.accept();
+    first.deliver({ type: "ready" });
+    const MULTI = {
+      type: "user_question" as const,
+      id: "q_3_1791402112898",
+      questions: [
+        { question: "Onde entra a busca?", options: [{ label: "No cabeçalho" }, { label: "No item" }] },
+        { question: "Como conto o prazo?", options: [{ label: "72h corridas" }] },
+      ],
+    };
+    first.deliver(MULTI);
+    await userEvent.click(screen.getByRole("button", { name: "No item" }));
+    await userEvent.type(screen.getAllByTestId("sdk-question-other")[1]!, "72h pulando domingo");
+
+    act(() => { first.readyState = 3; first.onclose?.(); }); // o deploy derruba o fio
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: RECONNECT_MAX_MS });
+    const second = FakeSocket.instances[1] as FakeSocket;
+    second.accept();
+    second.deliver(MULTI); // o replay redesenha o cartão do disco
+    second.deliver({ type: "ready" });
+
+    expect(screen.getByRole("button", { name: "No item" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getAllByTestId("sdk-question-other")[1]).toHaveValue("72h pulando domingo");
   });
 
   it("a timed-out question replays settled as unanswered", async () => {
