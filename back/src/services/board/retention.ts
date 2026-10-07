@@ -8,8 +8,9 @@ import { logger } from "../../utils/logger.js";
  *
  * The problem it closes: `done` is the column nobody cleans. Cards pile up there by the dozen,
  * each one still holding, in the runner, a worktree, a `card/<slug>` branch, a Claude Code
- * transcript, a browser profile and a GitHub token, plus its conversation under the data dir. The
- * board becomes unreadable and the disk grows for work that was finished half a year ago.
+ * transcript, a browser profile, a GitHub token and the images attached to it, plus its
+ * conversation under the data dir. The board becomes unreadable (128 cards in `done` the day this
+ * dropped from 180 days to one) and the runner's disk grows with a worktree per finished card.
  *
  * So after {@link DONE_RETENTION_DAYS} of TOTAL SILENCE in `done` the card is PURGED — the same
  * purge as the delete button (services/board/purge.ts), not a hide: processes killed, card off the
@@ -17,20 +18,29 @@ import { logger } from "../../utils/logger.js";
  *
  * What makes this safe enough to run unattended:
  *  - **Only `done`.** Every other column is invisible to the sweep, however old the card is.
- *    `done` is the one column a card only reaches because a person put it there.
+ *    A card reaches `done` because a person moved it — or because a maestro agent did
+ *    (`vibehub_move_cards`, mcp/cardMove.ts) — never on its own.
  *  - **Silence, not just the move.** The clock is the card's LAST SIGN OF LIFE
  *    ({@link lastActivityAt}) — the move to done, a rename, a status the hooks reported, a human
- *    typing in the terminal. Touch a finished card and it gets another six months.
- *  - **Six months.** Long enough that anything still wanted has been looked at; the same number
- *    the uploads sweep already uses (`UPLOAD_RETENTION_DAYS`).
+ *    typing in the terminal. Touch a finished card and it gets another day.
+ *  - **One day.** `done` means delivered: the work is on GitHub (pushed, PR'd, merged) and the
+ *    card is only holding the runner's copy of it. A day is enough to notice a card was moved to
+ *    `done` by mistake — and every done card shows a countdown, so nobody is surprised.
  *  - **A cap per pass** ({@link DONE_SWEEP_MAX}), oldest first, and what was left over is LOGGED:
- *    the first run on an old install trims the worst offenders over a few days instead of being a
- *    silent mass deletion.
+ *    a backlog is trimmed over a few HOURS (20 per hourly pass) instead of in one silent burst.
+ *  - **Re-judged per card:** the list is read once per pass, but each card is re-read right
+ *    before its purge, so one rescued mid-pass (the countdown invites exactly that) survives.
  *  - **An off switch:** retention `0` disables the sweep entirely.
  */
 
 /** How long a card may sit in `done`, untouched, before it is purged. */
-export const DONE_RETENTION_DAYS = 180;
+export const DONE_RETENTION_DAYS = 1;
+
+/**
+ * How often the sweep runs. HOURLY, because the retention is a day: a daily pass would let a card
+ * live up to two, and the countdown on the card would lie by up to a day.
+ */
+export const DONE_SWEEP_INTERVAL_MS = 60 * 60_000;
 
 /** Ceiling on one pass — a backlog of finished cards is collected over a few days, not at once. */
 export const DONE_SWEEP_MAX = 20;
@@ -80,18 +90,39 @@ export interface DoneRetentionSummary {
   truncated: number;
 }
 
+/** A pass in progress. The sweep is hourly and a pass on a slow runner can outlast the hour. */
+let sweeping = false;
+
 /**
  * ONE RETENTION PASS. Reads the board, purges the cards that have been done for too long, and
  * reports what it did. Never throws: a board that cannot be read, or a runner that is down, costs
- * at most one pass (the next one is a day away).
+ * at most one pass (the next one is an hour away).
  *
  * Sequential on purpose, like `purgeRemovedCards`: each purge is a handful of docker execs and
- * twenty of them must not hit the runner at the same time.
+ * twenty of them must not hit the runner at the same time. For the same reason a pass that starts
+ * while another is still running does NOTHING — two passes would purge the same card twice.
+ *
+ * The list is read once, but a pass can take many minutes, and the countdown on the card is exactly
+ * what makes somebody rescue it during one ("any moment now"). So every card is RE-READ and
+ * re-judged right before its purge: moved out of `done`, touched, or already gone = left alone.
  */
 export async function sweepDoneCards(
   opts: { now?: number; retentionDays?: number; max?: number } = {},
 ): Promise<DoneRetentionSummary> {
   const summary: DoneRetentionSummary = { expired: 0, purged: 0, incomplete: 0, truncated: 0 };
+  if (sweeping) return summary;
+  sweeping = true;
+  try {
+    return await sweepPass(opts, summary);
+  } finally {
+    sweeping = false;
+  }
+}
+
+async function sweepPass(
+  opts: { now?: number; retentionDays?: number; max?: number },
+  summary: DoneRetentionSummary,
+): Promise<DoneRetentionSummary> {
   const max = opts.max ?? DONE_SWEEP_MAX;
   let expired: Card[];
   try {
@@ -106,6 +137,8 @@ export async function sweepDoneCards(
 
   for (const card of expired.slice(0, max)) {
     try {
+      const current = await registry.getCard(card.id);
+      if (!current || expiredDoneCards([current], opts).length === 0) continue; // rescued mid-pass
       const report = await purgeCard(card.id, "retention");
       if (!report) continue; // already gone (a delete that raced this pass)
       summary.purged += 1;

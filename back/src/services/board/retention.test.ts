@@ -2,12 +2,18 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expiredDoneCards, lastActivityAt, DONE_RETENTION_DAYS, DONE_SWEEP_MAX } from "./retention.js";
+import {
+  expiredDoneCards,
+  lastActivityAt,
+  DONE_RETENTION_DAYS,
+  DONE_SWEEP_MAX,
+  DONE_SWEEP_INTERVAL_MS,
+} from "./retention.js";
 import type { Card } from "./registry.js";
 
 /**
- * DONE CARDS DO NOT PILE UP FOREVER — a card parked in `done` for six months is history nobody
- * reads, and it is still holding a worktree, a branch, a conversation and a browser profile in the
+ * DONE CARDS DO NOT PILE UP — a card parked in `done` for a day is finished work, and it is
+ * still holding a worktree, a branch, a conversation and a browser profile in the
  * runner. After {@link DONE_RETENTION_DAYS} of total silence it is PURGED (the same purge as the
  * delete button), not hidden.
  *
@@ -21,7 +27,8 @@ import type { Card } from "./registry.js";
  *  - a runner that is down still gets the card off the board (and the sweep says what survived).
  */
 
-const DAY = 24 * 60 * 60_000;
+const HOUR = 60 * 60_000;
+const DAY = 24 * HOUR;
 const NOW = 1_800_000_000_000;
 
 function card(over: Partial<Card> = {}): Card {
@@ -64,9 +71,9 @@ describe("expiredDoneCards (pure) — what the sweep is allowed to delete", () =
     expect(run([old]).map((c) => c.id)).toEqual(["old"]);
   });
 
-  it("exactly at the threshold counts as expired; one day short does not", () => {
-    const at = card({ id: "at", doneAt: NOW - 180 * DAY, updatedAt: NOW - 180 * DAY });
-    const almost = card({ id: "almost", doneAt: NOW - 179 * DAY, updatedAt: NOW - 179 * DAY });
+  it("exactly at the threshold (one day) counts as expired; an hour short does not", () => {
+    const at = card({ id: "at", doneAt: NOW - DAY, updatedAt: NOW - DAY });
+    const almost = card({ id: "almost", doneAt: NOW - 23 * HOUR, updatedAt: NOW - 23 * HOUR });
     expect(run([at, almost]).map((c) => c.id)).toEqual(["at"]);
   });
 
@@ -78,15 +85,15 @@ describe("expiredDoneCards (pure) — what the sweep is allowed to delete", () =
   });
 
   it("a done card that was touched recently is NOT expired (the rename, the hook, the keystroke)", () => {
-    const renamed = card({ id: "renamed", doneAt: NOW - 300 * DAY, updatedAt: NOW - 3 * DAY });
-    const reported = card({ id: "reported", doneAt: NOW - 300 * DAY, updatedAt: NOW - 300 * DAY, statusAt: NOW - DAY });
-    const typed = card({ id: "typed", doneAt: NOW - 300 * DAY, updatedAt: NOW - 300 * DAY, humanActiveAt: NOW - DAY });
+    const renamed = card({ id: "renamed", doneAt: NOW - 300 * DAY, updatedAt: NOW - 3 * HOUR });
+    const reported = card({ id: "reported", doneAt: NOW - 300 * DAY, updatedAt: NOW - 300 * DAY, statusAt: NOW - HOUR });
+    const typed = card({ id: "typed", doneAt: NOW - 300 * DAY, updatedAt: NOW - 300 * DAY, humanActiveAt: NOW - HOUR });
     expect(run([renamed, reported, typed])).toEqual([]);
   });
 
   it("a legacy done card without doneAt is judged by updatedAt", () => {
     const legacy = card({ id: "legacy", doneAt: undefined, updatedAt: NOW - 400 * DAY });
-    const legacyFresh = card({ id: "fresh", doneAt: undefined, updatedAt: NOW - 10 * DAY });
+    const legacyFresh = card({ id: "fresh", doneAt: undefined, updatedAt: NOW - 10 * HOUR });
     expect(run([legacy, legacyFresh]).map((c) => c.id)).toEqual(["legacy"]);
   });
 
@@ -149,11 +156,11 @@ afterEach(async () => {
 /**
  * The sweep is handed the CLOCK instead of the cards being back-dated: the stamps are written by
  * the registry itself (that is half of what is under test here), so the only honest way to make a
- * card six months old is to look at it six months from now.
+ * card a day old is to look at it a day from now.
  */
 const inDays = (days: number): number => Date.now() + days * DAY;
 
-describe("sweepDoneCards — the purge of what has been done for six months", () => {
+describe("sweepDoneCards — the purge of what has been done for a day", () => {
   it("purges the card that has been done for too long and leaves the rest of the board alone", async () => {
     const project = await reg.createProject({ name: "erp-aux" });
     const done = await reg.createCard({ projectId: project.id, title: "Velho" });
@@ -174,7 +181,7 @@ describe("sweepDoneCards — the purge of what has been done for six months", ()
     await reg.updateCard(c.id, { column: "done" });
     runScript.mockClear();
 
-    expect(await retention.sweepDoneCards({ now: inDays(179) })).toMatchObject({ expired: 0, purged: 0 });
+    expect(await retention.sweepDoneCards({ now: Date.now() + 23 * HOUR })).toMatchObject({ expired: 0, purged: 0 });
     expect(runScript).not.toHaveBeenCalled();
     expect(await reg.getCard(c.id)).toBeDefined();
   });
@@ -220,6 +227,43 @@ describe("sweepDoneCards — the purge of what has been done for six months", ()
     expect(await reg.getCard(c.id)).toBeUndefined();
   });
 
+  it("a card RESCUED while the pass is running is not purged — the decision is re-taken per card", async () => {
+    // The countdown says "any moment now"; the person drags the card out of done while the pass is
+    // busy purging an older one (each purge is minutes of docker execs). The list was read before.
+    const project = await reg.createProject({ name: "erp-aux" });
+    const older = await reg.createCard({ projectId: project.id, title: "Mais velho" });
+    const rescued = await reg.createCard({ projectId: project.id, title: "Resgatado" });
+    await reg.updateCard(older.id, { column: "done" });
+    await reg.updateCard(rescued.id, { column: "done" });
+    let moved = false;
+    runScript.mockImplementation(async () => {
+      if (!moved) {
+        moved = true;
+        await reg.updateCard(rescued.id, { column: "waiting" });
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const summary = await retention.sweepDoneCards({ now: inDays(365) });
+
+    expect(await reg.getCard(older.id)).toBeUndefined();
+    expect(await reg.getCard(rescued.id)).toBeDefined();
+    expect(summary.purged).toBe(1);
+  });
+
+  it("two passes never run at once — a slow runner must not purge the same card twice", async () => {
+    const project = await reg.createProject({ name: "erp-aux" });
+    const c = await reg.createCard({ projectId: project.id, title: "Velho" });
+    await reg.updateCard(c.id, { column: "done" });
+
+    const [a, b] = await Promise.all([
+      retention.sweepDoneCards({ now: inDays(365) }),
+      retention.sweepDoneCards({ now: inDays(365) }),
+    ]);
+
+    expect(a.purged + b.purged).toBe(1);
+  });
+
   it("caps one pass and reports what it left for the next — never a silent mass deletion", async () => {
     const project = await reg.createProject({ name: "erp-aux" });
     for (let i = 0; i < 3; i += 1) {
@@ -233,9 +277,14 @@ describe("sweepDoneCards — the purge of what has been done for six months", ()
     expect(await reg.listAllCards()).toHaveLength(1);
   });
 
-  it("the defaults are the ones the product promises: 180 days, a capped pass", () => {
-    expect(DONE_RETENTION_DAYS).toBe(180);
+  it("the defaults are the ones the product promises: ONE day, a capped pass", () => {
+    expect(DONE_RETENTION_DAYS).toBe(1);
     expect(DONE_SWEEP_MAX).toBeGreaterThan(0);
+  });
+
+  it("sweeps at least hourly — a daily pass would turn the one-day promise into up to two", () => {
+    expect(DONE_SWEEP_INTERVAL_MS).toBeLessThanOrEqual(HOUR);
+    expect(DONE_SWEEP_INTERVAL_MS).toBeGreaterThan(0);
   });
 
 });

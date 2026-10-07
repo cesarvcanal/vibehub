@@ -210,11 +210,14 @@ So the delete is a purge (`services/board/purge.ts`), in an order that has a rea
 
 Deleting a PROJECT cascades into the same purge for each of its cards (it used to be the way around
 it). So does the **done-card retention** (`services/board/retention.ts`): a card that has sat in
-`done` for 180 days without a single sign of life — no move, no rename, no hook status, no
-keystroke — is purged by a daily sweep, because `done` is the column nobody cleans and every card
-left there keeps a worktree, a branch, a transcript and a browser profile in the runner. Only
-`done` is swept, touching a finished card buys it another six months, a pass is capped (and logs
-what it left for the next one), and a retention of `0` turns it off.
+`done` for ONE DAY without a single sign of life — no move, no rename, no hook status, no
+keystroke — is purged by an HOURLY sweep, because `done` is the column nobody cleans and every card
+left there keeps a worktree, a branch, a transcript, its attachments and a browser profile in the
+runner. Only `done` is swept, touching a finished card buys it another day, a pass is capped (and
+logs what it left for the next one), and a retention of `0` turns it off. Every done card shows a
+countdown ("Deleted in 22 h"), computed in the browser from the same stamps and the retention that
+`GET /api/features` serves (`front/src/features/board/lib/doneRetention.ts`). What is purged is the
+runner's copy: the card's LOCAL branch goes with it, so work that was never pushed is lost.
 
 A **daily orphan sweep** is the backstop and the retroactive cleanup: it deletes only artifacts
 that belong to no card that exists, with three guards — the path must be unmistakably a card
