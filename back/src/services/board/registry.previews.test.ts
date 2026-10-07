@@ -87,6 +87,23 @@ describe("registerCardPreview", () => {
 });
 
 describe("registerCardPreview — relaunch recipe (command/cwd)", () => {
+  /**
+   * The CDP and VNC of a card's browser are remote control of a logged-in browser. A preview record
+   * pointing there would let whoever can open that card's previews (a member it is shared with)
+   * drive ANOTHER card's browser — so no card may register one, whatever its agent announces.
+   */
+  it("refuses to register a preview on a port of an allocated browser slot (another card's CDP/VNC)", async () => {
+    const reg = await freshRegistry();
+    const { cardBrowserPorts } = await import("../browser/ports.js");
+    const victim = await withCard(reg);
+    const attacker = await withCard(reg);
+    const { cdpPort, vncPort } = cardBrowserPorts(victim);
+    for (const port of [cdpPort, vncPort]) {
+      await expect(reg.registerCardPreview(attacker, port, { label: "x" })).rejects.toThrow(/reserved/);
+    }
+    expect((await reg.getCard(attacker))?.previews ?? []).toEqual([]);
+  });
+
   it("stores command and cwd; a re-announce WITHOUT them keeps the stored recipe", async () => {
     const reg = await freshRegistry();
     const id = await withCard(reg);

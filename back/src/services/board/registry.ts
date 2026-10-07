@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { JsonStore } from "../../store/jsonStore.js";
 import { dataPath } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
-import { allocateBrowserSlot, cardBrowserSlot, rememberBrowserSlot, SLOT_SPACE } from "../browser/ports.js";
+import { allocateBrowserSlot, cardBrowserSlot, isBrowserSlotPort, rememberBrowserSlot, SLOT_SPACE } from "../browser/ports.js";
 
 /**
  * BOARD REGISTRY — the projects and cards of the kanban of Claude Code terminals.
@@ -1655,6 +1655,10 @@ export async function registerCardPreview(
   const command = normalizePreviewCommand(input.command);
   const cwd = normalizePreviewCwd(input.cwd);
   return store.mutate((doc) => {
+    // Inside the mutation, the board is loaded — and with it every allocated browser slot. A card's
+    // CDP/VNC is remote control of a logged-in browser: a preview record there would let whoever can
+    // open THIS card's previews (a member it is shared with) drive ANOTHER card's browser.
+    if (isBrowserSlotPort(p)) throw new Error(`port ${p} is reserved for vibehub's browser plumbing`);
     const card = doc.cards.find((c) => c.id === cardId);
     if (!card) return undefined;
     // Re-announcing WITHOUT a command keeps the one already stored: the relaunch recipe is the

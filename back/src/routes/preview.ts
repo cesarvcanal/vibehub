@@ -70,9 +70,13 @@ async function previewPortScope(user: PublicUser): Promise<"all" | Set<number>> 
  * port's current card and asks about that card alone instead of building the whole scope.
  */
 async function canOpenPreviewPort(user: PublicUser | null, port: number): Promise<boolean> {
-  if (!user || isBrowserSlotPort(port)) return false;
-  if (user.role === "owner") return true;
+  if (!user) return false;
+  // Resolving the port's card loads the board — and with it every allocated browser slot, which is
+  // what isBrowserSlotPort reads. Asked first, right after a boot, the slot table could still be
+  // empty and wave a CDP port through: the check must never depend on what ran before it.
   const current = await findCardPreviewByPort(port);
+  if (isBrowserSlotPort(port)) return false;
+  if (user.role === "owner") return true;
   return current !== undefined && (await visibleCards(user, [current.card])).length > 0;
 }
 
