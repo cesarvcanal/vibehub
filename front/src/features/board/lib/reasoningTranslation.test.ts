@@ -71,7 +71,7 @@ describe("createReasoningTranslator", () => {
   it("modelo ainda não baixado e SEM gesto do usuário: não tenta baixar (o navegador recusaria)", async () => {
     const t = fakeTranslator({ availability: "downloadable" });
     const tr = createReasoningTranslator({ translator: t.factory, detector: fakeDetector(EN).factory, userActive: () => false });
-    await expect(tr.translate("Hello there, friend.")).resolves.toBe(null);
+    await expect(tr.translate("I need to check what the user wants.")).resolves.toBe(null);
     expect(t.create).not.toHaveBeenCalled();
   });
 
@@ -79,7 +79,7 @@ describe("createReasoningTranslator", () => {
     const t = fakeTranslator({ availability: "downloadable" });
     let active = false;
     const tr = createReasoningTranslator({ translator: t.factory, detector: fakeDetector(EN).factory, userActive: () => active });
-    await expect(tr.translate("Hello there, friend.")).resolves.toBe(null);
+    await expect(tr.translate("I need to check what the user wants.")).resolves.toBe(null);
 
     const ready = vi.fn();
     tr.onReady(ready);
@@ -87,7 +87,7 @@ describe("createReasoningTranslator", () => {
     tr.prime();
     await vi.waitFor(() => expect(ready).toHaveBeenCalled());
 
-    await expect(tr.translate("Hello there, friend.")).resolves.toBe("PT(Hello there, friend.)");
+    await expect(tr.translate("I need to check what the user wants.")).resolves.toBe("PT(I need to check what the user wants.)");
   });
 
   it("prime() no meio de uma checagem ainda pendente baixa mesmo assim (o gesto não se perde)", async () => {
@@ -95,13 +95,13 @@ describe("createReasoningTranslator", () => {
     const t = fakeTranslator({ availability: "downloadable" });
     t.availability.mockImplementationOnce(() => new Promise<Availability>((r) => { release = r; }));
     const tr = createReasoningTranslator({ translator: t.factory, userActive: () => false });
-    const first = tr.translate("Hello there, friend.");   // checagem pendente, sem gesto
+    const first = tr.translate("I need to check what the user wants.");   // checagem pendente, sem gesto
     await vi.waitFor(() => expect(t.availability).toHaveBeenCalled());
     tr.prime();                                           // o clique chega AGORA
     expect(t.create).toHaveBeenCalledTimes(1);
     release("downloadable");
     await first;
-    await expect(tr.translate("Hello there, friend.")).resolves.toBe("PT(Hello there, friend.)");
+    await expect(tr.translate("I need to check what the user wants.")).resolves.toBe("PT(I need to check what the user wants.)");
   });
 
   it("falha do tradutor: null, e a falha NÃO fica guardada — a próxima tentativa tenta de novo", async () => {
@@ -120,10 +120,65 @@ describe("createReasoningTranslator", () => {
     expect(t.create).not.toHaveBeenCalled();
   });
 
-  it("sem detector, assume inglês — é o idioma em que o modelo pensa por padrão", async () => {
+  it("sem detector, um texto CLARAMENTE em inglês é traduzido (a heurística local decide)", async () => {
     const t = fakeTranslator();
     const tr = createReasoningTranslator({ translator: t.factory });
-    await expect(tr.translate("Plain text.")).resolves.toBe("PT(Plain text.)");
+    const en = "I need to check how the roles work and what the user wants from this.";
+    await expect(tr.translate(en)).resolves.toBe(`PT(${en})`);
+  });
+
+  // Revisão adversarial (HIGH-1), provado no Chrome 154: com o detector indisponível, um raciocínio
+  // em PORTUGUÊS ia para o tradutor en→pt e voltava estragado ("...TESTES DO VOLTAR"), e ficava guardado.
+  it("sem detector, um raciocínio que JÁ veio em português não passa pelo tradutor", async () => {
+    const t = fakeTranslator();
+    const tr = createReasoningTranslator({ translator: t.factory });
+    await expect(tr.translate("Vou ler o arquivo sdk-driver.mjs e depois rodar os testes do back.")).resolves.toBe(null);
+    expect(t.translate).not.toHaveBeenCalled();
+  });
+
+  it("detector sem certeza: na dúvida NÃO traduz — o original nunca é estragado", async () => {
+    const t = fakeTranslator();
+    const tr = createReasoningTranslator({ translator: t.factory, detector: fakeDetector([{ detectedLanguage: "en", confidence: 0.2 }]).factory });
+    await expect(tr.translate("Tenho material suficiente para a análise que o usuário pediu.")).resolves.toBe(null);
+    await expect(tr.translate("ok")).resolves.toBe(null);
+    expect(t.translate).not.toHaveBeenCalled();
+  });
+
+  // HIGH-2, provado no Chrome real: o PRIMEIRO create() que baixa um modelo consome o gesto — o
+  // segundo, no mesmo clique, leva NotAllowedError. Então é um download por gesto: tradutor primeiro,
+  // detector no gesto seguinte — e o prime() não pode desistir depois do primeiro.
+  it("prime(): um download por gesto — o tradutor primeiro, o detector no gesto seguinte", async () => {
+    const t = fakeTranslator({ availability: "downloadable" });
+    const d = fakeDetector(EN);
+    const detectorCreate = (d.factory as unknown as { create: ReturnType<typeof vi.fn> }).create;
+    const tr = createReasoningTranslator({ translator: t.factory, detector: d.factory, userActive: () => true });
+    tr.prime();
+    expect(t.create).toHaveBeenCalledTimes(1);
+    expect(detectorCreate).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(t.create.mock.results[0]!.type).toBe("return"));
+    await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+    tr.prime();
+    expect(detectorCreate).toHaveBeenCalledTimes(1);
+    tr.prime();
+    await new Promise((r) => setTimeout(r, 0));
+    tr.prime();
+    expect(t.create).toHaveBeenCalledTimes(1);
+    expect(detectorCreate).toHaveBeenCalledTimes(1);
+  });
+
+  // MEDIUM-3, provado no Chrome real: o tradutor junta as linhas de um parágrafo ("- a - b").
+  it("linha por linha: listas e passos continuam um por linha", async () => {
+    const t = fakeTranslator();
+    const tr = createReasoningTranslator({ translator: t.factory, detector: fakeDetector(EN).factory });
+    await expect(tr.translate("I will read the file.\n- first item\n- second item")).resolves.toBe(
+      "PT(I will read the file.)\nPT(- first item)\nPT(- second item)",
+    );
+  });
+
+  it("supported diz se o navegador tem a API — sem ela ninguém nem tenta", () => {
+    expect(createReasoningTranslator({}).supported).toBe(false);
+    expect(createReasoningTranslator({ translator: fakeTranslator().factory }).supported).toBe(true);
   });
 
   it("texto vazio ou só espaço: nada a traduzir", async () => {

@@ -2742,6 +2742,19 @@ describe("SdkChatView — o raciocínio traduzido no navegador", () => {
     expect(screen.queryByTestId("sdk-thinking-original-toggle")).toBeNull();
   });
 
+  // LOW-4 da revisão: baixar o modelo CONSOME o gesto. No pointerdown em captura, o primeiro clique
+  // da pessoa perdia o gesto antes do próprio app (popup, tela cheia). No click, o app já agiu.
+  it("o tradutor é preparado no click, DEPOIS do app — nunca no pointerdown em captura", async () => {
+    setLanguage("pt-BR");
+    renderSdkChat();
+    await socket();
+    Translator.create.mockClear();
+    fireEvent.pointerDown(document.body);
+    expect(Translator.create).not.toHaveBeenCalled();
+    fireEvent.click(document.body);
+    expect(Translator.create).toHaveBeenCalledTimes(1);
+  });
+
   it("o socket não manda mais idioma nenhum — nada sobre o raciocínio chega ao modelo", async () => {
     setLanguage("pt-BR");
     const ws = await thinkingDone("Plain English reasoning.");

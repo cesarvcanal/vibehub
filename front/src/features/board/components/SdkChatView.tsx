@@ -340,18 +340,22 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
 
   /**
    * O tradutor local do navegador só BAIXA o pacote de idioma dentro de um gesto (clique, tecla) —
-   * então o primeiro gesto na página, com a interface em português, já o prepara. Depois de pronto,
-   * `prime()` não faz nada; o raciocínio que esperava se traduz sozinho (`onReady`).
+   * então os gestos na página, com a interface em português, o preparam (um modelo por gesto). Depois
+   * de pronto, `prime()` não faz nada; o raciocínio que esperava se traduz sozinho (`onReady`).
+   *
+   * `click`/`keyup` na fase de BOLHA, de propósito: baixar consome o gesto, e o app age antes (no
+   * pointerdown em captura, o primeiro clique da pessoa perdia o gesto — popup, tela cheia). O `click`
+   * também cobre o toque, onde o pointerdown nem conta como gesto.
    */
   React.useEffect(() => {
     const prime = (): void => {
       if (getLanguage() === "pt-BR") reasoningTranslator().prime();
     };
-    window.addEventListener("pointerdown", prime, true);
-    window.addEventListener("keydown", prime, true);
+    window.addEventListener("click", prime);
+    window.addEventListener("keyup", prime);
     return () => {
-      window.removeEventListener("pointerdown", prime, true);
-      window.removeEventListener("keydown", prime, true);
+      window.removeEventListener("click", prime);
+      window.removeEventListener("keyup", prime);
     };
   }, []);
 
