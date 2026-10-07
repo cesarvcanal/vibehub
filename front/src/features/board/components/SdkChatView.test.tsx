@@ -2681,7 +2681,7 @@ describe("SdkChatView — o raciocínio traduzido no navegador", () => {
   // os globais (Translator, LanguageDetector) o afterEach de fora desfaz, junto com o WebSocket
   afterEach(() => {
     resetReasoningTranslatorForTesting();
-    resetLanguage();
+    act(() => resetLanguage());
   });
 
   async function thinkingDone(text: string): Promise<FakeSocket> {
