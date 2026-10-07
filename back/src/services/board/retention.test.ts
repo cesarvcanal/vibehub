@@ -227,6 +227,43 @@ describe("sweepDoneCards — the purge of what has been done for a day", () => {
     expect(await reg.getCard(c.id)).toBeUndefined();
   });
 
+  it("a card RESCUED while the pass is running is not purged — the decision is re-taken per card", async () => {
+    // The countdown says "any moment now"; the person drags the card out of done while the pass is
+    // busy purging an older one (each purge is minutes of docker execs). The list was read before.
+    const project = await reg.createProject({ name: "erp-aux" });
+    const older = await reg.createCard({ projectId: project.id, title: "Mais velho" });
+    const rescued = await reg.createCard({ projectId: project.id, title: "Resgatado" });
+    await reg.updateCard(older.id, { column: "done" });
+    await reg.updateCard(rescued.id, { column: "done" });
+    let moved = false;
+    runScript.mockImplementation(async () => {
+      if (!moved) {
+        moved = true;
+        await reg.updateCard(rescued.id, { column: "waiting" });
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const summary = await retention.sweepDoneCards({ now: inDays(365) });
+
+    expect(await reg.getCard(older.id)).toBeUndefined();
+    expect(await reg.getCard(rescued.id)).toBeDefined();
+    expect(summary.purged).toBe(1);
+  });
+
+  it("two passes never run at once — a slow runner must not purge the same card twice", async () => {
+    const project = await reg.createProject({ name: "erp-aux" });
+    const c = await reg.createCard({ projectId: project.id, title: "Velho" });
+    await reg.updateCard(c.id, { column: "done" });
+
+    const [a, b] = await Promise.all([
+      retention.sweepDoneCards({ now: inDays(365) }),
+      retention.sweepDoneCards({ now: inDays(365) }),
+    ]);
+
+    expect(a.purged + b.purged).toBe(1);
+  });
+
   it("caps one pass and reports what it left for the next — never a silent mass deletion", async () => {
     const project = await reg.createProject({ name: "erp-aux" });
     for (let i = 0; i < 3; i += 1) {
