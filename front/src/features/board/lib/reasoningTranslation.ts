@@ -141,7 +141,7 @@ const FENCE = /^\s*(?:```|~~~)/;
  * Marcador de citação/título/lista/checkbox/numeração: fica intacto ("- [ ]" virava "- []"; ">" e
  * "##" iam junto para o tradutor). Sem backtracking.
  */
-const LIST_MARKER = /^(?:(?:>[ \t]*)+|#{1,6}\s+|[-*+]\s+(?:\[[ xX]\](?:\s+|$))?|\d+[.)]\s+)/;
+const LIST_MARKER = /^(?:(?:>\s*)+|#{1,6}\s+|[-*+]\s+(?:\[[ xX]\](?:\s+|$))?|\d+[.)]\s+)/;
 
 /**
  * Traduz LINHA por linha: o tradutor local junta as linhas de um mesmo pedaço ("- a - b", provado no

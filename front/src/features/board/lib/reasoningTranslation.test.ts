@@ -255,6 +255,14 @@ describe("createReasoningTranslator", () => {
     ).resolves.toBe("> - [ ] PT(the task is this)\n## 1. PT(the step is first)\n  >  PT(the indented quote is it)   ");
   });
 
+  it("espaço não-separável (NBSP) ou ideográfico depois de '>' também é marcador", async () => {
+    const t = fakeTranslator();
+    const tr = createReasoningTranslator({ translator: t.factory });
+    await expect(tr.translate("> the quote is this\n>　the other quote is it")).resolves.toBe(
+      "> PT(the quote is this)\n>　PT(the other quote is it)",
+    );
+  });
+
   it("fence com linha gigante ainda abre/fecha o bloco de código", async () => {
     const t = fakeTranslator();
     const tr = createReasoningTranslator({ translator: t.factory });
