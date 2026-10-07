@@ -145,13 +145,22 @@ export function appendHistory(cardId: string, event: HistoryEvent): Promise<void
  * browser before the driver says `ready`. Reading is also when the file is COMPACTED: a log that
  * has grown past several times the replay window is rewritten to just that window, so the hot
  * append path never pays for a rewrite. Never throws — no file simply means no history yet.
+ *
+ * `strict`: a read that FAILS (EBUSY, EMFILE…) throws instead of reading as "no history". For a
+ * caller that decides something once from the answer (the orphan-question sweep), an empty list
+ * born of a passing error is a wrong verdict, not a missing file.
  */
-export async function readHistory(cardId: string, limit: number = HISTORY_REPLAY_LIMIT): Promise<HistoryEvent[]> {
+export async function readHistory(
+  cardId: string,
+  limit: number = HISTORY_REPLAY_LIMIT,
+  opts: { strict?: boolean } = {},
+): Promise<HistoryEvent[]> {
   let raw: string;
   const file = historyFile(cardId);
   try {
     raw = await readFile(file, "utf8");
-  } catch {
+  } catch (err) {
+    if (opts.strict && (err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     return [];
   }
   const events = parseHistory(raw);

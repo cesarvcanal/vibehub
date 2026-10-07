@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { config } from "../../config/env.js";
@@ -562,6 +562,33 @@ describe("pergunta órfã — o cartão sobreviveu ao driver que o abriu", () =>
     socket.emit("message", Buffer.from(JSON.stringify({ type: "question_answer", id: "q_3_1791402112898", answers: [{ selected: ["No item"] }] })));
     await vi.waitFor(() => expect(sentTypes(socket)).toContain("error"));
     expect(successor.settledOrphans.has("q_3_1791402112898")).toBe(false); // o próximo driver ainda a recebe
+  });
+
+  // ---- achados da 2ª rodada adversarial do PR #98 ----
+
+  it("R1: uma leitura do histórico que FALHA não dá a varredura por feita — a próxima mensagem encerra a órfã", async () => {
+    const { socket } = await orphanedCard();
+    const file = join(dir, "sdk-history", `${CARD}.ndjson`);
+    await rename(file, `${file}.bak`);
+    await mkdir(file); // readFile → EISDIR: a falha passageira (EBUSY/EMFILE) no primeiro envio
+    socket.emit("message", Buffer.from(`{"type":"user","text":"primeira"}`));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await rm(file, { recursive: true, force: true });
+    await rename(`${file}.bak`, file);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"segunda"}`));
+    await vi.waitFor(async () => {
+      const result = (await readHistory(CARD)).find((e) => e.type === "question_result") as { superseded?: boolean } | undefined;
+      expect(result).toMatchObject({ superseded: true });
+    });
+  });
+
+  it("R2: clicar uma órfã que ESTE manager já encerrou recebe o erro — nunca silêncio", async () => {
+    const { socket } = await orphanedCard();
+    socket.emit("message", Buffer.from(`{"type":"user","text":"respondi por escrito"}`));
+    await vi.waitFor(async () => expect((await readHistory(CARD)).some((e) => e.type === "question_result")).toBe(true));
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "question_answer", id: "q_3_1791402112898", answers: [{ selected: ["No item"] }] })));
+    await vi.waitFor(() => expect(socket.sent.some((s) => s.includes("no pending question with id q_3_1791402112898"))).toBe(true));
+    expect(spawned[1]!.stdin.written.filter((w) => w.includes(`"type":"user"`))).toHaveLength(1); // só a mensagem escrita
   });
 
   it("a pergunta que o driver VIVO acabou de encerrar não vira órfã na corrida com o disco", async () => {

@@ -3,7 +3,7 @@ import { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
 import { onCardDriverProbe, type DriverActivity } from "../board/agentState.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
-import { appendHistory, appendHistoryReported, readHistory, replayableHistoryEvent, rewindHistory, type HistoryEvent } from "./history.js";
+import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, readHistory, replayableHistoryEvent, rewindHistory, type HistoryEvent } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inflight.js";
 import { createLineReader, forgetDriverKeys, noteDriverEventFor, onOutsideTurn } from "./mirror.js";
 import { writeCardCatalog } from "./catalog.js";
@@ -135,8 +135,10 @@ export interface DriverSession {
    * aqui, e uma leitura no meio desse caminho tomaria a pergunta dele por órfã (resultado duplicado).
    */
   ownQuestions: Set<string>;
-  /** Órfãs que este manager já encerrou — duas abas clicando a mesma viram UMA mensagem. */
+  /** Órfãs que este manager já ENCERROU: um clique tardio nelas recebe o erro, nunca silêncio. */
   settledOrphans: Set<string>;
+  /** Órfãs com uma resposta A CAMINHO: o segundo clique (outra aba, duplo clique) vira nada. */
+  answeringOrphans: Set<string>;
   /**
    * A varredura de órfãs por mensagem já rodou. Órfã é pergunta de um driver ANTERIOR: depois que
    * este driver subiu nenhuma nova pode nascer, então uma varredura basta — sem ler o histórico
@@ -464,6 +466,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     acceptedCids: new Map(),
     ownQuestions: new Set(),
     settledOrphans: new Set(),
+    answeringOrphans: new Set(),
     orphansSwept: false,
     ...(opts.transcriptDir ? { transcriptDir: opts.transcriptDir } : {}),
   };
@@ -697,7 +700,7 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
  */
 async function orphanQuestions(session: DriverSession): Promise<Map<string, UserQuestionItem[]>> {
   const open = new Map<string, UserQuestionItem[]>();
-  for (const event of await readHistory(session.cardId)) {
+  for (const event of await readHistory(session.cardId, HISTORY_REPLAY_LIMIT, { strict: true })) {
     if (event.type === "user_question") open.set(event.id, event.questions);
     else if (event.type === "question_result") open.delete(event.id);
   }
@@ -730,7 +733,7 @@ async function settleOrphanQuestions(session: DriverSession): Promise<void> {
     return;
   }
   for (const id of orphans.keys()) {
-    if (session.settledOrphans.has(id)) continue;
+    if (session.settledOrphans.has(id) || session.answeringOrphans.has(id)) continue;
     session.settledOrphans.add(id);
     settleQuestionCard(session, { type: "question_result", id, superseded: true });
   }
@@ -745,10 +748,15 @@ async function settleOrphanQuestions(session: DriverSession): Promise<void> {
 async function answerOrphanQuestion(session: DriverSession, control: QuestionAnswerControl): Promise<void> {
   // Marcada ANTES de qualquer await: o segundo clique (outra aba, duplo clique) chega no meio da
   // leitura do disco e precisa encontrar a vaga já tomada.
-  if (session.settledOrphans.has(control.id)) return;
-  session.settledOrphans.add(control.id);
+  if (session.answeringOrphans.has(control.id)) return; // a mesma resposta já está a caminho
+  if (session.settledOrphans.has(control.id)) {
+    // Encerrada aqui mesmo (por mensagem, ou por outra resposta): o veredito de sempre.
+    broadcast(session, { type: "error", message: `no pending question with id ${control.id}` });
+    return;
+  }
+  session.answeringOrphans.add(control.id);
   const release = (message: string): void => {
-    session.settledOrphans.delete(control.id);
+    session.answeringOrphans.delete(control.id);
     broadcast(session, { type: "error", message });
   };
   let orphans: Map<string, UserQuestionItem[]>;
@@ -780,6 +788,8 @@ async function answerOrphanQuestion(session: DriverSession, control: QuestionAns
   noteChatActivity(session);
   noteDriverEventFor(session.cardId, { type: "user", text });
   void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(text), attempts: 0 });
+  session.answeringOrphans.delete(control.id);
+  session.settledOrphans.add(control.id);
   settleQuestionCard(session, { type: "question_result", id: control.id, answers: control.answers, sent: text });
   logger.info(
     { audit: true, action: "sdk.question.orphan", card: session.label },
