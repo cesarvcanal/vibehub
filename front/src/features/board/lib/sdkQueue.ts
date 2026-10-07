@@ -155,7 +155,9 @@ export function updateQueued(
  * A TROCA DE CONTA com mensagens esperando: o que é de OUTRA conta não pode sair por esta conexão
  * (o servidor carimba o autor pela conexão, e a mensagem ficaria no nome de quem não a escreveu).
  * Ela vira uma cópia "não entregue" no outbox — continua na tela, com o nome de quem escreveu, e
- * pode ser descartada; só a conta dona dela pode reenviá-la.
+ * pode ser descartada; só a conta dona dela pode reenviá-la. E sai marcada `unsent`: ela nunca foi
+ * enviada, então nenhuma reconciliação pode dá-la por entregue só porque o mesmo texto está na
+ * conversa — sem a marca, o F5 seguinte a casava com qualquer "ok" do replay e ela sumia.
  *
  * Sem autor (gravada antes desta versão) segue com quem está na aba, como sempre foi; sem leitor
  * conhecido ainda (`/auth/me` em voo) nada é separado — não se decide no escuro. PURE.
@@ -169,7 +171,7 @@ export function foreignToOutbox(
   const foreign: OutboxMessage[] = [];
   for (const m of messages) {
     if (m.from && m.from.name !== viewer) {
-      foreign.push({ cid: m.id, text: m.text, at: m.at, from: m.from, undelivered: true });
+      foreign.push({ cid: m.id, text: m.text, at: m.at, from: m.from, undelivered: true, unsent: true });
     } else {
       own.push(m);
     }

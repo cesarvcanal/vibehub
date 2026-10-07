@@ -5,7 +5,7 @@ import "@xterm/xterm/css/xterm.css";
 import { cn } from "@/lib/utils";
 import { wsUrl } from "@/lib/ws";
 import { fitDimensions, resizeFrame } from "@/features/board/lib/focusMode";
-import { reconnectDelay, type ConnectionState } from "@/features/board/lib/reconnect";
+import { createReconnectBackoff, type ConnectionState } from "@/features/board/lib/reconnect";
 import { continuesLine, findUrls, offsetsToRange } from "@/features/board/lib/links";
 import { LocalEcho } from "@/features/board/lib/localEcho";
 import {
@@ -117,15 +117,6 @@ const THEME: ITerminalOptions["theme"] = {
 
 /** How long to wait for a real layout before giving up and connecting anyway. */
 const FIT_BACKSTOP_MS = 90;
-
-/**
- * A freshly opened socket must stay up this long before the connection counts as healthy and the
- * backoff resets to its base. A redeploy racing the proxy, or a network flap, can accept a socket
- * and drop it a moment later; resetting the delay on the bare `open` event would let that storm the
- * server at the base interval forever. Staying up for this long is the signal the socket is real,
- * so only then do we drop back to the first, fast retry delay.
- */
-const STABLE_CONNECTION_MS = 3_000;
 
 /**
  * Reads one buffer row. Only the LAST row of a line is trimmed: an untrimmed row is exactly `cols`
@@ -455,10 +446,11 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
 
     let socket: WebSocket | null = null;
     let retry: ReturnType<typeof setTimeout> | null = null;
-    // Set when a socket opens; fires after STABLE_CONNECTION_MS and resets the backoff. Cleared the
-    // moment the socket closes, so a connection that opens then dies never resets `attempt`.
-    let stableTimer: ReturnType<typeof setTimeout> | null = null;
-    let attempt = 0;
+    // The SAME policy as the chats (lib/reconnect.ts): geometric backoff with jitter, reset only
+    // once a socket has HELD for `STABLE_CONNECTION_MS` — never on the bare open, or a socket that
+    // opens and dies (a deploy racing the proxy, a flapping network) would retry at the base delay
+    // forever. The terminal has no "ready" frame, so holding is its only proof of health.
+    const backoff = createReconnectBackoff(Math.random);
     let disposed = false;
     const decoder = new TextDecoder();
 
@@ -496,7 +488,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
         setStatus("reconnecting");
         return;
       }
-      setStatus(attempt === 0 ? "connecting" : "reconnecting");
+      setStatus(backoff.attempt === 0 ? "connecting" : "reconnecting");
       let next: WebSocket;
       try {
         next = new WebSocket(wsUrl(wsPath));
@@ -516,15 +508,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
         if (autoFocusRef.current) term.focus();
         echo.reset();
         sendResize();
-        // Do NOT reset the backoff on the bare open — see STABLE_CONNECTION_MS. A socket that opens
-        // and immediately dies (a deploy racing the proxy, a flapping network) would otherwise reset
-        // to the base delay every time and hammer the server. Only once it has held for a moment do
-        // we trust it and drop back to the first, fast delay.
-        if (stableTimer) clearTimeout(stableTimer);
-        stableTimer = setTimeout(() => {
-          stableTimer = null;
-          attempt = 0;
-        }, STABLE_CONNECTION_MS);
+        backoff.opened(); // resets the backoff only if this socket holds — see above
       };
       next.onmessage = (event: MessageEvent) => {
         // The bridge sends text, but a proxy may hand it over as binary. Duck-typed rather than
@@ -540,12 +524,9 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
         /* onclose always follows; retrying is decided there so it happens exactly once */
       };
       next.onclose = () => {
-        // The socket died before it proved itself stable: drop the pending reset so `attempt` keeps
-        // ratcheting instead of snapping back to the base delay.
-        if (stableTimer) {
-          clearTimeout(stableTimer);
-          stableTimer = null;
-        }
+        // A socket that died before it proved itself stable leaves the backoff ratcheting instead of
+        // snapping back to the base delay.
+        backoff.closed();
         if (socket === next) socket = null;
         if (socketRef.current === next) socketRef.current = null;
         if (disposed) return;
@@ -559,8 +540,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
       // Offline or hidden: don't schedule a blind retry that will only fail and ratchet the backoff.
       // The wake listeners reconnect the instant the network or the tab comes back.
       if (!canConnectNow()) return;
-      const delay = reconnectDelay(attempt, Math.random);
-      attempt += 1;
+      const delay = backoff.next();
       retry = setTimeout(() => {
         retry = null;
         connect();
@@ -570,7 +550,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
     /**
      * A real network change or a tab waking up should recover FAST, not sit out a long backoff.
      * When we come back online or the tab becomes visible, cancel any pending wait and dial
-     * immediately — unless a socket is already live. `attempt` is deliberately NOT reset: if the
+     * immediately — unless a socket is already live. The backoff is deliberately NOT reset: if the
      * server itself is down the backoff must keep growing; we only skip the remaining WAIT so a
      * genuine reconnection is instant.
      */
@@ -816,7 +796,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
     return () => {
       disposed = true;
       if (retry) clearTimeout(retry);
-      if (stableTimer) clearTimeout(stableTimer);
+      backoff.dispose();
       clearTimeout(backstop);
       cancelAnimationFrame(firstFrame);
       cancelAnimationFrame(secondFrame);

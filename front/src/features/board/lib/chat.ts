@@ -190,6 +190,40 @@ export interface PendingMessage {
   text: string;
   /** When it was sent — what tells a moment's "enviando" apart from a bubble stuck forever. */
   at: number;
+  /**
+   * The ids of the user lines that ALREADY said these words when this was sent. A short answer
+   * repeats ("sim", "ok"), and those old lines are not this message's echo — matching them wiped
+   * the bubble before it was ever delivered. Ids, not a count: the transcript replays only its
+   * tail, but an event keeps its id across every replay. Absent on entries stored before it
+   * existed, which then match any line with the same words, as they always did.
+   */
+  seenIds?: string[];
+}
+
+/** The ids of the user lines that say `text` (compared the way the echo is matched). PURE. */
+export function userEventIdsSaying(events: readonly ChatEvent[], text: string): string[] {
+  const key = matchKeyOf(text);
+  return events.filter((e) => e.kind === "user" && matchKeyOf(e.text) === key).map((e) => e.id);
+}
+
+/**
+ * The pending bubbles the transcript has NOT echoed yet.
+ *
+ * A bubble's echo is a user line with the same words that was not there when it was sent
+ * (`seenIds`), and each line answers for ONE bubble — two sends of the same words wait for two
+ * echoes. Returns the same array when nothing was echoed, so the caller can skip the update. PURE.
+ */
+export function unechoedPending(pending: readonly PendingMessage[], events: readonly ChatEvent[]): PendingMessage[] {
+  const claimed = new Set<string>();
+  const left = pending.filter((p) => {
+    const key = matchKeyOf(p.text);
+    const seen = new Set(p.seenIds ?? []);
+    const echo = events.find((e) => e.kind === "user" && !seen.has(e.id) && !claimed.has(e.id) && matchKeyOf(e.text) === key);
+    if (!echo) return true;
+    claimed.add(echo.id);
+    return false;
+  });
+  return left.length === pending.length ? (pending as PendingMessage[]) : left;
 }
 
 /**
@@ -207,7 +241,11 @@ export function pendingPhase(pending: Pick<PendingMessage, "at">, now: number): 
 /**
  * The transcript's echo is matched by TEXT (it carries no client id), and the echo is not always
  * byte-identical — Claude Code may re-flow whitespace. Comparing the collapsed form keeps a
- * delivered message from haunting the screen as a forever-pending bubble. PURE.
+ * delivered message from haunting the screen as a forever-pending bubble.
+ *
+ * THE one whitespace folding of the chat code (the same the back's dedupe key uses): the outbox
+ * reconciliation, the supersede match, the decision anchors and the one-line summaries all fold
+ * through here, so two places can never disagree on whether two texts are the same. PURE.
  */
 export function normalizeMessage(text: string): string {
   return text.replace(/\s+/g, " ").trim();
@@ -249,7 +287,11 @@ export function readPending(cardId: string): PendingMessage[] {
       )
       // Entries written before `at` existed start their clock NOW: they become "unconfirmed" after
       // one timeout instead of spinning as "enviando" until the end of time.
-      .map((p) => (typeof p.at === "number" ? p : { ...p, at: Date.now() }));
+      .map((p) => ({
+        ...p,
+        at: typeof p.at === "number" ? p.at : Date.now(),
+        seenIds: Array.isArray(p.seenIds) ? p.seenIds.filter((id): id is string => typeof id === "string") : undefined,
+      }));
   } catch {
     return [];
   }

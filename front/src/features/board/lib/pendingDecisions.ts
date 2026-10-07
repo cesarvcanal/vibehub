@@ -1,3 +1,4 @@
+import { normalizeMessage } from "@/features/board/lib/chat";
 import type { SdkRow } from "@/features/board/lib/sdkChat";
 
 /**
@@ -100,7 +101,7 @@ export function decisionSummary(text: string): string {
 }
 
 function summarize(text: string): string {
-  const flat = text.replace(/\s+/g, " ").trim();
+  const flat = normalizeMessage(text);
   return flat.length > SUMMARY_MAX ? `${flat.slice(0, SUMMARY_MAX - 1)}…` : flat;
 }
 
@@ -153,7 +154,7 @@ export function pendingDecisions(rows: readonly SdkRow[]): PendingDecision[] {
 const REPLY_OPEN = "[resposta à decisão pendente:";
 
 export function buildDecisionReply(question: string, answer: string): string {
-  return `${REPLY_OPEN}\n«${question.replace(/\s+/g, " ").trim()}»]\n\n${answer}`;
+  return `${REPLY_OPEN}\n«${normalizeMessage(question)}»]\n\n${answer}`;
 }
 
 const REPLY_RE = /^\[resposta à decisão pendente:\n«([\s\S]*?)»\]\n\n([\s\S]*)$/;
@@ -169,7 +170,7 @@ export function parseDecisionReply(text: string): { question: string; answer: st
 
 /** Question identity for anchoring — the wrapper flattens whitespace, so the match must too. PURE. */
 export function decisionKey(question: string): string {
-  return question.replace(/\s+/g, " ").trim().toLowerCase();
+  return normalizeMessage(question).toLowerCase();
 }
 
 /**

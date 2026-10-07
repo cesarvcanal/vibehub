@@ -1,6 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import ReactMarkdown from "react-markdown";
 import { Markdown } from "@/features/board/components/ChatView";
+
+// Passthrough with a counter: the render is the real one, and the PARSE count is observable.
+vi.mock("react-markdown", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-markdown")>();
+  return { ...actual, default: vi.fn(actual.default) };
+});
 
 /**
  * The agent's answer, as the person actually sees it.
@@ -117,5 +124,23 @@ describe("Markdown — safety", () => {
   it("is TOTAL: an empty or undefined message renders nothing and throws nothing", () => {
     expect(() => render(<Markdown text="" />)).not.toThrow();
     expect(() => render(<Markdown text={undefined as unknown as string} />)).not.toThrow();
+  });
+});
+
+/**
+ * A live chat re-renders its transcript on EVERY streamed token. Markdown is the expensive part of a
+ * row (remark parse + the whole plugin chain), and a message that did not change has nothing new
+ * to parse — so the same text never reaches the parser twice.
+ */
+describe("Markdown — custo", () => {
+  it("o mesmo texto não é re-parseado quando o pai redesenha", () => {
+    const parses = vi.mocked(ReactMarkdown);
+    parses.mockClear();
+    const { rerender } = render(<Markdown text="**resposta antiga**" />);
+    rerender(<Markdown text="**resposta antiga**" />);
+    rerender(<Markdown text="**resposta antiga**" />);
+    expect(parses).toHaveBeenCalledTimes(1);
+    rerender(<Markdown text="**resposta nova**" />);
+    expect(parses).toHaveBeenCalledTimes(2);
   });
 });

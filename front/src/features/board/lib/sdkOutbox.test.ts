@@ -9,9 +9,16 @@ import {
   readOutbox,
   reconcileOutbox,
   retryOutbox,
+  sendMark,
   writeOutbox,
   type OutboxMessage,
+  type ServerText,
 } from "@/features/board/lib/sdkOutbox";
+
+/** O que o servidor tem, na ordem do replay. Sem `at`: o histórico antigo (ou um teste que não liga). */
+function lines(...texts: string[]): ServerText[] {
+  return texts.map((text) => ({ text }));
+}
 
 /**
  * O BUG QUE ESTE ARQUIVO FIXA (produção, 2026-09-17): "mando a mensagem, fica carregando sem nada
@@ -118,7 +125,7 @@ describe("a fila em si", () => {
     const now = 100_000;
     const entry = msg("c1", "instrução longa", now - OUTBOX_ACK_TIMEOUT_MS - 1);
     const cobrada = markUndelivered([entry], ["c1"]);
-    const reenviada = retryOutbox(cobrada, cobrada[0]!, now);
+    const reenviada = retryOutbox(cobrada, cobrada[0]!, now, {});
     expect(reenviada).toHaveLength(1); // mesmo cid: uma bolha só, não duas
     expect(overdueMessages(reenviada, now)).toEqual([]); // acabou de sair
     expect(overdueMessages(reenviada, now + OUTBOX_ACK_TIMEOUT_MS).map((m) => m.cid)).toEqual(["c1"]);
@@ -162,30 +169,120 @@ describe("a fila em si", () => {
 
 describe("reconciliação no reconnect — quem foi gravado e quem morreu no caminho", () => {
   it("o replay traz a mensagem: o recibo é que se perdeu, não a mensagem", () => {
-    const { delivered, missing } = reconcileOutbox(["roda os testes"], [msg("c1", "roda os testes")]);
+    const { delivered, missing } = reconcileOutbox(lines("roda os testes"), [msg("c1", "roda os testes")]);
     expect(delivered.map((m) => m.cid)).toEqual(["c1"]);
     expect(missing).toEqual([]);
   });
 
   it("o replay NÃO traz: é a mensagem perdida — e é ela que a tela precisa mostrar marcada", () => {
-    const { delivered, missing } = reconcileOutbox(["outra coisa"], [msg("c1", "instrução longa")]);
+    const { delivered, missing } = reconcileOutbox(lines("outra coisa"), [msg("c1", "instrução longa")]);
     expect(delivered).toEqual([]);
     expect(missing.map((m) => m.text)).toEqual(["instrução longa"]);
   });
 
   it("casa por texto colapsando espaços (o servidor pode reflowar a mensagem)", () => {
-    const { delivered } = reconcileOutbox(["roda  os\n testes"], [msg("c1", "roda os testes")]);
+    const { delivered } = reconcileOutbox(lines("roda  os\n testes"), [msg("c1", "roda os testes")]);
     expect(delivered.map((m) => m.cid)).toEqual(["c1"]);
   });
 
   it("cada linha do replay casa com UMA entrada: mandar a mesma frase duas vezes não entrega as duas", () => {
-    const { delivered, missing } = reconcileOutbox(["oi"], [msg("c1", "oi"), msg("c2", "oi")]);
+    const { delivered, missing } = reconcileOutbox(lines("oi"), [msg("c1", "oi"), msg("c2", "oi")]);
     expect(delivered.map((m) => m.cid)).toEqual(["c1"]);
     expect(missing.map((m) => m.cid)).toEqual(["c2"]);
   });
 
   it("fila vazia é um não-evento", () => {
-    expect(reconcileOutbox(["oi"], [])).toEqual({ delivered: [], missing: [] });
+    expect(reconcileOutbox(lines("oi"), [])).toEqual({ delivered: [], missing: [] });
+  });
+
+  /**
+   * O "SIM" DE ONTEM. O replay traz a conversa INTEIRA (a janela do histórico), não só o que veio
+   * depois do envio — e uma resposta curta se repete o tempo todo. Casar contra tudo dava o "sim"
+   * de hoje, perdido num socket meio-aberto, por entregue só porque ontem alguém disse "sim": a
+   * mensagem sumia em silêncio, que é exatamente o que o outbox existe para impedir.
+   */
+  it("um 'sim' que JÁ estava na conversa no envio não entrega o 'sim' de agora", () => {
+    const today = { ...msg("c1", "sim"), seenBefore: 1 };
+    const { delivered, missing } = reconcileOutbox(lines("sim"), [today]);
+    expect(delivered).toEqual([]);
+    expect(missing.map((m) => m.cid)).toEqual(["c1"]);
+  });
+
+  it("um 'sim' A MAIS do que havia no envio é o de agora: entregue", () => {
+    const { delivered } = reconcileOutbox(lines("sim", "sim"), [{ ...msg("c1", "sim"), seenBefore: 1 }]);
+    expect(delivered.map((m) => m.cid)).toEqual(["c1"]);
+  });
+
+  it("dois envios do mesmo texto: cada um precisa da SUA ocorrência depois do que já havia", () => {
+    // c1 saiu com um "sim" na conversa; c2 saiu depois que c1 foi gravado (dois "sim" na tela).
+    const pending = [{ ...msg("c1", "sim"), seenBefore: 1 }, { ...msg("c2", "sim"), seenBefore: 2 }];
+    expect(reconcileOutbox(lines("sim", "sim", "sim"), pending).delivered.map((m) => m.cid)).toEqual(["c1", "c2"]);
+    const partial = reconcileOutbox(lines("sim", "sim"), pending);
+    expect(partial.delivered.map((m) => m.cid)).toEqual(["c1"]);
+    expect(partial.missing.map((m) => m.cid)).toEqual(["c2"]);
+  });
+
+  it("a contagem do envio sobrevive ao F5 (vai pro disco com a mensagem)", () => {
+    writeOutbox("card-seen", [{ cid: "c1", text: "sim", at: 1, seenBefore: 3, since: 40, unsent: true }]);
+    expect(readOutbox("card-seen")[0]).toMatchObject({ seenBefore: 3, since: 40, unsent: true });
+    writeOutbox("card-seen", [{ cid: "c1", text: "sim", at: 1, since: "x", unsent: "sim" } as never]);
+    expect(readOutbox("card-seen")[0]).toMatchObject({ since: undefined, unsent: undefined });
+  });
+
+  /**
+   * A JANELA DO REPLAY ANDA. O replay é o fim do histórico, não o histórico inteiro: numa conversa
+   * longa, os "ok" mais antigos saem dela entre o envio e o reconnect. A marca do envio é então
+   * ANCORADA no relógio do SERVIDOR: `since` é o `at` mais novo que a tela conhecia, e só conta o
+   * que foi gravado depois dele — o que a janela descarta é sempre o mais VELHO, nunca isso.
+   */
+  describe("a marca do envio (sendMark) contra uma janela que anda", () => {
+    const seis = [1, 2, 3, 4, 5, 6].map((at) => ({ text: "ok", at }));
+
+    it("ancora no `at` mais novo da tela: nada gravado antes dele conta", () => {
+      expect(sendMark(seis, "ok")).toEqual({ since: 6, seenBefore: 0 });
+    });
+
+    it("um envio desta conexão já confirmado (sem `at` ainda) conta: ele volta no replay depois da âncora", () => {
+      expect(sendMark([...seis, { text: "ok" }], "ok")).toEqual({ since: 6, seenBefore: 1 });
+    });
+
+    it("sem nenhum `at` na tela (histórico antigo), conta tudo, como sempre foi", () => {
+      expect(sendMark(lines("ok", "sim", "ok"), "ok")).toEqual({ since: undefined, seenBefore: 2 });
+    });
+
+    it("a janela perdeu os 'ok' antigos: o 'ok' gravado depois da âncora entrega", () => {
+      const sent = { ...msg("c1", "ok"), ...sendMark(seis, "ok") };
+      const replay = [{ text: "ok", at: 5 }, { text: "ok", at: 6 }, { text: "ok", at: 100 }];
+      expect(reconcileOutbox(replay, [sent]).delivered.map((m) => m.cid)).toEqual(["c1"]);
+    });
+
+    it("…e sem ele, nenhum 'ok' antigo entrega — por mais que a janela ainda tenha vários", () => {
+      const sent = { ...msg("c1", "ok"), ...sendMark(seis, "ok") };
+      expect(reconcileOutbox(seis, [sent]).missing.map((m) => m.cid)).toEqual(["c1"]);
+    });
+
+    it("dois envios do mesmo texto depois da âncora: cada um precisa da SUA ocorrência", () => {
+      const c1 = { ...msg("c1", "ok"), ...sendMark(seis, "ok") };
+      const c2 = { ...msg("c2", "ok"), ...sendMark([...seis, { text: "ok" }], "ok") };
+      const umSo = [...seis.slice(-2), { text: "ok", at: 50 }];
+      expect(reconcileOutbox(umSo, [c1, c2])).toMatchObject({
+        delivered: [{ cid: "c1" }],
+        missing: [{ cid: "c2" }],
+      });
+    });
+  });
+
+  it("uma mensagem que NUNCA saiu deste navegador nunca é dada por entregue, nem com o texto no replay", () => {
+    const { delivered, missing } = reconcileOutbox(lines("oi"), [{ ...msg("c1", "oi"), unsent: true }]);
+    expect(delivered).toEqual([]);
+    expect(missing.map((m) => m.cid)).toEqual(["c1"]);
+  });
+
+  it("o Reenviar é o envio de verdade: marca de novo contra a tela de agora, e deixa de ser 'nunca enviada'", () => {
+    const old = { ...msg("c1", "ok"), seenBefore: 9, since: 2, undelivered: true, unsent: true };
+    const [again] = retryOutbox([old], old, 5_000, { since: 7, seenBefore: 1 });
+    expect(again).toMatchObject({ at: 5_000, since: 7, seenBefore: 1, undelivered: false });
+    expect(again!.unsent).toBeUndefined();
   });
 });
 
