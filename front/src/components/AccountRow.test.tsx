@@ -3,7 +3,11 @@ import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AccountRow } from "@/components/AccountRow";
 import { renderApp, setupState } from "@/test/render";
-import { get } from "@/lib/api";
+import { Route, Routes } from "react-router-dom";
+import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { PublicRoute } from "@/components/PublicRoute";
+import { Paths } from "@/lib/paths";
+import { get, post } from "@/lib/api";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -84,5 +88,39 @@ describe("AccountRow — the user", () => {
     await userEvent.click(await screen.findByRole("button", { name: /cesar/ }));
     await userEvent.click(await screen.findByRole("menuitem", { name: "Edit user" }));
     expect(await screen.findByLabelText("New password")).toBeInTheDocument();
+  });
+
+  /**
+   * The whole trip, through the real route guards — what a person sees, not what the provider holds.
+   * Dropping the cache with `queryClient.clear()` left the session query rebuilt EMPTY and never
+   * fetched: `isLoading` stayed true, PublicRoute sat on "Checking session" forever and only a
+   * reload brought the login back (production, 2026-10-07).
+   */
+  it("Sign out lands on the login form — not on a spinner that only a reload clears", async () => {
+    let signedIn = true;
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/setup/state") return Promise.resolve(setupState());
+      if (url === "/auth/me") {
+        return signedIn
+          ? Promise.resolve({ user: { id: "u1", username: "cesar", role: "owner" } })
+          : Promise.reject(Object.assign(new Error("401"), { response: { status: 401, data: {} } }));
+      }
+      return Promise.resolve({});
+    });
+    vi.mocked(post).mockImplementation(async () => {
+      signedIn = false;
+      return {};
+    });
+    renderApp(
+      <Routes>
+        <Route path={Paths.LOGIN} element={<PublicRoute><p>login form</p></PublicRoute>} />
+        <Route path={Paths.BOARD} element={<ProtectedRoute><AccountRow /></ProtectedRoute>} />
+      </Routes>,
+      { route: Paths.BOARD },
+    );
+    await userEvent.click(await screen.findByRole("button", { name: /cesar/ }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Sign out" }));
+    expect(await screen.findByText("login form")).toBeInTheDocument();
+    expect(screen.queryByText("Checking session")).not.toBeInTheDocument();
   });
 });
