@@ -327,6 +327,32 @@ export function buildSupersedeText(original: string, text: string): string {
 }
 
 /**
+ * The answer to an ORPHANED question card, on its way to the model as a plain user message.
+ *
+ * The driver that asked died (a deploy, a crash, a hibernate) and its successor never heard of the
+ * card — there is no tool call left to answer. The choices still matter, so they travel as words:
+ * each question quoted next to what was chosen, so the resumed model knows exactly what it reads.
+ * `questions` null = the card's text is gone from the history; the answers still go. pt-BR for the
+ * same reason as the supersede wrapper: it is the user's own speech act. PURE.
+ */
+export function buildOrphanAnswerText(questions: UserQuestionItem[] | null, answers: UserQuestionAnswer[]): string {
+  const lines: string[] = [];
+  answers.forEach((answer, i) => {
+    const chosen = (Array.isArray(answer?.selected) ? answer.selected : [])
+      .map((s) => (typeof s === "string" ? s.trim() : ""))
+      .filter((s) => s !== "");
+    if (chosen.length === 0) return;
+    const question = questions?.[i]?.question;
+    lines.push(`- ${question ? `«${question}»` : `pergunta ${i + 1}`} → ${chosen.join(", ")}`);
+  });
+  return (
+    `[resposta às suas perguntas — o processo reiniciou antes de a resposta chegar à ferramenta, ` +
+    `então ela vem por mensagem; siga com estas escolhas:]\n\n` +
+    lines.join("\n")
+  );
+}
+
+/**
  * The conversation NOTES the back writes when a turn is cut short. They travel as CODES, not
  * prose: the front translates them (like `terminal-activity`), so the same log reads in pt-BR and
  * in English, and a replay after F5 still explains why the answer above stops mid-sentence.
