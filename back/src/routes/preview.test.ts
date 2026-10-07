@@ -72,6 +72,18 @@ async function signIn(): Promise<string> {
   return `vibehub_session=${res.cookies.find((c) => c.name === "vibehub_session")?.value ?? ""}`;
 }
 
+/** Listens on 6006 (Storybook's default) — or the next free port in the VNC slot range. */
+async function listenInSlotRange(server: Server): Promise<number> {
+  for (let port = 6006; port < 6100; port++) {
+    const ok = await new Promise<boolean>((resolve) => {
+      server.once("error", () => resolve(false));
+      server.listen(port, "127.0.0.1", () => resolve(true));
+    });
+    if (ok) return port;
+  }
+  throw new Error("no free port in 6006..6099");
+}
+
 function listen(server: Server): Promise<number> {
   return new Promise((resolve) => {
     server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port));
@@ -658,9 +670,32 @@ describe("preview access scope", () => {
   });
 
   it("proxy: the per-card browser plumbing (CDP, VNC) is never proxied — not even for the owner", async () => {
-    for (const port of [9222, 5900]) {
+    const { cardBrowserPorts } = await import("../services/browser/ports.js");
+    const cardId = await ownerPreview(5173);
+    const { vncPort, cdpPort } = cardBrowserPorts(cardId);
+    for (const port of [cdpPort, vncPort]) {
       const res = await fetch(`http://127.0.0.1:${appPort}/preview/${port}/json/list`, { headers: { cookie } });
       expect(res.status).toBe(404);
+    }
+  });
+
+  /**
+   * Only the slots a browser holds are plumbing. Blocking the whole 5900–6799 / 9222–10121 span shut
+   * dev servers that live there by default — Storybook 6006, the Node inspector 9229 — which the
+   * owner opened before (a regression the review caught).
+   */
+  it("proxy: a dev server on a port inside the slot ranges still opens (Storybook's 6006)", async () => {
+    const upstream = createServer((_req, res) => { res.writeHead(200, { "content-type": "text/plain" }); res.end("storybook"); });
+    const port = await listenInSlotRange(upstream);
+    try {
+      const { cardBrowserPorts } = await import("../services/browser/ports.js");
+      const cardId = await ownerPreview(port);
+      expect([cardBrowserPorts(cardId).vncPort, cardBrowserPorts(cardId).cdpPort]).not.toContain(port);
+      const res = await fetch(`http://127.0.0.1:${appPort}/preview/${port}/`, { headers: { cookie } });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe("storybook");
+    } finally {
+      upstream.close();
     }
   });
 
@@ -681,7 +716,9 @@ describe("preview access scope", () => {
   });
 
   it("websocket: CDP's devtools socket is refused even to the owner", async () => {
-    expect(await tryUpgrade(`ws://127.0.0.1:${appPort}/preview/9222/devtools/page/abc`, { cookie })).toBe("status:404");
+    const { cardBrowserPorts } = await import("../services/browser/ports.js");
+    const { cdpPort } = cardBrowserPorts(await ownerPreview(5173));
+    expect(await tryUpgrade(`ws://127.0.0.1:${appPort}/preview/${cdpPort}/devtools/page/abc`, { cookie })).toBe("status:404");
   });
 
   it("websocket: a signed cookie of a DELETED account opens nothing", async () => {

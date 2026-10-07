@@ -6,11 +6,11 @@ import { currentUser, requestUser, requireSession, verifySessionUser, sessionTok
 import type { PublicUser } from "../auth/users.js";
 import { requireCardWork, visibleCards } from "../auth/access.js";
 import { hostExecutor } from "../runtime/host.js";
+import { isBrowserSlotPort } from "../services/browser/ports.js";
 import { config } from "../config/env.js";
 import {
   badGatewayResponse,
   buildProxyHead,
-  isInfraPort,
   listPortsScript,
   looksLikeHttpResponse,
   loopingRedirectPath,
@@ -70,7 +70,7 @@ async function previewPortScope(user: PublicUser): Promise<"all" | Set<number>> 
  * port's current card and asks about that card alone instead of building the whole scope.
  */
 async function canOpenPreviewPort(user: PublicUser | null, port: number): Promise<boolean> {
-  if (!user || isInfraPort(port)) return false;
+  if (!user || isBrowserSlotPort(port)) return false;
   if (user.role === "owner") return true;
   const current = await findCardPreviewByPort(port);
   return current !== undefined && (await visibleCards(user, [current.card])).length > 0;

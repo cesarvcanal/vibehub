@@ -18,7 +18,7 @@ import {
   escapeHtml,
   wantsHtmlInterstitial,
 } from "./preview.js";
-import { VNC_PORT_BASE, CDP_PORT_BASE, SLOT_SPACE } from "../browser/ports.js";
+import { VNC_PORT_BASE, CDP_PORT_BASE, SLOT_SPACE, rememberBrowserSlot } from "../browser/ports.js";
 
 /**
  * The preview feature's pure seams. INVARIANTS:
@@ -132,9 +132,19 @@ describe("tunnelRemoteCommand", () => {
     }
   });
 
-  it("refuses vibehub's own browser plumbing — CDP and VNC are remote control, never a preview", () => {
-    for (const port of [9222, 10121, 5900, 6799]) {
+  it("refuses vibehub's own browser plumbing — the CDP and VNC of an ALLOCATED slot are remote control", () => {
+    // Slot 3 (5903 / 9225): clear of the dev-server ports the next test opens (6006, 9229, 10000).
+    rememberBrowserSlot("card-with-a-browser", 3);
+    for (const port of [VNC_PORT_BASE + 3, CDP_PORT_BASE + 3]) {
       expect(() => tunnelRemoteCommand("c", port)).toThrow(/reserved/);
+    }
+  });
+
+  // Only slots in use are plumbing. The whole 5900–6799 / 9222–10121 span holds ports dev servers use
+  // by default — Storybook 6006, the Node inspector 9229, 10000 — which the owner opened before.
+  it("opens a dev server inside the slot ranges when no browser holds that port", () => {
+    for (const port of [6006, 9229, 10000]) {
+      expect(() => tunnelRemoteCommand("c", port)).not.toThrow();
     }
   });
 });

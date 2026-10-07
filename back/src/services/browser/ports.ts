@@ -67,6 +67,19 @@ export function rememberBrowserSlot(cardId: string, slot: number): void {
 }
 
 /**
+ * Is `port` the VNC or CDP of a slot a browser is allocated to (a card's, or a deleted card's
+ * held one)? THAT is vibehub's browser plumbing — remote control of a logged-in browser, never a
+ * preview. The rest of the 5900–6799 / 9222–10121 span is ordinary ports: dev servers live there by
+ * default (Storybook 6006, the Node inspector 9229), and blocking the whole span shut them out.
+ */
+export function isBrowserSlotPort(port: number): boolean {
+  for (const slot of allocatedSlots.values()) {
+    if (port === VNC_PORT_BASE + slot || port === CDP_PORT_BASE + slot) return true;
+  }
+  return false;
+}
+
+/**
  * Picks a slot for a card nobody else holds: its hashed slot when that one is free (a browser
  * already running there keeps its display), otherwise the lowest free one. Only when all
  * SLOT_SPACE slots are taken does it settle for the hashed slot anyway — sharing a display is
