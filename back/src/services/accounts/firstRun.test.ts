@@ -21,6 +21,16 @@ function runSeed(atCwd = cwd, atProfile = profile): void {
   execFileSync("bash", ["-c", firstRunSeedCommand(atProfile, '"$PWD"')], { cwd: atCwd });
 }
 
+/**
+ * The profile path as the SHELL spells it. On Linux that is the path itself; on a Windows dev box the
+ * temp dir is `C:\…`, which the remote-path guard rightly refuses — Git Bash's `/c/…` form is the same
+ * directory, and bash hands node the native path back.
+ */
+function shellPath(p: string): string {
+  if (process.platform !== "win32") return p;
+  return p.replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`).replace(/\\/g, "/");
+}
+
 const readConfig = async (p = profile) => JSON.parse(await readFile(claudeJsonPath(p), "utf8"));
 
 beforeEach(async () => {
@@ -48,6 +58,12 @@ describe("the command (pure)", () => {
 
   it("no cwd = a profile-only seed (the login terminal has no project to trust)", () => {
     expect(firstRunSeedCommand("/root/.claude")).not.toContain("$PWD");
+  });
+
+  it("the temp file is per PROCESS — two seeds of the same profile never write the same tmp", () => {
+    // Two cards of one account opening at once run two seeds on one `.claude.json`: with a fixed tmp
+    // name one rename could move the other's half-written file into place.
+    expect(firstRunSeedCommand("/root/.claude")).toContain("process.pid");
   });
 
   it("a traversal profile THROWS instead of reaching the shell", () => {
@@ -111,9 +127,27 @@ describe("what it writes (really running it)", () => {
     expect(Object.keys(c.projects).sort()).toEqual([cwd, other].sort());
   });
 
-  it("a CORRUPT .claude.json does not wedge the open: it is replaced by a valid seeded one", async () => {
-    await writeFile(claudeJsonPath(profile), "{ not json");
-    runSeed();
+  it("a .claude.json that is NOT VALID JSON is left alone — never replaced by a minimal one", async () => {
+    // Half-written by Claude itself (it does not write through a rename), or damaged: either way it
+    // holds the account's oauthAccount, mcpServers and every project's history. Rewriting it from
+    // `{}` erased all of that; skipping the seed only costs a wizard Claude itself can recover from.
+    const broken = '{"oauthAccount":{"emailAddress":"a@b.c"},"mcpServers":{"gh":{"command":"x"';
+    await writeFile(claudeJsonPath(profile), broken);
+    execFileSync("bash", ["-c", firstRunSeedCommand(shellPath(profile))], { cwd });
+    expect(await readFile(claudeJsonPath(profile), "utf8")).toBe(broken);
+  });
+
+  it("an EMPTY .claude.json (0 bytes, or only whitespace) is seeded — there is nothing in it to lose", async () => {
+    // `JSON.parse("")` throws a SyntaxError with no `code`, the same as a half-written file. But an
+    // empty file holds no login, no MCPs, no history: leaving it alone would only show the
+    // onboarding wizard on every card forever.
+    await writeFile(claudeJsonPath(profile), " \n");
+    execFileSync("bash", ["-c", firstRunSeedCommand(shellPath(profile))], { cwd });
+    expect((await readConfig()).hasCompletedOnboarding).toBe(true);
+  });
+
+  it("a MISSING .claude.json is still created (the only case that starts from nothing)", async () => {
+    execFileSync("bash", ["-c", firstRunSeedCommand(shellPath(profile))], { cwd });
     expect((await readConfig()).hasCompletedOnboarding).toBe(true);
   });
 

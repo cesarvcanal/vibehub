@@ -1,5 +1,6 @@
-import { SLOT_SPACE, VNC_PORT_BASE, CDP_PORT_BASE } from "../browser/ports.js";
+import { SLOT_SPACE, VNC_PORT_BASE, CDP_PORT_BASE, isBrowserSlotPort } from "../browser/ports.js";
 import { shQuote } from "../../runtime/host.js";
+import { SESSION_COOKIE } from "../../auth/session.js";
 
 /**
  * PREVIEW — open, in the USER'S OWN BROWSER, an app that a card's agent started inside the runner
@@ -38,8 +39,10 @@ export interface ListeningPort {
 }
 
 /**
- * Ports vibehub itself occupies in the runner — the per-card browser plumbing. Listing them as
- * "your app" would only confuse; a slot is x11vnc RFB or Chromium CDP, never something to preview.
+ * The whole span vibehub's browser slots MAY use — for the port LISTING only: a server there is far
+ * more likely a card's x11vnc or Chromium than an app, and listing it as "your app" would confuse.
+ * It is NOT the access rule: a dev server can live in the span (Storybook 6006); what is refused
+ * from the proxy and the tunnel is only a slot actually allocated (browser/ports.ts isBrowserSlotPort).
  */
 export function isInfraPort(port: number): boolean {
   return (
@@ -139,6 +142,10 @@ export function isValidPreviewPort(port: number): boolean {
  */
 export function tunnelRemoteCommand(container: string, port: number): string {
   if (!isValidPreviewPort(port)) throw new Error(`invalid preview port: ${port}`);
+  // The last line of defence for the access rule in routes/preview.ts: a tunnel into Chromium's
+  // CDP is full remote control of a card's browser (its tabs, its logged-in sessions), not an app.
+  // Only the slots a browser holds: the rest of the slot ranges are ordinary ports (isBrowserSlotPort).
+  if (isBrowserSlotPort(port)) throw new Error(`port ${port} is reserved for vibehub's browser plumbing`);
   return `docker exec -i ${shQuote(container)} socat STDIO TCP:127.0.0.1:${port}`;
 }
 
@@ -182,7 +189,7 @@ export function stripSessionCookie(cookieHeader: string): string {
   return cookieHeader
     .split(";")
     .map((p) => p.trim())
-    .filter((p) => p && !p.startsWith("vibehub_session="))
+    .filter((p) => p && !p.startsWith(`${SESSION_COOKIE}=`))
     .join("; ");
 }
 

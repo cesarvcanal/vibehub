@@ -9,8 +9,9 @@
  * contract lives in `back/src/services/sdk/protocol.ts`.
  */
 
-import { parseOrigin, type MessageOrigin } from "@/features/board/lib/chat";
+import { normalizeMessage, parseOrigin, type MessageOrigin } from "@/features/board/lib/chat";
 import type { SlashCommandInfo } from "@/features/board/lib/slashMenu";
+import type { ServerText } from "@/features/board/lib/sdkOutbox";
 
 /* ----------------------------------------------------------------- events */
 
@@ -98,8 +99,12 @@ export interface SdkEvent {
   ok?: boolean;
   /**
    * On `user_ack`/`user_nack`: the RECEIPT id of the send being answered (see lib/sdkOutbox.ts).
-   * `user_ack` = the back has the message on disk; `user_nack` = it refused it and nobody has it
-   * but this browser.
+   * `user_ack` = the back has the message on disk; `user_nack` = the history does NOT have it, so
+   * an F5 would lose it: either the back refused it outright (`reason: "driver-gone"`) or the driver
+   * took it but the history write failed (`"history-write-failed"`). Either way only this browser
+   * holds a durable copy — and while that driver is up, a resend with the same `cid` is never a
+   * second turn (the back recognises the receipt and only retries the write, answering with its
+   * `user_ack`).
    */
   cid?: string;
   /**
@@ -166,6 +171,9 @@ export type SdkRow =
       from?: MessageOrigin;
       edited?: boolean;
       absorbed?: boolean;
+      /** When the SERVER recorded it (the replay's / an external frame's `at`). Absent on one's own
+       *  live sends — the receipt carries no time. The outbox anchors on it: see `sendMark`. */
+      at?: number;
     }
   /** Claude talking. `streaming` while deltas are still landing on it. */
   | { kind: "assistant"; id: string; text: string; streaming: boolean }
@@ -340,7 +348,7 @@ export function toolSummary(input: unknown): string {
     (v) => typeof v === "string" && v.trim() !== "",
   ) as string | undefined;
   if (!pick) return "";
-  const flat = pick.replace(/\s+/g, " ").trim();
+  const flat = normalizeMessage(pick);
   return flat.length > SUMMARY_MAX ? `${flat.slice(0, SUMMARY_MAX - 1)}…` : flat;
 }
 
@@ -377,7 +385,7 @@ function field(o: Record<string, unknown>, key: string): string {
 
 /** One line, collapsed and capped. PURE. */
 function line(value: string, max = SUMMARY_MAX): string {
-  const flat = value.replace(/\s+/g, " ").trim();
+  const flat = normalizeMessage(value);
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
@@ -644,7 +652,7 @@ export function liveActivityDetail(state: SdkChatState): string | null {
 function lastLine(text: string): string | null {
   const lines = String(text ?? "").split("\n");
   for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = (lines[i] as string).replace(/\s+/g, " ").trim();
+    const line = normalizeMessage(lines[i] as string);
     if (line !== "") return line;
   }
   return null;
@@ -708,7 +716,9 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       // or a message the terminal mirror lifted from the TUI.
       if (!event.text) return state;
       const marked = markSource(state, viaTerminal);
-      return appendUserRow({ ...marked, rows: settleStreaming(marked.rows) }, event.text, event.from);
+      return appendUserRow({ ...marked, rows: settleStreaming(marked.rows) }, event.text, event.from, {
+        at: typeof event.at === "number" ? event.at : undefined,
+      });
     }
     case "catalog": {
       // The session's "/" menu. Pure STATE, not a row: it never touches the conversation, and it
@@ -763,8 +773,10 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       // drops it from the outbox).
       return event.cid ? settleUserRow(state, event.cid, "sent") : state;
     case "user_nack":
-      // The back REFUSED it (the card's driver had died — a hibernate, a crash). Nothing was
-      // written anywhere: say so, keep the words, offer the resend.
+      // The history does NOT have it: the back refused it (the card's driver had died — a
+      // hibernate, a crash), or the driver took it but the write to disk failed. Either way an F5
+      // would lose it: say so, keep the words, offer the resend (same `cid`: to the driver that took
+      // it, that only retries the write — see the back's `chargeReceipt`).
       return event.cid ? settleUserRow(state, event.cid, "undelivered") : state;
     case "session":
       if (!event.sessionId || event.sessionId === state.sessionId) return state;
@@ -1025,14 +1037,14 @@ export function appendUserRow(
   state: SdkChatState,
   text: string,
   from?: MessageOrigin,
-  opts?: { awaiting?: boolean; cid?: string; state?: "sending" | "sent" | "undelivered" },
+  opts?: { awaiting?: boolean; cid?: string; state?: "sending" | "sent" | "undelivered"; at?: number },
 ): SdkChatState {
   const { id, seq } = nextId(state, "u");
   return {
     ...state,
     seq,
     awaiting: opts?.awaiting === true ? true : state.awaiting,
-    rows: [...state.rows, { kind: "user", id, text, state: opts?.state ?? "sent", cid: opts?.cid, from }],
+    rows: [...state.rows, { kind: "user", id, text, state: opts?.state ?? "sent", cid: opts?.cid, from, at: opts?.at }],
   };
 }
 
@@ -1081,24 +1093,22 @@ export function liveUserCids(rows: readonly SdkRow[]): Set<string> {
   return cids;
 }
 
-/** The texts of the messages the SERVER has (replayed/acked own sends) — what reconciles the outbox. PURE. */
-export function deliveredUserTexts(rows: readonly SdkRow[]): string[] {
+/**
+ * The messages the SERVER has (replayed/acked own sends), with when it recorded them — what marks
+ * a send and reconciles the outbox (lib/sdkOutbox.ts `sendMark`/`reconcileOutbox`). PURE.
+ */
+export function deliveredUserTexts(rows: readonly SdkRow[]): ServerText[] {
   return rows.filter((r): r is Extract<SdkRow, { kind: "user" }> => r.kind === "user" && r.state === "sent")
-    .map((r) => r.text);
-}
-
-/** Whitespace-insensitive text identity — the same folding the back's dedupe key uses. */
-function normalizeMessageText(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
+    .map((r) => ({ text: r.text, at: r.at }));
 }
 
 /** Mark the LAST not-yet-edited user row whose words match as superseded ("editada"). PURE. */
 export function markUserEdited(state: SdkChatState, originalText: string): SdkChatState {
-  const target = normalizeMessageText(originalText);
+  const target = normalizeMessage(originalText);
   if (target === "") return state;
   for (let i = state.rows.length - 1; i >= 0; i -= 1) {
     const row = state.rows[i]!;
-    if (row.kind !== "user" || row.edited === true || normalizeMessageText(row.text) !== target) continue;
+    if (row.kind !== "user" || row.edited === true || normalizeMessage(row.text) !== target) continue;
     const rows = [...state.rows.slice(0, i), { ...row, edited: true }, ...state.rows.slice(i + 1)];
     return { ...state, rows };
   }
@@ -1135,14 +1145,14 @@ export function markUserEdited(state: SdkChatState, originalText: string): SdkCh
  * marked "editada" — that row is gone for the model too. Without it, the newest edited row. PURE.
  */
 export function dropRewoundRows(state: SdkChatState, originalText?: string): SdkChatState {
-  const target = originalText === undefined ? "" : normalizeMessageText(originalText);
+  const target = originalText === undefined ? "" : normalizeMessage(originalText);
   let editedAt = -1;
   let lastUserAt = -1;
   for (let i = state.rows.length - 1; i >= 0; i -= 1) {
     const row = state.rows[i]!;
     if (row.kind !== "user") continue;
     if (lastUserAt === -1) lastUserAt = i;
-    if (row.edited === true && (target === "" || normalizeMessageText(row.text) === target)) { editedAt = i; break; }
+    if (row.edited === true && (target === "" || normalizeMessage(row.text) === target)) { editedAt = i; break; }
   }
   // `editedAt >= lastUserAt` is the whole identity case: the edited row IS the newest message, so
   // there is nothing between them to drop. Past it the cut always removes at least one row.

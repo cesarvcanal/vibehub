@@ -58,18 +58,23 @@ export function sdkDriverSource(): string {
 /**
  * Script that plants the driver .mjs INSIDE the runner container (atomic tmp+mv, mode 755),
  * idempotent. The source travels in a QUOTED heredoc (no expansion). PURE.
+ *
+ * The tmp file is UNIQUE per run (`mktemp`), never a fixed `<driver>.tmp`: two installs that
+ * overlap (another panel process, or anything that slips past the single-flight below) would
+ * otherwise truncate each other's half-written file, and the loser's chmod/mv hit ENOENT on the
+ * tmp the winner had already moved — `set -e` turned that into "could not install the driver".
  */
 export function buildInstallDriverScript(containerName: string, source: string): string {
-  const tmp = `${SDK_DRIVER_PATH}.tmp`;
   const inner = [
     "set -e",
     "umask 077",
     `mkdir -p ${shQuote(SDK_DRIVER_DIR)}`,
-    `cat > ${shQuote(tmp)} <<'${SOURCE_DELIM}'`,
+    `tmp="$(mktemp ${shQuote(`${SDK_DRIVER_PATH}.XXXXXX`)})"`,
+    `cat > "$tmp" <<'${SOURCE_DELIM}'`,
     source,
     SOURCE_DELIM,
-    `chmod 755 ${shQuote(tmp)}`,
-    `mv -f ${shQuote(tmp)} ${shQuote(SDK_DRIVER_PATH)}`,
+    'chmod 755 "$tmp"',
+    `mv -f "$tmp" ${shQuote(SDK_DRIVER_PATH)}`,
   ].join("\n");
   return [
     "set -e",
@@ -205,15 +210,38 @@ export async function sdkDriverCommand(project: Project, card: Card): Promise<{ 
     statusUrl: statusUrl(),
     permissionGate: settings.sdkPermissionMode,
   });
-  return hostExecutor().ptyCommand(line);
+  // PIPE transport, not the pty one: over ssh `ptyCommand` adds `-tt`, and a tty between the
+  // manager and the driver echoes every control line back onto the event stream, rewrites line
+  // endings and cuts any line past the canonical-mode limit (4095 bytes) — a long message or a
+  // big tool input would arrive truncated. The `docker exec -i` inside is already tty-free.
+  return hostExecutor().pipeCommand(line);
 }
+
+/** The install running right now, per runner container — what the connects that overlap share. */
+const installsInFlight = new Map<string, Promise<void>>();
 
 /**
  * Plant the driver script AND make sure the SDK is installed in the runner (both idempotent).
  * Run before spawning. The first ever run pays one `npm install`; every run after that is a marker
  * check — the version marker is what keeps a reconnect from reinstalling anything.
+ *
+ * SINGLE-FLIGHT: a deploy kills every driver and the open tabs reconnect TOGETHER, each one
+ * landing here. Side by side, a new SDK version meant N `npm install` in the same
+ * /root/.vibehub-sdk (a corrupted node_modules); so a call that finds an install in flight joins
+ * it — same outcome, failure included. Only the IN-FLIGHT promise is shared: once it settles, the
+ * next connect checks again (cheap, by marker), and a failed install is retried, never cached.
  */
-export async function installCardSdkDriver(): Promise<void> {
-  await hostExecutor().runScript(buildInstallDriverScript(config.runner.container, sdkDriverSource()));
-  await hostExecutor().runScript(buildEnsureSdkScript(config.runner.container));
+export function installCardSdkDriver(): Promise<void> {
+  const container = config.runner.container;
+  const inFlight = installsInFlight.get(container);
+  if (inFlight) return inFlight;
+  // The cleanup is a `.finally` on the promise, not a try/finally in the body: the body runs
+  // synchronously up to its first await, so a throw there (executor, driver source read) would
+  // run the cleanup BEFORE the `set` below and leave the rejected promise "in flight" forever.
+  const run = (async () => {
+    await hostExecutor().runScript(buildInstallDriverScript(container, sdkDriverSource()));
+    await hostExecutor().runScript(buildEnsureSdkScript(container));
+  })().finally(() => installsInFlight.delete(container));
+  installsInFlight.set(container, run);
+  return run;
 }

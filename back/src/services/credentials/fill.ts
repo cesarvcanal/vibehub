@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { config } from "../../config/env.js";
-import { hostExecutor } from "../../runtime/host.js";
+import { hostExecutor, shQuote } from "../../runtime/host.js";
 import { getCard } from "../board/registry.js";
 import { cardBrowserPorts } from "../browser/ports.js";
 import { agentMayDriveBrowser } from "../browser/activity.js";
@@ -84,9 +84,9 @@ export function buildCdpHostScript(containerName: string, tag: string, payloadB6
     PAYLOAD_DELIM,
     runNode,
   ].join("\n");
-  // shQuote is unnecessary: containerName is validated config, everything else is a fixed literal or
-  // the [0-9a-f] tag. Kept simple and single-quoted via the docker exec wrapper below.
-  return [`docker exec -i ${JSON.stringify(containerName)} bash -s <<'VIBEHUB_CDP_OUTER'`, inner, "VIBEHUB_CDP_OUTER"].join("\n");
+  // shQuote, like every other docker exec: JSON.stringify yields DOUBLE quotes, inside which the
+  // shell still expands `$(…)` and backticks. Everything else is a fixed literal or the [0-9a-f] tag.
+  return [`docker exec -i ${shQuote(containerName)} bash -s <<'VIBEHUB_CDP_OUTER'`, inner, "VIBEHUB_CDP_OUTER"].join("\n");
 }
 
 export interface FillResult {

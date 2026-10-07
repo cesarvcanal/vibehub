@@ -3,9 +3,11 @@ import { screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { act } from "react";
 import { ChatView } from "@/features/board/components/ChatView";
+import { resetDraftsForTesting } from "@/features/board/components/TerminalComposer";
 import { renderApp } from "@/test/render";
 import { post } from "@/lib/api";
 import type { ChatEvent } from "@/features/board/lib/chat";
+import { STABLE_CONNECTION_MS } from "@/features/board/lib/reconnect";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -66,6 +68,10 @@ const originalWebSocket = globalThis.WebSocket;
 beforeEach(() => {
   vi.clearAllMocks();
   mockPost.mockResolvedValue({ ok: true });
+  // The composer keeps each card's unsent words in a MODULE-level map (it outlives a remount on
+  // purpose) — every test here is card "c1", so words a test left in the field would be typed into
+  // the next one.
+  resetDraftsForTesting();
   FakeSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeSocket);
 });
@@ -92,6 +98,40 @@ describe("ChatView", () => {
     expect(ws.url).toContain("/api/cards/c1/chat");
     ws.accept();
     expect(onStatus).toHaveBeenCalledWith("open");
+  });
+
+  /**
+   * The handshake is not health: the back accepts the socket and closes it right away when it
+   * cannot open the card's chat (card gone, transcript unreadable). Resetting the backoff on the
+   * bare `open` made that a reconnect at ~2Hz forever. Only a connection that HOLDS resets it.
+   */
+  it("a socket that opens and dies at once does not reset the backoff; one that holds does", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderChat();
+      const dropAtOnce = (ws: FakeSocket): void => {
+        ws.accept();
+        act(() => { ws.readyState = 3; ws.onclose?.(); });
+      };
+      dropAtOnce(await socket());
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      expect(FakeSocket.instances).toHaveLength(2);
+
+      dropAtOnce(FakeSocket.instances[1] as FakeSocket);
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      expect(FakeSocket.instances).toHaveLength(2); // the backoff moved on: no 400ms storm
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      expect(FakeSocket.instances).toHaveLength(3);
+
+      const stable = FakeSocket.instances[2] as FakeSocket;
+      stable.accept();
+      await act(async () => { await vi.advanceTimersByTimeAsync(STABLE_CONNECTION_MS); });
+      act(() => { stable.readyState = 3; stable.onclose?.(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      expect(FakeSocket.instances).toHaveLength(4); // proven healthy: the next drop is a blip
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("renders the conversation: what was asked, what was answered, and the tools as one line each", async () => {
@@ -396,6 +436,49 @@ describe("ChatView", () => {
     ws.deliver({ id: "a1", kind: "assistant", at: 3, text: "uma resposta" });
     expect(await screen.findAllByTestId("chat-assistant")).toHaveLength(1);
   });
+
+  /**
+   * A SHORT ANSWER REPEATS. "sim" said an hour ago is already in the transcript, and the bubble used
+   * to be cleared by ANY user line with the same words — so the next event of any kind (a tool line,
+   * a reply) wiped the "enviando" of the "sim" sent just now, before its own echo, and an undelivered
+   * one could never reach the honest "não confirmada" label. Only an echo that was NOT there when it
+   * was sent is its echo.
+   */
+  it("repeating an earlier message keeps its bubble until ITS OWN echo arrives", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: "sim" });
+    await screen.findByText("sim");
+
+    await user.type(screen.getByRole("textbox"), "sim{Enter}");
+    await waitFor(() => expect(screen.getAllByTestId("chat-user")).toHaveLength(2));
+
+    ws.deliver({ id: "a1", kind: "assistant", at: 2, text: "seguindo" }); // anything but the echo
+    expect(screen.getAllByTestId("chat-user")).toHaveLength(2); // the "sim" of now is still on its way
+
+    ws.deliver({ id: "u2", kind: "user", at: 3, text: "sim" }); // the echo
+    await waitFor(() => expect(screen.getAllByTestId("chat-user")).toHaveLength(2));
+    expect(screen.queryByText(/sending|enviando/i)).toBeNull();
+  }, 20_000);
+
+  it("a failed send drops ITS bubble only — not another one with the same words", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    mockPost.mockResolvedValueOnce({ ok: true }).mockRejectedValueOnce(new Error("boom"));
+
+    await user.type(screen.getByRole("textbox"), "oi{Enter}");
+    await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
+    await user.type(screen.getByRole("textbox"), "oi{Enter}");
+    await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(2));
+
+    // the first "oi" went through and is waiting for its echo; only the second one failed
+    await waitFor(() => expect(screen.getAllByTestId("chat-user")).toHaveLength(1));
+    expect(screen.getByTestId("chat-user")).toHaveTextContent("oi");
+  }, 20_000);
 
   it("sends a message to the SAME session and shows it before the transcript echoes it back", async () => {
     const user = userEvent.setup({ delay: null });

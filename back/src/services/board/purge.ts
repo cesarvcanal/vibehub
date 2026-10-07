@@ -3,7 +3,7 @@ import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.
 import { config, dataPath } from "../../config/env.js";
 import * as registry from "./registry.js";
 import type { Card, Project } from "./registry.js";
-import { cardWorkPaths, purgeCardWorkspace, killCardSession, CARD_BRANCH_PREFIX } from "./workspace.js";
+import { cardWorkPaths, purgeCardWorkspace, killCardSessionOrThrow, CARD_BRANCH_PREFIX } from "./workspace.js";
 import { cardsWithPending, purgeCardQueue } from "./outbox.js";
 import { removeHistory, SDK_HISTORY_DIR } from "../sdk/history.js";
 import { clearInflightMarker, SDK_INFLIGHT_DIR } from "../sdk/inflight.js";
@@ -45,8 +45,11 @@ import { logger } from "../../utils/logger.js";
  *  3. **Erase the files**, runner side and data-dir side, and REPORT each step.
  *
  * A step that fails does not abort the rest: the report names what survived, the audit log carries
- * it, and {@link sweepOrphanCardData} collects it later — so a runner that was down during a delete
- * cannot turn into data that stays forever.
+ * it, and {@link sweepOrphanCardData} collects the FILES later — so a runner that was down during a
+ * delete cannot turn into data that stays forever. The one process the sweep does retry is the
+ * BROWSER, because its slot is held until the stop goes through (see {@link retryBrowserSlotHolds});
+ * a session or a preview that could not be stopped is only ever surfaced by its failed step, which
+ * is why those steps fail loudly instead of being swallowed.
  */
 
 /** One thing the purge tried to erase. */
@@ -97,17 +100,33 @@ export async function purgeCard(cardId: string, by?: string): Promise<PurgeRepor
     await registry.removeCard(card.id);
   });
 
+  // The card is off the board, its slot held there until its browser is known to be down.
+  await releaseSlotIfBrowserStopped(card, steps);
+
   // 3. ERASE.
   await eraseEverything(card, steps, by);
 
   return finishReport(card, steps, by);
 }
 
+/**
+ * Frees the deleted card's browser slot for new cards — only when the browser step went through. A
+ * browser that could not be stopped is still running on that display/CDP port, logged in; the slot
+ * stays held (registry: BoardDoc.browserSlotHolds) so the next card is never handed it.
+ */
+async function releaseSlotIfBrowserStopped(card: Card, steps: PurgeStep[]): Promise<void> {
+  if (!steps.some((s) => s.name === "browser" && s.ok)) return;
+  await step(steps, "browser-slot", async () => {
+    await registry.releaseBrowserSlot(card.id);
+  });
+}
+
 /** Step 1 for both entry points: every process that could still write into the card. */
 async function stopEverything(card: Card, steps: PurgeStep[], by?: string): Promise<void> {
   await step(steps, "sessions", async () => {
-    // Tree-kills both tmux sessions AND ends the card's SDK driver (the kill listener).
-    await killCardSession(card, { includeShell: true });
+    // Tree-kills both tmux sessions AND ends the card's SDK driver (the kill listener). The STRICT
+    // kill: one that did not happen must fail this step — no sweep ever kills a session.
+    await killCardSessionOrThrow(card, { includeShell: true });
   });
   await step(steps, "previews", async () => {
     const killed = await stopAllCardPreviews(card.id);
@@ -406,6 +425,8 @@ export interface SweepSummary {
   runnerArtifacts: number;
   /** Orphans the cap left for the next pass. */
   truncated: number;
+  /** Browser slots of deleted cards released this pass, their Chromium finally stopped. */
+  browserSlots: number;
   /** true = the runner half did not run (host down). The data-dir half still did. */
   runnerFailed: boolean;
 }
@@ -455,7 +476,7 @@ export async function sweepOrphanCardData(
   const now = opts.now ?? Date.now();
   const graceMs = opts.graceMs ?? SWEEP_GRACE_MS;
   const summary: SweepSummary = {
-    dataFiles: 0, outboxQueues: 0, runnerArtifacts: 0, truncated: 0, runnerFailed: false,
+    dataFiles: 0, outboxQueues: 0, runnerArtifacts: 0, truncated: 0, browserSlots: 0, runnerFailed: false,
   };
   let live: LiveCardArtifacts;
   try {
@@ -497,7 +518,9 @@ export async function sweepOrphanCardData(
     logger.warn({ detail: (err as Error).message }, "the orphan sweep did not reach the runner this pass");
   }
 
-  const total = summary.dataFiles + summary.outboxQueues + summary.runnerArtifacts;
+  summary.browserSlots = await retryBrowserSlotHolds();
+
+  const total = summary.dataFiles + summary.outboxQueues + summary.runnerArtifacts + summary.browserSlots;
   if (total > 0 || summary.truncated > 0) {
     logger.info(
       { audit: true, action: "card.orphan_sweep", ...summary },
@@ -505,6 +528,38 @@ export async function sweepOrphanCardData(
     );
   }
   return summary;
+}
+
+/**
+ * The second chance of {@link releaseSlotIfBrowserStopped}: a purge that ran with the runner down
+ * left the deleted card's slot held and, possibly, its logged-in Chromium running there. Without
+ * this nothing would ever stop that browser or give the slot back, and holds piling up over months
+ * would exhaust the slot space — back to the hashed-slot collisions the holds exist to prevent.
+ * Each hold is stopped on its HELD slot (the registry reports holds to the port table on load) and
+ * released only once the stop went through. Returns how many were released; never throws.
+ */
+async function retryBrowserSlotHolds(): Promise<number> {
+  let released = 0;
+  let holds: registry.BrowserSlotHold[];
+  try {
+    holds = await registry.listBrowserSlotHolds();
+  } catch (err) {
+    logger.warn({ detail: (err as Error).message }, "could not read the held browser slots");
+    return 0;
+  }
+  for (const hold of holds) {
+    try {
+      await stopCardBrowser(config.runner.container, hold.cardId);
+      await registry.releaseBrowserSlot(hold.cardId);
+      released += 1;
+    } catch (err) {
+      logger.warn(
+        { card: hold.cardId, slot: hold.slot, detail: (err as Error).message },
+        "the browser of a deleted card is still not confirmed down — its slot stays held",
+      );
+    }
+  }
+  return released;
 }
 
 /**
@@ -526,6 +581,7 @@ export async function purgeRemovedCards(
   for (const card of cards) {
     const steps: PurgeStep[] = [];
     await stopEverything(card, steps, by);
+    await releaseSlotIfBrowserStopped(card, steps);
     await eraseEverything(card, steps, by, project);
     reports.push(finishReport(card, steps, by));
   }

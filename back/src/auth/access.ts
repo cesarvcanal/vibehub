@@ -1,5 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { currentUser } from "./session.js";
+import { currentUser, stampSessionUser } from "./session.js";
 import type { PublicUser } from "./users.js";
 import * as registry from "../services/board/registry.js";
 import type { Card, Project, ShareLevel } from "../services/board/registry.js";
@@ -94,7 +94,7 @@ export async function requireCardAccess(req: FastifyRequest, reply: FastifyReply
     await reply.code(404).send({ error: "card not found" });
     return;
   }
-  stamp(req, user.id, level);
+  stamp(req, user, level);
 }
 
 /**
@@ -118,14 +118,13 @@ export async function requireCardWork(req: FastifyRequest, reply: FastifyReply):
     await reply.code(403).send({ error: "this card is shared with you read-only" });
     return;
   }
-  stamp(req, user.id, level);
+  stamp(req, user, level);
 }
 
 /** Carries who the caller is and what they may do into the handler (the websockets read it). */
-function stamp(req: FastifyRequest, userId: string, level: ShareLevel): void {
-  const r = req as FastifyRequest & { userId?: string; cardLevel?: ShareLevel };
-  r.userId = userId;
-  r.cardLevel = level;
+function stamp(req: FastifyRequest, user: PublicUser, level: ShareLevel): void {
+  stampSessionUser(req, user);
+  (req as FastifyRequest & { cardLevel?: ShareLevel }).cardLevel = level;
 }
 
 /** What the preHandler decided for this request — "work" unless a read-only share said otherwise. */

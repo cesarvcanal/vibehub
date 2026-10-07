@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
-import type { WebSocket } from "ws";
+import { WebSocket } from "ws";
 import { requireCardWork } from "../auth/access.js";
-import { currentUser } from "../auth/session.js";
+import { requestUser } from "../auth/session.js";
 import { findUser } from "../auth/users.js";
 import * as registry from "../services/board/registry.js";
 import { recordCardActor, authorsTheTurn } from "../services/board/actor.js";
@@ -47,6 +47,10 @@ import { logger } from "../utils/logger.js";
  *   { "type": "user_question", "id": string, "questions": [{ "question", "header"?, "options": [{ "label", "description"? }], "multiSelect"? }] }
  *   { "type": "question_result", "id": string, "answers"?: [{ "selected": string[] }], "timedOut"?: boolean }
  *   { "type": "result", "isError": boolean, "sessionId"?: string, "subtype"?: string, "result"?: string, "permissionDenials"?: unknown[] }
+ *   { "type": "rewound", "ok": boolean, "uuid"?: string, "reason"?: string, "originalText"?: string } // an edit was applied
+ *   { "type": "workflow_progress", "runId": string, "name": string, "total": number, "done": number, "agents": [...], "at": number, "finished": boolean } // = WorkflowRun (services/sdk/workflow.ts); total/done count the whole journal, agents is capped
+ *   { "type": "system_note", "text": string, "at": number }  // the panel's own line (persisted)
+ *   { "type": "user_ack" | "user_nack", "cid": string, "reason"?: string } // the receipt of a send
  *   { "type": "error", "message": string }
  *   { "type": "parse_error", "raw": string }              // synthesised by the back for a bad line
  *   { "type": "peer_typing", "name": string, "active": boolean } // another socket of this card is typing (ephemeral)
@@ -80,7 +84,7 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       socket.on("message", bufferFrame);
       // Quem está deste lado do socket. Resolvido UMA vez: a sessão do cookie não muda no meio da
       // conexão, então cada mensagem que chegar por aqui é desta pessoa, sem nova consulta.
-      const author = await currentUser(req);
+      const author = await requestUser(req);
       await recordCardActor(author, req.params.id);
       const settings = await getSettings();
       if (!settings.sdkDriver) {
@@ -166,6 +170,23 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
           if (user) wsOrigin = { kind: user.role === "owner" ? "owner" : "user", name: user.username };
         } catch { /* unattributed beats broken */ }
       }
+      // The last two reads of the setup happen HERE, before anything is acquired: the spawn command
+      // (used only when the card has no live driver) and the "/" menu remembered on disk (see below).
+      const command = await sdkDriverCommand(project, {
+        ...card,
+        resumeSessionId: resumeTargetFor(card, latestSessionId),
+      });
+      const rememberedCatalog = await readCardCatalog(card.id);
+      // THE TAB MAY BE GONE BY NOW. Everything above awaited for seconds with no `close` listener,
+      // so a socket closed in that window already fired its `close` — nobody will ever hear it
+      // again. Acquiring past this point (the external bus, a mirror ref, a driver, a slot in
+      // `session.sockets`) would leak all of it for good: the idle stop never arms, the card reads
+      // "in use" forever and the follow `docker exec` never ends. From here to `attachSocket`
+      // there is no await, so this one check covers every acquisition below.
+      if (socket.readyState !== WebSocket.OPEN) {
+        logger.debug({ card: card.worktreeSlug }, "sdk chat closed during setup — nothing attached");
+        return;
+      }
       // An agent's send (`vibehub_send_to_terminal`) — and every event the transcript MIRROR lifts
       // from the terminal — lands in the history log, not on the driver's stdout. Forward them live
       // so the conversation is visible as it happens, whichever screen it happens on. (The driver's
@@ -192,24 +213,13 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       // The card's ONE driver: reuse it live (mid-turn included — the reconnect after the reload),
       // or spawn it resuming the newest transcript. History persistence, resume-id persistence and
       // the mirror's dedupe keys all live in the manager — the side that survives this socket.
-      const session = ensureDriverSession({
-        cardId: card.id,
-        label: card.worktreeSlug,
-        transcriptDir,
-        command: await sdkDriverCommand(project, {
-          ...card,
-          resumeSessionId: resumeTargetFor(card, latestSessionId),
-        }),
-      });
+      const session = ensureDriverSession({ cardId: card.id, label: card.worktreeSlug, transcriptDir, command });
       // O MENU "/" ANTES DO DRIVER FALAR. `attachSocket` só reenvia o catálogo se a sessão já o
       // tiver — e um driver recém-nascido ainda não anunciou nada, então o primeiro "/" abria vazio
       // e a pessoa tinha que apagar e tentar de novo (produção, 2026-09-28). A última lista
       // conhecida do card vale para este instante; o anúncio do driver, logo adiante, a atualiza.
-      if (!session.catalog) {
-        const remembered = await readCardCatalog(card.id);
-        if (remembered) {
-          try { socket.send(JSON.stringify(remembered)); } catch { /* going away */ }
-        }
+      if (!session.catalog && rememberedCatalog) {
+        try { socket.send(JSON.stringify(rememberedCatalog)); } catch { /* going away */ }
       }
       /**
        * A AUTORIA SEGUE A ÚLTIMA MENSAGEM, não quem abriu o card. Com duas pessoas no mesmo card ao

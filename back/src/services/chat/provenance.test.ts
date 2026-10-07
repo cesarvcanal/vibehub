@@ -74,6 +74,17 @@ describe("recordOrigin + matchOrigin", () => {
     expect(matchOrigin(CARD, "oi", 600)).toEqual(USER);
   });
 
+  it("duas abas abrindo juntas: a SEGUNDA também espera a leitura do disco antes de casar", async () => {
+    await recordOrigin(CARD, "oi", USER, 500);
+    resetProvenanceCache(); // a backend restart
+    // A primeira aba começa a carregar; a segunda chega com a leitura ainda em voo. Sem esperar por
+    // ela, o replay da segunda saía sem o `from` de ninguém.
+    const first = primeProvenance(CARD);
+    await primeProvenance(CARD);
+    expect(matchOrigin(CARD, "oi", 600)).toEqual(USER);
+    await first;
+  });
+
   it("refuses a card id that is not id-shaped (it names a file)", async () => {
     await expect(primeProvenance("../etc/passwd")).rejects.toThrow(/invalid card id/);
   });

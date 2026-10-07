@@ -202,9 +202,11 @@ describe("stopAllCardPreviews (the card is being deleted)", () => {
     expect(runScript).toHaveBeenCalledTimes(1);
   });
 
-  it("a runner that cannot be asked is not an error — the purge reports it and the sweep retries", async () => {
+  it("a runner that cannot be asked REJECTS — an empty answer would let the purge report the previews gone", async () => {
+    // The purge marks a step failed only when it throws. Swallowing the listing error into [] made
+    // the deletion report `previews: ok` while the dev server kept listening on the runner.
     const { lifecycle } = await boot();
     runScript.mockRejectedValue(new Error("runner down"));
-    expect(await lifecycle.stopAllCardPreviews(CARD)).toEqual([]);
+    await expect(lifecycle.stopAllCardPreviews(CARD)).rejects.toThrow(/runner down/);
   });
 });

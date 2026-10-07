@@ -153,7 +153,9 @@ describe("a fila de OUTRA conta (a aba trocou de conta com mensagens esperando)"
     const { own, foreign } = foreignToOutbox(queue, "cesar");
     // sem autor = de antes desta versão: continua com quem está na aba (o comportamento de sempre)
     expect(own.map((m) => m.id)).toEqual(["q2", "q3"]);
-    expect(foreign).toEqual([{ cid: "q1", text: "da mussa", at: 1, from: MUSSA, undelivered: true }]);
+    // `unsent`: ela nunca saiu deste navegador — a reconciliação jamais a casa com um "da mussa"
+    // que já esteja na conversa (sem a marca, o próximo F5 a dava por entregue e ela sumia).
+    expect(foreign).toEqual([{ cid: "q1", text: "da mussa", at: 1, from: MUSSA, undelivered: true, unsent: true }]);
   });
 
   it("sem leitor conhecido ainda, nada é separado (não se decide no escuro)", () => {

@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import type { WebSocket } from "ws";
+import { WebSocket } from "ws";
 import { requireCardAccess, requireCardWork } from "../auth/access.js";
 import { findUser } from "../auth/users.js";
 import { sendToTerminal } from "../services/maestro/maestro.js";
 import { chatSource, sendChatKey, parseChatEvents, CHAT_KEYS } from "../services/chat/chat.js";
 import { matchOrigin, primeProvenance, type MessageOrigin } from "../services/chat/provenance.js";
+import { createLineReader } from "../services/sdk/mirror.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -67,21 +68,28 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         return;
       }
 
+      // The tab may have closed while the two reads above were in flight: its `close` already fired,
+      // before the teardown below was listening. Spawning now would start a follow `docker exec`
+      // that nothing ever stops.
+      if (socket.readyState !== WebSocket.OPEN) return;
+
       const child = spawn(source.command.file, source.command.args, { stdio: ["pipe", "pipe", "ignore"] });
+      // The teardown below ends this stdin — also from inside the `error` handler, i.e. when the
+      // follow is ALREADY dead. A closed pipe then fails with EPIPE on the stream itself, and an
+      // unheard stream `error` is an uncaught exception that takes the whole back down. The child's
+      // own close/error handlers already end the chat; this write error carries nothing more.
+      child.stdin.on("error", () => { /* the follow died first; its close/error handlers tidy up */ });
       const keepalive = setInterval(() => {
         try { socket.ping?.(); } catch { /* the close handler cleans up */ }
       }, KEEPALIVE_MS);
 
       // `tail` hands over whatever the pipe happens to hold, so a line can arrive in two chunks —
       // parsing per chunk would drop every message that straddles a boundary. Only COMPLETE lines
-      // are parsed; the remainder waits for the rest of itself.
-      let pending = "";
+      // are parsed, with a multibyte character cut between chunks kept whole (see createLineReader);
+      // the remainder waits for the rest of itself — unless it is too long to be a message.
+      const readLines = createLineReader(MAX_LINE_BYTES);
       child.stdout.on("data", (chunk: Buffer) => {
-        pending += chunk.toString("utf8");
-        const lines = pending.split("\n");
-        pending = lines.pop() ?? "";
-        if (pending.length > MAX_LINE_BYTES) pending = ""; // a line that long is not a message
-        for (const line of lines) {
+        for (const line of readLines(chunk)) {
           for (const event of parseChatEvents(line)) {
             // The transcript says "user" for EVERYTHING that was typed at the prompt. When the send
             // was recorded (another card's agent, another person), attach who it really was — the
@@ -103,6 +111,14 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       };
       child.on("close", () => {
         clearInterval(keepalive);
+        try { socket.close(); } catch { /* already closed */ }
+      });
+      // A spawn that fails asynchronously (EAGAIN, EMFILE) arrives as an 'error' event — with no
+      // listener Node rethrows it as an uncaught exception and takes the whole back down. It ends
+      // this chat, not the process: the browser's reconnect tries again.
+      child.on("error", (err) => {
+        logger.warn({ card: source.cardId, detail: err.message }, "chat follow process error");
+        teardown();
         try { socket.close(); } catch { /* already closed */ }
       });
       socket.on("close", teardown);

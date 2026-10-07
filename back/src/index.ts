@@ -1,4 +1,4 @@
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, resolve, join } from "node:path";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
@@ -7,7 +7,7 @@ import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import fastifyStatic from "@fastify/static";
-import { config } from "./config/env.js";
+import { config, fastifyTrustProxy, trustProxyBootWarning } from "./config/env.js";
 import { logger } from "./utils/logger.js";
 import { authRoutes } from "./routes/auth.js";
 import { usersRoutes } from "./routes/users.js";
@@ -24,6 +24,7 @@ import { cardSessionRoutes } from "./routes/cardSession.js";
 import { chatRoutes } from "./routes/chat.js";
 import { accountLoginRoutes } from "./routes/accountLogin.js";
 import { previewRoutes, installPreviewUpgrade } from "./routes/preview.js";
+import { trackSessionSockets } from "./auth/sessionSockets.js";
 import { cardSdkRoutes } from "./routes/cardSdk.js";
 import { startPauseReconciler, sweepCardUploads, sweepIdleCards } from "./services/board/workspace.js";
 import { sweepOrphanCardData } from "./services/board/purge.js";
@@ -42,6 +43,9 @@ export async function buildServer() {
     logger: false,
     // Terminal frames and image uploads: the default 1 MB body limit is too small for a paste.
     bodyLimit: 16 * 1024 * 1024,
+    // Behind a gateway, `req.ip` must be the client it forwarded for — the sign-in ceilings are
+    // keyed on it (routes/auth.ts). False by default: a direct install trusts no header.
+    trustProxy: fastifyTrustProxy(config.trustProxy),
   });
 
   await app.register(cookie);
@@ -73,8 +77,13 @@ export async function buildServer() {
   await app.register(previewRoutes);
 
   // Preview websockets (vite HMR) ride the same `upgrade` event @fastify/websocket owns; the
-  // interceptor wraps its listener once everything is registered.
-  app.addHook("onReady", async () => { installPreviewUpgrade(app.server); });
+  // interceptor wraps its listener once everything is registered. The open-socket registry comes
+  // AFTER it, as a listener of its own, so it sees every upgrade — tunnels included — and a revoked
+  // session can end the sockets it already opened (auth/sessionSockets.ts).
+  app.addHook("onReady", async () => {
+    installPreviewUpgrade(app.server);
+    trackSessionSockets(app.server);
+  });
   await app.register(cardSdkRoutes);
 
   const staticDir = process.env.VIBEHUB_STATIC_DIR
@@ -191,6 +200,8 @@ async function main(): Promise<void> {
   // and none of them wants a timer poking at a runner.
   startOutboxFlusher();
   await app.listen({ port: config.port, host: config.host });
+  const trustWarning = trustProxyBootWarning(config.trustProxy);
+  if (trustWarning) logger.warn(trustWarning);
   startIdleSweep();
   // The uploads sweep, for the same reason and in the same place as the others: a test that boots
   // the app must not inherit a timer that deletes files in the runner.
@@ -241,8 +252,18 @@ async function main(): Promise<void> {
   );
 }
 
+/**
+ * Was this module the script node was asked to run? URL against URL: a hand-made `file://${argv1}`
+ * never matched on Windows (backslashes, drive letter) nor with a space in the path (%20), and the
+ * process then exited without a server and without a word.
+ */
+export function isEntryPoint(moduleUrl: string, argv1: string | undefined): boolean {
+  if (!argv1) return false;
+  return moduleUrl === pathToFileURL(argv1).href;
+}
+
 // Only run when executed directly — tests import buildServer().
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+if (isEntryPoint(import.meta.url, process.argv[1])) {
   main().catch((err: unknown) => {
     logger.error({ err }, "vibehub failed to start");
     process.exit(1);

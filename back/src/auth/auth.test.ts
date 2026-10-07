@@ -111,4 +111,49 @@ describe("sessions", () => {
     expect(code).toBe(401);
     expect(body).toEqual({ error: "not authenticated" });
   });
+
+  it("401s a correctly signed cookie whose account was removed", async () => {
+    const { users, session } = await fresh();
+    const ada = await users.createUser("ada", "supersecret");
+    const req = { cookies: { [session.SESSION_COOKIE]: await session.issueToken(ada.id) } };
+    await users.removeUser(ada.id);
+    let code = 0;
+    const reply = { code(c: number) { code = c; return this; }, async send() { /* captured above */ } };
+    await session.requireSession(req as never, reply as never);
+    expect(code).toBe(401);
+    expect(await session.sessionUserId(req as never)).toBeNull();
+  });
+
+  it("the gate hands the user it resolved to the handler — requestUser does not verify the cookie again", async () => {
+    const { users, session } = await fresh();
+    const ada = await users.createUser("ada", "supersecret", "owner");
+    const req: { cookies: Record<string, string> } = { cookies: { [session.SESSION_COOKIE]: await session.issueToken(ada.id) } };
+    const reply = { code() { return this; }, async send() { /* not reached: the session is valid */ } };
+    for (const gate of [session.requireSession, session.requireOwner]) {
+      req.cookies = { [session.SESSION_COOKIE]: await session.issueToken(ada.id) };
+      await gate(req as never, reply as never);
+      // Were the handler to verify again, a cookie that changed after the gate would answer null.
+      req.cookies = {};
+      expect((await session.requestUser(req as never))?.id).toBe(ada.id);
+    }
+  });
+
+  it("requestUser without a gate before it falls back to verifying the cookie", async () => {
+    const { users, session } = await fresh();
+    const ada = await users.createUser("ada", "supersecret");
+    const req = { cookies: { [session.SESSION_COOKIE]: await session.issueToken(ada.id) } };
+    expect((await session.requestUser(req as never))?.id).toBe(ada.id);
+    expect(await session.requestUser({ cookies: {} } as never)).toBeNull();
+  });
+
+  it("a password change revokes every session issued before it", async () => {
+    const { users, session } = await fresh();
+    const ada = await users.createUser("ada", "supersecret");
+    const stolen = await session.issueToken(ada.id, Date.now() - 1000);
+    expect((await session.verifySessionUser(stolen))?.id).toBe(ada.id);
+    await users.changePassword(ada.id, "brand-new-secret");
+    expect(await session.verifySessionUser(stolen)).toBeNull();
+    // A session signed AFTER the change is fine — that is the one the person who changed it gets.
+    expect((await session.verifySessionUser(await session.issueToken(ada.id)))?.id).toBe(ada.id);
+  });
 });

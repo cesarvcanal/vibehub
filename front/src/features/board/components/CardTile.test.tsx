@@ -283,3 +283,26 @@ describe("CardTile — the chips", () => {
     }
   });
 });
+
+describe("CardTile — on its way out", () => {
+  // `pointer-events-none` stops the mouse, not the keyboard: the tile stayed in the Tab order and
+  // Enter opened a card whose purge was already running on the server.
+  it("a card being deleted cannot be reached or opened from the keyboard", async () => {
+    const onOpen = vi.fn();
+    renderApp(<CardTile card={card()} onOpen={onOpen} deleting />);
+    const tile = screen.getByRole("link", { name: "fix the totals" });
+
+    tile.focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.keyboard(" ");
+    expect(onOpen).not.toHaveBeenCalled();
+
+    expect(tile).toHaveAttribute("aria-disabled", "true");
+    expect(tile).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("offers no actions menu on a card being deleted", () => {
+    renderApp(<CardTile card={card()} onOpen={vi.fn()} onDelete={vi.fn()} onDone={vi.fn()} deleting />);
+    expect(screen.queryByRole("button", { name: /actions for/i })).not.toBeInTheDocument();
+  });
+});

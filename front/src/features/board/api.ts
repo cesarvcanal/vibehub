@@ -465,7 +465,7 @@ export const boardApi = {
    * is what gets typed into the prompt.
    */
   uploadCardImage: async (id: string, file: File): Promise<UploadResult> => {
-    const content = await fileToBase64(file);
+    const content = await blobToBase64(file);
     return await post<UploadResult>(`/cards/${encodeURIComponent(id)}/upload`, { name: file.name, content });
   },
 
@@ -721,9 +721,6 @@ export function blobToBase64(blob: Blob): Promise<string> {
     reader.readAsDataURL(blob);
   });
 }
-
-/** A `File` is a `Blob`; kept as its own name because that is what the call sites read like. */
-export const fileToBase64 = blobToBase64;
 
 /** The runner rejects an image over 10 MB; catching it here saves a pointless round trip. */
 export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;

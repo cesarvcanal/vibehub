@@ -1,11 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import type { WebSocket } from "ws";
+import { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
 import { onCardDriverProbe, type DriverActivity } from "../board/agentState.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
-import { appendHistory, replayableHistoryEvent, rewindHistory } from "./history.js";
+import { appendHistory, appendHistoryReported, replayableHistoryEvent, rewindHistory, type HistoryEvent } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inflight.js";
-import { forgetDriverKeys, noteDriverEventFor, onOutsideTurn } from "./mirror.js";
+import { createLineReader, forgetDriverKeys, noteDriverEventFor, onOutsideTurn } from "./mirror.js";
 import { writeCardCatalog } from "./catalog.js";
 import { forgetCardWorkflows, lastWorkflowRuns, watchCardWorkflows } from "./workflow.js";
 import { isHarnessFiller } from "../chat/chat.js";
@@ -83,7 +83,6 @@ export interface DriverSession {
    */
   catalog?: CatalogEvent;
   idleTimer: NodeJS.Timeout | null;
-  buffer: string;
   /** Rolling tail of the driver's stderr — what a post-mortem has to say (see STDERR_TAIL_MAX). */
   stderrTail: string;
   /** The session was stopped or its child closed — a new ensure must spawn anew. */
@@ -114,7 +113,8 @@ export interface DriverSession {
    */
   rewinds: Array<{ original: string; text: string }>;
   /**
-   * OS RECIBOS JÁ EMITIDOS — `cid` → a mesma promessa de durabilidade que o primeiro envio ganhou.
+   * OS RECIBOS JÁ EMITIDOS — `cid` → o envio que o driver já leu (`AcceptedSend`): a promessa de
+   * durabilidade que o primeiro envio ganhou e a linha que ela grava.
    *
    * O "Reenviar" da bolha manda as MESMAS palavras com o MESMO `cid`, de propósito: ele existe para
    * o caso em que o recibo se perdeu, não a mensagem (o socket caiu entre o append e o `user_ack`,
@@ -124,7 +124,7 @@ export interface DriverSession {
    * destrutiva. Um cid já aceito não é uma mensagem — é a cobrança de um recibo, e é só o recibo
    * que ele recebe de volta.
    */
-  acceptedCids: Map<string, Promise<void>>;
+  acceptedCids: Map<string, AcceptedSend>;
   /** Cancela a inscrição no espelho (conversa vinda da aba Terminal). Vive o que o driver viver. */
   offOutside?: () => void;
 }
@@ -136,10 +136,21 @@ export interface DriverSession {
  */
 const ACCEPTED_CIDS_MAX = 256;
 
+/**
+ * Um envio que o driver JÁ leu: a promessa de durabilidade do seu recibo e a linha do histórico que
+ * ela tenta gravar. A linha fica guardada porque a gravação pode falhar (disco cheio) DEPOIS de o
+ * modelo ter recebido a mensagem — e aí o reenvio desse cid é a hora de gravá-la de novo, nunca de
+ * mandá-la outra vez ao driver (ver `chargeReceipt`).
+ */
+interface AcceptedSend {
+  persisted: Promise<boolean>;
+  line: HistoryEvent;
+}
+
 /** Lembra o recibo deste envio, descartando os mais antigos. A ordem do `Map` é a de inserção. */
-function rememberCid(session: DriverSession, cid: string | undefined, persisted: Promise<void>): void {
+function rememberCid(session: DriverSession, cid: string | undefined, sent: AcceptedSend): void {
   if (!cid) return;
-  session.acceptedCids.set(cid, persisted);
+  session.acceptedCids.set(cid, sent);
   while (session.acceptedCids.size > ACCEPTED_CIDS_MAX) {
     const oldest = session.acceptedCids.keys().next();
     if (oldest.done) break;
@@ -163,7 +174,8 @@ function rememberCid(session: DriverSession, cid: string | undefined, persisted:
  * turn (an interrupt, a permission click: those need no receipt).
  */
 export type ClientFrameOutcome =
-  | { kind: "accepted"; cid?: string; persisted: Promise<void> }
+  /** `persisted` resolves `true` once the message is on disk, `false` when that write failed. */
+  | { kind: "accepted"; cid?: string; persisted: Promise<boolean> }
   | { kind: "refused"; cid?: string; reason: string }
   | { kind: "ignored" };
 
@@ -430,7 +442,6 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     activeTurns: 0,
     rewinds: [],
     idleTimer: null,
-    buffer: "",
     stderrTail: "",
     closed: false,
     acceptedCids: new Map(),
@@ -443,12 +454,10 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
   session.offOutside = onOutsideTurn(opts.cardId, () => { writeToDriver(session, { type: "reanchor" }); });
   logger.info({ card: opts.label }, "sdk driver spawned (card-owned, survives the page)");
 
+  // Whole lines only, multibyte characters intact, linear in the line's size (see createLineReader).
+  const readLines = createLineReader();
   child.stdout.on("data", (chunk: Buffer) => {
-    session.buffer += chunk.toString();
-    let nl: number;
-    while ((nl = session.buffer.indexOf("\n")) >= 0) {
-      const line = session.buffer.slice(0, nl);
-      session.buffer = session.buffer.slice(nl + 1);
+    for (const line of readLines(chunk)) {
       const event = parseDriverLine(line);
       if (event) handleDriverEvent(session, event);
     }
@@ -485,14 +494,18 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     clearIdleTimer(session);
     session.closed = true;
     if (sessions.get(opts.cardId) === session) sessions.delete(opts.cardId);
+    // O estado POR CARD só é deste driver enquanto nenhum sucessor assumiu o card. Um `close` pode
+    // chegar segundos depois do `stopCardDriver` (o docker exec demora a morrer), quando a troca de
+    // modelo ou o reconnect já subiu o driver seguinte — e apagar agora seria apagar o DELE.
+    const succeeded = sessions.has(opts.cardId);
     // A memória de dedupe é do DRIVER: ele acabou, ela acaba junto — o sucessor fala do zero.
-    forgetDriverKeys(opts.cardId);
+    if (!succeeded) forgetDriverKeys(opts.cardId);
     // A inscrição no espelho também: deixada de pé, ela escreveria no stdin de um driver morto.
     session.offOutside?.();
     delete session.offOutside;
     // A sondagem da frota também: ela publica NESTA sessão. Deixada de pé, ela ainda recusaria ser
     // substituída pela do driver seguinte (a segunda chamada só estende a primeira).
-    forgetCardWorkflows(opts.cardId);
+    if (!succeeded) forgetCardWorkflows(opts.cardId);
     const stderrNote = session.stderrTail.trim() === "" ? "" : ` — stderr: ${session.stderrTail.trim().slice(-400)}`;
     broadcast(session, { type: "error", message: `driver exited (code ${code ?? "?"})${stderrNote}` });
     for (const socket of session.sockets) {
@@ -577,7 +590,7 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
     // com o driver morto. Recusá-la aqui faria a bolha pedir uma terceira cópia de algo que o
     // servidor tem. O "Reenviar" repete o mesmo `cid` de propósito: o que se perdeu foi o recibo.
     const known = control.cid ? session.acceptedCids.get(control.cid) : undefined;
-    if (known) return { kind: "accepted", cid: control.cid, persisted: known };
+    if (known) return { kind: "accepted", cid: control.cid, persisted: chargeReceipt(session, known) };
     // The driver is GONE: refuse out loud instead of writing into a closed pipe. Nothing is
     // persisted and no turn is counted, so the browser's copy is the only one — it keeps the words
     // and resends onto the successor driver (the socket's close is already on its way).
@@ -613,10 +626,11 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
     noteDriverEventFor(session.cardId, { type: "user", text: wrapped });
     const at = Date.now();
     void appendHistory(session.cardId, { type: "message_edited", originalText: control.original, at });
-    const persisted = appendHistory(session.cardId, { type: "user", text: control.text, sent: wrapped, at, from: origin });
+    const line: HistoryEvent = { type: "user", text: control.text, sent: wrapped, at, from: origin };
+    const persisted = appendHistoryReported(session.cardId, line);
     // Same durable in-flight promise a plain user turn earns (see #64's boot sweep).
     void writeInflightMarker(session.cardId, { startedAt: at, preview: inflightPreview(control.text), attempts: 0 });
-    rememberCid(session, control.cid, persisted);
+    rememberCid(session, control.cid, { persisted, line });
     return { kind: "accepted", cid: control.cid, persisted };
   }
   if (control.type === "user") {
@@ -625,12 +639,13 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
     clearIdleTimer(session);
     noteChatActivity(session);
     noteDriverEventFor(session.cardId, control);
-    const persisted = appendHistory(session.cardId, { type: "user", text: control.text, at: Date.now(), from: origin });
+    const line: HistoryEvent = { type: "user", text: control.text, at: Date.now(), from: origin };
+    const persisted = appendHistoryReported(session.cardId, line);
     // The durable "turn in flight" record: if a deploy kills the back (and this driver with it)
     // before the result arrives, the boot sweep finds this marker and the turn is not silently
     // lost. attempts: 0 — a person's own turn always earns one automatic resume.
     void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(control.text), attempts: 0 });
-    rememberCid(session, control.cid, persisted);
+    rememberCid(session, control.cid, { persisted, line });
     return { kind: "accepted", cid: control.cid, persisted };
   }
   writeToDriver(session, control);
@@ -645,6 +660,20 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
     if (session.activeTurns > 0) session.pendingInterruptNote = interruptNote(control);
   }
   return { kind: "ignored" };
+}
+
+/**
+ * A COBRANÇA DE UM RECIBO (o mesmo `cid` de novo): a promessa que o primeiro envio ganhou — e, se a
+ * gravação dele FALHOU, uma nova tentativa de gravar a mesma linha. O driver já leu a mensagem, então
+ * ela nunca volta ao stdin; só o histórico estava devendo. Sem a nova tentativa, um disco cheio por
+ * um instante deixava a bolha "não entregue" para sempre: cada Reenviar ganhava o mesmo `false`, e
+ * Descartar + digitar de novo fazia o modelo executar a instrução duas vezes. A promessa guardada é
+ * TROCADA pela nova antes de devolver, então dois reenvios seguidos encadeiam — a linha é gravada
+ * uma vez só.
+ */
+function chargeReceipt(session: DriverSession, sent: AcceptedSend): Promise<boolean> {
+  sent.persisted = sent.persisted.then((onDisk) => onDisk || appendHistoryReported(session.cardId, sent.line));
+  return sent.persisted;
 }
 
 /**
@@ -680,8 +709,13 @@ export function replyFrameOutcome(socket: WebSocket, outcome: ClientFrameOutcome
     send({ type: "user_nack", cid, reason: outcome.reason });
     return;
   }
-  // AFTER the append: the ack promises durability, not intention.
-  void outcome.persisted.then(() => send({ type: "user_ack", cid }));
+  // AFTER the append: the ack promises durability, not intention. A write that FAILED (a full
+  // disk) is no ack — the driver has the words, the history does not, and an F5 would lose them: the
+  // browser keeps its copy. Its resend carries the same `cid`, so it never becomes a second turn: it
+  // retries the history write and earns THAT verdict (see `chargeReceipt`).
+  void outcome.persisted.then((onDisk) => {
+    send(onDisk ? { type: "user_ack", cid } : { type: "user_nack", cid, reason: "history-write-failed" });
+  });
 }
 
 /**
@@ -690,6 +724,14 @@ export function replyFrameOutcome(socket: WebSocket, outcome: ClientFrameOutcome
  * close/error) never touches the driver; it only arms the idle stop when nothing else holds it.
  */
 export function attachSocket(session: DriverSession, socket: WebSocket, origin?: MessageOrigin): void {
+  // A socket that is no longer OPEN already fired (or is about to fire) its `close` — before the
+  // listener below exists. Attached, it would never be detached: `sockets` never empties, the idle
+  // stop never arms, `isCardChatInUse` vetoes the hibernation forever and the ping interval leaks.
+  // The route checks this after its own awaits; this is the manager's own guard on its invariant.
+  if (socket.readyState !== WebSocket.OPEN) {
+    maybeScheduleIdleStop(session);
+    return;
+  }
   disableNagle(socket);
   clearIdleTimer(session);
   session.sockets.add(socket);

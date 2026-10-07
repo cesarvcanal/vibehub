@@ -113,6 +113,7 @@ Everything is an environment variable with a working default. The ones that matt
 | `VIBEHUB_DATA_DIR` | `data` | Board, settings, users, encrypted vault. **Back this up.** |
 | `VIBEHUB_SECRET_KEY` | generated | Vault master key. Lose it and the stored tokens are gone. |
 | `VIBEHUB_INSECURE_COOKIES` | `0` | Set to `1` when serving over plain http. |
+| `VIBEHUB_TRUST_PROXY` | unset | Who the sign-in client is. Behind a gateway, name it (its address/CIDR, `loopback`, `uniquelocal`, or a hop count) so `X-Forwarded-For` is honoured — otherwise every request shares the gateway's address and ten wrong passwords from anyone lock that account out for 15 minutes in every browser that has not signed in as it before (a browser that has keeps its own count). `docker-compose.yml` passes it through from `.env`. `0` = no gateway (the peer is the client). Any other value requires the gateway to be the only way in — publish the port as `127.0.0.1:3010:3010` — or a client reaching it directly forges `X-Forwarded-For` past the throttle (warned at boot). Set either way, it also enables the per-address ceiling on failed sign-ins (30/min across usernames); unset, that ceiling stays off, because behind an undeclared gateway it would let anyone switch sign-in off for everybody. |
 
 ## Development
 

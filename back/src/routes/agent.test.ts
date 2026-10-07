@@ -13,6 +13,7 @@ const removeAccountToken = vi.fn();
 const accountsTokenStatus = vi.fn();
 const applyMcpsEverywhere = vi.fn();
 const setMcpSecretById = vi.fn();
+const deleteMcpSecrets = vi.fn();
 const applyBrainEverywhere = vi.fn();
 const applyPluginsEverywhere = vi.fn();
 const pluginCatalog = vi.fn();
@@ -41,7 +42,7 @@ async function boot(): Promise<FastifyInstance> {
   }));
   vi.doMock("../services/mcp/mcp.js", async () => {
     const actual = await vi.importActual<typeof import("../services/mcp/mcp.js")>("../services/mcp/mcp.js");
-    return { ...actual, applyMcpsEverywhere, setMcpSecretById };
+    return { ...actual, applyMcpsEverywhere, setMcpSecretById, deleteMcpSecrets };
   });
   vi.doMock("../services/brain/brain.js", async () => {
     const actual = await vi.importActual<typeof import("../services/brain/brain.js")>("../services/brain/brain.js");
@@ -175,6 +176,41 @@ describe("mcps", () => {
     const removed = await app.inject({ method: "DELETE", url: `/api/mcps/${id}`, headers: { cookie } });
     expect(removed.json()).toMatchObject({ applied: true, restarted: 0, pending: 0 });
     expect(applyMcpsEverywhere).toHaveBeenCalledTimes(3);
+  });
+
+  it("DELETE really drops the MCP: out of every profile AND its secrets out of the vault", async () => {
+    const created = await app.inject({
+      method: "POST", url: "/api/mcps", headers: { cookie },
+      payload: { name: "erp", kind: "stdio", command: "npx", envKeys: ["ERP_TOKEN"] },
+    });
+    const id = created.json().mcp.id as string;
+    applyMcpsEverywhere.mockClear();
+
+    const res = await app.inject({ method: "DELETE", url: `/api/mcps/${id}`, headers: { cookie } });
+
+    expect(res.statusCode).toBe(200);
+    // Re-applying the remaining MCPs never touches the deleted one: it has to be removed by name,
+    // or its token stays in every profile's .claude.json. The board records that debt, and the
+    // apply pays it (services/mcp: dropDeletedMcps).
+    const registry = await import("../services/board/registry.js");
+    expect(await registry.pendingMcpDrops()).toEqual(["erp"]);
+    expect(applyMcpsEverywhere).toHaveBeenCalledTimes(1);
+    expect(deleteMcpSecrets).toHaveBeenCalledWith(expect.objectContaining({ id }));
+  });
+
+  it("DELETE forgets the secrets even when the runner is down", async () => {
+    const created = await app.inject({
+      method: "POST", url: "/api/mcps", headers: { cookie },
+      payload: { name: "erp", kind: "stdio", command: "npx", envKeys: ["ERP_TOKEN"] },
+    });
+    const id = created.json().mcp.id as string;
+    applyMcpsEverywhere.mockRejectedValueOnce(new Error("the runner is not running"));
+
+    const res = await app.inject({ method: "DELETE", url: `/api/mcps/${id}`, headers: { cookie } });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ applied: false });
+    expect(deleteMcpSecrets).toHaveBeenCalledWith(expect.objectContaining({ id }));
   });
 
   it("an MCP save SURVIVES an unreachable runner — the write is persisted, applied is false", async () => {

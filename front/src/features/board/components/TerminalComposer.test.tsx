@@ -4,10 +4,13 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  DRAFT_WRITE_DELAY_MS,
   TerminalComposer,
   appendFragment,
   barHeights,
+  clearDraft,
   composeMessage,
+  flushDrafts,
   formatElapsed,
   imageFiles,
   isEmptyDraft,
@@ -16,6 +19,7 @@ import {
   pickAudioMimeType,
   resetDraftsForTesting,
   saveDraft,
+  textAfterSend,
 } from "./TerminalComposer";
 import { get, post } from "@/lib/api";
 import { MOBILE_QUERY } from "@/lib/useIsMobile";
@@ -63,6 +67,17 @@ describe("appendFragment", () => {
     expect(appendFragment("", "  hello ")).toBe("hello");
     expect(appendFragment("hello", "world")).toBe("hello world");
     expect(appendFragment("hello", "   ")).toBe("hello");
+  });
+});
+
+describe("textAfterSend", () => {
+  it("clears what was sent and keeps what was typed after it", () => {
+    expect(textAfterSend("run the tests", "run the tests")).toBe("");
+    expect(textAfterSend("run the tests\nand then lint", "run the tests")).toBe("and then lint");
+  });
+
+  it("clears nothing when the sent words were edited meanwhile", () => {
+    expect(textAfterSend("run THE tests", "run the tests")).toBe("run THE tests");
   });
 });
 
@@ -114,6 +129,7 @@ describe("drafts", () => {
       { id: "a", name: "done.png", path: "/work/.uploads/c/done.png", previewUrl: "blob:x", status: "ready" },
       { id: "b", name: "flying.png", previewUrl: "blob:y", status: "uploading" },
     ]);
+    flushDrafts();
     const stored = JSON.parse(localStorage.getItem("vibehub.composerDrafts") ?? "{}") as Record<
       string,
       { attachments: { name: string }[] }
@@ -127,6 +143,48 @@ describe("drafts", () => {
     saveDraft("card-1", "something", []);
     saveDraft("card-1", "   ", []);
     expect(loadDraft("card-1").text).toBe("");
+  });
+
+  describe("the localStorage layer", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    // saveDraft runs on every keystroke; parsing and re-serialising every card's draft each time
+    // is work the typing pays for. The memory layer answers at once, the disk catches up after.
+    it("writes once after the typing pauses, not once per keystroke", () => {
+      vi.useFakeTimers();
+      const setItem = vi.spyOn(Storage.prototype, "setItem");
+      for (const text of ["h", "ha", "hal", "half"]) saveDraft("card-1", text, []);
+
+      expect(loadDraft("card-1").text).toBe("half"); // memory is immediate
+      expect(setItem).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(DRAFT_WRITE_DELAY_MS);
+      expect(setItem).toHaveBeenCalledTimes(1);
+      const stored = JSON.parse(localStorage.getItem("vibehub.composerDrafts") ?? "{}") as Record<
+        string,
+        { text: string }
+      >;
+      expect(stored["card-1"]?.text).toBe("half");
+    });
+
+    it("leaving the page writes what is pending right away", () => {
+      vi.useFakeTimers();
+      saveDraft("card-1", "about to close the tab", []);
+      window.dispatchEvent(new Event("pagehide"));
+      expect(localStorage.getItem("vibehub.composerDrafts")).toContain("about to close the tab");
+    });
+
+    it("a cleared draft does not come back from a write that had not landed yet", () => {
+      vi.useFakeTimers();
+      saveDraft("card-1", "sent already", []);
+      vi.advanceTimersByTime(DRAFT_WRITE_DELAY_MS);
+      clearDraft("card-1");
+      // Nothing in memory now, so loadDraft falls through to the stored layer.
+      expect(loadDraft("card-1").text).toBe("");
+    });
   });
 });
 
@@ -378,6 +436,37 @@ describe("TerminalComposer", () => {
     await userEvent.type(box, "do not lose me{Enter}");
     await waitFor(() => expect(onSend).toHaveBeenCalled());
     expect(box).toHaveValue("do not lose me");
+  });
+
+  it("what is typed WHILE the message is on its way stays in the field — only what went is cleared", async () => {
+    let accept = (): void => undefined;
+    const onSend = vi.fn(() => new Promise<void>((resolve) => (accept = resolve)));
+    renderComposer(<TerminalComposer onSend={onSend} />);
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "first{Enter}");
+    expect(onSend).toHaveBeenCalledWith("first");
+
+    await userEvent.type(box, " and the next thought");
+    accept();
+    await waitFor(() => expect(box).toHaveValue("and the next thought"));
+  });
+
+  it("an image pasted WHILE the message is on its way is not swept away with it", async () => {
+    let accept = (): void => undefined;
+    const onSend = vi.fn(() => new Promise<void>((resolve) => (accept = resolve)));
+    const onUploadImage = vi.fn(async () => "/work/.uploads/c1/next.png");
+    renderComposer(<TerminalComposer onSend={onSend} onUploadImage={onUploadImage} />);
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "first{Enter}");
+
+    fireEvent.paste(box, {
+      clipboardData: { items: [], files: [new File(["x"], "next.png", { type: "image/png" })] },
+    });
+    await screen.findByTestId("composer-attachment");
+    accept();
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(box).toHaveValue(""));
+    expect(screen.getByTestId("composer-attachment")).toBeInTheDocument();
   });
 
   it("keeps a half-written message per card while you look at another one", async () => {

@@ -40,6 +40,14 @@ export function MarqueeSelect({
   const origin = React.useRef<{ x: number; y: number } | null>(null);
   const [band, setBand] = React.useState<Rect | null>(null);
   const bandRef = React.useRef<Rect | null>(null);
+  /**
+   * What this band last reported, as a key. Each report REPLACES the board's selection — a new Set,
+   * so the board and every tile on it render again — and a band crossing empty space touches the
+   * same cards for dozens of moves in a row. Only a change goes out. Reset per gesture: between two
+   * bands a shift-click may have changed the selection, so a new band always reports once.
+   * (No requestAnimationFrame throttle on top: browsers already deliver pointermove once per frame.)
+   */
+  const reportedRef = React.useRef<string | null>(null);
 
   // The handlers live on `window` for the life of one gesture: the pointer routinely leaves the
   // board mid-drag, and losing the pointerup there would leave a band stuck on screen.
@@ -54,7 +62,11 @@ export function MarqueeSelect({
       const rect = rectFromPoints(start, point);
       bandRef.current = rect;
       setBand(rect);
-      onSelect(cardsTouching(containerRef.current, rect));
+      const ids = cardsTouching(containerRef.current, rect);
+      const key = ids.join("\n");
+      if (key === reportedRef.current) return;
+      reportedRef.current = key;
+      onSelect(ids);
     };
 
     const up = () => {
@@ -86,6 +98,7 @@ export function MarqueeSelect({
               if (e.button !== 0 || e.pointerType === "touch") return;
               if (isInteractive(e.target)) return;
               origin.current = { x: e.clientX, y: e.clientY };
+              reportedRef.current = null;
             }
           : undefined
       }

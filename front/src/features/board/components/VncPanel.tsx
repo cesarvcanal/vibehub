@@ -126,8 +126,18 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
     });
   }, []);
 
+  /**
+   * Which connect attempt is the current one. Every attempt takes a number and checks it after each
+   * await: `rfbRef` is only filled at the very end, so it cannot tell a second attempt that the
+   * first is still on its way (StrictMode's mount-unmount-mount, or a click on Connect while one is
+   * starting). Without this both reached `new RFB(...)` on the same screen and the first one leaked
+   * with its socket open. Teardown bumps it too, which is what cancels an attempt in flight.
+   */
+  const attemptRef = React.useRef(0);
+
   /** Disconnect the client and stop the browser in the runner. Idempotent. */
   const teardown = React.useCallback(() => {
+    attemptRef.current += 1;
     try {
       rfbRef.current?.disconnect();
     } catch {
@@ -143,26 +153,32 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
 
   const connect = React.useCallback(async () => {
     if (rfbRef.current || !screenRef.current) return;
+    const attempt = ++attemptRef.current;
+    const overtaken = () => attempt !== attemptRef.current;
     setError(null);
     setState("starting");
     try {
       await boardApi.startCardBrowser(cardId);
     } catch (err) {
+      if (overtaken()) return;
       setState("error");
       setError(apiErrorMessage(err, translate("vnc.startError")));
       return;
     }
 
+    if (overtaken()) return;
     setState("connecting");
     let RFB: typeof import("@novnc/novnc").default;
     try {
       RFB = (await import("@novnc/novnc")).default;
     } catch (err) {
+      if (overtaken()) return;
       setState("error");
       setError(apiErrorMessage(err, translate("vnc.loadError")));
       return;
     }
-    if (!screenRef.current) return; // unmounted while the chunk was loading
+    // Unmounted, closed or superseded while the chunk was loading.
+    if (overtaken() || !screenRef.current) return;
 
     // `wsProtocols: []` because the bridge relays raw RFB with no sub-protocol; the session cookie
     // authenticates the upgrade, exactly like the terminal socket.
@@ -176,6 +192,8 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
     rfb.background = "#000";
     rfb.addEventListener("connect", () => setState("live"));
     rfb.addEventListener("disconnect", (event: Event) => {
+      // A client already replaced (or torn down) says nothing about the one on screen now.
+      if (rfbRef.current !== rfb) return;
       const clean = (event as CustomEvent<{ clean?: boolean }>).detail?.clean;
       setState(clean ? "closed" : "error");
       if (!clean) setError(translate("vnc.dropped"));
@@ -187,8 +205,9 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
   // Opening the Browser tab shows the live browser straight away — no manual "Connect" gate. The
   // agent's built-in Playwright MCP drives THIS same Chromium over CDP, so it needs the browser
   // running; auto-connecting on mount is what guarantees that the moment the pane is open. `connect`
-  // is idempotent (it no-ops when an RFB client already exists) and `startCardBrowser` is idempotent
-  // in the runner, so a re-render or a StrictMode double-mount never spawns a second browser.
+  // is idempotent (it no-ops when an RFB client already exists, and an attempt overtaken by a newer
+  // one stops at its next await — see `attemptRef`) and `startCardBrowser` is idempotent in the
+  // runner, so a re-render or a StrictMode double-mount never spawns a second browser or client.
   React.useEffect(() => {
     void connect();
   }, [connect]);
@@ -304,18 +323,25 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
  * captures — logins vibehub noticed being submitted (by the person or the agent) — and offers to save
  * the newest to the Cofre. The PASSWORD never reaches this component: the server holds it keyed by an
  * opaque id, and "Save" only sends that id plus a chosen name.
+ *
+ * OWNER ONLY: saving creates a Vault credential, which is install-level (the route 403s anyone
+ * else). A member with a work share used to be asked anyway — Save, a 403 toast, and the same
+ * question back on the next capture. A member is not asked at all (nor is the list polled); the
+ * capture stays pending for the owner.
  */
 export function CapturePrompt({ cardId, active }: { cardId: string; active: boolean }) {
   const t = useT();
   const qc = useQueryClient();
+  const { isOwner } = useAuth();
   const [name, setName] = React.useState("");
   const [nameEdited, setNameEdited] = React.useState(false);
+  const asking = active && isOwner;
 
   const captures = useQuery({
     queryKey: ["captures", cardId],
     queryFn: () => boardApi.cardCaptures(cardId),
-    enabled: active,
-    refetchInterval: active ? 4000 : false,
+    enabled: asking,
+    refetchInterval: asking ? 4000 : false,
   });
 
   const top = captures.data?.[0];
@@ -341,7 +367,7 @@ export function CapturePrompt({ cardId, active }: { cardId: string; active: bool
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["captures", cardId] }),
   });
 
-  if (!active || !top) return null;
+  if (!asking || !top) return null;
 
   return (
     <div

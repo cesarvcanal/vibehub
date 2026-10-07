@@ -9,6 +9,10 @@
  * `sdk-driver.mjs`'s inline copy in step with it.
  */
 
+// Type-only (erased at compile time): the workflow frame's shape IS the probe's result, and this
+// keeps the file free of runtime imports (and of the probe's config/host side of the graph).
+import type { WorkflowRun } from "./workflow.js";
+
 /* ------------------------------------------------------------------ events */
 
 /** A block of assistant text (consolidated, from an `assistant` message). */
@@ -186,18 +190,13 @@ export interface ParseErrorEvent { type: "parse_error"; raw: string }
  * final o stream não traz nada — quem sabe o que está acontecendo é o diário em disco, lido pela
  * sondagem em services/sdk/workflow.ts. Vive só na tela: não entra no histórico (um instantâneo que
  * se move não é conversa), e uma aba que conecta no meio recebe o último de memória.
+ *
+ * O frame É o `WorkflowRun` da sondagem com o `type` na frente (o manager o espalha inteiro:
+ * `{ type: "workflow_progress", ...run }`), então o tipo é DERIVADO dele em vez de redeclarado. A
+ * cópia à mão já tinha ficado para trás: não dizia nada de `total`/`done` — a contagem do diário
+ * inteiro, que é o que decide se a frota acabou e que o front lê — embora os dois fossem na wire.
  */
-export interface WorkflowProgressEvent {
-  type: "workflow_progress";
-  runId: string;
-  /** `meta.name` do script, quando dá pra saber pelo nome do arquivo. */
-  name: string;
-  agents: Array<{ id: string; label: string; status: "running" | "done"; result?: string }>;
-  /** mtime do diário (ms). */
-  at: number;
-  /** A rodada acabou — o painel para o spinner. */
-  finished: boolean;
-}
+export type WorkflowProgressEvent = { type: "workflow_progress" } & WorkflowRun;
 
 export type DriverEvent =
   | AssistantTextEvent

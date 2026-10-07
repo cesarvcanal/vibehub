@@ -73,8 +73,13 @@ export function normalizeProvenanceKey(text: string): string {
 
 /** In-memory tail per card: what the sync matcher consults. Loaded lazily, appended on record. */
 const cache = new Map<string, ProvenanceEntry[]>();
-/** Cards whose file has been loaded into the cache (so a restart still sees older sends). */
-const primed = new Set<string>();
+/**
+ * Each card's load of its file into the cache (so a restart still sees older sends) — the PROMISE,
+ * not a "done" mark: a second chat opening while the first load is still reading must wait for that
+ * same read. Marked done before the read finished, the second tab matched against an empty cache
+ * and its whole replay came out with nobody's name on it.
+ */
+const primed = new Map<string, Promise<void>>();
 /** Append serialization per card, so two sends never interleave their ndjson lines. */
 const chains = new Map<string, Promise<void>>();
 
@@ -106,9 +111,17 @@ function parseEntry(line: string): ProvenanceEntry | null {
  * backend restart does not forget who sent what. Never throws — no file means no history.
  */
 export async function primeProvenance(cardId: string): Promise<void> {
-  if (primed.has(cardId)) return;
   const file = provenanceFile(cardId); // validates the id BEFORE anything is swallowed below
-  primed.add(cardId);
+  let loading = primed.get(cardId);
+  if (!loading) {
+    loading = loadProvenance(cardId, file);
+    primed.set(cardId, loading);
+  }
+  await loading;
+}
+
+/** Reads a card's log into the cache, after whatever was recorded meanwhile. Never rejects. */
+async function loadProvenance(cardId: string, file: string): Promise<void> {
   let raw: string;
   try {
     raw = await readFile(file, "utf8");

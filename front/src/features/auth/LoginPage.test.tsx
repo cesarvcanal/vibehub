@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { LoginPage } from "@/features/auth/LoginPage";
 import { apiReject, renderApp, setupState } from "@/test/render";
 import { get, post } from "@/lib/api";
+import { setLanguage } from "@/i18n";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -107,5 +108,47 @@ describe("LoginPage", () => {
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Invalid username or password");
+  });
+
+  /**
+   * The sign-in door is throttled: past a few tries the server answers 429 with a `Retry-After` (in
+   * seconds) and stops hashing passwords at all. Showing that as "Invalid username or password"
+   * — or the server's English sentence on a Portuguese screen — sends a person who typed the RIGHT
+   * password back to retyping it, each try resetting nothing. The page says what happened, and for
+   * how long, in the page's language.
+   */
+  describe("throttled (429)", () => {
+    afterEach(() => setLanguage("en"));
+
+    function throttled(retryAfter?: string) {
+      const err = apiReject(429, "too many attempts — wait a few minutes and try again");
+      Object.assign(err.response, { headers: retryAfter === undefined ? {} : { "retry-after": retryAfter } });
+      mockPost.mockRejectedValue(err);
+    }
+
+    async function signIn() {
+      const user = userEvent.setup();
+      renderApp(<LoginPage />);
+      await user.type(await screen.findByLabelText(/Username|Usuário/), "operator");
+      await user.type(screen.getByLabelText(/Password|Senha/), "hunter2hunter2");
+      await user.click(screen.getByRole("button", { name: /Sign in|Entrar/ }));
+      return screen.findByRole("alert");
+    }
+
+    it("says how long to wait, rounded up to whole minutes", async () => {
+      throttled("290");
+      expect(await signIn()).toHaveTextContent("Too many sign-in attempts. Try again in 5 minutes.");
+    });
+
+    it("says it in Portuguese on a Portuguese screen", async () => {
+      setLanguage("pt-BR");
+      throttled("60");
+      expect(await signIn()).toHaveTextContent("Muitas tentativas de entrar. Tente de novo em 1 minuto.");
+    });
+
+    it("still says what happened when the server gives no usable Retry-After", async () => {
+      throttled();
+      expect(await signIn()).toHaveTextContent("Too many sign-in attempts. Wait a few minutes and try again.");
+    });
   });
 });

@@ -37,7 +37,7 @@ import { nextIdentity, type ViewerIdentity } from "@/features/board/lib/viewerId
 import { PeerTypingIndicator } from "@/features/board/components/PeerTypingIndicator";
 import { ultraKeywords } from "@/features/board/lib/ultraWords";
 import { workingStage, type WorkingKind } from "@/features/board/lib/workingStage";
-import { reconnectDelay, type ConnectionState } from "@/features/board/lib/reconnect";
+import { createReconnectBackoff, type ConnectionState } from "@/features/board/lib/reconnect";
 import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
 import {
   buildDecisionReply,
@@ -87,6 +87,7 @@ import {
   readOutbox,
   reconcileOutbox,
   retryOutbox,
+  sendMark,
   writeOutbox,
   type OutboxMessage,
 } from "@/features/board/lib/sdkOutbox";
@@ -169,6 +170,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   /** This tab's own outbound typing signal (created below, once `sendFrame` exists). */
   const typingRef = React.useRef<TypingSignal | null>(null);
   const [state, setState] = React.useState<SdkChatState>(INITIAL_SDK_STATE);
+  /** As linhas de AGORA, para os callbacks que as leem sem precisar ser recriados a cada evento. */
+  const rowsRef = React.useRef(state.rows);
+  rowsRef.current = state.rows;
   const socketRef = React.useRef<WebSocket | null>(null);
   const statusRef = React.useRef<SdkChatViewProps["onStatus"]>(onStatus);
   statusRef.current = onStatus;
@@ -232,13 +236,19 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     setQueueEdit(null);
     let socket: WebSocket | null = null;
     let retry: ReturnType<typeof setTimeout> | null = null;
-    let attempt = 0;
+    /**
+     * O backoff só zera quando o SERVIDOR assume a conexão (`ready`), nunca no `onopen`: o back
+     * aceita o websocket e só depois descobre que não pode atendê-lo (driver desligado, card
+     * apagado, install que falhou) — manda o erro e fecha. Zerado no aperto de mão, isso virava
+     * uma reconexão a ~2Hz para sempre, cada uma pagando o setup inteiro do servidor.
+     */
+    const backoff = createReconnectBackoff(Math.random);
     let disposed = false;
     const setStatus = (s: ConnectionState): void => statusRef.current?.(s);
 
     const connect = (): void => {
       if (disposed || socket || typeof WebSocket === "undefined") return;
-      setStatus(attempt === 0 ? "connecting" : "reconnecting");
+      setStatus(backoff.attempt === 0 ? "connecting" : "reconnecting");
       let next: WebSocket;
       try {
         next = new WebSocket(wsUrl(`/api/cards/${encodeURIComponent(cardId)}/sdk`));
@@ -249,7 +259,6 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       socket = next;
       socketRef.current = next;
       next.onopen = () => {
-        attempt = 0;
         setStatus("open");
         setConnected(true);
         reconciledRef.current = false;
@@ -269,6 +278,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         if (typeof event.data !== "string") return;
         const parsed = parseSdkFrame(event.data);
         if (!parsed) return;
+        if (parsed.type === "ready") backoff.healthy();
         // Ephemeral presence, not conversation: it never reaches the reducer or the rows.
         if (parsed.type === "peer_typing") {
           if (typeof parsed.name === "string") {
@@ -315,18 +325,17 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     const scheduleRetry = (): void => {
       if (disposed || retry) return;
       setStatus("reconnecting");
-      const delay = reconnectDelay(attempt, Math.random);
-      attempt += 1;
       retry = setTimeout(() => {
         retry = null;
         connect();
-      }, delay);
+      }, backoff.next());
     };
 
     connect();
     return () => {
       disposed = true;
       if (retry) clearTimeout(retry);
+      backoff.dispose();
       try { socket?.close(); } catch { /* already closing */ }
       socketRef.current = null;
       setStatus("closed");
@@ -385,7 +394,17 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    */
   const sendTurn = React.useCallback(
     (frame: { type: "user" | "edit_user"; text: string; original?: string }, shown: string, cid: string): void => {
-      const entry: OutboxMessage = { cid, text: shown, at: Date.now(), original: frame.original, from: selfOriginRef.current };
+      const entry: OutboxMessage = {
+        cid,
+        text: shown,
+        at: Date.now(),
+        original: frame.original,
+        from: selfOriginRef.current,
+        // O que o servidor JÁ tinha com estas palavras, ancorado no relógio dele: a reconciliação
+        // só aceita uma ocorrência além destas como prova de entrega (o "sim" de ontem não entrega
+        // o de hoje, e a janela do replay andar não condena o que chegou — ver `sendMark`).
+        ...sendMark(deliveredUserTexts(rowsRef.current), shown),
+      };
       setOutbox((prev) => addToOutbox(prev, entry));
       try {
         sendFrame({ ...frame, cid });
@@ -551,14 +570,19 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   const [replyTo, setReplyTo] = React.useState<PendingDecision | null>(null);
 
   /**
-   * STEP INTO EDIT MODE — and PAUSE the agent while doing it.
-   *
-   * The bug this closes, in the owner's words: "mandei o texto sem querer, cliquei pra editar, e em
-   * vez de ele PAUSAR o raciocínio, ele continua respondendo normalmente". Opening the edit bar
-   * used to be a purely local gesture: the driver never heard about it and kept working on the very
-   * message being corrected — burning a turn on words that were about to be withdrawn. The stop now
-   * goes at the GESTURE, not at the send (which is what the deferred-edit path below already did).
+   * UM CAMPO, UM MODO. Corrigir uma mensagem da fila (`queueEdit`), corrigir uma bolha enviada
+   * (`editing`) e responder uma decisão (`replyTo`) disputam o MESMO campo de texto — e o `send`
+   * resolve o Enter testando um modo depois do outro. Dois armados ao mesmo tempo é o Enter caindo
+   * no modo errado: a correção de uma bolha gravava POR CIMA da mensagem que esperava na fila. Todo
+   * gesto que entra num modo passa por aqui primeiro; a da fila volta a ser entregável, no lugar dela.
    */
+  const leaveComposerModes = React.useCallback((): void => {
+    setReplyTo(null);
+    setEditing(null);
+    setQueueEdit(null);
+    setQueue(releaseEditing);
+  }, []);
+
   /**
    * O lápis abre o campo — e SÓ. Ele não para o turno.
    *
@@ -571,9 +595,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    * Trabalho a mais é recuperável; um turno morto por engano, não.
    */
   const beginEdit = React.useCallback((rowId: string, original: string): void => {
-    setReplyTo(null); // editing and answering a decision are two different gestures
+    leaveComposerModes();
     setEditing({ rowId, original });
-  }, []);
+  }, [leaveComposerModes]);
 
   /* ------------------------------------------------------------ a fila */
 
@@ -584,7 +608,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   /**
    * A TROCA DE CONTA com mensagens esperando na fila: as de OUTRA conta saem da fila e viram cópias
    * "não entregue" no outbox (ver `foreignToOutbox`) — na tela com o nome de quem escreveu, nunca
-   * despachadas por esta conexão. E uma edição em curso era da conta anterior: some junto.
+   * despachadas por esta conexão. E o que estava no campo (qualquer modo) era da conta anterior:
+   * sai junto — uma correção da fila armada aqui faria o Enter da conta nova reescrever (ou recriar
+   * sem autor) a mensagem de outra pessoa.
    */
   React.useEffect(() => {
     const { own, foreign } = foreignToOutbox(queueRef.current, viewer);
@@ -594,9 +620,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   }, [viewer]);
   React.useEffect(() => {
     if (identity.epoch === 0) return;
-    setEditing(null);
+    leaveComposerModes();
     setPendingEdit(null);
-  }, [identity.epoch]);
+  }, [identity.epoch, leaveComposerModes]);
   /** As decisões ainda paradas na pessoa (preenchido abaixo, onde elas são derivadas das linhas). */
   const pendingRef = React.useRef<PendingDecision[]>([]);
 
@@ -626,11 +652,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   const beginQueueEdit = React.useCallback((id: string): void => {
     const target = queueRef.current.find((m) => m.id === id);
     if (!target) return;
-    setReplyTo(null); // uma coisa de cada vez: editar, responder e corrigir são gestos diferentes
-    setEditing(null);
+    leaveComposerModes();
     setQueueEdit({ id, text: target.text });
     setQueue((prev) => markEditing(prev, id)); // só uma por vez: só existe um campo de texto
-  }, []);
+  }, [leaveComposerModes]);
 
   /** O X da fila: a pessoa desistiu dessa mensagem antes de o Claude a ler. */
   const removeQueued = React.useCallback((id: string): void => {
@@ -668,14 +693,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    * SAIR do modo edição sem enviar. Uma mensagem da fila volta a ser entregável, no lugar dela e
    * com o texto que tinha — o X aqui é "desisti de reescrever", nunca "joga fora o que escrevi".
    */
-  const cancelEdit = React.useCallback((): void => {
-    if (queueEdit) {
-      setQueue(releaseEditing);
-      setQueueEdit(null);
-      return;
-    }
-    setEditing(null);
-  }, [queueEdit]);
+  const cancelEdit = leaveComposerModes;
 
   /**
    * O DESPACHO — a fila anda sozinha, UMA mensagem por vez, assim que o turno anterior fecha.
@@ -804,14 +822,20 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     }
   };
 
+  /*
+   * The row handlers below are STABLE (useCallback over refs and stable setters): every row is a
+   * memoised `SdkChatRow`, and a handler recreated per render would redraw the whole transcript on
+   * every streamed token all the same.
+   */
+
   /** "Reenviar": the same words, the same receipt id — the back never had them, so this is not a copy. */
-  const resendUndelivered = (cid: string): void => {
+  const resendUndelivered = React.useCallback((cid: string): void => {
     const entry = outboxRef.current.find((m) => m.cid === cid);
     if (!entry) return;
     // Reenviar a mensagem de OUTRA conta a gravaria no nome de quem está na aba agora.
     if (entry.from && entry.from.name !== viewer) return;
     setState((prev) => settleUserRow(prev, cid, "sending"));
-    setOutbox((prev) => retryOutbox(prev, entry, Date.now()));
+    setOutbox((prev) => retryOutbox(prev, entry, Date.now(), sendMark(deliveredUserTexts(rowsRef.current), entry.text)));
     try {
       sendFrame(entry.original !== undefined
         ? { type: "edit_user", original: entry.original, text: entry.text, cid }
@@ -821,20 +845,20 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       setOutbox((prev) => markUndelivered(prev, [cid]));
       setState((prev) => settleUserRow(prev, cid, "undelivered"));
     }
-  };
+  }, [sendFrame, viewer]);
 
   /** "Descartar": the person gave up on this send — the bubble and the stored copy both go. */
-  const discardUndelivered = (cid: string): void => {
+  const discardUndelivered = React.useCallback((cid: string): void => {
     setOutbox((prev) => dropFromOutbox(prev, cid));
     setState((prev) => dropUserRow(prev, cid));
-  };
+  }, []);
 
   const interrupt = (): void => {
     sendInterrupt();
   };
 
 
-  const answerPermission = (id: string, allow: boolean): void => {
+  const answerPermission = React.useCallback((id: string, allow: boolean): void => {
     try {
       sendFrame({ type: "permission_decision", id, allow });
     } catch (err) {
@@ -843,10 +867,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     }
     // Optimistic only in DRAWING — the driver echoes the decision; a flip is impossible (first wins).
     setState((prev) => decidePermission(prev, id, allow ? "allowed" : "denied"));
-  };
+  }, [sendFrame]);
 
   /** Returns whether the socket took the answer — a refusal must not disarm the reply composer. */
-  const answerUserQuestion = (id: string, answers: SdkQuestionAnswer[]): boolean => {
+  const answerUserQuestion = React.useCallback((id: string, answers: SdkQuestionAnswer[]): boolean => {
     try {
       sendFrame({ type: "question_answer", id, answers });
     } catch (err) {
@@ -856,7 +880,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     // Optimistic only in DRAWING — the driver echoes a `question_result`; the first settlement wins.
     setState((prev) => answerQuestion(prev, id, answers));
     return true;
-  };
+  }, [sendFrame]);
 
   /** The terminal's Esc gesture: an empty field steps into editing the LAST message of one's own. */
   const editLast = React.useCallback((): void => {
@@ -870,7 +894,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     }
     // Mid-turn Esc keeps meaning "stop", not "edit": the button owns that gesture, and stopping a
     // turn is too big a consequence for a key you may have pressed to dismiss something. The pencil
-    // is the explicit way in — and IT does pause the turn (see `beginEdit`).
+    // is the explicit way in — and even it only opens the field: the turn stops when the correction
+    // is SENT (see `beginEdit` and `send`).
     if (state.turnActive) return;
     for (let i = state.rows.length - 1; i >= 0; i -= 1) {
       const row = state.rows[i]!;
@@ -912,16 +937,16 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    * Tray click: scroll to the message, flash it, ARM the composer on it (when a typed line can
    * answer it) and take the cursor there. Arming leaves edit mode — one thing at a time.
    */
-  const jumpToDecision = (decision: PendingDecision): void => {
+  const jumpToDecision = React.useCallback((decision: PendingDecision): void => {
     const el = rowRefs.current.get(decision.rowId);
     el?.scrollIntoView?.({ behavior: "smooth", block: "center" });
     setFlashId(decision.rowId);
     if (decision.answerable) {
-      setEditing(null);
+      leaveComposerModes();
       setReplyTo(decision);
     }
     rootRef.current?.querySelector("textarea")?.focus();
-  };
+  }, [leaveComposerModes]);
 
   // THE OTHER TAB (and the agent that gave up waiting): the decision this composer is aimed at
   // stopped being pending — someone answered it elsewhere, it timed out, or Claude moved on. The
@@ -943,11 +968,25 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   // LONG, and whether the turn was escalated by a reserved word.
   const working = connected && (state.awaiting || state.turnActive);
   const activity = React.useMemo(() => (working ? currentActivity(state) : null), [working, state]);
-  const seconds = useTurnClock(working);
-  /* O verbo e a nota deste instante: é o que troca "Trabalhando…" parado por algo que anda. */
-  const stage = workingStage(workingKindOf(activity, state.awaiting, state.ready), seconds);
-  /* O que o modelo está dizendo AGORA (ver `liveActivityDetail`) — null quando não há palavra dele. */
-  const detail = liveActivityDetail(state);
+  /*
+   * QUANDO o trabalho começou — e só isso mora aqui. O relógio que anda a cada segundo vive nos dois
+   * mostradores (`useTurnClock`): aqui em cima ele redesenhava a conversa INTEIRA uma vez por
+   * segundo, durante o turno todo. Ajustado no render (não num efeito), para o primeiro quadro do
+   * turno já sair com o relógio certo.
+   */
+  const [workStartedAt, setWorkStartedAt] = React.useState<number | null>(null);
+  if (working && workStartedAt === null) setWorkStartedAt(Date.now());
+  if (!working && workStartedAt !== null) setWorkStartedAt(null);
+  const workingKind = workingKindOf(activity, state.awaiting, state.ready);
+  /*
+   * O LEITOR DE TELA. A conversa é um `role="log"` (região viva): tudo que muda lá dentro é
+   * anunciado. Por isso os mostradores do relógio ficam `aria-hidden` — o cronômetro é para os
+   * olhos, anunciado a cada segundo ele falava por cima da conversa — e para o ouvido vai só a FASE,
+   * numa região de status fora do log, que muda quando o trabalho muda. E um texto chegando token a
+   * token deixa o log OCUPADO (`aria-busy`): ele é lido inteiro quando fecha, não em pedaços.
+   */
+  const lastRow = state.rows[state.rows.length - 1];
+  const streaming = lastRow !== undefined && (lastRow.kind === "assistant" || lastRow.kind === "thinking") && lastRow.streaming;
   React.useEffect(() => {
     if (!working) setEscalation(null);
   }, [working]);
@@ -960,16 +999,16 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         onScroll={stick.onScroll}
         role="log"
         aria-label={ariaLabel ?? t("sdk.aria")}
-        aria-live="polite"
+        aria-busy={streaming || undefined}
         data-testid="sdk-chat-scroller"
         className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain rounded-md border border-border/60 bg-card/30 px-3 py-3"
       >
         {/* WHAT IS RUNNING — pinned to the top of the conversation for as long as work runs, so a
             long turn never leaves the person scrolling to find out whether anything is happening. */}
-        {working ? (
+        {working && workStartedAt !== null ? (
           <SdkActivityBar
             activity={activity}
-            seconds={seconds}
+            startedAt={workStartedAt}
             escalation={escalation}
             awaiting={state.awaiting}
             ready={state.ready}
@@ -1010,8 +1049,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
             ) : (
               <SdkChatRow
                 row={entry.row}
-                replies={replies}
-                replyingTo={replyTo}
+                answered={replies.get(entry.id)}
+                aiming={replyTo?.rowId === entry.id}
                 onPermission={answerPermission}
                 onAnswer={answerUserQuestion}
                 onReply={pendingIds.has(entry.id) ? jumpToDecision : undefined}
@@ -1029,31 +1068,20 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
             resuming the session (`ready` false — the cold start), "Pensando…" once the turn is in
             the engine and no token has landed yet. The first driver event clears `awaiting` and the
             plain "Trabalhando…" takes the same seat. Never stacked: one line, its label changes. */}
-        {working ? (
-          <div
-            className="flex items-center gap-2 text-xs text-muted-foreground"
-            data-testid="sdk-chat-working"
-            data-phase={workingKindOf(activity, state.awaiting, state.ready)}
-          >
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            <span className="text-foreground/90">{t(stage.verb)}</span>
-            {/* A PALAVRA DO MODELO ganha da frase pronta. A cauda enlatada era a mesma em qualquer
-                ferramenta e em qualquer raciocínio — escolhida por uma tabela a partir do relógio —,
-                e o que a pessoa queria ler ("Medindo o tamanho do módulo PDV", o raciocínio em
-                curso) estava a um passo dali, no estado. A enlatada segue sendo o fallback de quando
-                não há nada a dizer: uma sessão subindo não tem raciocínio para mostrar. */}
-            <span data-testid="sdk-working-note" className="min-w-0 truncate opacity-80">
-              {escalation
-                ? t("sdk.workingWithEffort", {
-                    elapsed: formatElapsed(seconds),
-                    note: detail ?? t(stage.note),
-                    effort: escalation.ultracode ? t("sdk.ultracodeOn") : t("sdk.effortHigh"),
-                  })
-                : t("sdk.workingWith", { elapsed: formatElapsed(seconds), note: detail ?? t(stage.note) })}
-            </span>
-          </div>
+        {working && workStartedAt !== null ? (
+          <SdkWorkingLine
+            startedAt={workStartedAt}
+            activity={activity}
+            awaiting={state.awaiting}
+            ready={state.ready}
+            escalation={escalation}
+            detail={liveActivityDetail(state)}
+          />
         ) : null}
       </div>
+      <span role="status" data-testid="sdk-working-status" className="sr-only">
+        {working ? t(workingStage(workingKind, 0).verb) : ""}
+      </span>
       <JumpToLatest stick={stick} />
       </div>
 
@@ -1489,22 +1517,75 @@ function SdkToolGroup({ rows }: { rows: SdkRow[] }) {
  * THE TURN'S CLOCK — seconds since the work started, ticking while it runs.
  *
  * "Trabalhando…" with no number is the same word at second 2 and at minute 9, and the difference
- * between those two is the whole question the person is asking the screen. Reset (and the interval
- * dropped) the moment the work stops, so an idle chat holds no timer.
+ * between those two is the whole question the person is asking the screen. Only the dials that
+ * SHOW the number call this (they are mounted only while work runs, so an idle chat holds no
+ * timer): the tick re-renders them, never the conversation around them.
  */
-function useTurnClock(active: boolean): number {
-  const [seconds, setSeconds] = React.useState(0);
+function useTurnClock(startedAt: number): number {
+  const [seconds, setSeconds] = React.useState(() => elapsedSeconds(startedAt));
   React.useEffect(() => {
-    if (!active) {
-      setSeconds(0);
-      return;
-    }
-    const startedAt = Date.now();
-    setSeconds(0);
-    const timer = setInterval(() => setSeconds(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    setSeconds(elapsedSeconds(startedAt));
+    const timer = setInterval(() => setSeconds(elapsedSeconds(startedAt)), 1000);
     return () => clearInterval(timer);
-  }, [active]);
+  }, [startedAt]);
   return seconds;
+}
+
+function elapsedSeconds(startedAt: number): number {
+  return Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+}
+
+/**
+ * The STATUS LADDER's line at the live edge of the conversation: the verb of this instant, the
+ * clock, and what the model is saying now (or the canned note when it says nothing).
+ */
+function SdkWorkingLine({
+  startedAt,
+  activity,
+  awaiting,
+  ready,
+  escalation,
+  detail,
+}: {
+  startedAt: number;
+  activity: SdkActivity | null;
+  awaiting: boolean;
+  ready: boolean;
+  escalation: { ultrathink: boolean; ultracode: boolean } | null;
+  /** O que o modelo está dizendo AGORA (ver `liveActivityDetail`) — null quando não há palavra dele. */
+  detail: string | null;
+}) {
+  const t = useT();
+  const seconds = useTurnClock(startedAt);
+  const kind = workingKindOf(activity, awaiting, ready);
+  /* O verbo e a nota deste instante: é o que troca "Trabalhando…" parado por algo que anda. */
+  const stage = workingStage(kind, seconds);
+  return (
+    // Para os olhos: dentro do log o relógio seria anunciado a cada segundo (a fase vai pelo status).
+    <div
+      aria-hidden="true"
+      className="flex items-center gap-2 text-xs text-muted-foreground"
+      data-testid="sdk-chat-working"
+      data-phase={kind}
+    >
+      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      <span className="text-foreground/90">{t(stage.verb)}</span>
+      {/* A PALAVRA DO MODELO ganha da frase pronta. A cauda enlatada era a mesma em qualquer
+          ferramenta e em qualquer raciocínio — escolhida por uma tabela a partir do relógio —,
+          e o que a pessoa queria ler ("Medindo o tamanho do módulo PDV", o raciocínio em
+          curso) estava a um passo dali, no estado. A enlatada segue sendo o fallback de quando
+          não há nada a dizer: uma sessão subindo não tem raciocínio para mostrar. */}
+      <span data-testid="sdk-working-note" className="min-w-0 truncate opacity-80">
+        {escalation
+          ? t("sdk.workingWithEffort", {
+              elapsed: formatTurnElapsed(seconds),
+              note: detail ?? t(stage.note),
+              effort: escalation.ultracode ? t("sdk.ultracodeOn") : t("sdk.effortHigh"),
+            })
+          : t("sdk.workingWith", { elapsed: formatTurnElapsed(seconds), note: detail ?? t(stage.note) })}
+      </span>
+    </div>
+  );
 }
 
 /**
@@ -1521,8 +1602,11 @@ export function workingKindOf(
   return awaiting ? "thinking" : "working";
 }
 
-/** Elapsed, the way the CLI writes it: `4s`, `1m 24s`. PURE. */
-export function formatElapsed(seconds: number): string {
+/**
+ * The turn's elapsed time, the way the CLI writes it: `4s`, `1m 24s`. Not the composer's recording
+ * clock (`0:42`, TerminalComposer) — a different dial, hence a different name. PURE.
+ */
+function formatTurnElapsed(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
 }
@@ -1543,20 +1627,21 @@ export function formatElapsed(seconds: number): string {
  */
 function SdkActivityBar({
   activity,
-  seconds,
+  startedAt,
   escalation,
   awaiting,
   ready,
   onJump,
 }: {
   activity: SdkActivity | null;
-  seconds: number;
+  startedAt: number;
   escalation: { ultrathink: boolean; ultracode: boolean } | null;
   awaiting: boolean;
   ready: boolean;
   onJump: () => void;
 }) {
   const t = useT();
+  const seconds = useTurnClock(startedAt);
   /* O nome da ferramenta ganha do verbo — "Rodando testes" diz mais que "Executando…". Fora isso,
      é o mesmo vocabulário do indicador lá embaixo (workingStage): verbo que troca, nota que escala. */
   const stage = workingStage(workingKindOf(activity, awaiting, ready), seconds);
@@ -1582,8 +1667,8 @@ function SdkActivityBar({
       {activity?.background ? (
         <span className="hidden shrink-0 opacity-70 sm:inline">{t("sdk.toolBackground")}</span>
       ) : null}
-      <span data-testid="sdk-activity-elapsed" className="shrink-0 opacity-70">
-        {t("sdk.workingWith", { elapsed: formatElapsed(seconds), note: t(stage.note) })}
+      <span data-testid="sdk-activity-elapsed" aria-hidden="true" className="shrink-0 opacity-70">
+        {t("sdk.workingWith", { elapsed: formatTurnElapsed(seconds), note: t(stage.note) })}
       </span>
       {effort ? (
         <span
@@ -1674,10 +1759,15 @@ function SdkThinkingRow({ text, streaming }: { text: string; streaming: boolean 
   );
 }
 
-function SdkChatRow({
+/**
+ * One row of the conversation. MEMOISED: a streamed token changes only the last row, and every
+ * other one — same `row` object (the reducer keeps untouched rows by reference), same primitives,
+ * same stable handlers — has nothing new to draw.
+ */
+const SdkChatRow = React.memo(function SdkChatRow({
   row,
-  replies,
-  replyingTo,
+  answered,
+  aiming = false,
   onPermission,
   onAnswer,
   onReply,
@@ -1686,10 +1776,10 @@ function SdkChatRow({
   onDiscard,
 }: {
   row: SdkRow;
-  /** Explicit replies already given, by the row they answered — what a question shows it received. */
-  replies?: Map<string, string>;
-  /** The decision the composer is aimed at (so the question it points to says so, in place). */
-  replyingTo?: PendingDecision | null;
+  /** The explicit reply this row's question already received — what it shows it got. */
+  answered?: string;
+  /** Is the composer aimed at THIS row's question (so it says so, in place)? */
+  aiming?: boolean;
   onPermission?: (id: string, allow: boolean) => void;
   onAnswer?: (id: string, answers: SdkQuestionAnswer[]) => void;
   /** Arms the composer on this row's question ("Responder"). */
@@ -1920,10 +2010,8 @@ function SdkChatRow({
   // paragraph gets a subtle amber frame so it never drowns in the text above it.
   const prose = row.kind === "assistant" && !row.streaming ? splitProseQuestion(row.text) : null;
   if (prose) {
-    // What this question RECEIVED, anchored to it — the third question the screen owes the person
-    // ("pronto, respondi"). Survives a reload: the answer is read back out of the sent message.
-    const answered = replies?.get(row.id);
-    const aiming = replyingTo?.rowId === row.id;
+    // What this question RECEIVED (`answered`), anchored to it — the third question the screen owes
+    // the person ("pronto, respondi"). Survives a reload: the answer is read back out of the sent message.
     return (
       <div data-testid="sdk-assistant" className="max-w-full select-text text-sm leading-relaxed">
         {prose.body !== "" ? <Markdown text={prose.body} /> : null}
@@ -1972,7 +2060,7 @@ function SdkChatRow({
       {row.streaming ? <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-foreground/60 align-baseline" /> : null}
     </div>
   );
-}
+});
 
 /**
  * The agent's QUESTION card — AskUserQuestion rendered as clickable options in the chat.

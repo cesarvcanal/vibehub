@@ -12,7 +12,7 @@ import {
 import { get, patch, post, del } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
 import type {
-  Settings, SettingsPatch, GithubConnection, GithubState, TranscribeStatus, Credential, CredentialType,
+  Settings, SettingsPatch, GithubConnection, TranscribeStatus, Credential, CredentialType,
 } from "@/api/types";
 import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
 import { AccountsManager } from "@/features/board/components/AccountsManager";
@@ -20,6 +20,9 @@ import { McpManager } from "@/features/board/components/McpManager";
 import { BrainManager } from "@/features/board/components/BrainManager";
 import { PluginsManager } from "@/features/board/components/PluginsManager";
 import { RunnerBanner } from "@/features/board/components/RunnerBanner";
+// The SAME cache entries the board reads (the composer's microphone, the project picker): a save
+// here has to reach them, which two keys for one endpoint never did.
+import { GITHUB_KEY, TRANSCRIBE_KEY, boardApi } from "@/features/board/api";
 import {
   LANGUAGES,
   getLanguage,
@@ -39,8 +42,6 @@ import {
  */
 
 export const SETTINGS_KEY = ["settings"] as const;
-export const GITHUB_KEY = ["github"] as const;
-export const TRANSCRIBE_KEY = ["transcribe"] as const;
 export const CREDENTIALS_KEY = ["credentials"] as const;
 
 export interface SettingsDialogProps {
@@ -52,8 +53,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const t = useT();
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: SETTINGS_KEY, queryFn: () => get<Settings>("/settings"), enabled: open });
-  const github = useQuery({ queryKey: GITHUB_KEY, queryFn: () => get<GithubState>("/github"), enabled: open });
-  const voice = useQuery({ queryKey: TRANSCRIBE_KEY, queryFn: () => get<TranscribeStatus>("/transcribe"), enabled: open });
+  const github = useQuery({ queryKey: GITHUB_KEY, queryFn: boardApi.github, enabled: open });
+  const voice = useQuery({ queryKey: TRANSCRIBE_KEY, queryFn: boardApi.transcribeStatus, enabled: open });
   const credentials = useQuery({
     queryKey: CREDENTIALS_KEY,
     queryFn: () => get<{ credentials: Credential[] }>("/credentials").then((r) => r.credentials ?? []),
@@ -116,8 +117,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     onSuccess: (result) => {
       setGithubToken("");
       setGithubLabel("");
+      // A prefix: the connection list AND every repo/branch query hanging off an account.
       void qc.invalidateQueries({ queryKey: GITHUB_KEY });
-      void qc.invalidateQueries({ queryKey: ["board", "github"] });
       void qc.invalidateQueries({ queryKey: SETTINGS_KEY });
       toast.success(
         translate("toast.githubAdded", {
@@ -134,8 +135,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const removeGithub = useMutation({
     mutationFn: (id: string) => del<{ ok: true }>(`/github/connections/${encodeURIComponent(id)}`),
     onSuccess: () => {
+      // A prefix: the connection list AND every repo/branch query hanging off an account.
       void qc.invalidateQueries({ queryKey: GITHUB_KEY });
-      void qc.invalidateQueries({ queryKey: ["board", "github"] });
       toast.success(translate("toast.githubRemoved"));
     },
     onError: (e) => toast.error(apiErrorMessage(e)),

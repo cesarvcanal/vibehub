@@ -199,6 +199,11 @@ So the delete is a purge (`services/board/purge.ts`), in an order that has a rea
    upload, a message, a status hook), so a card that is off the board cannot gain new content
    mid-purge. That is what makes "delete while an upload is in flight" safe, and what makes every
    old address (`/api/cards/:id/uploads/...`, the chat sockets) answer 404 from that instant.
+   The card's browser SLOT (its X display / CDP port) does not go free with it: it is held in
+   `board.json` (`browserSlotHolds`) and released only once the browser step went through. A
+   Chromium that could not be stopped (runner down), or that has not been yet (a project's cards
+   leave the board before they are purged), is still up there, logged in — a new card handed that
+   slot would drive it.
 3. **Erase the bytes** — data dir and runner, each step reported. `DELETE /api/cards/:id` answers
    with `incomplete: []` when nothing survived, and names the steps that failed otherwise: a runner
    that is down must never make a card undeletable, and must never be reported as a clean deletion.

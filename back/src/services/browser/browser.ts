@@ -242,11 +242,13 @@ export function vncBridgeRemoteCommand(containerName: string, vncPort: number): 
 
 /**
  * argv for the bridge process, resolved through the host executor — `bash -lc …` when Docker is
- * local, `ssh … <command>` when it is across a hop. The WS route does not care which. PURE-ish (it
- * reads the executor's configuration, nothing else).
+ * local, `ssh … <command>` when it is across a hop. The WS route does not care which. A PIPE command,
+ * never a pty one: RFB is binary, and the `-tt` the pty command adds across a hop would echo it
+ * back, rewrite \n into \r\n and read a 0x03 byte as Ctrl-C. PURE-ish (it reads the executor's
+ * configuration, nothing else).
  */
 export function vncBridgeCommand(containerName: string, vncPort: number): { file: string; args: string[] } {
-  return hostExecutor().ptyCommand(vncBridgeRemoteCommand(containerName, vncPort));
+  return hostExecutor().pipeCommand(vncBridgeRemoteCommand(containerName, vncPort));
 }
 
 /**

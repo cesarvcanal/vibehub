@@ -72,6 +72,18 @@ async function signIn(): Promise<string> {
   return `vibehub_session=${res.cookies.find((c) => c.name === "vibehub_session")?.value ?? ""}`;
 }
 
+/** Listens on 6006 (Storybook's default) — or the next free port in the VNC slot range. */
+async function listenInSlotRange(server: Server): Promise<number> {
+  for (let port = 6006; port < 6100; port++) {
+    const ok = await new Promise<boolean>((resolve) => {
+      server.once("error", () => resolve(false));
+      server.listen(port, "127.0.0.1", () => resolve(true));
+    });
+    if (ok) return port;
+  }
+  throw new Error("no free port in 6006..6099");
+}
+
 function listen(server: Server): Promise<number> {
   return new Promise((resolve) => {
     server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port));
@@ -451,5 +463,370 @@ describe("/preview/:port proxy", () => {
       ws.on("error", () => resolve("refused"));
     });
     expect(outcome).toMatch(/status:401|refused/);
+  });
+});
+
+/**
+ * ACCESS SCOPE. A session alone used to open everything: a member with nothing shared listed every
+ * port, stopped/relaunched any card's preview, proxied into any port — including Chromium's CDP
+ * (9222+, the per-card browser), whose /json/list hands out the owner's tabs and whose websocket is
+ * full remote control. The rule now: vibehub's own plumbing is never a preview; the owner reaches
+ * any other port; a member reaches only a port a card VISIBLE to them registered, and changes a
+ * preview only on a card they WORK on.
+ */
+describe("preview access scope", () => {
+  interface Member { cookie: string; id: string }
+
+  async function member(username = "alex"): Promise<Member> {
+    const created = await app.inject({
+      method: "POST", url: "/api/users", headers: { cookie },
+      payload: { username, password: "supersecret", role: "member" },
+    });
+    const login = await app.inject({
+      method: "POST", url: "/api/auth/login", payload: { username, password: "supersecret" },
+    });
+    return {
+      id: created.json().user.id as string,
+      cookie: `vibehub_session=${login.cookies.find((c) => c.name === "vibehub_session")?.value ?? ""}`,
+    };
+  }
+
+  /** The owner's card with a preview registered on `port`. */
+  async function ownerPreview(port: number): Promise<string> {
+    const registry = await import("../services/board/registry.js");
+    const project = await registry.createProject({ name: "Shop" });
+    const card = await registry.createCard({ projectId: project.id, title: "Checkout" });
+    await registry.registerCardPreview(card.id, port, { label: "front", command: "npm run dev", cwd: "/work/app" });
+    return card.id;
+  }
+
+  async function shareCard(cardId: string, userId: string, level: "view" | "work"): Promise<void> {
+    const registry = await import("../services/board/registry.js");
+    await registry.shareWith({ kind: "card", targetId: cardId, userId, level });
+  }
+
+  /** Outcome of a websocket attempt: "open", or the refusal the server wrote. */
+  function tryUpgrade(url: string, headers: Record<string, string> = {}): Promise<string> {
+    const ws = new WebSocket(url, { headers });
+    return new Promise<string>((resolve) => {
+      ws.on("open", () => { resolve("open"); ws.close(); });
+      ws.on("unexpected-response", (_req, res) => resolve(`status:${res.statusCode}`));
+      ws.on("error", () => resolve("refused"));
+    });
+  }
+
+  const scan = [
+    "   1: 0100007F:1435 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 77 1",
+    "   2: 0100007F:0BB8 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 78 1",
+    "__VIBEHUB_PROC__",
+  ].join("\n");
+
+  it("GET ports: a member sees only the ports registered by cards visible to them", async () => {
+    const cardId = await ownerPreview(5173);
+    const m = await member();
+    runScript.mockResolvedValue({ stdout: scan, stderr: "" });
+
+    const none = await app.inject({ method: "GET", url: "/api/preview/ports", headers: { cookie: m.cookie } });
+    expect(none.statusCode).toBe(200);
+    expect(none.json().ports).toEqual([]);
+
+    await shareCard(cardId, m.id, "view");
+    const shared = await app.inject({ method: "GET", url: "/api/preview/ports", headers: { cookie: m.cookie } });
+    expect(shared.json().ports.map((p: { port: number }) => p.port)).toEqual([5173]);
+
+    // The owner still sees everything listening.
+    const owner = await app.inject({ method: "GET", url: "/api/preview/ports", headers: { cookie } });
+    expect(owner.json().ports.map((p: { port: number }) => p.port)).toEqual([3000, 5173]);
+  });
+
+  it("DELETE/restart: 404 on a card the member cannot see, 403 on a read-only share — and nothing stops", async () => {
+    const cardId = await ownerPreview(5173);
+    const m = await member();
+    runScript.mockResolvedValue({ stdout: "", stderr: "" });
+    const registry = await import("../services/board/registry.js");
+    const attempts = [
+      ["DELETE", `/api/cards/${cardId}/previews/5173`],
+      ["POST", `/api/cards/${cardId}/previews/5173/restart`],
+    ] as const;
+
+    for (const [method, url] of attempts) {
+      expect((await app.inject({ method, url, headers: { cookie: m.cookie } })).statusCode).toBe(404);
+    }
+    await shareCard(cardId, m.id, "view");
+    for (const [method, url] of attempts) {
+      expect((await app.inject({ method, url, headers: { cookie: m.cookie } })).statusCode).toBe(403);
+    }
+    expect(runScript).not.toHaveBeenCalled();
+    expect((await registry.getCard(cardId))?.previews?.map((p) => p.port)).toEqual([5173]);
+
+    await shareCard(cardId, m.id, "work");
+    const stopped = await app.inject({
+      method: "DELETE", url: `/api/cards/${cardId}/previews/5173`, headers: { cookie: m.cookie },
+    });
+    expect(stopped.statusCode).toBe(200);
+  });
+
+  it("proxy: a member reaches a port only through a card visible to them", async () => {
+    let hits = 0;
+    const upstream = createServer((_req, res) => { hits += 1; res.writeHead(200); res.end("app"); });
+    const port = await listen(upstream);
+    try {
+      const cardId = await ownerPreview(port);
+      const m = await member();
+      const denied = await fetch(`http://127.0.0.1:${appPort}/preview/${port}/`, { headers: { cookie: m.cookie } });
+      expect(denied.status).toBe(404);
+      expect(hits).toBe(0);
+
+      await shareCard(cardId, m.id, "view");
+      const allowed = await fetch(`http://127.0.0.1:${appPort}/preview/${port}/`, { headers: { cookie: m.cookie } });
+      expect(allowed.status).toBe(200);
+      expect(await allowed.text()).toBe("app");
+    } finally {
+      upstream.close();
+    }
+  });
+
+  it("a port taken over by a NEWER registration follows its current card — an old share opens nothing", async () => {
+    // Shared card X once registered the port (with a relaunch recipe, so pruning never drops it);
+    // later the owner's PRIVATE card Y started its own server on that same port. The proxy, the
+    // stopped screen and the restart all treat Y as the port's card now — so must the scope.
+    const upstream = createServer((_req, res) => { res.writeHead(200); res.end("private app"); });
+    const port = await listen(upstream);
+    try {
+      const registry = await import("../services/board/registry.js");
+      const shared = await ownerPreview(port);
+      const m = await member();
+      await shareCard(shared, m.id, "view");
+      await new Promise((r) => setTimeout(r, 5)); // a strictly newer createdAt
+      const project = await registry.createProject({ name: "Private" });
+      const priv = await registry.createCard({ projectId: project.id, title: "Secret" });
+      await registry.registerCardPreview(priv.id, port, { command: "npm run dev", cwd: "/work/secret" });
+
+      const res = await fetch(`http://127.0.0.1:${appPort}/preview/${port}/`, { headers: { cookie: m.cookie } });
+      expect(res.status).toBe(404);
+      expect(await tryUpgrade(`ws://127.0.0.1:${appPort}/preview/${port}/`, { cookie: m.cookie })).toBe("status:404");
+
+      const hex = port.toString(16).toUpperCase().padStart(4, "0");
+      runScript.mockResolvedValue({
+        stdout: `   1: 0100007F:${hex} 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 77 1\n__VIBEHUB_PROC__`,
+        stderr: "",
+      });
+      const listed = await app.inject({ method: "GET", url: "/api/preview/ports", headers: { cookie: m.cookie } });
+      expect(listed.json().ports).toEqual([]);
+    } finally {
+      upstream.close();
+    }
+  });
+
+  it("proxy: a member's request checks the session ONCE and ONE card — not the whole board", async () => {
+    // A vite dev page is hundreds of module requests through this proxy. Each one used to verify
+    // the session twice (preHandler, then handler) and, for a member, load every card on the board
+    // to compute the full port scope — when the question is only "is THIS port's card yours?".
+    await app.close();
+    const sessionUser = vi.fn();
+    const listAllCards = vi.fn();
+    vi.doMock("../auth/users.js", async () => {
+      const actual = await vi.importActual<typeof import("../auth/users.js")>("../auth/users.js");
+      sessionUser.mockImplementation(actual.sessionUser);
+      return { ...actual, sessionUser };
+    });
+    vi.doMock("../services/board/registry.js", async () => {
+      const actual = await vi.importActual<typeof import("../services/board/registry.js")>("../services/board/registry.js");
+      listAllCards.mockImplementation(actual.listAllCards);
+      return { ...actual, listAllCards };
+    });
+    const upstream = createServer((_req, res) => { res.writeHead(200); res.end("app"); });
+    const port = await listen(upstream);
+    try {
+      app = await boot(); // same data dir: the owner and its cookie survive the reboot
+      const cardId = await ownerPreview(port);
+      const m = await member();
+      await shareCard(cardId, m.id, "view");
+
+      sessionUser.mockClear();
+      listAllCards.mockClear();
+      const res = await fetch(`http://127.0.0.1:${appPort}/preview/${port}/`, { headers: { cookie: m.cookie } });
+      expect(res.status).toBe(200);
+      expect(sessionUser).toHaveBeenCalledTimes(1);
+      expect(listAllCards).not.toHaveBeenCalled();
+    } finally {
+      upstream.close();
+      vi.doUnmock("../auth/users.js");
+      vi.doUnmock("../services/board/registry.js");
+    }
+  });
+
+  it("proxy: a port nobody registered is the owner's alone", async () => {
+    const upstream = createServer((_req, res) => { res.writeHead(200); res.end("app"); });
+    const port = await listen(upstream);
+    try {
+      const m = await member();
+      expect((await fetch(`http://127.0.0.1:${appPort}/preview/${port}/`, { headers: { cookie: m.cookie } })).status)
+        .toBe(404);
+      expect((await fetch(`http://127.0.0.1:${appPort}/preview/${port}/`, { headers: { cookie } })).status).toBe(200);
+    } finally {
+      upstream.close();
+    }
+  });
+
+  it("proxy: the per-card browser plumbing (CDP, VNC) is never proxied — not even for the owner", async () => {
+    const { cardBrowserPorts } = await import("../services/browser/ports.js");
+    const cardId = await ownerPreview(5173);
+    const { vncPort, cdpPort } = cardBrowserPorts(cardId);
+    for (const port of [cdpPort, vncPort]) {
+      const res = await fetch(`http://127.0.0.1:${appPort}/preview/${port}/json/list`, { headers: { cookie } });
+      expect(res.status).toBe(404);
+    }
+  });
+
+  /**
+   * Only the slots a browser holds are plumbing. Blocking the whole 5900–6799 / 9222–10121 span shut
+   * dev servers that live there by default — Storybook 6006, the Node inspector 9229 — which the
+   * owner opened before (a regression the review caught).
+   */
+  it("proxy: a dev server on a port inside the slot ranges still opens (Storybook's 6006)", async () => {
+    const upstream = createServer((_req, res) => { res.writeHead(200, { "content-type": "text/plain" }); res.end("storybook"); });
+    const port = await listenInSlotRange(upstream);
+    try {
+      const { cardBrowserPorts } = await import("../services/browser/ports.js");
+      const cardId = await ownerPreview(port);
+      expect([cardBrowserPorts(cardId).vncPort, cardBrowserPorts(cardId).cdpPort]).not.toContain(port);
+      const res = await fetch(`http://127.0.0.1:${appPort}/preview/${port}/`, { headers: { cookie } });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe("storybook");
+    } finally {
+      upstream.close();
+    }
+  });
+
+  it("websocket: a member without access to the port is refused; with a visible card it opens", async () => {
+    const upstream = createServer();
+    const wss = new WebSocketServer({ server: upstream });
+    const port = await listen(upstream);
+    try {
+      const cardId = await ownerPreview(port);
+      const m = await member();
+      expect(await tryUpgrade(`ws://127.0.0.1:${appPort}/preview/${port}/hmr`, { cookie: m.cookie })).toBe("status:404");
+      await shareCard(cardId, m.id, "view");
+      expect(await tryUpgrade(`ws://127.0.0.1:${appPort}/preview/${port}/hmr`, { cookie: m.cookie })).toBe("open");
+    } finally {
+      wss.close();
+      upstream.close();
+    }
+  });
+
+  it("websocket: CDP's devtools socket is refused even to the owner", async () => {
+    const { cardBrowserPorts } = await import("../services/browser/ports.js");
+    const { cdpPort } = cardBrowserPorts(await ownerPreview(5173));
+    expect(await tryUpgrade(`ws://127.0.0.1:${appPort}/preview/${cdpPort}/devtools/page/abc`, { cookie })).toBe("status:404");
+  });
+
+  it("websocket: a signed cookie of a DELETED account opens nothing", async () => {
+    const upstream = createServer();
+    const wss = new WebSocketServer({ server: upstream });
+    const port = await listen(upstream);
+    try {
+      await ownerPreview(port);
+      const m = await member();
+      await app.inject({ method: "DELETE", url: `/api/users/${m.id}`, headers: { cookie } });
+      expect(await tryUpgrade(`ws://127.0.0.1:${appPort}/preview/${port}/hmr`, { cookie: m.cookie })).toBe("status:401");
+    } finally {
+      wss.close();
+      upstream.close();
+    }
+  });
+
+  it("websocket: a cookie REVOKED by a password change opens nothing — same rule as the HTTP proxy", async () => {
+    const upstream = createServer();
+    const wss = new WebSocketServer({ server: upstream });
+    const port = await listen(upstream);
+    try {
+      // Revocation is "signed before sessionsValidAfter": the change must land a tick after the cookie.
+      await new Promise((r) => setTimeout(r, 5));
+      const changed = await app.inject({
+        method: "POST", url: "/api/auth/password", headers: { cookie }, payload: { password: "anothersecret" },
+      });
+      expect(changed.statusCode).toBe(200);
+      expect((await fetch(`http://127.0.0.1:${appPort}/preview/${port}/`, { headers: { cookie } })).status).toBe(401);
+      expect(await tryUpgrade(`ws://127.0.0.1:${appPort}/preview/${port}/hmr`, { cookie })).toBe("status:401");
+    } finally {
+      wss.close();
+      upstream.close();
+    }
+  });
+});
+
+/**
+ * REVOCATION REACHES SOCKETS ALREADY OPEN. The cookie is checked at the handshake; a websocket
+ * opened before a password change or an account removal used to stay alive for as long as its tab
+ * did — a terminal, a tunnel, still taking bytes from somebody who no longer has a session.
+ */
+describe("revoking a session ends its open websockets", () => {
+  /** An open tunnel to an upstream echo server, and a promise that settles when it closes. */
+  async function openTunnel(port: number, sessionCookie: string): Promise<{ ws: WebSocket; closed: Promise<void> }> {
+    const ws = new WebSocket(`ws://127.0.0.1:${appPort}/preview/${port}/hmr`, { headers: { cookie: sessionCookie } });
+    const closed = new Promise<void>((resolve) => ws.on("close", () => resolve()));
+    await new Promise<void>((resolve, reject) => {
+      ws.on("open", () => resolve());
+      ws.on("error", reject);
+    });
+    return { ws, closed };
+  }
+
+  const settlesWithin = (p: Promise<void>, ms: number): Promise<boolean> =>
+    Promise.race([p.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), ms))]);
+
+  async function upstreamServer(): Promise<{ port: number; stop: () => void }> {
+    const upstream = createServer();
+    const wss = new WebSocketServer({ server: upstream });
+    const port = await listen(upstream);
+    return { port, stop: () => { wss.close(); upstream.close(); } };
+  }
+
+  it("a password change closes the tunnels opened with the old cookie", async () => {
+    const { port, stop } = await upstreamServer();
+    try {
+      const tunnel = await openTunnel(port, cookie);
+      // Revocation is "signed before sessionsValidAfter": the change must land a tick after the cookie.
+      await new Promise((r) => setTimeout(r, 5));
+      const changed = await app.inject({
+        method: "POST", url: "/api/auth/password", headers: { cookie }, payload: { password: "anothersecret" },
+      });
+      expect(changed.statusCode).toBe(200);
+      expect(await settlesWithin(tunnel.closed, 3000)).toBe(true);
+    } finally {
+      stop();
+    }
+  });
+
+  it("removing a member closes THEIR sockets — and only theirs", async () => {
+    const { port, stop } = await upstreamServer();
+    try {
+      const created = await app.inject({
+        method: "POST", url: "/api/users", headers: { cookie },
+        payload: { username: "alex", password: "supersecret", role: "member" },
+      });
+      const memberId = created.json().user.id as string;
+      const login = await app.inject({
+        method: "POST", url: "/api/auth/login", payload: { username: "alex", password: "supersecret" },
+      });
+      const memberCookie = `vibehub_session=${login.cookies.find((c) => c.name === "vibehub_session")?.value ?? ""}`;
+      // A member reaches a port only through a card visible to them: register it and share it.
+      const registry = await import("../services/board/registry.js");
+      const project = await registry.createProject({ name: "Shop" });
+      const card = await registry.createCard({ projectId: project.id, title: "Checkout" });
+      await registry.registerCardPreview(card.id, port, { label: "front", command: "npm run dev", cwd: "/work/app" });
+      await registry.shareWith({ kind: "card", targetId: card.id, userId: memberId, level: "view" });
+
+      const members = await openTunnel(port, memberCookie);
+      const owners = await openTunnel(port, cookie);
+      const removed = await app.inject({ method: "DELETE", url: `/api/users/${memberId}`, headers: { cookie } });
+      expect(removed.statusCode).toBe(200);
+      expect(await settlesWithin(members.closed, 3000)).toBe(true);
+      expect(owners.ws.readyState).toBe(WebSocket.OPEN);
+      owners.ws.close();
+    } finally {
+      stop();
+    }
   });
 });

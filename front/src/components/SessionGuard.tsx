@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef } from "react";
 import { matchPath, useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { setUnauthorizedHandler } from "@/lib/api";
-import { dropSession, useAuth } from "@/providers/auth";
+import { get, setUnauthorizedHandler } from "@/lib/api";
+import type { MeResponse } from "@/api/types";
+import { dropSession, sessionRotationSettled, useAuth } from "@/providers/auth";
 import { Paths } from "@/lib/paths";
 
 /**
@@ -21,7 +22,10 @@ function isUnguarded(pathname: string): boolean {
  * Lives inside the router and the query client, so it can do two things nothing else can:
  *
  * 1. When any request 401s, drop the cache (never render data from a dead session) and route to
- *    /login through the SPA instead of a full page reload.
+ *    /login through the SPA instead of a full page reload — once `/auth/me` CONFIRMS the session is
+ *    gone. A 401 can outlive the session it was about: changing your own password revokes every
+ *    cookie signed before it, so a poll already in flight with the old cookie 401s while the fresh
+ *    cookie is on its way back. Logging the person out for that would undo a change that worked.
  * 2. When the tab regains focus, re-validate quietly. A laptop that slept for a day should find
  *    out its session expired the moment you look at it, not when you click something.
  */
@@ -39,6 +43,8 @@ export function SessionGuard() {
   rendered.current = { isAuthenticated, pathname, navigate };
   /** A 401 while signed in owes a trip to the login, paid once the dropped session has rendered. */
   const loginOwed = useRef(false);
+  /** One `/auth/me` confirmation at a time, for a burst of 401s. */
+  const confirming = useRef(false);
 
   /** Read at the moment of the trip — the page may have changed since the 401. */
   const toLoginIfUnguarded = useCallback((): void => {
@@ -54,13 +60,32 @@ export function SessionGuard() {
       // the session that just ended, answering late while the person signs in AGAIN — dropping
       // here would cancel the new session's `/auth/me` and send them back to the login.
       if (!signedIn && !isUnguarded(rendered.current.pathname)) return;
-      void dropSession(queryClient).then(() => {
-        // Signed out ALREADY (a setup step whose cookie never took): React shows no session, so no
-        // guard can bounce back — go now. And owe nothing: a late 401 of a session that just ended
-        // must not hijack some navigation later on.
-        if (!signedIn) toLoginIfUnguarded();
-      });
-      if (signedIn) loginOwed.current = true;
+      const signOutHere = (): void => {
+        void dropSession(queryClient).then(() => {
+          // Signed out ALREADY (a setup step whose cookie never took): React shows no session, so
+          // no guard can bounce back — go now. And owe nothing: a late 401 of a session that just
+          // ended must not hijack some navigation later on.
+          if (!signedIn) toLoginIfUnguarded();
+        });
+        if (signedIn) loginOwed.current = true;
+      };
+      // One confirmation for a burst of 401s (every poll on the page fails together).
+      if (confirming.current) return;
+      confirming.current = true;
+      // `/auth/me` is a silent route: its own 401 never re-enters this handler. It is asked only
+      // once a change of this tab's own cookie (your own password) has settled: asked during it,
+      // it would carry the revoked cookie too, and sign out the person who made the change.
+      void sessionRotationSettled()
+        .then(() => get<MeResponse>("/auth/me"))
+        .then(({ user }) => {
+          if (!user) return signOutHere();
+          // Still signed in: what 401'd only raced a cookie swap — fetch it again with the new one.
+          void queryClient.invalidateQueries({ predicate: (query) => query.state.status === "error" });
+        })
+        .catch(signOutHere)
+        .finally(() => {
+          confirming.current = false;
+        });
     });
     return () => setUnauthorizedHandler(null);
   }, [queryClient, toLoginIfUnguarded]);

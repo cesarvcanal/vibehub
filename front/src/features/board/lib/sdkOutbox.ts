@@ -10,15 +10,18 @@
  *
  * Agora toda mensagem nasce aqui, em disco (localStorage, por card), ANTES de ir pro socket, e só
  * sai quando o back responde `user_ack` — que o back só manda depois de gravar no histórico. Um
- * `user_nack` (o back recusou: o driver do card tinha morrido) ou um silêncio longo demais
- * (`OUTBOX_ACK_TIMEOUT_MS`) deixam a bolha marcada como NÃO ENTREGUE, com reenviar/descartar — e o
+ * `user_nack` (o back recusou: o driver do card tinha morrido; ou o driver recebeu mas a gravação
+ * no histórico falhou, `reason: "history-write-failed"` — um F5 a perderia, então a cópia fica, e
+ * o reenvio com o mesmo `cid` e o mesmo driver no ar só refaz a gravação e ganha o `user_ack`
+ * dela, nunca um segundo turno) ou um silêncio longo demais (`OUTBOX_ACK_TIMEOUT_MS`) deixam a
+ * bolha marcada como NÃO ENTREGUE, com reenviar/descartar — e o
  * texto continua na tela, recuperável, mesmo depois de recarregar a página ou trocar de máquina
  * (nesse caso, a máquina que enviou é quem guarda o rascunho).
  *
  * Tudo aqui é puro ou trivialmente falsificável: as regras são testes, não capturas de tela.
  */
 
-import { parseOrigin, type MessageOrigin } from "@/features/board/lib/chat";
+import { normalizeMessage, parseOrigin, type MessageOrigin } from "@/features/board/lib/chat";
 
 /** Uma mensagem enviada por este navegador e ainda sem recibo do servidor. */
 export interface OutboxMessage {
@@ -45,7 +48,43 @@ export interface OutboxMessage {
    * aparecia como "minha" para a conta nova (o bug do F5, 2026-10-06).
    */
   from?: MessageOrigin;
+  /**
+   * Quantas mensagens com ESTE texto o servidor já tinha gravadas DEPOIS de `since` quando esta
+   * saiu (sem `since`: na conversa inteira) — ver `sendMark`.
+   *
+   * A reconciliação casa por texto contra o replay, e o replay traz a conversa toda que cabe na
+   * janela — um "sim" de ontem dava o "sim" de hoje (perdido num socket meio-aberto) por entregue,
+   * e ele sumia em silêncio. Com a contagem, só uma ocorrência ALÉM das que já existiam prova a
+   * entrega. Entradas gravadas antes deste campo não o têm e casam como antes (contra qualquer
+   * ocorrência).
+   */
+  seenBefore?: number;
+  /**
+   * A ÂNCORA da contagem: o `at` (relógio do SERVIDOR) da mensagem mais nova que a tela conhecia
+   * quando esta saiu. Só ocorrências gravadas depois dele contam, dos dois lados — ver `sendMark`.
+   */
+  since?: number;
+  /**
+   * NUNCA saiu deste navegador (uma espera da fila de outra conta, ver `foreignToOutbox`): não há
+   * entrega a reconhecer, e o mesmo texto no replay é de outra pessoa ou de outro momento. Só um
+   * Reenviar de verdade (`retryOutbox`) a torna um envio.
+   */
+  unsent?: boolean;
 }
+
+/**
+ * Uma mensagem que o servidor TEM, como a reconciliação a lê: o texto e quando ELE a gravou.
+ *
+ * `at` é o carimbo do histórico que o replay carrega. Falta num envio desta conexão confirmado
+ * pelo `user_ack` (o recibo não traz hora) e no histórico gravado antes do carimbo existir.
+ */
+export interface ServerText {
+  text: string;
+  at?: number;
+}
+
+/** O que um envio leva consigo para a reconciliação poder reconhecê-lo depois. */
+export type SendMark = Pick<OutboxMessage, "since" | "seenBefore">;
 
 /**
  * Quanto tempo uma mensagem pode ficar sem recibo antes de a tela admitir que não sabe.
@@ -80,6 +119,9 @@ export function readOutbox(cardId: string): OutboxMessage[] {
       at: typeof m.at === "number" ? m.at : Date.now(),
       // localStorage é entrada não confiável: um autor malformado vira "sem autor", nunca lixo.
       from: parseOrigin(m.from),
+      seenBefore: typeof m.seenBefore === "number" && m.seenBefore >= 0 ? m.seenBefore : undefined,
+      since: typeof m.since === "number" && Number.isFinite(m.since) ? m.since : undefined,
+      unsent: m.unsent === true ? true : undefined,
     }));
   } catch {
     return [];
@@ -146,18 +188,54 @@ export function markUndelivered(
   return changed ? next : (messages as OutboxMessage[]);
 }
 
-/** Um reenvio: mesmas palavras, mesmo recibo, relógio zerado e o veredito anterior apagado. PURE. */
+/**
+ * Um reenvio: mesmas palavras, mesmo recibo, relógio zerado e o veredito anterior apagado.
+ *
+ * E a MARCA refeita contra a tela de agora (`mark`, ver `sendMark`): é este o envio que a próxima
+ * reconciliação precisa reconhecer, e a conversa andou desde o primeiro — inclusive o caso de uma
+ * espera de outra conta (`unsent`), que só agora sai de fato. PURE.
+ */
 export function retryOutbox(
   messages: readonly OutboxMessage[],
   entry: OutboxMessage,
   now: number,
+  mark: SendMark,
 ): OutboxMessage[] {
-  return addToOutbox(messages, { ...entry, at: now, undelivered: false });
+  const { unsent: _neverSent, ...sent } = entry;
+  return addToOutbox(messages, { ...sent, ...mark, at: now, undelivered: false });
 }
 
-/** Identidade de texto insensível a espaços — a mesma dobra que o dedupe do back usa. PURE. */
-export function normalizeOutboxText(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
+/**
+ * A MARCA de um envio: o que o servidor já tinha com estas palavras, no instante em que elas saem.
+ *
+ * O replay é uma JANELA (o fim do histórico, `HISTORY_REPLAY_LIMIT` eventos no back) e ela anda:
+ * contar as ocorrências na tela inteira dava 6 "ok" no envio contra 3 no replay do reconnect — os
+ * antigos saíram da janela — e a mensagem entregue voltava "não entregue", com um Reenviar que
+ * duplicava o turno. Então a contagem é ANCORADA no relógio do servidor: `since` é o `at` mais
+ * novo que a tela conhecia, e `seenBefore` conta só o que fica depois dele — o que, no próximo
+ * replay, terá `at > since`. A janela descarta sempre o mais VELHO, então isso sobrevive a ela
+ * (salvo se andar mais que a janela inteira entre o envio e o reconnect: aí a entrega sai como
+ * "não entregue", na tela com reenviar — o erro do lado que não perde palavras).
+ *
+ * Depois da âncora, na tela, só podem estar envios desta conexão já confirmados (o `user_ack` não
+ * traz hora): eles contam, porque voltam no replay carimbados depois dela. Sem nenhum `at` na tela
+ * (histórico antigo, ou conversa vazia) não há âncora, e conta-se tudo, como sempre foi. PURE.
+ */
+export function sendMark(known: readonly ServerText[], text: string): SendMark {
+  let since: number | undefined;
+  let anchor = -1;
+  known.forEach((m, i) => {
+    if (typeof m.at === "number" && (since === undefined || m.at >= since)) {
+      since = m.at;
+      anchor = i;
+    }
+  });
+  const key = normalizeMessage(text);
+  const seenBefore = known.reduce(
+    (n, m, i) => (i > anchor && m.at === undefined && normalizeMessage(m.text) === key ? n + 1 : n),
+    0,
+  );
+  return { since, seenBefore };
 }
 
 /**
@@ -169,28 +247,55 @@ export function normalizeOutboxText(text: string): string {
  *
  * O casamento é por TEXTO porque é o que o replay carrega: o `cid` é um recibo de conexão, não um
  * id de mensagem, e uma mensagem gravada volta do disco sem ele. Cada linha do replay casa com no
- * máximo uma entrada, então mandar o mesmo texto duas vezes não "entrega" as duas de graça. PURE.
+ * máximo uma entrada, então mandar o mesmo texto duas vezes não "entrega" as duas de graça.
+ *
+ * E a entrada só casa com uma ocorrência POSTERIOR às que já existiam quando ela saiu (a marca de
+ * `sendMark`): das ocorrências gravadas depois de `since` — todas, sem âncora —, as `seenBefore`
+ * primeiras já existiam, e só uma além delas pode ser desta mensagem. Uma entrada que nunca saiu
+ * deste navegador (`unsent`) não casa com nada: é sempre `missing`. PURE.
  */
 export function reconcileOutbox(
-  sentTexts: readonly string[],
+  sent: readonly ServerText[],
   messages: readonly OutboxMessage[],
 ): { delivered: OutboxMessage[]; missing: OutboxMessage[] } {
-  const counts = new Map<string, number>();
-  for (const text of sentTexts) {
-    const key = normalizeOutboxText(text);
-    if (key !== "") counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
+  const keys = sent.map((m) => normalizeMessage(m.text));
+  /** As linhas do replay que já casaram com alguma entrada (cada uma prova UMA entrega). */
+  const claimed = new Set<number>();
   const delivered: OutboxMessage[] = [];
   const missing: OutboxMessage[] = [];
   for (const message of messages) {
-    const key = normalizeOutboxText(message.text);
-    const left = counts.get(key) ?? 0;
-    if (left > 0) {
-      counts.set(key, left - 1);
-      delivered.push(message);
-    } else {
+    const match = message.unsent === true ? -1 : deliveryOf(message, sent, keys, claimed);
+    if (match < 0) {
       missing.push(message);
+      continue;
     }
+    claimed.add(match);
+    delivered.push(message);
   }
   return { delivered, missing };
+}
+
+/** A linha do replay que prova a entrega de `message`, ou -1 — ver `reconcileOutbox`. PURE. */
+function deliveryOf(
+  message: OutboxMessage,
+  sent: readonly ServerText[],
+  keys: readonly string[],
+  claimed: ReadonlySet<number>,
+): number {
+  const key = normalizeMessage(message.text);
+  if (key === "") return -1;
+  const { since } = message;
+  let before = message.seenBefore ?? 0;
+  for (let i = 0; i < sent.length; i += 1) {
+    if (keys[i] !== key) continue;
+    // Com âncora, só o que o servidor gravou depois dela — o que a janela nunca descarta primeiro.
+    const at = sent[i]!.at;
+    if (since !== undefined && !(at !== undefined && at > since)) continue;
+    if (before > 0) {
+      before -= 1; // já existia quando a mensagem saiu: não é ela
+      continue;
+    }
+    if (!claimed.has(i)) return i;
+  }
+  return -1;
 }

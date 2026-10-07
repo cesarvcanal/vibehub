@@ -486,3 +486,54 @@ describe("card creation", () => {
     expect(res.json().card.title).toBe("sem runner");
   });
 });
+
+describe("a member with a WORK share editing the card", () => {
+  /** A member signed in, with `work` on this card. */
+  async function memberWorking(cardId: string): Promise<string> {
+    const created = await app.inject({
+      method: "POST", url: "/api/users", headers: { cookie },
+      payload: { username: "alex", password: "supersecret", role: "member" },
+    });
+    await app.inject({
+      method: "POST", url: `/api/cards/${cardId}/shares`, headers: { cookie },
+      payload: { userId: created.json().user.id, level: "work" },
+    });
+    const login = await app.inject({
+      method: "POST", url: "/api/auth/login", payload: { username: "alex", password: "supersecret" },
+    });
+    return `vibehub_session=${login.cookies.find((c) => c.name === "vibehub_session")?.value ?? ""}`;
+  }
+
+  it("renames, moves and picks the model — what the card screen offers them", async () => {
+    const cardId = await makeCard(await makeProject());
+    const member = await memberWorking(cardId);
+    const res = await app.inject({
+      method: "PATCH", url: `/api/cards/${cardId}`, headers: { cookie: member },
+      payload: { title: "renomeado", column: "backlog", position: 0, model: "claude-opus-5" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().card).toMatchObject({ title: "renomeado", model: "claude-opus-5" });
+  });
+
+  it("does NOT repoint the install's account, branch, base or imported session — 403, nothing stored", async () => {
+    const cardId = await makeCard(await makeProject());
+    await app.inject({ method: "POST", url: "/api/accounts", headers: { cookie }, payload: { name: "tech" } });
+    const member = await memberWorking(cardId);
+    for (const payload of [
+      { accountSlug: "tech" },
+      { accountSlug: null },
+      { branch: "feat/mine" },
+      { base: "develop" },
+      { resumeSessionId: "0b6f7a52-0000-4000-8000-000000000000" },
+      { sdkChat: true },
+      { title: "carona", branch: "feat/mine" },
+    ]) {
+      const res = await app.inject({ method: "PATCH", url: `/api/cards/${cardId}`, headers: { cookie: member }, payload });
+      expect({ payload, status: res.statusCode }).toEqual({ payload, status: 403 });
+    }
+    const card = (await app.inject({ method: "GET", url: `/api/cards/${cardId}`, headers: { cookie } })).json().card;
+    expect(card.title).toBe("first card");
+    expect(card.branch).toBeUndefined();
+    expect(card.accountSlug).toBeUndefined();
+  });
+});

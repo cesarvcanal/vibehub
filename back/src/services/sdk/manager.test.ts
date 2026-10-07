@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { config } from "../../config/env.js";
@@ -85,6 +85,8 @@ function fakeChild(): FakeChild {
 interface FakeSocket extends EventEmitter {
   sent: string[];
   closed: boolean;
+  /** Same numbers as `ws`: OPEN = 1, CLOSED = 3. */
+  readyState: number;
   send: (s: string) => void;
   close: () => void;
 }
@@ -93,8 +95,9 @@ function fakeSocket(): FakeSocket {
   const socket = new EventEmitter() as FakeSocket;
   socket.sent = [];
   socket.closed = false;
+  socket.readyState = 1;
   socket.send = (s: string) => socket.sent.push(s);
-  socket.close = () => { socket.closed = true; };
+  socket.close = () => { socket.closed = true; socket.readyState = 3; };
   return socket;
 }
 
@@ -327,6 +330,34 @@ describe("the turn survives the page (o bug do Cmd+Shift+R)", () => {
     });
   });
 
+  it("um caractere multibyte partido entre dois chunks do stdout chega inteiro (nada de U+FFFD)", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    const bytes = line({ type: "assistant_text", text: "ação" });
+    // O pipe corta onde quiser: aqui, no meio dos dois bytes do "ç".
+    const cut = bytes.indexOf(Buffer.from("ç")) + 1;
+    spawned[0]!.stdout.emit("data", bytes.subarray(0, cut));
+    spawned[0]!.stdout.emit("data", bytes.subarray(cut));
+    const texts = socket.sent.map((s) => (JSON.parse(s) as { text?: string }).text);
+    expect(texts).toContain("ação");
+  });
+
+  it("uma linha de MB em muitos chunks custa linear: o \\n é procurado só no pedaço novo", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    // ~8 MB de texto num único `assistant_text`, entregue em chunks de 1 KB (o tamanho de um pipe
+    // sob carga). Reprocurar o buffer inteiro a cada chunk soma dezenas de GB varridos.
+    const big = "x".repeat(8 * 1024 * 1024);
+    const bytes = line({ type: "assistant_text", text: big });
+    const started = performance.now();
+    for (let i = 0; i < bytes.length; i += 1024) spawned[0]!.stdout.emit("data", bytes.subarray(i, i + 1024));
+    const elapsed = performance.now() - started;
+    expect(socket.sent.some((s) => s.length > big.length)).toBe(true);
+    expect(elapsed).toBeLessThan(1500);
+  });
+
   it("stamps the sender's origin on the user message it persists", async () => {
     const session = ensure();
     const socket = fakeSocket();
@@ -477,6 +508,19 @@ describe("streaming input — mensagem no meio do turno (turn_absorbed)", () => 
 });
 
 describe("end of life", () => {
+  it("o close ATRASADO do driver velho não apaga a memória de dedupe do sucessor", () => {
+    forgetDriverKeys(CARD);
+    ensure();
+    stopCardDriver(CARD); // troca de modelo: o velho recebe o kill, mas o processo ainda não fechou
+    const successor = ensure();
+    expect(spawned.length).toBe(2);
+    handleClientFrame(successor, `{"type":"user","text":"fala do sucessor"}`);
+    expect(driverKeysFor(CARD).size).toBeGreaterThan(0);
+    spawned[0]!.emit("close", null); // só agora o velho termina de morrer
+    expect(driverKeysFor(CARD).size).toBeGreaterThan(0);
+    expect(hasDriverSession(CARD)).toBe(true);
+  });
+
   it("stopCardDriver ends stdin (the driver's liveness check) and kills the child", () => {
     ensure();
     stopCardDriver(CARD);
@@ -832,6 +876,49 @@ describe("o recibo de entrega — nenhuma mensagem some em silêncio", () => {
     expect(spawned[0]!.stdin.written.join("")).toContain("roda os testes");
   });
 
+  it("disco cheio: a gravação falhou, então NÃO há user_ack — o navegador recebe user_nack e guarda as palavras", async () => {
+    // O diretório de dados vira um ARQUIVO: qualquer mkdir/append debaixo dele falha (ENOTDIR),
+    // como um disco cheio ou sem permissão — o que importa é que a linha não chega ao log.
+    const blocked = join(dir, "not-a-dir");
+    await writeFile(blocked, "");
+    config.dataDir = blocked;
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"some no F5?","cid":"c-disk"}`));
+
+    await vi.waitFor(() => {
+      const receipts = socket.sent.map((s) => JSON.parse(s) as { type: string; cid?: string })
+        .filter((f) => f.type === "user_ack" || f.type === "user_nack");
+      expect(receipts).toEqual([expect.objectContaining({ type: "user_nack", cid: "c-disk" })]);
+    });
+    config.dataDir = dir;
+  });
+
+  it("disco cheio que passa: o Reenviar do mesmo cid GRAVA a linha que faltou — sem segundo turno", async () => {
+    // O driver JÁ leu a mensagem; só o histórico falhou. O reenvio carrega o mesmo cid, e devolver
+    // para sempre o veredito velho (`false`) deixava a bolha "não entregue" sem saída: cada
+    // Reenviar ganhava outro nack, e Descartar + digitar de novo fazia o modelo trabalhar em dobro.
+    const blocked = join(dir, "not-a-dir");
+    await writeFile(blocked, "");
+    config.dataDir = blocked;
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    const frame = Buffer.from(`{"type":"user","text":"some no F5?","cid":"c-disk2"}`);
+    socket.emit("message", frame);
+    await vi.waitFor(() => expect(sentTypes(socket)).toContain("user_nack"));
+
+    config.dataDir = dir; // o disco liberou
+    socket.emit("message", frame);
+
+    await vi.waitFor(() => expect(sentTypes(socket)).toContain("user_ack"));
+    const events = await readHistory(CARD);
+    expect(events).toEqual([expect.objectContaining({ type: "user", text: "some no F5?" })]);
+    expect(session.activeTurns).toBe(1); // um turno só
+    expect(spawned[0]!.stdin.written.join("").match(/some no F5\?/g) ?? []).toHaveLength(1);
+  });
+
   it("o `cid` é recibo entre back e front — nunca entra no stdin do driver", () => {
     const session = ensure();
     const socket = fakeSocket();
@@ -1027,6 +1114,19 @@ describe("isCardChatInUse — o que impede o idle sweep de matar a conversa", ()
 
   it("card sem driver nenhum: liberado", () => {
     expect(isCardChatInUse(CARD2)).toBe(false);
+  });
+
+  it("um socket que JÁ fechou não é preso: o `close` dele não vem mais, e ele seguraria o card para sempre", () => {
+    vi.useFakeTimers();
+    const session = ensure();
+    const socket = fakeSocket();
+    socket.close(); // fechou durante o setup da rota — o evento já passou
+    attachSocket(session, socket as never);
+    expect(session.sockets.size).toBe(0);
+    expect(isCardChatInUse(CARD)).toBe(false);
+    // Ninguém mais segura o driver: o idle stop arma como se o socket nunca tivesse vindo.
+    vi.advanceTimersByTime(DRIVER_IDLE_MS + 1);
+    expect(hasDriverSession(CARD)).toBe(false);
   });
 });
 

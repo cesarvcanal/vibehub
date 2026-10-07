@@ -1,4 +1,6 @@
-import { hostExecutor, shQuote, assertSafeRemotePath, HostExecError } from "../../runtime/host.js";
+import {
+  hostExecutor, shQuote, assertSafeRemotePath, HostExecError, containerScriptCommand,
+} from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import { statusUrl } from "../../runtime/runner.js";
 import { gitAuthHeaderFor, tokenFor } from "../github/client.js";
@@ -58,6 +60,14 @@ const CARD_ID_RE = /^[0-9a-zA-Z-]{8,64}$/;
 const OPEN_DELIM = "VIBEHUB_OPEN";
 const UPLOAD_DELIM = "VIBEHUB_UPLOAD";
 const B64_DELIM = "VIBEHUB_B64";
+
+/**
+ * How long a card's OPEN script may run: cloning a big repository takes minutes (the rest of the
+ * script is fast). ONE number for both clocks — the Node one (runScript) and the one the script
+ * carries INTO the container (containerScriptCommand), because only the latter really stops a clone
+ * before the provisioning lock lets the next open in.
+ */
+const OPEN_TIMEOUT_MS = 600_000;
 
 export interface SessionCommandOpts {
   /** true = the card HAS had a session before (openedAt): resume the last conversation (`claude -c`). */
@@ -326,7 +336,8 @@ export interface OpenScriptOpts {
 
 /**
  * The card's OPEN script (runs on the HOST through the host executor over stdin; the body runs
- * INSIDE the runner via `docker exec -i … bash -s` with a heredoc). Idempotent: clone only when
+ * INSIDE the runner via `docker exec -i … bash -s` with a heredoc, under an in-container deadline —
+ * see containerScriptCommand). Idempotent: clone only when
  * missing, worktree only when missing, tmux session only when missing (the `has-session ||` guard —
  * `new-session -A` without a tty turns into an attach and FAILS once the session exists).
  * PURE/testable.
@@ -404,8 +415,9 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
   // The brain (global CLAUDE.md) seeded into the card's effective profile — idempotent by signature,
   // so reopening a card rewrites nothing; new text is picked up on the next open.
   if (opts.brain) inner.push(...brainInjectLines([opts.accountConfigDir], opts.brain));
-  // The official plugins, same idempotency rule. Each install carries `|| true`: a plugin whose
-  // clone fails must never stop a card from opening — the Plugins screen is where it is seen.
+  // The official plugins, same idempotency rule. A plugin whose clone fails must never stop a card
+  // from opening — the Plugins screen is where it is seen — and it leaves no marker, so the next
+  // open tries again.
   if (opts.plugins?.length) inner.push(...pluginInstallLines([opts.accountConfigDir], opts.plugins));
   // The PROJECT brain, as CLAUDE.local.md at the worktree root (project memory for both the TUI and
   // the SDK driver). Kept OUT of git through the clone's info/exclude — shared by every worktree of
@@ -444,7 +456,7 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
   );
   return [
     "set -e",
-    `docker exec -i ${shQuote(opts.containerName)} bash -s <<'${OPEN_DELIM}'`,
+    `${containerScriptCommand(opts.containerName, OPEN_TIMEOUT_MS)} <<'${OPEN_DELIM}'`,
     ...inner,
     OPEN_DELIM,
   ].join("\n");
@@ -629,6 +641,29 @@ interface ProvisionResult {
 }
 
 /**
+ * The card can be DELETED while its open script runs (a clone takes minutes; the purge does not
+ * wait for the provisioning lock). Its purge then killed and erased what existed at the time — and
+ * the script went on to create the worktree and a tmux session with `claude` in it, for a card
+ * nobody can see any more and that no sweep would ever kill. So whoever provisioned it tears it
+ * down, and THROWS "card not found" when it did. Still there = returns, nothing touched.
+ *
+ * A teardown that fails (typically the runner that just failed the script) is logged, not thrown:
+ * the answer is still "this card is gone", and the files are what `sweepOrphanCardData` collects.
+ */
+async function tearDownIfDeleted(card: Card, project: Project): Promise<void> {
+  if (await getCard(card.id)) return;
+  try {
+    await purgeCardWorkspace(card, { project, by: "provision.orphaned" });
+  } catch (err) {
+    logger.warn(
+      { card: card.worktreeSlug, detail: (err as Error).message },
+      "card deleted during provisioning: its runner leftovers could not be torn down now (the orphan sweep will)",
+    );
+  }
+  throw new Error("card not found (deleted while its workspace was being provisioned)");
+}
+
+/**
  * Guarantees the card's WORKSPACE in the runner: clone + worktree + tmux session with Claude Code
  * (an idempotent script, under the card's lock). It does NOT touch the board — the caller decides
  * what to stamp (open → applyOpenTerminal; prepare → markPrepared). The card is read INSIDE the
@@ -742,11 +777,13 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
       repo,
     });
     try {
-      // Cloning a big repository: 10 minutes of headroom (the rest of the script is fast).
-      await hostExecutor().runScript(script, { timeoutMs: 600_000 });
+      await hostExecutor().runScript(script, { timeoutMs: OPEN_TIMEOUT_MS });
     } catch (err) {
+      // A script that failed or timed out may have created half of it before dying: same rule.
+      await tearDownIfDeleted(card, project);
       throw runnerUnreachable(err);
     }
+    await tearDownIfDeleted(card, project);
     // The worktree exists NOW, so the author and the credential helper can be written into it. Kept
     // out of the open script on purpose: the exact same call re-runs on every actor switch, and one
     // code path for both is one behaviour for both.
@@ -1037,6 +1074,12 @@ export async function sweepCardUploads(days: number = UPLOAD_RETENTION_DAYS): Pr
 
 /** Heredoc delimiter of the kill script — a reserved word, never derived from input. */
 const KILL_DELIM = "VIBEHUB_KILL";
+/**
+ * What the kill script prints, followed by the session name, once that session is gone (killed, or
+ * already absent). A run cut short — a timeout halfway through a big batch — still says how far it
+ * got, instead of leaving the caller to guess between "all" and "none".
+ */
+const SESSION_ENDED_MARKER = "vibehub-session-ended";
 
 /* ----------------------------------------------------- session-kill hooks */
 
@@ -1129,7 +1172,7 @@ export function buildKillSessionScript(containerName: string, sessions: string[]
     ),
     // TERM first (graceful, while the tree still exists as captured), then the sessions...
     '[ -n "$PIDS" ] && kill -TERM $PIDS 2>/dev/null || true',
-    ...sessions.map((s) => `tmux kill-session -t ${shQuote(s)} 2>/dev/null || true`),
+    ...sessions.map((s) => `tmux kill-session -t ${shQuote(s)} 2>/dev/null || true; echo ${SESSION_ENDED_MARKER} ${shQuote(s)}`),
     // ...then KILL whatever ignored both the TERM and tmux's HUP (claude did, in production).
     'if [ -n "$PIDS" ]; then sleep 1; kill -KILL $PIDS 2>/dev/null || true; fi',
     "true",
@@ -1138,21 +1181,83 @@ export function buildKillSessionScript(containerName: string, sessions: string[]
 }
 
 /**
- * Kills the card's tmux session in the runner (BEST-EFFORT — used by card deletion and by the
- * pause). The session name comes from the BOARD (derived from the id), never from input.
- * `includeShell` also kills the `-sh` session of the Shell button (the suffix is derived HERE).
- * The whole PROCESS TREE of each pane dies with the session (see buildKillSessionScript).
- * A runner that is missing or a host that is down is simply ignored.
+ * A stdout reader for the kill script: calls `onEnded` with each session the script reports gone
+ * (see SESSION_ENDED_MARKER). Chunks arrive cut anywhere, so a partial line waits for the rest.
  */
-export async function killCardSession(card: Card, opts: { includeShell?: boolean } = {}): Promise<void> {
+function sessionEndedReader(onEnded: (session: string) => void): (chunk: string) => void {
+  let partial = "";
+  const prefix = `${SESSION_ENDED_MARKER} `;
+  return (chunk) => {
+    const lines = (partial + chunk).split("\n");
+    partial = lines.pop() ?? "";
+    for (const line of lines) if (line.startsWith(prefix)) onEnded(line.slice(prefix.length));
+  };
+}
+
+/** One card or several, as a list. PURE. */
+function cardList(cards: Card | readonly Card[]): readonly Card[] {
+  return "tmuxSession" in cards ? [cards] : cards;
+}
+
+export interface KillSessionOpts {
+  /** Also the `-sh` session of the Shell button. */
+  includeShell?: boolean;
+  /**
+   * Told each session as the runner reports it gone — DURING the run, so a batch that fails halfway
+   * (a timeout after ending part of it) still says which ones it did end.
+   */
+  onSessionEnded?: (session: string) => void;
+}
+
+/**
+ * Kills the tmux session of one card — or of SEVERAL, in ONE docker exec — and THROWS when the
+ * runner could not be told to. Session names come from the BOARD (derived from the id), never from
+ * input. `includeShell` also kills the `-sh` session of the Shell button (the suffix is derived
+ * HERE). The whole PROCESS TREE of each pane dies with the session (see buildKillSessionScript).
+ *
+ * Several cards go in one script on purpose: "restart everything" used to fire one `docker exec`
+ * per card at the runner simultaneously — thirty of them for thirty cards, each with its own
+ * one-second grace — which is the burst the purge's sequential loop exists to avoid.
+ *
+ * The card DELETE uses this one: a kill that did not happen there is a `claude` left running for a
+ * card that no longer exists, and nothing else ever kills it (the orphan sweep erases files, not
+ * sessions) — so the purge must report it instead of claiming a clean deletion.
+ */
+export async function killCardSessionOrThrow(
+  cards: Card | readonly Card[],
+  opts: KillSessionOpts = {},
+): Promise<void> {
+  const list = cardList(cards);
+  if (list.length === 0) return;
   // FIRST the listeners: the SDK driver manager ends the card's driver here, so every pause /
   // hibernate / restart / delete / switch that kills the tmux session kills the driver too.
-  notifyCardSessionKill(card.id);
+  for (const card of list) notifyCardSessionKill(card.id);
+  const sessions = list.flatMap((card) =>
+    opts.includeShell ? [card.tmuxSession, `${card.tmuxSession}-sh`] : [card.tmuxSession],
+  );
+  // The per-pane walk is a `ps` + awk each: a big batch gets headroom instead of a fixed ceiling.
+  const timeoutMs = Math.max(30_000, sessions.length * 2_000);
+  const onChunk = opts.onSessionEnded ? sessionEndedReader(opts.onSessionEnded) : undefined;
+  await hostExecutor().runScript(buildKillSessionScript(config.runner.container, sessions), { timeoutMs, onChunk });
+}
+
+/**
+ * {@link killCardSessionOrThrow}, BEST-EFFORT — pause, hibernate, restart, model/account switch: a
+ * runner that is missing or a host that is down is logged and ignored, because the session it would
+ * have killed is just as unreachable. Resolves `false` when the run did not complete — which, for a
+ * batch, may be HALFWAY: a caller that counts uses {@link restartCardSessions} instead.
+ */
+export async function killCardSession(
+  cards: Card | readonly Card[],
+  opts: KillSessionOpts = {},
+): Promise<boolean> {
   try {
-    const sessions = opts.includeShell ? [card.tmuxSession, `${card.tmuxSession}-sh`] : [card.tmuxSession];
-    await hostExecutor().runScript(buildKillSessionScript(config.runner.container, sessions), { timeoutMs: 30_000 });
+    await killCardSessionOrThrow(cards, opts);
+    return true;
   } catch (e) {
-    logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "kill-session failed (best-effort, continuing)");
+    const slugs = cardList(cards).map((c) => c.worktreeSlug);
+    logger.warn({ cards: slugs, detail: (e as Error).message }, "kill-session failed (best-effort, continuing)");
+    return false;
   }
 }
 
@@ -1449,13 +1554,30 @@ export function cardsToHibernate<T extends Pick<Card, "id" | "openedAt" | "pause
   );
 }
 
+/** True while a {@link sweepIdleCards} pass is on its way through the cards. */
+let idleSweepRunning = false;
+
 /**
  * THE IDLE SWEEP (a timer in `index.ts`, every few minutes): hibernates every card whose terminal has
  * been silent for longer than `idleHibernateMinutes`. Best-effort per card — a runner that is down
  * must not stop the rest — and it reads the setting on EVERY pass, so changing it takes effect at the
  * next sweep instead of at the next restart. Returns how many cards went cold.
+ *
+ * ONE PASS AT A TIME: the timer is a plain `setInterval`, and a pass hibernates card by card — with
+ * a slow runner it can outlast the interval. A tick that lands mid-pass does nothing (returns 0):
+ * a second pass would select the same cards and race the first onto the same runner.
  */
 export async function sweepIdleCards(now: number = Date.now()): Promise<number> {
+  if (idleSweepRunning) return 0;
+  idleSweepRunning = true;
+  try {
+    return await sweepIdleCardsOnce(now);
+  } finally {
+    idleSweepRunning = false;
+  }
+}
+
+async function sweepIdleCardsOnce(now: number): Promise<number> {
   const { idleHibernateMinutes } = await getSettings();
   const idleMs = Math.max(0, Number(idleHibernateMinutes) || 0) * 60_000;
   if (idleMs <= 0) return 0;
@@ -1464,8 +1586,16 @@ export async function sweepIdleCards(now: number = Date.now()): Promise<number> 
   // ate their message. The driver's own idle stop (DRIVER_IDLE_MS) releases the veto later.
   const target = cardsToHibernate(await listAllCards(), now, idleMs, isCardInUse);
   if (target.length === 0) return 0;
-  const results = await Promise.allSettled(target.map((c) => hibernateCard(c.id, "idle-sweep")));
-  const hibernated = results.filter((r) => r.status === "fulfilled" && r.value).length;
+  // ONE CARD AT A TIME, like the purge: a background timer has no one waiting on it, and firing a
+  // docker exec per cold card at the runner at once is a burst for nothing. Best-effort per card.
+  let hibernated = 0;
+  for (const c of target) {
+    try {
+      if (await hibernateCard(c.id, "idle-sweep")) hibernated += 1;
+    } catch (err) {
+      logger.warn({ card: c.worktreeSlug, detail: (err as Error).message }, "idle sweep could not hibernate a card (continuing)");
+    }
+  }
   logger.info(
     { audit: true, action: "card.sweepIdle", idleMinutes: idleHibernateMinutes, candidates: target.length, hibernated },
     "idle sweep — terminals with no sign of life were hibernated (columns untouched)",
@@ -1500,6 +1630,25 @@ export async function restartCard(cardId: string, by?: string): Promise<Card> {
     "card restarted — tmux session ended in the runner (reopens with claude -c)",
   );
   return card;
+}
+
+/**
+ * Ends the sessions of SEVERAL cards in one docker exec (best-effort, like {@link restartCard}) and
+ * answers how many were restarted — the truth even when the run fails halfway: a completed run
+ * ended them all, a cut-short one ended the sessions the runner reported before it was cut. Each
+ * card that was restarted gets the same `card.restart` audit line {@link restartCard} writes.
+ */
+async function restartCardSessions(cards: readonly Card[], by?: string): Promise<number> {
+  const reported = new Set<string>();
+  const completed = await killCardSession(cards, { onSessionEnded: (session) => reported.add(session) });
+  const restarted = completed ? cards : cards.filter((card) => reported.has(card.tmuxSession));
+  for (const card of restarted) {
+    logger.info(
+      { audit: true, action: "card.restart", card: card.worktreeSlug, session: card.tmuxSession, by },
+      "card restarted — tmux session ended in the runner (reopens with claude -c)",
+    );
+  }
+  return restarted.length;
 }
 
 /**
@@ -1544,19 +1693,18 @@ export async function applySessionChange(before: Card | undefined, after: Card, 
 }
 
 /**
- * RESTARTS EVERY card with a live session (POST /api/cards/restart-all): kills the tmux session of
- * each selected card in PARALLEL. Best-effort per card (Promise.allSettled): one failure does not
- * take the others down — and `killCardSession` already swallows a host/runner error. Returns how
- * many were restarted. Used by "apply and restart" for MCP changes, so a change takes effect on what
- * is already running without visiting each card.
+ * RESTARTS EVERY card with a live session (POST /api/cards/restart-all): kills the tmux sessions of
+ * every selected card in ONE docker exec. Best-effort: a host that is down resolves instead of
+ * throwing, and the count is what the runner reported ended (see restartCardSessions) — none for a
+ * host that was never reached, part of the batch for a run cut short. Used by "apply and restart"
+ * for MCP changes, so a change takes effect on what is already running without visiting each card.
  */
 export async function restartAllCards(by?: string): Promise<{ restarted: number; skipped: number }> {
   const live = (await listAllCards()).filter(hasLiveSession);
   const target = cardsToRestart(live);
   // Skipped = live sessions that are `working` (not restarted, so the task is not interrupted).
   const skipped = live.length - target.length;
-  const results = await Promise.allSettled(target.map((c) => killCardSession(c)));
-  const restarted = results.filter((r) => r.status === "fulfilled").length;
+  const restarted = await restartCardSessions(target, by);
   logger.info(
     { audit: true, action: "card.restartAll", total: target.length, restarted, skipped, skipReason: "working", by },
     "restart all — idle sessions ended in the runner (working cards preserved)",
@@ -1569,13 +1717,15 @@ export async function restartAllCards(by?: string): Promise<{ restarted: number;
  * auto-applies, in routes/agent.ts). Rewriting the files is not enough: Claude only re-reads the brain
  * and the MCPs when a session STARTS. So every card with a live session is staggered, precisely so the
  * change never gets in the way of somebody working:
- *  - IDLE (status != "working", via `cardsToRestart`) -> `restartCard` NOW: it reopens with
- *    `claude -c`, already reading the new brain/MCPs, and resumes the SAME conversation.
+ *  - IDLE (status != "working", via `cardsToRestart`) -> session killed NOW, all of them in one
+ *    docker exec: it reopens with `claude -c`, already reading the new brain/MCPs, and resumes the
+ *    SAME conversation.
  *  - WORKING -> `markRestartPending`: NOT interrupted; the status hook (POST /api/runner/status)
  *    restarts the card once it goes idle (shouldRestartOnStatus). One single flag serves both reasons
  *    (brain and MCP) — `reason` is only the badge label.
- * Best-effort per card (Promise.allSettled): a dead host or a card that vanished mid-sweep must not
- * take the rest down. Returns {restarted (idle cards restarted now), pending (working cards flagged)}.
+ * Best-effort: a dead host or a card that vanished mid-sweep must not take the rest down (a session
+ * that is already gone is fine for the kill script, and the flags are settled per card). Returns
+ * {restarted (idle cards whose sessions were ended now), pending (working cards flagged)}.
  */
 export async function restartStaggered(
   reason: RestartReason,
@@ -1589,13 +1739,16 @@ export async function restartStaggered(
   );
   const idle = cardsToRestart(live); // live session and NOT working
   const working = live.filter((c) => c.status === "working"); // live session AND working
-  await Promise.allSettled(idle.map((c) => restartCard(c.id, by)));
+  const restarted = await restartCardSessions(idle, by);
   await Promise.allSettled(working.map((c) => markRestartPending(c.id, reason)));
   logger.info(
-    { audit: true, action: "card.restartStaggered", reason, restarted: idle.length, pending: working.length, by },
+    {
+      audit: true, action: "card.restartStaggered", reason, restarted, pending: working.length,
+      cards: idle.map((c) => c.worktreeSlug), by,
+    },
     "staggered restart after applying the brain/MCPs — idle cards restarted now, working cards flagged as pending",
   );
-  return { restarted: idle.length, pending: working.length };
+  return { restarted, pending: working.length };
 }
 
 /**

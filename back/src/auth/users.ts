@@ -41,6 +41,12 @@ export interface User {
   /** per-user salt, hex. */
   salt: string;
   createdAt: string;
+  /**
+   * Epoch ms. A session cookie signed BEFORE this instant is refused (see {@link sessionUser}).
+   * Sessions are stateless, so there is no table to delete a stolen cookie from: this stamp is how
+   * a password change ends every session that was open with the old password.
+   */
+  sessionsValidAfter?: number;
 }
 
 /** A user as it leaves the server: never the hash, never the salt. */
@@ -64,9 +70,14 @@ const store = new JsonStore<UsersDoc>(
 
 const KEY_LEN = 64;
 
+/** True when `name` (already trimmed and lowercased) is a username an account could have. PURE. */
+export function isUsername(name: string): boolean {
+  return /^[a-z0-9][a-z0-9._-]{1,31}$/.test(name);
+}
+
 export function assertUsername(name: string): string {
   const v = String(name ?? "").trim().toLowerCase();
-  if (!/^[a-z0-9][a-z0-9._-]{1,31}$/.test(v)) {
+  if (!isUsername(v)) {
     throw new Error("username must be 2-32 chars: letters, digits, dot, dash or underscore");
   }
   return v;
@@ -107,10 +118,37 @@ export async function findUser(userId: string): Promise<PublicUser | null> {
 }
 
 /**
+ * The user behind a session cookie signed at `issuedAt`, or null when the account is gone or its
+ * sessions were revoked after that cookie was signed (a password change). The signature alone
+ * cannot answer this: it stays valid for the whole TTL whatever happens to the account.
+ */
+export async function sessionUser(userId: string, issuedAt: number): Promise<PublicUser | null> {
+  const doc = await store.load();
+  const user = doc.users.find((u) => u.id === userId);
+  if (!user) return null;
+  if (user.sessionsValidAfter !== undefined && issuedAt < user.sessionsValidAfter) return null;
+  return publicUser(user);
+}
+
+/** Thrown by {@link createUser} with `onlyIfEmpty` when the install already has somebody in it. */
+export class InstallAlreadySetUpError extends Error {
+  constructor() {
+    super("this install already has an owner — sign in instead");
+    this.name = "InstallAlreadySetUpError";
+  }
+}
+
+/**
  * Creates a user. Usernames are unique. Role defaults to `member`: the owner is created by the
  * setup wizard, which asks for it explicitly, and everybody else is an invitee until said otherwise.
+ *
+ * `onlyIfEmpty` is the setup wizard's guard, and it is checked INSIDE the serialized mutation on
+ * purpose: a check made before the scrypt hash (which yields for tens of ms) lets two concurrent
+ * setups both see an empty install and both become owner.
  */
-export async function createUser(username: string, password: string, role: Role = "member"): Promise<User> {
+export async function createUser(
+  username: string, password: string, role: Role = "member", opts: { onlyIfEmpty?: boolean } = {},
+): Promise<User> {
   const name = assertUsername(username);
   const pw = assertPassword(password);
   const r = assertRole(role);
@@ -124,6 +162,7 @@ export async function createUser(username: string, password: string, role: Role 
     createdAt: new Date().toISOString(),
   };
   return await store.mutate((doc) => {
+    if (opts.onlyIfEmpty && doc.users.length > 0) throw new InstallAlreadySetUpError();
     if (doc.users.some((u) => u.username === name)) throw new Error(`user '${name}' already exists`);
     doc.users.push(user);
     return user;
@@ -147,6 +186,13 @@ export async function verifyCredentials(username: string, password: string): Pro
   return user;
 }
 
+/**
+ * Sets a new password AND revokes every session signed before now: whoever held the old password
+ * may also hold a cookie, and a password change that left it working would change nothing for
+ * them. The caller re-issues the cookie of the person who made the change when that is themselves,
+ * and calls `endRevokedSessionSockets` (sessionSockets.ts): the cookie check here only stops NEW
+ * requests — the websockets those sessions already hold are closed there. Same for {@link removeUser}.
+ */
 export async function changePassword(userId: string, password: string): Promise<void> {
   const pw = assertPassword(password);
   const salt = randomBytes(16);
@@ -156,6 +202,7 @@ export async function changePassword(userId: string, password: string): Promise<
     if (!user) throw new Error("user not found");
     user.salt = salt.toString("hex");
     user.hash = hash;
+    user.sessionsValidAfter = Date.now();
   });
 }
 

@@ -1,7 +1,7 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import { secretGet, secretSet, secretDelete, secretList } from "../../secrets/vault.js";
-import { listMcps, getMcp, listAccounts, type McpServer } from "../board/registry.js";
+import { listMcps, getMcp, listAccounts, owedMcpDrops, settleMcpDrops, type McpServer } from "../board/registry.js";
 import {
   CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, DEFAULT_ACCOUNT_SLUG, accountConfigDir, profileDirFor,
 } from "../accounts/profiles.js";
@@ -35,6 +35,8 @@ export { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, DEFAULT_ACCOUNT_SLUG, accountC
 /** Heredoc delimiters — reserved words, never derived from user input. */
 const OUTER_DELIM = "VIBEHUB_MCP";
 const JSON_DELIM = "VIBEHUB_MCP_JSON";
+/** Shell variable that records a failed `add-json` in {@link mcpInjectLines} — a reserved name. */
+const INJECT_FAILED_FLAG = "VIBEHUB_MCPS_FAILED";
 
 /** Board MCP ids are 12 hex chars. They become part of a vault key, so the charset is enforced. */
 const MCP_ID_RE = /^[0-9a-f]{12}$/;
@@ -114,8 +116,9 @@ export interface McpInjection {
  * signature changes whenever the SET of MCPs changes, so a newly added MCP is picked up on the next
  * open without anyone pressing a button. `force=true` (the "Apply now" button) always re-injects.
  *
- * `add-json` carries `|| true`: "already exists" is benign and must not abort the enclosing
- * `set -e`. PURE.
+ * `add-json` never aborts the enclosing `set -e` (a card must open even when an MCP does not
+ * inject), but a failure is RECORDED and decides what the block leaves behind (markedSetupLines):
+ * the marker only over a clean injection, a retry stamp otherwise. PURE.
  */
 export function mcpInjectLines(profiles: McpProfile[], mcps: McpInjection[], force = false): string[] {
   const lines: string[] = [];
@@ -125,29 +128,76 @@ export function mcpInjectLines(profiles: McpProfile[], mcps: McpInjection[], for
     const dir = profile || DEFAULT_CLAUDE_DIR;
     assertSafeRemotePath(dir);
     const prefix = profile ? `CLAUDE_CONFIG_DIR=${shQuote(profile)} ` : "";
-    const marker = `${dir}/.mcps-${signature}`;
-    const inner: string[] = [`mkdir -p ${shQuote(dir)}`];
+    const body: string[] = [];
     for (const m of mcps) {
       // Belt and braces on top of JSON.stringify: a multi-line payload, or one that IS the
       // delimiter, would let the heredoc close early and turn the rest into shell commands.
       if (/[\r\n]/.test(m.json) || m.json.trim() === JSON_DELIM) throw new Error("invalid MCP JSON");
-      inner.push(
+      body.push(
+        // A remove that finds nothing is the normal case — only the add can really fail.
         `${prefix}claude mcp remove -s user ${shQuote(m.name)} >/dev/null 2>&1 || true`,
         `${prefix}claude mcp add-json -s user ${shQuote(m.name)} "$(cat <<'${JSON_DELIM}'`,
         m.json,
         JSON_DELIM,
-        `)" >/dev/null 2>&1 || true`,
+        `)" >/dev/null 2>&1 || ${INJECT_FAILED_FLAG}=1`,
       );
     }
-    // One marker per current set: drop the old ones, write the new one (that IS the idempotency).
-    inner.push(`rm -f ${shQuote(dir)}/.mcps-* 2>/dev/null || true`, `: > ${shQuote(marker)}`);
-    if (force) {
-      lines.push(...inner);
-    } else {
-      lines.push(`if [ ! -f ${shQuote(marker)} ]; then`, ...inner, "fi");
-    }
+    lines.push(...markedSetupLines({ dir, family: ".mcps-", signature, flag: INJECT_FAILED_FLAG, body, force }));
   }
   return lines;
+}
+
+/**
+ * How long a profile setup that FAILED waits before a card open tries it again, in minutes. Shared
+ * by MCPs and plugins (markedSetupLines).
+ */
+export const SETUP_RETRY_AFTER_MIN = 30;
+
+/**
+ * Wraps ONE profile's setup (MCP injection, plugin install) in its idempotency markers — the
+ * card-open contract MCPs and plugins share. `body` must never fail on its own (every command that
+ * can fail ends in `|| <flag>=1`); this decides what its outcome leaves behind:
+ *
+ *  - clean: the SET marker `<dir>/<family><signature>`, after dropping every older one of the
+ *    family (retry stamps included). The hot path skips the block from then on — that IS the
+ *    idempotency, and what keeps reopening a card free.
+ *  - failed: no marker (one written over a failed add would keep that MCP/plugin out of the
+ *    profile until somebody pressed apply), but a `<marker>.failed` stamp. The hot path skips the
+ *    block while the stamp is younger than SETUP_RETRY_AFTER_MIN, then tries again. Without it a
+ *    failure that does not go away — a JSON the CLI rejects, a plugin gone from the marketplace —
+ *    re-ran the WHOLE setup on every card open, a CLI boot (and a clone) per item, forever; with it
+ *    a passing failure (network down) still heals on its own within the window.
+ *
+ * `force` (the explicit apply) ignores both: it always runs, and what it leaves follows the same
+ * rule. PURE.
+ */
+export function markedSetupLines(opts: {
+  dir: string;
+  family: string;
+  signature: string;
+  flag: string;
+  body: string[];
+  force: boolean;
+}): string[] {
+  const { dir, family, signature, flag, body, force } = opts;
+  const marker = shQuote(`${dir}/${family}${signature}`);
+  const failed = shQuote(`${dir}/${family}${signature}.failed`);
+  const inner = [
+    `mkdir -p ${shQuote(dir)}`,
+    `${flag}=0`,
+    ...body,
+    `if [ "$${flag}" = 0 ]; then`,
+    `rm -f ${shQuote(dir)}/${family}* 2>/dev/null || true`,
+    `: > ${marker}`,
+    "else",
+    `: > ${failed}`,
+    "fi",
+  ];
+  if (force) return inner;
+  // `find -mmin -N` prints the stamp only while it is younger than N minutes; a missing stamp
+  // prints nothing (its complaint goes to /dev/null), so no stamp means "go".
+  const recentFailure = `"$(find ${failed} -mmin -${SETUP_RETRY_AFTER_MIN} 2>/dev/null)"`;
+  return [`if [ ! -f ${marker} ] && [ -z ${recentFailure} ]; then`, ...inner, "fi"];
 }
 
 /** Short, stable signature of the MCP set (names + json), used to name the marker. PURE. */
@@ -329,6 +379,51 @@ export async function deleteMcpSecrets(mcp: McpServer): Promise<number> {
   return removed;
 }
 
+/**
+ * REMOVES every deleted MCP the runner still owes (`owedMcpDrops`, recorded by `removeMcp`) from
+ * every profile, then settles them. Re-injecting the remaining MCPs cannot do it: the injection only
+ * removes-then-adds what is still registered, so a deleted one — with its token in clear text inside
+ * each profile's `.claude.json` — would stay there, and keep being launched by every new session.
+ * The debt is persisted, so a runner that was down at the delete gets it paid by the next apply.
+ * A registration carrying a BUILT-IN's name was never injected (resolveMcpInjections skips it), so
+ * removing that name would only take the built-in down: it is settled without touching the runner.
+ * Each profile's injection marker goes with the removal, so the next card open re-injects the rest.
+ * THROWS when the runner could not be reached — and then nothing is settled.
+ */
+export async function dropDeletedMcps(by?: string): Promise<void> {
+  const owed = await owedMcpDrops();
+  const names = [...new Set(owed.map((d) => d.name))]
+    .filter((n) => n !== BUILTIN_MAESTRO_NAME && n !== BUILTIN_BROWSER_NAME);
+  if (names.length > 0) {
+    const profiles = await allProfiles();
+    const lines = profiles.flatMap((profile) => {
+      const dir = profileDirOf(profile);
+      assertSafeRemotePath(dir);
+      const prefix = profile ? `CLAUDE_CONFIG_DIR=${shQuote(profile)} ` : "";
+      return [
+        ...names.map((name) => `${prefix}claude mcp remove -s user ${shQuote(name)} >/dev/null 2>&1 || true`),
+        // The profile no longer holds the set its `.mcps-<signature>` marker vouches for. Kept, a
+        // marker that matches again (the MCP recreated with the same definition while the apply
+        // that would re-inject it is refused) lets the card-open hot path skip the injection.
+        `rm -f ${shQuote(dir)}/.mcps-* 2>/dev/null || true`,
+      ];
+    });
+    const script = [
+      "set -e",
+      `docker exec -i ${shQuote(config.runner.container)} bash -s <<'${OUTER_DELIM}'`,
+      ...lines,
+      "true",
+      OUTER_DELIM,
+    ].join("\n");
+    await hostExecutor().runScript(script, { timeoutMs: 120_000 });
+    logger.info(
+      { audit: true, action: "mcp.drop", mcps: names, profiles: profiles.length, by },
+      "deleted MCPs removed from every profile of the runner",
+    );
+  }
+  await settleMcpDrops(owed);
+}
+
 /** Which of an MCP's env vars / headers already have a value (the UI renders "configured"). */
 export async function mcpSecretsStatus(mcp: McpServer): Promise<Record<string, boolean>> {
   const keys = new Set((await secretList()).map((s) => s.key));
@@ -345,8 +440,11 @@ export async function mcpSecretsStatus(mcp: McpServer): Promise<Record<string, b
  * and the UI still read the same field. It is always 1.
  */
 export async function applyMcpsEverywhere(by?: string): Promise<{ runners: number; mcps: number }> {
-  // Resolve BEFORE touching the host: a missing secret must fail the whole apply with a message
-  // that names it, leaving the runner exactly as it was.
+  // First what deletes still owe the runner: an MCP the owner removed is an earlier decision, and it
+  // must leave the profiles even when a missing secret below refuses the rest of this apply.
+  await dropDeletedMcps(by);
+  // Resolve BEFORE injecting: a missing secret must fail the whole apply with a message that names
+  // it, before a single MCP is (re)injected — only the removals above have touched the runner.
   const injections = await resolveMcpInjections();
   const profiles = await allProfiles();
   const container = config.runner.container;

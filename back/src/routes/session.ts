@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import type { IPty } from "node-pty";
 import pty from "node-pty";
 import type { FastifyInstance } from "fastify";
-import type { WebSocket } from "ws";
-import { currentUser, requireOwner, sessionUserId } from "../auth/session.js";
+import { WebSocket } from "ws";
+import { requestUser, requireOwner, sessionUserId } from "../auth/session.js";
 import { recordCardActor } from "../services/board/actor.js";
 import { requireCardAccess, requireCardWork, requestCardLevel } from "../auth/access.js";
 import * as registry from "../services/board/registry.js";
@@ -121,7 +121,19 @@ export interface BridgeOptions {
    * This is what a card shared `view` gets.
    */
   readOnly?: boolean;
+  /**
+   * Frames the browser sent BEFORE the pty existed — the attach's setup can take seconds or minutes
+   * and the front sends its real geometry the instant the socket opens. Replayed in order through
+   * the same path as live frames, so that first resize is what sizes the pty (instead of 120x30).
+   */
+  earlyFrames?: Buffer[];
 }
+
+/**
+ * How much a terminal socket may send before its pty exists (see the terminal route's setup): a few
+ * resizes and whatever a person types or pastes while the card is prepared fit with room to spare.
+ */
+export const EARLY_FRAMES_MAX_BYTES = 64 * 1024;
 
 export function bridgePty(socket: WebSocket, term: IPty, label: string, options: BridgeOptions = {}): void {
   disableNagle(socket);
@@ -140,7 +152,7 @@ export function bridgePty(socket: WebSocket, term: IPty, label: string, options:
   });
 
   if (!options.readOnly) {
-    socket.on("message", (raw: Buffer) => {
+    const onFrame = (raw: Buffer): void => {
       const frame = parseTerminalFrame(raw.toString());
       if (frame.type === "resize") term.resize(frame.cols, frame.rows);
       else {
@@ -148,7 +160,11 @@ export function bridgePty(socket: WebSocket, term: IPty, label: string, options:
         // A person typed. Best-effort: a bad listener must never take the terminal down.
         if (options.onInput) { try { options.onInput(frame.data); } catch { /* ignore */ } }
       }
-    });
+    };
+    socket.on("message", onFrame);
+    // Synchronously, right after subscribing: no live frame can be delivered in between, so the
+    // order the browser sent them in is kept.
+    for (const raw of options.earlyFrames ?? []) onFrame(raw);
   }
 
   const teardown = (): void => {
@@ -217,7 +233,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       // BEFORE the open: the open itself resolves the identity to write into the worktree, so the
       // actor has to be on the card by then or the first commit of a card somebody else opened
       // would still be attributed to them.
-      await recordCardActor(await currentUser(req), req.params.id);
+      await recordCardActor(await requestUser(req), req.params.id);
       return await reply.send({ card: await workspace.openCard(req.params.id) });
     } catch (err) {
       const message = (err as Error).message;
@@ -341,7 +357,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       try {
         const by = (await sessionUserId(req)) ?? undefined;
-        await recordCardActor(await currentUser(req), req.params.id);
+        await recordCardActor(await requestUser(req), req.params.id);
         return await reply.send(await outbox.queueMessage(req.params.id, String(req.body?.text ?? ""), by));
       } catch (err) {
         const message = (err as Error).message;
@@ -394,7 +410,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     "/api/cards/:id/browser/control",
     { preHandler: requireCardWork },
     async (req, reply) => {
-      const user = await currentUser(req);
+      const user = await requestUser(req);
       browser.takeBrowserControl(req.params.id, user?.username ?? "");
       return await reply.send(browser.cardBrowserActivity(req.params.id));
     },
@@ -405,7 +421,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     "/api/cards/:id/browser/control",
     { preHandler: requireCardWork },
     async (req, reply) => {
-      const user = await currentUser(req);
+      const user = await requestUser(req);
       browser.releaseBrowserControl(req.params.id, user?.username ?? "");
       return await reply.send(browser.cardBrowserActivity(req.params.id));
     },
@@ -436,6 +452,32 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     "/api/cards/:id/terminal",
     { websocket: true, preHandler: requireCardAccess },
     async (socket: WebSocket, req) => {
+      // THE SETUP BELOW IS SLOW (the paused-card grace, provisioning a card never opened) and the
+      // socket is live the whole time. Both of its events are taken NOW, before the first await:
+      //  - a close in that window must stop the attach — a pty spawned for a socket that is already
+      //    gone has nobody to close it, and the `docker exec … tmux attach` lives on for good;
+      //  - frames are kept for the bridge — the front sends its real geometry on open, and `ws`
+      //    drops a frame nobody listens to, so the pty was born 120x30 whatever the window was.
+      //    The buffer is BOUNDED (EARLY_FRAMES_MAX_BYTES): provisioning can run for minutes, and
+      //    each frame may be up to maxPayload — unbounded, one socket could grow the server's memory
+      //    for the whole clone. A read-only socket keeps nothing: its bridge never replays it.
+      let socketClosed = false;
+      socket.once("close", () => { socketClosed = true; });
+      const earlyFrames: Buffer[] = [];
+      let earlyBytes = 0;
+      const keepsEarlyFrames = requestCardLevel(req) === "work";
+      const bufferFrame = (raw: Buffer): void => {
+        if (!keepsEarlyFrames) return;
+        earlyBytes += raw.length;
+        if (earlyBytes > EARLY_FRAMES_MAX_BYTES) {
+          socket.off("message", bufferFrame);
+          socket.close(1009, "too much input before the terminal was ready");
+          return;
+        }
+        earlyFrames.push(raw);
+      };
+      socket.on("message", bufferFrame);
+
       const card = await registry.getCard(req.params.id);
       const project = card ? await registry.getProject(card.projectId) : undefined;
       if (!card || !project) {
@@ -446,7 +488,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       const shell = req.query?.shell === "1";
       // Attaching the terminal IS working the card — unless the share is `view`, which
       // recordCardActor checks for (this route's guard is requireCardAccess, not requireCardWork).
-      await recordCardActor(await currentUser(req), req.params.id);
+      await recordCardActor(await requestUser(req), req.params.id);
       // SNAPSHOT: `getCard` hands back the live cached record, which the provisioning below mutates
       // in place. The attach command has to be built from the card as it is NOW — a card that never
       // had a conversation must be born with a plain `claude`, never with `claude -c` (which prints
@@ -492,6 +534,14 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
         }
       }
 
+      socket.off("message", bufferFrame);
+      // No await from here to the bridge: if the socket is still open now, its close listener is
+      // in place before it can fire. The STATE is checked, not only the event: a close this route
+      // started (the 1009 above) is a handshake, and its `close` event can be up to 30s away.
+      if (socketClosed || socket.readyState !== WebSocket.OPEN) {
+        logger.debug({ card: card.worktreeSlug }, "terminal socket closed during setup — not attaching");
+        return;
+      }
       const { file, args } = workspace.cardTerminalCommand(project, snapshot, { shell });
       const term = pty.spawn(file, args, {
         name: "xterm-256color",
@@ -506,10 +556,25 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       // A card shared read-only attaches as a WINDOW on the session, not a seat at it: output
       // streams, nothing typed here reaches tmux (see BridgeOptions.readOnly).
       const readOnly = requestCardLevel(req) !== "work";
+      // Writing into a paused or finished card revives it — the same rule a status hook follows,
+      // applied here because the websocket is how a human actually shows up. Through `onInput`
+      // rather than a `message` listener of its own: the bridge REPLAYS what was typed during the
+      // setup straight into the pty, without a `message` event — and the slow setup is the paused
+      // card's grace, exactly when a person types first.
+      let revives = !shell && !readOnly && (card.column === "paused" || card.column === "done");
       bridgePty(socket, term, card.worktreeSlug, {
         readOnly,
+        earlyFrames,
         onInput: () => {
-          if (shouldStampHumanActive(card.id)) void registry.markCardHumanActive(card.id);
+          if (revives) {
+            revives = false;
+            void registry.applyCardStatus(card.id, "working").catch((err: unknown) => {
+              logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not revive the card on input");
+            });
+          }
+          if (shouldStampHumanActive(card.id)) {
+            void registry.markCardHumanActive(card.id).catch(() => { /* best effort, never fails a keystroke */ });
+          }
         },
       });
       if (readOnly) socket.send("\r\n[vibehub] this card is shared with you read-only\r\n");
@@ -522,14 +587,6 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
         const flush = setTimeout(() => void outbox.flushCard(card.id), OUTBOX_ATTACH_DELAY_MS);
         socket.on("close", () => clearTimeout(flush));
       }
-
-      // Writing into a paused or finished card revives it — the same rule a status hook follows,
-      // applied here because the websocket is how a human actually shows up.
-      if (!shell && !readOnly && (card.column === "paused" || card.column === "done")) {
-        socket.once("message", () => {
-          void registry.applyCardStatus(card.id, "working");
-        });
-      }
     },
   );
 
@@ -541,6 +598,10 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     "/api/cards/:id/vnc",
     { websocket: true, preHandler: requireCardWork },
     async (socket: WebSocket, req) => {
+      // Starting the browser can take a while (up to a minute): a socket that closes meanwhile must
+      // not get a bridge spawned for nobody — same reason as the terminal above.
+      let socketClosed = false;
+      socket.once("close", () => { socketClosed = true; });
       let bridge: Awaited<ReturnType<typeof browser.cardVncBridge>>;
       try {
         bridge = await browser.cardVncBridge(req.params.id);
@@ -549,12 +610,23 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
         socket.close();
         return;
       }
+      if (socketClosed) return;
       disableNagle(socket);
       const child = spawn(bridge.command.file, bridge.command.args, { stdio: ["pipe", "pipe", "ignore"] });
+      const hangUp = (): void => { try { socket.close(); } catch { /* already closed */ } };
       child.stdout.on("data", (chunk: Buffer) => {
         try { socket.send(chunk); } catch { child.kill(); }
       });
-      child.on("close", () => { try { socket.close(); } catch { /* already closed */ } });
+      // Either side can fail on its own, and an unhandled 'error' on the child or on its stdin is an
+      // uncaught exception that takes the WHOLE server down: a bridge that cannot start (ENOENT),
+      // or the browser still sending frames into a bridge that already died (EPIPE). Each costs
+      // this one socket, nothing more.
+      child.on("error", (err) => {
+        logger.warn({ err: err.message }, "the card browser bridge failed");
+        hangUp();
+      });
+      child.stdin.on("error", () => { /* the bridge died first; its close hangs the socket up */ });
+      child.on("close", hangUp);
       socket.on("message", (raw: Buffer) => { child.stdin.write(raw); });
       const teardown = (): void => { try { child.kill(); } catch { /* already gone */ } };
       socket.on("close", teardown);

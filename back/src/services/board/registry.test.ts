@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm, readFile, stat } from "node:fs/promises";
+import { mkdtemp, rm, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -471,7 +471,7 @@ describe("board registry (persisted)", () => {
     expect((await stat(file)).mode & 0o777).toBe(0o600);
     const doc = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
     expect(Object.keys(doc).sort()).toEqual([
-      "accounts", "cards", "config", "githubConnections", "mcps", "projects", "shares",
+      "accounts", "browserSlotHolds", "cards", "config", "githubConnections", "mcpDrops", "mcps", "projects", "shares",
     ]);
   });
 
@@ -1262,6 +1262,15 @@ describe("board registry (persisted)", () => {
       expect((await reg.removeMcp(mcp.id)).id).toBe(mcp.id);
       expect(await reg.listMcps()).toEqual([]);
       await expect(reg.removeMcp(mcp.id)).rejects.toThrow(/MCP not found/);
+    });
+
+    it("a board.json from before the receipts (bare names) still owes — and settles — its removals", async () => {
+      await writeFile(join(dir, "board.json"), JSON.stringify({ mcpDrops: ["erp", 7] }));
+      const legacy = await freshRegistry();
+      expect(await legacy.pendingMcpDrops()).toEqual(["erp"]);
+      const owed = await legacy.owedMcpDrops();
+      await legacy.settleMcpDrops(owed);
+      expect(await legacy.pendingMcpDrops()).toEqual([]);
     });
   });
   it("stampCardActor: registra quem está trabalhando e diz quando MUDOU", async () => {

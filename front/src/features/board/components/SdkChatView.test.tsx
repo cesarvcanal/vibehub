@@ -10,6 +10,8 @@ import { renderApp } from "@/test/render";
 import type { SdkEvent } from "@/features/board/lib/sdkChat";
 import { resetLanguage, setLanguage } from "@/i18n";
 import { get } from "@/lib/api";
+import { LinkifiedText } from "@/features/board/components/ChatView";
+import { resetDraftsForTesting } from "@/features/board/components/TerminalComposer";
 import { ME_KEY } from "@/providers/auth";
 
 vi.mock("@/lib/api", () => ({
@@ -20,6 +22,13 @@ vi.mock("@/lib/api", () => ({
   patch: vi.fn(),
   del: vi.fn(),
 }));
+
+// Passthrough com contador: o desenho é o de verdade, e quantas vezes uma bolha foi redesenhada
+// fica observável (o teste de custo do transcript, mais abaixo).
+vi.mock("@/features/board/components/ChatView", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/features/board/components/ChatView")>();
+  return { ...actual, LinkifiedText: vi.fn(actual.LinkifiedText) };
+});
 
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), {
@@ -90,6 +99,10 @@ const originalWebSocket = globalThis.WebSocket;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // O composer guarda o rascunho de cada card num mapa do MÓDULO (sobrevive a um remount de
+  // propósito) — e todo teste aqui é o card "c1": o que um teste deixou no campo era digitado no
+  // seguinte ("vai pelo A mesmoinstrução longa", com a ordem embaralhada).
+  resetDraftsForTesting();
   FakeSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeSocket);
 });
@@ -97,6 +110,11 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   globalThis.WebSocket = originalWebSocket;
+  // `setLanguage` grava a escolha no localStorage e `resetLanguage` a RELÊ de lá — e a limpeza do
+  // storage do setup só roda depois deste gancho. Sem limpar antes, um teste em pt-BR deixava o
+  // arquivo inteiro em pt-BR para quem viesse depois.
+  localStorage.clear();
+  resetLanguage();
 });
 
 async function socket(): Promise<FakeSocket> {
@@ -320,6 +338,44 @@ describe("SdkChatView", () => {
 
     act(() => ws.onclose?.());
     expect(screen.queryByTestId("sdk-chat-working")).toBeNull();
+  });
+
+  /**
+   * O APERTO DE MÃO NÃO É SAÚDE. O back aceita o websocket e só DEPOIS descobre que não pode
+   * atendê-lo (driver desligado, card apagado, install falhou): manda o erro e fecha. Zerar o
+   * backoff no `onopen` fazia disso uma reconexão a ~2Hz para sempre — cada uma pagando o setup
+   * inteiro do servidor (sessão, settings, e no install, SSH+docker). Só o `ready` prova a conexão.
+   */
+  it("aceitar e recusar em seguida não zera o backoff — só o `ready` do servidor zera", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderSdkChat();
+      const refuse = (ws: FakeSocket): void => {
+        ws.accept();
+        ws.deliver({ type: "error", message: "the SDK driver is off (enable the sdkDriver setting)" });
+        act(() => { ws.readyState = 3; ws.onclose?.(); });
+      };
+      refuse(await socket());
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      expect(FakeSocket.instances).toHaveLength(2);
+
+      refuse(FakeSocket.instances[1] as FakeSocket);
+      // a segunda recusa espera MAIS que a primeira (o backoff andou), não volta aos 400ms
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      expect(FakeSocket.instances).toHaveLength(2);
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      expect(FakeSocket.instances).toHaveLength(3);
+
+      // uma conexão que o servidor ASSUMIU (`ready`) zera: a queda seguinte volta a ser um piscar
+      const healthy = FakeSocket.instances[2] as FakeSocket;
+      healthy.accept();
+      healthy.deliver({ type: "ready" });
+      act(() => { healthy.readyState = 3; healthy.onclose?.(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      expect(FakeSocket.instances).toHaveLength(4);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("terminal-mirrored events draw the conversation with an 'activity in the terminal' note — no spinner", async () => {
@@ -1136,6 +1192,84 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     await waitFor(() => expect(localStorage.getItem("vibehub.sdkOutbox.c1")).toBeNull());
   });
 
+  it("o 'sim' de ANTES no replay não dá por entregue o 'sim' que se perdeu agora", async () => {
+    renderSdkChat();
+    const first = await socket();
+    first.accept();
+    first.deliver({ type: "user", text: "sim" }); // a conversa já tinha um "sim" (o histórico)
+    first.deliver({ type: "ready" });
+    await userEvent.type(screen.getByRole("textbox"), "sim{Enter}");
+    await waitFor(() => expect(first.sent.length).toBe(1));
+    // o socket meio-aberto engoliu o envio: nenhum recibo, e o fio cai
+    act(() => { first.readyState = 3; first.onclose?.(); });
+
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
+    const second = FakeSocket.instances[1] as FakeSocket;
+    second.accept();
+    second.deliver({ type: "user", text: "sim" }); // o servidor só tem o "sim" de antes
+    second.deliver({ type: "ready" });
+
+    // o "sim" de agora volta MARCADO, com reenviar — em vez de sumir como se tivesse chegado
+    await waitFor(() => expect(screen.getAllByTestId("sdk-user")).toHaveLength(2));
+    expect(screen.getAllByTestId("sdk-user")[1]).toHaveAttribute("data-state", "undelivered");
+    expect(localStorage.getItem("vibehub.sdkOutbox.c1")).toContain("sim");
+  });
+
+  /**
+   * A CONVERSA LONGA. O replay é uma JANELA (as últimas centenas de eventos do histórico), e ela anda:
+   * seis "ok" na tela no envio, e no reconnect só os dois mais recentes ainda cabem — mais o "ok"
+   * novo. Contar "quantos 'ok' havia" na tela inteira dava 6 contra 3 no replay: a mensagem ENTREGUE
+   * voltava "não entregue", e o Reenviar duplicava o turno. O replay carrega o `at` do servidor em
+   * cada mensagem: o que prova a entrega é uma ocorrência gravada DEPOIS da última que a tela
+   * conhecia — relógio do servidor contra relógio do servidor, e a janela andar não muda isso.
+   */
+  it("conversa longa: a janela do replay andou, e o 'ok' entregue NÃO volta como não entregue", async () => {
+    renderSdkChat();
+    const first = await socket();
+    first.accept();
+    for (let at = 1; at <= 6; at += 1) first.deliver({ type: "user", text: "ok", at });
+    first.deliver({ type: "ready" });
+    await waitFor(() => expect(screen.getAllByTestId("sdk-user")).toHaveLength(6));
+    await userEvent.type(screen.getByRole("textbox"), "ok{Enter}");
+    await waitFor(() => expect(first.sent.length).toBe(1));
+    // o recibo se perdeu junto com o fio — mas o servidor gravou
+    act(() => { first.readyState = 3; first.onclose?.(); });
+
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
+    const second = FakeSocket.instances[1] as FakeSocket;
+    second.accept();
+    second.deliver({ type: "user", text: "ok", at: 5 }); // os quatro mais antigos saíram da janela
+    second.deliver({ type: "user", text: "ok", at: 6 });
+    second.deliver({ type: "user", text: "ok", at: 100 }); // o de agora, gravado
+    second.deliver({ type: "ready" });
+
+    await waitFor(() => expect(localStorage.getItem("vibehub.sdkOutbox.c1")).toBeNull());
+    expect(screen.getAllByTestId("sdk-user")).toHaveLength(3);
+    expect(screen.queryByTestId("sdk-user-undelivered")).not.toBeInTheDocument();
+  });
+
+  it("conversa longa: a janela andou e o 'ok' de agora NÃO está nela — continua marcado", async () => {
+    renderSdkChat();
+    const first = await socket();
+    first.accept();
+    for (let at = 1; at <= 6; at += 1) first.deliver({ type: "user", text: "ok", at });
+    first.deliver({ type: "ready" });
+    await waitFor(() => expect(screen.getAllByTestId("sdk-user")).toHaveLength(6));
+    await userEvent.type(screen.getByRole("textbox"), "ok{Enter}");
+    await waitFor(() => expect(first.sent.length).toBe(1));
+    act(() => { first.readyState = 3; first.onclose?.(); });
+
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
+    const second = FakeSocket.instances[1] as FakeSocket;
+    second.accept();
+    second.deliver({ type: "user", text: "ok", at: 5 });
+    second.deliver({ type: "user", text: "ok", at: 6 });
+    second.deliver({ type: "ready" });
+
+    await waitFor(() => expect(screen.getAllByTestId("sdk-user")).toHaveLength(3));
+    expect(screen.getAllByTestId("sdk-user")[2]).toHaveAttribute("data-state", "undelivered");
+  });
+
   it("Reenviar manda as MESMAS palavras (mesmo recibo: o servidor nunca teve a primeira)", async () => {
     renderSdkChat();
     const ws = await socket();
@@ -1772,6 +1906,71 @@ describe("SdkChatView — the activity bar", () => {
   });
 });
 
+/**
+ * O LEITOR DE TELA. A conversa é um `role="log"` — uma região viva: tudo que muda lá dentro é
+ * anunciado. O relógio do turno morava ali dentro (a barra fixa no topo e o "Trabalhando… 1m 24s"
+ * no fim), então quem ouve a tela ouvia o cronômetro a cada segundo, por cima da conversa. O
+ * cronômetro é para os olhos; para o ouvido vai a FASE (pensando, respondendo, executando), que só
+ * muda quando o trabalho muda.
+ */
+describe("SdkChatView — o que o leitor de tela anuncia", () => {
+  /** Está numa parte da conversa que o leitor de tela anuncia (dentro do log e sem aria-hidden)? */
+  function announcedInLog(el: Element): boolean {
+    const log = screen.getByRole("log");
+    if (!log.contains(el)) return false;
+    for (let node: Element | null = el; node && node !== log; node = node.parentElement) {
+      if (node.getAttribute("aria-hidden") === "true") return false;
+    }
+    return true;
+  }
+
+  it("o relógio do turno não é anunciado: nem a barra do topo, nem a linha do fim", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "thinking_delta", text: "pensando…" });
+
+    expect(announcedInLog(screen.getByTestId("sdk-activity-elapsed"))).toBe(false);
+    expect(announcedInLog(screen.getByTestId("sdk-chat-working"))).toBe(false);
+  });
+
+  it("a FASE vai para uma região de status fora do log — sem o relógio", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    const status = screen.getByTestId("sdk-working-status");
+    expect(status).toHaveAttribute("role", "status");
+    expect(screen.getByRole("log").contains(status)).toBe(false);
+    expect(status).toHaveTextContent("");
+
+    ws.deliver({ type: "thinking_delta", text: "pensando…" });
+    expect(status).toHaveTextContent(/Pensando|Thinking/);
+    expect(status.textContent).not.toMatch(/\d/);
+
+    ws.deliver({ type: "result", isError: false });
+    expect(status).toHaveTextContent("");
+  });
+
+  it("o log fica OCUPADO enquanto um texto chega token a token — e é lido inteiro quando fecha", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    const log = screen.getByRole("log");
+    // `role="log"` já é uma região viva educada: o `aria-live` repetido não dizia nada a mais
+    expect(log).not.toHaveAttribute("aria-live");
+    expect(log).not.toHaveAttribute("aria-busy", "true");
+
+    ws.deliver({ type: "assistant_delta", text: "Começ" });
+    expect(log).toHaveAttribute("aria-busy", "true");
+
+    ws.deliver({ type: "assistant_text", text: "Começando." });
+    expect(log).not.toHaveAttribute("aria-busy", "true");
+  });
+});
+
 describe("SdkChatView — a tool call reads like the terminal's", () => {
   it("shows the headline and the detail under it, and says when work went to the background", async () => {
     renderSdkChat();
@@ -2007,6 +2206,56 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
     await waitFor(() => expect(ws.sent.length).toBe(1));
     expect(JSON.parse(ws.sent[0]!).text).toContain("o B");
     expect(screen.queryByTestId("sdk-queue")).toBeNull();
+  });
+
+  /**
+   * UM CAMPO, UM MODO. Corrigir uma da fila, corrigir uma bolha enviada e responder uma decisão são
+   * três gestos que disputam o MESMO campo de texto — entrar num tem de sair dos outros. O lápis da
+   * fila já soltava os outros dois, mas o lápis da bolha e a bandeja de decisões não soltavam a
+   * fila: o Enter seguinte caía no `queueEdit` (testado primeiro) e a correção da bolha gravava
+   * POR CIMA da mensagem que esperava na fila, que sumia sem ninguém ter pedido.
+   */
+  it("o lápis de uma bolha ENVIADA solta a da fila: a correção não grava por cima dela", async () => {
+    const { ws, box } = await chatWithQueued();
+    await userEvent.click(screen.getByTestId("sdk-queued-edit"));
+    await userEvent.click(screen.getByTestId("sdk-edit")); // mudou de ideia: corrige a enviada
+    expect(box.value).toBe("faz a tarefa");
+
+    await userEvent.clear(box);
+    await userEvent.type(box, "faz a outra tarefa{Enter}");
+
+    // a correção da bolha seguiu o caminho dela (para o turno, e vai depois do result)…
+    await waitFor(() => expect(ws.sent.length).toBe(2));
+    expect(JSON.parse(ws.sent[1]!)).toEqual({ type: "interrupt", reason: "edit" });
+    // …e a da fila está intacta, de volta à espera
+    expect(screen.getByTestId("sdk-queued")).toHaveTextContent("aproveita e ajusta o título");
+    expect(screen.getByTestId("sdk-queued")).not.toHaveTextContent("faz a outra tarefa");
+    expect(screen.getByTestId("sdk-queued")).not.toHaveAttribute("data-editing");
+  });
+
+  it("responder uma decisão pela bandeja solta a da fila: a resposta não grava por cima dela", async () => {
+    const { ws, box } = await chatWithQueued();
+    await userEvent.click(screen.getByTestId("sdk-queued-edit"));
+    // No meio da correção chega um AskUserQuestion (a da fila, no campo, não é despachada).
+    ws.deliver({
+      type: "user_question",
+      id: "q_1",
+      questions: [{ question: "Formato do relatório?", options: [{ label: "Resumo" }, { label: "Detalhado" }] }],
+    });
+    await userEvent.click(await screen.findByTestId("pending-tray-item"));
+    expect(screen.queryByTestId("composer-editing")).toBeNull(); // o campo agora RESPONDE
+
+    await userEvent.clear(box);
+    await userEvent.type(box, "em tabela{Enter}");
+
+    await waitFor(() => expect(ws.sent.some((raw) => JSON.parse(raw).type === "question_answer")).toBe(true));
+    const frames = ws.sent.map((raw) => JSON.parse(raw) as { type: string; text?: string });
+    expect(frames).toContainEqual({ type: "question_answer", id: "q_1", answers: [{ selected: ["em tabela"] }] });
+    // a da fila voltou a ser entregável com o texto DELA — e a pergunta respondida abre o respiro,
+    // então ela sai logo em seguida, intacta
+    await waitFor(() => expect(ws.sent.map((raw) => JSON.parse(raw) as { text?: string }))
+      .toContainEqual(expect.objectContaining({ type: "user", text: "aproveita e ajusta o título" })));
+    expect(frames.filter((f) => f.type === "user").map((f) => f.text)).not.toContain("em tabela");
   });
 });
 
@@ -2658,5 +2907,57 @@ describe("SdkChatView — quem escreve e quem está digitando", () => {
     expect(ws.typingSent).toEqual([true]);
     await userEvent.type(screen.getByRole("textbox"), "{Enter}");
     await waitFor(() => expect(ws.typingSent).toEqual([true, false]));
+  });
+});
+
+/**
+ * O CUSTO DO TRANSCRIPT. Cada token que chega (`assistant_delta`) e cada segundo do relógio do
+ * turno re-renderizavam a conversa INTEIRA — toda bolha antiga redesenhada e todo Markdown
+ * re-parseado, dezenas de vezes por segundo numa conversa longa (e é no celular que isso dói).
+ * Uma linha que não mudou não tem o que redesenhar.
+ */
+describe("SdkChatView — o custo do transcript", () => {
+  /** Quantas vezes a bolha com este texto foi desenhada até agora. */
+  function drawsOf(text: string): number {
+    return vi.mocked(LinkifiedText).mock.calls.filter(([props]) => props.text === text).length;
+  }
+
+  it("um token novo não redesenha as bolhas antigas", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "user", text: "a mensagem antiga" });
+    ws.deliver({ type: "assistant_text", text: "a resposta antiga" });
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "assistant_delta", text: "Come" });
+    const before = drawsOf("a mensagem antiga");
+    expect(before).toBeGreaterThan(0);
+
+    ws.deliver({ type: "assistant_delta", text: "çando" });
+    ws.deliver({ type: "assistant_delta", text: " a nova" });
+    ws.deliver({ type: "assistant_delta", text: " resposta" });
+
+    expect(screen.getAllByTestId("sdk-assistant")[1]).toHaveTextContent("Começando a nova resposta");
+    expect(drawsOf("a mensagem antiga")).toBe(before);
+  });
+
+  it("o relógio do turno anda sem redesenhar a conversa", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "user", text: "a mensagem antiga" });
+      ws.deliver({ type: "ready" });
+      ws.deliver({ type: "assistant_delta", text: "Trabalhando nisso" });
+      const before = drawsOf("a mensagem antiga");
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+
+      expect(screen.getByTestId("sdk-activity-elapsed")).toHaveTextContent(/3s/);
+      expect(drawsOf("a mensagem antiga")).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

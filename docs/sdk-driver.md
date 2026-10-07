@@ -37,7 +37,7 @@ The driver `.mjs` is copied into `dist` by `back/scripts/build-assets.mjs` (tsc 
 The websocket sends **one JSON text frame per event**:
 
 ```jsonc
-{ "type": "ready", "resume"?: "<sessionId>" }              // driver is up
+{ "type": "ready", "resume"?: "<sessionId>", "turnActive"?: bool } // driver is up (turnActive: a turn is in flight)
 { "type": "session", "sessionId": "<uuid>" }               // learned the session id (resume key)
 { "type": "assistant_delta", "text": "…" }                 // live token stream
 { "type": "assistant_text", "text": "…" }                  // consolidated text block
@@ -50,18 +50,30 @@ The websocket sends **one JSON text frame per event**:
 { "type": "local_output", "text": "…" }                    // resposta de um comando LOCAL (/cost, /usage)
 { "type": "thinking", "text": "…" }                        // o raciocínio do modelo (bloco fechado)
 { "type": "thinking_delta", "text": "…" }                  // …e o mesmo, token a token, ao vivo
+{ "type": "user_question", "id": "…", "questions": [ { "question": "…", "header"?: "…", "options": [ { "label": "…", "description"?: "…" } ], "multiSelect"?: bool } ] }
+{ "type": "question_result", "id": "…", "answers"?: [ { "selected": ["…"] } ], "timedOut"?: bool, "superseded"?: bool }
+{ "type": "rewound", "ok": bool, "uuid"?: "…", "reason"?: "no-fork-point"|"absorbed", "originalText"?: "…" } // an edit was applied (live-only)
+{ "type": "workflow_progress", "runId": "wf_…", "name": "…", "total": n, "done": n, "agents": [ { "id", "label", "status": "running"|"done", "result"? } ], "at": ms, "finished": bool } // live-only
+{ "type": "system_note", "text": "…", "at": ms }           // back-synthesised: the panel's own line (persisted)
+{ "type": "peer_typing", "name": "…", "active": bool }     // back-synthesised: ANOTHER socket of this card is typing (ephemeral)
 { "type": "user_ack", "cid": "…" }                         // back-synthesised: a send is ON DISK
-{ "type": "user_nack", "cid": "…", "reason": "driver-gone" } // back-synthesised: the send was REFUSED
+{ "type": "user_nack", "cid": "…", "reason": "driver-gone"|"history-write-failed" } // back-synthesised: the send was REFUSED, or never reached the disk
 { "type": "error", "message": "…" }
 { "type": "parse_error", "raw": "<the bad line>" }          // back-synthesised; nothing is swallowed
 ```
 
-The front sends, per message: a JSON object `{ "type": "user", "text": "…" }`,
-`{ "type": "interrupt" }`, `{ "type": "permission_decision", "id": "…", "allow": true|false }`
-(the answer to a `permission_request`), or `{ "type": "edit_user", "original": "…", "text": "…" }`
-(editar uma mensagem enviada — ver a seção *Editar mensagem*) — **or a bare string**, which is
-treated as a user message.
-Multi-turn works by resume: the driver captures `session_id`, the route persists it on the card
+The connect REPLAY (before any of the above) re-sends the persisted history events — `user`,
+`assistant_text`, `tool_use`, `permission_request`/`permission`, `user_question`/`question_result`,
+`system_note`, `message_edited` — plus the terminal-mirrored ones (`source: "terminal"`, `tid`).
+
+The front sends, per message: a JSON object `{ "type": "user", "text": "…", "cid"?: "…" }`,
+`{ "type": "interrupt", "reason"?: "edit" }`, `{ "type": "permission_decision", "id": "…", "allow": true|false }`
+(the answer to a `permission_request`), `{ "type": "question_answer", "id": "…", "answers": [{ "selected": ["…"] }] }`
+(the answer to a `user_question`), `{ "type": "edit_user", "original": "…", "text": "…", "cid"?: "…" }`
+(editar uma mensagem enviada — ver a seção *Editar mensagem*), `{ "type": "typing", "active": bool }`
+(o "está digitando", só repassado às outras abas) — **or a bare string**, which is treated as a user
+message.
+Multi-turn works by resume: the driver captures `session_id`, the manager persists it on the card
 (`resumeSessionId`), and the next spawn continues the same session.
 
 ## O menu "/" — invocar skills e comandos pelo chat
@@ -407,7 +419,8 @@ The runner container is never recreated.
 
 ## Session persistence
 
-The driver emits the `session_id` (`session` / `result` events); the `/sdk` route persists each
+The driver emits the `session_id` (`session` / `result` events); the manager
+(`handleDriverEvent` in `services/sdk/manager.ts` — the side that survives the page) persists each
 NEW id onto the card (`resumeSessionId` in board.json, deduplicated). The next driver spawn — a
 reconnect, the card reopened tomorrow — passes `--resume <id>` and continues the SAME conversation.
 The chat footer shows the short session id (the resume key you are on).
@@ -569,6 +582,17 @@ Agora o driver é **do CARD**, propriedade do back (`back/src/services/sdk/manag
   processo com `.vibehub-sdk/sdk-driver.mjs` na linha de comando (e os subprocessos do SDK pendem
   do driver, nunca ppid 1 enquanto ele vive). Um driver realmente morto sai sozinho no EOF do
   stdin (`rl.on("close") → exit 0`), inclusive quando o back reinicia.
+- **Aba que fecha no meio do setup não prende nada.** O connect gasta segundos em `await` (instalar
+  o driver, a sonda do transcript, o replay) sem ninguém ouvindo o `close`; uma aba fechada nesse
+  intervalo já disparou o evento. A rota confere o `readyState` depois do último `await` e, com o
+  socket morto, sai sem assinar o barramento externo, sem pegar ref do espelho e sem subir driver —
+  e `attachSocket` recusa um socket que não esteja `OPEN`. Antes, o socket morto ficava em
+  `session.sockets` para sempre: o idle stop nunca armava, o card nunca hibernava (`isCardChatInUse`)
+  e o follow do espelho rodava eterno. O chat legado (`/api/cards/:id/chat`) segue a mesma regra.
+- **O close atrasado do driver velho não mexe no sucessor.** O `close` de um driver parado
+  (`stopCardDriver`) pode chegar depois que o próximo já subiu; a memória de dedupe do espelho e a
+  sondagem da frota são do CARD, então só são apagadas quando nenhum sucessor assumiu o card. A
+  memória é ESVAZIADA (`forgetDriverKeys`), não trocada: um espelho vivo lê o mesmo `Set`.
 
 ## Recibo de entrega — a mensagem que "sumia no F5" (2026-09-17)
 
@@ -596,14 +620,40 @@ tivesse sido enviada. Reenviar o mesmo texto funciona. Dois furos, um em cada po
 - **Envio nunca é engolido.** `handleClientFrame` devolve um veredito (`ClientFrameOutcome`): com o
   driver morto ele **recusa** (nada escrito, nada gravado, nenhum turno contado) e o socket recebe
   `user_nack`; aceito, o `user_ack` sai **depois** do append no histórico — o ack promete
-  durabilidade, não intenção. EPIPE no stdin virou frame de erro, não silêncio.
+  durabilidade, não intenção. Um append que FALHA (disco cheio) não ganha ack: sai `user_nack`
+  com `reason: "history-write-failed"` (`appendHistoryReported`), e o navegador guarda as palavras
+  — antes ele recebia o ack, apagava o outbox e a mensagem sumia no F5. EPIPE no stdin virou frame
+  de erro, não silêncio.
 - **O navegador guarda o que enviou.** `front/src/features/board/lib/sdkOutbox.ts`: cada envio
   nasce em `localStorage` (por card) com um `cid` ANTES de ir pro socket, e só sai de lá com o
   `user_ack`. Sem recibo em `OUTBOX_ACK_TIMEOUT_MS` (12s) a bolha vira **"não entregue"** com
   *Reenviar*/*Descartar* e o socket é derrubado (o reconnect é a única forma de descobrir se ele
   estava vivo). No reconnect, `reconcileOutbox` compara o outbox com o replay do servidor: texto
   que está no replay foi entregue (só o recibo se perdeu); o que não está volta marcado, com o
-  texto inteiro — inclusive depois de um F5.
+  texto inteiro — inclusive depois de um F5. O casamento é por texto (o `cid` não volta do disco),
+  mas não contra QUALQUER ocorrência: cada entrada nasce com uma MARCA (`sendMark`, sobre
+  `deliveredUserTexts` — as bolhas do usuário já gravadas na tela), ancorada no relógio do
+  SERVIDOR. `since` é o `at` (carimbo do histórico) mais novo que a tela conhecia quando a mensagem
+  saiu; `seenBefore` conta só as linhas com aquelas palavras DEPOIS da âncora (na prática, envios
+  desta conexão confirmados pelo `user_ack`, que não traz hora). Na reconciliação (`deliveryOf`)
+  só contam as linhas do replay com `at > since`; as `seenBefore` primeiras já existiam, e só uma
+  além delas prova a entrega; cada linha do replay casa com no máximo uma entrada. Antes, o "sim"
+  de ontem dava por entregue o "sim" de hoje perdido num socket meio-aberto, e ele sumia em
+  silêncio. A âncora existe porque o replay é uma JANELA que descarta sempre o mais velho: contar
+  na tela inteira dava 6 "ok" no envio contra 3 no replay, e a mensagem entregue voltava "não
+  entregue" com um *Reenviar* que duplicava o turno. O limite que sobra: se a conversa andar mais
+  que a janela inteira entre o envio e o reconnect, a entrega volta como "não entregue" — com
+  *Reenviar*/*Descartar*, nunca sumida (e o *Reenviar* do mesmo `cid` só cobra o recibo, abaixo;
+  ele também refaz a marca contra a tela de agora, `retryOutbox`). Sem nenhum `at` na tela
+  (histórico antigo ou conversa vazia) não há âncora e conta-se tudo; entradas gravadas antes dos
+  campos casam contra qualquer ocorrência, como antes.
+- **O backoff do reconnect só zera com o `ready`.** O aperto de mão do websocket não é saúde: o
+  back aceita a conexão e SÓ ENTÃO descobre se consegue servi-la (setup do driver, card apagado,
+  instalação que falhou) — e fecha. Zerar no `onopen` transformava isso num reconnect no intervalo
+  base para sempre. O chat SDK zera o backoff (`createReconnectBackoff().healthy()`, em
+  `front/src/features/board/lib/reconnect.ts`) quando chega o frame `ready`, a prova de que o
+  servidor terminou o setup e está atendendo; uma conexão que cai antes dele mantém o atraso
+  crescendo geometricamente (400ms → 15s).
 - **O veredito é dado UMA vez por envio.** A mensagem dada por não entregue CONTINUA no outbox (é a
   cópia que o *Reenviar*/*Descartar* oferece) e o `at` dela não anda mais — então ela é marcada com
   `undelivered`, e `overdueMessages` ignora quem já foi cobrado. Sem essa marca ela estaria vencida
@@ -635,7 +685,10 @@ tivesse sido enviada. Reenviar o mesmo texto funciona. Dois furos, um em cada po
   perdeu foi o recibo, não a mensagem. `handleClientFrame` lembra os recibos já emitidos
   (`acceptedCids`, os últimos `ACCEPTED_CIDS_MAX`) e devolve o `user_ack` sem tocar no driver — sem
   isso, reenviar "apaga a branch" executava a instrução duas vezes. Mesmas palavras com `cid` NOVO
-  seguem sendo mensagem nova: mandar duas vezes é um direito.
+  seguem sendo mensagem nova: mandar duas vezes é um direito. Se o recibo guardado é um
+  `history-write-failed` (o driver JÁ leu a mensagem, só o append falhou), o reenvio tenta GRAVAR a
+  linha de novo (`chargeReceipt`) e devolve esse novo veredito — antes ele ganhava o mesmo nack para
+  sempre, e a saída que sobrava (Descartar + digitar de novo) fazia o modelo trabalhar em dobro.
 
 ## A espera é uma escolha, não uma sentença (2026-09-28)
 

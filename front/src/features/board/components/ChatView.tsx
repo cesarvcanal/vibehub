@@ -15,7 +15,7 @@ import { boardApi } from "@/features/board/api";
 import { cardHref } from "@/features/board/lib/board";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
 import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
-import { reconnectDelay, type ConnectionState } from "@/features/board/lib/reconnect";
+import { createReconnectBackoff, type ConnectionState } from "@/features/board/lib/reconnect";
 import {
   groupChatRows,
   mergeEvent,
@@ -27,7 +27,8 @@ import {
   type ChatEvent,
   type MessageOrigin,
   type PendingMessage,
-  matchKeyOf,
+  unechoedPending,
+  userEventIdsSaying,
 } from "@/features/board/lib/chat";
 import { linkifyTokens, remarkEscapeHtml, remarkPreviewPaths, safeUrl, uploadImageUrl } from "@/features/board/lib/markdown";
 import { UltraText } from "@/features/board/components/UltraText";
@@ -122,13 +123,16 @@ export function ChatView({
     let socket: WebSocket | null = null;
     let grace: ReturnType<typeof setTimeout> | null = null;
     let retry: ReturnType<typeof setTimeout> | null = null;
-    let attempt = 0;
+    // Reset only by a connection that HOLDS (see STABLE_CONNECTION_MS): the back accepts the socket
+    // and closes it right away when it cannot open the chat, and resetting on the bare `open` made
+    // that a reconnect at the base interval forever.
+    const backoff = createReconnectBackoff(Math.random);
     let disposed = false;
     const setStatus = (state: ConnectionState): void => statusRef.current?.(state);
 
     const connect = (): void => {
       if (disposed || socket || typeof WebSocket === "undefined") return;
-      setStatus(attempt === 0 ? "connecting" : "reconnecting");
+      setStatus(backoff.attempt === 0 ? "connecting" : "reconnecting");
       let next: WebSocket;
       try {
         next = new WebSocket(wsUrl(`/api/cards/${encodeURIComponent(cardId)}/chat`));
@@ -138,7 +142,7 @@ export function ChatView({
       }
       socket = next;
       next.onopen = () => {
-        attempt = 0;
+        backoff.opened();
         setStatus("open");
         // Connected: the replay is on its way. If nothing has arrived shortly, the card really is
         // empty and the empty state is the truth rather than a guess.
@@ -158,6 +162,7 @@ export function ChatView({
         /* onclose always follows; the retry is decided there so it happens once */
       };
       next.onclose = () => {
+        backoff.closed();
         if (socket === next) socket = null;
         if (disposed) return;
         scheduleRetry();
@@ -167,12 +172,10 @@ export function ChatView({
     const scheduleRetry = (): void => {
       if (disposed || retry) return;
       setStatus("reconnecting");
-      const delay = reconnectDelay(attempt, Math.random);
-      attempt += 1;
       retry = setTimeout(() => {
         retry = null;
         connect();
-      }, delay);
+      }, backoff.next());
     };
 
     connect();
@@ -180,31 +183,28 @@ export function ChatView({
       disposed = true;
       if (grace) clearTimeout(grace);
       if (retry) clearTimeout(retry);
+      backoff.dispose();
       try { socket?.close(); } catch { /* already closing */ }
       setStatus("closed");
     };
   }, [cardId]);
 
   /** An optimistic bubble dies when the real message for it arrives. Matched on the COLLAPSED
-   * text: the transcript's echo may re-flow whitespace, and a mismatch here was one of the ways a
-   * delivered message kept spinning as "enviando" forever. */
+   * text (`matchKeyOf`): the transcript's echo may re-flow whitespace, a slash command comes back
+   * plugin-qualified, and a mismatch here was one of the ways a delivered message kept spinning as
+   * "enviando" forever. And only a line that was not there at the send is its echo (see
+   * `unechoedPending`) — an old "sim" in the history is not the echo of the "sim" sent now. */
   React.useEffect(() => {
-    setPending((prev) => {
-      if (!prev.length) return prev;
-      // `matchKeyOf`, not `normalizeMessage`: a slash command comes back from the transcript in its
-      // plugin-qualified form, so the raw text of the echo never equalled what was typed.
-      const said = new Set(events.filter((e) => e.kind === "user").map((e) => matchKeyOf(e.text)));
-      const next = prev.filter((p) => !said.has(matchKeyOf(p.text)));
-      return next.length === prev.length ? prev : next;
-    });
+    setPending((prev) => (prev.length ? unechoedPending(prev, events) : prev));
   }, [events]);
 
   /* ------------------------------------------------------------- sending */
 
   const sendMutation = useMutation({
-    mutationFn: (text: string) => boardApi.sendCardChat(cardId, text),
-    onError: (error, text) => {
-      setPending((prev) => prev.filter((p) => p.text !== text));
+    mutationFn: (message: PendingMessage) => boardApi.sendCardChat(cardId, message.text),
+    onError: (error, failed) => {
+      // THIS bubble only: another one with the same words may be on its way just fine.
+      setPending((prev) => prev.filter((p) => p.id !== failed.id));
       const message = apiErrorMessage(error, translate("chat.sendError"));
       // A menu is open in the terminal (resume / compact / permission): sending would have pressed
       // Enter on an option. Say so plainly — the composer keeps the words (see `deliver`).
@@ -217,14 +217,23 @@ export function ChatView({
     onError: (error) => toast.error(apiErrorMessage(error, translate("chat.stopError"))),
   });
 
+  /** Tells apart two sends in the same millisecond (the pending id must be unique). */
+  const sendSeqRef = React.useRef(0);
   const send = async (raw: string): Promise<void> => {
     // The composer speaks terminal ("\r" submits); here the Enter is the server's job.
     const text = raw.replace(/\r$/, "").trim();
     if (!text) return;
-    setPending((prev) => [...prev, { id: `local:${Date.now()}:${prev.length}`, text, at: Date.now() }]);
+    sendSeqRef.current += 1;
+    const message: PendingMessage = {
+      id: `local:${Date.now()}:${sendSeqRef.current}`,
+      text,
+      at: Date.now(),
+      seenIds: userEventIdsSaying(events, text),
+    };
+    setPending((prev) => [...prev, message]);
     // Await so a REJECTED send (e.g. the terminal is on a menu) propagates to the composer, which
     // then keeps the draft instead of clearing it. onError still handles the toast + the pending row.
-    await sendMutation.mutateAsync(text);
+    await sendMutation.mutateAsync(message);
   };
 
   /** The overdue bubble's "Reenviar": drop the stuck entry, send the same words again fresh. */
@@ -672,8 +681,12 @@ const MD_PLUGINS = [remarkGfm, remarkBreaks, remarkEscapeHtml, remarkPreviewPath
  * `remarkEscapeHtml` turns raw `<script>` in the source into visible, inert text, and `safeUrl`
  * allowlists the only three href shapes we trust. Exported so the native SDK chat renders answers
  * exactly the way this view does.
+ *
+ * Memoised on the text: a live transcript re-renders on every streamed token, and the parse (remark
+ * plus the whole plugin chain) is the expensive part of a row — a message that did not change has
+ * nothing new to parse.
  */
-export function Markdown({ text }: { text: string }) {
+export const Markdown = React.memo(function Markdown({ text }: { text: string }) {
   return (
     <div className="space-y-2" data-testid="chat-markdown">
       <ReactMarkdown remarkPlugins={MD_PLUGINS} urlTransform={safeUrl} components={MD_COMPONENTS}>
@@ -681,7 +694,7 @@ export function Markdown({ text }: { text: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});
 
 /**
  * The element map. Headings stay visually modest on purpose — an `#` inside a chat bubble is a

@@ -1,4 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
+import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   OFFICIAL_MARKETPLACE,
   assertPluginName,
@@ -12,6 +14,7 @@ import {
   pluginsSignature,
   reconcileLines,
 } from "./plugins.js";
+import { SETUP_RETRY_AFTER_MIN } from "../mcp/mcp.js";
 
 /**
  * OFFICIAL PLUGINS — the rules that decide what reaches a runner's command line and what comes
@@ -46,9 +49,9 @@ describe("pluginInstallLines — the card-open path", () => {
     expect(lines[lines.length - 1]).toBe("fi");
   });
 
-  it("never lets a plugin break the open — every command carries `|| true`", () => {
+  it("never lets a plugin break the open — every command carries an `||` that cannot fail", () => {
     for (const line of pluginInstallLines([DEFAULT], ["superpowers"])) {
-      if (line.includes("claude plugin")) expect(line.endsWith("|| true")).toBe(true);
+      if (line.includes("claude plugin")) expect(line).toMatch(/\|\| (true|VIBEHUB_PLUGINS_FAILED=1)$/);
     }
   });
 
@@ -57,7 +60,7 @@ describe("pluginInstallLines — the card-open path", () => {
   });
 
   it("forced, it drops the guard — and with nothing wanted it writes nothing at all", () => {
-    expect(pluginInstallLines([DEFAULT], ["code-review"], true).some((l) => l.startsWith("if ["))).toBe(false);
+    expect(pluginInstallLines([DEFAULT], ["code-review"], true).some((l) => l.startsWith("if [ ! -f"))).toBe(false);
     expect(pluginInstallLines([DEFAULT], [])).toEqual([]);
   });
 
@@ -68,6 +71,54 @@ describe("pluginInstallLines — the card-open path", () => {
 
   it("refuses a name it would otherwise put in a shell line", () => {
     expect(() => pluginInstallLines([DEFAULT], ["oops; rm -rf /"])).toThrow(/invalid plugin name/);
+  });
+});
+
+/**
+ * The marker is a PROMISE that the set is installed — the hot path skips the whole block while it
+ * exists. These run the lines for real (bash, with `claude` stubbed as a shell function), because
+ * "a failed install leaves no marker" is a property of the script's control flow, not of its text.
+ */
+describe("pluginInstallLines — the marker only after a clean install", () => {
+  const profile = `/tmp/vibehub-plugins-${randomUUID().slice(0, 8)}`;
+  const calls = `${profile}-calls`;
+  const bash = (script: string): string => execFileSync("bash", ["-c", script], { encoding: "utf8" });
+  const run = (claudeExit: number): void => {
+    bash([
+      `claude() { echo x >> ${calls}; return ${claudeExit}; }`, "set -e", ...pluginInstallLines([profile], ["code-review"]),
+    ].join("\n"));
+  };
+  /** How many times the CLI was booted so far — a marketplace add or an install is a network clone. */
+  const cliCalls = (): number => Number(bash(`cat ${calls} 2>/dev/null | wc -l`).trim());
+  /** The SET marker only (the one that lets the hot path skip the block). */
+  const markers = (): string => bash(`ls -A ${profile} 2>/dev/null | grep -E '^[.]plugins-[0-9a-f]+$' || true`).trim();
+  afterEach(() => {
+    bash(`rm -rf ${profile} ${calls}`);
+  });
+
+  it("a failed install (network down) leaves NO marker — the next open tries again", () => {
+    run(1);
+    expect(markers()).toBe("");
+  });
+
+  it("a clean install writes the marker, and the open still never breaks on a failure", () => {
+    run(0);
+    expect(markers()).toBe(`.plugins-${pluginsSignature(["code-review"])}`);
+    expect(() => run(1)).not.toThrow();
+  });
+
+  it("a lasting failure (a plugin gone from the marketplace) is retried once per backoff — not on every open", () => {
+    run(1);
+    const first = cliCalls();
+    expect(first).toBeGreaterThan(0);
+
+    run(1); // the next open: no marketplace add, no clone attempt
+    expect(cliCalls()).toBe(first);
+
+    bash(`touch -d '-${SETUP_RETRY_AFTER_MIN + 1} minutes' ${profile}/.plugins-*.failed`);
+    run(0);
+    expect(cliCalls()).toBeGreaterThan(first);
+    expect(markers()).toBe(`.plugins-${pluginsSignature(["code-review"])}`);
   });
 });
 

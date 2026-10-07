@@ -25,6 +25,12 @@ interface VaultDoc {
 
 let keyPromise: Promise<Buffer> | null = null;
 let cache: VaultDoc | null = null;
+/**
+ * The cold read in flight, shared by every caller that finds no cache. Two independent reads race:
+ * a slow one that read the old file could land AFTER a write persisted and put the old vault back
+ * in the cache — and the next write would then persist it, dropping the secret in between.
+ */
+let loading: Promise<VaultDoc> | null = null;
 let queue: Promise<unknown> = Promise.resolve();
 
 /** Secret keys are uppercase identifiers — they become env var names in the runner. */
@@ -75,6 +81,13 @@ function decrypt(key: Buffer, blob: string): string {
 
 async function load(): Promise<VaultDoc> {
   if (cache) return cache;
+  loading ??= readFromDisk().finally(() => {
+    loading = null;
+  });
+  return await loading;
+}
+
+async function readFromDisk(): Promise<VaultDoc> {
   try {
     const blob = await readFile(VAULT_FILE(), "utf8");
     const parsed = JSON.parse(decrypt(await masterKey(), blob.trim())) as Partial<VaultDoc>;
@@ -100,12 +113,23 @@ async function persist(doc: VaultDoc): Promise<void> {
   cache = doc;
 }
 
+/**
+ * All or nothing, same contract as JsonStore.mutate: `fn` edits the cached doc in place, so a write
+ * that fails (disk full) drops the cache and the next read reloads the file — the last vault that
+ * did persist (tmp + atomic rename). Otherwise a rejected `secretSet` would still be served until
+ * the restart, and persisted by the next successful write.
+ */
 function mutate<R>(fn: (doc: VaultDoc) => R): Promise<R> {
   const run = async (): Promise<R> => {
     const doc = await load();
-    const result = fn(doc);
-    await persist(doc);
-    return result;
+    try {
+      const result = fn(doc);
+      await persist(doc);
+      return result;
+    } catch (err) {
+      cache = null;
+      throw err;
+    }
   };
   const next = queue.then(run, run);
   queue = next.catch(() => undefined);
@@ -157,6 +181,7 @@ export async function secretList(): Promise<{ key: string; updatedAt: string | n
 
 export function resetVaultForTesting(): void {
   cache = null;
+  loading = null;
   keyPromise = null;
   queue = Promise.resolve();
 }

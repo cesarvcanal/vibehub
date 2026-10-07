@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 
 /**
  * Managed MCPs. INVARIANTS:
@@ -126,7 +128,7 @@ describe("mcpInjectLines", () => {
     expect(s).toContain("claude mcp remove -s user 'erp' >/dev/null 2>&1 || true");
     expect(s).toContain("claude mcp add-json -s user 'erp' \"$(cat <<'VIBEHUB_MCP_JSON'");
     expect(s).toContain(json);
-    expect(s).toContain(")\" >/dev/null 2>&1 || true");
+    expect(s).toContain(")\" >/dev/null 2>&1 || VIBEHUB_MCPS_FAILED=1");
     // account profile: mkdir + the CLAUDE_CONFIG_DIR prefix
     expect(s).toContain("mkdir -p '/root/.claude-profiles/work'");
     expect(s).toContain("CLAUDE_CONFIG_DIR='/root/.claude-profiles/work' claude mcp remove -s user 'erp'");
@@ -179,6 +181,61 @@ describe("mcpInjectLines", () => {
   it("does nothing at all when there is no MCP", async () => {
     const { mod } = await fresh();
     expect(mod.mcpInjectLines([undefined, "/root/.claude-profiles/work"], [])).toEqual([]);
+  });
+});
+
+/**
+ * The marker promises the set is injected — the hot path skips the whole block while it exists.
+ * Run for real (bash, `claude` stubbed as a shell function): whether a failure leaves a marker is
+ * control flow, not text.
+ */
+describe("mcpInjectLines — the marker only after a clean injection", () => {
+  const profile = `/tmp/vibehub-mcps-${randomUUID().slice(0, 8)}`;
+  const calls = `${profile}-calls`;
+  const bash = (script: string): string => execFileSync("bash", ["-c", script], { encoding: "utf8" });
+  const run = async (claudeExit: number): Promise<void> => {
+    const { mod } = await fresh();
+    const lines = mod.mcpInjectLines([profile], [{ name: "erp", json: "{}" }]);
+    bash([`claude() { echo x >> ${calls}; return ${claudeExit}; }`, "set -e", ...lines].join("\n"));
+  };
+  /** How many times the CLI was booted so far — each one is a Node start inside the runner. */
+  const cliCalls = (): number => Number(bash(`cat ${calls} 2>/dev/null | wc -l`).trim());
+  /** The SET marker only (the one that lets the hot path skip the block). */
+  const markers = (): string => bash(`ls -A ${profile} 2>/dev/null | grep -E '^[.]mcps-[0-9a-f]+$' || true`).trim();
+  afterEach(() => {
+    bash(`rm -rf ${profile} ${calls}`);
+  });
+
+  it("a failed add-json leaves NO marker — the next open injects again", async () => {
+    await run(1);
+    expect(markers()).toBe("");
+  });
+
+  it("a clean injection writes the marker, and a failure still never breaks the open", async () => {
+    await run(0);
+    expect(markers()).toMatch(/^\.mcps-[0-9a-f]+$/);
+    await expect(run(1)).resolves.toBeUndefined();
+  });
+
+  /**
+   * A failure that does not go away (a JSON the CLI rejects) must not tax EVERY card open with the
+   * whole injection again — remove + add-json per MCP, a CLI boot each, on every open, forever. It
+   * is retried once per backoff window; "Aplicar agora" (forced) still retries at once.
+   */
+  it("a lasting failure is retried once per backoff window — not on every open", async () => {
+    const { mod } = await fresh();
+    await run(1);
+    const first = cliCalls();
+    expect(first).toBeGreaterThan(0);
+
+    await run(1); // the next open, moments later
+    expect(cliCalls()).toBe(first);
+
+    bash(`touch -d '-${mod.SETUP_RETRY_AFTER_MIN + 1} minutes' ${profile}/.mcps-*.failed`);
+    await run(0); // the window passed: it tries again, and this time it works
+    expect(cliCalls()).toBeGreaterThan(first);
+    expect(markers()).toMatch(/^\.mcps-[0-9a-f]+$/);
+    expect(bash(`ls -A ${profile}`)).not.toContain(".failed"); // a clean run clears the backoff
   });
 });
 
@@ -320,6 +377,135 @@ describe("applyMcpsEverywhere", () => {
     const { mod } = await seeded();
     runScript.mockRejectedValue(new Error("host command timed out"));
     await expect(mod.applyMcpsEverywhere()).rejects.toThrow("host command timed out");
+  });
+});
+
+describe("dropDeletedMcps (deleting an MCP)", () => {
+  it("removes it from EVERY profile of the runner — re-applying the others never would", async () => {
+    const { mod, reg, container } = await fresh();
+    await reg.createAccount({ name: "Work" });
+    const erp = await reg.createMcp({ name: "erp", kind: "stdio", command: "npx", envKeys: ["ERP_TOKEN"] });
+    await reg.removeMcp(erp.id);
+
+    await mod.dropDeletedMcps("alice");
+
+    expect(runScript).toHaveBeenCalledTimes(1);
+    const script = String(runScript.mock.calls[0]![0]);
+    expect(script).toContain(`docker exec -i '${container}' bash -s`);
+    expect(script).toMatch(/^claude mcp remove -s user 'erp' >\/dev\/null 2>&1 \|\| true$/m);
+    expect(script).toContain("CLAUDE_CONFIG_DIR='/root/.claude-profiles/work' claude mcp remove -s user 'erp'");
+    expect(script).not.toContain("add-json");
+    expect(await reg.pendingMcpDrops()).toEqual([]); // paid
+  });
+
+  /**
+   * The removal changes the profile, so the `.mcps-<signature>` marker no longer describes it. Left
+   * in place, an apply refused right after the removal (a missing secret) plus an MCP recreated with
+   * the same definition would hand the card-open hot path a marker that matches — and it would skip
+   * the injection over a profile that no longer has that MCP.
+   */
+  it("drops each profile's injection marker with the MCP, so the next card open re-injects", async () => {
+    const { mod, reg } = await fresh();
+    await reg.createAccount({ name: "Work" });
+    await reg.removeMcp((await reg.createMcp({ name: "erp", kind: "stdio", command: "npx" })).id);
+
+    await mod.dropDeletedMcps();
+
+    const script = String(runScript.mock.calls[0]![0]);
+    expect(script).toContain("rm -f '/root/.claude'/.mcps-* 2>/dev/null || true");
+    expect(script).toContain("rm -f '/root/.claude-profiles/work'/.mcps-* 2>/dev/null || true");
+  });
+
+  it("a registration that carried a BUILT-IN's name never removes the built-in", async () => {
+    const { mod, reg } = await fresh();
+    for (const name of [mod.BUILTIN_MAESTRO_NAME, mod.BUILTIN_BROWSER_NAME]) {
+      await reg.removeMcp((await reg.createMcp({ name, kind: "stdio", command: "npx" })).id);
+    }
+    await mod.dropDeletedMcps();
+    expect(runScript).not.toHaveBeenCalled();
+    expect(await reg.pendingMcpDrops()).toEqual([]);
+  });
+
+  /**
+   * A DEBT RECORDED WHILE THE REMOVAL RUNS. The script takes up to two minutes; an MCP of the same
+   * name created, applied and deleted in that window owes its OWN removal — the script already
+   * running may have passed that profile before the new one was injected. Settling by name paid the
+   * new debt with the old receipt, and its token stayed in clear in the profiles.
+   */
+  it("a removal owed again DURING the script stays owed — settling pays only what the script saw", async () => {
+    const { mod, reg } = await fresh();
+    await reg.removeMcp((await reg.createMcp({ name: "erp", kind: "stdio", command: "npx" })).id);
+    runScript.mockImplementationOnce(async () => {
+      await reg.removeMcp((await reg.createMcp({ name: "erp", kind: "stdio", command: "npx" })).id);
+      return { stdout: "", stderr: "" };
+    });
+    await mod.dropDeletedMcps();
+    expect(await reg.pendingMcpDrops()).toEqual(["erp"]);
+
+    await mod.dropDeletedMcps(); // the next apply pays the new one
+    expect(await reg.pendingMcpDrops()).toEqual([]);
+  });
+
+  it("propagates a runner that could not be reached — and the removal stays owed", async () => {
+    const { mod, reg } = await fresh();
+    await reg.removeMcp((await reg.createMcp({ name: "erp", kind: "stdio", command: "npx" })).id);
+    runScript.mockRejectedValue(new Error("host command timed out"));
+    await expect(mod.dropDeletedMcps()).rejects.toThrow("host command timed out");
+    expect(await reg.pendingMcpDrops()).toEqual(["erp"]);
+  });
+
+  /**
+   * A DELETE THE RUNNER MISSED. The board forgets the MCP at once, but its removal from the profiles
+   * needs the runner — and when it was down (restarting, unreachable) nothing remembered that the
+   * removal was owed: "Aplicar agora" re-injects only what is still registered, so the deleted MCP
+   * stayed in every `.claude.json`, token in clear, launched by every new session.
+   */
+  it("the next apply finishes a delete the runner missed — and only once", async () => {
+    const { mod, reg } = await fresh();
+    const erp = await reg.createMcp({ name: "erp", kind: "stdio", command: "npx" });
+    await reg.removeMcp(erp.id);
+
+    runScript.mockRejectedValueOnce(new Error("the runner is not running"));
+    await expect(mod.applyMcpsEverywhere()).rejects.toThrow("the runner is not running");
+
+    await mod.applyMcpsEverywhere(); // "Aplicar agora", runner back
+    const scripts = runScript.mock.calls.map((c) => String(c[0]));
+    expect(scripts.slice(1).join("\n")).toMatch(/^claude mcp remove -s user 'erp' >\/dev\/null 2>&1 \|\| true$/m);
+    expect(scripts.join("\n")).not.toContain("add-json -s user 'erp'");
+
+    runScript.mockClear();
+    await mod.applyMcpsEverywhere();
+    expect(runScript.mock.calls.map((c) => String(c[0])).join("\n")).not.toContain("'erp'");
+  });
+
+  /**
+   * A NAME REGISTERED AGAIN still owes the old one's removal. The injection that would replace it is
+   * fail-closed: a recreated MCP whose secret has no value yet refuses the whole apply — so clearing
+   * the debt at create time left the deleted config (the leaked token, in clear) in every profile.
+   */
+  it("a name registered again still has the old one removed — even when its own apply is refused", async () => {
+    const { mod, reg } = await fresh();
+    const old = await reg.createMcp({ name: "erp", kind: "stdio", command: "npx" });
+    await reg.removeMcp(old.id);
+    await reg.createMcp({ name: "erp", kind: "stdio", command: "npx", envKeys: ["ERP_TOKEN"] }); // no value yet
+
+    await expect(mod.applyMcpsEverywhere()).rejects.toThrow(/ERP_TOKEN/);
+    expect(runScript).toHaveBeenCalledTimes(1); // the removal — the injection never ran
+    expect(String(runScript.mock.calls[0]![0])).toMatch(/^claude mcp remove -s user 'erp' >\/dev\/null 2>&1 \|\| true$/m);
+    expect(await reg.pendingMcpDrops()).toEqual([]);
+  });
+
+  it("a name registered again is removed, then injected anew by the same apply", async () => {
+    const { mod, reg } = await fresh();
+    const old = await reg.createMcp({ name: "erp", kind: "stdio", command: "npx" });
+    await reg.removeMcp(old.id);
+    await reg.createMcp({ name: "erp", kind: "stdio", command: "npx", args: ["-y", "erp-mcp@2"] });
+
+    await mod.applyMcpsEverywhere();
+    const scripts = runScript.mock.calls.map((c) => String(c[0]));
+    expect(scripts).toHaveLength(2);
+    expect(scripts[0]).toContain("claude mcp remove -s user 'erp'");
+    expect(scripts[1]).toContain("add-json -s user 'erp'");
   });
 });
 

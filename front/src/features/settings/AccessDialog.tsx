@@ -10,10 +10,10 @@ import {
 } from "@/components/ui/dialog";
 import { get, patch, post, del } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
-import { useAuth } from "@/providers/auth";
+import { rotateSession, useAuth } from "@/providers/auth";
 import { sharesKey } from "@/features/board/components/ShareDialog";
-import { PROJECTS_KEY, boardApi } from "@/features/board/api";
-import type { GithubState, Role, Share, ShareLevel, SharesResponse, User, UserGit, UsersResponse } from "@/api/types";
+import { GITHUB_KEY, PROJECTS_KEY, boardApi } from "@/features/board/api";
+import type { Role, Share, ShareLevel, SharesResponse, User, UserGit, UsersResponse } from "@/api/types";
 import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
 import { t as translate, useT } from "@/i18n";
 
@@ -66,8 +66,8 @@ export function AccessDialog({ open, onOpenChange }: AccessDialogProps) {
 
   // The accounts a person can be pointed at — the same list the project picker reads.
   const github = useQuery({
-    queryKey: ["github"] as const,
-    queryFn: () => get<GithubState>("/github"),
+    queryKey: GITHUB_KEY,
+    queryFn: boardApi.github,
     enabled: open && isOwner,
   });
   const connections = github.data?.connections ?? [];
@@ -487,7 +487,9 @@ export function OwnPasswordForm() {
   const [ownPassword, setOwnPassword] = React.useState("");
 
   const changeOwn = useMutation({
-    mutationFn: (body: { password: string }) => post<{ ok: true }>("/auth/password", body),
+    // rotateSession: this revokes the very cookie the open polls carry — SessionGuard must wait
+    // for the fresh one before taking their 401s as a signed-out session.
+    mutationFn: (body: { password: string }) => rotateSession(post<{ ok: true }>("/auth/password", body)),
     onSuccess: () => {
       setOwnPassword("");
       toast.success(translate("access.ownPasswordChanged"));

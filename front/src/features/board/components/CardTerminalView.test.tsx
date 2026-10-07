@@ -163,6 +163,16 @@ function serveSession(info: {
   });
 }
 
+/** Signs in a MEMBER instead of the owner, on top of the usual fixtures. */
+function serveMember() {
+  const base = mockGet.getMockImplementation();
+  mockGet.mockImplementation((url: string, ...rest: unknown[]) =>
+    url === "/auth/me"
+      ? Promise.resolve({ user: { id: "2", username: "ada", role: "member" } })
+      : (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest),
+  );
+}
+
 /** Serves the card-browser route with a live reading, on top of the usual fixtures. */
 function serveBrowser(browser: { live: boolean; busy?: boolean; control?: "agent" | "human"; controlBy?: string | null }) {
   const base = mockGet.getMockImplementation();
@@ -840,6 +850,28 @@ describe("CardTerminalView — the account pill knows how much plan is left", ()
   });
 });
 
+/**
+ * Which Claude account a card runs on is the OWNER's call: `PATCH /api/cards/:id` with
+ * `accountSlug` answers 403 to a member, even one with a work share. A member used to get the
+ * account pill anyway — with only the "default" row in it (the account list is owner-only too),
+ * and picking it sent `accountSlug: null` straight into that 403. The model is theirs to pick.
+ */
+describe("CardTerminalView — a member gets the model, not the account", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    serve();
+    serveMember();
+    mockPost.mockResolvedValue({ card: card({ openedAt: 10 }) });
+  });
+
+  it("shows the model pill and no account pill on the desktop bar", async () => {
+    renderWithCache([card({ openedAt: 10 })]);
+    expect(await screen.findByLabelText("Model")).toBeInTheDocument();
+    await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/auth/me"));
+    expect(screen.queryByLabelText("Claude account")).not.toBeInTheDocument();
+  });
+});
+
 describe("CardTerminalView — extra panes", () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -1020,6 +1052,19 @@ describe("CardTerminalView — the phone", () => {
     expect(within(menu).getByText("Model")).toBeInTheDocument();
     expect(within(menu).getByText("Claude account")).toBeInTheDocument();
     expect(within(menu).getByRole("menuitemcheckbox", { name: /Sonnet/ })).toBeInTheDocument();
+  });
+
+  it("keeps the account rows out of a member's overflow menu — only the model is theirs", async () => {
+    serveMember();
+    setViewport(true);
+    const user = userEvent.setup();
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/auth/me"));
+
+    await user.click(await screen.findByTestId("card-bar-more"));
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByText("Model")).toBeInTheDocument();
+    expect(within(menu).queryByText("Claude account")).not.toBeInTheDocument();
   });
 
   it("opens the browser pane from the overflow menu", async () => {

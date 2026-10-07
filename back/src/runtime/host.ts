@@ -66,6 +66,33 @@ export function assertSafeRemotePath(remotePath: string): void {
   if (!/^[A-Za-z0-9/_.-]+$/.test(remotePath)) throw new Error(`remote path has invalid characters: ${remotePath}`);
 }
 
+/**
+ * How much EARLIER than the Node deadline the in-container one fires (containerScriptCommand). It
+ * covers what the Node clock counts and the container's does not: the ssh handshake (ConnectTimeout
+ * alone is 8s) and the `docker exec` start-up. With it, the work is already dead when runProcess
+ * gives up — never the other way round.
+ */
+export const CONTAINER_DEADLINE_MARGIN_MS = 15_000;
+
+/**
+ * The host-side line that runs a heredoc'd script INSIDE the runner — `docker exec -i <c> timeout
+ * -s KILL <s> bash -s` — for a caller that holds something (a lock) until the script is over.
+ *
+ * runProcess's timeout kills the LOCAL wrapper only (bash -s / ssh, and the `docker exec` client
+ * with it), and killing a `docker exec` client does NOT kill what it started in the container (see
+ * docs/runner-processes.md). So a provisioning that blew its 10 minutes in a clone released its lock
+ * while the clone went on, and the next open ran its own script over the live one. GNU `timeout`
+ * (coreutils — always in the Debian runner image) runs bash in a process group of its own and, on
+ * the deadline, KILLs that whole group: bash and every git under it. A child that detached into a
+ * session of its own (the tmux server) is deliberately out of reach — it outlives the script by
+ * design. THROWS on a Node deadline too short to keep the margin. PURE.
+ */
+export function containerScriptCommand(containerName: string, timeoutMs: number): string {
+  const seconds = Math.floor((timeoutMs - CONTAINER_DEADLINE_MARGIN_MS) / 1000);
+  if (seconds < 1) throw new Error(`timeout too short for an in-container deadline: ${timeoutMs}ms`);
+  return `docker exec -i ${shQuote(containerName)} timeout -s KILL ${seconds} bash -s`;
+}
+
 export interface HostExecutor {
   readonly kind: "local" | "ssh";
   /** Human label for logs and the UI ("this machine" / "root@10.0.0.5"). */
@@ -125,6 +152,11 @@ function runProcess(file: string, args: string[], stdin: string, opts: ExecOpts)
       const detail = (stderr || `command exited with code ${code}`).trim();
       reject(new HostExecError(detail, { accessError: isAccessError(detail), exitCode: code }));
     });
+    // A host that exits without reading all of stdin (ssh to a runner that is down, a script that
+    // bails early, the timeout's kill) fails our pending write with EPIPE. Unhandled, that error is
+    // an uncaught exception that takes the whole process down; the exit code above already reports
+    // the failure, so the write error carries nothing worth keeping.
+    child.stdin.on("error", () => { /* the close/error handlers report */ });
     child.stdin.write(stdin);
     child.stdin.end();
   });

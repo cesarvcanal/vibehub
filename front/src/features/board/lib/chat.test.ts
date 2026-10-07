@@ -10,6 +10,8 @@ import {
   readCardMode,
   writeCardMode,
   readPending,
+  unechoedPending,
+  userEventIdsSaying,
   writePending,
   PENDING_TIMEOUT_MS,
   type ChatEvent,
@@ -215,5 +217,35 @@ describe("normalizeMessage — the echo match", () => {
   it("collapses whitespace so a re-flowed echo still clears its bubble", () => {
     expect(normalizeMessage("  arruma\n  o dre  ")).toBe("arruma o dre");
     expect(normalizeMessage("arruma o dre")).toBe("arruma o dre");
+  });
+});
+
+describe("unechoedPending — which line is a bubble's echo", () => {
+  const said = (id: string, text: string): ChatEvent => event({ id, kind: "user", text });
+
+  it("a line that already said the words at the send is NOT the echo", () => {
+    const old = said("u1", "sim");
+    const pending = [{ id: "p1", text: "sim", at: 1, seenIds: userEventIdsSaying([old], "sim") }];
+    expect(unechoedPending(pending, [old])).toBe(pending); // same array: nothing to update
+    expect(unechoedPending(pending, [old, said("u2", "sim")])).toEqual([]);
+  });
+
+  it("each line answers for ONE bubble: two sends of the same words wait for two echoes", () => {
+    const pending = [
+      { id: "p1", text: "oi", at: 1, seenIds: [] },
+      { id: "p2", text: "oi", at: 2, seenIds: [] },
+    ];
+    expect(unechoedPending(pending, [said("u1", "oi")]).map((p) => p.id)).toEqual(["p2"]);
+  });
+
+  it("an entry stored before `seenIds` existed matches any line with its words, as it always did", () => {
+    expect(unechoedPending([{ id: "p1", text: "sim", at: 1 }], [said("u1", "sim")])).toEqual([]);
+  });
+
+  it("a stored `seenIds` survives the reload; a malformed one is dropped", () => {
+    writePending("c1", [{ id: "p1", text: "sim", at: 1, seenIds: ["u1"] }]);
+    expect(readPending("c1")[0]!.seenIds).toEqual(["u1"]);
+    localStorage.setItem("vibehub.chatPending.c1", JSON.stringify([{ id: "p1", text: "sim", at: 1, seenIds: "u1" }]));
+    expect(readPending("c1")[0]!.seenIds).toBeUndefined();
   });
 });

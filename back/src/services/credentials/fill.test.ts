@@ -63,6 +63,18 @@ describe("buildCdpHostScript (pure)", () => {
   });
 });
 
+describe("buildCdpHostScript — the container name is SHELL-quoted, not JSON-quoted", () => {
+  it("a `$(…)` in the name never reaches the outer shell inside double quotes", async () => {
+    const { fill } = await fresh();
+    const b64 = Buffer.from("{}").toString("base64");
+    const hostile = 'runner"$(touch /tmp/pwn)"';
+    const script = fill.buildCdpHostScript(hostile, "abc123def456", b64);
+    // JSON.stringify yields "runner\"$(touch /tmp/pwn)\"" — double quotes, where bash still runs $(…).
+    expect(script).not.toContain(JSON.stringify(hostile));
+    expect(script.startsWith(`docker exec -i '${hostile}' bash -s`)).toBe(true);
+  });
+});
+
 describe("parseFillResult (pure)", () => {
   it("reads the last JSON line", async () => {
     const { fill } = await fresh();

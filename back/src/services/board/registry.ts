@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { JsonStore } from "../../store/jsonStore.js";
 import { dataPath } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
+import { allocateBrowserSlot, cardBrowserSlot, isBrowserSlotPort, rememberBrowserSlot, SLOT_SPACE } from "../browser/ports.js";
 
 /**
  * BOARD REGISTRY — the projects and cards of the kanban of Claude Code terminals.
@@ -356,6 +357,13 @@ export interface Card {
    * — the sweep falls back to `updatedAt` there, which is the honest approximation.
    */
   doneAt?: number;
+  /**
+   * The card's BROWSER SLOT (0..SLOT_SPACE-1): its display, VNC port and CDP port are this offset
+   * from their bases. Allocated by {@link assignBrowserSlots} — never two cards on the same slot —
+   * and stored, because deriving it from the id collided (see services/browser/ports.ts). Absent
+   * only on disk, on a card older than the field: the load allocates it.
+   */
+  browserSlot?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -500,12 +508,58 @@ export function sanitizeDefaultAccountLabel(label: string | null | undefined): s
   return v || undefined;
 }
 
+/** A deleted card's browser slot, held until its browser is confirmed down (see BoardDoc). */
+export interface BrowserSlotHold {
+  cardId: string;
+  slot: number;
+}
+
+const isBrowserSlotHold = (h: unknown): h is BrowserSlotHold =>
+  typeof h === "object" && h !== null &&
+  typeof (h as BrowserSlotHold).cardId === "string" && Number.isInteger((h as BrowserSlotHold).slot);
+
+/**
+ * One removal the runner owes. The `id` is what settles it: a NAME can be owed again while a removal
+ * is running (deleted, recreated, deleted again), and that new debt is not paid by the old receipt.
+ */
+export interface McpDrop {
+  name: string;
+  id: string;
+}
+
+/**
+ * A stored debt, or null. Documents written before the id existed hold bare names: each one gets a
+ * DETERMINISTIC id (names were deduplicated then), so a reload between reading the debts and
+ * settling them still settles the same entries.
+ */
+function parseMcpDrop(raw: unknown): McpDrop | null {
+  if (typeof raw === "string") return { name: raw, id: `legacy:${raw}` };
+  if (!raw || typeof raw !== "object") return null;
+  const { name, id } = raw as Partial<McpDrop>;
+  return typeof name === "string" && typeof id === "string" ? { name, id } : null;
+}
+
 export interface BoardDoc {
   config: BoardConfig;
   accounts: Account[];
   projects: Project[];
   cards: Card[];
   mcps: McpServer[];
+  /**
+   * DELETED MCPs whose removal from the runner's profiles is still owed. Recorded in the same write
+   * that deletes the MCP, settled only once the runner has really removed it — see
+   * `dropDeletedMcps` in services/mcp. Older documents have none (or bare names, see `parseMcpDrop`).
+   */
+  mcpDrops: McpDrop[];
+  /**
+   * Browser slots of DELETED cards whose Chromium is not confirmed down yet. A card leaves the board
+   * before (project delete) or regardless of (runner down) its browser being stopped, and that
+   * browser — logged-in sessions and all — keeps running on the slot's display/CDP port: handing the
+   * slot to a new card would give that card's agent the deleted card's Chromium. Recorded in the
+   * same write that removes the card, released by the purge once the stop went through
+   * (`releaseBrowserSlot`), or by the orphan sweep's retry when it did not. Older documents have none.
+   */
+  browserSlotHolds: BrowserSlotHold[];
   /** GitHub accounts vibehub can clone as. Older documents have none — the field is filled on load. */
   githubConnections: GithubConnection[];
   /** Who else can reach which card or project. Empty on an install nobody has shared anything on. */
@@ -514,20 +568,99 @@ export interface BoardDoc {
 
 const store = new JsonStore<BoardDoc>(
   dataPath("board.json"),
-  () => ({ config: {}, accounts: [], projects: [], cards: [], mcps: [], githubConnections: [], shares: [] }),
+  () => ({
+    config: {}, accounts: [], projects: [], cards: [], mcps: [], mcpDrops: [], browserSlotHolds: [],
+    githubConnections: [], shares: [],
+  }),
   (raw) => {
     const doc = raw as Partial<BoardDoc> | null;
     return {
       config: doc?.config && typeof doc.config === "object" ? doc.config : {},
       accounts: Array.isArray(doc?.accounts) ? doc.accounts : [],
       projects: Array.isArray(doc?.projects) ? doc.projects : [],
-      cards: Array.isArray(doc?.cards) ? doc.cards : [],
+      cards: assignBrowserSlots(Array.isArray(doc?.cards) ? doc.cards : []),
       mcps: Array.isArray(doc?.mcps) ? doc.mcps : [],
+      mcpDrops: Array.isArray(doc?.mcpDrops)
+        ? (doc.mcpDrops as unknown[]).map(parseMcpDrop).filter((d): d is McpDrop => d !== null)
+        : [],
+      browserSlotHolds: rememberBrowserSlotHolds(Array.isArray(doc?.browserSlotHolds) ? doc.browserSlotHolds : []),
       githubConnections: Array.isArray(doc?.githubConnections) ? doc.githubConnections : [],
       shares: Array.isArray(doc?.shares) ? doc.shares : [],
     };
   },
 );
+
+/**
+ * Gives every card that has no valid slot of its own one nobody else holds, and reports every
+ * card's slot to the port table. THREE passes, each one a claim stronger than the next:
+ *
+ *  1. a slot already stored on the card — kept, so a card older than the field can never take a
+ *     slot from one that has it. A slot two cards claim (a hand-edited board.json) stays with the
+ *     first and the second falls through;
+ *  2. the HASHED slot of each card without one, while still free — that is where its Chromium has
+ *     been running since before slots were allocated;
+ *  3. only the cards whose hashed slot was taken get the lowest free one.
+ *
+ * Folding 2 and 3 into one pass in file order handed a colliding legacy card the lowest free slot
+ * BEFORE a legacy card further down claimed it as its hashed one — with that card's browser already
+ * up there, the first card's agent drove the other's logged-in Chromium: the very bug allocating
+ * slots exists to close. Mutates and returns `cards` — it runs on load and the next mutation
+ * persists what it allocated.
+ */
+function assignBrowserSlots(cards: Card[]): Card[] {
+  const taken = new Set<number>();
+  const claim = (card: Card, slot: number): void => {
+    card.browserSlot = slot;
+    taken.add(slot);
+    rememberBrowserSlot(card.id, slot);
+  };
+  const missing: Card[] = [];
+  for (const card of cards) {
+    const slot = card.browserSlot;
+    if (typeof slot === "number" && Number.isInteger(slot) && slot >= 0 && slot < SLOT_SPACE && !taken.has(slot)) {
+      claim(card, slot);
+    } else {
+      missing.push(card);
+    }
+  }
+  const collided: Card[] = [];
+  for (const card of missing) {
+    const hashed = cardBrowserSlot(card.id);
+    if (taken.has(hashed)) collided.push(card);
+    else claim(card, hashed);
+  }
+  for (const card of collided) claim(card, allocateBrowserSlot(card.id, taken));
+  return cards;
+}
+
+/**
+ * The valid holds, each reported to the port table: after a restart a deleted card is in no card
+ * list, and stopping its browser by the HASHED slot (the table's fallback) would aim at another
+ * display and leave the logged-in Chromium on the held one running — see `retryBrowserSlotHolds`.
+ */
+function rememberBrowserSlotHolds(raw: unknown[]): BrowserSlotHold[] {
+  const holds = raw.filter(isBrowserSlotHold);
+  for (const hold of holds) rememberBrowserSlot(hold.cardId, hold.slot);
+  return holds;
+}
+
+/**
+ * The slots a new card must not be handed: the board's cards', and the deleted cards' whose
+ * browser may still be running there (`browserSlotHolds`).
+ */
+function takenBrowserSlots(doc: Pick<BoardDoc, "cards" | "browserSlotHolds">): Set<number> {
+  return new Set([
+    ...doc.cards.flatMap((c) => (c.browserSlot === undefined ? [] : [c.browserSlot])),
+    ...doc.browserSlotHolds.map((h) => h.slot),
+  ]);
+}
+
+/** Holds the slots of cards leaving the board, in the same write (see BoardDoc.browserSlotHolds). */
+function holdBrowserSlots(doc: BoardDoc, cards: readonly Card[]): void {
+  for (const card of cards) {
+    if (card.browserSlot !== undefined) doc.browserSlotHolds.push({ cardId: card.id, slot: card.browserSlot });
+  }
+}
 
 /** Drops the in-memory cache. Tests only. */
 export function resetForTesting(): void {
@@ -1191,6 +1324,7 @@ export async function removeProject(id: string): Promise<RemovedProject> {
     if (!project) throw new Error("project not found");
     const cards = doc.cards.filter((c) => c.projectId === id);
     doc.cards = doc.cards.filter((c) => c.projectId !== id);
+    holdBrowserSlots(doc, cards);
     doc.projects = doc.projects.filter((p) => p.id !== id);
     // The shares of the project AND of every card that went with it: a share pointing at something
     // that no longer exists is a permission nobody can see and nobody can revoke.
@@ -1245,6 +1379,9 @@ export async function createCard(input: CreateCardInput): Promise<Card> {
 
     const id = randomUUID();
     const now = Date.now();
+    // Allocated inside the mutation, against the document as it is: two concurrent creations
+    // are serialized by the store, so they can never be handed the same slot.
+    const browserSlot = allocateBrowserSlot(id, takenBrowserSlots(doc));
     const card: Card = {
       id,
       projectId: project.id,
@@ -1255,10 +1392,12 @@ export async function createCard(input: CreateCardInput): Promise<Card> {
       tmuxSession: tmuxSessionFor(id),
       worktreeSlug: worktreeSlugFor(title, id),
       status: null,
+      browserSlot,
       createdAt: now,
       updatedAt: now,
     };
     doc.cards.push(card);
+    rememberBrowserSlot(id, browserSlot);
     // Renumbers the backlog with the new card spliced in at 0, so positions stay 0..n-1.
     placeCard(doc.cards, card, "backlog", 0);
     return card;
@@ -1377,12 +1516,28 @@ export async function updateCard(id: string, patch: UpdateCardInput): Promise<Ca
   });
 }
 
+/**
+ * The browser of this deleted card is confirmed down: its slot may go to a new card again (see
+ * BoardDoc.browserSlotHolds). A card still on the board holds nothing — a no-op.
+ */
+export async function releaseBrowserSlot(cardId: string): Promise<void> {
+  await store.mutate((doc) => {
+    doc.browserSlotHolds = doc.browserSlotHolds.filter((h) => h.cardId !== cardId);
+  });
+}
+
+/** Deleted cards whose browser is not confirmed down yet (see BoardDoc.browserSlotHolds). */
+export async function listBrowserSlotHolds(): Promise<BrowserSlotHold[]> {
+  return (await store.load()).browserSlotHolds.map((h) => ({ ...h }));
+}
+
 /** Removes a card and renumbers the column it came from. Unknown id -> undefined (the caller decides the 404). */
 export async function removeCard(id: string): Promise<Card | undefined> {
   return store.mutate((doc) => {
     const found = doc.cards.find((c) => c.id === id);
     if (!found) return undefined;
     doc.cards = doc.cards.filter((c) => c.id !== id);
+    holdBrowserSlots(doc, [found]);
     doc.shares = doc.shares.filter((s) => !(s.kind === "card" && s.targetId === id));
     normalizeColumns(doc.cards, found.projectId, [found.column]);
     return found;
@@ -1500,6 +1655,10 @@ export async function registerCardPreview(
   const command = normalizePreviewCommand(input.command);
   const cwd = normalizePreviewCwd(input.cwd);
   return store.mutate((doc) => {
+    // Inside the mutation, the board is loaded — and with it every allocated browser slot. A card's
+    // CDP/VNC is remote control of a logged-in browser: a preview record there would let whoever can
+    // open THIS card's previews (a member it is shared with) drive ANOTHER card's browser.
+    if (isBrowserSlotPort(p)) throw new Error(`port ${p} is reserved for vibehub's browser plumbing`);
     const card = doc.cards.find((c) => c.id === cardId);
     if (!card) return undefined;
     // Re-announcing WITHOUT a command keeps the one already stored: the relaunch recipe is the
@@ -1526,14 +1685,24 @@ export async function registerCardPreview(
  */
 export async function findCardPreviewByPort(port: number): Promise<{ card: Card; preview: CardPreview } | undefined> {
   const p = assertPreviewPort(port);
-  const doc = await store.load();
-  let best: { card: Card; preview: CardPreview } | undefined;
-  for (const card of doc.cards) {
+  return currentPreviewOwners((await store.load()).cards).get(p);
+}
+
+/**
+ * Every registered port -> the card that holds it NOW, by findCardPreviewByPort's rule (the newest
+ * registration wins). Pure, over a card list the caller already has — the preview access scope needs
+ * the whole map at once, and must agree with the proxy on whose port it is: an older card that once
+ * registered the same port does not own it anymore.
+ */
+export function currentPreviewOwners(cards: readonly Card[]): Map<number, { card: Card; preview: CardPreview }> {
+  const owners = new Map<number, { card: Card; preview: CardPreview }>();
+  for (const card of cards) {
     for (const preview of card.previews ?? []) {
-      if (preview.port === p && (!best || preview.createdAt > best.preview.createdAt)) best = { card, preview };
+      const best = owners.get(preview.port);
+      if (!best || preview.createdAt > best.preview.createdAt) owners.set(preview.port, { card, preview });
     }
   }
-  return best;
+  return owners;
 }
 
 /**
@@ -1813,16 +1982,51 @@ export async function createMcp(input: CreateMcpInput): Promise<McpServer> {
     if (doc.mcps.some((m) => m.name === shape.name)) throw new Error(`MCP '${shape.name}' already exists`);
     const mcp: McpServer = { id: randomUUID().replace(/-/g, "").slice(0, 12), ...shape, createdAt: Date.now() };
     doc.mcps.push(mcp);
+    // A removal still owed for this NAME stays owed. The injection that would replace the deleted
+    // config is fail-closed (a secret with no value yet refuses the whole apply), so settling the
+    // debt here left the old entry — leaked token in clear — in every profile. The apply pays the
+    // removal first and injects the new one right after, so nothing is lost by keeping it.
     return mcp;
   });
 }
 
+/**
+ * Deletes an MCP from the board AND records, in the same write, that the runner still owes its
+ * removal (`mcpDrops`). The removal itself needs the runner, which may be down right now; with the
+ * debt kept nowhere, a failed removal was forgotten and the MCP — token in clear text in every
+ * profile's `.claude.json` — kept being launched by every new session.
+ */
 export async function removeMcp(id: string): Promise<McpServer> {
   return store.mutate((doc) => {
     const found = doc.mcps.find((m) => m.id === id);
     if (!found) throw new Error("MCP not found");
     doc.mcps = doc.mcps.filter((m) => m.id !== id);
+    // Always a NEW debt, even for a name already owed: a removal running right now may have passed
+    // a profile before this registration reached it (see `settleMcpDrops`).
+    doc.mcpDrops.push({ name: found.name, id: randomUUID() });
     return found;
+  });
+}
+
+/** Names of deleted MCPs the runner has not removed yet (see `removeMcp`), each once. */
+export async function pendingMcpDrops(): Promise<string[]> {
+  return [...new Set((await store.load()).mcpDrops.map((d) => d.name))];
+}
+
+/** The removals owed right now, receipts included — what `dropDeletedMcps` pays and then settles. */
+export async function owedMcpDrops(): Promise<McpDrop[]> {
+  return (await store.load()).mcpDrops.map((d) => ({ ...d }));
+}
+
+/**
+ * The runner removed these: the debt is paid. Settled by RECEIPT, not by name — a removal owed
+ * again meanwhile (same name, newer id) stays owed for the next apply.
+ */
+export async function settleMcpDrops(paid: readonly McpDrop[]): Promise<void> {
+  if (paid.length === 0) return;
+  const ids = new Set(paid.map((d) => d.id));
+  await store.mutate((doc) => {
+    doc.mcpDrops = doc.mcpDrops.filter((d) => !ids.has(d.id));
   });
 }
 
