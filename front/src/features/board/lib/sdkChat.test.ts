@@ -1347,3 +1347,77 @@ describe("workflow — a frota visível no chat", () => {
     expect((rendered.at(-1) as { row: { kind: string } }).row.kind).toBe("workflow");
   });
 });
+
+describe("background_tasks — o trabalho que segue depois do turno", () => {
+  const bash = { id: "b1", type: "local_bash", description: "Aguarda o deploy" };
+
+  it("guarda o conjunto vivo, SUBSTITUINDO o anterior a cada aviso", () => {
+    let state = feed([{ type: "ready" }, { type: "background_tasks", tasks: [bash] }]);
+    expect(state.backgroundTasks).toEqual([bash]);
+    state = applySdkEvent(state, { type: "background_tasks", tasks: [] });
+    expect(state.backgroundTasks).toEqual([]);
+  });
+
+  it("sobrevive ao fim do turno: o result fecha o turno, não a tarefa", () => {
+    const state = feed([
+      { type: "ready" },
+      { type: "tool_use", id: "t1", name: "Bash", input: { command: "sleep 200", run_in_background: true } },
+      { type: "background_tasks", tasks: [bash] },
+      { type: "result", isError: false },
+    ]);
+    expect(state.turnActive).toBe(false);
+    expect(state.backgroundTasks).toEqual([bash]);
+  });
+
+  it("um ready (driver novo ou reconexão) zera o conjunto — o back reenvia o vigente logo atrás", () => {
+    const state = feed([{ type: "ready" }, { type: "background_tasks", tasks: [bash] }, { type: "ready" }]);
+    expect(state.backgroundTasks).toEqual([]);
+  });
+
+  it("normaliza campos que faltam: uma tarefa sem description/type não chega torta à tela", () => {
+    const state = feed([{ type: "ready" }, { type: "background_tasks", tasks: [{ id: "b1" } as never] }]);
+    expect(state.backgroundTasks).toEqual([{ id: "b1", type: "", description: "" }]);
+  });
+
+  it("descarta entradas malformadas e não acende o spinner do turno", () => {
+    const state = feed([
+      { type: "ready" },
+      { type: "background_tasks", tasks: [bash, { id: 7 } as never, null as never] },
+    ]);
+    expect(state.backgroundTasks).toEqual([bash]);
+    expect(state.turnActive).toBe(false);
+    expect(state.rows).toEqual([]);
+  });
+});
+
+describe("conversation_reset — /clear", () => {
+  it("limpa a conversa da tela e esquece a sessão antiga, mantendo o menu e as tarefas vivas", () => {
+    const bash = { id: "b1", type: "local_bash", description: "Aguarda o deploy" };
+    const before = feed([
+      { type: "ready" },
+      { type: "catalog", commands: [{ name: "clear", source: "command" } as never] },
+      { type: "background_tasks", tasks: [bash] },
+      { type: "assistant_text", text: "conversa antiga" },
+      { type: "result", isError: false, sessionId: "0d1b3864-4870-4141-8451-79d73de0bd96" },
+    ]);
+    const state = applySdkEvent(before, { type: "conversation_reset", trigger: "clear" });
+    expect(state.rows).toEqual([]);
+    expect(state.sessionId).toBeUndefined();
+    expect(state.commands).toEqual(before.commands);
+    expect(state.backgroundTasks).toEqual([bash]);
+  });
+
+  it("mantém o /clear e o que foi enviado DEPOIS dele (fila do CLI); só sai o que veio antes", () => {
+    let state = feed([{ type: "ready" }, { type: "assistant_text", text: "conversa antiga" }]);
+    state = appendUserRow(state, "/clear", undefined, { cid: "c1", state: "sent" });
+    state = appendUserRow(state, "agora roda os testes", undefined, { cid: "c2", state: "sending" });
+    state = applySdkEvent(state, { type: "conversation_reset", trigger: "clear" });
+    expect(state.rows.map((r) => (r.kind === "user" ? r.text : r.kind))).toEqual(["/clear", "agora roda os testes"]);
+  });
+
+  it("um reset que não veio de /clear não apaga a tela", () => {
+    const before = feed([{ type: "ready" }, { type: "assistant_text", text: "plano aprovado" }]);
+    const state = applySdkEvent(before, { type: "conversation_reset", trigger: "plan_exit" });
+    expect(state.rows).toEqual(before.rows);
+  });
+});

@@ -549,6 +549,19 @@ describe("parseTypingFrame — o sinal efêmero de \"está digitando\"", () => {
   });
 });
 
+describe("parseDriverLine — tarefas em segundo plano", () => {
+  it("aceita o conjunto vivo de tarefas em segundo plano que o driver repassa", () => {
+    expect(parseDriverLine(`{"type":"background_tasks","tasks":[{"id":"b1","type":"local_bash","description":"Aguarda o deploy"}]}`))
+      .toEqual({ type: "background_tasks", tasks: [{ id: "b1", type: "local_bash", description: "Aguarda o deploy" }] });
+  });
+});
+
+describe("parseDriverLine — /clear", () => {
+  it("aceita o reset da conversa que o driver repassa", () => {
+    expect(parseDriverLine(`{"type":"conversation_reset","trigger":"clear"}`)).toEqual({ type: "conversation_reset", trigger: "clear" });
+  });
+});
+
 /**
  * A PERGUNTA ÓRFÃ (produção, 2026-10-07): o driver morreu (deploy, crash, hibernação) com um cartão
  * de pergunta de pé. O histórico redesenha o cartão como pendente, mas o driver novo nunca ouviu

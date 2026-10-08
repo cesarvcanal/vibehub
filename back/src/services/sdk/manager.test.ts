@@ -7,9 +7,11 @@ import { config } from "../../config/env.js";
 import { readCardCatalog } from "./catalog.js";
 import { readHistory, rewindHistory } from "./history.js";
 import {
+  BACKGROUND_HOLD_MAX_MS,
   DRIVER_IDLE_MS,
   TYPING_RELAY_MIN_MS,
   attachSocket,
+  driverActivity,
   ensureDriverSession,
   handleClientFrame,
   hasDriverSession,
@@ -1709,5 +1711,219 @@ describe("attachSocket — \"está digitando\" entre as abas do card", () => {
     attachSocket(session, mussa as never, MUSSA);
     anon.emit("message", typing(true));
     expect(peerFrames(mussa)).toEqual([]);
+  });
+});
+
+/**
+ * TAREFAS EM SEGUNDO PLANO (produção, 2026-10-07): o Claude disparou um `sleep 200` em background, o
+ * turno fechou e o chat ficou mudo — "parece que ela parou, mas está rodando". O conjunto vivo vem
+ * do CLI (`background_tasks`, semântica de SUBSTITUIR) e é ESTADO da sessão, como o catálogo.
+ */
+describe("background_tasks — o trabalho que segue depois do turno", () => {
+  const running = { type: "background_tasks", tasks: [{ id: "b1", type: "local_bash", description: "Aguarda o deploy" }] };
+  const none = { type: "background_tasks", tasks: [] };
+
+  it("chega às abas abertas e é reenviado a uma aba que conecta depois", () => {
+    const session = ensure();
+    const s1 = fakeSocket();
+    attachSocket(session, s1 as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    spawned[0]!.stdout.emit("data", line(running));
+    expect(sentTypes(s1)).toContain("background_tasks");
+
+    const s2 = fakeSocket();
+    attachSocket(session, s2 as never);
+    const frames = s2.sent.map((s) => JSON.parse(s) as { type: string; tasks?: unknown }).filter((e) => e.type === "background_tasks");
+    expect(frames).toEqual([running]);
+  });
+
+  it("não reenvia nada quando o conjunto esvaziou", () => {
+    const session = ensure();
+    attachSocket(session, fakeSocket() as never);
+    spawned[0]!.stdout.emit("data", line(running));
+    spawned[0]!.stdout.emit("data", line(none));
+    const late = fakeSocket();
+    attachSocket(session, late as never);
+    expect(sentTypes(late)).not.toContain("background_tasks");
+  });
+
+  it("nunca vai para a conversa gravada — é estado, não algo que alguém disse", async () => {
+    const session = ensure();
+    attachSocket(session, fakeSocket() as never);
+    spawned[0]!.stdout.emit("data", line(running));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const history = await readHistory(CARD);
+    expect(history.some((e) => e.type === "background_tasks")).toBe(false);
+  });
+
+  it("um driver NOVO começa sem tarefas: as do processo antigo morreram com ele", () => {
+    const session = ensure();
+    attachSocket(session, fakeSocket() as never);
+    spawned[0]!.stdout.emit("data", line(running));
+    stopCardDriver(CARD);
+    const fresh = ensure();
+    const late = fakeSocket();
+    attachSocket(fresh, late as never);
+    expect(fresh).not.toBe(session);
+    expect(sentTypes(late)).not.toContain("background_tasks");
+  });
+
+  it("o idle stop NÃO mata um driver com tarefa em segundo plano viva — só quando ela termina", () => {
+    vi.useFakeTimers();
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"espera o deploy em background"}`));
+    spawned[0]!.stdout.emit("data", line(running));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    socket.emit("close");
+    vi.advanceTimersByTime(DRIVER_IDLE_MS * 3);
+    expect(spawned[0]!.killed).toBe(false);
+    expect(isCardChatInUse(CARD)).toBe(true);
+    expect(driverActivity(CARD)).toBe("turn");
+
+    spawned[0]!.stdout.emit("data", line(none));
+    expect(isCardChatInUse(CARD)).toBe(false);
+    expect(driverActivity(CARD)).toBe("idle");
+    vi.advanceTimersByTime(DRIVER_IDLE_MS + 1);
+    expect(spawned[0]!.killed).toBe(true);
+  });
+
+  it("tem TETO: uma tarefa que nunca termina (npm run dev, tail -f) não segura o driver para sempre sem ninguém olhando", () => {
+    vi.useFakeTimers();
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    spawned[0]!.stdout.emit("data", line({ type: "background_tasks", tasks: [{ id: "b1", type: "local_bash", description: "npm run dev" }] }));
+    socket.emit("close");
+    vi.advanceTimersByTime(BACKGROUND_HOLD_MAX_MS - 1);
+    expect(spawned[0]!.killed).toBe(false);
+    expect(isCardChatInUse(CARD)).toBe(true);
+    vi.advanceTimersByTime(DRIVER_IDLE_MS + 2);
+    expect(isCardChatInUse(CARD)).toBe(false);
+    expect(spawned[0]!.killed).toBe(true);
+  });
+
+  // O TURNO QUE O CLI ABRE SOZINHO (a tarefa terminou e o modelo foi acordado) NÃO é contado pelo
+  // manager: inferi-lo pelo tipo de evento prendia a contagem em 1 — o driver não sabe desse turno
+  // (seu `turnActive` só nasce em `sendUser`), então uma mensagem no meio dele não vira
+  // `turn_absorbed` e um CLI que cai no meio não paga o `result`. Contar esse turno é tarefa do
+  // DRIVER (fora do escopo deste PR); até lá, a contagem fica exatamente como na main.
+  it("mensagem enviada no meio do turno autônomo não prende a contagem: um result e volta a zero", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"espera o deploy"}`));
+    spawned[0]!.stdout.emit("data", line(running));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    spawned[0]!.stdout.emit("data", line(none));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_delta", text: "Deploy ok, " }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"e o cert?"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    expect(session.activeTurns).toBe(0);
+    expect(driverActivity(CARD)).toBe("idle");
+  });
+
+  it("CLI que cai no meio do turno autônomo não deixa o driver ocupado para sempre", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"espera o deploy"}`));
+    spawned[0]!.stdout.emit("data", line(running));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    socket.emit("close");
+    spawned[0]!.stdout.emit("data", line(none));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "woke" }));
+    spawned[0]!.stdout.emit("data", line({ type: "error", message: "CLI process exited with code 1" }));
+    expect(session.activeTurns).toBe(0);
+    expect(isCardChatInUse(CARD)).toBe(false);
+  });
+
+  it("parar sem turno nenhum não deixa nota de interrupção para o próximo turno", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"espera o deploy"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_delta", text: "acordei" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"e agora?"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    socket.emit("message", Buffer.from(`{"type":"interrupt"}`));
+    expect(session.pendingInterruptNote).toBeUndefined();
+  });
+});
+
+/**
+ * /clear (produção, 2026-10-08): o CLI limpa o contexto e abre uma sessão nova, mas a tela e o log
+ * do card seguiam com a conversa inteira — no F5 ela voltava, e para quem olhava o /clear "não
+ * funcionava". O reset apaga o LOG (o replay) e deixa uma nota dizendo que a conversa foi limpa.
+ */
+describe("conversation_reset — o /clear limpa a conversa de verdade", () => {
+  it("repassa o reset às abas, apaga o log da conversa antiga e grava a nota do /clear", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "conversa antiga" }));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"/clear"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "conversation_reset", trigger: "clear" }));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    expect(sentTypes(socket)).toContain("conversation_reset");
+    const reset = sentTypes(socket).indexOf("conversation_reset");
+    expect(sentTypes(socket).slice(reset)).toContain("system_note");
+
+    await vi.waitFor(async () => {
+      const history = await readHistory(CARD);
+      expect(history.map((e) => [e.type, (e as { text?: string }).text])).toEqual([
+        ["user", "/clear"],
+        ["system_note", "conversation-cleared"],
+      ]);
+    }, { timeout: 5000 });
+  });
+
+  it("uma mensagem enviada DEPOIS do /clear (fila do CLI) sobrevive: só sai o que veio antes dele", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"faz a tarefa longa"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "conversa antiga" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"/clear"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "turn_absorbed" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"agora roda os testes"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "turn_absorbed" }));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    spawned[0]!.stdout.emit("data", line({ type: "conversation_reset", trigger: "clear" }));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "testes passaram" }));
+
+    await vi.waitFor(async () => {
+      const history = await readHistory(CARD);
+      expect(history.map((e) => [e.type, (e as { text?: string }).text])).toEqual([
+        ["user", "/clear"],
+        ["user", "agora roda os testes"],
+        ["system_note", "conversation-cleared"],
+        ["assistant_text", "testes passaram"],
+      ]);
+    }, { timeout: 5000 });
+  });
+
+  it("um reset que NÃO veio de /clear (outro fluxo de sessão nova) não apaga a conversa nem escreve a nota", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "plano aprovado" }));
+    spawned[0]!.stdout.emit("data", line({ type: "conversation_reset", trigger: "plan_exit" }));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "implementando" }));
+    await vi.waitFor(async () => {
+      const history = await readHistory(CARD);
+      expect(history.map((e) => (e as { text?: string }).text)).toEqual(["plano aprovado", "implementando"]);
+    }, { timeout: 5000 });
   });
 });

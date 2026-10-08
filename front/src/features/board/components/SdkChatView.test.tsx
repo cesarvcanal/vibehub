@@ -3077,3 +3077,50 @@ describe("SdkChatView — o custo do transcript", () => {
     }
   });
 });
+
+describe("SdkChatView — tarefas em segundo plano", () => {
+  it("o turno acabou mas a tarefa segue: o chat DIZ que há trabalho rodando, e para de dizer quando ela termina", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { command: "sleep 200 && echo ok", run_in_background: true } });
+    ws.deliver({ type: "background_tasks", tasks: [{ id: "b1", type: "local_bash", description: "Aguarda o self-deploy" }] });
+    ws.deliver({ type: "assistant_text", text: "Vou aguardar o deploy." });
+    ws.deliver({ type: "result", isError: false });
+
+    const tray = await screen.findByTestId("sdk-background-tasks");
+    expect(tray).toHaveTextContent("Aguarda o self-deploy");
+    expect(tray).toHaveTextContent(/background/i);
+
+    ws.deliver({ type: "background_tasks", tasks: [] });
+    await waitFor(() => expect(screen.queryByTestId("sdk-background-tasks")).toBeNull());
+  });
+
+  it("uma tarefa sem descrição não derruba o chat: aparece com um nome genérico", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "background_tasks", tasks: [{ id: "b1" } as never] });
+    const tray = await screen.findByTestId("sdk-background-tasks");
+    expect(tray).toHaveTextContent(/background task/i);
+  });
+});
+
+describe("SdkChatView — /clear", () => {
+  it("o /clear limpa a conversa da tela e diz que o Claude começou do zero", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "assistant_text", text: "Resposta antiga e longa." });
+    ws.deliver({ type: "result", isError: false });
+    expect(screen.getByText("Resposta antiga e longa.")).toBeInTheDocument();
+
+    ws.deliver({ type: "conversation_reset", trigger: "clear" });
+    ws.deliver({ type: "system_note", text: "conversation-cleared", at: Date.now() });
+    await waitFor(() => expect(screen.queryByText("Resposta antiga e longa.")).toBeNull());
+    expect(screen.getByText(/cleared/i)).toBeInTheDocument();
+  });
+});

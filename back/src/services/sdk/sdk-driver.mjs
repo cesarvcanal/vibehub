@@ -502,6 +502,10 @@ let currentQuery = null; // the live query() iterator, so an interrupt can reach
 let channel = null; // feeds the live query's prompt stream (null = no stream running)
 let turnActive = false; // a turn is running, or a message is already fed and about to start one
 let announcedSessionId = null; // last session id emitted as a `session` event (dedupe)
+// O stream (= processo do CLI) que anunciou o conjunto NÃO VAZIO de tarefas em segundo plano que a
+// tela está mostrando agora. Quando ESSE processo morre, as tarefas morrem com ele — e o CLI, morto,
+// não manda o aviso de conjunto vazio: quem manda é o driver (ver o `finally` de `runStream`).
+let backgroundTasksOwner = null;
 
 /* ------------------------------------------------- rewind (editar = voltar no tempo) */
 // Editing a message REWINDS the conversation: the session resumes at the point right before that
@@ -707,11 +711,35 @@ async function runStream() {
           }
         } else if (msg.subtype === "commands_changed") {
           emitCatalogChanged(msg.commands);
+        } else if (msg.subtype === "background_tasks_changed" && Array.isArray(msg.tasks)) {
+          // TAREFAS EM SEGUNDO PLANO (um Bash com run_in_background, um subagente, um monitor): o
+          // turno fecha e elas seguem. Sem este aviso o chat apagava o "Trabalhando…" no `result` e
+          // ficava mudo por minutos — lido do outro lado como "ele parou" (produção, 2026-10-07).
+          // É um sinal de NÍVEL: o conjunto inteiro a cada mudança, para SUBSTITUIR, nunca somar.
+          const tasks = msg.tasks
+            .filter((t) => t && typeof t.task_id === "string")
+            .map((t) => ({
+              id: t.task_id,
+              type: typeof t.task_type === "string" ? t.task_type : "",
+              description: typeof t.description === "string" ? t.description : "",
+            }));
+          backgroundTasksOwner = tasks.length > 0 ? myQuery : null;
+          emit({ type: "background_tasks", tasks });
         } else if (msg.subtype === "local_command_output" && typeof msg.content === "string") {
           // A command the CLI answers itself (/cost, /usage): no turn, no assistant message — the
           // answer exists ONLY here, and swallowing it makes the command look broken.
           if (msg.content.trim() !== "") emit({ type: "local_output", text: msg.content });
         }
+      } else if (msg.type === "conversation_reset") {
+        // /clear (ou outro fluxo de "sessão nova" do CLI): o modelo começa do zero numa sessão NOVA
+        // — a próxima mensagem `system` traz o id dela, e o `session` sai por lá. O que este driver
+        // guardava da conversa antiga morre aqui: um ponto de volta dela, usado num editar depois
+        // do /clear, rebobinaria a sessão nova para dentro da conversa que acabou de ser apagada.
+        lastAssistantUuid = null;
+        forkPoint = null;
+        forkText = null;
+        absorbedSinceFork = false;
+        emit({ type: "conversation_reset", trigger: typeof msg.trigger === "string" ? msg.trigger : "clear" });
       } else if (msg.type === "stream_event") {
         const ev = msg.event;
         if (ev && ev.type === "content_block_delta" && ev.delta && ev.delta.type === "text_delta") {
@@ -776,6 +804,12 @@ async function runStream() {
     // custa uma comparação e no caminho normal não muda nada.
     const stillOurs = currentQuery === myQuery;
     if (stillOurs) closeTurnAborted();
+    // O processo do CLI deste stream acabou, e as tarefas em segundo plano dele com ele: o conjunto
+    // que a tela mostra volta a vazio — senão o "rodando em segundo plano" ficava aceso para sempre.
+    if (backgroundTasksOwner !== null && backgroundTasksOwner === myQuery) {
+      backgroundTasksOwner = null;
+      emit({ type: "background_tasks", tasks: [] });
+    }
     if (channel === myChannel) channel = null;
     if (closingQuery === myQuery) closingQuery = null;
     if (stillOurs) {
@@ -1034,6 +1068,13 @@ async function endStream() {
     currentQuery = null;
     ultraRaised = null; // pinned in that CLI's flag layer, which is no longer ours to give back
     closeTurnAborted();
+    // As tarefas em segundo plano dele também deixam de ser nossas: o que ele ainda anunciar é só
+    // drenado (inclusive o `[]` de quando elas acabam), e o `finally` dele pode nunca rodar — um
+    // processo pendurado deixava a faixa acesa e o driver "ocupado" para sempre.
+    if (backgroundTasksOwner === dying) {
+      backgroundTasksOwner = null;
+      emit({ type: "background_tasks", tasks: [] });
+    }
     if (closingQuery === dying) closingQuery = null;
     trace("stream did not let go within the teardown window — disowned, its errors are news again");
   }

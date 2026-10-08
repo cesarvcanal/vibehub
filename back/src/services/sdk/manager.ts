@@ -3,15 +3,15 @@ import { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
 import { onCardDriverProbe, type DriverActivity } from "../board/agentState.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
-import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, readHistory, replayableHistoryEvent, rewindHistory, type HistoryEvent } from "./history.js";
+import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, clearHistoryBeforeLastClear, readHistory, replayableHistoryEvent, rewindHistory, type HistoryEvent } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inflight.js";
 import { createLineReader, forgetDriverKeys, noteDriverEventFor, onOutsideTurn } from "./mirror.js";
 import { writeCardCatalog } from "./catalog.js";
 import { forgetCardWorkflows, lastWorkflowRuns, watchCardWorkflows } from "./workflow.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
-  buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, parseTypingFrame, encodeControl,
-  type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type UserQuestionItem,
+  NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, parseTypingFrame, encodeControl,
+  type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type UserQuestionItem,
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { logger } from "../../utils/logger.js";
@@ -46,6 +46,15 @@ import { logger } from "../../utils/logger.js";
 /** No sockets AND no running turn for this long ⇒ the driver shuts down (resume covers the rest). */
 export const DRIVER_IDLE_MS = 15 * 60_000;
 
+/**
+ * Por quanto tempo uma tarefa em segundo plano segura sozinha um driver que ninguém está olhando.
+ * Uma espera de deploy dura minutos; um `npm run dev` ou `tail -f` em background não acaba nunca, e
+ * sem teto ele mantinha o driver (e o card) acordado para sempre — antes desta regra o idle stop o
+ * derrubava em 15 min. Passado o teto vale o idle normal. Com uma aba aberta o driver vive de
+ * qualquer jeito, como sempre.
+ */
+export const BACKGROUND_HOLD_MAX_MS = 3 * 60 * 60_000;
+
 /** Websocket keepalive — same cadence as the terminal socket (proxies drop idle websockets). */
 const KEEPALIVE_MS = 25_000;
 
@@ -75,6 +84,14 @@ export interface DriverSession {
   transcriptDir?: string;
   /** Turns in flight or queued in the driver: +1 per user send, -1 per result. */
   activeTurns: number;
+  /**
+   * As tarefas EM SEGUNDO PLANO vivas no CLI deste driver (o último `background_tasks`): trabalho
+   * que segue depois do `result` do turno. Estado da sessão, como o catálogo — reenviado a quem
+   * conecta depois, nunca gravado — e, enquanto não estiver vazio, o driver NÃO está ocioso.
+   */
+  backgroundTasks: BackgroundTaskInfo[];
+  /** Quando o conjunto deixou de ser vazio — o início da contagem de `BACKGROUND_HOLD_MAX_MS`. */
+  backgroundSince?: number;
   /**
    * The session's command CATALOGUE (what the chat's "/" menu offers), as last reported by the
    * driver. Kept HERE, next to `ready`: it is session state, not conversation — it is never
@@ -240,7 +257,23 @@ export function hasDriverSession(cardId: string): boolean {
 export function isCardChatInUse(cardId: string): boolean {
   const session = sessions.get(cardId);
   if (!session || session.closed) return false;
-  return session.sockets.size > 0 || session.activeTurns > 0;
+  return session.sockets.size > 0 || isDriverBusy(session);
+}
+
+/**
+ * O driver está TRABALHANDO: um turno em voo ou na fila, OU uma tarefa em segundo plano viva (um
+ * `sleep 200` de espera de deploy, um subagente). Esta segunda metade é o que faltava: o turno que
+ * dispara a tarefa fecha na hora, e um driver "ocioso" sem ninguém na aba era desligado — matando o
+ * trabalho que o Claude tinha acabado de dizer que estava esperando.
+ */
+function isDriverBusy(session: Pick<DriverSession, "activeTurns" | "backgroundTasks" | "backgroundSince">): boolean {
+  return session.activeTurns > 0 || backgroundHoldLeft(session) > 0;
+}
+
+/** Quanto falta do teto em que as tarefas em segundo plano seguram o driver (0 = não seguram). */
+function backgroundHoldLeft(session: Pick<DriverSession, "backgroundTasks" | "backgroundSince">): number {
+  if (session.backgroundTasks.length === 0 || session.backgroundSince === undefined) return 0;
+  return Math.max(0, session.backgroundSince + BACKGROUND_HOLD_MAX_MS - Date.now());
 }
 
 /**
@@ -251,7 +284,7 @@ export function isCardChatInUse(cardId: string): boolean {
 export function driverActivity(cardId: string): DriverActivity {
   const session = sessions.get(cardId);
   if (!session || session.closed) return "none";
-  return session.activeTurns > 0 ? "turn" : "idle";
+  return isDriverBusy(session) ? "turn" : "idle";
 }
 
 /* ---------------------------------------------------------------- helpers */
@@ -294,12 +327,21 @@ function clearIdleTimer(session: DriverSession): void {
 function maybeScheduleIdleStop(session: DriverSession): void {
   if (session.closed || session.sockets.size > 0 || session.activeTurns > 0) return;
   if (session.idleTimer) return;
+  // Uma tarefa em segundo plano viva adia o relógio até o fim do teto dela (ver
+  // BACKGROUND_HOLD_MAX_MS) — e só então começam os 15 min de ociosidade.
   session.idleTimer = setTimeout(() => {
     session.idleTimer = null;
-    if (session.closed || session.sockets.size > 0 || session.activeTurns > 0) return;
-    logger.info({ card: session.label, audit: true, action: "sdk.driver.idle" }, "sdk driver idle — shutting it down (resume id persisted)");
+    if (session.closed || session.sockets.size > 0 || isDriverBusy(session)) return;
+    if (session.backgroundTasks.length > 0) {
+      logger.info(
+        { card: session.label, audit: true, action: "sdk.driver.idle.background-cap", tasks: session.backgroundTasks.map((t) => t.description) },
+        "sdk driver held by background tasks past the cap with nobody connected — shutting it down",
+      );
+    } else {
+      logger.info({ card: session.label, audit: true, action: "sdk.driver.idle" }, "sdk driver idle — shutting it down (resume id persisted)");
+    }
     stopCardDriver(session.cardId);
-  }, DRIVER_IDLE_MS);
+  }, backgroundHoldLeft(session) + DRIVER_IDLE_MS);
   session.idleTimer.unref?.();
 }
 
@@ -342,6 +384,29 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   // lado como "ele terminou" (produção, 2026-10-02). A sondagem do diário começa aqui, no instante
   // da chamada, e se encerra sozinha (ver services/sdk/workflow.ts): é ela quem alimenta o painel.
   if (event.type === "tool_use" && event.name === "Workflow") startWorkflowWatch(session);
+  if (event.type === "background_tasks") {
+    // Normalizado AQUI, no lado que fala com o navegador (como o catálogo): o que sai é só o que a
+    // tela desenha, e um item torto do driver não derruba a aba de ninguém.
+    const raw = (event as { tasks?: unknown }).tasks;
+    const tasks: BackgroundTaskInfo[] = Array.isArray(raw)
+      ? raw
+        .filter((t): t is Record<string, unknown> => typeof t === "object" && t !== null && typeof (t as { id?: unknown }).id === "string")
+        .map((t) => ({
+          id: t.id as string,
+          type: typeof t.type === "string" ? t.type : "",
+          description: typeof t.description === "string" ? t.description : "",
+        }))
+      : [];
+    event = { type: "background_tasks", tasks };
+    if (tasks.length === 0) session.backgroundSince = undefined;
+    else if (session.backgroundTasks.length === 0) session.backgroundSince = Date.now();
+    session.backgroundTasks = tasks;
+    // O relógio do idle é refeito a cada mudança: com tarefa viva ele espera o teto dela; quando a
+    // última termina sem turno em voo e sem ninguém olhando, AGORA começam os 15 min — o mesmo
+    // ponto em que um `result` o arma.
+    clearIdleTimer(session);
+    maybeScheduleIdleStop(session);
+  }
   if (event.type === "turn_absorbed") {
     // Streaming input: this send folded into the turn ALREADY running (the model absorbs it at its
     // next step) — it will not produce its own `result`, so its +1 comes back off. Floor at 1: an
@@ -401,6 +466,16 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   }
   if (event.type === "user_question") session.ownQuestions.add(event.id);
   if (!silenced) broadcast(session, event);
+  if (event.type === "conversation_reset" && (event.trigger === undefined || event.trigger === "clear")) {
+    // O /clear limpou o CONTEXTO do modelo; o log do card tem de ir junto, senão o F5 devolvia a
+    // conversa inteira e o /clear parecia não ter feito nada. Sai só o que veio ANTES do "/clear"
+    // (ver `clearHistoryBeforeLastClear`): o que foi mandado depois dele o CLI ainda vai rodar. O
+    // painel de workflow da conversa apagada também não volta num F5. Só no gatilho `clear`: outro
+    // fluxo de sessão nova do CLI (sair do plan mode, por exemplo) não é a pessoa pedindo a limpeza.
+    void clearHistoryBeforeLastClear(session.cardId);
+    forgetCardWorkflows(session.cardId);
+    emitSystemNote(session, NOTE_CONVERSATION_CLEARED);
+  }
   if (interruptNoteToFlush) emitSystemNote(session, interruptNoteToFlush);
   // History + mirror dedupe are MANAGER duties, not socket duties: they must keep happening while
   // no page is open — that is the whole point of the detach.
@@ -459,6 +534,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     sockets: new Set(),
     ready: false,
     activeTurns: 0,
+    backgroundTasks: [],
     rewinds: [],
     idleTimer: null,
     stderrTail: "",
@@ -886,6 +962,12 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
   // up had no command list until the next turn's `init` — an empty menu on a session full of skills.
   if (session.catalog) {
     try { socket.send(JSON.stringify(session.catalog)); } catch { /* going away */ }
+  }
+
+  // As tarefas em segundo plano também são estado: uma aba que abre (ou recarrega) enquanto um
+  // `sleep` de deploy roda precisa ver isso no primeiro quadro — o aviso do CLI só vem na mudança.
+  if (session.backgroundTasks.length > 0) {
+    try { socket.send(JSON.stringify({ type: "background_tasks", tasks: session.backgroundTasks })); } catch { /* going away */ }
   }
 
   // A frota do workflow é da mesma natureza do catálogo: estado, não conversa. Ela não está no

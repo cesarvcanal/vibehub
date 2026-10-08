@@ -48,6 +48,8 @@ The websocket sends **one JSON text frame per event**:
 { "type": "result", "isError": bool, "sessionId"?: "…", "subtype"?: "success", "result"?: "…", "permissionDenials"?: [ … ] }
 { "type": "catalog", "commands": [ { "name": "code-review", "description": "…", "argumentHint": "[<pr#>]", "aliases": ["review"], "source": "skill"|"plugin"|"command" } ] }
 { "type": "local_output", "text": "…" }                    // resposta de um comando LOCAL (/cost, /usage)
+{ "type": "conversation_reset", "trigger"?: "clear" }      // o /clear zerou o contexto: sessão NOVA no CLI; o back apaga o log do card e grava a nota "conversation-cleared"; o front limpa a tela
+{ "type": "background_tasks", "tasks": [ { "id": "…", "type": "local_bash", "description": "…" } ] } // o conjunto VIVO de tarefas em segundo plano (substitui o anterior; [] = nada rodando). Estado, não conversa: nunca gravado, reenviado a quem conecta; enquanto não vazio o driver não é desligado por ociosidade
 { "type": "thinking", "text": "…" }                        // o raciocínio do modelo (bloco fechado)
 { "type": "thinking_delta", "text": "…" }                  // …e o mesmo, token a token, ao vivo
 { "type": "user_question", "id": "…", "questions": [ { "question": "…", "header"?: "…", "options": [ { "label": "…", "description"?: "…" } ], "multiSelect"?: bool } ] }

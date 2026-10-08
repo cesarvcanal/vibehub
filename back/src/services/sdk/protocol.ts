@@ -181,6 +181,21 @@ export interface CatalogEvent { type: "catalog"; commands: SlashCommandInfo[] }
  * turn. Without this the chat swallowed the answer and the command looked like it did nothing.
  */
 export interface LocalOutputEvent { type: "local_output"; text: string }
+/** One live background task, as the driver forwards it from the CLI. */
+export interface BackgroundTaskInfo { id: string; type: string; description: string }
+/**
+ * O conjunto VIVO de tarefas em segundo plano (um Bash com `run_in_background`, um subagente, um
+ * monitor) — o trabalho que segue depois do `result` do turno. Sinal de NÍVEL vindo do CLI
+ * (`background_tasks_changed`): cada evento SUBSTITUI o anterior; vazio = nada rodando. Estado da
+ * sessão, como o catálogo: nunca entra no histórico.
+ */
+export interface BackgroundTasksEvent { type: "background_tasks"; tasks: BackgroundTaskInfo[] }
+/**
+ * O CLI ZEROU a conversa (`/clear`, ou outro fluxo de sessão nova): o modelo segue numa sessão NOVA,
+ * sem o contexto anterior. A tela e o log do card têm de esquecer a conversa antiga junto — senão o
+ * /clear parecia não ter funcionado, e o F5 trazia tudo de volta.
+ */
+export interface ConversationResetEvent { type: "conversation_reset"; trigger?: string }
 /** The driver is up and ready to accept the first user message. The back stamps `turnActive` on
  *  every `ready` it sends (real or synthesized on reattach) with the manager's live turn count, so
  *  a view mounting mid-turn knows work is running (reattach mid-turn: Terminal↔Chat during a turn
@@ -219,6 +234,8 @@ export type DriverEvent =
   | RewoundEvent
   | CatalogEvent
   | LocalOutputEvent
+  | BackgroundTasksEvent
+  | ConversationResetEvent
   | ResultEvent
   | ReadyEvent
   | DriverErrorEvent
@@ -241,6 +258,8 @@ const DRIVER_EVENT_TYPES = new Set([
   "rewound",
   "catalog",
   "local_output",
+  "background_tasks",
+  "conversation_reset",
   "result",
   "ready",
   "error",
@@ -365,6 +384,8 @@ export function buildOrphanAnswerText(questions: UserQuestionItem[] | null, answ
  */
 export const NOTE_TURN_INTERRUPTED = "turn-interrupted";
 export const NOTE_TURN_INTERRUPTED_EDIT = "turn-interrupted-edit";
+/** A nota que fica no lugar da conversa apagada por um `/clear`. Código, traduzido pelo front. */
+export const NOTE_CONVERSATION_CLEARED = "conversation-cleared";
 
 /** Which note narrates a stop. PURE. */
 export function interruptNote(control: InterruptControl): string {
