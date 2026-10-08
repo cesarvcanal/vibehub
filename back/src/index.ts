@@ -31,8 +31,8 @@ import { sweepOrphanCardData } from "./services/board/purge.js";
 import { sweepDoneCards, DONE_SWEEP_INTERVAL_MS } from "./services/board/retention.js";
 import { startOutboxFlusher } from "./services/board/outbox.js";
 import { startRunnerReaper } from "./services/reaper/reaper.js";
-import { shutdownAllDrivers } from "./services/sdk/manager.js";
-import { resumeInterruptedTurns } from "./services/sdk/resume.js";
+import { pruneStaleInflightOwners, startInflightOwnerHeartbeat } from "./services/sdk/inflight.js";
+import { handOffSdkOnShutdown, resumeInterruptedTurns } from "./services/sdk/resume.js";
 
 /**
  * The vibehub server: one process serving the API, the websocket terminals, and (in production) the
@@ -219,6 +219,10 @@ async function main(): Promise<void> {
   // loop's stdin check — this collects whatever slips through, every ten minutes. Started HERE
   // for the same reason as the others: tests must not inherit a timer that kills processes.
   startRunnerReaper();
+  // O batimento deste processo: enquanto ele bate, os marcadores que este processo assina são turnos
+  // VIVOS — o sweep do container novo de um deploy blue/green espera em vez de retomá-los.
+  startInflightOwnerHeartbeat();
+  void pruneStaleInflightOwners();
   // Turnos do chat nativo interrompidos pelo ÚLTIMO deploy (o back morre, os drivers — filhos dele —
   // morrem juntos): o sweep acha os marcadores duráveis, escreve a linha de sistema no chat do card
   // e retoma o turno automaticamente (uma vez, nunca em loop). Depois do listen, fire-and-forget:
@@ -234,7 +238,7 @@ async function main(): Promise<void> {
   // shutdown interrompeu. Nada aqui bloqueia a saída.
   const shutdown = (signal: NodeJS.Signals): void => {
     logger.info({ signal }, "vibehub shutting down — closing sdk drivers (inflight markers kept)");
-    try { shutdownAllDrivers(); } catch { /* best-effort by design */ }
+    handOffSdkOnShutdown();
     void app.close().finally(() => process.exit(0));
     // The escape hatch: a socket that will not close must not outlive docker's grace window.
     setTimeout(() => process.exit(0), 5_000).unref?.();
