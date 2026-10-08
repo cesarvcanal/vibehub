@@ -1043,7 +1043,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       // `rewindAndSend`), and then nothing is dropped — the supersede it sent instead means every
       // row on screen is still part of the conversation.
       if (event.ok !== true) return state;
-      return dropRewoundRows(state, event.originalText);
+      return dropRewoundRows(state, event.originalText, event.text);
     }
     case "message_edited": {
       // The user superseded a message he sent: the LAST user row with those words is drawn dimmed
@@ -1157,9 +1157,15 @@ export function liveUserCids(rows: readonly SdkRow[]): Set<string> {
 /**
  * The messages the SERVER has (replayed/acked own sends), with when it recorded them — what marks
  * a send and reconciles the outbox (lib/sdkOutbox.ts `sendMark`/`reconcileOutbox`). PURE.
+ *
+ * `viewer` (who is looking) leaves OTHER people's messages out: they reach this screen live now,
+ * and the same words from someone else never prove that one's own send arrived — nor are they an
+ * anchor for one's next send (a peer's line drawn after one's own bubble may be older on the
+ * server). Unattributed rows stay: one's own live sends carry no `from`. Unknown viewer: all count.
  */
-export function deliveredUserTexts(rows: readonly SdkRow[]): ServerText[] {
-  return rows.filter((r): r is Extract<SdkRow, { kind: "user" }> => r.kind === "user" && r.state === "sent")
+export function deliveredUserTexts(rows: readonly SdkRow[], viewer?: string): ServerText[] {
+  return rows.filter((r): r is Extract<SdkRow, { kind: "user" }> =>
+    r.kind === "user" && r.state === "sent" && (viewer === undefined || !r.from || r.from.name === viewer))
     .map((r) => ({ text: r.text, at: r.at }));
 }
 
@@ -1205,7 +1211,7 @@ export function markUserEdited(state: SdkChatState, originalText: string): SdkCh
  * edit of an older message must not stop at a row further down that an earlier supersede already
  * marked "editada" — that row is gone for the model too. Without it, the newest edited row. PURE.
  */
-export function dropRewoundRows(state: SdkChatState, originalText?: string): SdkChatState {
+export function dropRewoundRows(state: SdkChatState, originalText?: string, newText?: string): SdkChatState {
   const target = originalText === undefined ? "" : normalizeMessage(originalText);
   let editedAt = -1;
   let lastUserAt = -1;
@@ -1218,7 +1224,17 @@ export function dropRewoundRows(state: SdkChatState, originalText?: string): Sdk
   // `editedAt >= lastUserAt` is the whole identity case: the edited row IS the newest message, so
   // there is nothing between them to drop. Past it the cut always removes at least one row.
   if (editedAt === -1 || lastUserAt === -1 || editedAt >= lastUserAt) return state;
-  const tail = state.rows.slice(lastUserAt).filter((row) => !narratesTheCutTurn(row));
+  // `newText` (the back says which row is the edit's new message) moves the end of the cut there:
+  // with another person on the card, their message can land after it, before this confirmation —
+  // and the "last user row" would then be THEIRS, erasing the correction. The FIRST match after the
+  // edited row: an earlier identical line only keeps more rows, never fewer.
+  const key = newText === undefined ? "" : normalizeMessage(newText);
+  let keepFrom = lastUserAt;
+  if (key !== "") {
+    const found = state.rows.findIndex((row, i) => i > editedAt && row.kind === "user" && normalizeMessage(row.text) === key);
+    if (found !== -1) keepFrom = found;
+  }
+  const tail = state.rows.slice(keepFrom).filter((row) => !narratesTheCutTurn(row));
   return { ...state, rows: [...state.rows.slice(0, editedAt), ...tail] };
 }
 

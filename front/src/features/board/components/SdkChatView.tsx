@@ -410,7 +410,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         // O que o servidor JÁ tinha com estas palavras, ancorado no relógio dele: a reconciliação
         // só aceita uma ocorrência além destas como prova de entrega (o "sim" de ontem não entrega
         // o de hoje, e a janela do replay andar não condena o que chegou — ver `sendMark`).
-        ...sendMark(deliveredUserTexts(rowsRef.current), shown),
+        ...sendMark(deliveredUserTexts(rowsRef.current, viewer), shown),
       };
       setOutbox((prev) => addToOutbox(prev, entry));
       try {
@@ -423,7 +423,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         throw err;
       }
     },
-    [sendFrame],
+    [sendFrame, viewer],
   );
 
   /**
@@ -441,7 +441,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     const live = liveUserCids(state.rows);
     const pending = outboxRef.current.filter((m) => !live.has(m.cid));
     if (pending.length === 0) return;
-    const { delivered, missing } = reconcileOutbox(deliveredUserTexts(state.rows), pending);
+    const { delivered, missing } = reconcileOutbox(deliveredUserTexts(state.rows, viewer), pending);
     if (delivered.length > 0 || missing.length > 0) {
       // Entregue sai da fila; a que o servidor não tem FICA, já com o veredito dado — a fila é a
       // cópia recuperável dela, e uma entrada vencida que ninguém marca é o que fazia o watchdog
@@ -457,7 +457,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         prev,
       ));
     }
-  }, [state.ready, state.rows]);
+  }, [state.ready, state.rows, viewer]);
 
   /**
    * O relógio do recibo NASCE quando o SERVIDOR assume esta conexão (o `ready`, que ele só manda

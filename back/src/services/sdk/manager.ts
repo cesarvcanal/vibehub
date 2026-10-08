@@ -445,6 +445,8 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
       // do dono, como o corte: um frame que não pertence a edição nenhuma não apaga a nota de uma
       // parada que foi de outra pessoa.
       session.pendingInterruptNote = undefined;
+      // Which row is the edit's new message, for the screen's cut (see `RewoundEvent.text`).
+      event = { ...event, text: edit.text };
       void rewindHistory(session.cardId, edit.original, edit.text).then((dropped) => {
         logger.info(
           { audit: true, action: "sdk.rewind", card: session.label, dropped },
@@ -692,6 +694,35 @@ function relayToPeers(session: DriverSession, sender: WebSocket | undefined, eve
     if (other === sender) continue;
     try { other.send(frame); } catch { /* that socket is going away */ }
   }
+  for (const listener of setupListeners.get(session.cardId) ?? []) listener(event);
+}
+
+/**
+ * A tab still CONNECTING is in no `session.sockets` yet: the route reads the history (the replay),
+ * then awaits for seconds before `attachSocket`. A turn sent in that gap is in neither — the newcomer
+ * saw the answer without the question until an F5. The route listens from BEFORE the replay read and,
+ * once attached, delivers what the replay missed (`missedDuringSetup`).
+ */
+const setupListeners = new Map<string, Set<(event: HistoryEvent) => void>>();
+
+export function onPeerTurn(cardId: string, listener: (event: HistoryEvent) => void): () => void {
+  let set = setupListeners.get(cardId);
+  if (!set) setupListeners.set(cardId, (set = new Set()));
+  set.add(listener);
+  return () => {
+    set.delete(listener);
+    if (set.size === 0 && setupListeners.get(cardId) === set) setupListeners.delete(cardId);
+  };
+}
+
+/** What was heard during the setup and is NOT already in the replay — never drawn twice. PURE. */
+export function missedDuringSetup(heard: readonly HistoryEvent[], replay: readonly object[]): HistoryEvent[] {
+  const key = (e: object): string => {
+    const { type, at, text, originalText } = e as { type?: unknown; at?: unknown; text?: unknown; originalText?: unknown };
+    return JSON.stringify([type, at, text, originalText]);
+  };
+  const replayed = new Set(replay.map(key));
+  return heard.filter((e) => !replayed.has(key(e)));
 }
 
 export function handleClientFrame(
@@ -921,7 +952,10 @@ export function injectSystemTurn(session: DriverSession, text: string, origin: M
   session.activeTurns += 1;
   clearIdleTimer(session);
   noteDriverEventFor(session.cardId, { type: "user", text });
-  void appendHistory(session.cardId, { type: "user", text, at: Date.now(), from: origin });
+  const line: HistoryEvent = { type: "user", text, at: Date.now(), from: origin };
+  void appendHistory(session.cardId, line);
+  // Nobody typed it, so nobody drew it: every open tab gets it, or the answer arrives without it.
+  relayToPeers(session, undefined, line);
   void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(text), attempts });
 }
 

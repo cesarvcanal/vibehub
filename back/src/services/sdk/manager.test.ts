@@ -16,6 +16,8 @@ import {
   handleClientFrame,
   hasDriverSession,
   isCardChatInUse,
+  missedDuringSetup,
+  onPeerTurn,
   injectSystemTurn,
   resetSdkSessionsForTesting,
   setDriverSpawnerForTesting,
@@ -1347,6 +1349,16 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
     for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 10));
   };
 
+  it("o `rewound` que vai à tela diz QUAL mensagem é a edição — com outra pessoa no card, ela não é a última", async () => {
+    await conversaComEdicao();
+    const viewer = fakeSocket();
+    attachSocket(ensure(), viewer as never);
+    emit({ type: "rewound", ok: true, uuid: "abc", originalText: "errada" });
+    const rewound = viewer.sent.map((s) => JSON.parse(s) as { type: string; text?: string }).find((e) => e.type === "rewound");
+    expect(rewound?.text).toBe("certa");
+    await logAssentado();
+  });
+
   it("ok: true corta o miolo e deixa o log igual ao que o modelo tem", async () => {
     await conversaComEdicao();
     emit({ type: "rewound", ok: true, uuid: "abc" });
@@ -1773,6 +1785,33 @@ describe("attachSocket — a mensagem enviada aparece ao vivo nas outras abas do
     expect(frames(mussa, "message_edited")).toEqual([expect.objectContaining({ originalText: "sobe pra prod" })]);
     expect(frames(mussa, "user")).toEqual([expect.objectContaining({ text: "sobe pra dev", from: { kind: "user", name: "albert" } })]);
     expect(frames(albert, "user")).toEqual([]);
+  });
+
+  it("quem ainda está conectando (setup da rota) também ouve o envio — e para de ouvir ao sair", () => {
+    const session = ensure();
+    const albert = fakeSocket();
+    attachSocket(session, albert as never, ALBERT);
+    const heard: string[] = [];
+    const off = onPeerTurn(CARD, (e) => heard.push(e.type === "user" ? e.text : e.type));
+    albert.emit("message", Buffer.from(`{"type":"user","text":"sobe o deploy"}`));
+    off();
+    albert.emit("message", Buffer.from(`{"type":"user","text":"depois"}`));
+    expect(heard).toEqual(["sobe o deploy"]);
+  });
+
+  it("do que foi ouvido no setup, só o que o replay NÃO trouxe é entregue (nunca duas vezes)", () => {
+    const noReplay = { type: "user" as const, text: "a", at: 1, from: ALBERT };
+    const depois = { type: "user" as const, text: "b", at: 2, from: ALBERT };
+    const marca = { type: "message_edited" as const, originalText: "b", at: 3 };
+    expect(missedDuringSetup([noReplay, depois, marca], [{ ...noReplay }])).toEqual([depois, marca]);
+  });
+
+  it("o turno que o próprio back injeta (retomada pós-deploy) também aparece em quem está olhando", () => {
+    const session = ensure();
+    const mussa = fakeSocket();
+    attachSocket(session, mussa as never, MUSSA);
+    injectSystemTurn(session, "continue de onde parou", { kind: "system", name: "vibehub" }, 1);
+    expect(frames(mussa, "user")).toEqual([expect.objectContaining({ text: "continue de onde parou", from: { kind: "system", name: "vibehub" } })]);
   });
 
   it("vale também para a mensagem guardada durante o setup da conexão (o caminho do buffer)", () => {

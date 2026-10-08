@@ -900,3 +900,14 @@ OUTRAS abas do card, no mesmo formato do replay (`{ type: "user", text, at, from
 antes, o `message_edited`). Nunca de volta ao remetente (ele já desenhou), nunca de novo num
 Reenviar com o mesmo `cid`, nunca quando a mensagem foi recusada. O transporte já era em tempo
 real: faltava publicar o evento — Socket.IO não mudaria nada aqui.
+
+O que a mensagem alheia ao vivo exigiu em volta:
+- **Aba conectando.** O socket só entra em `session.sockets` no `attachSocket`, segundos depois de a
+  rota ler o replay. A rota escuta os envios do card (`onPeerTurn`) desde ANTES dessa leitura e,
+  já anexada, entrega o que o replay não trouxe (`missedDuringSetup`, sem desenhar duas vezes).
+- **Rebobinar.** `dropRewoundRows` cortava até a ÚLTIMA mensagem, que agora pode ser de outra
+  pessoa (chegada entre a edição e o `rewound`). O back carimba no `rewound` o texto novo da edição
+  (`text`) e a tela corta até ELA.
+- **Fila de envio.** `deliveredUserTexts(rows, viewer)` ignora mensagens de outras pessoas: o mesmo
+  texto vindo de outro não prova que o meu envio chegou, nem vira âncora (`sendMark`) do próximo.
+- **Turno do sistema.** A retomada pós-deploy (`injectSystemTurn`) também é repassada a quem olha.
