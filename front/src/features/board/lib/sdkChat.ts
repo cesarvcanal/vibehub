@@ -745,9 +745,15 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       // Sinal de NÍVEL: o conjunto inteiro, para SUBSTITUIR. Não acende o spinner do turno — a
       // tarefa não é um turno, e o turno que a disparou já pode ter acabado.
       if (!Array.isArray(event.tasks)) return state;
-      const tasks = event.tasks.filter(
-        (t): t is BackgroundTask => typeof t === "object" && t !== null && typeof t.id === "string",
-      );
+      // Normalizado aqui também (fronteira do socket): a faixa lê `description` sem checar, e um
+      // campo ausente derrubava a árvore do chat inteira.
+      const tasks: BackgroundTask[] = event.tasks
+        .filter((t) => typeof t === "object" && t !== null && typeof t.id === "string")
+        .map((t) => ({
+          id: t.id,
+          type: typeof t.type === "string" ? t.type : "",
+          description: typeof t.description === "string" ? t.description : "",
+        }));
       if (tasks.length === 0 && state.backgroundTasks.length === 0) return state;
       return { ...state, backgroundTasks: tasks };
     }

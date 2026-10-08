@@ -1374,6 +1374,11 @@ describe("background_tasks — o trabalho que segue depois do turno", () => {
     expect(state.backgroundTasks).toEqual([]);
   });
 
+  it("normaliza campos que faltam: uma tarefa sem description/type não chega torta à tela", () => {
+    const state = feed([{ type: "ready" }, { type: "background_tasks", tasks: [{ id: "b1" } as never] }]);
+    expect(state.backgroundTasks).toEqual([{ id: "b1", type: "", description: "" }]);
+  });
+
   it("descarta entradas malformadas e não acende o spinner do turno", () => {
     const state = feed([
       { type: "ready" },

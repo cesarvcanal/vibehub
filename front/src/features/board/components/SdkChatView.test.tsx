@@ -3032,4 +3032,14 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     ws.deliver({ type: "background_tasks", tasks: [] });
     await waitFor(() => expect(screen.queryByTestId("sdk-background-tasks")).toBeNull());
   });
+
+  it("uma tarefa sem descrição não derruba o chat: aparece com um nome genérico", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "background_tasks", tasks: [{ id: "b1" } as never] });
+    const tray = await screen.findByTestId("sdk-background-tasks");
+    expect(tray).toHaveTextContent(/background task/i);
+  });
 });

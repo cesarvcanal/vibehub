@@ -1091,14 +1091,14 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       <JumpToLatest stick={stick} />
       </div>
 
-      {/* PENDING DECISIONS — the questions still waiting on the user, surfaced right above the
-          composer so they never drown in a long turn. Clicking one jumps to it in the chat. */}
       {/* O TRABALHO QUE SEGUE DEPOIS DO TURNO — um `sleep` esperando o deploy, um subagente. O
           "Trabalhando…" apagou com o `result`, e sem esta faixa o chat parecia parado enquanto o
           Claude ainda esperava algo (produção, 2026-10-07). Só com a wire de pé: uma tela
           desconectada não pode garantir nada; a reconexão reacende pelo reenvio do back. */}
       {connected && state.backgroundTasks.length > 0 ? <SdkBackgroundTray tasks={state.backgroundTasks} /> : null}
 
+      {/* PENDING DECISIONS — the questions still waiting on the user, surfaced right above the
+          composer so they never drown in a long turn. Clicking one jumps to it in the chat. */}
       {pending.length > 0 ? <PendingTray pending={pending} active={replyTo} onJump={jumpToDecision} /> : null}
 
       {/* ANSWERING A DECISION — the missing sentence on this screen: the question is in view, right
@@ -1175,18 +1175,6 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
 }
 
 /**
- * A FILA, desenhada — as mensagens escritas durante um turno, esperando de prontidão logo acima do
- * campo de texto.
- *
- * Por que aqui e não na conversa: uma bolha na conversa afirma que o Claude leu aquilo. Enquanto a
- * mensagem espera, ninguém leu nada — ela ainda é um rascunho entregue, e dizer o contrário é a
- * mentira que esta tela existe pra não contar. Na hora em que for entregue ela sai daqui e nasce
- * lá, como bolha, com recibo.
- *
- * Cada linha carrega os dois gestos que a fila promete: o lápis (volta pro campo, e SAI da fila —
- * nada de ser enviada no meio da correção) e o X (desisti dessa).
- */
-/**
  * A FAIXA "RODANDO EM SEGUNDO PLANO" — o equivalente do "1 background task" no rodapé do Claude
  * Code. Lista o que está vivo pela descrição que o próprio modelo deu à tarefa. Teto de altura pelo
  * mesmo motivo da fila: irmã do scroller, ela não pode espremer a conversa.
@@ -1214,6 +1202,18 @@ function SdkBackgroundTray({ tasks }: { tasks: readonly BackgroundTask[] }) {
   );
 }
 
+/**
+ * A FILA, desenhada — as mensagens escritas durante um turno, esperando de prontidão logo acima do
+ * campo de texto.
+ *
+ * Por que aqui e não na conversa: uma bolha na conversa afirma que o Claude leu aquilo. Enquanto a
+ * mensagem espera, ninguém leu nada — ela ainda é um rascunho entregue, e dizer o contrário é a
+ * mentira que esta tela existe pra não contar. Na hora em que for entregue ela sai daqui e nasce
+ * lá, como bolha, com recibo.
+ *
+ * Cada linha carrega os dois gestos que a fila promete: o lápis (volta pro campo, e SAI da fila —
+ * nada de ser enviada no meio da correção) e o X (desisti dessa).
+ */
 function SdkQueueTray({
   queue,
   onEdit,
