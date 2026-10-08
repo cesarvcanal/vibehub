@@ -180,7 +180,7 @@ describe("Markdown — copiar bloco de código", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     // The block, untouched: indentation and blank lines kept, no fences, none of the prose around it.
     expect(writeText).toHaveBeenCalledWith(PROMPT);
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Copied to clipboard"));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Copied to clipboard", { id: "chat-code-copied" }));
     // The button itself also confirms, for whoever is not looking at the corner of the screen.
     expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
   });
@@ -215,7 +215,63 @@ describe("Markdown — copiar bloco de código", () => {
 
     await waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
     expect(copied).toBe("faz isso");
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Copied to clipboard"));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Copied to clipboard", { id: "chat-code-copied" }));
+  });
+
+  it("o fallback devolve o foco a quem tinha — copiar não fecha o teclado do composer", async () => {
+    delete (navigator as unknown as { clipboard?: unknown }).clipboard;
+    Object.defineProperty(document, "execCommand", { value: vi.fn(() => true), configurable: true });
+    render(
+      <>
+        <textarea aria-label="composer" />
+        <Markdown text={"```\nfaz isso\n```"} />
+      </>,
+    );
+    const composer = screen.getByRole("textbox", { name: "composer" });
+    composer.focus();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(document.activeElement).toBe(composer);
+  });
+
+  it("cliques seguidos substituem o toast em vez de empilhar", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    render(<Markdown text={"```\nfaz isso\n```"} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Copied" }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(2));
+    const ids = vi.mocked(toast.success).mock.calls.map((call) => (call[1] as { id?: unknown } | undefined)?.id);
+    expect(ids[0]).toBeDefined();
+    expect(ids[1]).toBe(ids[0]);
+  });
+
+  it("bloco vazio não ganha botão — não há nada para copiar", () => {
+    render(<Markdown text={"```\n```"} />);
+    expect(screen.queryByRole("button", { name: "Copy code" })).toBeNull();
+  });
+
+  it("desmontar no meio da cópia não deixa timer vivo", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolve: () => void = () => {};
+      const writeText = vi.fn(() => new Promise<void>((r) => (resolve = r)));
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      const { unmount } = render(<Markdown text={"```\nfaz isso\n```"} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+      unmount();
+      resolve();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("quando nada chega ao clipboard, diz que falhou — nunca um 'copiado' mentiroso", async () => {

@@ -724,24 +724,36 @@ function CodeBlock({ source, children }: { source: string; children: React.React
   const t = useT();
   const [copied, setCopied] = React.useState(false);
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  React.useEffect(() => () => {
-    if (timer.current) clearTimeout(timer.current);
+  // The copy is async: a row can unmount (reconnect, transcript replay) before it settles, and a
+  // timer armed after the cleanup ran would never be cleared.
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (timer.current) clearTimeout(timer.current);
+    };
   }, []);
   async function copy() {
     if (!(await copyText(source))) {
       toast.error(t("chat.copyError"));
       return;
     }
-    toast.success(t("chat.codeCopied"));
+    // One fixed id: clicking again REPLACES the toast instead of stacking a tower of them.
+    toast.success(t("chat.codeCopied"), { id: "chat-code-copied" });
+    if (!mounted.current) return;
     setCopied(true);
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => setCopied(false), 1500);
   }
+  const frame = "overflow-x-auto rounded-md border border-border/60 bg-background/60 p-2 text-xs";
+  // An empty block has nothing to copy, and a "copied!" for an empty string would be a small lie.
+  if (source === "") return <pre className={frame}>{children}</pre>;
   const label = copied ? t("chat.copied") : t("chat.copyCode");
   return (
     <div className="relative">
       {/* `pr-9` keeps the first line out from under the button. */}
-      <pre className="overflow-x-auto rounded-md border border-border/60 bg-background/60 p-2 pr-9 text-xs">{children}</pre>
+      <pre className={cn(frame, "pr-9")}>{children}</pre>
       <button
         type="button"
         onClick={copy}

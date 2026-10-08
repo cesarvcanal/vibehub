@@ -100,8 +100,12 @@ export function writeTerminalFontSize(size: number): void {
  * Legacy fallback for when the Clipboard API fails or is not there at all: an off-screen textarea
  * plus `execCommand('copy')`. It does not need a secure context or a permission, and it tolerates
  * gesture timing better. Only reached when the modern API has already failed.
+ *
+ * Focus goes back to whoever had it: the textarea has to steal it to be selected, and leaving it on
+ * `<body>` closes the phone keyboard under the composer you were typing in.
  */
 function legacyCopy(text: string): boolean {
+  const previous = document.activeElement as HTMLElement | null;
   const ta = document.createElement("textarea");
   ta.value = text;
   ta.style.position = "fixed";
@@ -114,6 +118,7 @@ function legacyCopy(text: string): boolean {
     return document.execCommand("copy");
   } finally {
     document.body.removeChild(ta);
+    if (previous && previous !== document.body) previous.focus?.();
   }
 }
 
