@@ -3,14 +3,14 @@ import { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
 import { onCardDriverProbe, type DriverActivity } from "../board/agentState.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
-import { appendHistory, appendHistoryReported, replayableHistoryEvent, rewindHistory, type HistoryEvent } from "./history.js";
+import { appendHistory, appendHistoryReported, removeHistory, replayableHistoryEvent, rewindHistory, type HistoryEvent } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inflight.js";
 import { createLineReader, forgetDriverKeys, noteDriverEventFor, onOutsideTurn } from "./mirror.js";
 import { writeCardCatalog } from "./catalog.js";
 import { forgetCardWorkflows, lastWorkflowRuns, watchCardWorkflows } from "./workflow.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
-  buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, parseTypingFrame, encodeControl,
+  NOTE_CONVERSATION_CLEARED, buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, parseTypingFrame, encodeControl,
   type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent,
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
@@ -447,6 +447,15 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     }
   }
   if (!silenced) broadcast(session, event);
+  if (event.type === "conversation_reset") {
+    // O /clear limpou o CONTEXTO do modelo; o log do card tem de ir junto, senão o F5 devolvia a
+    // conversa inteira e o /clear parecia não ter feito nada. A remoção entra na MESMA fila dos
+    // appends do card: o que já estava enfileirado (o próprio "/clear") sai, e a nota vem depois.
+    void removeHistory(session.cardId).catch((err: unknown) => {
+      logger.warn({ card: session.label, detail: (err as Error).message }, "could not clear the sdk chat history on /clear");
+    });
+    emitSystemNote(session, NOTE_CONVERSATION_CLEARED);
+  }
   if (interruptNoteToFlush) emitSystemNote(session, interruptNoteToFlush);
   // History + mirror dedupe are MANAGER duties, not socket duties: they must keep happening while
   // no page is open — that is the whole point of the detach.

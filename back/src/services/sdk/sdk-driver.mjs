@@ -730,6 +730,16 @@ async function runStream() {
           // answer exists ONLY here, and swallowing it makes the command look broken.
           if (msg.content.trim() !== "") emit({ type: "local_output", text: msg.content });
         }
+      } else if (msg.type === "conversation_reset") {
+        // /clear (ou outro fluxo de "sessão nova" do CLI): o modelo começa do zero numa sessão NOVA
+        // — a próxima mensagem `system` traz o id dela, e o `session` sai por lá. O que este driver
+        // guardava da conversa antiga morre aqui: um ponto de volta dela, usado num editar depois
+        // do /clear, rebobinaria a sessão nova para dentro da conversa que acabou de ser apagada.
+        lastAssistantUuid = null;
+        forkPoint = null;
+        forkText = null;
+        absorbedSinceFork = false;
+        emit({ type: "conversation_reset", trigger: typeof msg.trigger === "string" ? msg.trigger : "clear" });
       } else if (msg.type === "stream_event") {
         const ev = msg.event;
         if (ev && ev.type === "content_block_delta" && ev.delta && ev.delta.type === "text_delta") {

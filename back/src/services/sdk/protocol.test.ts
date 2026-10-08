@@ -554,3 +554,9 @@ describe("parseDriverLine — tarefas em segundo plano", () => {
       .toEqual({ type: "background_tasks", tasks: [{ id: "b1", type: "local_bash", description: "Aguarda o deploy" }] });
   });
 });
+
+describe("parseDriverLine — /clear", () => {
+  it("aceita o reset da conversa que o driver repassa", () => {
+    expect(parseDriverLine(`{"type":"conversation_reset","trigger":"clear"}`)).toEqual({ type: "conversation_reset", trigger: "clear" });
+  });
+});

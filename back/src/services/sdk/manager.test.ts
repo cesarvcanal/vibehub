@@ -1682,3 +1682,31 @@ describe("background_tasks — o trabalho que segue depois do turno", () => {
     expect(session.pendingInterruptNote).toBeUndefined();
   });
 });
+
+/**
+ * /clear (produção, 2026-10-08): o CLI limpa o contexto e abre uma sessão nova, mas a tela e o log
+ * do card seguiam com a conversa inteira — no F5 ela voltava, e para quem olhava o /clear "não
+ * funcionava". O reset apaga o LOG (o replay) e deixa uma nota dizendo que a conversa foi limpa.
+ */
+describe("conversation_reset — o /clear limpa a conversa de verdade", () => {
+  it("repassa o reset às abas, apaga o log da conversa antiga e grava a nota do /clear", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "conversa antiga" }));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"/clear"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "conversation_reset", trigger: "clear" }));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    expect(sentTypes(socket)).toContain("conversation_reset");
+    const reset = sentTypes(socket).indexOf("conversation_reset");
+    expect(sentTypes(socket).slice(reset)).toContain("system_note");
+
+    await vi.waitFor(async () => {
+      const history = await readHistory(CARD);
+      expect(history.map((e) => e.type)).toEqual(["system_note"]);
+      expect((history[0] as { text?: string }).text).toBe("conversation-cleared");
+    }, { timeout: 5000 });
+  });
+});

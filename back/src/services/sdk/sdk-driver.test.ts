@@ -29,6 +29,7 @@ let created = 0;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const mark = (name) => process.stderr.write("fake:" + name + "\n");
 const SESSION = "11111111-2222-3333-4444-555555555555";
+const CLEARED = "99999999-2222-3333-4444-555555555555";
 
 export function query({ prompt, options }) {
   const index = ++created;
@@ -63,6 +64,14 @@ export function query({ prompt, options }) {
         }
         await stop;
         yield { type: "result", subtype: "error_during_execution", is_error: true, terminal_reason: "aborted_streaming", session_id: SESSION };
+        continue;
+      }
+      if (text === "/clear") {
+        // O que o CLI de verdade faz (verificado com o Claude Code em stream-json): anuncia o
+        // reset, abre uma sessão NOVA e fecha o turno do comando com um result vazio.
+        yield { type: "conversation_reset", trigger: "clear", new_conversation_id: "n-1", uuid: "n-1", session_id: SESSION };
+        yield { type: "system", subtype: "init", session_id: CLEARED };
+        yield { type: "result", subtype: "success", session_id: CLEARED, result: "" };
         continue;
       }
       if (text === "bgstubborn") {
@@ -303,4 +312,29 @@ describe("sdk-driver.mjs — tarefas em segundo plano", () => {
     const off = await driver.waitFor((e) => e.type === "background_tasks" && Array.isArray(e.tasks) && e.tasks.length === 0);
     expect(off.tasks).toEqual([]);
   });
+});
+
+describe("sdk-driver.mjs — /clear", () => {
+  it("repassa o reset da conversa e anuncia a sessão NOVA", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "/clear" });
+    await driver.waitFor((e) => e.type === "result", from);
+    const after = driver.events.slice(from);
+    const reset = after.findIndex((e) => e.type === "conversation_reset");
+    expect(reset).toBeGreaterThanOrEqual(0);
+    expect(after[reset]!.trigger).toBe("clear");
+    expect(after.slice(reset).some((e) => e.type === "session" && e.sessionId === "99999999-2222-3333-4444-555555555555")).toBe(true);
+  });
+
+  it("depois do /clear, editar uma mensagem de ANTES não rebobina para a conversa apagada", async () => {
+    const driver = await driverAfterOneTurn(); // "hello" -> fork point da sessão antiga
+    driver.send({ type: "user", text: "/clear" });
+    await driver.waitFor((e) => e.type === "conversation_reset");
+    await driver.waitFor((e) => e.type === "result" && e.sessionId === "99999999-2222-3333-4444-555555555555");
+    const from = driver.events.length;
+    driver.send({ type: "edit_user", original: "/clear", text: "/clear de novo", fallback: "fallback" });
+    const rewound = await driver.waitFor((e) => e.type === "rewound", from);
+    expect(rewound.ok).toBe(false);
+  }, 30_000);
 });
