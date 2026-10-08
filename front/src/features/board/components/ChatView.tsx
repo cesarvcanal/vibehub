@@ -717,11 +717,26 @@ function codeBlockSource(node: HastNode | undefined): string {
 
 const CODE_COPIED_TOAST_ID = "chat-code-copied";
 
-/** A short, stable fingerprint of a block's text (djb2), for a toast id that survives remounts. PURE. */
-function hashText(text: string): string {
+/**
+ * A short, stable fingerprint of a block's text (length + djb2), for an error toast id that survives
+ * remounts. The length makes a collision between two blocks on screen practically impossible. PURE.
+ */
+function blockKey(text: string): string {
   let h = 5381;
   for (let i = 0; i < text.length; i += 1) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
-  return (h >>> 0).toString(36);
+  return `${text.length.toString(36)}-${(h >>> 0).toString(36)}`;
+}
+
+/**
+ * Each dismissal RETIRES the block's error id: sonner keeps a dismissed toast around for its exit
+ * animation, and a new toast published under that same id in that window is swallowed with it — a
+ * failure right after a success would go unannounced. Module-level so a remount sees it too.
+ */
+const errorGeneration = new Map<string, number>();
+const errorToastId = (key: string) => `chat-code-copy-error-${key}-${errorGeneration.get(key) ?? 0}`;
+function retireErrorToast(key: string): void {
+  toast.dismiss(errorToastId(key));
+  errorGeneration.set(key, (errorGeneration.get(key) ?? 0) + 1);
 }
 
 /**
@@ -750,20 +765,26 @@ function CodeBlock({ source, children }: { source: string; children: React.React
   //    thinking A was copied), and keyed on the content rather than the instance, a remount
   //    (reconnect, transcript replay) still finds it.
   //  - A success dismisses its own block's error: never "could not copy" and "copied" for one block.
-  const errorToastId = `chat-code-copy-error-${hashText(source)}`;
+  //    "Its own" = the error THIS instance showed (the text may have streamed on since) plus the one
+  //    keyed on the current text (shown before a remount).
+  const shownErrorKey = React.useRef<string | null>(null);
   // Any SUCCESS wins: a copy that hung on a permission prompt and then went through really did put
   // the block on the clipboard, so saying otherwise would be the lie. A FAILURE only speaks if no
   // newer click has been made since — an old failure must not undo a newer "copied".
   const latest = React.useRef(0);
   async function copy() {
     const request = ++latest.current;
-    const ok = await copyText(source);
+    const text = source;
+    const ok = await copyText(text);
     if (!ok && request !== latest.current) return;
+    const key = blockKey(text); // only on a click: hashing every streamed render would be waste
     if (ok) {
-      toast.dismiss(errorToastId);
+      for (const shown of new Set([key, shownErrorKey.current])) if (shown) retireErrorToast(shown);
+      shownErrorKey.current = null;
       toast.success(t("chat.codeCopied"), { id: CODE_COPIED_TOAST_ID });
     } else {
-      toast.error(t("chat.copyError"), { id: errorToastId });
+      shownErrorKey.current = key;
+      toast.error(t("chat.copyError"), { id: errorToastId(key) });
     }
     if (!mounted.current) return;
     if (timer.current) clearTimeout(timer.current);
@@ -773,7 +794,7 @@ function CodeBlock({ source, children }: { source: string; children: React.React
   }
   const frame = "overflow-x-auto rounded-md border border-border/60 bg-background/60 p-2 text-xs";
   // A blank block has nothing to copy, and a "copied!" for it would be a small lie. Blank means
-  // ASCII whitespace ONLY: any other invisible character (NBSP, narrow NBSP, ideographic space, BOM\u2026)
+  // ASCII whitespace ONLY: any other invisible character (NBSP, narrow NBSP, ideographic space, BOM...)
   // may be exactly what the block exists to hand you, and you cannot select it by hand.
   if (/^[ \t\n\r\f\v]*$/.test(source)) return <pre className={frame}>{children}</pre>;
   const label = copied ? t("chat.copied") : t("chat.copyCode");
