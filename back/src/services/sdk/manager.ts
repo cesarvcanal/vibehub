@@ -11,7 +11,7 @@ import { forgetCardWorkflows, lastWorkflowRuns, watchCardWorkflows } from "./wor
 import { isHarnessFiller } from "../chat/chat.js";
 import {
   buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, parseTypingFrame, encodeControl,
-  type CatalogEvent, type DriverControl, type DriverEvent,
+  type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent,
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { logger } from "../../utils/logger.js";
@@ -75,6 +75,12 @@ export interface DriverSession {
   transcriptDir?: string;
   /** Turns in flight or queued in the driver: +1 per user send, -1 per result. */
   activeTurns: number;
+  /**
+   * As tarefas EM SEGUNDO PLANO vivas no CLI deste driver (o último `background_tasks`): trabalho
+   * que segue depois do `result` do turno. Estado da sessão, como o catálogo — reenviado a quem
+   * conecta depois, nunca gravado — e, enquanto não estiver vazio, o driver NÃO está ocioso.
+   */
+  backgroundTasks: BackgroundTaskInfo[];
   /**
    * The session's command CATALOGUE (what the chat's "/" menu offers), as last reported by the
    * driver. Kept HERE, next to `ready`: it is session state, not conversation — it is never
@@ -222,7 +228,17 @@ export function hasDriverSession(cardId: string): boolean {
 export function isCardChatInUse(cardId: string): boolean {
   const session = sessions.get(cardId);
   if (!session || session.closed) return false;
-  return session.sockets.size > 0 || session.activeTurns > 0;
+  return session.sockets.size > 0 || isDriverBusy(session);
+}
+
+/**
+ * O driver está TRABALHANDO: um turno em voo ou na fila, OU uma tarefa em segundo plano viva (um
+ * `sleep 200` de espera de deploy, um subagente). Esta segunda metade é o que faltava: o turno que
+ * dispara a tarefa fecha na hora, e um driver "ocioso" sem ninguém na aba era desligado — matando o
+ * trabalho que o Claude tinha acabado de dizer que estava esperando.
+ */
+function isDriverBusy(session: Pick<DriverSession, "activeTurns" | "backgroundTasks">): boolean {
+  return session.activeTurns > 0 || session.backgroundTasks.length > 0;
 }
 
 /**
@@ -233,7 +249,7 @@ export function isCardChatInUse(cardId: string): boolean {
 export function driverActivity(cardId: string): DriverActivity {
   const session = sessions.get(cardId);
   if (!session || session.closed) return "none";
-  return session.activeTurns > 0 ? "turn" : "idle";
+  return isDriverBusy(session) ? "turn" : "idle";
 }
 
 /* ---------------------------------------------------------------- helpers */
@@ -274,11 +290,11 @@ function clearIdleTimer(session: DriverSession): void {
  * check runs again when the timer fires — a turn or a socket that showed up in between wins.
  */
 function maybeScheduleIdleStop(session: DriverSession): void {
-  if (session.closed || session.sockets.size > 0 || session.activeTurns > 0) return;
+  if (session.closed || session.sockets.size > 0 || isDriverBusy(session)) return;
   if (session.idleTimer) return;
   session.idleTimer = setTimeout(() => {
     session.idleTimer = null;
-    if (session.closed || session.sockets.size > 0 || session.activeTurns > 0) return;
+    if (session.closed || session.sockets.size > 0 || isDriverBusy(session)) return;
     logger.info({ card: session.label, audit: true, action: "sdk.driver.idle" }, "sdk driver idle — shutting it down (resume id persisted)");
     stopCardDriver(session.cardId);
   }, DRIVER_IDLE_MS);
@@ -294,6 +310,8 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     && isHarnessFiller("assistant", (event as { text: string }).text)) return;
   if (event.type === "ready") {
     session.ready = true;
+    // Um `ready` REAL é um processo novo: as tarefas em segundo plano do anterior morreram com ele.
+    session.backgroundTasks = [];
     // Stamp the manager's live turn count on the frame: a message may already be queued on the
     // fresh driver's stdin (sent before it booted) — the front's spinner must know it.
     event = { ...event, turnActive: session.activeTurns > 0 };
@@ -324,6 +342,26 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   // lado como "ele terminou" (produção, 2026-10-02). A sondagem do diário começa aqui, no instante
   // da chamada, e se encerra sozinha (ver services/sdk/workflow.ts): é ela quem alimenta o painel.
   if (event.type === "tool_use" && event.name === "Workflow") startWorkflowWatch(session);
+  if (event.type === "background_tasks") {
+    // Normalizado AQUI, no lado que fala com o navegador (como o catálogo): o que sai é só o que a
+    // tela desenha, e um item torto do driver não derruba a aba de ninguém.
+    const raw = (event as { tasks?: unknown }).tasks;
+    const tasks: BackgroundTaskInfo[] = Array.isArray(raw)
+      ? raw
+        .filter((t): t is Record<string, unknown> => typeof t === "object" && t !== null && typeof (t as { id?: unknown }).id === "string")
+        .map((t) => ({
+          id: t.id as string,
+          type: typeof t.type === "string" ? t.type : "",
+          description: typeof t.description === "string" ? t.description : "",
+        }))
+      : [];
+    event = { type: "background_tasks", tasks };
+    session.backgroundTasks = tasks;
+    // A última tarefa terminou sem turno nenhum em voo e sem ninguém olhando: AGORA o relógio do
+    // idle começa — o mesmo ponto em que um `result` o arma.
+    if (tasks.length === 0) maybeScheduleIdleStop(session);
+    else clearIdleTimer(session);
+  }
   if (event.type === "turn_absorbed") {
     // Streaming input: this send folded into the turn ALREADY running (the model absorbs it at its
     // next step) — it will not produce its own `result`, so its +1 comes back off. Floor at 1: an
@@ -440,6 +478,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     sockets: new Set(),
     ready: false,
     activeTurns: 0,
+    backgroundTasks: [],
     rewinds: [],
     idleTimer: null,
     stderrTail: "",
@@ -751,6 +790,12 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
   // up had no command list until the next turn's `init` — an empty menu on a session full of skills.
   if (session.catalog) {
     try { socket.send(JSON.stringify(session.catalog)); } catch { /* going away */ }
+  }
+
+  // As tarefas em segundo plano também são estado: uma aba que abre (ou recarrega) enquanto um
+  // `sleep` de deploy roda precisa ver isso no primeiro quadro — o aviso do CLI só vem na mudança.
+  if (session.backgroundTasks.length > 0) {
+    try { socket.send(JSON.stringify({ type: "background_tasks", tasks: session.backgroundTasks })); } catch { /* going away */ }
   }
 
   // A frota do workflow é da mesma natureza do catálogo: estado, não conversa. Ela não está no

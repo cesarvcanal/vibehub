@@ -10,6 +10,7 @@ import {
   DRIVER_IDLE_MS,
   TYPING_RELAY_MIN_MS,
   attachSocket,
+  driverActivity,
   ensureDriverSession,
   handleClientFrame,
   hasDriverSession,
@@ -1534,5 +1535,80 @@ describe("attachSocket — \"está digitando\" entre as abas do card", () => {
     attachSocket(session, mussa as never, MUSSA);
     anon.emit("message", typing(true));
     expect(peerFrames(mussa)).toEqual([]);
+  });
+});
+
+/**
+ * TAREFAS EM SEGUNDO PLANO (produção, 2026-10-07): o Claude disparou um `sleep 200` em background, o
+ * turno fechou e o chat ficou mudo — "parece que ela parou, mas está rodando". O conjunto vivo vem
+ * do CLI (`background_tasks`, semântica de SUBSTITUIR) e é ESTADO da sessão, como o catálogo.
+ */
+describe("background_tasks — o trabalho que segue depois do turno", () => {
+  const running = { type: "background_tasks", tasks: [{ id: "b1", type: "local_bash", description: "Aguarda o deploy" }] };
+  const none = { type: "background_tasks", tasks: [] };
+
+  it("chega às abas abertas e é reenviado a uma aba que conecta depois", () => {
+    const session = ensure();
+    const s1 = fakeSocket();
+    attachSocket(session, s1 as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    spawned[0]!.stdout.emit("data", line(running));
+    expect(sentTypes(s1)).toContain("background_tasks");
+
+    const s2 = fakeSocket();
+    attachSocket(session, s2 as never);
+    const frames = s2.sent.map((s) => JSON.parse(s) as { type: string; tasks?: unknown }).filter((e) => e.type === "background_tasks");
+    expect(frames).toEqual([running]);
+  });
+
+  it("não reenvia nada quando o conjunto esvaziou", () => {
+    const session = ensure();
+    attachSocket(session, fakeSocket() as never);
+    spawned[0]!.stdout.emit("data", line(running));
+    spawned[0]!.stdout.emit("data", line(none));
+    const late = fakeSocket();
+    attachSocket(session, late as never);
+    expect(sentTypes(late)).not.toContain("background_tasks");
+  });
+
+  it("nunca vai para a conversa gravada — é estado, não algo que alguém disse", async () => {
+    const session = ensure();
+    attachSocket(session, fakeSocket() as never);
+    spawned[0]!.stdout.emit("data", line(running));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const history = await readHistory(CARD);
+    expect(history.some((e) => e.type === "background_tasks")).toBe(false);
+  });
+
+  it("um driver NOVO (ready real) zera o conjunto: as tarefas morreram com o processo antigo", () => {
+    const session = ensure();
+    attachSocket(session, fakeSocket() as never);
+    spawned[0]!.stdout.emit("data", line(running));
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    const late = fakeSocket();
+    attachSocket(session, late as never);
+    expect(sentTypes(late)).not.toContain("background_tasks");
+  });
+
+  it("o idle stop NÃO mata um driver com tarefa em segundo plano viva — só quando ela termina", () => {
+    vi.useFakeTimers();
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"espera o deploy em background"}`));
+    spawned[0]!.stdout.emit("data", line(running));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    socket.emit("close");
+    vi.advanceTimersByTime(DRIVER_IDLE_MS * 3);
+    expect(spawned[0]!.killed).toBe(false);
+    expect(isCardChatInUse(CARD)).toBe(true);
+    expect(driverActivity(CARD)).toBe("turn");
+
+    spawned[0]!.stdout.emit("data", line(none));
+    expect(isCardChatInUse(CARD)).toBe(false);
+    expect(driverActivity(CARD)).toBe("idle");
+    vi.advanceTimersByTime(DRIVER_IDLE_MS + 1);
+    expect(spawned[0]!.killed).toBe(true);
   });
 });
