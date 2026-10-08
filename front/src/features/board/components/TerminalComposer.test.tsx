@@ -246,6 +246,45 @@ describe("TerminalComposer", () => {
     expect(box).toHaveValue("first\nsecond");
   });
 
+  // Produção, 2026-10-08: o card termina de preparar (ou o chat nativo decide o modo) e o campo é
+  // REMONTADO noutro ramo da tela, com o rascunho restaurado. O foco automático de um textarea novo
+  // deixa o cursor na posição 0 — e o resto do que se digita entra NO COMEÇO da mensagem.
+  it("a remounted field takes the focus with the caret at the END of the restored draft", async () => {
+    saveDraft("card-1", "metade de um pensamento", []);
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId="card-1" />);
+    const box = screen.getByRole<HTMLTextAreaElement>("textbox");
+    await waitFor(() => expect(box).toHaveFocus());
+    expect(box.selectionStart).toBe("metade de um pensamento".length);
+    expect(box.selectionEnd).toBe("metade de um pensamento".length);
+  });
+
+  it("coming back to a card puts the caret at the end, not at the start of the draft", async () => {
+    const { rerender } = renderComposer(<TerminalComposer onSend={vi.fn()} cardId="card-1" active />);
+    const box = screen.getByRole<HTMLTextAreaElement>("textbox");
+    await waitFor(() => expect(box).toHaveFocus());
+    await userEvent.type(box, "rascunho em andamento");
+    rerender(<TerminalComposer onSend={vi.fn()} cardId="card-1" active={false} />);
+    box.setSelectionRange(0, 0);
+    box.blur();
+    rerender(<TerminalComposer onSend={vi.fn()} cardId="card-1" active />);
+    await waitFor(() => expect(box).toHaveFocus());
+    expect(box.selectionStart).toBe("rascunho em andamento".length);
+  });
+
+  it("re-running the auto-focus never moves the caret of someone who is already typing", async () => {
+    const { rerender } = renderComposer(<TerminalComposer onSend={vi.fn()} cardId="card-1" active />);
+    const box = screen.getByRole<HTMLTextAreaElement>("textbox");
+    await waitFor(() => expect(box).toHaveFocus());
+    await userEvent.type(box, "corrigindo o meio");
+    box.setSelectionRange(3, 3); // editando no meio da frase
+    // Algo acima re-renderiza e o efeito de foco roda de novo (o card voltou a ficar ativo).
+    rerender(<TerminalComposer onSend={vi.fn()} cardId="card-1" active={false} />);
+    rerender(<TerminalComposer onSend={vi.fn()} cardId="card-1" active />);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(box).toHaveFocus();
+    expect(box.selectionStart).toBe(3);
+  });
+
   it("paints ultrathink / ultracode as they are typed, and only then", async () => {
     renderComposer(<TerminalComposer onSend={vi.fn()} />);
     const box = screen.getByRole("textbox", { name: /enter sends/i });

@@ -521,6 +521,28 @@ describe("CardTerminalView — composing a message", () => {
     resolveOpen({ card: card({ openedAt: 10 }) });
   });
 
+  // Produção, 2026-10-08: digitando durante o "Preparando…", o card fica pronto, o campo é trocado
+  // pelo do painel de verdade e o cursor pulava pro COMEÇO do rascunho — o resto da frase entrava
+  // antes do que já estava escrito.
+  it("a message half-typed while the card prepares keeps the caret at its END when the card opens", async () => {
+    let resolveOpen: (value: unknown) => void = () => {};
+    mockPost.mockImplementation(() => new Promise((resolve) => (resolveOpen = resolve)));
+
+    renderWithCache([card({ column: "backlog" })]);
+    await screen.findByText(/Preparing the worktree and session/i);
+    const before = screen.getByTestId("terminal-composer").querySelector("textarea") as HTMLTextAreaElement;
+    await userEvent.type(before, "comece pelo schema");
+
+    resolveOpen({ card: card({ openedAt: 99 }) });
+    await screen.findByTestId("xterm");
+
+    const box = screen.getByTestId("terminal-composer").querySelector("textarea") as HTMLTextAreaElement;
+    expect(box).not.toBe(before); // um campo NOVO, com o rascunho restaurado
+    await waitFor(() => expect(document.activeElement).toBe(box));
+    expect(box).toHaveValue("comece pelo schema");
+    expect(box.selectionStart).toBe("comece pelo schema".length);
+  });
+
   it("the COMPOSER takes the keyboard when the card opens, not the terminal", async () => {
     mockPost.mockResolvedValue({ card: card({ openedAt: 10 }) });
     renderWithCache([card({ openedAt: 10 })]);

@@ -613,12 +613,22 @@ export function TerminalComposer({
    * Card views are not unmounted any more (the deck keeps every card you opened attached), so
    * "mounted" stopped meaning "just opened": without `active` in here, returning to a card would
    * leave the caret wherever it was and the first thing you typed would go nowhere.
+   *
+   * The caret goes to the END of what is there (produção, 2026-10-08). A field mounted with a
+   * restored draft — the card finishing "Preparando…" swaps in a new composer — starts with its
+   * selection at 0, and a bare `focus()` left it there: the rest of the sentence went in at the
+   * START of the message. A field that already has the keyboard is left alone: someone is typing.
    */
   React.useEffect(() => {
     if (!autoFocus || isMobile || !active) return;
     // After the terminal's own mount focus (the websocket grabs it on open), or the caret lands in
     // xterm and the first thing typed goes into the raw session.
-    const id = setTimeout(() => ref.current?.focus(), 0);
+    const id = setTimeout(() => {
+      const el = ref.current;
+      if (!el || document.activeElement === el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    }, 0);
     return () => clearTimeout(id);
   }, [autoFocus, isMobile, draftKey, active]);
 
