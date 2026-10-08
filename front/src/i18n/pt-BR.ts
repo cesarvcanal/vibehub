@@ -467,6 +467,7 @@ export const ptBR: Record<string, string> = {
   "sdk.backgroundTitle.other": "{n} tarefas rodando em segundo plano",
   "sdk.backgroundHint": "o Claude segue trabalhando — ele retoma quando isso terminar",
   "sdk.backgroundUnnamed": "tarefa em segundo plano",
+  "sdk.noteConversationCleared": "Conversa limpa com /clear — o Claude começou do zero, sem o contexto anterior.",
   "sdk.queueEdit": "Editar esta mensagem antes de ela ir",
   "sdk.queueSendNow": "Mandar esta agora, sem esperar o turno terminar",
   "sdk.queueSendNowShort": "Enviar agora",

@@ -38,6 +38,7 @@ export interface SdkEvent {
     | "catalog"
     | "local_output"
     | "background_tasks"
+    | "conversation_reset"
     | "result"
     | "workflow_progress"
     | "user_ack"
@@ -76,6 +77,8 @@ export interface SdkEvent {
   from?: MessageOrigin;
   /** "terminal" = the event was MIRRORED from the card's TUI transcript, not spoken by the driver. */
   source?: string;
+  /** On `conversation_reset`: what reset the conversation ("clear" for a `/clear`). */
+  trigger?: string;
   /** On `background_tasks`: the WHOLE live set (replace, never merge) — see `backgroundTasks`. */
   tasks?: BackgroundTask[];
   /** On `catalog`: every skill/command this session can run — what the composer's "/" offers. */
@@ -311,6 +314,9 @@ export const TERMINAL_ACTIVITY_NOTE = "terminal-activity";
  *  `back/src/services/sdk/protocol.ts` (`NOTE_TURN_INTERRUPTED*`). */
 export const TURN_INTERRUPTED_NOTE = "turn-interrupted";
 export const TURN_INTERRUPTED_EDIT_NOTE = "turn-interrupted-edit";
+/** The note the back leaves where a `/clear` wiped the conversation. Must match the back's
+ *  `NOTE_CONVERSATION_CLEARED` (back/src/services/sdk/protocol.ts). */
+export const CONVERSATION_CLEARED_NOTE = "conversation-cleared";
 
 /**
  * Sentinels the reducer puts on an error row when the wire carried NO words of its own. The view
@@ -756,6 +762,19 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         }));
       if (tasks.length === 0 && state.backgroundTasks.length === 0) return state;
       return { ...state, backgroundTasks: tasks };
+    }
+    case "conversation_reset": {
+      // /clear: o modelo começou do zero numa sessão nova. A tela esquece a conversa antiga como
+      // o Claude Code faz — senão o /clear parecia não ter feito nada. Fica o que é da SESSÃO do
+      // card e não da conversa: o menu "/", as tarefas em segundo plano ainda vivas, o turno.
+      return {
+        ...state,
+        rows: [],
+        sessionId: undefined,
+        workflowMeta: {},
+        terminalBurst: false,
+        awaiting: false,
+      };
     }
     case "local_output": {
       // `/cost` and friends: answered by the CLI itself, outside any turn. Its own row, so it is

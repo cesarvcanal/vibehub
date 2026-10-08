@@ -1389,3 +1389,21 @@ describe("background_tasks — o trabalho que segue depois do turno", () => {
     expect(state.rows).toEqual([]);
   });
 });
+
+describe("conversation_reset — /clear", () => {
+  it("limpa a conversa da tela e esquece a sessão antiga, mantendo o menu e as tarefas vivas", () => {
+    const bash = { id: "b1", type: "local_bash", description: "Aguarda o deploy" };
+    const before = feed([
+      { type: "ready" },
+      { type: "catalog", commands: [{ name: "clear", source: "command" } as never] },
+      { type: "background_tasks", tasks: [bash] },
+      { type: "assistant_text", text: "conversa antiga" },
+      { type: "result", isError: false, sessionId: "0d1b3864-4870-4141-8451-79d73de0bd96" },
+    ]);
+    const state = applySdkEvent(before, { type: "conversation_reset", trigger: "clear" });
+    expect(state.rows).toEqual([]);
+    expect(state.sessionId).toBeUndefined();
+    expect(state.commands).toEqual(before.commands);
+    expect(state.backgroundTasks).toEqual([bash]);
+  });
+});

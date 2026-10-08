@@ -3043,3 +3043,20 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     expect(tray).toHaveTextContent(/background task/i);
   });
 });
+
+describe("SdkChatView — /clear", () => {
+  it("o /clear limpa a conversa da tela e diz que o Claude começou do zero", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "assistant_text", text: "Resposta antiga e longa." });
+    ws.deliver({ type: "result", isError: false });
+    expect(screen.getByText("Resposta antiga e longa.")).toBeInTheDocument();
+
+    ws.deliver({ type: "conversation_reset", trigger: "clear" });
+    ws.deliver({ type: "system_note", text: "conversation-cleared", at: Date.now() });
+    await waitFor(() => expect(screen.queryByText("Resposta antiga e longa.")).toBeNull());
+    expect(screen.getByText(/cleared/i)).toBeInTheDocument();
+  });
+});

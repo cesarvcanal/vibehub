@@ -56,6 +56,7 @@ import {
   TERMINAL_ACTIVITY_NOTE,
   TURN_INTERRUPTED_EDIT_NOTE,
   TURN_INTERRUPTED_NOTE,
+  CONVERSATION_CLEARED_NOTE,
   answerQuestion,
   applySdkEvent,
   appendUserRow,
@@ -2273,6 +2274,7 @@ function noteText(text: string, t: ReturnType<typeof useT>): string {
   if (text === TERMINAL_ACTIVITY_NOTE) return t("sdk.terminalActivity");
   if (text === TURN_INTERRUPTED_EDIT_NOTE) return t("sdk.noteInterruptedEdit");
   if (text === TURN_INTERRUPTED_NOTE) return t("sdk.noteInterrupted");
+  if (text === CONVERSATION_CLEARED_NOTE) return t("sdk.noteConversationCleared");
   return text;
 }
 

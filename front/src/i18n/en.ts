@@ -466,6 +466,7 @@ export const en: Record<string, string> = {
   "sdk.backgroundTitle.other": "{n} tasks running in the background",
   "sdk.backgroundHint": "Claude is still working — it picks up when this finishes",
   "sdk.backgroundUnnamed": "background task",
+  "sdk.noteConversationCleared": "Conversation cleared with /clear — Claude started fresh, without the previous context.",
   "sdk.queueEdit": "Edit this message before it goes",
   "sdk.queueSendNow": "Send this one now, without waiting for the turn to end",
   "sdk.queueSendNowShort": "Send now",
