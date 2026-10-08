@@ -360,26 +360,6 @@ describe("Markdown — copiar bloco de código", () => {
     expect(toast.dismiss).not.toHaveBeenCalledWith(errorId);
   });
 
-  it("o erro do bloco sobrevive a um remount (reconexão/replay) — o sucesso depois ainda o tira da tela", async () => {
-    const writeText = vi.fn().mockRejectedValueOnce(new Error("denied")).mockResolvedValue(undefined);
-    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-    Object.defineProperty(document, "execCommand", { value: vi.fn(() => false), configurable: true });
-    silenceWarn();
-    const text = ["```", "faz isso", "```"].join("\n");
-    const first = render(<Markdown text={text} />);
-    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
-    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
-    first.unmount();
-
-    render(<Markdown text={text} />);
-    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
-    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1));
-
-    const errorId = (vi.mocked(toast.error).mock.calls[0]?.[1] as { id?: unknown } | undefined)?.id;
-    expect(errorId).toBeDefined();
-    expect(toast.dismiss).toHaveBeenCalledWith(errorId);
-  });
-
   it("bloco que muda de texto (streaming) e depois copia com sucesso ainda tira da tela o erro que mostrou", async () => {
     const writeText = vi.fn().mockRejectedValueOnce(new Error("denied")).mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
@@ -420,6 +400,54 @@ describe("Markdown — copiar bloco de código", () => {
     const secondErrorId = (vi.mocked(toast.error).mock.calls[1]?.[1] as { id?: unknown } | undefined)?.id;
     expect(secondErrorId).toBeDefined();
     expect(dismissed).not.toContain(secondErrorId);
+  });
+
+  it("falhas do mesmo bloco enquanto o texto ainda chega (streaming) não empilham — e o sucesso depois tira o erro", async () => {
+    const writeText = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("denied"))
+      .mockRejectedValueOnce(new Error("denied"))
+      .mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    Object.defineProperty(document, "execCommand", { value: vi.fn(() => false), configurable: true });
+    silenceWarn();
+    const { rerender } = render(<Markdown text={["```", "npm te", ""].join("\n")} />);
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+
+    rerender(<Markdown text={["```", "npm test", ""].join("\n")} />);
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(2));
+    const ids = vi.mocked(toast.error).mock.calls.map((call) => (call[1] as { id?: unknown } | undefined)?.id);
+    expect(ids[1]).toBe(ids[0]); // one error toast for the block, replaced — not two stacked
+
+    rerender(<Markdown text={["```", "npm test -- --run", "```"].join("\n")} />);
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1));
+    expect(toast.dismiss).toHaveBeenCalledWith(ids[0]);
+  });
+
+  it("um sucesso atrasado de um texto ANTIGO não apaga o erro do texto novo — o clipboard tem a versão velha", async () => {
+    let resolveFirst: () => void = () => {};
+    const writeText = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise<void>((r) => (resolveFirst = r)))
+      .mockRejectedValue(new Error("denied"));
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    Object.defineProperty(document, "execCommand", { value: vi.fn(() => false), configurable: true });
+    silenceWarn();
+    const { rerender } = render(<Markdown text={["```", "npm te", ""].join("\n")} />);
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" })); // "npm te": hangs on a prompt
+
+    rerender(<Markdown text={["```", "npm test", "```"].join("\n")} />);
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" })); // "npm test": fails
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    resolveFirst(); // the OLD text reaches the clipboard
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.dismiss).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Copy code" })).toBeInTheDocument();
   });
 
   it("um SUCESSO atrasado vale — o texto chegou ao clipboard, mesmo que um clique mais novo tenha falhado", async () => {

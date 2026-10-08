@@ -718,28 +718,6 @@ function codeBlockSource(node: HastNode | undefined): string {
 const CODE_COPIED_TOAST_ID = "chat-code-copied";
 
 /**
- * A short, stable fingerprint of a block's text (length + djb2), for an error toast id that survives
- * remounts. The length makes a collision between two blocks on screen practically impossible. PURE.
- */
-function blockKey(text: string): string {
-  let h = 5381;
-  for (let i = 0; i < text.length; i += 1) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
-  return `${text.length.toString(36)}-${(h >>> 0).toString(36)}`;
-}
-
-/**
- * Each dismissal RETIRES the block's error id: sonner keeps a dismissed toast around for its exit
- * animation, and a new toast published under that same id in that window is swallowed with it — a
- * failure right after a success would go unannounced. Module-level so a remount sees it too.
- */
-const errorGeneration = new Map<string, number>();
-const errorToastId = (key: string) => `chat-code-copy-error-${key}-${errorGeneration.get(key) ?? 0}`;
-function retireErrorToast(key: string): void {
-  toast.dismiss(errorToastId(key));
-  errorGeneration.set(key, (errorGeneration.get(key) ?? 0) + 1);
-}
-
-/**
  * A fenced block with its own copy button. The agent often hands over a prompt, a command or a
  * config inside a block, and that block — not the whole answer — is what you want; selecting a
  * long one by hand inside a scroller is miserable. Always visible (a phone has no hover), quiet
@@ -761,30 +739,38 @@ function CodeBlock({ source, children }: { source: string; children: React.React
   }, []);
   // The toast rules, each one a scenario that bit:
   //  - ONE success toast for the whole chat: copying four blocks in a row replaces, never stacks.
-  //  - The error toast is per BLOCK CONTENT: B's success must not erase A's failure (you would paste
-  //    thinking A was copied), and keyed on the content rather than the instance, a remount
-  //    (reconnect, transcript replay) still finds it.
-  //  - A success dismisses its own block's error: never "could not copy" and "copied" for one block.
-  //    "Its own" = the error THIS instance showed (the text may have streamed on since) plus the one
-  //    keyed on the current text (shown before a remount).
-  const shownErrorKey = React.useRef<string | null>(null);
-  // Any SUCCESS wins: a copy that hung on a permission prompt and then went through really did put
-  // the block on the clipboard, so saying otherwise would be the lie. A FAILURE only speaks if no
-  // newer click has been made since — an old failure must not undo a newer "copied".
-  const latest = React.useRef(0);
+  //  - ONE error toast per block (this instance), whatever its text has streamed on to: failures
+  //    replace each other, and B's success never erases A's failure (you would paste thinking A was
+  //    copied).
+  //  - A success dismisses its own block's error, then moves to a fresh id: sonner keeps a dismissed
+  //    toast for its exit animation, and a new one under the same id in that window would vanish
+  //    with it. (An unmounted instance's error is left to time out — as on main, where error toasts
+  //    were never dismissed at all.)
+  const blockId = React.useId();
+  const errorGeneration = React.useRef(0);
+  const errorShown = React.useRef(false);
+  const errorToastId = () => `chat-code-copy-error-${blockId}-${errorGeneration.current}`;
+  // The race: a FAILURE only speaks if no newer click came after it — an old failure must not undo
+  // a newer "copied". A late SUCCESS speaks if it copied the text the latest click was after (it
+  // hung on a permission prompt, then really put that text on the clipboard); a success for text
+  // that has since streamed on put a stale version there and stays quiet.
+  const latest = React.useRef({ request: 0, text: "" });
   async function copy() {
-    const request = ++latest.current;
+    const request = latest.current.request + 1;
     const text = source;
+    latest.current = { request, text };
     const ok = await copyText(text);
-    if (!ok && request !== latest.current) return;
-    const key = blockKey(text); // only on a click: hashing every streamed render would be waste
+    if (request !== latest.current.request && !(ok && text === latest.current.text)) return;
     if (ok) {
-      for (const shown of new Set([key, shownErrorKey.current])) if (shown) retireErrorToast(shown);
-      shownErrorKey.current = null;
+      if (errorShown.current) {
+        toast.dismiss(errorToastId());
+        errorGeneration.current += 1;
+        errorShown.current = false;
+      }
       toast.success(t("chat.codeCopied"), { id: CODE_COPIED_TOAST_ID });
     } else {
-      shownErrorKey.current = key;
-      toast.error(t("chat.copyError"), { id: errorToastId(key) });
+      errorShown.current = true;
+      toast.error(t("chat.copyError"), { id: errorToastId() });
     }
     if (!mounted.current) return;
     if (timer.current) clearTimeout(timer.current);
