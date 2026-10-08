@@ -622,6 +622,27 @@ export function TerminalComposer({
     return () => clearTimeout(id);
   }, [autoFocus, isMobile, draftKey, active]);
 
+  /**
+   * The FIRST focus of this field puts the caret at the END of what is there (produção, 2026-10-08).
+   *
+   * A field mounted with a restored draft — the card finishing "Preparando…" swaps in a new
+   * composer — starts with its selection at 0, and a bare `focus()` (the auto-focus above, the
+   * decision tray's "Responder") left it there: the rest of the sentence went in at the START of
+   * the message. Only the first focus, and only one that is not a click or tap: after that the
+   * browser remembers where the caret was, and a pointer puts it where the pointer is.
+   */
+  const focusedOnceRef = React.useRef(false);
+  const pointerFocusRef = React.useRef(false);
+  const onFieldPointerDown = React.useCallback((): void => {
+    pointerFocusRef.current = true;
+  }, []);
+  const onFieldFocus = React.useCallback((event: React.FocusEvent<HTMLTextAreaElement>): void => {
+    const el = event.currentTarget;
+    if (!focusedOnceRef.current && !pointerFocusRef.current) el.setSelectionRange(el.value.length, el.value.length);
+    focusedOnceRef.current = true;
+    pointerFocusRef.current = false;
+  }, []);
+
   const append = React.useCallback((fragment: string) => {
     setText((prev) => appendFragment(prev, fragment));
   }, []);
@@ -1063,6 +1084,8 @@ export function TerminalComposer({
         <textarea
           ref={ref}
           value={text}
+          onPointerDown={onFieldPointerDown}
+          onFocus={onFieldFocus}
           onChange={(e) => {
             setText(e.target.value);
             onDraftInput?.(e.target.value);
