@@ -220,9 +220,13 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "and — ONLY when `authorized` is true and the gate is green — merge the PR with a merge commit " +
         "(never a squash). All git/gh runs as the project's GitHub connection. Returns { prUrl, " +
         "merged, reason }: `reason` is 'merged' on success, or 'gate' (checks red), 'unauthorized' " +
-        "(prepared the PR but was not told to merge), or a git failure. Pass `authorized:true` ONLY " +
-        "when the user named where to ship (e.g. 'sobe pra dev'); NEVER by default — a merge is a " +
-        "deploy. Cherry-picking to another branch is a separate, explicit operation, not part of this.",
+        "(prepared the PR but was not told to merge), 'locked' (see below), or a git failure. Pass " +
+        "`authorized:true` ONLY when the user named where to ship (e.g. 'sobe pra dev'); NEVER by " +
+        "default — a merge is a deploy. Cherry-picking to another branch is a separate, explicit " +
+        "operation, not part of this. A LOCKED card answers { reason: 'locked', locked: true }: the " +
+        "PR goes to that card's own base whatever `branch` said, and it is NEVER merged from here — " +
+        "say so plainly ('o PR está aberto em <base>; o merge é de quem revisa') instead of " +
+        "retrying, and do not go around it with git or gh by hand.",
       inputSchema: {
         card: z.string().describe("id of the card to deliver (from vibehub_list_terminals)"),
         branch: z.string().optional().describe("target branch for the PR / merge. Absent = the project's base branch."),

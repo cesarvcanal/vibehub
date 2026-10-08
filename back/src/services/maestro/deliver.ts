@@ -29,11 +29,17 @@ import { logger } from "../../utils/logger.js";
  *
  * `authorized` is the whole safety story: merging is deploying. The maestro persona passes it only
  * when the user named where to ship ("sobe pra dev"), and it is NEVER defaulted to true.
+ *
+ * A LOCKED CARD (`Card.locked`) overrides all of it: the target is forced to the card's own base,
+ * whatever was asked for, and step (d) never runs — the delivery ENDS at the open pull request,
+ * with the gate already run, for a reviewer to merge. That is the hotfix shape turned into the only
+ * shape that card has.
  */
 
 export type DeliverReason =
   | "merged"
   | "gate"
+  | "locked"
   | "unauthorized"
   | "push_failed"
   | "pr_failed"
@@ -49,6 +55,8 @@ export interface DeliverResult {
   branch: string;
   /** The card's source branch that was pushed. */
   cardBranch: string;
+  /** true = this card is LOCKED to its base: the target was forced and the merge was never on offer. */
+  locked?: true;
   /** Gate/git output when there is something to show (redacted, tail). */
   output?: string;
 }
@@ -156,7 +164,13 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
   if (!project) throw new Error("project for this card not found");
 
   const source = cardBranch(card);
-  const target = assertBranchName(opts.branch ?? project.baseBranch);
+  // A LOCKED card has exactly one exit: a pull request back to the branch it was cut from. The
+  // target it was ASKED for is ignored rather than refused — the point of the lock is that the
+  // delivery still works, it just cannot land anywhere else. See `Card.locked` in registry.ts.
+  const locked = card.locked === true;
+  /** Spread into every result so the caller can SAY why the target was not the one it asked for. */
+  const lock = (locked ? { locked: true } : {}) as { locked?: true };
+  const target = assertBranchName(locked ? (card.base || project.baseBranch) : (opts.branch ?? project.baseBranch));
   const { cwd } = cardWorkPaths(project, card);
   const container = config.runner.container;
 
@@ -181,7 +195,7 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
       { audit: true, action: "maestro.deliver", card: card.worktreeSlug, stage: pr.stage, merged: false, by: opts.by },
       "deliver stopped before a PR",
     );
-    return { merged: false, reason: reasonForStage(pr.stage), branch: target, cardBranch: source, output: cleanOutput(pr.output) };
+    return { merged: false, reason: reasonForStage(pr.stage), branch: target, cardBranch: source, ...lock, output: cleanOutput(pr.output) };
   }
   const prUrl = pr.prUrl;
 
@@ -192,17 +206,27 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     gate = await runGate(card.id);
   } catch (err) {
     logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "gate could not run — treating as red");
-    return { prUrl, merged: false, reason: "gate", branch: target, cardBranch: source, output: (err as Error).message };
+    return { prUrl, merged: false, reason: "gate", branch: target, cardBranch: source, ...lock, output: (err as Error).message };
   }
   if (gate.ran && !gate.passed) {
     logger.info(
       { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, gate: "red", by: opts.by },
       "deliver stopped at the gate",
     );
-    return { prUrl, merged: false, reason: "gate", branch: target, cardBranch: source, output: gate.output };
+    return { prUrl, merged: false, reason: "gate", branch: target, cardBranch: source, ...lock, output: gate.output };
   }
 
-  // (d) merge — ONLY when explicitly authorized. Never a default.
+  // (d) merge. A LOCKED card never gets here on purpose: its delivery IS the open pull request, and
+  // the merge belongs to whoever reviews it. Said before the `authorized` check so that an
+  // `authorized: true` (an agent that read the user's "sobe pra dev" and passed it along) changes
+  // nothing — on this card the word is not the card's to give.
+  if (locked) {
+    logger.info(
+      { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "locked", by: opts.by },
+      "deliver opened a PR on a locked card — merging is the reviewer's",
+    );
+    return { prUrl, merged: false, reason: "locked", branch: target, cardBranch: source, locked: true };
+  }
   if (opts.authorized !== true) {
     logger.info(
       { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "unauthorized", by: opts.by },

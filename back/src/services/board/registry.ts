@@ -330,6 +330,27 @@ export interface Card {
   /** Worktree branch when it is NOT the derived `card/<worktreeSlug>` (assertBranchName). */
   branch?: string;
   /**
+   * LOCKED TO ITS BASE — the card may only ever deliver back to the branch it was born from.
+   *
+   * A card already works on its own branch in its own worktree, cut from `base`. What this field
+   * takes away is the EXIT: `deliver` (services/maestro/deliver.ts) ignores whatever target it was
+   * asked for and uses `base`, and it NEVER merges — the flow ends at an open pull request with the
+   * gate run, for somebody else to review. It is the hotfix shape, made the only shape this card
+   * has: branch off, push, open the PR, stop.
+   *
+   * Why on the CARD and not on the person: the same dev may be trusted to ship one thing and not
+   * another, and the owner's own card is sometimes worth locking too ("this one goes through
+   * review"). Setting it is the owner's (it is outside MEMBER_CARD_FIELDS in routes/board.ts), so a
+   * `work` share cannot unlock the card it was given.
+   *
+   * This is the BOARD's half of the lock. The runner's terminal is still a shell with git in it, so
+   * a card that must not reach `prod` by hand also needs the repository to say so (a GitHub ruleset
+   * on the protected branches). See docs/API.md, "Locked cards".
+   *
+   * Stored as `true` or ABSENT — never `false`.
+   */
+  locked?: boolean;
+  /**
    * DECLARED STATE reported by the agent through `vibehub_report` — its own judgement of where the
    * task stands ({@link DeclaredState}). ORTHOGONAL to `status`/`column`: reporting it never moves
    * the card. Absent = the agent has said nothing yet.
@@ -1420,6 +1441,8 @@ export interface UpdateCardInput {
   branch?: string | null;
   /** Base branch of the worktree (just the label the next open/worktree uses); validated. */
   base?: string;
+  /** Lock the card to its base: deliver may only open a PR back to it, never merge. null/false = unlock. */
+  locked?: boolean | null;
 }
 
 /**
@@ -1506,6 +1529,12 @@ export async function updateCard(id: string, patch: UpdateCardInput): Promise<Ca
     // `null`: the base is always required (inherited from the project at creation), so fixing it is
     // always a string.
     if (patch.base !== undefined) next.base = assertBranchName(patch.base);
+    // locked: strictly boolean (or null to clear). Same storage rule as `sdkChat` — `true` or
+    // ABSENT, so an unlocked card reads exactly like every card written before the lock existed.
+    if (patch.locked !== undefined) {
+      if (patch.locked !== null && typeof patch.locked !== "boolean") throw new Error("locked must be a boolean");
+      next.locked = patch.locked === true ? true : undefined;
+    }
 
     // Nothing below this line can throw. (Object.assign copies keys explicitly set to `undefined`
     // too, which is exactly how a field gets cleared.)

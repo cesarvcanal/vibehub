@@ -317,6 +317,9 @@ export const en: Record<string, string> = {
     "The brain, the MCP set or this card's model/account changed while it was working — it restarts onto the new one once it goes idle, without interrupting.",
   "card.projectChip": "Project: {name}",
   "card.ownAccount": "This card's Claude account",
+  "card.lockedTo": "Locked: delivers only as a PR against {branch}",
+  "card.lockMenu": "Lock to {branch}",
+  "card.unlockMenu": "Unlock the card",
   "card.actionsFor": "Actions for {title}",
   "card.declaredState.working": "On it",
   "card.declaredState.ready": "Ready",
@@ -695,6 +698,11 @@ export const en: Record<string, string> = {
   "newCard.branch": "Branch",
   "newCard.branchPlaceholderBase": "derived from the title (base {branch})",
   "newCard.branchPlaceholder": "derived from the title",
+  "newCard.base": "Cut from",
+  "newCard.basePlaceholder": "the project's ({branch})",
+  "newCard.locked": "Lock the card to this branch",
+  "newCard.lockedHint":
+    "The card works on its own branch and delivers only as a pull request against the branch it was cut from — it never merges and never ships anywhere else. Whoever reviews it merges it.",
   "newCard.create": "Create card",
 
   /* ---------------------------------------------------------- project form */
@@ -990,6 +998,9 @@ export const en: Record<string, string> = {
   "toast.cardDeleteError": "Could not delete the card",
   "toast.cardAccountSwitched": "Account switched — the Claude session restarts on the next open.",
   "toast.cardAccountSwitchError": "Could not switch the card's account",
+  "toast.cardLocked": "Card locked — delivering is now only a PR against the branch it was cut from.",
+  "toast.cardUnlocked": "Card unlocked — delivering can merge again.",
+  "toast.cardLockError": "Could not change the card's lock",
   "toast.cardFinished": "“{title}” finished — stopped following the terminal.",
   "toast.cardFinishedShort": "“{title}” finished.",
   "toast.cardRenameError": "Could not rename the card",

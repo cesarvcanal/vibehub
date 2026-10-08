@@ -787,6 +787,28 @@ describe("board registry (persisted)", () => {
       await expect(reg.updateCard(card.id, { sdkChat: "yes" as unknown as boolean })).rejects.toThrow(/sdkChat/);
     });
 
+    it("locked: opt-in stores true, false/null clear to ABSENT, non-boolean rejected", async () => {
+      const p = await seedProject();
+      const card = await reg.createCard({ projectId: p.id, title: "a" });
+      expect(card.locked).toBeUndefined(); // default: a free card, exactly as before the lock existed
+      expect((await reg.updateCard(card.id, { locked: true })).locked).toBe(true);
+      expect((await reg.updateCard(card.id, { locked: false })).locked).toBeUndefined();
+      expect((await reg.updateCard(card.id, { locked: true })).locked).toBe(true);
+      expect((await reg.updateCard(card.id, { locked: null })).locked).toBeUndefined();
+      await expect(reg.updateCard(card.id, { locked: "yes" as unknown as boolean })).rejects.toThrow(/locked/);
+    });
+
+    it("locked survives a reload from disk and every unrelated patch", async () => {
+      const p = await seedProject();
+      const card = await reg.createCard({ projectId: p.id, title: "card preso do dev" });
+      await reg.updateCard(card.id, { locked: true, base: "dev" });
+      await reg.updateCard(card.id, { title: "renomeado" });
+      await reg.updateCard(card.id, { column: "working", position: 0 });
+      const reopened = await freshRegistry();
+      expect((await reopened.getCard(card.id))?.locked).toBe(true);
+      expect((await reopened.getCard(card.id))?.base).toBe("dev");
+    });
+
     it("sdkChat survives a reload from disk and every unrelated patch — 'reabrir o card' keeps the beta", async () => {
       const p = await seedProject();
       const card = await reg.createCard({ projectId: p.id, title: "teste chat nativo sdk" });

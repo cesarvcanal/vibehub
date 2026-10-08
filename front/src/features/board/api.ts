@@ -358,6 +358,8 @@ export interface CardPatchInput {
   model?: string | null;
   /** Native chat (beta) opt-in for this card; false/null go back to the transcript chat. */
   sdkChat?: boolean | null;
+  /** Locks the card to its base (deliver = a PR against it, never a merge); false/null unlocks. */
+  locked?: boolean | null;
 }
 
 /**

@@ -23,7 +23,8 @@ import { claudeProjectsDirName } from "../import/import.js";
 import { mcpInjectLines, resolveMcpInjections, type McpInjection } from "../mcp/mcp.js";
 import { pluginInstallLines, enabledPlugins } from "../plugins/plugins.js";
 import {
-  brainInjectLines, resolveBrainText, projectBrainWriteLines, resolveProjectBrainText, PROJECT_BRAIN_FILE,
+  brainInjectLines, resolveBrainText, projectBrainWriteLines, resolveProjectBrainText, brainTextForCard,
+  PROJECT_BRAIN_FILE,
 } from "../brain/brain.js";
 import { logger } from "../../utils/logger.js";
 
@@ -757,6 +758,11 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
     } catch (e) {
       logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "project brain not seeded on open (continuing)");
     }
+    // A LOCKED card carries its rule INTO the session: the notice goes above the project's own text,
+    // so the agent reads "this card only opens a PR against <base>" as project memory instead of
+    // discovering it when the delivery refuses to merge. Skipped when the resolve above FAILED
+    // (undefined): writing only the notice there would wipe the project brain already on disk.
+    if (projectBrain !== undefined) projectBrain = brainTextForCard(projectBrain, card);
 
     const script = buildOpenScript({
       containerName: config.runner.container,
@@ -1770,7 +1776,9 @@ export async function applyProjectBrainEverywhere(
   if (cards.length) {
     const lines = ["set -e", `docker exec -i ${shQuote(config.runner.container)} bash -s <<'${OPEN_DELIM}'`];
     for (const card of cards) {
-      lines.push(...projectBrainWriteLines(cardWorkPaths(project, card).cwd, text));
+      // Per card, not once: a LOCKED card's file keeps its notice — the sweep must not be the thing
+      // that strips the lock from the session until the next open.
+      lines.push(...projectBrainWriteLines(cardWorkPaths(project, card).cwd, brainTextForCard(text, card)));
     }
     lines.push(OPEN_DELIM);
     try {

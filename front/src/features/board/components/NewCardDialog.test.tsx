@@ -179,6 +179,49 @@ describe("NewCardDialog", () => {
     );
   });
 
+  it("locks the card to a base branch when asked: sends `base` and `locked`", async () => {
+    const { user, onSubmit } = setup();
+    await user.type(screen.getByLabelText("Title"), "ajuste do dev");
+    await user.click(screen.getByRole("button", { name: "Options" }));
+
+    await user.type(screen.getByLabelText("Cut from"), "dev");
+    await user.click(screen.getByLabelText(/Lock the card to this branch/));
+    await user.click(screen.getByRole("button", { name: "Create card" }));
+
+    expect(onSubmit).toHaveBeenCalledWith({
+      projectId: "p1",
+      title: "ajuste do dev",
+      base: "dev",
+      locked: true,
+    });
+  });
+
+  it("the lock is OPT-IN: off by default, and nothing is sent when it is not ticked", async () => {
+    // It did not exist before, and a card that does not ask for it must behave exactly as it always
+    // did — no `locked` in the payload at all, not even `false`.
+    const { user, onSubmit } = setup();
+    await user.type(screen.getByLabelText("Title"), "como sempre");
+    await user.click(screen.getByRole("button", { name: "Options" }));
+
+    const lock = screen.getByLabelText(/Lock the card to this branch/) as HTMLInputElement;
+    expect(lock.checked).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Create card" }));
+
+    expect(onSubmit).toHaveBeenCalledWith({ projectId: "p1", title: "como sempre" });
+  });
+
+  it("clears the lock on Cancel, so it cannot ride along into the next card", async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    await user.type(screen.getByLabelText("Cut from"), "prod");
+    await user.click(screen.getByLabelText(/Lock the card to this branch/));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    expect((screen.getByLabelText("Cut from") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText(/Lock the card to this branch/) as HTMLInputElement).checked).toBe(false);
+  });
+
   it("omits the optional fields entirely when they are left alone", async () => {
     const { user, onSubmit } = setup();
     await user.type(screen.getByLabelText("Title"), "bare{Enter}");

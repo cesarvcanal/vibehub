@@ -526,6 +526,10 @@ describe("a member with a WORK share editing the card", () => {
       { base: "develop" },
       { resumeSessionId: "0b6f7a52-0000-4000-8000-000000000000" },
       { sdkChat: true },
+      // The lock is the owner's: a `work` share must not be able to unlock the card it was given,
+      // nor lock somebody else's.
+      { locked: true },
+      { locked: false },
       { title: "carona", branch: "feat/mine" },
     ]) {
       const res = await app.inject({ method: "PATCH", url: `/api/cards/${cardId}`, headers: { cookie: member }, payload });

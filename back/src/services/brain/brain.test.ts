@@ -259,6 +259,38 @@ describe("projectBrainWriteLines", () => {
   });
 });
 
+describe("brainTextForCard (the locked-card notice)", () => {
+  it("a card that is NOT locked gets the project's text byte-for-byte", async () => {
+    const { mod } = await fresh();
+    const text = "# Projeto\n\nregras do erp-aux";
+    expect(mod.brainTextForCard(text, { base: "dev" })).toBe(text);
+    expect(mod.brainTextForCard(text, { base: "dev", locked: false })).toBe(text);
+    expect(mod.brainTextForCard("", { base: "dev" })).toBe("");
+  });
+
+  it("a LOCKED card gets the rule FIRST, naming its base, with the project's text below it", async () => {
+    const { mod } = await fresh();
+    const out = mod.brainTextForCard("# Projeto\n\nregras do erp-aux", { base: "dev", locked: true });
+    expect(out.startsWith("## Locked card (vibehub)")).toBe(true);
+    expect(out).toContain("`dev`");
+    expect(out).toContain("regras do erp-aux"); // the project's own text is never dropped
+    expect(out).toMatch(/do NOT push/i);
+  });
+
+  it("a LOCKED card with no project brain gets the notice alone — never a stray blank document", async () => {
+    const { mod } = await fresh();
+    const out = mod.brainTextForCard("   ", { base: "main", locked: true });
+    expect(out).toBe(mod.lockedCardNotice("main"));
+    expect(out.trim()).not.toBe("");
+  });
+
+  it("the notice survives the heredoc guard (it is written like any other brain text)", async () => {
+    const { mod } = await fresh();
+    const text = mod.brainTextForCard("", { base: "dev", locked: true });
+    expect(() => mod.projectBrainWriteLines("/work/acme--erp-worktrees/intake", text)).not.toThrow();
+  });
+});
+
 describe("the project brain store", () => {
   it("round-trips per project, isolated between projects, and survives a reload", async () => {
     const { mod } = await fresh();

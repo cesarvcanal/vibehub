@@ -339,6 +339,11 @@ export interface Card {
   branch?: string;
   /** Branch the worktree was cut from. */
   base?: string;
+  /**
+   * LOCKED to its base: this card delivers only as a pull request against `base`, and never merges.
+   * Set by the owner when the card is created (or from the card's options later). Absent = free.
+   */
+  locked?: boolean;
   /** tmux session name inside the runner. Derived by the server — never user input. */
   tmuxSession: string;
   /** Worktree directory slug inside the runner. Derived by the server. */
@@ -429,6 +434,10 @@ export interface NewCard {
   title: string;
   /** Optional fields go through the same validation an edit uses. */
   branch?: string;
+  /** Branch the worktree is cut FROM. Absent = the project's base branch. */
+  base?: string;
+  /** Lock the card to that base: delivery is a PR against it, never a merge. */
+  locked?: boolean;
   accountSlug?: string;
   model?: string;
   resumeSessionId?: string;
@@ -444,6 +453,8 @@ export interface CardPatch {
   /** null clears it (back to the derived `card/<worktreeSlug>`). */
   branch?: string | null;
   base?: string;
+  /** null/false unlocks the card. Owner-only, like the branch and its base. */
+  locked?: boolean | null;
   resumeSessionId?: string | null;
 }
 
