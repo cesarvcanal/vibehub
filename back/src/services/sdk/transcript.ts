@@ -191,6 +191,12 @@ export function mergeTranscriptReplay(jsonl: string, history: HistoryEvent[]): H
     for (const key of dedupeNoteKeys(event as HistoryEvent & { text?: string; id?: string })) {
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
+    // A resposta a uma pergunta ÓRFÃ foi ao modelo como mensagem, mas mora no `question_result`
+    // (`sent`), não numa linha `user`: é a mesma fala, e o transcript a traz de volta como tal.
+    const sent = event.type === "question_result" ? (event as { sent?: unknown }).sent : undefined;
+    if (typeof sent === "string" && sent !== "") {
+      for (const key of dedupeNoteKeys({ type: "user", text: sent })) counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
   }
   const firstHistoryAt = history.find((e) => typeof e.at === "number" && e.at > 0)?.at ?? Number.POSITIVE_INFINITY;
 

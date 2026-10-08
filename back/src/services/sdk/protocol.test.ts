@@ -16,6 +16,7 @@ import {
   parseSdkClientFrame,
   parseTypingFrame,
   buildSupersedeText,
+  buildOrphanAnswerText,
   interruptNote,
   NOTE_TURN_INTERRUPTED,
   NOTE_TURN_INTERRUPTED_EDIT,
@@ -558,5 +559,37 @@ describe("parseDriverLine — tarefas em segundo plano", () => {
 describe("parseDriverLine — /clear", () => {
   it("aceita o reset da conversa que o driver repassa", () => {
     expect(parseDriverLine(`{"type":"conversation_reset","trigger":"clear"}`)).toEqual({ type: "conversation_reset", trigger: "clear" });
+  });
+});
+
+/**
+ * A PERGUNTA ÓRFÃ (produção, 2026-10-07): o driver morreu (deploy, crash, hibernação) com um cartão
+ * de pergunta de pé. O histórico redesenha o cartão como pendente, mas o driver novo nunca ouviu
+ * falar dele — a resposta clicada virava "no pending question with id …" e se perdia. A resposta
+ * agora chega ao modelo como MENSAGEM, e este é o texto dela.
+ */
+describe("buildOrphanAnswerText", () => {
+  it("quotes each question next to what the person chose — free text included", () => {
+    const text = buildOrphanAnswerText(
+      [
+        { question: "Onde entra a busca?", options: [{ label: "No cabeçalho" }] },
+        { question: "Como conto o prazo?", options: [], multiSelect: true },
+      ],
+      [{ selected: ["No cabeçalho"] }, { selected: ["72h", "pulando domingo"] }],
+    );
+    expect(text).toContain("«Onde entra a busca?» → No cabeçalho");
+    expect(text).toContain("«Como conto o prazo?» → 72h, pulando domingo");
+    // says WHY it is a message and not a tool answer — the model must not wait for a tool result
+    expect(text).toMatch(/^\[resposta/);
+  });
+
+  it("skips unanswered questions and survives a card whose questions are unknown", () => {
+    const text = buildOrphanAnswerText(
+      [{ question: "A?", options: [] }, { question: "B?", options: [] }],
+      [{ selected: [" "] }, { selected: ["sim"] }],
+    );
+    expect(text).not.toContain("«A?»");
+    expect(text).toContain("«B?» → sim");
+    expect(buildOrphanAnswerText(null, [{ selected: ["x"] }])).toContain("pergunta 1 → x");
   });
 });

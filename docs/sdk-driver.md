@@ -331,6 +331,18 @@ pergunta pendente CLICÁVEL (o driver é do card e continua aguardando — F5 n�
 como a permissão) e uma respondida/expirada já assentada. Ledger: `createQuestionBroker` em
 `protocol.ts` (unit-tested; o driver embute o espelho).
 
+**Pergunta órfã.** O ledger do driver vive só em memória. Se o driver morre com um cartão de pé
+(deploy, crash, hibernação), o replay ainda o desenha pendente, mas o sucessor nunca ouviu falar
+dele. Antes, o clique voltava `no pending question with id …` e a resposta se perdia. Agora o
+manager (`manager.ts`) sabe quais perguntas o driver atual fez (`ownQuestions`) e trata o resto:
+- um `question_answer` para uma órfã vira **mensagem** ao modelo (`buildOrphanAnswerText`: cada
+  pergunta citada ao lado do escolhido), conta como turno, e o cartão assenta como respondido;
+- uma mensagem do usuário (ou edição) assenta as órfãs como `superseded` (uma varredura por driver: órfã só nasce de um driver anterior), como o driver faz com as
+  dele. Assim a bandeja não volta a pedir o que já foi respondido por escrito.
+
+O que a pessoa marcou e escreveu num cartão pendente fica num mapa do módulo (`questionDrafts` em
+`SdkChatView.tsx`), por id de pergunta. Ele sobrevive ao remount que todo reconnect provoca, inclusive depois do clique (o "respondida" é otimista; se o driver morrer antes de confirmar, o cartão volta pendente com o que foi marcado).
+
 ## As mesmas ferramentas do terminal (MCPs, navegador, CLAUDE.md)
 
 O chat nativo carrega a MESMA configuração que a sessão TUI do card — o agente precisa poder

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { config } from "../../config/env.js";
@@ -25,6 +25,7 @@ import {
 import { readInflightMarker } from "./inflight.js";
 import { createMirrorState, driverKeysFor, forgetDriverKeys, mirrorNewEvents } from "./mirror.js";
 import { notifyCardSessionKill } from "../board/workspace.js";
+import { mergeTranscriptReplay } from "./transcript.js";
 
 /**
  * THE BUG THIS FILE PINS (the reload-mid-turn bug): the SDK driver was a CHILD OF THE
@@ -438,9 +439,183 @@ describe("question_answer — reaches the LIVE driver", () => {
     const session = ensure();
     const socket = fakeSocket();
     attachSocket(session, socket as never);
+    // the card this driver is parked on — the answer pairs with it by id
+    spawned[0]!.stdout.emit("data", line({ type: "user_question", id: "q_1", questions: [{ question: "Formato?", options: [{ label: "Summary" }] }] }));
     socket.emit("message", Buffer.from(`{"type":"question_answer","id":"q_1","answers":[{"selected":["Summary"]}]}`));
     expect(spawned[0]!.stdin.written.some((w) => w.includes(`"question_answer"`) && w.includes(`"Summary"`))).toBe(true);
     expect(session.activeTurns).toBe(0); // an answer is not a new turn — the turn asking it is already counted
+  });
+});
+
+/**
+ * A PERGUNTA ÓRFÃ (produção, 2026-10-07). O driver morreu com um cartão de pergunta de pé (um
+ * deploy reiniciou o back às 16:50; a pergunta era das 16:41). O histórico redesenha o cartão como
+ * pendente — mas o driver novo guarda as perguntas só em memória e nunca ouviu falar dela:
+ *  - o CLIQUE ia ao driver novo e voltava "no pending question with id q_3_…" — resposta perdida;
+ *  - a MENSAGEM escrita no lugar não encerrava o cartão (só o driver que o abriu sabe fazer isso),
+ *    e a bandeja seguia pedindo a resposta de algo já respondido.
+ */
+describe("pergunta órfã — o cartão sobreviveu ao driver que o abriu", () => {
+  const QUESTIONS = [
+    { question: "Onde entra a busca?", options: [{ label: "No cabeçalho" }, { label: "No item" }] },
+    { question: "Como conto o prazo?", options: [{ label: "72h corridas" }] },
+  ];
+
+  /** Driver 1 asks and dies; driver 2 is the successor a reconnect spawns. */
+  async function orphanedCard() {
+    const first = ensure();
+    spawned[0]!.stdout.emit("data", line({ type: "user_question", id: "q_3_1791402112898", questions: QUESTIONS }));
+    await vi.waitFor(async () => expect((await readHistory(CARD)).some((e) => e.type === "user_question")).toBe(true));
+    spawned[0]!.exitCode = 1;
+    spawned[0]!.emit("close", 1);
+    expect(first.closed).toBe(true);
+    const successor = ensure();
+    const socket = fakeSocket();
+    attachSocket(successor, socket as never, { kind: "user", name: "cesar" });
+    spawned[1]!.stdout.emit("data", line({ type: "ready" }));
+    return { successor, socket };
+  }
+
+  it("o clique numa pergunta órfã chega ao modelo como mensagem — nunca 'no pending question'", async () => {
+    const { successor, socket } = await orphanedCard();
+    socket.emit("message", Buffer.from(JSON.stringify({
+      type: "question_answer",
+      id: "q_3_1791402112898",
+      answers: [{ selected: ["No cabeçalho"] }, { selected: ["72h corridas"] }],
+    })));
+    await vi.waitFor(() => {
+      const user = spawned[1]!.stdin.written.map((w) => JSON.parse(w) as { type: string; text?: string }).find((c) => c.type === "user");
+      expect(user?.text).toContain("«Onde entra a busca?» → No cabeçalho");
+      expect(user?.text).toContain("«Como conto o prazo?» → 72h corridas");
+    });
+    // the successor never sees a question_answer it cannot pair
+    expect(spawned[1]!.stdin.written.some((w) => w.includes(`"question_answer"`))).toBe(false);
+    expect(successor.activeTurns).toBe(1); // it IS a turn now: the model has to read and act on it
+    // the card settles everywhere — live and after an F5
+    await vi.waitFor(async () => {
+      const result = (await readHistory(CARD)).find((e) => e.type === "question_result") as { id?: string; answers?: unknown } | undefined;
+      expect(result?.id).toBe("q_3_1791402112898");
+      expect(result?.answers).toEqual([{ selected: ["No cabeçalho"] }, { selected: ["72h corridas"] }]);
+    });
+    expect(sentTypes(socket)).toContain("question_result");
+  });
+
+  it("duas abas respondendo a mesma órfã viram UMA mensagem só", async () => {
+    const { socket } = await orphanedCard();
+    const frame = Buffer.from(JSON.stringify({ type: "question_answer", id: "q_3_1791402112898", answers: [{ selected: ["No item"] }] }));
+    socket.emit("message", frame);
+    socket.emit("message", frame);
+    await vi.waitFor(async () => expect((await readHistory(CARD)).some((e) => e.type === "question_result")).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const users = spawned[1]!.stdin.written.filter((w) => w.includes(`"type":"user"`));
+    expect(users).toHaveLength(1);
+  });
+
+  it("responder por MENSAGEM encerra a órfã — a bandeja não volta a pedir a resposta", async () => {
+    const { socket } = await orphanedCard();
+    socket.emit("message", Buffer.from(`{"type":"user","text":"no cabeçalho, e 72h corridas"}`));
+    await vi.waitFor(async () => {
+      const result = (await readHistory(CARD)).find((e) => e.type === "question_result") as { id?: string; superseded?: boolean } | undefined;
+      expect(result).toMatchObject({ id: "q_3_1791402112898", superseded: true });
+    });
+    expect(sentTypes(socket)).toContain("question_result");
+  });
+
+  // ---- achados da revisão adversarial do PR #98 ----
+
+  it("F1: depois de um F5, a resposta da órfã NÃO volta do transcript como bolha 'do terminal'", async () => {
+    const { socket } = await orphanedCard();
+    socket.emit("message", Buffer.from(JSON.stringify({
+      type: "question_answer", id: "q_3_1791402112898", answers: [{ selected: ["No item"] }, { selected: [] }],
+    })));
+    let sent = "";
+    await vi.waitFor(() => {
+      const user = spawned[1]!.stdin.written.map((w) => JSON.parse(w) as { type: string; text?: string }).find((c) => c.type === "user");
+      expect(user?.text).toBeTruthy();
+      sent = user!.text!;
+    });
+    await vi.waitFor(async () => expect((await readHistory(CARD)).some((e) => e.type === "question_result")).toBe(true));
+    // o CLI grava a mensagem no transcript; o próximo connect funde transcript + histórico
+    const jsonl = JSON.stringify({ type: "user", uuid: "t-1", timestamp: new Date(Date.now() + 1000).toISOString(), message: { role: "user", content: sent } });
+    expect(mergeTranscriptReplay(jsonl, await readHistory(CARD)).filter((e) => e.type === "user")).toEqual([]);
+  });
+
+  it("F2: uma pergunta JÁ encerrada no disco (aba velha) não vira turno — volta o erro de antes", async () => {
+    ensure();
+    spawned[0]!.stdout.emit("data", line({ type: "user_question", id: "q_9_1", questions: QUESTIONS }));
+    spawned[0]!.stdout.emit("data", line({ type: "question_result", id: "q_9_1", answers: [{ selected: ["No item"] }] }));
+    await vi.waitFor(async () => expect((await readHistory(CARD)).some((e) => e.type === "question_result")).toBe(true));
+    spawned[0]!.exitCode = 1;
+    spawned[0]!.emit("close", 1);
+    const successor = ensure();
+    const socket = fakeSocket();
+    attachSocket(successor, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"question_answer","id":"q_9_1","answers":[{"selected":["No cabeçalho"]}]}`));
+    socket.emit("message", Buffer.from(`{"type":"question_answer","id":"bogus","answers":[{"selected":["rm -rf"]}]}`));
+    await vi.waitFor(() => expect(socket.sent.filter((s) => s.includes("no pending question")).length).toBe(2));
+    expect(spawned[1]!.stdin.written.some((w) => w.includes(`"type":"user"`))).toBe(false);
+    expect(successor.activeTurns).toBe(0);
+    expect((await readHistory(CARD)).filter((e) => e.type === "question_result")).toHaveLength(1);
+  });
+
+  it("F4: clicar a órfã com o driver já morto avisa a tela — a resposta não some calada", async () => {
+    const { successor, socket } = await orphanedCard();
+    spawned[1]!.exitCode = 1; // morreu, e o close ainda não chegou
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "question_answer", id: "q_3_1791402112898", answers: [{ selected: ["No item"] }] })));
+    await vi.waitFor(() => expect(sentTypes(socket)).toContain("error"));
+    expect(successor.settledOrphans.has("q_3_1791402112898")).toBe(false); // o próximo driver ainda a recebe
+  });
+
+  // ---- achados da 2ª rodada adversarial do PR #98 ----
+
+  it("R1: uma leitura do histórico que FALHA não dá a varredura por feita — a próxima mensagem encerra a órfã", async () => {
+    const { socket } = await orphanedCard();
+    const file = join(dir, "sdk-history", `${CARD}.ndjson`);
+    await rename(file, `${file}.bak`);
+    await mkdir(file); // readFile → EISDIR: a falha passageira (EBUSY/EMFILE) no primeiro envio
+    socket.emit("message", Buffer.from(`{"type":"user","text":"primeira"}`));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await rm(file, { recursive: true, force: true });
+    await rename(`${file}.bak`, file);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"segunda"}`));
+    await vi.waitFor(async () => {
+      const result = (await readHistory(CARD)).find((e) => e.type === "question_result") as { superseded?: boolean } | undefined;
+      expect(result).toMatchObject({ superseded: true });
+    });
+  });
+
+  it("R2: clicar uma órfã que ESTE manager já encerrou recebe o erro — nunca silêncio", async () => {
+    const { socket } = await orphanedCard();
+    socket.emit("message", Buffer.from(`{"type":"user","text":"respondi por escrito"}`));
+    await vi.waitFor(async () => expect((await readHistory(CARD)).some((e) => e.type === "question_result")).toBe(true));
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "question_answer", id: "q_3_1791402112898", answers: [{ selected: ["No item"] }] })));
+    await vi.waitFor(() => expect(socket.sent.some((s) => s.includes("no pending question with id q_3_1791402112898"))).toBe(true));
+    expect(spawned[1]!.stdin.written.filter((w) => w.includes(`"type":"user"`))).toHaveLength(1); // só a mensagem escrita
+  });
+
+  it("a pergunta que o driver VIVO acabou de encerrar não vira órfã na corrida com o disco", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "user_question", id: "q_1_1", questions: QUESTIONS }));
+    await vi.waitFor(async () => expect((await readHistory(CARD)).some((e) => e.type === "user_question")).toBe(true));
+    // a mensagem libera o cartão: o driver responde NA HORA, antes de o append dele chegar ao disco
+    socket.emit("message", Buffer.from(`{"type":"user","text":"outra coisa"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "question_result", id: "q_1_1", superseded: true }));
+    const results = async () => (await readHistory(CARD)).filter((e) => e.type === "question_result");
+    await vi.waitFor(async () => expect((await results()).length).toBeGreaterThan(0));
+    await new Promise((resolve) => setTimeout(resolve, 200)); // a leitura do manager, se houver, já terminou
+    expect(await results()).toHaveLength(1);
+  });
+
+  it("uma pergunta que o driver VIVO ainda espera não é tocada pelo manager — quem a encerra é o driver", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "user_question", id: "q_1_1", questions: QUESTIONS }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"outra coisa"}`));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect((await readHistory(CARD)).some((e) => e.type === "question_result")).toBe(false);
   });
 });
 
