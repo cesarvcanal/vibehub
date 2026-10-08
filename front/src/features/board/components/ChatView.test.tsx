@@ -6,6 +6,7 @@ import { ChatView } from "@/features/board/components/ChatView";
 import { resetDraftsForTesting } from "@/features/board/components/TerminalComposer";
 import { renderApp } from "@/test/render";
 import { post } from "@/lib/api";
+import { toast } from "sonner";
 import type { ChatEvent } from "@/features/board/lib/chat";
 import { STABLE_CONNECTION_MS } from "@/features/board/lib/reconnect";
 
@@ -234,6 +235,92 @@ describe("ChatView", () => {
     // The rendered markdown shows "verde" without the asterisks; the copy carries the SOURCE.
     fireEvent.click(screen.getByRole("button", { name: "Copy" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("Tudo **verde**."));
+  });
+
+  it("copies the message even WITHOUT the Clipboard API (panel over plain http) — the execCommand fallback", async () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    delete (navigator as unknown as { clipboard?: unknown }).clipboard;
+    let copied = "";
+    const execCommand = vi.fn(() => {
+      copied = (document.activeElement as HTMLTextAreaElement | null)?.value ?? "";
+      return true;
+    });
+    Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
+    try {
+      renderChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ id: "a1", kind: "assistant", at: 1, text: "Tudo **verde**." });
+      await screen.findByTestId("chat-assistant");
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+      await waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
+      expect(copied).toBe("Tudo **verde**.");
+      expect(await screen.findByText("Copied")).toBeInTheDocument();
+      expect(toast.error).not.toHaveBeenCalled();
+    } finally {
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      delete (document as unknown as { execCommand?: unknown }).execCommand;
+    }
+  });
+
+  it("unmounting while the copy is still pending arms no timer after the cleanup", async () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    let resolve: () => void = () => {};
+    const writeText = vi.fn(() => new Promise<void>((r) => (resolve = r)));
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    try {
+      const { unmount } = renderChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ id: "a1", kind: "assistant", at: 1, text: "Tudo verde." });
+      await screen.findByTestId("chat-assistant");
+      fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+      await waitFor(() => expect(writeText).toHaveBeenCalled());
+
+      unmount();
+      const flush = new Promise((r) => setTimeout(r, 0)); // armed BEFORE the spy: not counted
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      try {
+        resolve();
+        await flush;
+        // After the cleanup ran, nothing may arm a timer — whatever its delay, nothing would clear it.
+        expect(setTimeoutSpy).not.toHaveBeenCalled();
+      } finally {
+        setTimeoutSpy.mockRestore();
+      }
+    } finally {
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      else delete (navigator as unknown as { clipboard?: unknown }).clipboard;
+    }
+  });
+
+  it("a failure right after a success takes the 'Copied' off the button", async () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const writeText = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValue(new Error("denied"));
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    Object.defineProperty(document, "execCommand", { value: vi.fn(() => false), configurable: true });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      renderChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ id: "a1", kind: "assistant", at: 1, text: "Tudo verde." });
+      await screen.findByTestId("chat-assistant");
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+      expect(await screen.findByText("Copied")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+
+      expect(screen.queryByText("Copied")).not.toBeInTheDocument();
+    } finally {
+      warn.mockRestore();
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      else delete (navigator as unknown as { clipboard?: unknown }).clipboard;
+      delete (document as unknown as { execCommand?: unknown }).execCommand;
+    }
   });
 
   it("shows a message sent earlier and persisted — it never vanishes on a remount", async () => {
