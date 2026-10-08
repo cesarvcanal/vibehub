@@ -52,7 +52,7 @@ vi.mock("./history.js", () => ({
   publishExternalMessage: (_cardId: string, event: unknown) => { h.published.push(event); return Promise.resolve(); },
 }));
 
-const { acquireTranscriptMirror, forgetDriverKeys, noteDriverEventFor, resetMirrors } = await import("./mirror.js");
+const { acquireTranscriptMirror, forgetDriverKeys, noteDriverEventFor, resetMirrors, stopAllMirrors } = await import("./mirror.js");
 
 function follow(i: number): FakeFollow {
   const child = h.spawned[i] as FakeFollow | undefined;
@@ -148,5 +148,40 @@ describe("acquireTranscriptMirror — a memória de dedupe ao longo da vida do d
     noteDriverEventFor(CARD, { type: "user", text: "oi do sucessor" });
     follow(0).stdout.emit("data", Buffer.from(userLine("u-suc", T0 + 1_000, "oi do sucessor")));
     expect(publishedTexts()).toEqual([]);
+  });
+});
+
+/**
+ * O SHUTDOWN DE UM DEPLOY BLUE/GREEN: o processo antigo larga o card para o novo retomar o turno. Um
+ * espelho que seguisse vivo até o exit lia a fala de retomada que o processo NOVO injetou — fala que
+ * a memória deste processo nunca viu — e a gravava como conversa do terminal (a bolha duplicada da
+ * print de 2026-10-08). Antes de largar, os espelhos param.
+ */
+describe("stopAllMirrors — o espelho do processo que está saindo", () => {
+  it("mata o follow, e o que chegar depois não é publicado", async () => {
+    await acquireTranscriptMirror(CARD, { cutoffAt: T0 });
+    stopAllMirrors();
+
+    expect(follow(0).killed).toBe(true);
+    follow(0).stdout.emit("data", Buffer.from(userLine("u-novo", T0 + 1_000, "Continue de onde parou")));
+    expect(publishedTexts()).toEqual([]);
+  });
+});
+
+describe("acquireTranscriptMirror — quem solta é o espelho que pegou", () => {
+  it("o release de uma aba de um espelho já parado não derruba o espelho que nasceu depois", async () => {
+    const releaseVelho = await acquireTranscriptMirror(CARD, { cutoffAt: T0 });
+    stopAllMirrors();
+    await acquireTranscriptMirror(CARD, { cutoffAt: T0 }); // uma aba que conectou depois do stop
+
+    releaseVelho(); // a aba antiga fecha agora
+    expect(follow(1).killed).toBe(false);
+  });
+
+  it("um 'error' do follow não cala as linhas que ele ainda entrega", async () => {
+    await acquireTranscriptMirror(CARD, { cutoffAt: T0 });
+    follow(0).emit("error", new Error("kill falhou"));
+    follow(0).stdout.emit("data", Buffer.from(userLine("u-tarde", T0 + 1_000, "oi do terminal")));
+    expect(publishedTexts()).toEqual(["oi do terminal"]);
   });
 });
