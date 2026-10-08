@@ -174,11 +174,13 @@ describe("writeClipboard — the real execCommand fallback", () => {
     document.body.appendChild(term);
     term.focus();
     const focus = vi.spyOn(term, "focus");
-    Object.defineProperty(document, "execCommand", { value: vi.fn(() => true), configurable: true });
+    const execCommand = vi.fn(() => true);
+    Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
     try {
       writeClipboard("ls -la", () => Promise.reject(new Error("insecure context")));
-      await Promise.resolve();
-      await Promise.resolve();
+      // Wait for the fallback itself (not a fixed number of ticks): until it runs, focus is trivially
+      // still on the terminal and the assertion below would prove nothing.
+      await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
       expect(document.activeElement).toBe(term);
       expect(focus).toHaveBeenCalledWith({ preventScroll: true });
     } finally {

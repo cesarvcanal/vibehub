@@ -736,21 +736,22 @@ function CodeBlock({ source, children }: { source: string; children: React.React
     };
   }, []);
   async function copy() {
-    // One fixed id per outcome: clicking again REPLACES the toast instead of stacking a tower of them.
-    if (!(await copyText(source))) {
-      toast.error(t("chat.copyError"), { id: "chat-code-copy-error" });
-      return;
-    }
-    toast.success(t("chat.codeCopied"), { id: "chat-code-copied" });
+    const ok = await copyText(source);
+    // ONE id for every outcome: clicking again replaces the toast instead of stacking a tower, and
+    // a "could not copy" and a "copied" can never sit on screen together contradicting each other.
+    if (ok) toast.success(t("chat.codeCopied"), { id: "chat-code-copy" });
+    else toast.error(t("chat.copyError"), { id: "chat-code-copy" });
     if (!mounted.current) return;
-    setCopied(true);
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setCopied(false), 1500);
+    // A failure right after a success must not leave the button saying "Copied".
+    setCopied(ok);
+    if (ok) timer.current = setTimeout(() => setCopied(false), 1500);
   }
   const frame = "overflow-x-auto rounded-md border border-border/60 bg-background/60 p-2 text-xs";
-  // A blank block (empty, or only spaces and line breaks) has nothing to copy, and a "copied!" for
-  // it would be a small lie.
-  if (source.trim() === "") return <pre className={frame}>{children}</pre>;
+  // A blank block (empty, or only spaces, tabs and line breaks) has nothing to copy, and a
+  // "copied!" for it would be a small lie. Deliberately NOT `trim()`: that also eats NBSP and BOM,
+  // and a block holding just one of those exists precisely to hand you that invisible character.
+  if (/^[ \t\r\n]*$/.test(source)) return <pre className={frame}>{children}</pre>;
   const label = copied ? t("chat.copied") : t("chat.copyCode");
   return (
     <div className="relative">
