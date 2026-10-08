@@ -258,6 +258,27 @@ describe("Markdown — copiar bloco de código", () => {
     expect(screen.queryByRole("button", { name: "Copy code" })).toBeNull();
   });
 
+  it("bloco só com espaços/quebras de linha também não ganha botão", () => {
+    render(<Markdown text={["```", "", "", "   ", "```"].join("\n")} />);
+    expect(screen.queryByRole("button", { name: "Copy code" })).toBeNull();
+  });
+
+  it("falhas seguidas substituem o toast de erro em vez de empilhar", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) }, configurable: true });
+    Object.defineProperty(document, "execCommand", { value: vi.fn(() => false), configurable: true });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    render(<Markdown text={["```", "faz isso", "```"].join("\n")} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(2));
+    const ids = vi.mocked(toast.error).mock.calls.map((call) => (call[1] as { id?: unknown } | undefined)?.id);
+    expect(ids[0]).toBeDefined();
+    expect(ids[1]).toBe(ids[0]);
+    warn.mockRestore();
+  });
+
   it("desmontar no meio da cópia não deixa timer vivo", async () => {
     vi.useFakeTimers();
     try {
@@ -281,11 +302,14 @@ describe("Markdown — copiar bloco de código", () => {
     const writeText = vi.fn().mockRejectedValue(new Error("denied"));
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     Object.defineProperty(document, "execCommand", { value: vi.fn(() => false), configurable: true });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     render(<Markdown text={"```\nfaz isso\n```"} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Could not copy"));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Could not copy", { id: "chat-code-copy-error" }));
     expect(toast.success).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled(); // the console says WHY
+    warn.mockRestore();
   });
 });

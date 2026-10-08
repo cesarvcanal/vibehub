@@ -705,8 +705,9 @@ interface HastNode {
 
 /**
  * A fenced block's text exactly as the agent wrote it, read off the hast node rather than the DOM:
- * indentation and blank lines intact, no fences. The parser leaves the line break that precedes
- * the closing fence on the text; that one is not part of the block. PURE, TOTAL.
+ * indentation and blank lines intact, no fences. mdast-util-to-hast appends one `\n` to every
+ * non-empty code value (it is not in the source); that one is stripped. The "copia SÓ o conteúdo
+ * do bloco" test pins this, so an upgrade that stops appending it fails loudly. PURE, TOTAL.
  */
 function codeBlockSource(node: HastNode | undefined): string {
   const text = (n: HastNode | undefined): string =>
@@ -735,11 +736,11 @@ function CodeBlock({ source, children }: { source: string; children: React.React
     };
   }, []);
   async function copy() {
+    // One fixed id per outcome: clicking again REPLACES the toast instead of stacking a tower of them.
     if (!(await copyText(source))) {
-      toast.error(t("chat.copyError"));
+      toast.error(t("chat.copyError"), { id: "chat-code-copy-error" });
       return;
     }
-    // One fixed id: clicking again REPLACES the toast instead of stacking a tower of them.
     toast.success(t("chat.codeCopied"), { id: "chat-code-copied" });
     if (!mounted.current) return;
     setCopied(true);
@@ -747,8 +748,9 @@ function CodeBlock({ source, children }: { source: string; children: React.React
     timer.current = setTimeout(() => setCopied(false), 1500);
   }
   const frame = "overflow-x-auto rounded-md border border-border/60 bg-background/60 p-2 text-xs";
-  // An empty block has nothing to copy, and a "copied!" for an empty string would be a small lie.
-  if (source === "") return <pre className={frame}>{children}</pre>;
+  // A blank block (empty, or only spaces and line breaks) has nothing to copy, and a "copied!" for
+  // it would be a small lie.
+  if (source.trim() === "") return <pre className={frame}>{children}</pre>;
   const label = copied ? t("chat.copied") : t("chat.copyCode");
   return (
     <div className="relative">
