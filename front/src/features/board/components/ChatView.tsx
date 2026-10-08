@@ -569,8 +569,9 @@ function ChatRow({ event, sending }: { event: ChatEvent; sending?: boolean }) {
 
 /**
  * Copy a message's SOURCE text — the reliable path when a hand selection over rendered markdown
- * comes out scrambled or refuses to copy at all. Hidden until the message is hovered (touch shows it
- * on tap-focus via focus-within on the row); flips to a check for a moment on success.
+ * comes out scrambled or refuses to copy at all. Hidden until the message row is hovered or the
+ * button itself gets keyboard focus (`group-hover` / `focus-visible`) — note that a touch screen has
+ * neither, so on a phone it stays invisible; flips to a check for a moment on success.
  *
  * Goes through `copyText`, like the code blocks: over plain http there is no `navigator.clipboard`,
  * and without the execCommand fallback this button could never copy there.
@@ -590,14 +591,13 @@ function CopyButton({ text }: { text: string }) {
     };
   }, []);
   async function copy() {
-    if (!(await copyText(text))) {
-      toast.error(t("chat.copyError"));
-      return;
-    }
+    const ok = await copyText(text);
+    if (!ok) toast.error(t("chat.copyError"));
     if (!mounted.current) return;
-    setCopied(true);
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setCopied(false), 1500);
+    // A failure right after a success must not leave the button saying "Copied".
+    setCopied(ok);
+    if (ok) timer.current = setTimeout(() => setCopied(false), 1500);
   }
   return (
     <button
