@@ -719,7 +719,9 @@ function codeBlockSource(node: HastNode | undefined): string {
  * A toast id that moves on once its toast is gone. Reusing an id is how a toast is REPLACED instead
  * of stacked — but sonner keeps a closing toast around for its exit animation, and anything
  * published under that id in that window vanishes with it. So the id is retired the moment its toast
- * closes (on its own, or dismissed), and the next one starts fresh.
+ * closes and the next one starts fresh. Wire `retire` to `onAutoClose` (timer) and `onDismiss`
+ * (swipe / close button) — and call it yourself after a programmatic `toast.dismiss(id)`: sonner
+ * 1.x does NOT fire `onDismiss` for that one.
  */
 function renewingToastId(prefix: string) {
   let generation = 0;
@@ -763,7 +765,10 @@ function CodeBlock({ source, children }: { source: string; children: React.React
   //    (An unmounted instance's error is left to time out — as on main, where error toasts were
   //    never dismissed at all.)
   const blockId = React.useId();
-  const errorToast = React.useMemo(() => renewingToastId(`chat-code-copy-error-${blockId}`), [blockId]);
+  // useState, not useMemo: the generation counter is STATE, and a memo is a cache React may drop.
+  const [errorToast] = React.useState(() => renewingToastId(`chat-code-copy-error-${blockId}`));
+  // Only dismiss what was published: each dismiss leaves an entry in sonner's dismissed set.
+  const errorShown = React.useRef(false);
   // The race: a FAILURE only speaks if no newer click came after it — an old failure must not undo
   // a newer "copied". A late SUCCESS speaks if it copied the text the latest click was after (it
   // hung on a permission prompt, then really put that text on the clipboard); a success for text
@@ -776,20 +781,23 @@ function CodeBlock({ source, children }: { source: string; children: React.React
     const ok = await copyText(text);
     if (request !== latest.current.request && !(ok && text === latest.current.text)) return;
     if (ok) {
-      // Dismissing an id with no toast behind it is a no-op, so no "is an error up?" flag to drift.
-      toast.dismiss(errorToast.current());
-      errorToast.retire();
+      if (errorShown.current) {
+        toast.dismiss(errorToast.current());
+        errorToast.retire(); // programmatic dismiss: sonner 1.x does not call onDismiss
+        errorShown.current = false;
+      }
       toast.success(t("chat.codeCopied"), {
         id: copiedToast.current(),
         onAutoClose: copiedToast.retire,
         onDismiss: copiedToast.retire,
       });
     } else {
-      toast.error(t("chat.copyError"), {
-        id: errorToast.current(),
-        onAutoClose: errorToast.retire,
-        onDismiss: errorToast.retire,
-      });
+      errorShown.current = true;
+      const closed = () => {
+        errorToast.retire();
+        errorShown.current = false;
+      };
+      toast.error(t("chat.copyError"), { id: errorToast.current(), onAutoClose: closed, onDismiss: closed });
     }
     if (!mounted.current) return;
     if (timer.current) clearTimeout(timer.current);
