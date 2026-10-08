@@ -32,6 +32,7 @@ import {
 } from "@/features/board/lib/chat";
 import { linkifyTokens, remarkEscapeHtml, remarkPreviewPaths, safeUrl, uploadImageUrl } from "@/features/board/lib/markdown";
 import { UltraText } from "@/features/board/components/UltraText";
+import { copyText } from "@/features/board/lib/terminalZoom";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -696,6 +697,76 @@ export const Markdown = React.memo(function Markdown({ text }: { text: string })
   );
 });
 
+/** The slice of hast a `pre` hands us — only `value`/`children` are read. */
+interface HastNode {
+  value?: unknown;
+  children?: HastNode[];
+}
+
+/**
+ * A fenced block's text exactly as the agent wrote it, read off the hast node rather than the DOM:
+ * indentation and blank lines intact, no fences. The parser leaves the line break that precedes
+ * the closing fence on the text; that one is not part of the block. PURE, TOTAL.
+ */
+function codeBlockSource(node: HastNode | undefined): string {
+  const text = (n: HastNode | undefined): string =>
+    !n ? "" : typeof n.value === "string" ? n.value : (n.children ?? []).map(text).join("");
+  return text(node).replace(/\n$/, "");
+}
+
+/**
+ * A fenced block with its own copy button. The agent often hands over a prompt, a command or a
+ * config inside a block, and that block — not the whole answer — is what you want; selecting a
+ * long one by hand inside a scroller is miserable. Always visible (a phone has no hover), quiet
+ * until touched. A toast confirms, and only when something actually reached the clipboard.
+ */
+function CodeBlock({ source, children }: { source: string; children: React.ReactNode }) {
+  const t = useT();
+  const [copied, setCopied] = React.useState(false);
+  const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The copy is async: a row can unmount (reconnect, transcript replay) before it settles, and a
+  // timer armed after the cleanup ran would never be cleared.
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, []);
+  async function copy() {
+    if (!(await copyText(source))) {
+      toast.error(t("chat.copyError"));
+      return;
+    }
+    // One fixed id: clicking again REPLACES the toast instead of stacking a tower of them.
+    toast.success(t("chat.codeCopied"), { id: "chat-code-copied" });
+    if (!mounted.current) return;
+    setCopied(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), 1500);
+  }
+  const frame = "overflow-x-auto rounded-md border border-border/60 bg-background/60 p-2 text-xs";
+  // An empty block has nothing to copy, and a "copied!" for an empty string would be a small lie.
+  if (source === "") return <pre className={frame}>{children}</pre>;
+  const label = copied ? t("chat.copied") : t("chat.copyCode");
+  return (
+    <div className="relative">
+      {/* `pr-9` keeps the first line out from under the button. */}
+      <pre className={cn(frame, "pr-9")}>{children}</pre>
+      <button
+        type="button"
+        onClick={copy}
+        aria-label={label}
+        title={label}
+        className="absolute right-1.5 top-1.5 inline-flex h-6 w-6 items-center justify-center rounded border border-border/60 bg-background/80 text-muted-foreground/80 transition-colors hover:bg-accent hover:text-foreground"
+      >
+        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+      </button>
+    </div>
+  );
+}
+
 /**
  * The element map. Headings stay visually modest on purpose — an `#` inside a chat bubble is a
  * section of an answer, not a page title, and rendering it at document scale shouts.
@@ -727,9 +798,7 @@ const MD_COMPONENTS: React.ComponentProps<typeof ReactMarkdown>["components"] = 
   ),
   /* Wide code scrolls INSIDE its own box: a chat that scrolls sideways as a whole is unreadable on
      the phone this view exists for. `pre` owns the frame so the `code` inside stays unstyled. */
-  pre: ({ children }) => (
-    <pre className="overflow-x-auto rounded-md border border-border/60 bg-background/60 p-2 text-xs">{children}</pre>
-  ),
+  pre: ({ node, children }) => <CodeBlock source={codeBlockSource(node)}>{children}</CodeBlock>,
   code: ({ className, children, ...rest }) => {
     // A fenced block arrives as <pre><code>; inline code arrives bare. Only the second gets a chip.
     const fenced = typeof className === "string" && className.includes("language-");

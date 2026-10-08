@@ -100,8 +100,12 @@ export function writeTerminalFontSize(size: number): void {
  * Legacy fallback for when the Clipboard API fails or is not there at all: an off-screen textarea
  * plus `execCommand('copy')`. It does not need a secure context or a permission, and it tolerates
  * gesture timing better. Only reached when the modern API has already failed.
+ *
+ * Focus goes back to whoever had it: the textarea has to steal it to be selected, and leaving it on
+ * `<body>` closes the phone keyboard under the composer you were typing in.
  */
 function legacyCopy(text: string): boolean {
+  const previous = document.activeElement as HTMLElement | null;
   const ta = document.createElement("textarea");
   ta.value = text;
   ta.style.position = "fixed";
@@ -114,6 +118,8 @@ function legacyCopy(text: string): boolean {
     return document.execCommand("copy");
   } finally {
     document.body.removeChild(ta);
+    // `preventScroll`: the element may sit off-screen (xterm's helper textarea) — no page jump.
+    if (previous && previous !== document.body) previous.focus?.({ preventScroll: true });
   }
 }
 
@@ -149,5 +155,26 @@ export function writeClipboard(
     void Promise.resolve(w(text)).catch(tryFallback);
   } catch (apiReason) {
     tryFallback(apiReason);
+  }
+}
+
+/**
+ * The same two paths as `writeClipboard`, but it ANSWERS: `true` only when something actually
+ * reached the clipboard. For a button that says "copied" — a confirmation that fires on a silent
+ * failure is worse than none. Never throws.
+ */
+export async function copyText(text: string, fallback: (t: string) => boolean = legacyCopy): Promise<boolean> {
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* refused or insecure context — the legacy path below may still work */
+  }
+  try {
+    return fallback(text);
+  } catch {
+    return false;
   }
 }

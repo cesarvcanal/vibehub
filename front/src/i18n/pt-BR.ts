@@ -448,6 +448,8 @@ export const ptBR: Record<string, string> = {
   "chat.copy": "Copiar",
   "chat.copied": "Copiado",
   "chat.copyError": "Não deu pra copiar",
+  "chat.copyCode": "Copiar código",
+  "chat.codeCopied": "Copiado para a área de transferência",
   "chat.sendError": "Não deu pra enviar a mensagem",
   "chat.awaitingChoice": "O terminal está esperando uma escolha (menu de sessão, /compact ou permissão). Abra a aba Terminal, responda e envie de novo. Sua mensagem foi mantida.",
   "chat.stopError": "Não deu pra parar o agente",
