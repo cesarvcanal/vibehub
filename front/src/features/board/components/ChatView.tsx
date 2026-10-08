@@ -571,23 +571,33 @@ function ChatRow({ event, sending }: { event: ChatEvent; sending?: boolean }) {
  * Copy a message's SOURCE text — the reliable path when a hand selection over rendered markdown
  * comes out scrambled or refuses to copy at all. Hidden until the message is hovered (touch shows it
  * on tap-focus via focus-within on the row); flips to a check for a moment on success.
+ *
+ * Goes through `copyText`, like the code blocks: over plain http there is no `navigator.clipboard`,
+ * and without the execCommand fallback this button could never copy there.
  */
 function CopyButton({ text }: { text: string }) {
   const t = useT();
   const [copied, setCopied] = React.useState(false);
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  React.useEffect(() => () => {
-    if (timer.current) clearTimeout(timer.current);
+  // The copy is async: a row can unmount (reconnect, transcript replay) before it settles, and a
+  // timer armed after the cleanup ran would never be cleared.
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (timer.current) clearTimeout(timer.current);
+    };
   }, []);
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(false), 1500);
-    } catch {
+    if (!(await copyText(text))) {
       toast.error(t("chat.copyError"));
+      return;
     }
+    if (!mounted.current) return;
+    setCopied(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), 1500);
   }
   return (
     <button

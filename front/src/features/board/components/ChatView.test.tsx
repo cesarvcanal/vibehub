@@ -6,6 +6,7 @@ import { ChatView } from "@/features/board/components/ChatView";
 import { resetDraftsForTesting } from "@/features/board/components/TerminalComposer";
 import { renderApp } from "@/test/render";
 import { post } from "@/lib/api";
+import { toast } from "sonner";
 import type { ChatEvent } from "@/features/board/lib/chat";
 import { STABLE_CONNECTION_MS } from "@/features/board/lib/reconnect";
 
@@ -234,6 +235,58 @@ describe("ChatView", () => {
     // The rendered markdown shows "verde" without the asterisks; the copy carries the SOURCE.
     fireEvent.click(screen.getByRole("button", { name: "Copy" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("Tudo **verde**."));
+  });
+
+  it("copies the message even WITHOUT the Clipboard API (panel over plain http) — the execCommand fallback", async () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    delete (navigator as unknown as { clipboard?: unknown }).clipboard;
+    let copied = "";
+    const execCommand = vi.fn(() => {
+      copied = (document.activeElement as HTMLTextAreaElement | null)?.value ?? "";
+      return true;
+    });
+    Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
+    try {
+      renderChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ id: "a1", kind: "assistant", at: 1, text: "Tudo **verde**." });
+      await screen.findByTestId("chat-assistant");
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+      await waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
+      expect(copied).toBe("Tudo **verde**.");
+      expect(await screen.findByText("Copied")).toBeInTheDocument();
+      expect(toast.error).not.toHaveBeenCalled();
+    } finally {
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      delete (document as unknown as { execCommand?: unknown }).execCommand;
+    }
+  });
+
+  it("unmounting while the copy is still pending arms no timer after the cleanup", async () => {
+    let resolve: () => void = () => {};
+    const writeText = vi.fn(() => new Promise<void>((r) => (resolve = r)));
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const { unmount } = renderChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ id: "a1", kind: "assistant", at: 1, text: "Tudo verde." });
+    await screen.findByTestId("chat-assistant");
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+
+    unmount();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      resolve();
+      await new Promise((r) => setTimeout(r, 0));
+      // 1500 ms is the "Copied" flip-back timer: armed after the cleanup ran, nothing would clear it.
+      expect(setTimeoutSpy.mock.calls.some((call) => call[1] === 1500)).toBe(false);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 
   it("shows a message sent earlier and persisted — it never vanishes on a remount", async () => {
