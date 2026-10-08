@@ -1347,3 +1347,40 @@ describe("workflow — a frota visível no chat", () => {
     expect((rendered.at(-1) as { row: { kind: string } }).row.kind).toBe("workflow");
   });
 });
+
+describe("background_tasks — o trabalho que segue depois do turno", () => {
+  const bash = { id: "b1", type: "local_bash", description: "Aguarda o deploy" };
+
+  it("guarda o conjunto vivo, SUBSTITUINDO o anterior a cada aviso", () => {
+    let state = feed([{ type: "ready" }, { type: "background_tasks", tasks: [bash] }]);
+    expect(state.backgroundTasks).toEqual([bash]);
+    state = applySdkEvent(state, { type: "background_tasks", tasks: [] });
+    expect(state.backgroundTasks).toEqual([]);
+  });
+
+  it("sobrevive ao fim do turno: o result fecha o turno, não a tarefa", () => {
+    const state = feed([
+      { type: "ready" },
+      { type: "tool_use", id: "t1", name: "Bash", input: { command: "sleep 200", run_in_background: true } },
+      { type: "background_tasks", tasks: [bash] },
+      { type: "result", isError: false },
+    ]);
+    expect(state.turnActive).toBe(false);
+    expect(state.backgroundTasks).toEqual([bash]);
+  });
+
+  it("um ready (driver novo ou reconexão) zera o conjunto — o back reenvia o vigente logo atrás", () => {
+    const state = feed([{ type: "ready" }, { type: "background_tasks", tasks: [bash] }, { type: "ready" }]);
+    expect(state.backgroundTasks).toEqual([]);
+  });
+
+  it("descarta entradas malformadas e não acende o spinner do turno", () => {
+    const state = feed([
+      { type: "ready" },
+      { type: "background_tasks", tasks: [bash, { id: 7 } as never, null as never] },
+    ]);
+    expect(state.backgroundTasks).toEqual([bash]);
+    expect(state.turnActive).toBe(false);
+    expect(state.rows).toEqual([]);
+  });
+});
