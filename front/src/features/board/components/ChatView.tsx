@@ -715,6 +715,15 @@ function codeBlockSource(node: HastNode | undefined): string {
   return text(node).replace(/\n$/, "");
 }
 
+const CODE_COPIED_TOAST_ID = "chat-code-copied";
+
+/** A short, stable fingerprint of a block's text (djb2), for a toast id that survives remounts. PURE. */
+function hashText(text: string): string {
+  let h = 5381;
+  for (let i = 0; i < text.length; i += 1) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
 /**
  * A fenced block with its own copy button. The agent often hands over a prompt, a command or a
  * config inside a block, and that block — not the whole answer — is what you want; selecting a
@@ -735,19 +744,27 @@ function CodeBlock({ source, children }: { source: string; children: React.React
       if (timer.current) clearTimeout(timer.current);
     };
   }, []);
-  // ONE toast id per block, for every outcome: clicking again replaces the toast instead of stacking
-  // a tower, and a "could not copy" and a "copied" for THIS block never sit on screen together. Per
-  // BLOCK, not global: B's success must not silently erase A's failure.
-  const toastId = `chat-code-copy-${React.useId()}`;
-  // Only the latest click speaks. A copy can hang on a permission prompt; when it finally settles,
-  // a newer click's result already stands and the stale one is dropped.
+  // The toast rules, each one a scenario that bit:
+  //  - ONE success toast for the whole chat: copying four blocks in a row replaces, never stacks.
+  //  - The error toast is per BLOCK CONTENT: B's success must not erase A's failure (you would paste
+  //    thinking A was copied), and keyed on the content rather than the instance, a remount
+  //    (reconnect, transcript replay) still finds it.
+  //  - A success dismisses its own block's error: never "could not copy" and "copied" for one block.
+  const errorToastId = `chat-code-copy-error-${hashText(source)}`;
+  // Any SUCCESS wins: a copy that hung on a permission prompt and then went through really did put
+  // the block on the clipboard, so saying otherwise would be the lie. A FAILURE only speaks if no
+  // newer click has been made since — an old failure must not undo a newer "copied".
   const latest = React.useRef(0);
   async function copy() {
     const request = ++latest.current;
     const ok = await copyText(source);
-    if (request !== latest.current) return;
-    if (ok) toast.success(t("chat.codeCopied"), { id: toastId });
-    else toast.error(t("chat.copyError"), { id: toastId });
+    if (!ok && request !== latest.current) return;
+    if (ok) {
+      toast.dismiss(errorToastId);
+      toast.success(t("chat.codeCopied"), { id: CODE_COPIED_TOAST_ID });
+    } else {
+      toast.error(t("chat.copyError"), { id: errorToastId });
+    }
     if (!mounted.current) return;
     if (timer.current) clearTimeout(timer.current);
     // A failure right after a success must not leave the button saying "Copied".
@@ -755,10 +772,10 @@ function CodeBlock({ source, children }: { source: string; children: React.React
     if (ok) timer.current = setTimeout(() => setCopied(false), 1500);
   }
   const frame = "overflow-x-auto rounded-md border border-border/60 bg-background/60 p-2 text-xs";
-  // A blank block (empty, or only whitespace) has nothing to copy, and a "copied!" for it would be a
-  // small lie. `trim()` with two exceptions: NBSP and BOM also count as whitespace to it, but a block
-  // holding just one of those exists precisely to hand you that invisible character.
-  if (source.trim() === "" && !/[\u00a0\ufeff]/.test(source)) return <pre className={frame}>{children}</pre>;
+  // A blank block has nothing to copy, and a "copied!" for it would be a small lie. Blank means
+  // ASCII whitespace ONLY: any other invisible character (NBSP, narrow NBSP, ideographic space, BOM\u2026)
+  // may be exactly what the block exists to hand you, and you cannot select it by hand.
+  if (/^[ \t\n\r\f\v]*$/.test(source)) return <pre className={frame}>{children}</pre>;
   const label = copied ? t("chat.copied") : t("chat.copyCode");
   return (
     <div className="relative">
