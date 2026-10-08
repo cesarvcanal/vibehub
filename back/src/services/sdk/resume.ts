@@ -2,9 +2,18 @@ import * as registry from "../board/registry.js";
 import { getSettings } from "../settings/settings.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { appendHistory } from "./history.js";
-import { clearInflightMarker, listInflightMarkers, type InflightMarker } from "./inflight.js";
+import {
+  INFLIGHT_OWNER,
+  clearInflightMarker,
+  isInflightOwnerAlive,
+  listInflightMarkers,
+  readInflightMarker,
+  releaseInflightOwnerSync,
+  type InflightMarker,
+} from "./inflight.js";
 import { installCardSdkDriver, sdkDriverCommand } from "./driver.js";
-import { ensureDriverSession, injectSystemTurn } from "./manager.js";
+import { ensureDriverSession, injectSystemTurn, shutdownAllDrivers } from "./manager.js";
+import { stopAllMirrors } from "./mirror.js";
 import { transcriptDirFor } from "../maestro/maestro.js";
 import { effectiveAccountSlug } from "../board/registry.js";
 import { logger } from "../../utils/logger.js";
@@ -29,7 +38,17 @@ import { logger } from "../../utils/logger.js";
  *     estado parado explícito — nunca um loop de deploy→resume→deploy→resume.
  *
  * Melhor esforço por card: um card que falha não impede os outros, e falha alguma derruba o boot.
+ *
+ * ÓRFÃO DE VERDADE, não só "existe marcador": o deploy do tech.multi é BLUE/GREEN — este processo
+ * nasce com o antigo AINDA rodando o turno. Retomar ali punha dois CLIs na mesma sessão e o espelho
+ * do antigo gravava a fala de retomada como conversa do terminal: a mensagem de sistema aparecia
+ * duas vezes (produção, 2026-10-08). O sweep espera o dono do marcador parar de bater — a troca do
+ * blue/green remove o antigo com `docker rm -f` (SIGKILL) — ou largar o batimento num SIGTERM
+ * (`handOffSdkOnShutdown`). Se o turno acabar lá enquanto isso, o marcador some e não há o que retomar.
  */
+
+/** De quanto em quanto tempo o sweep reconsulta um marcador cujo dono ainda vive. */
+export const OWNER_POLL_MS = 2_000;
 
 /** A mensagem de continuação injetada no driver — proveniência de sistema, texto curto e direto. */
 export const RESUME_CONTINUATION_TEXT =
@@ -61,6 +80,11 @@ export interface ResumeDeps {
   ensureSession: typeof ensureDriverSession;
   inject: typeof injectSystemTurn;
   appendNote: (cardId: string, text: string) => Promise<void>;
+  readMarker: typeof readInflightMarker;
+  /** A identidade deste processo: o marcador que ela assina é um turno vivo DAQUI, não um órfão. */
+  selfOwner: string;
+  ownerAlive: typeof isInflightOwnerAlive;
+  wait: (ms: number) => Promise<void>;
 }
 
 const realDeps: ResumeDeps = {
@@ -74,7 +98,34 @@ const realDeps: ResumeDeps = {
   ensureSession: ensureDriverSession,
   inject: injectSystemTurn,
   appendNote: (cardId, text) => appendHistory(cardId, { type: "system_note", text, at: Date.now() }),
+  readMarker: readInflightMarker,
+  selfOwner: INFLIGHT_OWNER,
+  ownerAlive: isInflightOwnerAlive,
+  wait: (ms) => new Promise((resolve) => { setTimeout(resolve, ms).unref?.(); }),
 };
+
+/**
+ * Espera o marcador deixar de ter dono vivo. Devolve o marcador ÓRFÃO (a versão relida, que é a
+ * que vale), ou null quando não há nada a retomar: o turno terminou no dono, ou o marcador passou
+ * a ser deste processo (alguém mandou mensagem aqui enquanto o antigo ainda saía).
+ */
+async function orphanedMarker(cardId: string, first: InflightMarker, deps: ResumeDeps): Promise<InflightMarker | null> {
+  let marker: InflightMarker | null = first;
+  let announced = false;
+  while (marker) {
+    // Sem dono = escrito por uma versão anterior a este mecanismo: órfão como sempre foi.
+    if (!marker.owner) return marker;
+    if (marker.owner === deps.selfOwner) return null;
+    if (!(await deps.ownerAlive(marker.owner))) return marker;
+    if (!announced) {
+      announced = true;
+      logger.info({ card: cardId, owner: marker.owner }, "sdk turn still alive in the previous instance — waiting for it to hand off");
+    }
+    await deps.wait(OWNER_POLL_MS);
+    marker = await deps.readMarker(cardId);
+  }
+  return null;
+}
 
 export interface ResumeSummary {
   /** Cards whose interrupted turn was resumed automatically. */
@@ -106,22 +157,32 @@ export async function resumeInterruptedTurns(deps: ResumeDeps = realDeps): Promi
     return summary;
   }
 
-  let driverInstalled = false;
-  for (const { cardId, marker } of markers) {
+  // Cada card na sua própria tarefa: o turno vivo de um card não atrasa a retomada de outro.
+  // O install do driver no runner é um só, compartilhado por todos.
+  let install: Promise<void> | null = null;
+  await Promise.all(markers.map(async ({ cardId, marker: first }) => {
+    let marker: InflightMarker | null;
+    try {
+      marker = await orphanedMarker(cardId, first, deps);
+    } catch (err) {
+      logger.warn({ card: cardId, detail: (err as Error).message }, "could not tell whether an sdk inflight marker is orphaned");
+      return;
+    }
+    if (!marker) return;
     try {
       const card = await deps.getCard(cardId);
       const project = card ? await deps.getProject(card.projectId) : undefined;
       if (!card || !project) {
         // The card is gone (deleted between the marker and this boot): nothing to tell, no one to tell it to.
         await deps.clearMarker(cardId);
-        continue;
+        return;
       }
       if (!settings.sdkDriver || !settings.sdkAutoResume) {
         await deps.appendNote(cardId, NOTE_AUTO_OFF);
         await deps.clearMarker(cardId);
         summary.noted.push(cardId);
         logger.info({ audit: true, action: "sdk.resume.off", card: card.worktreeSlug }, "interrupted sdk turn noted — auto-resume off");
-        continue;
+        return;
       }
       if (marker.attempts >= 1) {
         await deps.appendNote(cardId, NOTE_NOT_AGAIN);
@@ -131,13 +192,10 @@ export async function resumeInterruptedTurns(deps: ResumeDeps = realDeps): Promi
           { audit: true, action: "sdk.resume.loop_guard", card: card.worktreeSlug, attempts: marker.attempts },
           "interrupted sdk turn NOT resumed again — loop guard",
         );
-        continue;
+        return;
       }
       await deps.appendNote(cardId, NOTE_RESUMING);
-      if (!driverInstalled) {
-        await deps.installDriver();
-        driverInstalled = true;
-      }
+      await (install ??= deps.installDriver());
       // O resume usa a chave persistida no card (resumeSessionId — gravada pelo manager a cada
       // session/result). O probe de transcript do connect não roda aqui: é o mesmo alvo na prática,
       // e o boot não deve depender de um ls no runner para cada card.
@@ -165,6 +223,21 @@ export async function resumeInterruptedTurns(deps: ResumeDeps = realDeps): Promi
       // marker would note the same interruption again on the next boot. Best-effort cleanup:
       await deps.clearMarker(cardId).catch(() => undefined);
     }
-  }
+  }));
   return summary;
+}
+
+/**
+ * O adeus deste processo num SIGTERM (`docker stop`, restart; a troca do blue/green é SIGKILL e não
+ * passa aqui — lá o batimento envelhece sozinho). NESTA ordem, que é a que fecha a duplicata:
+ *  1. os espelhos param: daqui em diante nada que o processo novo escrever no transcript volta como
+ *     "terminal" por este lado;
+ *  2. os drivers encerram (os marcadores ficam: são o recado para o novo);
+ *  3. o batimento some: só agora o sweep do novo passa a ver os marcadores deste como órfãos.
+ * Síncrono — o docker stop dá segundos, não promessas.
+ */
+export function handOffSdkOnShutdown(): void {
+  try { stopAllMirrors(); } catch { /* best-effort by design */ }
+  try { shutdownAllDrivers(); } catch { /* best-effort by design */ }
+  releaseInflightOwnerSync();
 }

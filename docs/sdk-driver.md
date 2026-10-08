@@ -449,7 +449,7 @@ no meio do turno** — 2x em produção o card ficou mudo. A resposta:
   `services/sdk/inflight.ts`): escrito quando um turno de usuário entra no stdin do driver
   (`{startedAt, preview, attempts}`), removido quando o `result` fecha o último turno em voo, e
   também num stop DELIBERADO (pause/hibernate/delete — o que a pessoa encerrou não se retoma).
-- **SIGTERM** (o docker stop do deploy): `shutdownAllDrivers()` encerra o stdin de cada driver
+- **SIGTERM** (`docker stop`/restart): `handOffSdkOnShutdown()` para os espelhos, `shutdownAllDrivers()` encerra o stdin de cada driver
   (EOF = saída limpa, atravessa o docker exec) e **mantém os marcadores** — eles são a mensagem
   para o próximo boot.
 - **Sweep de boot** (`services/sdk/resume.ts`, depois do listen): para cada marcador órfão, o card
@@ -457,6 +457,17 @@ no meio do turno** — 2x em produção o card ficou mudo. A resposta:
   com `sdkAutoResume` ligado (default) — o driver sobe de novo (`--resume` da chave persistida) e
   recebe um turno de continuação **como turno de usuário normal** (nunca embrulhado em
   notificação), com **proveniência `system`** (#48) para nunca parecer fala da pessoa.
+- **Órfão de verdade — deploy blue/green (2026-10-08):** o tech.multi sobe o container novo e só
+  remove o antigo depois do health-gate — com `docker rm -f` (SIGKILL, sem SIGTERM) —, então o boot
+  do novo acontece com o antigo **ainda rodando o turno**. Retomar ali punha dois CLIs na mesma
+  sessão, e o espelho do back antigo gravava a fala de retomada como "Atividade no terminal" (a
+  mensagem de sistema aparecia duas vezes). Agora cada processo assina os marcadores que escreve
+  (`owner`) e toca um batimento em `<dataDir>/sdk-inflight/owners/<owner>` a cada 3 s. O sweep só
+  retoma um marcador cujo dono **parou de bater** há 12 s (o SIGKILL da troca, um crash) ou
+  **largou** o batimento num SIGTERM (`handOffSdkOnShutdown`: para os espelhos, encerra os drivers
+  e só então apaga o batimento). Se o turno terminar no antigo durante a espera, o marcador some e
+  nada é retomado. Cada card espera na sua própria tarefa; marcador sem `owner` (versão anterior)
+  segue órfão na hora; batimentos de processos mortos são recolhidos no boot.
 - **Sem loop:** o turno retomado nasce com `attempts: 1`; se um segundo deploy o matar, o próximo
   boot só escreve a linha ("não vou retomar de novo") e para explicitamente.
 - **Filler do harness filtrado:** o par que o Claude Code sintetiza ao retomar sessão cortada —

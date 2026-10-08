@@ -238,10 +238,21 @@ export function noteDriverEventFor(cardId: string, event: DriverEvent | { type: 
   noteDriverKeys(driverKeysFor(cardId), event);
 }
 
-/** Test hook: forget every live mirror (children are killed). */
-export function resetMirrors(): void {
+/**
+ * Para TODO espelho deste processo — o SIGTERM de um deploy. No blue/green o processo NOVO retoma o
+ * turno logo que este larga o card, e a fala de retomada que ele injeta é desconhecida da memória de
+ * dedupe DESTE: um espelho que seguisse vivo até o exit a gravaria como conversa do terminal (a
+ * mensagem de sistema duplicada, produção 2026-10-08). Num SIGTERM (`docker stop`, restart), por
+ * isso, os espelhos param ANTES de o batimento ser largado (ver `handOffSdkOnShutdown`).
+ */
+export function stopAllMirrors(): void {
   for (const mirror of mirrors.values()) stopChild(mirror);
   mirrors.clear();
+}
+
+/** Test hook: forget every live mirror (children are killed) and every card's dedupe memory. */
+export function resetMirrors(): void {
+  stopAllMirrors();
   driverKeysByCard.clear();
 }
 
@@ -283,7 +294,7 @@ export async function acquireTranscriptMirror(cardId: string, opts: AcquireMirro
       capSet(existing.state.seen);
       await startFollow(cardId, existing);
     }
-    return () => release(cardId);
+    return () => release(cardId, existing);
   }
   // O espelho ADOTA a memória do card: o que o driver já foi mandado dizer antes de alguém abrir
   // esta tela (o turno do sweep de boot, por exemplo) segue reconhecível quando voltar pelo arquivo.
@@ -295,7 +306,7 @@ export async function acquireTranscriptMirror(cardId: string, opts: AcquireMirro
   };
   mirrors.set(cardId, mirror);
   await startFollow(cardId, mirror);
-  return () => release(cardId);
+  return () => release(cardId, mirror);
 }
 
 /** Spawns the mirror's follow process and wires its stdout into the conversation. Never throws. */
@@ -304,10 +315,14 @@ async function startFollow(cardId: string, mirror: CardMirror): Promise<void> {
   try {
     await primeProvenance(cardId).catch(() => undefined);
     const source = await chatSource(cardId);
+    // Parado enquanto subia (o último release, ou o shutdown): um follow nascido agora não teria dono.
+    if (mirrors.get(cardId) !== mirror) return;
     const child = spawn(source.command.file, source.command.args, { stdio: ["pipe", "pipe", "ignore"] });
     mirror.child = child;
     const readLines = createLineReader();
     child.stdout?.on("data", (chunk: Buffer) => {
+      // Espelho parado (último release, shutdown): o que o follow ainda despeja do buffer não tem dono.
+      if (mirrors.get(cardId) !== mirror) return;
       const batch = readLines(chunk).join("\n");
       if (batch.trim() === "") return;
       for (const event of mirrorNewEvents(mirror.state, batch, cardId)) {
@@ -336,9 +351,9 @@ async function startFollow(cardId: string, mirror: CardMirror): Promise<void> {
   }
 }
 
-function release(cardId: string): void {
-  const mirror = mirrors.get(cardId);
-  if (!mirror) return;
+/** Solta UM ref do espelho que a aba pegou — um espelho já parado não tem o que soltar. */
+function release(cardId: string, mirror: CardMirror): void {
+  if (mirrors.get(cardId) !== mirror) return;
   mirror.refs -= 1;
   if (mirror.refs > 0) return;
   mirrors.delete(cardId);
