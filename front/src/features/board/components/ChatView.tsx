@@ -735,12 +735,19 @@ function CodeBlock({ source, children }: { source: string; children: React.React
       if (timer.current) clearTimeout(timer.current);
     };
   }, []);
+  // ONE toast id per block, for every outcome: clicking again replaces the toast instead of stacking
+  // a tower, and a "could not copy" and a "copied" for THIS block never sit on screen together. Per
+  // BLOCK, not global: B's success must not silently erase A's failure.
+  const toastId = `chat-code-copy-${React.useId()}`;
+  // Only the latest click speaks. A copy can hang on a permission prompt; when it finally settles,
+  // a newer click's result already stands and the stale one is dropped.
+  const latest = React.useRef(0);
   async function copy() {
+    const request = ++latest.current;
     const ok = await copyText(source);
-    // ONE id for every outcome: clicking again replaces the toast instead of stacking a tower, and
-    // a "could not copy" and a "copied" can never sit on screen together contradicting each other.
-    if (ok) toast.success(t("chat.codeCopied"), { id: "chat-code-copy" });
-    else toast.error(t("chat.copyError"), { id: "chat-code-copy" });
+    if (request !== latest.current) return;
+    if (ok) toast.success(t("chat.codeCopied"), { id: toastId });
+    else toast.error(t("chat.copyError"), { id: toastId });
     if (!mounted.current) return;
     if (timer.current) clearTimeout(timer.current);
     // A failure right after a success must not leave the button saying "Copied".
@@ -748,10 +755,10 @@ function CodeBlock({ source, children }: { source: string; children: React.React
     if (ok) timer.current = setTimeout(() => setCopied(false), 1500);
   }
   const frame = "overflow-x-auto rounded-md border border-border/60 bg-background/60 p-2 text-xs";
-  // A blank block (empty, or only spaces, tabs and line breaks) has nothing to copy, and a
-  // "copied!" for it would be a small lie. Deliberately NOT `trim()`: that also eats NBSP and BOM,
-  // and a block holding just one of those exists precisely to hand you that invisible character.
-  if (/^[ \t\r\n]*$/.test(source)) return <pre className={frame}>{children}</pre>;
+  // A blank block (empty, or only whitespace) has nothing to copy, and a "copied!" for it would be a
+  // small lie. `trim()` with two exceptions: NBSP and BOM also count as whitespace to it, but a block
+  // holding just one of those exists precisely to hand you that invisible character.
+  if (source.trim() === "" && !/[\u00a0\ufeff]/.test(source)) return <pre className={frame}>{children}</pre>;
   const label = copied ? t("chat.copied") : t("chat.copyCode");
   return (
     <div className="relative">
