@@ -680,7 +680,26 @@ function noteChatActivity(session: DriverSession): void {
  * turn is only ever reported `accepted` when it is both in the driver's stdin and on its way to
  * disk — never because a `write()` did not happen to throw.
  */
-export function handleClientFrame(session: DriverSession, raw: string, origin?: MessageOrigin): ClientFrameOutcome {
+/**
+ * A turn someone just sent, on the card's OTHER screens — the same frame the replay would draw.
+ * The sender drew it already (its own bubble, settled by the receipt), so it never gets it back.
+ * Without this, a second person on the card saw "está digitando…", then nothing — the answer arrived
+ * without the question, and only an F5 (the replay) brought the message in (produção, 2026-10-08).
+ */
+function relayToPeers(session: DriverSession, sender: WebSocket | undefined, event: HistoryEvent): void {
+  const frame = JSON.stringify(event);
+  for (const other of session.sockets) {
+    if (other === sender) continue;
+    try { other.send(frame); } catch { /* that socket is going away */ }
+  }
+}
+
+export function handleClientFrame(
+  session: DriverSession,
+  raw: string,
+  origin?: MessageOrigin,
+  sender?: WebSocket,
+): ClientFrameOutcome {
   const control = parseSdkClientFrame(raw);
   if (!control) return { kind: "ignored" };
   if (control.type === "user" || control.type === "edit_user") {
@@ -724,9 +743,12 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
     // The transcript will carry the WRAPPED words — that is what the mirror must not re-emit.
     noteDriverEventFor(session.cardId, { type: "user", text: wrapped });
     const at = Date.now();
-    void appendHistory(session.cardId, { type: "message_edited", originalText: control.original, at });
+    const edited: HistoryEvent = { type: "message_edited", originalText: control.original, at };
+    void appendHistory(session.cardId, edited);
     const line: HistoryEvent = { type: "user", text: control.text, sent: wrapped, at, from: origin };
     const persisted = appendHistoryReported(session.cardId, line);
+    relayToPeers(session, sender, edited);
+    relayToPeers(session, sender, line);
     // Same durable in-flight promise a plain user turn earns (see #64's boot sweep).
     void writeInflightMarker(session.cardId, { startedAt: at, preview: inflightPreview(control.text), attempts: 0 });
     rememberCid(session, control.cid, { persisted, line });
@@ -741,6 +763,7 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
     noteDriverEventFor(session.cardId, control);
     const line: HistoryEvent = { type: "user", text: control.text, at: Date.now(), from: origin };
     const persisted = appendHistoryReported(session.cardId, line);
+    relayToPeers(session, sender, line);
     // The durable "turn in flight" record: if a deploy kills the back (and this driver with it)
     // before the result arrives, the boot sweep finds this marker and the turn is not silently
     // lost. attempts: 0 — a person's own turn always earns one automatic resume.
@@ -1018,7 +1041,7 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
       noteTyping(typing);
       return;
     }
-    const outcome = handleClientFrame(session, text, origin);
+    const outcome = handleClientFrame(session, text, origin, socket);
     // The message is out: whoever wrote it stopped typing — even if the front's own "parou" is lost.
     if (outcome.kind === "accepted") noteTyping(false);
     replyFrameOutcome(socket, outcome);

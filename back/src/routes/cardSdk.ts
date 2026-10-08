@@ -54,6 +54,8 @@ import { logger } from "../utils/logger.js";
  *   { "type": "error", "message": string }
  *   { "type": "parse_error", "raw": string }              // synthesised by the back for a bad line
  *   { "type": "peer_typing", "name": string, "active": boolean } // another socket of this card is typing (ephemeral)
+ *   { "type": "user", "text": string, "at": number, "from"?: MessageOrigin } // a message sent from ANOTHER socket of this card
+ *   { "type": "message_edited", "originalText": string, "at": number } // …and an edit made there (the new text follows as `user`)
  *
  * The front sends, per message: either a JSON object { "type": "user", "text": "..." },
  * { "type": "interrupt" }, { "type": "permission_decision", "id": string, "allow": boolean }
@@ -243,7 +245,7 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
         // renews it every few seconds while the person keeps typing).
         if (parseTypingFrame(raw) !== null) continue;
         noteAuthor(raw);
-        replyFrameOutcome(socket, handleClientFrame(session, raw, wsOrigin));
+        replyFrameOutcome(socket, handleClientFrame(session, raw, wsOrigin, socket));
       }
       logger.info({ card: card.worktreeSlug, reattached: driverAlive, buffered: pendingFrames.length }, "sdk chat attached");
     },

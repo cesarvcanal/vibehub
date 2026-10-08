@@ -58,6 +58,7 @@ The websocket sends **one JSON text frame per event**:
 { "type": "workflow_progress", "runId": "wf_…", "name": "…", "total": n, "done": n, "agents": [ { "id", "label", "status": "running"|"done", "result"? } ], "at": ms, "finished": bool } // live-only
 { "type": "system_note", "text": "…", "at": ms }           // back-synthesised: the panel's own line (persisted)
 { "type": "peer_typing", "name": "…", "active": bool }     // back-synthesised: ANOTHER socket of this card is typing (ephemeral)
+{ "type": "user", "text": "…", "at": ms, "from"?: {…} }  // back-relayed: a message sent from ANOTHER socket of this card (an edit sends `message_edited` first)
 { "type": "user_ack", "cid": "…" }                         // back-synthesised: a send is ON DISK
 { "type": "user_nack", "cid": "…", "reason": "driver-gone"|"history-write-failed" } // back-synthesised: the send was REFUSED, or never reached the disk
 { "type": "error", "message": "…" }
@@ -890,3 +891,12 @@ em duas abas e fechando uma apaga o indicador por até 2,5 s (até a próxima re
 
 Custo no servidor: um frame de poucos bytes a cada ~2,5 s por pessoa digitando, fan-out só para as
 abas abertas NAQUELE card. Nada em disco, nenhum timer no back.
+
+**A mensagem enviada, ao vivo nas outras abas (2026-10-08).** O "digitando" chegava, mas o Enter
+não: o turno ia para o stdin do driver e para o histórico, e só quem enviou via a bolha (eco local).
+A resposta do modelo chegava a todos via `broadcast`, sem a pergunta que a gerou — só um F5 (o
+replay) trazia a mensagem. Agora `handleClientFrame` repassa a linha aceita (`relayToPeers`) às
+OUTRAS abas do card, no mesmo formato do replay (`{ type: "user", text, at, from }`; numa edição,
+antes, o `message_edited`). Nunca de volta ao remetente (ele já desenhou), nunca de novo num
+Reenviar com o mesmo `cid`, nunca quando a mensagem foi recusada. O transporte já era em tempo
+real: faltava publicar o evento — Socket.IO não mudaria nada aqui.
