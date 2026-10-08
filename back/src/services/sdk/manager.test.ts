@@ -7,6 +7,7 @@ import { config } from "../../config/env.js";
 import { readCardCatalog } from "./catalog.js";
 import { readHistory, rewindHistory } from "./history.js";
 import {
+  BACKGROUND_HOLD_MAX_MS,
   DRIVER_IDLE_MS,
   TYPING_RELAY_MIN_MS,
   attachSocket,
@@ -1580,13 +1581,15 @@ describe("background_tasks — o trabalho que segue depois do turno", () => {
     expect(history.some((e) => e.type === "background_tasks")).toBe(false);
   });
 
-  it("um driver NOVO (ready real) zera o conjunto: as tarefas morreram com o processo antigo", () => {
+  it("um driver NOVO começa sem tarefas: as do processo antigo morreram com ele", () => {
     const session = ensure();
     attachSocket(session, fakeSocket() as never);
     spawned[0]!.stdout.emit("data", line(running));
-    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    stopCardDriver(CARD);
+    const fresh = ensure();
     const late = fakeSocket();
-    attachSocket(session, late as never);
+    attachSocket(fresh, late as never);
+    expect(fresh).not.toBe(session);
     expect(sentTypes(late)).not.toContain("background_tasks");
   });
 
@@ -1608,6 +1611,47 @@ describe("background_tasks — o trabalho que segue depois do turno", () => {
     spawned[0]!.stdout.emit("data", line(none));
     expect(isCardChatInUse(CARD)).toBe(false);
     expect(driverActivity(CARD)).toBe("idle");
+    vi.advanceTimersByTime(DRIVER_IDLE_MS + 1);
+    expect(spawned[0]!.killed).toBe(true);
+  });
+
+  it("tem TETO: uma tarefa que nunca termina (npm run dev, tail -f) não segura o driver para sempre sem ninguém olhando", () => {
+    vi.useFakeTimers();
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    spawned[0]!.stdout.emit("data", line({ type: "background_tasks", tasks: [{ id: "b1", type: "local_bash", description: "npm run dev" }] }));
+    socket.emit("close");
+    vi.advanceTimersByTime(BACKGROUND_HOLD_MAX_MS - 1);
+    expect(spawned[0]!.killed).toBe(false);
+    expect(isCardChatInUse(CARD)).toBe(true);
+    vi.advanceTimersByTime(DRIVER_IDLE_MS + 2);
+    expect(isCardChatInUse(CARD)).toBe(false);
+    expect(spawned[0]!.killed).toBe(true);
+  });
+
+  it("o turno que o CLI abre SOZINHO quando a tarefa termina conta como ocupado até o result dele", () => {
+    vi.useFakeTimers();
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"espera o deploy"}`));
+    spawned[0]!.stdout.emit("data", line(running));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    socket.emit("close");
+    // A tarefa acabou; o CLI acorda o modelo e ele volta a trabalhar, sem mensagem de ninguém.
+    spawned[0]!.stdout.emit("data", line(none));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "Deploy confirmado, seguindo." }));
+    spawned[0]!.stdout.emit("data", line({ type: "tool_use", id: "t9", name: "Bash", input: { command: "make cert" } }));
+    expect(isCardChatInUse(CARD)).toBe(true);
+    expect(driverActivity(CARD)).toBe("turn");
+    vi.advanceTimersByTime(DRIVER_IDLE_MS * 3);
+    expect(spawned[0]!.killed).toBe(false);
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    expect(session.activeTurns).toBe(0);
+    expect(isCardChatInUse(CARD)).toBe(false);
     vi.advanceTimersByTime(DRIVER_IDLE_MS + 1);
     expect(spawned[0]!.killed).toBe(true);
   });

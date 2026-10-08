@@ -46,6 +46,15 @@ import { logger } from "../../utils/logger.js";
 /** No sockets AND no running turn for this long ⇒ the driver shuts down (resume covers the rest). */
 export const DRIVER_IDLE_MS = 15 * 60_000;
 
+/**
+ * Por quanto tempo uma tarefa em segundo plano segura sozinha um driver que ninguém está olhando.
+ * Uma espera de deploy dura minutos; um `npm run dev` ou `tail -f` em background não acaba nunca, e
+ * sem teto ele mantinha o driver (e o card) acordado para sempre — antes desta regra o idle stop o
+ * derrubava em 15 min. Passado o teto vale o idle normal. Com uma aba aberta o driver vive de
+ * qualquer jeito, como sempre.
+ */
+export const BACKGROUND_HOLD_MAX_MS = 3 * 60 * 60_000;
+
 /** Websocket keepalive — same cadence as the terminal socket (proxies drop idle websockets). */
 const KEEPALIVE_MS = 25_000;
 
@@ -81,6 +90,8 @@ export interface DriverSession {
    * conecta depois, nunca gravado — e, enquanto não estiver vazio, o driver NÃO está ocioso.
    */
   backgroundTasks: BackgroundTaskInfo[];
+  /** Quando o conjunto deixou de ser vazio — o início da contagem de `BACKGROUND_HOLD_MAX_MS`. */
+  backgroundSince?: number;
   /**
    * The session's command CATALOGUE (what the chat's "/" menu offers), as last reported by the
    * driver. Kept HERE, next to `ready`: it is session state, not conversation — it is never
@@ -237,9 +248,23 @@ export function isCardChatInUse(cardId: string): boolean {
  * dispara a tarefa fecha na hora, e um driver "ocioso" sem ninguém na aba era desligado — matando o
  * trabalho que o Claude tinha acabado de dizer que estava esperando.
  */
-function isDriverBusy(session: Pick<DriverSession, "activeTurns" | "backgroundTasks">): boolean {
-  return session.activeTurns > 0 || session.backgroundTasks.length > 0;
+function isDriverBusy(session: Pick<DriverSession, "activeTurns" | "backgroundTasks" | "backgroundSince">): boolean {
+  return session.activeTurns > 0 || backgroundHoldLeft(session) > 0;
 }
+
+/** Quanto falta do teto em que as tarefas em segundo plano seguram o driver (0 = não seguram). */
+function backgroundHoldLeft(session: Pick<DriverSession, "backgroundTasks" | "backgroundSince">): number {
+  if (session.backgroundTasks.length === 0 || session.backgroundSince === undefined) return 0;
+  return Math.max(0, session.backgroundSince + BACKGROUND_HOLD_MAX_MS - Date.now());
+}
+
+/**
+ * Eventos que só existem DENTRO de um turno. Um deles com nenhum turno contado é um turno que o
+ * CLI abriu sozinho — o caso típico: a tarefa em segundo plano terminou e o CLI acordou o modelo.
+ */
+const TURN_CONTENT_EVENTS = new Set([
+  "assistant_delta", "assistant_text", "thinking", "thinking_delta", "tool_use", "permission_request", "user_question",
+]);
 
 /**
  * What this card's driver is doing right now, for the board's session view (see
@@ -290,14 +315,23 @@ function clearIdleTimer(session: DriverSession): void {
  * check runs again when the timer fires — a turn or a socket that showed up in between wins.
  */
 function maybeScheduleIdleStop(session: DriverSession): void {
-  if (session.closed || session.sockets.size > 0 || isDriverBusy(session)) return;
+  if (session.closed || session.sockets.size > 0 || session.activeTurns > 0) return;
   if (session.idleTimer) return;
+  // Uma tarefa em segundo plano viva adia o relógio até o fim do teto dela (ver
+  // BACKGROUND_HOLD_MAX_MS) — e só então começam os 15 min de ociosidade.
   session.idleTimer = setTimeout(() => {
     session.idleTimer = null;
     if (session.closed || session.sockets.size > 0 || isDriverBusy(session)) return;
-    logger.info({ card: session.label, audit: true, action: "sdk.driver.idle" }, "sdk driver idle — shutting it down (resume id persisted)");
+    if (session.backgroundTasks.length > 0) {
+      logger.info(
+        { card: session.label, audit: true, action: "sdk.driver.idle.background-cap", tasks: session.backgroundTasks.map((t) => t.description) },
+        "sdk driver held by background tasks past the cap with nobody connected — shutting it down",
+      );
+    } else {
+      logger.info({ card: session.label, audit: true, action: "sdk.driver.idle" }, "sdk driver idle — shutting it down (resume id persisted)");
+    }
     stopCardDriver(session.cardId);
-  }, DRIVER_IDLE_MS);
+  }, backgroundHoldLeft(session) + DRIVER_IDLE_MS);
   session.idleTimer.unref?.();
 }
 
@@ -310,8 +344,6 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     && isHarnessFiller("assistant", (event as { text: string }).text)) return;
   if (event.type === "ready") {
     session.ready = true;
-    // Um `ready` REAL é um processo novo: as tarefas em segundo plano do anterior morreram com ele.
-    session.backgroundTasks = [];
     // Stamp the manager's live turn count on the frame: a message may already be queued on the
     // fresh driver's stdin (sent before it booted) — the front's spinner must know it.
     event = { ...event, turnActive: session.activeTurns > 0 };
@@ -356,11 +388,21 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
         }))
       : [];
     event = { type: "background_tasks", tasks };
+    if (tasks.length === 0) session.backgroundSince = undefined;
+    else if (session.backgroundTasks.length === 0) session.backgroundSince = Date.now();
     session.backgroundTasks = tasks;
-    // A última tarefa terminou sem turno nenhum em voo e sem ninguém olhando: AGORA o relógio do
-    // idle começa — o mesmo ponto em que um `result` o arma.
-    if (tasks.length === 0) maybeScheduleIdleStop(session);
-    else clearIdleTimer(session);
+    // O relógio do idle é refeito a cada mudança: com tarefa viva ele espera o teto dela; quando a
+    // última termina sem turno em voo e sem ninguém olhando, AGORA começam os 15 min — o mesmo
+    // ponto em que um `result` o arma.
+    clearIdleTimer(session);
+    maybeScheduleIdleStop(session);
+  }
+  if (TURN_CONTENT_EVENTS.has(event.type) && session.activeTurns === 0) {
+    // Um turno que ninguém mandou: o CLI acordou o modelo sozinho (a tarefa em segundo plano
+    // terminou). Conta como turno até o `result` dele — senão o idle stop e o idle sweep o
+    // derrubavam no meio da resposta, com a faixa dizendo "ele retoma quando isso terminar".
+    session.activeTurns = 1;
+    clearIdleTimer(session);
   }
   if (event.type === "turn_absorbed") {
     // Streaming input: this send folded into the turn ALREADY running (the model absorbs it at its
