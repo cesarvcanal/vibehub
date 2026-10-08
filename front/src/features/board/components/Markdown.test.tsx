@@ -192,7 +192,7 @@ describe("Markdown — copiar bloco de código", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     // The block, untouched: indentation and blank lines kept, no fences, none of the prose around it.
     expect(writeText).toHaveBeenCalledWith(PROMPT);
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Copied to clipboard", { id: expect.any(String) }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Copied to clipboard", expect.objectContaining({ id: expect.any(String) })));
     // The button itself also confirms, for whoever is not looking at the corner of the screen.
     expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
   });
@@ -227,7 +227,7 @@ describe("Markdown — copiar bloco de código", () => {
 
     await waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
     expect(copied).toBe("faz isso");
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Copied to clipboard", { id: expect.any(String) }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Copied to clipboard", expect.objectContaining({ id: expect.any(String) })));
   });
 
   it("o fallback devolve o foco a quem tinha — copiar não fecha o teclado do composer", async () => {
@@ -419,6 +419,7 @@ describe("Markdown — copiar bloco de código", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(2));
     const ids = vi.mocked(toast.error).mock.calls.map((call) => (call[1] as { id?: unknown } | undefined)?.id);
+    expect(ids[0]).toBeDefined();
     expect(ids[1]).toBe(ids[0]); // one error toast for the block, replaced — not two stacked
 
     rerender(<Markdown text={["```", "npm test -- --run", "```"].join("\n")} />);
@@ -448,6 +449,43 @@ describe("Markdown — copiar bloco de código", () => {
     expect(toast.success).not.toHaveBeenCalled();
     expect(toast.dismiss).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Copy code" })).toBeInTheDocument();
+  });
+
+  it("depois que o toast de ERRO fecha sozinho, a próxima falha usa um id novo (o sonner engoliria o antigo na saída)", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) }, configurable: true });
+    Object.defineProperty(document, "execCommand", { value: vi.fn(() => false), configurable: true });
+    silenceWarn();
+    render(<Markdown text={["```", "faz isso", "```"].join("\n")} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    const first = vi.mocked(toast.error).mock.calls[0]?.[1] as { id?: unknown; onAutoClose?: () => void } | undefined;
+    expect(first?.id).toBeDefined();
+    first?.onAutoClose?.(); // sonner closes it on its own timer
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(2));
+    const second = vi.mocked(toast.error).mock.calls[1]?.[1] as { id?: unknown } | undefined;
+    expect(second?.id).toBeDefined();
+    expect(second?.id).not.toBe(first?.id);
+  });
+
+  it("depois que o 'Copiado' fecha sozinho, o próximo usa um id novo — a cópia seguinte nunca fica sem confirmação", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: vi.fn().mockResolvedValue(undefined) }, configurable: true });
+    render(<Markdown text={["```", "bloco A", "```", "", "```", "bloco B", "```"].join("\n")} />);
+    const [a, b] = screen.getAllByRole("button", { name: "Copy code" });
+
+    fireEvent.click(a as HTMLElement);
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1));
+    const first = vi.mocked(toast.success).mock.calls[0]?.[1] as { id?: unknown; onAutoClose?: () => void } | undefined;
+    expect(first?.id).toBeDefined();
+    first?.onAutoClose?.();
+
+    fireEvent.click(b as HTMLElement);
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(2));
+    const second = vi.mocked(toast.success).mock.calls[1]?.[1] as { id?: unknown } | undefined;
+    expect(second?.id).toBeDefined();
+    expect(second?.id).not.toBe(first?.id);
   });
 
   it("um SUCESSO atrasado vale — o texto chegou ao clipboard, mesmo que um clique mais novo tenha falhado", async () => {
@@ -533,7 +571,7 @@ describe("Markdown — copiar bloco de código", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Could not copy", { id: expect.any(String) }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Could not copy", expect.objectContaining({ id: expect.any(String) })));
     expect(toast.success).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalled(); // the console says WHY
   });
