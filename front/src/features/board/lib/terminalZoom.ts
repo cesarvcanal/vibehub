@@ -161,20 +161,24 @@ export function writeClipboard(
 /**
  * The same two paths as `writeClipboard`, but it ANSWERS: `true` only when something actually
  * reached the clipboard. For a button that says "copied" — a confirmation that fires on a silent
- * failure is worse than none. Never throws.
+ * failure is worse than none. Never throws. Like `writeClipboard`, a total failure leaves a
+ * `console.warn` with both reasons — the toast says "could not copy", the console says WHY.
  */
 export async function copyText(text: string, fallback: (t: string) => boolean = legacyCopy): Promise<boolean> {
+  let apiReason: unknown = "navigator.clipboard is not available (insecure context?)";
   try {
     if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);
       return true;
     }
-  } catch {
-    /* refused or insecure context — the legacy path below may still work */
+  } catch (reason) {
+    apiReason = reason; // refused or insecure context — the legacy path below may still work
   }
   try {
-    return fallback(text);
-  } catch {
-    return false;
+    if (fallback(text)) return true;
+    console.warn("[clipboard] the Clipboard API failed and execCommand('copy') copied nothing.", { apiReason });
+  } catch (fallbackReason) {
+    console.warn("[clipboard] both the Clipboard API and execCommand('copy') failed.", { apiReason, fallbackReason });
   }
+  return false;
 }

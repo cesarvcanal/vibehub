@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   clampFontSize, nextFontSize, applyZoom, zoomActionFromKey, readTerminalFontSize,
-  writeTerminalFontSize, writeClipboard,
+  writeTerminalFontSize, writeClipboard, copyText,
   TERMINAL_FONT_MIN, TERMINAL_FONT_MAX, TERMINAL_FONT_DEFAULT, TERMINAL_FONT_SIZE_KEY,
 } from "./terminalZoom";
 
@@ -139,5 +139,52 @@ describe("writeClipboard", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(warn).toHaveBeenCalled();
+  });
+});
+
+describe("copyText", () => {
+  let warn: ReturnType<typeof vi.spyOn>;
+  const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  beforeEach(() => { warn = vi.spyOn(console, "warn").mockImplementation(() => undefined); });
+  afterEach(() => {
+    warn.mockRestore();
+    if (original) Object.defineProperty(navigator, "clipboard", original);
+    else delete (navigator as unknown as { clipboard?: unknown }).clipboard;
+  });
+
+  it("answers false AND says why when nothing reached the clipboard — the same rule as writeClipboard", async () => {
+    const apiReason = new Error("insecure context");
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: vi.fn().mockRejectedValue(apiReason) }, configurable: true });
+    expect(await copyText("hello", () => false)).toBe(false);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("clipboard"), expect.objectContaining({ apiReason }));
+  });
+
+  it("stays quiet when the fallback rescues the copy", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: vi.fn().mockRejectedValue(new Error("x")) }, configurable: true });
+    expect(await copyText("hello", () => true)).toBe(true);
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("writeClipboard — the real execCommand fallback", () => {
+  afterEach(() => { delete (document as unknown as { execCommand?: unknown }).execCommand; });
+
+  it("gives focus back to the terminal's textarea without scrolling — it used to stay on <body> and stop taking keys", async () => {
+    const term = document.createElement("textarea");
+    document.body.appendChild(term);
+    term.focus();
+    const focus = vi.spyOn(term, "focus");
+    const execCommand = vi.fn(() => true);
+    Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
+    try {
+      writeClipboard("ls -la", () => Promise.reject(new Error("insecure context")));
+      // Wait for the fallback itself (not a fixed number of ticks): until it runs, focus is trivially
+      // still on the terminal and the assertion below would prove nothing.
+      await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
+      expect(document.activeElement).toBe(term);
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    } finally {
+      term.remove();
+    }
   });
 });
