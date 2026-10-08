@@ -932,70 +932,29 @@ describe("sdk-driver.mjs — religar no fim real quando a conversa anda fora do 
 });
 
 /**
- * O RACIOCÍNIO NA LÍNGUA DE QUEM LÊ. O bloco "Raciocínio" saía sempre em inglês — e nem todo mundo
- * na operação lê inglês, então era tela morta. Segue o idioma da INTERFACE, que mora no navegador.
+ * O PROMPT DO OPUS NÃO FALA DO RACIOCÍNIO. A instrução "escreva seu raciocínio em português"
+ * (7bf6ace, suavizada em 4403c05) era o gatilho conhecido do bloqueio `[reasoning_extraction]` do
+ * Opus — e nem funcionava direito: com `display: "summarized"` o texto que chega é um RESUMO, que
+ * ora seguia a instrução, ora voltava em inglês. A tradução agora acontece no NAVEGADOR, só na
+ * exibição (front/src/features/board/lib/reasoningTranslation.ts); o modelo não fica sabendo.
  */
-describe("sdk-driver.mjs — em que idioma o modelo pensa", () => {
+describe("sdk-driver.mjs — o prompt não mexe no raciocínio", () => {
   const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
+  const opts = source.slice(source.indexOf("function baseOptions()"), source.indexOf("/* ------------------------------------------- the command catalogue"));
 
-  function cut<T>(name: string): T {
-    const from = source.indexOf(`function ${name}(`);
-    expect(from).toBeGreaterThan(0);
-    return new Function(`${source.slice(from, source.indexOf("\n}", from) + 2)}\nreturn ${name};`)() as T;
-  }
-  const normalizeLanguage = cut<(t: unknown) => string | null>("normalizeLanguage");
-  const reasoningInstruction = cut<(l: unknown) => string>("reasoningInstruction");
-
-  it("reconhece as duas línguas do painel, com ou sem região", () => {
-    expect(normalizeLanguage("pt-BR")).toBe("pt-BR");
-    expect(normalizeLanguage("pt")).toBe("pt-BR");
-    expect(normalizeLanguage("PT-br")).toBe("pt-BR");
-    expect(normalizeLanguage("en-US")).toBe("en");
-    expect(normalizeLanguage("en")).toBe("en");
+  it("o system prompt é o preset do Claude Code PURO — sem `append`, em nenhum idioma", () => {
+    expect(opts).toContain('systemPrompt: { type: "preset", preset: "claude_code" },');
+    expect(opts).not.toContain("append");
   });
 
-  it("qualquer outra coisa é o PADRÃO do modelo, nunca um palpite", () => {
-    expect(normalizeLanguage("fr")).toBe(null);
-    expect(normalizeLanguage("")).toBe(null);
-    expect(normalizeLanguage(undefined)).toBe(null);
-    expect(normalizeLanguage(null)).toBe(null);
-    expect(normalizeLanguage(42)).toBe(null);
+  it("nenhuma instrução sobre o raciocínio sobrou no driver", () => {
+    expect(source).not.toContain("function reasoningInstruction(");
+    expect(source).not.toContain("reasoningLanguage");
+    expect(source).not.toMatch(/Escreva seu racioc/i);
   });
 
-  it("em português, manda escrever o RACIOCÍNIO em português — e só ele", () => {
-    const instruction = reasoningInstruction("pt-BR");
-    expect(instruction).toContain("racioc");
-    expect(instruction).toContain("portugu");
-  });
-
-  it("inglês (e desconhecido) não anexa nada: é o padrão do modelo, e parágrafo tem custo", () => {
-    expect(reasoningInstruction("en")).toBe("");
-    expect(reasoningInstruction(null)).toBe("");
-    expect(reasoningInstruction(undefined)).toBe("");
-  });
-
-  it("o idioma entra como APPEND do preset — trocar o preset custaria o CLAUDE.md e as ferramentas", () => {
-    const opts = source.slice(source.indexOf("function baseOptions()"), source.indexOf("/* ------------------------------------------- the command catalogue"));
-    expect(opts).toContain('{ type: "preset", preset: "claude_code", append: reasoningInstruction(reasoningLanguage) }');
-    // sem idioma, o objeto é exatamente o de antes — nenhuma chave `append` vazia
-    expect(opts).toContain('{ type: "preset", preset: "claude_code" }');
-  });
-
-  it("trocar o idioma vale do turno seguinte, sem respawn: o controle só move a variável", () => {
-    const at = source.indexOf('control.type === "language"');
-    expect(at).toBeGreaterThan(0);
-    const branch = source.slice(at, at + 260);
-    expect(branch).toContain("reasoningLanguage = normalizeLanguage(control.language);");
-    // `baseOptions()` é relido a cada stream, então nada precisa ser derrubado aqui
-    expect(branch).not.toContain("endStream(");
-  });
-
-  it("não nomeia o mecanismo interno — é isso que o classificador do Opus caça (card #3684)", () => {
-    // claude-code#93584 documenta o safeguard disparando ao citar o PRÓPRIO raciocínio que a tela
-    // já mostra. A instrução pede o idioma sem nomear "thinking"/"chain of thought" — só "raciocínio".
-    const instruction = reasoningInstruction("pt-BR");
-    expect(instruction.toLowerCase()).not.toContain("thinking");
-    expect(instruction.toLowerCase()).not.toContain("chain of thought");
+  it("o driver não tem mais um controle de idioma — o protocolo nem o entrega", () => {
+    expect(source).not.toContain('control.type === "language"');
   });
 });
 
@@ -1007,9 +966,10 @@ describe("sdk-driver.mjs — em que idioma o modelo pensa", () => {
  * driver evitar o bloqueio em si (ele nasce do lado da Anthropic, antes da resposta chegar), mas
  * duas coisas estavam no alcance do código:
  *
- *   1. a instrução de idioma do raciocínio (acima) citava "os blocos de thinking" — vocabulário
- *      técnico que o próprio #93584 mostra como gatilho conhecido. Suavizada para falar só em
- *      "raciocínio", sem o jargão do mecanismo interno.
+ *   1. a instrução de idioma do raciocínio citava "os blocos de thinking" — vocabulário técnico
+ *      que o próprio #93584 mostra como gatilho conhecido. Suavizada aqui e, depois, REMOVIDA de vez
+ *      (o raciocínio passou a ser traduzido no navegador — ver o describe "o prompt não mexe no
+ *      raciocínio", acima).
  *   2. a mensagem que chega ao humano trazia só o texto cru em inglês, sem explicar que é um bug
  *      conhecido do classificador e não algo sobre a pergunta feita.
  */

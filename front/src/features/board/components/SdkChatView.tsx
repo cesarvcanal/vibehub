@@ -38,6 +38,7 @@ import { PeerTypingIndicator } from "@/features/board/components/PeerTypingIndic
 import { ultraKeywords } from "@/features/board/lib/ultraWords";
 import { workingStage, type WorkingKind } from "@/features/board/lib/workingStage";
 import { createReconnectBackoff, type ConnectionState } from "@/features/board/lib/reconnect";
+import { reasoningTranslator, useReasoningTranslation } from "@/features/board/lib/reasoningTranslation";
 import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
 import {
   buildDecisionReply,
@@ -55,6 +56,7 @@ import {
   TERMINAL_ACTIVITY_NOTE,
   TURN_INTERRUPTED_EDIT_NOTE,
   TURN_INTERRUPTED_NOTE,
+  CONVERSATION_CLEARED_NOTE,
   answerQuestion,
   applySdkEvent,
   appendUserRow,
@@ -75,6 +77,7 @@ import {
   type SdkActivity,
   type SdkChatState,
   type SdkQuestionAnswer,
+  type BackgroundTask,
   type SdkRow,
 } from "@/features/board/lib/sdkChat";
 import {
@@ -268,11 +271,6 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         setState(INITIAL_SDK_STATE);
         // The replay tells the story again from disk (the interrupt note included) — a stale
         // "continuar?" offer from before the drop would be guessing about a turn we no longer see.
-        // EM QUE IDIOMA A IA PENSA: o "Raciocínio" na tela saía sempre em inglês, e nem todo mundo
-        // aqui lê inglês. O idioma mora NESTE navegador (localStorage), então o driver — que é do
-        // servidor e nasceu sem ele — só fica sabendo por aqui. Antes de qualquer mensagem, porque
-        // o socket entrega em ordem: o primeiro turno já pensa no idioma certo.
-        try { next.send(JSON.stringify({ type: "language", language: getLanguage() })); } catch { /* o close já vem */ }
       };
       next.onmessage = (event: MessageEvent) => {
         if (typeof event.data !== "string") return;
@@ -343,16 +341,25 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   }, [cardId, identity.epoch]);
 
   /**
-   * Trocar o idioma com o card ABERTO também troca o idioma do raciocínio — sem esperar um
-   * reconnect. `useT()` reassina este componente a cada troca, então `getLanguage()` relido no
-   * render é o gatilho. Socket fechado não faz nada: o `onopen` manda de novo ao reconectar.
+   * O tradutor local do navegador só BAIXA o pacote de idioma dentro de um gesto (clique, tecla) —
+   * então os gestos na página, com a interface em português, o preparam (um modelo por gesto). Depois
+   * de pronto, `prime()` não faz nada; o raciocínio que esperava se traduz sozinho (`onReady`).
+   *
+   * `click`/`keyup` na fase de BOLHA, de propósito: baixar consome o gesto, e o app age antes (no
+   * pointerdown em captura, o primeiro clique da pessoa perdia o gesto — popup, tela cheia). O `click`
+   * também cobre o toque, onde o pointerdown nem conta como gesto.
    */
-  const language = getLanguage();
   React.useEffect(() => {
-    const socket = socketRef.current;
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    try { socket.send(JSON.stringify({ type: "language", language })); } catch { /* o close já vem */ }
-  }, [language]);
+    const prime = (): void => {
+      if (getLanguage() === "pt-BR") reasoningTranslator().prime();
+    };
+    window.addEventListener("click", prime);
+    window.addEventListener("keyup", prime);
+    return () => {
+      window.removeEventListener("click", prime);
+      window.removeEventListener("keyup", prime);
+    };
+  }, []);
 
 
   /* ------------------------------------------------------------- sending */
@@ -1085,6 +1092,12 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       <JumpToLatest stick={stick} />
       </div>
 
+      {/* O TRABALHO QUE SEGUE DEPOIS DO TURNO — um `sleep` esperando o deploy, um subagente. O
+          "Trabalhando…" apagou com o `result`, e sem esta faixa o chat parecia parado enquanto o
+          Claude ainda esperava algo (produção, 2026-10-07). Só com a wire de pé: uma tela
+          desconectada não pode garantir nada; a reconexão reacende pelo reenvio do back. */}
+      {connected && state.backgroundTasks.length > 0 ? <SdkBackgroundTray tasks={state.backgroundTasks} /> : null}
+
       {/* PENDING DECISIONS — the questions still waiting on the user, surfaced right above the
           composer so they never drown in a long turn. Clicking one jumps to it in the chat. */}
       {pending.length > 0 ? <PendingTray pending={pending} active={replyTo} onJump={jumpToDecision} /> : null}
@@ -1158,6 +1171,34 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
           </span>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * A FAIXA "RODANDO EM SEGUNDO PLANO" — o equivalente do "1 background task" no rodapé do Claude
+ * Code. Lista o que está vivo pela descrição que o próprio modelo deu à tarefa. Teto de altura pelo
+ * mesmo motivo da fila: irmã do scroller, ela não pode espremer a conversa.
+ */
+function SdkBackgroundTray({ tasks }: { tasks: readonly BackgroundTask[] }) {
+  const t = useT();
+  return (
+    <div
+      data-testid="sdk-background-tasks"
+      role="status"
+      className="mt-1.5 flex max-h-[20vh] shrink-0 flex-col gap-1 overflow-y-auto overscroll-contain rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-1.5"
+    >
+      <div className="flex items-center gap-1.5 text-[11px] font-medium text-sky-700 dark:text-sky-300">
+        <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+        <span>{t("sdk.backgroundTitle", { n: tasks.length })}</span>
+        <span className="min-w-0 truncate font-normal opacity-80">{t("sdk.backgroundHint")}</span>
+      </div>
+      {tasks.map((task) => (
+        <div key={task.id} data-testid="sdk-background-task" className="flex items-start gap-1.5 px-1 text-xs text-muted-foreground">
+          <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-70" />
+          <span className="min-w-0 break-words">{task.description.trim() || t("sdk.backgroundUnnamed")}</span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1734,6 +1775,12 @@ function SdkThinkingRow({ text, streaming }: { text: string; streaming: boolean 
   // recolhia sozinho no fim, que é exatamente o que estava escondendo o raciocínio.
   const [choice, setChoice] = React.useState<boolean | null>(null);
   const open = choice ?? true;
+  // EM PORTUGUÊS, traduzido no navegador (zero token — ver lib/reasoningTranslation). Só o bloco
+  // TERMINADO: traduzir pedaço a pedaço faria o texto pular enquanto chega. `useT()` reassina
+  // este componente quando o idioma troca, então `getLanguage()` aqui acompanha.
+  const translated = useReasoningTranslation(text, !streaming && getLanguage() === "pt-BR");
+  const [showOriginal, setShowOriginal] = React.useState(false);
+  const shown = translated !== null && !showOriginal ? translated : text;
   return (
     <div data-testid="sdk-thinking" data-streaming={streaming || undefined} data-open={open || undefined}>
       <button
@@ -1752,8 +1799,18 @@ function SdkThinkingRow({ text, streaming }: { text: string; streaming: boolean 
           data-testid="sdk-thinking-text"
           className="mt-1 select-text whitespace-pre-wrap break-words border-l-2 border-muted pl-2.5 text-xs italic leading-relaxed text-muted-foreground"
         >
-          {text}
+          {shown}
         </div>
+      ) : null}
+      {open && translated !== null ? (
+        <button
+          type="button"
+          data-testid="sdk-thinking-original-toggle"
+          onClick={() => setShowOriginal(!showOriginal)}
+          className="mt-0.5 pl-3 text-[10px] text-muted-foreground/60 hover:text-foreground"
+        >
+          {showOriginal ? t("sdk.reasoningShowTranslation") : t("sdk.reasoningShowOriginal")}
+        </button>
       ) : null}
     </div>
   );
@@ -2063,6 +2120,19 @@ const SdkChatRow = React.memo(function SdkChatRow({
 });
 
 /**
+ * O RASCUNHO DE CADA CARTÃO, por id de pergunta — num mapa do MÓDULO, como o do composer. Todo
+ * (re)connect limpa a tela e o replay redesenha o cartão do disco: ele desmonta e remonta, e o que a
+ * pessoa já tinha marcado e escrito morava no estado local dele. Um deploy no meio de três perguntas
+ * apagava tudo (produção, 2026-10-07). O id vem do histórico, igual antes e depois do reconnect.
+ */
+const questionDrafts = new Map<string, { picked: string[][]; other: string[] }>();
+
+/** Test hook: esquece os rascunhos de cartão (todo teste reusa os mesmos ids). */
+export function resetQuestionDraftsForTesting(): void {
+  questionDrafts.clear();
+}
+
+/**
  * The agent's QUESTION card — AskUserQuestion rendered as clickable options in the chat.
  *
  * Reading rules: a single-choice single question answers on the CLICK (one gesture, like the
@@ -2079,8 +2149,14 @@ function SdkQuestionCard({
   onAnswer?: (id: string, answers: SdkQuestionAnswer[]) => void;
 }) {
   const t = useT();
-  const [picked, setPicked] = React.useState<string[][]>(() => row.questions.map(() => []));
-  const [other, setOther] = React.useState<string[]>(() => row.questions.map(() => ""));
+  const [picked, setPicked] = React.useState<string[][]>(() => questionDrafts.get(row.id)?.picked ?? row.questions.map(() => []));
+  const [other, setOther] = React.useState<string[]>(() => questionDrafts.get(row.id)?.other ?? row.questions.map(() => ""));
+  // Guardado também DEPOIS do clique: o "respondida" da tela é otimista, e se o fio cair junto com o
+  // driver antes da confirmação o replay redesenha o cartão pendente — com o que já estava marcado.
+  // Cada entrada é um punhado de rótulos por pergunta da sessão: não há o que limpar.
+  React.useEffect(() => {
+    questionDrafts.set(row.id, { picked, other });
+  }, [row.id, picked, other]);
 
   const single = row.questions.length === 1 && row.questions[0]?.multiSelect !== true;
 
@@ -2217,6 +2293,7 @@ function noteText(text: string, t: ReturnType<typeof useT>): string {
   if (text === TERMINAL_ACTIVITY_NOTE) return t("sdk.terminalActivity");
   if (text === TURN_INTERRUPTED_EDIT_NOTE) return t("sdk.noteInterruptedEdit");
   if (text === TURN_INTERRUPTED_NOTE) return t("sdk.noteInterrupted");
+  if (text === CONVERSATION_CLEARED_NOTE) return t("sdk.noteConversationCleared");
   return text;
 }
 

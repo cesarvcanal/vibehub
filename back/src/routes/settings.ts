@@ -4,6 +4,7 @@ import { requireOwner, requireSession } from "../auth/session.js";
 import { getSettings, updateSettings, markSetupCompleted, type SettingsPatch } from "../services/settings/settings.js";
 import { setDefaultAccountLabel } from "../services/board/registry.js";
 import { hostExecutor } from "../runtime/host.js";
+import { DONE_RETENTION_DAYS } from "../services/board/retention.js";
 
 /** Install settings the wizard and the settings screen read and write. */
 export async function settingsRoutes(app: FastifyInstance): Promise<void> {
@@ -46,9 +47,12 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
    * Install-wide flags EVERY signed-in user needs to render the right UI — settings themselves stay
    * owner-only. `sdkChat`: with the global sdkDriver switch on, the native chat IS the Chat tab of
    * every card (the per-card `sdkChat` opt-in is retired/vestigial); off = the classic chat.
+   * `doneRetentionDays`: how long a card sits untouched in `done` before the retention purges it
+   * (services/board/retention.ts) — the countdown on a done card reads it, so the number lives in
+   * one place.
    */
   app.get("/api/features", { preHandler: requireSession }, async (_req, reply) => {
     const settings = await getSettings();
-    return await reply.send({ sdkChat: settings.sdkDriver });
+    return await reply.send({ sdkChat: settings.sdkDriver, doneRetentionDays: DONE_RETENTION_DAYS });
   });
 }

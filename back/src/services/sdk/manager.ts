@@ -3,15 +3,15 @@ import { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
 import { onCardDriverProbe, type DriverActivity } from "../board/agentState.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
-import { appendHistory, appendHistoryReported, replayableHistoryEvent, rewindHistory, type HistoryEvent } from "./history.js";
+import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, clearHistoryBeforeLastClear, readHistory, replayableHistoryEvent, rewindHistory, type HistoryEvent } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inflight.js";
 import { createLineReader, forgetDriverKeys, noteDriverEventFor, onOutsideTurn } from "./mirror.js";
 import { writeCardCatalog } from "./catalog.js";
 import { forgetCardWorkflows, lastWorkflowRuns, watchCardWorkflows } from "./workflow.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
-  buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, parseTypingFrame, encodeControl,
-  type CatalogEvent, type DriverControl, type DriverEvent,
+  NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, parseTypingFrame, encodeControl,
+  type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type UserQuestionItem,
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { logger } from "../../utils/logger.js";
@@ -46,6 +46,15 @@ import { logger } from "../../utils/logger.js";
 /** No sockets AND no running turn for this long ⇒ the driver shuts down (resume covers the rest). */
 export const DRIVER_IDLE_MS = 15 * 60_000;
 
+/**
+ * Por quanto tempo uma tarefa em segundo plano segura sozinha um driver que ninguém está olhando.
+ * Uma espera de deploy dura minutos; um `npm run dev` ou `tail -f` em background não acaba nunca, e
+ * sem teto ele mantinha o driver (e o card) acordado para sempre — antes desta regra o idle stop o
+ * derrubava em 15 min. Passado o teto vale o idle normal. Com uma aba aberta o driver vive de
+ * qualquer jeito, como sempre.
+ */
+export const BACKGROUND_HOLD_MAX_MS = 3 * 60 * 60_000;
+
 /** Websocket keepalive — same cadence as the terminal socket (proxies drop idle websockets). */
 const KEEPALIVE_MS = 25_000;
 
@@ -75,6 +84,14 @@ export interface DriverSession {
   transcriptDir?: string;
   /** Turns in flight or queued in the driver: +1 per user send, -1 per result. */
   activeTurns: number;
+  /**
+   * As tarefas EM SEGUNDO PLANO vivas no CLI deste driver (o último `background_tasks`): trabalho
+   * que segue depois do `result` do turno. Estado da sessão, como o catálogo — reenviado a quem
+   * conecta depois, nunca gravado — e, enquanto não estiver vazio, o driver NÃO está ocioso.
+   */
+  backgroundTasks: BackgroundTaskInfo[];
+  /** Quando o conjunto deixou de ser vazio — o início da contagem de `BACKGROUND_HOLD_MAX_MS`. */
+  backgroundSince?: number;
   /**
    * The session's command CATALOGUE (what the chat's "/" menu offers), as last reported by the
    * driver. Kept HERE, next to `ready`: it is session state, not conversation — it is never
@@ -127,6 +144,24 @@ export interface DriverSession {
   acceptedCids: Map<string, AcceptedSend>;
   /** Cancela a inscrição no espelho (conversa vinda da aba Terminal). Vive o que o driver viver. */
   offOutside?: () => void;
+  /**
+   * AS PERGUNTAS QUE ESTE DRIVER FEZ — todo `user_question` que ele emitiu, encerrado ou não. O
+   * driver guarda as dele só em memória; um cartão pendente no histórico que NÃO está aqui é
+   * ÓRFÃO: quem o abriu morreu (deploy, crash, hibernação) e este driver nunca ouviu falar dele.
+   * Nunca sai daqui ao ser encerrada: o `question_result` do driver chega ao disco DEPOIS de chegar
+   * aqui, e uma leitura no meio desse caminho tomaria a pergunta dele por órfã (resultado duplicado).
+   */
+  ownQuestions: Set<string>;
+  /** Órfãs que este manager já ENCERROU: um clique tardio nelas recebe o erro, nunca silêncio. */
+  settledOrphans: Set<string>;
+  /** Órfãs com uma resposta A CAMINHO: o segundo clique (outra aba, duplo clique) vira nada. */
+  answeringOrphans: Set<string>;
+  /**
+   * A varredura de órfãs por mensagem já rodou. Órfã é pergunta de um driver ANTERIOR: depois que
+   * este driver subiu nenhuma nova pode nascer, então uma varredura basta — sem ler o histórico
+   * inteiro a cada mensagem da vida da sessão.
+   */
+  orphansSwept: boolean;
 }
 
 /**
@@ -222,7 +257,23 @@ export function hasDriverSession(cardId: string): boolean {
 export function isCardChatInUse(cardId: string): boolean {
   const session = sessions.get(cardId);
   if (!session || session.closed) return false;
-  return session.sockets.size > 0 || session.activeTurns > 0;
+  return session.sockets.size > 0 || isDriverBusy(session);
+}
+
+/**
+ * O driver está TRABALHANDO: um turno em voo ou na fila, OU uma tarefa em segundo plano viva (um
+ * `sleep 200` de espera de deploy, um subagente). Esta segunda metade é o que faltava: o turno que
+ * dispara a tarefa fecha na hora, e um driver "ocioso" sem ninguém na aba era desligado — matando o
+ * trabalho que o Claude tinha acabado de dizer que estava esperando.
+ */
+function isDriverBusy(session: Pick<DriverSession, "activeTurns" | "backgroundTasks" | "backgroundSince">): boolean {
+  return session.activeTurns > 0 || backgroundHoldLeft(session) > 0;
+}
+
+/** Quanto falta do teto em que as tarefas em segundo plano seguram o driver (0 = não seguram). */
+function backgroundHoldLeft(session: Pick<DriverSession, "backgroundTasks" | "backgroundSince">): number {
+  if (session.backgroundTasks.length === 0 || session.backgroundSince === undefined) return 0;
+  return Math.max(0, session.backgroundSince + BACKGROUND_HOLD_MAX_MS - Date.now());
 }
 
 /**
@@ -233,7 +284,7 @@ export function isCardChatInUse(cardId: string): boolean {
 export function driverActivity(cardId: string): DriverActivity {
   const session = sessions.get(cardId);
   if (!session || session.closed) return "none";
-  return session.activeTurns > 0 ? "turn" : "idle";
+  return isDriverBusy(session) ? "turn" : "idle";
 }
 
 /* ---------------------------------------------------------------- helpers */
@@ -276,12 +327,21 @@ function clearIdleTimer(session: DriverSession): void {
 function maybeScheduleIdleStop(session: DriverSession): void {
   if (session.closed || session.sockets.size > 0 || session.activeTurns > 0) return;
   if (session.idleTimer) return;
+  // Uma tarefa em segundo plano viva adia o relógio até o fim do teto dela (ver
+  // BACKGROUND_HOLD_MAX_MS) — e só então começam os 15 min de ociosidade.
   session.idleTimer = setTimeout(() => {
     session.idleTimer = null;
-    if (session.closed || session.sockets.size > 0 || session.activeTurns > 0) return;
-    logger.info({ card: session.label, audit: true, action: "sdk.driver.idle" }, "sdk driver idle — shutting it down (resume id persisted)");
+    if (session.closed || session.sockets.size > 0 || isDriverBusy(session)) return;
+    if (session.backgroundTasks.length > 0) {
+      logger.info(
+        { card: session.label, audit: true, action: "sdk.driver.idle.background-cap", tasks: session.backgroundTasks.map((t) => t.description) },
+        "sdk driver held by background tasks past the cap with nobody connected — shutting it down",
+      );
+    } else {
+      logger.info({ card: session.label, audit: true, action: "sdk.driver.idle" }, "sdk driver idle — shutting it down (resume id persisted)");
+    }
     stopCardDriver(session.cardId);
-  }, DRIVER_IDLE_MS);
+  }, backgroundHoldLeft(session) + DRIVER_IDLE_MS);
   session.idleTimer.unref?.();
 }
 
@@ -324,6 +384,29 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   // lado como "ele terminou" (produção, 2026-10-02). A sondagem do diário começa aqui, no instante
   // da chamada, e se encerra sozinha (ver services/sdk/workflow.ts): é ela quem alimenta o painel.
   if (event.type === "tool_use" && event.name === "Workflow") startWorkflowWatch(session);
+  if (event.type === "background_tasks") {
+    // Normalizado AQUI, no lado que fala com o navegador (como o catálogo): o que sai é só o que a
+    // tela desenha, e um item torto do driver não derruba a aba de ninguém.
+    const raw = (event as { tasks?: unknown }).tasks;
+    const tasks: BackgroundTaskInfo[] = Array.isArray(raw)
+      ? raw
+        .filter((t): t is Record<string, unknown> => typeof t === "object" && t !== null && typeof (t as { id?: unknown }).id === "string")
+        .map((t) => ({
+          id: t.id as string,
+          type: typeof t.type === "string" ? t.type : "",
+          description: typeof t.description === "string" ? t.description : "",
+        }))
+      : [];
+    event = { type: "background_tasks", tasks };
+    if (tasks.length === 0) session.backgroundSince = undefined;
+    else if (session.backgroundTasks.length === 0) session.backgroundSince = Date.now();
+    session.backgroundTasks = tasks;
+    // O relógio do idle é refeito a cada mudança: com tarefa viva ele espera o teto dela; quando a
+    // última termina sem turno em voo e sem ninguém olhando, AGORA começam os 15 min — o mesmo
+    // ponto em que um `result` o arma.
+    clearIdleTimer(session);
+    maybeScheduleIdleStop(session);
+  }
   if (event.type === "turn_absorbed") {
     // Streaming input: this send folded into the turn ALREADY running (the model absorbs it at its
     // next step) — it will not produce its own `result`, so its +1 comes back off. Floor at 1: an
@@ -381,7 +464,18 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
       );
     }
   }
+  if (event.type === "user_question") session.ownQuestions.add(event.id);
   if (!silenced) broadcast(session, event);
+  if (event.type === "conversation_reset" && (event.trigger === undefined || event.trigger === "clear")) {
+    // O /clear limpou o CONTEXTO do modelo; o log do card tem de ir junto, senão o F5 devolvia a
+    // conversa inteira e o /clear parecia não ter feito nada. Sai só o que veio ANTES do "/clear"
+    // (ver `clearHistoryBeforeLastClear`): o que foi mandado depois dele o CLI ainda vai rodar. O
+    // painel de workflow da conversa apagada também não volta num F5. Só no gatilho `clear`: outro
+    // fluxo de sessão nova do CLI (sair do plan mode, por exemplo) não é a pessoa pedindo a limpeza.
+    void clearHistoryBeforeLastClear(session.cardId);
+    forgetCardWorkflows(session.cardId);
+    emitSystemNote(session, NOTE_CONVERSATION_CLEARED);
+  }
   if (interruptNoteToFlush) emitSystemNote(session, interruptNoteToFlush);
   // History + mirror dedupe are MANAGER duties, not socket duties: they must keep happening while
   // no page is open — that is the whole point of the detach.
@@ -440,11 +534,16 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     sockets: new Set(),
     ready: false,
     activeTurns: 0,
+    backgroundTasks: [],
     rewinds: [],
     idleTimer: null,
     stderrTail: "",
     closed: false,
     acceptedCids: new Map(),
+    ownQuestions: new Set(),
+    settledOrphans: new Set(),
+    answeringOrphans: new Set(),
+    orphansSwept: false,
     ...(opts.transcriptDir ? { transcriptDir: opts.transcriptDir } : {}),
   };
   sessions.set(opts.cardId, session);
@@ -631,6 +730,7 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
     // Same durable in-flight promise a plain user turn earns (see #64's boot sweep).
     void writeInflightMarker(session.cardId, { startedAt: at, preview: inflightPreview(control.text), attempts: 0 });
     rememberCid(session, control.cid, { persisted, line });
+    void settleOrphanQuestions(session);
     return { kind: "accepted", cid: control.cid, persisted };
   }
   if (control.type === "user") {
@@ -646,7 +746,14 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
     // lost. attempts: 0 — a person's own turn always earns one automatic resume.
     void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(control.text), attempts: 0 });
     rememberCid(session, control.cid, { persisted, line });
+    void settleOrphanQuestions(session);
     return { kind: "accepted", cid: control.cid, persisted };
+  }
+  if (control.type === "question_answer" && !session.ownQuestions.has(control.id)) {
+    // ÓRFÃ: este driver nunca fez esta pergunta. Repassá-la devolvia "no pending question with id"
+    // e a resposta se perdia — ela vira mensagem (ver `answerOrphanQuestion`).
+    void answerOrphanQuestion(session, control);
+    return { kind: "ignored" };
   }
   writeToDriver(session, control);
   if (control.type === "interrupt") {
@@ -660,6 +767,110 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
     if (session.activeTurns > 0) session.pendingInterruptNote = interruptNote(control);
   }
   return { kind: "ignored" };
+}
+
+/**
+ * O que o histórico ainda mostra como pergunta PENDENTE e que o driver atual não espera — os
+ * cartões órfãos, com o texto deles. Lido do disco: depois de um deploy o back novo não tem outra
+ * memória deles, e o cartão que a tela redesenha vem exatamente daqui.
+ */
+async function orphanQuestions(session: DriverSession): Promise<Map<string, UserQuestionItem[]>> {
+  const open = new Map<string, UserQuestionItem[]>();
+  for (const event of await readHistory(session.cardId, HISTORY_REPLAY_LIMIT, { strict: true })) {
+    if (event.type === "user_question") open.set(event.id, event.questions);
+    else if (event.type === "question_result") open.delete(event.id);
+  }
+  for (const id of [...open.keys()]) {
+    if (session.ownQuestions.has(id)) open.delete(id);
+  }
+  return open;
+}
+
+/** Encerra um cartão em todas as abas e no histórico (o F5 lê a mesma coisa). */
+function settleQuestionCard(session: DriverSession, result: Extract<DriverEvent, { type: "question_result" }>): void {
+  broadcast(session, result);
+  void appendHistory(session.cardId, { ...result, at: Date.now() });
+}
+
+/**
+ * FALAR É RESPONDER, também para a órfã. Com o driver vivo, uma mensagem libera o cartão que ele
+ * espera (`supersedePendingQuestions` no driver). A órfã não tem driver para isso: ficava pendente
+ * no histórico e a bandeja voltava a pedir uma resposta que a pessoa acabara de dar.
+ */
+async function settleOrphanQuestions(session: DriverSession): Promise<void> {
+  if (session.orphansSwept) return;
+  session.orphansSwept = true;
+  let orphans: Map<string, UserQuestionItem[]>;
+  try {
+    orphans = await orphanQuestions(session);
+  } catch (err) {
+    session.orphansSwept = false; // a próxima mensagem tenta de novo
+    logger.warn({ card: session.label, detail: (err as Error).message }, "could not sweep orphaned question cards");
+    return;
+  }
+  for (const id of orphans.keys()) {
+    if (session.settledOrphans.has(id) || session.answeringOrphans.has(id)) continue;
+    session.settledOrphans.add(id);
+    settleQuestionCard(session, { type: "question_result", id, superseded: true });
+  }
+}
+
+/**
+ * O CLIQUE NUMA ÓRFÃ (produção, 2026-10-07): o deploy matou o driver com o cartão de pé; o driver
+ * novo retomou a conversa sem a chamada de ferramenta que a resposta deveria completar. As escolhas
+ * ainda importam — elas vão ao modelo como MENSAGEM, cada pergunta citada ao lado do escolhido, e o
+ * cartão se encerra como respondido. É um turno: conta, desarma o ocioso e ganha o marcador.
+ */
+async function answerOrphanQuestion(session: DriverSession, control: QuestionAnswerControl): Promise<void> {
+  // Marcada ANTES de qualquer await: o segundo clique (outra aba, duplo clique) chega no meio da
+  // leitura do disco e precisa encontrar a vaga já tomada.
+  if (session.answeringOrphans.has(control.id)) return; // a mesma resposta já está a caminho
+  if (session.settledOrphans.has(control.id)) {
+    // Encerrada aqui mesmo (por mensagem, ou por outra resposta): o veredito de sempre.
+    broadcast(session, { type: "error", message: `no pending question with id ${control.id}` });
+    return;
+  }
+  session.answeringOrphans.add(control.id);
+  const release = (message: string): void => {
+    session.answeringOrphans.delete(control.id);
+    broadcast(session, { type: "error", message });
+  };
+  let orphans: Map<string, UserQuestionItem[]>;
+  try {
+    orphans = await orphanQuestions(session);
+  } catch (err) {
+    release(`could not read the question card: ${(err as Error).message}`);
+    return;
+  }
+  const questions = orphans.get(control.id);
+  if (!questions) {
+    // Não está pendente no disco: já encerrada (aba velha) ou nunca existiu. Nada vai ao modelo —
+    // o mesmo veredito que o driver dava antes.
+    release(`no pending question with id ${control.id}`);
+    return;
+  }
+  if (!canAcceptTurn(session)) {
+    // Sem driver não há a quem entregar: a tela é avisada e o cartão segue pendente para o próximo.
+    release("driver exited before the answer reached it — answer again once the chat reconnects");
+    return;
+  }
+  const text = buildOrphanAnswerText(questions, control.answers);
+  if (!writeToDriver(session, { type: "user", text })) {
+    release("driver exited before the answer reached it — answer again once the chat reconnects");
+    return;
+  }
+  session.activeTurns += 1;
+  clearIdleTimer(session);
+  noteChatActivity(session);
+  noteDriverEventFor(session.cardId, { type: "user", text });
+  void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(text), attempts: 0 });
+  session.answeringOrphans.delete(control.id);
+  session.settledOrphans.add(control.id);
+  settleQuestionCard(session, { type: "question_result", id: control.id, answers: control.answers, sent: text });
+  logger.info(
+    { audit: true, action: "sdk.question.orphan", card: session.label },
+    "an answer to a question whose driver died was delivered as a message",
+  );
 }
 
 /**
@@ -751,6 +962,12 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
   // up had no command list until the next turn's `init` — an empty menu on a session full of skills.
   if (session.catalog) {
     try { socket.send(JSON.stringify(session.catalog)); } catch { /* going away */ }
+  }
+
+  // As tarefas em segundo plano também são estado: uma aba que abre (ou recarrega) enquanto um
+  // `sleep` de deploy roda precisa ver isso no primeiro quadro — o aviso do CLI só vem na mudança.
+  if (session.backgroundTasks.length > 0) {
+    try { socket.send(JSON.stringify({ type: "background_tasks", tasks: session.backgroundTasks })); } catch { /* going away */ }
   }
 
   // A frota do workflow é da mesma natureza do catálogo: estado, não conversa. Ela não está no

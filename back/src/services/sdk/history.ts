@@ -145,13 +145,22 @@ export function appendHistory(cardId: string, event: HistoryEvent): Promise<void
  * browser before the driver says `ready`. Reading is also when the file is COMPACTED: a log that
  * has grown past several times the replay window is rewritten to just that window, so the hot
  * append path never pays for a rewrite. Never throws — no file simply means no history yet.
+ *
+ * `strict`: a read that FAILS (EBUSY, EMFILE…) throws instead of reading as "no history". For a
+ * caller that decides something once from the answer (the orphan-question sweep), an empty list
+ * born of a passing error is a wrong verdict, not a missing file.
  */
-export async function readHistory(cardId: string, limit: number = HISTORY_REPLAY_LIMIT): Promise<HistoryEvent[]> {
+export async function readHistory(
+  cardId: string,
+  limit: number = HISTORY_REPLAY_LIMIT,
+  opts: { strict?: boolean } = {},
+): Promise<HistoryEvent[]> {
   let raw: string;
   const file = historyFile(cardId);
   try {
     raw = await readFile(file, "utf8");
-  } catch {
+  } catch (err) {
+    if (opts.strict && (err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     return [];
   }
   const events = parseHistory(raw);
@@ -327,6 +336,46 @@ function appendHistoryBarrier(cardId: string, work: () => Promise<void>): Promis
     });
   chains.set(cardId, next);
   return next;
+}
+
+/**
+ * O CORTE DO /clear: apaga do log tudo o que veio ANTES da última mensagem "/clear" e mantém ela e
+ * o que veio depois.
+ *
+ * Por que não apagar o arquivo inteiro: o /clear pode ter entrado na FILA do CLI no meio de um turno
+ * longo, e a pessoa ter mandado mais coisa depois dele — mensagens que já estão no log e que o CLI
+ * vai rodar na sessão nova. Apagá-las fazia a resposta aparecer sem a pergunta, e no F5 a pergunta
+ * voltava atribuída ao terminal. Manter a própria linha "/clear" também é o que deixa o replay casá-la
+ * com o `<command-name>/clear` que o CLI grava no transcript novo (uma bolha só, não duas).
+ *
+ * Sem linha "/clear" no log (o comando veio da aba Terminal, por exemplo), não há fronteira: a
+ * conversa inteira é da sessão apagada e sai toda. Na mesma fila dos appends — o "/clear" ainda
+ * enfileirado é escrito antes do corte.
+ */
+export function clearHistoryBeforeLastClear(cardId: string): Promise<void> {
+  return appendHistoryBarrier(cardId, async () => {
+    const file = historyFile(cardId);
+    let raw: string;
+    try {
+      raw = await readFile(file, "utf8");
+    } catch {
+      return; // no log yet: nothing to clear
+    }
+    const events = parseHistory(raw);
+    let from = -1;
+    for (let i = 0; i < events.length; i += 1) {
+      const e = events[i] as HistoryEvent;
+      if (e.type === "user" && typeof e.text === "string" && isClearCommand(e.text)) from = i;
+    }
+    const kept = from === -1 ? [] : events.slice(from);
+    if (kept.length === events.length) return;
+    await writeFile(file, kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length ? "\n" : ""), "utf8");
+  });
+}
+
+/** A mensagem É o comando /clear (não uma frase que o menciona). PURE. */
+export function isClearCommand(text: string): boolean {
+  return text.trim() === "/clear";
 }
 
 /**

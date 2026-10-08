@@ -37,6 +37,8 @@ export interface SdkEvent {
     | "rewound"
     | "catalog"
     | "local_output"
+    | "background_tasks"
+    | "conversation_reset"
     | "result"
     | "workflow_progress"
     | "user_ack"
@@ -75,6 +77,10 @@ export interface SdkEvent {
   from?: MessageOrigin;
   /** "terminal" = the event was MIRRORED from the card's TUI transcript, not spoken by the driver. */
   source?: string;
+  /** On `conversation_reset`: what reset the conversation ("clear" for a `/clear`). */
+  trigger?: string;
+  /** On `background_tasks`: the WHOLE live set (replace, never merge) — see `backgroundTasks`. */
+  tasks?: BackgroundTask[];
   /** On `catalog`: every skill/command this session can run — what the composer's "/" offers. */
   commands?: SlashCommandInfo[];
   /** On `user_question`: the questions with their selectable options. */
@@ -113,6 +119,9 @@ export interface SdkEvent {
    */
   active?: boolean;
 }
+
+/** One live background task (mirror of `BackgroundTaskInfo` in the back's protocol). */
+export interface BackgroundTask { id: string; type: string; description: string }
 
 /** One question of a `user_question` (mirror of `UserQuestionItem` in the back's protocol). */
 export interface SdkQuestion {
@@ -273,6 +282,14 @@ export interface SdkChatState {
    * não na linha, porque a chamada acontece antes de existir linha de progresso alguma.
    */
   workflowMeta: Record<string, { description?: string; phases?: Array<{ title: string; detail?: string }> }>;
+  /**
+   * AS TAREFAS EM SEGUNDO PLANO vivas no CLI (um Bash com `run_in_background`, um subagente, um
+   * monitor). O turno que as dispara fecha na hora — o "Trabalhando…" apaga no `result` — e elas
+   * seguem por minutos: sem isto o chat ficava mudo e parecia que o Claude tinha parado (produção,
+   * 2026-10-07). Não é linha da conversa: é estado, mostrado numa faixa acima do campo enquanto
+   * houver algo vivo — o "1 background task" do rodapé do Claude Code.
+   */
+  backgroundTasks: BackgroundTask[];
   /** Monotonic counter for rows the driver did not name. */
   seq: number;
 }
@@ -280,6 +297,7 @@ export interface SdkChatState {
 export const INITIAL_SDK_STATE: SdkChatState = {
   rows: [],
   workflowMeta: {},
+  backgroundTasks: [],
   ready: false,
   turnActive: false,
   terminalBurst: false,
@@ -296,6 +314,9 @@ export const TERMINAL_ACTIVITY_NOTE = "terminal-activity";
  *  `back/src/services/sdk/protocol.ts` (`NOTE_TURN_INTERRUPTED*`). */
 export const TURN_INTERRUPTED_NOTE = "turn-interrupted";
 export const TURN_INTERRUPTED_EDIT_NOTE = "turn-interrupted-edit";
+/** The note the back leaves where a `/clear` wiped the conversation. Must match the back's
+ *  `NOTE_CONVERSATION_CLEARED` (back/src/services/sdk/protocol.ts). */
+export const CONVERSATION_CLEARED_NOTE = "conversation-cleared";
 
 /**
  * Sentinels the reducer puts on an error row when the wire carried NO words of its own. The view
@@ -726,6 +747,42 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       if (!Array.isArray(event.commands)) return state;
       return { ...state, commands: event.commands };
     }
+    case "background_tasks": {
+      // Sinal de NÍVEL: o conjunto inteiro, para SUBSTITUIR. Não acende o spinner do turno — a
+      // tarefa não é um turno, e o turno que a disparou já pode ter acabado.
+      if (!Array.isArray(event.tasks)) return state;
+      // Normalizado aqui também (fronteira do socket): a faixa lê `description` sem checar, e um
+      // campo ausente derrubava a árvore do chat inteira.
+      const tasks: BackgroundTask[] = event.tasks
+        .filter((t) => typeof t === "object" && t !== null && typeof t.id === "string")
+        .map((t) => ({
+          id: t.id,
+          type: typeof t.type === "string" ? t.type : "",
+          description: typeof t.description === "string" ? t.description : "",
+        }));
+      if (tasks.length === 0 && state.backgroundTasks.length === 0) return state;
+      return { ...state, backgroundTasks: tasks };
+    }
+    case "conversation_reset": {
+      // /clear: o modelo começou do zero numa sessão nova. A tela esquece a conversa antiga como
+      // o Claude Code faz — senão o /clear parecia não ter feito nada. Fica o que é da SESSÃO do
+      // card e não da conversa: o menu "/", as tarefas em segundo plano ainda vivas, o turno.
+      // Só no gatilho `clear` (o mesmo critério do back), e o corte é no ÚLTIMO "/clear": o que foi
+      // mandado depois dele (a fila do CLI) é da conversa nova e fica.
+      if (event.trigger !== undefined && event.trigger !== "clear") return state;
+      let from = -1;
+      state.rows.forEach((row, i) => {
+        if (row.kind === "user" && row.text.trim() === "/clear") from = i;
+      });
+      return {
+        ...state,
+        rows: from === -1 ? [] : state.rows.slice(from),
+        sessionId: undefined,
+        workflowMeta: {},
+        terminalBurst: false,
+        awaiting: false,
+      };
+    }
     case "local_output": {
       // `/cost` and friends: answered by the CLI itself, outside any turn. Its own row, so it is
       // never mistaken for something Claude said.
@@ -758,6 +815,10 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         // A (re)connect: whatever this view interrupted belongs to a turn that is already over —
         // the flag must not outlive it and swallow a later, REAL error result.
         interruptRequested: false,
+        // Um driver novo não tem as tarefas do anterior; numa reconexão o back reenvia o conjunto
+        // vigente logo atrás deste `ready` (ver `attachSocket`). Zerar aqui é o que impede uma faixa
+        // "rodando em segundo plano" pendurada depois que o processo que a rodava morreu.
+        backgroundTasks: [],
         rows: settleStreaming(state.rows),
       };
       if (event.resume) {

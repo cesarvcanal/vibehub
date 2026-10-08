@@ -16,6 +16,7 @@ import {
   parseSdkClientFrame,
   parseTypingFrame,
   buildSupersedeText,
+  buildOrphanAnswerText,
   interruptNote,
   NOTE_TURN_INTERRUPTED,
   NOTE_TURN_INTERRUPTED_EDIT,
@@ -506,31 +507,18 @@ describe("normalizeSlashCommands — the chat's \"/\" catalogue", () => {
 });
 
 /**
- * O IDIOMA DO RACIOCÍNIO vem do NAVEGADOR (localStorage), então ele atravessa o socket como um
- * frame comum — e um frame comum é entrada não confiável: ele termina num system prompt.
+ * O CONTROLE DE IDIOMA MORREU: ele só existia para pôr uma instrução de idioma no system prompt do
+ * driver, o gatilho do bloqueio do Opus. Uma aba aberta ANTES do deploy ainda manda o frame ao
+ * conectar — ele precisa sumir em silêncio: nem chegar ao driver, nem virar mensagem do usuário.
  */
-describe("parseSdkClientFrame — o controle de idioma", () => {
-  it("aceita um tag de idioma", () => {
-    expect(parseSdkClientFrame(JSON.stringify({ type: "language", language: "pt-BR" })))
-      .toEqual({ type: "language", language: "pt-BR" });
-  });
-
-  it("recusa o que não é tag: nada disso pode virar texto de system prompt", () => {
+describe("parseSdkClientFrame — o frame de idioma de uma aba antiga", () => {
+  it("é descartado (null), com ou sem tag", () => {
+    expect(parseSdkClientFrame(JSON.stringify({ type: "language", language: "pt-BR" }))).toBe(null);
     expect(parseSdkClientFrame(JSON.stringify({ type: "language" }))).toBe(null);
-    expect(parseSdkClientFrame(JSON.stringify({ type: "language", language: 42 }))).toBe(null);
-    expect(parseSdkClientFrame(JSON.stringify({ type: "language", language: { toString: 1 } }))).toBe(null);
   });
+});
 
-  it("um tag absurdamente longo é recusado — tag de idioma é curto, parágrafo não é", () => {
-    expect(parseSdkClientFrame(JSON.stringify({ type: "language", language: "x".repeat(33) }))).toBe(null);
-    expect(parseSdkClientFrame(JSON.stringify({ type: "language", language: "x".repeat(32) })))
-      .toEqual({ type: "language", language: "x".repeat(32) });
-  });
-
-  it("o driver recebe o controle inteiro (o encode não derruba o campo)", () => {
-    expect(encodeControl({ type: "language", language: "pt-BR" })).toBe('{"type":"language","language":"pt-BR"}\n');
-  });
-
+describe("parseSdkClientFrame — reanchor", () => {
   it("`reanchor` nasce no BACK, nunca no navegador: o parser de frames não o inventa", () => {
     expect(parseSdkClientFrame(JSON.stringify({ type: "reanchor" }))).toBe(null);
     // mas o back sabe escrevê-lo
@@ -558,5 +546,50 @@ describe("parseTypingFrame — o sinal efêmero de \"está digitando\"", () => {
     expect(parseTypingFrame(`{"type":"typing","active":"sim"}`)).toBe(false);
     // e o parser de controles não o confunde com uma mensagem do usuário
     expect(parseSdkClientFrame(`{"type":"typing","active":true}`)).toBe(null);
+  });
+});
+
+describe("parseDriverLine — tarefas em segundo plano", () => {
+  it("aceita o conjunto vivo de tarefas em segundo plano que o driver repassa", () => {
+    expect(parseDriverLine(`{"type":"background_tasks","tasks":[{"id":"b1","type":"local_bash","description":"Aguarda o deploy"}]}`))
+      .toEqual({ type: "background_tasks", tasks: [{ id: "b1", type: "local_bash", description: "Aguarda o deploy" }] });
+  });
+});
+
+describe("parseDriverLine — /clear", () => {
+  it("aceita o reset da conversa que o driver repassa", () => {
+    expect(parseDriverLine(`{"type":"conversation_reset","trigger":"clear"}`)).toEqual({ type: "conversation_reset", trigger: "clear" });
+  });
+});
+
+/**
+ * A PERGUNTA ÓRFÃ (produção, 2026-10-07): o driver morreu (deploy, crash, hibernação) com um cartão
+ * de pergunta de pé. O histórico redesenha o cartão como pendente, mas o driver novo nunca ouviu
+ * falar dele — a resposta clicada virava "no pending question with id …" e se perdia. A resposta
+ * agora chega ao modelo como MENSAGEM, e este é o texto dela.
+ */
+describe("buildOrphanAnswerText", () => {
+  it("quotes each question next to what the person chose — free text included", () => {
+    const text = buildOrphanAnswerText(
+      [
+        { question: "Onde entra a busca?", options: [{ label: "No cabeçalho" }] },
+        { question: "Como conto o prazo?", options: [], multiSelect: true },
+      ],
+      [{ selected: ["No cabeçalho"] }, { selected: ["72h", "pulando domingo"] }],
+    );
+    expect(text).toContain("«Onde entra a busca?» → No cabeçalho");
+    expect(text).toContain("«Como conto o prazo?» → 72h, pulando domingo");
+    // says WHY it is a message and not a tool answer — the model must not wait for a tool result
+    expect(text).toMatch(/^\[resposta/);
+  });
+
+  it("skips unanswered questions and survives a card whose questions are unknown", () => {
+    const text = buildOrphanAnswerText(
+      [{ question: "A?", options: [] }, { question: "B?", options: [] }],
+      [{ selected: [" "] }, { selected: ["sim"] }],
+    );
+    expect(text).not.toContain("«A?»");
+    expect(text).toContain("«B?» → sim");
+    expect(buildOrphanAnswerText(null, [{ selected: ["x"] }])).toContain("pergunta 1 → x");
   });
 });

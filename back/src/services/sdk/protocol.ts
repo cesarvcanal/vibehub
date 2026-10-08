@@ -95,6 +95,12 @@ export interface QuestionResultEvent {
   timedOut?: boolean;
   /** A pessoa respondeu POR MENSAGEM em vez de clicar: o cartão foi substituído pelo que ela disse. */
   superseded?: boolean;
+  /**
+   * PERGUNTA ÓRFÃ: as palavras com que a resposta chegou ao modelo (`buildOrphanAnswerText`). Não há
+   * linha `user` no histórico para ela — o cartão assentado é o registro visível —, então é ESTA a
+   * chave que impede o transcript de republicá-la como fala do terminal num replay.
+   */
+  sent?: string;
 }
 
 /**
@@ -175,6 +181,21 @@ export interface CatalogEvent { type: "catalog"; commands: SlashCommandInfo[] }
  * turn. Without this the chat swallowed the answer and the command looked like it did nothing.
  */
 export interface LocalOutputEvent { type: "local_output"; text: string }
+/** One live background task, as the driver forwards it from the CLI. */
+export interface BackgroundTaskInfo { id: string; type: string; description: string }
+/**
+ * O conjunto VIVO de tarefas em segundo plano (um Bash com `run_in_background`, um subagente, um
+ * monitor) — o trabalho que segue depois do `result` do turno. Sinal de NÍVEL vindo do CLI
+ * (`background_tasks_changed`): cada evento SUBSTITUI o anterior; vazio = nada rodando. Estado da
+ * sessão, como o catálogo: nunca entra no histórico.
+ */
+export interface BackgroundTasksEvent { type: "background_tasks"; tasks: BackgroundTaskInfo[] }
+/**
+ * O CLI ZEROU a conversa (`/clear`, ou outro fluxo de sessão nova): o modelo segue numa sessão NOVA,
+ * sem o contexto anterior. A tela e o log do card têm de esquecer a conversa antiga junto — senão o
+ * /clear parecia não ter funcionado, e o F5 trazia tudo de volta.
+ */
+export interface ConversationResetEvent { type: "conversation_reset"; trigger?: string }
 /** The driver is up and ready to accept the first user message. The back stamps `turnActive` on
  *  every `ready` it sends (real or synthesized on reattach) with the manager's live turn count, so
  *  a view mounting mid-turn knows work is running (reattach mid-turn: Terminal↔Chat during a turn
@@ -213,6 +234,8 @@ export type DriverEvent =
   | RewoundEvent
   | CatalogEvent
   | LocalOutputEvent
+  | BackgroundTasksEvent
+  | ConversationResetEvent
   | ResultEvent
   | ReadyEvent
   | DriverErrorEvent
@@ -235,6 +258,8 @@ const DRIVER_EVENT_TYPES = new Set([
   "rewound",
   "catalog",
   "local_output",
+  "background_tasks",
+  "conversation_reset",
   "result",
   "ready",
   "error",
@@ -303,19 +328,13 @@ export interface EditUserControl { type: "edit_user"; original: string; text: st
  * sdk-driver.mjs. Nasce no back (espelho), nunca no navegador.
  */
 export interface ReanchorControl { type: "reanchor" }
-/**
- * O idioma da INTERFACE, que decide em que língua o modelo escreve o RACIOCÍNIO. Mora no navegador
- * (localStorage), então chega pelo socket e vale do turno seguinte, sem respawn do driver.
- */
-export interface LanguageControl { type: "language"; language: string }
 export type DriverControl =
   | UserControl
   | InterruptControl
   | PermissionDecisionControl
   | QuestionAnswerControl
   | EditUserControl
-  | ReanchorControl
-  | LanguageControl;
+  | ReanchorControl;
 
 /**
  * The supersede wrapper an EDITED message wears on its way to the MODEL. The original was already
@@ -333,12 +352,40 @@ export function buildSupersedeText(original: string, text: string): string {
 }
 
 /**
+ * The answer to an ORPHANED question card, on its way to the model as a plain user message.
+ *
+ * The driver that asked died (a deploy, a crash, a hibernate) and its successor never heard of the
+ * card — there is no tool call left to answer. The choices still matter, so they travel as words:
+ * each question quoted next to what was chosen, so the resumed model knows exactly what it reads.
+ * `questions` null = the card's text is gone from the history; the answers still go. pt-BR for the
+ * same reason as the supersede wrapper: it is the user's own speech act. PURE.
+ */
+export function buildOrphanAnswerText(questions: UserQuestionItem[] | null, answers: UserQuestionAnswer[]): string {
+  const lines: string[] = [];
+  answers.forEach((answer, i) => {
+    const chosen = (Array.isArray(answer?.selected) ? answer.selected : [])
+      .map((s) => (typeof s === "string" ? s.trim() : ""))
+      .filter((s) => s !== "");
+    if (chosen.length === 0) return;
+    const question = questions?.[i]?.question;
+    lines.push(`- ${question ? `«${question}»` : `pergunta ${i + 1}`} → ${chosen.join(", ")}`);
+  });
+  return (
+    `[resposta às suas perguntas — o processo reiniciou antes de a resposta chegar à ferramenta, ` +
+    `então ela vem por mensagem; siga com estas escolhas:]\n\n` +
+    lines.join("\n")
+  );
+}
+
+/**
  * The conversation NOTES the back writes when a turn is cut short. They travel as CODES, not
  * prose: the front translates them (like `terminal-activity`), so the same log reads in pt-BR and
  * in English, and a replay after F5 still explains why the answer above stops mid-sentence.
  */
 export const NOTE_TURN_INTERRUPTED = "turn-interrupted";
 export const NOTE_TURN_INTERRUPTED_EDIT = "turn-interrupted-edit";
+/** A nota que fica no lugar da conversa apagada por um `/clear`. Código, traduzido pelo front. */
+export const NOTE_CONVERSATION_CLEARED = "conversation-cleared";
 
 /** Which note narrates a stop. PURE. */
 export function interruptNote(control: InterruptControl): string {
@@ -391,13 +438,6 @@ export function parseSdkClientFrame(raw: string): DriverControl | null {
         parsed.text.trim() !== ""
       ) {
         return { type: "edit_user", original: (parsed as { original: string }).original, text: parsed.text, cid: frameCid(parsed) };
-      }
-      if (parsed.type === "language") {
-        // Um tag curto e nada mais: ele vai parar num system prompt, e o driver só reconhece os
-        // idiomas que o painel traduz (o resto vira o padrão do modelo). Nunca vem do driver.
-        const language = (parsed as { language?: unknown }).language;
-        if (typeof language === "string" && language.length <= 32) return { type: "language", language };
-        return null;
       }
       return null;
     } catch {

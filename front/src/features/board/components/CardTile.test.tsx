@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CardTile } from "@/features/board/components/CardTile";
 import { get } from "@/lib/api";
@@ -339,5 +339,75 @@ describe("CardTile — on its way out", () => {
   it("offers no actions menu on a card being deleted", () => {
     renderApp(<CardTile card={card()} onOpen={vi.fn()} onDelete={vi.fn()} onDone={vi.fn()} deleting />);
     expect(screen.queryByRole("button", { name: /actions for/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("CardTile — the countdown on a done card", () => {
+  const HOUR = 60 * 60_000;
+  /** The install says done cards live one day (GET /api/features). */
+  function withRetention(days: number | undefined): void {
+    vi.mocked(get).mockImplementation(async (url: string) =>
+      url === "/features" ? { sdkChat: true, ...(days === undefined ? {} : { doneRetentionDays: days }) } : {},
+    );
+  }
+  /** Lets the features query answer INSIDE act, so asserting an absence is not just asserting "too early". */
+  const settle = () =>
+    act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.mocked(get).mockResolvedValue({});
+  });
+
+  it("says how long a done card has before the server deletes it", async () => {
+    withRetention(1);
+    // Done 90 minutes ago: 22h30 left, printed in whole hours.
+    renderApp(<CardTile card={card({ column: "done", doneAt: Date.now() - 90 * 60_000 })} onOpen={vi.fn()} />);
+    expect(await screen.findByText("Deleted in 22 h")).toBeInTheDocument();
+  });
+
+  it("explains the rule in the tooltip — with the worktree and the attachments, and how to keep it", async () => {
+    withRetention(1);
+    renderApp(<CardTile card={card({ column: "done", doneAt: Date.now() - HOUR })} onOpen={vi.fn()} />);
+    const line = await screen.findByText(/Deleted in/);
+    expect(line).toHaveAttribute("title", expect.stringMatching(/1 day without activity/));
+    expect(line).toHaveAttribute("title", expect.stringMatching(/attachments/));
+    // Opening a card is not activity on the server's clock — the tooltip must not let anyone think so.
+    expect(line).toHaveAttribute("title", expect.stringMatching(/just opening it does not/));
+  });
+
+  it("past the deadline it says 'any moment now' (the hourly sweep has not reached it yet)", async () => {
+    withRetention(1);
+    renderApp(<CardTile card={card({ column: "done", doneAt: Date.now() - 30 * HOUR })} onOpen={vi.fn()} />);
+    expect(await screen.findByText("Deleted any moment now")).toBeInTheDocument();
+  });
+
+  it("keeps counting while the board is open — minutes in the last hour", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    withRetention(1);
+    // 61 minutes left.
+    renderApp(<CardTile card={card({ column: "done", doneAt: Date.now() - 24 * HOUR + 61 * 60_000 })} onOpen={vi.fn()} />);
+    expect(await screen.findByText("Deleted in 1 h")).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(3 * 60_000);
+    });
+    expect(screen.getByText("Deleted in 58 min")).toBeInTheDocument();
+  });
+
+  it("says nothing outside done — no other column is ever deleted", async () => {
+    withRetention(1);
+    renderApp(<CardTile card={card({ column: "working", doneAt: undefined, updatedAt: Date.now() })} onOpen={vi.fn()} />);
+    // Let the features query settle before asserting an absence.
+    await screen.findByRole("link", { name: "fix the totals" });
+    await settle();
+    expect(screen.queryByText(/Deleted/)).not.toBeInTheDocument();
+  });
+
+  it("says nothing while the retention is unknown — no countdown beats a wrong one", async () => {
+    withRetention(undefined);
+    renderApp(<CardTile card={card({ column: "done", doneAt: Date.now() - HOUR })} onOpen={vi.fn()} />);
+    await settle();
+    expect(screen.queryByText(/Deleted/)).not.toBeInTheDocument();
   });
 });

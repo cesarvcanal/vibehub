@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Check, Lock, LockOpen, Moon, MoreHorizontal, Pause, RotateCw, Share2, Trash2, Users } from "lucide-react";
 import { cn, isNewTabClick } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,8 @@ import {
   useContextMenuPoint,
   type ContextMenuItem,
 } from "@/features/board/components/ContextMenu";
-import type { BoardCard } from "@/features/board/api";
+import { boardApi, FEATURES_KEY, type BoardCard } from "@/features/board/api";
+import { donePurgeAt, purgeCountdown } from "@/features/board/lib/doneRetention";
 import { useT } from "@/i18n";
 import { useAuth } from "@/providers/auth";
 import { ShareDialog } from "@/features/board/components/ShareDialog";
@@ -247,6 +249,9 @@ export function CardTile({
           </div>
         ) : null}
 
+        {/* A done card is deleted by the server after a day untouched: it says when. */}
+        {card.column === "done" && !deleting ? <PurgeCountdownLine card={card} /> : null}
+
         {/* What the AGENT said about its own work (vibehub_report), colour-coded. The one-line
             summary rides in the tooltip; with no summary the tooltip repeats the state label. */}
         {stateChip ? (
@@ -329,6 +334,65 @@ export function CardTile({
         <ShareDialog kind="card" targetId={card.id} title={card.title} open onOpenChange={setShareOpen} />
       ) : null}
     </a>
+  );
+}
+
+/** How often the countdown re-reads the clock. Minutes are its finest unit. */
+const COUNTDOWN_TICK_MS = 30_000;
+
+/**
+ * ONE clock for every countdown on the board: a column of 128 done cards runs one interval, not
+ * 128, and their updates land in the same callback, so React renders them as one batch. The timer
+ * exists only while some countdown is mounted.
+ */
+const countdownListeners = new Set<() => void>();
+let countdownTimer: ReturnType<typeof setInterval> | null = null;
+
+function onCountdownTick(listener: () => void): () => void {
+  countdownListeners.add(listener);
+  countdownTimer ??= setInterval(() => countdownListeners.forEach((l) => l()), COUNTDOWN_TICK_MS);
+  return () => {
+    countdownListeners.delete(listener);
+    if (countdownListeners.size === 0 && countdownTimer) {
+      clearInterval(countdownTimer);
+      countdownTimer = null;
+    }
+  };
+}
+
+/**
+ * "Deleted in 22 h" under a done card — the server's retention (GET /api/features), counted from
+ * the same stamps the server counts from (lib/doneRetention). Mounted only on done cards, so the
+ * other columns run neither the query nor the timer. Renders NOTHING while the retention is
+ * unknown or off: no countdown beats a wrong one.
+ */
+function PurgeCountdownLine({ card }: { card: BoardCard }) {
+  const t = useT();
+  const features = useQuery({ queryKey: FEATURES_KEY, queryFn: boardApi.features, staleTime: 60_000 });
+  const retentionDays = features.data?.doneRetentionDays;
+  const purgeAt = donePurgeAt(card, retentionDays);
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    if (purgeAt === null) return undefined;
+    setNow(Date.now());
+    return onCountdownTick(() => setNow(Date.now()));
+  }, [purgeAt]);
+  if (purgeAt === null || retentionDays === undefined) return null;
+
+  const left = purgeCountdown(purgeAt, now);
+  const label =
+    left.unit === "now"
+      ? t("card.purgeSoon")
+      : t("card.purgeIn", {
+          time: t(
+            left.unit === "days" ? "card.purgeDays" : left.unit === "hours" ? "card.purgeHours" : "card.purgeMinutes",
+            { n: left.value },
+          ),
+        });
+  return (
+    <div title={t("card.purgeHint", { n: retentionDays })} className="mt-0.5 text-[11px] text-muted-foreground/80">
+      {label}
+    </div>
   );
 }
 

@@ -51,16 +51,6 @@ const INITIAL_RESUME = argOf("--resume"); // a stored session_id to continue on 
 const MODEL = argOf("--model");
 // Mirror of `parseGateMode` in protocol.ts: anything unrecognised falls back to the STRICTER mode.
 const GATE_MODE = argOf("--permission-gate") === "same-as-terminal" ? "same-as-terminal" : "ask-sensitive";
-/**
- * EM QUE IDIOMA O MODELO PENSA. O raciocínio aparece na tela ("Raciocínio") e vinha em inglês para
- * todo mundo — numa equipe em que nem todos leem inglês, é tela morta.
- *
- * Segue o idioma da INTERFACE, que mora no NAVEGADOR (localStorage) e por isso não existe na hora
- * do spawn: ele chega pelo controle `language` assim que um chat conecta, e vale do turno seguinte
- * (`baseOptions()` é relido a cada `runStream`) — sem respawn. Começa nulo: o padrão do modelo.
- */
-let reasoningLanguage = null;
-
 /* ------------------------------------------------------------- output */
 
 function emit(event) {
@@ -394,42 +384,6 @@ function userMessage(text) {
   return { type: "user", message: { role: "user", content: text }, parent_tool_use_id: null };
 }
 
-/**
- * O idioma pedido, reduzido ao que o painel tem tradução (ver front/src/i18n). Qualquer outra coisa
- * — undefined, lixo, um tag que não conhecemos — vira `null`: o padrão do modelo, nunca um palpite.
- * PURA, TOTAL.
- */
-function normalizeLanguage(tag) {
-  if (typeof tag !== "string") return null;
-  const t = tag.trim().toLowerCase();
-  if (t === "pt" || t.startsWith("pt-")) return "pt-BR";
-  if (t === "en" || t.startsWith("en-")) return "en";
-  return null;
-}
-
-/**
- * A instrução que faz o RACIOCÍNIO sair no idioma da interface, anexada ao system prompt do preset.
- * Fala só do raciocínio: a resposta já segue o idioma de quem escreveu, e mandar no texto visível
- * atropelaria quem pede resposta em outra língua. Inglês (e desconhecido) não anexa nada — é o
- * padrão do modelo, e um parágrafo a mais no system prompt tem custo sem troco. PURA, TOTAL.
- *
- * NÃO nomeia o mecanismo interno ("thinking blocks", "chain of thought"): o classificador de
- * segurança `reasoning_extraction` do Opus tem um histórico documentado de falso positivo quando o
- * prompt fala explicitamente sobre COMO o raciocínio bruto do modelo deve ser tratado — inclusive
- * disparando ao citar o próprio raciocínio que a tela já mostra (claude-code#93584) ou mesmo sem
- * nenhum conteúdo de risco aparente (claude-code#89503, #95275). "Raciocínio" em português é
- * instrução de IDIOMA, não sobre o mecanismo — card #3684, Opus bloqueando toda mensagem do chat.
- */
-function reasoningInstruction(language) {
-  if (language !== "pt-BR") return "";
-  return (
-    "Escreva seu raciocínio sempre em português do Brasil, mesmo que o código, as mensagens de " +
-    "erro, a documentação ou a pergunta estejam em inglês. Quem acompanha seu raciocínio nesta " +
-    "tela não necessariamente lê inglês. Termos técnicos e nomes próprios (arquivos, comandos, " +
-    "APIs) ficam como são — traduza o raciocínio, não o vocabulário."
-  );
-}
-
 function baseOptions() {
   const opts = {
     cwd: CWD,
@@ -449,11 +403,10 @@ function baseOptions() {
     settingSources: ["user", "project", "local"],
     // The TUI's system prompt (Claude Code's own), which is also what loads CLAUDE.md — the brain
     // at the profile root and the repo's. Without it the driver ran on the bare SDK prompt.
-    // `append` e não um prompt próprio: trocar o preset custaria o CLAUDE.md e as ferramentas do
-    // Claude Code. Relido a cada `runStream`, então trocar o idioma vale do turno seguinte.
-    systemPrompt: reasoningInstruction(reasoningLanguage) === ""
-      ? { type: "preset", preset: "claude_code" }
-      : { type: "preset", preset: "claude_code", append: reasoningInstruction(reasoningLanguage) },
+    // NADA anexado, em idioma nenhum: uma instrução sobre o raciocínio aqui era o gatilho do
+    // bloqueio `[reasoning_extraction]` do Opus (card #3684). O raciocínio é traduzido no NAVEGADOR,
+    // só na exibição — ver front/src/features/board/lib/reasoningTranslation.ts.
+    systemPrompt: { type: "preset", preset: "claude_code" },
     hooks: { PreToolUse: [{ hooks: [preToolUse] }] },
     // AskUserQuestion always lands here (every permission mode) — the chat's question card.
     canUseTool,
@@ -549,6 +502,10 @@ let currentQuery = null; // the live query() iterator, so an interrupt can reach
 let channel = null; // feeds the live query's prompt stream (null = no stream running)
 let turnActive = false; // a turn is running, or a message is already fed and about to start one
 let announcedSessionId = null; // last session id emitted as a `session` event (dedupe)
+// O stream (= processo do CLI) que anunciou o conjunto NÃO VAZIO de tarefas em segundo plano que a
+// tela está mostrando agora. Quando ESSE processo morre, as tarefas morrem com ele — e o CLI, morto,
+// não manda o aviso de conjunto vazio: quem manda é o driver (ver o `finally` de `runStream`).
+let backgroundTasksOwner = null;
 
 /* ------------------------------------------------- rewind (editar = voltar no tempo) */
 // Editing a message REWINDS the conversation: the session resumes at the point right before that
@@ -754,11 +711,35 @@ async function runStream() {
           }
         } else if (msg.subtype === "commands_changed") {
           emitCatalogChanged(msg.commands);
+        } else if (msg.subtype === "background_tasks_changed" && Array.isArray(msg.tasks)) {
+          // TAREFAS EM SEGUNDO PLANO (um Bash com run_in_background, um subagente, um monitor): o
+          // turno fecha e elas seguem. Sem este aviso o chat apagava o "Trabalhando…" no `result` e
+          // ficava mudo por minutos — lido do outro lado como "ele parou" (produção, 2026-10-07).
+          // É um sinal de NÍVEL: o conjunto inteiro a cada mudança, para SUBSTITUIR, nunca somar.
+          const tasks = msg.tasks
+            .filter((t) => t && typeof t.task_id === "string")
+            .map((t) => ({
+              id: t.task_id,
+              type: typeof t.task_type === "string" ? t.task_type : "",
+              description: typeof t.description === "string" ? t.description : "",
+            }));
+          backgroundTasksOwner = tasks.length > 0 ? myQuery : null;
+          emit({ type: "background_tasks", tasks });
         } else if (msg.subtype === "local_command_output" && typeof msg.content === "string") {
           // A command the CLI answers itself (/cost, /usage): no turn, no assistant message — the
           // answer exists ONLY here, and swallowing it makes the command look broken.
           if (msg.content.trim() !== "") emit({ type: "local_output", text: msg.content });
         }
+      } else if (msg.type === "conversation_reset") {
+        // /clear (ou outro fluxo de "sessão nova" do CLI): o modelo começa do zero numa sessão NOVA
+        // — a próxima mensagem `system` traz o id dela, e o `session` sai por lá. O que este driver
+        // guardava da conversa antiga morre aqui: um ponto de volta dela, usado num editar depois
+        // do /clear, rebobinaria a sessão nova para dentro da conversa que acabou de ser apagada.
+        lastAssistantUuid = null;
+        forkPoint = null;
+        forkText = null;
+        absorbedSinceFork = false;
+        emit({ type: "conversation_reset", trigger: typeof msg.trigger === "string" ? msg.trigger : "clear" });
       } else if (msg.type === "stream_event") {
         const ev = msg.event;
         if (ev && ev.type === "content_block_delta" && ev.delta && ev.delta.type === "text_delta") {
@@ -823,6 +804,12 @@ async function runStream() {
     // custa uma comparação e no caminho normal não muda nada.
     const stillOurs = currentQuery === myQuery;
     if (stillOurs) closeTurnAborted();
+    // O processo do CLI deste stream acabou, e as tarefas em segundo plano dele com ele: o conjunto
+    // que a tela mostra volta a vazio — senão o "rodando em segundo plano" ficava aceso para sempre.
+    if (backgroundTasksOwner !== null && backgroundTasksOwner === myQuery) {
+      backgroundTasksOwner = null;
+      emit({ type: "background_tasks", tasks: [] });
+    }
     if (channel === myChannel) channel = null;
     if (closingQuery === myQuery) closingQuery = null;
     if (stillOurs) {
@@ -1081,6 +1068,13 @@ async function endStream() {
     currentQuery = null;
     ultraRaised = null; // pinned in that CLI's flag layer, which is no longer ours to give back
     closeTurnAborted();
+    // As tarefas em segundo plano dele também deixam de ser nossas: o que ele ainda anunciar é só
+    // drenado (inclusive o `[]` de quando elas acabam), e o `finally` dele pode nunca rodar — um
+    // processo pendurado deixava a faixa acesa e o driver "ocupado" para sempre.
+    if (backgroundTasksOwner === dying) {
+      backgroundTasksOwner = null;
+      emit({ type: "background_tasks", tasks: [] });
+    }
     if (closingQuery === dying) closingQuery = null;
     trace("stream did not let go within the teardown window — disowned, its errors are news again");
   }
@@ -1236,11 +1230,6 @@ rl.on("line", (line) => {
   if (control && control.type === "reanchor") {
     // O back viu o transcript andar fora do chat (espelho da aba Terminal). Só marca — ver `staleView`.
     staleView = true;
-    return;
-  }
-  if (control && control.type === "language") {
-    // Idioma da interface, ao vivo: vale do próximo turno, sem respawn.
-    reasoningLanguage = normalizeLanguage(control.language);
     return;
   }
   if (control && control.type === "permission_decision" && typeof control.id === "string") {

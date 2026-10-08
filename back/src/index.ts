@@ -28,7 +28,7 @@ import { trackSessionSockets } from "./auth/sessionSockets.js";
 import { cardSdkRoutes } from "./routes/cardSdk.js";
 import { startPauseReconciler, sweepCardUploads, sweepIdleCards } from "./services/board/workspace.js";
 import { sweepOrphanCardData } from "./services/board/purge.js";
-import { sweepDoneCards } from "./services/board/retention.js";
+import { sweepDoneCards, DONE_SWEEP_INTERVAL_MS } from "./services/board/retention.js";
 import { startOutboxFlusher } from "./services/board/outbox.js";
 import { startRunnerReaper } from "./services/reaper/reaper.js";
 import { shutdownAllDrivers } from "./services/sdk/manager.js";
@@ -176,19 +176,14 @@ function startOrphanSweep(): NodeJS.Timeout {
 }
 
 /**
- * How often the done-card retention runs. ONCE A DAY, like the other retention sweeps: what it
- * deletes has been finished for six months, so there is no version of this that needs to be prompt.
- */
-const DONE_RETENTION_SWEEP_MS = 24 * 60 * 60_000;
-
-/**
- * The cards nobody has touched in `done` for six months (see `DONE_RETENTION_DAYS`): purged, not
- * hidden — with their worktree, their branch and their conversation. Runs once at boot too, so an
- * install restarted more often than daily still sweeps; the pass is capped and logged.
+ * The cards nobody has touched in `done` for a day (see `DONE_RETENTION_DAYS`): purged, not
+ * hidden — with their worktree, their branch, their uploads and their conversation. Runs once at
+ * boot and then HOURLY (`DONE_SWEEP_INTERVAL_MS`), so the countdown on the card holds; the pass is
+ * capped and logged.
  */
 function startDoneRetentionSweep(): NodeJS.Timeout {
   void sweepDoneCards();
-  const timer = setInterval(() => void sweepDoneCards(), DONE_RETENTION_SWEEP_MS);
+  const timer = setInterval(() => void sweepDoneCards(), DONE_SWEEP_INTERVAL_MS);
   timer.unref?.();
   return timer;
 }

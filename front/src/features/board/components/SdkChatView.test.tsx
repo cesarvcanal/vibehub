@@ -2,13 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { act } from "react";
-import { OUTBOX_TICK_MS, SdkChatView } from "@/features/board/components/SdkChatView";
+import { OUTBOX_TICK_MS, SdkChatView, resetQuestionDraftsForTesting } from "@/features/board/components/SdkChatView";
 import { OUTBOX_ACK_TIMEOUT_MS } from "@/features/board/lib/sdkOutbox";
 import { RECONNECT_MAX_MS } from "@/features/board/lib/reconnect";
 import { PEER_TYPING_TTL_MS } from "@/features/board/lib/peerTyping";
 import { renderApp } from "@/test/render";
 import type { SdkEvent } from "@/features/board/lib/sdkChat";
 import { resetLanguage, setLanguage } from "@/i18n";
+import { resetReasoningTranslatorForTesting } from "@/features/board/lib/reasoningTranslation";
 import { get } from "@/lib/api";
 import { LinkifiedText } from "@/features/board/components/ChatView";
 import { resetDraftsForTesting } from "@/features/board/components/TerminalComposer";
@@ -50,15 +51,14 @@ class FakeSocket {
   /** TUDO que saiu pelo socket, handshake incluído — o que os testes do handshake leem. */
   rawSent: string[] = [];
   /**
-   * Os frames da CONVERSA. O idioma do raciocínio é dito uma vez na abertura (setup de sessão, não
-   * fala de ninguém): contá-lo aqui faria cada teste que mede "saiu UMA mensagem" medir duas.
+   * Os frames da CONVERSA. O `typing` é sinal efêmero entre abas, não fala de ninguém: contá-lo aqui
+   * faria cada teste que mede "saiu UMA mensagem" medir duas.
    */
   get sent(): string[] {
     return this.rawSent.filter((raw) => {
       try {
         const type = (JSON.parse(raw) as { type?: string }).type;
-        // `typing` é da mesma natureza: sinal efêmero entre abas, não fala de ninguém.
-        return type !== "language" && type !== "typing";
+        return type !== "typing";
       } catch { return true; }
     });
   }
@@ -103,6 +103,7 @@ beforeEach(() => {
   // propósito) — e todo teste aqui é o card "c1": o que um teste deixou no campo era digitado no
   // seguinte ("vai pelo A mesmoinstrução longa", com a ordem embaralhada).
   resetDraftsForTesting();
+  resetQuestionDraftsForTesting();
   FakeSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeSocket);
 });
@@ -489,6 +490,69 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
     await userEvent.click(screen.getByRole("button", { name: "Detalhado" }));
     const frame = ws.sent.map((s) => JSON.parse(s)).find((f) => f.type === "question_answer");
     expect(frame).toEqual({ type: "question_answer", id: "q_1", answers: [{ selected: ["Detalhado"] }] });
+  });
+
+  /**
+   * O RECONNECT APAGAVA O CARTÃO (produção, 2026-10-07). Todo connect limpa a tela e o replay a
+   * redesenha do disco — o cartão desmonta e remonta, e o que a pessoa já tinha marcado e escrito
+   * vivia no estado local dele. Um deploy no meio de três perguntas = tudo de novo, do zero.
+   */
+  it("o que foi marcado e escrito no cartão sobrevive ao reconnect", async () => {
+    renderSdkChat();
+    const first = await socket();
+    first.accept();
+    first.deliver({ type: "ready" });
+    const MULTI = {
+      type: "user_question" as const,
+      id: "q_3_1791402112898",
+      questions: [
+        { question: "Onde entra a busca?", options: [{ label: "No cabeçalho" }, { label: "No item" }] },
+        { question: "Como conto o prazo?", options: [{ label: "72h corridas" }] },
+      ],
+    };
+    first.deliver(MULTI);
+    await userEvent.click(screen.getByRole("button", { name: "No item" }));
+    await userEvent.type(screen.getAllByTestId("sdk-question-other")[1]!, "72h pulando domingo");
+
+    act(() => { first.readyState = 3; first.onclose?.(); }); // o deploy derruba o fio
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: RECONNECT_MAX_MS });
+    const second = FakeSocket.instances[1] as FakeSocket;
+    second.accept();
+    second.deliver(MULTI); // o replay redesenha o cartão do disco
+    second.deliver({ type: "ready" });
+
+    expect(screen.getByRole("button", { name: "No item" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getAllByTestId("sdk-question-other")[1]).toHaveValue("72h pulando domingo");
+  });
+
+  /** Achado F3 da revisão do PR #98: a resposta saiu, o driver morreu antes de recebê-la. */
+  it("respondeu e o fio caiu antes da confirmação: o cartão volta pendente COM o que foi marcado", async () => {
+    renderSdkChat();
+    const first = await socket();
+    first.accept();
+    first.deliver({ type: "ready" });
+    const MULTI = {
+      type: "user_question" as const,
+      id: "q_4_1",
+      questions: [
+        { question: "Onde entra a busca?", options: [{ label: "No cabeçalho" }, { label: "No item" }] },
+        { question: "Como conto o prazo?", options: [{ label: "72h corridas" }] },
+      ],
+    };
+    first.deliver(MULTI);
+    await userEvent.click(screen.getByRole("button", { name: "No item" }));
+    await userEvent.type(screen.getAllByTestId("sdk-question-other")[1]!, "72h pulando domingo");
+    await userEvent.click(screen.getByTestId("sdk-question-send"));
+
+    act(() => { first.readyState = 3; first.onclose?.(); }); // nenhum question_result voltou
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: RECONNECT_MAX_MS });
+    const second = FakeSocket.instances[1] as FakeSocket;
+    second.accept();
+    second.deliver(MULTI);
+    second.deliver({ type: "ready" });
+
+    expect(screen.getByRole("button", { name: "No item" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getAllByTestId("sdk-question-other")[1]).toHaveValue("72h pulando domingo");
   });
 
   it("a timed-out question replays settled as unanswered", async () => {
@@ -2656,59 +2720,111 @@ describe("SdkChatView — o painel da frota do Workflow", () => {
 });
 
 /**
- * EM QUE IDIOMA A IA PENSA. O bloco "Raciocínio" saía sempre em inglês, e nem todo mundo na
- * operação lê inglês. O idioma mora NESTE navegador (localStorage), e o driver é do servidor: se o
- * chat não contar, ninguém conta.
+ * O RACIOCÍNIO TRADUZIDO NA TELA. O modelo não recebe mais instrução de idioma (era o gatilho do
+ * bloqueio do Opus, e nem funcionava sempre): o navegador traduz o bloco TERMINADO, com o tradutor
+ * local do Chrome/Edge — zero token. Sem a API, o original, e nada quebra.
  */
-describe("SdkChatView — o idioma do raciocínio", () => {
+describe("SdkChatView — o raciocínio traduzido no navegador", () => {
+  const translate = vi.fn(async (text: string) => `[pt] ${text}`);
+  const Translator = {
+    availability: vi.fn(async () => "available"),
+    create: vi.fn(async () => ({ translate })),
+  };
+  const LanguageDetector = {
+    availability: vi.fn(async () => "available"),
+    create: vi.fn(async () => ({ detect: async () => [{ detectedLanguage: "en", confidence: 0.99 }] })),
+  };
+
+  beforeEach(() => {
+    resetReasoningTranslatorForTesting();
+    translate.mockClear();
+    vi.stubGlobal("Translator", Translator);
+    vi.stubGlobal("LanguageDetector", LanguageDetector);
+  });
   // O idioma é global e persistido: deixá-lo trocado vazaria para os outros arquivos de teste.
-  afterEach(() => { resetLanguage(); });
-
-  it("conta o idioma ao abrir, ANTES de qualquer mensagem — o socket entrega em ordem", async () => {
-    setLanguage("pt-BR");
-    renderSdkChat();
-    const ws = await socket();
-    ws.accept();
-    ws.deliver({ type: "ready" });
-
-    await waitFor(() => expect(ws.rawSent.length).toBeGreaterThan(0));
-    expect(JSON.parse(ws.rawSent[0]!)).toEqual({ type: "language", language: "pt-BR" });
-
-    const box = screen.getByRole("textbox");
-    await userEvent.type(box, "oi{Enter}");
-    await waitFor(() => expect(ws.sent.length).toBe(1));
-    // o idioma veio primeiro: o PRIMEIRO turno já pensa no idioma certo (o "digitando", efêmero,
-    // pode sair entre os dois — o que importa é a ordem idioma → turno)
-    const frames = ws.rawSent.map((raw) => JSON.parse(raw) as { type: string });
-    expect(frames[0]!.type).toBe("language");
-    const turn = frames.findIndex((f) => f.type === "user");
-    expect(turn).toBeGreaterThan(0);
-    expect(frames[turn]).toMatchObject({ type: "user", text: "oi" });
+  // os globais (Translator, LanguageDetector) o afterEach de fora desfaz, junto com o WebSocket
+  afterEach(() => {
+    resetReasoningTranslatorForTesting();
+    act(() => resetLanguage());
   });
 
-  it("trocar o idioma com o card ABERTO reconta na hora — sem esperar um reconnect", async () => {
-    setLanguage("pt-BR");
+  async function thinkingDone(text: string): Promise<FakeSocket> {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
     ws.deliver({ type: "ready" });
-    await waitFor(() => expect(ws.rawSent.length).toBe(1));
+    ws.deliver({ type: "thinking_delta", text: "Let me" } as SdkEvent);
+    await screen.findByTestId("sdk-thinking-text");
+    ws.deliver({ type: "thinking", text } as SdkEvent);
+    return ws;
+  }
 
-    act(() => setLanguage("en"));
-
-    await waitFor(() => expect(ws.rawSent.length).toBe(2));
-    expect(JSON.parse(ws.rawSent[1]!)).toEqual({ type: "language", language: "en" });
+  it("em pt-BR, o bloco TERMINADO aparece traduzido", async () => {
+    setLanguage("pt-BR");
+    await thinkingDone("I need to check how roles work.");
+    await waitFor(() =>
+      expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("[pt] I need to check how roles work."),
+    );
   });
 
-  it("o handshake não é conversa: ele não vira bolha nem conta como mensagem enviada", async () => {
+  it("enquanto o bloco ainda chega, mostra o original — traduzir pedaço a pedaço faria o texto pular", async () => {
     setLanguage("pt-BR");
     renderSdkChat();
     const ws = await socket();
     ws.accept();
     ws.deliver({ type: "ready" });
-    await waitFor(() => expect(ws.rawSent.length).toBe(1));
-    expect(ws.sent).toHaveLength(0);
-    expect(screen.queryByText(/language/i)).toBeNull();
+    ws.deliver({ type: "thinking_delta", text: "Still thinking" } as SdkEvent);
+    expect(await screen.findByTestId("sdk-thinking-text")).toHaveTextContent("Still thinking");
+    expect(translate).not.toHaveBeenCalled();
+  });
+
+  it("\"ver original\" mostra o texto como veio, e volta para a tradução", async () => {
+    setLanguage("pt-BR");
+    await thinkingDone("I will check the reasoning.");
+    const toggle = await screen.findByTestId("sdk-thinking-original-toggle");
+    await userEvent.click(toggle);
+    expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent(/^I will check the reasoning\.$/);
+    await userEvent.click(screen.getByTestId("sdk-thinking-original-toggle"));
+    expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("[pt] I will check the reasoning.");
+  });
+
+  it("interface em inglês: o original, e o tradutor nem é chamado", async () => {
+    setLanguage("en");
+    await thinkingDone("I will check the reasoning.");
+    await waitFor(() => expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("I will check the reasoning."));
+    expect(translate).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("sdk-thinking-original-toggle")).toBeNull();
+  });
+
+  it("navegador sem a API (Firefox): o original, sem botão e sem erro", async () => {
+    vi.stubGlobal("Translator", undefined);
+    vi.stubGlobal("LanguageDetector", undefined);
+    resetReasoningTranslatorForTesting();
+    setLanguage("pt-BR");
+    await thinkingDone("I will check the reasoning.");
+    await waitFor(() => expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("I will check the reasoning."));
+    expect(screen.queryByTestId("sdk-thinking-original-toggle")).toBeNull();
+  });
+
+  // LOW-4 da revisão: baixar o modelo CONSOME o gesto. No pointerdown em captura, o primeiro clique
+  // da pessoa perdia o gesto antes do próprio app (popup, tela cheia). No click, o app já agiu.
+  it("o tradutor é preparado no click, DEPOIS do app — nunca no pointerdown em captura", async () => {
+    setLanguage("pt-BR");
+    renderSdkChat();
+    await socket();
+    Translator.create.mockClear();
+    fireEvent.pointerDown(document.body);
+    expect(Translator.create).not.toHaveBeenCalled();
+    fireEvent.click(document.body);
+    expect(Translator.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("o socket não manda mais idioma nenhum — nada sobre o raciocínio chega ao modelo", async () => {
+    setLanguage("pt-BR");
+    const ws = await thinkingDone("I will check the reasoning.");
+    await userEvent.type(screen.getByRole("textbox"), "oi{Enter}");
+    await waitFor(() => expect(ws.rawSent.some((raw) => raw.includes('"user"'))).toBe(true));
+    expect(ws.rawSent.some((raw) => raw.includes('"language"'))).toBe(false);
   });
 });
 
@@ -2959,5 +3075,52 @@ describe("SdkChatView — o custo do transcript", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("SdkChatView — tarefas em segundo plano", () => {
+  it("o turno acabou mas a tarefa segue: o chat DIZ que há trabalho rodando, e para de dizer quando ela termina", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { command: "sleep 200 && echo ok", run_in_background: true } });
+    ws.deliver({ type: "background_tasks", tasks: [{ id: "b1", type: "local_bash", description: "Aguarda o self-deploy" }] });
+    ws.deliver({ type: "assistant_text", text: "Vou aguardar o deploy." });
+    ws.deliver({ type: "result", isError: false });
+
+    const tray = await screen.findByTestId("sdk-background-tasks");
+    expect(tray).toHaveTextContent("Aguarda o self-deploy");
+    expect(tray).toHaveTextContent(/background/i);
+
+    ws.deliver({ type: "background_tasks", tasks: [] });
+    await waitFor(() => expect(screen.queryByTestId("sdk-background-tasks")).toBeNull());
+  });
+
+  it("uma tarefa sem descrição não derruba o chat: aparece com um nome genérico", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "background_tasks", tasks: [{ id: "b1" } as never] });
+    const tray = await screen.findByTestId("sdk-background-tasks");
+    expect(tray).toHaveTextContent(/background task/i);
+  });
+});
+
+describe("SdkChatView — /clear", () => {
+  it("o /clear limpa a conversa da tela e diz que o Claude começou do zero", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "assistant_text", text: "Resposta antiga e longa." });
+    ws.deliver({ type: "result", isError: false });
+    expect(screen.getByText("Resposta antiga e longa.")).toBeInTheDocument();
+
+    ws.deliver({ type: "conversation_reset", trigger: "clear" });
+    ws.deliver({ type: "system_note", text: "conversation-cleared", at: Date.now() });
+    await waitFor(() => expect(screen.queryByText("Resposta antiga e longa.")).toBeNull());
+    expect(screen.getByText(/cleared/i)).toBeInTheDocument();
   });
 });
