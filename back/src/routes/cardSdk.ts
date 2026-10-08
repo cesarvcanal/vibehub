@@ -7,9 +7,17 @@ import * as registry from "../services/board/registry.js";
 import { recordCardActor, authorsTheTurn } from "../services/board/actor.js";
 import { getSettings } from "../services/settings/settings.js";
 import { installCardSdkDriver, sdkDriverCommand } from "../services/sdk/driver.js";
-import { attachSocket, ensureDriverSession, handleClientFrame, hasDriverSession, replyFrameOutcome } from "../services/sdk/manager.js";
+import {
+  attachSocket,
+  ensureDriverSession,
+  handleClientFrame,
+  hasDriverSession,
+  missedDuringSetup,
+  onPeerTurn,
+  replyFrameOutcome,
+} from "../services/sdk/manager.js";
 import { readCardCatalog } from "../services/sdk/catalog.js";
-import { onExternalMessage, readHistory } from "../services/sdk/history.js";
+import { onExternalMessage, readHistory, type HistoryEvent } from "../services/sdk/history.js";
 import { matchOrigin, primeProvenance, type MessageOrigin } from "../services/chat/provenance.js";
 import {
   buildLatestTranscriptScript,
@@ -54,6 +62,8 @@ import { logger } from "../utils/logger.js";
  *   { "type": "error", "message": string }
  *   { "type": "parse_error", "raw": string }              // synthesised by the back for a bad line
  *   { "type": "peer_typing", "name": string, "active": boolean } // another socket of this card is typing (ephemeral)
+ *   { "type": "user", "text": string, "at": number, "from"?: MessageOrigin } // a message sent from ANOTHER socket of this card
+ *   { "type": "message_edited", "originalText": string, "at": number } // …and an edit made there (the new text follows as `user`)
  *
  * The front sends, per message: either a JSON object { "type": "user", "text": "..." },
  * { "type": "interrupt" }, { "type": "permission_decision", "id": string, "allow": boolean }
@@ -82,6 +92,12 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       const pendingFrames: string[] = [];
       const bufferFrame = (raw: Buffer): void => { pendingFrames.push(raw.toString()); };
       socket.on("message", bufferFrame);
+      // The same gap, from the OTHER side: someone else's message sent while this tab sets up lands
+      // in no replay (read too early) and in no relay (this socket is not attached yet). Heard from
+      // here — before the replay read — and delivered after the attach (see `missedDuringSetup`).
+      const heardDuringSetup: HistoryEvent[] = [];
+      const stopHearing = onPeerTurn(req.params.id, (event) => { heardDuringSetup.push(event); });
+      socket.on("close", stopHearing);
       // Quem está deste lado do socket. Resolvido UMA vez: a sessão do cookie não muda no meio da
       // conexão, então cada mensagem que chegar por aqui é desta pessoa, sem nova consulta.
       const author = await requestUser(req);
@@ -90,6 +106,7 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       if (!settings.sdkDriver) {
         try { socket.send(JSON.stringify({ type: "error", message: "the SDK driver is off (enable the sdkDriver setting)" })); } catch { /* ignore */ }
         socket.close();
+        stopHearing();
         return;
       }
       const card = await registry.getCard(req.params.id);
@@ -97,6 +114,7 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       if (!card || !project) {
         try { socket.send(JSON.stringify({ type: "error", message: "this card no longer exists" })); } catch { /* ignore */ }
         socket.close();
+        stopHearing();
         return;
       }
       // Whether the card's driver is ALREADY alive decides two things below: the install becomes a
@@ -108,6 +126,7 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
         } catch (err) {
           try { socket.send(JSON.stringify({ type: "error", message: `could not install the driver in the runner: ${(err as Error).message}` })); } catch { /* ignore */ }
           socket.close();
+          stopHearing();
           return;
         }
       }
@@ -142,6 +161,7 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       // the transcript are MERGED into one timeline (see mergeTranscriptReplay): the TUI era, the
       // SDK era, and the terminal conversations the log never saw — deduped, never drawn twice.
       const replayedIds: string[] = [];
+      let replayed: object[] = [];
       try {
         const sdkHistory = await readHistory(card.id);
         // TUI-era user lines carry no sender; the provenance log (best-effort text+time match, see
@@ -153,6 +173,7 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
           const from = matchOrigin(card.id, past.text, past.at ?? 0);
           return from ? { ...past, from } : past;
         });
+        replayed = replay;
         for (const past of replay) {
           if (past.tid) replayedIds.push(past.tid);
           try { socket.send(JSON.stringify(past)); } catch { /* socket going away */ }
@@ -185,6 +206,7 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       // there is no await, so this one check covers every acquisition below.
       if (socket.readyState !== WebSocket.OPEN) {
         logger.debug({ card: card.worktreeSlug }, "sdk chat closed during setup — nothing attached");
+        stopHearing();
         return;
       }
       // An agent's send (`vibehub_send_to_terminal`) — and every event the transcript MIRROR lifts
@@ -235,6 +257,12 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       };
       socket.on("message", (raw: Buffer) => noteAuthor(raw.toString()));
       attachSocket(session, socket, wsOrigin);
+      // Attached: from now on the relay reaches this socket itself. What it missed in between goes
+      // out now, in order, minus what the replay already drew.
+      stopHearing();
+      for (const missed of missedDuringSetup(heardDuringSetup, replayed)) {
+        try { socket.send(JSON.stringify(missed)); } catch { /* going away */ }
+      }
       // Setup is done: hand the frames buffered during it to the SAME funnel the live listener
       // uses — user messages become normal user turns (queued by the driver until it is ready).
       socket.off("message", bufferFrame);
@@ -243,7 +271,7 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
         // renews it every few seconds while the person keeps typing).
         if (parseTypingFrame(raw) !== null) continue;
         noteAuthor(raw);
-        replyFrameOutcome(socket, handleClientFrame(session, raw, wsOrigin));
+        replyFrameOutcome(socket, handleClientFrame(session, raw, wsOrigin, socket));
       }
       logger.info({ card: card.worktreeSlug, reattached: driverAlive, buffered: pendingFrames.length }, "sdk chat attached");
     },
