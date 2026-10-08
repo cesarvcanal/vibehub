@@ -2084,6 +2084,19 @@ const SdkChatRow = React.memo(function SdkChatRow({
 });
 
 /**
+ * O RASCUNHO DE CADA CARTÃO, por id de pergunta — num mapa do MÓDULO, como o do composer. Todo
+ * (re)connect limpa a tela e o replay redesenha o cartão do disco: ele desmonta e remonta, e o que a
+ * pessoa já tinha marcado e escrito morava no estado local dele. Um deploy no meio de três perguntas
+ * apagava tudo (produção, 2026-10-07). O id vem do histórico, igual antes e depois do reconnect.
+ */
+const questionDrafts = new Map<string, { picked: string[][]; other: string[] }>();
+
+/** Test hook: esquece os rascunhos de cartão (todo teste reusa os mesmos ids). */
+export function resetQuestionDraftsForTesting(): void {
+  questionDrafts.clear();
+}
+
+/**
  * The agent's QUESTION card — AskUserQuestion rendered as clickable options in the chat.
  *
  * Reading rules: a single-choice single question answers on the CLICK (one gesture, like the
@@ -2100,8 +2113,14 @@ function SdkQuestionCard({
   onAnswer?: (id: string, answers: SdkQuestionAnswer[]) => void;
 }) {
   const t = useT();
-  const [picked, setPicked] = React.useState<string[][]>(() => row.questions.map(() => []));
-  const [other, setOther] = React.useState<string[]>(() => row.questions.map(() => ""));
+  const [picked, setPicked] = React.useState<string[][]>(() => questionDrafts.get(row.id)?.picked ?? row.questions.map(() => []));
+  const [other, setOther] = React.useState<string[]>(() => questionDrafts.get(row.id)?.other ?? row.questions.map(() => ""));
+  // Guardado também DEPOIS do clique: o "respondida" da tela é otimista, e se o fio cair junto com o
+  // driver antes da confirmação o replay redesenha o cartão pendente — com o que já estava marcado.
+  // Cada entrada é um punhado de rótulos por pergunta da sessão: não há o que limpar.
+  React.useEffect(() => {
+    questionDrafts.set(row.id, { picked, other });
+  }, [row.id, picked, other]);
 
   const single = row.questions.length === 1 && row.questions[0]?.multiSelect !== true;
 

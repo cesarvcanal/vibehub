@@ -95,6 +95,12 @@ export interface QuestionResultEvent {
   timedOut?: boolean;
   /** A pessoa respondeu POR MENSAGEM em vez de clicar: o cartão foi substituído pelo que ela disse. */
   superseded?: boolean;
+  /**
+   * PERGUNTA ÓRFÃ: as palavras com que a resposta chegou ao modelo (`buildOrphanAnswerText`). Não há
+   * linha `user` no histórico para ela — o cartão assentado é o registro visível —, então é ESTA a
+   * chave que impede o transcript de republicá-la como fala do terminal num replay.
+   */
+  sent?: string;
 }
 
 /**
@@ -323,6 +329,32 @@ export function buildSupersedeText(original: string, text: string): string {
     `«${original}»\n` +
     `e considere esta versão no lugar:]\n\n` +
     text
+  );
+}
+
+/**
+ * The answer to an ORPHANED question card, on its way to the model as a plain user message.
+ *
+ * The driver that asked died (a deploy, a crash, a hibernate) and its successor never heard of the
+ * card — there is no tool call left to answer. The choices still matter, so they travel as words:
+ * each question quoted next to what was chosen, so the resumed model knows exactly what it reads.
+ * `questions` null = the card's text is gone from the history; the answers still go. pt-BR for the
+ * same reason as the supersede wrapper: it is the user's own speech act. PURE.
+ */
+export function buildOrphanAnswerText(questions: UserQuestionItem[] | null, answers: UserQuestionAnswer[]): string {
+  const lines: string[] = [];
+  answers.forEach((answer, i) => {
+    const chosen = (Array.isArray(answer?.selected) ? answer.selected : [])
+      .map((s) => (typeof s === "string" ? s.trim() : ""))
+      .filter((s) => s !== "");
+    if (chosen.length === 0) return;
+    const question = questions?.[i]?.question;
+    lines.push(`- ${question ? `«${question}»` : `pergunta ${i + 1}`} → ${chosen.join(", ")}`);
+  });
+  return (
+    `[resposta às suas perguntas — o processo reiniciou antes de a resposta chegar à ferramenta, ` +
+    `então ela vem por mensagem; siga com estas escolhas:]\n\n` +
+    lines.join("\n")
   );
 }
 

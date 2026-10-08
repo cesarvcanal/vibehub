@@ -3,15 +3,15 @@ import { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
 import { onCardDriverProbe, type DriverActivity } from "../board/agentState.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
-import { appendHistory, appendHistoryReported, replayableHistoryEvent, rewindHistory, type HistoryEvent } from "./history.js";
+import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, readHistory, replayableHistoryEvent, rewindHistory, type HistoryEvent } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inflight.js";
 import { createLineReader, forgetDriverKeys, noteDriverEventFor, onOutsideTurn } from "./mirror.js";
 import { writeCardCatalog } from "./catalog.js";
 import { forgetCardWorkflows, lastWorkflowRuns, watchCardWorkflows } from "./workflow.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
-  buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, parseTypingFrame, encodeControl,
-  type CatalogEvent, type DriverControl, type DriverEvent,
+  buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, parseTypingFrame, encodeControl,
+  type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type UserQuestionItem,
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { logger } from "../../utils/logger.js";
@@ -127,6 +127,24 @@ export interface DriverSession {
   acceptedCids: Map<string, AcceptedSend>;
   /** Cancela a inscrição no espelho (conversa vinda da aba Terminal). Vive o que o driver viver. */
   offOutside?: () => void;
+  /**
+   * AS PERGUNTAS QUE ESTE DRIVER FEZ — todo `user_question` que ele emitiu, encerrado ou não. O
+   * driver guarda as dele só em memória; um cartão pendente no histórico que NÃO está aqui é
+   * ÓRFÃO: quem o abriu morreu (deploy, crash, hibernação) e este driver nunca ouviu falar dele.
+   * Nunca sai daqui ao ser encerrada: o `question_result` do driver chega ao disco DEPOIS de chegar
+   * aqui, e uma leitura no meio desse caminho tomaria a pergunta dele por órfã (resultado duplicado).
+   */
+  ownQuestions: Set<string>;
+  /** Órfãs que este manager já ENCERROU: um clique tardio nelas recebe o erro, nunca silêncio. */
+  settledOrphans: Set<string>;
+  /** Órfãs com uma resposta A CAMINHO: o segundo clique (outra aba, duplo clique) vira nada. */
+  answeringOrphans: Set<string>;
+  /**
+   * A varredura de órfãs por mensagem já rodou. Órfã é pergunta de um driver ANTERIOR: depois que
+   * este driver subiu nenhuma nova pode nascer, então uma varredura basta — sem ler o histórico
+   * inteiro a cada mensagem da vida da sessão.
+   */
+  orphansSwept: boolean;
 }
 
 /**
@@ -381,6 +399,7 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
       );
     }
   }
+  if (event.type === "user_question") session.ownQuestions.add(event.id);
   if (!silenced) broadcast(session, event);
   if (interruptNoteToFlush) emitSystemNote(session, interruptNoteToFlush);
   // History + mirror dedupe are MANAGER duties, not socket duties: they must keep happening while
@@ -445,6 +464,10 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     stderrTail: "",
     closed: false,
     acceptedCids: new Map(),
+    ownQuestions: new Set(),
+    settledOrphans: new Set(),
+    answeringOrphans: new Set(),
+    orphansSwept: false,
     ...(opts.transcriptDir ? { transcriptDir: opts.transcriptDir } : {}),
   };
   sessions.set(opts.cardId, session);
@@ -631,6 +654,7 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
     // Same durable in-flight promise a plain user turn earns (see #64's boot sweep).
     void writeInflightMarker(session.cardId, { startedAt: at, preview: inflightPreview(control.text), attempts: 0 });
     rememberCid(session, control.cid, { persisted, line });
+    void settleOrphanQuestions(session);
     return { kind: "accepted", cid: control.cid, persisted };
   }
   if (control.type === "user") {
@@ -646,7 +670,14 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
     // lost. attempts: 0 — a person's own turn always earns one automatic resume.
     void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(control.text), attempts: 0 });
     rememberCid(session, control.cid, { persisted, line });
+    void settleOrphanQuestions(session);
     return { kind: "accepted", cid: control.cid, persisted };
+  }
+  if (control.type === "question_answer" && !session.ownQuestions.has(control.id)) {
+    // ÓRFÃ: este driver nunca fez esta pergunta. Repassá-la devolvia "no pending question with id"
+    // e a resposta se perdia — ela vira mensagem (ver `answerOrphanQuestion`).
+    void answerOrphanQuestion(session, control);
+    return { kind: "ignored" };
   }
   writeToDriver(session, control);
   if (control.type === "interrupt") {
@@ -660,6 +691,110 @@ export function handleClientFrame(session: DriverSession, raw: string, origin?: 
     if (session.activeTurns > 0) session.pendingInterruptNote = interruptNote(control);
   }
   return { kind: "ignored" };
+}
+
+/**
+ * O que o histórico ainda mostra como pergunta PENDENTE e que o driver atual não espera — os
+ * cartões órfãos, com o texto deles. Lido do disco: depois de um deploy o back novo não tem outra
+ * memória deles, e o cartão que a tela redesenha vem exatamente daqui.
+ */
+async function orphanQuestions(session: DriverSession): Promise<Map<string, UserQuestionItem[]>> {
+  const open = new Map<string, UserQuestionItem[]>();
+  for (const event of await readHistory(session.cardId, HISTORY_REPLAY_LIMIT, { strict: true })) {
+    if (event.type === "user_question") open.set(event.id, event.questions);
+    else if (event.type === "question_result") open.delete(event.id);
+  }
+  for (const id of [...open.keys()]) {
+    if (session.ownQuestions.has(id)) open.delete(id);
+  }
+  return open;
+}
+
+/** Encerra um cartão em todas as abas e no histórico (o F5 lê a mesma coisa). */
+function settleQuestionCard(session: DriverSession, result: Extract<DriverEvent, { type: "question_result" }>): void {
+  broadcast(session, result);
+  void appendHistory(session.cardId, { ...result, at: Date.now() });
+}
+
+/**
+ * FALAR É RESPONDER, também para a órfã. Com o driver vivo, uma mensagem libera o cartão que ele
+ * espera (`supersedePendingQuestions` no driver). A órfã não tem driver para isso: ficava pendente
+ * no histórico e a bandeja voltava a pedir uma resposta que a pessoa acabara de dar.
+ */
+async function settleOrphanQuestions(session: DriverSession): Promise<void> {
+  if (session.orphansSwept) return;
+  session.orphansSwept = true;
+  let orphans: Map<string, UserQuestionItem[]>;
+  try {
+    orphans = await orphanQuestions(session);
+  } catch (err) {
+    session.orphansSwept = false; // a próxima mensagem tenta de novo
+    logger.warn({ card: session.label, detail: (err as Error).message }, "could not sweep orphaned question cards");
+    return;
+  }
+  for (const id of orphans.keys()) {
+    if (session.settledOrphans.has(id) || session.answeringOrphans.has(id)) continue;
+    session.settledOrphans.add(id);
+    settleQuestionCard(session, { type: "question_result", id, superseded: true });
+  }
+}
+
+/**
+ * O CLIQUE NUMA ÓRFÃ (produção, 2026-10-07): o deploy matou o driver com o cartão de pé; o driver
+ * novo retomou a conversa sem a chamada de ferramenta que a resposta deveria completar. As escolhas
+ * ainda importam — elas vão ao modelo como MENSAGEM, cada pergunta citada ao lado do escolhido, e o
+ * cartão se encerra como respondido. É um turno: conta, desarma o ocioso e ganha o marcador.
+ */
+async function answerOrphanQuestion(session: DriverSession, control: QuestionAnswerControl): Promise<void> {
+  // Marcada ANTES de qualquer await: o segundo clique (outra aba, duplo clique) chega no meio da
+  // leitura do disco e precisa encontrar a vaga já tomada.
+  if (session.answeringOrphans.has(control.id)) return; // a mesma resposta já está a caminho
+  if (session.settledOrphans.has(control.id)) {
+    // Encerrada aqui mesmo (por mensagem, ou por outra resposta): o veredito de sempre.
+    broadcast(session, { type: "error", message: `no pending question with id ${control.id}` });
+    return;
+  }
+  session.answeringOrphans.add(control.id);
+  const release = (message: string): void => {
+    session.answeringOrphans.delete(control.id);
+    broadcast(session, { type: "error", message });
+  };
+  let orphans: Map<string, UserQuestionItem[]>;
+  try {
+    orphans = await orphanQuestions(session);
+  } catch (err) {
+    release(`could not read the question card: ${(err as Error).message}`);
+    return;
+  }
+  const questions = orphans.get(control.id);
+  if (!questions) {
+    // Não está pendente no disco: já encerrada (aba velha) ou nunca existiu. Nada vai ao modelo —
+    // o mesmo veredito que o driver dava antes.
+    release(`no pending question with id ${control.id}`);
+    return;
+  }
+  if (!canAcceptTurn(session)) {
+    // Sem driver não há a quem entregar: a tela é avisada e o cartão segue pendente para o próximo.
+    release("driver exited before the answer reached it — answer again once the chat reconnects");
+    return;
+  }
+  const text = buildOrphanAnswerText(questions, control.answers);
+  if (!writeToDriver(session, { type: "user", text })) {
+    release("driver exited before the answer reached it — answer again once the chat reconnects");
+    return;
+  }
+  session.activeTurns += 1;
+  clearIdleTimer(session);
+  noteChatActivity(session);
+  noteDriverEventFor(session.cardId, { type: "user", text });
+  void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(text), attempts: 0 });
+  session.answeringOrphans.delete(control.id);
+  session.settledOrphans.add(control.id);
+  settleQuestionCard(session, { type: "question_result", id: control.id, answers: control.answers, sent: text });
+  logger.info(
+    { audit: true, action: "sdk.question.orphan", card: session.label },
+    "an answer to a question whose driver died was delivered as a message",
+  );
 }
 
 /**
