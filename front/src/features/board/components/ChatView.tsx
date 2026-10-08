@@ -705,14 +705,36 @@ interface HastNode {
 
 /**
  * A fenced block's text exactly as the agent wrote it, read off the hast node rather than the DOM:
- * indentation and blank lines intact, no fences. The parser leaves the line break that precedes
- * the closing fence on the text; that one is not part of the block. PURE, TOTAL.
+ * indentation and blank lines intact, no fences. mdast-util-to-hast appends one `\n` to every
+ * non-empty code value (it is not in the source); that one is stripped. The "copia SÓ o conteúdo
+ * do bloco" test pins this, so an upgrade that stops appending it fails loudly. PURE, TOTAL.
  */
 function codeBlockSource(node: HastNode | undefined): string {
   const text = (n: HastNode | undefined): string =>
     !n ? "" : typeof n.value === "string" ? n.value : (n.children ?? []).map(text).join("");
   return text(node).replace(/\n$/, "");
 }
+
+/**
+ * A toast id that moves on once its toast is gone. Reusing an id is how a toast is REPLACED instead
+ * of stacked — but sonner keeps a closing toast around for its exit animation, and anything
+ * published under that id in that window vanishes with it. So the id is retired the moment its toast
+ * closes and the next one starts fresh. Wire `retire` to `onAutoClose` (timer) and `onDismiss`
+ * (swipe / close button) — and call it yourself after a programmatic `toast.dismiss(id)`: sonner
+ * 1.x does NOT fire `onDismiss` for that one.
+ */
+function renewingToastId(prefix: string) {
+  let generation = 0;
+  return {
+    current: () => `${prefix}-${generation}`,
+    retire: () => {
+      generation += 1;
+    },
+  };
+}
+
+/** One "copied" toast for the whole chat: copying four blocks in a row replaces, never stacks. */
+const copiedToast = renewingToastId("chat-code-copied");
 
 /**
  * A fenced block with its own copy button. The agent often hands over a prompt, a command or a
@@ -734,21 +756,60 @@ function CodeBlock({ source, children }: { source: string; children: React.React
       if (timer.current) clearTimeout(timer.current);
     };
   }, []);
+  // The toast rules, each one a scenario that bit:
+  //  - ONE success toast for the whole chat (`copiedToast`).
+  //  - ONE error toast per block (this instance), whatever its text has streamed on to: failures
+  //    replace each other, and B's success never erases A's failure (you would paste thinking A was
+  //    copied).
+  //  - A success dismisses its own block's error: never "could not copy" and "copied" for one block.
+  //    (An unmounted instance's error is left to time out — as on main, where error toasts were
+  //    never dismissed at all.)
+  const blockId = React.useId();
+  // useState, not useMemo: the generation counter is STATE, and a memo is a cache React may drop.
+  const [errorToast] = React.useState(() => renewingToastId(`chat-code-copy-error-${blockId}`));
+  // Only dismiss what was published: each dismiss leaves an entry in sonner's dismissed set.
+  const errorShown = React.useRef(false);
+  // The race: a FAILURE only speaks if no newer click came after it — an old failure must not undo
+  // a newer "copied". A late SUCCESS speaks if it copied the text the latest click was after (it
+  // hung on a permission prompt, then really put that text on the clipboard); a success for text
+  // that has since streamed on put a stale version there and stays quiet.
+  const latest = React.useRef({ request: 0, text: "" });
   async function copy() {
-    if (!(await copyText(source))) {
-      toast.error(t("chat.copyError"));
-      return;
+    const request = latest.current.request + 1;
+    const text = source;
+    latest.current = { request, text };
+    const ok = await copyText(text);
+    if (request !== latest.current.request && !(ok && text === latest.current.text)) return;
+    if (ok) {
+      if (errorShown.current) {
+        toast.dismiss(errorToast.current());
+        errorToast.retire(); // programmatic dismiss: sonner 1.x does not call onDismiss
+        errorShown.current = false;
+      }
+      toast.success(t("chat.codeCopied"), {
+        id: copiedToast.current(),
+        onAutoClose: copiedToast.retire,
+        onDismiss: copiedToast.retire,
+      });
+    } else {
+      errorShown.current = true;
+      const closed = () => {
+        errorToast.retire();
+        errorShown.current = false;
+      };
+      toast.error(t("chat.copyError"), { id: errorToast.current(), onAutoClose: closed, onDismiss: closed });
     }
-    // One fixed id: clicking again REPLACES the toast instead of stacking a tower of them.
-    toast.success(t("chat.codeCopied"), { id: "chat-code-copied" });
     if (!mounted.current) return;
-    setCopied(true);
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setCopied(false), 1500);
+    // A failure right after a success must not leave the button saying "Copied".
+    setCopied(ok);
+    if (ok) timer.current = setTimeout(() => setCopied(false), 1500);
   }
   const frame = "overflow-x-auto rounded-md border border-border/60 bg-background/60 p-2 text-xs";
-  // An empty block has nothing to copy, and a "copied!" for an empty string would be a small lie.
-  if (source === "") return <pre className={frame}>{children}</pre>;
+  // A blank block has nothing to copy, and a "copied!" for it would be a small lie. Blank means
+  // ASCII whitespace ONLY: any other invisible character (NBSP, narrow NBSP, ideographic space, BOM...)
+  // may be exactly what the block exists to hand you, and you cannot select it by hand.
+  if (/^[ \t\n\r\f\v]*$/.test(source)) return <pre className={frame}>{children}</pre>;
   const label = copied ? t("chat.copied") : t("chat.copyCode");
   return (
     <div className="relative">
