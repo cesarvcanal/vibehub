@@ -258,17 +258,39 @@ describe("TerminalComposer", () => {
     expect(box.selectionEnd).toBe("metade de um pensamento".length);
   });
 
-  it("coming back to a card puts the caret at the end, not at the start of the draft", async () => {
+  it("coming back to a card puts the caret back WHERE IT WAS — mid-draft edits are not thrown to the end", async () => {
     const { rerender } = renderComposer(<TerminalComposer onSend={vi.fn()} cardId="card-1" active />);
     const box = screen.getByRole<HTMLTextAreaElement>("textbox");
     await waitFor(() => expect(box).toHaveFocus());
-    await userEvent.type(box, "rascunho em andamento");
+    await userEvent.type(box, "corrigindo o meio");
+    box.setSelectionRange(3, 3); // editando no meio da frase
     rerender(<TerminalComposer onSend={vi.fn()} cardId="card-1" active={false} />);
-    box.setSelectionRange(0, 0);
-    box.blur();
+    box.blur(); // o que o Pane do deck faz com o card que sai de cena
     rerender(<TerminalComposer onSend={vi.fn()} cardId="card-1" active />);
     await waitFor(() => expect(box).toHaveFocus());
-    expect(box.selectionStart).toBe("rascunho em andamento".length);
+    expect(box.selectionStart).toBe(3);
+  });
+
+  // O campo remontado nem sempre é focado pelo autofoco: no celular ele não roda, e o "Responder"
+  // da bandeja de decisões (SdkChatView) foca o textarea por fora. Qualquer PRIMEIRO foco que não
+  // venha de um clique tem que deixar o cursor no fim do rascunho restaurado.
+  it("the FIRST focus from outside (not a click) puts the caret at the end of a restored draft", () => {
+    saveDraft("card-1", "rascunho restaurado", []);
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId="card-1" autoFocus={false} />);
+    const box = screen.getByRole<HTMLTextAreaElement>("textbox");
+    box.focus();
+    expect(box.selectionStart).toBe("rascunho restaurado".length);
+  });
+
+  it("a click or tap into a restored draft keeps the caret where the pointer put it", () => {
+    saveDraft("card-1", "rascunho restaurado", []);
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId="card-1" autoFocus={false} />);
+    const box = screen.getByRole<HTMLTextAreaElement>("textbox");
+    // O ponteiro desce e o foco chega: quem decide o cursor é o ponto do clique (que o navegador
+    // põe sozinho), não o fim do texto — o composer não pode passar por cima.
+    fireEvent.pointerDown(box);
+    box.focus();
+    expect(box.selectionStart).toBe(0);
   });
 
   it("re-running the auto-focus never moves the caret of someone who is already typing", async () => {
@@ -277,10 +299,11 @@ describe("TerminalComposer", () => {
     await waitFor(() => expect(box).toHaveFocus());
     await userEvent.type(box, "corrigindo o meio");
     box.setSelectionRange(3, 3); // editando no meio da frase
-    // Algo acima re-renderiza e o efeito de foco roda de novo (o card voltou a ficar ativo).
+    // Algo acima re-renderiza e o efeito de foco roda de novo, com o campo AINDA focado.
     rerender(<TerminalComposer onSend={vi.fn()} cardId="card-1" active={false} />);
     rerender(<TerminalComposer onSend={vi.fn()} cardId="card-1" active />);
-    await new Promise((r) => setTimeout(r, 10));
+    // O timer de 0ms do efeito foi agendado antes deste: quando este dispara, aquele já rodou.
+    await new Promise((r) => setTimeout(r, 0));
     expect(box).toHaveFocus();
     expect(box.selectionStart).toBe(3);
   });

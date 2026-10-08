@@ -613,24 +613,35 @@ export function TerminalComposer({
    * Card views are not unmounted any more (the deck keeps every card you opened attached), so
    * "mounted" stopped meaning "just opened": without `active` in here, returning to a card would
    * leave the caret wherever it was and the first thing you typed would go nowhere.
-   *
-   * The caret goes to the END of what is there (produção, 2026-10-08). A field mounted with a
-   * restored draft — the card finishing "Preparando…" swaps in a new composer — starts with its
-   * selection at 0, and a bare `focus()` left it there: the rest of the sentence went in at the
-   * START of the message. A field that already has the keyboard is left alone: someone is typing.
    */
   React.useEffect(() => {
     if (!autoFocus || isMobile || !active) return;
     // After the terminal's own mount focus (the websocket grabs it on open), or the caret lands in
     // xterm and the first thing typed goes into the raw session.
-    const id = setTimeout(() => {
-      const el = ref.current;
-      if (!el || document.activeElement === el) return;
-      el.focus();
-      el.setSelectionRange(el.value.length, el.value.length);
-    }, 0);
+    const id = setTimeout(() => ref.current?.focus(), 0);
     return () => clearTimeout(id);
   }, [autoFocus, isMobile, draftKey, active]);
+
+  /**
+   * The FIRST focus of this field puts the caret at the END of what is there (produção, 2026-10-08).
+   *
+   * A field mounted with a restored draft — the card finishing "Preparando…" swaps in a new
+   * composer — starts with its selection at 0, and a bare `focus()` (the auto-focus above, the
+   * decision tray's "Responder") left it there: the rest of the sentence went in at the START of
+   * the message. Only the first focus, and only one that is not a click or tap: after that the
+   * browser remembers where the caret was, and a pointer puts it where the pointer is.
+   */
+  const focusedOnceRef = React.useRef(false);
+  const pointerFocusRef = React.useRef(false);
+  const onFieldPointerDown = React.useCallback((): void => {
+    pointerFocusRef.current = true;
+  }, []);
+  const onFieldFocus = React.useCallback((event: React.FocusEvent<HTMLTextAreaElement>): void => {
+    const el = event.currentTarget;
+    if (!focusedOnceRef.current && !pointerFocusRef.current) el.setSelectionRange(el.value.length, el.value.length);
+    focusedOnceRef.current = true;
+    pointerFocusRef.current = false;
+  }, []);
 
   const append = React.useCallback((fragment: string) => {
     setText((prev) => appendFragment(prev, fragment));
@@ -1073,6 +1084,8 @@ export function TerminalComposer({
         <textarea
           ref={ref}
           value={text}
+          onPointerDown={onFieldPointerDown}
+          onFocus={onFieldFocus}
           onChange={(e) => {
             setText(e.target.value);
             onDraftInput?.(e.target.value);
