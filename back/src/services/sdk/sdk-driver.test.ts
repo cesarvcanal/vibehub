@@ -65,6 +65,15 @@ export function query({ prompt, options }) {
         yield { type: "result", subtype: "error_during_execution", is_error: true, terminal_reason: "aborted_streaming", session_id: SESSION };
         continue;
       }
+      if (text === "bg" || text === "bg-off" || text === "bg-die") {
+        // TAREFAS EM SEGUNDO PLANO: o CLI anuncia o conjunto vivo inteiro a cada mudança
+        // (system/background_tasks_changed, semântica de SUBSTITUIR).
+        const tasks = text === "bg-off" ? [] : [{ task_id: "b1", task_type: "local_bash", description: "Aguarda o deploy" }];
+        yield { type: "system", subtype: "background_tasks_changed", tasks, session_id: SESSION, uuid: "u-" + text };
+        if (text === "bg-die") throw new Error("CLI process exited with code 1");
+        yield { type: "result", subtype: "success", session_id: SESSION, result: "ok" };
+        continue;
+      }
       if (text.includes("slow")) {
         mark("slow:running");
         while (!existsSync(join(options.cwd, "release-slow"))) await sleep(20);
@@ -249,4 +258,27 @@ describe("sdk-driver.mjs — editar com um turno parado não espera minutos", ()
     expect(rewound.ok).toBe(true);
     await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:fixed", from);
   }, 60_000);
+});
+
+describe("sdk-driver.mjs — tarefas em segundo plano", () => {
+  it("repassa o conjunto VIVO de tarefas em segundo plano que o CLI anuncia, inclusive quando ele esvazia", async () => {
+    const driver = startDriver();
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "bg" });
+    const on = await driver.waitFor((e) => e.type === "background_tasks");
+    expect(on.tasks).toEqual([{ id: "b1", type: "local_bash", description: "Aguarda o deploy" }]);
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "bg-off" });
+    const off = await driver.waitFor((e) => e.type === "background_tasks", from);
+    expect(off.tasks).toEqual([]);
+  });
+
+  it("quando o processo do CLI morre, as tarefas morrem com ele: o conjunto volta vazio", async () => {
+    const driver = startDriver();
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "bg-die" });
+    await driver.waitFor((e) => e.type === "background_tasks" && Array.isArray(e.tasks) && e.tasks.length === 1);
+    const off = await driver.waitFor((e) => e.type === "background_tasks" && Array.isArray(e.tasks) && e.tasks.length === 0);
+    expect(off.tasks).toEqual([]);
+  });
 });
