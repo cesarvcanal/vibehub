@@ -767,9 +767,16 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       // /clear: o modelo começou do zero numa sessão nova. A tela esquece a conversa antiga como
       // o Claude Code faz — senão o /clear parecia não ter feito nada. Fica o que é da SESSÃO do
       // card e não da conversa: o menu "/", as tarefas em segundo plano ainda vivas, o turno.
+      // Só no gatilho `clear` (o mesmo critério do back), e o corte é no ÚLTIMO "/clear": o que foi
+      // mandado depois dele (a fila do CLI) é da conversa nova e fica.
+      if (event.trigger !== undefined && event.trigger !== "clear") return state;
+      let from = -1;
+      state.rows.forEach((row, i) => {
+        if (row.kind === "user" && row.text.trim() === "/clear") from = i;
+      });
       return {
         ...state,
-        rows: [],
+        rows: from === -1 ? [] : state.rows.slice(from),
         sessionId: undefined,
         workflowMeta: {},
         terminalBurst: false,

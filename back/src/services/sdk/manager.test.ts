@@ -1880,8 +1880,50 @@ describe("conversation_reset — o /clear limpa a conversa de verdade", () => {
 
     await vi.waitFor(async () => {
       const history = await readHistory(CARD);
-      expect(history.map((e) => e.type)).toEqual(["system_note"]);
-      expect((history[0] as { text?: string }).text).toBe("conversation-cleared");
+      expect(history.map((e) => [e.type, (e as { text?: string }).text])).toEqual([
+        ["user", "/clear"],
+        ["system_note", "conversation-cleared"],
+      ]);
+    }, { timeout: 5000 });
+  });
+
+  it("uma mensagem enviada DEPOIS do /clear (fila do CLI) sobrevive: só sai o que veio antes dele", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"faz a tarefa longa"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "conversa antiga" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"/clear"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "turn_absorbed" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"agora roda os testes"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "turn_absorbed" }));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    spawned[0]!.stdout.emit("data", line({ type: "conversation_reset", trigger: "clear" }));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "testes passaram" }));
+
+    await vi.waitFor(async () => {
+      const history = await readHistory(CARD);
+      expect(history.map((e) => [e.type, (e as { text?: string }).text])).toEqual([
+        ["user", "/clear"],
+        ["user", "agora roda os testes"],
+        ["system_note", "conversation-cleared"],
+        ["assistant_text", "testes passaram"],
+      ]);
+    }, { timeout: 5000 });
+  });
+
+  it("um reset que NÃO veio de /clear (outro fluxo de sessão nova) não apaga a conversa nem escreve a nota", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "plano aprovado" }));
+    spawned[0]!.stdout.emit("data", line({ type: "conversation_reset", trigger: "plan_exit" }));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "implementando" }));
+    await vi.waitFor(async () => {
+      const history = await readHistory(CARD);
+      expect(history.map((e) => (e as { text?: string }).text)).toEqual(["plano aprovado", "implementando"]);
     }, { timeout: 5000 });
   });
 });

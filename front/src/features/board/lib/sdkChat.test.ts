@@ -1406,4 +1406,18 @@ describe("conversation_reset — /clear", () => {
     expect(state.commands).toEqual(before.commands);
     expect(state.backgroundTasks).toEqual([bash]);
   });
+
+  it("mantém o /clear e o que foi enviado DEPOIS dele (fila do CLI); só sai o que veio antes", () => {
+    let state = feed([{ type: "ready" }, { type: "assistant_text", text: "conversa antiga" }]);
+    state = appendUserRow(state, "/clear", undefined, { cid: "c1", state: "sent" });
+    state = appendUserRow(state, "agora roda os testes", undefined, { cid: "c2", state: "sending" });
+    state = applySdkEvent(state, { type: "conversation_reset", trigger: "clear" });
+    expect(state.rows.map((r) => (r.kind === "user" ? r.text : r.kind))).toEqual(["/clear", "agora roda os testes"]);
+  });
+
+  it("um reset que não veio de /clear não apaga a tela", () => {
+    const before = feed([{ type: "ready" }, { type: "assistant_text", text: "plano aprovado" }]);
+    const state = applySdkEvent(before, { type: "conversation_reset", trigger: "plan_exit" });
+    expect(state.rows).toEqual(before.rows);
+  });
 });

@@ -3,7 +3,7 @@ import { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
 import { onCardDriverProbe, type DriverActivity } from "../board/agentState.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
-import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, readHistory, removeHistory, replayableHistoryEvent, rewindHistory, type HistoryEvent } from "./history.js";
+import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, clearHistoryBeforeLastClear, readHistory, replayableHistoryEvent, rewindHistory, type HistoryEvent } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inflight.js";
 import { createLineReader, forgetDriverKeys, noteDriverEventFor, onOutsideTurn } from "./mirror.js";
 import { writeCardCatalog } from "./catalog.js";
@@ -466,13 +466,14 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   }
   if (event.type === "user_question") session.ownQuestions.add(event.id);
   if (!silenced) broadcast(session, event);
-  if (event.type === "conversation_reset") {
+  if (event.type === "conversation_reset" && (event.trigger === undefined || event.trigger === "clear")) {
     // O /clear limpou o CONTEXTO do modelo; o log do card tem de ir junto, senão o F5 devolvia a
-    // conversa inteira e o /clear parecia não ter feito nada. A remoção entra na MESMA fila dos
-    // appends do card: o que já estava enfileirado (o próprio "/clear") sai, e a nota vem depois.
-    void removeHistory(session.cardId).catch((err: unknown) => {
-      logger.warn({ card: session.label, detail: (err as Error).message }, "could not clear the sdk chat history on /clear");
-    });
+    // conversa inteira e o /clear parecia não ter feito nada. Sai só o que veio ANTES do "/clear"
+    // (ver `clearHistoryBeforeLastClear`): o que foi mandado depois dele o CLI ainda vai rodar. O
+    // painel de workflow da conversa apagada também não volta num F5. Só no gatilho `clear`: outro
+    // fluxo de sessão nova do CLI (sair do plan mode, por exemplo) não é a pessoa pedindo a limpeza.
+    void clearHistoryBeforeLastClear(session.cardId);
+    forgetCardWorkflows(session.cardId);
     emitSystemNote(session, NOTE_CONVERSATION_CLEARED);
   }
   if (interruptNoteToFlush) emitSystemNote(session, interruptNoteToFlush);
