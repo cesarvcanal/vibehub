@@ -1,7 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import ReactMarkdown from "react-markdown";
+import { toast } from "sonner";
 import { Markdown } from "@/features/board/components/ChatView";
+
+vi.mock("sonner", () => ({
+  toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
+}));
 
 // Passthrough with a counter: the render is the real one, and the PARSE count is observable.
 vi.mock("react-markdown", async (importOriginal) => {
@@ -142,5 +147,86 @@ describe("Markdown — custo", () => {
     expect(parses).toHaveBeenCalledTimes(1);
     rerender(<Markdown text="**resposta nova**" />);
     expect(parses).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * The agent hands you a prompt (or a command, a config) inside a fenced block, and THAT block is
+ * what you want — not the whole answer around it. Selecting it by hand over a long block is
+ * miserable, so each block carries its own copy button, and a toast says it worked.
+ */
+describe("Markdown — copiar bloco de código", () => {
+  const PROMPT = "COMO TRABALHAR\n\n1. NÃO comece codando.\n   Leia o código citado acima.\n2. Commits atômicos.";
+  const ANSWER = ["Segue o prompt pro César:", "", "```", PROMPT, "```", "", "Dois avisos sobre o que coloquei aí."].join("\n");
+  const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+
+  beforeEach(() => {
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.error).mockClear();
+  });
+  afterEach(() => {
+    if (originalClipboard) Object.defineProperty(navigator, "clipboard", originalClipboard);
+    else delete (navigator as unknown as { clipboard?: unknown }).clipboard;
+    delete (document as unknown as { execCommand?: unknown }).execCommand;
+  });
+
+  it("copia SÓ o conteúdo do bloco, exatamente como a IA escreveu, e avisa com um toast", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    render(<Markdown text={ANSWER} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    // The block, untouched: indentation and blank lines kept, no fences, none of the prose around it.
+    expect(writeText).toHaveBeenCalledWith(PROMPT);
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Copied to clipboard"));
+    // The button itself also confirms, for whoever is not looking at the corner of the screen.
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
+  });
+
+  it("cada bloco tem o seu botão e copia o SEU texto", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    render(<Markdown text={"```bash\nnpm test\n```\n\nentre eles\n\n```ts\nconst a = 1;\n```"} />);
+
+    const buttons = screen.getAllByRole("button", { name: "Copy code" });
+    expect(buttons).toHaveLength(2);
+    fireEvent.click(buttons[1] as HTMLElement);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("const a = 1;"));
+  });
+
+  it("código inline NÃO ganha botão — é um trecho da frase, não um bloco", () => {
+    render(<Markdown text={"rode `npm test` e depois `npm run build`"} />);
+    expect(screen.queryByRole("button", { name: "Copy code" })).toBeNull();
+  });
+
+  it("sem Clipboard API (painel em http), cai no execCommand e ainda copia", async () => {
+    delete (navigator as unknown as { clipboard?: unknown }).clipboard;
+    let copied = "";
+    const execCommand = vi.fn(() => {
+      copied = (document.activeElement as HTMLTextAreaElement | null)?.value ?? "";
+      return true;
+    });
+    Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
+    render(<Markdown text={"```\nfaz isso\n```"} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+
+    await waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
+    expect(copied).toBe("faz isso");
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Copied to clipboard"));
+  });
+
+  it("quando nada chega ao clipboard, diz que falhou — nunca um 'copiado' mentiroso", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    Object.defineProperty(document, "execCommand", { value: vi.fn(() => false), configurable: true });
+    render(<Markdown text={"```\nfaz isso\n```"} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Could not copy"));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });

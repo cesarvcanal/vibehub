@@ -447,6 +447,8 @@ export const en: Record<string, string> = {
   "chat.copy": "Copy",
   "chat.copied": "Copied",
   "chat.copyError": "Could not copy",
+  "chat.copyCode": "Copy code",
+  "chat.codeCopied": "Copied to clipboard",
   "chat.sendError": "Could not send the message",
   "chat.awaitingChoice": "The terminal is waiting on a choice (a session menu, /compact, or a permission prompt). Open the Terminal tab, answer it, then send again. Your message was kept.",
   "chat.stopError": "Could not stop the agent",

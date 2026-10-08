@@ -151,3 +151,24 @@ export function writeClipboard(
     tryFallback(apiReason);
   }
 }
+
+/**
+ * The same two paths as `writeClipboard`, but it ANSWERS: `true` only when something actually
+ * reached the clipboard. For a button that says "copied" — a confirmation that fires on a silent
+ * failure is worse than none. Never throws.
+ */
+export async function copyText(text: string, fallback: (t: string) => boolean = legacyCopy): Promise<boolean> {
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* refused or insecure context — the legacy path below may still work */
+  }
+  try {
+    return fallback(text);
+  } catch {
+    return false;
+  }
+}
