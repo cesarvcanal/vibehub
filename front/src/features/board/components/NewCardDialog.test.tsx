@@ -9,7 +9,9 @@ vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
   setUnauthorizedHandler: vi.fn(),
   get: vi.fn().mockImplementation((url: string) =>
-    url === "/accounts/usage"
+    url === "/github/repos/acme/p1/branches"
+      ? Promise.resolve({ branches: ["dev", "main", "feat/pdv"] })
+      : url === "/accounts/usage"
       ? Promise.resolve({
           bySlug: {
             default: { available: true, fiveHour: { utilization: 8, resetsAt: null }, fetchedAt: 1 },
@@ -184,7 +186,7 @@ describe("NewCardDialog", () => {
     await user.type(screen.getByLabelText("Title"), "ajuste do dev");
     await user.click(screen.getByRole("button", { name: "Options" }));
 
-    await user.type(screen.getByLabelText("Cut from"), "dev");
+    await user.selectOptions(await screen.findByLabelText("Cut from"), "dev");
     await user.click(screen.getByLabelText(/Lock the card to this branch/));
     await user.click(screen.getByRole("button", { name: "Create card" }));
 
@@ -213,13 +215,90 @@ describe("NewCardDialog", () => {
   it("clears the lock on Cancel, so it cannot ride along into the next card", async () => {
     const { user } = setup();
     await user.click(screen.getByRole("button", { name: "Options" }));
-    await user.type(screen.getByLabelText("Cut from"), "prod");
+    await user.selectOptions(await screen.findByLabelText("Cut from"), "main");
     await user.click(screen.getByLabelText(/Lock the card to this branch/));
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 
     await user.click(screen.getByRole("button", { name: "Options" }));
-    expect((screen.getByLabelText("Cut from") as HTMLInputElement).value).toBe("");
+    expect((await screen.findByLabelText("Cut from") as HTMLSelectElement).value).toBe("");
     expect((screen.getByLabelText(/Lock the card to this branch/) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("offers the repository's REAL branches as the base, instead of asking for a guess", async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Options" }));
+
+    const base = (await screen.findByLabelText("Cut from")) as HTMLSelectElement;
+    await waitFor(() =>
+      expect(Array.from(base.options).map((o) => o.textContent)).toEqual([
+        "The project's (dev)",
+        "dev",
+        "main",
+        "feat/pdv",
+      ]),
+    );
+    // Picking one sends it; the inherit option sends nothing.
+    await user.selectOptions(base, "main");
+    expect(base.value).toBe("main");
+  });
+
+  it("refuses a branch name the server would refuse, and says why", async () => {
+    const { user, onSubmit } = setup();
+    await user.type(screen.getByLabelText("Title"), "nome ruim");
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    await user.type(screen.getByLabelText("Branch"), "feat/../etc");
+
+    expect(await screen.findByText(/Invalid name/)).toBeInTheDocument();
+    expect((screen.getByRole("button", { name: "Create card" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Create card" }));
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("refuses a working branch equal to the base — the card would commit straight into it", async () => {
+    const { user, onSubmit } = setup();
+    await user.type(screen.getByLabelText("Title"), "direto na prod");
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    await user.selectOptions(await screen.findByLabelText("Cut from"), "main");
+    await user.type(screen.getByLabelText("Branch"), "main");
+
+    expect(await screen.findByText(/cannot be the same as the base/)).toBeInTheDocument();
+    expect((screen.getByRole("button", { name: "Create card" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("catches it against the INHERITED base too, not only against one picked by hand", async () => {
+    const { user } = setup();
+    await user.type(screen.getByLabelText("Title"), "direto na dev");
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    await user.type(screen.getByLabelText("Branch"), "dev"); // base left on "the project's (dev)"
+
+    expect(await screen.findByText(/cannot be the same as the base/)).toBeInTheDocument();
+  });
+
+  it("WARNS about an existing branch without blocking — opening one is a real thing to want", async () => {
+    const { user, onSubmit } = setup();
+    await user.type(screen.getByLabelText("Title"), "retomar o pdv");
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    await user.type(screen.getByLabelText("Branch"), "feat/pdv");
+
+    expect(await screen.findByText(/already exists/)).toBeInTheDocument();
+    expect((screen.getByRole("button", { name: "Create card" }) as HTMLButtonElement).disabled).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Create card" }));
+    expect(onSubmit).toHaveBeenCalledWith({
+      projectId: "p1",
+      title: "retomar o pdv",
+      branch: "feat/pdv",
+    });
+  });
+
+  it("says nothing about a brand-new name — the quiet path stays quiet", async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    await screen.findByLabelText("Cut from"); // branches loaded
+    await user.type(screen.getByLabelText("Branch"), "fix/nota-fiscal");
+
+    expect(screen.queryByText(/already exists/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Invalid name/)).not.toBeInTheDocument();
   });
 
   it("omits the optional fields entirely when they are left alone", async () => {

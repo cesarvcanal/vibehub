@@ -17,8 +17,10 @@ import {
   DEFAULT_ACCOUNT_SLUG,
   accountLabel,
   boardApi,
+  githubBranchesKey,
   projectAccountSlug,
   projectBaseBranch,
+  splitRepo,
   type BoardAccount,
   type BoardProject,
 } from "@/features/board/api";
@@ -29,6 +31,17 @@ import { useT } from "@/i18n";
 /** The native select, styled like the rest of the form controls. */
 export const SELECT_CLASS =
   "h-9 w-full rounded-md border border-input bg-background/60 px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50";
+
+/**
+ * A branch name the server will accept — the same rule as `assertBranchName` in the registry, which
+ * is what the card's open would hit later. Checked HERE so a typo is a red line under the field
+ * instead of a card that refuses to open minutes afterwards, in the runner, with a git message.
+ * PURE.
+ */
+export function isBranchName(name: string): boolean {
+  const v = name.trim();
+  return v !== "" && !v.startsWith("-") && !v.includes("..") && /^[\w./-]{1,80}$/.test(v);
+}
 
 /**
  * New card. The title is the only thing that matters — the branch, worktree and tmux session are
@@ -91,6 +104,46 @@ export function NewCardDialog({
     retry: false,
   });
 
+  /**
+   * THE REPOSITORY'S REAL BRANCHES, so "cut from" is a list and not a guess. Only fetched once the
+   * options are open: most cards are created without ever unfolding them, and this is a round trip
+   * to GitHub. A project with no repo (scratch), or a request that fails, falls back to a free text
+   * field — the card still gets created, it just stops being able to check the name.
+   */
+  const { owner, repo: repoName } = splitRepo(selectedProject?.repoFullName ?? "");
+  const connection = selectedProject?.githubConnectionId ?? "";
+  const { data: branches } = useQuery({
+    queryKey: githubBranchesKey(connection, owner ?? "", repoName ?? ""),
+    queryFn: () => boardApi.githubBranches(connection, owner as string, repoName as string),
+    enabled: open && showOptions && Boolean(owner && repoName),
+    staleTime: 60_000,
+    retry: false,
+  });
+
+  /**
+   * What is wrong with the branch the card would be created ON, if anything. Three answers, and
+   * they do NOT weigh the same:
+   *  - `invalid` and `isBase` BLOCK the creation — the first would be refused by the server, and
+   *    the second would put the card's commits straight on the branch it is meant to deliver to
+   *    (a locked card pointed at `prod` would be working IN `prod`);
+   *  - `exists` only WARNS: opening a card on a branch that already exists is a real thing to want
+   *    (picking work back up), it just is not "create a new one", and the person should know which
+   *    of the two they are getting.
+   */
+  const effectiveBase = base.trim() || defaultBranch || "";
+  const branchIssue: "invalid" | "isBase" | "exists" | null = !branch.trim()
+    ? null
+    : !isBranchName(branch)
+      ? "invalid"
+      : branch.trim() === effectiveBase
+        ? "isBase"
+        : branches?.includes(branch.trim())
+          ? "exists"
+          : null;
+  /** A base typed by hand (no list) is taken on trust; one picked from the list cannot be wrong. */
+  const baseInvalid = base.trim() !== "" && !isBranchName(base);
+  const blocked = branchIssue === "invalid" || branchIssue === "isBase" || baseInvalid;
+
   /** `Tech — 31%`, or just the name when that account has no numbers to show. PURE-ish. */
   const withPercent = (label: string, slug: string) => {
     const percent = pillPercent(usage?.bySlug?.[slug]);
@@ -122,7 +175,7 @@ export function NewCardDialog({
   function submit(event: React.FormEvent) {
     event.preventDefault();
     const trimmed = title.trim();
-    if (!trimmed || !projectId) return;
+    if (!trimmed || !projectId || blocked) return;
     onSubmit({
       projectId,
       title: trimmed,
@@ -237,6 +290,40 @@ export function NewCardDialog({
                 </select>
               </div>
 
+              {/* CUT FROM comes first: it is the question you answer before naming anything, and a
+                  list of the repository's real branches is the whole point — "dev" exists in some
+                  repos and not others, and typing it wrong fails minutes later inside the runner. */}
+              <div className="space-y-1.5">
+                <Label htmlFor="new-card-base">{t("newCard.base")}</Label>
+                {branches?.length ? (
+                  <select
+                    id="new-card-base"
+                    className={SELECT_CLASS}
+                    value={base}
+                    onChange={(e) => setBase(e.target.value)}
+                  >
+                    <option value="">{t("newCard.baseInherit", { branch: defaultBranch ?? "" })}</option>
+                    {branches.map((b) => (
+                      <option key={b} value={b}>
+                        {b}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <Input
+                    id="new-card-base"
+                    value={base}
+                    onChange={(e) => setBase(e.target.value)}
+                    placeholder={t("newCard.basePlaceholder", { branch: defaultBranch ?? "dev" })}
+                    className="font-mono"
+                    aria-invalid={baseInvalid || undefined}
+                  />
+                )}
+                {baseInvalid ? (
+                  <p className="text-[11px] text-destructive">{t("newCard.branchInvalid")}</p>
+                ) : null}
+              </div>
+
               <div className="space-y-1.5">
                 <Label htmlFor="new-card-branch">{t("newCard.branch")}</Label>
                 <Input
@@ -244,23 +331,32 @@ export function NewCardDialog({
                   value={branch}
                   onChange={(e) => setBranch(e.target.value)}
                   placeholder={
-                    defaultBranch
-                      ? t("newCard.branchPlaceholderBase", { branch: defaultBranch })
+                    effectiveBase
+                      ? t("newCard.branchPlaceholderBase", { branch: effectiveBase })
                       : t("newCard.branchPlaceholder")
                   }
                   className="font-mono"
+                  aria-invalid={branchIssue === "invalid" || branchIssue === "isBase" || undefined}
+                  aria-describedby={branchIssue ? "new-card-branch-issue" : undefined}
                 />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="new-card-base">{t("newCard.base")}</Label>
-                <Input
-                  id="new-card-base"
-                  value={base}
-                  onChange={(e) => setBase(e.target.value)}
-                  placeholder={t("newCard.basePlaceholder", { branch: defaultBranch ?? "dev" })}
-                  className="font-mono"
-                />
+                {/* One line, and it says which of the three it is: two stop the card, one just
+                    tells you the card will OPEN on a branch instead of creating it. */}
+                {branchIssue ? (
+                  <p
+                    id="new-card-branch-issue"
+                    className={
+                      branchIssue === "exists"
+                        ? "text-[11px] text-amber-600 dark:text-amber-400"
+                        : "text-[11px] text-destructive"
+                    }
+                  >
+                    {branchIssue === "invalid"
+                      ? t("newCard.branchInvalid")
+                      : branchIssue === "isBase"
+                        ? t("newCard.branchIsBase", { branch: effectiveBase })
+                        : t("newCard.branchExists")}
+                  </p>
+                ) : null}
               </div>
 
               {/* The LOCK. Deliberately next to the base, because the base is what it locks the card
@@ -285,7 +381,7 @@ export function NewCardDialog({
             <Button type="button" variant="ghost" onClick={close}>
               {t("common.cancel")}
             </Button>
-            <Button type="submit" disabled={!title.trim()}>
+            <Button type="submit" disabled={!title.trim() || blocked}>
               {t("newCard.create")}
             </Button>
           </DialogFooter>

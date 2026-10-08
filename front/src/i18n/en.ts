@@ -717,6 +717,13 @@ export const en: Record<string, string> = {
   "newCard.branchPlaceholder": "derived from the title",
   "newCard.base": "Cut from",
   "newCard.basePlaceholder": "the project's ({branch})",
+  "newCard.baseInherit": "The project's ({branch})",
+  "newCard.branchInvalid":
+    "Invalid name: letters, digits, dot, slash, dash and _ — no spaces, no “..”, and it cannot start with “-”.",
+  "newCard.branchExists":
+    "That branch already exists — the card will open ON it, as it stands, instead of creating a new one.",
+  "newCard.branchIsBase":
+    "It cannot be the same as the base: the card would commit straight into {branch}. Give the working branch another name.",
   "newCard.locked": "Lock the card to this branch",
   "newCard.lockedHint":
     "The card works on its own branch and delivers only as a pull request against the branch it was cut from — it never merges and never ships anywhere else. Whoever reviews it merges it.",

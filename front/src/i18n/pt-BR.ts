@@ -723,6 +723,13 @@ export const ptBR: Record<string, string> = {
   "newCard.branchPlaceholder": "derivada do título",
   "newCard.base": "Branch de origem",
   "newCard.basePlaceholder": "do projeto ({branch})",
+  "newCard.baseInherit": "A do projeto ({branch})",
+  "newCard.branchInvalid":
+    "Nome inválido: letras, números, ponto, barra, hífen e _ — sem espaço, sem “..” e sem começar com “-”.",
+  "newCard.branchExists":
+    "Essa branch já existe — o card vai abrir NELA, do jeito que ela está, em vez de criar uma nova.",
+  "newCard.branchIsBase":
+    "Não pode ser a mesma da origem: o card commitaria direto em {branch}. Dê outro nome à branch de trabalho.",
   "newCard.locked": "Prender o card nesta branch",
   "newCard.lockedHint":
     "O card trabalha na branch dele e entrega só como pull request para a branch de origem — nunca mergeia, nunca sobe pra outra branch. Quem revisa mergeia.",
