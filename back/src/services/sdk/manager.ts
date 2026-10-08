@@ -259,14 +259,6 @@ function backgroundHoldLeft(session: Pick<DriverSession, "backgroundTasks" | "ba
 }
 
 /**
- * Eventos que só existem DENTRO de um turno. Um deles com nenhum turno contado é um turno que o
- * CLI abriu sozinho — o caso típico: a tarefa em segundo plano terminou e o CLI acordou o modelo.
- */
-const TURN_CONTENT_EVENTS = new Set([
-  "assistant_delta", "assistant_text", "thinking", "thinking_delta", "tool_use", "permission_request", "user_question",
-]);
-
-/**
  * What this card's driver is doing right now, for the board's session view (see
  * `onCardDriverProbe` in services/board/agentState.ts): `turn` while a turn is in flight, `idle`
  * for a live driver at the prompt, `none` when there is no driver. Read-only and in-memory.
@@ -396,13 +388,6 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     // ponto em que um `result` o arma.
     clearIdleTimer(session);
     maybeScheduleIdleStop(session);
-  }
-  if (TURN_CONTENT_EVENTS.has(event.type) && session.activeTurns === 0) {
-    // Um turno que ninguém mandou: o CLI acordou o modelo sozinho (a tarefa em segundo plano
-    // terminou). Conta como turno até o `result` dele — senão o idle stop e o idle sweep o
-    // derrubavam no meio da resposta, com a faixa dizendo "ele retoma quando isso terminar".
-    session.activeTurns = 1;
-    clearIdleTimer(session);
   }
   if (event.type === "turn_absorbed") {
     // Streaming input: this send folded into the turn ALREADY running (the model absorbs it at its

@@ -1631,8 +1631,28 @@ describe("background_tasks — o trabalho que segue depois do turno", () => {
     expect(spawned[0]!.killed).toBe(true);
   });
 
-  it("o turno que o CLI abre SOZINHO quando a tarefa termina conta como ocupado até o result dele", () => {
-    vi.useFakeTimers();
+  // O TURNO QUE O CLI ABRE SOZINHO (a tarefa terminou e o modelo foi acordado) NÃO é contado pelo
+  // manager: inferi-lo pelo tipo de evento prendia a contagem em 1 — o driver não sabe desse turno
+  // (seu `turnActive` só nasce em `sendUser`), então uma mensagem no meio dele não vira
+  // `turn_absorbed` e um CLI que cai no meio não paga o `result`. Contar esse turno é tarefa do
+  // DRIVER (fora do escopo deste PR); até lá, a contagem fica exatamente como na main.
+  it("mensagem enviada no meio do turno autônomo não prende a contagem: um result e volta a zero", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"espera o deploy"}`));
+    spawned[0]!.stdout.emit("data", line(running));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    spawned[0]!.stdout.emit("data", line(none));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_delta", text: "Deploy ok, " }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"e o cert?"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    expect(session.activeTurns).toBe(0);
+    expect(driverActivity(CARD)).toBe("idle");
+  });
+
+  it("CLI que cai no meio do turno autônomo não deixa o driver ocupado para sempre", () => {
     const session = ensure();
     const socket = fakeSocket();
     attachSocket(session, socket as never);
@@ -1641,18 +1661,24 @@ describe("background_tasks — o trabalho que segue depois do turno", () => {
     spawned[0]!.stdout.emit("data", line(running));
     spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
     socket.emit("close");
-    // A tarefa acabou; o CLI acorda o modelo e ele volta a trabalhar, sem mensagem de ninguém.
     spawned[0]!.stdout.emit("data", line(none));
-    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "Deploy confirmado, seguindo." }));
-    spawned[0]!.stdout.emit("data", line({ type: "tool_use", id: "t9", name: "Bash", input: { command: "make cert" } }));
-    expect(isCardChatInUse(CARD)).toBe(true);
-    expect(driverActivity(CARD)).toBe("turn");
-    vi.advanceTimersByTime(DRIVER_IDLE_MS * 3);
-    expect(spawned[0]!.killed).toBe(false);
-    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "woke" }));
+    spawned[0]!.stdout.emit("data", line({ type: "error", message: "CLI process exited with code 1" }));
     expect(session.activeTurns).toBe(0);
     expect(isCardChatInUse(CARD)).toBe(false);
-    vi.advanceTimersByTime(DRIVER_IDLE_MS + 1);
-    expect(spawned[0]!.killed).toBe(true);
+  });
+
+  it("parar sem turno nenhum não deixa nota de interrupção para o próximo turno", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"espera o deploy"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_delta", text: "acordei" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"e agora?"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    socket.emit("message", Buffer.from(`{"type":"interrupt"}`));
+    expect(session.pendingInterruptNote).toBeUndefined();
   });
 });
