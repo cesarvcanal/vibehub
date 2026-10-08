@@ -6,6 +6,7 @@ import {
   answerQuestion,
   currentActivity,
   decidePermission,
+  deliveredUserTexts,
   dropRewoundRows,
   groupSdkRows,
   liveActivityDetail,
@@ -22,6 +23,7 @@ import {
   type SdkEvent,
 } from "./sdkChat";
 import { pendingDecisions } from "./pendingDecisions";
+import { reconcileOutbox, sendMark } from "./sdkOutbox";
 
 function feed(events: SdkEvent[], from: SdkChatState = INITIAL_SDK_STATE): SdkChatState {
   return events.reduce((state, event) => applySdkEvent(state, event), from);
@@ -1419,5 +1421,50 @@ describe("conversation_reset — /clear", () => {
     const before = feed([{ type: "ready" }, { type: "assistant_text", text: "plano aprovado" }]);
     const state = applySdkEvent(before, { type: "conversation_reset", trigger: "plan_exit" });
     expect(state.rows).toEqual(before.rows);
+  });
+});
+
+/**
+ * MENSAGENS DE OUTRAS PESSOAS AO VIVO (2026-10-08): o back passou a repassar o envio de uma aba às
+ * outras do card. A tela tinha regras escritas para um mundo em que só existiam linhas do replay e
+ * os próprios envios — estas são as que a mensagem alheia ao vivo quebrava.
+ */
+describe("mensagem de outra pessoa chegando ao vivo", () => {
+  const BOB = { kind: "user" as const, name: "bob" };
+  const ALICE = { kind: "owner" as const, name: "alice" };
+
+  it("o rebobinar não apaga a edição quando outra pessoa mandou algo antes do `rewound`", () => {
+    let state = appendUserRow(INITIAL_SDK_STATE, "sobe pra prod");
+    state = applySdkEvent(state, { type: "assistant_text", text: "subindo..." });
+    state = appendUserRow(markUserEdited(state, "sobe pra prod"), "sobe pra dev", undefined, { cid: "c2", state: "sending" });
+    state = applySdkEvent(state, { type: "user", text: "e o banco?", at: 1000, from: BOB });
+    state = applySdkEvent(state, { type: "rewound", ok: true, originalText: "sobe pra prod", text: "sobe pra dev" } as SdkEvent);
+    const users = state.rows.filter((r) => r.kind === "user").map((r) => (r as { text: string }).text);
+    expect(users).toEqual(["sobe pra dev", "e o banco?"]);
+    expect(state.rows.some((r) => r.kind === "assistant" && r.text === "subindo...")).toBe(false);
+  });
+
+  it("o mesmo texto vindo de OUTRA pessoa não prova que o MEU envio pendente chegou", () => {
+    const mine = { cid: "c9", text: "sim", at: 100, since: 50, seenBefore: 0 };
+    let state = applySdkEvent(INITIAL_SDK_STATE, { type: "user", text: "sim", at: 40, from: ALICE });
+    state = applySdkEvent(state, { type: "user", text: "sim", at: 200, from: BOB });
+    const { missing } = reconcileOutbox(deliveredUserTexts(state.rows, "alice"), [mine as never]);
+    expect(missing.map((m) => m.cid)).toEqual(["c9"]);
+  });
+
+  it("a mensagem alheia desenhada depois da minha não vira a âncora do meu próximo envio", () => {
+    let state = appendUserRow(INITIAL_SDK_STATE, "ok", undefined, { cid: "c1", state: "sent" });
+    state = applySdkEvent(state, { type: "user", text: "valeu", at: 1500, from: BOB });
+    const entry = { cid: "c2", text: "ok", at: 3000, ...sendMark(deliveredUserTexts(state.rows, "alice"), "ok") };
+    // O reconnect: o replay traz o primeiro "ok" (gravado em 2000) — e é a mesma tela que filtra.
+    let replay = applySdkEvent(INITIAL_SDK_STATE, { type: "user", text: "valeu", at: 1500, from: BOB });
+    replay = applySdkEvent(replay, { type: "user", text: "ok", at: 2000, from: ALICE });
+    const { missing } = reconcileOutbox(deliveredUserTexts(replay.rows, "alice"), [entry as never]);
+    expect(missing.map((m) => m.cid)).toEqual(["c2"]);
+  });
+
+  it("sem saber quem está vendo, tudo conta (o comportamento de antes)", () => {
+    const state = applySdkEvent(INITIAL_SDK_STATE, { type: "user", text: "valeu", at: 1500, from: BOB });
+    expect(deliveredUserTexts(state.rows)).toEqual([{ text: "valeu", at: 1500 }]);
   });
 });

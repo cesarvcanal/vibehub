@@ -16,6 +16,8 @@ import {
   handleClientFrame,
   hasDriverSession,
   isCardChatInUse,
+  missedDuringSetup,
+  onPeerTurn,
   injectSystemTurn,
   resetSdkSessionsForTesting,
   setDriverSpawnerForTesting,
@@ -1347,6 +1349,16 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
     for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 10));
   };
 
+  it("o `rewound` que vai à tela diz QUAL mensagem é a edição — com outra pessoa no card, ela não é a última", async () => {
+    await conversaComEdicao();
+    const viewer = fakeSocket();
+    attachSocket(ensure(), viewer as never);
+    emit({ type: "rewound", ok: true, uuid: "abc", originalText: "errada" });
+    const rewound = viewer.sent.map((s) => JSON.parse(s) as { type: string; text?: string }).find((e) => e.type === "rewound");
+    expect(rewound?.text).toBe("certa");
+    await logAssentado();
+  });
+
   it("ok: true corta o miolo e deixa o log igual ao que o modelo tem", async () => {
     await conversaComEdicao();
     emit({ type: "rewound", ok: true, uuid: "abc" });
@@ -1711,6 +1723,106 @@ describe("attachSocket — \"está digitando\" entre as abas do card", () => {
     attachSocket(session, mussa as never, MUSSA);
     anon.emit("message", typing(true));
     expect(peerFrames(mussa)).toEqual([]);
+  });
+});
+
+/**
+ * A MENSAGEM DE UMA PESSOA NA TELA DAS OUTRAS (produção, 2026-10-08): o Albert digitou — o
+ * "está digitando…" apareceu para os outros —, deu Enter, e a mensagem não apareceu para ninguém
+ * além dele até um F5. O turno ia para o driver e para o disco, mas o envio nunca era repassado às
+ * outras abas do card: só a resposta do modelo chegava, sem a pergunta que a gerou.
+ */
+describe("attachSocket — a mensagem enviada aparece ao vivo nas outras abas do card", () => {
+  const ALBERT = { kind: "user" as const, name: "albert" };
+  const MUSSA = { kind: "owner" as const, name: "mussa" };
+  type Frame = { type: string; text?: string; from?: { name: string }; at?: number; originalText?: string };
+  const frames = (socket: FakeSocket, type: string): Frame[] =>
+    socket.sent.map((s) => JSON.parse(s) as Frame).filter((e) => e.type === type);
+
+  it("repassa a mensagem às OUTRAS abas com autor e horário — quem enviou já a desenhou", () => {
+    const session = ensure();
+    const albert = fakeSocket();
+    const mussa = fakeSocket();
+    attachSocket(session, albert as never, ALBERT);
+    attachSocket(session, mussa as never, MUSSA);
+    albert.emit("message", Buffer.from(`{"type":"user","text":"sobe o deploy","cid":"c1"}`));
+    const seen = frames(mussa, "user");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ type: "user", text: "sobe o deploy", from: { name: "albert" } });
+    expect(typeof seen[0]!.at).toBe("number");
+    expect(frames(albert, "user")).toEqual([]);
+  });
+
+  it("o Reenviar (mesmo cid) não desenha a mensagem duas vezes nos outros", () => {
+    const session = ensure();
+    const albert = fakeSocket();
+    const mussa = fakeSocket();
+    attachSocket(session, albert as never, ALBERT);
+    attachSocket(session, mussa as never, MUSSA);
+    albert.emit("message", Buffer.from(`{"type":"user","text":"sobe o deploy","cid":"c1"}`));
+    albert.emit("message", Buffer.from(`{"type":"user","text":"sobe o deploy","cid":"c1"}`));
+    expect(frames(mussa, "user")).toHaveLength(1);
+  });
+
+  it("uma mensagem RECUSADA (driver morto) não aparece para ninguém — ela não entrou na conversa", () => {
+    const session = ensure();
+    const albert = fakeSocket();
+    const mussa = fakeSocket();
+    attachSocket(session, albert as never, ALBERT);
+    attachSocket(session, mussa as never, MUSSA);
+    spawned[0]!.stdin.writable = false;
+    albert.emit("message", Buffer.from(`{"type":"user","text":"sobe o deploy","cid":"c1"}`));
+    expect(frames(mussa, "user")).toEqual([]);
+  });
+
+  it("a edição chega aos outros: a original esmaece e a nova versão aparece", () => {
+    const session = ensure();
+    const albert = fakeSocket();
+    const mussa = fakeSocket();
+    attachSocket(session, albert as never, ALBERT);
+    attachSocket(session, mussa as never, MUSSA);
+    albert.emit("message", Buffer.from(`{"type":"edit_user","original":"sobe pra prod","text":"sobe pra dev","cid":"c2"}`));
+    expect(frames(mussa, "message_edited")).toEqual([expect.objectContaining({ originalText: "sobe pra prod" })]);
+    expect(frames(mussa, "user")).toEqual([expect.objectContaining({ text: "sobe pra dev", from: { kind: "user", name: "albert" } })]);
+    expect(frames(albert, "user")).toEqual([]);
+  });
+
+  it("quem ainda está conectando (setup da rota) também ouve o envio — e para de ouvir ao sair", () => {
+    const session = ensure();
+    const albert = fakeSocket();
+    attachSocket(session, albert as never, ALBERT);
+    const heard: string[] = [];
+    const off = onPeerTurn(CARD, (e) => heard.push(e.type === "user" ? e.text : e.type));
+    albert.emit("message", Buffer.from(`{"type":"user","text":"sobe o deploy"}`));
+    off();
+    albert.emit("message", Buffer.from(`{"type":"user","text":"depois"}`));
+    expect(heard).toEqual(["sobe o deploy"]);
+  });
+
+  it("do que foi ouvido no setup, só o que o replay NÃO trouxe é entregue (nunca duas vezes)", () => {
+    const noReplay = { type: "user" as const, text: "a", at: 1, from: ALBERT };
+    const depois = { type: "user" as const, text: "b", at: 2, from: ALBERT };
+    const marca = { type: "message_edited" as const, originalText: "b", at: 3 };
+    expect(missedDuringSetup([noReplay, depois, marca], [{ ...noReplay }])).toEqual([depois, marca]);
+  });
+
+  it("o turno que o próprio back injeta (retomada pós-deploy) também aparece em quem está olhando", () => {
+    const session = ensure();
+    const mussa = fakeSocket();
+    attachSocket(session, mussa as never, MUSSA);
+    injectSystemTurn(session, "continue de onde parou", { kind: "system", name: "vibehub" }, 1);
+    expect(frames(mussa, "user")).toEqual([expect.objectContaining({ text: "continue de onde parou", from: { kind: "system", name: "vibehub" } })]);
+  });
+
+  it("vale também para a mensagem guardada durante o setup da conexão (o caminho do buffer)", () => {
+    const session = ensure();
+    const albert = fakeSocket();
+    const mussa = fakeSocket();
+    attachSocket(session, albert as never, ALBERT);
+    attachSocket(session, mussa as never, MUSSA);
+    handleClientFrame(session, `{"type":"user","text":"e aí, como tá indo?"}`, ALBERT, albert as never);
+    expect(frames(mussa, "user")).toEqual([expect.objectContaining({ text: "e aí, como tá indo?" })]);
+    expect(frames(albert, "user")).toEqual([]);
   });
 });
 

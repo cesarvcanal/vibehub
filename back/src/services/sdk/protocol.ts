@@ -138,6 +138,12 @@ export interface RewoundEvent {
   reason?: "no-fork-point" | "absorbed";
   /** On `ok: true`: the edited message's original words — the screen cuts from THAT row. */
   originalText?: string;
+  /**
+   * On `ok: true`, stamped by the back (the driver does not know it): the edit's NEW words — the
+   * screen cuts UP TO that row. With another person on the card it is not the last message: their
+   * send can land between the edit and this confirmation.
+   */
+  text?: string;
 }
 
 /** End of a turn. */
