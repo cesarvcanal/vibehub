@@ -65,6 +65,16 @@ export function query({ prompt, options }) {
         yield { type: "result", subtype: "error_during_execution", is_error: true, terminal_reason: "aborted_streaming", session_id: SESSION };
         continue;
       }
+      if (text === "bgstubborn") {
+        // O stream DESERDADO que era dono do conjunto: anuncia uma tarefa, ignora interrupt e EOF, e
+        // só depois de existir um stream mais novo anuncia o conjunto vazio — e fica pendurado.
+        yield { type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "b1", task_type: "local_bash", description: "x" }], session_id: SESSION, uuid: "u-bgs" };
+        mark("bgstubborn:running");
+        while (created === index) await sleep(20);
+        yield { type: "system", subtype: "background_tasks_changed", tasks: [], session_id: SESSION, uuid: "u-bgs-off" };
+        mark("bgstubborn:cleared");
+        await new Promise(() => {});
+      }
       if (text === "bg" || text === "bg-off" || text === "bg-die") {
         // TAREFAS EM SEGUNDO PLANO: o CLI anuncia o conjunto vivo inteiro a cada mudança
         // (system/background_tasks_changed, semântica de SUBSTITUIR).
@@ -272,6 +282,18 @@ describe("sdk-driver.mjs — tarefas em segundo plano", () => {
     const off = await driver.waitFor((e) => e.type === "background_tasks", from);
     expect(off.tasks).toEqual([]);
   });
+
+  it("o teardown que DESISTE de um stream dono das tarefas zera o conjunto: o [] dele é só drenado, e ele pode nunca morrer", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "bgstubborn" });
+    await driver.waitMark("bgstubborn:running");
+    driver.send({ type: "edit_user", original: "bgstubborn", text: "fixed", fallback: "fallback" });
+    await driver.waitMark("bgstubborn:cleared");
+    await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:fixed", from);
+    const sets = driver.events.slice(from).filter((e) => e.type === "background_tasks");
+    expect(sets.at(-1)?.tasks).toEqual([]);
+  }, 60_000);
 
   it("quando o processo do CLI morre, as tarefas morrem com ele: o conjunto volta vazio", async () => {
     const driver = startDriver();

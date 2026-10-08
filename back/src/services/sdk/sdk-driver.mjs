@@ -1058,6 +1058,13 @@ async function endStream() {
     currentQuery = null;
     ultraRaised = null; // pinned in that CLI's flag layer, which is no longer ours to give back
     closeTurnAborted();
+    // As tarefas em segundo plano dele também deixam de ser nossas: o que ele ainda anunciar é só
+    // drenado (inclusive o `[]` de quando elas acabam), e o `finally` dele pode nunca rodar — um
+    // processo pendurado deixava a faixa acesa e o driver "ocupado" para sempre.
+    if (backgroundTasksOwner === dying) {
+      backgroundTasksOwner = null;
+      emit({ type: "background_tasks", tasks: [] });
+    }
     if (closingQuery === dying) closingQuery = null;
     trace("stream did not let go within the teardown window — disowned, its errors are news again");
   }
