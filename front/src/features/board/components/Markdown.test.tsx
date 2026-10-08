@@ -229,11 +229,14 @@ describe("Markdown — copiar bloco de código", () => {
     );
     const composer = screen.getByRole("textbox", { name: "composer" });
     composer.focus();
+    const focus = vi.spyOn(composer, "focus");
 
     fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
 
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
     expect(document.activeElement).toBe(composer);
+    // Giving focus back must not scroll the page to it (xterm's helper textarea lives off-screen).
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
   });
 
   it("cliques seguidos substituem o toast em vez de empilhar", async () => {

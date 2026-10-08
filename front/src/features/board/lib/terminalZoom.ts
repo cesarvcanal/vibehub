@@ -118,7 +118,8 @@ function legacyCopy(text: string): boolean {
     return document.execCommand("copy");
   } finally {
     document.body.removeChild(ta);
-    if (previous && previous !== document.body) previous.focus?.();
+    // `preventScroll`: the element may sit off-screen (xterm's helper textarea) — no page jump.
+    if (previous && previous !== document.body) previous.focus?.({ preventScroll: true });
   }
 }
 
