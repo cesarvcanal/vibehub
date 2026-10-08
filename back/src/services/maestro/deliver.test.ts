@@ -155,6 +155,41 @@ describe("deliver orchestration", () => {
     expect(runScript).toHaveBeenCalledOnce(); // push only — no gate, no merge
   });
 
+  it("a LOCKED card opens the PR against its OWN base, ignoring the branch it was asked for", async () => {
+    const { deliver, registry, project, card } = await makeCard();
+    await registry.updateProject(project.id, { baseBranch: "dev" });
+    await registry.updateCard(card.id, { base: "dev", locked: true });
+    wire();
+    // The agent read "sobe pra prod" and passed it along, authorized and all. Neither word counts.
+    const out = await deliver.deliver(card.id, { branch: "prod", authorized: true });
+    expect(out).toMatchObject({ merged: false, reason: "locked", locked: true, branch: "dev", prUrl: PR });
+    expect(mergeRan()).toBe(false);
+    expect(scripts().some((s) => s.includes("--base 'dev'"))).toBe(true);
+    expect(scripts().some((s) => s.includes("prod"))).toBe(false);
+  });
+
+  it("a LOCKED card still runs the gate — the PR arrives already measured", async () => {
+    const { deliver, registry, card } = await makeCard();
+    await registry.updateCard(card.id, { locked: true });
+    wire({ run: "1 failing test\n__VIBEHUB_GATE__ fail\n" });
+    const out = await deliver.deliver(card.id, { authorized: true });
+    // A red gate is the more useful answer than "locked": it says what to FIX.
+    expect(out).toMatchObject({ merged: false, reason: "gate", locked: true });
+    expect(out.output).toContain("1 failing test");
+    expect(mergeRan()).toBe(false);
+  });
+
+  it("unlocking the card gives the merge back", async () => {
+    const { deliver, registry, card } = await makeCard();
+    await registry.updateCard(card.id, { locked: true });
+    await registry.updateCard(card.id, { locked: null });
+    wire();
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true });
+    expect(out).toMatchObject({ merged: true, reason: "merged" });
+    expect(out.locked).toBeUndefined();
+    expect(mergeRan()).toBe(true);
+  });
+
   it("defaults the target to the project's base branch", async () => {
     const { deliver, registry, project, card } = await makeCard();
     await registry.updateProject(project.id, { baseBranch: "main" });

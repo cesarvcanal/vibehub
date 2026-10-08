@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Check, Moon, MoreHorizontal, Pause, RotateCw, Share2, Trash2, Users } from "lucide-react";
+import { Check, Lock, LockOpen, Moon, MoreHorizontal, Pause, RotateCw, Share2, Trash2, Users } from "lucide-react";
 import { cn, isNewTabClick } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -48,6 +48,7 @@ export function CardTile({
   onRestart,
   onHibernate,
   onAccount,
+  onLock,
   onDelete,
   onDragStart,
   onDragEnd,
@@ -66,6 +67,8 @@ export function CardTile({
   onHibernate?: (card: BoardCard) => void;
   /** Opens the dialog that switches this card's Claude account. */
   onAccount?: (card: BoardCard) => void;
+  /** Locks the card to its base (or unlocks it). Owner-only, and reversible — see `card.locked`. */
+  onLock?: (card: BoardCard) => void;
   onDelete?: (card: BoardCard) => void;
   /** The event rides along so the board can swap the drag ghost for a bulk move. */
   onDragStart?: (card: BoardCard, e: React.DragEvent) => void;
@@ -120,6 +123,15 @@ export function CardTile({
     // Switching the account, sharing and deleting are the OWNER's — the routes behind them (the
     // account list, the shares, DELETE /api/cards/:id) all answer 403/owner-only to a member.
     ...(onAccount && isOwner ? [{ key: "account", label: t("card.claudeAccountMenu"), icon: Users, onSelect: () => onAccount(card) }] : []),
+    // The lock, both ways: a card locked by accident must be one menu away from being free again.
+    ...(onLock && isOwner
+      ? [{
+          key: "lock",
+          label: card.locked ? t("card.unlockMenu") : t("card.lockMenu", { branch: card.base ?? "" }),
+          icon: card.locked ? LockOpen : Lock,
+          onSelect: () => onLock(card),
+        }]
+      : []),
     ...(isOwner ? [{ key: "share", label: t("card.share"), icon: Share2, onSelect: () => setShareOpen(true) }] : []),
     ...(onDelete && isOwner
       ? [{ key: "delete", label: t("card.deleteCard"), icon: Trash2, danger: true, onSelect: () => onDelete(card) }]
@@ -261,6 +273,19 @@ export function CardTile({
             className="mr-1 mt-1 inline-flex max-w-full items-center truncate rounded border border-primary/30 bg-primary/10 px-1 py-px text-[10px] font-medium text-primary"
           >
             {projectLabel}
+          </span>
+        ) : null}
+
+        {/* LOCKED to its base. This one earns a chip where an inherited setting does not, because it
+            changes what the card can DO: its delivery is a pull request against that branch and
+            never a merge. The branch is the whole information, so it is the chip's text. */}
+        {card.locked ? (
+          <span
+            title={t("card.lockedTo", { branch: card.base ?? "" })}
+            className="mr-1 mt-1 inline-flex max-w-full items-center gap-1 truncate rounded border border-amber-500/40 bg-amber-500/10 px-1 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400"
+          >
+            <Lock aria-hidden className="h-2.5 w-2.5 shrink-0" />
+            <span className="truncate font-mono">{card.base}</span>
           </span>
         ) : null}
 

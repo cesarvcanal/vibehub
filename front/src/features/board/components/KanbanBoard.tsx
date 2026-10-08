@@ -257,6 +257,20 @@ export function KanbanBoard({
     onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardAccountSwitchError"))),
   });
 
+  /**
+   * The LOCK, toggled from the card's menu: a PATCH of `locked` and nothing else. It changes where
+   * the card may deliver (its base, as a PR, never a merge) and never touches the session, so there
+   * is no restart and no dialog — the chip on the card is the confirmation.
+   */
+  const lockMutation = useMutation({
+    mutationFn: ({ id, locked }: { id: string; locked: boolean }) => boardApi.patchCard(id, { locked }),
+    onSuccess: (_data, { locked }) => {
+      void queryClient.invalidateQueries({ queryKey: boardKey });
+      toast.success(translate(locked ? "toast.cardLocked" : "toast.cardUnlocked"));
+    },
+    onError: (error) => toast.error(apiErrorMessage(error, translate("toast.cardLockError"))),
+  });
+
   const groups = groupByColumn(cards ?? []);
   const total = (cards ?? []).length;
 
@@ -428,6 +442,7 @@ export function KanbanBoard({
                         setAccountChoice(c.accountSlug ?? "");
                         setAccountTarget(c);
                       }}
+                      onLock={(c) => lockMutation.mutate({ id: c.id, locked: !c.locked })}
                       onDelete={setDeleteTarget}
                       deleting={deletingIds.has(card.id)}
                       onDragStart={startDrag}

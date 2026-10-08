@@ -188,6 +188,43 @@ export function projectBrainWriteLines(cwd: string, text: string): string[] {
   ];
 }
 
+/* ------------------------------------------------------- locked-card notice */
+
+/**
+ * THE LOCK, STATED TO THE AGENT. A locked card (`Card.locked`) can only ever deliver a pull request
+ * back to its base, and what ENFORCES that is `deliver` — but an agent that does not know the rule
+ * spends the turn bumping into it: a `gh pr merge` by hand, a push straight at the base branch, a
+ * question to the user about where to ship. So the rule travels with the card, at the top of its
+ * `CLAUDE.local.md`, where Claude Code reads it as project memory.
+ *
+ * A NOTICE, not the enforcement: text in a prompt is advice. The guarantee is deliver() refusing to
+ * merge, plus whatever the repository's own branch protection says about its protected branches.
+ */
+export function lockedCardNotice(base: string): string {
+  return [
+    "## Locked card (vibehub)",
+    "",
+    `This card works on its own branch and delivers ONLY as a pull request against \`${base}\`.`,
+    "",
+    `- Do NOT merge anything, and do NOT push to \`${base}\` or to any branch other than this card's own.`,
+    "- Delivering is `vibehub_deliver` (push + PR + gate). On this card it ignores any other target",
+    "  and never merges — by design, not by accident.",
+    "- Reviewing and merging the PR is somebody else's job. When the work is done, say where the PR is and stop.",
+    "- Asked to merge or to ship to production: answer that this card is locked and the PR is open for review.",
+  ].join("\n");
+}
+
+/**
+ * The project-brain text a given CARD receives: the lock stated first when the card is locked, the
+ * project's own text untouched below it. A card that is not locked gets exactly what it always got.
+ * PURE.
+ */
+export function brainTextForCard(text: string, card: { locked?: boolean; base: string }): string {
+  if (card.locked !== true) return text;
+  const notice = lockedCardNotice(card.base);
+  return text.trim() ? `${notice}\n\n${text}` : notice;
+}
+
 /* --------------------------------------------------------------- learnings */
 
 /** Heading of the append-only section `vibehub_brain_learn` is allowed to touch. */

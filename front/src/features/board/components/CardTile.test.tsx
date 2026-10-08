@@ -225,6 +225,30 @@ describe("CardTile — the ⋯ menu", () => {
     }
   });
 
+  it("offers the LOCK both ways — lock a free card, unlock a locked one", async () => {
+    const user = userEvent.setup();
+    const onLock = vi.fn();
+    vi.mocked(get).mockImplementation(async (url: string) =>
+      url === "/auth/me" ? { user: { id: "u1", username: "sam", role: "owner" } } : {},
+    );
+    try {
+      const { unmount } = renderApp(
+        <CardTile card={card({ base: "dev" })} onOpen={vi.fn()} onLock={onLock} />,
+      );
+      await user.click(await screen.findByRole("button", { name: "Actions for fix the totals" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Lock to dev" }));
+      expect(onLock).toHaveBeenCalledWith(expect.objectContaining({ id: "c1" }));
+      unmount();
+
+      // A card locked by accident must be one menu away from being free again.
+      renderApp(<CardTile card={card({ base: "dev", locked: true })} onOpen={vi.fn()} onLock={onLock} />);
+      await user.click(await screen.findByRole("button", { name: "Actions for fix the totals" }));
+      expect(await screen.findByRole("menuitem", { name: "Unlock the card" })).toBeInTheDocument();
+    } finally {
+      vi.mocked(get).mockResolvedValue({});
+    }
+  });
+
   it("runs an action without also opening the card", async () => {
     const user = userEvent.setup();
     const onOpen = vi.fn();
@@ -255,6 +279,17 @@ describe("CardTile — the chips", () => {
   it("shows the card's OWN account and never the one it merely inherits", () => {
     renderApp(<CardTile card={card({ accountSlug: "personal" })} onOpen={vi.fn()} />);
     expect(screen.getByText("personal")).toBeInTheDocument();
+  });
+
+  it("shows a LOCKED card's base branch, because the lock changes what the card can do", () => {
+    renderApp(<CardTile card={card({ locked: true, base: "dev" })} onOpen={vi.fn()} />);
+    expect(screen.getByText("dev")).toBeInTheDocument();
+    expect(screen.getByTitle("Locked: delivers only as a PR against dev")).toBeInTheDocument();
+  });
+
+  it("says nothing about the base on a card that is NOT locked — an inherited base is not news", () => {
+    renderApp(<CardTile card={card({ base: "dev" })} onOpen={vi.fn()} />);
+    expect(screen.queryByText("dev")).not.toBeInTheDocument();
   });
 
   it("says nothing about the model — that is a setting, not news", () => {

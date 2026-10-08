@@ -37,6 +37,7 @@ const cards: BoardCard[] = [
   {
     id: "c1", projectId: "p1", title: "fix the totals", column: "working", position: 0,
     tmuxSession: "card-c1", worktreeSlug: "fix-the-totals-c1", status: "working", openedAt: 5, createdAt: 1,
+    base: "dev",
   },
 ];
 
@@ -66,7 +67,7 @@ describe("role-aware UI — the card tile's menu", () => {
   function renderTile() {
     renderApp(
       <CardTile card={cards[0]} onOpen={vi.fn()} onDone={vi.fn()} onPause={vi.fn()}
-        onAccount={vi.fn()} onDelete={vi.fn()} />,
+        onAccount={vi.fn()} onLock={vi.fn()} onDelete={vi.fn()} />,
     );
   }
 
@@ -78,6 +79,7 @@ describe("role-aware UI — the card tile's menu", () => {
     expect(within(menu).getByText("Claude account…")).toBeInTheDocument();
     expect(within(menu).getByText("Share…")).toBeInTheDocument();
     expect(within(menu).getByText("Delete card")).toBeInTheDocument();
+    expect(within(menu).getByText("Lock to dev")).toBeInTheDocument();
   });
 
   it("hides all three from a member — the routes behind them are the owner's", async () => {
@@ -90,6 +92,9 @@ describe("role-aware UI — the card tile's menu", () => {
     expect(within(menu).queryByText("Claude account…")).not.toBeInTheDocument();
     expect(within(menu).queryByText("Share…")).not.toBeInTheDocument();
     expect(within(menu).queryByText("Delete card")).not.toBeInTheDocument();
+    // The lock decides where the card may deliver — a member must not be able to take it off.
+    expect(within(menu).queryByText(/^Lock to/)).not.toBeInTheDocument();
+    expect(within(menu).queryByText("Unlock the card")).not.toBeInTheDocument();
   });
 });
 

@@ -1484,6 +1484,39 @@ describe("the PROJECT brain (CLAUDE.local.md) seeded on open", () => {
     expect(script).not.toContain("cat > '/work/acme--erp-aux-worktrees");
   });
 
+  it("a LOCKED card has the lock stated in its CLAUDE.local.md, above the project's own text", async () => {
+    const brain = await import("../brain/brain.js");
+    const reg = await import("./registry.js");
+    const { project, card } = await seed();
+    await brain.setProjectBrainText(project.id, "# Regras do projeto\nfilial explícita sempre");
+    await reg.updateCard(card.id, { base: "dev", locked: true });
+    await ws.openCard(card.id);
+    const script = scriptAt(0);
+    expect(script).toContain("## Locked card (vibehub)");
+    expect(script).toContain("pull request against `dev`");
+    // the project's own rules are still there, below the notice
+    expect(script).toContain("filial explícita sempre");
+    expect(script.indexOf("## Locked card")).toBeLessThan(script.indexOf("filial explícita sempre"));
+  });
+
+  it("a LOCKED card with no project brain still gets the notice — the file is written, not removed", async () => {
+    const reg = await import("./registry.js");
+    const { card } = await seed();
+    await reg.updateCard(card.id, { locked: true });
+    await ws.openCard(card.id);
+    const script = scriptAt(0);
+    expect(script).toContain("## Locked card (vibehub)");
+    expect(script).not.toContain(`rm -f '/work/acme--erp-aux-worktrees/${card.worktreeSlug}/CLAUDE.local.md'`);
+  });
+
+  it("an UNLOCKED card's file is exactly the project's text — no notice, as before the lock existed", async () => {
+    const brain = await import("../brain/brain.js");
+    const { project, card } = await seed();
+    await brain.setProjectBrainText(project.id, "# Regras do projeto");
+    await ws.openCard(card.id);
+    expect(scriptAt(0)).not.toContain("Locked card");
+  });
+
   it("a scratch project (no repo) gets it too — in the scratch directory, with no git exclude", async () => {
     const brain = await import("../brain/brain.js");
     const { project, card } = await seed(false);

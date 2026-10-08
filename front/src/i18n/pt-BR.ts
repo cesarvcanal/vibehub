@@ -328,6 +328,9 @@ export const ptBR: Record<string, string> = {
   "card.purgeHint.other":
     "Cards em Feito são apagados — com worktree, branch e anexos no servidor — após {n} dias sem atividade. Atividade no card (conversar com o agente, digitar no terminal, renomear) reinicia a contagem — só abrir não conta.",
   "card.ownAccount": "A conta Claude deste card",
+  "card.lockedTo": "Preso: entrega só como PR para {branch}",
+  "card.lockMenu": "Prender em {branch}",
+  "card.unlockMenu": "Soltar o card",
   "card.actionsFor": "Ações de {title}",
   "card.declaredState.working": "Em andamento",
   "card.declaredState.ready": "Pronto",
@@ -718,6 +721,11 @@ export const ptBR: Record<string, string> = {
   "newCard.branch": "Branch",
   "newCard.branchPlaceholderBase": "derivada do título (base {branch})",
   "newCard.branchPlaceholder": "derivada do título",
+  "newCard.base": "Branch de origem",
+  "newCard.basePlaceholder": "do projeto ({branch})",
+  "newCard.locked": "Prender o card nesta branch",
+  "newCard.lockedHint":
+    "O card trabalha na branch dele e entrega só como pull request para a branch de origem — nunca mergeia, nunca sobe pra outra branch. Quem revisa mergeia.",
   "newCard.create": "Criar card",
 
   /* ---------------------------------------------------------------- projeto */
@@ -1017,6 +1025,9 @@ export const ptBR: Record<string, string> = {
   "toast.cardAccountSwitched":
     "Conta trocada — a sessão do Claude reinicia na próxima abertura.",
   "toast.cardAccountSwitchError": "Não deu pra trocar a conta do card",
+  "toast.cardLocked": "Card preso — a entrega agora é só um PR para a branch de origem.",
+  "toast.cardUnlocked": "Card solto — a entrega volta a poder mergear.",
+  "toast.cardLockError": "Não deu pra mudar a trava do card",
   "toast.cardFinished": "“{title}” concluído — parei de acompanhar o terminal.",
   "toast.cardFinishedShort": "“{title}” concluído.",
   "toast.cardRenameError": "Não deu pra renomear o card",

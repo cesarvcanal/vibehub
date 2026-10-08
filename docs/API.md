@@ -139,9 +139,9 @@ that card.
 | PATCH | `/api/projects/:id/order` | `{ position }` — sidebar position |
 | GET | `/api/projects/:id/cards` | `{ cards: Card[] }` |
 | GET | `/api/cards` | `{ cards: Card[] }` — every card in the install, for the views that cut across projects (the sidebar's Recent list) |
-| POST | `/api/cards` | `{ projectId, title }` plus any editable field (`branch`, `accountSlug`, `model`, `resumeSessionId`), applied through the same validation an edit uses. Answers immediately and **pre-provisions the workspace in the background** (clone, worktree, tmux), so the first open is instant |
+| POST | `/api/cards` | `{ projectId, title }` plus any editable field (`branch`, `base`, `locked`, `accountSlug`, `model`, `resumeSessionId`), applied through the same validation an edit uses. Answers immediately and **pre-provisions the workspace in the background** (clone, worktree, tmux), so the first open is instant |
 | GET | `/api/cards/:id` | `{ card }` |
-| PATCH | `/api/cards/:id` | `{ title?, column?, position?, model?, accountSlug?, branch?, base?, resumeSessionId?, sdkChat? }` → `{ card, session }`. All-or-nothing: one invalid field and nothing is applied. A **member** (with `work`) may send only `title`, `column`, `position` and `model` — any other field refuses the whole patch with `403 { error: "only the owner can change: …" }`. `accountSlug`/`branch`/`resumeSessionId`: `null` clears (back to the project's account / `card/<slug>` / `claude -c`); `model`: `null`/`""` clears. `sdkChat` is the per-card "Chat nativo (beta)" opt-in (SDK driver socket) — moving to `done` is always manual. A column is not just a label: moving **into `paused` pauses the card for real** (same rules as the pause route) and moving a paused card into `waiting`/`working` **resumes it** (the session comes back in the background) |
+| PATCH | `/api/cards/:id` | `{ title?, column?, position?, model?, accountSlug?, branch?, base?, locked?, resumeSessionId?, sdkChat? }` → `{ card, session }`. All-or-nothing: one invalid field and nothing is applied. A **member** (with `work`) may send only `title`, `column`, `position` and `model` — any other field refuses the whole patch with `403 { error: "only the owner can change: …" }`. `accountSlug`/`branch`/`resumeSessionId`: `null` clears (back to the project's account / `card/<slug>` / `claude -c`); `model`: `null`/`""` clears. `sdkChat` is the per-card "Chat nativo (beta)" opt-in (SDK driver socket); `locked` is the per-card lock described below (`null`/`false` unlocks) — moving to `done` is always manual. A column is not just a label: moving **into `paused` pauses the card for real** (same rules as the pause route) and moving a paused card into `waiting`/`working` **resumes it** (the session comes back in the background) |
 | DELETE | `/api/cards/:id` | **owner** — a PURGE, not a hide: `{ ok: true, incomplete: string[], steps }`. Kills both tmux sessions and the SDK driver, the preview servers and the card's browser; then erases the native chat history, the provenance log, the in-flight marker, the queued messages, the worktree, **the `card/<slug>` branch the card created, LOCALLY** (a branch that existed before the card — `dev`, `prod`, an imported session — is left alone, and nothing remote is ever touched: the script carries no `push`/`fetch`/`gh`), `/work/.uploads/<id>`, the browser profile, the gh-token file and the Claude Code transcripts/prompt history of the card's cwd in every account profile. The card leaves the board even when the runner is down — `incomplete` names the steps that did not finish and the daily orphan sweep collects them. Nothing pushed to GitHub is touched |
 | POST | `/api/cards/:id/open` | attach-or-create the tmux session; returns the card. Also resumes a paused or hibernated one |
 | POST | `/api/cards/:id/pause` | moves the card to `paused` and ends its tmux sessions. A card that is REALLY working (the runner is asked, not the dot) becomes a *pending* pause: the session lives until Claude finishes. A stale `working` dot — a card parked on Claude's "Resume from summary" screen never fires a Stop hook — does not defer anything: it is paused on the spot |
@@ -163,6 +163,25 @@ that card.
 | WS | `/api/cards/:id/sdk` | **native chat (beta)** — the Agent-SDK driver, gated by the `sdkDriver` setting. One JSON `DriverEvent` per frame (`ready`, `session`, `assistant_delta`, `assistant_text`, `tool_use`, `permission_request`, `permission`, `result`, `error`, `parse_error`); the client sends `{ type: "user", text }`, `{ type: "interrupt" }` or `{ type: "permission_decision", id, allow }`. On connect the route **replays the conversation**: the newest TUI/SDK transcript tail (converted to frames, incl. `{ type: "user" }`) plus the per-card event log (`<dataDir>/sdk-history/<cardId>.ndjson`), then spawns the driver resuming the **newest session** in the card's worktree (falling back to `resumeSessionId`). The route persists each new `session_id` on the card (`resumeSessionId`) so a reconnect resumes the same conversation. Contract in `back/src/services/sdk/protocol.ts` + `docs/sdk-driver.md` |
 | POST | `/api/cards/:id/chat/key` | `{ key: "escape" \| "interrupt" }` — the chat's Stop button |
 | WS | `/api/cards/:id/vnc` | noVNC bridge for the card browser |
+
+### Locked cards — deliver only as a pull request
+
+A card can be **locked to its base** (`locked: true`, owner-only, off by default and absent from
+every card that does not ask for it). A locked card still works the way every card works — its own
+worktree, its own branch cut from `base` — but its DELIVERY is fixed:
+
+- the pull request is opened against **that card's `base`**, whatever target the caller asked for;
+- it is **never merged** from vibehub, `authorized: true` or not. `vibehub_deliver` answers
+  `{ reason: "locked", locked: true, prUrl }` with the gate already run, and merging is the
+  reviewer's;
+- the rule is also written into the card's `CLAUDE.local.md`, so its agent knows it before trying.
+
+It is the hotfix shape made the only shape that card has, and it is how somebody is given a card to
+work without being given the ability to ship it: share the card at `work`, lock it, review the PR.
+
+**What the lock does not do:** a card's terminal is still a shell with `git` in it. The lock is the
+board's half — to stop a merge made by hand, the repository has to say so too (a GitHub ruleset
+requiring a pull request on the protected branches, on an account that cannot bypass it).
 
 ## Preview
 

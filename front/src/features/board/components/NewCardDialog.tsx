@@ -74,6 +74,8 @@ export function NewCardDialog({
   const [account, setAccount] = React.useState("");
   const [model, setModel] = React.useState("");
   const [branch, setBranch] = React.useState("");
+  const [base, setBase] = React.useState("");
+  const [locked, setLocked] = React.useState(false);
   const [showOptions, setShowOptions] = React.useState(false);
 
   /**
@@ -101,6 +103,8 @@ export function NewCardDialog({
     setAccount("");
     setModel("");
     setBranch("");
+    setBase("");
+    setLocked(false);
     setShowOptions(false);
   }, [initialProjectId, projects]);
 
@@ -125,6 +129,9 @@ export function NewCardDialog({
       ...(account ? { accountSlug: account } : {}),
       ...(model ? { model } : {}),
       ...(branch.trim() ? { branch: branch.trim() } : {}),
+      ...(base.trim() ? { base: base.trim() } : {}),
+      // Sent only when ON: the card record stores the lock or nothing, and so does the request.
+      ...(locked ? { locked: true } : {}),
     });
     // Close on submit, not on success: the next card can be typed while this one is still cloning.
     reset();
@@ -244,6 +251,33 @@ export function NewCardDialog({
                   className="font-mono"
                 />
               </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="new-card-base">{t("newCard.base")}</Label>
+                <Input
+                  id="new-card-base"
+                  value={base}
+                  onChange={(e) => setBase(e.target.value)}
+                  placeholder={t("newCard.basePlaceholder", { branch: defaultBranch ?? "dev" })}
+                  className="font-mono"
+                />
+              </div>
+
+              {/* The LOCK. Deliberately next to the base, because the base is what it locks the card
+                  to: the delivery becomes a PR against that branch and nothing else. */}
+              <label htmlFor="new-card-locked" className="flex cursor-pointer items-start gap-2">
+                <input
+                  id="new-card-locked"
+                  type="checkbox"
+                  checked={locked}
+                  onChange={(e) => setLocked(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-primary"
+                />
+                <span className="space-y-0.5">
+                  <span className="block text-sm leading-none">{t("newCard.locked")}</span>
+                  <span className="block text-xs text-muted-foreground">{t("newCard.lockedHint")}</span>
+                </span>
+              </label>
             </div>
           ) : null}
 
