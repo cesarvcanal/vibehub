@@ -67,9 +67,10 @@ export function query({ prompt, options }) {
         continue;
       }
       if (text === "/clear") {
-        // O que o CLI de verdade faz (verificado com o Claude Code em stream-json): anuncia o
-        // reset, abre uma sessão NOVA e fecha o turno do comando com um result vazio.
-        yield { type: "conversation_reset", trigger: "clear", new_conversation_id: "n-1", uuid: "n-1", session_id: SESSION };
+        // O que o CLI de verdade faz (verificado com o SDK 0.3.246 em streaming, 2026-10-09): anuncia
+        // o reset SEM campo "trigger" e ainda com o session_id ANTIGO, abre uma sessão NOVA (cujo id
+        // não é o "new_conversation_id") e fecha o turno do comando com um result vazio.
+        yield { type: "conversation_reset", new_conversation_id: "c4cc72ac-b5c3-4442-bc47-09159c6a1527", uuid: "8719ab21-dad0-493d-9e09-a26261eb6708", session_id: SESSION };
         yield { type: "system", subtype: "init", session_id: CLEARED };
         yield { type: "result", subtype: "success", session_id: CLEARED, result: "" };
         continue;
