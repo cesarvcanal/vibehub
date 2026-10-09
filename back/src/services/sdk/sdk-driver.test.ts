@@ -67,9 +67,10 @@ export function query({ prompt, options }) {
         continue;
       }
       if (text === "/clear") {
-        // O que o CLI de verdade faz (verificado com o Claude Code em stream-json): anuncia o
-        // reset, abre uma sessão NOVA e fecha o turno do comando com um result vazio.
-        yield { type: "conversation_reset", trigger: "clear", new_conversation_id: "n-1", uuid: "n-1", session_id: SESSION };
+        // O que o CLI de verdade faz (verificado com o SDK 0.3.246 em streaming, 2026-10-09): anuncia
+        // o reset SEM campo "trigger" e ainda com o session_id ANTIGO, abre uma sessão NOVA (cujo id
+        // não é o "new_conversation_id") e fecha o turno do comando com um result vazio.
+        yield { type: "conversation_reset", new_conversation_id: "c4cc72ac-b5c3-4442-bc47-09159c6a1527", uuid: "8719ab21-dad0-493d-9e09-a26261eb6708", session_id: SESSION };
         yield { type: "system", subtype: "init", session_id: CLEARED };
         yield { type: "result", subtype: "success", session_id: CLEARED, result: "" };
         continue;
@@ -324,7 +325,9 @@ describe("sdk-driver.mjs — /clear", () => {
     const reset = after.findIndex((e) => e.type === "conversation_reset");
     expect(reset).toBeGreaterThanOrEqual(0);
     expect(after[reset]!.trigger).toBe("clear");
-    expect(after.slice(reset).some((e) => e.type === "session" && e.sessionId === "99999999-2222-3333-4444-555555555555")).toBe(true);
+    // O PRIMEIRO `session` depois do reset já é o da sessão nova — nem o `new_conversation_id` nem o
+    // `session_id` antigo que o próprio frame do reset carrega viram a sessão do card.
+    expect(after.slice(reset).find((e) => e.type === "session")?.sessionId).toBe("99999999-2222-3333-4444-555555555555");
   });
 
   it("depois do /clear, editar uma mensagem de ANTES não rebobina para a conversa apagada", async () => {

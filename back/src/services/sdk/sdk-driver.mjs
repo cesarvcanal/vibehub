@@ -739,6 +739,8 @@ async function runStream() {
         forkPoint = null;
         forkText = null;
         absorbedSinceFork = false;
+        // Hoje o frame do CLI chega sem a causa do reset (sem campo `trigger`), e todo reset vira
+        // "clear" — sair do plan mode inclusive. Se o CLI passar a mandar `trigger`, ele é repassado.
         emit({ type: "conversation_reset", trigger: typeof msg.trigger === "string" ? msg.trigger : "clear" });
       } else if (msg.type === "stream_event") {
         const ev = msg.event;
