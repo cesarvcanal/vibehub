@@ -472,8 +472,9 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     // O /clear limpou o CONTEXTO do modelo; o log do card tem de ir junto, senão o F5 devolvia a
     // conversa inteira e o /clear parecia não ter feito nada. Sai só o que veio ANTES do "/clear"
     // (ver `clearHistoryBeforeLastClear`): o que foi mandado depois dele o CLI ainda vai rodar. O
-    // painel de workflow da conversa apagada também não volta num F5. Só no gatilho `clear`: outro
-    // fluxo de sessão nova do CLI (sair do plan mode, por exemplo) não é a pessoa pedindo a limpeza.
+    // painel de workflow da conversa apagada também não volta num F5. O filtro de gatilho só separa
+    // algo se o CLI um dia disser a causa do reset: hoje o driver manda "clear" para todos (ver o
+    // `conversation_reset` em sdk-driver.mjs), sair do plan mode inclusive.
     void clearHistoryBeforeLastClear(session.cardId);
     forgetCardWorkflows(session.cardId);
     emitSystemNote(session, NOTE_CONVERSATION_CLEARED);

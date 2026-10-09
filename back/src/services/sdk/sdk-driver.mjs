@@ -739,8 +739,9 @@ async function runStream() {
         forkPoint = null;
         forkText = null;
         absorbedSinceFork = false;
-        // O CLI não diz o que causou o reset (o SDK 0.3.246 não tem campo `trigger`): todo reset vira
-        // "clear", porque em todos eles o modelo perdeu o contexto e a tela tem de esquecer junto.
+        // O frame do CLI não diz o que causou o reset (não tem campo `trigger`), então o "clear" aqui
+        // não é fallback: é o valor de TODO reset que chega, inclusive o de sair do plan mode — e o
+        // filtro por gatilho do manager e da tela hoje não separa nada.
         emit({ type: "conversation_reset", trigger: typeof msg.trigger === "string" ? msg.trigger : "clear" });
       } else if (msg.type === "stream_event") {
         const ev = msg.event;

@@ -325,7 +325,9 @@ describe("sdk-driver.mjs — /clear", () => {
     const reset = after.findIndex((e) => e.type === "conversation_reset");
     expect(reset).toBeGreaterThanOrEqual(0);
     expect(after[reset]!.trigger).toBe("clear");
-    expect(after.slice(reset).some((e) => e.type === "session" && e.sessionId === "99999999-2222-3333-4444-555555555555")).toBe(true);
+    // O PRIMEIRO `session` depois do reset já é o da sessão nova — nem o `new_conversation_id` nem o
+    // `session_id` antigo que o próprio frame do reset carrega viram a sessão do card.
+    expect(after.slice(reset).find((e) => e.type === "session")?.sessionId).toBe("99999999-2222-3333-4444-555555555555");
   });
 
   it("depois do /clear, editar uma mensagem de ANTES não rebobina para a conversa apagada", async () => {
