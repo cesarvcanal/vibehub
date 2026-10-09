@@ -739,9 +739,8 @@ async function runStream() {
         forkPoint = null;
         forkText = null;
         absorbedSinceFork = false;
-        // O frame do CLI não diz o que causou o reset (não tem campo `trigger`), então o "clear" aqui
-        // não é fallback: é o valor de TODO reset que chega, inclusive o de sair do plan mode — e o
-        // filtro por gatilho do manager e da tela hoje não separa nada.
+        // Hoje o frame do CLI chega sem a causa do reset (sem campo `trigger`), e todo reset vira
+        // "clear" — sair do plan mode inclusive. Se o CLI passar a mandar `trigger`, ele é repassado.
         emit({ type: "conversation_reset", trigger: typeof msg.trigger === "string" ? msg.trigger : "clear" });
       } else if (msg.type === "stream_event") {
         const ev = msg.event;
