@@ -441,6 +441,47 @@ export function clearDraft(cardId: string): void {
   scheduleStoredWrite(cardId, null);
 }
 
+type SentListener = (sent: string, sentAttachmentIds: ReadonlySet<string>) => void;
+
+/**
+ * The fields showing each card's draft right now.
+ *
+ * A send can land after the field that started it is gone — the card finishing "Preparando…" swaps
+ * the composer in the middle of the round trip — and the field that replaced it was mounted from a
+ * draft that still holds the sent words. Only a field that is on screen can take them out of what
+ * it shows, so the send is announced to whoever is showing the card, not to its own closure.
+ */
+const sentListeners = new Map<string, Set<SentListener>>();
+
+function subscribeSent(cardId: string, listener: SentListener): () => void {
+  const listeners = sentListeners.get(cardId) ?? new Set<SentListener>();
+  listeners.add(listener);
+  sentListeners.set(cardId, listeners);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) sentListeners.delete(cardId);
+  };
+}
+
+/** A message was accepted: what went leaves the card's draft, wherever that draft is living. */
+function removeSentFromDraft(cardId: string, sent: string, sentAttachmentIds: ReadonlySet<string>): void {
+  const listeners = sentListeners.get(cardId);
+  if (listeners) {
+    listeners.forEach((listener) => listener(sent, sentAttachmentIds));
+    // The fields re-save what is left of theirs right after this (their draft effect).
+    clearDraft(cardId);
+    return;
+  }
+  // No field on screen (the gap between two views of the card): the stored draft is the only copy
+  // of what was typed after Enter, and it is the next message.
+  const draft = loadDraft(cardId);
+  saveDraft(
+    cardId,
+    textAfterSend(draft.text, sent),
+    draft.attachments.filter((a) => !sentAttachmentIds.has(a.id)),
+  );
+}
+
 /** Ids that do not depend on `crypto.randomUUID` (absent in some jsdom/webview combinations). */
 let attachmentSeq = 0;
 function nextAttachmentId(): string {
@@ -614,10 +655,13 @@ export function TerminalComposer({
    * "mounted" stopped meaning "just opened": without `active` in here, returning to a card would
    * leave the caret wherever it was and the first thing you typed would go nowhere.
    */
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (!autoFocus || isMobile || !active) return;
-    // After the terminal's own mount focus (the websocket grabs it on open), or the caret lands in
-    // xterm and the first thing typed goes into the raw session.
+    // In the commit that puts the field on screen: it may be REPLACING the one being typed in (the
+    // card finishing "Preparando…"), and a keystroke between two fields lands in neither.
+    ref.current?.focus();
+    // And again after the terminal's own mount focus (the websocket grabs it on open), or the caret
+    // lands in xterm and the first thing typed goes into the raw session.
     const id = setTimeout(() => ref.current?.focus(), 0);
     return () => clearTimeout(id);
   }, [autoFocus, isMobile, draftKey, active]);
@@ -663,6 +707,17 @@ export function TerminalComposer({
     });
   }, []);
 
+  /** Only what went is cleared: what was typed or pasted during the round trip is the next message. */
+  const removeSent = React.useCallback<SentListener>((sent, sentAttachmentIds) => {
+    setText((current) => textAfterSend(current, sent));
+    setAttachments((current) => current.filter((a) => !sentAttachmentIds.has(a.id)));
+  }, []);
+
+  React.useEffect(() => {
+    if (!draftKey) return;
+    return subscribeSent(draftKey, removeSent);
+  }, [draftKey, removeSent]);
+
   /**
    * The one place a message leaves this component. Everything it needs is already decided: the
    * paths are appended by `composeMessage`, and the field is only cleared once the caller has
@@ -676,16 +731,15 @@ export function TerminalComposer({
       setSending(true);
       try {
         await onSend(body);
-        // Only what went is cleared: what was typed or pasted during the round trip is the next
-        // message. The draft effect re-saves that remainder right after this clear.
         const sentIds = new Set(attached.map((a) => a.id));
         attached.forEach((a) => {
           if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
           filesRef.current.delete(a.id);
         });
-        setText((current) => textAfterSend(current, value));
-        setAttachments((current) => current.filter((a) => !sentIds.has(a.id)));
-        if (draftKey) clearDraft(draftKey);
+        // A card's draft may be showing in ANOTHER field by now; a composer with no card only has
+        // this one.
+        if (draftKey) removeSentFromDraft(draftKey, value, sentIds);
+        else removeSent(value, sentIds);
         if (!isMobile) ref.current?.focus();
       } catch {
         /* the caller has already said what went wrong; the draft stays put */
@@ -693,7 +747,7 @@ export function TerminalComposer({
         setSending(false);
       }
     },
-    [draftKey, isMobile, onSend],
+    [draftKey, isMobile, onSend, removeSent],
   );
 
   const send = (): void => {

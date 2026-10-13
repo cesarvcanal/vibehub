@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import type { ReactElement, ReactNode } from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -306,6 +306,58 @@ describe("TerminalComposer", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(box).toHaveFocus();
     expect(box.selectionStart).toBe(3);
+  });
+
+  // Reproduzido no Chrome, 2026-10-13: o card termina de preparar no meio de uma frase e o campo é
+  // trocado. O foco do campo novo só chegava num timer — e o que se digita até lá não cai em campo
+  // nenhum ("teste da" virou "testeda").
+  it("a field that replaces the focused one has the keyboard in the SAME commit — no keystroke falls in between", async () => {
+    const { rerender } = renderComposer(<TerminalComposer key="preparing" onSend={vi.fn()} cardId="card-1" />);
+    const before = screen.getByRole<HTMLTextAreaElement>("textbox");
+    await waitFor(() => expect(before).toHaveFocus());
+    await userEvent.type(before, "um teste");
+
+    rerender(<TerminalComposer key="ready" onSend={vi.fn()} cardId="card-1" />);
+
+    const box = screen.getByRole<HTMLTextAreaElement>("textbox");
+    expect(box).not.toBe(before);
+    expect(box).toHaveFocus();
+    expect(box.selectionStart).toBe("um teste".length);
+  });
+
+  // Reproduzido no Chrome, 2026-10-13: a primeira mensagem é enviada durante o "Preparando…", a
+  // pessoa segue digitando a próxima, e o card fica pronto ANTES de o envio responder. O campo novo
+  // nasce do rascunho ("primeira" + "segunda") e quem sabia o que já tinha ido era o campo antigo.
+  it("a send that lands after the field was replaced takes the sent words out of the NEW field", async () => {
+    let accept: () => void = () => {};
+    const onSend = vi.fn(() => new Promise<void>((resolve) => (accept = resolve)));
+    const { rerender } = renderComposer(<TerminalComposer key="preparing" onSend={onSend} cardId="card-1" />);
+    const before = screen.getByRole<HTMLTextAreaElement>("textbox");
+    await userEvent.type(before, "primeira{Enter}");
+    await userEvent.type(before, " segunda");
+
+    rerender(<TerminalComposer key="ready" onSend={vi.fn()} cardId="card-1" />);
+    const box = screen.getByRole<HTMLTextAreaElement>("textbox");
+    expect(box).toHaveValue("primeira segunda");
+
+    await act(async () => accept());
+
+    expect(box).toHaveValue("segunda");
+    expect(loadDraft("card-1").text).toBe("segunda");
+  });
+
+  it("a send that lands with NO field on screen keeps what was typed after it as the draft", async () => {
+    let accept: () => void = () => {};
+    const onSend = vi.fn(() => new Promise<void>((resolve) => (accept = resolve)));
+    const { unmount } = renderComposer(<TerminalComposer onSend={onSend} cardId="card-1" />);
+    const box = screen.getByRole<HTMLTextAreaElement>("textbox");
+    await userEvent.type(box, "primeira{Enter}");
+    await userEvent.type(box, " segunda");
+
+    unmount();
+    await act(async () => accept());
+
+    expect(loadDraft("card-1").text).toBe("segunda");
   });
 
   it("paints ultrathink / ultracode as they are typed, and only then", async () => {
