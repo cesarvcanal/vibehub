@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import * as React from "react";
 import type { ReactElement, ReactNode } from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -306,6 +307,130 @@ describe("TerminalComposer", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(box).toHaveFocus();
     expect(box.selectionStart).toBe(3);
+  });
+
+  // O card termina de preparar no meio de uma frase e o campo é trocado: uma tecla que chegue entre
+  // um campo e o outro não cai em nenhum ("teste da" vira "testeda").
+  it("a field that replaces the focused one has the keyboard in the SAME commit — no keystroke falls in between", async () => {
+    const { rerender } = renderComposer(<TerminalComposer key="preparing" onSend={vi.fn()} cardId="card-1" />);
+    const before = screen.getByRole<HTMLTextAreaElement>("textbox");
+    await waitFor(() => expect(before).toHaveFocus());
+    await userEvent.type(before, "um teste");
+
+    rerender(<TerminalComposer key="ready" onSend={vi.fn()} cardId="card-1" />);
+
+    const box = screen.getByRole<HTMLTextAreaElement>("textbox");
+    expect(box).not.toBe(before);
+    expect(box).toHaveFocus();
+    expect(box.selectionStart).toBe("um teste".length);
+  });
+
+  // A primeira mensagem é enviada durante o "Preparando…", a pessoa segue digitando a próxima, e o
+  // card fica pronto ANTES de o envio responder: o campo novo nasce do rascunho, que ainda tem as
+  // duas ("primeira" + "segunda").
+  it("a send that lands after the field was replaced takes the sent words out of the NEW field", async () => {
+    let accept: () => void = () => {};
+    const onSend = vi.fn(() => new Promise<void>((resolve) => (accept = resolve)));
+    const { rerender } = renderComposer(<TerminalComposer key="preparing" onSend={onSend} cardId="card-1" />);
+    const before = screen.getByRole<HTMLTextAreaElement>("textbox");
+    await userEvent.type(before, "primeira{Enter}");
+    await userEvent.type(before, " segunda");
+
+    rerender(<TerminalComposer key="ready" onSend={vi.fn()} cardId="card-1" />);
+    const box = screen.getByRole<HTMLTextAreaElement>("textbox");
+    expect(box).toHaveValue("primeira segunda");
+
+    await act(async () => accept());
+
+    expect(box).toHaveValue("segunda");
+    expect(loadDraft("card-1").text).toBe("segunda");
+  });
+
+  it("a send that lands with NO field on screen keeps what was typed after it as the draft", async () => {
+    let accept: () => void = () => {};
+    const onSend = vi.fn(() => new Promise<void>((resolve) => (accept = resolve)));
+    const { unmount } = renderComposer(<TerminalComposer onSend={onSend} cardId="card-1" />);
+    const box = screen.getByRole<HTMLTextAreaElement>("textbox");
+    await userEvent.type(box, "primeira{Enter}");
+    await userEvent.type(box, " segunda");
+
+    unmount();
+    await act(async () => accept());
+
+    expect(loadDraft("card-1").text).toBe("segunda");
+  });
+
+  it("the field that replaced the sending one does not send again while that send is on its way", async () => {
+    let accept: () => void = () => {};
+    const first = vi.fn(() => new Promise<void>((resolve) => (accept = resolve)));
+    const second = vi.fn();
+    const { rerender } = renderComposer(<TerminalComposer key="preparing" onSend={first} cardId="card-1" />);
+    await userEvent.type(screen.getByRole("textbox"), "primeira{Enter}");
+    await userEvent.type(screen.getByRole("textbox"), " segunda");
+
+    rerender(<TerminalComposer key="ready" onSend={second} cardId="card-1" />);
+    const box = screen.getByRole<HTMLTextAreaElement>("textbox");
+    await userEvent.type(box, "{Enter}");
+    expect(second).not.toHaveBeenCalled();
+
+    await act(async () => accept());
+    await userEvent.type(box, "{Enter}");
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledWith("segunda");
+  });
+
+  it("a send REJECTED after the field was replaced frees the new field, with every word still in it", async () => {
+    let reject: (reason: Error) => void = () => {};
+    const first = vi.fn(() => new Promise<void>((_, fail) => (reject = fail)));
+    const second = vi.fn();
+    const { rerender } = renderComposer(<TerminalComposer key="preparing" onSend={first} cardId="card-1" />);
+    await userEvent.type(screen.getByRole("textbox"), "primeira{Enter}");
+
+    rerender(<TerminalComposer key="ready" onSend={second} cardId="card-1" />);
+    const box = screen.getByRole<HTMLTextAreaElement>("textbox");
+    await act(async () => reject(new Error("runner restarting")));
+
+    expect(box).toHaveValue("primeira");
+    await userEvent.type(box, "{Enter}");
+    expect(second).toHaveBeenCalledWith("primeira");
+  });
+
+  // Fora do `act`, de propósito: a troca entra como transição, cujos efeitos passivos rodam numa
+  // tarefa DEPOIS do commit — e o envio é aceito bem nesse intervalo, com o campo novo já na tela.
+  it("a send that lands between the swap's commit and its effects still leaves what was typed after it", async () => {
+    let accept: () => void = () => {};
+    const onSend = vi.fn(() => new Promise<void>((resolve) => (accept = resolve)));
+    let swap: () => void = () => {};
+    function Swapped() {
+      const [ready, setReady] = React.useState(false);
+      swap = () => React.startTransition(() => setReady(true));
+      return <TerminalComposer key={ready ? "ready" : "preparing"} onSend={onSend} cardId="card-1" />;
+    }
+    renderComposer(<Swapped />);
+    const before = screen.getByRole("textbox");
+    await userEvent.type(before, "primeira{Enter}");
+    await userEvent.type(before, " segunda");
+
+    const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const actEnvironment = env.IS_REACT_ACT_ENVIRONMENT;
+    env.IS_REACT_ACT_ENVIRONMENT = false;
+    try {
+      const committed = new Promise<void>((resolve) => {
+        const observer = new MutationObserver(() => {
+          if (screen.getByRole("textbox") === before) return;
+          observer.disconnect();
+          accept();
+          resolve();
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+      });
+      swap();
+      await committed;
+      await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("segunda"));
+    } finally {
+      env.IS_REACT_ACT_ENVIRONMENT = actEnvironment;
+    }
+    expect(loadDraft("card-1").text).toBe("segunda");
   });
 
   it("paints ultrathink / ultracode as they are typed, and only then", async () => {

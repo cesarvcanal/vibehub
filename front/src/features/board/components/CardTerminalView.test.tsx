@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient } from "@tanstack/react-query";
 import { CardTerminalView } from "@/features/board/components/CardTerminalView";
@@ -541,6 +541,37 @@ describe("CardTerminalView — composing a message", () => {
     await waitFor(() => expect(document.activeElement).toBe(box));
     expect(box).toHaveValue("comece pelo schema");
     expect(box.selectionStart).toBe("comece pelo schema".length);
+  });
+
+  // A primeira mensagem sai durante o "Preparando…", a pessoa já está na próxima, e o card abre
+  // ANTES de o outbox responder: o campo do painel nasce do rascunho, que ainda tem as duas.
+  it("a message sent while the card prepares, accepted after it opened, leaves only the NEXT one in the field", async () => {
+    let resolveOpen: (value: unknown) => void = () => {};
+    const messages: ((value: unknown) => void)[] = [];
+    mockPost.mockImplementation((url: string) =>
+      url === "/cards/c1/messages"
+        ? new Promise((resolve) => messages.push(resolve))
+        : new Promise((resolve) => (resolveOpen = resolve)),
+    );
+
+    renderWithCache([card({ column: "backlog" })]);
+    await screen.findByText(/Preparing the worktree and session/i);
+    const before = screen.getByTestId("terminal-composer").querySelector("textarea") as HTMLTextAreaElement;
+    await userEvent.type(before, "schema{Enter}");
+    await userEvent.type(before, " testes");
+
+    resolveOpen({ card: card({ openedAt: 99 }) });
+    await screen.findByTestId("xterm");
+    const box = screen.getByTestId("terminal-composer").querySelector("textarea") as HTMLTextAreaElement;
+    expect(box).not.toBe(before);
+    expect(box).toHaveValue("schema testes");
+
+    // O Enter no campo novo não reenvia o que ainda está a caminho.
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(messages).toHaveLength(1);
+
+    messages[0]?.({ pending: [], agent: "none" });
+    await waitFor(() => expect(box).toHaveValue("testes"));
   });
 
   it("the COMPOSER takes the keyboard when the card opens, not the terminal", async () => {

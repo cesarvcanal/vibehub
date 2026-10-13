@@ -425,6 +425,7 @@ export function loadDraft(cardId: string): { text: string; attachments: Attachme
 /** Tests only: forget every draft, in both layers. */
 export function resetDraftsForTesting(): void {
   memoryDrafts.clear();
+  sendsInFlight.clear();
   pendingWrites.clear();
   if (flushTimer !== null) clearTimeout(flushTimer);
   flushTimer = null;
@@ -439,6 +440,54 @@ export function resetDraftsForTesting(): void {
 export function clearDraft(cardId: string): void {
   memoryDrafts.delete(cardId);
   scheduleStoredWrite(cardId, null);
+}
+
+/** What a send took with it, once the caller accepted it. */
+interface AcceptedSend {
+  text: string;
+  attachmentIds: ReadonlySet<string>;
+}
+
+/** `null` when the caller rejected the message: nothing went, nothing leaves the field. */
+type SendSettledListener = (accepted: AcceptedSend | null) => void;
+
+/**
+ * A send on its way belongs to the CARD, not to the field that started it.
+ *
+ * The round trip can outlive that field — the card finishing "Preparando…" swaps the composer in
+ * the middle of it — and the field that takes its place is mounted from a draft that still holds
+ * the words being sent. So which cards have a send in flight lives here, beside the drafts: a field
+ * mounting for one of them starts out sending, and hears how it ended.
+ */
+const sendsInFlight = new Set<string>();
+const sendSettledListeners = new Map<string, Set<SendSettledListener>>();
+
+function subscribeSendSettled(cardId: string, listener: SendSettledListener): () => void {
+  const listeners = sendSettledListeners.get(cardId) ?? new Set<SendSettledListener>();
+  listeners.add(listener);
+  sendSettledListeners.set(cardId, listeners);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) sendSettledListeners.delete(cardId);
+  };
+}
+
+/**
+ * The send of this card ended. What went leaves the STORED draft here, whoever is listening: a
+ * field can be on screen and not subscribed yet (its effects run after the commit that drew it),
+ * and it reads this draft when they do.
+ */
+function settleSend(cardId: string, accepted: AcceptedSend | null): void {
+  sendsInFlight.delete(cardId);
+  if (accepted) {
+    const draft = loadDraft(cardId);
+    saveDraft(
+      cardId,
+      textAfterSend(draft.text, accepted.text),
+      draft.attachments.filter((a) => !accepted.attachmentIds.has(a.id)),
+    );
+  }
+  sendSettledListeners.get(cardId)?.forEach((listener) => listener(accepted));
 }
 
 /** Ids that do not depend on `crypto.randomUUID` (absent in some jsdom/webview combinations). */
@@ -519,7 +568,7 @@ export function TerminalComposer({
   const initial = React.useMemo(() => (draftKey ? loadDraft(draftKey) : { text: "", attachments: [] }), [draftKey]);
   const [text, setText] = React.useState(initial.text);
   const [attachments, setAttachments] = React.useState<Attachment[]>(initial.attachments);
-  const [sending, setSending] = React.useState(false);
+  const [sending, setSending] = React.useState(() => sendsInFlight.has(draftKey));
   /**
    * Enter was pressed while an image was still uploading. The message is not dropped and it is not
    * sent without its picture: it goes the moment the last upload lands (see the effect below).
@@ -622,6 +671,15 @@ export function TerminalComposer({
     return () => clearTimeout(id);
   }, [autoFocus, isMobile, draftKey, active]);
 
+  // And already in the commit that puts the field on screen: it may be REPLACING the one being
+  // typed in (the card finishing "Preparando…"), and a keystroke between two fields lands in
+  // neither. The timer above stays in a passive effect so it still runs after the deck has made
+  // the pane reachable again.
+  React.useLayoutEffect(() => {
+    if (!autoFocus || isMobile || !active) return;
+    ref.current?.focus();
+  }, [autoFocus, isMobile, draftKey, active]);
+
   /**
    * The FIRST focus of this field puts the caret at the END of what is there (produção, 2026-10-08).
    *
@@ -663,6 +721,20 @@ export function TerminalComposer({
     });
   }, []);
 
+  /** Only what went is cleared: what was typed or pasted during the round trip is the next message. */
+  const onSendSettled = React.useCallback<SendSettledListener>((accepted) => {
+    setSending(false);
+    if (!accepted) return;
+    setText((current) => textAfterSend(current, accepted.text));
+    setAttachments((current) => current.filter((a) => !accepted.attachmentIds.has(a.id)));
+  }, []);
+
+  React.useEffect(() => {
+    if (!draftKey) return;
+    setSending(sendsInFlight.has(draftKey));
+    return subscribeSendSettled(draftKey, onSendSettled);
+  }, [draftKey, onSendSettled]);
+
   /**
    * The one place a message leaves this component. Everything it needs is already decided: the
    * paths are appended by `composeMessage`, and the field is only cleared once the caller has
@@ -674,26 +746,24 @@ export function TerminalComposer({
       const body = composeMessage(value, attached);
       if (!body) return;
       setSending(true);
+      if (draftKey) sendsInFlight.add(draftKey);
+      let accepted: AcceptedSend | null = null;
       try {
         await onSend(body);
-        // Only what went is cleared: what was typed or pasted during the round trip is the next
-        // message. The draft effect re-saves that remainder right after this clear.
-        const sentIds = new Set(attached.map((a) => a.id));
         attached.forEach((a) => {
           if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
           filesRef.current.delete(a.id);
         });
-        setText((current) => textAfterSend(current, value));
-        setAttachments((current) => current.filter((a) => !sentIds.has(a.id)));
-        if (draftKey) clearDraft(draftKey);
-        if (!isMobile) ref.current?.focus();
+        accepted = { text: value, attachmentIds: new Set(attached.map((a) => a.id)) };
       } catch {
         /* the caller has already said what went wrong; the draft stays put */
-      } finally {
-        setSending(false);
       }
+      // A composer with no card has no draft to share: this field is the only one there is.
+      if (draftKey) settleSend(draftKey, accepted);
+      else onSendSettled(accepted);
+      if (accepted && !isMobile) ref.current?.focus();
     },
-    [draftKey, isMobile, onSend],
+    [draftKey, isMobile, onSend, onSendSettled],
   );
 
   const send = (): void => {
