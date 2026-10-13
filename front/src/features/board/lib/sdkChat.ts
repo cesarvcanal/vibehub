@@ -616,18 +616,30 @@ export function currentActivity(state: SdkChatState): SdkActivity | null {
  * O turno tem ESPAÇO para mais uma mensagem — o RESPIRO em que a fila anda.
  *
  * A fila esperava o turno FECHAR, e um turno de quinze minutos segurava por quinze minutos um
- * "para, tá errado". Só que um turno não é um bloco maciço: entre uma ferramenta e a próxima o
- * modelo FECHA um bloco de resposta, e é esse instante que o Cursor e o Claude Code usam para puxar
- * o que está esperando. Entregue aí, a mensagem entra no turno em andamento pelo streaming input
- * (o `turn_absorbed`) em vez de virar uma interrupção do raciocínio em curso.
+ * "para, tá errado". Então o respiro passou a ser o BLOCO FECHADO: entregue ali, a mensagem entra
+ * no turno em andamento pelo streaming input (o `turn_absorbed`) em vez de virar uma interrupção
+ * do raciocínio em curso.
  *
- * Respiro é a AUSÊNCIA de algo em curso, lida na mesma ordem que a barra de atividade usa para
- * dizer o que está acontecendo (ver `currentActivity`): ferramenta rodando, não; texto ou
- * raciocínio ainda escorrendo, não; "Preparando…" — o turno nem começou —, não. Bloco fechado, sim.
+ * O QUE ESTA REGRA NÃO PODE SER é "nada rodando" (produção, 13/10/2026: "passo uma tarefa e vejo
+ * que ela demora um pouco"). Ler "ferramenta em curso" como "espera" devolvia quase toda a espera
+ * antiga, porque é na ferramenta que o turno passa o tempo dele e a linha mais nova de um turno
+ * trabalhando é quase sempre uma ferramenta: medido no transcript de uma sessão real deste painel,
+ * de uma chamada de ferramenta até o próximo bloco fechado são 11s na mediana, 31s no p90 e 71s no
+ * pior caso — com o fio de pé e o CLI pronto para receber. Pior: um turno que ACABA numa linha de
+ * ferramenta (interrompido no meio de uma, um `result` sem texto final) deixava a fila parada sem
+ * nada rodando e sem ninguém para desenhar a próxima linha — travada até a pessoa mandar outra
+ * coisa.
  *
- * E uma mensagem recém-entregue NÃO abre o respiro seguinte: o `turn_absorbed` derruba o
- * `awaiting`, e sem esta regra a fila inteira sairia de uma vez no mesmo instante, que é o oposto
- * de "uma por vez, e as outras continuam suas". PURE.
+ * Então respiro é a ausência de uma FRASE PELA METADE, não a ausência de trabalho — lido na mesma
+ * ordem que a barra de atividade usa (ver `currentActivity`): texto ou raciocínio ainda escorrendo,
+ * não; "Preparando…" — a nossa última mensagem ainda nem foi lida —, não. Bloco fechado, sim; e
+ * ferramenta em curso TAMBÉM sim, porque a mensagem entregue nela tem o mesmo destino que teria no
+ * bloco fechado: o CLI a enfileira e o modelo a lê no passo seguinte.
+ *
+ * E uma mensagem recém-entregue NÃO abre o respiro seguinte: ela é a linha mais nova e o turno
+ * segue de pé, então a próxima só anda quando o modelo REAGIR (a linha dele). Sem isso a fila
+ * inteira sairia de uma vez no mesmo instante, que é o oposto de "uma por vez, e as outras
+ * continuam suas". PURE.
  */
 export function turnHasRoomForMore(state: SdkChatState): boolean {
   if (state.awaiting) return false;
@@ -636,7 +648,8 @@ export function turnHasRoomForMore(state: SdkChatState): boolean {
     // A última coisa dita é nossa: ou não há turno (a fila anda como sempre andou), ou ela acabou
     // de ser entregue e o modelo ainda não reagiu — o respiro já foi dela.
     if (row.kind === "user") return !state.turnActive;
-    if (row.kind === "tool") return false;
+    // Ferramenta: trabalho em curso, não frase em curso — e é aqui que o turno passa o tempo dele.
+    if (row.kind === "tool") return true;
     if (row.kind === "thinking" || row.kind === "assistant") return !row.streaming;
   }
   return true; // conversa vazia: não há nada em curso para atrapalhar
