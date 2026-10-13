@@ -663,15 +663,21 @@ export function TerminalComposer({
    * "mounted" stopped meaning "just opened": without `active` in here, returning to a card would
    * leave the caret wherever it was and the first thing you typed would go nowhere.
    */
-  React.useLayoutEffect(() => {
+  React.useEffect(() => {
     if (!autoFocus || isMobile || !active) return;
-    // In the commit that puts the field on screen: it may be REPLACING the one being typed in (the
-    // card finishing "Preparando…"), and a keystroke between two fields lands in neither.
-    ref.current?.focus();
-    // And again after the terminal's own mount focus (the websocket grabs it on open), or the caret
-    // lands in xterm and the first thing typed goes into the raw session.
+    // After the terminal's own mount focus (the websocket grabs it on open), or the caret lands in
+    // xterm and the first thing typed goes into the raw session.
     const id = setTimeout(() => ref.current?.focus(), 0);
     return () => clearTimeout(id);
+  }, [autoFocus, isMobile, draftKey, active]);
+
+  // And already in the commit that puts the field on screen: it may be REPLACING the one being
+  // typed in (the card finishing "Preparando…"), and a keystroke between two fields lands in
+  // neither. The timer above stays in a passive effect so it still runs after the deck has made
+  // the pane reachable again.
+  React.useLayoutEffect(() => {
+    if (!autoFocus || isMobile || !active) return;
+    ref.current?.focus();
   }, [autoFocus, isMobile, draftKey, active]);
 
   /**
