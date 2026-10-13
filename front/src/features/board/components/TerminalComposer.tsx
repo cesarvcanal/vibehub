@@ -425,6 +425,7 @@ export function loadDraft(cardId: string): { text: string; attachments: Attachme
 /** Tests only: forget every draft, in both layers. */
 export function resetDraftsForTesting(): void {
   memoryDrafts.clear();
+  sendsInFlight.clear();
   pendingWrites.clear();
   if (flushTimer !== null) clearTimeout(flushTimer);
   flushTimer = null;
@@ -441,45 +442,52 @@ export function clearDraft(cardId: string): void {
   scheduleStoredWrite(cardId, null);
 }
 
-type SentListener = (sent: string, sentAttachmentIds: ReadonlySet<string>) => void;
+/** What a send took with it, once the caller accepted it. */
+interface AcceptedSend {
+  text: string;
+  attachmentIds: ReadonlySet<string>;
+}
+
+/** `null` when the caller rejected the message: nothing went, nothing leaves the field. */
+type SendSettledListener = (accepted: AcceptedSend | null) => void;
 
 /**
- * The fields showing each card's draft right now.
+ * A send on its way belongs to the CARD, not to the field that started it.
  *
- * A send can land after the field that started it is gone — the card finishing "Preparando…" swaps
- * the composer in the middle of the round trip — and the field that replaced it was mounted from a
- * draft that still holds the sent words. Only a field that is on screen can take them out of what
- * it shows, so the send is announced to whoever is showing the card, not to its own closure.
+ * The round trip can outlive that field — the card finishing "Preparando…" swaps the composer in
+ * the middle of it — and the field that takes its place is mounted from a draft that still holds
+ * the words being sent. So which cards have a send in flight lives here, beside the drafts: a field
+ * mounting for one of them starts out sending, and hears how it ended.
  */
-const sentListeners = new Map<string, Set<SentListener>>();
+const sendsInFlight = new Set<string>();
+const sendSettledListeners = new Map<string, Set<SendSettledListener>>();
 
-function subscribeSent(cardId: string, listener: SentListener): () => void {
-  const listeners = sentListeners.get(cardId) ?? new Set<SentListener>();
+function subscribeSendSettled(cardId: string, listener: SendSettledListener): () => void {
+  const listeners = sendSettledListeners.get(cardId) ?? new Set<SendSettledListener>();
   listeners.add(listener);
-  sentListeners.set(cardId, listeners);
+  sendSettledListeners.set(cardId, listeners);
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0) sentListeners.delete(cardId);
+    if (listeners.size === 0) sendSettledListeners.delete(cardId);
   };
 }
 
-/** A message was accepted: what went leaves the card's draft, wherever that draft is living. */
-function removeSentFromDraft(cardId: string, sent: string, sentAttachmentIds: ReadonlySet<string>): void {
-  const listeners = sentListeners.get(cardId);
-  if (listeners) {
-    listeners.forEach((listener) => listener(sent, sentAttachmentIds));
-    // The fields re-save what is left of theirs right after this (their draft effect).
-    clearDraft(cardId);
-    return;
+/**
+ * The send of this card ended. What went leaves the STORED draft here, whoever is listening: a
+ * field can be on screen and not subscribed yet (its effects run after the commit that drew it),
+ * and it reads this draft when they do.
+ */
+function settleSend(cardId: string, accepted: AcceptedSend | null): void {
+  sendsInFlight.delete(cardId);
+  if (accepted) {
+    const draft = loadDraft(cardId);
+    saveDraft(
+      cardId,
+      textAfterSend(draft.text, accepted.text),
+      draft.attachments.filter((a) => !accepted.attachmentIds.has(a.id)),
+    );
   }
-  // No field on screen (the gap between two views of the card): the stored draft is the only copy
-  // of what was typed after Enter, and it is the next message.
-  const draft = loadDraft(cardId);
-  saveDraft(
-    cardId,
-    textAfterSend(draft.text, sent),
-    draft.attachments.filter((a) => !sentAttachmentIds.has(a.id)),
-  );
+  sendSettledListeners.get(cardId)?.forEach((listener) => listener(accepted));
 }
 
 /** Ids that do not depend on `crypto.randomUUID` (absent in some jsdom/webview combinations). */
@@ -560,7 +568,7 @@ export function TerminalComposer({
   const initial = React.useMemo(() => (draftKey ? loadDraft(draftKey) : { text: "", attachments: [] }), [draftKey]);
   const [text, setText] = React.useState(initial.text);
   const [attachments, setAttachments] = React.useState<Attachment[]>(initial.attachments);
-  const [sending, setSending] = React.useState(false);
+  const [sending, setSending] = React.useState(() => sendsInFlight.has(draftKey));
   /**
    * Enter was pressed while an image was still uploading. The message is not dropped and it is not
    * sent without its picture: it goes the moment the last upload lands (see the effect below).
@@ -708,15 +716,18 @@ export function TerminalComposer({
   }, []);
 
   /** Only what went is cleared: what was typed or pasted during the round trip is the next message. */
-  const removeSent = React.useCallback<SentListener>((sent, sentAttachmentIds) => {
-    setText((current) => textAfterSend(current, sent));
-    setAttachments((current) => current.filter((a) => !sentAttachmentIds.has(a.id)));
+  const onSendSettled = React.useCallback<SendSettledListener>((accepted) => {
+    setSending(false);
+    if (!accepted) return;
+    setText((current) => textAfterSend(current, accepted.text));
+    setAttachments((current) => current.filter((a) => !accepted.attachmentIds.has(a.id)));
   }, []);
 
   React.useEffect(() => {
     if (!draftKey) return;
-    return subscribeSent(draftKey, removeSent);
-  }, [draftKey, removeSent]);
+    setSending(sendsInFlight.has(draftKey));
+    return subscribeSendSettled(draftKey, onSendSettled);
+  }, [draftKey, onSendSettled]);
 
   /**
    * The one place a message leaves this component. Everything it needs is already decided: the
@@ -729,25 +740,24 @@ export function TerminalComposer({
       const body = composeMessage(value, attached);
       if (!body) return;
       setSending(true);
+      if (draftKey) sendsInFlight.add(draftKey);
+      let accepted: AcceptedSend | null = null;
       try {
         await onSend(body);
-        const sentIds = new Set(attached.map((a) => a.id));
         attached.forEach((a) => {
           if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
           filesRef.current.delete(a.id);
         });
-        // A card's draft may be showing in ANOTHER field by now; a composer with no card only has
-        // this one.
-        if (draftKey) removeSentFromDraft(draftKey, value, sentIds);
-        else removeSent(value, sentIds);
-        if (!isMobile) ref.current?.focus();
+        accepted = { text: value, attachmentIds: new Set(attached.map((a) => a.id)) };
       } catch {
         /* the caller has already said what went wrong; the draft stays put */
-      } finally {
-        setSending(false);
       }
+      // A composer with no card has no draft to share: this field is the only one there is.
+      if (draftKey) settleSend(draftKey, accepted);
+      else onSendSettled(accepted);
+      if (accepted && !isMobile) ref.current?.focus();
     },
-    [draftKey, isMobile, onSend, removeSent],
+    [draftKey, isMobile, onSend, onSendSettled],
   );
 
   const send = (): void => {
