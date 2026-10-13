@@ -717,8 +717,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     if (!connected || socketRef.current?.readyState !== WebSocket.OPEN) return;
     if (!state.ready) return;
     // O RESPIRO, não o fim do turno (ver `turnHasRoomForMore`): um turno de quinze minutos segurava
-    // por quinze minutos um "para, tá errado". Entre uma ferramenta e a próxima o modelo fecha um
-    // bloco, e é aí que a mensagem entra — no turno em andamento, pelo streaming input.
+    // por quinze minutos um "para, tá errado". Respiro é não haver uma FRASE PELA METADE — uma
+    // ferramenta em curso não é —, e a mensagem entregue aí entra no turno em andamento pelo
+    // streaming input: o CLI a enfileira e o modelo a lê no passo seguinte.
     if (!turnHasRoomForMore(state)) return;
     if (editing || pendingEdit) return;
     // Só o que é DESTA conta sai por esta conexão (o servidor carimba o autor pela conexão).

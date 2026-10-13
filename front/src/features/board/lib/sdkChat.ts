@@ -639,7 +639,15 @@ export function currentActivity(state: SdkChatState): SdkActivity | null {
  * E uma mensagem recém-entregue NÃO abre o respiro seguinte: ela é a linha mais nova e o turno
  * segue de pé, então a próxima só anda quando o modelo REAGIR (a linha dele). Sem isso a fila
  * inteira sairia de uma vez no mesmo instante, que é o oposto de "uma por vez, e as outras
- * continuam suas". PURE.
+ * continuam suas".
+ *
+ * O LIMITE CONHECIDO desse ritmo: ele conta LINHAS, não passos do modelo. Um passo que desenhasse
+ * várias linhas de uma vez (texto + duas ferramentas em paralelo na MESMA mensagem) abriria um
+ * respiro por linha e deixaria várias da fila subirem juntas. Fica documentado em vez de defendido
+ * porque (a) o protocolo não tem marca de início de passo para ler, e (b) nos 1.677 passos de
+ * assistente dos transcripts deste runner, TODOS trazem um bloco só — o CLI escreve uma mensagem
+ * por bloco. E o pior caso é benigno: as mensagens chegam todas ao modelo, que é o destino que elas
+ * já tinham; o que se perde é a chance de editar as de trás. PURE.
  */
 export function turnHasRoomForMore(state: SdkChatState): boolean {
   if (state.awaiting) return false;
