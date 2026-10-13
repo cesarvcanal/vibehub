@@ -1083,14 +1083,46 @@ describe("turnHasRoomForMore — o respiro em que a fila anda", () => {
     expect(turnHasRoomForMore(state)).toBe(false);
   });
 
-  it("ferramenta rodando: espera — é o oposto de tranquilo", () => {
+  /**
+   * FERRAMENTA RODANDO É O RESPIRO MAIS COMUM QUE EXISTE (produção, 13/10/2026: "passo uma tarefa e
+   * vejo que ela demora um pouco").
+   *
+   * A regra antiga lia "ferramenta em curso" como "não está tranquilo" e segurava a mensagem — mas
+   * é justamente aí que o turno PASSA o tempo dele, e a linha mais nova de um turno trabalhando é
+   * quase sempre uma ferramenta. Medido no transcript de uma sessão real deste painel: de uma
+   * chamada de ferramenta até o próximo bloco fechado são 11s na mediana, 31s no p90 e 71s no pior
+   * caso — o tempo que a mensagem ficava parada na tela com o fio de pé e o CLI pronto para
+   * recebê-la. E uma ferramenta não é uma frase pela metade: a mensagem entregue aqui entra pelo
+   * streaming input e o CLI a dobra no passo seguinte do modelo (o `turn_absorbed`), que é
+   * exatamente o que aconteceria num "bloco fechado". O ritmo de uma por vez não vem daqui — vem da
+   * regra da linha `user` logo abaixo.
+   */
+  it("ferramenta rodando: a fila ANDA — a mensagem é dobrada no próximo passo do modelo", () => {
     const state = feed([
       { type: "ready" },
       { type: "assistant_delta", text: "vou olhar" },
       { type: "assistant_text", text: "vou olhar" },
       { type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } },
     ]);
-    expect(turnHasRoomForMore(state)).toBe(false);
+    expect(state.turnActive).toBe(true);
+    expect(turnHasRoomForMore(state)).toBe(true);
+  });
+
+  /**
+   * E o caso em que a espera não tinha fim: o turno ACABOU com uma ferramenta como última linha (um
+   * turno interrompido no meio de uma, um `result` que chega sem texto final). Nada estava rodando,
+   * ninguém ia desenhar outra linha, e a mensagem da fila ficava parada até a pessoa mandar algo
+   * de novo — a fila travada com o agente ocioso.
+   */
+  it("turno fechado com uma ferramenta como última linha: a fila NÃO fica travada", () => {
+    const state = feed([
+      { type: "ready" },
+      { type: "thinking", text: "vou olhar" },
+      { type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } },
+      { type: "result", isError: false },
+    ]);
+    expect(state.turnActive).toBe(false);
+    expect(turnHasRoomForMore(state)).toBe(true);
   });
 
   it("texto ainda escorrendo: espera — ele está no meio de uma frase", () => {
@@ -1127,6 +1159,11 @@ describe("turnHasRoomForMore — o respiro em que a fila anda", () => {
     expect(sent.turnActive).toBe(true);
     expect(sent.awaiting).toBe(false); // nada mais "preparando"…
     expect(turnHasRoomForMore(sent)).toBe(false); // …mas o modelo ainda não reagiu a ela
+
+    // E o ritmo é esse: UM passo do modelo, UMA mensagem. A ferramenta que ele chama em seguida é
+    // a reação à que acabou de subir — e abre o respiro da próxima.
+    const reacted = applySdkEvent(sent, { type: "tool_use", id: "t9", name: "Read", input: { file_path: "a.ts" } });
+    expect(turnHasRoomForMore(reacted)).toBe(true);
   });
 });
 

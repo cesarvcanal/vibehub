@@ -2484,8 +2484,20 @@ describe("SdkChatView — forçar o envio de uma mensagem da fila", () => {
  * parada enquanto o agente seguia no caminho errado. Agora ela sai no primeiro bloco FECHADO: o
  * turno continua de pé, e a mensagem entra nele pelo streaming input.
  */
+/**
+ * O RESPIRO DO TURNO — e o que ele NÃO pode ser (produção, 13/10/2026: "passo uma tarefa e vejo que
+ * ela demora um pouco").
+ *
+ * A fila anda no respiro, não só no fim do turno. Só que "respiro" não é "nada rodando": a linha
+ * mais nova de um turno trabalhando é quase sempre uma FERRAMENTA, que é justamente onde o tempo
+ * passa — medido num transcript real deste painel, 11s na mediana de uma chamada de ferramenta até
+ * o próximo bloco fechado, 31s no p90, 71s no pior caso. Esperar isso com o fio de pé e o CLI
+ * pronto era a lentidão que o dono via. Respiro é a ausência de uma FRASE PELA METADE: texto ou
+ * raciocínio escorrendo, espera; ferramenta em curso, vai — o CLI enfileira e o modelo lê no passo
+ * seguinte (ver `turnHasRoomForMore`).
+ */
 describe("SdkChatView — a fila anda no respiro do turno, não só no fim", () => {
-  it("ferramenta rodando: a mensagem continua esperando", async () => {
+  it("ferramenta rodando: a mensagem SOBE na hora — é aí que o turno passa o tempo dele", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -2497,15 +2509,17 @@ describe("SdkChatView — a fila anda no respiro do turno, não só no fim", () 
     ws.deliver({ type: "assistant_text", text: "vou olhar" });
     ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } });
 
-    // escrita COM a ferramenta já rodando: não há respiro nenhum à vista
+    // escrita COM a ferramenta já rodando: nada disso é uma frase pela metade
     await userEvent.type(box, "o que você tá fazendo ?{Enter}");
-    await screen.findByTestId("sdk-queued");
 
-    expect(ws.sent.length).toBe(1); // nada saiu: ferramenta rodando é o oposto de tranquilo
-    expect(screen.getByTestId("sdk-queued")).toBeInTheDocument();
+    await waitFor(() => expect(ws.sent.length).toBe(2));
+    expect(JSON.parse(ws.sent[1]!)).toMatchObject({ type: "user", text: "o que você tá fazendo ?" });
+    await waitFor(() => expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument());
+    // e nada disso precisou do fim do turno: NENHUM `result` foi entregue nesta conversa
+    expect(screen.getByTestId("sdk-chat-working")).toBeInTheDocument();
   });
 
-  it("bloco FECHADO no meio do turno: ela vai — sem o turno ter acabado", async () => {
+  it("texto ainda escorrendo: ESPERA — e o bloco fechado a solta, sem o turno ter acabado", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -2517,14 +2531,12 @@ describe("SdkChatView — a fila anda no respiro do turno, não só no fim", () 
 
     await userEvent.type(box, "o que você tá fazendo ?{Enter}");
     await screen.findByTestId("sdk-queued");
-    ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } });
-    expect(ws.sent.length).toBe(1); // ainda ocupado
+    expect(ws.sent.length).toBe(1); // no meio de uma frase, não
 
     ws.deliver({ type: "assistant_text", text: "os testes passaram" }); // o respiro
 
     await waitFor(() => expect(ws.sent.length).toBe(2));
     expect(JSON.parse(ws.sent[1]!)).toMatchObject({ type: "user", text: "o que você tá fazendo ?" });
-    // e nada disso precisou do fim do turno: NENHUM `result` foi entregue nesta conversa
     await waitFor(() => expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument());
   });
 
@@ -2547,9 +2559,14 @@ describe("SdkChatView — a fila anda no respiro do turno, não só no fim", () 
 
     await waitFor(() => expect(ws.sent.length).toBe(2));
     expect(JSON.parse(ws.sent[1]!)).toMatchObject({ text: "recado um" });
-    // a segunda NÃO foi junto: o respiro foi da primeira, e ela ainda é sua
+    // a segunda NÃO foi junto: a linha mais nova é a que subiu, e o modelo ainda não reagiu
     expect(screen.getAllByTestId("sdk-queued")).toHaveLength(1);
     expect(screen.getByTestId("sdk-queued")).toHaveTextContent("recado dois");
+
+    // o passo seguinte do modelo é a reação — e é ele que abre o respiro da próxima
+    ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } });
+    await waitFor(() => expect(ws.sent.length).toBe(3));
+    expect(JSON.parse(ws.sent[2]!)).toMatchObject({ text: "recado dois" });
   });
 });
 

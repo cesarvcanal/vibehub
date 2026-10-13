@@ -737,13 +737,25 @@ ajuda:
   esconder as outras. A espera é um aviso, não uma leitura: o lápis continua sendo o caminho para
   ler a mensagem inteira, no campo.
 - **A fila anda no RESPIRO do turno, não no fim dele.** Esperar o `result` fazia um turno de quinze
-  minutos segurar por quinze minutos um "para, tá errado". Só que um turno não é um bloco maciço:
-  entre uma ferramenta e a próxima o modelo FECHA um bloco de resposta, e é esse instante que o
-  Cursor e o Claude Code usam para puxar o que está esperando. `turnHasRoomForMore` (puro, em
-  `lib/sdkChat.ts`) lê o respiro na mesma ordem da barra de atividade: ferramenta rodando, não;
-  texto ou raciocínio ainda escorrendo, não; "Preparando…", não; bloco fechado, sim. Uma mensagem
-  recém-entregue não abre o respiro seguinte — senão a fila inteira sairia de uma vez, que é o
-  oposto de "uma por vez, e as outras continuam suas".
+  minutos segurar por quinze minutos um "para, tá errado". Só que um turno não é um bloco maciço: a
+  cada passo o modelo FECHA um bloco, e é esse instante que o Cursor e o Claude Code usam para puxar
+  o que está esperando. `turnHasRoomForMore` (puro, em `lib/sdkChat.ts`) lê o respiro na mesma ordem
+  da barra de atividade: texto ou raciocínio ainda escorrendo, não; "Preparando…", não; bloco
+  fechado, sim; **ferramenta em curso, sim** (ver abaixo). Uma mensagem recém-entregue não abre o
+  respiro seguinte — ela é a linha mais nova e o turno segue de pé, então a próxima espera o modelo
+  REAGIR; senão a fila inteira sairia de uma vez, que é o oposto de "uma por vez, e as outras
+  continuam suas".
+- **"Ferramenta rodando" NÃO é esperar** (produção, 13/10/2026: "passo uma tarefa e vejo que ela
+  demora um pouco"). A primeira versão da regra lia a ferramenta como "não está tranquilo" e
+  devolvia quase toda a espera antiga, porque é na ferramenta que o turno passa o tempo dele e a
+  linha mais nova de um turno trabalhando é quase sempre uma: medido no transcript de uma sessão
+  real deste painel, de uma chamada de ferramenta até o próximo bloco fechado são **11s na mediana,
+  31s no p90 e 71s no pior caso** — a mensagem parada na tela com o fio de pé e o CLI pronto para
+  recebê-la. E um turno que ACABA numa linha de ferramenta (interrompido no meio de uma, um
+  `result` sem texto final) deixava a fila travada sem nada rodando. Uma ferramenta é trabalho em
+  curso, não frase pela metade: entregue ali, a mensagem segue o mesmo caminho que seguiria no
+  bloco fechado — o CLI a enfileira pelo streaming input e o modelo a lê no passo seguinte (o
+  `turn_absorbed` que volta).
 - **Dá para atropelar a espera.** Cada mensagem da fila carrega o gesto de ir AGORA
   (`sdk-queued-send-now`): ela entra no turno em andamento pelo streaming input e volta marcada
   "entrou no turno em andamento" (o `turn_absorbed` acima). Esperar continua sendo o padrão — uma
