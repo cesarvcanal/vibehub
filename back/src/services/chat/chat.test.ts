@@ -91,6 +91,21 @@ describe("parseChatEvents", () => {
     expect(parseChatEvents(noise)).toEqual([]);
   });
 
+  it("drops the auto-compaction SUMMARY — the CLI writes it as a user line, but nobody typed it", () => {
+    // The real shape (CLI 2.1.x): after a `compact_boundary` the CLI appends the whole recap as a
+    // `type:"user"` line flagged `isCompactSummary` / `isVisibleInTranscriptOnly`. Read as a user
+    // message it became a giant bubble — and, in the mirror, a "turn outside the chat" (reanchor).
+    const summary = userLine("This session is being continued from a previous conversation that ran out of context.", {
+      uuid: "sum",
+      isCompactSummary: true,
+      isVisibleInTranscriptOnly: true,
+    });
+    expect(parseChatEvents(summary)).toEqual([]);
+    // Either flag alone is enough: both mean "this line is not the conversation".
+    expect(parseChatEvents(userLine("resumo", { uuid: "s2", isCompactSummary: true }))).toEqual([]);
+    expect(parseChatEvents(userLine("resumo", { uuid: "s3", isVisibleInTranscriptOnly: true }))).toEqual([]);
+  });
+
   it("shows a slash command as the command, not as its xml wrapper", () => {
     const events = parseChatEvents(
       userLine("<command-name>/loop</command-name><command-args>5m /status</command-args>", { uuid: "u2" }),
