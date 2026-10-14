@@ -11,7 +11,7 @@
 
 // Type-only (erased at compile time): the workflow frame's shape IS the probe's result, and this
 // keeps the file free of runtime imports (and of the probe's config/host side of the graph).
-import type { WorkflowRun } from "./workflow.js";
+import type { WorkflowRun } from "./workflowProbe.js";
 
 /* ------------------------------------------------------------------ events */
 
