@@ -16,7 +16,15 @@ import type { WorkflowRun } from "./workflow.js";
 /* ------------------------------------------------------------------ events */
 
 /** A block of assistant text (consolidated, from an `assistant` message). */
-export interface AssistantTextEvent { type: "assistant_text"; text: string }
+export interface AssistantTextEvent {
+  type: "assistant_text";
+  text: string;
+  /**
+   * Said by a SUBAGENTE (Agent/Task), not by the main agent: the id of the tool call that started
+   * it. Absent = the main agent. See `ToolUseEvent.parentToolUseId`.
+   */
+  parentToolUseId?: string;
+}
 /** A live text delta (only when the driver runs with partial messages on). */
 export interface AssistantDeltaEvent { type: "assistant_delta"; text: string }
 /**
@@ -33,7 +41,18 @@ export interface AssistantDeltaEvent { type: "assistant_delta"; text: string }
 export interface ThinkingEvent { type: "thinking"; text: string }
 export interface ThinkingDeltaEvent { type: "thinking_delta"; text: string }
 /** A tool call the agent is about to run (or ran). */
-export interface ToolUseEvent { type: "tool_use"; id: string; name: string; input: unknown }
+export interface ToolUseEvent {
+  type: "tool_use";
+  id: string;
+  name: string;
+  input: unknown;
+  /**
+   * The call was made by a SUBAGENTE: the id of the Agent/Task call that started it (the CLI's
+   * `parent_tool_use_id`). Without it the screen drew the subagent's work as the main agent's.
+   * Subagent stream deltas are never emitted — only these consolidated frames, marked.
+   */
+  parentToolUseId?: string;
+}
 /** The session id — emitted as soon as the driver learns it, and again on the result. */
 export interface SessionEvent { type: "session"; sessionId: string }
 /** A permission decision the driver's PreToolUse gate made (observability + the escalation's outcome). */
