@@ -198,8 +198,9 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "to clear. It runs `.vibehub/gate.json` (`{ \"checks\": [\"…\"] }`) if the repo has one, else " +
         "sensible defaults (a typecheck and `npm test`) when they are resolvable, else nothing at all. " +
         "Returns { ran, passed, output }: `ran:false` means there was nothing to check (a pass-" +
-        "through, not a failure). Output is a redacted tail. Use it to know if a card is green before " +
-        "you ask to ship it.",
+        "through, not a failure). Output is a redacted tail. Use it only to know if a card is green when " +
+        "you are NOT delivering: vibehub_deliver already runs the gate and returns its verdict, so " +
+        "running this first just repeats minutes of checks.",
       inputSchema: {
         card: z.string().describe("id of the card to check (from vibehub_list_terminals)"),
       },
