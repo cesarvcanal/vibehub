@@ -40,6 +40,8 @@ import { workingStage, type WorkingKind } from "@/features/board/lib/workingStag
 import { createReconnectBackoff, type ConnectionState } from "@/features/board/lib/reconnect";
 import { reasoningTranslator, useReasoningTranslation } from "@/features/board/lib/reasoningTranslation";
 import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
+import { ToolDiffCard } from "@/features/board/components/ToolDiffCard";
+import { toolDiff } from "@/features/board/lib/toolDiff";
 import {
   buildDecisionReply,
   decisionReplies,
@@ -1852,13 +1854,15 @@ const SdkChatRow = React.memo(function SdkChatRow({
   const t = useT();
   // Whose screen this is — their own messages render unlabelled, everyone else's carry the sender.
   const viewer = useAuth().user?.username;
+  // Antes dos returns (regra dos hooks). Uma vez por linha: o memo da linha e o `row` estável seguram.
+  const diff = React.useMemo(() => (row.kind === "tool" ? toolDiff(row.name, row.input) : null), [row]);
 
   if (row.kind === "question") {
     return <SdkQuestionCard row={row} onAnswer={onAnswer} />;
   }
 
   if (row.kind === "tool") {
-    return <SdkToolRow row={row} />;
+    return diff ? <ToolDiffCard row={row} diff={diff} /> : <SdkToolRow row={row} />;
   }
 
   if (row.kind === "workflow") {
