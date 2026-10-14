@@ -17,6 +17,39 @@ import type { ServerText } from "@/features/board/lib/sdkOutbox";
 
 /** One frame from the SDK socket — the driver's event contract, verbatim (`user` only on replay
  *  and for external sends: another card's agent, another person's message). */
+/**
+ * Espelho dos tipos de back/src/services/sdk/workflow.ts (`WorkflowActivity`, `WorkflowAgent`,
+ * `WorkflowFeedItem`). Os campos que o back passou a mandar depois ficam OPCIONAIS aqui: no deploy
+ * blue/green um back antigo ainda publica quadros sem eles.
+ */
+export type WorkflowActivity =
+  | { kind: "tool"; tool: string; target: string }
+  | { kind: "text"; text: string }
+  | { kind: "thinking"; since: number };
+
+export interface WorkflowAgentFrame {
+  id: string;
+  label: string;
+  status: "running" | "done";
+  result?: string;
+  phase?: string;
+  startedAt?: number;
+  lastAt?: number;
+  endedAt?: number;
+  toolCount?: number;
+  /** `toolCount` é um piso: o transcript é maior do que o back leu. */
+  toolCountPartial?: boolean;
+  activity?: WorkflowActivity;
+}
+
+export interface WorkflowFeedItem {
+  at: number;
+  kind: "tool" | "text" | "thinking" | "result";
+  tool?: string;
+  target?: string;
+  text?: string;
+}
+
 export interface SdkEvent {
   type:
     | "user"
@@ -65,7 +98,11 @@ export interface SdkEvent {
   /** On `workflow_progress` (synthesised by the BACK, see back/src/services/sdk/workflow.ts): the
    *  live snapshot of a Workflow's fleet of subagents. `name` carries the script's name. */
   runId?: string;
-  agents?: Array<{ id: string; label: string; status: "running" | "done"; result?: string }>;
+  agents?: WorkflowAgentFrame[];
+  /** Os títulos de `meta.phases` lidos do script pelo back, na ordem. */
+  phases?: string[];
+  /** Quando a rodada começou (ms). */
+  startedAt?: number;
   /** A contagem do diário INTEIRO — a lista de `agents` tem teto, ela não. */
   total?: number;
   done?: number;
@@ -227,7 +264,7 @@ export type SdkRow =
       name: string;
       description?: string;
       phases?: Array<{ title: string; detail?: string }>;
-      agents: Array<{ id: string; label: string; status: "running" | "done"; result?: string }>;
+      agents: WorkflowAgentFrame[];
       /** Quantos subagentes a rodada tem e quantos já responderam, contados no diário inteiro. */
       total: number;
       done: number;
