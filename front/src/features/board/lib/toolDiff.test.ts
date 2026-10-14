@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DIFF_SHOWN_MAX, WRITE_SHOWN_MAX, lineDiff, toolDiff, type DiffLine } from "@/features/board/lib/toolDiff";
+import { DIFF_SHOWN_MAX, WRITE_SHOWN_MAX, hasToolDiff, lineDiff, toolDiff, type DiffLine } from "@/features/board/lib/toolDiff";
 
 const add = (text: string): DiffLine => ({ kind: "add", text });
 const del = (text: string): DiffLine => ({ kind: "del", text });
@@ -117,5 +117,32 @@ describe("toolDiff", () => {
     expect(toolDiff("Bash", { command: "ls" })).toBeNull();
     expect(toolDiff("Edit", undefined)).toBeNull();
     expect(toolDiff("NotebookEdit", { notebook_path: "nb.ipynb", new_source: "", edit_mode: "delete" })).toBeNull();
+  });
+});
+
+describe("hasToolDiff", () => {
+  const cases: [string, unknown][] = [
+    ["Edit", { file_path: "a.ts", old_string: "a", new_string: "b" }],
+    ["Edit", { description: "Edit(a.ts)" }],
+    ["MultiEdit", { file_path: "a.ts", edits: [{ old_string: "a", new_string: "b" }] }],
+    ["MultiEdit", { file_path: "a.ts", edits: [] }],
+    ["Write", { file_path: "a.ts", content: "x" }],
+    ["Write", { file_path: "a.ts" }],
+    ["NotebookEdit", { notebook_path: "nb.ipynb", new_source: "x" }],
+    ["NotebookEdit", { notebook_path: "nb.ipynb", new_source: "", edit_mode: "delete" }],
+    ["Bash", { command: "ls" }],
+    ["Edit", null],
+  ];
+
+  it("answers exactly when toolDiff would return a diff", () => {
+    for (const [name, input] of cases) expect(hasToolDiff(name, input), name).toBe(toolDiff(name, input) !== null);
+  });
+
+  it("does not run the diff (cheap enough for every streamed token)", () => {
+    const huge = Array.from({ length: 5000 }, (_, i) => `line ${i}`).join("\n");
+    const input = { file_path: "a.ts", old_string: huge, new_string: `${huge}\nmore` };
+    const started = performance.now();
+    for (let i = 0; i < 1000; i++) hasToolDiff("Edit", input);
+    expect(performance.now() - started).toBeLessThan(50);
   });
 });

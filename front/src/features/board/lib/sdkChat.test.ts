@@ -21,6 +21,7 @@ import {
   toolSummary,
   type SdkChatState,
   type SdkEvent,
+  type SdkRow,
 } from "./sdkChat";
 import { pendingDecisions } from "./pendingDecisions";
 import { reconcileOutbox, sendMark } from "./sdkOutbox";
@@ -374,6 +375,28 @@ describe("groupSdkRows", () => {
       Array.from({ length: n }, (_, i) => ({ kind: "tool" as const, id: `t${i}`, name: "Read", summary: "" }));
     expect(groupSdkRows(tools(3)).map((r) => r.kind)).toEqual(["tools"]);
     expect(groupSdkRows(tools(2)).map((r) => r.kind)).toEqual(["row", "row"]);
+  });
+
+  it("never folds a tool row that carries a diff: it breaks the run and stays on screen", () => {
+    const read = (id: string): SdkRow => ({ kind: "tool", id, name: "Read", summary: "" });
+    const edit: SdkRow = {
+      kind: "tool",
+      id: "e",
+      name: "Edit",
+      summary: "a.ts",
+      input: { file_path: "a.ts", old_string: "x", new_string: "y" },
+    };
+    const rendered = groupSdkRows([read("r1"), read("r2"), read("r3"), edit, read("r4")]);
+    expect(rendered.map((r) => [r.kind, r.id])).toEqual([
+      ["tools", "r1"],
+      ["row", "e"],
+      ["row", "r4"],
+    ]);
+  });
+
+  it("still folds an Edit mirrored from the terminal (no old/new strings, so no diff)", () => {
+    const mirrored = (id: string): SdkRow => ({ kind: "tool", id, name: "Edit", summary: "", input: { description: "Edit(a.ts)" } });
+    expect(groupSdkRows([mirrored("m1"), mirrored("m2"), mirrored("m3")]).map((r) => r.kind)).toEqual(["tools"]);
   });
 });
 

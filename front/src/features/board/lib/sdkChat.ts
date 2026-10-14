@@ -12,6 +12,7 @@
 import { normalizeMessage, parseOrigin, type MessageOrigin } from "@/features/board/lib/chat";
 import type { SlashCommandInfo } from "@/features/board/lib/slashMenu";
 import type { ServerText } from "@/features/board/lib/sdkOutbox";
+import { hasToolDiff } from "@/features/board/lib/toolDiff";
 
 /* ----------------------------------------------------------------- events */
 
@@ -1319,7 +1320,11 @@ export type SdkRenderRow = { kind: "row"; id: string; row: SdkRow } | { kind: "t
 
 export const SDK_TOOL_FOLD_MIN = 3;
 
-/** Fold consecutive tool rows (>= min) into one block; everything else passes through. PURE. */
+/**
+ * Fold consecutive tool rows (>= min) into one block; everything else passes through. PURE.
+ * A tool row that carries a diff (an Edit/Write with its text) is never folded: the change is
+ * what the reader wants to see, so it breaks the run and stays on screen as its own row.
+ */
 export function groupSdkRows(rows: readonly SdkRow[], min: number = SDK_TOOL_FOLD_MIN): SdkRenderRow[] {
   const out: SdkRenderRow[] = [];
   let run: SdkRow[] = [];
@@ -1330,7 +1335,7 @@ export function groupSdkRows(rows: readonly SdkRow[], min: number = SDK_TOOL_FOL
     run = [];
   };
   for (const row of rows) {
-    if (row.kind === "tool") {
+    if (row.kind === "tool" && !hasToolDiff(row.name, row.input)) {
       run.push(row);
       continue;
     }

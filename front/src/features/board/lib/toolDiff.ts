@@ -166,44 +166,64 @@ function isEdit(value: unknown): value is EditInput {
   return typeof o.old_string === "string" && typeof o.new_string === "string";
 }
 
-function multiEditDiff(file: string, edits: unknown): ToolDiff | null {
-  if (!Array.isArray(edits)) return null;
-  const parts = edits.filter(isEdit);
-  if (parts.length === 0) return null;
+/** O que uma chamada de edição traz de texto, já validado. Só a forma — nenhum diff calculado. */
+type EditCall =
+  | { kind: "edits"; file: string; edits: EditInput[] }
+  | { kind: "content"; file: string; content: string; created: boolean };
+
+function parseEditCall(name: string, input: unknown): EditCall | null {
+  if (!input || typeof input !== "object") return null;
+  const o = input as Record<string, unknown>;
+  const file = typeof o.file_path === "string" ? o.file_path : null;
+  switch (name) {
+    case "Edit":
+      return file && isEdit(o) ? { kind: "edits", file, edits: [o] } : null;
+    case "MultiEdit": {
+      const edits = file && Array.isArray(o.edits) ? o.edits.filter(isEdit) : [];
+      return file && edits.length > 0 ? { kind: "edits", file, edits } : null;
+    }
+    case "Write":
+      return file && typeof o.content === "string" ? { kind: "content", file, content: o.content, created: true } : null;
+    case "NotebookEdit":
+      // Apagar uma célula não traz o que foi apagado: não há diff honesto a desenhar.
+      if (typeof o.notebook_path !== "string" || typeof o.new_source !== "string" || o.edit_mode === "delete") return null;
+      return { kind: "content", file: o.notebook_path, content: o.new_source, created: false };
+    default:
+      return null;
+  }
+}
+
+function editsDiff(edits: readonly EditInput[]): LineDiff {
+  const diffs = edits.map((edit) => lineDiff(edit.old_string, edit.new_string));
+  if (diffs.length === 1) return diffs[0]!;
   // Cada edição já vem com seu teto; o total ganha o mesmo teto para o card não crescer por edição.
-  const diffs = parts.map((edit) => lineDiff(edit.old_string, edit.new_string));
-  const summed: LineDiff = {
-    hunks: diffs.flatMap((d) => d.hunks),
-    added: diffs.reduce((n, d) => n + d.added, 0),
-    removed: diffs.reduce((n, d) => n + d.removed, 0),
-    truncated: diffs.some((d) => d.truncated) || undefined,
-    hidden: diffs.reduce((n, d) => n + (d.hidden ?? 0), 0) || undefined,
-  };
-  const replaceAll = parts.some((edit) => edit.replace_all === true) || undefined;
-  return { file, ...capHunks(summed, DIFF_SHOWN_MAX), replaceAll };
+  const hidden = diffs.reduce((n, d) => n + (d.hidden ?? 0), 0);
+  return capHunks(
+    {
+      hunks: diffs.flatMap((d) => d.hunks),
+      added: diffs.reduce((n, d) => n + d.added, 0),
+      removed: diffs.reduce((n, d) => n + d.removed, 0),
+      ...(diffs.some((d) => d.truncated) ? { truncated: true, hidden } : {}),
+    },
+    DIFF_SHOWN_MAX,
+  );
+}
+
+/**
+ * Esta chamada vira um card de diff? Mesma resposta que `toolDiff(...) !== null`, sem calcular o
+ * diff — barato o bastante para rodar sobre a conversa inteira a cada token que chega. PURE.
+ */
+export function hasToolDiff(name: string, input: unknown): boolean {
+  return parseEditCall(name, input) !== null;
 }
 
 /** O diff que uma chamada de ferramenta representa, ou null quando ela não altera código. PURE. */
 export function toolDiff(name: string, input: unknown): ToolDiff | null {
-  if (!input || typeof input !== "object") return null;
-  const o = input as Record<string, unknown>;
-  const file = typeof o.file_path === "string" ? o.file_path : null;
-
-  switch (name) {
-    case "Edit":
-      if (!file || !isEdit(o)) return null;
-      return { file, ...lineDiff(o.old_string, o.new_string), replaceAll: o.replace_all === true || undefined };
-    case "MultiEdit":
-      return file ? multiEditDiff(file, o.edits) : null;
-    case "Write":
-      if (!file || typeof o.content !== "string") return null;
-      return { file, ...allAdded(o.content, WRITE_SHOWN_MAX), created: true };
-    case "NotebookEdit": {
-      // Apagar uma célula não traz o que foi apagado: não há diff honesto a desenhar.
-      if (typeof o.notebook_path !== "string" || typeof o.new_source !== "string" || o.edit_mode === "delete") return null;
-      return { file: o.notebook_path, ...allAdded(o.new_source, WRITE_SHOWN_MAX) };
-    }
-    default:
-      return null;
+  const call = parseEditCall(name, input);
+  if (!call) return null;
+  if (call.kind === "content") {
+    return { file: call.file, ...allAdded(call.content, WRITE_SHOWN_MAX), ...(call.created ? { created: true } : {}) };
   }
+  const replaceAll = call.edits.some((edit) => edit.replace_all === true);
+  return { file: call.file, ...editsDiff(call.edits), ...(replaceAll ? { replaceAll: true } : {}) };
 }
