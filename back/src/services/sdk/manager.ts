@@ -950,6 +950,24 @@ function chargeReceipt(session: DriverSession, sent: AcceptedSend): Promise<bool
  */
 export function injectSystemTurn(session: DriverSession, text: string, origin: MessageOrigin, attempts: number): void {
   try { session.child.stdin.write(encodeControl({ type: "user", text })); } catch { /* driver gone; close will fire */ }
+  recordInjectedTurn(session, text, origin);
+  void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(text), attempts });
+}
+
+/**
+ * Another card's AGENT talking to this one (`vibehub_send_to_terminal`): a normal user turn of the
+ * card's own driver, so it lands in the conversation the card is really having — not in the tmux
+ * TUI, whose Claude never rereads what the driver wrote. No in-flight marker: the boot-resume
+ * continues a PERSON's interrupted turn; an agent's turn is for the agent that sent it to retry.
+ * Returns false (nothing recorded) when the driver can no longer take a turn.
+ */
+export function sendAgentTurn(session: DriverSession, text: string, origin: MessageOrigin): boolean {
+  if (!canAcceptTurn(session) || !writeToDriver(session, { type: "user", text })) return false;
+  recordInjectedTurn(session, text, origin);
+  return true;
+}
+
+function recordInjectedTurn(session: DriverSession, text: string, origin: MessageOrigin): void {
   session.activeTurns += 1;
   clearIdleTimer(session);
   noteDriverEventFor(session.cardId, { type: "user", text });
@@ -957,7 +975,6 @@ export function injectSystemTurn(session: DriverSession, text: string, origin: M
   void appendHistory(session.cardId, line);
   // Nobody typed it, so nobody drew it: every open tab gets it, or the answer arrives without it.
   relayToPeers(session, undefined, line);
-  void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(text), attempts });
 }
 
 /**
