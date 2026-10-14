@@ -82,6 +82,25 @@ export function proseQuestion(text: string): string | null {
   return DIRECTED.test(plain) ? para : null;
 }
 
+/**
+ * `proseQuestion` per ROW OBJECT. Every streamed token hands the view a new `rows` array, but the
+ * closed rows in it are the same objects as before (the reducer only replaces the row that changed),
+ * so the history is read once instead of once per token. A row whose text changes is a new object
+ * and misses the cache.
+ */
+type AssistantRow = Extract<SdkRow, { kind: "assistant" }>;
+
+const proseByRow = new WeakMap<AssistantRow, string | null>();
+
+function rowProseQuestion(row: AssistantRow): string | null {
+  let question = proseByRow.get(row);
+  if (question === undefined) {
+    question = proseQuestion(row.text);
+    proseByRow.set(row, question);
+  }
+  return question;
+}
+
 /** Split a text into the body and its closing prose question, for the highlighted render. PURE. */
 export function splitProseQuestion(text: string): { body: string; question: string } | null {
   const question = proseQuestion(text);
@@ -134,7 +153,7 @@ export function pendingDecisions(rows: readonly SdkRow[]): PendingDecision[] {
       return;
     }
     if (row.kind === "assistant" && !row.streaming && i > lastUserAt && i === lastAssistantAt) {
-      const question = proseQuestion(row.text);
+      const question = rowProseQuestion(row);
       if (question) out.push({ kind: "prose", rowId: row.id, text: question, summary: summarize(question), answerable: true });
     }
   });
@@ -184,7 +203,7 @@ export function decisionReplies(rows: readonly SdkRow[]): Map<string, string> {
   const lastAsked = new Map<string, string>();
   for (const row of rows) {
     if (row.kind === "assistant" && !row.streaming) {
-      const question = proseQuestion(row.text);
+      const question = rowProseQuestion(row);
       if (question) lastAsked.set(decisionKey(question), row.id);
       continue;
     }
