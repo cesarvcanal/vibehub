@@ -148,6 +148,34 @@ export function parseSdkFrame(raw: string): SdkEvent | null {
   return { ...e, from: parseOrigin(e.from) } as SdkEvent;
 }
 
+/** A streamed token: the events the view may hold until the next animation frame. PURE. */
+export function isSdkDelta(event: SdkEvent): boolean {
+  return event.type === "assistant_delta" || event.type === "thinking_delta";
+}
+
+/** Only `type` and `text` set — a delta carrying anything else is applied on its own. */
+function isPlainDelta(event: SdkEvent): boolean {
+  return isSdkDelta(event) && Object.entries(event).every(([key, value]) => key === "type" || key === "text" || value === undefined);
+}
+
+/**
+ * Merge CONSECUTIVE plain deltas of the same type into one event, keeping every other event in its
+ * place. Applying the result gives the same rows as applying the input one by one — it only changes
+ * how many reducer passes (and renders) the frame costs. PURE.
+ */
+export function coalesceDeltas(events: readonly SdkEvent[]): SdkEvent[] {
+  const out: SdkEvent[] = [];
+  for (const event of events) {
+    const prev = out[out.length - 1];
+    if (prev && prev.type === event.type && isPlainDelta(prev) && isPlainDelta(event)) {
+      out[out.length - 1] = { type: event.type, text: (prev.text ?? "") + (event.text ?? "") };
+      continue;
+    }
+    out.push(event);
+  }
+  return out;
+}
+
 /* ------------------------------------------------------------------- rows */
 
 /** What one permission card is showing: still waiting, or how it ended. */

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { act } from "react";
+import { Profiler, act } from "react";
 import { OUTBOX_TICK_MS, SdkChatView, resetQuestionDraftsForTesting } from "@/features/board/components/SdkChatView";
 import { OUTBOX_ACK_TIMEOUT_MS } from "@/features/board/lib/sdkOutbox";
 import { RECONNECT_MAX_MS } from "@/features/board/lib/reconnect";
@@ -90,9 +90,27 @@ class FakeSocket {
     this.readyState = 1;
     act(() => this.onopen?.());
   }
+  /** Um frame do socket seguido de um frame de animação — o ritmo normal de um socket de verdade. */
   deliver(event: SdkEvent): void {
+    this.receive(event);
+    runAnimationFrames();
+  }
+  /** Só o frame do socket: o que chegar assim fica no mesmo frame de animação até `runAnimationFrames`. */
+  receive(event: SdkEvent): void {
     act(() => this.onmessage?.({ data: JSON.stringify(event) } as MessageEvent));
   }
+}
+
+/**
+ * Os frames de animação ficam na mão do teste: o jsdom os dispara pelo relógio de verdade, o que
+ * deixaria cada asserção logo depois de um `deliver` dependendo de 16ms terem passado ou não.
+ */
+let animationFrames = new Map<number, FrameRequestCallback>();
+let nextAnimationFrame = 1;
+function runAnimationFrames(): void {
+  const due = [...animationFrames.values()];
+  animationFrames = new Map();
+  if (due.length > 0) act(() => due.forEach((callback) => callback(performance.now())));
 }
 
 const originalWebSocket = globalThis.WebSocket;
@@ -106,6 +124,15 @@ beforeEach(() => {
   resetQuestionDraftsForTesting();
   FakeSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeSocket);
+  animationFrames = new Map();
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    const id = nextAnimationFrame++;
+    animationFrames.set(id, callback);
+    return id;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+    animationFrames.delete(id);
+  });
 });
 
 afterEach(() => {
@@ -3139,5 +3166,70 @@ describe("SdkChatView — /clear", () => {
     ws.deliver({ type: "system_note", text: "conversation-cleared", at: Date.now() });
     await waitFor(() => expect(screen.queryByText("Resposta antiga e longa.")).toBeNull());
     expect(screen.getByText(/cleared/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * O RITMO DO STREAMING. O driver manda um frame de socket por token, e cada frame virava um
+ * setState: um render da conversa inteira por token — a resposta longa "engasgava" na tela e o
+ * campo de texto atrasava junto.
+ */
+describe("SdkChatView — o ritmo do streaming", () => {
+  it("os tokens que chegam no mesmo frame de animação viram UM render", async () => {
+    const commits = vi.fn();
+    renderApp(
+      <Profiler id="chat" onRender={commits}>
+        <SdkChatView cardId="c1" />
+      </Profiler>,
+    );
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "assistant_delta", text: "Começ" });
+    const before = commits.mock.calls.length;
+
+    for (let i = 0; i < 30; i++) ws.receive({ type: "assistant_delta", text: ` t${i}` });
+    runAnimationFrames();
+
+    expect(commits.mock.calls.length - before).toBeLessThanOrEqual(2);
+    await waitFor(() => expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("Começ t0 t1"));
+    await waitFor(() => expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("t29"));
+  });
+
+  it("um evento que não é token esvazia o frame ANTES de entrar: a ordem da conversa não muda", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    ws.receive({ type: "assistant_delta", text: "Vou rodar " });
+    ws.receive({ type: "assistant_delta", text: "os testes." });
+    ws.receive({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } });
+    ws.receive({ type: "assistant_delta", text: "Depois" });
+
+    // Sem nenhum frame de animação: o texto antes da ferramenta já está na tela, e no lugar dele.
+    const answer = screen.getAllByTestId("sdk-assistant")[0]!;
+    expect(answer).toHaveTextContent("Vou rodar os testes.");
+    expect(answer.compareDocumentPosition(screen.getByTestId("sdk-tool")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    runAnimationFrames();
+    await waitFor(() => expect(screen.getAllByTestId("sdk-assistant")).toHaveLength(2));
+    expect(screen.getAllByTestId("sdk-assistant")[1]).toHaveTextContent("Depois");
+  });
+
+  it("sem frame de animação (aba em segundo plano), os tokens entram mesmo assim", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    vi.useFakeTimers();
+    try {
+      ws.receive({ type: "assistant_delta", text: "Rodando " });
+      ws.receive({ type: "assistant_delta", text: "em segundo plano" });
+      act(() => { vi.advanceTimersByTime(250); });
+      expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("Rodando em segundo plano");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

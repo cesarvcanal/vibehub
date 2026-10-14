@@ -60,12 +60,14 @@ import {
   answerQuestion,
   applySdkEvent,
   appendUserRow,
+  coalesceDeltas,
   decidePermission,
   deliveredUserTexts,
   dropUserRow,
   currentActivity,
   formatAgentResult,
   groupSdkRows,
+  isSdkDelta,
   liveActivityDetail,
   liveUserCids,
   markInterruptRequested,
@@ -78,6 +80,7 @@ import {
   type SdkChatState,
   type SdkQuestionAnswer,
   type BackgroundTask,
+  type SdkEvent,
   type SdkRow,
 } from "@/features/board/lib/sdkChat";
 import {
@@ -130,6 +133,9 @@ export const EDIT_INTERRUPT_GRACE_MS = 15_000;
 
 /** How often the outbox is checked for a send whose receipt never came. */
 export const OUTBOX_TICK_MS = 2_000;
+
+/** The longest streamed tokens wait for an animation frame (a hidden tab gets none). */
+const DELTA_FLUSH_MAX_MS = 100;
 
 export interface SdkChatViewProps {
   cardId: string;
@@ -248,6 +254,38 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     const backoff = createReconnectBackoff(Math.random);
     let disposed = false;
     const setStatus = (s: ConnectionState): void => statusRef.current?.(s);
+    /**
+     * Os TOKENS que chegaram neste frame de animação. O driver manda um frame de socket por token, e
+     * um setState por frame era um render da conversa inteira por token — a resposta longa
+     * engasgava e o campo de texto atrasava junto. Eles entram de uma vez, no próximo frame; o
+     * timer cobre a aba em segundo plano, onde o rAF não dispara.
+     */
+    let pendingDeltas: SdkEvent[] = [];
+    let deltaFrame: number | null = null;
+    let deltaTimer: ReturnType<typeof setTimeout> | null = null;
+    const cancelDeltaFlush = (): void => {
+      if (deltaFrame !== null) cancelAnimationFrame(deltaFrame);
+      if (deltaTimer !== null) clearTimeout(deltaTimer);
+      deltaFrame = null;
+      deltaTimer = null;
+    };
+    const flushDeltas = (): void => {
+      cancelDeltaFlush();
+      if (pendingDeltas.length === 0) return;
+      const batch = coalesceDeltas(pendingDeltas);
+      pendingDeltas = [];
+      setState((prev) => batch.reduce(applySdkEvent, prev));
+    };
+    const discardDeltas = (): void => {
+      cancelDeltaFlush();
+      pendingDeltas = [];
+    };
+    const queueDelta = (event: SdkEvent): void => {
+      pendingDeltas.push(event);
+      if (deltaTimer !== null) return;
+      if (typeof requestAnimationFrame === "function") deltaFrame = requestAnimationFrame(flushDeltas);
+      deltaTimer = setTimeout(flushDeltas, DELTA_FLUSH_MAX_MS);
+    };
 
     const connect = (): void => {
       if (disposed || socket || typeof WebSocket === "undefined") return;
@@ -265,6 +303,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         setStatus("open");
         setConnected(true);
         reconciledRef.current = false;
+        discardDeltas();
         // EVERY connect replays the card's history from the server log (see back/services/sdk/
         // history.ts), so the slate is wiped here — otherwise a reconnect would draw the whole
         // conversation twice. What was on screen comes right back, from disk instead of memory.
@@ -300,6 +339,12 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
           const cid = parsed.cid;
           setOutbox((prev) => markUndelivered(prev, [cid]));
         }
+        if (isSdkDelta(parsed)) {
+          queueDelta(parsed);
+          return;
+        }
+        // Qualquer outro evento entra DEPOIS dos tokens que chegaram antes dele.
+        flushDeltas();
         setState((prev) => applySdkEvent(prev, parsed));
       };
       next.onerror = () => {
@@ -308,6 +353,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       next.onclose = () => {
         if (socket === next) socket = null;
         if (socketRef.current === next) socketRef.current = null;
+        if (disposed) discardDeltas();
+        else flushDeltas();
         // A DISPOSED socket's close lands late — after a reconnect (account switch, card switch) the
         // NEW connection may already be open, and its state is not this one's to clear.
         if (disposed) return;
@@ -333,6 +380,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     return () => {
       disposed = true;
       if (retry) clearTimeout(retry);
+      discardDeltas();
       backoff.dispose();
       try { socket?.close(); } catch { /* already closing */ }
       socketRef.current = null;
