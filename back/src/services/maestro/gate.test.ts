@@ -96,7 +96,21 @@ describe("probe script + parse", () => {
     expect(gate.parseGateProbe(stdout)).toEqual({
       gateJson: '{"checks":["make ci"]}',
       hasPackageJson: true, hasTestScript: false, hasTsconfig: true, hasLocalTsc: true,
+      headSha: null, cleanTree: false,
     });
+  });
+
+  it("reads the worktree's HEAD and whether the tree is clean (untracked files count as dirty)", async () => {
+    const { gate } = await load();
+    const s = gate.buildGateProbeScript("vibehub-runner", "/work/scratch/x");
+    expect(s).toContain("git rev-parse HEAD");
+    expect(s).toContain("git status --porcelain --untracked-files=all");
+    const sha = "a".repeat(40);
+    const head = ["pkg=1", "test=1", "tsconfig=0", "localtsc=0"];
+    const clean = gate.parseGateProbe([...head, `head=${sha}`, "clean=1", "__VIBEHUB_GATE_JSON__"].join("\n"));
+    expect(clean).toMatchObject({ headSha: sha, cleanTree: true });
+    const dirty = gate.parseGateProbe([...head, `head=${sha}`, "clean=0", "__VIBEHUB_GATE_JSON__"].join("\n"));
+    expect(dirty).toMatchObject({ headSha: sha, cleanTree: false });
   });
 
   it("a probe with no gate.json yields an empty body", async () => {
@@ -187,5 +201,115 @@ describe("runGate", () => {
     const r = await gate.runGate(c.id);
     expect(r).toMatchObject({ ran: true, passed: false });
     expect(r.output).toContain("1 failing");
+  });
+});
+
+describe("runGate reuses a GREEN verdict for the same commit on a clean tree", () => {
+  // The delivery flow asks the gate the same question two or three times in a row (deliver without
+  // authorization, then with it) — minutes of typecheck + tests each, on an unchanged commit.
+  const SHA_A = "a".repeat(40);
+  const SHA_B = "b".repeat(40);
+  const probeOut = (sha: string, clean: boolean, checks = '{"checks":["npm test"]}') =>
+    [`head=${sha}`, `clean=${clean ? 1 : 0}`, "__VIBEHUB_GATE_JSON__", checks].join("\n");
+  let probes: string[] = [];
+  let runs: string[] = [];
+  const isRun = (s: string) => s.includes('echo "__VIBEHUB_GATE__ pass"');
+  const wireHost = (verdicts: string[] = ["pass"]) => {
+    runScript.mockImplementation(async (script: string) => {
+      if (script.includes("__VIBEHUB_GATE_JSON__") && !isRun(script)) {
+        return { stdout: probes.shift() ?? "", stderr: "" };
+      }
+      runs.push(script);
+      const verdict = verdicts[Math.min(runs.length - 1, verdicts.length - 1)];
+      return { stdout: `tests ran\n__VIBEHUB_GATE__ ${verdict}\n`, stderr: "" };
+    });
+  };
+  async function cardFor() {
+    const { gate, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "x" });
+    probes = [];
+    runs = [];
+    return { gate, card: c };
+  }
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("same HEAD, clean tree, green moments ago: the second call does not run the checks again", async () => {
+    const { gate, card } = await cardFor();
+    probes = [probeOut(SHA_A, true), probeOut(SHA_A, true)];
+    wireHost();
+    const first = await gate.runGate(card.id);
+    const second = await gate.runGate(card.id);
+    expect(runs).toHaveLength(1);
+    expect(first).toMatchObject({ ran: true, passed: true });
+    expect(second).toMatchObject({ ran: true, passed: true, reused: true });
+    expect(second.output).toContain("tests ran");
+  });
+
+  it("a new commit runs the checks again", async () => {
+    const { gate, card } = await cardFor();
+    probes = [probeOut(SHA_A, true), probeOut(SHA_B, true)];
+    wireHost();
+    await gate.runGate(card.id);
+    await gate.runGate(card.id);
+    expect(runs).toHaveLength(2);
+  });
+
+  it("a dirty tree (edits or untracked files) never reuses, before or after", async () => {
+    const { gate, card } = await cardFor();
+    probes = [probeOut(SHA_A, true), probeOut(SHA_A, false), probeOut(SHA_A, false)];
+    wireHost();
+    await gate.runGate(card.id);
+    await gate.runGate(card.id);
+    await gate.runGate(card.id);
+    expect(runs).toHaveLength(3);
+  });
+
+  it("a RED verdict is never reused — the next call runs again, and its green is what counts", async () => {
+    const { gate, card } = await cardFor();
+    probes = [probeOut(SHA_A, true), probeOut(SHA_A, true)];
+    wireHost(["fail", "pass"]);
+    expect(await gate.runGate(card.id)).toMatchObject({ passed: false });
+    expect(await gate.runGate(card.id)).toMatchObject({ passed: true });
+    expect(runs).toHaveLength(2);
+  });
+
+  it("any red run drops the card's older green — going back to that commit runs again", async () => {
+    const { gate, card } = await cardFor();
+    probes = [probeOut(SHA_A, true), probeOut(SHA_B, true), probeOut(SHA_A, true)];
+    wireHost(["pass", "fail", "pass"]);
+    await gate.runGate(card.id);
+    await gate.runGate(card.id); // another commit, red
+    await gate.runGate(card.id); // back on A: the old green is gone
+    expect(runs).toHaveLength(3);
+  });
+
+  it("a different resolved check list on the same commit runs again", async () => {
+    const { gate, card } = await cardFor();
+    probes = [probeOut(SHA_A, true), probeOut(SHA_A, true, '{"checks":["npm test","npm run lint"]}')];
+    wireHost();
+    await gate.runGate(card.id);
+    await gate.runGate(card.id);
+    expect(runs).toHaveLength(2);
+  });
+
+  it("an old green expires: past the reuse window the checks run again", async () => {
+    const { gate, card } = await cardFor();
+    probes = [probeOut(SHA_A, true), probeOut(SHA_A, true)];
+    wireHost();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await gate.runGate(card.id);
+    vi.setSystemTime(Date.now() + gate.GATE_REUSE_MS + 1);
+    await gate.runGate(card.id);
+    expect(runs).toHaveLength(2);
+  });
+
+  it("a worktree that is not a git repo (no HEAD) never reuses", async () => {
+    const { gate, card } = await cardFor();
+    probes = ['__VIBEHUB_GATE_JSON__\n{"checks":["npm test"]}', '__VIBEHUB_GATE_JSON__\n{"checks":["npm test"]}'];
+    wireHost();
+    await gate.runGate(card.id);
+    await gate.runGate(card.id);
+    expect(runs).toHaveLength(2);
   });
 });
