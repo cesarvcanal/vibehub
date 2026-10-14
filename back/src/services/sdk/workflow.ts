@@ -3,10 +3,13 @@ import { hostExecutor } from "../../runtime/host.js";
 import { logger } from "../../utils/logger.js";
 import {
   RUNS_PROBED,
+  buildAgentFeedProbeScript,
   buildWorkflowProbeScript,
+  parseAgentFeed,
   parseWorkflowProbe,
   type WorkflowActivity,
   type WorkflowAgent,
+  type WorkflowFeedItem,
   type WorkflowRun,
 } from "./workflowProbe.js";
 
@@ -303,6 +306,20 @@ export function watchCardWorkflows(cardId: string, deps: WatchDeps): void {
   watch.timer.unref?.();
   watches.set(cardId, watch);
   void tick();
+}
+
+/** Quantos passos o feed de um subagente traz: as últimas ações, não o transcript inteiro. */
+export const FEED_REQUEST_ITEMS = 50;
+
+/**
+ * O feed de UM subagente, lido agora do runner (mesmo executor da sondagem da frota). Sob demanda:
+ * só quando alguém abre o agente no painel. Lança `InvalidWorkflowIdError` para ids fora do formato
+ * (antes de existir um comando) e o erro do executor quando o runner não responde.
+ */
+export async function readAgentFeed(runsDir: string, runId: string, agentId: string): Promise<WorkflowFeedItem[]> {
+  const script = buildAgentFeedProbeScript(config.runner.container, runsDir, runId, agentId, FEED_REQUEST_ITEMS);
+  const { stdout } = await hostExecutor().runScript(script, { timeoutMs: 10_000 });
+  return parseAgentFeed(stdout);
 }
 
 /** Os últimos quadros publicados deste card — o que uma aba que acabou de abrir precisa ver. */

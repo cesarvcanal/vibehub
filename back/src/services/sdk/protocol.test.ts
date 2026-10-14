@@ -15,6 +15,7 @@ import {
   parseQuestionAnswers,
   parseSdkClientFrame,
   parseTypingFrame,
+  parseWorkflowFeedFrame,
   buildSupersedeText,
   buildOrphanAnswerText,
   interruptNote,
@@ -546,6 +547,25 @@ describe("parseTypingFrame — o sinal efêmero de \"está digitando\"", () => {
     expect(parseTypingFrame(`{"type":"typing","active":"sim"}`)).toBe(false);
     // e o parser de controles não o confunde com uma mensagem do usuário
     expect(parseSdkClientFrame(`{"type":"typing","active":true}`)).toBe(null);
+  });
+});
+
+describe("parseWorkflowFeedFrame — o pedido do feed de um subagente", () => {
+  it("lê runId e agentId do pedido", () => {
+    expect(parseWorkflowFeedFrame(`{"type":"workflow_feed","runId":"wf_abc","agentId":"a01f"}`))
+      .toEqual({ runId: "wf_abc", agentId: "a01f" });
+  });
+
+  it("não é um pedido de feed: null (segue o funil normal)", () => {
+    expect(parseWorkflowFeedFrame(`{"type":"user","text":"oi"}`)).toBe(null);
+    expect(parseWorkflowFeedFrame("workflow_feed")).toBe(null);
+    expect(parseWorkflowFeedFrame("")).toBe(null);
+    expect(parseWorkflowFeedFrame("{quebrado")).toBe(null);
+  });
+
+  it("um pedido malformado ainda é um pedido (consumido, nunca vira mensagem): os ids vêm vazios", () => {
+    expect(parseWorkflowFeedFrame(`{"type":"workflow_feed","runId":7}`)).toEqual({ runId: "", agentId: "" });
+    expect(parseSdkClientFrame(`{"type":"workflow_feed","runId":"wf_a","agentId":"a1"}`)).toBe(null);
   });
 });
 

@@ -330,6 +330,9 @@ function main(dir,runId,agentId,max){
 console.log(JSON.stringify(main(process.argv[1]||'',process.argv[2]||'',process.argv[3]||'',process.argv[4]||'')));
 `.trim();
 
+/** Um id de rodada ou de subagente fora do formato que o harness gera — o pedido, não o runner, errou. */
+export class InvalidWorkflowIdError extends Error {}
+
 /**
  * O comando do feed de um subagente. Os ids viram caminho dentro do runner: só passam os formatos
  * que o harness gera — qualquer outra coisa é recusada AQUI, antes de existir um comando. PURE.
@@ -341,8 +344,8 @@ export function buildAgentFeedProbeScript(
   agentId: string,
   maxItems: number,
 ): string {
-  if (!RUN_ID_RE.test(runId)) throw new Error(`invalid workflow run id: ${JSON.stringify(runId)}`);
-  if (!AGENT_ID_RE.test(agentId)) throw new Error(`invalid workflow agent id: ${JSON.stringify(agentId)}`);
+  if (!RUN_ID_RE.test(runId)) throw new InvalidWorkflowIdError(`invalid workflow run id: ${JSON.stringify(runId)}`);
+  if (!AGENT_ID_RE.test(agentId)) throw new InvalidWorkflowIdError(`invalid workflow agent id: ${JSON.stringify(agentId)}`);
   const limit = Math.max(1, Math.min(FEED_MAX_ITEMS, Math.floor(Number.isFinite(maxItems) ? maxItems : 1)));
   return (
     `docker exec ${shQuote(containerName)} node -e ${shQuote(AGENT_FEED_PROBE_JS)} ` +
