@@ -1675,7 +1675,8 @@ describe("subagentes (parentToolUseId)", () => {
     let state = feed([agentCall, { type: "result", isError: false, sessionId: "s-1" }], ready());
     state = appendUserRow(state, "e agora?", undefined, { awaiting: true });
     state = applySdkEvent(state, { type: "tool_use", id: "c2", name: "Read", input: { file_path: "/w/b.ts" }, parentToolUseId: "t1" });
-    expect(state.awaiting || state.turnActive).toBe(true);
+    expect(state.awaiting).toBe(true);
+    expect(state.turnActive).toBe(false);
   });
 });
 

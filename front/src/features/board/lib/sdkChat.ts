@@ -354,8 +354,9 @@ export interface SdkChatState {
   /**
    * A message of OUR OWN went out and the driver has not reacted yet — the window the status
    * ladder fills: "Preparando…" while `ready` is still false (cold driver booting/resuming),
-   * "Pensando…" once it is (the turn is in the engine, no token yet). Any driver event — a delta,
-   * a tool, the result — clears it and the plain "Trabalhando…"/nothing takes over. Set only by
+   * "Pensando…" once it is (the turn is in the engine, no token yet). Any event of the MAIN agent —
+   * a delta, a tool, the result — clears it and the plain "Trabalhando…"/nothing takes over; a
+   * subagent's events do not (the main has not reacted to OUR message yet). Set only by
    * the view's own send (`appendUserRow` with `awaiting`), never by replay or external messages:
    * the ladder narrates OUR send, not someone else's.
    */

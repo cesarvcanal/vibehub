@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import { WorkflowPanel } from "@/features/board/components/WorkflowPanel";
+import { FEED_RETRY_MAX, WorkflowPanel } from "@/features/board/components/WorkflowPanel";
 import { WorkflowFeedContext, createWorkflowFeedChannel } from "@/features/board/lib/workflowFeed";
 import type { SdkRow, WorkflowAgentFrame, WorkflowFeedItem } from "@/features/board/lib/sdkChat";
 import { resetLanguage, setLanguage } from "@/i18n";
@@ -39,7 +39,7 @@ function renderPanel(row: WorkflowRow) {
     </WorkflowFeedContext.Provider>
   );
   const view = render(ui(row));
-  const answer = (agentId: string, items: WorkflowFeedItem[], error?: "probe-failed") =>
+  const answer = (agentId: string, items: WorkflowFeedItem[], error?: "probe-failed" | "invalid-id") =>
     act(() => channel.deliver({ type: "workflow_feed", runId: row.runId, agentId, items, ...(error ? { error } : {}) }));
   return { sent, answer, rerender: (r: WorkflowRow) => view.rerender(ui(r)) };
 }
@@ -191,6 +191,24 @@ describe("WorkflowPanel — o feed de um agente, sob demanda", () => {
     answer("a02f", [{ at: T0 - 1_000, kind: "text", text: "pronto" }]);
     act(() => { vi.advanceTimersByTime(12_000); });
     expect(sent.filter((f) => f.agentId === "a02f")).toHaveLength(2);
+  });
+
+  it("um runner que segue caído não vira pedido eterno: o concluído tenta FEED_RETRY_MAX vezes e para", () => {
+    const { sent, answer } = renderPanel(running());
+    fireEvent.click(screen.getAllByTestId("sdk-workflow-agent")[1]!);
+    for (let i = 0; i < 20; i += 1) {
+      answer("a02f", [], "probe-failed");
+      act(() => { vi.advanceTimersByTime(4_000); });
+    }
+    expect(sent.filter((f) => f.agentId === "a02f")).toHaveLength(1 + FEED_RETRY_MAX);
+  });
+
+  it("um id recusado (invalid-id) não muda pedindo de novo: um pedido só", () => {
+    const { sent, answer } = renderPanel(running());
+    fireEvent.click(screen.getAllByTestId("sdk-workflow-agent")[1]!);
+    answer("a02f", [], "invalid-id");
+    act(() => { vi.advanceTimersByTime(20_000); });
+    expect(sent.filter((f) => f.agentId === "a02f")).toHaveLength(1);
   });
 
   it("toolCountPartial vira '80+'", () => {

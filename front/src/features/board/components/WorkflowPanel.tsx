@@ -285,16 +285,21 @@ function nowLine(agent: WorkflowAgentFrame, now: number, t: Translate): React.Re
   return <em>{t("sdk.workflowThinkingFor", { elapsed: formatDuration(now - since) })}</em>;
 }
 
+/** Quantas vezes um agente CONCLUÍDO pede de novo um feed que não veio (perdido ou `probe-failed`). */
+export const FEED_RETRY_MAX = 3;
+
 /**
  * O feed SOB DEMANDA do agente aberto: pede ao abrir e de novo a cada `FEED_POLL_MS` enquanto ele
- * roda — ou enquanto nenhuma resposta sem erro chegou (um pedido perdido na queda do socket,
- * ignorado por um back antigo ou que pegou uma falha passageira da sonda não deixa o painel parado).
- * Fechar ou desmontar para de pedir. Só a resposta deste agente conta.
+ * roda. Um CONCLUÍDO pede de novo só enquanto não veio resposta (pedido perdido na queda do socket,
+ * ignorado por um back antigo) ou veio `probe-failed` — e no máximo `FEED_RETRY_MAX` vezes, para um
+ * runner caído não virar um `docker exec` a cada 4s. `invalid-id` e `no-session` não mudam
+ * pedindo de novo. Fechar ou desmontar para de pedir. Só a resposta deste agente conta.
  */
 function useAgentFeed(runId: string, agentId: string, polling: boolean): WorkflowFeedResponse | null {
   const channel = React.useContext(WorkflowFeedContext);
   const [feed, setFeed] = React.useState<WorkflowFeedResponse | null>(null);
-  const answered = feed !== null && !feed.error;
+  const answered = feed !== null && feed.error !== "probe-failed";
+  const retriesRef = React.useRef(0);
   React.useEffect(() => {
     if (!channel) return;
     return channel.subscribe((response) => {
@@ -307,7 +312,16 @@ function useAgentFeed(runId: string, agentId: string, polling: boolean): Workflo
   }, [channel, runId, agentId, polling]);
   React.useEffect(() => {
     if (!channel || (!polling && answered)) return;
-    const timer = setInterval(() => channel.request(runId, agentId), FEED_POLL_MS);
+    const timer = setInterval(() => {
+      if (!polling) {
+        if (retriesRef.current >= FEED_RETRY_MAX) {
+          clearInterval(timer);
+          return;
+        }
+        retriesRef.current += 1;
+      }
+      channel.request(runId, agentId);
+    }, FEED_POLL_MS);
     return () => clearInterval(timer);
   }, [channel, runId, agentId, polling, answered]);
   return feed;
