@@ -275,7 +275,9 @@ describe("feed de UM agente — sob demanda", () => {
     const script = buildAgentFeedProbeScript("runner", "/root/x/workflows", "wf_abc-12", "a01f", 20);
     expect(script).toContain("docker exec 'runner' node -e ");
     expect(script).toContain("'/root/x/workflows' 'wf_abc-12' 'a01f' '20'");
-    expect(script.endsWith("|| true")).toBe(true);
+    // Uma falha do runner (sem node, container parado) tem de virar erro, não um feed vazio.
+    expect(script).not.toMatch(/\|\|\s*true/);
+    expect(script).not.toContain("2>/dev/null");
     // maxItems vira um inteiro dentro do teto.
     expect(buildAgentFeedProbeScript("runner", "/r", "wf_a", "a1", 9_999)).toContain("'wf_a' 'a1' '200'");
     expect(buildAgentFeedProbeScript("runner", "/r", "wf_a", "a1", -3)).toContain("'wf_a' 'a1' '1'");

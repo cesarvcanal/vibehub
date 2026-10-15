@@ -349,7 +349,7 @@ export function buildAgentFeedProbeScript(
   const limit = Math.max(1, Math.min(FEED_MAX_ITEMS, Math.floor(Number.isFinite(maxItems) ? maxItems : 1)));
   return (
     `docker exec ${shQuote(containerName)} node -e ${shQuote(AGENT_FEED_PROBE_JS)} ` +
-    `${shQuote(runsDir)} ${shQuote(runId)} ${shQuote(agentId)} ${shQuote(String(limit))} 2>/dev/null || true`
+    `${shQuote(runsDir)} ${shQuote(runId)} ${shQuote(agentId)} ${shQuote(String(limit))}`
   );
 }
 
