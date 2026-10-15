@@ -3381,3 +3381,22 @@ describe("SdkChatView — o buffer de tokens diante de uma ação local", () => 
     expect(follows(answer!, bubbles[bubbles.length - 1]!)).toBe(true);
   });
 });
+
+describe("SdkChatView — o buffer de tokens e a troca de conexão", () => {
+  it("um token do card anterior que ficou no buffer não entra no card novo", async () => {
+    const { rerender } = renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.receive({ type: "assistant_delta", text: "TOKEN-DO-CARD-1" }); // sem frame de animação ainda
+
+    rerender(<SdkChatView cardId="c2" />);
+    await waitFor(() => expect(FakeSocket.instances).toHaveLength(2));
+    const ws2 = FakeSocket.instances[1]!;
+    ws2.accept();
+    ws2.deliver({ type: "ready" });
+    runAnimationFrames();
+
+    expect(screen.getByTestId("sdk-chat-scroller")).not.toHaveTextContent("TOKEN-DO-CARD-1");
+  });
+});
