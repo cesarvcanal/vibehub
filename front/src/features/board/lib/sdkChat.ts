@@ -982,7 +982,9 @@ function appendErrorRow(state: SdkChatState, rows: SdkRow[], text: string): SdkC
 /**
  * Uma linha de SUBAGENTE entra sem mexer na fala do principal: ela é desenhada sob o card do pai, e
  * fechar a linha que o principal está escrevendo faria o bloco consolidado dele virar uma SEGUNDA
- * linha (o mesmo cuidado do `workflow_progress`). Então a linha aberta continua sendo a última. PURE.
+ * linha (o mesmo cuidado do `workflow_progress`). Então a linha aberta continua sendo a última.
+ * O turno também é do principal: um subagente em segundo plano que fala depois do `result` não o
+ * reabre. PURE.
  */
 function appendSubagentRow(state: SdkChatState, build: (id: string) => SdkRow, preferredId?: string): SdkChatState {
   const marked = markSource(state, false);
@@ -993,7 +995,6 @@ function appendSubagentRow(state: SdkChatState, build: (id: string) => SdkRow, p
   return {
     ...marked,
     seq,
-    turnActive: nextTurnActive(marked, false),
     awaiting: false,
     rows: stillWriting ? [...marked.rows.slice(0, -1), row, last] : [...marked.rows, row],
   };

@@ -1659,6 +1659,17 @@ describe("subagentes (parentToolUseId)", () => {
     expect(currentActivity(state)?.label).toBe("Subagent Explore: agora o view");
     expect(liveActivityDetail(state)).toBe("Subagent Explore: agora o view");
   });
+
+  it("um subagente em segundo plano que fala DEPOIS do fim do turno não religa o 'Trabalhando…'", () => {
+    let state = feed([agentCall, { type: "result", isError: false, sessionId: "s-1" }], ready());
+    expect(state.turnActive).toBe(false);
+    state = feed([
+      { type: "tool_use", id: "c1", name: "Read", input: { file_path: "/w/a.ts" }, parentToolUseId: "t1" },
+      { type: "assistant_text", text: "achei", parentToolUseId: "t1" },
+    ], state);
+    expect(state.turnActive).toBe(false);
+    expect(state.rows.filter((r) => "parent" in r && r.parent === "t1")).toHaveLength(2);
+  });
 });
 
 /**
