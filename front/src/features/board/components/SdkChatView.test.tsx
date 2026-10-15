@@ -3667,10 +3667,15 @@ describe("SdkChatView — o buffer de tokens diante de uma ação local", () => 
     runAnimationFrames();
 
     await waitFor(() => expect(ws.sent.length).toBe(2));
-    const answer = screen.getAllByTestId("sdk-assistant").find((el) => el.textContent?.includes("Analisando a saída"));
+    // A resposta que ainda escorre é redesenhada a cada STREAMING_MARKDOWN_MS: o texto novo pode
+    // levar até essa janela para aparecer. Um token perdido no buffer nunca aparece — e falha aqui.
+    const answer = await waitFor(() => {
+      const found = screen.getAllByTestId("sdk-assistant").find((el) => el.textContent?.includes("Analisando a saída"));
+      expect(found).toBeDefined();
+      return found!;
+    });
     const bubbles = screen.getAllByTestId("sdk-user");
-    expect(answer).toBeDefined();
-    expect(follows(answer!, bubbles[bubbles.length - 1]!)).toBe(true);
+    expect(follows(answer, bubbles[bubbles.length - 1]!)).toBe(true);
   });
 });
 
