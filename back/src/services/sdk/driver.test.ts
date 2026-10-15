@@ -513,7 +513,9 @@ describe("sdk-driver.mjs — editar rebobina, mas só quando é seguro", () => {
   });
 
   it("o ponto de volta é o uuid do ASSISTANT — o do result é recusado pelo CLI", () => {
-    expect(source).toContain("if (msg.uuid) lastAssistantUuid = msg.uuid;");
+    // Só a mensagem do PRINCIPAL (`parent === null`): a de um subagente mora numa sidechain — o
+    // comportamento está coberto, com o driver rodando, em sdk-driver.test.ts ("subagentes").
+    expect(source).toContain("if (msg.uuid && parent === null) lastAssistantUuid = msg.uuid;");
     // e ele é gravado no ramo do assistant, não no do result
     const assistantBranch = source.slice(source.indexOf('} else if (msg.type === "assistant")'), source.indexOf('} else if (msg.type === "result")'));
     expect(assistantBranch).toContain("lastAssistantUuid");
