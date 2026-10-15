@@ -381,7 +381,7 @@ describe("message provenance on send", () => {
   });
 });
 
-describe("an agent's send reaches the card's NATIVE chat, never the stale TUI", () => {
+describe("an agent's send goes to the native chat while it is in use, to the terminal otherwise", () => {
   // THE BUG: with the native chat on, the card's conversation lives in its SDK driver — but the
   // maestro typed into the tmux TUI, whose Claude still held the context of the day it was opened
   // (or was a bare shell by then). The child worked blind, or nobody worked at all.
@@ -447,19 +447,15 @@ describe("an agent's send reaches the card's NATIVE chat, never the stale TUI", 
     ]);
   });
 
-  it("with the driver stopped (idle stop), it comes up resuming the newest transcript, then takes the turn", async () => {
+  it("with no live driver (chat not in use), the instruction is typed at the terminal — no hidden driver is spawned", async () => {
     const { maestro, manager, dest, origin } = await nativeCard();
-    const latest = "11111111-2222-3333-4444-555555555555";
-    runScript.mockImplementation(async (script: string) =>
-      script.includes("*.jsonl") ? { stdout: `${latest}\n`, stderr: "" } : { stdout: "", stderr: "" });
+    runScript.mockResolvedValueOnce({ stdout: "bash\nnode\n", stderr: "" }); // agent probe: claude alive in the TUI
     const out = await maestro.sendToTerminal(dest.id, "continue a tarefa", { respectHumanActive: true, origin });
     manager.resetSdkSessionsForTesting();
 
-    expect(out).toMatchObject({ sent: true });
-    expect(sendKeysRan()).toBe(false);
-    expect(spawned).toHaveLength(1);
-    expect(String(pipeCommand.mock.calls[0]?.[0])).toMatch(new RegExp(`--resume\\W+${latest}`));
-    expect(userFrames(spawned[0]!)).toEqual([{ type: "user", text: "continue a tarefa" }]);
+    expect(out).toMatchObject({ sent: true, title: "filho" });
+    expect(spawned).toHaveLength(0);
+    expect(sendKeysRan()).toBe(true);
   });
 
   it("a driver that can no longer take a turn fails the send out loud — nothing recorded", async () => {

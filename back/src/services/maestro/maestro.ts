@@ -5,17 +5,12 @@ import {
   listAccounts, getConfig, isHumanActive, reportCardState, CLAUDE_MODELS,
   type Card, type Project, type BoardColumn, type CardStatus, type DeclaredState,
 } from "../board/registry.js";
-import { cardWorkPaths } from "../board/workspace.js";
 import { cardAgentState, cardAwaitingChoice, cardDriverActivity } from "../board/agentState.js";
 import { profileDirFor } from "../accounts/profiles.js";
-import { seedDestDir } from "../import/import.js";
 import { transcriptDirFor, sessionGoneError } from "./cardSession.js";
 import { recordOrigin, type MessageOrigin } from "../chat/provenance.js";
 import { publishExternalMessage } from "../sdk/history.js";
-import { ensureDriverSession, hasDriverSession, sendAgentTurn } from "../sdk/manager.js";
-import { installCardSdkDriver, sdkDriverCommand } from "../sdk/driver.js";
-import { buildLatestTranscriptScript, parseLatestTranscript, resumeTargetFor } from "../sdk/transcript.js";
-import { getSettings } from "../settings/settings.js";
+import { liveDriverSession, sendAgentTurn } from "../sdk/manager.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -26,8 +21,8 @@ import { logger } from "../../utils/logger.js";
  * does exactly three things, and each one reuses machinery the board already has:
  *
  *  - **list** the terminals and their current situation (the same mirror the board renders);
- *  - **send** an instruction to one card: a turn of its native-chat driver when the native chat is
- *    on, otherwise typed at its terminal's prompt followed by Enter;
+ *  - **send** an instruction to one card: a turn of its native-chat driver while that chat is in
+ *    use (a live driver), otherwise typed at its terminal's prompt followed by Enter;
  *  - **read** that card's last assistant turns out of the Claude transcript.
  *
  * RULE FOR THIS FILE: reimplement nothing. It calls the same registry/workspace/runner code the UI
@@ -318,10 +313,17 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
     );
   }
   const fromAgent = origin?.kind === "agent";
-  if (fromAgent && (await getSettings()).sdkDriver) {
+  // The native chat takes the turn only while it is in use (a live driver). Without one, the
+  // terminal is where the card is being worked, so the instruction is typed there.
+  const driver = fromAgent ? liveDriverSession(card.id) : null;
+  if (driver && origin) {
     const project = await getProject(card.projectId);
     if (!project) throw new Error("project for this card not found");
-    await sendToNativeChat(card, project, instruction, origin);
+    if (!sendAgentTurn(driver, instruction, origin)) {
+      throw new Error(
+        `the native chat driver of card "${card.title}" exited before it could take the instruction — send it again`,
+      );
+    }
     logger.info(
       { audit: true, action: "maestro.send", card: card.worktreeSlug, route: "sdk-driver", bytes: Buffer.byteLength(instruction), by },
       "instruction delivered to a card's native chat",
@@ -364,10 +366,9 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
   if (origin) {
     // Attribution only, AFTER a successful delivery — a failed send must leave no ghost label, and
     // a failed record must not fail a delivered message (both writers below never throw).
-    // The provenance log is what the OLD chat matches its transcript user-events against. This path
-    // only runs with the native chat switched off (an agent's send goes to the driver otherwise), so
-    // the sdk history line is for later: it keeps the message, with its sender, in the card's
-    // history for when the native chat is switched on.
+    // The provenance log is what the OLD chat matches its transcript user-events against; the sdk
+    // history line is what makes an agent's message VISIBLE (with its sender) in the native chat,
+    // which never sees text typed into the tmux prompt.
     void recordOrigin(card.id, instruction, origin);
     if (origin.kind === "agent") {
       void publishExternalMessage(card.id, { type: "user", text: instruction, at: Date.now(), from: origin });
@@ -381,37 +382,6 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
     "instruction delivered to a card terminal",
   );
   return { sent: true, cardId: card.id, title: card.title, project: project.name };
-}
-
-/**
- * An agent's instruction as a turn of the card's SDK driver — the conversation the card is really
- * having. A driver stopped by the idle stop is brought back the way the chat's connect does it:
- * install check, then a spawn resuming the newest transcript in the card's worktree.
- */
-async function sendToNativeChat(card: Card, project: Project, instruction: string, origin: MessageOrigin): Promise<void> {
-  const transcriptDir = transcriptDirFor(project, card, effectiveAccountSlug(card, project));
-  let resumeSessionId = card.resumeSessionId;
-  if (!hasDriverSession(card.id)) {
-    await installCardSdkDriver();
-    let latestSessionId: string | null = null;
-    try {
-      const { stdout } = await hostExecutor().runScript(
-        buildLatestTranscriptScript(config.runner.container, transcriptDir),
-        { timeoutMs: 15_000 },
-      );
-      latestSessionId = parseLatestTranscript(stdout).sessionId;
-    } catch (err) {
-      logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not read the card transcript before starting its driver");
-    }
-    resumeSessionId = resumeTargetFor(card, latestSessionId);
-  }
-  const command = await sdkDriverCommand(project, { ...card, resumeSessionId });
-  const session = ensureDriverSession({ cardId: card.id, label: card.worktreeSlug, command, transcriptDir });
-  if (!sendAgentTurn(session, instruction, origin)) {
-    throw new Error(
-      `the native chat driver of card "${card.title}" exited before it could take the instruction — send it again`,
-    );
-  }
 }
 
 export interface ReportResult {

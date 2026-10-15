@@ -243,8 +243,13 @@ export function resetSdkSessionsForTesting(): void {
 
 /** Whether a card has a LIVE driver right now. */
 export function hasDriverSession(cardId: string): boolean {
+  return liveDriverSession(cardId) !== null;
+}
+
+/** The card's LIVE driver, or null — never spawns one. */
+export function liveDriverSession(cardId: string): DriverSession | null {
   const session = sessions.get(cardId);
-  return !!session && !session.closed;
+  return session && !session.closed ? session : null;
 }
 
 /**
