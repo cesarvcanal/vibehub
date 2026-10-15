@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient } from "@tanstack/react-query";
 import { CardTerminalView } from "@/features/board/components/CardTerminalView";
@@ -681,15 +681,30 @@ describe("CardTerminalView — the card bar", () => {
     return within(await screen.findByRole("menu")).getAllByRole("menuitemcheckbox");
   }
 
+  // Every checkable row, in order: an extra model row (a session id no row matched) breaks this.
+  const MENU_ROWS = ["Fable", "Opus", "Sonnet", "Haiku", "Low", "Medium", "High", "Extra high", "Max"];
+
   it("switching the model reconnects the terminal on the same conversation", async () => {
-    mockPatch.mockResolvedValue({ card: card({ openedAt: 10, model: "claude-sonnet-5" }), session: "restarted" });
+    mockPatch.mockResolvedValue({ card: card({ openedAt: 10, model: "sonnet" }), session: "restarted" });
     const user = userEvent.setup();
     renderWithCache([card({ openedAt: 10 })]);
 
     const before = (await screen.findByTestId("xterm")).getAttribute("data-reconnect");
     await openMenu(user, "Model");
     await user.click(screen.getByRole("menuitemcheckbox", { name: "Sonnet" }));
-    await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/cards/c1", { model: "claude-sonnet-5" }));
+    await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/cards/c1", { model: "sonnet" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("xterm").getAttribute("data-reconnect")).not.toBe(before),
+    );
+  });
+
+  it("an intelligence switch made elsewhere reattaches at once — the server restarted the session", async () => {
+    const client = testQueryClient();
+    renderWithCache([card({ openedAt: 10 })], client);
+
+    const before = (await screen.findByTestId("xterm")).getAttribute("data-reconnect");
+    // another tab, or a member with a work share, picked a level: the board mirror brings it here
+    act(() => client.setQueryData(cardsKey(project.id), [card({ openedAt: 10, effort: "max" })]));
     await waitFor(() =>
       expect(screen.getByTestId("xterm").getAttribute("data-reconnect")).not.toBe(before),
     );
@@ -704,7 +719,7 @@ describe("CardTerminalView — the card bar", () => {
     await waitFor(() => expect(screen.getByLabelText("Model")).toHaveTextContent("Opus"));
 
     const items = await openMenu(user, "Model");
-    expect(items.map((i) => i.textContent)).toEqual(["Fable", "Opus", "Sonnet", "Haiku"]);
+    expect(items.map((i) => i.textContent)).toEqual(MENU_ROWS);
     // "Default model" was the one answer nobody wants: the question is which model is answering.
     expect(screen.queryByRole("menuitem", { name: "Default model" })).not.toBeInTheDocument();
     // The check marks the model IN USE, even though the card pins none…
@@ -741,20 +756,20 @@ describe("CardTerminalView — the card bar", () => {
   });
 
   it("an alias or a dated id ticks the row it belongs to instead of growing a second one", async () => {
-    // settings.json stores "opus": the menu used to show Fable/Opus/Sonnet/Haiku AND a second,
-    // checked "Opus" underneath, because the id matched no row exactly.
-    serveSession({ model: "opus", modelLabel: "Opus" });
+    // The transcript names a dated id, which matches no row exactly: the menu used to show
+    // Fable/Opus/Sonnet/Haiku AND a second, checked "Opus 5.5" underneath.
+    serveSession({ model: "claude-opus-5-5-20261001", modelLabel: "Opus 5.5" });
     const user = userEvent.setup();
     renderWithCache([card({ openedAt: 10 })]);
 
-    await waitFor(() => expect(screen.getByLabelText("Model")).toHaveTextContent("Opus"));
+    await waitFor(() => expect(screen.getByLabelText("Model")).toHaveTextContent("Opus 5.5"));
     const items = await openMenu(user, "Model");
-    expect(items.map((i) => i.textContent)).toEqual(["Fable", "Opus", "Sonnet", "Haiku"]);
+    expect(items.map((i) => i.textContent)).toEqual(MENU_ROWS);
     expect(screen.getByRole("menuitemcheckbox", { name: "Opus" })).toHaveAttribute("aria-checked", "true");
   });
 
   it("a switch the server could not apply yet says so instead of promising the conversation continues", async () => {
-    mockPatch.mockResolvedValue({ card: card({ openedAt: 10, model: "claude-opus-5" }), session: "pending" });
+    mockPatch.mockResolvedValue({ card: card({ openedAt: 10, model: "opus" }), session: "pending" });
     const user = userEvent.setup();
     renderWithCache([card({ openedAt: 10 })]);
 
@@ -763,6 +778,39 @@ describe("CardTerminalView — the card bar", () => {
     await waitFor(() =>
       expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/takes effect the moment Claude finishes/i)),
     );
+  });
+
+  it("the pill names the VERSION the session runs on, and the card's intelligence next to it", async () => {
+    serveSession({ model: "claude-opus-5-5", modelLabel: "Opus 5.5" });
+    renderWithCache([card({ openedAt: 10, model: "opus", effort: "high" })]);
+    await waitFor(() => expect(screen.getByLabelText("Model")).toHaveTextContent("Opus 5.5 · High"));
+  });
+
+  it("the same menu picks the intelligence: the level is PATCHed and the session restarts on it", async () => {
+    mockPatch.mockResolvedValue({ card: card({ openedAt: 10, effort: "max" }), session: "restarted" });
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10 })]);
+
+    const before = (await screen.findByTestId("xterm")).getAttribute("data-reconnect");
+    const items = await openMenu(user, "Model");
+    // The model rows come first; the five levels follow, in order of strength.
+    expect(items.map((i) => i.textContent)).toEqual(["Fable", "Opus", "Sonnet", "Haiku", "Low", "Medium", "High", "Extra high", "Max"]);
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Max" }));
+    await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/cards/c1", { effort: "max" }));
+    await waitFor(() => expect(screen.getByTestId("xterm").getAttribute("data-reconnect")).not.toBe(before));
+    expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/Max/));
+  });
+
+  it("the pinned level is ticked, and clearing it is an action that sends null", async () => {
+    mockPatch.mockResolvedValue({ card: card({ openedAt: 10 }), session: "restarted" });
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10, effort: "low" })]);
+
+    await openMenu(user, "Model");
+    expect(screen.getByRole("menuitemcheckbox", { name: "Low" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("menuitemcheckbox", { name: "High" })).toHaveAttribute("aria-checked", "false");
+    await user.click(screen.getByRole("menuitem", { name: "Use account default intelligence" }));
+    await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/cards/c1", { effort: null }));
   });
 
   it("names the account in USE on the pill, with no (default) or (inherited) suffix", async () => {

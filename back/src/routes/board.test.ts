@@ -162,9 +162,9 @@ describe("cards", () => {
     const projectId = await makeProject();
     const ok = await app.inject({
       method: "POST", url: "/api/cards", headers: { cookie },
-      payload: { projectId, title: "with model", model: "claude-opus-5" },
+      payload: { projectId, title: "with model", model: "opus", effort: "high" },
     });
-    expect(ok.json().card.model).toBe("claude-opus-5");
+    expect(ok.json().card).toMatchObject({ model: "opus", effort: "high" });
     const bad = await app.inject({
       method: "POST", url: "/api/cards", headers: { cookie },
       payload: { projectId, title: "bad model", model: "gpt-9" },
@@ -467,10 +467,10 @@ describe("card creation", () => {
     const projectId = await makeProject();
     const res = await app.inject({
       method: "POST", url: "/api/cards", headers: { cookie },
-      payload: { projectId, title: "com conta", model: "claude-opus-5", branch: "feat/x" },
+      payload: { projectId, title: "com conta", model: "opus", branch: "feat/x" },
     });
     const card = res.json().card;
-    expect(card.model).toBe("claude-opus-5");
+    expect(card.model).toBe("opus");
     expect(card.branch).toBe("feat/x");
     // Fired AFTER the patch: the id is the same card, and by then it already carries the fields.
     await vi.waitFor(() => expect(prepareCard).toHaveBeenCalledWith(card.id, "card.create"));
@@ -504,15 +504,15 @@ describe("a member with a WORK share editing the card", () => {
     return `vibehub_session=${login.cookies.find((c) => c.name === "vibehub_session")?.value ?? ""}`;
   }
 
-  it("renames, moves and picks the model — what the card screen offers them", async () => {
+  it("renames, moves and picks the model and the intelligence — what the card screen offers them", async () => {
     const cardId = await makeCard(await makeProject());
     const member = await memberWorking(cardId);
     const res = await app.inject({
       method: "PATCH", url: `/api/cards/${cardId}`, headers: { cookie: member },
-      payload: { title: "renomeado", column: "backlog", position: 0, model: "claude-opus-5" },
+      payload: { title: "renomeado", column: "backlog", position: 0, model: "opus", effort: "max" },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().card).toMatchObject({ title: "renomeado", model: "claude-opus-5" });
+    expect(res.json().card).toMatchObject({ title: "renomeado", model: "opus", effort: "max" });
   });
 
   it("does NOT repoint the install's account, branch, base or imported session — 403, nothing stored", async () => {

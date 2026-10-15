@@ -27,12 +27,12 @@ function badRequest(err: unknown): { code: number; body: { error: string } } {
 
 /**
  * What a MEMBER with a `work` share may change through PATCH /api/cards/:id — exactly what the card
- * screen offers them: rename, move, pick the model. The other fields decide what the INSTALL runs
+ * screen offers them: rename, move, pick the model and its intelligence. The other fields decide what the INSTALL runs
  * and where it pushes — the Claude account (accounts are the owner's), the branch and its base, an
  * imported session, the native-chat opt-in — and a share hands over a piece of work, not that.
  */
 const MEMBER_CARD_FIELDS: ReadonlySet<string> = new Set<keyof registry.UpdateCardInput>([
-  "title", "column", "position", "model",
+  "title", "column", "position", "model", "effort",
 ]);
 
 /** The fields of a card patch a member may not send (empty = the patch is theirs to make). PURE. */

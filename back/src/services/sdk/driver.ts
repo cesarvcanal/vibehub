@@ -6,7 +6,7 @@ import { config } from "../../config/env.js";
 import { cardWorkPaths } from "../board/workspace.js";
 import { accountConfigDir } from "../accounts/profiles.js";
 import { oauthTokenPath, DEFAULT_CLAUDE_DIR } from "../accounts/profiles.js";
-import { effectiveAccountSlug, isValidModel, assertSessionId, type Card, type Project } from "../board/registry.js";
+import { effectiveAccountSlug, modelPin, isValidEffort, assertSessionId, type Card, type Project } from "../board/registry.js";
 import { cardCdpEndpoint } from "../browser/ports.js";
 import { statusUrl } from "../../runtime/runner.js";
 import { getSettings } from "../settings/settings.js";
@@ -36,7 +36,7 @@ export const SDK_DRIVER_PATH = `${SDK_DRIVER_DIR}/sdk-driver.mjs`;
  * deliberate act: change the constant and the next connect reinstalls (the `.sdk-version` marker
  * no longer matches).
  */
-export const SDK_PACKAGE_VERSION = "0.3.246";
+export const SDK_PACKAGE_VERSION = "0.3.300";
 /** Marker file recording which SDK version is installed — what makes the install a no-op on every open after the first. */
 export const SDK_VERSION_MARKER = `${SDK_DRIVER_DIR}/.sdk-version`;
 
@@ -124,6 +124,8 @@ export interface SdkDriverCommandOpts {
   resumeSessionId?: string;
   /** The card's model (validated against the whitelist; invalid = account default). */
   model?: string;
+  /** The card's reasoning level (validated against the whitelist; invalid = account default). */
+  effort?: string;
   /**
    * CDP endpoint of the CARD's live Chromium (the one on the noVNC canvas). Exported as
    * PW_CDP_ENDPOINT so the injected `navegador` MCP — whose stored config carries the literal
@@ -158,7 +160,9 @@ export function buildSdkDriverCommandLine(opts: SdkDriverCommandOpts): string {
   assertSafeRemotePath(opts.profileDir);
   if (opts.configDir) assertSafeRemotePath(opts.configDir);
   const tokenFile = oauthTokenPath(opts.profileDir);
-  const model = isValidModel(opts.model) ? ` --model ${shQuote(opts.model)}` : "";
+  const pin = modelPin(opts.model);
+  const model = pin ? ` --model ${shQuote(pin)}` : "";
+  const effort = isValidEffort(opts.effort) ? ` --effort ${shQuote(opts.effort)}` : "";
   const resume = opts.resumeSessionId ? ` --resume ${shQuote(assertSessionId(opts.resumeSessionId))}` : "";
   const gate = opts.permissionGate ? ` --permission-gate ${shQuote(opts.permissionGate)}` : "";
   // Environment the TUI session also carries, so the driver's Claude behaves like the terminal's:
@@ -182,7 +186,7 @@ export function buildSdkDriverCommandLine(opts: SdkDriverCommandOpts): string {
     `if [ -s ${shQuote(tokenFile)} ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${shQuote(tokenFile)})"; fi; ` +
     (opts.configDir ? `export CLAUDE_CONFIG_DIR=${shQuote(opts.configDir)}; ` : "") +
     cardEnv +
-    `exec node ${shQuote(SDK_DRIVER_PATH)} --cwd ${shQuote(opts.cwd)}${resume}${model}${gate}`;
+    `exec node ${shQuote(SDK_DRIVER_PATH)} --cwd ${shQuote(opts.cwd)}${resume}${model}${effort}${gate}`;
   const argv = ["docker", "exec", "-i", opts.containerName, "bash", "-c", script];
   return argv.map(shQuote).join(" ");
 }
@@ -205,6 +209,7 @@ export async function sdkDriverCommand(project: Project, card: Card): Promise<{ 
     configDir,
     resumeSessionId: card.resumeSessionId,
     model: card.model,
+    effort: card.effort,
     cdpEndpoint: cardCdpEndpoint(card.id),
     cardId: card.id,
     statusUrl: statusUrl(),
