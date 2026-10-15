@@ -293,10 +293,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     let disposed = false;
     const setStatus = (s: ConnectionState): void => statusRef.current?.(s);
     /**
-     * Os TOKENS que chegaram neste frame de animação. O driver manda um frame de socket por token, e
-     * um setState por frame era um render da conversa inteira por token — a resposta longa
-     * engasgava e o campo de texto atrasava junto. Eles entram de uma vez, no próximo frame; o
-     * timer cobre a aba em segundo plano, onde o rAF não dispara.
+     * Os TOKENS que chegaram neste frame de animação. O driver manda um frame de socket por token;
+     * eles entram de uma vez, no próximo frame, para que a conversa inteira renderize uma vez por
+     * frame e não uma vez por token. O timer cobre a aba em segundo plano, onde o rAF não dispara.
      *
      * A queda do fio não mexe aqui: o timer desta espera nasce antes do timer da reconexão e é mais
      * curto (`DELTA_FLUSH_MAX_MS` < `RECONNECT_BASE_MS`), então dispara primeiro — o `onopen` da

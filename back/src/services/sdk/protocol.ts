@@ -48,16 +48,16 @@ export interface ToolUseEvent {
   input: unknown;
   /**
    * The call was made by a SUBAGENTE: the id of the Agent/Task call that started it (the CLI's
-   * `parent_tool_use_id`). Without it the screen drew the subagent's work as the main agent's.
+   * `parent_tool_use_id`), so the screen draws it under that call, not as the main agent's.
    * Subagent stream deltas are never emitted — only these consolidated frames, marked.
    */
   parentToolUseId?: string;
 }
 /**
  * A FERRAMENTA AINDA SENDO GERADA. O `tool_use` só existe quando o modelo termina de escrever o
- * input inteiro — num Write de 400 linhas, dezenas de segundos em que a tela dizia só
- * "Trabalhando…" e a IA parecia engasgada. Estes três sinais preenchem esse silêncio, e só para o
- * agente PRINCIPAL (os de subagente são descartados no driver, como os deltas de texto):
+ * input inteiro — num Write de 400 linhas, dezenas de segundos sem nada a mostrar. Estes três
+ * sinais dizem o que está sendo gerado e há quanto tempo a ferramenta roda, e só para o agente
+ * PRINCIPAL (os de subagente são descartados no driver, como os deltas de texto):
  *
  * - `tool_use_start`: o modelo ABRIU o bloco da ferramenta — o mesmo `id` do `tool_use` que virá,
  *   e que a tela usa para trocar a linha provisória pela definitiva no lugar.

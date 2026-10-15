@@ -807,9 +807,9 @@ async function runStream() {
         // "clear" — sair do plan mode inclusive. Se o CLI passar a mandar `trigger`, ele é repassado.
         emit({ type: "conversation_reset", trigger: typeof msg.trigger === "string" ? msg.trigger : "clear" });
       } else if (msg.type === "stream_event") {
-        // O stream de um SUBAGENTE (Agent/Task) não é a fala do principal: misturado à linha de
-        // streaming, o texto dele aparecia como se o agente principal tivesse mudado de assunto. O
-        // que o subagente faz chega consolidado, marcado com `parentToolUseId` (ramo `assistant`).
+        // O stream de um SUBAGENTE (Agent/Task) não é a fala do principal e fica fora da linha de
+        // streaming. O que o subagente faz chega consolidado, marcado com `parentToolUseId` (ramo
+        // `assistant`).
         if (msg.parent_tool_use_id) continue;
         const ev = msg.event;
         if (ev && ev.type === "content_block_delta" && ev.delta && ev.delta.type === "text_delta") {

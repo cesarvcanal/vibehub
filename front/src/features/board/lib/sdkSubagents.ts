@@ -2,10 +2,8 @@
  * SUBAGENTES NO CHAT NATIVO — quem fez o quê.
  *
  * Um Agent/Task dispara um subagente, e o driver marca o que ele faz com `parentToolUseId` (a linha
- * guarda como `parent`). Sem separar, o trabalho do subagente aparecia no fio da conversa como se
- * fosse o agente principal mudando de assunto. Aqui o fio é dividido: o principal segue como
- * sempre (é ele que `groupSdkRows` dobra), e o que é de cada subagente vai para debaixo do card
- * da chamada que o disparou. PURE.
+ * guarda como `parent`). O fio é dividido: o principal segue como sempre (é ele que `groupSdkRows`
+ * dobra), e o que é de cada subagente vai para debaixo do card da chamada que o disparou. PURE.
  */
 
 import type { SdkRow } from "@/features/board/lib/sdkChat";

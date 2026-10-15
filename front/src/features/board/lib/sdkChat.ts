@@ -747,11 +747,11 @@ const EDITING_TOOLS = new Set(["Edit", "MultiEdit", "NotebookEdit"]);
 /**
  * WHAT THE TOOL IS DOING NOW, while there is something live to say — or null.
  *
- * Two windows used to be silent: the model WRITING a tool's input (a 400-line Write is tens of
- * seconds of tokens before the `tool_use` exists) and a tool RUNNING for a long time (a Bash of two
- * minutes looked like a hang). In the first the row is provisional (`pending`) and this says which
- * file and how much of it: "Escrevendo sdkChat.ts… 12 KB". In the second it says what runs and for
- * how long: "Rodando: npm test… 42s". A settled row with no clock has nothing live to say. PURE.
+ * Two windows have something live to say: the model WRITING a tool's input (a 400-line Write is
+ * tens of seconds of tokens before the `tool_use` exists) and a tool RUNNING for a long time. In the
+ * first the row is provisional (`pending`) and this says which file and how much of it: "Escrevendo
+ * sdkChat.ts… 12 KB". In the second it says what runs and for how long: "Rodando: npm test… 42s".
+ * A settled row with no clock has nothing live to say. PURE.
  */
 export function toolLiveLabel(row: SdkRow): string | null {
   if (row.kind !== "tool") return null;
@@ -920,9 +920,8 @@ export function subagentAction(row: SdkRow): string | null {
 }
 
 /**
- * A barra de atividade quando a última coisa é de um SUBAGENTE: "Subagente Explore: Read(x.ts)".
- * Sem isso ela narrava o trabalho do subagente como se fosse o principal. Null quando a linha não é
- * de subagente. PURE.
+ * A barra de atividade quando a última coisa é de um SUBAGENTE: "Subagente Explore: Read(x.ts)",
+ * atribuída a ele e não ao principal. Null quando a linha não é de subagente. PURE.
  */
 function subagentActivity(rows: readonly SdkRow[], row: SdkRow): string | null {
   if ((row.kind !== "tool" && row.kind !== "assistant") || !row.parent) return null;

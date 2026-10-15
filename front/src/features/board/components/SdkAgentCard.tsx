@@ -8,10 +8,9 @@ import { SdkThreadContext } from "@/features/board/components/sdkThreadContext";
 /**
  * UM SUBAGENTE (Agent/Task) NO CHAT: a chamada, e debaixo dela o que ELE fez.
  *
- * Antes, as ferramentas e o texto do subagente caíam no fio da conversa como se fossem do agente
- * principal — a IA parecia perdida, mudando de assunto no meio do turno. Aqui elas ficam recuadas
- * sob o card que as disparou, recolhidas por padrão: o contador de ações e a última delas dizem que
- * ele está trabalhando e em quê, sem enterrar a conversa principal.
+ * As ferramentas e o texto do subagente ficam recuados sob o card que as disparou, fora do fio da
+ * conversa principal, e recolhidos por padrão: o contador de ações e a última delas dizem que ele
+ * está trabalhando e em quê, sem enterrar o que o agente principal diz.
  */
 export function SdkAgentCard({ row }: { row: Extract<SdkRow, { kind: "tool" }> }) {
   const t = useT();

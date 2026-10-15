@@ -10,10 +10,9 @@ const STATUS_MARK: Record<SdkTodo["status"], string> = { completed: "✓", in_pr
 /**
  * A LISTA DE TAREFAS DO AGENTE (um TodoWrite).
  *
- * A linha dizia só "TodoWrite" — e a lista é exatamente o plano que quem acompanha quer ler: o que
- * já foi, o que está sendo feito agora, o que falta. Cada TodoWrite é a lista INTEIRA de novo, então
- * só o mais recente (`latest`) nasce aberto: os anteriores são versões velhas e ficam recolhidos,
- * mostrando só a contagem. A escolha explícita da pessoa (abrir/fechar) vence o padrão.
+ * A lista é o plano que quem acompanha quer ler: o que já foi, o que está sendo feito agora, o que
+ * falta. Cada TodoWrite é a lista INTEIRA de novo, então só o mais recente (`latest`) nasce aberto:
+ * os anteriores são versões velhas e ficam recolhidos, mostrando só a contagem. A escolha explícita da pessoa (abrir/fechar) vence o padrão.
  */
 export function TodoCard({ row, latest }: { row: Extract<SdkRow, { kind: "tool" }>; latest: boolean }) {
   const t = useT();
