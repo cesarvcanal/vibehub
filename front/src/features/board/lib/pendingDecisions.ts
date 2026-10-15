@@ -82,14 +82,14 @@ export function proseQuestion(text: string): string | null {
   return DIRECTED.test(plain) ? para : null;
 }
 
+type AssistantRow = Extract<SdkRow, { kind: "assistant" }>;
+
 /**
  * `proseQuestion` per ROW OBJECT. Every streamed token hands the view a new `rows` array, but the
  * closed rows in it are the same objects as before (the reducer only replaces the row that changed),
  * so the history is read once instead of once per token. A row whose text changes is a new object
  * and misses the cache.
  */
-type AssistantRow = Extract<SdkRow, { kind: "assistant" }>;
-
 const proseByRow = new WeakMap<AssistantRow, string | null>();
 
 function rowProseQuestion(row: AssistantRow): string | null {
