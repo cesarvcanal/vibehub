@@ -114,6 +114,25 @@ describe("mergeTranscriptReplay (one timeline, nothing lost, nothing twice)", ()
     expect(out.every((e) => e.source === undefined)).toBe(true);
   });
 
+  it("never replays the auto-compaction summary as a terminal user message", () => {
+    const compacted = [
+      transcript,
+      line({ type: "system", subtype: "compact_boundary", uuid: "cb", timestamp: "2026-08-31T10:02:00Z" }),
+      line({
+        type: "user", uuid: "sum", timestamp: "2026-08-31T10:02:01Z",
+        isCompactSummary: true, isVisibleInTranscriptOnly: true,
+        message: { content: "This session is being continued from a previous conversation..." },
+      }),
+    ].join("\n");
+    const history = [{ type: "user" as const, text: "pergunta no chat nativo", at: at("2026-08-31T10:01:00Z") }];
+    const out = mergeTranscriptReplay(compacted, history);
+    expect(out.map((e) => ("text" in e ? e.text : e.type))).toEqual([
+      "arruma o login",
+      "Feito.",
+      "pergunta no chat nativo",
+    ]);
+  });
+
   it("keeps the TERMINAL conversation the history never saw — the 'não puxou nada' bug", () => {
     // Native chat used at 10:01; then the person talked to the TUI at 10:05 with no chat open.
     // The old cutoff dropped everything after 10:01 — the terminal conversation vanished forever.

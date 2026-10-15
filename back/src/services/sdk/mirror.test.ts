@@ -267,6 +267,28 @@ describe("o espelho avisa quando a conversa anda FORA do chat", () => {
     expect(avisos).toBe(0);
   });
 
+  it("o resumo da auto-compactação NÃO é conversa de fora — senão o CLI vivo cai e a próxima mensagem sobe outro do zero", () => {
+    // Forma real: depois do `compact_boundary` o CLI grava o resumo como linha `type:"user"` marcada
+    // `isCompactSummary`. Ninguém digitou aquilo; tratado como fala do terminal, virava bolha gigante
+    // e disparava o reanchor, que derruba a corrente do driver.
+    let avisos = 0;
+    const off = onOutsideTurn(CARD_OUT, () => { avisos += 1; });
+    const state = createMirrorState(T0);
+    const resumo = line({
+      type: "user",
+      uuid: "sum1",
+      timestamp: "2026-08-31T21:31:00Z",
+      isSidechain: false,
+      isCompactSummary: true,
+      isVisibleInTranscriptOnly: true,
+      message: { role: "user", content: "This session is being continued from a previous conversation..." },
+    });
+    const out = mirrorNewEvents(state, resumo, CARD_OUT);
+    off();
+    expect(out).toEqual([]);
+    expect(avisos).toBe(0);
+  });
+
   it("um ouvinte que explode não derruba o espelho — a conversa na tela vale mais que o aviso", () => {
     const off1 = onOutsideTurn(CARD_OUT, () => { throw new Error("ouvinte quebrado"); });
     let depois = 0;
