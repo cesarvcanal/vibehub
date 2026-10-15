@@ -244,7 +244,7 @@ function agentOf(dir,a){
   if(info.activity)out.activity=info.activity;
   return {agent:out,mtime:info.mtime};
 }
-function main(dir,scriptsDir){
+function main(dir,scriptsDir,settled){
   let names=[];
   try{names=fs.readdirSync(dir)}catch(e){return []}
   const runs=[];
@@ -276,6 +276,8 @@ function main(dir,scriptsDir){
     const done=all.filter(function(a){return a.status==='done'}).length;
     const list=[];let first=0,oldest=0;
     for(const a of all.slice(0,${AGENTS_MAX})){
+      // Concluído que o back já tem: o transcript dele não muda mais, então não é relido.
+      if(a.status==='done'&&settled.has(r.runId+'/'+a.id)){list.push({id:a.id,status:'done',settled:true});continue}
       const got=agentOf(r.dir,a);
       list.push(got.agent);
       if(got.agent.startedAt&&(!first||got.agent.startedAt<first))first=got.agent.startedAt;
@@ -288,13 +290,27 @@ function main(dir,scriptsDir){
   }
   return out;
 }
-console.log(JSON.stringify(main(process.argv[1]||'',process.argv[2]||'')));
+const settled=new Set(String(process.argv[3]||'').split(',').filter(Boolean));
+console.log(JSON.stringify(main(process.argv[1]||'',process.argv[2]||'',settled)));
 `.trim();
 
-export function buildWorkflowProbeScript(containerName: string, runsDir: string, scriptsDir: string): string {
+/**
+ * `settled`: os concluídos que o back já tem inteiros, como "runId/agentId" — a sonda devolve só um
+ * marcador para eles. Chave fora do formato do harness é descartada aqui. PURE.
+ */
+export function buildWorkflowProbeScript(
+  containerName: string,
+  runsDir: string,
+  scriptsDir: string,
+  settled: readonly string[] = [],
+): string {
+  const keys = settled.filter((key) => {
+    const [runId = "", agentId = "", ...rest] = key.split("/");
+    return rest.length === 0 && RUN_ID_RE.test(runId) && AGENT_ID_RE.test(agentId);
+  });
   return (
     `docker exec ${shQuote(containerName)} node -e ${shQuote(WORKFLOW_PROBE_JS)} ` +
-    `${shQuote(runsDir)} ${shQuote(scriptsDir)} 2>/dev/null || true`
+    `${shQuote(runsDir)} ${shQuote(scriptsDir)} ${shQuote(keys.join(","))} 2>/dev/null || true`
   );
 }
 
@@ -438,8 +454,21 @@ function parseAgent(value: unknown): WorkflowAgent | null {
   };
 }
 
-/** Lê a saída da sondagem. Lixo, vazio ou JSON quebrado viram `[]` — isto desenha uma tela. PURE. */
-export function parseWorkflowProbe(stdout: string): WorkflowRun[] {
+/** O concluído que a sonda não releu (`settled`), tirado do quadro anterior da rodada. */
+function knownDoneAgent(value: unknown, previous: WorkflowRun | undefined): WorkflowAgent | null {
+  const id = asString(asFields(value)?.id);
+  return previous?.agents.find((a) => a.id === id && a.status === "done") ?? null;
+}
+
+/**
+ * Lê a saída da sondagem. Lixo, vazio ou JSON quebrado viram `[]` — isto desenha uma tela. O
+ * marcador de um concluído já conhecido vira o agente do quadro anterior (`previous`); sem ele, o
+ * marcador some e o próximo tique o lê de novo. PURE.
+ */
+export function parseWorkflowProbe(
+  stdout: string,
+  previous: (runId: string) => WorkflowRun | undefined = () => undefined,
+): WorkflowRun[] {
   const parsed = lastJsonLine(stdout);
   if (!Array.isArray(parsed)) return [];
   const runs: WorkflowRun[] = [];
@@ -447,14 +476,23 @@ export function parseWorkflowProbe(stdout: string): WorkflowRun[] {
     const o = asFields(entry);
     const runId = asString(o?.runId);
     if (!o || !runId) continue;
+    const before = previous(runId);
+    const known: WorkflowAgent[] = [];
     const agents = (Array.isArray(o.agents) ? o.agents : [])
-      .map(parseAgent)
+      .map((value) => {
+        if (asFields(value)?.settled !== true) return parseAgent(value);
+        const agent = knownDoneAgent(value, before);
+        if (agent) known.push(agent);
+        return agent;
+      })
       .filter((a): a is WorkflowAgent => a !== null);
     const total = typeof o.total === "number" && Number.isFinite(o.total) ? o.total : agents.length;
     const done = typeof o.done === "number" && Number.isFinite(o.done)
       ? o.done
       : agents.filter((a) => a.status === "done").length;
-    const startedAt = asInstant(o.startedAt);
+    // A sonda só mede o início pelos agentes que leu; os conhecidos entram com o que já se sabia.
+    const starts = [asInstant(o.startedAt), ...known.map((a) => a.startedAt)].filter((t): t is number => t !== undefined);
+    const startedAt = starts.length > 0 ? Math.min(...starts) : undefined;
     runs.push({
       runId,
       name: asString(o.name),

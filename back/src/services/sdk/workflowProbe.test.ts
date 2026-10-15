@@ -245,6 +245,55 @@ describe("WORKFLOW_PROBE_JS — a sondagem lendo um diário real", () => {
   });
 });
 
+describe("agentes concluídos já conhecidos — a sondagem não relê o transcript deles", () => {
+  let fx: Fixture;
+  beforeEach(() => { fx = fleetFixture(); });
+  afterEach(() => { rmSync(fx.root, { recursive: true, force: true }); });
+
+  it("um concluído conhecido sai como marcador, sem abrir o arquivo; os outros continuam inteiros", async () => {
+    const wf = await load();
+    rmSync(join(fx.run, "agent-a01f.jsonl")); // se a sonda tentasse ler, a01f viria sem tempos
+    const raw = JSON.parse(runProbe(wf.WORKFLOW_PROBE_JS, [fx.runs, fx.scripts, "wf_abc12/a01f"]).trim()) as Array<{
+      agents: Array<Record<string, unknown>>;
+    }>;
+    const agents = raw[0]!.agents;
+    expect(agents.find((a) => a.id === "a01f")).toEqual({ id: "a01f", status: "done", settled: true });
+    expect(agents.find((a) => a.id === "a02f")).toMatchObject({ startedAt: T0 + 500, toolCount: 2 });
+  });
+
+  it("só pula quem o diário diz que terminou — um 'conhecido' que ainda roda é lido", async () => {
+    const wf = await load();
+    const raw = JSON.parse(runProbe(wf.WORKFLOW_PROBE_JS, [fx.runs, fx.scripts, "wf_abc12/a02f"]).trim()) as Array<{
+      agents: Array<Record<string, unknown>>;
+    }>;
+    expect(raw[0]!.agents.find((a) => a.id === "a02f")).toMatchObject({ status: "running", toolCount: 2 });
+  });
+
+  it("parseWorkflowProbe remonta o marcador com o quadro anterior; sem quadro anterior, o marcador some", async () => {
+    const { parseWorkflowProbe } = await load();
+    const stdout = JSON.stringify([{
+      runId: "wf_abc12", total: 2, done: 1, at: 5, startedAt: T0 + 500,
+      agents: [{ id: "a01f", status: "done", settled: true }, { id: "a02f", status: "running", startedAt: T0 + 500, toolCount: 2 }],
+    }]);
+    const before = {
+      runId: "wf_abc12", name: "review", phases: [], total: 2, done: 1, at: 4, finished: false,
+      agents: [{ id: "a01f", label: "varre:front", phase: "Varredura", status: "done" as const, result: "ok", toolCount: 7, startedAt: T0, endedAt: T0 + 9 }],
+    };
+    const [run] = parseWorkflowProbe(stdout, (runId) => (runId === "wf_abc12" ? before : undefined));
+    expect(run!.agents.map((a) => a.id)).toEqual(["a01f", "a02f"]);
+    expect(run!.agents[0]).toEqual(before.agents[0]);
+    expect(run!.startedAt).toBe(T0); // o início da rodada conta o concluído que não foi relido
+    expect(parseWorkflowProbe(stdout)[0]!.agents.map((a) => a.id)).toEqual(["a02f"]);
+  });
+
+  it("o comando leva os conhecidos como argumento — e descarta o que não tem o formato do harness", async () => {
+    const { buildWorkflowProbeScript } = await load();
+    const script = buildWorkflowProbeScript("runner", "/r", "/s", ["wf_abc12/a01f", "wf_x/a02f", "wf_../a1", "wf_a/a1;rm", "lixo"]);
+    expect(script).toContain("'/r' '/s' 'wf_abc12/a01f,wf_x/a02f'");
+    expect(buildWorkflowProbeScript("runner", "/r", "/s")).toContain("'/r' '/s' ''");
+  });
+});
+
 describe("parseWorkflowProbe — campos novos com lixo viram default", () => {
   it("valida tipo a tipo; nunca expõe texto de thinking", async () => {
     const { parseWorkflowProbe } = await load();

@@ -227,6 +227,27 @@ describe("watchCardWorkflows — a sondagem e suas travas", () => {
     wf.resetWorkflowWatchesForTesting();
   });
 
+  it("o concluído já visto vai como conhecido no tique seguinte — e o quadro publicado segue inteiro", async () => {
+    vi.useFakeTimers();
+    const wf = await load();
+    const published: Array<{ agents: Array<{ id: string; toolCount: number; result?: string }> }> = [];
+    const done = AGENT({ id: "a1f", status: "done", result: "ok", toolCount: 7, startedAt: 1_000, lastAt: 9_000, endedAt: 9_000 });
+    runScript.mockResolvedValue({ stdout: probe([{ runId: "wf_a", total: 2, done: 1, at: 1, agents: [done, AGENT({ id: "a2f" })] }]), stderr: "" });
+    wf.watchCardWorkflows("c1", { label: "card", dirs, watchers: () => 1, publish: (r) => published.push(r) });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(String((runScript.mock.calls[0] as unknown as string[])[0])).toContain("'/runs' '/scripts' ''");
+
+    runScript.mockResolvedValue({
+      stdout: probe([{ runId: "wf_a", total: 2, done: 1, at: 2, agents: [{ id: "a1f", status: "done", settled: true }, AGENT({ id: "a2f", toolCount: 1 })] }]),
+      stderr: "",
+    });
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS);
+    expect(String((runScript.mock.calls[1] as unknown as string[])[0])).toContain("'/runs' '/scripts' 'wf_a/a1f'");
+    expect(published).toHaveLength(2);
+    expect(published[1]!.agents.find((a) => a.id === "a1f")).toMatchObject({ toolCount: 7, result: "ok" });
+    wf.resetWorkflowWatchesForTesting();
+  });
+
   it("uma sondagem lenta não é ultrapassada pela seguinte", async () => {
     vi.useFakeTimers();
     const wf = await load();

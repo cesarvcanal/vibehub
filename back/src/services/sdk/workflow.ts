@@ -207,11 +207,13 @@ export function watchCardWorkflows(cardId: string, deps: WatchDeps): void {
     let runs: WorkflowRun[];
     watch.busy = true;
     try {
+      const settled = [...watch.runs.values()].flatMap(({ last }) =>
+        last.agents.filter((a) => a.status === "done").map((a) => `${last.runId}/${a.id}`));
       const { stdout } = await hostExecutor().runScript(
-        buildWorkflowProbeScript(config.runner.container, dirs.runs, dirs.scripts),
+        buildWorkflowProbeScript(config.runner.container, dirs.runs, dirs.scripts, settled),
         { timeoutMs: 10_000 },
       );
-      runs = parseWorkflowProbe(stdout);
+      runs = parseWorkflowProbe(stdout, (runId) => watch.runs.get(runId)?.last);
       watch.failures = 0;
     } catch (err) {
       watch.failures += 1;
