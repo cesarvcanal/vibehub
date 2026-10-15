@@ -282,6 +282,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
      * um setState por frame era um render da conversa inteira por token — a resposta longa
      * engasgava e o campo de texto atrasava junto. Eles entram de uma vez, no próximo frame; o
      * timer cobre a aba em segundo plano, onde o rAF não dispara.
+     *
+     * A queda do fio não mexe aqui: o timer desta espera nasce antes do timer da reconexão e é mais
+     * curto (`DELTA_FLUSH_MAX_MS` < `RECONNECT_BASE_MS`), então dispara primeiro — o `onopen` da
+     * conexão seguinte sempre encontra o buffer vazio. Só a troca de card/conta (o cleanup) DESCARTA.
      */
     let pendingDeltas: SdkEvent[] = [];
     let deltaFrame: number | null = null;
@@ -328,7 +332,6 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         setStatus("open");
         setConnected(true);
         reconciledRef.current = false;
-        discardDeltas();
         // EVERY connect replays the card's history from the server log (see back/services/sdk/
         // history.ts), so the slate is wiped here — otherwise a reconnect would draw the whole
         // conversation twice. What was on screen comes right back, from disk instead of memory.
@@ -378,8 +381,6 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       next.onclose = () => {
         if (socket === next) socket = null;
         if (socketRef.current === next) socketRef.current = null;
-        if (disposed) discardDeltas();
-        else flushDeltas();
         // A DISPOSED socket's close lands late — after a reconnect (account switch, card switch) the
         // NEW connection may already be open, and its state is not this one's to clear.
         if (disposed) return;

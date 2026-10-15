@@ -3400,3 +3400,38 @@ describe("SdkChatView — o buffer de tokens e a troca de conexão", () => {
     expect(screen.getByTestId("sdk-chat-scroller")).not.toHaveTextContent("TOKEN-DO-CARD-1");
   });
 });
+
+describe("SdkChatView — o buffer de tokens e a queda do fio", () => {
+  /**
+   * O que garante isto é a ORDEM dos timers: o do buffer (100ms) nasce antes do da reconexão (400ms
+   * no mínimo) e dispara primeiro, então o `onopen` seguinte — que limpa a tela para o replay —
+   * nunca encontra token da conexão morta para pingar por cima do histórico.
+   */
+  it("o token que estava no buffer quando o fio caiu não reaparece por cima do replay", async () => {
+    // Só o relógio é falso: o frame de animação continua na mão do teste e NÃO dispara (a aba em
+    // segundo plano) — quem esvazia o buffer aqui é o timer.
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+    try {
+      renderSdkChat();
+      const first = await socket();
+      first.accept();
+      first.deliver({ type: "ready" });
+      first.deliver({ type: "assistant_delta", text: "Começo" });
+      first.receive({ type: "assistant_delta", text: " da resposta" }); // sem frame de animação
+
+      act(() => { first.readyState = 3; first.onclose?.(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(RECONNECT_MAX_MS); });
+      const second = FakeSocket.instances[1] as FakeSocket;
+      second.accept();
+      second.deliver({ type: "user", text: "explica o deploy" }); // o replay do disco
+      second.deliver({ type: "assistant_text", text: "Começo da resposta" });
+      second.deliver({ type: "ready" });
+      runAnimationFrames();
+
+      expect(screen.getAllByTestId("sdk-assistant")).toHaveLength(1);
+      expect(screen.getByTestId("sdk-chat-scroller").textContent?.match(/da resposta/g)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
