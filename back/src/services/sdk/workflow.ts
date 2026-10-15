@@ -207,8 +207,12 @@ export function watchCardWorkflows(cardId: string, deps: WatchDeps): void {
     let runs: WorkflowRun[];
     watch.busy = true;
     try {
-      const settled = [...watch.runs.values()].flatMap(({ last }) =>
-        last.agents.filter((a) => a.status === "done").map((a) => `${last.runId}/${a.id}`));
+      // Só as rodadas que a sonda ainda lê (as mais recentes): as outras não precisam de marcador.
+      const settled = [...watch.runs.values()]
+        .map(({ last }) => last)
+        .sort((x, y) => y.at - x.at)
+        .slice(0, RUNS_PROBED)
+        .flatMap((last) => last.agents.filter((a) => a.status === "done").map((a) => `${last.runId}/${a.id}`));
       const { stdout } = await hostExecutor().runScript(
         buildWorkflowProbeScript(config.runner.container, dirs.runs, dirs.scripts, settled),
         { timeoutMs: 10_000 },

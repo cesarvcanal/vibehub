@@ -248,6 +248,21 @@ describe("watchCardWorkflows — a sondagem e suas travas", () => {
     wf.resetWorkflowWatchesForTesting();
   });
 
+  it("só as rodadas que a sonda ainda lê (as RUNS_PROBED mais recentes) mandam seus concluídos", async () => {
+    vi.useFakeTimers();
+    const wf = await load();
+    const run = (runId: string, at: number) => ({ runId, total: 1, done: 1, at, agents: [AGENT({ id: "a1f", status: "done", result: "ok" })] });
+    runScript.mockResolvedValue({ stdout: probe([run("wf_old", 1), run("wf_mid", 2), run("wf_new", 3)]), stderr: "" });
+    wf.watchCardWorkflows("c1", { label: "card", dirs, watchers: () => 1, publish: () => undefined });
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS);
+    const script = String((runScript.mock.calls[1] as unknown as string[])[0]);
+    expect(script).toContain("wf_new/a1f");
+    expect(script).toContain("wf_mid/a1f");
+    expect(script).not.toContain("wf_old/a1f");
+    wf.resetWorkflowWatchesForTesting();
+  });
+
   it("uma sondagem lenta não é ultrapassada pela seguinte", async () => {
     vi.useFakeTimers();
     const wf = await load();

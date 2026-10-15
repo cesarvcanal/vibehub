@@ -267,9 +267,9 @@ export interface SendOpts {
   /**
    * WHO this message is from — the visual attribution the destination card's chat shows ("card X
    * said this", "user Y said this"). Absent = unattributed (drawn as the card owner's own message,
-   * which is the pre-provenance behaviour). An AGENT origin also picks the route: with the native
-   * chat on, the instruction goes to the card's SDK driver, not to the tmux prompt (see
-   * `sendToNativeChat`).
+   * which is the pre-provenance behaviour). An AGENT origin also picks the route: while the card's
+   * native chat is in use (a live SDK driver), the instruction is a turn of that driver, not text
+   * typed at the tmux prompt.
    */
   origin?: MessageOrigin;
 }
