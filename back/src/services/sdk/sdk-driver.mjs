@@ -743,6 +743,10 @@ async function runStream() {
         // "clear" — sair do plan mode inclusive. Se o CLI passar a mandar `trigger`, ele é repassado.
         emit({ type: "conversation_reset", trigger: typeof msg.trigger === "string" ? msg.trigger : "clear" });
       } else if (msg.type === "stream_event") {
+        // O stream de um SUBAGENTE (Agent/Task) não é a fala do principal: misturado à linha de
+        // streaming, o texto dele aparecia como se o agente principal tivesse mudado de assunto. O
+        // que o subagente faz chega consolidado, marcado com `parentToolUseId` (ramo `assistant`).
+        if (msg.parent_tool_use_id) continue;
         const ev = msg.event;
         if (ev && ev.type === "content_block_delta" && ev.delta && ev.delta.type === "text_delta") {
           emit({ type: "assistant_delta", text: ev.delta.text });
@@ -753,14 +757,19 @@ async function runStream() {
       } else if (msg.type === "assistant") {
         // The fork point a later rewind will use. Recorded for EVERY assistant message, so the
         // point is always the tip of the last completed answer.
-        if (msg.uuid) lastAssistantUuid = msg.uuid;
+        // A mensagem de um SUBAGENTE mora numa sidechain: rebobinar para o uuid dela levaria a sessão
+        // principal a um ponto que não é dela. Só o principal move o ponto de volta.
+        const parent = typeof msg.parent_tool_use_id === "string" && msg.parent_tool_use_id !== "" ? msg.parent_tool_use_id : null;
+        if (msg.uuid && parent === null) lastAssistantUuid = msg.uuid;
+        const origin = parent === null ? {} : { parentToolUseId: parent };
         for (const block of msg.message.content) {
-          if (block.type === "text") emit({ type: "assistant_text", text: block.text });
+          if (block.type === "text") emit({ type: "assistant_text", text: block.text, ...origin });
           // `redacted_thinking` não entra aqui de propósito: ele não carrega texto legível (só o
           // payload cifrado), então não há o que mostrar — emitir uma linha vazia seria pior que
           // nada. Um bloco vazio também é descartado: o spinner já diz que há trabalho em curso.
-          else if (block.type === "thinking") { if (block.thinking) emit({ type: "thinking", text: block.thinking }); }
-          else if (block.type === "tool_use") emit({ type: "tool_use", id: block.id, name: block.name, input: block.input });
+          // O raciocínio de um subagente fica de fora: a linha de raciocínio da tela é a do principal.
+          else if (block.type === "thinking") { if (block.thinking && parent === null) emit({ type: "thinking", text: block.thinking }); }
+          else if (block.type === "tool_use") emit({ type: "tool_use", id: block.id, name: block.name, input: block.input, ...origin });
         }
       } else if (msg.type === "result") {
         // In streaming input mode the CLI emits ONE result per turn and keeps running — the

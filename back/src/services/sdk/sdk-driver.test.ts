@@ -94,6 +94,25 @@ export function query({ prompt, options }) {
         yield { type: "result", subtype: "success", session_id: SESSION, result: "ok" };
         continue;
       }
+      if (text === "sub") {
+        // UM SUBAGENTE (Agent/Task) TRABALHANDO: o CLI repassa o stream e as mensagens dele com
+        // parent_tool_use_id = o id da chamada que o disparou. A ÚLTIMA mensagem antes do result é
+        // dele (uuid de sidechain) — o ponto de volta de um rebobinar não pode ser ela.
+        yield { type: "assistant", uuid: "a-sub", parent_tool_use_id: null, session_id: SESSION, message: { content: [
+          { type: "tool_use", id: "task1", name: "Agent", input: { description: "explora", subagent_type: "Explore" } },
+        ] } };
+        yield { type: "stream_event", parent_tool_use_id: "task1", session_id: SESSION, event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "SUBTHINK" } } };
+        yield { type: "stream_event", parent_tool_use_id: "task1", session_id: SESSION, event: { type: "content_block_delta", delta: { type: "text_delta", text: "SUBDELTA" } } };
+        yield { type: "assistant", uuid: "a-sub-child", parent_tool_use_id: "task1", session_id: SESSION, message: { content: [
+          { type: "thinking", thinking: "SUBTHINKBLOCK" },
+          { type: "text", text: "achei o arquivo" },
+          { type: "tool_use", id: "c1", name: "Read", input: { file_path: "/w/sdkChat.ts" } },
+        ] } };
+        yield { type: "stream_event", parent_tool_use_id: null, session_id: SESSION, event: { type: "content_block_delta", delta: { type: "text_delta", text: "MAINDELTA" } } };
+        yield { type: "system", subtype: "background_tasks_changed", parent_tool_use_id: "task1", tasks: [], session_id: SESSION, uuid: "u-sub" };
+        yield { type: "result", subtype: "success", session_id: SESSION, result: "ok" };
+        continue;
+      }
       if (text.includes("slow")) {
         mark("slow:running");
         while (!existsSync(join(options.cwd, "release-slow"))) await sleep(20);
@@ -313,6 +332,50 @@ describe("sdk-driver.mjs — tarefas em segundo plano", () => {
     const off = await driver.waitFor((e) => e.type === "background_tasks" && Array.isArray(e.tasks) && e.tasks.length === 0);
     expect(off.tasks).toEqual([]);
   });
+});
+
+/**
+ * O SUBAGENTE NÃO É O AGENTE PRINCIPAL. O driver ignorava `parent_tool_use_id`: o que um Agent/Task
+ * fazia chegava na tela como se fosse o principal, e os deltas dele se misturavam à linha de
+ * streaming do principal — a IA "parecia perdida".
+ */
+describe("sdk-driver.mjs — subagentes", () => {
+  it("marca tool_use e assistant_text de subagente com parentToolUseId e não repassa os deltas dele", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "sub" });
+    await driver.waitFor((e) => e.type === "result", from);
+    const after = driver.events.slice(from);
+
+    const tools = after.filter((e) => e.type === "tool_use");
+    expect(tools).toEqual([
+      { type: "tool_use", id: "task1", name: "Agent", input: { description: "explora", subagent_type: "Explore" } },
+      { type: "tool_use", id: "c1", name: "Read", input: { file_path: "/w/sdkChat.ts" }, parentToolUseId: "task1" },
+    ]);
+    expect(after.filter((e) => e.type === "assistant_text")).toEqual([
+      { type: "assistant_text", text: "achei o arquivo", parentToolUseId: "task1" },
+    ]);
+    // Os deltas do subagente não saem; os do principal, sim.
+    expect(after.filter((e) => e.type === "assistant_delta").map((e) => e.text)).toEqual(["MAINDELTA"]);
+    expect(after.filter((e) => e.type === "thinking_delta" || e.type === "thinking")).toEqual([]);
+    // Mensagens de SESSÃO (system) continuam passando, mesmo vindas de dentro do subagente.
+    expect(after.some((e) => e.type === "background_tasks")).toBe(true);
+  });
+
+  it("o ponto de volta de um rebobinar é a última mensagem do PRINCIPAL, nunca a de um subagente", async () => {
+    const driver = await driverAfterOneTurn();
+    const subFrom = driver.events.length;
+    driver.send({ type: "user", text: "sub" });
+    await driver.waitFor((e) => e.type === "result", subFrom);
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "next" });
+    await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:next", from);
+    await driver.waitFor((e) => e.type === "result", from);
+    driver.send({ type: "edit_user", original: "next", text: "next fixed", fallback: "fallback" });
+    const rewound = await driver.waitFor((e) => e.type === "rewound", from);
+    expect(rewound.ok).toBe(true);
+    expect(rewound.uuid).toBe("a-sub");
+  }, 30_000);
 });
 
 describe("sdk-driver.mjs — /clear", () => {

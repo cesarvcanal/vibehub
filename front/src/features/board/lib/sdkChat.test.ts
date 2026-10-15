@@ -1009,6 +1009,58 @@ describe("toolHeadline", () => {
     expect(toolHeadline("Workflow", { name: "review-changes" }).background).toBe(true);
   });
 
+  it("AGENT (o nome atual da tool de subagente) tem o mesmo tratamento do Task", () => {
+    expect(toolHeadline("Agent", { description: "audita o pdv", subagent_type: "Explore", prompt: "..." })).toEqual({
+      title: "Agent(audita o pdv)",
+      detail: "Explore",
+      background: true,
+    });
+    expect(toolHeadline("Agent", { subagent_type: "Explore" })).toEqual({ title: "Agent(Explore)", background: true });
+  });
+
+  it("MultiEdit é edição de arquivo: o nome do arquivo na manchete", () => {
+    expect(toolHeadline("MultiEdit", { file_path: "/w/src/sdkChat.ts", edits: [] })).toEqual({
+      title: "MultiEdit(sdkChat.ts)",
+      detail: "/w/src/sdkChat.ts",
+    });
+  });
+
+  it("Workflow: o input real é {script} — o nome e a descrição saem do `meta` do script", () => {
+    const script = [
+      "export const meta = {",
+      "  name: 'review-changes',",
+      "  description: 'Revisa o diff em paralelo',",
+      "  phases: [{ title: 'Ler' }, { title: 'Revisar' }],",
+      "};",
+    ].join("\n");
+    expect(toolHeadline("Workflow", { script })).toEqual({
+      title: "Workflow(review-changes)",
+      detail: "Revisa o diff em paralelo",
+      background: true,
+    });
+    const noDescription = "export const meta = { name: 'x', phases: [{ title: 'A' }, { title: 'B' }] };";
+    expect(toolHeadline("Workflow", { script: noDescription })).toEqual({
+      title: "Workflow(x)",
+      detail: "2 phases",
+      background: true,
+    });
+  });
+
+  it("TodoWrite: quantas tarefas já foram feitas, e a que está em andamento", () => {
+    const todos = [
+      { content: "Ler o código", activeForm: "Lendo o código", status: "completed" },
+      { content: "Escrever o teste", activeForm: "Escrevendo o teste", status: "in_progress" },
+      { content: "Implementar", activeForm: "Implementando", status: "pending" },
+    ];
+    expect(toolHeadline("TodoWrite", { todos })).toEqual({ title: "Tasks 1/3", detail: "Escrevendo o teste" });
+    // Nada em andamento: só a contagem.
+    expect(toolHeadline("TodoWrite", { todos: [{ content: "a", activeForm: "A", status: "pending" }] })).toEqual({
+      title: "Tasks 0/1",
+    });
+    // Input torto não derruba a manchete.
+    expect(toolHeadline("TodoWrite", { todos: "x" })).toEqual({ title: "TodoWrite" });
+  });
+
   it("an unknown tool keeps the old behaviour: its name and the one-line summary", () => {
     expect(toolHeadline("SomeNewTool", { prompt: "faz  isso\naqui" })).toEqual({
       title: "SomeNewTool",
@@ -1526,5 +1578,58 @@ describe("mensagem de outra pessoa chegando ao vivo", () => {
   it("sem saber quem está vendo, tudo conta (o comportamento de antes)", () => {
     const state = applySdkEvent(INITIAL_SDK_STATE, { type: "user", text: "valeu", at: 1500, from: BOB });
     expect(deliveredUserTexts(state.rows)).toEqual([{ text: "valeu", at: 1500 }]);
+  });
+});
+
+/**
+ * O SUBAGENTE NÃO FALA PELO PRINCIPAL. O driver agora marca com `parentToolUseId` o que um
+ * Agent/Task fez; a tela guarda a marca na linha (`parent`) para desenhá-la sob o card do pai, e a
+ * barra de atividade diz que é o subagente trabalhando — não o principal.
+ */
+describe("subagentes (parentToolUseId)", () => {
+  const ready = (): SdkChatState => applySdkEvent(INITIAL_SDK_STATE, { type: "ready" });
+  const agentCall: SdkEvent = {
+    type: "tool_use", id: "t1", name: "Agent", input: { description: "explora o chat", subagent_type: "Explore" },
+  };
+
+  it("a ferramenta e o texto do subagente viram linhas com `parent`", () => {
+    const state = feed([
+      agentCall,
+      { type: "tool_use", id: "c1", name: "Read", input: { file_path: "/w/sdkChat.ts" }, parentToolUseId: "t1" },
+      { type: "assistant_text", text: "achei", parentToolUseId: "t1" },
+    ], ready());
+    expect(state.rows.map((r) => [r.kind, r.id, "parent" in r ? r.parent : undefined])).toEqual([
+      ["tool", "t1", undefined],
+      ["tool", "c1", "t1"],
+      ["assistant", expect.stringMatching(/^a:/), "t1"],
+    ]);
+  });
+
+  it("o texto do subagente não fecha nem substitui a resposta do principal que está escorrendo", () => {
+    const state = feed([
+      agentCall,
+      { type: "assistant_delta", text: "Enquanto isso, " },
+      { type: "assistant_text", text: "achei", parentToolUseId: "t1" },
+      { type: "tool_use", id: "c1", name: "Read", input: { file_path: "/w/a.ts" }, parentToolUseId: "t1" },
+      { type: "assistant_delta", text: "sigo aqui." },
+      { type: "assistant_text", text: "Enquanto isso, sigo aqui." },
+    ], ready());
+    const main = state.rows.filter((r) => r.kind === "assistant" && !r.parent);
+    expect(main).toEqual([{ kind: "assistant", id: expect.any(String), text: "Enquanto isso, sigo aqui.", streaming: false }]);
+    const child = state.rows.filter((r) => r.kind === "assistant" && r.parent === "t1");
+    expect(child.map((r) => r.kind === "assistant" && r.text)).toEqual(["achei"]);
+  });
+
+  it("a barra diz que é o SUBAGENTE trabalhando, com o tipo dele e a ação", () => {
+    let state = appendUserRow(ready(), "investiga", undefined, { awaiting: true });
+    state = feed([
+      agentCall,
+      { type: "tool_use", id: "c1", name: "Read", input: { file_path: "/w/sdkChat.ts" }, parentToolUseId: "t1" },
+    ], state);
+    expect(currentActivity(state)).toEqual({ kind: "tool", label: "Subagent Explore: Read(sdkChat.ts)", rowId: "c1" });
+    expect(liveActivityDetail(state)).toBe("Subagent Explore: Read(sdkChat.ts)");
+    state = applySdkEvent(state, { type: "assistant_text", text: "olhei o reducer\nagora o view", parentToolUseId: "t1" });
+    expect(currentActivity(state)?.label).toBe("Subagent Explore: agora o view");
+    expect(liveActivityDetail(state)).toBe("Subagent Explore: agora o view");
   });
 });

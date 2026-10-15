@@ -13,6 +13,7 @@ import { normalizeMessage, parseOrigin, type MessageOrigin } from "@/features/bo
 import type { SlashCommandInfo } from "@/features/board/lib/slashMenu";
 import type { ServerText } from "@/features/board/lib/sdkOutbox";
 import { hasToolDiff } from "@/features/board/lib/toolDiff";
+import { t as translate } from "@/i18n";
 
 /* ----------------------------------------------------------------- events */
 
@@ -152,6 +153,11 @@ export interface SdkEvent {
    */
   cid?: string;
   /**
+   * On `tool_use`/`assistant_text`: said by a SUBAGENTE (Agent/Task), not by the main agent — the id
+   * of the tool call that started it. Becomes the row's `parent` (see back protocol `ToolUseEvent`).
+   */
+  parentToolUseId?: string;
+  /**
    * On `peer_typing` (relayed by the BACK from the card's other sockets, never persisted): whether
    * the person in `name` is typing. Handled by the view (see lib/peerTyping.ts), not the reducer.
    */
@@ -222,8 +228,9 @@ export type SdkRow =
        *  live sends — the receipt carries no time. The outbox anchors on it: see `sendMark`. */
       at?: number;
     }
-  /** Claude talking. `streaming` while deltas are still landing on it. */
-  | { kind: "assistant"; id: string; text: string; streaming: boolean }
+  /** Claude talking. `streaming` while deltas are still landing on it. `parent` = said by the
+   *  SUBAGENTE started by that tool call (never streaming: subagent deltas are not relayed). */
+  | { kind: "assistant"; id: string; text: string; streaming: boolean; parent?: string }
   /**
    * O RACIOCÍNIO do modelo, enquanto ele pensa. Mesma mecânica de streaming da linha do assistente
    * (`streaming` enquanto os deltas caem), mas desenhada em segundo plano: é contexto de espera, não
@@ -231,8 +238,9 @@ export type SdkRow =
    * ideia do que estava acontecendo. Vive na sessão: não é gravado no histórico nem replayado.
    */
   | { kind: "thinking"; id: string; text: string; streaming: boolean }
-  /** One tool call, compact: the name plus a one-line summary of its input. */
-  | { kind: "tool"; id: string; name: string; summary: string; input?: unknown }
+  /** One tool call, compact: the name plus a one-line summary of its input. `parent` = made by the
+   *  SUBAGENTE started by that tool call (drawn under its card, not as the main agent's step). */
+  | { kind: "tool"; id: string; name: string; summary: string; input?: unknown; parent?: string }
   /** The "Permitir / Negar" card — a sensitive call waiting on the human (or how it ended). */
   | { kind: "permission"; id: string; tool: string; summary: string; reason?: string; outcome: PermissionOutcome }
   /** The agent's question with clickable options — waiting on the human, or how it was answered. */
@@ -536,6 +544,25 @@ export function formatAgentResult(raw: string): string {
     .join("\n");
 }
 
+/** One item of a `TodoWrite` call — the agent's own task list. */
+export interface SdkTodo {
+  content: string;
+  activeForm: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
+/** The `todos` of a TodoWrite input, normalised; null when it is not a list. PURE. */
+export function parseTodos(raw: unknown): SdkTodo[] | null {
+  if (!Array.isArray(raw)) return null;
+  return raw
+    .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+    .map((item) => ({
+      content: typeof item.content === "string" ? item.content.trim() : "",
+      activeForm: typeof item.activeForm === "string" ? item.activeForm.trim() : "",
+      status: item.status === "completed" || item.status === "in_progress" ? item.status : "pending",
+    }));
+}
+
 export function toolHeadline(name: string, input: unknown): ToolHeadline {
   const tool = String(name ?? "").trim() || "?";
   const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
@@ -552,6 +579,7 @@ export function toolHeadline(name: string, input: unknown): ToolHeadline {
     case "Read":
     case "Write":
     case "Edit":
+    case "MultiEdit":
     case "NotebookEdit":
       return {
         title: file ? `${tool}(${basename(file)})` : tool,
@@ -579,13 +607,24 @@ export function toolHeadline(name: string, input: unknown): ToolHeadline {
       const query = field(o, "query");
       return { title: query ? `Search(${line(query, 60)})` : tool };
     }
-    case "TodoWrite":
-      return { title: tool };
-    case "Task": {
+    case "TodoWrite": {
+      const todos = parseTodos(o.todos);
+      if (!todos) return { title: tool };
+      const done = todos.filter((todo) => todo.status === "completed").length;
+      const current = todos.find((todo) => todo.status === "in_progress");
+      const doing = current ? current.activeForm || current.content : "";
+      return {
+        title: translate("sdk.todosTitle", { done, total: todos.length }),
+        ...(doing ? { detail: line(doing) } : {}),
+      };
+    }
+    // `Agent` é o nome atual da tool de subagente no Claude Code; `Task`, o antigo.
+    case "Task":
+    case "Agent": {
       const agent = field(o, "subagent_type");
       const what = field(o, "description") || agent;
       return {
-        title: what ? `Task(${line(what, 60)})` : tool,
+        title: what ? `${tool}(${line(what, 60)})` : tool,
         ...(agent && agent !== what ? { detail: line(agent) } : {}),
         background: true,
       };
@@ -599,8 +638,16 @@ export function toolHeadline(name: string, input: unknown): ToolHeadline {
       };
     }
     case "Workflow": {
-      const what = field(o, "name") || field(o, "title") || field(o, "description");
-      return { title: what ? `Workflow(${line(what, 60)})` : tool, background: true };
+      // O input real é `{script}`: nome e descrição moram no `meta` do script.
+      const meta = parseWorkflowScriptMeta(o.script);
+      const what = meta?.name || field(o, "name") || field(o, "title") || field(o, "description");
+      const about = meta?.description
+        ?? (meta?.phases?.length ? translate("sdk.workflowPhases", { n: meta.phases.length }) : "");
+      return {
+        title: what ? `Workflow(${line(what, 60)})` : tool,
+        ...(about ? { detail: line(about) } : {}),
+        background: true,
+      };
     }
     default: {
       const summary = toolSummary(input);
@@ -632,6 +679,8 @@ export function currentActivity(state: SdkChatState): SdkActivity | null {
   for (let i = state.rows.length - 1; i >= 0; i -= 1) {
     const row = state.rows[i] as SdkRow;
     if (row.kind === "user") return null; // the turn's own message: nothing after it to report
+    const subagent = subagentActivity(state.rows, row);
+    if (subagent !== null) return { kind: "tool", label: subagent, rowId: row.id };
     if (row.kind === "tool") {
       const headline = toolHeadline(row.name, row.input);
       return {
@@ -720,12 +769,49 @@ export function liveActivityDetail(state: SdkChatState): string | null {
   for (let i = state.rows.length - 1; i >= 0; i -= 1) {
     const row = state.rows[i] as SdkRow;
     if (row.kind === "user") return null; // a mensagem do turno: nada depois dela para relatar
+    const subagent = subagentActivity(state.rows, row);
+    if (subagent !== null) return subagent;
     if (row.kind === "tool") return lastLine(toolHeadline(row.name, row.input).title);
     if (row.kind === "thinking" || row.kind === "assistant") {
       return row.streaming ? lastLine(row.text) : null;
     }
   }
   return null;
+}
+
+/**
+ * Quem é o subagente que a chamada `parentId` disparou: o tipo dele (`Explore`), ou a descrição, ou
+ * o nome da tool — o que houver. PURE.
+ */
+export function subagentName(rows: readonly SdkRow[], parentId: string): string {
+  const parent = rows.find((row) => row.kind === "tool" && row.id === parentId);
+  return parent && parent.kind === "tool" ? subagentLabel(parent.name, parent.input) : "";
+}
+
+/** O nome de um subagente pela chamada que o disparou: tipo, descrição ou o nome da tool. PURE. */
+export function subagentLabel(tool: string, input: unknown): string {
+  const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  return field(o, "subagent_type") || field(o, "description") || tool;
+}
+
+/** O que uma linha de subagente está fazendo, em uma linha: a manchete da ferramenta, ou a última
+ *  linha do que ele disse. Vazio vira null. PURE. */
+export function subagentAction(row: SdkRow): string | null {
+  if (row.kind === "tool") return lastLine(toolHeadline(row.name, row.input).title);
+  if (row.kind === "assistant") return lastLine(row.text);
+  return null;
+}
+
+/**
+ * A barra de atividade quando a última coisa é de um SUBAGENTE: "Subagente Explore: Read(x.ts)".
+ * Sem isso ela narrava o trabalho do subagente como se fosse o principal. Null quando a linha não é
+ * de subagente. PURE.
+ */
+function subagentActivity(rows: readonly SdkRow[], row: SdkRow): string | null {
+  if ((row.kind !== "tool" && row.kind !== "assistant") || !row.parent) return null;
+  const action = subagentAction(row);
+  if (action === null) return null;
+  return translate("sdk.subagentRunning", { type: subagentName(rows, row.parent) || "?", action });
 }
 
 /** A última linha não vazia de um texto em curso, dobrada em espaço simples. Vazio vira null. PURE. */
@@ -774,6 +860,26 @@ function appendErrorRow(state: SdkChatState, rows: SdkRow[], text: string): SdkC
   }
   const { id, seq } = nextId(state, "e");
   return { ...state, seq, rows: [...rows, { kind: "error", id, text }] };
+}
+
+/**
+ * Uma linha de SUBAGENTE entra sem mexer na fala do principal: ela é desenhada sob o card do pai, e
+ * fechar a linha que o principal está escrevendo faria o bloco consolidado dele virar uma SEGUNDA
+ * linha (o mesmo cuidado do `workflow_progress`). Então a linha aberta continua sendo a última. PURE.
+ */
+function appendSubagentRow(state: SdkChatState, build: (id: string) => SdkRow, preferredId?: string): SdkChatState {
+  const marked = markSource(state, false);
+  const { id, seq } = nextId(marked, "a");
+  const row = build(preferredId ?? id);
+  const last = marked.rows[marked.rows.length - 1];
+  const stillWriting = last && (last.kind === "assistant" || last.kind === "thinking") && last.streaming;
+  return {
+    ...marked,
+    seq,
+    turnActive: nextTurnActive(marked, false),
+    awaiting: false,
+    rows: stillWriting ? [...marked.rows.slice(0, -1), row, last] : [...marked.rows, row],
+  };
 }
 
 /** Close any live streaming row (a tool call or the turn's end interrupts the text block). */
@@ -966,6 +1072,11 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
     }
     case "assistant_text": {
       const text = event.text ?? "";
+      if (event.parentToolUseId) {
+        if (text === "") return state;
+        const parent = event.parentToolUseId;
+        return appendSubagentRow(state, (id) => ({ kind: "assistant", id, text, streaming: false, parent }));
+      }
       const live = streamingRow(state.rows);
       if (live && !viaTerminal) {
         // The consolidated block REPLACES the deltas that built it — same words, now settled.
@@ -984,6 +1095,12 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       };
     }
     case "tool_use": {
+      if (event.parentToolUseId) {
+        const parent = event.parentToolUseId;
+        return appendSubagentRow(state, (id) => ({
+          kind: "tool", id, name: event.name ?? "?", summary: toolSummary(event.input), input: event.input, parent,
+        }), event.id);
+      }
       const marked = markSource(state, viaTerminal);
       const { id, seq } = nextId(marked, "t");
       const rows = settleStreaming(marked.rows);
