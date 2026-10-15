@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { act } from "react";
+import { Profiler, act } from "react";
 import { OUTBOX_TICK_MS, SdkChatView, resetQuestionDraftsForTesting } from "@/features/board/components/SdkChatView";
 import { OUTBOX_ACK_TIMEOUT_MS } from "@/features/board/lib/sdkOutbox";
 import { RECONNECT_MAX_MS } from "@/features/board/lib/reconnect";
@@ -11,7 +11,7 @@ import type { SdkEvent } from "@/features/board/lib/sdkChat";
 import { resetLanguage, setLanguage } from "@/i18n";
 import { resetReasoningTranslatorForTesting } from "@/features/board/lib/reasoningTranslation";
 import { get } from "@/lib/api";
-import { LinkifiedText } from "@/features/board/components/ChatView";
+import { LinkifiedText, Markdown } from "@/features/board/components/ChatView";
 import { resetDraftsForTesting } from "@/features/board/components/TerminalComposer";
 import { ME_KEY } from "@/providers/auth";
 import { SdkAgentCard } from "@/features/board/components/SdkAgentCard";
@@ -26,10 +26,21 @@ vi.mock("@/lib/api", () => ({
 }));
 
 // Passthrough com contador: o desenho é o de verdade, e quantas vezes uma bolha foi redesenhada
-// fica observável (o teste de custo do transcript, mais abaixo).
+// fica observável (o teste de custo do transcript, mais abaixo). O `Markdown` é um memo: o contador
+// fica DENTRO dele, então conta só os parses de verdade, não os renders que o memo pulou.
 vi.mock("@/features/board/components/ChatView", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/features/board/components/ChatView")>();
-  return { ...actual, LinkifiedText: vi.fn(actual.LinkifiedText) };
+  const { memo } = await import("react");
+  const parse: unknown = (actual.Markdown as unknown as { type?: unknown }).type;
+  if (typeof parse !== "function") {
+    throw new Error(
+      "mock do ChatView: o `Markdown` deixou de ser um React.memo (sem `.type` função) — "
+      + "o contador de parses deste arquivo precisa ser refeito para o novo formato.",
+    );
+  }
+  // Conferido acima que é função; a assinatura é a do componente que o memo embrulha.
+  const render = parse as (props: { text: string }) => React.ReactElement;
+  return { ...actual, LinkifiedText: vi.fn(actual.LinkifiedText), Markdown: memo(vi.fn(render)) };
 });
 
 // Mesmo passthrough com contador, para o card do subagente: um token do principal não pode
@@ -98,9 +109,27 @@ class FakeSocket {
     this.readyState = 1;
     act(() => this.onopen?.());
   }
+  /** Um frame do socket seguido de um frame de animação — o ritmo normal de um socket de verdade. */
   deliver(event: SdkEvent): void {
+    this.receive(event);
+    runAnimationFrames();
+  }
+  /** Só o frame do socket: o que chegar assim fica no mesmo frame de animação até `runAnimationFrames`. */
+  receive(event: SdkEvent): void {
     act(() => this.onmessage?.({ data: JSON.stringify(event) } as MessageEvent));
   }
+}
+
+/**
+ * Os frames de animação ficam na mão do teste: o jsdom os dispara pelo relógio de verdade, o que
+ * deixaria cada asserção logo depois de um `deliver` dependendo de 16ms terem passado ou não.
+ */
+let animationFrames = new Map<number, FrameRequestCallback>();
+let nextAnimationFrame = 1;
+function runAnimationFrames(): void {
+  const due = [...animationFrames.values()];
+  animationFrames = new Map();
+  if (due.length > 0) act(() => due.forEach((callback) => callback(performance.now())));
 }
 
 const originalWebSocket = globalThis.WebSocket;
@@ -114,6 +143,15 @@ beforeEach(() => {
   resetQuestionDraftsForTesting();
   FakeSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeSocket);
+  animationFrames = new Map();
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    const id = nextAnimationFrame++;
+    animationFrames.set(id, callback);
+    return id;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+    animationFrames.delete(id);
+  });
 });
 
 afterEach(() => {
@@ -3205,13 +3243,17 @@ describe("SdkChatView — o custo do transcript", () => {
   }
 
   it("um token novo não redesenha as bolhas antigas", async () => {
-    renderSdkChat();
+    const { queryClient } = renderSdkChat();
     const ws = await socket();
     ws.accept();
     ws.deliver({ type: "user", text: "a mensagem antiga" });
     ws.deliver({ type: "assistant_text", text: "a resposta antiga" });
     ws.deliver({ type: "ready" });
     ws.deliver({ type: "assistant_delta", text: "Come" });
+    // As consultas da montagem (o /auth/me redesenha toda linha pelo contexto) assentam antes da
+    // contagem: a espera abaixo pela linha viva não pode medir isso como se fosse culpa do token.
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
     const before = drawsOf("a mensagem antiga");
     expect(before).toBeGreaterThan(0);
 
@@ -3219,7 +3261,8 @@ describe("SdkChatView — o custo do transcript", () => {
     ws.deliver({ type: "assistant_delta", text: " a nova" });
     ws.deliver({ type: "assistant_delta", text: " resposta" });
 
-    expect(screen.getAllByTestId("sdk-assistant")[1]).toHaveTextContent("Começando a nova resposta");
+    // a linha viva é re-parseada no máximo a cada 100ms (ver "o ritmo do streaming")
+    await waitFor(() => expect(screen.getAllByTestId("sdk-assistant")[1]).toHaveTextContent("Começando a nova resposta"));
     expect(drawsOf("a mensagem antiga")).toBe(before);
   });
 
@@ -3423,5 +3466,264 @@ describe("SdkChatView — o diff do que a IA editou", () => {
     const card = screen.getByTestId("sdk-diff");
     expect(within(card).getByTestId("sdk-diff-added").getAttribute("aria-label")).toBe("1 linha adicionada");
     expect(within(card).getByTestId("sdk-diff-removed").getAttribute("aria-label")).toBe("2 linhas removidas");
+  });
+});
+
+/**
+ * O RITMO DO STREAMING. O driver manda um frame de socket por token, e cada frame virava um
+ * setState: um render da conversa inteira por token, e o Markdown da resposta re-parseado do zero
+ * a cada um — a resposta longa "engasgava" na tela e o campo de texto atrasava junto.
+ */
+describe("SdkChatView — o ritmo do streaming", () => {
+  /** Quantas vezes o Markdown parseou um texto que começa assim. */
+  function parsesOf(prefix: string): number {
+    const inner = (Markdown as unknown as { type: { mock: { calls: [{ text: string }][] } } }).type;
+    return inner.mock.calls.filter(([props]) => props.text.startsWith(prefix)).length;
+  }
+
+  it("os tokens que chegam no mesmo frame de animação viram UM render", async () => {
+    const commits = vi.fn();
+    renderApp(
+      <Profiler id="chat" onRender={commits}>
+        <SdkChatView cardId="c1" />
+      </Profiler>,
+    );
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "assistant_delta", text: "Começ" });
+    const before = commits.mock.calls.length;
+
+    for (let i = 0; i < 30; i++) ws.receive({ type: "assistant_delta", text: ` t${i}` });
+    runAnimationFrames();
+
+    expect(commits.mock.calls.length - before).toBeLessThanOrEqual(2);
+    await waitFor(() => expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("Começ t0 t1"));
+    await waitFor(() => expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("t29"));
+  });
+
+  it("um evento que não é token esvazia o frame ANTES de entrar: a ordem da conversa não muda", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    ws.receive({ type: "assistant_delta", text: "Vou rodar " });
+    ws.receive({ type: "assistant_delta", text: "os testes." });
+    ws.receive({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } });
+    ws.receive({ type: "assistant_delta", text: "Depois" });
+
+    // Sem nenhum frame de animação: o texto antes da ferramenta já está na tela, e no lugar dele.
+    const answer = screen.getAllByTestId("sdk-assistant")[0]!;
+    expect(answer).toHaveTextContent("Vou rodar os testes.");
+    expect(answer.compareDocumentPosition(screen.getByTestId("sdk-tool")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    runAnimationFrames();
+    await waitFor(() => expect(screen.getAllByTestId("sdk-assistant")).toHaveLength(2));
+    expect(screen.getAllByTestId("sdk-assistant")[1]).toHaveTextContent("Depois");
+  });
+
+  it("sem frame de animação (aba em segundo plano), os tokens entram mesmo assim", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    vi.useFakeTimers();
+    try {
+      ws.receive({ type: "assistant_delta", text: "Rodando " });
+      ws.receive({ type: "assistant_delta", text: "em segundo plano" });
+      act(() => { vi.advanceTimersByTime(250); });
+      expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("Rodando em segundo plano");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a resposta que ainda escorre não é re-parseada a cada token — e o texto final sempre aparece", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    vi.useFakeTimers();
+    try {
+      ws.deliver({ type: "assistant_delta", text: "Resposta:" });
+      // 40 tokens, cada um no seu frame de animação, em menos de 100ms de relógio
+      for (let i = 0; i < 40; i++) {
+        ws.deliver({ type: "assistant_delta", text: ` p${i}` });
+        act(() => { vi.advanceTimersByTime(2); });
+      }
+      expect(parsesOf("Resposta:")).toBeLessThanOrEqual(3);
+
+      // passada a janela, a linha viva alcança o texto inteiro, mesmo sem token novo
+      act(() => { vi.advanceTimersByTime(200); });
+      expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("p39");
+    } finally {
+      vi.useRealTimers();
+    }
+
+    ws.deliver({ type: "assistant_text", text: "Resposta: **final**." });
+    expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("Resposta: final.");
+    expect(screen.getByText("final").tagName).toBe("STRONG");
+  });
+});
+
+/**
+ * OS TOKENS DO FRAME E A AÇÃO LOCAL. Os tokens esperam o próximo frame de animação num buffer — e
+ * uma ação da pessoa nesse meio-tempo (Enter, a correção, o Esc, o "enviar agora") não pode ser
+ * julgada pela tela de um frame atrás, nem escrever na conversa ANTES do que já tinha chegado.
+ */
+describe("SdkChatView — o buffer de tokens diante de uma ação local", () => {
+  function follows(first: Element, second: Element): boolean {
+    return (first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  }
+
+  async function readyChat() {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    return ws;
+  }
+
+  it("Enter com o token que abriu um turno ainda no buffer: a mensagem ESPERA na fila", async () => {
+    const ws = await readyChat();
+    ws.deliver({ type: "ready" });
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.type(box, "oi");
+
+    ws.receive({ type: "assistant_delta", text: "Começando" }); // sem frame de animação ainda
+    await userEvent.type(box, "{Enter}");
+    runAnimationFrames();
+
+    expect(ws.sent).toHaveLength(0);
+    await screen.findByTestId("sdk-queue");
+    expect(screen.getByTestId("sdk-queued")).toHaveTextContent("oi");
+  });
+
+  it("a correção enviada com um turno aberto só no buffer PARA o turno antes — e nasce depois da resposta", async () => {
+    const ws = await readyChat();
+    ws.deliver({ type: "user", text: "sobe pra prod" }); // replay: nenhum turno rodando
+    ws.deliver({ type: "ready" });
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.click(screen.getByTestId("sdk-edit"));
+    await userEvent.clear(box);
+    await userEvent.type(box, "sobe pra dev");
+
+    ws.receive({ type: "assistant_delta", text: "Subindo…" });
+    await userEvent.type(box, "{Enter}");
+    runAnimationFrames();
+
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    expect(JSON.parse(ws.sent[0]!)).toEqual({ type: "interrupt", reason: "edit" });
+    const bubbles = screen.getAllByTestId("sdk-user");
+    expect(follows(screen.getByTestId("sdk-assistant"), bubbles[bubbles.length - 1]!)).toBe(true);
+  });
+
+  it("Esc no campo vazio com um turno aberto só no buffer não entra em edição", async () => {
+    const ws = await readyChat();
+    ws.deliver({ type: "user", text: "sobe pra prod" });
+    ws.deliver({ type: "ready" });
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.clear(box);
+
+    ws.receive({ type: "assistant_delta", text: "Subindo…" });
+    fireEvent.keyDown(box, { key: "Escape" });
+    runAnimationFrames();
+
+    expect(screen.queryByTestId("composer-editing")).not.toBeInTheDocument();
+  });
+
+  it("o despacho da fila não solta a mensagem no meio de uma frase que só está no buffer", async () => {
+    const ws = await readyChat();
+    ws.deliver({ type: "ready" });
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.type(box, "faz a tarefa{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "Fazendo…" });
+    await userEvent.type(box, "depois isto{Enter}");
+    await screen.findByTestId("sdk-queued");
+    await userEvent.click(screen.getByTestId("sdk-edit")); // a correção armada segura a fila
+    ws.deliver({ type: "result", isError: false });
+    expect(ws.sent).toHaveLength(1);
+
+    ws.receive({ type: "assistant_delta", text: "Outro turno começando" }); // frase pela metade, no buffer
+    fireEvent.keyDown(box, { key: "Escape" }); // desisti da correção: a fila volta a poder andar
+    runAnimationFrames();
+
+    expect(ws.sent).toHaveLength(1);
+    expect(screen.getByTestId("sdk-queued")).toHaveTextContent("depois isto");
+  });
+
+  it("'enviar agora' com tokens no buffer: a bolha nasce DEPOIS do que já tinha chegado", async () => {
+    const ws = await readyChat();
+    ws.deliver({ type: "ready" });
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.type(box, "faz a tarefa{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "Fazendo…" });
+    await userEvent.type(box, "o que você tá fazendo ?{Enter}");
+    await screen.findByTestId("sdk-queued");
+    ws.receive({ type: "assistant_delta", text: " Analisando a saída" }); // ainda a mesma frase, no buffer
+    await userEvent.click(screen.getByTestId("sdk-queued-send-now"));
+    runAnimationFrames();
+
+    await waitFor(() => expect(ws.sent.length).toBe(2));
+    const answer = screen.getAllByTestId("sdk-assistant").find((el) => el.textContent?.includes("Analisando a saída"));
+    const bubbles = screen.getAllByTestId("sdk-user");
+    expect(answer).toBeDefined();
+    expect(follows(answer!, bubbles[bubbles.length - 1]!)).toBe(true);
+  });
+});
+
+describe("SdkChatView — o buffer de tokens e a troca de conexão", () => {
+  it("um token do card anterior que ficou no buffer não entra no card novo", async () => {
+    const { rerender } = renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.receive({ type: "assistant_delta", text: "TOKEN-DO-CARD-1" }); // sem frame de animação ainda
+
+    rerender(<SdkChatView cardId="c2" />);
+    await waitFor(() => expect(FakeSocket.instances).toHaveLength(2));
+    const ws2 = FakeSocket.instances[1]!;
+    ws2.accept();
+    ws2.deliver({ type: "ready" });
+    runAnimationFrames();
+
+    expect(screen.getByTestId("sdk-chat-scroller")).not.toHaveTextContent("TOKEN-DO-CARD-1");
+  });
+});
+
+describe("SdkChatView — o buffer de tokens e a queda do fio", () => {
+  /**
+   * O que garante isto é a ORDEM dos timers: o do buffer (100ms) nasce antes do da reconexão (400ms
+   * no mínimo) e dispara primeiro, então o `onopen` seguinte — que limpa a tela para o replay —
+   * nunca encontra token da conexão morta para pingar por cima do histórico.
+   */
+  it("o token que estava no buffer quando o fio caiu não reaparece por cima do replay", async () => {
+    // Só o relógio é falso: o frame de animação continua na mão do teste e NÃO dispara (a aba em
+    // segundo plano) — quem esvazia o buffer aqui é o timer.
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+    try {
+      renderSdkChat();
+      const first = await socket();
+      first.accept();
+      first.deliver({ type: "ready" });
+      first.deliver({ type: "assistant_delta", text: "Começo" });
+      first.receive({ type: "assistant_delta", text: " da resposta" }); // sem frame de animação
+
+      act(() => { first.readyState = 3; first.onclose?.(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(RECONNECT_MAX_MS); });
+      const second = FakeSocket.instances[1] as FakeSocket;
+      second.accept();
+      second.deliver({ type: "user", text: "explica o deploy" }); // o replay do disco
+      second.deliver({ type: "assistant_text", text: "Começo da resposta" });
+      second.deliver({ type: "ready" });
+      runAnimationFrames();
+
+      expect(screen.getAllByTestId("sdk-assistant")).toHaveLength(1);
+      expect(screen.getByTestId("sdk-chat-scroller").textContent?.match(/da resposta/g)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

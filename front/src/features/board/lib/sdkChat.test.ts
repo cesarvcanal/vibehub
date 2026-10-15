@@ -3,6 +3,7 @@ import {
   INITIAL_SDK_STATE,
   applySdkEvent,
   appendUserRow,
+  coalesceDeltas,
   answerQuestion,
   currentActivity,
   decidePermission,
@@ -1799,5 +1800,63 @@ describe("ferramenta sendo gerada (tool_use_start → progresso → tool_use)", 
     } finally {
       resetLanguage();
     }
+  });
+});
+
+/**
+ * Um frame do socket por token: aplicar cada um com seu próprio setState era um render da conversa
+ * por token. A view junta o que chegou no mesmo frame de animação — e juntar só pode mudar QUANTAS
+ * vezes se desenha, nunca O QUE fica na tela.
+ */
+describe("coalesceDeltas — os tokens de um frame viram um evento só", () => {
+  const replay = (events: SdkEvent[]) => events.reduce(applySdkEvent, INITIAL_SDK_STATE);
+
+  it("junta deltas consecutivos do mesmo tipo, na ordem", () => {
+    expect(
+      coalesceDeltas([
+        { type: "assistant_delta", text: "Rodando " },
+        { type: "assistant_delta", text: "os " },
+        { type: "assistant_delta", text: "testes" },
+      ]),
+    ).toEqual([{ type: "assistant_delta", text: "Rodando os testes" }]);
+  });
+
+  it("não atravessa um evento de outro tipo: o raciocínio e a resposta seguem separados e em ordem", () => {
+    const events: SdkEvent[] = [
+      { type: "thinking_delta", text: "vou " },
+      { type: "thinking_delta", text: "ler" },
+      { type: "assistant_delta", text: "Lendo " },
+      { type: "assistant_delta", text: "o arquivo." },
+      { type: "tool_use", id: "t1", name: "Read", input: { file_path: "a.ts" } },
+      { type: "assistant_delta", text: "Pronto." },
+    ];
+    expect(coalesceDeltas(events)).toEqual([
+      { type: "thinking_delta", text: "vou ler" },
+      { type: "assistant_delta", text: "Lendo o arquivo." },
+      { type: "tool_use", id: "t1", name: "Read", input: { file_path: "a.ts" } },
+      { type: "assistant_delta", text: "Pronto." },
+    ]);
+  });
+
+  it("um delta com qualquer campo além do texto não é fundido (não sabemos o que ele significa)", () => {
+    const events: SdkEvent[] = [
+      { type: "assistant_delta", text: "a" },
+      { type: "assistant_delta", text: "b", source: "terminal" },
+    ];
+    expect(coalesceDeltas(events)).toEqual(events);
+  });
+
+  it("o estado final é o mesmo de aplicar evento a evento", () => {
+    const events: SdkEvent[] = [
+      { type: "ready" },
+      { type: "thinking_delta", text: "hmm " },
+      { type: "thinking_delta", text: "certo" },
+      { type: "assistant_delta", text: "Com" },
+      { type: "assistant_delta", text: "eçando" },
+      { type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } },
+      { type: "assistant_delta", text: "Fim" },
+      { type: "assistant_delta", text: "." },
+    ];
+    expect(replay(coalesceDeltas(events)).rows).toEqual(replay(events).rows);
   });
 });

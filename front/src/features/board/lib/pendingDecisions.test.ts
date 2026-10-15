@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildDecisionReply,
   decisionKey,
@@ -223,5 +223,48 @@ describe("buildDecisionReply / parseDecisionReply — a resposta ancorada", () =
 
   it("decisionKey ignores case and spacing (the wrapper flattens the question)", () => {
     expect(decisionKey("  QUAL dos dois   você prefere? ")).toBe(decisionKey("Qual dos dois você prefere?"));
+  });
+});
+
+/**
+ * O CUSTO POR TOKEN. Cada `assistant_delta` dá ao componente um array `rows` novo, e o mapa das
+ * respostas é recalculado — mas as linhas fechadas são os MESMOS objetos de antes (o redutor só
+ * troca a que mudou). Reler o texto inteiro de cada resposta antiga a cada token fazia o custo de
+ * cada token crescer com o histórico do card.
+ */
+describe("decisionReplies — linhas que não mudaram não são relidas", () => {
+  const closed = Array.from({ length: 50 }, (_, i) =>
+    assistant(`a${i}`, `Resposta ${i}, com contexto.\n\nQual das opções você prefere no passo ${i}?`),
+  );
+  /** Quantas vezes o texto de uma destas linhas foi quebrado em parágrafos. */
+  function splitsOf(rows: readonly SdkRow[], run: () => void): number {
+    const texts = new Set(rows.map((row) => ("text" in row ? row.text : "")));
+    const split = vi.spyOn(String.prototype, "split");
+    try {
+      run();
+      return split.mock.contexts.filter((self) => texts.has(String(self))).length;
+    } finally {
+      split.mockRestore();
+    }
+  }
+
+  it("um token novo no fim não relê as respostas fechadas", () => {
+    const before = decisionReplies(closed);
+    const streaming: SdkRow = { kind: "assistant", id: "live", text: "Come", streaming: true };
+    const next = [...closed, streaming];
+
+    let after = new Map<string, string>();
+    expect(splitsOf(closed, () => { after = decisionReplies(next); })).toBe(0);
+    expect(after).toEqual(before);
+  });
+
+  it("uma linha que mudou de texto (objeto novo) é relida", () => {
+    decisionReplies(closed);
+    const changed = assistant("a0", "Mudei de ideia.\n\nPosso seguir com a opção B?");
+    const rows = [changed, ...closed.slice(1), user("u1", buildDecisionReply("Posso seguir com a opção B?", "pode"))];
+
+    let result = new Map<string, string>();
+    expect(splitsOf([changed], () => { result = decisionReplies(rows); })).toBeGreaterThan(0);
+    expect(result).toEqual(new Map([["a0", "pode"]]));
   });
 });
