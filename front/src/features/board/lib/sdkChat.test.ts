@@ -1412,6 +1412,30 @@ describe("workflow — a frota visível no chat", () => {
     });
   });
 
+  it("as fases e o início da rodada vêm do quadro do back (o script lido no runner)", () => {
+    // Sem a chamada da tool nesta sessão (aba aberta depois do disparo): só o back sabe o plano.
+    const state = feed([progress({ phases: ["Varredura", "Síntese"], startedAt: 1_000 })]);
+    expect(state.rows.find((r) => r.kind === "workflow")).toMatchObject({
+      phases: [{ title: "Varredura" }, { title: "Síntese" }],
+      startedAt: 1_000,
+    });
+  });
+
+  it("as fases do back mandam na ordem; o detalhe do plano da chamada vem junto quando o título bate", () => {
+    const state = feed([call(SCRIPT), progress({ phases: ["Mapear", "Montar"] })]);
+    expect((state.rows.find((r) => r.kind === "workflow") as { phases?: unknown }).phases).toEqual([
+      { title: "Mapear", detail: "leitores paralelos" },
+      { title: "Montar" },
+    ]);
+  });
+
+  it("um back antigo (sem phases/startedAt no quadro) mantém o plano da chamada e não inventa início", () => {
+    const state = feed([call(SCRIPT), progress()]);
+    const row = state.rows.find((r) => r.kind === "workflow") as { phases?: unknown[]; startedAt?: number };
+    expect(row.phases).toHaveLength(3);
+    expect(row.startedAt).toBeUndefined();
+  });
+
   it("um quadro sem rodada é descartado em silêncio", () => {
     const state = feed([progress({ runId: undefined })]);
     expect(state.rows).toHaveLength(0);

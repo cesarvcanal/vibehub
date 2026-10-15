@@ -76,6 +76,7 @@ export interface SdkEvent {
     | "conversation_reset"
     | "result"
     | "workflow_progress"
+    | "workflow_feed"
     | "user_ack"
     | "user_nack"
     | "peer_typing"
@@ -101,6 +102,10 @@ export interface SdkEvent {
    *  live snapshot of a Workflow's fleet of subagents. `name` carries the script's name. */
   runId?: string;
   agents?: WorkflowAgentFrame[];
+  /** On `workflow_feed` (the answer to THIS tab's request, never a broadcast): which subagent, its
+   *  latest steps, and why they came back empty when they did (see components/WorkflowPanel.tsx). */
+  agentId?: string;
+  items?: WorkflowFeedItem[];
   /** Os títulos de `meta.phases` lidos do script pelo back, na ordem. */
   phases?: string[];
   /** Quando a rodada começou (ms). */
@@ -273,6 +278,8 @@ export type SdkRow =
       name: string;
       description?: string;
       phases?: Array<{ title: string; detail?: string }>;
+      /** Quando a rodada começou (ms), segundo o back. Ausente num back antigo. */
+      startedAt?: number;
       agents: WorkflowAgentFrame[];
       /** Quantos subagentes a rodada tem e quantos já responderam, contados no diário inteiro. */
       total: number;
@@ -514,6 +521,23 @@ export function parseWorkflowScriptMeta(script: unknown): WorkflowScriptMeta | n
     }
   }
   return { name, ...(description ? { description } : {}), ...(phases.length ? { phases } : {}) };
+}
+
+/**
+ * As fases de uma rodada: as do QUADRO do back (lidas do script no runner — a única fonte quando a
+ * aba abriu depois do disparo) mandam na ordem, com o detalhe do plano da chamada quando o título
+ * bate. Um back antigo não manda `phases`: vale o plano da chamada, como antes. PURE.
+ */
+function workflowPhases(
+  fromBack: unknown,
+  fromCall: Array<{ title: string; detail?: string }> | undefined,
+): Array<{ title: string; detail?: string }> {
+  const titles = Array.isArray(fromBack) ? fromBack.filter((t): t is string => typeof t === "string" && t !== "") : [];
+  if (titles.length === 0) return fromCall ?? [];
+  return titles.map((title) => {
+    const detail = fromCall?.find((p) => p.title === title)?.detail;
+    return detail ? { title, detail } : { title };
+  });
 }
 
 /**
@@ -1135,13 +1159,15 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       // sessão só disparou UM workflow, é esse — melhor o plano certo do que painel sem plano.
       const meta = state.workflowMeta[name] ?? (metas.length === 1 ? state.workflowMeta[metas[0]!] : undefined);
       const agents = Array.isArray(event.agents) ? event.agents : [];
+      const phases = workflowPhases(event.phases, meta?.phases);
       const row: SdkRow = {
         kind: "workflow",
         id: `wf:${runId}`,
         runId,
         name,
         ...(meta?.description ? { description: meta.description } : {}),
-        ...(meta?.phases?.length ? { phases: meta.phases } : {}),
+        ...(phases.length ? { phases } : {}),
+        ...(typeof event.startedAt === "number" && event.startedAt > 0 ? { startedAt: event.startedAt } : {}),
         agents,
         total: typeof event.total === "number" ? event.total : agents.length,
         done: typeof event.done === "number" ? event.done : agents.filter((a) => a.status === "done").length,

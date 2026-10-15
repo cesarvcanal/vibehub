@@ -73,6 +73,10 @@ import { logger } from "../utils/logger.js";
  * signal: relayed to the card's OTHER sockets as `peer_typing` with this socket's author, and
  * nothing else — never the driver, never the history (see `attachSocket` in services/sdk/manager.ts);
  * one buffered during the setup below is stale by the attach and is dropped.
+ * `{ "type": "workflow_feed", "runId": string, "agentId": string }` asks for ONE workflow subagent's
+ * recent steps (the panel opened that agent): the manager runs the feed probe in the runner and
+ * answers ONLY this socket with `{ "type": "workflow_feed", "runId", "agentId", "items": [...],
+ * "error"?: "invalid-id"|"no-session"|"probe-failed" }` — never the driver, never the history.
  */
 
 // Re-exported for compatibility (tests, callers): the parser moved into the pure protocol module.

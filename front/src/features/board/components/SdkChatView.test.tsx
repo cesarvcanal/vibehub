@@ -2855,6 +2855,23 @@ describe("SdkChatView — o painel da frota do Workflow", () => {
     expect(screen.getByTestId("sdk-workflow")).toHaveTextContent(/concluído|done/);
   });
 
+  it("abrir um subagente pede o feed PELO SOCKET e desenha a resposta — que não vira linha da conversa", async () => {
+    const ws = await fleetOnScreen();
+    ws.deliver({
+      type: "workflow_progress", runId: "wf_1", name: "auditoria-do-pdv", at: 1, finished: false,
+      phases: ["Achar", "Verificar"], startedAt: Date.now() - 30_000,
+      agents: [{ id: "a01f", label: "achar:caixa", phase: "Achar", status: "running", startedAt: Date.now() - 30_000 }],
+    });
+    await userEvent.click(await screen.findByTestId("sdk-workflow-agent"));
+    const asked = ws.sent.map((raw) => JSON.parse(raw) as { type: string }).filter((f) => f.type === "workflow_feed");
+    expect(asked).toEqual([{ type: "workflow_feed", runId: "wf_1", agentId: "a01f" }]);
+    const rowsBefore = screen.getByTestId("sdk-chat-scroller").children.length;
+    ws.deliver({ type: "workflow_feed", runId: "wf_1", agentId: "a01f", items: [{ at: Date.now(), kind: "tool", tool: "Grep", target: "estoque" }] });
+    expect(await screen.findByTestId("workflow-feed")).toHaveTextContent(/(Buscou|Searched) estoque/);
+    expect(screen.getByTestId("sdk-chat-scroller").children.length).toBe(rowsBefore);
+    expect(screen.getAllByTestId("workflow-phase-group").map((g) => g.getAttribute("data-phase"))).toEqual(["Achar"]);
+  });
+
   it("dois quadros da mesma rodada desenham UM cartão, não dois", async () => {
     const ws = await fleetOnScreen();
     const base = { type: "workflow_progress" as const, runId: "wf_1", name: "auditoria-do-pdv", finished: false };

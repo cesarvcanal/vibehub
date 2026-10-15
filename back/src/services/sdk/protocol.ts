@@ -11,7 +11,7 @@
 
 // Type-only (erased at compile time): the workflow frame's shape IS the probe's result, and this
 // keeps the file free of runtime imports (and of the probe's config/host side of the graph).
-import type { WorkflowRun } from "./workflow.js";
+import type { WorkflowFeedItem, WorkflowRun } from "./workflowProbe.js";
 
 /* ------------------------------------------------------------------ events */
 
@@ -490,6 +490,45 @@ export function parseTypingFrame(raw: string): boolean | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * O pedido do FEED de um subagente — `{ "type": "workflow_feed", "runId": string, "agentId": string }`.
+ * Sob demanda: a aba pede quando a pessoa abre um agente no painel do workflow, e só ela recebe a
+ * resposta (`WorkflowFeedEvent`). Como a digitação, vive fora de `parseSdkClientFrame`: não é turno,
+ * não vai ao driver nem ao histórico.
+ *
+ * Um pedido malformado ainda é um pedido (o front errou): os ids vêm vazios e quem monta o comando os
+ * recusa — a resposta é um erro, nunca uma mensagem para a IA. `null` = não é um pedido de feed. PURE.
+ */
+export interface WorkflowFeedRequest { runId: string; agentId: string }
+
+export function parseWorkflowFeedFrame(raw: string): WorkflowFeedRequest | null {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as { type?: unknown; runId?: unknown; agentId?: unknown };
+    if (parsed.type !== "workflow_feed") return null;
+    return {
+      runId: typeof parsed.runId === "string" ? parsed.runId : "",
+      agentId: typeof parsed.agentId === "string" ? parsed.agentId : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A resposta a um `workflow_feed`, só para o socket que pediu. `error` diz por que veio vazia:
+ * `invalid-id` (ids fora do formato do harness), `no-session` (a sessão ainda não tem id — não há
+ * onde ler) ou `probe-failed` (o runner não respondeu).
+ */
+export interface WorkflowFeedEvent {
+  type: "workflow_feed";
+  runId: string;
+  agentId: string;
+  items: WorkflowFeedItem[];
+  error?: "invalid-id" | "no-session" | "probe-failed";
 }
 
 /* ------------------------------------------------------ permission gate */
