@@ -9,6 +9,7 @@ import { cardWorkPaths } from "../board/workspace.js";
 import { cardAgentState, cardAwaitingChoice, cardDriverActivity } from "../board/agentState.js";
 import { profileDirFor } from "../accounts/profiles.js";
 import { seedDestDir } from "../import/import.js";
+import { transcriptDirFor, sessionGoneError } from "./cardSession.js";
 import { recordOrigin, type MessageOrigin } from "../chat/provenance.js";
 import { publishExternalMessage } from "../sdk/history.js";
 import { ensureDriverSession, hasDriverSession, sendAgentTurn } from "../sdk/manager.js";
@@ -135,17 +136,6 @@ function assistantText(content: unknown): string {
 }
 
 /**
- * Where a card's Claude transcripts live INSIDE the runner: the account profile's `projects/`
- * directory for that card's cwd. Every reader of a transcript — the maestro, the model pill, the
- * chat view — derives the path here, so they can never disagree about which file is the session.
- * PURE.
- */
-export function transcriptDirFor(project: Project, card: Card, accountSlug?: string | null): string {
-  const profileDir = profileDirFor(accountSlug ?? undefined);
-  return seedDestDir(profileDir, cardWorkPaths(project, card).cwd);
-}
-
-/**
  * Reads a Claude Code transcript (`.jsonl`, one JSON object per line) and returns the TEXT of the
  * last `last` assistant messages, oldest first. Malformed lines, non-assistant messages and
  * non-text blocks are dropped. PURE.
@@ -240,24 +230,6 @@ export async function listTerminals(project?: string): Promise<TerminalSummary[]
       COLUMN_ORDER[a.column] - COLUMN_ORDER[b.column] ||
       b.updatedAt - a.updatedAt,
   );
-}
-
-/**
- * A tmux session can disappear underneath the board — the runner restarted, someone killed it —
- * while the card still looks live (it was opened and never paused). tmux then answers with its own
- * wording ("no server running", "can't find session"), which tells a coordinating agent nothing
- * about what to do. Translate it into the action that fixes it: open the card, which recreates the
- * session through the same attach-or-create the terminal uses. PURE.
- */
-export function sessionGoneError(err: unknown, title: string): Error {
-  const detail = (err as Error)?.message ?? String(err);
-  if (/no server running|can't find session|session not found/i.test(detail)) {
-    return new Error(
-      `the terminal for card "${title}" is gone in the runner (the session died or the runner restarted) — ` +
-      "open the card to recreate it, then send the instruction again",
-    );
-  }
-  return err instanceof Error ? err : new Error(detail);
 }
 
 export interface SendResult {
@@ -392,9 +364,10 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
   if (origin) {
     // Attribution only, AFTER a successful delivery — a failed send must leave no ghost label, and
     // a failed record must not fail a delivered message (both writers below never throw).
-    // The provenance log is what the OLD chat matches its transcript user-events against; the sdk
-    // history line is what makes an agent's message VISIBLE (with its sender) in the native chat,
-    // which never sees text typed into the tmux prompt.
+    // The provenance log is what the OLD chat matches its transcript user-events against. This path
+    // only runs with the native chat switched off (an agent's send goes to the driver otherwise), so
+    // the sdk history line is for later: it keeps the message, with its sender, in the card's
+    // history for when the native chat is switched on.
     void recordOrigin(card.id, instruction, origin);
     if (origin.kind === "agent") {
       void publishExternalMessage(card.id, { type: "user", text: instruction, at: Date.now(), from: origin });

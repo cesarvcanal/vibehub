@@ -50,7 +50,7 @@ vi.mock("../services/sdk/driver.js", () => ({
 vi.mock("../runtime/host.js", () => ({
   hostExecutor: () => ({ runScript: () => Promise.resolve({ stdout: "" }) }),
 }));
-vi.mock("../services/maestro/maestro.js", () => ({ transcriptDirFor: () => "/root/.claude/projects/t" }));
+vi.mock("../services/maestro/cardSession.js", () => ({ transcriptDirFor: () => "/root/.claude/projects/t" }));
 vi.mock("../services/sdk/catalog.js", () => ({
   readCardCatalog: () => Promise.resolve(null),
   writeCardCatalog: () => Promise.resolve(),

@@ -14,7 +14,7 @@ import {
 import { installCardSdkDriver, sdkDriverCommand } from "./driver.js";
 import { ensureDriverSession, injectSystemTurn, shutdownAllDrivers } from "./manager.js";
 import { stopAllMirrors } from "./mirror.js";
-import { transcriptDirFor } from "../maestro/maestro.js";
+import { transcriptDirFor } from "../maestro/cardSession.js";
 import { effectiveAccountSlug } from "../board/registry.js";
 import { logger } from "../../utils/logger.js";
 

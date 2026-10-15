@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { sessionGoneError } from "./cardSession.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -261,18 +262,16 @@ describe("readTerminal", () => {
 
 describe("sessionGoneError", () => {
   it("turns tmux's wording into the action that fixes it", async () => {
-    const { maestro } = await load();
     for (const raw of ["no server running on /tmp/tmux-0/default", "can't find session: card-1234"]) {
-      const out = maestro.sessionGoneError(new Error(raw), "my card");
+      const out = sessionGoneError(new Error(raw), "my card");
       expect(out.message).toContain("my card");
       expect(out.message).toMatch(/open the card/i);
     }
   });
 
   it("leaves an unrelated failure exactly as it was", async () => {
-    const { maestro } = await load();
     const original = new Error("docker: permission denied while trying to connect to the socket");
-    expect(maestro.sessionGoneError(original, "my card")).toBe(original);
+    expect(sessionGoneError(original, "my card")).toBe(original);
   });
 
   it("surfaces the friendly error through sendToTerminal", async () => {
@@ -332,7 +331,7 @@ describe("message provenance on send", () => {
     expect(await maestro.agentOriginFor(undefined)).toEqual({ kind: "agent", name: "" });
   });
 
-  it("records who sent it and announces an agent's message to the native chat", async () => {
+  it("records who sent it and keeps an agent's message in the card history (TUI-only path)", async () => {
     const { maestro, registry, provenance, history, settings } = await load();
     await settings.updateSettings({ sdkDriver: false }); // TUI-only install: the tmux path
     const p = await registry.createProject({ name: "billing" });

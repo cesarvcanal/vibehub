@@ -1,7 +1,7 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import { getCard, getProject, hasLiveSession, effectiveAccountSlug } from "../board/registry.js";
-import { transcriptDirFor, sessionGoneError } from "../maestro/maestro.js";
+import { transcriptDirFor, sessionGoneError } from "../maestro/cardSession.js";
 import { logger } from "../../utils/logger.js";
 
 /**
