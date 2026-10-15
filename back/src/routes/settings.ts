@@ -5,6 +5,7 @@ import { getSettings, updateSettings, markSetupCompleted, type SettingsPatch } f
 import { setDefaultAccountLabel } from "../services/board/registry.js";
 import { hostExecutor } from "../runtime/host.js";
 import { DONE_RETENTION_DAYS } from "../services/board/retention.js";
+import { getModelCatalog } from "../services/sdk/models.js";
 
 /** Install settings the wizard and the settings screen read and write. */
 export async function settingsRoutes(app: FastifyInstance): Promise<void> {
@@ -54,5 +55,14 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/features", { preHandler: requireSession }, async (_req, reply) => {
     const settings = await getSettings();
     return await reply.send({ sdkChat: settings.sdkDriver, doneRetentionDays: DONE_RETENTION_DAYS });
+  });
+
+  /**
+   * Which release each model alias resolves to today ("opus" → "Opus 5.5"), as the runner's own
+   * Claude reports it — the model menu names its rows with this, so a new version shows up there
+   * by itself. Readable by every signed-in user: it is the same menu for all of them.
+   */
+  app.get("/api/models", { preHandler: requireSession }, async (_req, reply) => {
+    return await reply.send(await getModelCatalog());
   });
 }
