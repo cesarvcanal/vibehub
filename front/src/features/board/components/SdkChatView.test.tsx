@@ -30,8 +30,16 @@ vi.mock("@/lib/api", () => ({
 vi.mock("@/features/board/components/ChatView", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/features/board/components/ChatView")>();
   const { memo } = await import("react");
-  const parse = (actual.Markdown as unknown as { type: (props: { text: string }) => React.ReactElement }).type;
-  return { ...actual, LinkifiedText: vi.fn(actual.LinkifiedText), Markdown: memo(vi.fn(parse)) };
+  const parse: unknown = (actual.Markdown as unknown as { type?: unknown }).type;
+  if (typeof parse !== "function") {
+    throw new Error(
+      "mock do ChatView: o `Markdown` deixou de ser um React.memo (sem `.type` função) — "
+      + "o contador de parses deste arquivo precisa ser refeito para o novo formato.",
+    );
+  }
+  // Conferido acima que é função; a assinatura é a do componente que o memo embrulha.
+  const render = parse as (props: { text: string }) => React.ReactElement;
+  return { ...actual, LinkifiedText: vi.fn(actual.LinkifiedText), Markdown: memo(vi.fn(render)) };
 });
 
 vi.mock("sonner", () => ({
