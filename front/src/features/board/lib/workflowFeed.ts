@@ -26,8 +26,8 @@ export interface WorkflowFeedRequestFrame {
 }
 
 export interface WorkflowFeedChannel {
-  /** Pede o feed. Sem socket aberto não sai nada — o próximo pedido (a cada 4s) tenta de novo. */
-  request(runId: string, agentId: string): void;
+  /** Pede o feed. `false` = não saiu (socket fechado): quem pede tenta de novo no próximo ciclo. */
+  request(runId: string, agentId: string): boolean;
   /** Escuta as respostas; devolve o "pare de escutar". */
   subscribe(listener: (response: WorkflowFeedResponse) => void): () => void;
   /** Entrega uma resposta que chegou pelo socket a quem escuta. */
@@ -40,8 +40,9 @@ export function createWorkflowFeedChannel(send: (frame: WorkflowFeedRequestFrame
     request(runId, agentId) {
       try {
         send({ type: "workflow_feed", runId, agentId });
+        return true;
       } catch {
-        /* socket fechado: o painel segue com o que tem, e o próximo pedido tenta de novo */
+        return false;
       }
     },
     subscribe(listener) {

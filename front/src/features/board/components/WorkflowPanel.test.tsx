@@ -203,6 +203,26 @@ describe("WorkflowPanel — o feed de um agente, sob demanda", () => {
     expect(sent.filter((f) => f.agentId === "a02f")).toHaveLength(1 + FEED_RETRY_MAX);
   });
 
+  it("socket caído não gasta o teto: só pedido que SAIU conta, e ao voltar o concluído pede de novo", () => {
+    let online = false;
+    const sent: Array<{ agentId: string }> = [];
+    const channel = createWorkflowFeedChannel((frame) => {
+      if (!online) throw new Error("offline");
+      sent.push(frame);
+    });
+    render(
+      <WorkflowFeedContext.Provider value={channel}>
+        <WorkflowPanel row={running()} />
+      </WorkflowFeedContext.Provider>,
+    );
+    fireEvent.click(screen.getAllByTestId("sdk-workflow-agent")[1]!);
+    act(() => { vi.advanceTimersByTime(20_000); });
+    expect(sent).toHaveLength(0);
+    online = true;
+    act(() => { vi.advanceTimersByTime(4_000); });
+    expect(sent.filter((f) => f.agentId === "a02f")).toHaveLength(1);
+  });
+
   it("um id recusado (invalid-id) não muda pedindo de novo: um pedido só", () => {
     const { sent, answer } = renderPanel(running());
     fireEvent.click(screen.getAllByTestId("sdk-workflow-agent")[1]!);
