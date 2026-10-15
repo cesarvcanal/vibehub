@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  CLAUDE_MODELS,
   IMPLICIT_MODEL,
+  catalogModels,
   implicitModelTitle,
   accountInUseName,
   cardNeedsOpen,
@@ -134,6 +136,53 @@ describe("modelInUse", () => {
     // Without a server label, the family still names it.
     expect(modelInUse(null, session({ model: "opus" })).label).toBe("Opus");
     expect(modelInUse(null, session({ model: "claude-sonnet-5-20260101" })).label).toBe("Sonnet");
+  });
+});
+
+/**
+ * The menu used to read "Opus" with no version, so a new release looked like it never arrived. The
+ * server now says which release each alias resolves to; the whitelist stays the only source of ids.
+ */
+describe("catalogModels", () => {
+  const catalog = {
+    at: 1,
+    models: [
+      { id: "fable", label: "Fable 5.1" },
+      { id: "opus", label: "Opus 5.5", resolved: "claude-opus-5-5" },
+      { id: "sonnet", label: "Sonnet 5.5" },
+      { id: "haiku", label: "Haiku 5.5" },
+    ],
+  };
+
+  it("names each row with the version the server reports, in the whitelist's order", () => {
+    expect(catalogModels(catalog)).toEqual([
+      { id: "fable", label: "Fable 5.1" },
+      { id: "opus", label: "Opus 5.5" },
+      { id: "sonnet", label: "Sonnet 5.5" },
+      { id: "haiku", label: "Haiku 5.5" },
+    ]);
+  });
+
+  it("is the plain whitelist before the server answers", () => {
+    expect(catalogModels(undefined)).toEqual(CLAUDE_MODELS);
+    expect(catalogModels({ at: 0, models: [] })).toEqual(CLAUDE_MODELS);
+  });
+
+  it("never adds a row the whitelist does not have, and ignores an empty label", () => {
+    const rows = catalogModels({
+      at: 1,
+      models: [{ id: "gpt", label: "GPT" }, { id: "opus", label: "  " }],
+    });
+    expect(rows.map((m) => m.id)).toEqual(CLAUDE_MODELS.map((m) => m.id));
+    expect(rows.find((m) => m.id === "opus")?.label).toBe("Opus");
+  });
+
+  it("names a pinned alias with its version in the pill, but never relabels an older release", () => {
+    const models = catalogModels(catalog);
+    expect(modelInUse({ model: "opus" }, null, models).label).toBe("Opus 5.5");
+    expect(modelInUse(null, session({ model: "opus" }), models).label).toBe("Opus 5.5");
+    // A transcript that says claude-opus-5 ran on Opus 5, whatever "opus" points at today.
+    expect(modelInUse(null, session({ model: "claude-opus-5" }), models).label).toBe("Opus");
   });
 });
 

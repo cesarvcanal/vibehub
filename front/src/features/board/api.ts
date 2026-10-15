@@ -209,6 +209,7 @@ export const RUNNER_KEY = ["board", "runner"] as const;
 export const GITHUB_KEY = ["board", "github"] as const;
 export const PREVIEW_PORTS_KEY = ["board", "preview", "ports"] as const;
 export const FEATURES_KEY = ["board", "features"] as const;
+export const MODELS_KEY = ["board", "models"] as const;
 /** Prefix matching EVERY project's card list — for invalidating the whole board at once. */
 export const CARDS_PREFIX_KEY = ["board", "cards"] as const;
 /**
@@ -378,11 +379,23 @@ export interface InstallFeatures {
   doneRetentionDays?: number;
 }
 
+/**
+ * `GET /api/models` — the release each model alias resolves to today, as the runner's own Claude
+ * reports it ("opus" → "Opus 5.5"). Ids are always the whitelist's; only the labels move.
+ */
+export interface ModelCatalog {
+  models: { id: string; label: string; resolved?: string }[];
+  /** When the CLI answered (epoch ms); 0 = it never did and the labels are family names. */
+  at: number;
+}
+
 /* --------------------------------------------------------------- requests */
 
 export const boardApi = {
   /** Install-wide UI flags — which chat the Chat tab mounts, for one. */
   features: () => get<InstallFeatures>("/features"),
+  /** What each model alias resolves to today — the names of the model menu's rows. */
+  models: () => get<ModelCatalog>("/models"),
   /* projects */
   listProjects: () => get<{ projects: BoardProject[] }>("/projects").then((r) => r.projects ?? []),
 
@@ -740,7 +753,9 @@ export const AUDIO_MAX_BYTES = 20 * 1024 * 1024;
 /**
  * Claude models a card can be pinned to: FAMILY aliases, which the CLI resolves to the newest release
  * it knows — so this list does not change when a new version ships. Mirrors the server's list; absent
- * on a card means "the account default", which is why the empty option is never written back.
+ * on a card means "the account default", which is why the empty option is never written back. The
+ * labels here are the FALLBACK: the menu names its rows with the version from `GET /api/models`
+ * (see {@link catalogModels}).
  */
 export const CLAUDE_MODELS: readonly { id: string; label: string }[] = [
   { id: "fable", label: "Fable" },
@@ -748,6 +763,16 @@ export const CLAUDE_MODELS: readonly { id: string; label: string }[] = [
   { id: "sonnet", label: "Sonnet" },
   { id: "haiku", label: "Haiku" },
 ] as const;
+
+/**
+ * The whitelist, each row named with the release its alias resolves to today ("Opus 5.5") when the
+ * server knows it. Never adds or drops a row: what a card can pin is the whitelist, the catalog only
+ * names it — so a menu that has not heard from the server yet looks exactly like before. PURE.
+ */
+export function catalogModels(catalog: ModelCatalog | null | undefined): readonly { id: string; label: string }[] {
+  const named = new Map((catalog?.models ?? []).map((m) => [m.id, (m.label ?? "").trim()]));
+  return CLAUDE_MODELS.map((m) => ({ id: m.id, label: named.get(m.id) || m.label }));
+}
 
 /** Reasoning levels a card can be pinned to, weakest first. Mirrors the server's CLAUDE_EFFORTS. */
 export const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
@@ -803,11 +828,13 @@ export interface ModelInUse {
 export function modelInUse(
   card: { model?: string | null } | null | undefined,
   session: CardSessionInfo | null | undefined,
+  /** The menu's rows ({@link catalogModels}) — what names a bare alias with its version. */
+  models: readonly { id: string; label: string }[] = CLAUDE_MODELS,
 ): ModelInUse {
   const live = session?.model?.trim();
-  if (live) return { id: live, label: modelLabelFor(live, session?.modelLabel ?? null) };
+  if (live) return { id: live, label: modelLabelFor(live, session?.modelLabel ?? null, models) };
   const pinned = card?.model?.trim();
-  if (pinned) return { id: pinned, label: modelLabelFor(pinned, null) };
+  if (pinned) return { id: pinned, label: modelLabelFor(pinned, null, models) };
   return { id: IMPLICIT_MODEL.id, label: IMPLICIT_MODEL.label, title: implicitModelTitle() };
 }
 
@@ -828,10 +855,19 @@ export function whitelistModel(id: string | null | undefined): { id: string; lab
 
 /**
  * The server's label first — it read the transcript and names the VERSION ("Opus 5.5"), which the
- * family alias a card pins cannot — then the whitelist's family name, then the raw id. PURE.
+ * family alias a card pins cannot — then, for a BARE alias ("opus", a pin not yet answered), the
+ * version the catalog says it resolves to, then the whitelist's family name, then the raw id. Only
+ * the exact alias borrows the catalog's version: a versioned id from a transcript (`claude-opus-5`)
+ * is that release, not whatever "opus" points at today. PURE.
  */
-export function modelLabelFor(id: string, serverLabel: string | null): string {
-  return (serverLabel ?? "").trim() || whitelistModel(id)?.label || id;
+export function modelLabelFor(
+  id: string,
+  serverLabel: string | null,
+  models: readonly { id: string; label: string }[] = CLAUDE_MODELS,
+): string {
+  return (
+    (serverLabel ?? "").trim() || models.find((m) => m.id === id.trim())?.label || whitelistModel(id)?.label || id
+  );
 }
 
 /**

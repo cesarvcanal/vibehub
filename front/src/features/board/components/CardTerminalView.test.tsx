@@ -138,6 +138,8 @@ function serve() {
     if (/^\/cards\/[^/]+\/browser$/.test(url)) {
       return Promise.resolve({ live: false, busy: false, control: "agent", controlBy: null });
     }
+    // The model catalog: unanswered, so the menu keeps the family names most suites assert.
+    if (url === "/models") return Promise.reject(new Error("no catalog"));
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
 }
@@ -726,6 +728,34 @@ describe("CardTerminalView — the card bar", () => {
     expect(screen.getByRole("menuitemcheckbox", { name: "Opus" })).toHaveAttribute("aria-checked", "true");
     // …and clearing the pin is an ACTION, so it carries no competing check.
     expect(screen.getByRole("menuitem", { name: "Use account default" })).toBeInTheDocument();
+  });
+
+  it("names each row with the release its alias resolves to today — a new version shows up by itself", async () => {
+    // The bug: the menu read "Opus" and looked stuck on an old release while "opus" already ran
+    // Opus 5.5. The server asks the runner's Claude; the ids stay the whitelist's.
+    const base = mockGet.getMockImplementation();
+    mockGet.mockImplementation((url: string, ...rest: unknown[]) => {
+      if (url === "/models") {
+        return Promise.resolve({
+          at: 1,
+          models: [
+            { id: "fable", label: "Fable 5.1" },
+            { id: "opus", label: "Opus 5.6" },
+            { id: "sonnet", label: "Sonnet 5.5" },
+            { id: "haiku", label: "Haiku 5.5" },
+          ],
+        });
+      }
+      return (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest);
+    });
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10, model: "opus" })]);
+
+    // A pin nobody has answered yet already carries its version.
+    await waitFor(() => expect(screen.getByLabelText("Model")).toHaveTextContent("Opus 5.6"));
+    const items = await openMenu(user, "Model");
+    expect(items.map((i) => i.textContent).slice(0, 4)).toEqual(["Fable 5.1", "Opus 5.6", "Sonnet 5.5", "Haiku 5.5"]);
+    expect(screen.getByRole("menuitemcheckbox", { name: "Opus 5.6" })).toHaveAttribute("aria-checked", "true");
   });
 
   it("names a model the whitelist has never heard of from the server's own label", async () => {

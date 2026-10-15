@@ -44,7 +44,6 @@ import {
   ACCOUNTS_KEY,
   ACCOUNT_USAGE_KEY,
   CLAUDE_EFFORTS,
-  CLAUDE_MODELS,
   DEFAULT_ACCOUNT_SLUG,
   accountInUseSlug,
   UPLOAD_MAX_BYTES,
@@ -71,6 +70,7 @@ import {
 } from "@/features/board/api";
 import { AccountUsageBars, useMinuteTick } from "@/features/board/components/AccountUsageBars";
 import { pillPercent } from "@/features/board/lib/usage";
+import { useClaudeModels } from "@/features/board/lib/models";
 import type { CardColumn } from "@/api/types";
 import { t as translate, useT } from "@/i18n";
 
@@ -161,6 +161,8 @@ export function CardTerminalView({
   // WHICH chat the Chat tab mounts is an INSTALL flag now, not a per-card opt-in: with the global
   // sdkDriver switch on, every card's Chat tab is the native (SDK) chat; off is the classic chat.
   const features = useQuery({ queryKey: FEATURES_KEY, queryFn: boardApi.features, staleTime: 60_000 });
+  // The model menu's rows, named with the version each alias resolves to today ("Opus 5.5").
+  const claudeModels = useClaudeModels();
 
   // Decided ONCE, on mount, before anything can refetch underneath us.
   const [cachedInstant] = React.useState(() =>
@@ -328,7 +330,7 @@ export function CardTerminalView({
     mutationFn: (model: string | null) => boardApi.patchCardSession(cardId, { model }),
     onSuccess: (result) => {
       const label =
-        CLAUDE_MODELS.find((m) => m.id === result.card.model)?.label ?? translate("cardView.accountDefault");
+        claudeModels.find((m) => m.id === result.card.model)?.label ?? translate("cardView.accountDefault");
       applySessionSwitch(result, { switched: "cardView.modelSwitched", pending: "cardView.modelSwitchPending" }, { label });
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("cardView.modelSwitchError"))),
@@ -372,7 +374,7 @@ export function CardTerminalView({
   const inheritedAccount = projectAccountSlug(project) ?? defaultAccountLabelOr(accountsData?.defaultLabel);
 
   // The two pills answer "what am I talking to", never "what was typed into this card".
-  const model = modelInUse(card, session);
+  const model = modelInUse(card, session, claudeModels);
   // Which ROW of the menu the model in use belongs to — by family, so the alias settings.json keeps
   // ("opus") and a dated transcript id both tick the whitelisted row instead of growing a second one.
   const modelRow = whitelistModel(model.id);
@@ -659,7 +661,7 @@ export function CardTerminalView({
                 {/* The FIXED list, always in the same order with the same labels. The trigger is
                     where "what am I talking to" is answered; a menu whose rows are recomputed from
                     the live session shuffles its own labels while you read it. */}
-                {CLAUDE_MODELS.map((m) => (
+                {claudeModels.map((m) => (
                   <DropdownMenuCheckboxItem
                     key={m.id}
                     checked={modelRow?.id === m.id}

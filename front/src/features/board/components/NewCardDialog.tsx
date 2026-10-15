@@ -13,7 +13,6 @@ import { Label } from "@/components/ui/label";
 import { useQuery } from "@tanstack/react-query";
 import {
   ACCOUNT_USAGE_KEY,
-  CLAUDE_MODELS,
   DEFAULT_ACCOUNT_SLUG,
   accountLabel,
   boardApi,
@@ -25,6 +24,7 @@ import {
   type BoardProject,
 } from "@/features/board/api";
 import { pillPercent } from "@/features/board/lib/usage";
+import { useClaudeModels } from "@/features/board/lib/models";
 import type { NewCard } from "@/api/types";
 import { useT } from "@/i18n";
 
@@ -86,6 +86,7 @@ export function NewCardDialog({
   const defaultBranch = projectBaseBranch(selectedProject);
   const [account, setAccount] = React.useState("");
   const [model, setModel] = React.useState("");
+  const claudeModels = useClaudeModels();
   const [branch, setBranch] = React.useState("");
   const [base, setBase] = React.useState("");
   const [locked, setLocked] = React.useState(false);
@@ -282,7 +283,7 @@ export function NewCardDialog({
                   onChange={(e) => setModel(e.target.value)}
                 >
                   <option value="">{t("newCard.accountDefault")}</option>
-                  {CLAUDE_MODELS.map((m) => (
+                  {claudeModels.map((m) => (
                     <option key={m.id} value={m.id}>
                       {m.label}
                     </option>
