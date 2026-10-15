@@ -27,7 +27,7 @@ import {
 } from "../services/sdk/transcript.js";
 import { acquireTranscriptMirror } from "../services/sdk/mirror.js";
 import { parseSdkClientFrame, parseTypingFrame } from "../services/sdk/protocol.js";
-import { transcriptDirFor } from "../services/maestro/maestro.js";
+import { transcriptDirFor } from "../services/maestro/cardSession.js";
 import { effectiveAccountSlug } from "../services/board/registry.js";
 import { config } from "../config/env.js";
 import { hostExecutor } from "../runtime/host.js";
@@ -214,9 +214,9 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
         return;
       }
       // Every event the transcript MIRROR lifts from the terminal lands in the history log, not on
-      // the driver's stdout. Forward them live
-      // so the conversation is visible as it happens, whichever screen it happens on. (The driver's
-      // own events reach this socket through the manager's broadcast.)
+      // the driver's stdout. Forward them live so the conversation is visible as it happens,
+      // whichever screen it happens on. (The driver's own events reach this socket through the
+      // manager's broadcast.)
       const offExternal = onExternalMessage(card.id, (event) => {
         try { socket.send(JSON.stringify(event)); } catch { /* socket going away */ }
       });

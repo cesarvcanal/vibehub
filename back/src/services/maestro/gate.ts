@@ -109,9 +109,10 @@ export function resolveGateChecks(probe: GateProbe): { ran: boolean; checks: str
 }
 
 /**
- * Read-only probe script: prints the four facts as `k=0|1` lines, then a marker, then the raw body
- * of `.vibehub/gate.json` (which may be multi-line and is therefore put last, unbounded). The cwd is
- * validated and passed as `$1`. PURE.
+ * Read-only probe script: prints the project facts as `k=0|1` lines, the commit as `head=<sha>`
+ * and whether the tree is clean as `clean=0|1` (both absent or `0` when the cwd is gone), then a
+ * marker, then the raw body of `.vibehub/gate.json` (which may be multi-line and is therefore put
+ * last, unbounded). The cwd is validated and passed as `$1`. PURE.
  */
 export function buildGateProbeScript(containerName: string, cwd: string): string {
   assertSafeRemotePath(cwd);
