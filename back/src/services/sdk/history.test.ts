@@ -68,6 +68,13 @@ describe("replayableHistoryEvent", () => {
     expect(replayableHistoryEvent({ type: "thinking_delta", text: "vou " })).toBe(false);
   });
 
+  /** O progresso da ferramenta é do instante: o `tool_use` completo é o que a conversa guarda. */
+  it("NÃO grava o começo nem o progresso de uma ferramenta", () => {
+    expect(replayableHistoryEvent({ type: "tool_use_start", id: "t1", name: "Write" })).toBe(false);
+    expect(replayableHistoryEvent({ type: "tool_input_progress", id: "t1", bytes: 10 })).toBe(false);
+    expect(replayableHistoryEvent({ type: "tool_progress", id: "t1", elapsedSeconds: 4 })).toBe(false);
+  });
+
   it("drops the connection's own chatter: deltas, ready, session, results, errors", () => {
     expect(replayableHistoryEvent({ type: "assistant_delta", text: "oi" })).toBe(false);
     expect(replayableHistoryEvent({ type: "ready" })).toBe(false);

@@ -670,6 +670,65 @@ async function readSessionTranscript(sessionId) {
   return "";
 }
 
+/** No máximo um `tool_input_progress` por bloco nesta janela: o modelo solta deltas às dezenas por segundo. */
+const TOOL_INPUT_PROGRESS_MS = 500;
+
+/**
+ * A FERRAMENTA SENDO GERADA, lida do stream do agente principal. O `tool_use` só sai quando o modelo
+ * termina o input inteiro — num Write grande, dezenas de segundos de tela muda. Isto transforma os
+ * eventos parciais da Messages API em `tool_use_start` (o bloco abriu) e `tool_input_progress`
+ * (bytes já gerados + o arquivo, assim que o caminho fecha no JSON parcial). O JSON parcial não é
+ * parseado: só o começo dele é guardado, até o `file_path` aparecer.
+ *
+ * O `input_json_delta` traz só o ÍNDICE do bloco, então o mapa índice→ferramenta vem do
+ * `content_block_start`, e morre no `content_block_stop`, no `message_start` (os índices recomeçam
+ * a cada mensagem) e no `done(id)` — chamado quando o `tool_use` completo sai: depois dele, nenhum
+ * progresso. PURE (o relógio entra por `now`), autocontida para ser testada recortada.
+ */
+function createToolInputTracker(throttleMs) {
+  const PATH_HEAD_MAX = 4096;
+  const PATH_RE = /"(?:file_path|notebook_path)"\s*:\s*"((?:[^"\\]|\\.)*)"/;
+  const blocks = new Map();
+  const readPath = (raw) => {
+    try { return JSON.parse(`"${raw}"`); } catch { return raw; }
+  };
+  return {
+    see(ev, now) {
+      if (!ev || typeof ev !== "object") return [];
+      if (ev.type === "message_start") { blocks.clear(); return []; }
+      if (ev.type === "content_block_stop") { blocks.delete(ev.index); return []; }
+      if (ev.type === "content_block_start") {
+        const block = ev.content_block;
+        if (!block || block.type !== "tool_use" || typeof block.id !== "string" || typeof block.name !== "string") return [];
+        blocks.set(ev.index, { id: block.id, bytes: 0, head: "", filePath: null, lastAt: -Infinity });
+        return [{ type: "tool_use_start", id: block.id, name: block.name }];
+      }
+      if (ev.type !== "content_block_delta" || !ev.delta || ev.delta.type !== "input_json_delta") return [];
+      const block = blocks.get(ev.index);
+      const chunk = ev.delta.partial_json;
+      if (!block || typeof chunk !== "string" || chunk === "") return [];
+      block.bytes += Buffer.byteLength(chunk, "utf8");
+      let foundPath = false;
+      if (block.filePath === null && block.head.length < PATH_HEAD_MAX) {
+        block.head += chunk;
+        const match = PATH_RE.exec(block.head);
+        if (match) {
+          block.filePath = readPath(match[1]);
+          block.head = "";
+          foundPath = true;
+        }
+      }
+      // O caminho recém-achado fura a janela (uma vez por bloco): é ele que dá nome ao que está sendo escrito.
+      if (!foundPath && now - block.lastAt < throttleMs) return [];
+      block.lastAt = now;
+      return [{ type: "tool_input_progress", id: block.id, bytes: block.bytes, ...(block.filePath !== null ? { filePath: block.filePath } : {}) }];
+    },
+    done(id) {
+      for (const [index, block] of blocks) if (block.id === id) blocks.delete(index);
+    },
+  };
+}
+
 async function runStream() {
   const options = baseOptions();
   if (lastSessionId) options.resume = lastSessionId;
@@ -681,6 +740,7 @@ async function runStream() {
   pendingResumeAt = null;
   const myChannel = channel;
   let myQuery = null;
+  const toolInput = createToolInputTracker(TOOL_INPUT_PROGRESS_MS);
   try {
     currentQuery = query({ prompt: myChannel, options });
     myQuery = currentQuery;
@@ -753,6 +813,15 @@ async function runStream() {
         } else if (ev && ev.type === "content_block_delta" && ev.delta && ev.delta.type === "thinking_delta") {
           // O campo é `thinking`, não `text` (ThinkingDelta da Messages API).
           if (ev.delta.thinking) emit({ type: "thinking_delta", text: ev.delta.thinking });
+        } else {
+          for (const out of toolInput.see(ev, Date.now())) emit(out);
+        }
+      } else if (msg.type === "tool_progress") {
+        // Há quanto tempo a ferramenta roda (um Bash de dois minutos era indistinguível de um
+        // travamento). Só a do principal: a de um subagente não é um passo que a tela desenha.
+        if (msg.parent_tool_use_id) continue;
+        if (typeof msg.tool_use_id === "string" && typeof msg.elapsed_time_seconds === "number") {
+          emit({ type: "tool_progress", id: msg.tool_use_id, elapsedSeconds: msg.elapsed_time_seconds });
         }
       } else if (msg.type === "assistant") {
         // The fork point a later rewind will use. Recorded for EVERY assistant message, so the
@@ -769,7 +838,10 @@ async function runStream() {
           // nada. Um bloco vazio também é descartado: o spinner já diz que há trabalho em curso.
           // O raciocínio de um subagente fica de fora: a linha de raciocínio da tela é a do principal.
           else if (block.type === "thinking") { if (block.thinking && parent === null) emit({ type: "thinking", text: block.thinking }); }
-          else if (block.type === "tool_use") emit({ type: "tool_use", id: block.id, name: block.name, input: block.input, ...origin });
+          else if (block.type === "tool_use") {
+            if (parent === null) toolInput.done(block.id); // o input está completo: acabou o progresso dele
+            emit({ type: "tool_use", id: block.id, name: block.name, input: block.input, ...origin });
+          }
         }
       } else if (msg.type === "result") {
         // In streaming input mode the CLI emits ONE result per turn and keeps running — the

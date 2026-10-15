@@ -53,6 +53,24 @@ export interface ToolUseEvent {
    */
   parentToolUseId?: string;
 }
+/**
+ * A FERRAMENTA AINDA SENDO GERADA. O `tool_use` só existe quando o modelo termina de escrever o
+ * input inteiro — num Write de 400 linhas, dezenas de segundos em que a tela dizia só
+ * "Trabalhando…" e a IA parecia engasgada. Estes três sinais preenchem esse silêncio, e só para o
+ * agente PRINCIPAL (os de subagente são descartados no driver, como os deltas de texto):
+ *
+ * - `tool_use_start`: o modelo ABRIU o bloco da ferramenta — o mesmo `id` do `tool_use` que virá,
+ *   e que a tela usa para trocar a linha provisória pela definitiva no lugar.
+ * - `tool_input_progress`: quanto do input já saiu (bytes de JSON, com throttle no driver) e o
+ *   arquivo, assim que o caminho aparece no JSON parcial. Nunca depois do `tool_use` completo.
+ * - `tool_progress`: há quanto tempo a ferramenta roda (o `SDKToolProgressMessage` do CLI).
+ *
+ * Efêmeros, como o raciocínio: NÃO entram no histórico (ver `replayableHistoryEvent`). O que a
+ * conversa guarda é o `tool_use` completo.
+ */
+export interface ToolUseStartEvent { type: "tool_use_start"; id: string; name: string }
+export interface ToolInputProgressEvent { type: "tool_input_progress"; id: string; bytes: number; filePath?: string }
+export interface ToolProgressEvent { type: "tool_progress"; id: string; elapsedSeconds: number }
 /** The session id — emitted as soon as the driver learns it, and again on the result. */
 export interface SessionEvent { type: "session"; sessionId: string }
 /** A permission decision the driver's PreToolUse gate made (observability + the escalation's outcome). */
@@ -250,6 +268,9 @@ export type DriverEvent =
   | ThinkingEvent
   | ThinkingDeltaEvent
   | ToolUseEvent
+  | ToolUseStartEvent
+  | ToolInputProgressEvent
+  | ToolProgressEvent
   | SessionEvent
   | PermissionEvent
   | PermissionRequestEvent
@@ -274,6 +295,9 @@ const DRIVER_EVENT_TYPES = new Set([
   "thinking",
   "thinking_delta",
   "tool_use",
+  "tool_use_start",
+  "tool_input_progress",
+  "tool_progress",
   "session",
   "permission",
   "permission_request",

@@ -80,6 +80,22 @@ describe("raciocínio do modelo", () => {
   });
 });
 
+/**
+ * A FERRAMENTA AINDA SENDO GERADA: enquanto o modelo escreve o input de um Write grande (ou um Bash
+ * longo roda), o driver diz que ela começou e quanto já saiu. Sem estes tipos no contrato, cada um
+ * desses frames virava `parse_error` no back — um banner de erro no lugar do progresso.
+ */
+describe("progresso da ferramenta", () => {
+  it("reconhece o começo, o progresso do input e o relógio da ferramenta", () => {
+    expect(parseDriverLine(`{"type":"tool_use_start","id":"toolu_1","name":"Write"}`))
+      .toEqual({ type: "tool_use_start", id: "toolu_1", name: "Write" });
+    expect(parseDriverLine(`{"type":"tool_input_progress","id":"toolu_1","bytes":12288,"filePath":"/w/a.ts"}`))
+      .toEqual({ type: "tool_input_progress", id: "toolu_1", bytes: 12288, filePath: "/w/a.ts" });
+    expect(parseDriverLine(`{"type":"tool_progress","id":"toolu_1","elapsedSeconds":42}`))
+      .toEqual({ type: "tool_progress", id: "toolu_1", elapsedSeconds: 42 });
+  });
+});
+
 describe("encodeControl", () => {
   it("serialises a user message as one newline-terminated line", () => {
     expect(encodeControl({ type: "user", text: "olá" })).toBe(`{"type":"user","text":"olá"}\n`);
