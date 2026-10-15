@@ -39,8 +39,8 @@ function renderPanel(row: WorkflowRow) {
     </WorkflowFeedContext.Provider>
   );
   const view = render(ui(row));
-  const answer = (agentId: string, items: WorkflowFeedItem[]) =>
-    act(() => channel.deliver({ type: "workflow_feed", runId: row.runId, agentId, items }));
+  const answer = (agentId: string, items: WorkflowFeedItem[], error?: "probe-failed") =>
+    act(() => channel.deliver({ type: "workflow_feed", runId: row.runId, agentId, items, ...(error ? { error } : {}) }));
   return { sent, answer, rerender: (r: WorkflowRow) => view.rerender(ui(r)) };
 }
 
@@ -178,6 +178,17 @@ describe("WorkflowPanel — o feed de um agente, sob demanda", () => {
     expect(sent.filter((f) => f.agentId === "a02f")).toHaveLength(2);
     answer("a02f", [{ at: T0 - 1_000, kind: "text", text: "pronto" }]);
     expect(screen.getByTestId("workflow-feed")).toHaveTextContent("pronto");
+    act(() => { vi.advanceTimersByTime(12_000); });
+    expect(sent.filter((f) => f.agentId === "a02f")).toHaveLength(2);
+  });
+
+  it("uma falha passageira da sonda não encerra os pedidos de um concluído — a próxima resposta vale", () => {
+    const { sent, answer } = renderPanel(running());
+    fireEvent.click(screen.getAllByTestId("sdk-workflow-agent")[1]!);
+    answer("a02f", [], "probe-failed");
+    act(() => { vi.advanceTimersByTime(4_000); });
+    expect(sent.filter((f) => f.agentId === "a02f")).toHaveLength(2);
+    answer("a02f", [{ at: T0 - 1_000, kind: "text", text: "pronto" }]);
     act(() => { vi.advanceTimersByTime(12_000); });
     expect(sent.filter((f) => f.agentId === "a02f")).toHaveLength(2);
   });

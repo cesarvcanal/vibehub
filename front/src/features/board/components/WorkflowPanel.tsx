@@ -287,14 +287,14 @@ function nowLine(agent: WorkflowAgentFrame, now: number, t: Translate): React.Re
 
 /**
  * O feed SOB DEMANDA do agente aberto: pede ao abrir e de novo a cada `FEED_POLL_MS` enquanto ele
- * roda — ou enquanto nenhuma resposta chegou (um pedido perdido na queda do socket ou ignorado por
- * um back antigo não deixa o painel em "Carregando"). Fechar ou desmontar para de pedir. Só a
- * resposta deste agente conta.
+ * roda — ou enquanto nenhuma resposta sem erro chegou (um pedido perdido na queda do socket,
+ * ignorado por um back antigo ou que pegou uma falha passageira da sonda não deixa o painel parado).
+ * Fechar ou desmontar para de pedir. Só a resposta deste agente conta.
  */
 function useAgentFeed(runId: string, agentId: string, polling: boolean): WorkflowFeedResponse | null {
   const channel = React.useContext(WorkflowFeedContext);
   const [feed, setFeed] = React.useState<WorkflowFeedResponse | null>(null);
-  const answered = feed !== null;
+  const answered = feed !== null && !feed.error;
   React.useEffect(() => {
     if (!channel) return;
     return channel.subscribe((response) => {
