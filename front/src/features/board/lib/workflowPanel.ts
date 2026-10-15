@@ -34,10 +34,10 @@ function observedConcurrency(agents: readonly WorkflowAgentFrame[], now: number)
 }
 
 /**
- * Quanto falta, pela média de quem já terminou — o mesmo cálculo de `estimateRemainingMs` no back
- * (services/sdk/workflow.ts), refeito aqui porque o relógio que anda é o da tela. Em voo: a média
- * menos o que já correu; na fila (contados no diário, fora da lista): a média inteira; tudo dividido
- * pela concorrência observada. Sem concluído com tempo conhecido não há base: `null`.
+ * Quanto falta, pela média de quem já terminou — calculado na tela, porque o relógio que anda é o
+ * dela. Em voo: a média menos o que já correu; na fila (contados no diário, fora da lista): a média
+ * inteira; tudo dividido pela concorrência observada. Sem concluído com tempo conhecido não há
+ * base: `null`.
  */
 export function estimateWorkflowRemaining(
   run: { agents: readonly WorkflowAgentFrame[]; total: number; done: number },

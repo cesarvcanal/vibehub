@@ -244,58 +244,6 @@ describe("watchCardWorkflows — a sondagem e suas travas", () => {
   });
 });
 
-describe("estimateRemainingMs", () => {
-  type Agent = import("./workflowProbe.js").WorkflowAgent;
-  const A = (id: string, over: Partial<Agent>): Agent => ({ id, label: "", phase: "", status: "running", toolCount: 0, ...over });
-  const RUN = (agents: Agent[], total = agents.length) => ({
-    runId: "wf_a", name: "", phases: [], total, done: agents.filter((a) => a.status === "done").length, agents, at: 0, finished: false,
-  });
-
-  it("sem nenhum concluído não há base: null", async () => {
-    const { estimateRemainingMs } = await load();
-    expect(estimateRemainingMs(RUN([A("a1", { startedAt: 1 })]), 5_000)).toBeNull();
-    expect(estimateRemainingMs(RUN([]), 5_000)).toBeNull();
-  });
-
-  it("em série: média dos concluídos menos o que o em voo já correu", async () => {
-    const { estimateRemainingMs } = await load();
-    const run = RUN([
-      A("a1", { status: "done", startedAt: 1, endedAt: 10_001 }),
-      A("a2", { status: "done", startedAt: 10_001, endedAt: 30_001 }),
-      A("a3", { startedAt: 30_001 }),
-    ]);
-    // média 15s; a3 correu 4s ⇒ faltam 11s; concorrência observada 1.
-    expect(estimateRemainingMs(run, 34_001)).toBe(11_000);
-  });
-
-  it("em paralelo: soma em voo + fila e divide pela concorrência observada", async () => {
-    const { estimateRemainingMs } = await load();
-    const run = RUN([
-      A("a1", { status: "done", startedAt: 1, endedAt: 10_001 }),
-      A("a2", { status: "done", startedAt: 1, endedAt: 10_001 }),
-      A("a3", { startedAt: 10_001 }),
-      A("a4", { startedAt: 10_001 }),
-    ], 6); // 2 no diário além da lista desenhada, ainda sem resposta = fila
-    // em voo: 2 × (10 - 4) = 12s; fila: 2 × 10 = 20s; concorrência 2 ⇒ 16s.
-    expect(estimateRemainingMs(run, 14_001)).toBe(16_000);
-    // concorrência informada vence a observada.
-    expect(estimateRemainingMs(run, 14_001, 4)).toBe(8_000);
-  });
-
-  it("quem já passou da média não conta negativo; concluído sem tempo não entra na média", async () => {
-    const { estimateRemainingMs } = await load();
-    const run = RUN([
-      A("a1", { status: "done", startedAt: 1, endedAt: 10_001 }),
-      A("a2", { status: "done" }),
-      A("a3", { startedAt: 10_001 }),
-    ]);
-    expect(estimateRemainingMs(run, 60_001)).toBe(0);
-    expect(estimateRemainingMs(run, 60_001, 0)).toBe(0); // concorrência mínima 1, nunca divide por 0
-    // a2 sem tempo não puxa a média para 5s: o em voo que correu 4s ainda tem 6s pela frente.
-    expect(estimateRemainingMs(run, 14_001)).toBe(6_000);
-  });
-});
-
 describe("runChanged — atividade, fase e ferramentas também redesenham", () => {
   it("muda com activity/phase/toolCount; o mesmo conteúdo em outro objeto não", async () => {
     const { runChanged } = await load();

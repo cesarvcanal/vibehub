@@ -45,55 +45,6 @@ import {
  * silencia sem agente em voo, e um teto duro de tempo além do qual ela desiste de qualquer jeito.
  */
 
-/* ------------------------------------------------------------------ estimativa */
-
-/**
- * Quantos subagentes trabalharam AO MESMO TEMPO no pico — a concorrência que a rodada mostrou.
- * Quem terminou e quem começou no mesmo instante não se somam (o fim conta primeiro). PURE.
- */
-function observedConcurrency(agents: readonly WorkflowAgent[], now: number): number {
-  const edges: Array<[number, 1 | -1]> = [];
-  for (const a of agents) {
-    if (a.startedAt === undefined) continue;
-    const end = a.status === "done" ? (a.endedAt ?? a.lastAt ?? a.startedAt) : now;
-    edges.push([a.startedAt, 1], [Math.max(end, a.startedAt), -1]);
-  }
-  edges.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
-  let live = 0;
-  let peak = 0;
-  for (const [, delta] of edges) {
-    live += delta;
-    peak = Math.max(peak, live);
-  }
-  return peak;
-}
-
-/**
- * Quanto falta, em ms, pela média de quem já terminou. Em voo: a média menos o que já correu (nunca
- * negativo). Na fila: quem o diário conta como começado e sem resposta, mas não está na lista
- * desenhada (passou do teto) — a média inteira. O total se divide pela concorrência (a informada,
- * senão a observada; no mínimo 1). Sem nenhum concluído com tempo conhecido não há base: `null`. PURE.
- */
-export function estimateRemainingMs(
-  run: Pick<WorkflowRun, "agents" | "total" | "done">,
-  now: number,
-  concurrency?: number,
-): number | null {
-  const durations = run.agents
-    .filter((a) => a.status === "done" && a.startedAt !== undefined && a.endedAt !== undefined && a.endedAt >= a.startedAt)
-    .map((a) => (a.endedAt ?? 0) - (a.startedAt ?? 0));
-  if (durations.length === 0) return null;
-  const average = durations.reduce((sum, d) => sum + d, 0) / durations.length;
-  const running = run.agents.filter((a) => a.status === "running");
-  const inFlight = running.reduce(
-    (sum, a) => sum + Math.max(0, average - (a.startedAt !== undefined ? now - a.startedAt : 0)),
-    0,
-  );
-  const queued = Math.max(0, run.total - run.done - running.length);
-  const lanes = Math.max(1, Math.floor(concurrency ?? observedConcurrency(run.agents, now)));
-  return Math.round((inFlight + queued * average) / lanes);
-}
-
 /** Nada em voo: todo subagente que começou já devolveu (e pelo menos um começou). Conta pelo
  *  TOTAL do diário, não pela lista desenhada — a lista tem teto, a frota não. PURE. */
 export function runSettled(run: WorkflowRun): boolean {
