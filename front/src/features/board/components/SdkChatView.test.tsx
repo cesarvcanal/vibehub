@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { act } from "react";
 import { OUTBOX_TICK_MS, SdkChatView, resetQuestionDraftsForTesting } from "@/features/board/components/SdkChatView";
@@ -3139,5 +3139,100 @@ describe("SdkChatView — /clear", () => {
     ws.deliver({ type: "system_note", text: "conversation-cleared", at: Date.now() });
     await waitFor(() => expect(screen.queryByText("Resposta antiga e longa.")).toBeNull());
     expect(screen.getByText(/cleared/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * O DIFF da edição, como no Cursor: quando a IA altera código, o chat mostra só os trechos
+ * alterados (+ verde, − vermelho, contador no cabeçalho) em vez da linha "Edit(arquivo)".
+ */
+describe("SdkChatView — o diff do que a IA editou", () => {
+  const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i}`).join("\n");
+  // Desmonta ANTES do `resetLanguage()` do arquivo: trocar o idioma com a tela montada redesenha
+  // todo assinante do `useT` fora de um act(...) — os avisos que este bloco não pode somar.
+  afterEach(() => cleanup());
+
+  it("um Edit vira o card de diff: +1 −1, as linhas com sinal e o contexto", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({
+      type: "tool_use", id: "t1", name: "Edit",
+      input: { file_path: "/repo/src/app.ts", old_string: "const a = 1;\nconst b = 2;", new_string: "const a = 1;\nconst b = 3;" },
+    });
+
+    const card = screen.getByTestId("sdk-diff");
+    expect(card.getAttribute("data-tool")).toBe("Edit");
+    expect(screen.queryByTestId("sdk-tool")).toBeNull();
+    expect(within(card).getByText("app.ts").getAttribute("title")).toBe("/repo/src/app.ts");
+    expect(within(card).getByTestId("sdk-diff-added")).toHaveTextContent("+1");
+    expect(within(card).getByTestId("sdk-diff-added").getAttribute("aria-label")).toBe("1 line added");
+    expect(within(card).getByTestId("sdk-diff-removed")).toHaveTextContent("−1");
+    expect(within(card).getByRole("button", { expanded: true })).toBeInTheDocument();
+
+    const shown = within(card).getAllByTestId("sdk-diff-line").map((line) => [line.getAttribute("data-kind"), line.textContent]);
+    expect(shown).toEqual([
+      ["ctx", " const a = 1;"],
+      ["del", "−const b = 2;"],
+      ["add", "+const b = 3;"],
+    ]);
+  });
+
+  it("três ferramentas antes do Edit dobram sozinhas — o card do diff fica de fora, na tela", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    for (const id of ["r1", "r2", "r3"]) ws.deliver({ type: "tool_use", id, name: "Read", input: { file_path: `/repo/${id}.ts` } });
+    ws.deliver({ type: "tool_use", id: "e1", name: "Edit", input: { file_path: "/repo/a.ts", old_string: "x", new_string: "y" } });
+
+    const group = screen.getByTestId("sdk-tool-group");
+    expect(group.getAttribute("data-count")).toBe("3");
+    const card = screen.getByTestId("sdk-diff");
+    expect(group.contains(card)).toBe(false);
+    expect(within(card).getAllByTestId("sdk-diff-line")).toHaveLength(2);
+  });
+
+  it("um Edit espelhado do terminal (só description) continua a linha compacta de sempre", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "t1", name: "Edit", input: { description: "Edit(src/a.ts)" } });
+    expect(screen.queryByTestId("sdk-diff")).toBeNull();
+    expect(screen.getByTestId("sdk-tool").getAttribute("data-tool")).toBe("Edit");
+  });
+
+  it("um Write grande começa recolhido e abre no clique, com o resto contado", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "w1", name: "Write", input: { file_path: "/repo/new.ts", content: lines(60) } });
+
+    const card = screen.getByTestId("sdk-diff");
+    expect(within(card).getByTestId("sdk-diff-added")).toHaveTextContent("+60");
+    const toggle = within(card).getByRole("button", { expanded: false });
+    expect(within(card).queryAllByTestId("sdk-diff-line")).toHaveLength(0);
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    const shown = within(card).getAllByTestId("sdk-diff-line");
+    expect(shown).toHaveLength(40);
+    expect(shown.every((line) => line.getAttribute("data-kind") === "add")).toBe(true);
+    expect(within(card).getByTestId("sdk-diff-truncated")).toHaveTextContent("20 more lines not shown");
+  });
+
+  it("em pt-BR os contadores falam com plural", async () => {
+    setLanguage("pt-BR");
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "t1", name: "Edit", input: { file_path: "a.ts", old_string: "a\nb", new_string: "c" } });
+    const card = screen.getByTestId("sdk-diff");
+    expect(within(card).getByTestId("sdk-diff-added").getAttribute("aria-label")).toBe("1 linha adicionada");
+    expect(within(card).getByTestId("sdk-diff-removed").getAttribute("aria-label")).toBe("2 linhas removidas");
   });
 });
