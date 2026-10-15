@@ -157,16 +157,29 @@ describe("WorkflowPanel — o feed de um agente, sob demanda", () => {
     expect(sent).toHaveLength(3);
   });
 
-  it("um agente concluído pede uma vez só e mostra o que devolveu; abrir outro fecha o primeiro", () => {
-    const { sent } = renderPanel(running());
+  it("um agente concluído para de pedir depois da primeira resposta; abrir outro fecha o primeiro", () => {
+    const { sent, answer } = renderPanel(running());
     const [first, second] = screen.getAllByTestId("sdk-workflow-agent");
     fireEvent.click(second!);
     expect(screen.getByTestId("sdk-workflow-result")).toHaveTextContent("findings: 2");
+    expect(sent.filter((f) => f.agentId === "a02f")).toHaveLength(1);
+    answer("a02f", [{ at: T0 - 1_000, kind: "text", text: "pronto" }]);
     act(() => { vi.advanceTimersByTime(12_000); });
     expect(sent.filter((f) => f.agentId === "a02f")).toHaveLength(1);
     fireEvent.click(first!);
     expect(screen.getAllByTestId("workflow-feed")).toHaveLength(1);
     expect(second).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("um pedido perdido (socket caindo, back antigo) não deixa o concluído em 'Carregando' para sempre", () => {
+    const { sent, answer } = renderPanel(running());
+    fireEvent.click(screen.getAllByTestId("sdk-workflow-agent")[1]!);
+    act(() => { vi.advanceTimersByTime(4_000); });
+    expect(sent.filter((f) => f.agentId === "a02f")).toHaveLength(2);
+    answer("a02f", [{ at: T0 - 1_000, kind: "text", text: "pronto" }]);
+    expect(screen.getByTestId("workflow-feed")).toHaveTextContent("pronto");
+    act(() => { vi.advanceTimersByTime(12_000); });
+    expect(sent.filter((f) => f.agentId === "a02f")).toHaveLength(2);
   });
 
   it("toolCountPartial vira '80+'", () => {

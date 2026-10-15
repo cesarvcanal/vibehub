@@ -286,12 +286,15 @@ function nowLine(agent: WorkflowAgentFrame, now: number, t: Translate): React.Re
 }
 
 /**
- * O feed SOB DEMANDA do agente aberto: pede ao abrir e, enquanto ele roda, de novo a cada
- * `FEED_POLL_MS`; fechar, concluir ou desmontar para de pedir. Só a resposta deste agente conta.
+ * O feed SOB DEMANDA do agente aberto: pede ao abrir e de novo a cada `FEED_POLL_MS` enquanto ele
+ * roda — ou enquanto nenhuma resposta chegou (um pedido perdido na queda do socket ou ignorado por
+ * um back antigo não deixa o painel em "Carregando"). Fechar ou desmontar para de pedir. Só a
+ * resposta deste agente conta.
  */
 function useAgentFeed(runId: string, agentId: string, polling: boolean): WorkflowFeedResponse | null {
   const channel = React.useContext(WorkflowFeedContext);
   const [feed, setFeed] = React.useState<WorkflowFeedResponse | null>(null);
+  const answered = feed !== null;
   React.useEffect(() => {
     if (!channel) return;
     return channel.subscribe((response) => {
@@ -301,10 +304,12 @@ function useAgentFeed(runId: string, agentId: string, polling: boolean): Workflo
   React.useEffect(() => {
     if (!channel) return;
     channel.request(runId, agentId);
-    if (!polling) return;
+  }, [channel, runId, agentId, polling]);
+  React.useEffect(() => {
+    if (!channel || (!polling && answered)) return;
     const timer = setInterval(() => channel.request(runId, agentId), FEED_POLL_MS);
     return () => clearInterval(timer);
-  }, [channel, runId, agentId, polling]);
+  }, [channel, runId, agentId, polling, answered]);
   return feed;
 }
 
