@@ -11,6 +11,10 @@ import { profileDirFor } from "../accounts/profiles.js";
 import { seedDestDir } from "../import/import.js";
 import { recordOrigin, type MessageOrigin } from "../chat/provenance.js";
 import { publishExternalMessage } from "../sdk/history.js";
+import { ensureDriverSession, hasDriverSession, sendAgentTurn } from "../sdk/manager.js";
+import { installCardSdkDriver, sdkDriverCommand } from "../sdk/driver.js";
+import { buildLatestTranscriptScript, parseLatestTranscript, resumeTargetFor } from "../sdk/transcript.js";
+import { getSettings } from "../settings/settings.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -21,7 +25,8 @@ import { logger } from "../../utils/logger.js";
  * does exactly three things, and each one reuses machinery the board already has:
  *
  *  - **list** the terminals and their current situation (the same mirror the board renders);
- *  - **send** an instruction to one card's terminal (types it at the prompt and presses Enter);
+ *  - **send** an instruction to one card: a turn of its native-chat driver when the native chat is
+ *    on, otherwise typed at its terminal's prompt followed by Enter;
  *  - **read** that card's last assistant turns out of the Claude transcript.
  *
  * RULE FOR THIS FILE: reimplement nothing. It calls the same registry/workspace/runner code the UI
@@ -288,15 +293,16 @@ export interface SendOpts {
    * `/exit`, a hibernate that half-landed) still has a live tmux with a bare SHELL under it: the
    * board says "open", send-keys succeeds — and the message is executed by bash or swallowed,
    * never reaching any conversation. That was the chat's "balão pendente para sempre": a 200 with
-   * no echo ever coming. On for the person's chat send; off by default (the outbox path probes for
-   * itself, and an agent-to-agent send pays no extra exec).
+   * no echo ever coming. On for the person's chat send and always for an AGENT's send; off by
+   * default otherwise (the outbox path probes for itself).
    */
   requireAgent?: boolean;
   /**
    * WHO this message is from — the visual attribution the destination card's chat shows ("card X
-   * said this", "user Y said this"). Recording it changes NOTHING about delivery: the text is typed
-   * at the prompt exactly as before. Absent = unattributed (drawn as the card owner's own message,
-   * which is the pre-provenance behaviour).
+   * said this", "user Y said this"). Absent = unattributed (drawn as the card owner's own message,
+   * which is the pre-provenance behaviour). An AGENT origin also picks the route: with the native
+   * chat on, the instruction goes to the card's SDK driver, not to the tmux prompt (see
+   * `sendToNativeChat`).
    */
   origin?: MessageOrigin;
 }
@@ -339,6 +345,17 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
       `the terminal for card "${card.title}" has no live session — open or resume the card before sending it an instruction`,
     );
   }
+  const fromAgent = origin?.kind === "agent";
+  if (fromAgent && (await getSettings()).sdkDriver) {
+    const project = await getProject(card.projectId);
+    if (!project) throw new Error("project for this card not found");
+    await sendToNativeChat(card, project, instruction, origin);
+    logger.info(
+      { audit: true, action: "maestro.send", card: card.worktreeSlug, route: "sdk-driver", bytes: Buffer.byteLength(instruction), by },
+      "instruction delivered to a card's native chat",
+    );
+    return { sent: true, cardId: card.id, title: card.title, project: project.name };
+  }
   // A menu is open in the terminal (session-resume, /compact, a permission prompt): typing a message
   // now would press Enter on the highlighted option and be swallowed. Refuse — the caller keeps the
   // text and the person answers the menu in the Terminal tab. The marker lets the routes map it to a
@@ -346,7 +363,7 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
   // Claude EXITED under this session (the pane is a bare shell) or the session evaporated: typing
   // here would hand the message to bash, answer 200, and echo NOTHING back — the chat's forever-
   // pending bubble. Refuse with the action that fixes it instead.
-  if (requireAgent) {
+  if (requireAgent || fromAgent) {
     const agent = await cardAgentState(card);
     if (agent !== "running") {
       throw new Error(
@@ -391,6 +408,37 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
     "instruction delivered to a card terminal",
   );
   return { sent: true, cardId: card.id, title: card.title, project: project.name };
+}
+
+/**
+ * An agent's instruction as a turn of the card's SDK driver — the conversation the card is really
+ * having. A driver stopped by the idle stop is brought back the way the chat's connect does it:
+ * install check, then a spawn resuming the newest transcript in the card's worktree.
+ */
+async function sendToNativeChat(card: Card, project: Project, instruction: string, origin: MessageOrigin): Promise<void> {
+  const transcriptDir = transcriptDirFor(project, card, effectiveAccountSlug(card, project));
+  let resumeSessionId = card.resumeSessionId;
+  if (!hasDriverSession(card.id)) {
+    await installCardSdkDriver();
+    let latestSessionId: string | null = null;
+    try {
+      const { stdout } = await hostExecutor().runScript(
+        buildLatestTranscriptScript(config.runner.container, transcriptDir),
+        { timeoutMs: 15_000 },
+      );
+      latestSessionId = parseLatestTranscript(stdout).sessionId;
+    } catch (err) {
+      logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not read the card transcript before starting its driver");
+    }
+    resumeSessionId = resumeTargetFor(card, latestSessionId);
+  }
+  const command = await sdkDriverCommand(project, { ...card, resumeSessionId });
+  const session = ensureDriverSession({ cardId: card.id, label: card.worktreeSlug, command, transcriptDir });
+  if (!sendAgentTurn(session, instruction, origin)) {
+    throw new Error(
+      `the native chat driver of card "${card.title}" exited before it could take the instruction — send it again`,
+    );
+  }
 }
 
 export interface ReportResult {

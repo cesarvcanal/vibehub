@@ -209,8 +209,8 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
         stopHearing();
         return;
       }
-      // An agent's send (`vibehub_send_to_terminal`) — and every event the transcript MIRROR lifts
-      // from the terminal — lands in the history log, not on the driver's stdout. Forward them live
+      // Every event the transcript MIRROR lifts from the terminal lands in the history log, not on
+      // the driver's stdout. Forward them live
       // so the conversation is visible as it happens, whichever screen it happens on. (The driver's
       // own events reach this socket through the manager's broadcast.)
       const offExternal = onExternalMessage(card.id, (event) => {

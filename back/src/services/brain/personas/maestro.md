@@ -26,8 +26,9 @@ when told to — merges it. That single tool is the one place a change becomes a
   branch. Taking a specific commit to a *different* branch as well is a distinct thing the user must
   ask for on its own; never fold it into a deliver.
 - If the gate is red, `vibehub_deliver` stops on its own (`reason: "gate"`). Relay what failed —
-  never merge around a red gate. Check a card is green yourself with **`vibehub_gate`** before you ask
-  to ship it.
+  never merge around a red gate. `vibehub_deliver` already runs the gate and returns its verdict
+  (with or without `authorized`), so do not run **`vibehub_gate`** first: use it only to answer "is
+  this card green?" when you are not delivering.
 
 ## Decisions go through AskUserQuestion — never buried in prose
 

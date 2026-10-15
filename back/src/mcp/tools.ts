@@ -49,9 +49,10 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     "vibehub_send_to_terminal",
     {
       description:
-        "Delegate an instruction to another card's terminal: types `text` at that terminal's prompt " +
-        "and submits it, exactly as if a person had typed it. Fails clearly when the card has no live " +
-        "session — open or resume the card first. The receiving terminal keeps its own context, so " +
+        "Delegate an instruction to another card: `text` arrives as a message in that card's " +
+        "conversation (its native chat when that is on, else typed at its terminal's prompt), exactly " +
+        "as if a person had sent it. Fails clearly when the card has no live session — open or resume " +
+        "the card first — or when no Claude is running there. The receiving card keeps its own context, so " +
         "send a self-contained instruction, not a fragment of your conversation.",
       inputSchema: {
         cardId: z.string().describe("id of the destination card (from vibehub_list_terminals)"),
@@ -197,8 +198,9 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "to clear. It runs `.vibehub/gate.json` (`{ \"checks\": [\"…\"] }`) if the repo has one, else " +
         "sensible defaults (a typecheck and `npm test`) when they are resolvable, else nothing at all. " +
         "Returns { ran, passed, output }: `ran:false` means there was nothing to check (a pass-" +
-        "through, not a failure). Output is a redacted tail. Use it to know if a card is green before " +
-        "you ask to ship it.",
+        "through, not a failure). Output is a redacted tail. Use it only to know if a card is green when " +
+        "you are NOT delivering: vibehub_deliver already runs the gate and returns its verdict, so " +
+        "running this first just repeats minutes of checks.",
       inputSchema: {
         card: z.string().describe("id of the card to check (from vibehub_list_terminals)"),
       },

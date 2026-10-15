@@ -2,8 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { EventEmitter } from "node:events";
 
 const runScript = vi.fn(async () => ({ stdout: "", stderr: "" }));
+const pipeCommand = vi.fn((line: string) => ({ file: "sh", args: ["-c", line] }));
 
 let dir = "";
 
@@ -14,10 +16,11 @@ async function load() {
   env.config.runner.container = "vibehub-runner";
   vi.doMock("../../runtime/host.js", async () => {
     const actual = await vi.importActual<typeof import("../../runtime/host.js")>("../../runtime/host.js");
-    return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, writeFile: vi.fn(), ptyCommand: vi.fn() }) };
+    return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, writeFile: vi.fn(), ptyCommand: vi.fn(), pipeCommand }) };
   });
   return {
     maestro: await import("./maestro.js"),
+    settings: await import("../settings/settings.js"),
     registry: await import("../board/registry.js"),
     provenance: await import("../chat/provenance.js"),
     history: await import("../sdk/history.js"),
@@ -29,6 +32,7 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "vibehub-maestro-"));
   runScript.mockClear();
   runScript.mockResolvedValue({ stdout: "", stderr: "" });
+  pipeCommand.mockClear();
 });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
@@ -329,20 +333,23 @@ describe("message provenance on send", () => {
   });
 
   it("records who sent it and announces an agent's message to the native chat", async () => {
-    const { maestro, registry, provenance, history } = await load();
+    const { maestro, registry, provenance, history, settings } = await load();
+    await settings.updateSettings({ sdkDriver: false }); // TUI-only install: the tmux path
     const p = await registry.createProject({ name: "billing" });
     const sender = await registry.createCard({ projectId: p.id, title: "card preview" });
     const dest = await registry.createCard({ projectId: p.id, title: "destino" });
     await registry.applyOpenTerminal(dest.id);
     const origin = await maestro.agentOriginFor(sender.id);
+    runScript.mockResolvedValueOnce({ stdout: "bash\nnode\n", stderr: "" }); // agent probe: claude alive
 
     const live: unknown[] = [];
     const off = history.onExternalMessage(dest.id, (e) => live.push(e));
     await maestro.sendToTerminal(dest.id, "roda os testes", { origin });
     off();
 
-    // Delivery is unchanged (same send-keys script), and the attribution is queryable right away.
-    expect(runScript).toHaveBeenCalledOnce();
+    // The agent probe, then the send-keys script; the attribution is queryable right away.
+    expect(runScript).toHaveBeenCalledTimes(2);
+    expect((runScript.mock.calls[1] as unknown as string[])[0]).toContain("roda os testes");
     expect(provenance.matchOrigin(dest.id, "roda  os\ntestes", Date.now())).toEqual(origin);
     // The native chat heard it live, and the history log replays it with its sender.
     expect(live).toHaveLength(1);
@@ -372,6 +379,120 @@ describe("message provenance on send", () => {
     await registry.applyOpenTerminal(dest.id);
     await maestro.sendToTerminal(dest.id, "sem origem");
     expect(provenance.matchOrigin(dest.id, "sem origem", Date.now())).toBeUndefined();
+  });
+});
+
+describe("an agent's send reaches the card's NATIVE chat, never the stale TUI", () => {
+  // THE BUG: with the native chat on, the card's conversation lives in its SDK driver — but the
+  // maestro typed into the tmux TUI, whose Claude still held the context of the day it was opened
+  // (or was a bare shell by then). The child worked blind, or nobody worked at all.
+  type Child = EventEmitter & {
+    stdout: EventEmitter; stderr: EventEmitter; exitCode: number | null; kill: () => void;
+    stdin: EventEmitter & { written: string[]; writable: boolean; write: (s: string) => boolean; end: () => void };
+  };
+  let spawned: Child[] = [];
+  const fakeChild = (): Child => {
+    const child = new EventEmitter() as Child;
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    const stdin = new EventEmitter() as Child["stdin"];
+    stdin.written = [];
+    stdin.writable = true;
+    stdin.write = (s: string) => { stdin.written.push(s); return true; };
+    stdin.end = () => { stdin.writable = false; };
+    child.stdin = stdin;
+    child.exitCode = null;
+    child.kill = () => undefined;
+    return child;
+  };
+  const userFrames = (child: Child) =>
+    child.stdin.written.map((l) => JSON.parse(l) as { type: string; text?: string }).filter((f) => f.type === "user");
+  const sendKeysRan = () =>
+    runScript.mock.calls.some((c) => String((c as unknown as string[])[0]).includes("tmux send-keys"));
+
+  async function nativeCard() {
+    const loaded = { ...(await load()), manager: await import("../sdk/manager.js") };
+    spawned = [];
+    loaded.manager.setDriverSpawnerForTesting(() => {
+      const child = fakeChild();
+      spawned.push(child);
+      return child as never;
+    });
+    const p = await loaded.registry.createProject({ name: "billing" });
+    const sender = await loaded.registry.createCard({ projectId: p.id, title: "maestro" });
+    const dest = await loaded.registry.createCard({ projectId: p.id, title: "filho" });
+    await loaded.registry.applyOpenTerminal(dest.id);
+    const origin = await loaded.maestro.agentOriginFor(sender.id);
+    return { ...loaded, dest, origin };
+  }
+
+  it("with the card's driver alive, the instruction is a turn of THAT driver — no send-keys, one bubble", async () => {
+    const { maestro, manager, history, dest, origin } = await nativeCard();
+    manager.ensureDriverSession({ cardId: dest.id, label: "filho", command: { file: "x", args: [] } });
+    const live: unknown[] = [];
+    const off = history.onExternalMessage(dest.id, (e) => live.push(e));
+    const out = await maestro.sendToTerminal(dest.id, "rode os testes e corrija", { respectHumanActive: true, origin });
+    off();
+    manager.resetSdkSessionsForTesting();
+
+    expect(out).toMatchObject({ sent: true, title: "filho", project: "billing" });
+    expect(sendKeysRan()).toBe(false);
+    expect(spawned).toHaveLength(1);
+    expect(userFrames(spawned[0]!)).toEqual([{ type: "user", text: "rode os testes e corrija" }]);
+    // The driver path draws the bubble itself (history + relay); the external bus would draw a second one.
+    expect(live).toHaveLength(0);
+    await history.appendHistory(dest.id, { type: "session", sessionId: "s" }); // barrier: the chain is serialized
+    const replay = await history.readHistory(dest.id);
+    expect(replay.filter((e) => e.type === "user")).toEqual([
+      expect.objectContaining({ text: "rode os testes e corrija", from: origin }),
+    ]);
+  });
+
+  it("with the driver stopped (idle stop), it comes up resuming the newest transcript, then takes the turn", async () => {
+    const { maestro, manager, dest, origin } = await nativeCard();
+    const latest = "11111111-2222-3333-4444-555555555555";
+    runScript.mockImplementation(async (script: string) =>
+      script.includes("*.jsonl") ? { stdout: `${latest}\n`, stderr: "" } : { stdout: "", stderr: "" });
+    const out = await maestro.sendToTerminal(dest.id, "continue a tarefa", { respectHumanActive: true, origin });
+    manager.resetSdkSessionsForTesting();
+
+    expect(out).toMatchObject({ sent: true });
+    expect(sendKeysRan()).toBe(false);
+    expect(spawned).toHaveLength(1);
+    expect(String(pipeCommand.mock.calls[0]?.[0])).toMatch(new RegExp(`--resume\\W+${latest}`));
+    expect(userFrames(spawned[0]!)).toEqual([{ type: "user", text: "continue a tarefa" }]);
+  });
+
+  it("a driver that can no longer take a turn fails the send out loud — nothing recorded", async () => {
+    const { maestro, manager, history, dest, origin } = await nativeCard();
+    manager.ensureDriverSession({ cardId: dest.id, label: "filho", command: { file: "x", args: [] } });
+    spawned[0]!.exitCode = 1; // died; its close has not fired yet
+    await expect(maestro.sendToTerminal(dest.id, "oi", { respectHumanActive: true, origin })).rejects.toThrow(/driver/i);
+    manager.resetSdkSessionsForTesting();
+    expect(sendKeysRan()).toBe(false);
+    await history.appendHistory(dest.id, { type: "session", sessionId: "s" });
+    expect((await history.readHistory(dest.id)).some((e) => e.type === "user")).toBe(false);
+  });
+
+  it("a person typing in the card still blocks the agent on the native chat", async () => {
+    const { maestro, manager, registry, dest, origin } = await nativeCard();
+    await registry.markCardHumanActive(dest.id, Date.now());
+    await expect(maestro.sendToTerminal(dest.id, "oi", { respectHumanActive: true, origin })).rejects.toThrow(/human-active/);
+    manager.resetSdkSessionsForTesting();
+    expect(spawned).toHaveLength(0);
+    expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("on a TUI-only install, an agent never types into a bare shell: refused, and no bubble announced", async () => {
+    const { maestro, settings, history, dest, origin } = await nativeCard();
+    await settings.updateSettings({ sdkDriver: false });
+    runScript.mockResolvedValueOnce({ stdout: "bash\n", stderr: "" }); // agent probe: only a shell in the pane
+    const live: unknown[] = [];
+    const off = history.onExternalMessage(dest.id, (e) => live.push(e));
+    await expect(maestro.sendToTerminal(dest.id, "oi", { respectHumanActive: true, origin })).rejects.toThrow(/no agent running/i);
+    off();
+    expect(sendKeysRan()).toBe(false);
+    expect(live).toHaveLength(0);
   });
 });
 
