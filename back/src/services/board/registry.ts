@@ -168,26 +168,55 @@ export type RestartReason = "brain" | "mcp" | "plugin" | "config";
 export const RESTART_REASONS: readonly RestartReason[] = ["brain", "mcp", "plugin", "config"] as const;
 
 /**
- * Claude models a card may pin. When set, the session starts with `claude --model <id>`. Unset =
- * whatever the account defaults to (no flag at all). These ids end up on a shell command line, so
- * they are never taken raw: they are checked against this whitelist first.
+ * Claude models a card may pin: FAMILY aliases, not versioned ids. When set, the session starts with
+ * `claude --model <alias>` and the CLI resolves the alias to the newest release it knows — a new Opus
+ * reaches every pinned card by bumping the CLI/SDK, with no list to edit here. Unset = whatever the
+ * account defaults to (no flag at all). These values end up on a shell command line, so they are never
+ * taken raw: they are checked against this whitelist first.
  */
-export const CLAUDE_MODELS = ["claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"] as const;
+export const CLAUDE_MODELS = ["fable", "opus", "sonnet", "haiku"] as const;
 export type ClaudeModelId = (typeof CLAUDE_MODELS)[number];
 const CLAUDE_MODEL_IDS: ReadonlySet<string> = new Set(CLAUDE_MODELS);
 
-/** True when `id` is one of the whitelisted models. Used as a guard before building a session. PURE. */
-export function isValidModel(id: string | null | undefined): id is ClaudeModelId {
-  return typeof id === "string" && CLAUDE_MODEL_IDS.has(id);
+/** A versioned id an older vibehub pinned (`claude-opus-5`, `claude-haiku-4-5`): family + digits only. */
+const VERSIONED_MODEL_RE = new RegExp(`^claude-(${CLAUDE_MODELS.join("|")})(-\\d+)+$`);
+
+/**
+ * The alias a pin stands for: the alias itself, or the family of a versioned id pinned before the
+ * aliases (a board.json written by an older vibehub, a PATCH from a tab on the previous front).
+ * Undefined for anything else — this is the guard that keeps raw input off a command line. PURE.
+ */
+export function modelPin(id: string | null | undefined): ClaudeModelId | undefined {
+  const v = typeof id === "string" ? id.trim() : "";
+  if (CLAUDE_MODEL_IDS.has(v)) return v as ClaudeModelId;
+  return VERSIONED_MODEL_RE.exec(v)?.[1] as ClaudeModelId | undefined;
 }
 
-/** Returns a whitelisted model id. THROWS otherwise — this value becomes a session env var. PURE. */
+/** Returns the whitelisted alias a model stands for (see {@link modelPin}). THROWS otherwise. PURE. */
 export function assertModel(id: string): ClaudeModelId {
-  const v = String(id ?? "").trim();
-  if (!CLAUDE_MODEL_IDS.has(v)) {
-    throw new Error(`invalid model (expected one of ${CLAUDE_MODELS.join(", ")}): '${id}'`);
-  }
-  return v as ClaudeModelId;
+  const pin = modelPin(id);
+  if (!pin) throw new Error(`invalid model (expected one of ${CLAUDE_MODELS.join(", ")}): '${id}'`);
+  return pin;
+}
+
+/**
+ * Reasoning levels a card may pin — what `claude --effort` takes. Unset = the account's own level.
+ * Same whitelist rule as the model: the value reaches a command line.
+ */
+export const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type ClaudeEffort = (typeof CLAUDE_EFFORTS)[number];
+const CLAUDE_EFFORT_IDS: ReadonlySet<string> = new Set(CLAUDE_EFFORTS);
+
+/** True when `level` is one of the whitelisted effort levels. PURE. */
+export function isValidEffort(level: string | null | undefined): level is ClaudeEffort {
+  return typeof level === "string" && CLAUDE_EFFORT_IDS.has(level);
+}
+
+/** Returns a whitelisted effort level. THROWS otherwise. PURE. */
+export function assertEffort(level: string): ClaudeEffort {
+  const v = String(level ?? "").trim();
+  if (!isValidEffort(v)) throw new Error(`invalid effort (expected one of ${CLAUDE_EFFORTS.join(", ")}): '${level}'`);
+  return v;
 }
 
 // ---------------------------------------------------------------------------
@@ -259,6 +288,8 @@ export interface Card {
    * one that is true. Absent = a pin older than this field, which never beats the transcript.
    */
   modelAt?: number;
+  /** Reasoning level for THIS card (one of CLAUDE_EFFORTS). Absent = the account's own (no flag). */
+  effort?: string;
   /**
    * When the card's terminal was opened for the FIRST time (worktree and session already exist in
    * the runner). Present = the front-end may attach the websocket immediately (attach-or-create) and
@@ -599,7 +630,7 @@ const store = new JsonStore<BoardDoc>(
       config: doc?.config && typeof doc.config === "object" ? doc.config : {},
       accounts: Array.isArray(doc?.accounts) ? doc.accounts : [],
       projects: Array.isArray(doc?.projects) ? doc.projects : [],
-      cards: assignBrowserSlots(Array.isArray(doc?.cards) ? doc.cards : []),
+      cards: assignBrowserSlots(readModelPins(Array.isArray(doc?.cards) ? doc.cards : [])),
       mcps: Array.isArray(doc?.mcps) ? doc.mcps : [],
       mcpDrops: Array.isArray(doc?.mcpDrops)
         ? (doc.mcpDrops as unknown[]).map(parseMcpDrop).filter((d): d is McpDrop => d !== null)
@@ -610,6 +641,20 @@ const store = new JsonStore<BoardDoc>(
     };
   },
 );
+
+/**
+ * Rewrites each versioned pin (`claude-opus-5`) as its family alias, once, on load — so every reader
+ * of `card.model` (the restart check, the `modelAt` stamp, the session pill) compares like with like.
+ * A value that is not a model at all is left as it is: modelPin keeps it off the command line anyway.
+ * Mutates and returns `cards`; the next mutation persists the rewrite.
+ */
+function readModelPins(cards: Card[]): Card[] {
+  for (const card of cards) {
+    const pin = modelPin(card.model);
+    if (pin) card.model = pin;
+  }
+  return cards;
+}
 
 /**
  * Gives every card that has no valid slot of its own one nobody else holds, and reports every
@@ -1433,6 +1478,8 @@ export interface UpdateCardInput {
   accountSlug?: string | null;
   /** Claude model (one of CLAUDE_MODELS); null/"" clears it (back to the account default). */
   model?: string | null;
+  /** Reasoning level (one of CLAUDE_EFFORTS); null/"" clears it (back to the account's own). */
+  effort?: string | null;
   /** Imported session (uuid); null clears it (back to `claude -c`). */
   resumeSessionId?: string | null;
   /** Native chat (beta) opt-in for THIS card; false/null clears it (back to the TUI chat). */
@@ -1509,6 +1556,9 @@ export async function updateCard(id: string, patch: UpdateCardInput): Promise<Ca
     if (patch.model !== undefined) {
       next.model = patch.model === null || !String(patch.model).trim() ? undefined : assertModel(patch.model);
       if (next.model !== card.model) next.modelAt = Date.now();
+    }
+    if (patch.effort !== undefined) {
+      next.effort = patch.effort === null || !String(patch.effort).trim() ? undefined : assertEffort(patch.effort);
     }
     // Imported session / own branch: validated here (uuid / assertBranchName) because both become
     // argv or script content in the runner and must never pass through raw. null clears.

@@ -386,7 +386,10 @@ quando pinta a palavra no compositor. Então o driver:
    permitir — plano com teto de esforço, workflows desligados, CLI antigo;
 3. **devolve** no `result` do turno (`applyFlagSettings({ effortLevel: null, ultracode: null })`):
    limpa a camada de flags, então o que vale de novo é a configuração do próprio usuário. A palavra
-   valia para AQUELE turno.
+   valia para AQUELE turno. **Exceção: o card que fixou uma inteligência** (`--effort`, campo
+   `effort` do card). Limpar a flag NÃO traz o `--effort` de volta (medido no CLI real, SDK 0.3.300:
+   `--effort low` → flag `max` → flag `null` deixou a sessão em `medium`), então nesse caso a
+   devolução escreve `effortLevel: <nível do card>` em vez de `null`.
 
 Duas armadilhas que o teste cerca: a mensagem é empurrada num `finally`, então nenhuma falha da
 escalada pode engoli-la; e a primeira mensagem de uma corrente nova espera o
@@ -548,7 +551,7 @@ resto). Agora o driver usa o **modo de input streaming do SDK**: um `query()` de
 turno é empurrada pro stream vivo e o CLI **dobra ela no turno corrente** — o modelo absorve no
 próximo passo, exatamente como a fila da TUI.
 
-**Verificado ao vivo no SDK 0.3.246** (PoC + smoke do driver real): mensagem empurrada durante um
+**Verificado ao vivo no SDK 0.3.246, e de novo no 0.3.300** (PoC + smoke do driver real): mensagem empurrada durante um
 `sleep` de turno em andamento → UM único `result`, cuja resposta final já honrava a mensagem
 mid-turn. Os types do SDK confirmam a semântica (fold-in-flight, "queued user message … absorbed
 mid-turn", batches coalescidos).

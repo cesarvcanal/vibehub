@@ -634,11 +634,15 @@ describe("session introspection", () => {
     expect(maestro.parseLastModel('{"type":"assi')).toBeNull();
   });
 
-  it("maps model ids to the names the UI shows, and passes unknown ids through", async () => {
+  it("maps model ids to the names the UI shows, VERSION included, and passes unknown ids through", async () => {
     const { maestro } = await load();
-    expect(maestro.modelLabelFor("claude-opus-5")).toBe("Opus");
-    expect(maestro.modelLabelFor("claude-fable-5")).toBe("Fable");
-    expect(maestro.modelLabelFor("claude-haiku-4-5-20251001")).toBe("Haiku");
+    // A card pins a family alias, so only the transcript can name the release it resolved to.
+    expect(maestro.modelLabelFor("claude-opus-5-5")).toBe("Opus 5.5");
+    expect(maestro.modelLabelFor("claude-opus-5")).toBe("Opus 5");
+    expect(maestro.modelLabelFor("claude-fable-5-1")).toBe("Fable 5.1");
+    expect(maestro.modelLabelFor("claude-haiku-4-5-20251001")).toBe("Haiku 4.5");
+    expect(maestro.modelLabelFor("claude-sonnet-6")).toBe("Sonnet 6");
+    expect(maestro.modelLabelFor("claude-opus-5-5[1m]")).toBe("Opus 5.5");
     expect(maestro.modelLabelFor("gpt-x")).toBe("gpt-x");
     expect(maestro.modelLabelFor(null)).toBeNull();
   });
@@ -652,7 +656,7 @@ describe("session introspection", () => {
     const info = await maestro.sessionInfo(c.id);
     expect(info).toEqual({
       model: "claude-opus-5",
-      modelLabel: "Opus",
+      modelLabel: "Opus 5",
       account: { slug: acct.slug, name: "Tech" },
       // A card that was never opened has no session for the chat to be waiting on.
       situation: "no session",

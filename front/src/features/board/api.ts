@@ -356,6 +356,8 @@ export interface CardPatchInput {
   accountSlug?: string | null;
   /** null clears it (back to the account default). */
   model?: string | null;
+  /** Reasoning level; null clears it (back to the account's own). */
+  effort?: string | null;
   /** Native chat (beta) opt-in for this card; false/null go back to the transcript chat. */
   sdkChat?: boolean | null;
   /** Locks the card to its base (deliver = a PR against it, never a merge); false/null unlocks. */
@@ -736,15 +738,31 @@ export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 export const AUDIO_MAX_BYTES = 20 * 1024 * 1024;
 
 /**
- * Claude models a card can be pinned to. Mirrors the server's list; absent on a card means "the
- * account default", which is why the empty option is never written back.
+ * Claude models a card can be pinned to: FAMILY aliases, which the CLI resolves to the newest release
+ * it knows — so this list does not change when a new version ships. Mirrors the server's list; absent
+ * on a card means "the account default", which is why the empty option is never written back.
  */
 export const CLAUDE_MODELS: readonly { id: string; label: string }[] = [
-  { id: "claude-fable-5", label: "Fable" },
-  { id: "claude-opus-5", label: "Opus" },
-  { id: "claude-sonnet-5", label: "Sonnet" },
-  { id: "claude-haiku-4-5", label: "Haiku" },
+  { id: "fable", label: "Fable" },
+  { id: "opus", label: "Opus" },
+  { id: "sonnet", label: "Sonnet" },
+  { id: "haiku", label: "Haiku" },
 ] as const;
+
+/** Reasoning levels a card can be pinned to, weakest first. Mirrors the server's CLAUDE_EFFORTS. */
+export const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type ClaudeEffort = (typeof CLAUDE_EFFORTS)[number];
+
+/** The name a reasoning level goes by on screen, in the operator's language. */
+export function effortLabel(level: ClaudeEffort): string {
+  return t(`cardView.effort.${level}`);
+}
+
+/** The pinned level when it is one the menu knows, undefined otherwise. PURE. */
+export function pinnedEffort(card: { effort?: string | null } | null | undefined): ClaudeEffort | undefined {
+  const level = card?.effort;
+  return CLAUDE_EFFORTS.find((e) => e === level);
+}
 
 /** Slug the token routes use to address the built-in profile, which has no account record. */
 export const DEFAULT_ACCOUNT_SLUG = "default";
@@ -805,14 +823,15 @@ export function whitelistModel(id: string | null | undefined): { id: string; lab
   const exact = CLAUDE_MODELS.find((m) => m.id === raw);
   if (exact) return exact;
   const lower = raw.toLowerCase();
-  return CLAUDE_MODELS.find((m) => lower.includes(m.label.toLowerCase()));
+  return CLAUDE_MODELS.find((m) => lower.includes(m.id));
 }
 
-/** Whitelist label for a model id (family included), the server's own label, or the raw id. PURE. */
+/**
+ * The server's label first — it read the transcript and names the VERSION ("Opus 5.5"), which the
+ * family alias a card pins cannot — then the whitelist's family name, then the raw id. PURE.
+ */
 export function modelLabelFor(id: string, serverLabel: string | null): string {
-  const known = whitelistModel(id)?.label;
-  if (known) return known;
-  return (serverLabel ?? "").trim() || id;
+  return (serverLabel ?? "").trim() || whitelistModel(id)?.label || id;
 }
 
 /**

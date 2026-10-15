@@ -15,8 +15,11 @@ import {
   assertMcpName,
   effectiveAccountSlug,
   assertModel,
-  isValidModel,
+  modelPin,
   CLAUDE_MODELS,
+  CLAUDE_EFFORTS,
+  isValidEffort,
+  assertEffort,
   sanitizeDefaultAccountLabel,
   LABEL_MAX,
   BOARD_COLUMNS,
@@ -191,19 +194,43 @@ describe("derivations and validation (pure)", () => {
     expect(effectiveAccountSlug({}, {})).toBeUndefined();
   });
 
-  it("model whitelist: exactly the four ids, and nothing else passes", () => {
-    expect([...CLAUDE_MODELS]).toEqual(["claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"]);
+  it("model whitelist: the four FAMILY aliases — the CLI resolves each to its newest version", () => {
+    expect([...CLAUDE_MODELS]).toEqual(["fable", "opus", "sonnet", "haiku"]);
     for (const id of CLAUDE_MODELS) {
-      expect(isValidModel(id)).toBe(true);
+      expect(modelPin(id)).toBe(id);
       expect(assertModel(id)).toBe(id);
     }
-    expect(assertModel("  claude-opus-5  ")).toBe("claude-opus-5");
-    for (const bad of ["gpt-4", "claude-opus-5; rm -rf /", "claude-opus-5$(id)", "", "CLAUDE-OPUS-5"]) {
-      expect(isValidModel(bad)).toBe(false);
+    expect(assertModel("  opus  ")).toBe("opus");
+    // A tab still running the previous front (blue/green deploy) PATCHes the versioned id.
+    expect(assertModel("claude-opus-5")).toBe("opus");
+    for (const bad of ["gpt-4", "opus; rm -rf /", "opus$(id)", "", "OPUS"]) {
+      expect(modelPin(bad)).toBeUndefined();
       expect(() => assertModel(bad)).toThrow(/invalid model/);
     }
-    expect(isValidModel(null)).toBe(false);
-    expect(isValidModel(undefined)).toBe(false);
+  });
+
+  it("modelPin: a versioned id stored by an older vibehub is read as its family", () => {
+    // A board.json from an older vibehub holds `claude-opus-5`; the card must keep its family.
+    expect(modelPin("claude-opus-5")).toBe("opus");
+    expect(modelPin("claude-haiku-4-5")).toBe("haiku");
+    expect(modelPin("claude-fable-5")).toBe("fable");
+    expect(modelPin("sonnet")).toBe("sonnet");
+    for (const bad of ["gpt-4", "claude-opus-5; rm -rf /", "claude-opus-5$(id)", "", null, undefined]) {
+      expect(modelPin(bad)).toBeUndefined();
+    }
+  });
+
+  it("effort whitelist: the five levels the CLI takes, and nothing else passes", () => {
+    expect([...CLAUDE_EFFORTS]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    for (const e of CLAUDE_EFFORTS) {
+      expect(isValidEffort(e)).toBe(true);
+      expect(assertEffort(e)).toBe(e);
+    }
+    for (const bad of ["ultra", "high; id", "", "HIGH"]) {
+      expect(isValidEffort(bad)).toBe(false);
+      expect(() => assertEffort(bad)).toThrow(/invalid effort/);
+    }
+    expect(isValidEffort(undefined)).toBe(false);
   });
 
   it("sanitizeDefaultAccountLabel: trims, caps at 40, empty -> undefined", () => {
@@ -837,12 +864,41 @@ describe("board registry (persisted)", () => {
     it("model: only the whitelist is stored; null/'' clears it", async () => {
       const p = await seedProject();
       const card = await reg.createCard({ projectId: p.id, title: "a" });
-      expect((await reg.updateCard(card.id, { model: "claude-opus-5" })).model).toBe("claude-opus-5");
+      expect((await reg.updateCard(card.id, { model: "opus" })).model).toBe("opus");
       expect((await reg.updateCard(card.id, { model: null })).model).toBeUndefined();
-      expect((await reg.updateCard(card.id, { model: "claude-fable-5" })).model).toBe("claude-fable-5");
+      expect((await reg.updateCard(card.id, { model: "fable" })).model).toBe("fable");
       expect((await reg.updateCard(card.id, { model: "" })).model).toBeUndefined();
-      await expect(reg.updateCard(card.id, { model: "claude-opus-5; rm -rf /" })).rejects.toThrow(/invalid model/);
+      await expect(reg.updateCard(card.id, { model: "opus; rm -rf /" })).rejects.toThrow(/invalid model/);
       await expect(reg.updateCard(card.id, { model: "gpt-4" })).rejects.toThrow(/invalid model/);
+    });
+
+    it("a card pinned with a versioned id loads as its family, so picking that family again changes nothing", async () => {
+      const p = await seedProject();
+      const card = await reg.createCard({ projectId: p.id, title: "fixado antes dos aliases" });
+      const file = join(dir, "board.json");
+      const doc = JSON.parse(await readFile(file, "utf8")) as { cards: { id: string; model?: string; modelAt?: number }[] };
+      const stored = doc.cards.find((c) => c.id === card.id)!;
+      stored.model = "claude-opus-5";
+      stored.modelAt = 111;
+      await writeFile(file, JSON.stringify(doc));
+
+      const reopened = await freshRegistry();
+      expect((await reopened.getCard(card.id))?.model).toBe("opus");
+      // the ticked "Opus" row clicked again: no new modelAt, which is what restarts the session
+      expect((await reopened.updateCard(card.id, { model: "opus" })).modelAt).toBe(111);
+    });
+
+    it("effort: only the whitelist is stored; null/'' clears it", async () => {
+      const p = await seedProject();
+      const card = await reg.createCard({ projectId: p.id, title: "a" });
+      const high = await reg.updateCard(card.id, { effort: "high" });
+      expect(high.effort).toBe("high");
+      expect((await reg.updateCard(card.id, { effort: "max" })).effort).toBe("max");
+      expect((await reg.updateCard(card.id, { effort: null })).effort).toBeUndefined();
+      expect((await reg.updateCard(card.id, { effort: "low" })).effort).toBe("low");
+      expect((await reg.updateCard(card.id, { effort: "" })).effort).toBeUndefined();
+      await expect(reg.updateCard(card.id, { effort: "high; id" })).rejects.toThrow(/invalid effort/);
+      expect((await reg.getCard(card.id))?.effort).toBeUndefined();
     });
   });
 

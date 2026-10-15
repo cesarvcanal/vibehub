@@ -105,7 +105,7 @@ const cards: BoardCard[] = [
     status: "working",
     openedAt: 10,
     accountSlug: "personal",
-    model: "claude-opus-5",
+    model: "opus",
     createdAt: 2,
   },
   {

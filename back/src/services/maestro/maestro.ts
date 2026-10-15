@@ -2,7 +2,7 @@ import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.
 import { config } from "../../config/env.js";
 import {
   listProjects, listAllCards, getCard, getProject, hasLiveSession, effectiveAccountSlug,
-  listAccounts, getConfig, isHumanActive, reportCardState,
+  listAccounts, getConfig, isHumanActive, reportCardState, CLAUDE_MODELS,
   type Card, type Project, type BoardColumn, type CardStatus, type DeclaredState,
 } from "../board/registry.js";
 import { cardWorkPaths } from "../board/workspace.js";
@@ -481,15 +481,24 @@ export async function readTerminal(cardId: string, last = 3): Promise<ReadResult
 
 /* ----------------------------------------------------------- session introspection */
 
-/** Model ids Claude Code writes into transcripts, mapped to the names the UI shows. PURE. */
+/** `claude-<family>-<major>[-<minor>]`; a further run of digits is a date stamp, not the version. */
+const MODEL_VERSION_RE = new RegExp(`claude-(${CLAUDE_MODELS.join("|")})-(\\d{1,2})(?:-(\\d{1,2}))?(?!\\d)`);
+
+/**
+ * Model ids Claude Code writes into transcripts, mapped to the names the UI shows — VERSION included
+ * ("claude-opus-5-5" → "Opus 5.5"), because a card pins a family alias and only the transcript says
+ * which release that alias resolved to. An alias ("opus", from settings.json or a fresh pin) has no
+ * version to show; a trailing date stamp is not part of the version. PURE.
+ */
 export function modelLabelFor(model: string | null | undefined): string | null {
   if (!model) return null;
-  const m = model.toLowerCase(); // full ids ("claude-opus-5") and the aliases settings.json uses ("opus")
-  if (m.includes("fable")) return "Fable";
-  if (m.includes("opus")) return "Opus";
-  if (m.includes("sonnet")) return "Sonnet";
-  if (m.includes("haiku")) return "Haiku";
-  return model;
+  const m = model.toLowerCase();
+  const version = MODEL_VERSION_RE.exec(m);
+  const family = version?.[1] ?? CLAUDE_MODELS.find((f) => m.includes(f));
+  if (!family) return model;
+  const name = family.charAt(0).toUpperCase() + family.slice(1);
+  if (!version) return name;
+  return `${name} ${version[3] ? `${version[2]}.${version[3]}` : version[2]}`;
 }
 
 /**

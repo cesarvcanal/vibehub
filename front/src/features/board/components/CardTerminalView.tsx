@@ -43,6 +43,7 @@ import { readCardMode, writeCardMode, type CardViewMode } from "@/features/board
 import {
   ACCOUNTS_KEY,
   ACCOUNT_USAGE_KEY,
+  CLAUDE_EFFORTS,
   CLAUDE_MODELS,
   DEFAULT_ACCOUNT_SLUG,
   accountInUseSlug,
@@ -59,8 +60,10 @@ import {
   cardSessionKey,
   cardsKey,
   defaultAccountLabelOr,
+  effortLabel,
   FEATURES_KEY,
   modelInUse,
+  pinnedEffort,
   projectAccountSlug,
   whitelistModel,
   type BoardCard,
@@ -297,40 +300,48 @@ export function CardTerminalView({
     onError: (error) => toast.error(apiErrorMessage(error, translate("cardView.restartError"))),
   });
 
+  /**
+   * The account, the model and the intelligence all reach Claude only when the process STARTS, so the
+   * server restarts a live session for the switch to be real — or flags it, when Claude is mid-task —
+   * and the message follows what it actually did. The pill shows what is in USE, so the session the
+   * switch just changed is read again.
+   */
+  function applySessionSwitch(
+    { card: updated, session: change }: Awaited<ReturnType<typeof boardApi.patchCardSession>>,
+    toastKey: { switched: string; pending: string },
+    vars?: { label: string },
+  ) {
+    mirror(updated);
+    void queryClient.invalidateQueries({ queryKey: cardSessionKey(updated.id) });
+    if (change === "restarted") setReconnectNonce((n) => n + 1);
+    toast.success(translate(change === "pending" ? toastKey.pending : toastKey.switched, vars));
+  }
+
   const accountMutation = useMutation({
     mutationFn: (accountSlug: string | null) => boardApi.patchCardSession(cardId, { accountSlug }),
-    onSuccess: ({ card: updated, session: change }) => {
-      mirror(updated);
-      // The pill shows what is in USE, so it has to re-read the session the switch just changed.
-      void queryClient.invalidateQueries({ queryKey: cardSessionKey(updated.id) });
-      // Same as the model: the profile is chosen when Claude starts, so a live session has to be
-      // restarted for the switch to be real — or flagged, when Claude is mid-task.
-      if (change === "restarted") setReconnectNonce((n) => n + 1);
-      toast.success(
-        translate(change === "pending" ? "cardView.accountSwitchPending" : "cardView.accountSwitched"),
-      );
-    },
+    onSuccess: (result) =>
+      applySessionSwitch(result, { switched: "cardView.accountSwitched", pending: "cardView.accountSwitchPending" }),
     onError: (error) => toast.error(apiErrorMessage(error, translate("cardView.accountSwitchError"))),
   });
 
   const modelMutation = useMutation({
     mutationFn: (model: string | null) => boardApi.patchCardSession(cardId, { model }),
-    onSuccess: ({ card: updated, session: change }) => {
-      mirror(updated);
-      void queryClient.invalidateQueries({ queryKey: cardSessionKey(updated.id) });
+    onSuccess: (result) => {
       const label =
-        CLAUDE_MODELS.find((m) => m.id === updated.model)?.label ?? translate("cardView.accountDefault");
-      // The model only reaches Claude when the process STARTS, so the message follows what the
-      // server actually did with the session — it used to promise a switch that never happened.
-      if (change === "restarted") setReconnectNonce((n) => n + 1);
-      toast.success(
-        translate(
-          change === "pending" ? "cardView.modelSwitchPending" : "cardView.modelSwitched",
-          { label },
-        ),
-      );
+        CLAUDE_MODELS.find((m) => m.id === result.card.model)?.label ?? translate("cardView.accountDefault");
+      applySessionSwitch(result, { switched: "cardView.modelSwitched", pending: "cardView.modelSwitchPending" }, { label });
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("cardView.modelSwitchError"))),
+  });
+
+  const effortMutation = useMutation({
+    mutationFn: (effort: string | null) => boardApi.patchCardSession(cardId, { effort }),
+    onSuccess: (result) => {
+      const level = pinnedEffort(result.card);
+      const label = level ? effortLabel(level) : translate("cardView.accountDefault");
+      applySessionSwitch(result, { switched: "cardView.effortSwitched", pending: "cardView.effortSwitchPending" }, { label });
+    },
+    onError: (error) => toast.error(apiErrorMessage(error, translate("cardView.effortSwitchError"))),
   });
 
   /**
@@ -366,6 +377,8 @@ export function CardTerminalView({
   // ("opus") and a dated transcript id both tick the whitelisted row instead of growing a second one.
   const modelRow = whitelistModel(model.id);
   const modelUnlisted = !modelRow;
+  // The level is the card's PIN, not a reading: the transcript does not record the effort a turn ran on.
+  const effort = pinnedEffort(card);
   const accountName = accountInUseName(card, session, accounts, inheritedAccount);
   const defaultAccountName = defaultAccountLabelOr(accountsData?.defaultLabel);
 
@@ -498,13 +511,14 @@ export function CardTerminalView({
   }, [browserOpen, closeBrowserPane]);
 
   /**
-   * Changing the account or the model ends the session server-side (applySessionChange); changing
+   * Changing the account, the model or the intelligence ends the session server-side (applySessionChange); changing
    * this key makes the terminal drop and reattach, which recreates it with the new environment in
    * the SAME conversation. The nonce covers the rest: an explicit restart, and a switch on a card
    * whose pin already had that value in the key.
    */
   const reconnectKey =
-    `${card?.accountSlug ?? "-"}:${card?.model ?? "-"}` + (reconnectNonce ? `:r${reconnectNonce}` : "");
+    `${card?.accountSlug ?? "-"}:${card?.model ?? "-"}:${card?.effort ?? "-"}` +
+    (reconnectNonce ? `:r${reconnectNonce}` : "");
 
   function saveTitle() {
     if (editingTitle === null) return;
@@ -666,6 +680,20 @@ export function CardTerminalView({
                     here would compete with the one marking the model actually in use. */}
                 <DropdownMenuItem onSelect={() => modelMutation.mutate(null)}>
                   {t("cardView.useAccountDefault")}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>{t("cardView.effortSection")}</DropdownMenuLabel>
+                {CLAUDE_EFFORTS.map((level) => (
+                  <DropdownMenuCheckboxItem
+                    key={level}
+                    checked={effort === level}
+                    onSelect={() => effortMutation.mutate(level)}
+                  >
+                    {effortLabel(level)}
+                  </DropdownMenuCheckboxItem>
+                ))}
+                <DropdownMenuItem onSelect={() => effortMutation.mutate(null)}>
+                  {t("cardView.useAccountDefaultEffort")}
                 </DropdownMenuItem>
     </>
   );
@@ -864,13 +892,15 @@ export function CardTerminalView({
                   aria-label={t("cardView.model")}
                   title={model.title ?? t("cardView.modelInUse")}
                   className={PILL}
-                  disabled={modelMutation.isPending}
+                  disabled={modelMutation.isPending || effortMutation.isPending}
                 >
                   {model.label}
+                  {effort ? <span className="text-muted-foreground"> · {effortLabel(effort)}</span> : null}
                 </button>
               </DropdownMenuTrigger>
               {/* Below the trigger, aligned to its right edge — never over the thing you clicked. */}
               <DropdownMenuContent side="bottom" align="end">
+                <DropdownMenuLabel>{t("cardView.model")}</DropdownMenuLabel>
                 {modelItems}
               </DropdownMenuContent>
             </DropdownMenu>
