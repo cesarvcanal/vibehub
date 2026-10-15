@@ -11,7 +11,7 @@ import type { SdkEvent } from "@/features/board/lib/sdkChat";
 import { resetLanguage, setLanguage } from "@/i18n";
 import { resetReasoningTranslatorForTesting } from "@/features/board/lib/reasoningTranslation";
 import { get } from "@/lib/api";
-import { LinkifiedText } from "@/features/board/components/ChatView";
+import { LinkifiedText, Markdown } from "@/features/board/components/ChatView";
 import { resetDraftsForTesting } from "@/features/board/components/TerminalComposer";
 import { ME_KEY } from "@/providers/auth";
 
@@ -25,10 +25,13 @@ vi.mock("@/lib/api", () => ({
 }));
 
 // Passthrough com contador: o desenho é o de verdade, e quantas vezes uma bolha foi redesenhada
-// fica observável (o teste de custo do transcript, mais abaixo).
+// fica observável (o teste de custo do transcript, mais abaixo). O `Markdown` é um memo: o contador
+// fica DENTRO dele, então conta só os parses de verdade, não os renders que o memo pulou.
 vi.mock("@/features/board/components/ChatView", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/features/board/components/ChatView")>();
-  return { ...actual, LinkifiedText: vi.fn(actual.LinkifiedText) };
+  const { memo } = await import("react");
+  const parse = (actual.Markdown as unknown as { type: (props: { text: string }) => React.ReactElement }).type;
+  return { ...actual, LinkifiedText: vi.fn(actual.LinkifiedText), Markdown: memo(vi.fn(parse)) };
 });
 
 vi.mock("sonner", () => ({
@@ -3083,13 +3086,17 @@ describe("SdkChatView — o custo do transcript", () => {
   }
 
   it("um token novo não redesenha as bolhas antigas", async () => {
-    renderSdkChat();
+    const { queryClient } = renderSdkChat();
     const ws = await socket();
     ws.accept();
     ws.deliver({ type: "user", text: "a mensagem antiga" });
     ws.deliver({ type: "assistant_text", text: "a resposta antiga" });
     ws.deliver({ type: "ready" });
     ws.deliver({ type: "assistant_delta", text: "Come" });
+    // As consultas da montagem (o /auth/me redesenha toda linha pelo contexto) assentam antes da
+    // contagem: a espera abaixo pela linha viva não pode medir isso como se fosse culpa do token.
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
     const before = drawsOf("a mensagem antiga");
     expect(before).toBeGreaterThan(0);
 
@@ -3097,7 +3104,8 @@ describe("SdkChatView — o custo do transcript", () => {
     ws.deliver({ type: "assistant_delta", text: " a nova" });
     ws.deliver({ type: "assistant_delta", text: " resposta" });
 
-    expect(screen.getAllByTestId("sdk-assistant")[1]).toHaveTextContent("Começando a nova resposta");
+    // a linha viva é re-parseada no máximo a cada 100ms (ver "o ritmo do streaming")
+    await waitFor(() => expect(screen.getAllByTestId("sdk-assistant")[1]).toHaveTextContent("Começando a nova resposta"));
     expect(drawsOf("a mensagem antiga")).toBe(before);
   });
 
@@ -3171,10 +3179,16 @@ describe("SdkChatView — /clear", () => {
 
 /**
  * O RITMO DO STREAMING. O driver manda um frame de socket por token, e cada frame virava um
- * setState: um render da conversa inteira por token — a resposta longa "engasgava" na tela e o
- * campo de texto atrasava junto.
+ * setState: um render da conversa inteira por token, e o Markdown da resposta re-parseado do zero
+ * a cada um — a resposta longa "engasgava" na tela e o campo de texto atrasava junto.
  */
 describe("SdkChatView — o ritmo do streaming", () => {
+  /** Quantas vezes o Markdown parseou um texto que começa assim. */
+  function parsesOf(prefix: string): number {
+    const inner = (Markdown as unknown as { type: { mock: { calls: [{ text: string }][] } } }).type;
+    return inner.mock.calls.filter(([props]) => props.text.startsWith(prefix)).length;
+  }
+
   it("os tokens que chegam no mesmo frame de animação viram UM render", async () => {
     const commits = vi.fn();
     renderApp(
@@ -3231,5 +3245,32 @@ describe("SdkChatView — o ritmo do streaming", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("a resposta que ainda escorre não é re-parseada a cada token — e o texto final sempre aparece", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    vi.useFakeTimers();
+    try {
+      ws.deliver({ type: "assistant_delta", text: "Resposta:" });
+      // 40 tokens, cada um no seu frame de animação, em menos de 100ms de relógio
+      for (let i = 0; i < 40; i++) {
+        ws.deliver({ type: "assistant_delta", text: ` p${i}` });
+        act(() => { vi.advanceTimersByTime(2); });
+      }
+      expect(parsesOf("Resposta:")).toBeLessThanOrEqual(3);
+
+      // passada a janela, a linha viva alcança o texto inteiro, mesmo sem token novo
+      act(() => { vi.advanceTimersByTime(200); });
+      expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("p39");
+    } finally {
+      vi.useRealTimers();
+    }
+
+    ws.deliver({ type: "assistant_text", text: "Resposta: **final**." });
+    expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("Resposta: final.");
+    expect(screen.getByText("final").tagName).toBe("STRONG");
   });
 });

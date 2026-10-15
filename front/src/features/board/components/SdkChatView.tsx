@@ -1865,6 +1865,34 @@ function SdkThinkingRow({ text, streaming }: { text: string; streaming: boolean 
   );
 }
 
+/** How often the answer still streaming is re-parsed as markdown. */
+const STREAMING_MARKDOWN_MS = 100;
+
+/**
+ * The answer still streaming. `Markdown` re-parses the WHOLE text on every change, so a growing
+ * answer is parsed at most once per `STREAMING_MARKDOWN_MS`; the newest text lands when the window
+ * closes even if no token follows, and the settled row goes back to a plain `Markdown`.
+ */
+function StreamingMarkdown({ text }: { text: string }) {
+  const [shown, setShown] = React.useState(text);
+  const shownAtRef = React.useRef(Date.now());
+  React.useEffect(() => {
+    if (text === shown) return;
+    const show = (): void => {
+      shownAtRef.current = Date.now();
+      setShown(text);
+    };
+    const wait = shownAtRef.current + STREAMING_MARKDOWN_MS - Date.now();
+    if (wait <= 0) {
+      show();
+      return;
+    }
+    const timer = setTimeout(show, wait);
+    return () => clearTimeout(timer);
+  }, [text, shown]);
+  return <Markdown text={shown} />;
+}
+
 /**
  * One row of the conversation. MEMOISED: a streamed token changes only the last row, and every
  * other one — same `row` object (the reducer keeps untouched rows by reference), same primitives,
@@ -2162,7 +2190,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
   }
   return (
     <div data-testid="sdk-assistant" className="max-w-full select-text text-sm leading-relaxed">
-      <Markdown text={row.text} />
+      {row.streaming ? <StreamingMarkdown text={row.text} /> : <Markdown text={row.text} />}
       {row.streaming ? <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-foreground/60 align-baseline" /> : null}
     </div>
   );
