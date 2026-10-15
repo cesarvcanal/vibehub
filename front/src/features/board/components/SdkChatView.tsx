@@ -1,4 +1,5 @@
 import * as React from "react";
+import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import {
   AlertTriangle,
@@ -14,7 +15,6 @@ import {
   Reply,
   SendHorizontal,
   ShieldAlert,
-  Waypoints,
   Wrench,
   X,
 } from "lucide-react";
@@ -35,11 +35,24 @@ import {
 } from "@/features/board/lib/peerTyping";
 import { nextIdentity, type ViewerIdentity } from "@/features/board/lib/viewerIdentity";
 import { PeerTypingIndicator } from "@/features/board/components/PeerTypingIndicator";
+import { SdkAgentCard } from "@/features/board/components/SdkAgentCard";
+import { TodoCard } from "@/features/board/components/TodoCard";
+import { SdkThreadContext, type SdkThread } from "@/features/board/components/sdkThreadContext";
+import { isAgentTool, latestTodoRowId, splitSubagentRows, type SubagentSplit } from "@/features/board/lib/sdkSubagents";
+import { WorkflowPanel } from "@/features/board/components/WorkflowPanel";
+import {
+  WorkflowFeedContext,
+  createWorkflowFeedChannel,
+  parseWorkflowFeedResponse,
+  type WorkflowFeedChannel,
+} from "@/features/board/lib/workflowFeed";
 import { ultraKeywords } from "@/features/board/lib/ultraWords";
 import { workingStage, type WorkingKind } from "@/features/board/lib/workingStage";
 import { createReconnectBackoff, type ConnectionState } from "@/features/board/lib/reconnect";
 import { reasoningTranslator, useReasoningTranslation } from "@/features/board/lib/reasoningTranslation";
 import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
+import { ToolDiffCard } from "@/features/board/components/ToolDiffCard";
+import { toolDiff } from "@/features/board/lib/toolDiff";
 import {
   buildDecisionReply,
   decisionReplies,
@@ -60,24 +73,28 @@ import {
   answerQuestion,
   applySdkEvent,
   appendUserRow,
+  coalesceDeltas,
   decidePermission,
   deliveredUserTexts,
   dropUserRow,
   currentActivity,
-  formatAgentResult,
   groupSdkRows,
+  isSdkDelta,
   liveActivityDetail,
   liveUserCids,
   markInterruptRequested,
   markUserEdited,
   parseSdkFrame,
   settleUserRow,
+  formatTurnElapsed,
   toolHeadline,
+  toolLiveLabel,
   turnHasRoomForMore,
   type SdkActivity,
   type SdkChatState,
   type SdkQuestionAnswer,
   type BackgroundTask,
+  type SdkEvent,
   type SdkRow,
 } from "@/features/board/lib/sdkChat";
 import {
@@ -131,6 +148,9 @@ export const EDIT_INTERRUPT_GRACE_MS = 15_000;
 /** How often the outbox is checked for a send whose receipt never came. */
 export const OUTBOX_TICK_MS = 2_000;
 
+/** The longest streamed tokens wait for an animation frame (a hidden tab gets none). */
+const DELTA_FLUSH_MAX_MS = 100;
+
 export interface SdkChatViewProps {
   cardId: string;
   /** Is this card the one on screen? (see ChatView — the composer must not steal the keyboard) */
@@ -172,11 +192,35 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   const [peersNow, setPeersNow] = React.useState(() => Date.now());
   /** This tab's own outbound typing signal (created below, once `sendFrame` exists). */
   const typingRef = React.useRef<TypingSignal | null>(null);
-  const [state, setState] = React.useState<SdkChatState>(INITIAL_SDK_STATE);
+  /** `commitState` é do socket (o único que conhece a ordem do stream); todo o resto usa `setState`. */
+  const [state, commitState] = React.useState<SdkChatState>(INITIAL_SDK_STATE);
+  const stateRef = React.useRef(state);
+  stateRef.current = state;
   /** As linhas de AGORA, para os callbacks que as leem sem precisar ser recriados a cada evento. */
   const rowsRef = React.useRef(state.rows);
   rowsRef.current = state.rows;
+  /**
+   * Esvazia os tokens que esperam o frame de animação (ver o efeito do websocket) e diz se havia
+   * algum. Eles já CHEGARAM: uma ação local que decidisse ou escrevesse sem eles seria julgada pela
+   * tela de um frame atrás — o Enter que vai direto pro socket com um turno acabando de abrir, a
+   * bolha que nasce antes da resposta que chegou primeiro.
+   */
+  const flushStreamRef = React.useRef<() => boolean>(() => false);
+  /** Toda escrita local na conversa entra DEPOIS dos tokens que já chegaram. */
+  const setState = React.useCallback((update: React.SetStateAction<SdkChatState>): void => {
+    flushStreamRef.current();
+    commitState(update);
+  }, []);
+  /** A conversa com os tokens já chegados dentro — o que um gesto lê para decidir. Só em handler. */
+  const readSettledState = React.useCallback((): SdkChatState => {
+    flushSync(() => {
+      flushStreamRef.current();
+    });
+    return stateRef.current;
+  }, []);
   const socketRef = React.useRef<WebSocket | null>(null);
+  /** Onde a resposta de um `workflow_feed` é entregue (o painel do workflow escuta; ver lib/workflowFeed.ts). */
+  const workflowFeedRef = React.useRef<WorkflowFeedChannel | null>(null);
   const statusRef = React.useRef<SdkChatViewProps["onStatus"]>(onStatus);
   statusRef.current = onStatus;
   const [connected, setConnected] = React.useState(false);
@@ -228,7 +272,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   /* ------------------------------------------------------------- websocket */
 
   React.useEffect(() => {
-    setState(INITIAL_SDK_STATE);
+    commitState(INITIAL_SDK_STATE);
     setPeers({});
     // The old socket's close no longer reports (it is disposed): this connection starts offline.
     setConnected(false);
@@ -248,6 +292,43 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     const backoff = createReconnectBackoff(Math.random);
     let disposed = false;
     const setStatus = (s: ConnectionState): void => statusRef.current?.(s);
+    /**
+     * Os TOKENS que chegaram neste frame de animação. O driver manda um frame de socket por token;
+     * eles entram de uma vez, no próximo frame, para que a conversa inteira renderize uma vez por
+     * frame e não uma vez por token. O timer cobre a aba em segundo plano, onde o rAF não dispara.
+     *
+     * A queda do fio não mexe aqui: o timer desta espera nasce antes do timer da reconexão e é mais
+     * curto (`DELTA_FLUSH_MAX_MS` < `RECONNECT_BASE_MS`), então dispara primeiro — o `onopen` da
+     * conexão seguinte sempre encontra o buffer vazio. Só a troca de card/conta (o cleanup) DESCARTA.
+     */
+    let pendingDeltas: SdkEvent[] = [];
+    let deltaFrame: number | null = null;
+    let deltaTimer: ReturnType<typeof setTimeout> | null = null;
+    const cancelDeltaFlush = (): void => {
+      if (deltaFrame !== null) cancelAnimationFrame(deltaFrame);
+      if (deltaTimer !== null) clearTimeout(deltaTimer);
+      deltaFrame = null;
+      deltaTimer = null;
+    };
+    const flushDeltas = (): boolean => {
+      cancelDeltaFlush();
+      if (pendingDeltas.length === 0) return false;
+      const batch = coalesceDeltas(pendingDeltas);
+      pendingDeltas = [];
+      commitState((prev) => batch.reduce(applySdkEvent, prev));
+      return true;
+    };
+    flushStreamRef.current = flushDeltas;
+    const discardDeltas = (): void => {
+      cancelDeltaFlush();
+      pendingDeltas = [];
+    };
+    const queueDelta = (event: SdkEvent): void => {
+      pendingDeltas.push(event);
+      if (deltaTimer !== null) return;
+      if (typeof requestAnimationFrame === "function") deltaFrame = requestAnimationFrame(flushDeltas);
+      deltaTimer = setTimeout(flushDeltas, DELTA_FLUSH_MAX_MS);
+    };
 
     const connect = (): void => {
       if (disposed || socket || typeof WebSocket === "undefined") return;
@@ -268,7 +349,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         // EVERY connect replays the card's history from the server log (see back/services/sdk/
         // history.ts), so the slate is wiped here — otherwise a reconnect would draw the whole
         // conversation twice. What was on screen comes right back, from disk instead of memory.
-        setState(INITIAL_SDK_STATE);
+        commitState(INITIAL_SDK_STATE);
         // The replay tells the story again from disk (the interrupt note included) — a stale
         // "continuar?" offer from before the drop would be guessing about a turn we no longer see.
       };
@@ -287,6 +368,12 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
           }
           return;
         }
+        // O feed de um subagente que ESTA aba pediu: vai ao painel, nunca ao reducer nem às linhas.
+        if (parsed.type === "workflow_feed") {
+          const feed = parseWorkflowFeedResponse(parsed);
+          if (feed) workflowFeedRef.current?.deliver(feed);
+          return;
+        }
         // The RECEIPT: `user_ack` means the back gravou — this browser no longer needs its copy.
         // `user_nack` means it refused, so the copy STAYS (the bubble now says "não entregue").
         if (parsed.type === "user_ack" && parsed.cid) {
@@ -300,7 +387,13 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
           const cid = parsed.cid;
           setOutbox((prev) => markUndelivered(prev, [cid]));
         }
-        setState((prev) => applySdkEvent(prev, parsed));
+        if (isSdkDelta(parsed)) {
+          queueDelta(parsed);
+          return;
+        }
+        // Qualquer outro evento entra DEPOIS dos tokens que chegaram antes dele.
+        flushDeltas();
+        commitState((prev) => applySdkEvent(prev, parsed));
       };
       next.onerror = () => {
         /* onclose always follows */
@@ -333,6 +426,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     return () => {
       disposed = true;
       if (retry) clearTimeout(retry);
+      discardDeltas();
       backoff.dispose();
       try { socket?.close(); } catch { /* already closing */ }
       socketRef.current = null;
@@ -372,6 +466,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     }
     socket.send(JSON.stringify(frame));
   }, []);
+
+  const workflowFeed = React.useMemo(() => createWorkflowFeedChannel(sendFrame), [sendFrame]);
+  workflowFeedRef.current = workflowFeed;
 
   /**
    * "Está digitando" para as outras abas do card: um frame na primeira tecla, um a cada poucos
@@ -715,6 +812,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     // fila para entregá-la nele: ela saía da espera e virava a bolha condenada que a fila existe
     // para evitar. As duas pontas (o que entra na fila, o que sai dela) leem a MESMA verdade.
     if (!connected || socketRef.current?.readyState !== WebSocket.OPEN) return;
+    // Uma frase que só está no buffer de tokens também é frase pela metade: esvaziá-lo muda o
+    // `state`, e este efeito roda de novo já sabendo dela.
+    if (flushStreamRef.current()) return;
     if (!state.ready) return;
     // O RESPIRO, não o fim do turno (ver `turnHasRoomForMore`): um turno de quinze minutos segurava
     // por quinze minutos um "para, tá errado". Respiro é não haver uma FRASE PELA METADE — uma
@@ -772,10 +872,11 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       setReplyTo(null);
       return;
     }
+    const chat = readSettledState();
     if (editing) {
       const { original } = editing;
       const editCid = newCid();
-      if (state.turnActive) {
+      if (chat.turnActive) {
         // AQUI é onde o turno para — no envio da correção, não no clique do lápis (ver `beginEdit`).
         // A decisão foi tomada: a mensagem que está sendo respondida foi superada, e deixar o turno
         // correr seria gastar raciocínio numa pergunta que já não existe. A correção só VAI quando
@@ -817,7 +918,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     // da fila só anda quando o turno fecha, então enfileirar com uma pergunta de pé — inclusive com
     // o fio fora do ar — seria esperar por um fim de turno que só a própria mensagem pode causar.
     const wireUp = connected && socketRef.current?.readyState === WebSocket.OPEN;
-    const waits = !wireUp || state.turnActive || state.awaiting || pendingEdit;
+    const waits = !wireUp || chat.turnActive || chat.awaiting || pendingEdit;
     if (waits && pendingRef.current.length === 0) {
       setQueue((prev) => enqueue(prev, { id: newQueueId(), text, at: Date.now(), from: selfOriginRef.current }));
       return;
@@ -904,9 +1005,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     // turn is too big a consequence for a key you may have pressed to dismiss something. The pencil
     // is the explicit way in — and even it only opens the field: the turn stops when the correction
     // is SENT (see `beginEdit` and `send`).
-    if (state.turnActive) return;
-    for (let i = state.rows.length - 1; i >= 0; i -= 1) {
-      const row = state.rows[i]!;
+    const chat = readSettledState();
+    if (chat.turnActive) return;
+    for (let i = chat.rows.length - 1; i >= 0; i -= 1) {
+      const row = chat.rows[i]!;
       // A decision answer is skipped for the same reason its pencil is hidden (see the bubble).
       if (row.kind === "user" && row.edited !== true && parseDecisionReply(row.text) === null
         && originRole(row.from, viewer) === "self") {
@@ -914,7 +1016,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         return;
       }
     }
-  }, [state.rows, state.turnActive, viewer, beginEdit, beginQueueEdit]);
+  }, [readSettledState, viewer, beginEdit, beginQueueEdit]);
 
   /* ------------------------------------------------------------ scrolling */
 
@@ -967,7 +1069,22 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     toast.message(translate("sdk.replyGone"));
   }, [pending, replyTo]);
 
-  const rendered = React.useMemo(() => groupSdkRows(state.rows), [state.rows]);
+  // O que é de um SUBAGENTE sai do fio principal e vai para debaixo do card que o disparou.
+  // O mapa anterior entra para ser REUSADO quando nenhum subagente mudou: assim um token da resposta
+  // do principal não troca o valor do contexto nem redesenha os cards de subagente.
+  const subagentRowsRef = React.useRef<SubagentSplit["children"] | undefined>(undefined);
+  const split = React.useMemo(() => {
+    const next = splitSubagentRows(state.rows, subagentRowsRef.current);
+    subagentRowsRef.current = next.children;
+    return next;
+  }, [state.rows]);
+  const rendered = React.useMemo(() => groupSdkRows(split.main), [split.main]);
+  const latestTodoId = React.useMemo(() => latestTodoRowId(split.main), [split.main]);
+  const renderThreadRow = React.useCallback((row: SdkRow) => <SdkChatRow row={row} />, []);
+  const thread = React.useMemo<SdkThread>(
+    () => ({ subagentRows: split.children, latestTodoId, renderRow: renderThreadRow }),
+    [split.children, latestTodoId, renderThreadRow],
+  );
   const empty = state.rows.length === 0;
 
   /* -------------------------------------------------- what is running, right now */
@@ -1000,6 +1117,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   }, [working]);
 
   return (
+    <WorkflowFeedContext.Provider value={workflowFeed}>
     <div ref={rootRef} className={cn("flex min-h-0 min-w-0 flex-1 flex-col", className)}>
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <div
@@ -1042,6 +1160,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
           </div>
         ) : null}
 
+        <SdkThreadContext.Provider value={thread}>
         {rendered.map((entry) => (
           <div
             key={entry.id}
@@ -1069,6 +1188,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
             )}
           </div>
         ))}
+        </SdkThreadContext.Provider>
 
         {/* The STATUS LADDER — one indicator, three rungs, only while the wire is UP (a
             disconnected view cannot vouch for anything; the reconnect relights it). The instant a
@@ -1173,6 +1293,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         ) : null}
       </div>
     </div>
+    </WorkflowFeedContext.Provider>
   );
 }
 
@@ -1383,144 +1504,6 @@ function PendingTray({
 }
 
 /** A folded run of tool calls — same reading rules as the transcript chat's fold. */
-
-/**
- * O PAINEL DA FROTA — o workflow deixando de ser invisível.
- *
- * A tool `Workflow` devolve na hora e trabalha em segundo plano: o turno acaba, o modelo diz "te
- * trago quando voltar" e, até agora, a tela não dizia mais nada — por minutos. Quem estava do outro
- * lado lia aquilo como "ele terminou" (produção, 2026-10-02). Este cartão é a frota em movimento:
- * quantos subagentes já responderam, quais ainda correm, o que cada um devolveu, e o plano que o
- * script declarou. Enquanto roda ele fica ABERTO — é a resposta à pergunta que a pessoa está
- * fazendo à tela naquele instante; terminado, fecha e vira uma linha de resumo que não ocupa a
- * conversa. O conteúdo vem do back lendo o diário da rodada (back/src/services/sdk/workflow.ts).
- */
-function SdkWorkflowCard({ row }: { row: Extract<SdkRow, { kind: "workflow" }> }) {
-  const t = useT();
-  const [open, setOpen] = React.useState(!row.finished);
-  // Um subagente por vez aberto: a lista é o mapa, o resultado é o detalhe que se vai buscar nela.
-  const [openAgent, setOpenAgent] = React.useState<string | null>(null);
-  // Terminou: o cartão se recolhe sozinho. Só uma vez — reabrir e continuar lendo é direito de quem
-  // está lendo, e um efeito que "corrige" isso a cada quadro fecharia o painel na cara da pessoa.
-  const collapsed = React.useRef(false);
-  React.useEffect(() => {
-    if (row.finished && !collapsed.current) {
-      collapsed.current = true;
-      setOpen(false);
-    }
-  }, [row.finished]);
-
-  // A contagem vem do diário inteiro (o back a manda pronta); a lista desenhada tem teto.
-  const done = row.done;
-  const total = row.total;
-  const percent = total > 0 ? Math.round((done / total) * 100) : 0;
-  const title = row.name || t("sdk.workflowFallbackName");
-
-  return (
-    <div
-      data-testid="sdk-workflow"
-      data-run={row.runId}
-      data-finished={row.finished || undefined}
-      className="rounded-md border border-border/70 bg-muted/40 px-3 py-2 text-xs"
-    >
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full min-w-0 items-center gap-1.5 text-left"
-      >
-        <ChevronRight className={cn("h-3 w-3 shrink-0 transition-transform", open && "rotate-90")} />
-        {row.finished ? (
-          <Waypoints className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
-        ) : (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
-        )}
-        <span className="min-w-0 flex-1 truncate font-medium text-foreground/90">{title}</span>
-        <span data-testid="sdk-workflow-count" className="shrink-0 tabular-nums text-muted-foreground">
-          {t("sdk.workflowAgents", { done, total })}
-        </span>
-        <span className="shrink-0 text-muted-foreground/80">
-          {row.finished ? t("sdk.workflowDone") : t("sdk.workflowRunning")}
-        </span>
-      </button>
-
-      {/* A barra: a mesma informação do contador, legível sem ler. Some quando não há frota ainda. */}
-      {total > 0 ? (
-        <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-border/60">
-          <div
-            data-testid="sdk-workflow-bar"
-            className={cn("h-full rounded-full transition-all", row.finished ? "bg-emerald-500" : "bg-primary")}
-            style={{ width: `${percent}%` }}
-          />
-        </div>
-      ) : null}
-
-      {open ? (
-        <div className="mt-2 space-y-2">
-          {row.description ? <p className="text-muted-foreground">{row.description}</p> : null}
-          {row.phases?.length ? (
-            <div data-testid="sdk-workflow-phases" className="flex flex-wrap items-center gap-1 text-[11px]">
-              <span className="text-muted-foreground/70">{t("sdk.workflowPlan")}</span>
-              {row.phases.map((phase, i) => (
-                <span
-                  key={`${phase.title}-${i}`}
-                  title={phase.detail}
-                  className="rounded border border-border/70 bg-background/60 px-1.5 py-px text-muted-foreground"
-                >
-                  {phase.title}
-                </span>
-              ))}
-            </div>
-          ) : null}
-
-          {total === 0 ? (
-            <p className="text-muted-foreground/80">{t("sdk.workflowStarting")}</p>
-          ) : (
-            <ul className="space-y-0.5">
-              {row.agents.map((agent, i) => {
-                const showing = openAgent === agent.id;
-                return (
-                  <li key={agent.id}>
-                    <button
-                      type="button"
-                      data-testid="sdk-workflow-agent"
-                      data-status={agent.status}
-                      aria-expanded={showing}
-                      onClick={() => setOpenAgent(showing ? null : agent.id)}
-                      className="flex w-full min-w-0 items-start gap-1.5 rounded px-1 py-0.5 text-left hover:bg-muted/60"
-                    >
-                      <span
-                        className={cn(
-                          "mt-1 h-1.5 w-1.5 shrink-0 rounded-full",
-                          agent.status === "done" ? "bg-emerald-500" : "animate-pulse bg-primary",
-                        )}
-                      />
-                      <span className="shrink-0 tabular-nums text-muted-foreground/60">{i + 1}</span>
-                      <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                        {agent.label || t("sdk.workflowAgentUnnamed")}
-                      </span>
-                    </button>
-                    {showing ? (
-                      <div
-                        data-testid="sdk-workflow-result"
-                        className="ml-4 mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded border border-border/60 bg-background/70 px-2 py-1 text-[11px] text-muted-foreground"
-                      >
-                        {agent.result
-                          ? formatAgentResult(agent.result)
-                          : t(agent.status === "done" ? "sdk.workflowNoResult" : "sdk.workflowAgentWorking")}
-                      </div>
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function SdkToolGroup({ rows }: { rows: SdkRow[] }) {
   const t = useT();
   const [open, setOpen] = React.useState(false);
@@ -1645,15 +1628,6 @@ export function workingKindOf(
 }
 
 /**
- * The turn's elapsed time, the way the CLI writes it: `4s`, `1m 24s`. Not the composer's recording
- * clock (`0:42`, TerminalComposer) — a different dial, hence a different name. PURE.
- */
-function formatTurnElapsed(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds));
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
-}
-
-/**
  * THE ACTIVITY BAR — pinned to the top of the conversation while something is running.
  *
  * The problem it solves is the one the terminal does not have: in the TUI the status line is always
@@ -1736,12 +1710,18 @@ function SdkToolRow({ row }: { row: Extract<SdkRow, { kind: "tool" }> }) {
   const t = useT();
   const headline = toolHeadline(row.name, row.input);
   const detail = headline.background ? t("sdk.toolBackground") : headline.detail;
+  // PROVISÓRIA: o modelo ainda escreve o input — a linha diz o quê e quanto ("Escrevendo x.ts… 12 KB").
+  const pending = row.pending === true;
   return (
-    <div data-testid="sdk-tool" data-tool={row.name} className="min-w-0 pl-0.5 text-xs">
+    <div data-testid="sdk-tool" data-tool={row.name} data-pending={pending || undefined} className="min-w-0 pl-0.5 text-xs">
       <div className="flex items-baseline gap-1.5 text-muted-foreground">
-        <Wrench className="h-3 w-3 shrink-0 translate-y-0.5 opacity-70" />
+        {pending ? (
+          <Loader2 className="h-3 w-3 shrink-0 translate-y-0.5 animate-spin opacity-70" />
+        ) : (
+          <Wrench className="h-3 w-3 shrink-0 translate-y-0.5 opacity-70" />
+        )}
         <span data-testid="sdk-tool-title" className="min-w-0 truncate font-medium text-foreground/90">
-          {headline.title}
+          {pending ? toolLiveLabel(row) : headline.title}
         </span>
       </div>
       {detail ? (
@@ -1817,6 +1797,40 @@ function SdkThinkingRow({ text, streaming }: { text: string; streaming: boolean 
   );
 }
 
+/** O TodoWrite da conversa: aberto só quando é o mais recente (ver `TodoCard`). */
+function SdkTodoRow({ row }: { row: Extract<SdkRow, { kind: "tool" }> }) {
+  const { latestTodoId } = React.useContext(SdkThreadContext);
+  return <TodoCard row={row} latest={latestTodoId === row.id} />;
+}
+
+/** How often the answer still streaming is re-parsed as markdown. */
+const STREAMING_MARKDOWN_MS = 100;
+
+/**
+ * The answer still streaming. `Markdown` re-parses the WHOLE text on every change, so a growing
+ * answer is parsed at most once per `STREAMING_MARKDOWN_MS`; the newest text lands when the window
+ * closes even if no token follows, and the settled row goes back to a plain `Markdown`.
+ */
+function StreamingMarkdown({ text }: { text: string }) {
+  const [shown, setShown] = React.useState(text);
+  const shownAtRef = React.useRef(Date.now());
+  React.useEffect(() => {
+    if (text === shown) return;
+    const show = (): void => {
+      shownAtRef.current = Date.now();
+      setShown(text);
+    };
+    const wait = shownAtRef.current + STREAMING_MARKDOWN_MS - Date.now();
+    if (wait <= 0) {
+      show();
+      return;
+    }
+    const timer = setTimeout(show, wait);
+    return () => clearTimeout(timer);
+  }, [text, shown]);
+  return <Markdown text={shown} />;
+}
+
 /**
  * One row of the conversation. MEMOISED: a streamed token changes only the last row, and every
  * other one — same `row` object (the reducer keeps untouched rows by reference), same primitives,
@@ -1852,17 +1866,23 @@ const SdkChatRow = React.memo(function SdkChatRow({
   const t = useT();
   // Whose screen this is — their own messages render unlabelled, everyone else's carry the sender.
   const viewer = useAuth().user?.username;
+  // Antes dos returns (regra dos hooks). Uma vez por linha: o memo da linha e o `row` estável seguram.
+  const diff = React.useMemo(() => (row.kind === "tool" ? toolDiff(row.name, row.input) : null), [row]);
 
   if (row.kind === "question") {
     return <SdkQuestionCard row={row} onAnswer={onAnswer} />;
   }
 
   if (row.kind === "tool") {
-    return <SdkToolRow row={row} />;
+    // Sem input ainda, o card do subagente ou da lista sairia vazio: a provisória é a linha viva.
+    if (row.pending) return <SdkToolRow row={row} />;
+    if (isAgentTool(row.name)) return <SdkAgentCard row={row} />;
+    if (row.name === "TodoWrite") return <SdkTodoRow row={row} />;
+    return diff ? <ToolDiffCard row={row} diff={diff} /> : <SdkToolRow row={row} />;
   }
 
   if (row.kind === "workflow") {
-    return <SdkWorkflowCard row={row} />;
+    return <WorkflowPanel row={row} />;
   }
 
   if (row.kind === "permission") {
@@ -2114,7 +2134,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
   }
   return (
     <div data-testid="sdk-assistant" className="max-w-full select-text text-sm leading-relaxed">
-      <Markdown text={row.text} />
+      {row.streaming ? <StreamingMarkdown text={row.text} /> : <Markdown text={row.text} />}
       {row.streaming ? <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-foreground/60 align-baseline" /> : null}
     </div>
   );

@@ -525,7 +525,9 @@ describe("sdk-driver.mjs — editar rebobina, mas só quando é seguro", () => {
   });
 
   it("o ponto de volta é o uuid do ASSISTANT — o do result é recusado pelo CLI", () => {
-    expect(source).toContain("if (msg.uuid) lastAssistantUuid = msg.uuid;");
+    // Só a mensagem do PRINCIPAL (`parent === null`): a de um subagente mora numa sidechain — o
+    // comportamento está coberto, com o driver rodando, em sdk-driver.test.ts ("subagentes").
+    expect(source).toContain("if (msg.uuid && parent === null) lastAssistantUuid = msg.uuid;");
     // e ele é gravado no ramo do assistant, não no do result
     const assistantBranch = source.slice(source.indexOf('} else if (msg.type === "assistant")'), source.indexOf('} else if (msg.type === "result")'));
     expect(assistantBranch).toContain("lastAssistantUuid");
@@ -1028,5 +1030,92 @@ describe("sdk-driver.mjs — o Opus bloqueava toda mensagem (card #3684)", () =>
   it("o catch de runStream passa o texto humano pelo tradutor antes de emitir — não substitui, encadeia", () => {
     const run = source.slice(source.indexOf("async function runStream()"), source.indexOf("async function endStream()"));
     expect(run).toContain('emit({ type: "error", message: humanizeSafeguardError(detail) });');
+  });
+});
+
+/**
+ * A IA "ENGASGADA" NO WRITE GRANDE. Enquanto o modelo gerava o input de um Write/Edit (dezenas de
+ * segundos num arquivo de 400 linhas), o driver descartava o `content_block_start` do tool_use e
+ * todos os `input_json_delta`: a tela ficava só em "Trabalhando…" até o input inteiro chegar. O
+ * rastreador transforma esse stream em dois sinais efêmeros — a ferramenta COMEÇOU, e quanto do
+ * input já saiu (com o arquivo, assim que ele aparece no JSON parcial) — com o relógio injetado,
+ * para o throttle ser provado sem depender do tempo da máquina.
+ */
+describe("sdk-driver.mjs — o input de uma ferramenta sendo gerado", () => {
+  const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
+
+  type TrackerEvent = { type: string } & Record<string, unknown>;
+  interface Tracker { see(ev: unknown, now: number): TrackerEvent[]; done(id: string): void }
+
+  function cut<T>(name: string): T {
+    const from = source.indexOf(`function ${name}(`);
+    expect(from).toBeGreaterThan(0);
+    const body = source.slice(from, source.indexOf("\n}", from) + 2);
+    return new Function(`${body}\nreturn ${name};`)() as T;
+  }
+  const createToolInputTracker = cut<(throttleMs: number) => Tracker>("createToolInputTracker");
+
+  const start = (index: number, id: string, name: string) =>
+    ({ type: "content_block_start", index, content_block: { type: "tool_use", id, name, input: {} } });
+  const delta = (index: number, partial: string) =>
+    ({ type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: partial } });
+
+  it("anuncia o começo do tool_use com id e nome, na hora", () => {
+    const tracker = createToolInputTracker(500);
+    expect(tracker.see(start(1, "toolu_1", "Write"), 0)).toEqual([{ type: "tool_use_start", id: "toolu_1", name: "Write" }]);
+  });
+
+  it("conta os bytes do input por bloco (o delta traz só o índice) e acha o arquivo no JSON parcial", () => {
+    const tracker = createToolInputTracker(500);
+    tracker.see(start(1, "toolu_1", "Write"), 0);
+    expect(tracker.see(delta(1, '{"file_'), 0)).toEqual([{ type: "tool_input_progress", id: "toolu_1", bytes: 7 }]);
+    // O caminho fecha neste pedaço: sai na hora, mesmo dentro da janela do throttle — é ele que
+    // vira "Escrevendo sdkChat.ts…". O "é" do fim conta 2 bytes: é tamanho em UTF-8, não em caracteres.
+    expect(tracker.see(delta(1, 'path": "/w/src/sdkChat.ts", "content": "é'), 10)).toEqual([
+      { type: "tool_input_progress", id: "toolu_1", bytes: 7 + 42, filePath: "/w/src/sdkChat.ts" },
+    ]);
+  });
+
+  it("throttle: no máximo um progresso por janela, por bloco", () => {
+    const tracker = createToolInputTracker(500);
+    tracker.see(start(0, "toolu_1", "Write"), 0);
+    const out: TrackerEvent[] = [];
+    for (let now = 0; now < 1200; now += 50) out.push(...tracker.see(delta(0, "xx"), now));
+    // 0, 500 e 1000: três janelas, três progressos — os outros 21 deltas só contam bytes.
+    expect(out.map((e) => e.bytes)).toEqual([2, 22, 42]);
+  });
+
+  it("cada bloco tem o seu throttle e o seu id; um índice desconhecido não vira progresso de ninguém", () => {
+    const tracker = createToolInputTracker(500);
+    tracker.see(start(1, "toolu_a", "Edit"), 0);
+    tracker.see(start(2, "toolu_b", "Bash"), 0);
+    expect(tracker.see(delta(1, "{}"), 0)).toEqual([{ type: "tool_input_progress", id: "toolu_a", bytes: 2 }]);
+    expect(tracker.see(delta(2, "{}"), 0)).toEqual([{ type: "tool_input_progress", id: "toolu_b", bytes: 2 }]);
+    expect(tracker.see(delta(7, "{}"), 0)).toEqual([]);
+  });
+
+  it("nunca depois do tool_use completo: `done` esquece o bloco", () => {
+    const tracker = createToolInputTracker(500);
+    tracker.see(start(1, "toolu_1", "Write"), 0);
+    tracker.see(delta(1, "{"), 0);
+    tracker.done("toolu_1");
+    expect(tracker.see(delta(1, "}"), 10_000)).toEqual([]);
+  });
+
+  it("um índice reaproveitado na mensagem seguinte não cai no id da anterior", () => {
+    const tracker = createToolInputTracker(500);
+    tracker.see(start(1, "toolu_old", "Write"), 0);
+    tracker.see({ type: "content_block_stop", index: 1 }, 0);
+    expect(tracker.see(delta(1, "{}"), 10_000)).toEqual([]);
+    tracker.see(start(1, "toolu_x", "Write"), 0);
+    tracker.see({ type: "message_start", message: {} }, 0);
+    expect(tracker.see(delta(1, "{}"), 10_000)).toEqual([]);
+  });
+
+  it("texto, raciocínio e blocos que não são tool_use passam sem gerar nada", () => {
+    const tracker = createToolInputTracker(500);
+    expect(tracker.see({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, 0)).toEqual([]);
+    expect(tracker.see({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "oi" } }, 0)).toEqual([]);
+    expect(tracker.see(undefined, 0)).toEqual([]);
   });
 });

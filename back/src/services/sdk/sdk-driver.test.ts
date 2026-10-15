@@ -95,6 +95,48 @@ export function query({ prompt, options }) {
         yield { type: "result", subtype: "success", session_id: SESSION, result: "ok" };
         continue;
       }
+      if (text === "sub") {
+        // UM SUBAGENTE (Agent/Task) TRABALHANDO: o CLI repassa o stream e as mensagens dele com
+        // parent_tool_use_id = o id da chamada que o disparou. A ÚLTIMA mensagem antes do result é
+        // dele (uuid de sidechain) — o ponto de volta de um rebobinar não pode ser ela.
+        yield { type: "assistant", uuid: "a-sub", parent_tool_use_id: null, session_id: SESSION, message: { content: [
+          { type: "tool_use", id: "task1", name: "Agent", input: { description: "explora", subagent_type: "Explore" } },
+        ] } };
+        yield { type: "stream_event", parent_tool_use_id: "task1", session_id: SESSION, event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "SUBTHINK" } } };
+        yield { type: "stream_event", parent_tool_use_id: "task1", session_id: SESSION, event: { type: "content_block_delta", delta: { type: "text_delta", text: "SUBDELTA" } } };
+        yield { type: "assistant", uuid: "a-sub-child", parent_tool_use_id: "task1", session_id: SESSION, message: { content: [
+          { type: "thinking", thinking: "SUBTHINKBLOCK" },
+          { type: "text", text: "achei o arquivo" },
+          { type: "tool_use", id: "c1", name: "Read", input: { file_path: "/w/sdkChat.ts" } },
+        ] } };
+        yield { type: "stream_event", parent_tool_use_id: null, session_id: SESSION, event: { type: "content_block_delta", delta: { type: "text_delta", text: "MAINDELTA" } } };
+        yield { type: "system", subtype: "background_tasks_changed", parent_tool_use_id: "task1", tasks: [], session_id: SESSION, uuid: "u-sub" };
+        yield { type: "result", subtype: "success", session_id: SESSION, result: "ok" };
+        continue;
+      }
+      if (text === "toolgen") {
+        // UM WRITE GRANDE SENDO GERADO (formas do SDK 0.3.246, includePartialMessages): o bloco
+        // tool_use abre, o input escorre em input_json_delta, e o turno PARA no gate — o tempo em
+        // que o modelo ainda está escrevendo o arquivo. Um subagente faz o mesmo ao lado.
+        const ev = (event, parent = null) => ({ type: "stream_event", parent_tool_use_id: parent, session_id: SESSION, event });
+        yield ev({ type: "message_start", message: {} });
+        yield ev({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_1", name: "Write", input: {} } });
+        yield ev({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "sub_1", name: "Write", input: {} } }, "task9");
+        yield ev({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"file_path": "/w/sub.ts"' } }, "task9");
+        yield ev({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"file_path": "/w/sdkChat.ts", "content": "' } });
+        yield ev({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: "x".repeat(4000) } });
+        mark("toolgen:generating");
+        while (!existsSync(join(options.cwd, "release-tool"))) await sleep(20);
+        yield ev({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '"}' } });
+        yield ev({ type: "content_block_stop", index: 1 });
+        yield { type: "assistant", uuid: "a-toolgen", parent_tool_use_id: null, session_id: SESSION, message: { content: [
+          { type: "tool_use", id: "toolu_1", name: "Write", input: { file_path: "/w/sdkChat.ts", content: "x".repeat(4000) } },
+        ] } };
+        yield { type: "tool_progress", tool_use_id: "toolu_1", tool_name: "Write", parent_tool_use_id: null, elapsed_time_seconds: 3, uuid: "u-tp1", session_id: SESSION };
+        yield { type: "tool_progress", tool_use_id: "sub_1", tool_name: "Write", parent_tool_use_id: "task9", elapsed_time_seconds: 5, uuid: "u-tp2", session_id: SESSION };
+        yield { type: "result", subtype: "success", session_id: SESSION, result: "ok" };
+        continue;
+      }
       if (text.includes("slow")) {
         mark("slow:running");
         while (!existsSync(join(options.cwd, "release-slow"))) await sleep(20);
@@ -147,6 +189,7 @@ beforeAll(async () => {
 afterEach(async () => {
   for (const child of children.splice(0)) child.kill();
   await rm(join(sandbox, "release-slow"), { force: true });
+  await rm(join(sandbox, "release-tool"), { force: true });
 });
 
 afterAll(async () => {
@@ -314,6 +357,84 @@ describe("sdk-driver.mjs — tarefas em segundo plano", () => {
     const off = await driver.waitFor((e) => e.type === "background_tasks" && Array.isArray(e.tasks) && e.tasks.length === 0);
     expect(off.tasks).toEqual([]);
   });
+});
+
+/**
+ * O SUBAGENTE NÃO É O AGENTE PRINCIPAL. O driver ignorava `parent_tool_use_id`: o que um Agent/Task
+ * fazia chegava na tela como se fosse o principal, e os deltas dele se misturavam à linha de
+ * streaming do principal — a IA "parecia perdida".
+ */
+describe("sdk-driver.mjs — subagentes", () => {
+  it("marca tool_use e assistant_text de subagente com parentToolUseId e não repassa os deltas dele", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "sub" });
+    await driver.waitFor((e) => e.type === "result", from);
+    const after = driver.events.slice(from);
+
+    const tools = after.filter((e) => e.type === "tool_use");
+    expect(tools).toEqual([
+      { type: "tool_use", id: "task1", name: "Agent", input: { description: "explora", subagent_type: "Explore" } },
+      { type: "tool_use", id: "c1", name: "Read", input: { file_path: "/w/sdkChat.ts" }, parentToolUseId: "task1" },
+    ]);
+    expect(after.filter((e) => e.type === "assistant_text")).toEqual([
+      { type: "assistant_text", text: "achei o arquivo", parentToolUseId: "task1" },
+    ]);
+    // Os deltas do subagente não saem; os do principal, sim.
+    expect(after.filter((e) => e.type === "assistant_delta").map((e) => e.text)).toEqual(["MAINDELTA"]);
+    expect(after.filter((e) => e.type === "thinking_delta" || e.type === "thinking")).toEqual([]);
+    // Mensagens de SESSÃO (system) continuam passando, mesmo vindas de dentro do subagente.
+    expect(after.some((e) => e.type === "background_tasks")).toBe(true);
+  });
+
+  it("o ponto de volta de um rebobinar é a última mensagem do PRINCIPAL, nunca a de um subagente", async () => {
+    const driver = await driverAfterOneTurn();
+    const subFrom = driver.events.length;
+    driver.send({ type: "user", text: "sub" });
+    await driver.waitFor((e) => e.type === "result", subFrom);
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "next" });
+    await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:next", from);
+    await driver.waitFor((e) => e.type === "result", from);
+    driver.send({ type: "edit_user", original: "next", text: "next fixed", fallback: "fallback" });
+    const rewound = await driver.waitFor((e) => e.type === "rewound", from);
+    expect(rewound.ok).toBe(true);
+    expect(rewound.uuid).toBe("a-sub");
+  }, 30_000);
+});
+
+/**
+ * O CHAT MUDO NO WRITE GRANDE. O `tool_use` só saía quando o modelo terminava de gerar o input
+ * inteiro: num arquivo de 400 linhas, dezenas de segundos de "Trabalhando…" sem um frame. Agora o
+ * começo da ferramenta e o tamanho do input já gerado saem ENQUANTO o modelo escreve — e só do
+ * agente principal, como os deltas de texto.
+ */
+describe("sdk-driver.mjs — ferramenta sendo gerada", () => {
+  it("anuncia o tool_use e o progresso do input ANTES de o input inteiro chegar, só do principal", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "toolgen" });
+    await driver.waitMark("toolgen:generating");
+    // O gate segura o resto do input: o que chegou até aqui saiu durante a geração.
+    const started = await driver.waitFor((e) => e.type === "tool_use_start", from);
+    expect(started).toEqual({ type: "tool_use_start", id: "toolu_1", name: "Write" });
+    const progress = await driver.waitFor((e) => e.type === "tool_input_progress" && e.filePath !== undefined, from);
+    expect(progress).toMatchObject({ type: "tool_input_progress", id: "toolu_1", filePath: "/w/sdkChat.ts" });
+    expect(progress.bytes).toBeGreaterThan(0);
+    expect(driver.events.slice(from).some((e) => e.type === "tool_use")).toBe(false);
+
+    await writeFile(join(sandbox, "release-tool"), "");
+    await driver.waitFor((e) => e.type === "result", from);
+    const after = driver.events.slice(from);
+    // Nada do subagente: nem o começo, nem o progresso do input, nem o relógio da ferramenta.
+    expect(after.filter((e) => e.type === "tool_use_start").map((e) => e.id)).toEqual(["toolu_1"]);
+    expect(after.filter((e) => e.type === "tool_input_progress").every((e) => e.id === "toolu_1")).toBe(true);
+    expect(after.filter((e) => e.type === "tool_progress")).toEqual([{ type: "tool_progress", id: "toolu_1", elapsedSeconds: 3 }]);
+    // O começo vem antes do tool_use completo, e nenhum progresso de input vem depois dele.
+    const full = after.findIndex((e) => e.type === "tool_use");
+    expect(after.findIndex((e) => e.type === "tool_use_start")).toBeLessThan(full);
+    expect(after.slice(full).some((e) => e.type === "tool_input_progress")).toBe(false);
+  }, 30_000);
 });
 
 describe("sdk-driver.mjs — /clear", () => {

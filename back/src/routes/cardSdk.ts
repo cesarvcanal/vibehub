@@ -27,7 +27,7 @@ import {
 } from "../services/sdk/transcript.js";
 import { acquireTranscriptMirror } from "../services/sdk/mirror.js";
 import { parseSdkClientFrame, parseTypingFrame } from "../services/sdk/protocol.js";
-import { transcriptDirFor } from "../services/maestro/maestro.js";
+import { transcriptDirFor } from "../services/maestro/cardSession.js";
 import { effectiveAccountSlug } from "../services/board/registry.js";
 import { config } from "../config/env.js";
 import { hostExecutor } from "../runtime/host.js";
@@ -73,6 +73,10 @@ import { logger } from "../utils/logger.js";
  * signal: relayed to the card's OTHER sockets as `peer_typing` with this socket's author, and
  * nothing else — never the driver, never the history (see `attachSocket` in services/sdk/manager.ts);
  * one buffered during the setup below is stale by the attach and is dropped.
+ * `{ "type": "workflow_feed", "runId": string, "agentId": string }` asks for ONE workflow subagent's
+ * recent steps (the panel opened that agent): the manager runs the feed probe in the runner and
+ * answers ONLY this socket with `{ "type": "workflow_feed", "runId", "agentId", "items": [...],
+ * "error"?: "invalid-id"|"no-session"|"probe-failed" }` — never the driver, never the history.
  */
 
 // Re-exported for compatibility (tests, callers): the parser moved into the pure protocol module.
@@ -209,10 +213,10 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
         stopHearing();
         return;
       }
-      // An agent's send (`vibehub_send_to_terminal`) — and every event the transcript MIRROR lifts
-      // from the terminal — lands in the history log, not on the driver's stdout. Forward them live
-      // so the conversation is visible as it happens, whichever screen it happens on. (The driver's
-      // own events reach this socket through the manager's broadcast.)
+      // Every event the transcript MIRROR lifts from the terminal lands in the history log, not on
+      // the driver's stdout. Forward them live so the conversation is visible as it happens,
+      // whichever screen it happens on. (The driver's own events reach this socket through the
+      // manager's broadcast.)
       const offExternal = onExternalMessage(card.id, (event) => {
         try { socket.send(JSON.stringify(event)); } catch { /* socket going away */ }
       });

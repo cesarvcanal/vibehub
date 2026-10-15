@@ -7,11 +7,13 @@ import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, clearHistor
 import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inflight.js";
 import { createLineReader, forgetDriverKeys, noteDriverEventFor, onOutsideTurn } from "./mirror.js";
 import { writeCardCatalog } from "./catalog.js";
-import { forgetCardWorkflows, lastWorkflowRuns, watchCardWorkflows } from "./workflow.js";
+import { forgetCardWorkflows, lastWorkflowRuns, readAgentFeed, watchCardWorkflows } from "./workflow.js";
+import { InvalidWorkflowIdError } from "./workflowProbe.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
-  NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, parseTypingFrame, encodeControl,
+  NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseWorkflowFeedFrame, encodeControl,
   type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type UserQuestionItem,
+  type WorkflowFeedEvent, type WorkflowFeedRequest,
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { logger } from "../../utils/logger.js";
@@ -241,8 +243,13 @@ export function resetSdkSessionsForTesting(): void {
 
 /** Whether a card has a LIVE driver right now. */
 export function hasDriverSession(cardId: string): boolean {
+  return liveDriverSession(cardId) !== null;
+}
+
+/** The card's LIVE driver, or null — never spawns one. */
+export function liveDriverSession(cardId: string): DriverSession | null {
   const session = sessions.get(cardId);
-  return !!session && !session.closed;
+  return session && !session.closed ? session : null;
 }
 
 /**
@@ -507,6 +514,48 @@ function startWorkflowWatch(session: DriverSession): void {
     watchers: () => session.sockets.size,
     publish: (run) => broadcast(session, { type: "workflow_progress", ...run }),
   });
+}
+
+/** O feed de um subagente para quem pediu, com o motivo quando vier vazio por erro. */
+async function feedReply(session: DriverSession, request: WorkflowFeedRequest): Promise<WorkflowFeedEvent> {
+  const reply = (items: WorkflowFeedEvent["items"], error?: WorkflowFeedEvent["error"]): WorkflowFeedEvent => ({
+    type: "workflow_feed", runId: request.runId, agentId: request.agentId, items, ...(error ? { error } : {}),
+  });
+  const dirs = workflowDirs(session);
+  if (!dirs) return reply([], "no-session");
+  try {
+    return reply(await readAgentFeed(dirs.runs, request.runId, request.agentId));
+  } catch (err) {
+    if (err instanceof InvalidWorkflowIdError) return reply([], "invalid-id");
+    logger.debug({ card: session.label, detail: (err as Error).message }, "workflow feed probe failed");
+    return reply([], "probe-failed");
+  }
+}
+
+/**
+ * Quem responde aos pedidos de feed de UM socket. Um `docker exec` por vez por aba: um pedido que
+ * chega com outro em voo espera, e só o MAIS RECENTE espera (a pessoa trocou de agente — os do meio
+ * já não interessam). Sem isso, cliques rápidos ou um socket teimoso empilhariam sondagens no runner.
+ */
+function createFeedResponder(session: DriverSession, socket: WebSocket): (request: WorkflowFeedRequest) => void {
+  let busy = false;
+  let next: WorkflowFeedRequest | null = null;
+  const run = async (request: WorkflowFeedRequest): Promise<void> => {
+    busy = true;
+    try {
+      const frame = await feedReply(session, request);
+      try { socket.send(JSON.stringify(frame)); } catch { /* going away */ }
+    } finally {
+      busy = false;
+      const queued = next;
+      next = null;
+      if (queued && socket.readyState === WebSocket.OPEN) void run(queued);
+    }
+  };
+  return (request) => {
+    if (busy) next = request;
+    else void run(request);
+  };
 }
 
 /* ------------------------------------------------------------------- API */
@@ -950,6 +999,24 @@ function chargeReceipt(session: DriverSession, sent: AcceptedSend): Promise<bool
  */
 export function injectSystemTurn(session: DriverSession, text: string, origin: MessageOrigin, attempts: number): void {
   try { session.child.stdin.write(encodeControl({ type: "user", text })); } catch { /* driver gone; close will fire */ }
+  recordInjectedTurn(session, text, origin);
+  void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(text), attempts });
+}
+
+/**
+ * Another card's AGENT talking to this one (`vibehub_send_to_terminal`): a normal user turn of the
+ * card's own driver, so it lands in the conversation the card is really having — not in the tmux
+ * TUI, whose Claude never rereads what the driver wrote. No in-flight marker: the boot-resume
+ * continues a PERSON's interrupted turn; an agent's turn is for the agent that sent it to retry.
+ * Returns false (nothing recorded) when the driver can no longer take a turn.
+ */
+export function sendAgentTurn(session: DriverSession, text: string, origin: MessageOrigin): boolean {
+  if (!canAcceptTurn(session) || !writeToDriver(session, { type: "user", text })) return false;
+  recordInjectedTurn(session, text, origin);
+  return true;
+}
+
+function recordInjectedTurn(session: DriverSession, text: string, origin: MessageOrigin): void {
   session.activeTurns += 1;
   clearIdleTimer(session);
   noteDriverEventFor(session.cardId, { type: "user", text });
@@ -957,7 +1024,6 @@ export function injectSystemTurn(session: DriverSession, text: string, origin: M
   void appendHistory(session.cardId, line);
   // Nobody typed it, so nobody drew it: every open tab gets it, or the answer arrives without it.
   relayToPeers(session, undefined, line);
-  void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(text), attempts });
 }
 
 /**
@@ -1069,11 +1135,19 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
     relayTyping(false);
   };
 
+  const answerFeed = createFeedResponder(session, socket);
+
   socket.on("message", (raw: Buffer) => {
     const text = raw.toString();
     const typing = parseTypingFrame(text);
     if (typing !== null) {
       noteTyping(typing);
+      return;
+    }
+    // O feed de um subagente do workflow: sob demanda, só para esta aba — nem driver, nem histórico.
+    const feed = parseWorkflowFeedFrame(text);
+    if (feed !== null) {
+      answerFeed(feed);
       return;
     }
     const outcome = handleClientFrame(session, text, origin, socket);

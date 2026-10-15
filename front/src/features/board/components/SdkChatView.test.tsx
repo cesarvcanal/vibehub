@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { act } from "react";
+import { Profiler, act } from "react";
 import { OUTBOX_TICK_MS, SdkChatView, resetQuestionDraftsForTesting } from "@/features/board/components/SdkChatView";
 import { OUTBOX_ACK_TIMEOUT_MS } from "@/features/board/lib/sdkOutbox";
 import { RECONNECT_MAX_MS } from "@/features/board/lib/reconnect";
@@ -11,9 +11,10 @@ import type { SdkEvent } from "@/features/board/lib/sdkChat";
 import { resetLanguage, setLanguage } from "@/i18n";
 import { resetReasoningTranslatorForTesting } from "@/features/board/lib/reasoningTranslation";
 import { get } from "@/lib/api";
-import { LinkifiedText } from "@/features/board/components/ChatView";
+import { LinkifiedText, Markdown } from "@/features/board/components/ChatView";
 import { resetDraftsForTesting } from "@/features/board/components/TerminalComposer";
 import { ME_KEY } from "@/providers/auth";
+import { SdkAgentCard } from "@/features/board/components/SdkAgentCard";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -25,10 +26,28 @@ vi.mock("@/lib/api", () => ({
 }));
 
 // Passthrough com contador: o desenho é o de verdade, e quantas vezes uma bolha foi redesenhada
-// fica observável (o teste de custo do transcript, mais abaixo).
+// fica observável (o teste de custo do transcript, mais abaixo). O `Markdown` é um memo: o contador
+// fica DENTRO dele, então conta só os parses de verdade, não os renders que o memo pulou.
 vi.mock("@/features/board/components/ChatView", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/features/board/components/ChatView")>();
-  return { ...actual, LinkifiedText: vi.fn(actual.LinkifiedText) };
+  const { memo } = await import("react");
+  const parse: unknown = (actual.Markdown as unknown as { type?: unknown }).type;
+  if (typeof parse !== "function") {
+    throw new Error(
+      "mock do ChatView: o `Markdown` deixou de ser um React.memo (sem `.type` função) — "
+      + "o contador de parses deste arquivo precisa ser refeito para o novo formato.",
+    );
+  }
+  // Conferido acima que é função; a assinatura é a do componente que o memo embrulha.
+  const render = parse as (props: { text: string }) => React.ReactElement;
+  return { ...actual, LinkifiedText: vi.fn(actual.LinkifiedText), Markdown: memo(vi.fn(render)) };
+});
+
+// Mesmo passthrough com contador, para o card do subagente: um token do principal não pode
+// redesenhá-lo.
+vi.mock("@/features/board/components/SdkAgentCard", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/features/board/components/SdkAgentCard")>();
+  return { ...actual, SdkAgentCard: vi.fn(actual.SdkAgentCard) };
 });
 
 vi.mock("sonner", () => ({
@@ -90,9 +109,27 @@ class FakeSocket {
     this.readyState = 1;
     act(() => this.onopen?.());
   }
+  /** Um frame do socket seguido de um frame de animação — o ritmo normal de um socket de verdade. */
   deliver(event: SdkEvent): void {
+    this.receive(event);
+    runAnimationFrames();
+  }
+  /** Só o frame do socket: o que chegar assim fica no mesmo frame de animação até `runAnimationFrames`. */
+  receive(event: SdkEvent): void {
     act(() => this.onmessage?.({ data: JSON.stringify(event) } as MessageEvent));
   }
+}
+
+/**
+ * Os frames de animação ficam na mão do teste: o jsdom os dispara pelo relógio de verdade, o que
+ * deixaria cada asserção logo depois de um `deliver` dependendo de 16ms terem passado ou não.
+ */
+let animationFrames = new Map<number, FrameRequestCallback>();
+let nextAnimationFrame = 1;
+function runAnimationFrames(): void {
+  const due = [...animationFrames.values()];
+  animationFrames = new Map();
+  if (due.length > 0) act(() => due.forEach((callback) => callback(performance.now())));
 }
 
 const originalWebSocket = globalThis.WebSocket;
@@ -106,6 +143,15 @@ beforeEach(() => {
   resetQuestionDraftsForTesting();
   FakeSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeSocket);
+  animationFrames = new Map();
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    const id = nextAnimationFrame++;
+    animationFrames.set(id, callback);
+    return id;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+    animationFrames.delete(id);
+  });
 });
 
 afterEach(() => {
@@ -2035,6 +2081,130 @@ describe("SdkChatView — o que o leitor de tela anuncia", () => {
   });
 });
 
+/**
+ * QUEM ESTÁ FAZENDO O QUÊ. O que um subagente (Agent/Task) faz chega marcado com `parentToolUseId`
+ * e é desenhado DENTRO do card da chamada que o disparou — recolhido, com quantas ações já foram e
+ * a última —, nunca como passo ou resposta do agente principal.
+ */
+describe("SdkChatView — subagentes", () => {
+  const agentCall: SdkEvent = {
+    type: "tool_use", id: "t1", name: "Agent", input: { description: "explora o chat", subagent_type: "Explore" },
+  };
+
+  it("o card do Agent tem o ícone de robô, e as ações do subagente ficam recolhidas sob ele", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(agentCall);
+    ws.deliver({ type: "tool_use", id: "c1", name: "Read", input: { file_path: "/w/sdkChat.ts" }, parentToolUseId: "t1" });
+    ws.deliver({ type: "assistant_text", text: "achei o reducer", parentToolUseId: "t1" });
+    ws.deliver({ type: "tool_use", id: "c2", name: "Grep", input: { pattern: "toolHeadline" }, parentToolUseId: "t1" });
+
+    const card = screen.getByTestId("sdk-agent");
+    expect(card.querySelector(".lucide-bot")).not.toBeNull();
+    expect(card.querySelector(".lucide-wrench")).toBeNull();
+    expect(within(card).getByTestId("sdk-tool-title")).toHaveTextContent("Agent(explora o chat)");
+
+    // Recolhido por padrão: o contador e a última ação, nada mais.
+    const summary = within(card).getByTestId("sdk-subagent-summary");
+    expect(summary).toHaveTextContent("2 actions");
+    expect(summary).toHaveTextContent("Explore · Grep(toolHeadline)");
+    expect(screen.queryByTestId("sdk-subagent-rows")).toBeNull();
+    // As ações do subagente não aparecem como passos do principal: a única linha de ferramenta é a
+    // própria chamada do Agent.
+    expect(screen.getAllByTestId("sdk-tool").map((el) => el.getAttribute("data-tool"))).toEqual(["Agent"]);
+
+    fireEvent.click(summary);
+    const rows = within(card).getByTestId("sdk-subagent-rows");
+    expect(rows).toHaveClass("border-l");
+    expect(rows).toHaveTextContent("by the subagent");
+    expect(within(rows).getByText("Read(sdkChat.ts)")).toBeInTheDocument();
+    expect(within(rows).getByText("achei o reducer")).toBeInTheDocument();
+    for (const toolRow of screen.getAllByTestId("sdk-tool")) expect(card.contains(toolRow)).toBe(true);
+  });
+
+  it("o texto do subagente não vira resposta do agente principal", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(agentCall);
+    ws.deliver({ type: "assistant_text", text: "relatório do subagente", parentToolUseId: "t1" });
+    ws.deliver({ type: "assistant_text", text: "Resumo do principal." });
+
+    const answers = screen.getAllByTestId("sdk-assistant");
+    expect(answers).toHaveLength(1);
+    expect(answers[0]).toHaveTextContent("Resumo do principal.");
+  });
+
+  it("um token da resposta do principal não redesenha o card do subagente", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(agentCall);
+    ws.deliver({ type: "tool_use", id: "c1", name: "Read", input: { file_path: "/w/a.ts" }, parentToolUseId: "t1" });
+    const before = vi.mocked(SdkAgentCard).mock.calls.length;
+    ws.deliver({ type: "assistant_delta", text: "Enquanto " });
+    ws.deliver({ type: "assistant_delta", text: "isso, " });
+    ws.deliver({ type: "assistant_delta", text: "sigo." });
+    expect(vi.mocked(SdkAgentCard).mock.calls.length).toBe(before);
+    // E uma ação NOVA do subagente redesenha, sim.
+    ws.deliver({ type: "tool_use", id: "c2", name: "Grep", input: { pattern: "x" }, parentToolUseId: "t1" });
+    expect(vi.mocked(SdkAgentCard).mock.calls.length).toBeGreaterThan(before);
+  });
+
+  it("a barra de atividade diz que é o subagente trabalhando", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "investiga" });
+    ws.deliver(agentCall);
+    ws.deliver({ type: "tool_use", id: "c1", name: "Read", input: { file_path: "/w/sdkChat.ts" }, parentToolUseId: "t1" });
+    expect(screen.getByTestId("sdk-activity-label")).toHaveTextContent("Subagent Explore: Read(sdkChat.ts)");
+  });
+});
+
+/**
+ * A LISTA DE TAREFAS DO AGENTE. Um TodoWrite dizia só "TodoWrite"; agora diz quantas já foram e
+ * mostra a lista — só a MAIS RECENTE aberta: as anteriores são versões velhas da mesma lista.
+ */
+describe("SdkChatView — TodoWrite", () => {
+  const todos = (statuses: Array<"pending" | "in_progress" | "completed">) => statuses.map((status, i) => ({
+    content: `Tarefa ${i + 1}`, activeForm: `Fazendo a tarefa ${i + 1}`, status,
+  }));
+
+  it("o mais recente aparece aberto com a lista e o status de cada item; os anteriores, recolhidos", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "td1", name: "TodoWrite", input: { todos: todos(["in_progress", "pending", "pending"]) } });
+    ws.deliver({ type: "assistant_text", text: "começando" });
+    ws.deliver({ type: "tool_use", id: "td2", name: "TodoWrite", input: { todos: todos(["completed", "in_progress", "pending"]) } });
+
+    const cards = screen.getAllByTestId("sdk-todos");
+    expect(cards).toHaveLength(2);
+    const [older, latest] = cards as [HTMLElement, HTMLElement];
+    expect(within(older).getByTestId("sdk-todos-title")).toHaveTextContent("Tasks 0/3");
+    expect(within(older).queryByTestId("sdk-todo-item")).toBeNull();
+
+    expect(within(latest).getByTestId("sdk-todos-title")).toHaveTextContent("Tasks 1/3");
+    const items = within(latest).getAllByTestId("sdk-todo-item");
+    expect(items.map((item) => item.getAttribute("data-status"))).toEqual(["completed", "in_progress", "pending"]);
+    expect(items[0]).toHaveClass("line-through");
+    expect(items[1]).toHaveClass("font-semibold");
+    expect(items[1]).toHaveTextContent("Fazendo a tarefa 2");
+    expect(items[2]).toHaveTextContent("Tarefa 3");
+
+    // Quem quer ver a versão velha abre.
+    fireEvent.click(within(older).getByTestId("sdk-todos-toggle"));
+    expect(within(older).getAllByTestId("sdk-todo-item")).toHaveLength(3);
+  });
+});
+
 describe("SdkChatView — a tool call reads like the terminal's", () => {
   it("shows the headline and the detail under it, and says when work went to the background", async () => {
     renderSdkChat();
@@ -2723,6 +2893,23 @@ describe("SdkChatView — o painel da frota do Workflow", () => {
     expect(screen.getByTestId("sdk-workflow")).toHaveTextContent(/concluído|done/);
   });
 
+  it("abrir um subagente pede o feed PELO SOCKET e desenha a resposta — que não vira linha da conversa", async () => {
+    const ws = await fleetOnScreen();
+    ws.deliver({
+      type: "workflow_progress", runId: "wf_1", name: "auditoria-do-pdv", at: 1, finished: false,
+      phases: ["Achar", "Verificar"], startedAt: Date.now() - 30_000,
+      agents: [{ id: "a01f", label: "achar:caixa", phase: "Achar", status: "running", startedAt: Date.now() - 30_000 }],
+    });
+    await userEvent.click(await screen.findByTestId("sdk-workflow-agent"));
+    const asked = ws.sent.map((raw) => JSON.parse(raw) as { type: string }).filter((f) => f.type === "workflow_feed");
+    expect(asked).toEqual([{ type: "workflow_feed", runId: "wf_1", agentId: "a01f" }]);
+    const rowsBefore = screen.getByTestId("sdk-chat-scroller").children.length;
+    ws.deliver({ type: "workflow_feed", runId: "wf_1", agentId: "a01f", items: [{ at: Date.now(), kind: "tool", tool: "Grep", target: "estoque" }] });
+    expect(await screen.findByTestId("workflow-feed")).toHaveTextContent(/(Buscou|Searched) estoque/);
+    expect(screen.getByTestId("sdk-chat-scroller").children.length).toBe(rowsBefore);
+    expect(screen.getAllByTestId("workflow-phase-group").map((g) => g.getAttribute("data-phase"))).toEqual(["Achar"]);
+  });
+
   it("dois quadros da mesma rodada desenham UM cartão, não dois", async () => {
     const ws = await fleetOnScreen();
     const base = { type: "workflow_progress" as const, runId: "wf_1", name: "auditoria-do-pdv", finished: false };
@@ -3056,13 +3243,17 @@ describe("SdkChatView — o custo do transcript", () => {
   }
 
   it("um token novo não redesenha as bolhas antigas", async () => {
-    renderSdkChat();
+    const { queryClient } = renderSdkChat();
     const ws = await socket();
     ws.accept();
     ws.deliver({ type: "user", text: "a mensagem antiga" });
     ws.deliver({ type: "assistant_text", text: "a resposta antiga" });
     ws.deliver({ type: "ready" });
     ws.deliver({ type: "assistant_delta", text: "Come" });
+    // As consultas da montagem (o /auth/me redesenha toda linha pelo contexto) assentam antes da
+    // contagem: a espera abaixo pela linha viva não pode medir isso como se fosse culpa do token.
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
     const before = drawsOf("a mensagem antiga");
     expect(before).toBeGreaterThan(0);
 
@@ -3070,7 +3261,8 @@ describe("SdkChatView — o custo do transcript", () => {
     ws.deliver({ type: "assistant_delta", text: " a nova" });
     ws.deliver({ type: "assistant_delta", text: " resposta" });
 
-    expect(screen.getAllByTestId("sdk-assistant")[1]).toHaveTextContent("Começando a nova resposta");
+    // a linha viva é re-parseada no máximo a cada 100ms (ver "o ritmo do streaming")
+    await waitFor(() => expect(screen.getAllByTestId("sdk-assistant")[1]).toHaveTextContent("Começando a nova resposta"));
     expect(drawsOf("a mensagem antiga")).toBe(before);
   });
 
@@ -3139,5 +3331,404 @@ describe("SdkChatView — /clear", () => {
     ws.deliver({ type: "system_note", text: "conversation-cleared", at: Date.now() });
     await waitFor(() => expect(screen.queryByText("Resposta antiga e longa.")).toBeNull());
     expect(screen.getByText(/cleared/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * O DIFF da edição, como no Cursor: quando a IA altera código, o chat mostra só os trechos
+ * alterados (+ verde, − vermelho, contador no cabeçalho) em vez da linha "Edit(arquivo)".
+ */
+describe("SdkChatView — o diff do que a IA editou", () => {
+  const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i}`).join("\n");
+  // Desmonta ANTES do `resetLanguage()` do arquivo: trocar o idioma com a tela montada redesenha
+  // todo assinante do `useT` fora de um act(...) — os avisos que este bloco não pode somar.
+  afterEach(() => cleanup());
+
+  it("um Edit vira o card de diff: +1 −1, as linhas com sinal e o contexto", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({
+      type: "tool_use", id: "t1", name: "Edit",
+      input: { file_path: "/repo/src/app.ts", old_string: "const a = 1;\nconst b = 2;", new_string: "const a = 1;\nconst b = 3;" },
+    });
+
+    const card = screen.getByTestId("sdk-diff");
+    expect(card.getAttribute("data-tool")).toBe("Edit");
+    expect(screen.queryByTestId("sdk-tool")).toBeNull();
+    expect(within(card).getByText("app.ts").getAttribute("title")).toBe("/repo/src/app.ts");
+    expect(within(card).getByTestId("sdk-diff-added")).toHaveTextContent("+1");
+    expect(within(card).getByTestId("sdk-diff-added").getAttribute("aria-label")).toBe("1 line added");
+    expect(within(card).getByTestId("sdk-diff-removed")).toHaveTextContent("−1");
+    expect(within(card).getByRole("button", { expanded: true })).toBeInTheDocument();
+
+    const shown = within(card).getAllByTestId("sdk-diff-line").map((line) => [line.getAttribute("data-kind"), line.textContent]);
+    expect(shown).toEqual([
+      ["ctx", " const a = 1;"],
+      ["del", "−const b = 2;"],
+      ["add", "+const b = 3;"],
+    ]);
+  });
+
+  it("três ferramentas antes do Edit dobram sozinhas — o card do diff fica de fora, na tela", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    for (const id of ["r1", "r2", "r3"]) ws.deliver({ type: "tool_use", id, name: "Read", input: { file_path: `/repo/${id}.ts` } });
+    ws.deliver({ type: "tool_use", id: "e1", name: "Edit", input: { file_path: "/repo/a.ts", old_string: "x", new_string: "y" } });
+
+    const group = screen.getByTestId("sdk-tool-group");
+    expect(group.getAttribute("data-count")).toBe("3");
+    const card = screen.getByTestId("sdk-diff");
+    expect(group.contains(card)).toBe(false);
+    expect(within(card).getAllByTestId("sdk-diff-line")).toHaveLength(2);
+  });
+
+  it("um Edit espelhado do terminal (só description) continua a linha compacta de sempre", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "t1", name: "Edit", input: { description: "Edit(src/a.ts)" } });
+    expect(screen.queryByTestId("sdk-diff")).toBeNull();
+    expect(screen.getByTestId("sdk-tool").getAttribute("data-tool")).toBe("Edit");
+  });
+
+  it("um Write grande começa recolhido e abre no clique, com o resto contado", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "w1", name: "Write", input: { file_path: "/repo/new.ts", content: lines(60) } });
+
+    const card = screen.getByTestId("sdk-diff");
+    expect(within(card).getByTestId("sdk-diff-added")).toHaveTextContent("+60");
+    const toggle = within(card).getByRole("button", { expanded: false });
+    expect(within(card).queryAllByTestId("sdk-diff-line")).toHaveLength(0);
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    const shown = within(card).getAllByTestId("sdk-diff-line");
+    expect(shown).toHaveLength(40);
+    expect(shown.every((line) => line.getAttribute("data-kind") === "add")).toBe(true);
+    expect(within(card).getByTestId("sdk-diff-truncated")).toHaveTextContent("20 more lines not shown");
+  });
+
+  /**
+   * A IA "ENGASGADA": enquanto o modelo escrevia o input de um Write grande, a tela ficava só em
+   * "Trabalhando…" por dezenas de segundos. Agora a linha provisória diz o que está sendo escrito e
+   * quanto, e o `tool_use` completo vira o card de diff NO LUGAR dela — nunca um segundo card.
+   */
+  it("durante a geração mostra 'Writing x… N KB'; com o tool_use completo fica um único card de diff", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "cria o arquivo" });
+    ws.deliver({ type: "tool_use_start", id: "w1", name: "Write" });
+    ws.deliver({ type: "tool_input_progress", id: "w1", bytes: 12_288, filePath: "/repo/src/sdkChat.ts" });
+
+    const live = screen.getByTestId("sdk-tool");
+    expect(live.getAttribute("data-pending")).toBe("true");
+    expect(within(live).getByTestId("sdk-tool-title")).toHaveTextContent("Writing sdkChat.ts… 12 KB");
+    expect(screen.getByTestId("sdk-activity-label")).toHaveTextContent("Writing sdkChat.ts… 12 KB");
+    expect(screen.queryByTestId("sdk-diff")).toBeNull();
+
+    ws.deliver({ type: "tool_use", id: "w1", name: "Write", input: { file_path: "/repo/src/sdkChat.ts", content: lines(3) } });
+    expect(screen.getAllByTestId("sdk-diff")).toHaveLength(1);
+    expect(screen.queryByTestId("sdk-tool")).toBeNull();
+    expect(within(screen.getByTestId("sdk-diff")).getByTestId("sdk-diff-added")).toHaveTextContent("+3");
+  });
+
+  it("um Agent ou TodoWrite ainda sendo gerado é a linha viva, não um card vazio", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "explora" });
+    ws.deliver({ type: "tool_use_start", id: "a1", name: "Agent" });
+    expect(screen.queryByTestId("sdk-agent")).toBeNull();
+    expect(within(screen.getByTestId("sdk-tool")).getByTestId("sdk-tool-title")).toHaveTextContent("Preparing Agent…");
+    ws.deliver({ type: "tool_use", id: "a1", name: "Agent", input: { description: "explora o chat", subagent_type: "Explore" } });
+    expect(screen.getAllByTestId("sdk-agent")).toHaveLength(1);
+    expect(document.querySelector("[data-pending]")).toBeNull();
+  });
+
+  it("em pt-BR os contadores falam com plural", async () => {
+    setLanguage("pt-BR");
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "t1", name: "Edit", input: { file_path: "a.ts", old_string: "a\nb", new_string: "c" } });
+    const card = screen.getByTestId("sdk-diff");
+    expect(within(card).getByTestId("sdk-diff-added").getAttribute("aria-label")).toBe("1 linha adicionada");
+    expect(within(card).getByTestId("sdk-diff-removed").getAttribute("aria-label")).toBe("2 linhas removidas");
+  });
+});
+
+/**
+ * O RITMO DO STREAMING. O driver manda um frame de socket por token, e cada frame virava um
+ * setState: um render da conversa inteira por token, e o Markdown da resposta re-parseado do zero
+ * a cada um — a resposta longa "engasgava" na tela e o campo de texto atrasava junto.
+ */
+describe("SdkChatView — o ritmo do streaming", () => {
+  /** Quantas vezes o Markdown parseou um texto que começa assim. */
+  function parsesOf(prefix: string): number {
+    const inner = (Markdown as unknown as { type: { mock: { calls: [{ text: string }][] } } }).type;
+    return inner.mock.calls.filter(([props]) => props.text.startsWith(prefix)).length;
+  }
+
+  it("os tokens que chegam no mesmo frame de animação viram UM render", async () => {
+    const commits = vi.fn();
+    renderApp(
+      <Profiler id="chat" onRender={commits}>
+        <SdkChatView cardId="c1" />
+      </Profiler>,
+    );
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "assistant_delta", text: "Começ" });
+    const before = commits.mock.calls.length;
+
+    for (let i = 0; i < 30; i++) ws.receive({ type: "assistant_delta", text: ` t${i}` });
+    runAnimationFrames();
+
+    expect(commits.mock.calls.length - before).toBeLessThanOrEqual(2);
+    await waitFor(() => expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("Começ t0 t1"));
+    await waitFor(() => expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("t29"));
+  });
+
+  it("um evento que não é token esvazia o frame ANTES de entrar: a ordem da conversa não muda", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    ws.receive({ type: "assistant_delta", text: "Vou rodar " });
+    ws.receive({ type: "assistant_delta", text: "os testes." });
+    ws.receive({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } });
+    ws.receive({ type: "assistant_delta", text: "Depois" });
+
+    // Sem nenhum frame de animação: o texto antes da ferramenta já está na tela, e no lugar dele.
+    const answer = screen.getAllByTestId("sdk-assistant")[0]!;
+    expect(answer).toHaveTextContent("Vou rodar os testes.");
+    expect(answer.compareDocumentPosition(screen.getByTestId("sdk-tool")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    runAnimationFrames();
+    await waitFor(() => expect(screen.getAllByTestId("sdk-assistant")).toHaveLength(2));
+    expect(screen.getAllByTestId("sdk-assistant")[1]).toHaveTextContent("Depois");
+  });
+
+  it("sem frame de animação (aba em segundo plano), os tokens entram mesmo assim", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    vi.useFakeTimers();
+    try {
+      ws.receive({ type: "assistant_delta", text: "Rodando " });
+      ws.receive({ type: "assistant_delta", text: "em segundo plano" });
+      act(() => { vi.advanceTimersByTime(250); });
+      expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("Rodando em segundo plano");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a resposta que ainda escorre não é re-parseada a cada token — e o texto final sempre aparece", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    vi.useFakeTimers();
+    try {
+      ws.deliver({ type: "assistant_delta", text: "Resposta:" });
+      // 40 tokens, cada um no seu frame de animação, em menos de 100ms de relógio
+      for (let i = 0; i < 40; i++) {
+        ws.deliver({ type: "assistant_delta", text: ` p${i}` });
+        act(() => { vi.advanceTimersByTime(2); });
+      }
+      expect(parsesOf("Resposta:")).toBeLessThanOrEqual(3);
+
+      // passada a janela, a linha viva alcança o texto inteiro, mesmo sem token novo
+      act(() => { vi.advanceTimersByTime(200); });
+      expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("p39");
+    } finally {
+      vi.useRealTimers();
+    }
+
+    ws.deliver({ type: "assistant_text", text: "Resposta: **final**." });
+    expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("Resposta: final.");
+    expect(screen.getByText("final").tagName).toBe("STRONG");
+  });
+});
+
+/**
+ * OS TOKENS DO FRAME E A AÇÃO LOCAL. Os tokens esperam o próximo frame de animação num buffer — e
+ * uma ação da pessoa nesse meio-tempo (Enter, a correção, o Esc, o "enviar agora") não pode ser
+ * julgada pela tela de um frame atrás, nem escrever na conversa ANTES do que já tinha chegado.
+ */
+describe("SdkChatView — o buffer de tokens diante de uma ação local", () => {
+  function follows(first: Element, second: Element): boolean {
+    return (first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  }
+
+  async function readyChat() {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    return ws;
+  }
+
+  it("Enter com o token que abriu um turno ainda no buffer: a mensagem ESPERA na fila", async () => {
+    const ws = await readyChat();
+    ws.deliver({ type: "ready" });
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.type(box, "oi");
+
+    ws.receive({ type: "assistant_delta", text: "Começando" }); // sem frame de animação ainda
+    await userEvent.type(box, "{Enter}");
+    runAnimationFrames();
+
+    expect(ws.sent).toHaveLength(0);
+    await screen.findByTestId("sdk-queue");
+    expect(screen.getByTestId("sdk-queued")).toHaveTextContent("oi");
+  });
+
+  it("a correção enviada com um turno aberto só no buffer PARA o turno antes — e nasce depois da resposta", async () => {
+    const ws = await readyChat();
+    ws.deliver({ type: "user", text: "sobe pra prod" }); // replay: nenhum turno rodando
+    ws.deliver({ type: "ready" });
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.click(screen.getByTestId("sdk-edit"));
+    await userEvent.clear(box);
+    await userEvent.type(box, "sobe pra dev");
+
+    ws.receive({ type: "assistant_delta", text: "Subindo…" });
+    await userEvent.type(box, "{Enter}");
+    runAnimationFrames();
+
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    expect(JSON.parse(ws.sent[0]!)).toEqual({ type: "interrupt", reason: "edit" });
+    const bubbles = screen.getAllByTestId("sdk-user");
+    expect(follows(screen.getByTestId("sdk-assistant"), bubbles[bubbles.length - 1]!)).toBe(true);
+  });
+
+  it("Esc no campo vazio com um turno aberto só no buffer não entra em edição", async () => {
+    const ws = await readyChat();
+    ws.deliver({ type: "user", text: "sobe pra prod" });
+    ws.deliver({ type: "ready" });
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.clear(box);
+
+    ws.receive({ type: "assistant_delta", text: "Subindo…" });
+    fireEvent.keyDown(box, { key: "Escape" });
+    runAnimationFrames();
+
+    expect(screen.queryByTestId("composer-editing")).not.toBeInTheDocument();
+  });
+
+  it("o despacho da fila não solta a mensagem no meio de uma frase que só está no buffer", async () => {
+    const ws = await readyChat();
+    ws.deliver({ type: "ready" });
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.type(box, "faz a tarefa{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "Fazendo…" });
+    await userEvent.type(box, "depois isto{Enter}");
+    await screen.findByTestId("sdk-queued");
+    await userEvent.click(screen.getByTestId("sdk-edit")); // a correção armada segura a fila
+    ws.deliver({ type: "result", isError: false });
+    expect(ws.sent).toHaveLength(1);
+
+    ws.receive({ type: "assistant_delta", text: "Outro turno começando" }); // frase pela metade, no buffer
+    fireEvent.keyDown(box, { key: "Escape" }); // desisti da correção: a fila volta a poder andar
+    runAnimationFrames();
+
+    expect(ws.sent).toHaveLength(1);
+    expect(screen.getByTestId("sdk-queued")).toHaveTextContent("depois isto");
+  });
+
+  it("'enviar agora' com tokens no buffer: a bolha nasce DEPOIS do que já tinha chegado", async () => {
+    const ws = await readyChat();
+    ws.deliver({ type: "ready" });
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.type(box, "faz a tarefa{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "Fazendo…" });
+    await userEvent.type(box, "o que você tá fazendo ?{Enter}");
+    await screen.findByTestId("sdk-queued");
+    ws.receive({ type: "assistant_delta", text: " Analisando a saída" }); // ainda a mesma frase, no buffer
+    await userEvent.click(screen.getByTestId("sdk-queued-send-now"));
+    runAnimationFrames();
+
+    await waitFor(() => expect(ws.sent.length).toBe(2));
+    // A resposta que ainda escorre é redesenhada a cada STREAMING_MARKDOWN_MS: o texto novo pode
+    // levar até essa janela para aparecer. Um token perdido no buffer nunca aparece — e falha aqui.
+    const answer = await waitFor(() => {
+      const found = screen.getAllByTestId("sdk-assistant").find((el) => el.textContent?.includes("Analisando a saída"));
+      expect(found).toBeDefined();
+      return found!;
+    });
+    const bubbles = screen.getAllByTestId("sdk-user");
+    expect(follows(answer, bubbles[bubbles.length - 1]!)).toBe(true);
+  });
+});
+
+describe("SdkChatView — o buffer de tokens e a troca de conexão", () => {
+  it("um token do card anterior que ficou no buffer não entra no card novo", async () => {
+    const { rerender } = renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.receive({ type: "assistant_delta", text: "TOKEN-DO-CARD-1" }); // sem frame de animação ainda
+
+    rerender(<SdkChatView cardId="c2" />);
+    await waitFor(() => expect(FakeSocket.instances).toHaveLength(2));
+    const ws2 = FakeSocket.instances[1]!;
+    ws2.accept();
+    ws2.deliver({ type: "ready" });
+    runAnimationFrames();
+
+    expect(screen.getByTestId("sdk-chat-scroller")).not.toHaveTextContent("TOKEN-DO-CARD-1");
+  });
+});
+
+describe("SdkChatView — o buffer de tokens e a queda do fio", () => {
+  /**
+   * O que garante isto é a ORDEM dos timers: o do buffer (100ms) nasce antes do da reconexão (400ms
+   * no mínimo) e dispara primeiro, então o `onopen` seguinte — que limpa a tela para o replay —
+   * nunca encontra token da conexão morta para pingar por cima do histórico.
+   */
+  it("o token que estava no buffer quando o fio caiu não reaparece por cima do replay", async () => {
+    // Só o relógio é falso: o frame de animação continua na mão do teste e NÃO dispara (a aba em
+    // segundo plano) — quem esvazia o buffer aqui é o timer.
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+    try {
+      renderSdkChat();
+      const first = await socket();
+      first.accept();
+      first.deliver({ type: "ready" });
+      first.deliver({ type: "assistant_delta", text: "Começo" });
+      first.receive({ type: "assistant_delta", text: " da resposta" }); // sem frame de animação
+
+      act(() => { first.readyState = 3; first.onclose?.(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(RECONNECT_MAX_MS); });
+      const second = FakeSocket.instances[1] as FakeSocket;
+      second.accept();
+      second.deliver({ type: "user", text: "explica o deploy" }); // o replay do disco
+      second.deliver({ type: "assistant_text", text: "Começo da resposta" });
+      second.deliver({ type: "ready" });
+      runAnimationFrames();
+
+      expect(screen.getAllByTestId("sdk-assistant")).toHaveLength(1);
+      expect(screen.getByTestId("sdk-chat-scroller").textContent?.match(/da resposta/g)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

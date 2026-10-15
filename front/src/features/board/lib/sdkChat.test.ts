@@ -3,6 +3,7 @@ import {
   INITIAL_SDK_STATE,
   applySdkEvent,
   appendUserRow,
+  coalesceDeltas,
   answerQuestion,
   currentActivity,
   decidePermission,
@@ -17,11 +18,14 @@ import {
   formatAgentResult,
   parseWorkflowScriptMeta,
   toolHeadline,
+  toolLiveLabel,
   turnHasRoomForMore,
   toolSummary,
   type SdkChatState,
   type SdkEvent,
+  type SdkRow,
 } from "./sdkChat";
+import { resetLanguage, setLanguage } from "@/i18n";
 import { pendingDecisions } from "./pendingDecisions";
 import { reconcileOutbox, sendMark } from "./sdkOutbox";
 
@@ -374,6 +378,28 @@ describe("groupSdkRows", () => {
       Array.from({ length: n }, (_, i) => ({ kind: "tool" as const, id: `t${i}`, name: "Read", summary: "" }));
     expect(groupSdkRows(tools(3)).map((r) => r.kind)).toEqual(["tools"]);
     expect(groupSdkRows(tools(2)).map((r) => r.kind)).toEqual(["row", "row"]);
+  });
+
+  it("never folds a tool row that carries a diff: it breaks the run and stays on screen", () => {
+    const read = (id: string): SdkRow => ({ kind: "tool", id, name: "Read", summary: "" });
+    const edit: SdkRow = {
+      kind: "tool",
+      id: "e",
+      name: "Edit",
+      summary: "a.ts",
+      input: { file_path: "a.ts", old_string: "x", new_string: "y" },
+    };
+    const rendered = groupSdkRows([read("r1"), read("r2"), read("r3"), edit, read("r4")]);
+    expect(rendered.map((r) => [r.kind, r.id])).toEqual([
+      ["tools", "r1"],
+      ["row", "e"],
+      ["row", "r4"],
+    ]);
+  });
+
+  it("still folds an Edit mirrored from the terminal (no old/new strings, so no diff)", () => {
+    const mirrored = (id: string): SdkRow => ({ kind: "tool", id, name: "Edit", summary: "", input: { description: "Edit(a.ts)" } });
+    expect(groupSdkRows([mirrored("m1"), mirrored("m2"), mirrored("m3")]).map((r) => r.kind)).toEqual(["tools"]);
   });
 });
 
@@ -986,6 +1012,58 @@ describe("toolHeadline", () => {
     expect(toolHeadline("Workflow", { name: "review-changes" }).background).toBe(true);
   });
 
+  it("AGENT (o nome atual da tool de subagente) tem o mesmo tratamento do Task", () => {
+    expect(toolHeadline("Agent", { description: "audita o pdv", subagent_type: "Explore", prompt: "..." })).toEqual({
+      title: "Agent(audita o pdv)",
+      detail: "Explore",
+      background: true,
+    });
+    expect(toolHeadline("Agent", { subagent_type: "Explore" })).toEqual({ title: "Agent(Explore)", background: true });
+  });
+
+  it("MultiEdit é edição de arquivo: o nome do arquivo na manchete", () => {
+    expect(toolHeadline("MultiEdit", { file_path: "/w/src/sdkChat.ts", edits: [] })).toEqual({
+      title: "MultiEdit(sdkChat.ts)",
+      detail: "/w/src/sdkChat.ts",
+    });
+  });
+
+  it("Workflow: o input real é {script} — o nome e a descrição saem do `meta` do script", () => {
+    const script = [
+      "export const meta = {",
+      "  name: 'review-changes',",
+      "  description: 'Revisa o diff em paralelo',",
+      "  phases: [{ title: 'Ler' }, { title: 'Revisar' }],",
+      "};",
+    ].join("\n");
+    expect(toolHeadline("Workflow", { script })).toEqual({
+      title: "Workflow(review-changes)",
+      detail: "Revisa o diff em paralelo",
+      background: true,
+    });
+    const noDescription = "export const meta = { name: 'x', phases: [{ title: 'A' }, { title: 'B' }] };";
+    expect(toolHeadline("Workflow", { script: noDescription })).toEqual({
+      title: "Workflow(x)",
+      detail: "2 phases",
+      background: true,
+    });
+  });
+
+  it("TodoWrite: quantas tarefas já foram feitas, e a que está em andamento", () => {
+    const todos = [
+      { content: "Ler o código", activeForm: "Lendo o código", status: "completed" },
+      { content: "Escrever o teste", activeForm: "Escrevendo o teste", status: "in_progress" },
+      { content: "Implementar", activeForm: "Implementando", status: "pending" },
+    ];
+    expect(toolHeadline("TodoWrite", { todos })).toEqual({ title: "Tasks 1/3", detail: "Escrevendo o teste" });
+    // Nada em andamento: só a contagem.
+    expect(toolHeadline("TodoWrite", { todos: [{ content: "a", activeForm: "A", status: "pending" }] })).toEqual({
+      title: "Tasks 0/1",
+    });
+    // Input torto não derruba a manchete.
+    expect(toolHeadline("TodoWrite", { todos: "x" })).toEqual({ title: "TodoWrite" });
+  });
+
   it("an unknown tool keeps the old behaviour: its name and the one-line summary", () => {
     expect(toolHeadline("SomeNewTool", { prompt: "faz  isso\naqui" })).toEqual({
       title: "SomeNewTool",
@@ -1337,6 +1415,30 @@ describe("workflow — a frota visível no chat", () => {
     });
   });
 
+  it("as fases e o início da rodada vêm do quadro do back (o script lido no runner)", () => {
+    // Sem a chamada da tool nesta sessão (aba aberta depois do disparo): só o back sabe o plano.
+    const state = feed([progress({ phases: ["Varredura", "Síntese"], startedAt: 1_000 })]);
+    expect(state.rows.find((r) => r.kind === "workflow")).toMatchObject({
+      phases: [{ title: "Varredura" }, { title: "Síntese" }],
+      startedAt: 1_000,
+    });
+  });
+
+  it("as fases do back mandam na ordem; o detalhe do plano da chamada vem junto quando o título bate", () => {
+    const state = feed([call(SCRIPT), progress({ phases: ["Mapear", "Montar"] })]);
+    expect((state.rows.find((r) => r.kind === "workflow") as { phases?: unknown }).phases).toEqual([
+      { title: "Mapear", detail: "leitores paralelos" },
+      { title: "Montar" },
+    ]);
+  });
+
+  it("um back antigo (sem phases/startedAt no quadro) mantém o plano da chamada e não inventa início", () => {
+    const state = feed([call(SCRIPT), progress()]);
+    const row = state.rows.find((r) => r.kind === "workflow") as { phases?: unknown[]; startedAt?: number };
+    expect(row.phases).toHaveLength(3);
+    expect(row.startedAt).toBeUndefined();
+  });
+
   it("um quadro sem rodada é descartado em silêncio", () => {
     const state = feed([progress({ runId: undefined })]);
     expect(state.rows).toHaveLength(0);
@@ -1503,5 +1605,277 @@ describe("mensagem de outra pessoa chegando ao vivo", () => {
   it("sem saber quem está vendo, tudo conta (o comportamento de antes)", () => {
     const state = applySdkEvent(INITIAL_SDK_STATE, { type: "user", text: "valeu", at: 1500, from: BOB });
     expect(deliveredUserTexts(state.rows)).toEqual([{ text: "valeu", at: 1500 }]);
+  });
+});
+
+/**
+ * O SUBAGENTE NÃO FALA PELO PRINCIPAL. O driver agora marca com `parentToolUseId` o que um
+ * Agent/Task fez; a tela guarda a marca na linha (`parent`) para desenhá-la sob o card do pai, e a
+ * barra de atividade diz que é o subagente trabalhando — não o principal.
+ */
+describe("subagentes (parentToolUseId)", () => {
+  const ready = (): SdkChatState => applySdkEvent(INITIAL_SDK_STATE, { type: "ready" });
+  const agentCall: SdkEvent = {
+    type: "tool_use", id: "t1", name: "Agent", input: { description: "explora o chat", subagent_type: "Explore" },
+  };
+
+  it("a ferramenta e o texto do subagente viram linhas com `parent`", () => {
+    const state = feed([
+      agentCall,
+      { type: "tool_use", id: "c1", name: "Read", input: { file_path: "/w/sdkChat.ts" }, parentToolUseId: "t1" },
+      { type: "assistant_text", text: "achei", parentToolUseId: "t1" },
+    ], ready());
+    expect(state.rows.map((r) => [r.kind, r.id, "parent" in r ? r.parent : undefined])).toEqual([
+      ["tool", "t1", undefined],
+      ["tool", "c1", "t1"],
+      ["assistant", expect.stringMatching(/^a:/), "t1"],
+    ]);
+  });
+
+  it("o texto do subagente não fecha nem substitui a resposta do principal que está escorrendo", () => {
+    const state = feed([
+      agentCall,
+      { type: "assistant_delta", text: "Enquanto isso, " },
+      { type: "assistant_text", text: "achei", parentToolUseId: "t1" },
+      { type: "tool_use", id: "c1", name: "Read", input: { file_path: "/w/a.ts" }, parentToolUseId: "t1" },
+      { type: "assistant_delta", text: "sigo aqui." },
+      { type: "assistant_text", text: "Enquanto isso, sigo aqui." },
+    ], ready());
+    const main = state.rows.filter((r) => r.kind === "assistant" && !r.parent);
+    expect(main).toEqual([{ kind: "assistant", id: expect.any(String), text: "Enquanto isso, sigo aqui.", streaming: false }]);
+    const child = state.rows.filter((r) => r.kind === "assistant" && r.parent === "t1");
+    expect(child.map((r) => r.kind === "assistant" && r.text)).toEqual(["achei"]);
+  });
+
+  it("a barra diz que é o SUBAGENTE trabalhando, com o tipo dele e a ação", () => {
+    let state = appendUserRow(ready(), "investiga", undefined, { awaiting: true });
+    state = feed([
+      agentCall,
+      { type: "tool_use", id: "c1", name: "Read", input: { file_path: "/w/sdkChat.ts" }, parentToolUseId: "t1" },
+    ], state);
+    expect(currentActivity(state)).toEqual({ kind: "tool", label: "Subagent Explore: Read(sdkChat.ts)", rowId: "c1" });
+    expect(liveActivityDetail(state)).toBe("Subagent Explore: Read(sdkChat.ts)");
+    state = applySdkEvent(state, { type: "assistant_text", text: "olhei o reducer\nagora o view", parentToolUseId: "t1" });
+    expect(currentActivity(state)?.label).toBe("Subagent Explore: agora o view");
+    expect(liveActivityDetail(state)).toBe("Subagent Explore: agora o view");
+  });
+
+  it("um subagente em segundo plano que fala DEPOIS do fim do turno não religa o 'Trabalhando…'", () => {
+    let state = feed([agentCall, { type: "result", isError: false, sessionId: "s-1" }], ready());
+    expect(state.turnActive).toBe(false);
+    state = feed([
+      { type: "tool_use", id: "c1", name: "Read", input: { file_path: "/w/a.ts" }, parentToolUseId: "t1" },
+      { type: "assistant_text", text: "achei", parentToolUseId: "t1" },
+    ], state);
+    expect(state.turnActive).toBe(false);
+    expect(state.rows.filter((r) => "parent" in r && r.parent === "t1")).toHaveLength(2);
+  });
+
+  it("um envio esperando o principal continua esperando quando o subagente em segundo plano fala", () => {
+    let state = feed([agentCall, { type: "result", isError: false, sessionId: "s-1" }], ready());
+    state = appendUserRow(state, "e agora?", undefined, { awaiting: true });
+    state = applySdkEvent(state, { type: "tool_use", id: "c2", name: "Read", input: { file_path: "/w/b.ts" }, parentToolUseId: "t1" });
+    expect(state.awaiting).toBe(true);
+    expect(state.turnActive).toBe(false);
+  });
+});
+
+/**
+ * A FERRAMENTA SENDO GERADA. O `tool_use` só chega quando o modelo termina o input inteiro — num
+ * Write de 400 linhas, dezenas de segundos de "Trabalhando…" em que a IA parecia engasgada. O
+ * driver agora avisa o começo (`tool_use_start`), o tamanho já gerado (`tool_input_progress`) e há
+ * quanto tempo a ferramenta roda (`tool_progress`). A linha provisória mostra isso, e o `tool_use`
+ * completo a SUBSTITUI no lugar: um card só.
+ */
+describe("ferramenta sendo gerada (tool_use_start → progresso → tool_use)", () => {
+  const ready = (): SdkChatState => applySdkEvent(INITIAL_SDK_STATE, { type: "ready" });
+  const started = (): SdkChatState =>
+    feed([
+      { type: "user", text: "cria o arquivo" },
+      { type: "assistant_text", text: "Vou criar." },
+      { type: "tool_use_start", id: "w1", name: "Write" },
+    ], ready());
+
+  it("o começo cria a linha PROVISÓRIA, sem input, e acende o turno", () => {
+    const state = started();
+    expect(state.rows.at(-1)).toEqual({ kind: "tool", id: "w1", name: "Write", summary: "", pending: true });
+    expect(state.turnActive).toBe(true);
+  });
+
+  it("o progresso atualiza só a linha provisória; as outras linhas mantêm a referência", () => {
+    const before = started();
+    const after = applySdkEvent(before, { type: "tool_input_progress", id: "w1", bytes: 12_288, filePath: "/w/src/sdkChat.ts" });
+    expect(after.rows.at(-1)).toMatchObject({ id: "w1", pending: true, inputBytes: 12_288, filePath: "/w/src/sdkChat.ts" });
+    expect(after.rows.slice(0, -1).every((row, i) => row === before.rows[i])).toBe(true);
+    // O mesmo progresso de novo não muda nada: o mesmo estado, nenhum render.
+    expect(applySdkEvent(after, { type: "tool_input_progress", id: "w1", bytes: 12_288, filePath: "/w/src/sdkChat.ts" })).toBe(after);
+  });
+
+  it("o tool_use completo SUBSTITUI a provisória no lugar: uma linha só, com o input final", () => {
+    const generating = feed([
+      { type: "tool_input_progress", id: "w1", bytes: 4_000, filePath: "/w/a.ts" },
+      // Uma linha que cai DEPOIS da provisória (o painel de workflow) não pode empurrar o card para o fim.
+      { type: "workflow_progress", runId: "r1", name: "x", agents: [] },
+    ], started());
+    const input = { file_path: "/w/a.ts", content: "linha\n" };
+    const done = applySdkEvent(generating, { type: "tool_use", id: "w1", name: "Write", input });
+    expect(done.rows.filter((row) => row.kind === "tool")).toEqual([
+      { kind: "tool", id: "w1", name: "Write", summary: toolSummary(input), input },
+    ]);
+    const at = generating.rows.findIndex((row) => row.id === "w1");
+    expect(done.rows.findIndex((row) => row.id === "w1")).toBe(at);
+    expect(done.rows.length).toBe(generating.rows.length);
+    expect(done.rows.every((row, i) => i === at || row === generating.rows[i])).toBe(true);
+  });
+
+  it("o bloco consolidado que chega DEPOIS do começo da ferramenta não duplica a fala nem o raciocínio", () => {
+    // O `tool_use_start` fecha a linha que escorria; se o CLI mandar o `assistant` do bloco de texto
+    // só depois dele, o bloco consolidado tem de cair na MESMA linha, não numa segunda bolha.
+    const state = feed([
+      { type: "user", text: "cria" },
+      { type: "thinking_delta", text: "vou pensar" },
+      { type: "assistant_delta", text: "Vou " },
+      { type: "assistant_delta", text: "criar." },
+      { type: "tool_use_start", id: "w1", name: "Write" },
+      { type: "assistant_text", text: "Vou criar." },
+      { type: "tool_use", id: "w1", name: "Write", input: { file_path: "/w/a.ts", content: "x" } },
+    ], ready());
+    expect(state.rows.map((row) => row.kind)).toEqual(["user", "thinking", "assistant", "tool"]);
+    expect(state.rows[2]).toMatchObject({ text: "Vou criar.", streaming: false });
+
+    const thought = feed([
+      { type: "user", text: "cria" },
+      { type: "thinking_delta", text: "vou pensar" },
+      { type: "tool_use_start", id: "w1", name: "Write" },
+      { type: "thinking", text: "vou pensar" },
+    ], ready());
+    expect(thought.rows.map((row) => row.kind)).toEqual(["user", "thinking", "tool"]);
+  });
+
+  it("progresso de uma ferramenta que já chegou completa (ou que nunca começou) é ignorado", () => {
+    const done = applySdkEvent(started(), { type: "tool_use", id: "w1", name: "Write", input: { file_path: "/w/a.ts", content: "" } });
+    expect(applySdkEvent(done, { type: "tool_input_progress", id: "w1", bytes: 99 })).toBe(done);
+    expect(applySdkEvent(done, { type: "tool_input_progress", id: "nunca", bytes: 99 })).toBe(done);
+  });
+
+  it("o relógio da ferramenta (tool_progress) entra na linha dela", () => {
+    const state = feed([
+      { type: "tool_use", id: "b1", name: "Bash", input: { command: "npm test", description: "Rodando a suíte" } },
+      { type: "tool_progress", id: "b1", elapsedSeconds: 42 },
+    ], started());
+    expect(state.rows.find((row) => row.id === "b1")).toMatchObject({ elapsedSeconds: 42 });
+  });
+
+  it("um turno que acaba com a linha ainda provisória (interrompido) não a deixa girando para sempre", () => {
+    const cut = applySdkEvent(started(), { type: "result", isError: false, subtype: "aborted" });
+    expect(cut.rows.some((row) => row.kind === "tool" && row.pending)).toBe(false);
+    const crashed = applySdkEvent(started(), { type: "error", message: "o CLI caiu" });
+    expect(crashed.rows.some((row) => row.kind === "tool" && row.pending)).toBe(false);
+    // Um driver novo, sem turno em voo: a ferramenta pela metade morreu com o anterior.
+    const rebooted = applySdkEvent(started(), { type: "ready" });
+    expect(rebooted.rows.some((row) => row.kind === "tool" && row.pending)).toBe(false);
+  });
+
+  it("a linha provisória não dobra num grupo de ferramentas: ela é o que está acontecendo agora", () => {
+    const state = feed([
+      { type: "tool_use", id: "r1", name: "Read", input: { file_path: "/w/1.ts" } },
+      { type: "tool_use", id: "r2", name: "Read", input: { file_path: "/w/2.ts" } },
+      { type: "tool_use", id: "r3", name: "Read", input: { file_path: "/w/3.ts" } },
+      { type: "tool_use_start", id: "w1", name: "Write" },
+    ], ready());
+    expect(groupSdkRows(state.rows).at(-1)).toEqual({ kind: "row", id: "w1", row: state.rows.at(-1) });
+  });
+
+  it("a barra e o indicador dizem o que a IA está fazendo AGORA", () => {
+    let state = applySdkEvent(started(), { type: "tool_input_progress", id: "w1", bytes: 12_288, filePath: "/w/src/sdkChat.ts" });
+    expect(currentActivity(state)).toEqual({ kind: "tool", label: "Writing sdkChat.ts… 12 KB", rowId: "w1" });
+    expect(liveActivityDetail(state)).toBe("Writing sdkChat.ts… 12 KB");
+    state = feed([
+      { type: "tool_use", id: "w1", name: "Write", input: { file_path: "/w/src/sdkChat.ts", content: "x" } },
+      { type: "tool_use_start", id: "e1", name: "Edit" },
+    ], state);
+    expect(currentActivity(state)?.label).toBe("Editing a file…");
+    state = feed([
+      { type: "tool_use", id: "e1", name: "Edit", input: { file_path: "/w/a.ts", old_string: "a", new_string: "b" } },
+      { type: "tool_use", id: "b1", name: "Bash", input: { command: "npm test", description: "Rodando a suíte" } },
+      { type: "tool_progress", id: "b1", elapsedSeconds: 42 },
+    ], state);
+    expect(currentActivity(state)?.label).toBe("Running: Rodando a suíte… 42s");
+    expect(liveActivityDetail(state)).toBe("Running: Rodando a suíte… 42s");
+  });
+
+  it("toolLiveLabel: a frase de cada caso, em pt-BR também", () => {
+    const pending = (name: string, extra: Partial<Extract<SdkRow, { kind: "tool" }>> = {}): SdkRow =>
+      ({ kind: "tool", id: "x", name, summary: "", pending: true, ...extra });
+    expect(toolLiveLabel(pending("Edit", { filePath: "/w/a.ts", inputBytes: 300 }))).toBe("Editing a.ts… 1 KB");
+    expect(toolLiveLabel(pending("Grep"))).toBe("Preparing Grep…");
+    expect(toolLiveLabel({ kind: "tool", id: "x", name: "Read", summary: "", input: { file_path: "/w/a.ts" } })).toBeNull();
+    setLanguage("pt-BR");
+    try {
+      expect(toolLiveLabel(pending("Write", { filePath: "/w/sdkChat.ts", inputBytes: 12_288 }))).toBe("Escrevendo sdkChat.ts… 12 KB");
+      expect(toolLiveLabel(pending("Edit"))).toBe("Editando um arquivo…");
+      expect(toolLiveLabel({ kind: "tool", id: "x", name: "Bash", summary: "", input: { command: "ls -la" }, elapsedSeconds: 75 }))
+        .toBe("Rodando: ls -la… 1m 15s");
+    } finally {
+      resetLanguage();
+    }
+  });
+});
+
+/**
+ * Um frame do socket por token: aplicar cada um com seu próprio setState era um render da conversa
+ * por token. A view junta o que chegou no mesmo frame de animação — e juntar só pode mudar QUANTAS
+ * vezes se desenha, nunca O QUE fica na tela.
+ */
+describe("coalesceDeltas — os tokens de um frame viram um evento só", () => {
+  const replay = (events: SdkEvent[]) => events.reduce(applySdkEvent, INITIAL_SDK_STATE);
+
+  it("junta deltas consecutivos do mesmo tipo, na ordem", () => {
+    expect(
+      coalesceDeltas([
+        { type: "assistant_delta", text: "Rodando " },
+        { type: "assistant_delta", text: "os " },
+        { type: "assistant_delta", text: "testes" },
+      ]),
+    ).toEqual([{ type: "assistant_delta", text: "Rodando os testes" }]);
+  });
+
+  it("não atravessa um evento de outro tipo: o raciocínio e a resposta seguem separados e em ordem", () => {
+    const events: SdkEvent[] = [
+      { type: "thinking_delta", text: "vou " },
+      { type: "thinking_delta", text: "ler" },
+      { type: "assistant_delta", text: "Lendo " },
+      { type: "assistant_delta", text: "o arquivo." },
+      { type: "tool_use", id: "t1", name: "Read", input: { file_path: "a.ts" } },
+      { type: "assistant_delta", text: "Pronto." },
+    ];
+    expect(coalesceDeltas(events)).toEqual([
+      { type: "thinking_delta", text: "vou ler" },
+      { type: "assistant_delta", text: "Lendo o arquivo." },
+      { type: "tool_use", id: "t1", name: "Read", input: { file_path: "a.ts" } },
+      { type: "assistant_delta", text: "Pronto." },
+    ]);
+  });
+
+  it("um delta com qualquer campo além do texto não é fundido (não sabemos o que ele significa)", () => {
+    const events: SdkEvent[] = [
+      { type: "assistant_delta", text: "a" },
+      { type: "assistant_delta", text: "b", source: "terminal" },
+    ];
+    expect(coalesceDeltas(events)).toEqual(events);
+  });
+
+  it("o estado final é o mesmo de aplicar evento a evento", () => {
+    const events: SdkEvent[] = [
+      { type: "ready" },
+      { type: "thinking_delta", text: "hmm " },
+      { type: "thinking_delta", text: "certo" },
+      { type: "assistant_delta", text: "Com" },
+      { type: "assistant_delta", text: "eçando" },
+      { type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } },
+      { type: "assistant_delta", text: "Fim" },
+      { type: "assistant_delta", text: "." },
+    ];
+    expect(replay(coalesceDeltas(events)).rows).toEqual(replay(events).rows);
   });
 });

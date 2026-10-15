@@ -137,6 +137,15 @@ describe("deliver orchestration", () => {
     expect(mergeRan()).toBe(false);
   });
 
+  it("unauthorized, then the user's OK on the same clean commit: the gate runs once, the merge still happens", async () => {
+    const { deliver, card } = await makeCard();
+    const probe = [`head=${"c".repeat(40)}`, "clean=1", "__VIBEHUB_GATE_JSON__", '{"checks":["npm test"]}'].join("\n");
+    wire({ probe });
+    expect(await deliver.deliver(card.id, { branch: "dev" })).toMatchObject({ reason: "unauthorized" });
+    expect(await deliver.deliver(card.id, { branch: "dev", authorized: true })).toMatchObject({ merged: true });
+    expect(scripts().filter((s) => s.includes('echo "__VIBEHUB_GATE__ pass"'))).toHaveLength(1);
+  });
+
   it("authorized:true is the ONLY thing that merges — a truthy-but-not-true value does not", async () => {
     const { deliver, card } = await makeCard();
     wire();

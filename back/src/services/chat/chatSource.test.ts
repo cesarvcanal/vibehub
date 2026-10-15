@@ -15,8 +15,8 @@ vi.mock("../board/registry.js", async (orig) => ({
   getCard: vi.fn(async () => ({ id: "c1", title: "a card", projectId: "p1" })),
   getProject: vi.fn(async () => ({ id: "p1" })),
 }));
-vi.mock("../maestro/maestro.js", async (orig) => ({
-  ...(await orig<typeof import("../maestro/maestro.js")>()),
+vi.mock("../maestro/cardSession.js", async (orig) => ({
+  ...(await orig<typeof import("../maestro/cardSession.js")>()),
   transcriptDirFor: () => "/root/.claude/projects/-work-p1-c1",
 }));
 

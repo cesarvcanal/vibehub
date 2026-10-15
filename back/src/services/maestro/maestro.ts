@@ -5,12 +5,12 @@ import {
   listAccounts, getConfig, isHumanActive, reportCardState, CLAUDE_MODELS,
   type Card, type Project, type BoardColumn, type CardStatus, type DeclaredState,
 } from "../board/registry.js";
-import { cardWorkPaths } from "../board/workspace.js";
 import { cardAgentState, cardAwaitingChoice, cardDriverActivity } from "../board/agentState.js";
 import { profileDirFor } from "../accounts/profiles.js";
-import { seedDestDir } from "../import/import.js";
+import { transcriptDirFor, sessionGoneError } from "./cardSession.js";
 import { recordOrigin, type MessageOrigin } from "../chat/provenance.js";
 import { publishExternalMessage } from "../sdk/history.js";
+import { liveDriverSession, sendAgentTurn } from "../sdk/manager.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -21,7 +21,8 @@ import { logger } from "../../utils/logger.js";
  * does exactly three things, and each one reuses machinery the board already has:
  *
  *  - **list** the terminals and their current situation (the same mirror the board renders);
- *  - **send** an instruction to one card's terminal (types it at the prompt and presses Enter);
+ *  - **send** an instruction to one card: a turn of its native-chat driver while that chat is in
+ *    use (a live driver), otherwise typed at its terminal's prompt followed by Enter;
  *  - **read** that card's last assistant turns out of the Claude transcript.
  *
  * RULE FOR THIS FILE: reimplement nothing. It calls the same registry/workspace/runner code the UI
@@ -130,17 +131,6 @@ function assistantText(content: unknown): string {
 }
 
 /**
- * Where a card's Claude transcripts live INSIDE the runner: the account profile's `projects/`
- * directory for that card's cwd. Every reader of a transcript — the maestro, the model pill, the
- * chat view — derives the path here, so they can never disagree about which file is the session.
- * PURE.
- */
-export function transcriptDirFor(project: Project, card: Card, accountSlug?: string | null): string {
-  const profileDir = profileDirFor(accountSlug ?? undefined);
-  return seedDestDir(profileDir, cardWorkPaths(project, card).cwd);
-}
-
-/**
  * Reads a Claude Code transcript (`.jsonl`, one JSON object per line) and returns the TEXT of the
  * last `last` assistant messages, oldest first. Malformed lines, non-assistant messages and
  * non-text blocks are dropped. PURE.
@@ -237,24 +227,6 @@ export async function listTerminals(project?: string): Promise<TerminalSummary[]
   );
 }
 
-/**
- * A tmux session can disappear underneath the board — the runner restarted, someone killed it —
- * while the card still looks live (it was opened and never paused). tmux then answers with its own
- * wording ("no server running", "can't find session"), which tells a coordinating agent nothing
- * about what to do. Translate it into the action that fixes it: open the card, which recreates the
- * session through the same attach-or-create the terminal uses. PURE.
- */
-export function sessionGoneError(err: unknown, title: string): Error {
-  const detail = (err as Error)?.message ?? String(err);
-  if (/no server running|can't find session|session not found/i.test(detail)) {
-    return new Error(
-      `the terminal for card "${title}" is gone in the runner (the session died or the runner restarted) — ` +
-      "open the card to recreate it, then send the instruction again",
-    );
-  }
-  return err instanceof Error ? err : new Error(detail);
-}
-
 export interface SendResult {
   sent: true;
   cardId: string;
@@ -288,15 +260,16 @@ export interface SendOpts {
    * `/exit`, a hibernate that half-landed) still has a live tmux with a bare SHELL under it: the
    * board says "open", send-keys succeeds — and the message is executed by bash or swallowed,
    * never reaching any conversation. That was the chat's "balão pendente para sempre": a 200 with
-   * no echo ever coming. On for the person's chat send; off by default (the outbox path probes for
-   * itself, and an agent-to-agent send pays no extra exec).
+   * no echo ever coming. On for the person's chat send and always for an AGENT's send; off by
+   * default otherwise (the outbox path probes for itself).
    */
   requireAgent?: boolean;
   /**
    * WHO this message is from — the visual attribution the destination card's chat shows ("card X
-   * said this", "user Y said this"). Recording it changes NOTHING about delivery: the text is typed
-   * at the prompt exactly as before. Absent = unattributed (drawn as the card owner's own message,
-   * which is the pre-provenance behaviour).
+   * said this", "user Y said this"). Absent = unattributed (drawn as the card owner's own message,
+   * which is the pre-provenance behaviour). An AGENT origin also picks the route: while the card's
+   * native chat is in use (a live SDK driver), the instruction is a turn of that driver, not text
+   * typed at the tmux prompt.
    */
   origin?: MessageOrigin;
 }
@@ -339,6 +312,24 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
       `the terminal for card "${card.title}" has no live session — open or resume the card before sending it an instruction`,
     );
   }
+  const fromAgent = origin?.kind === "agent";
+  // The native chat takes the turn only while it is in use (a live driver). Without one, the
+  // terminal is where the card is being worked, so the instruction is typed there.
+  const driver = fromAgent ? liveDriverSession(card.id) : null;
+  if (driver && origin) {
+    const project = await getProject(card.projectId);
+    if (!project) throw new Error("project for this card not found");
+    if (!sendAgentTurn(driver, instruction, origin)) {
+      throw new Error(
+        `the native chat driver of card "${card.title}" exited before it could take the instruction — send it again`,
+      );
+    }
+    logger.info(
+      { audit: true, action: "maestro.send", card: card.worktreeSlug, route: "sdk-driver", bytes: Buffer.byteLength(instruction), by },
+      "instruction delivered to a card's native chat",
+    );
+    return { sent: true, cardId: card.id, title: card.title, project: project.name };
+  }
   // A menu is open in the terminal (session-resume, /compact, a permission prompt): typing a message
   // now would press Enter on the highlighted option and be swallowed. Refuse — the caller keeps the
   // text and the person answers the menu in the Terminal tab. The marker lets the routes map it to a
@@ -346,7 +337,7 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
   // Claude EXITED under this session (the pane is a bare shell) or the session evaporated: typing
   // here would hand the message to bash, answer 200, and echo NOTHING back — the chat's forever-
   // pending bubble. Refuse with the action that fixes it instead.
-  if (requireAgent) {
+  if (requireAgent || fromAgent) {
     const agent = await cardAgentState(card);
     if (agent !== "running") {
       throw new Error(

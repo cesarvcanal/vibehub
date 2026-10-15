@@ -1,6 +1,17 @@
 import { config } from "../../config/env.js";
-import { hostExecutor, shQuote } from "../../runtime/host.js";
+import { hostExecutor } from "../../runtime/host.js";
 import { logger } from "../../utils/logger.js";
+import {
+  RUNS_PROBED,
+  buildAgentFeedProbeScript,
+  buildWorkflowProbeScript,
+  parseAgentFeed,
+  parseWorkflowProbe,
+  type WorkflowActivity,
+  type WorkflowAgent,
+  type WorkflowFeedItem,
+  type WorkflowRun,
+} from "./workflowProbe.js";
 
 /**
  * O WORKFLOW VISÍVEL — o que a tela não tinha como saber.
@@ -15,199 +26,24 @@ import { logger } from "../../utils/logger.js";
  * O que existe de verdade é um DIÁRIO em disco, dentro do runner, escrito pelo harness:
  *
  *   <transcriptDir>/<sessionId>/subagents/workflows/<runId>/journal.jsonl
- *     {"type":"started","key":"v2:…","agentId":"a3c4…"}
+ *     {"type":"launched"}
+ *     {"type":"started","key":"v2:…","agentId":"a3c4…","label":"varre:front","phase":"Varredura"}
  *     {"type":"result","key":"v2:…","agentId":"a3c4…","result":{…}}
  *
- * e, ao lado, um `agent-<id>.jsonl` por subagente cuja PRIMEIRA linha é a tarefa que ele recebeu —
- * o rótulo. Este módulo lê isso de fora (uma sondagem só-leitura por `docker exec`), transforma em
- * um instantâneo e o manager publica no chat. Nada é escrito no runner.
+ * e, ao lado, por subagente, um `agent-<id>.meta.json` (`description`, `workflowPhase`) e um
+ * `agent-<id>.jsonl` com o transcript dele, linha a linha e com `timestamp`. O rótulo vem do DIÁRIO;
+ * o meta e a linha "computed task text follows:" do transcript são os fallbacks. A PRIMEIRA linha do
+ * transcript não serve: no harness 2.1.x ela é o cabeçalho "[Workflow harness — user request]" com
+ * o pedido do usuário — igual em todos os subagentes.
+ *
+ * Este módulo lê isso de fora (uma sondagem só-leitura por `docker exec`, montada e lida em
+ * ./workflowProbe.ts), transforma em um instantâneo e o manager publica no chat. Nada é escrito no
+ * runner.
  *
  * As travas são deliberadas (a frota pode durar uma hora e ninguém quer um laço no servidor): uma
  * sondagem por card, só enquanto alguém está com o chat aberto, parada sozinha quando o diário
  * silencia sem agente em voo, e um teto duro de tempo além do qual ela desiste de qualquer jeito.
  */
-
-/** Um subagente da frota, como o diário o conhece. */
-export interface WorkflowAgent {
-  /** `agentId` do harness — o nome do arquivo `agent-<id>.jsonl`. */
-  id: string;
-  /** A tarefa que ele recebeu, em uma linha. Pode vir vazia (arquivo ainda não escrito). */
-  label: string;
-  status: "running" | "done";
-  /** O que ele devolveu, aparado — só nos que terminaram. */
-  result?: string;
-}
-
-/** O instantâneo de UMA rodada de workflow. */
-export interface WorkflowRun {
-  /** `wf_…` — o diretório da rodada, e o id que o harness imprime no resultado da tool. */
-  runId: string;
-  /** O nome do script (`meta.name`), lido do arquivo do script ao lado. "" quando não dá pra saber. */
-  name: string;
-  /**
-   * TODOS os subagentes que a rodada começou, e quantos já responderam — contados no diário inteiro,
-   * não na lista abaixo. A lista é o que a tela desenha e tem teto; a contagem é a verdade, e é ela
-   * que decide se a frota acabou. Sem essa separação, uma frota maior que o teto era dada como
-   * concluída com meia dúzia de subagentes ainda trabalhando.
-   */
-  total: number;
-  done: number;
-  agents: WorkflowAgent[];
-  /** mtime do diário, em ms: a última vez que a rodada se mexeu. */
-  at: number;
-  /** A rodada silenciou sem nada em voo — o painel pode parar o spinner. */
-  finished: boolean;
-}
-
-/** Quantas rodadas a sondagem olha (as mais recentes). Duas cobrem "rodei de novo pra iterar". */
-const RUNS_PROBED = 2;
-/** Teto de subagentes LISTADOS por rodada — a contagem (`total`/`done`) é sempre do diário inteiro. */
-const AGENTS_MAX = 200;
-
-/**
- * A sondagem, como ela roda DENTRO do runner. Node porque o diário e os rótulos são JSON: fazer
- * isso em awk seria ilegível e quebradiço. Só lê — `readdir`, `stat`, `readFile` — e imprime UMA
- * linha JSON. Um diretório que não existe (nenhum workflow nesta sessão) imprime `[]`, não um erro.
- *
- * O `dir` chega como ARGUMENTO (`process.argv[1]`), nunca interpolado no corpo do script. PURE.
- */
-export function buildWorkflowProbeScript(containerName: string, runsDir: string, scriptsDir: string): string {
-  const js = `
-const fs=require('fs'),p=require('path');
-const PRE='computed task text follows:';
-function head(file,bytes){
-  let fd=null;
-  try{
-    fd=fs.openSync(file,'r');
-    const buf=Buffer.alloc(bytes);
-    const n=fs.readSync(fd,buf,0,bytes,0);
-    return buf.slice(0,n).toString('utf8');
-  }catch(e){return ''}
-  finally{if(fd!==null)try{fs.closeSync(fd)}catch(e){}}
-}
-function label(file){
-  try{
-    const h=head(file,65536);
-    const nl=h.indexOf('\\n');
-    const o=JSON.parse(nl<0?h:h.slice(0,nl));
-    let c=o&&o.message&&o.message.content;
-    if(Array.isArray(c))c=c.map(function(b){return b&&b.text||''}).join(' ');
-    if(typeof c!=='string')return '';
-    const i=c.indexOf(PRE);
-    return (i<0?c:c.slice(i+PRE.length)).replace(/\\s+/g,' ').trim().slice(0,200);
-  }catch(e){return ''}
-}
-function nameOf(scriptsDir,runId){
-  try{
-    const hit=fs.readdirSync(scriptsDir).filter(function(n){return n.indexOf('-'+runId+'.js')>0})[0];
-    return hit?hit.slice(0,hit.length-('-'+runId+'.js').length):'';
-  }catch(e){return ''}
-}
-function main(dir,scriptsDir){
-  let names=[];
-  try{names=fs.readdirSync(dir)}catch(e){return []}
-  const runs=[];
-  for(const n of names){
-    if(n.indexOf('wf_')!==0)continue;
-    const d=p.join(dir,n);
-    let st;try{st=fs.statSync(p.join(d,'journal.jsonl'))}catch(e){continue}
-    runs.push({runId:n,dir:d,at:Math.round(st.mtimeMs)});
-  }
-  runs.sort(function(a,b){return b.at-a.at});
-  const out=[];
-  for(const r of runs.slice(0,${RUNS_PROBED})){
-    let lines=[];
-    try{lines=fs.readFileSync(p.join(r.dir,'journal.jsonl'),'utf8').split('\\n')}catch(e){}
-    const agents=new Map();
-    for(const l of lines){
-      if(!l)continue;
-      let o;try{o=JSON.parse(l)}catch(e){continue}
-      if(!o||!o.agentId)continue;
-      const a=agents.get(o.agentId)||{id:o.agentId,status:'running',label:''};
-      if(o.type==='result'){
-        a.status='done';
-        const v=o.result;
-        a.result=(typeof v==='string'?v:JSON.stringify(v==null?'':v)).replace(/\\s+/g,' ').slice(0,400);
-      }
-      agents.set(o.agentId,a);
-    }
-    const all=Array.from(agents.values());
-    const done=all.filter(function(a){return a.status==='done'}).length;
-    const list=all.slice(0,${AGENTS_MAX});
-    for(const a of list)a.label=label(p.join(r.dir,'agent-'+a.id+'.jsonl'));
-    out.push({runId:r.runId,name:nameOf(scriptsDir,r.runId),at:r.at,total:all.length,done:done,agents:list});
-  }
-  return out;
-}
-console.log(JSON.stringify(main(process.argv[1]||'',process.argv[2]||'')));
-`.trim();
-  return (
-    `docker exec ${shQuote(containerName)} node -e ${shQuote(js)} ` +
-    `${shQuote(runsDir)} ${shQuote(scriptsDir)} 2>/dev/null || true`
-  );
-}
-
-/**
- * Tira do rótulo o cabeçalho que TODO subagente de workflow carrega — "Trabalhe em /work/…/x." é a
- * mesma frase em todos eles e empurra pra fora da linha a única parte que diferencia um do outro.
- * Sobrando nada, o rótulo original volta inteiro: é melhor do que uma linha vazia. PURE.
- */
-export function trimAgentLabel(raw: string): string {
-  const flat = String(raw ?? "").replace(/\s+/g, " ").trim();
-  if (!flat) return "";
-  const withoutCwd = flat.replace(/^(trabalhe em|work in|working in|working directory:)\s+\S+[.:,]?\s*/i, "");
-  const text = withoutCwd.trim() || flat;
-  return text.length > 140 ? `${text.slice(0, 139)}…` : text;
-}
-
-/** Lê a saída da sondagem. Lixo, vazio ou JSON quebrado viram `[]` — isto desenha uma tela. PURE. */
-export function parseWorkflowProbe(stdout: string): WorkflowRun[] {
-  const text = String(stdout ?? "").trim();
-  if (!text) return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text.slice(text.lastIndexOf("\n") + 1));
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(parsed)) return [];
-  const runs: WorkflowRun[] = [];
-  for (const entry of parsed) {
-    if (!entry || typeof entry !== "object") continue;
-    const o = entry as Record<string, unknown>;
-    const runId = typeof o.runId === "string" ? o.runId : "";
-    if (!runId) continue;
-    const rawAgents = Array.isArray(o.agents) ? o.agents : [];
-    const agents: WorkflowAgent[] = [];
-    for (const item of rawAgents) {
-      if (!item || typeof item !== "object") continue;
-      const a = item as Record<string, unknown>;
-      const id = typeof a.id === "string" ? a.id : "";
-      if (!id) continue;
-      const done = a.status === "done";
-      agents.push({
-        id,
-        label: trimAgentLabel(typeof a.label === "string" ? a.label : ""),
-        status: done ? "done" : "running",
-        ...(done && typeof a.result === "string" && a.result ? { result: a.result } : {}),
-      });
-    }
-    const total = typeof o.total === "number" && Number.isFinite(o.total) ? o.total : agents.length;
-    const done = typeof o.done === "number" && Number.isFinite(o.done)
-      ? o.done
-      : agents.filter((a) => a.status === "done").length;
-    runs.push({
-      runId,
-      name: typeof o.name === "string" ? o.name : "",
-      total,
-      done,
-      agents,
-      at: typeof o.at === "number" && Number.isFinite(o.at) ? o.at : 0,
-      finished: false,
-    });
-  }
-  return runs;
-}
 
 /** Nada em voo: todo subagente que começou já devolveu (e pelo menos um começou). Conta pelo
  *  TOTAL do diário, não pela lista desenhada — a lista tem teto, a frota não. PURE. */
@@ -215,17 +51,32 @@ export function runSettled(run: WorkflowRun): boolean {
   return run.total > 0 && run.done >= run.total;
 }
 
-/** Mudou alguma coisa que valha um quadro novo na tela? PURE. */
+function sameActivity(a: WorkflowActivity | undefined, b: WorkflowActivity | undefined): boolean {
+  if (!a || !b) return a === b;
+  if (a.kind === "tool" && b.kind === "tool") return a.tool === b.tool && a.target === b.target;
+  if (a.kind === "text" && b.kind === "text") return a.text === b.text;
+  if (a.kind === "thinking" && b.kind === "thinking") return a.since === b.since;
+  return false;
+}
+
+function agentChanged(a: WorkflowAgent, b: WorkflowAgent | undefined): boolean {
+  return (
+    !b || a.id !== b.id || a.status !== b.status || a.label !== b.label || a.phase !== b.phase ||
+    a.toolCount !== b.toolCount || a.startedAt !== b.startedAt || a.endedAt !== b.endedAt ||
+    !sameActivity(a.activity, b.activity)
+  );
+}
+
+/** Mudou alguma coisa que valha um quadro novo na tela? `lastAt` sozinho não: ele anda a cada
+ *  linha do transcript, e o que a tela mostra dele já vem pela atividade. PURE. */
 export function runChanged(previous: WorkflowRun | undefined, next: WorkflowRun): boolean {
   if (!previous) return true;
   if (previous.runId !== next.runId || previous.at !== next.at) return true;
   if (previous.finished !== next.finished) return true;
   if (previous.total !== next.total || previous.done !== next.done) return true;
+  if (previous.phases.join("\n") !== next.phases.join("\n")) return true;
   if (previous.agents.length !== next.agents.length) return true;
-  return previous.agents.some((a, i) => {
-    const b = next.agents[i];
-    return !b || a.id !== b.id || a.status !== b.status || a.label !== b.label;
-  });
+  return previous.agents.some((a, i) => agentChanged(a, next.agents[i]));
 }
 
 /* ------------------------------------------------------------------ a sondagem */
@@ -356,11 +207,17 @@ export function watchCardWorkflows(cardId: string, deps: WatchDeps): void {
     let runs: WorkflowRun[];
     watch.busy = true;
     try {
+      // Só as rodadas que a sonda ainda lê (as mais recentes): as outras não precisam de marcador.
+      const settled = [...watch.runs.values()]
+        .map(({ last }) => last)
+        .sort((x, y) => y.at - x.at)
+        .slice(0, RUNS_PROBED)
+        .flatMap((last) => last.agents.filter((a) => a.status === "done").map((a) => `${last.runId}/${a.id}`));
       const { stdout } = await hostExecutor().runScript(
-        buildWorkflowProbeScript(config.runner.container, dirs.runs, dirs.scripts),
+        buildWorkflowProbeScript(config.runner.container, dirs.runs, dirs.scripts, settled),
         { timeoutMs: 10_000 },
       );
-      runs = parseWorkflowProbe(stdout);
+      runs = parseWorkflowProbe(stdout, (runId) => watch.runs.get(runId)?.last);
       watch.failures = 0;
     } catch (err) {
       watch.failures += 1;
@@ -406,6 +263,20 @@ export function watchCardWorkflows(cardId: string, deps: WatchDeps): void {
   watch.timer.unref?.();
   watches.set(cardId, watch);
   void tick();
+}
+
+/** Quantos passos o feed de um subagente traz: as últimas ações, não o transcript inteiro. */
+export const FEED_REQUEST_ITEMS = 50;
+
+/**
+ * O feed de UM subagente, lido agora do runner (mesmo executor da sondagem da frota). Sob demanda:
+ * só quando alguém abre o agente no painel. Lança `InvalidWorkflowIdError` para ids fora do formato
+ * (antes de existir um comando) e o erro do executor quando o runner não responde.
+ */
+export async function readAgentFeed(runsDir: string, runId: string, agentId: string): Promise<WorkflowFeedItem[]> {
+  const script = buildAgentFeedProbeScript(config.runner.container, runsDir, runId, agentId, FEED_REQUEST_ITEMS);
+  const { stdout } = await hostExecutor().runScript(script, { timeoutMs: 10_000 });
+  return parseAgentFeed(stdout);
 }
 
 /** Os últimos quadros publicados deste card — o que uma aba que acabou de abrir precisa ver. */

@@ -12,11 +12,46 @@
 import { normalizeMessage, parseOrigin, type MessageOrigin } from "@/features/board/lib/chat";
 import type { SlashCommandInfo } from "@/features/board/lib/slashMenu";
 import type { ServerText } from "@/features/board/lib/sdkOutbox";
+import { hasToolDiff } from "@/features/board/lib/toolDiff";
+import { t as translate } from "@/i18n";
 
 /* ----------------------------------------------------------------- events */
 
 /** One frame from the SDK socket — the driver's event contract, verbatim (`user` only on replay
  *  and for external sends: another card's agent, another person's message). */
+/**
+ * Espelho dos tipos de back/src/services/sdk/workflow.ts (`WorkflowActivity`, `WorkflowAgent`,
+ * `WorkflowFeedItem`). Os campos que o back passou a mandar depois ficam OPCIONAIS aqui: no deploy
+ * blue/green um back antigo ainda publica quadros sem eles.
+ */
+export type WorkflowActivity =
+  | { kind: "tool"; tool: string; target: string }
+  | { kind: "text"; text: string }
+  | { kind: "thinking"; since: number };
+
+export interface WorkflowAgentFrame {
+  id: string;
+  label: string;
+  status: "running" | "done";
+  result?: string;
+  phase?: string;
+  startedAt?: number;
+  lastAt?: number;
+  endedAt?: number;
+  toolCount?: number;
+  /** `toolCount` é um piso: o transcript é maior do que o back leu. */
+  toolCountPartial?: boolean;
+  activity?: WorkflowActivity;
+}
+
+export interface WorkflowFeedItem {
+  at: number;
+  kind: "tool" | "text" | "thinking" | "result";
+  tool?: string;
+  target?: string;
+  text?: string;
+}
+
 export interface SdkEvent {
   type:
     | "user"
@@ -28,6 +63,9 @@ export interface SdkEvent {
     | "thinking"
     | "thinking_delta"
     | "tool_use"
+    | "tool_use_start"
+    | "tool_input_progress"
+    | "tool_progress"
     | "permission"
     | "permission_request"
     | "user_question"
@@ -41,6 +79,7 @@ export interface SdkEvent {
     | "conversation_reset"
     | "result"
     | "workflow_progress"
+    | "workflow_feed"
     | "user_ack"
     | "user_nack"
     | "peer_typing"
@@ -65,7 +104,15 @@ export interface SdkEvent {
   /** On `workflow_progress` (synthesised by the BACK, see back/src/services/sdk/workflow.ts): the
    *  live snapshot of a Workflow's fleet of subagents. `name` carries the script's name. */
   runId?: string;
-  agents?: Array<{ id: string; label: string; status: "running" | "done"; result?: string }>;
+  agents?: WorkflowAgentFrame[];
+  /** On `workflow_feed` (the answer to THIS tab's request, never a broadcast): which subagent, its
+   *  latest steps, and why they came back empty when they did (see components/WorkflowPanel.tsx). */
+  agentId?: string;
+  items?: WorkflowFeedItem[];
+  /** Os títulos de `meta.phases` lidos do script pelo back, na ordem. */
+  phases?: string[];
+  /** Quando a rodada começou (ms). */
+  startedAt?: number;
   /** A contagem do diário INTEIRO — a lista de `agents` tem teto, ela não. */
   total?: number;
   done?: number;
@@ -114,6 +161,17 @@ export interface SdkEvent {
    */
   cid?: string;
   /**
+   * On `tool_use`/`assistant_text`: said by a SUBAGENTE (Agent/Task), not by the main agent — the id
+   * of the tool call that started it. Becomes the row's `parent` (see back protocol `ToolUseEvent`).
+   */
+  parentToolUseId?: string;
+  /** On `tool_input_progress`: bytes of the tool's input generated so far (JSON, throttled). */
+  bytes?: number;
+  /** On `tool_input_progress`: the file the input names, as soon as its path closed in the JSON. */
+  filePath?: string;
+  /** On `tool_progress`: how long the tool has been running. */
+  elapsedSeconds?: number;
+  /**
    * On `peer_typing` (relayed by the BACK from the card's other sockets, never persisted): whether
    * the person in `name` is typing. Handled by the view (see lib/peerTyping.ts), not the reducer.
    */
@@ -146,6 +204,34 @@ export function parseSdkFrame(raw: string): SdkEvent | null {
   const e = obj as Partial<SdkEvent>;
   if (typeof e.type !== "string") return null;
   return { ...e, from: parseOrigin(e.from) } as SdkEvent;
+}
+
+/** A streamed token: the events the view may hold until the next animation frame. PURE. */
+export function isSdkDelta(event: SdkEvent): boolean {
+  return event.type === "assistant_delta" || event.type === "thinking_delta";
+}
+
+/** Only `type` and `text` set — a delta carrying anything else is applied on its own. */
+function isPlainDelta(event: SdkEvent): boolean {
+  return isSdkDelta(event) && Object.entries(event).every(([key, value]) => key === "type" || key === "text" || value === undefined);
+}
+
+/**
+ * Merge CONSECUTIVE plain deltas of the same type into one event, keeping every other event in its
+ * place. Applying the result gives the same rows as applying the input one by one — it only changes
+ * how many reducer passes (and renders) the frame costs. PURE.
+ */
+export function coalesceDeltas(events: readonly SdkEvent[]): SdkEvent[] {
+  const out: SdkEvent[] = [];
+  for (const event of events) {
+    const prev = out[out.length - 1];
+    if (prev && prev.type === event.type && isPlainDelta(prev) && isPlainDelta(event)) {
+      out[out.length - 1] = { type: event.type, text: (prev.text ?? "") + (event.text ?? "") };
+      continue;
+    }
+    out.push(event);
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------- rows */
@@ -184,8 +270,9 @@ export type SdkRow =
        *  live sends — the receipt carries no time. The outbox anchors on it: see `sendMark`. */
       at?: number;
     }
-  /** Claude talking. `streaming` while deltas are still landing on it. */
-  | { kind: "assistant"; id: string; text: string; streaming: boolean }
+  /** Claude talking. `streaming` while deltas are still landing on it. `parent` = said by the
+   *  SUBAGENTE started by that tool call (never streaming: subagent deltas are not relayed). */
+  | { kind: "assistant"; id: string; text: string; streaming: boolean; parent?: string }
   /**
    * O RACIOCÍNIO do modelo, enquanto ele pensa. Mesma mecânica de streaming da linha do assistente
    * (`streaming` enquanto os deltas caem), mas desenhada em segundo plano: é contexto de espera, não
@@ -193,8 +280,23 @@ export type SdkRow =
    * ideia do que estava acontecendo. Vive na sessão: não é gravado no histórico nem replayado.
    */
   | { kind: "thinking"; id: string; text: string; streaming: boolean }
-  /** One tool call, compact: the name plus a one-line summary of its input. */
-  | { kind: "tool"; id: string; name: string; summary: string; input?: unknown }
+  /** One tool call, compact: the name plus a one-line summary of its input. `parent` = made by the
+   *  SUBAGENTE started by that tool call (drawn under its card, not as the main agent's step).
+   *  `pending` = PROVISIONAL: the model opened the call (`tool_use_start`) and is still writing its
+   *  input — `inputBytes`/`filePath` say how far it got; the complete `tool_use` replaces the row in
+   *  place. `elapsedSeconds` = how long the tool has been running (`tool_progress`). */
+  | {
+      kind: "tool";
+      id: string;
+      name: string;
+      summary: string;
+      input?: unknown;
+      parent?: string;
+      pending?: boolean;
+      inputBytes?: number;
+      filePath?: string;
+      elapsedSeconds?: number;
+    }
   /** The "Permitir / Negar" card — a sensitive call waiting on the human (or how it ended). */
   | { kind: "permission"; id: string; tool: string; summary: string; reason?: string; outcome: PermissionOutcome }
   /** The agent's question with clickable options — waiting on the human, or how it was answered. */
@@ -227,7 +329,9 @@ export type SdkRow =
       name: string;
       description?: string;
       phases?: Array<{ title: string; detail?: string }>;
-      agents: Array<{ id: string; label: string; status: "running" | "done"; result?: string }>;
+      /** Quando a rodada começou (ms), segundo o back. Ausente num back antigo. */
+      startedAt?: number;
+      agents: WorkflowAgentFrame[];
       /** Quantos subagentes a rodada tem e quantos já responderam, contados no diário inteiro. */
       total: number;
       done: number;
@@ -250,8 +354,9 @@ export interface SdkChatState {
   /**
    * A message of OUR OWN went out and the driver has not reacted yet — the window the status
    * ladder fills: "Preparando…" while `ready` is still false (cold driver booting/resuming),
-   * "Pensando…" once it is (the turn is in the engine, no token yet). Any driver event — a delta,
-   * a tool, the result — clears it and the plain "Trabalhando…"/nothing takes over. Set only by
+   * "Pensando…" once it is (the turn is in the engine, no token yet). Any event of the MAIN agent —
+   * a delta, a tool, the result — clears it and the plain "Trabalhando…"/nothing takes over; a
+   * subagent's events do not (the main has not reacted to OUR message yet). Set only by
    * the view's own send (`appendUserRow` with `awaiting`), never by replay or external messages:
    * the ladder narrates OUR send, not someone else's.
    */
@@ -471,6 +576,23 @@ export function parseWorkflowScriptMeta(script: unknown): WorkflowScriptMeta | n
 }
 
 /**
+ * As fases de uma rodada: as do QUADRO do back (lidas do script no runner — a única fonte quando a
+ * aba abriu depois do disparo) mandam na ordem, com o detalhe do plano da chamada quando o título
+ * bate. Um back antigo não manda `phases`: vale o plano da chamada, como antes. PURE.
+ */
+function workflowPhases(
+  fromBack: unknown,
+  fromCall: Array<{ title: string; detail?: string }> | undefined,
+): Array<{ title: string; detail?: string }> {
+  const titles = Array.isArray(fromBack) ? fromBack.filter((t): t is string => typeof t === "string" && t !== "") : [];
+  if (titles.length === 0) return fromCall ?? [];
+  return titles.map((title) => {
+    const detail = fromCall?.find((p) => p.title === title)?.detail;
+    return detail ? { title, detail } : { title };
+  });
+}
+
+/**
  * O que um subagente devolveu, legível. Quase todo `agent()` de workflow volta com `schema`, então o
  * diário guarda um OBJETO — e cru na tela isso é uma linha de JSON cortada no meio. Vira
  * `chave: valor`, uma por linha, que é como a pessoa leria. Texto puro passa intacto, e um JSON que
@@ -498,6 +620,25 @@ export function formatAgentResult(raw: string): string {
     .join("\n");
 }
 
+/** One item of a `TodoWrite` call — the agent's own task list. */
+export interface SdkTodo {
+  content: string;
+  activeForm: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
+/** The `todos` of a TodoWrite input, normalised; null when it is not a list. PURE. */
+export function parseTodos(raw: unknown): SdkTodo[] | null {
+  if (!Array.isArray(raw)) return null;
+  return raw
+    .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+    .map((item) => ({
+      content: typeof item.content === "string" ? item.content.trim() : "",
+      activeForm: typeof item.activeForm === "string" ? item.activeForm.trim() : "",
+      status: item.status === "completed" || item.status === "in_progress" ? item.status : "pending",
+    }));
+}
+
 export function toolHeadline(name: string, input: unknown): ToolHeadline {
   const tool = String(name ?? "").trim() || "?";
   const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
@@ -514,6 +655,7 @@ export function toolHeadline(name: string, input: unknown): ToolHeadline {
     case "Read":
     case "Write":
     case "Edit":
+    case "MultiEdit":
     case "NotebookEdit":
       return {
         title: file ? `${tool}(${basename(file)})` : tool,
@@ -541,13 +683,24 @@ export function toolHeadline(name: string, input: unknown): ToolHeadline {
       const query = field(o, "query");
       return { title: query ? `Search(${line(query, 60)})` : tool };
     }
-    case "TodoWrite":
-      return { title: tool };
-    case "Task": {
+    case "TodoWrite": {
+      const todos = parseTodos(o.todos);
+      if (!todos) return { title: tool };
+      const done = todos.filter((todo) => todo.status === "completed").length;
+      const current = todos.find((todo) => todo.status === "in_progress");
+      const doing = current ? current.activeForm || current.content : "";
+      return {
+        title: translate("sdk.todosTitle", { done, total: todos.length }),
+        ...(doing ? { detail: line(doing) } : {}),
+      };
+    }
+    // `Agent` é o nome atual da tool de subagente no Claude Code; `Task`, o antigo.
+    case "Task":
+    case "Agent": {
       const agent = field(o, "subagent_type");
       const what = field(o, "description") || agent;
       return {
-        title: what ? `Task(${line(what, 60)})` : tool,
+        title: what ? `${tool}(${line(what, 60)})` : tool,
         ...(agent && agent !== what ? { detail: line(agent) } : {}),
         background: true,
       };
@@ -561,14 +714,64 @@ export function toolHeadline(name: string, input: unknown): ToolHeadline {
       };
     }
     case "Workflow": {
-      const what = field(o, "name") || field(o, "title") || field(o, "description");
-      return { title: what ? `Workflow(${line(what, 60)})` : tool, background: true };
+      // O input real é `{script}`: nome e descrição moram no `meta` do script.
+      const meta = parseWorkflowScriptMeta(o.script);
+      const what = meta?.name || field(o, "name") || field(o, "title") || field(o, "description");
+      const about = meta?.description
+        ?? (meta?.phases?.length ? translate("sdk.workflowPhases", { n: meta.phases.length }) : "");
+      return {
+        title: what ? `Workflow(${line(what, 60)})` : tool,
+        ...(about ? { detail: line(about) } : {}),
+        background: true,
+      };
     }
     default: {
       const summary = toolSummary(input);
       return { title: tool, ...(summary ? { detail: summary } : {}) };
     }
   }
+}
+
+/**
+ * Elapsed time the way the CLI writes it: `4s`, `1m 24s`. Not the composer's recording clock
+ * (`0:42`, TerminalComposer) — a different dial, hence a different name. PURE.
+ */
+export function formatTurnElapsed(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
+/** The tools whose input IS a file being written: the provisional row names the file. */
+const WRITING_TOOLS = new Set(["Write"]);
+const EDITING_TOOLS = new Set(["Edit", "MultiEdit", "NotebookEdit"]);
+
+/**
+ * WHAT THE TOOL IS DOING NOW, while there is something live to say — or null.
+ *
+ * Two windows have something live to say: the model WRITING a tool's input (a 400-line Write is
+ * tens of seconds of tokens before the `tool_use` exists) and a tool RUNNING for a long time. In the
+ * first the row is provisional (`pending`) and this says which file and how much of it: "Escrevendo
+ * sdkChat.ts… 12 KB". In the second it says what runs and for how long: "Rodando: npm test… 42s".
+ * A settled row with no clock has nothing live to say. PURE.
+ */
+export function toolLiveLabel(row: SdkRow): string | null {
+  if (row.kind !== "tool") return null;
+  if (row.pending) {
+    const file = row.filePath ? basename(row.filePath) : translate("sdk.toolLive.aFile");
+    const label = WRITING_TOOLS.has(row.name)
+      ? translate("sdk.toolLive.writing", { file })
+      : EDITING_TOOLS.has(row.name)
+        ? translate("sdk.toolLive.editing", { file })
+        : translate("sdk.toolLive.preparing", { tool: row.name });
+    const bytes = row.inputBytes ?? 0;
+    return bytes > 0 ? `${label} ${translate("sdk.toolLive.kb", { n: Math.max(1, Math.round(bytes / 1024)) })}` : label;
+  }
+  if (typeof row.elapsedSeconds !== "number") return null;
+  const o = (row.input && typeof row.input === "object" ? row.input : {}) as Record<string, unknown>;
+  const what = row.name === "Bash"
+    ? field(o, "description") || line(field(o, "command"), 60) || row.name
+    : toolHeadline(row.name, row.input).title;
+  return `${translate("sdk.toolLive.running", { what })} ${formatTurnElapsed(row.elapsedSeconds)}`;
 }
 
 /**
@@ -594,11 +797,13 @@ export function currentActivity(state: SdkChatState): SdkActivity | null {
   for (let i = state.rows.length - 1; i >= 0; i -= 1) {
     const row = state.rows[i] as SdkRow;
     if (row.kind === "user") return null; // the turn's own message: nothing after it to report
+    const subagent = subagentActivity(state.rows, row);
+    if (subagent !== null) return { kind: "tool", label: subagent, rowId: row.id };
     if (row.kind === "tool") {
       const headline = toolHeadline(row.name, row.input);
       return {
         kind: "tool",
-        label: headline.title,
+        label: toolLiveLabel(row) ?? headline.title,
         rowId: row.id,
         ...(headline.background ? { background: true } : {}),
       };
@@ -682,12 +887,48 @@ export function liveActivityDetail(state: SdkChatState): string | null {
   for (let i = state.rows.length - 1; i >= 0; i -= 1) {
     const row = state.rows[i] as SdkRow;
     if (row.kind === "user") return null; // a mensagem do turno: nada depois dela para relatar
-    if (row.kind === "tool") return lastLine(toolHeadline(row.name, row.input).title);
+    const subagent = subagentActivity(state.rows, row);
+    if (subagent !== null) return subagent;
+    if (row.kind === "tool") return toolLiveLabel(row) ?? lastLine(toolHeadline(row.name, row.input).title);
     if (row.kind === "thinking" || row.kind === "assistant") {
       return row.streaming ? lastLine(row.text) : null;
     }
   }
   return null;
+}
+
+/**
+ * Quem é o subagente que a chamada `parentId` disparou: o tipo dele (`Explore`), ou a descrição, ou
+ * o nome da tool — o que houver. PURE.
+ */
+export function subagentName(rows: readonly SdkRow[], parentId: string): string {
+  const parent = rows.find((row) => row.kind === "tool" && row.id === parentId);
+  return parent && parent.kind === "tool" ? subagentLabel(parent.name, parent.input) : "";
+}
+
+/** O nome de um subagente pela chamada que o disparou: tipo, descrição ou o nome da tool. PURE. */
+export function subagentLabel(tool: string, input: unknown): string {
+  const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  return field(o, "subagent_type") || field(o, "description") || tool;
+}
+
+/** O que uma linha de subagente está fazendo, em uma linha: a manchete da ferramenta, ou a última
+ *  linha do que ele disse. Vazio vira null. PURE. */
+export function subagentAction(row: SdkRow): string | null {
+  if (row.kind === "tool") return lastLine(toolHeadline(row.name, row.input).title);
+  if (row.kind === "assistant") return lastLine(row.text);
+  return null;
+}
+
+/**
+ * A barra de atividade quando a última coisa é de um SUBAGENTE: "Subagente Explore: Read(x.ts)",
+ * atribuída a ele e não ao principal. Null quando a linha não é de subagente. PURE.
+ */
+function subagentActivity(rows: readonly SdkRow[], row: SdkRow): string | null {
+  if ((row.kind !== "tool" && row.kind !== "assistant") || !row.parent) return null;
+  const action = subagentAction(row);
+  if (action === null) return null;
+  return translate("sdk.subagentRunning", { type: subagentName(rows, row.parent) || "?", action });
 }
 
 /** A última linha não vazia de um texto em curso, dobrada em espaço simples. Vazio vira null. PURE. */
@@ -736,6 +977,62 @@ function appendErrorRow(state: SdkChatState, rows: SdkRow[], text: string): SdkC
   }
   const { id, seq } = nextId(state, "e");
   return { ...state, seq, rows: [...rows, { kind: "error", id, text }] };
+}
+
+/**
+ * Uma linha de SUBAGENTE entra sem mexer na fala do principal: ela é desenhada sob o card do pai, e
+ * fechar a linha que o principal está escrevendo faria o bloco consolidado dele virar uma SEGUNDA
+ * linha (o mesmo cuidado do `workflow_progress`). Então a linha aberta continua sendo a última.
+ * O turno e a espera também são do principal: um subagente em segundo plano não reabre o turno
+ * depois do `result`, nem dá por respondido um envio que ainda espera o principal. PURE.
+ */
+function appendSubagentRow(state: SdkChatState, build: (id: string) => SdkRow, preferredId?: string): SdkChatState {
+  const marked = markSource(state, false);
+  const { id, seq } = nextId(marked, "a");
+  const row = build(preferredId ?? id);
+  const last = marked.rows[marked.rows.length - 1];
+  const stillWriting = last && (last.kind === "assistant" || last.kind === "thinking") && last.streaming;
+  return {
+    ...marked,
+    seq,
+    rows: stillWriting ? [...marked.rows.slice(0, -1), row, last] : [...marked.rows, row],
+  };
+}
+
+/** Where the PROVISIONAL tool row with this id sits (see `pending`), or -1. PURE. */
+function provisionalToolAt(rows: readonly SdkRow[], id: string | undefined): number {
+  return id ? rows.findIndex((row) => row.kind === "tool" && row.pending === true && row.id === id) : -1;
+}
+
+/**
+ * The text/thinking row a `tool_use_start` closed: the one right before the trailing provisional
+ * tool rows, or -1. The consolidated block of that row may land AFTER the start (the CLI's order
+ * between the block's `assistant` message and the next block's opening is not ours to pick) — and
+ * it belongs on that same row, not on a second bubble with the same words. PURE.
+ */
+function blockClosedByToolStart(rows: readonly SdkRow[], kind: "assistant" | "thinking"): number {
+  let i = rows.length - 1;
+  while (i >= 0 && rows[i]!.kind === "tool" && (rows[i] as { pending?: boolean }).pending === true) i -= 1;
+  if (i === rows.length - 1 || i < 0) return -1;
+  const row = rows[i]!;
+  if (row.kind !== kind || (row.kind === "assistant" && row.parent)) return -1;
+  return i;
+}
+
+/** The rows with `row` in place of index `at` — every other row keeps its reference (the memo). PURE. */
+function replaceRowAt(rows: readonly SdkRow[], at: number, row: SdkRow): SdkRow[] {
+  return [...rows.slice(0, at), row, ...rows.slice(at + 1)];
+}
+
+/**
+ * Drop the provisional tool rows a turn left behind. The `tool_use` that would have replaced them
+ * never comes once the turn is over (interrupted mid-input, the CLI died): kept, they would spin
+ * forever — and the conversation never had that call, so a replay would not draw it either. PURE.
+ */
+function dropProvisionalTools(rows: SdkRow[]): SdkRow[] {
+  return rows.some((row) => row.kind === "tool" && row.pending === true)
+    ? rows.filter((row) => !(row.kind === "tool" && row.pending === true))
+    : rows;
 }
 
 /** Close any live streaming row (a tool call or the turn's end interrupts the text block). */
@@ -841,7 +1138,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         // vigente logo atrás deste `ready` (ver `attachSocket`). Zerar aqui é o que impede uma faixa
         // "rodando em segundo plano" pendurada depois que o processo que a rodava morreu.
         backgroundTasks: [],
-        rows: settleStreaming(state.rows),
+        rows: event.turnActive === true ? settleStreaming(state.rows) : dropProvisionalTools(settleStreaming(state.rows)),
       };
       if (event.resume) {
         next.sessionId = event.resume;
@@ -915,6 +1212,12 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         const rows = [...state.rows.slice(0, -1), { ...live, text, streaming: false }];
         return { ...state, rows, turnActive: nextTurnActive(state, viaTerminal), awaiting: false };
       }
+      const closed = viaTerminal ? -1 : blockClosedByToolStart(state.rows, "thinking");
+      const closedRow = state.rows[closed];
+      if (closedRow && closedRow.kind === "thinking") {
+        if (text === "" || closedRow.text === text) return state;
+        return { ...state, rows: replaceRowAt(state.rows, closed, { ...closedRow, text }) };
+      }
       if (text === "") return state;
       const marked = markSource(state, viaTerminal);
       const { id, seq } = nextId(marked, "t");
@@ -928,11 +1231,22 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
     }
     case "assistant_text": {
       const text = event.text ?? "";
+      if (event.parentToolUseId) {
+        if (text === "") return state;
+        const parent = event.parentToolUseId;
+        return appendSubagentRow(state, (id) => ({ kind: "assistant", id, text, streaming: false, parent }));
+      }
       const live = streamingRow(state.rows);
       if (live && !viaTerminal) {
         // The consolidated block REPLACES the deltas that built it — same words, now settled.
         const rows = [...state.rows.slice(0, -1), { ...live, text, streaming: false }];
         return { ...state, rows, turnActive: nextTurnActive(state, viaTerminal), awaiting: false };
+      }
+      const closed = viaTerminal ? -1 : blockClosedByToolStart(state.rows, "assistant");
+      const closedRow = state.rows[closed];
+      if (closedRow && closedRow.kind === "assistant") {
+        if (text === "" || closedRow.text === text) return state;
+        return { ...state, rows: replaceRowAt(state.rows, closed, { ...closedRow, text }) };
       }
       if (text === "") return state;
       const marked = markSource(state, viaTerminal);
@@ -946,6 +1260,12 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       };
     }
     case "tool_use": {
+      if (event.parentToolUseId) {
+        const parent = event.parentToolUseId;
+        return appendSubagentRow(state, (id) => ({
+          kind: "tool", id, name: event.name ?? "?", summary: toolSummary(event.input), input: event.input, parent,
+        }), event.id);
+      }
       const marked = markSource(state, viaTerminal);
       const { id, seq } = nextId(marked, "t");
       const rows = settleStreaming(marked.rows);
@@ -956,17 +1276,46 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       const workflowMeta = meta
         ? { ...marked.workflowMeta, [meta.name]: { description: meta.description, phases: meta.phases } }
         : marked.workflowMeta;
+      const row: SdkRow = { kind: "tool", id: event.id ?? id, name: event.name ?? "?", summary: toolSummary(event.input), input: event.input };
+      // O input completo da chamada que já está na tela como PROVISÓRIA: a mesma linha, no mesmo
+      // lugar — um card só, que agora sabe o que faz (o diff do Edit/Write aparece aqui).
+      const provisional = provisionalToolAt(rows, event.id);
       return {
         ...marked,
         seq,
         workflowMeta,
         turnActive: nextTurnActive(marked, viaTerminal),
         awaiting: false,
-        rows: [
-          ...rows,
-          { kind: "tool", id: event.id ?? id, name: event.name ?? "?", summary: toolSummary(event.input), input: event.input },
-        ],
+        rows: provisional >= 0 ? replaceRowAt(rows, provisional, row) : [...rows, row],
       };
+    }
+    case "tool_use_start": {
+      // O modelo ABRIU a chamada e ainda escreve o input (dezenas de segundos num Write grande). A
+      // linha nasce provisória e o `tool_use` completo a substitui. Só o principal: o driver não
+      // repassa o stream de subagente, e um frame repetido não abre uma segunda linha.
+      if (!event.id || event.parentToolUseId || state.rows.some((row) => row.kind === "tool" && row.id === event.id)) return state;
+      const marked = markSource(state, false);
+      return {
+        ...marked,
+        turnActive: nextTurnActive(marked, false),
+        awaiting: false,
+        rows: [...settleStreaming(marked.rows), { kind: "tool", id: event.id, name: event.name ?? "?", summary: "", pending: true }],
+      };
+    }
+    case "tool_input_progress": {
+      // Só a linha provisória: depois do `tool_use` completo, o tamanho do input já não é notícia.
+      const at = provisionalToolAt(state.rows, event.id);
+      const row = state.rows[at];
+      if (!row || row.kind !== "tool" || typeof event.bytes !== "number") return state;
+      const filePath = event.filePath || row.filePath;
+      if (row.inputBytes === event.bytes && row.filePath === filePath) return state;
+      return { ...state, rows: replaceRowAt(state.rows, at, { ...row, inputBytes: event.bytes, ...(filePath ? { filePath } : {}) }) };
+    }
+    case "tool_progress": {
+      const at = event.id ? state.rows.findIndex((r) => r.kind === "tool" && r.id === event.id) : -1;
+      const row = state.rows[at];
+      if (!row || row.kind !== "tool" || typeof event.elapsedSeconds !== "number" || row.elapsedSeconds === event.elapsedSeconds) return state;
+      return { ...state, rows: replaceRowAt(state.rows, at, { ...row, elapsedSeconds: event.elapsedSeconds }) };
     }
     case "workflow_progress": {
       // O back lendo o diário da frota (services/sdk/workflow.ts). NÃO mexe em `turnActive`: o
@@ -980,13 +1329,15 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       // sessão só disparou UM workflow, é esse — melhor o plano certo do que painel sem plano.
       const meta = state.workflowMeta[name] ?? (metas.length === 1 ? state.workflowMeta[metas[0]!] : undefined);
       const agents = Array.isArray(event.agents) ? event.agents : [];
+      const phases = workflowPhases(event.phases, meta?.phases);
       const row: SdkRow = {
         kind: "workflow",
         id: `wf:${runId}`,
         runId,
         name,
         ...(meta?.description ? { description: meta.description } : {}),
-        ...(meta?.phases?.length ? { phases: meta.phases } : {}),
+        ...(phases.length ? { phases } : {}),
+        ...(typeof event.startedAt === "number" && event.startedAt > 0 ? { startedAt: event.startedAt } : {}),
         agents,
         total: typeof event.total === "number" ? event.total : agents.length,
         done: typeof event.done === "number" ? event.done : agents.filter((a) => a.status === "done").length,
@@ -1080,7 +1431,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         turnActive: false,
         awaiting: false,
         interruptRequested: false,
-        rows: settleStreaming(state.rows),
+        rows: dropProvisionalTools(settleStreaming(state.rows)),
       };
       if (event.sessionId) next.sessionId = event.sessionId;
       if (!event.isError) return next;
@@ -1100,7 +1451,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       const text = (event.message ?? "").trim();
       return appendErrorRow(
         { ...state, turnActive: false, awaiting: false },
-        settleStreaming(state.rows),
+        dropProvisionalTools(settleStreaming(state.rows)),
         text !== "" ? text : SDK_ERROR_NO_DETAIL,
       );
     }
@@ -1319,7 +1670,12 @@ export type SdkRenderRow = { kind: "row"; id: string; row: SdkRow } | { kind: "t
 
 export const SDK_TOOL_FOLD_MIN = 3;
 
-/** Fold consecutive tool rows (>= min) into one block; everything else passes through. PURE. */
+/**
+ * Fold consecutive tool rows (>= min) into one block; everything else passes through. PURE.
+ * A tool row that carries a diff (an Edit/Write with its text) is never folded: the change is
+ * what the reader wants to see, so it breaks the run and stays on screen as its own row. Neither
+ * is a provisional one (`pending`): it is what is happening now, not a step already taken.
+ */
 export function groupSdkRows(rows: readonly SdkRow[], min: number = SDK_TOOL_FOLD_MIN): SdkRenderRow[] {
   const out: SdkRenderRow[] = [];
   let run: SdkRow[] = [];
@@ -1330,7 +1686,7 @@ export function groupSdkRows(rows: readonly SdkRow[], min: number = SDK_TOOL_FOL
     run = [];
   };
   for (const row of rows) {
-    if (row.kind === "tool") {
+    if (row.kind === "tool" && !row.pending && !hasToolDiff(row.name, row.input)) {
       run.push(row);
       continue;
     }

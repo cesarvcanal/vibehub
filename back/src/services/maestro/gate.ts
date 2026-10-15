@@ -33,7 +33,16 @@ export interface GateResult {
   passed: boolean;
   /** Tail of the combined output, secret-redacted. Empty when `!ran`. */
   output: string;
+  /** true = the checks did not run now: this is a green verdict from moments ago (see `GATE_REUSE_MS`). */
+  reused?: true;
 }
+
+/**
+ * How long a GREEN verdict answers for the same commit on a clean tree. Short on purpose: the reuse
+ * assumes the checks depend only on the commit, and anything outside it (ignored files, services,
+ * env) is only trusted for this long.
+ */
+export const GATE_REUSE_MS = 10 * 60_000;
 
 /** The default typecheck: the worktree's OWN tsc, invoked by path so it needs no network. */
 export const DEFAULT_TSC_CHECK = "node_modules/.bin/tsc --noEmit";
@@ -56,6 +65,10 @@ export interface GateProbe {
   hasTsconfig: boolean;
   /** A local `node_modules/.bin/tsc` exists (so the default typecheck can run offline). */
   hasLocalTsc: boolean;
+  /** The worktree's HEAD commit, or null when it is not readable (not a repo). */
+  headSha: string | null;
+  /** No tracked change and no untracked file in the worktree. */
+  cleanTree: boolean;
 }
 
 /**
@@ -96,9 +109,10 @@ export function resolveGateChecks(probe: GateProbe): { ran: boolean; checks: str
 }
 
 /**
- * Read-only probe script: prints the four facts as `k=0|1` lines, then a marker, then the raw body
- * of `.vibehub/gate.json` (which may be multi-line and is therefore put last, unbounded). The cwd is
- * validated and passed as `$1`. PURE.
+ * Read-only probe script: prints the project facts as `k=0|1` lines, the commit as `head=<sha>`
+ * and whether the tree is clean as `clean=0|1` (both absent or `0` when the cwd is gone), then a
+ * marker, then the raw body of `.vibehub/gate.json` (which may be multi-line and is therefore put
+ * last, unbounded). The cwd is validated and passed as `$1`. PURE.
  */
 export function buildGateProbeScript(containerName: string, cwd: string): string {
   assertSafeRemotePath(cwd);
@@ -108,6 +122,8 @@ export function buildGateProbeScript(containerName: string, cwd: string): string
     `if [ -f package.json ] && grep -Eq '"test"[[:space:]]*:' package.json; then echo "test=1"; else echo "test=0"; fi; ` +
     `if [ -f tsconfig.json ]; then echo "tsconfig=1"; else echo "tsconfig=0"; fi; ` +
     `if [ -x node_modules/.bin/tsc ]; then echo "localtsc=1"; else echo "localtsc=0"; fi; ` +
+    `h=$(git rev-parse HEAD 2>/dev/null) && echo "head=$h"; ` +
+    `if s=$(git status --porcelain --untracked-files=all 2>/dev/null) && [ -z "$s" ]; then echo "clean=1"; else echo "clean=0"; fi; ` +
     `echo "${PROBE_MARKER}"; ` +
     `if [ -f .vibehub/gate.json ]; then cat .vibehub/gate.json; fi`;
   return `docker exec ${shQuote(containerName)} sh -c ${shQuote(inner)} _ ${shQuote(cwd)}`;
@@ -125,7 +141,18 @@ export function parseGateProbe(stdout: string): GateProbe {
     hasTestScript: flag("test"),
     hasTsconfig: flag("tsconfig"),
     hasLocalTsc: flag("localtsc"),
+    headSha: /(?:^|\n)head=([0-9a-f]{40,64})\r?(?:\n|$)/.exec(head)?.[1] ?? null,
+    cleanTree: flag("clean"),
   };
+}
+
+/**
+ * What a green verdict is valid FOR: the commit and the exact check list, and only on a clean
+ * tree — null (never reusable) otherwise. PURE.
+ */
+export function gateReuseKey(probe: Pick<GateProbe, "headSha" | "cleanTree">, checks: string[]): string | null {
+  if (!probe.headSha || !probe.cleanTree) return null;
+  return JSON.stringify([probe.headSha, checks]);
 }
 
 /**
@@ -187,10 +214,14 @@ export function cleanOutput(text: string): string {
   return tailOutput(redactSecrets(text));
 }
 
+/** Each card's last green verdict, timed from when its tree was probed. In memory only. */
+const greenVerdicts = new Map<string, { key: string; at: number; output: string }>();
+
 /**
  * Runs the gate for a card: probe the worktree, decide the checks, run them. Two host round trips
  * (probe is cheap; the run is where the time goes). A worktree with nothing to check returns
- * `{ ran: false }` without a second round trip.
+ * `{ ran: false }` without a second round trip, and a green verdict for the same commit on a clean
+ * tree within `GATE_REUSE_MS` is answered without running the checks again.
  */
 export async function runGate(cardId: string): Promise<GateResult> {
   const card = await getCard(cardId);
@@ -201,17 +232,32 @@ export async function runGate(cardId: string): Promise<GateResult> {
   const container = config.runner.container;
 
   const probeOut = await hostExecutor().runScript(buildGateProbeScript(container, cwd), { timeoutMs: 30_000 });
-  const plan = resolveGateChecks(parseGateProbe(probeOut.stdout));
+  const probedAt = Date.now();
+  const probe = parseGateProbe(probeOut.stdout);
+  const plan = resolveGateChecks(probe);
   if (!plan.ran) {
     logger.info({ audit: true, action: "maestro.gate", card: card.worktreeSlug, ran: false }, "gate had nothing to run");
     return { ran: false, passed: true, output: "" };
   }
 
+  const reuseKey = gateReuseKey(probe, plan.checks);
+  const green = greenVerdicts.get(card.id);
+  if (reuseKey && green?.key === reuseKey && probedAt - green.at < GATE_REUSE_MS) {
+    logger.info(
+      { audit: true, action: "maestro.gate", card: card.worktreeSlug, ran: true, passed: true, reused: true, head: probe.headSha },
+      "gate reused: same commit, clean tree, green moments ago",
+    );
+    return { ran: true, passed: true, output: green.output, reused: true };
+  }
+
   const runOut = await hostExecutor().runScript(buildGateRunScript(container, cwd, plan.checks), { timeoutMs: 600_000 });
   const { passed, output } = parseGateRun(runOut.stdout);
+  const cleaned = cleanOutput(output);
+  if (passed && reuseKey) greenVerdicts.set(card.id, { key: reuseKey, at: probedAt, output: cleaned });
+  else greenVerdicts.delete(card.id);
   logger.info(
     { audit: true, action: "maestro.gate", card: card.worktreeSlug, ran: true, passed, checks: plan.checks.length },
     "gate ran",
   );
-  return { ran: true, passed, output: cleanOutput(output) };
+  return { ran: true, passed, output: cleaned };
 }

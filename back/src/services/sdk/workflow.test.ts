@@ -26,58 +26,6 @@ beforeEach(() => {
 });
 afterEach(() => { vi.useRealTimers(); });
 
-describe("parseWorkflowProbe", () => {
-  it("reads the runs, the agents and their results", async () => {
-    const { parseWorkflowProbe } = await load();
-    const runs = parseWorkflowProbe(probe([
-      { runId: "wf_abc", name: "review-changes", at: 1700, agents: [
-        AGENT({ id: "a1", status: "done", result: "achei 3 bugs" }),
-        AGENT({ id: "a2" }),
-      ] },
-    ]));
-    expect(runs).toHaveLength(1);
-    expect(runs[0]).toMatchObject({ runId: "wf_abc", name: "review-changes", at: 1700, finished: false });
-    expect(runs[0]!.agents).toEqual([
-      { id: "a1", label: "Leia o diário e diga o que falta", status: "done", result: "achei 3 bugs" },
-      { id: "a2", label: "Leia o diário e diga o que falta", status: "running" },
-    ]);
-  });
-
-  it("a broken, empty or hostile payload draws nothing — it never throws", async () => {
-    const { parseWorkflowProbe } = await load();
-    expect(parseWorkflowProbe("")).toEqual([]);
-    expect(parseWorkflowProbe("docker: no such container")).toEqual([]);
-    expect(parseWorkflowProbe('{"runId":"wf_a"}')).toEqual([]); // an object, not the array
-    expect(parseWorkflowProbe(probe([{ name: "no id" }, null, 7]))).toEqual([]);
-    // A line of noise BEFORE the json (a warning from docker) does not lose the payload.
-    expect(parseWorkflowProbe(`WARNING: something\n${probe([{ runId: "wf_a", agents: [] }])}`)).toHaveLength(1);
-  });
-
-  it("an agent with no result is never shown as having answered", async () => {
-    const { parseWorkflowProbe } = await load();
-    const [run] = parseWorkflowProbe(probe([{ runId: "wf_a", agents: [AGENT({ status: "running", result: "lixo" })] }]));
-    expect(run!.agents[0]).toEqual({ id: "a1", label: "Leia o diário e diga o que falta", status: "running" });
-  });
-});
-
-describe("trimAgentLabel", () => {
-  it("drops the working-directory preamble every workflow subagent carries", async () => {
-    const { trimAgentLabel } = await load();
-    expect(trimAgentLabel("Trabalhe em /work/a/b. Leia COMPLETO o build da ISO")).toBe("Leia COMPLETO o build da ISO");
-    expect(trimAgentLabel("Work in /srv/x: review the diff")).toBe("review the diff");
-    expect(trimAgentLabel("  linha   com   espaços  ")).toBe("linha com espaços");
-  });
-
-  it("keeps the original when the preamble IS the whole label, and caps the length", async () => {
-    const { trimAgentLabel } = await load();
-    expect(trimAgentLabel("Trabalhe em /work/a/b")).toBe("Trabalhe em /work/a/b");
-    expect(trimAgentLabel("")).toBe("");
-    const long = trimAgentLabel(`x${"y".repeat(400)}`);
-    expect(long).toHaveLength(140);
-    expect(long.endsWith("…")).toBe(true);
-  });
-});
-
 describe("runSettled / runChanged", () => {
   it("settled is counted on the WHOLE journal, not on the list the screen draws", async () => {
     const { runSettled } = await load();
@@ -92,38 +40,15 @@ describe("runSettled / runChanged", () => {
 
   it("only a real change redraws the panel", async () => {
     const { runChanged } = await load();
-    const base = { runId: "wf_a", name: "n", at: 10, finished: false, total: 1, done: 0, agents: [{ id: "a1", label: "l", status: "running" as const }] };
+    const base = { runId: "wf_a", name: "n", phases: [], at: 10, finished: false, total: 1, done: 0, agents: [{ id: "a1", label: "l", phase: "", status: "running" as const, toolCount: 0 }] };
     expect(runChanged(undefined, base)).toBe(true);
     expect(runChanged(base, { ...base })).toBe(false);
     expect(runChanged(base, { ...base, at: 11 })).toBe(true);
     expect(runChanged(base, { ...base, finished: true })).toBe(true);
-    expect(runChanged(base, { ...base, total: 2, agents: [...base.agents, { id: "a2", label: "", status: "running" }] })).toBe(true);
-    expect(runChanged(base, { ...base, done: 1, agents: [{ id: "a1", label: "l", status: "done" }] })).toBe(true);
+    expect(runChanged(base, { ...base, total: 2, agents: [...base.agents, { id: "a2", label: "", phase: "", status: "running", toolCount: 0 }] })).toBe(true);
+    expect(runChanged(base, { ...base, done: 1, agents: [{ id: "a1", label: "l", phase: "", status: "done", toolCount: 0 }] })).toBe(true);
     // The counts alone are enough: agent 201 answering moves nothing in the drawn list.
     expect(runChanged(base, { ...base, done: 1 })).toBe(true);
-  });
-});
-
-describe("buildWorkflowProbeScript", () => {
-  it("passes the directories as ARGUMENTS, never interpolated into the script body", async () => {
-    const { buildWorkflowProbeScript } = await load();
-    const script = buildWorkflowProbeScript("runner", "/root/.claude/p/s/subagents/workflows", "/root/.claude/p/s/workflows/scripts");
-    expect(script).toContain("docker exec 'runner' node -e ");
-    expect(script).toContain("'/root/.claude/p/s/subagents/workflows'");
-    expect(script).toContain("'/root/.claude/p/s/workflows/scripts'");
-    expect(script).toContain("process.argv[1]");
-    expect(script.endsWith("|| true")).toBe(true); // no session, no workflows: not an error
-  });
-
-  it("a hostile directory cannot break out of the quoting", async () => {
-    const { buildWorkflowProbeScript } = await load();
-    const { shQuote } = await import("../../runtime/host.js");
-    const hostile = "/tmp/x'; rm -rf /; echo '";
-    const script = buildWorkflowProbeScript("runner", hostile, "/tmp/s");
-    // The whole hostile path travels as ONE quoted argument: every quote in it is escaped, so the
-    // `'; rm -rf /` never closes the shell's quoting — it reaches node as part of the path string.
-    expect(script).toContain(shQuote(hostile));
-    expect(script).not.toContain(hostile); // never raw — only in its escaped form
   });
 });
 
@@ -302,6 +227,42 @@ describe("watchCardWorkflows — a sondagem e suas travas", () => {
     wf.resetWorkflowWatchesForTesting();
   });
 
+  it("o concluído já visto vai como conhecido no tique seguinte — e o quadro publicado segue inteiro", async () => {
+    vi.useFakeTimers();
+    const wf = await load();
+    const published: Array<{ agents: Array<{ id: string; toolCount: number; result?: string }> }> = [];
+    const done = AGENT({ id: "a1f", status: "done", result: "ok", toolCount: 7, startedAt: 1_000, lastAt: 9_000, endedAt: 9_000 });
+    runScript.mockResolvedValue({ stdout: probe([{ runId: "wf_a", total: 2, done: 1, at: 1, agents: [done, AGENT({ id: "a2f" })] }]), stderr: "" });
+    wf.watchCardWorkflows("c1", { label: "card", dirs, watchers: () => 1, publish: (r) => published.push(r) });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(String((runScript.mock.calls[0] as unknown as string[])[0])).toContain("'/runs' '/scripts' ''");
+
+    runScript.mockResolvedValue({
+      stdout: probe([{ runId: "wf_a", total: 2, done: 1, at: 2, agents: [{ id: "a1f", status: "done", settled: true }, AGENT({ id: "a2f", toolCount: 1 })] }]),
+      stderr: "",
+    });
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS);
+    expect(String((runScript.mock.calls[1] as unknown as string[])[0])).toContain("'/runs' '/scripts' 'wf_a/a1f'");
+    expect(published).toHaveLength(2);
+    expect(published[1]!.agents.find((a) => a.id === "a1f")).toMatchObject({ toolCount: 7, result: "ok" });
+    wf.resetWorkflowWatchesForTesting();
+  });
+
+  it("só as rodadas que a sonda ainda lê (as RUNS_PROBED mais recentes) mandam seus concluídos", async () => {
+    vi.useFakeTimers();
+    const wf = await load();
+    const run = (runId: string, at: number) => ({ runId, total: 1, done: 1, at, agents: [AGENT({ id: "a1f", status: "done", result: "ok" })] });
+    runScript.mockResolvedValue({ stdout: probe([run("wf_old", 1), run("wf_mid", 2), run("wf_new", 3)]), stderr: "" });
+    wf.watchCardWorkflows("c1", { label: "card", dirs, watchers: () => 1, publish: () => undefined });
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS);
+    const script = String((runScript.mock.calls[1] as unknown as string[])[0]);
+    expect(script).toContain("wf_new/a1f");
+    expect(script).toContain("wf_mid/a1f");
+    expect(script).not.toContain("wf_old/a1f");
+    wf.resetWorkflowWatchesForTesting();
+  });
+
   it("uma sondagem lenta não é ultrapassada pela seguinte", async () => {
     vi.useFakeTimers();
     const wf = await load();
@@ -316,5 +277,19 @@ describe("watchCardWorkflows — a sondagem e suas travas", () => {
     expect(runScript.mock.calls.length).toBe(1); // três tiques, UMA sondagem em voo
     release?.();
     wf.resetWorkflowWatchesForTesting();
+  });
+});
+
+describe("runChanged — atividade, fase e ferramentas também redesenham", () => {
+  it("muda com activity/phase/toolCount; o mesmo conteúdo em outro objeto não", async () => {
+    const { runChanged } = await load();
+    const agent = { id: "a1", label: "l", phase: "P", status: "running" as const, toolCount: 1, activity: { kind: "tool" as const, tool: "Bash", target: "x" } };
+    const base = { runId: "wf_a", name: "n", phases: ["P"], at: 10, finished: false, total: 1, done: 0, agents: [agent] };
+    expect(runChanged(base, { ...base, agents: [{ ...agent, activity: { kind: "tool", tool: "Bash", target: "x" } }] })).toBe(false);
+    expect(runChanged(base, { ...base, agents: [{ ...agent, activity: { kind: "tool", tool: "Bash", target: "y" } }] })).toBe(true);
+    expect(runChanged(base, { ...base, agents: [{ ...agent, activity: { kind: "thinking", since: 5 } }] })).toBe(true);
+    expect(runChanged(base, { ...base, agents: [{ ...agent, phase: "Q" }] })).toBe(true);
+    expect(runChanged(base, { ...base, agents: [{ ...agent, toolCount: 2 }] })).toBe(true);
+    expect(runChanged(base, { ...base, phases: ["P", "Q"] })).toBe(true);
   });
 });

@@ -15,6 +15,7 @@ import {
   parseQuestionAnswers,
   parseSdkClientFrame,
   parseTypingFrame,
+  parseWorkflowFeedFrame,
   buildSupersedeText,
   buildOrphanAnswerText,
   interruptNote,
@@ -76,6 +77,22 @@ describe("raciocínio do modelo", () => {
       .toEqual({ type: "thinking", text: "Vou ler o arquivo primeiro." });
     expect(parseDriverLine(`{"type":"thinking_delta","text":"Vou ler "}`))
       .toEqual({ type: "thinking_delta", text: "Vou ler " });
+  });
+});
+
+/**
+ * A FERRAMENTA AINDA SENDO GERADA: enquanto o modelo escreve o input de um Write grande (ou um Bash
+ * longo roda), o driver diz que ela começou e quanto já saiu. Sem estes tipos no contrato, cada um
+ * desses frames virava `parse_error` no back — um banner de erro no lugar do progresso.
+ */
+describe("progresso da ferramenta", () => {
+  it("reconhece o começo, o progresso do input e o relógio da ferramenta", () => {
+    expect(parseDriverLine(`{"type":"tool_use_start","id":"toolu_1","name":"Write"}`))
+      .toEqual({ type: "tool_use_start", id: "toolu_1", name: "Write" });
+    expect(parseDriverLine(`{"type":"tool_input_progress","id":"toolu_1","bytes":12288,"filePath":"/w/a.ts"}`))
+      .toEqual({ type: "tool_input_progress", id: "toolu_1", bytes: 12288, filePath: "/w/a.ts" });
+    expect(parseDriverLine(`{"type":"tool_progress","id":"toolu_1","elapsedSeconds":42}`))
+      .toEqual({ type: "tool_progress", id: "toolu_1", elapsedSeconds: 42 });
   });
 });
 
@@ -546,6 +563,25 @@ describe("parseTypingFrame — o sinal efêmero de \"está digitando\"", () => {
     expect(parseTypingFrame(`{"type":"typing","active":"sim"}`)).toBe(false);
     // e o parser de controles não o confunde com uma mensagem do usuário
     expect(parseSdkClientFrame(`{"type":"typing","active":true}`)).toBe(null);
+  });
+});
+
+describe("parseWorkflowFeedFrame — o pedido do feed de um subagente", () => {
+  it("lê runId e agentId do pedido", () => {
+    expect(parseWorkflowFeedFrame(`{"type":"workflow_feed","runId":"wf_abc","agentId":"a01f"}`))
+      .toEqual({ runId: "wf_abc", agentId: "a01f" });
+  });
+
+  it("não é um pedido de feed: null (segue o funil normal)", () => {
+    expect(parseWorkflowFeedFrame(`{"type":"user","text":"oi"}`)).toBe(null);
+    expect(parseWorkflowFeedFrame("workflow_feed")).toBe(null);
+    expect(parseWorkflowFeedFrame("")).toBe(null);
+    expect(parseWorkflowFeedFrame("{quebrado")).toBe(null);
+  });
+
+  it("um pedido malformado ainda é um pedido (consumido, nunca vira mensagem): os ids vêm vazios", () => {
+    expect(parseWorkflowFeedFrame(`{"type":"workflow_feed","runId":7}`)).toEqual({ runId: "", agentId: "" });
+    expect(parseSdkClientFrame(`{"type":"workflow_feed","runId":"wf_a","agentId":"a1"}`)).toBe(null);
   });
 });
 

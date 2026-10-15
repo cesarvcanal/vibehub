@@ -1,7 +1,7 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import { getCard, getProject, hasLiveSession, effectiveAccountSlug } from "../board/registry.js";
-import { transcriptDirFor, sessionGoneError } from "../maestro/maestro.js";
+import { transcriptDirFor, sessionGoneError } from "../maestro/cardSession.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -167,6 +167,8 @@ function textOf(content: unknown): string {
 function skipLine(obj: Record<string, unknown>): boolean {
   if (obj.isSidechain === true) return true; // a subagent's private turns
   if (obj.isMeta === true) return true;
+  // The auto-compaction recap: written as a user line, but the CLI wrote it, not the person.
+  if (obj.isCompactSummary === true || obj.isVisibleInTranscriptOnly === true) return true;
   if (obj.type === "user" && obj.toolUseResult !== undefined) return true; // a tool result, not a person
   return obj.type !== "user" && obj.type !== "assistant";
 }
