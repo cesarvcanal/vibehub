@@ -3373,6 +3373,46 @@ describe("SdkChatView — o diff do que a IA editou", () => {
     expect(within(card).getByTestId("sdk-diff-truncated")).toHaveTextContent("20 more lines not shown");
   });
 
+  /**
+   * A IA "ENGASGADA": enquanto o modelo escrevia o input de um Write grande, a tela ficava só em
+   * "Trabalhando…" por dezenas de segundos. Agora a linha provisória diz o que está sendo escrito e
+   * quanto, e o `tool_use` completo vira o card de diff NO LUGAR dela — nunca um segundo card.
+   */
+  it("durante a geração mostra 'Writing x… N KB'; com o tool_use completo fica um único card de diff", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "cria o arquivo" });
+    ws.deliver({ type: "tool_use_start", id: "w1", name: "Write" });
+    ws.deliver({ type: "tool_input_progress", id: "w1", bytes: 12_288, filePath: "/repo/src/sdkChat.ts" });
+
+    const live = screen.getByTestId("sdk-tool");
+    expect(live.getAttribute("data-pending")).toBe("true");
+    expect(within(live).getByTestId("sdk-tool-title")).toHaveTextContent("Writing sdkChat.ts… 12 KB");
+    expect(screen.getByTestId("sdk-activity-label")).toHaveTextContent("Writing sdkChat.ts… 12 KB");
+    expect(screen.queryByTestId("sdk-diff")).toBeNull();
+
+    ws.deliver({ type: "tool_use", id: "w1", name: "Write", input: { file_path: "/repo/src/sdkChat.ts", content: lines(3) } });
+    expect(screen.getAllByTestId("sdk-diff")).toHaveLength(1);
+    expect(screen.queryByTestId("sdk-tool")).toBeNull();
+    expect(within(screen.getByTestId("sdk-diff")).getByTestId("sdk-diff-added")).toHaveTextContent("+3");
+  });
+
+  it("um Agent ou TodoWrite ainda sendo gerado é a linha viva, não um card vazio", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "explora" });
+    ws.deliver({ type: "tool_use_start", id: "a1", name: "Agent" });
+    expect(screen.queryByTestId("sdk-agent")).toBeNull();
+    expect(within(screen.getByTestId("sdk-tool")).getByTestId("sdk-tool-title")).toHaveTextContent("Preparing Agent…");
+    ws.deliver({ type: "tool_use", id: "a1", name: "Agent", input: { description: "explora o chat", subagent_type: "Explore" } });
+    expect(screen.getAllByTestId("sdk-agent")).toHaveLength(1);
+    expect(document.querySelector("[data-pending]")).toBeNull();
+  });
+
   it("em pt-BR os contadores falam com plural", async () => {
     setLanguage("pt-BR");
     renderSdkChat();

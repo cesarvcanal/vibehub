@@ -63,6 +63,9 @@ export interface SdkEvent {
     | "thinking"
     | "thinking_delta"
     | "tool_use"
+    | "tool_use_start"
+    | "tool_input_progress"
+    | "tool_progress"
     | "permission"
     | "permission_request"
     | "user_question"
@@ -162,6 +165,12 @@ export interface SdkEvent {
    * of the tool call that started it. Becomes the row's `parent` (see back protocol `ToolUseEvent`).
    */
   parentToolUseId?: string;
+  /** On `tool_input_progress`: bytes of the tool's input generated so far (JSON, throttled). */
+  bytes?: number;
+  /** On `tool_input_progress`: the file the input names, as soon as its path closed in the JSON. */
+  filePath?: string;
+  /** On `tool_progress`: how long the tool has been running. */
+  elapsedSeconds?: number;
   /**
    * On `peer_typing` (relayed by the BACK from the card's other sockets, never persisted): whether
    * the person in `name` is typing. Handled by the view (see lib/peerTyping.ts), not the reducer.
@@ -244,8 +253,22 @@ export type SdkRow =
    */
   | { kind: "thinking"; id: string; text: string; streaming: boolean }
   /** One tool call, compact: the name plus a one-line summary of its input. `parent` = made by the
-   *  SUBAGENTE started by that tool call (drawn under its card, not as the main agent's step). */
-  | { kind: "tool"; id: string; name: string; summary: string; input?: unknown; parent?: string }
+   *  SUBAGENTE started by that tool call (drawn under its card, not as the main agent's step).
+   *  `pending` = PROVISIONAL: the model opened the call (`tool_use_start`) and is still writing its
+   *  input — `inputBytes`/`filePath` say how far it got; the complete `tool_use` replaces the row in
+   *  place. `elapsedSeconds` = how long the tool has been running (`tool_progress`). */
+  | {
+      kind: "tool";
+      id: string;
+      name: string;
+      summary: string;
+      input?: unknown;
+      parent?: string;
+      pending?: boolean;
+      inputBytes?: number;
+      filePath?: string;
+      elapsedSeconds?: number;
+    }
   /** The "Permitir / Negar" card — a sensitive call waiting on the human (or how it ended). */
   | { kind: "permission"; id: string; tool: string; summary: string; reason?: string; outcome: PermissionOutcome }
   /** The agent's question with clickable options — waiting on the human, or how it was answered. */
@@ -681,6 +704,48 @@ export function toolHeadline(name: string, input: unknown): ToolHeadline {
 }
 
 /**
+ * Elapsed time the way the CLI writes it: `4s`, `1m 24s`. Not the composer's recording clock
+ * (`0:42`, TerminalComposer) — a different dial, hence a different name. PURE.
+ */
+export function formatTurnElapsed(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
+/** The tools whose input IS a file being written: the provisional row names the file. */
+const WRITING_TOOLS = new Set(["Write"]);
+const EDITING_TOOLS = new Set(["Edit", "MultiEdit", "NotebookEdit"]);
+
+/**
+ * WHAT THE TOOL IS DOING NOW, while there is something live to say — or null.
+ *
+ * Two windows used to be silent: the model WRITING a tool's input (a 400-line Write is tens of
+ * seconds of tokens before the `tool_use` exists) and a tool RUNNING for a long time (a Bash of two
+ * minutes looked like a hang). In the first the row is provisional (`pending`) and this says which
+ * file and how much of it: "Escrevendo sdkChat.ts… 12 KB". In the second it says what runs and for
+ * how long: "Rodando: npm test… 42s". A settled row with no clock has nothing live to say. PURE.
+ */
+export function toolLiveLabel(row: SdkRow): string | null {
+  if (row.kind !== "tool") return null;
+  if (row.pending) {
+    const file = row.filePath ? basename(row.filePath) : translate("sdk.toolLive.aFile");
+    const label = WRITING_TOOLS.has(row.name)
+      ? translate("sdk.toolLive.writing", { file })
+      : EDITING_TOOLS.has(row.name)
+        ? translate("sdk.toolLive.editing", { file })
+        : translate("sdk.toolLive.preparing", { tool: row.name });
+    const bytes = row.inputBytes ?? 0;
+    return bytes > 0 ? `${label} ${translate("sdk.toolLive.kb", { n: Math.max(1, Math.round(bytes / 1024)) })}` : label;
+  }
+  if (typeof row.elapsedSeconds !== "number") return null;
+  const o = (row.input && typeof row.input === "object" ? row.input : {}) as Record<string, unknown>;
+  const what = row.name === "Bash"
+    ? field(o, "description") || line(field(o, "command"), 60) || row.name
+    : toolHeadline(row.name, row.input).title;
+  return `${translate("sdk.toolLive.running", { what })} ${formatTurnElapsed(row.elapsedSeconds)}`;
+}
+
+/**
  * WHAT THE TURN IS DOING RIGHT NOW — the line the sticky bar shows while work runs.
  *
  * Read backwards from the end of the conversation and stop at the message that started the turn:
@@ -709,7 +774,7 @@ export function currentActivity(state: SdkChatState): SdkActivity | null {
       const headline = toolHeadline(row.name, row.input);
       return {
         kind: "tool",
-        label: headline.title,
+        label: toolLiveLabel(row) ?? headline.title,
         rowId: row.id,
         ...(headline.background ? { background: true } : {}),
       };
@@ -795,7 +860,7 @@ export function liveActivityDetail(state: SdkChatState): string | null {
     if (row.kind === "user") return null; // a mensagem do turno: nada depois dela para relatar
     const subagent = subagentActivity(state.rows, row);
     if (subagent !== null) return subagent;
-    if (row.kind === "tool") return lastLine(toolHeadline(row.name, row.input).title);
+    if (row.kind === "tool") return toolLiveLabel(row) ?? lastLine(toolHeadline(row.name, row.input).title);
     if (row.kind === "thinking" || row.kind === "assistant") {
       return row.streaming ? lastLine(row.text) : null;
     }
@@ -906,6 +971,42 @@ function appendSubagentRow(state: SdkChatState, build: (id: string) => SdkRow, p
   };
 }
 
+/** Where the PROVISIONAL tool row with this id sits (see `pending`), or -1. PURE. */
+function provisionalToolAt(rows: readonly SdkRow[], id: string | undefined): number {
+  return id ? rows.findIndex((row) => row.kind === "tool" && row.pending === true && row.id === id) : -1;
+}
+
+/**
+ * The text/thinking row a `tool_use_start` closed: the one right before the trailing provisional
+ * tool rows, or -1. The consolidated block of that row may land AFTER the start (the CLI's order
+ * between the block's `assistant` message and the next block's opening is not ours to pick) — and
+ * it belongs on that same row, not on a second bubble with the same words. PURE.
+ */
+function blockClosedByToolStart(rows: readonly SdkRow[], kind: "assistant" | "thinking"): number {
+  let i = rows.length - 1;
+  while (i >= 0 && rows[i]!.kind === "tool" && (rows[i] as { pending?: boolean }).pending === true) i -= 1;
+  if (i === rows.length - 1 || i < 0) return -1;
+  const row = rows[i]!;
+  if (row.kind !== kind || (row.kind === "assistant" && row.parent)) return -1;
+  return i;
+}
+
+/** The rows with `row` in place of index `at` — every other row keeps its reference (the memo). PURE. */
+function replaceRowAt(rows: readonly SdkRow[], at: number, row: SdkRow): SdkRow[] {
+  return [...rows.slice(0, at), row, ...rows.slice(at + 1)];
+}
+
+/**
+ * Drop the provisional tool rows a turn left behind. The `tool_use` that would have replaced them
+ * never comes once the turn is over (interrupted mid-input, the CLI died): kept, they would spin
+ * forever — and the conversation never had that call, so a replay would not draw it either. PURE.
+ */
+function dropProvisionalTools(rows: SdkRow[]): SdkRow[] {
+  return rows.some((row) => row.kind === "tool" && row.pending === true)
+    ? rows.filter((row) => !(row.kind === "tool" && row.pending === true))
+    : rows;
+}
+
 /** Close any live streaming row (a tool call or the turn's end interrupts the text block). */
 function settleStreaming(rows: SdkRow[]): SdkRow[] {
   const live = streamingRow(rows) ?? streamingThinkingRow(rows);
@@ -1009,7 +1110,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         // vigente logo atrás deste `ready` (ver `attachSocket`). Zerar aqui é o que impede uma faixa
         // "rodando em segundo plano" pendurada depois que o processo que a rodava morreu.
         backgroundTasks: [],
-        rows: settleStreaming(state.rows),
+        rows: event.turnActive === true ? settleStreaming(state.rows) : dropProvisionalTools(settleStreaming(state.rows)),
       };
       if (event.resume) {
         next.sessionId = event.resume;
@@ -1083,6 +1184,12 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         const rows = [...state.rows.slice(0, -1), { ...live, text, streaming: false }];
         return { ...state, rows, turnActive: nextTurnActive(state, viaTerminal), awaiting: false };
       }
+      const closed = viaTerminal ? -1 : blockClosedByToolStart(state.rows, "thinking");
+      const closedRow = state.rows[closed];
+      if (closedRow && closedRow.kind === "thinking") {
+        if (text === "" || closedRow.text === text) return state;
+        return { ...state, rows: replaceRowAt(state.rows, closed, { ...closedRow, text }) };
+      }
       if (text === "") return state;
       const marked = markSource(state, viaTerminal);
       const { id, seq } = nextId(marked, "t");
@@ -1106,6 +1213,12 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         // The consolidated block REPLACES the deltas that built it — same words, now settled.
         const rows = [...state.rows.slice(0, -1), { ...live, text, streaming: false }];
         return { ...state, rows, turnActive: nextTurnActive(state, viaTerminal), awaiting: false };
+      }
+      const closed = viaTerminal ? -1 : blockClosedByToolStart(state.rows, "assistant");
+      const closedRow = state.rows[closed];
+      if (closedRow && closedRow.kind === "assistant") {
+        if (text === "" || closedRow.text === text) return state;
+        return { ...state, rows: replaceRowAt(state.rows, closed, { ...closedRow, text }) };
       }
       if (text === "") return state;
       const marked = markSource(state, viaTerminal);
@@ -1135,17 +1248,46 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       const workflowMeta = meta
         ? { ...marked.workflowMeta, [meta.name]: { description: meta.description, phases: meta.phases } }
         : marked.workflowMeta;
+      const row: SdkRow = { kind: "tool", id: event.id ?? id, name: event.name ?? "?", summary: toolSummary(event.input), input: event.input };
+      // O input completo da chamada que já está na tela como PROVISÓRIA: a mesma linha, no mesmo
+      // lugar — um card só, que agora sabe o que faz (o diff do Edit/Write aparece aqui).
+      const provisional = provisionalToolAt(rows, event.id);
       return {
         ...marked,
         seq,
         workflowMeta,
         turnActive: nextTurnActive(marked, viaTerminal),
         awaiting: false,
-        rows: [
-          ...rows,
-          { kind: "tool", id: event.id ?? id, name: event.name ?? "?", summary: toolSummary(event.input), input: event.input },
-        ],
+        rows: provisional >= 0 ? replaceRowAt(rows, provisional, row) : [...rows, row],
       };
+    }
+    case "tool_use_start": {
+      // O modelo ABRIU a chamada e ainda escreve o input (dezenas de segundos num Write grande). A
+      // linha nasce provisória e o `tool_use` completo a substitui. Só o principal: o driver não
+      // repassa o stream de subagente, e um frame repetido não abre uma segunda linha.
+      if (!event.id || event.parentToolUseId || state.rows.some((row) => row.kind === "tool" && row.id === event.id)) return state;
+      const marked = markSource(state, false);
+      return {
+        ...marked,
+        turnActive: nextTurnActive(marked, false),
+        awaiting: false,
+        rows: [...settleStreaming(marked.rows), { kind: "tool", id: event.id, name: event.name ?? "?", summary: "", pending: true }],
+      };
+    }
+    case "tool_input_progress": {
+      // Só a linha provisória: depois do `tool_use` completo, o tamanho do input já não é notícia.
+      const at = provisionalToolAt(state.rows, event.id);
+      const row = state.rows[at];
+      if (!row || row.kind !== "tool" || typeof event.bytes !== "number") return state;
+      const filePath = event.filePath || row.filePath;
+      if (row.inputBytes === event.bytes && row.filePath === filePath) return state;
+      return { ...state, rows: replaceRowAt(state.rows, at, { ...row, inputBytes: event.bytes, ...(filePath ? { filePath } : {}) }) };
+    }
+    case "tool_progress": {
+      const at = event.id ? state.rows.findIndex((r) => r.kind === "tool" && r.id === event.id) : -1;
+      const row = state.rows[at];
+      if (!row || row.kind !== "tool" || typeof event.elapsedSeconds !== "number" || row.elapsedSeconds === event.elapsedSeconds) return state;
+      return { ...state, rows: replaceRowAt(state.rows, at, { ...row, elapsedSeconds: event.elapsedSeconds }) };
     }
     case "workflow_progress": {
       // O back lendo o diário da frota (services/sdk/workflow.ts). NÃO mexe em `turnActive`: o
@@ -1261,7 +1403,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         turnActive: false,
         awaiting: false,
         interruptRequested: false,
-        rows: settleStreaming(state.rows),
+        rows: dropProvisionalTools(settleStreaming(state.rows)),
       };
       if (event.sessionId) next.sessionId = event.sessionId;
       if (!event.isError) return next;
@@ -1281,7 +1423,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       const text = (event.message ?? "").trim();
       return appendErrorRow(
         { ...state, turnActive: false, awaiting: false },
-        settleStreaming(state.rows),
+        dropProvisionalTools(settleStreaming(state.rows)),
         text !== "" ? text : SDK_ERROR_NO_DETAIL,
       );
     }
@@ -1503,7 +1645,8 @@ export const SDK_TOOL_FOLD_MIN = 3;
 /**
  * Fold consecutive tool rows (>= min) into one block; everything else passes through. PURE.
  * A tool row that carries a diff (an Edit/Write with its text) is never folded: the change is
- * what the reader wants to see, so it breaks the run and stays on screen as its own row.
+ * what the reader wants to see, so it breaks the run and stays on screen as its own row. Neither
+ * is a provisional one (`pending`): it is what is happening now, not a step already taken.
  */
 export function groupSdkRows(rows: readonly SdkRow[], min: number = SDK_TOOL_FOLD_MIN): SdkRenderRow[] {
   const out: SdkRenderRow[] = [];
@@ -1515,7 +1658,7 @@ export function groupSdkRows(rows: readonly SdkRow[], min: number = SDK_TOOL_FOL
     run = [];
   };
   for (const row of rows) {
-    if (row.kind === "tool" && !hasToolDiff(row.name, row.input)) {
+    if (row.kind === "tool" && !row.pending && !hasToolDiff(row.name, row.input)) {
       run.push(row);
       continue;
     }

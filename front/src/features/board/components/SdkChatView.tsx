@@ -83,7 +83,9 @@ import {
   markUserEdited,
   parseSdkFrame,
   settleUserRow,
+  formatTurnElapsed,
   toolHeadline,
+  toolLiveLabel,
   turnHasRoomForMore,
   type SdkActivity,
   type SdkChatState,
@@ -1548,15 +1550,6 @@ export function workingKindOf(
 }
 
 /**
- * The turn's elapsed time, the way the CLI writes it: `4s`, `1m 24s`. Not the composer's recording
- * clock (`0:42`, TerminalComposer) — a different dial, hence a different name. PURE.
- */
-function formatTurnElapsed(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds));
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
-}
-
-/**
  * THE ACTIVITY BAR — pinned to the top of the conversation while something is running.
  *
  * The problem it solves is the one the terminal does not have: in the TUI the status line is always
@@ -1639,12 +1632,18 @@ function SdkToolRow({ row }: { row: Extract<SdkRow, { kind: "tool" }> }) {
   const t = useT();
   const headline = toolHeadline(row.name, row.input);
   const detail = headline.background ? t("sdk.toolBackground") : headline.detail;
+  // PROVISÓRIA: o modelo ainda escreve o input — a linha diz o quê e quanto ("Escrevendo x.ts… 12 KB").
+  const pending = row.pending === true;
   return (
-    <div data-testid="sdk-tool" data-tool={row.name} className="min-w-0 pl-0.5 text-xs">
+    <div data-testid="sdk-tool" data-tool={row.name} data-pending={pending || undefined} className="min-w-0 pl-0.5 text-xs">
       <div className="flex items-baseline gap-1.5 text-muted-foreground">
-        <Wrench className="h-3 w-3 shrink-0 translate-y-0.5 opacity-70" />
+        {pending ? (
+          <Loader2 className="h-3 w-3 shrink-0 translate-y-0.5 animate-spin opacity-70" />
+        ) : (
+          <Wrench className="h-3 w-3 shrink-0 translate-y-0.5 opacity-70" />
+        )}
         <span data-testid="sdk-tool-title" className="min-w-0 truncate font-medium text-foreground/90">
-          {headline.title}
+          {pending ? toolLiveLabel(row) : headline.title}
         </span>
       </div>
       {detail ? (
@@ -1769,6 +1768,8 @@ const SdkChatRow = React.memo(function SdkChatRow({
   }
 
   if (row.kind === "tool") {
+    // Sem input ainda, o card do subagente ou da lista sairia vazio: a provisória é a linha viva.
+    if (row.pending) return <SdkToolRow row={row} />;
     if (isAgentTool(row.name)) return <SdkAgentCard row={row} />;
     if (row.name === "TodoWrite") return <SdkTodoRow row={row} />;
     return diff ? <ToolDiffCard row={row} diff={diff} /> : <SdkToolRow row={row} />;

@@ -17,12 +17,14 @@ import {
   formatAgentResult,
   parseWorkflowScriptMeta,
   toolHeadline,
+  toolLiveLabel,
   turnHasRoomForMore,
   toolSummary,
   type SdkChatState,
   type SdkEvent,
   type SdkRow,
 } from "./sdkChat";
+import { resetLanguage, setLanguage } from "@/i18n";
 import { pendingDecisions } from "./pendingDecisions";
 import { reconcileOutbox, sendMark } from "./sdkOutbox";
 
@@ -1655,5 +1657,147 @@ describe("subagentes (parentToolUseId)", () => {
     state = applySdkEvent(state, { type: "assistant_text", text: "olhei o reducer\nagora o view", parentToolUseId: "t1" });
     expect(currentActivity(state)?.label).toBe("Subagent Explore: agora o view");
     expect(liveActivityDetail(state)).toBe("Subagent Explore: agora o view");
+  });
+});
+
+/**
+ * A FERRAMENTA SENDO GERADA. O `tool_use` só chega quando o modelo termina o input inteiro — num
+ * Write de 400 linhas, dezenas de segundos de "Trabalhando…" em que a IA parecia engasgada. O
+ * driver agora avisa o começo (`tool_use_start`), o tamanho já gerado (`tool_input_progress`) e há
+ * quanto tempo a ferramenta roda (`tool_progress`). A linha provisória mostra isso, e o `tool_use`
+ * completo a SUBSTITUI no lugar: um card só.
+ */
+describe("ferramenta sendo gerada (tool_use_start → progresso → tool_use)", () => {
+  const ready = (): SdkChatState => applySdkEvent(INITIAL_SDK_STATE, { type: "ready" });
+  const started = (): SdkChatState =>
+    feed([
+      { type: "user", text: "cria o arquivo" },
+      { type: "assistant_text", text: "Vou criar." },
+      { type: "tool_use_start", id: "w1", name: "Write" },
+    ], ready());
+
+  it("o começo cria a linha PROVISÓRIA, sem input, e acende o turno", () => {
+    const state = started();
+    expect(state.rows.at(-1)).toEqual({ kind: "tool", id: "w1", name: "Write", summary: "", pending: true });
+    expect(state.turnActive).toBe(true);
+  });
+
+  it("o progresso atualiza só a linha provisória; as outras linhas mantêm a referência", () => {
+    const before = started();
+    const after = applySdkEvent(before, { type: "tool_input_progress", id: "w1", bytes: 12_288, filePath: "/w/src/sdkChat.ts" });
+    expect(after.rows.at(-1)).toMatchObject({ id: "w1", pending: true, inputBytes: 12_288, filePath: "/w/src/sdkChat.ts" });
+    expect(after.rows.slice(0, -1).every((row, i) => row === before.rows[i])).toBe(true);
+    // O mesmo progresso de novo não muda nada: o mesmo estado, nenhum render.
+    expect(applySdkEvent(after, { type: "tool_input_progress", id: "w1", bytes: 12_288, filePath: "/w/src/sdkChat.ts" })).toBe(after);
+  });
+
+  it("o tool_use completo SUBSTITUI a provisória no lugar: uma linha só, com o input final", () => {
+    const generating = feed([
+      { type: "tool_input_progress", id: "w1", bytes: 4_000, filePath: "/w/a.ts" },
+      // Uma linha que cai DEPOIS da provisória (o painel de workflow) não pode empurrar o card para o fim.
+      { type: "workflow_progress", runId: "r1", name: "x", agents: [] },
+    ], started());
+    const input = { file_path: "/w/a.ts", content: "linha\n" };
+    const done = applySdkEvent(generating, { type: "tool_use", id: "w1", name: "Write", input });
+    expect(done.rows.filter((row) => row.kind === "tool")).toEqual([
+      { kind: "tool", id: "w1", name: "Write", summary: toolSummary(input), input },
+    ]);
+    const at = generating.rows.findIndex((row) => row.id === "w1");
+    expect(done.rows.findIndex((row) => row.id === "w1")).toBe(at);
+    expect(done.rows.length).toBe(generating.rows.length);
+    expect(done.rows.every((row, i) => i === at || row === generating.rows[i])).toBe(true);
+  });
+
+  it("o bloco consolidado que chega DEPOIS do começo da ferramenta não duplica a fala nem o raciocínio", () => {
+    // O `tool_use_start` fecha a linha que escorria; se o CLI mandar o `assistant` do bloco de texto
+    // só depois dele, o bloco consolidado tem de cair na MESMA linha, não numa segunda bolha.
+    const state = feed([
+      { type: "user", text: "cria" },
+      { type: "thinking_delta", text: "vou pensar" },
+      { type: "assistant_delta", text: "Vou " },
+      { type: "assistant_delta", text: "criar." },
+      { type: "tool_use_start", id: "w1", name: "Write" },
+      { type: "assistant_text", text: "Vou criar." },
+      { type: "tool_use", id: "w1", name: "Write", input: { file_path: "/w/a.ts", content: "x" } },
+    ], ready());
+    expect(state.rows.map((row) => row.kind)).toEqual(["user", "thinking", "assistant", "tool"]);
+    expect(state.rows[2]).toMatchObject({ text: "Vou criar.", streaming: false });
+
+    const thought = feed([
+      { type: "user", text: "cria" },
+      { type: "thinking_delta", text: "vou pensar" },
+      { type: "tool_use_start", id: "w1", name: "Write" },
+      { type: "thinking", text: "vou pensar" },
+    ], ready());
+    expect(thought.rows.map((row) => row.kind)).toEqual(["user", "thinking", "tool"]);
+  });
+
+  it("progresso de uma ferramenta que já chegou completa (ou que nunca começou) é ignorado", () => {
+    const done = applySdkEvent(started(), { type: "tool_use", id: "w1", name: "Write", input: { file_path: "/w/a.ts", content: "" } });
+    expect(applySdkEvent(done, { type: "tool_input_progress", id: "w1", bytes: 99 })).toBe(done);
+    expect(applySdkEvent(done, { type: "tool_input_progress", id: "nunca", bytes: 99 })).toBe(done);
+  });
+
+  it("o relógio da ferramenta (tool_progress) entra na linha dela", () => {
+    const state = feed([
+      { type: "tool_use", id: "b1", name: "Bash", input: { command: "npm test", description: "Rodando a suíte" } },
+      { type: "tool_progress", id: "b1", elapsedSeconds: 42 },
+    ], started());
+    expect(state.rows.find((row) => row.id === "b1")).toMatchObject({ elapsedSeconds: 42 });
+  });
+
+  it("um turno que acaba com a linha ainda provisória (interrompido) não a deixa girando para sempre", () => {
+    const cut = applySdkEvent(started(), { type: "result", isError: false, subtype: "aborted" });
+    expect(cut.rows.some((row) => row.kind === "tool" && row.pending)).toBe(false);
+    const crashed = applySdkEvent(started(), { type: "error", message: "o CLI caiu" });
+    expect(crashed.rows.some((row) => row.kind === "tool" && row.pending)).toBe(false);
+    // Um driver novo, sem turno em voo: a ferramenta pela metade morreu com o anterior.
+    const rebooted = applySdkEvent(started(), { type: "ready" });
+    expect(rebooted.rows.some((row) => row.kind === "tool" && row.pending)).toBe(false);
+  });
+
+  it("a linha provisória não dobra num grupo de ferramentas: ela é o que está acontecendo agora", () => {
+    const state = feed([
+      { type: "tool_use", id: "r1", name: "Read", input: { file_path: "/w/1.ts" } },
+      { type: "tool_use", id: "r2", name: "Read", input: { file_path: "/w/2.ts" } },
+      { type: "tool_use", id: "r3", name: "Read", input: { file_path: "/w/3.ts" } },
+      { type: "tool_use_start", id: "w1", name: "Write" },
+    ], ready());
+    expect(groupSdkRows(state.rows).at(-1)).toEqual({ kind: "row", id: "w1", row: state.rows.at(-1) });
+  });
+
+  it("a barra e o indicador dizem o que a IA está fazendo AGORA", () => {
+    let state = applySdkEvent(started(), { type: "tool_input_progress", id: "w1", bytes: 12_288, filePath: "/w/src/sdkChat.ts" });
+    expect(currentActivity(state)).toEqual({ kind: "tool", label: "Writing sdkChat.ts… 12 KB", rowId: "w1" });
+    expect(liveActivityDetail(state)).toBe("Writing sdkChat.ts… 12 KB");
+    state = feed([
+      { type: "tool_use", id: "w1", name: "Write", input: { file_path: "/w/src/sdkChat.ts", content: "x" } },
+      { type: "tool_use_start", id: "e1", name: "Edit" },
+    ], state);
+    expect(currentActivity(state)?.label).toBe("Editing a file…");
+    state = feed([
+      { type: "tool_use", id: "e1", name: "Edit", input: { file_path: "/w/a.ts", old_string: "a", new_string: "b" } },
+      { type: "tool_use", id: "b1", name: "Bash", input: { command: "npm test", description: "Rodando a suíte" } },
+      { type: "tool_progress", id: "b1", elapsedSeconds: 42 },
+    ], state);
+    expect(currentActivity(state)?.label).toBe("Running: Rodando a suíte… 42s");
+    expect(liveActivityDetail(state)).toBe("Running: Rodando a suíte… 42s");
+  });
+
+  it("toolLiveLabel: a frase de cada caso, em pt-BR também", () => {
+    const pending = (name: string, extra: Partial<Extract<SdkRow, { kind: "tool" }>> = {}): SdkRow =>
+      ({ kind: "tool", id: "x", name, summary: "", pending: true, ...extra });
+    expect(toolLiveLabel(pending("Edit", { filePath: "/w/a.ts", inputBytes: 300 }))).toBe("Editing a.ts… 1 KB");
+    expect(toolLiveLabel(pending("Grep"))).toBe("Preparing Grep…");
+    expect(toolLiveLabel({ kind: "tool", id: "x", name: "Read", summary: "", input: { file_path: "/w/a.ts" } })).toBeNull();
+    setLanguage("pt-BR");
+    try {
+      expect(toolLiveLabel(pending("Write", { filePath: "/w/sdkChat.ts", inputBytes: 12_288 }))).toBe("Escrevendo sdkChat.ts… 12 KB");
+      expect(toolLiveLabel(pending("Edit"))).toBe("Editando um arquivo…");
+      expect(toolLiveLabel({ kind: "tool", id: "x", name: "Bash", summary: "", input: { command: "ls -la" }, elapsedSeconds: 75 }))
+        .toBe("Rodando: ls -la… 1m 15s");
+    } finally {
+      resetLanguage();
+    }
   });
 });
