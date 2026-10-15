@@ -66,18 +66,30 @@ describe("buildSdkDriverCommandLine", () => {
     const line = buildSdkDriverCommandLine({
       ...base,
       resumeSessionId: "0d1b3864-4870-4141-8451-79d73de0bd96",
-      model: "claude-opus-5",
+      model: "opus",
     });
     expect(line).toContain("--resume");
     expect(line).toContain("0d1b3864-4870-4141-8451-79d73de0bd96");
-    expect(line).toContain("--model");
-    expect(line).toContain("claude-opus-5");
+    expect(line).toContain(String.raw`--model '\''opus'\''`);
+  });
+
+  it("a versioned id pinned by an older vibehub reaches the driver as its family", () => {
+    const line = buildSdkDriverCommandLine({ ...base, model: "claude-opus-5" });
+    expect(line).toContain(String.raw`--model '\''opus'\''`);
+    expect(line).not.toContain("claude-opus-5");
   });
 
   it("drops an invalid model rather than passing raw input to the shell", () => {
     const line = buildSdkDriverCommandLine({ ...base, model: "; rm -rf / #" });
     expect(line).not.toContain("--model");
     expect(line).not.toContain("rm -rf");
+  });
+
+  it("adds --effort for a whitelisted level and drops anything else", () => {
+    expect(buildSdkDriverCommandLine({ ...base, effort: "xhigh" })).toContain(String.raw`--effort '\''xhigh'\''`);
+    const bad = buildSdkDriverCommandLine({ ...base, effort: "high; id" });
+    expect(bad).not.toContain("--effort");
+    expect(bad).not.toContain("; id");
   });
 
   it("threads CLAUDE_CONFIG_DIR only for a non-default account", () => {

@@ -10,7 +10,7 @@ import {
   getCard, getProject, applyOpenTerminal, markPrepared, pauseCard as registryPauseCard,
   listGithubConnections,
   hibernateCard as registryHibernateCard,
-  listAllCards, assertBranchName, assertSessionId, effectiveAccountSlug, isValidModel, hasLiveSession,
+  listAllCards, assertBranchName, assertSessionId, effectiveAccountSlug, modelPin, isValidEffort, hasLiveSession,
   markRestartPending,
   type Card, type CardStatus, type Project, type RestartReason,
 } from "./registry.js";
@@ -81,11 +81,13 @@ export interface SessionCommandOpts {
    */
   profileDir?: string;
   /**
-   * The card's Claude model (one of CLAUDE_MODELS): when VALID, Claude starts with `--model <id>`.
-   * Absent/invalid = the account default (no flag at all). Checked against the whitelist
-   * (isValidModel) — raw input never reaches the shell.
+   * The card's Claude model (one of CLAUDE_MODELS, or a versioned id an older vibehub pinned): when
+   * VALID, Claude starts with `--model <alias>`. Absent/invalid = the account default (no flag at all).
+   * Checked against the whitelist (modelPin) — raw input never reaches the shell.
    */
   model?: string;
+  /** The card's reasoning level (one of CLAUDE_EFFORTS): `--effort <level>`. Same whitelist rule. */
+  effort?: string;
   /**
    * Per-card file that MAY hold the project's GitHub token. When set, the guard exports `GH_TOKEN`
    * by reading the file IF it exists (`[ -s <file> ]`) — so `git push`/`gh` in the card act as the
@@ -145,13 +147,15 @@ export function sessionCommand(opts: SessionCommandOpts | boolean): string {
   // for when nothing else says anything, and the profile's own settings.json (`"model"`, written by
   // any `/model` typed in ANY card sharing that account profile) beat it — a card pinned to Opus
   // would boot on whatever the last `/model` left behind. `--model` wins over both. Only when the id
-  // is VALID (CLAUDE_MODELS whitelist): safe charset, never raw input.
-  const model = isValidModel(o.model) ? ` --model ${o.model}` : "";
+  // is VALID (CLAUDE_MODELS whitelist): safe charset, never raw input. `--effort` rides along under
+  // the same rule.
+  const pin = modelPin(o.model);
+  const pinFlags = (pin ? ` --model ${pin}` : "") + (isValidEffort(o.effort) ? ` --effort ${o.effort}` : "");
   let claude: string;
   if (o.resumeSessionId) {
-    claude = `claude${model} --resume ${assertSessionId(o.resumeSessionId)} || claude${model} -c || claude${model}`;
-  } else if (o.resume) claude = `claude${model} -c || claude${model}`;
-  else claude = `claude${model}`;
+    claude = `claude${pinFlags} --resume ${assertSessionId(o.resumeSessionId)} || claude${pinFlags} -c || claude${pinFlags}`;
+  } else if (o.resume) claude = `claude${pinFlags} -c || claude${pinFlags}`;
+  else claude = `claude${pinFlags}`;
   return `${guard}${claude}; exec bash`;
 }
 
@@ -282,6 +286,8 @@ export interface OpenScriptOpts {
   resumeSessionId?: string;
   /** The card's Claude model: Claude starts with `--model <id>`. Absent = account default. */
   model?: string;
+  /** The card's reasoning level: Claude starts with `--effort <level>`. Absent = account default. */
+  effort?: string;
   /**
    * The effective account's long-lived token (from the vault): SEEDED into the profile
    * (<profile>/.oauth-token, mode 600) inside the script — over STDIN, never argv. Absent = nothing
@@ -453,7 +459,7 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
       ` -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8` +
       // Non-default account: the session's Claude uses the account profile (isolated credentials/state).
       (opts.accountConfigDir ? ` -e CLAUDE_CONFIG_DIR=${shQuote(opts.accountConfigDir)}` : "") +
-      ` ${shQuote(sessionCommand({ resume: !!opts.resume, resumeSessionId: opts.resumeSessionId, profileDir, model: opts.model, ghTokenFile: ghTokenPath(opts.cardId) }))}`,
+      ` ${shQuote(sessionCommand({ resume: !!opts.resume, resumeSessionId: opts.resumeSessionId, profileDir, model: opts.model, effort: opts.effort, ghTokenFile: ghTokenPath(opts.cardId) }))}`,
   );
   return [
     "set -e",
@@ -474,6 +480,8 @@ export interface CardAttachOpts {
   resumeSessionId?: string;
   /** The card's Claude model: Claude starts with `--model <id>`. Absent = account default. */
   model?: string;
+  /** The card's reasoning level: Claude starts with `--effort <level>`. Absent = account default. */
+  effort?: string;
   /**
    * Per-card gh-token file the session exports `GH_TOKEN` from (see SessionCommandOpts). The PATH is
    * safe in argv — the token itself is only ever written by the open script over STDIN.
@@ -517,6 +525,7 @@ export function terminalRemoteArgs(containerName: string, tmuxSession: string, c
           resumeSessionId: opts.resumeSessionId,
           profileDir: opts.accountConfigDir ?? DEFAULT_CLAUDE_DIR,
           model: opts.model,
+          effort: opts.effort,
           ghTokenFile: opts.ghTokenFile,
         }),
   ];
@@ -546,6 +555,7 @@ export function cardAttachArgs(
     resume: !!card.openedAt,
     resumeSessionId: card.resumeSessionId,
     model: card.model,
+    effort: card.effort,
     // Always the card's token file: the session exports GH_TOKEN from what a prior /open wrote
     // (the export is `[ -s ]`-guarded, so no file = no export). The open writes it whenever ANY
     // GitHub account is connected — projects with no explicit connection use the first one, same
@@ -774,6 +784,7 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
       resume: !!card.openedAt,
       resumeSessionId: card.resumeSessionId,
       model: card.model,
+      effort: card.effort,
       oauthToken,
       ghToken,
       mcps,
@@ -1680,19 +1691,21 @@ export type SessionChange = "none" | "restarted" | "pending";
  */
 export async function applySessionChange(before: Card | undefined, after: Card, by?: string): Promise<SessionChange> {
   const changed =
-    (before?.model ?? null) !== (after.model ?? null) || (before?.accountSlug ?? null) !== (after.accountSlug ?? null);
+    (before?.model ?? null) !== (after.model ?? null) ||
+    (before?.effort ?? null) !== (after.effort ?? null) ||
+    (before?.accountSlug ?? null) !== (after.accountSlug ?? null);
   if (!before || !changed || !hasLiveSession(after)) return "none";
   if (after.status === "working") {
     await markRestartPending(after.id, "config");
     logger.info(
-      { audit: true, action: "card.config.pending", card: after.worktreeSlug, model: after.model ?? null, account: after.accountSlug ?? null, by },
+      { audit: true, action: "card.config.pending", card: after.worktreeSlug, model: after.model ?? null, effort: after.effort ?? null, account: after.accountSlug ?? null, by },
       "model/account switched while Claude was working — the session restarts onto it once the card goes idle",
     );
     return "pending";
   }
   await restartCard(after.id, by);
   logger.info(
-    { audit: true, action: "card.config.applied", card: after.worktreeSlug, model: after.model ?? null, account: after.accountSlug ?? null, by },
+    { audit: true, action: "card.config.applied", card: after.worktreeSlug, model: after.model ?? null, effort: after.effort ?? null, account: after.accountSlug ?? null, by },
     "model/account switched — the session was ended so the reattach starts Claude with it (claude -c)",
   );
   return "restarted";

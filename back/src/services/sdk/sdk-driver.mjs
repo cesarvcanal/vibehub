@@ -49,6 +49,9 @@ function argOf(flag) {
 const CWD = argOf("--cwd") || process.cwd();
 const INITIAL_RESUME = argOf("--resume"); // a stored session_id to continue on the first message
 const MODEL = argOf("--model");
+// The card's reasoning level (whitelisted by the back before it reaches this argv). Kept, not just
+// forwarded: the end of an `ultrathink` turn gives the session back THIS level (see clearUltra).
+const EFFORT = argOf("--effort");
 // Mirror of `parseGateMode` in protocol.ts: anything unrecognised falls back to the STRICTER mode.
 const GATE_MODE = argOf("--permission-gate") === "same-as-terminal" ? "same-as-terminal" : "ask-sensitive";
 /* ------------------------------------------------------------- output */
@@ -354,7 +357,7 @@ let lastSessionId = INITIAL_RESUME; // resume target for the NEXT stream
 // ONE long-lived query() fed by an async channel of user messages, instead of one query() per
 // turn. The payoff is the TUI's own queue behaviour ("encavalar"): a message sent WHILE a turn is
 // running is pushed into the live stream and the CLI FOLDS it into the running turn — the model
-// absorbs it at its next step. Verified live on SDK 0.3.246: a message pushed mid-turn produced
+// absorbs it at its next step. Verified live on SDK 0.3.246 and again on 0.3.300: a message pushed mid-turn produced
 // ONE result whose final answer already honoured it (see docs/sdk-driver.md).
 
 function makeChannel() {
@@ -412,6 +415,7 @@ function baseOptions() {
     canUseTool,
   };
   if (MODEL) opts.model = MODEL;
+  if (EFFORT) opts.effort = EFFORT;
   return opts;
 }
 
@@ -463,7 +467,7 @@ async function emitCatalogFrom(init, queryHandle) {
  * escolher um comando.
  *
  * O CLI responde `supportedCommands()` sem nenhum turno (verificado contra o SDK 0.3.246 antes
- * desta linha existir), então o driver sobe uma consulta DESCARTÁVEL só para perguntar isso e a
+ * desta linha existir, e de novo no 0.3.300), então o driver sobe uma consulta DESCARTÁVEL só para perguntar isso e a
  * encerra em seguida. Três cuidados:
  *
  *  - `VIBEHUB_STATUS_URL` vai VAZIO: os hooks de status do runner disparam no SessionStart desta
@@ -979,8 +983,12 @@ async function clearUltra() {
     // `null` clears the key from the flag layer, so whatever the user's own settings say takes
     // over again — this restores a level, it does not impose one. Only the keys this driver
     // actually set are cleared: an `ultrathink` turn never touches `ultracode`.
+    // EXCEPT the card's own level: clearing the flag does NOT bring `--effort` back (measured on
+    // the real CLI, SDK 0.3.300: --effort low → flag max → flag null left the session on `medium`).
+    // So a card that pinned a level gets that level written back instead of a null.
     const give = {};
     for (const key of Object.keys(raised)) give[key] = null;
+    if ("effortLevel" in give && EFFORT) give.effortLevel = EFFORT;
     await handle.applyFlagSettings(give);
   } catch { /* the stream is gone, and a dead stream has no effort to give back */ }
 }

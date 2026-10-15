@@ -526,14 +526,27 @@ describe("terminalRemoteArgs / cardAttachArgs (the websocket's COMPLETE attach-o
 
 describe("per-card model (`claude --model` — the flag, never the env)", () => {
   it("a VALID model becomes a --model flag; an absent one adds nothing", () => {
-    expect(ws.sessionCommand({ model: "claude-opus-5" })).toBe(`${guard()}claude --model claude-opus-5; exec bash`);
+    expect(ws.sessionCommand({ model: "opus" })).toBe(`${guard()}claude --model opus; exec bash`);
     expect(ws.sessionCommand({})).toBe(CLAUDE);
+  });
+
+  it("a versioned id pinned by an older vibehub boots on its FAMILY, never on the account default", () => {
+    // A card pinned by an older vibehub holds the versioned id; it must still boot on its family.
+    expect(ws.sessionCommand({ model: "claude-opus-5" })).toBe(`${guard()}claude --model opus; exec bash`);
   });
 
   it("the pin is a FLAG, not ANTHROPIC_DEFAULT_MODEL — the profile's settings.json beats that env", () => {
     // The bug: a card pinned to Opus booted on whatever `/model` last wrote into the SHARED account
     // profile (Fable), because the env is only the default of last resort.
-    expect(ws.sessionCommand({ model: "claude-opus-5" })).not.toContain("ANTHROPIC_DEFAULT_MODEL");
+    expect(ws.sessionCommand({ model: "opus" })).not.toContain("ANTHROPIC_DEFAULT_MODEL");
+  });
+
+  it("a VALID effort becomes an --effort flag on every fallback; an invalid one adds nothing", () => {
+    expect(ws.sessionCommand({ model: "opus", effort: "high" })).toBe(`${guard()}claude --model opus --effort high; exec bash`);
+    expect(ws.sessionCommand({ effort: "max", resume: true })).toBe(`${guard()}claude --effort max -c || claude --effort max; exec bash`);
+    const bad = ws.sessionCommand({ effort: "high; rm -rf /" });
+    expect(bad).toBe(CLAUDE);
+    expect(bad).not.toContain("rm -rf");
   });
 
   it("an INVALID model is IGNORED (no flag, does not throw) — nothing raw reaches the shell", () => {
@@ -544,20 +557,20 @@ describe("per-card model (`claude --model` — the flag, never the env)", () => 
   });
 
   it("the flag rides EVERY fallback of a resume, so no branch silently drops the pin", () => {
-    expect(ws.sessionCommand({ model: "claude-sonnet-5", profileDir: "/root/.claude-profiles/personal", resume: true }))
-      .toBe(`${guard("/root/.claude-profiles/personal")}claude --model claude-sonnet-5 -c || claude --model claude-sonnet-5; exec bash`);
-    const imported = ws.sessionCommand({ model: "claude-opus-5", resumeSessionId: "a1b2c3d4-e5f6-4a4a-8b8b-000011112222" });
-    expect(imported.match(/--model claude-opus-5/g)).toHaveLength(3);
+    expect(ws.sessionCommand({ model: "sonnet", profileDir: "/root/.claude-profiles/personal", resume: true }))
+      .toBe(`${guard("/root/.claude-profiles/personal")}claude --model sonnet -c || claude --model sonnet; exec bash`);
+    const imported = ws.sessionCommand({ model: "opus", resumeSessionId: "a1b2c3d4-e5f6-4a4a-8b8b-000011112222" });
+    expect(imported.match(/--model opus/g)).toHaveLength(3);
   });
 
-  it("both the attach and the open carry the card's model into the session command", async () => {
+  it("both the attach and the open carry the card's model and effort into the session command", async () => {
     const { project, card } = await seed();
-    const c = await reg.updateCard(card.id, { model: "claude-fable-5" });
-    expect(ws.cardAttachArgs(CONTAINER, project, c).at(-1)).toContain("claude --model claude-fable-5");
+    const c = await reg.updateCard(card.id, { model: "fable", effort: "xhigh" });
+    expect(ws.cardAttachArgs(CONTAINER, project, c).at(-1)).toContain("claude --model fable --effort xhigh");
 
     await ws.openCard(c.id);
     const tmux = lastScript().split("\n").find((l) => l.includes("tmux new-session"))!;
-    expect(tmux).toContain("claude --model claude-fable-5");
+    expect(tmux).toContain("claude --model fable --effort xhigh");
 
     // a card with no model (the account default): no flag at all. The board hands back the SAME
     // object it stores, so `card` was mutated by updateCard — clear the field explicitly.
@@ -904,6 +917,18 @@ describe("restart (single and all) — a working card is protected", () => {
     expect(await ws.applySessionChange(before, after)).toBe("restarted");
     expect(scriptAt(0)).toContain(`tmux kill-session -t '${card.tmuxSession}'`);
     expect((await reg.getCard(card.id))?.restartPendingAt ?? null).toBeNull();
+  });
+
+  it("applySessionChange: an EFFORT switch alone restarts too — `--effort` is read only when Claude starts", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "waiting");
+    const before = { ...(await reg.getCard(card.id))! };
+    const after = await reg.updateCard(card.id, { effort: "max" });
+    runScript.mockClear();
+
+    expect(await ws.applySessionChange(before, after)).toBe("restarted");
+    expect(scriptAt(0)).toContain(`tmux kill-session -t '${card.tmuxSession}'`);
   });
 
   it("applySessionChange: switching while Claude WORKS flags the card instead of interrupting the task", async () => {

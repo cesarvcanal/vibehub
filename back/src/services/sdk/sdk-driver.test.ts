@@ -33,6 +33,7 @@ const CLEARED = "99999999-2222-3333-4444-555555555555";
 
 export function query({ prompt, options }) {
   const index = ++created;
+  mark("effort:" + (options.effort ?? "none"));
   let onInterrupt = () => {};
   let interruptAnswer = Promise.resolve();
   const interrupted = () => new Promise((resolve) => { onInterrupt = resolve; });
@@ -106,7 +107,7 @@ export function query({ prompt, options }) {
   handle.interrupt = () => { onInterrupt(); return interruptAnswer; };
   handle.supportedCommands = async () => [];
   handle.initializationResult = async () => ({});
-  handle.applyFlagSettings = async () => {};
+  handle.applyFlagSettings = async (settings) => { mark("flags:" + JSON.stringify(settings)); };
   return handle;
 }
 `;
@@ -186,9 +187,9 @@ function waitableLines<T>(stream: NodeJS.ReadableStream, parse: (line: string) =
   return { items, wait };
 }
 
-function startDriver(): RunningDriver {
+function startDriver(extraArgs: string[] = []): RunningDriver {
   // CLAUDE_CONFIG_DIR with no `projects/`: the disk has no fork point, the memory one decides.
-  const child = spawn(process.execPath, [driverPath, "--cwd", sandbox], {
+  const child = spawn(process.execPath, [driverPath, "--cwd", sandbox, ...extraArgs], {
     env: { ...process.env, CLAUDE_CONFIG_DIR: sandbox },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -340,4 +341,27 @@ describe("sdk-driver.mjs — /clear", () => {
     const rewound = await driver.waitFor((e) => e.type === "rewound", from);
     expect(rewound.ok).toBe(false);
   }, 30_000);
+});
+
+describe("sdk-driver.mjs — a inteligência do card sobrevive ao ultrathink", () => {
+  it("o --effort do card vai para o SDK, e o fim de um turno ultrathink DEVOLVE esse nível, não o padrão", async () => {
+    // Medido no CLI de verdade (SDK 0.3.300, 2026-10-14): --effort low, flag max por cima e depois
+    // flag null deixava a sessão em `medium` — o card perdia a escolha no primeiro ultrathink.
+    const driver = startDriver(["--effort", "low"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink" });
+    await driver.waitMark("effort:low");
+    await driver.waitMark('flags:{"effortLevel":"max"}');
+    await driver.waitFor((e) => e.type === "result");
+    await driver.waitMark('flags:{"effortLevel":"low"}');
+  }, 60_000);
+
+  it("sem inteligência no card, a devolução continua limpando a chave (o padrão da conta volta)", async () => {
+    const driver = startDriver();
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink" });
+    await driver.waitMark("effort:none");
+    await driver.waitFor((e) => e.type === "result");
+    await driver.waitMark('flags:{"effortLevel":null}');
+  }, 60_000);
 });
