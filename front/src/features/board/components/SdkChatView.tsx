@@ -35,6 +35,10 @@ import {
 } from "@/features/board/lib/peerTyping";
 import { nextIdentity, type ViewerIdentity } from "@/features/board/lib/viewerIdentity";
 import { PeerTypingIndicator } from "@/features/board/components/PeerTypingIndicator";
+import { SdkAgentCard } from "@/features/board/components/SdkAgentCard";
+import { TodoCard } from "@/features/board/components/TodoCard";
+import { SdkThreadContext, type SdkThread } from "@/features/board/components/sdkThreadContext";
+import { isAgentTool, latestTodoRowId, splitSubagentRows, type SubagentSplit } from "@/features/board/lib/sdkSubagents";
 import { ultraKeywords } from "@/features/board/lib/ultraWords";
 import { workingStage, type WorkingKind } from "@/features/board/lib/workingStage";
 import { createReconnectBackoff, type ConnectionState } from "@/features/board/lib/reconnect";
@@ -967,7 +971,22 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     toast.message(translate("sdk.replyGone"));
   }, [pending, replyTo]);
 
-  const rendered = React.useMemo(() => groupSdkRows(state.rows), [state.rows]);
+  // O que é de um SUBAGENTE sai do fio principal e vai para debaixo do card que o disparou.
+  // O mapa anterior entra para ser REUSADO quando nenhum subagente mudou: assim um token da resposta
+  // do principal não troca o valor do contexto nem redesenha os cards de subagente.
+  const subagentRowsRef = React.useRef<SubagentSplit["children"] | undefined>(undefined);
+  const split = React.useMemo(() => {
+    const next = splitSubagentRows(state.rows, subagentRowsRef.current);
+    subagentRowsRef.current = next.children;
+    return next;
+  }, [state.rows]);
+  const rendered = React.useMemo(() => groupSdkRows(split.main), [split.main]);
+  const latestTodoId = React.useMemo(() => latestTodoRowId(split.main), [split.main]);
+  const renderThreadRow = React.useCallback((row: SdkRow) => <SdkChatRow row={row} />, []);
+  const thread = React.useMemo<SdkThread>(
+    () => ({ subagentRows: split.children, latestTodoId, renderRow: renderThreadRow }),
+    [split.children, latestTodoId, renderThreadRow],
+  );
   const empty = state.rows.length === 0;
 
   /* -------------------------------------------------- what is running, right now */
@@ -1042,6 +1061,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
           </div>
         ) : null}
 
+        <SdkThreadContext.Provider value={thread}>
         {rendered.map((entry) => (
           <div
             key={entry.id}
@@ -1069,6 +1089,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
             )}
           </div>
         ))}
+        </SdkThreadContext.Provider>
 
         {/* The STATUS LADDER — one indicator, three rungs, only while the wire is UP (a
             disconnected view cannot vouch for anything; the reconnect relights it). The instant a
@@ -1817,6 +1838,12 @@ function SdkThinkingRow({ text, streaming }: { text: string; streaming: boolean 
   );
 }
 
+/** O TodoWrite da conversa: aberto só quando é o mais recente (ver `TodoCard`). */
+function SdkTodoRow({ row }: { row: Extract<SdkRow, { kind: "tool" }> }) {
+  const { latestTodoId } = React.useContext(SdkThreadContext);
+  return <TodoCard row={row} latest={latestTodoId === row.id} />;
+}
+
 /**
  * One row of the conversation. MEMOISED: a streamed token changes only the last row, and every
  * other one — same `row` object (the reducer keeps untouched rows by reference), same primitives,
@@ -1858,6 +1885,8 @@ const SdkChatRow = React.memo(function SdkChatRow({
   }
 
   if (row.kind === "tool") {
+    if (isAgentTool(row.name)) return <SdkAgentCard row={row} />;
+    if (row.name === "TodoWrite") return <SdkTodoRow row={row} />;
     return <SdkToolRow row={row} />;
   }
 

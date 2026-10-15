@@ -747,9 +747,13 @@ export function liveActivityDetail(state: SdkChatState): string | null {
  */
 export function subagentName(rows: readonly SdkRow[], parentId: string): string {
   const parent = rows.find((row) => row.kind === "tool" && row.id === parentId);
-  if (!parent || parent.kind !== "tool") return "";
-  const o = (parent.input && typeof parent.input === "object" ? parent.input : {}) as Record<string, unknown>;
-  return field(o, "subagent_type") || field(o, "description") || parent.name;
+  return parent && parent.kind === "tool" ? subagentLabel(parent.name, parent.input) : "";
+}
+
+/** O nome de um subagente pela chamada que o disparou: tipo, descrição ou o nome da tool. PURE. */
+export function subagentLabel(tool: string, input: unknown): string {
+  const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  return field(o, "subagent_type") || field(o, "description") || tool;
 }
 
 /** O que uma linha de subagente está fazendo, em uma linha: a manchete da ferramenta, ou a última

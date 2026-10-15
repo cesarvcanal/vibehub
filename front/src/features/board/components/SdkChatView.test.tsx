@@ -14,6 +14,7 @@ import { get } from "@/lib/api";
 import { LinkifiedText } from "@/features/board/components/ChatView";
 import { resetDraftsForTesting } from "@/features/board/components/TerminalComposer";
 import { ME_KEY } from "@/providers/auth";
+import { SdkAgentCard } from "@/features/board/components/SdkAgentCard";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -29,6 +30,13 @@ vi.mock("@/lib/api", () => ({
 vi.mock("@/features/board/components/ChatView", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/features/board/components/ChatView")>();
   return { ...actual, LinkifiedText: vi.fn(actual.LinkifiedText) };
+});
+
+// Mesmo passthrough com contador, para o card do subagente: um token do principal não pode
+// redesenhá-lo.
+vi.mock("@/features/board/components/SdkAgentCard", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/features/board/components/SdkAgentCard")>();
+  return { ...actual, SdkAgentCard: vi.fn(actual.SdkAgentCard) };
 });
 
 vi.mock("sonner", () => ({
@@ -2032,6 +2040,130 @@ describe("SdkChatView — o que o leitor de tela anuncia", () => {
 
     ws.deliver({ type: "assistant_text", text: "Começando." });
     expect(log).not.toHaveAttribute("aria-busy", "true");
+  });
+});
+
+/**
+ * QUEM ESTÁ FAZENDO O QUÊ. O que um subagente (Agent/Task) faz chega marcado com `parentToolUseId`
+ * e é desenhado DENTRO do card da chamada que o disparou — recolhido, com quantas ações já foram e
+ * a última —, nunca como passo ou resposta do agente principal.
+ */
+describe("SdkChatView — subagentes", () => {
+  const agentCall: SdkEvent = {
+    type: "tool_use", id: "t1", name: "Agent", input: { description: "explora o chat", subagent_type: "Explore" },
+  };
+
+  it("o card do Agent tem o ícone de robô, e as ações do subagente ficam recolhidas sob ele", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(agentCall);
+    ws.deliver({ type: "tool_use", id: "c1", name: "Read", input: { file_path: "/w/sdkChat.ts" }, parentToolUseId: "t1" });
+    ws.deliver({ type: "assistant_text", text: "achei o reducer", parentToolUseId: "t1" });
+    ws.deliver({ type: "tool_use", id: "c2", name: "Grep", input: { pattern: "toolHeadline" }, parentToolUseId: "t1" });
+
+    const card = screen.getByTestId("sdk-agent");
+    expect(card.querySelector(".lucide-bot")).not.toBeNull();
+    expect(card.querySelector(".lucide-wrench")).toBeNull();
+    expect(within(card).getByTestId("sdk-tool-title")).toHaveTextContent("Agent(explora o chat)");
+
+    // Recolhido por padrão: o contador e a última ação, nada mais.
+    const summary = within(card).getByTestId("sdk-subagent-summary");
+    expect(summary).toHaveTextContent("2 actions");
+    expect(summary).toHaveTextContent("Explore · Grep(toolHeadline)");
+    expect(screen.queryByTestId("sdk-subagent-rows")).toBeNull();
+    // As ações do subagente não aparecem como passos do principal: a única linha de ferramenta é a
+    // própria chamada do Agent.
+    expect(screen.getAllByTestId("sdk-tool").map((el) => el.getAttribute("data-tool"))).toEqual(["Agent"]);
+
+    fireEvent.click(summary);
+    const rows = within(card).getByTestId("sdk-subagent-rows");
+    expect(rows).toHaveClass("border-l");
+    expect(rows).toHaveTextContent("by the subagent");
+    expect(within(rows).getByText("Read(sdkChat.ts)")).toBeInTheDocument();
+    expect(within(rows).getByText("achei o reducer")).toBeInTheDocument();
+    for (const toolRow of screen.getAllByTestId("sdk-tool")) expect(card.contains(toolRow)).toBe(true);
+  });
+
+  it("o texto do subagente não vira resposta do agente principal", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(agentCall);
+    ws.deliver({ type: "assistant_text", text: "relatório do subagente", parentToolUseId: "t1" });
+    ws.deliver({ type: "assistant_text", text: "Resumo do principal." });
+
+    const answers = screen.getAllByTestId("sdk-assistant");
+    expect(answers).toHaveLength(1);
+    expect(answers[0]).toHaveTextContent("Resumo do principal.");
+  });
+
+  it("um token da resposta do principal não redesenha o card do subagente", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(agentCall);
+    ws.deliver({ type: "tool_use", id: "c1", name: "Read", input: { file_path: "/w/a.ts" }, parentToolUseId: "t1" });
+    const before = vi.mocked(SdkAgentCard).mock.calls.length;
+    ws.deliver({ type: "assistant_delta", text: "Enquanto " });
+    ws.deliver({ type: "assistant_delta", text: "isso, " });
+    ws.deliver({ type: "assistant_delta", text: "sigo." });
+    expect(vi.mocked(SdkAgentCard).mock.calls.length).toBe(before);
+    // E uma ação NOVA do subagente redesenha, sim.
+    ws.deliver({ type: "tool_use", id: "c2", name: "Grep", input: { pattern: "x" }, parentToolUseId: "t1" });
+    expect(vi.mocked(SdkAgentCard).mock.calls.length).toBeGreaterThan(before);
+  });
+
+  it("a barra de atividade diz que é o subagente trabalhando", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "investiga" });
+    ws.deliver(agentCall);
+    ws.deliver({ type: "tool_use", id: "c1", name: "Read", input: { file_path: "/w/sdkChat.ts" }, parentToolUseId: "t1" });
+    expect(screen.getByTestId("sdk-activity-label")).toHaveTextContent("Subagent Explore: Read(sdkChat.ts)");
+  });
+});
+
+/**
+ * A LISTA DE TAREFAS DO AGENTE. Um TodoWrite dizia só "TodoWrite"; agora diz quantas já foram e
+ * mostra a lista — só a MAIS RECENTE aberta: as anteriores são versões velhas da mesma lista.
+ */
+describe("SdkChatView — TodoWrite", () => {
+  const todos = (statuses: Array<"pending" | "in_progress" | "completed">) => statuses.map((status, i) => ({
+    content: `Tarefa ${i + 1}`, activeForm: `Fazendo a tarefa ${i + 1}`, status,
+  }));
+
+  it("o mais recente aparece aberto com a lista e o status de cada item; os anteriores, recolhidos", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "td1", name: "TodoWrite", input: { todos: todos(["in_progress", "pending", "pending"]) } });
+    ws.deliver({ type: "assistant_text", text: "começando" });
+    ws.deliver({ type: "tool_use", id: "td2", name: "TodoWrite", input: { todos: todos(["completed", "in_progress", "pending"]) } });
+
+    const cards = screen.getAllByTestId("sdk-todos");
+    expect(cards).toHaveLength(2);
+    const [older, latest] = cards as [HTMLElement, HTMLElement];
+    expect(within(older).getByTestId("sdk-todos-title")).toHaveTextContent("Tasks 0/3");
+    expect(within(older).queryByTestId("sdk-todo-item")).toBeNull();
+
+    expect(within(latest).getByTestId("sdk-todos-title")).toHaveTextContent("Tasks 1/3");
+    const items = within(latest).getAllByTestId("sdk-todo-item");
+    expect(items.map((item) => item.getAttribute("data-status"))).toEqual(["completed", "in_progress", "pending"]);
+    expect(items[0]).toHaveClass("line-through");
+    expect(items[1]).toHaveClass("font-semibold");
+    expect(items[1]).toHaveTextContent("Fazendo a tarefa 2");
+    expect(items[2]).toHaveTextContent("Tarefa 3");
+
+    // Quem quer ver a versão velha abre.
+    fireEvent.click(within(older).getByTestId("sdk-todos-toggle"));
+    expect(within(older).getAllByTestId("sdk-todo-item")).toHaveLength(3);
   });
 });
 
