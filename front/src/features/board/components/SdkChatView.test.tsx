@@ -3274,3 +3274,110 @@ describe("SdkChatView — o ritmo do streaming", () => {
     expect(screen.getByText("final").tagName).toBe("STRONG");
   });
 });
+
+/**
+ * OS TOKENS DO FRAME E A AÇÃO LOCAL. Os tokens esperam o próximo frame de animação num buffer — e
+ * uma ação da pessoa nesse meio-tempo (Enter, a correção, o Esc, o "enviar agora") não pode ser
+ * julgada pela tela de um frame atrás, nem escrever na conversa ANTES do que já tinha chegado.
+ */
+describe("SdkChatView — o buffer de tokens diante de uma ação local", () => {
+  function follows(first: Element, second: Element): boolean {
+    return (first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  }
+
+  async function readyChat() {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    return ws;
+  }
+
+  it("Enter com o token que abriu um turno ainda no buffer: a mensagem ESPERA na fila", async () => {
+    const ws = await readyChat();
+    ws.deliver({ type: "ready" });
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.type(box, "oi");
+
+    ws.receive({ type: "assistant_delta", text: "Começando" }); // sem frame de animação ainda
+    await userEvent.type(box, "{Enter}");
+    runAnimationFrames();
+
+    expect(ws.sent).toHaveLength(0);
+    await screen.findByTestId("sdk-queue");
+    expect(screen.getByTestId("sdk-queued")).toHaveTextContent("oi");
+  });
+
+  it("a correção enviada com um turno aberto só no buffer PARA o turno antes — e nasce depois da resposta", async () => {
+    const ws = await readyChat();
+    ws.deliver({ type: "user", text: "sobe pra prod" }); // replay: nenhum turno rodando
+    ws.deliver({ type: "ready" });
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.click(screen.getByTestId("sdk-edit"));
+    await userEvent.clear(box);
+    await userEvent.type(box, "sobe pra dev");
+
+    ws.receive({ type: "assistant_delta", text: "Subindo…" });
+    await userEvent.type(box, "{Enter}");
+    runAnimationFrames();
+
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    expect(JSON.parse(ws.sent[0]!)).toEqual({ type: "interrupt", reason: "edit" });
+    const bubbles = screen.getAllByTestId("sdk-user");
+    expect(follows(screen.getByTestId("sdk-assistant"), bubbles[bubbles.length - 1]!)).toBe(true);
+  });
+
+  it("Esc no campo vazio com um turno aberto só no buffer não entra em edição", async () => {
+    const ws = await readyChat();
+    ws.deliver({ type: "user", text: "sobe pra prod" });
+    ws.deliver({ type: "ready" });
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.clear(box);
+
+    ws.receive({ type: "assistant_delta", text: "Subindo…" });
+    fireEvent.keyDown(box, { key: "Escape" });
+    runAnimationFrames();
+
+    expect(screen.queryByTestId("composer-editing")).not.toBeInTheDocument();
+  });
+
+  it("o despacho da fila não solta a mensagem no meio de uma frase que só está no buffer", async () => {
+    const ws = await readyChat();
+    ws.deliver({ type: "ready" });
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.type(box, "faz a tarefa{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "Fazendo…" });
+    await userEvent.type(box, "depois isto{Enter}");
+    await screen.findByTestId("sdk-queued");
+    await userEvent.click(screen.getByTestId("sdk-edit")); // a correção armada segura a fila
+    ws.deliver({ type: "result", isError: false });
+    expect(ws.sent).toHaveLength(1);
+
+    ws.receive({ type: "assistant_delta", text: "Outro turno começando" }); // frase pela metade, no buffer
+    fireEvent.keyDown(box, { key: "Escape" }); // desisti da correção: a fila volta a poder andar
+    runAnimationFrames();
+
+    expect(ws.sent).toHaveLength(1);
+    expect(screen.getByTestId("sdk-queued")).toHaveTextContent("depois isto");
+  });
+
+  it("'enviar agora' com tokens no buffer: a bolha nasce DEPOIS do que já tinha chegado", async () => {
+    const ws = await readyChat();
+    ws.deliver({ type: "ready" });
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.type(box, "faz a tarefa{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "Fazendo…" });
+    await userEvent.type(box, "o que você tá fazendo ?{Enter}");
+    await screen.findByTestId("sdk-queued");
+    ws.receive({ type: "assistant_delta", text: " Analisando a saída" }); // ainda a mesma frase, no buffer
+    await userEvent.click(screen.getByTestId("sdk-queued-send-now"));
+    runAnimationFrames();
+
+    await waitFor(() => expect(ws.sent.length).toBe(2));
+    const answer = screen.getAllByTestId("sdk-assistant").find((el) => el.textContent?.includes("Analisando a saída"));
+    const bubbles = screen.getAllByTestId("sdk-user");
+    expect(answer).toBeDefined();
+    expect(follows(answer!, bubbles[bubbles.length - 1]!)).toBe(true);
+  });
+});

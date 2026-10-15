@@ -1,4 +1,5 @@
 import * as React from "react";
+import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import {
   AlertTriangle,
@@ -178,10 +179,32 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   const [peersNow, setPeersNow] = React.useState(() => Date.now());
   /** This tab's own outbound typing signal (created below, once `sendFrame` exists). */
   const typingRef = React.useRef<TypingSignal | null>(null);
-  const [state, setState] = React.useState<SdkChatState>(INITIAL_SDK_STATE);
+  /** `commitState` é do socket (o único que conhece a ordem do stream); todo o resto usa `setState`. */
+  const [state, commitState] = React.useState<SdkChatState>(INITIAL_SDK_STATE);
+  const stateRef = React.useRef(state);
+  stateRef.current = state;
   /** As linhas de AGORA, para os callbacks que as leem sem precisar ser recriados a cada evento. */
   const rowsRef = React.useRef(state.rows);
   rowsRef.current = state.rows;
+  /**
+   * Esvazia os tokens que esperam o frame de animação (ver o efeito do websocket) e diz se havia
+   * algum. Eles já CHEGARAM: uma ação local que decidisse ou escrevesse sem eles seria julgada pela
+   * tela de um frame atrás — o Enter que vai direto pro socket com um turno acabando de abrir, a
+   * bolha que nasce antes da resposta que chegou primeiro.
+   */
+  const flushStreamRef = React.useRef<() => boolean>(() => false);
+  /** Toda escrita local na conversa entra DEPOIS dos tokens que já chegaram. */
+  const setState = React.useCallback((update: React.SetStateAction<SdkChatState>): void => {
+    flushStreamRef.current();
+    commitState(update);
+  }, []);
+  /** A conversa com os tokens já chegados dentro — o que um gesto lê para decidir. Só em handler. */
+  const readSettledState = React.useCallback((): SdkChatState => {
+    flushSync(() => {
+      flushStreamRef.current();
+    });
+    return stateRef.current;
+  }, []);
   const socketRef = React.useRef<WebSocket | null>(null);
   const statusRef = React.useRef<SdkChatViewProps["onStatus"]>(onStatus);
   statusRef.current = onStatus;
@@ -234,7 +257,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   /* ------------------------------------------------------------- websocket */
 
   React.useEffect(() => {
-    setState(INITIAL_SDK_STATE);
+    commitState(INITIAL_SDK_STATE);
     setPeers({});
     // The old socket's close no longer reports (it is disposed): this connection starts offline.
     setConnected(false);
@@ -269,13 +292,15 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       deltaFrame = null;
       deltaTimer = null;
     };
-    const flushDeltas = (): void => {
+    const flushDeltas = (): boolean => {
       cancelDeltaFlush();
-      if (pendingDeltas.length === 0) return;
+      if (pendingDeltas.length === 0) return false;
       const batch = coalesceDeltas(pendingDeltas);
       pendingDeltas = [];
-      setState((prev) => batch.reduce(applySdkEvent, prev));
+      commitState((prev) => batch.reduce(applySdkEvent, prev));
+      return true;
     };
+    flushStreamRef.current = flushDeltas;
     const discardDeltas = (): void => {
       cancelDeltaFlush();
       pendingDeltas = [];
@@ -307,7 +332,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         // EVERY connect replays the card's history from the server log (see back/services/sdk/
         // history.ts), so the slate is wiped here — otherwise a reconnect would draw the whole
         // conversation twice. What was on screen comes right back, from disk instead of memory.
-        setState(INITIAL_SDK_STATE);
+        commitState(INITIAL_SDK_STATE);
         // The replay tells the story again from disk (the interrupt note included) — a stale
         // "continuar?" offer from before the drop would be guessing about a turn we no longer see.
       };
@@ -345,7 +370,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         }
         // Qualquer outro evento entra DEPOIS dos tokens que chegaram antes dele.
         flushDeltas();
-        setState((prev) => applySdkEvent(prev, parsed));
+        commitState((prev) => applySdkEvent(prev, parsed));
       };
       next.onerror = () => {
         /* onclose always follows */
@@ -763,6 +788,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     // fila para entregá-la nele: ela saía da espera e virava a bolha condenada que a fila existe
     // para evitar. As duas pontas (o que entra na fila, o que sai dela) leem a MESMA verdade.
     if (!connected || socketRef.current?.readyState !== WebSocket.OPEN) return;
+    // Uma frase que só está no buffer de tokens também é frase pela metade: esvaziá-lo muda o
+    // `state`, e este efeito roda de novo já sabendo dela.
+    if (flushStreamRef.current()) return;
     if (!state.ready) return;
     // O RESPIRO, não o fim do turno (ver `turnHasRoomForMore`): um turno de quinze minutos segurava
     // por quinze minutos um "para, tá errado". Respiro é não haver uma FRASE PELA METADE — uma
@@ -820,10 +848,11 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       setReplyTo(null);
       return;
     }
+    const chat = readSettledState();
     if (editing) {
       const { original } = editing;
       const editCid = newCid();
-      if (state.turnActive) {
+      if (chat.turnActive) {
         // AQUI é onde o turno para — no envio da correção, não no clique do lápis (ver `beginEdit`).
         // A decisão foi tomada: a mensagem que está sendo respondida foi superada, e deixar o turno
         // correr seria gastar raciocínio numa pergunta que já não existe. A correção só VAI quando
@@ -865,7 +894,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     // da fila só anda quando o turno fecha, então enfileirar com uma pergunta de pé — inclusive com
     // o fio fora do ar — seria esperar por um fim de turno que só a própria mensagem pode causar.
     const wireUp = connected && socketRef.current?.readyState === WebSocket.OPEN;
-    const waits = !wireUp || state.turnActive || state.awaiting || pendingEdit;
+    const waits = !wireUp || chat.turnActive || chat.awaiting || pendingEdit;
     if (waits && pendingRef.current.length === 0) {
       setQueue((prev) => enqueue(prev, { id: newQueueId(), text, at: Date.now(), from: selfOriginRef.current }));
       return;
@@ -952,9 +981,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     // turn is too big a consequence for a key you may have pressed to dismiss something. The pencil
     // is the explicit way in — and even it only opens the field: the turn stops when the correction
     // is SENT (see `beginEdit` and `send`).
-    if (state.turnActive) return;
-    for (let i = state.rows.length - 1; i >= 0; i -= 1) {
-      const row = state.rows[i]!;
+    const chat = readSettledState();
+    if (chat.turnActive) return;
+    for (let i = chat.rows.length - 1; i >= 0; i -= 1) {
+      const row = chat.rows[i]!;
       // A decision answer is skipped for the same reason its pencil is hidden (see the bubble).
       if (row.kind === "user" && row.edited !== true && parseDecisionReply(row.text) === null
         && originRole(row.from, viewer) === "self") {
@@ -962,7 +992,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         return;
       }
     }
-  }, [state.rows, state.turnActive, viewer, beginEdit, beginQueueEdit]);
+  }, [readSettledState, viewer, beginEdit, beginQueueEdit]);
 
   /* ------------------------------------------------------------ scrolling */
 
