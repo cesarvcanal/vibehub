@@ -1670,6 +1670,13 @@ describe("subagentes (parentToolUseId)", () => {
     expect(state.turnActive).toBe(false);
     expect(state.rows.filter((r) => "parent" in r && r.parent === "t1")).toHaveLength(2);
   });
+
+  it("um envio esperando o principal continua esperando quando o subagente em segundo plano fala", () => {
+    let state = feed([agentCall, { type: "result", isError: false, sessionId: "s-1" }], ready());
+    state = appendUserRow(state, "e agora?", undefined, { awaiting: true });
+    state = applySdkEvent(state, { type: "tool_use", id: "c2", name: "Read", input: { file_path: "/w/b.ts" }, parentToolUseId: "t1" });
+    expect(state.awaiting || state.turnActive).toBe(true);
+  });
 });
 
 /**
