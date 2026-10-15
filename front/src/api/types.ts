@@ -352,7 +352,10 @@ export interface Card {
   status?: CardStatus | null;
   statusAt?: number;
   accountSlug?: string;
+  /** Family alias the card pins (`opus`); the CLI resolves it to the newest release. */
   model?: string;
+  /** Reasoning level the card pins (`low`…`max`). Absent = the account's own. */
+  effort?: string;
   /** Claude session id this card resumes. */
   resumeSessionId?: string;
   /** Native chat (beta): this card's conversation runs over the Agent SDK driver socket. */

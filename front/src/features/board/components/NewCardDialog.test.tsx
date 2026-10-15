@@ -153,7 +153,7 @@ describe("NewCardDialog", () => {
     await user.click(screen.getByRole("button", { name: "Options" }));
 
     await user.selectOptions(screen.getByLabelText("Claude account"), "personal");
-    await user.selectOptions(screen.getByLabelText("Model"), "claude-opus-5");
+    await user.selectOptions(screen.getByLabelText("Model"), "opus");
     await user.type(screen.getByLabelText("Branch"), "feat/totals");
     await user.click(screen.getByRole("button", { name: "Create card" }));
 
@@ -161,7 +161,7 @@ describe("NewCardDialog", () => {
       projectId: "p1",
       title: "with options",
       accountSlug: "personal",
-      model: "claude-opus-5",
+      model: "opus",
       branch: "feat/totals",
     });
   });

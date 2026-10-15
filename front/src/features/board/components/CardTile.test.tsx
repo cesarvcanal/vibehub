@@ -293,7 +293,7 @@ describe("CardTile — the chips", () => {
   });
 
   it("says nothing about the model — that is a setting, not news", () => {
-    renderApp(<CardTile card={card({ model: "claude-opus-5" })} onOpen={vi.fn()} />);
+    renderApp(<CardTile card={card({ model: "opus" })} onOpen={vi.fn()} />);
     expect(screen.queryByText(/opus/i)).not.toBeInTheDocument();
   });
 
