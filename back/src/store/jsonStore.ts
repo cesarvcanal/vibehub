@@ -1,5 +1,7 @@
-import { readFile, writeFile, mkdir, chmod, rename } from "node:fs/promises";
+import { readFile, mkdir, stat } from "node:fs/promises";
+import type { Stats } from "node:fs";
 import { dirname } from "node:path";
+import { writeFileAtomic } from "./atomicWrite.js";
 
 /**
  * A tiny persistence helper: one JSON file per concern, mode 600, atomic writes (tmp + rename), and
@@ -8,6 +10,10 @@ import { dirname } from "node:path";
  * Why a queue: every mutation runs the full load -> mutate -> persist cycle. Without serialization,
  * two overlapping mutations both persist a snapshot of the WHOLE document and the last one silently
  * undoes the first — exactly the race that status hooks (many, fast, concurrent) would hit.
+ *
+ * The queue only covers ONE process. A blue/green deploy runs two backs on the same /data for a few
+ * seconds, so every mutation first checks that the file is still the one this process last read or
+ * wrote (see `fileChanged`) and reloads it when the other process wrote in between.
  */
 export class JsonStore<T extends object> {
   private queue: Promise<unknown> = Promise.resolve();
@@ -23,6 +29,8 @@ export class JsonStore<T extends object> {
    * compared against it: unchanged = a refusal before any write, and the cache stays.
    */
   private saved: string | null = null;
+  /** Identity of the file the cache came from (null = no file on disk yet). */
+  private stamp: FileStamp | null = null;
 
   constructor(
     private readonly file: string,
@@ -42,11 +50,16 @@ export class JsonStore<T extends object> {
 
   private async readFromDisk(): Promise<T> {
     try {
+      // Stat BEFORE reading: a write landing between the two leaves a stamp older than the content,
+      // which only costs one extra reload — the other order could pair new content with no reload.
+      const stamp = toStamp(await stat(this.file));
       const raw = await readFile(this.file, "utf8");
       this.cache = this.normalize(JSON.parse(raw));
+      this.stamp = stamp;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
       this.cache = this.seed();
+      this.stamp = null;
     }
     this.saved = serialize(this.cache);
     return this.cache;
@@ -69,6 +82,7 @@ export class JsonStore<T extends object> {
    */
   mutate<R>(fn: (doc: T) => R): Promise<R> {
     const run = async (): Promise<R> => {
+      if (this.cache && (await this.fileChanged())) this.dropCache();
       const doc = await this.load();
       let result: R;
       try {
@@ -78,7 +92,9 @@ export class JsonStore<T extends object> {
         throw err;
       }
       try {
-        await this.persist(doc);
+        // Nothing changed and the file exists: rewriting it would only cost a full serialize+fsync
+        // (status hooks and periodic prunes call this a lot with nothing to do).
+        if (this.stamp === null || serialize(doc) !== this.saved) await this.persist(doc);
       } catch (err) {
         this.dropCache();
         throw err;
@@ -93,18 +109,28 @@ export class JsonStore<T extends object> {
 
   private async persist(doc: T): Promise<void> {
     await mkdir(dirname(this.file), { recursive: true });
-    const tmp = `${this.file}.tmp`;
     const text = serialize(doc);
-    await writeFile(tmp, text, "utf8");
-    await chmod(tmp, 0o600);
-    await rename(tmp, this.file);
+    this.stamp = toStamp(await writeFileAtomic(this.file, text));
     this.cache = doc;
     this.saved = text;
+  }
+
+  /** Did someone else (the other process of a deploy) replace the file since we last saw it? */
+  private async fileChanged(): Promise<boolean> {
+    let current: FileStamp | null;
+    try {
+      current = toStamp(await stat(this.file));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      current = null;
+    }
+    return !sameStamp(current, this.stamp);
   }
 
   private dropCache(): void {
     this.cache = null;
     this.saved = null;
+    this.stamp = null;
   }
 
   /** Drops the in-memory cache — tests and hot-reload only. */
@@ -113,6 +139,21 @@ export class JsonStore<T extends object> {
     this.loading = null;
     this.queue = Promise.resolve();
   }
+}
+
+/**
+ * What tells one version of the file from another. The inode is the strong part: every write is a
+ * rename of a fresh tmp, so a new version is a new inode even within the same millisecond.
+ */
+interface FileStamp { ino: number; size: number; mtimeMs: number }
+
+function toStamp(s: Stats): FileStamp {
+  return { ino: s.ino, size: s.size, mtimeMs: s.mtimeMs };
+}
+
+function sameStamp(a: FileStamp | null, b: FileStamp | null): boolean {
+  if (!a || !b) return a === b;
+  return a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs;
 }
 
 /** The document as the file holds it. */

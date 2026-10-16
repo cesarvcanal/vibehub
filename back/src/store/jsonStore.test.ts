@@ -9,7 +9,7 @@ import { JsonStore } from "./jsonStore.js";
  * depois de ler — é assim que se reproduz um leitor lento que leu a versão velha do arquivo e só
  * devolve depois que uma mutação já gravou a nova.
  */
-const fsHooks = vi.hoisted(() => ({ reads: 0, hold: null as Promise<void> | null }));
+const fsHooks = vi.hoisted(() => ({ reads: 0, hold: null as Promise<void> | null, renames: 0, failRename: false }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   const readFile = async (...args: Parameters<typeof actual.readFile>) => {
@@ -20,8 +20,15 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     if (hold) await hold;
     return out;
   };
+  // Every persist ends in a rename: counting them counts the writes that reached the file, and
+  // failing one is a write the disk refused (full disk) at the last step.
+  const rename = async (...args: Parameters<typeof actual.rename>) => {
+    fsHooks.renames++;
+    if (fsHooks.failRename) throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+    return await actual.rename(...args);
+  };
   // Cast: readFile is overloaded and the wrapper only re-exposes its last overload.
-  return { ...actual, readFile: readFile as typeof actual.readFile };
+  return { ...actual, readFile: readFile as typeof actual.readFile, rename };
 });
 
 interface Doc { items: string[] }
@@ -36,6 +43,8 @@ beforeEach(async () => {
   store = new JsonStore<Doc>(file, () => ({ items: [] }));
   fsHooks.reads = 0;
   fsHooks.hold = null;
+  fsHooks.renames = 0;
+  fsHooks.failRename = false;
 });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
@@ -72,12 +81,11 @@ describe("JsonStore", () => {
 
   it("a mutation that fails to persist is not served nor written by the next one", async () => {
     await store.mutate((d) => d.items.push("a"));
-    // A directory squatting the tmp path makes the write fail like a full disk would.
-    await mkdir(`${file}.tmp`);
-    await expect(store.mutate((d) => d.items.push("lost"))).rejects.toThrow();
+    fsHooks.failRename = true;
+    await expect(store.mutate((d) => d.items.push("lost"))).rejects.toThrow("ENOSPC");
     expect((await store.load()).items).toEqual(["a"]);
 
-    await rm(`${file}.tmp`, { recursive: true });
+    fsHooks.failRename = false;
     await store.mutate((d) => d.items.push("b"));
     expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ items: ["a", "b"] });
   });
@@ -118,5 +126,42 @@ describe("JsonStore", () => {
     await store.mutate((d) => d.items.push("n"));
     expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ items: ["old", "m", "n"] });
     expect(fsHooks.reads).toBe(2); // the one shared cold load + the assertion above
+  });
+
+  it("a mutation that changes nothing does not rewrite the file", async () => {
+    await store.mutate((d) => d.items.push("a"));
+    fsHooks.renames = 0;
+    await store.mutate(() => undefined);
+    await store.mutate((d) => { if (!d.items.includes("a")) d.items.push("a"); });
+    expect(fsHooks.renames).toBe(0);
+  });
+
+  it("a no-op mutation still creates a file that does not exist yet", async () => {
+    await store.mutate(() => undefined);
+    expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ items: [] });
+  });
+});
+
+/**
+ * O DEPLOY BLUE/GREEN: o back novo e o antigo convivem alguns segundos sobre o MESMO /data. A fila
+ * de mutações só serializa dentro de um processo — aqui, dois JsonStore no mesmo arquivo fazem o
+ * papel dos dois processos.
+ */
+describe("JsonStore — dois processos no mesmo arquivo", () => {
+  it("a mutação de um não apaga o que o outro gravou depois que ele leu", async () => {
+    const other = new JsonStore<Doc>(file, () => ({ items: [] }));
+    await store.load(); // o back novo sobe e lê o arquivo
+    await other.mutate((d) => d.items.push("antigo")); // o back antigo, ainda vivo, grava
+    await store.mutate((d) => d.items.push("novo"));
+    expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ items: ["antigo", "novo"] });
+  });
+
+  it("o arquivo temporário de um não atrapalha a gravação do outro", async () => {
+    await store.mutate((d) => d.items.push("a"));
+    // O tmp do outro processo, no meio da escrita dele, ocupando o caminho (um diretório basta
+    // para o open/rename de um tmp de nome FIXO falhar).
+    await mkdir(`${file}.tmp`);
+    await store.mutate((d) => d.items.push("b"));
+    expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ items: ["a", "b"] });
   });
 });

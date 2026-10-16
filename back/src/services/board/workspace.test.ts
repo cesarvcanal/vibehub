@@ -1886,7 +1886,9 @@ describe("session probe (busy / idle / gone) and the pending-pause reconciler", 
       runScript.mockResolvedValue({ stdout: `${card.tmuxSession} gone\n`, stderr: "" });
       const stop = ws.startPauseReconciler(1_000);
       await vi.advanceTimersByTimeAsync(1_000);
-      expect((await reg.getCard(card.id))?.pausedAt).toBeTypeOf("number");
+      // The tick's mutation reaches the disk (a stat first: the other process of a deploy may have
+      // written) before it lands — waited for, like the kill below, not assumed done by the tick.
+      await vi.waitFor(async () => expect((await reg.getCard(card.id))?.pausedAt).toBeTypeOf("number"));
       // Let the tick's own kill land BEFORE measuring the silence after stop() — the pause is
       // stamped (fs) before the session is killed (host), so the read above can win that race.
       await vi.waitFor(() =>
