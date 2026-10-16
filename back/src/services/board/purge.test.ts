@@ -525,6 +525,20 @@ describe("the sweep's scripts", () => {
   });
 });
 
+describe("purgeCard — o tmp de uma reescrita que o SIGKILL interrompeu", () => {
+  it("vai junto com a conversa: o tmp tem o histórico inteiro do card", async () => {
+    const { card } = await seed();
+    await fillCard(card.id);
+    // O que sobra quando o deploy mata o back no meio de uma compactação/rewind/clear: o tmp já
+    // tem a conversa inteira, e o rename nunca aconteceu.
+    await writeFile(join(dir, history.SDK_HISTORY_DIR, `${card.id}.ndjson.4242.0a1b2c3d.tmp`), "segredo do chat", "utf8");
+
+    await purge.purgeCard(card.id, "cesar");
+
+    expect(await dataFiles(history.SDK_HISTORY_DIR)).toEqual([]);
+  });
+});
+
 describe("sweepOrphanCardData (the backstop: what earlier deletes left behind)", () => {
   /** Writes a data-dir file and back-dates it past the grace window. */
   async function stale(sub: string, name: string, body = "{}"): Promise<string> {
@@ -551,6 +565,25 @@ describe("sweepOrphanCardData (the backstop: what earlier deletes left behind)",
     expect(await dataFiles(provenance.PROVENANCE_DIR)).toEqual([`${card.id}.ndjson`]);
     expect(await dataFiles(inflight.SDK_INFLIGHT_DIR)).toEqual([`${card.id}.json`]);
     // The live card's conversation is untouched.
+    expect(await history.readHistory(card.id)).toHaveLength(2);
+  });
+
+  it("recolhe os tmps de escrita atômica que um SIGKILL deixou — do card vivo, do morto e do board", async () => {
+    const { card } = await seed();
+    await fillCard(card.id);
+    const ghost = "dddddddd-0000-0000-0000-000000000000";
+    await stale(history.SDK_HISTORY_DIR, `${card.id}.ndjson.4242.0a1b2c3d.tmp`);
+    await stale(history.SDK_HISTORY_DIR, `${ghost}.ndjson.4242.0a1b2c3d.tmp`);
+    await stale("", "board.json.4242.0a1b2c3d.tmp");
+    // Uma escrita EM ANDAMENTO (mtime de agora) não é lixo: fica.
+    await writeFile(join(dir, "users.json.4243.deadbeef.tmp"), "{}", "utf8");
+
+    await purge.sweepOrphanCardData();
+
+    expect(await dataFiles(history.SDK_HISTORY_DIR)).toEqual([`${card.id}.ndjson`]);
+    const root = await readdir(dir);
+    expect(root).not.toContain("board.json.4242.0a1b2c3d.tmp");
+    expect(root).toContain("users.json.4243.deadbeef.tmp");
     expect(await history.readHistory(card.id)).toHaveLength(2);
   });
 

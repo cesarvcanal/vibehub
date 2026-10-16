@@ -1,11 +1,11 @@
-import { appendFile, mkdir, readFile, rm } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { EventEmitter } from "node:events";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { dataPath } from "../../config/env.js";
 import { NOTE_TURN_INTERRUPTED, NOTE_TURN_INTERRUPTED_EDIT, type DriverEvent } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { logger } from "../../utils/logger.js";
-import { writeFileAtomic } from "../../store/atomicWrite.js";
+import { isAtomicWriteTmp, writeFileAtomic } from "../../store/atomicWrite.js";
 
 /**
  * SDK CHAT HISTORY — the per-card event log that makes the native chat's conversation SURVIVE.
@@ -392,7 +392,14 @@ export async function removeHistory(cardId: string): Promise<void> {
   let failure: Error | undefined;
   await appendHistoryBarrier(cardId, async () => {
     try {
-      await rm(historyFile(cardId), { force: true });
+      const file = historyFile(cardId);
+      await rm(file, { force: true });
+      // A rewrite the deploy SIGKILLed mid-way leaves its tmp — the whole conversation — behind.
+      const name = basename(file);
+      const leftovers = await readdir(dirname(file)).catch(() => [] as string[]);
+      for (const other of leftovers) {
+        if (isAtomicWriteTmp(other, name)) await rm(join(dirname(file), other), { force: true });
+      }
     } catch (err) {
       failure = err as Error;
     }

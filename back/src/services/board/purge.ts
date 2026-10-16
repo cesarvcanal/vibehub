@@ -16,6 +16,7 @@ import { claudeProjectsDirName } from "../import/import.js";
 import { cardBrowserPorts, BROWSER_DATA_DIR } from "../browser/ports.js";
 import { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR } from "../accounts/profiles.js";
 import { logger } from "../../utils/logger.js";
+import { isAtomicWriteTmp } from "../../store/atomicWrite.js";
 
 /**
  * CARD PURGE — deleting a card ERASES the card, not the tile that showed it.
@@ -438,9 +439,38 @@ const DATA_DIRS: ReadonlyArray<{ dir: string; suffix: string }> = [
   { dir: SDK_INFLIGHT_DIR, suffix: ".json" },
 ];
 
+/**
+ * Deletes the tmps of atomic writes a SIGKILL interrupted (the deploy kills the old back mid-write
+ * now and then): every write takes milliseconds, so one older than the grace window is never in
+ * progress — only garbage, often holding a whole conversation. Live cards' tmps go too.
+ */
+async function sweepStaleWriteTmps(now: number, graceMs: number): Promise<number> {
+  let removed = 0;
+  for (const dir of ["", ...DATA_DIRS.map((d) => d.dir)]) {
+    let names: string[];
+    try {
+      names = await readdir(dataPath(dir));
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (!isAtomicWriteTmp(name)) continue;
+      const file = dataPath(dir, name);
+      try {
+        if (now - (await stat(file)).mtimeMs < graceMs) continue;
+        await rm(file, { force: true });
+        removed += 1;
+      } catch (err) {
+        logger.warn({ file, detail: (err as Error).message }, "could not sweep a leftover write tmp");
+      }
+    }
+  }
+  return removed;
+}
+
 /** Deletes the data-dir files of cards that no longer exist. Returns how many went. */
 async function sweepDataDir(live: LiveCardArtifacts, now: number, graceMs: number): Promise<number> {
-  let removed = 0;
+  let removed = await sweepStaleWriteTmps(now, graceMs);
   for (const { dir, suffix } of DATA_DIRS) {
     let names: string[];
     try {

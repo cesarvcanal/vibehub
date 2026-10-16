@@ -55,7 +55,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
-const { appendHistory, readHistory, HISTORY_COMPACT_FACTOR } = await import("./history.js");
+const { appendHistory, readHistory, rewindHistory, clearHistoryBeforeLastClear, HISTORY_COMPACT_FACTOR } = await import("./history.js");
 
 const CARD = "abc498d1-98dd-44b6-97ee-c06a181c3769";
 
@@ -103,5 +103,28 @@ describe("reescrita do log interrompida no meio", () => {
 
     const after = await readHistory(CARD, 100);
     expect(after).toHaveLength(total);
+  });
+
+  it("o rewind de uma edição que morre no meio deixa o log inteiro como estava", async () => {
+    await appendHistory(CARD, { type: "user", text: "errada" });
+    await appendHistory(CARD, { type: "assistant_text", text: "meia resposta" });
+    await appendHistory(CARD, { type: "message_edited", originalText: "errada" });
+    await appendHistory(CARD, { type: "user", text: "certa" });
+    h.tornWrites = true;
+    await rewindHistory(CARD, "errada").catch(() => undefined);
+    h.tornWrites = false;
+
+    expect(await readHistory(CARD, 100)).toHaveLength(4);
+  });
+
+  it("o /clear que morre no meio deixa o log inteiro como estava", async () => {
+    await appendHistory(CARD, { type: "user", text: "antes" });
+    await appendHistory(CARD, { type: "assistant_text", text: "resposta de antes" });
+    await appendHistory(CARD, { type: "user", text: "/clear" });
+    h.tornWrites = true;
+    await clearHistoryBeforeLastClear(CARD).catch(() => undefined);
+    h.tornWrites = false;
+
+    expect(await readHistory(CARD, 100)).toHaveLength(3);
   });
 });
