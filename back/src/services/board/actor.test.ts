@@ -13,7 +13,12 @@ import { join } from "node:path";
  */
 
 let dir = "";
-const reapply = vi.fn(async () => undefined);
+const reapply = vi.fn(async (_cardId: string) => undefined);
+/**
+ * Uma falha do runner, entregue FORA do `vi.fn`: o mock do vitest pendura um `.then` na promise que
+ * devolve (settledResults), e uma rejeição vinda dele nunca chega a ser "sem dono".
+ */
+let reapplyFailure: Error | null = null;
 
 async function load() {
   vi.resetModules();
@@ -23,7 +28,15 @@ async function load() {
   // `reapplyIdentityForUser` de verdade e precisa que ele exista.
   vi.doMock("./workspace.js", async () => {
     const actual = await vi.importActual<typeof import("./workspace.js")>("./workspace.js");
-    return { ...actual, reapplyCardIdentity: reapply };
+    return {
+      ...actual,
+      reapplyCardIdentity: (cardId: string): Promise<void> => {
+        void reapply(cardId);
+        const failure = reapplyFailure;
+        reapplyFailure = null;
+        return failure ? Promise.reject(failure) : Promise.resolve();
+      },
+    };
   });
   const registry = await import("./registry.js");
   registry.resetForTesting();
@@ -35,7 +48,7 @@ const owner = { id: "u-cesar", username: "cesar", role: "owner" as const, create
 const mussa = { id: "u-mussa", username: "mussa", role: "member" as const, createdAt: "" };
 const viewer = { id: "u-view", username: "espectador", role: "member" as const, createdAt: "" };
 
-beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "vibehub-actor-")); reapply.mockClear(); });
+beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "vibehub-actor-")); reapply.mockClear(); reapplyFailure = null; });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); vi.doUnmock("./workspace.js"); });
 
 async function seed(registry: Awaited<ReturnType<typeof load>>["registry"]) {
@@ -180,5 +193,49 @@ describe("vincular identidade alcança os cards já abertos", () => {
     expect(await workspace.reapplyIdentityForUser("u-cesar")).toBe(1);
     expect(await workspace.reapplyIdentityForUser("u-ninguem")).toBe(0);
     expect(await workspace.reapplyIdentityForUser("")).toBe(0);
+  });
+});
+
+/**
+ * O CARIMBO SAI A CADA MENSAGEM DO CHAT, como `void recordCardActor(...)`. Uma promise rejeitada sem
+ * dono derruba o processo no Node 24 — e com ele os terminais e os chats de todo mundo. Disco cheio
+ * ou runner fora do ar viram uma linha de log, nunca uma rejeição.
+ */
+describe("o carimbo do autor nunca rejeita", () => {
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+  beforeEach(() => { unhandled.length = 0; process.on("unhandledRejection", onUnhandled); });
+  afterEach(() => { process.off("unhandledRejection", onUnhandled); vi.doUnmock("./registry.js"); });
+
+  /** Deixa as rejeições sem dono chegarem ao processo antes de olhar. */
+  const settle = async (): Promise<void> => {
+    for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  };
+
+  it("um disco que recusa a gravação do board não rejeita", async () => {
+    vi.resetModules();
+    const env = await import("../../config/env.js");
+    env.config.dataDir = dir;
+    vi.doMock("./registry.js", async () => {
+      const actual = await vi.importActual<typeof import("./registry.js")>("./registry.js");
+      return { ...actual, stampCardActor: async () => { throw new Error("ENOSPC: no space left on device"); } };
+    });
+    const registry = await import("./registry.js");
+    registry.resetForTesting();
+    const { recordCardActor } = await import("./actor.js");
+    const card = await seed(registry);
+
+    await expect(recordCardActor(owner, card.id)).resolves.toBeUndefined();
+  });
+
+  it("o runner que falha ao reaplicar a identidade não vira rejeição sem dono", async () => {
+    const { registry, recordCardActor } = await load();
+    const card = await seed(registry);
+    reapplyFailure = new Error("runner unreachable");
+
+    await recordCardActor(owner, card.id);
+    await settle();
+    expect(reapply).toHaveBeenCalledTimes(1);
+    expect(unhandled).toEqual([]);
   });
 });
