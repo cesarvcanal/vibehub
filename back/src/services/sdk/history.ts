@@ -1,10 +1,11 @@
-import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rm } from "node:fs/promises";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { dataPath } from "../../config/env.js";
 import { NOTE_TURN_INTERRUPTED, NOTE_TURN_INTERRUPTED_EDIT, type DriverEvent } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { logger } from "../../utils/logger.js";
+import { writeFileAtomic } from "../../store/atomicWrite.js";
 
 /**
  * SDK CHAT HISTORY — the per-card event log that makes the native chat's conversation SURVIVE.
@@ -173,7 +174,7 @@ export async function readHistory(
     await appendHistoryBarrier(cardId, async () => {
       const current = parseHistory(await readFile(file, "utf8"));
       if (current.length <= compactAbove) return; // a rewind already shrank it
-      await writeFile(file, current.slice(-limit).map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
+      await writeFileAtomic(file, current.slice(-limit).map((e) => JSON.stringify(e)).join("\n") + "\n");
     });
   }
   return events.slice(-limit);
@@ -254,7 +255,7 @@ export function rewindHistory(
     const kept = [...events.slice(0, start), ...tail];
     dropped = events.length - kept.length;
     if (dropped === 0 && !unwrapped) return; // a cut that removes nothing and nothing to repair
-    await writeFile(file, kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length ? "\n" : ""), "utf8");
+    await writeFileAtomic(file, kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length ? "\n" : ""));
   }).then(() => dropped);
 }
 
@@ -369,7 +370,7 @@ export function clearHistoryBeforeLastClear(cardId: string): Promise<void> {
     }
     const kept = from === -1 ? [] : events.slice(from);
     if (kept.length === events.length) return;
-    await writeFile(file, kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length ? "\n" : ""), "utf8");
+    await writeFileAtomic(file, kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length ? "\n" : ""));
   });
 }
 

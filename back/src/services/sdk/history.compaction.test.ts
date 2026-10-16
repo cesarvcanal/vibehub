@@ -16,12 +16,35 @@ import { config } from "../../config/env.js";
  * `readFile` dispara o append exatamente depois que a leitura da compactação terminou.
  */
 
-const h = vi.hoisted(() => ({ afterRead: null as null | (() => void) }));
+const h = vi.hoisted(() => ({ afterRead: null as null | (() => void), tornWrites: false }));
+
+/**
+ * Uma escrita que morre NO MEIO (OOM, SIGKILL do deploy): metade dos bytes chega ao arquivo que
+ * estava sendo escrito e a chamada não volta. Vale para as duas formas de escrever um arquivo
+ * inteiro — a função do módulo e o `writeFile` de um FileHandle aberto.
+ */
+async function tornWrite(write: (data: string) => Promise<void>, data: unknown): Promise<never> {
+  const text = String(data);
+  await write(text.slice(0, Math.floor(text.length / 2)));
+  throw new Error("killed mid-write");
+}
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...actual,
+    writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
+      if (!h.tornWrites) return await actual.writeFile(...args);
+      return await tornWrite((half) => actual.writeFile(args[0], half, "utf8"), args[1]);
+    },
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const handle = await actual.open(...args);
+      if (h.tornWrites) {
+        const write = handle.writeFile.bind(handle);
+        handle.writeFile = (data: unknown) => tornWrite((half) => write(half, "utf8"), data);
+      }
+      return handle;
+    },
     readFile: async (...args: Parameters<typeof actual.readFile>) => {
       const out = await actual.readFile(...args);
       const hook = h.afterRead;
@@ -44,6 +67,7 @@ beforeEach(async () => {
   savedDataDir = config.dataDir;
   config.dataDir = dir;
   h.afterRead = null;
+  h.tornWrites = false;
 });
 afterEach(async () => {
   config.dataDir = savedDataDir;
@@ -63,5 +87,21 @@ describe("readHistory — compactação serializada com os appends", () => {
 
     const after = await readHistory(CARD, 100);
     expect(after.map((e) => (e as { text?: string }).text)).toContain("chegou no meio");
+  });
+});
+
+describe("reescrita do log interrompida no meio", () => {
+  it("a compactação que morre no meio deixa o log inteiro como estava", async () => {
+    const limit = 2;
+    const total = limit * HISTORY_COMPACT_FACTOR + 1;
+    for (let i = 0; i < total; i += 1) {
+      await appendHistory(CARD, { type: "assistant_text", text: `mensagem ${i}` });
+    }
+    h.tornWrites = true;
+    await readHistory(CARD, limit).catch(() => undefined);
+    h.tornWrites = false;
+
+    const after = await readHistory(CARD, 100);
+    expect(after).toHaveLength(total);
   });
 });
