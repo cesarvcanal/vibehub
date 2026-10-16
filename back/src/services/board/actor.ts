@@ -3,6 +3,7 @@ import { cardLevel } from "../../auth/access.js";
 import { stampCardActor, getCard } from "./registry.js";
 import { reapplyCardIdentity } from "./workspace.js";
 import { parseSdkClientFrame } from "../sdk/protocol.js";
+import { logger } from "../../utils/logger.js";
 
 /**
  * WHO IS WORKING THIS CARD — recorded at the three moments a person touches one (opening it,
@@ -19,18 +20,29 @@ import { parseSdkClientFrame } from "../sdk/protocol.js";
  *
  * CHEAP WHEN NOTHING CHANGES, because it is called PER MESSAGE (see {@link authorsTheTurn}): the
  * early return below reads the cached board and stops there. Without it, every message would cost
- * an access query plus a full rewrite of `board.json` — `store.mutate` persists the whole document
- * even when the mutation changed nothing — for the common case of the same person typing again.
+ * an access query for the common case of the same person typing again.
+ *
+ * NEVER REJECTS: the chat calls it as `void recordCardActor(...)` per message, and an unowned
+ * rejection ends the Node process — every terminal and chat with it. A failed stamp (full disk) only
+ * costs the attribution of the next commit; it is logged, and the prompt goes on.
  */
 export async function recordCardActor(user: PublicUser | null, cardId: string): Promise<void> {
   if (!user || !cardId) return;
-  // Already the author: nothing to decide, nothing to write, nobody to ask about access.
-  if ((await getCard(cardId))?.actorUserId === user.id) return;
-  if ((await cardLevel(user, cardId)) !== "work") return;
-  const stamped = await stampCardActor(cardId, user.id);
-  // Only on a real switch: this runs on every attach and every prompt, and re-running the script
-  // for the same person would be a docker exec per keystroke-ish event for no change at all.
-  if (stamped?.changed) void reapplyCardIdentity(cardId);
+  try {
+    // Already the author: nothing to decide, nothing to write, nobody to ask about access.
+    if ((await getCard(cardId))?.actorUserId === user.id) return;
+    if ((await cardLevel(user, cardId)) !== "work") return;
+    const stamped = await stampCardActor(cardId, user.id);
+    // Only on a real switch: this runs on every attach and every prompt, and re-running the script
+    // for the same person would be a docker exec per keystroke-ish event for no change at all.
+    if (stamped?.changed) {
+      void reapplyCardIdentity(cardId).catch((err: unknown) => {
+        logger.warn({ card: cardId, detail: (err as Error).message }, "could not reapply the card's git identity");
+      });
+    }
+  } catch (err) {
+    logger.warn({ card: cardId, detail: (err as Error).message }, "could not record the card's actor");
+  }
 }
 
 /**

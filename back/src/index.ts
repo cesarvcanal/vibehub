@@ -9,6 +9,7 @@ import websocket from "@fastify/websocket";
 import fastifyStatic from "@fastify/static";
 import { config, fastifyTrustProxy, trustProxyBootWarning } from "./config/env.js";
 import { logger } from "./utils/logger.js";
+import { logUnownedRejections } from "./utils/processGuards.js";
 import { authRoutes } from "./routes/auth.js";
 import { usersRoutes } from "./routes/users.js";
 import { sharesRoutes } from "./routes/shares.js";
@@ -56,6 +57,16 @@ export async function buildServer() {
   // here so it cannot come back by accident. TCP_NODELAY for the same path is set in the route.
   await app.register(websocket, {
     options: { maxPayload: 16 * 1024 * 1024, perMessageDeflate: false },
+  });
+
+  // `logger: false` above silences Fastify's own logger — and with it the default error handler's
+  // only trace of a crashed route. A 5xx is the server's fault and lands in the app log here; the
+  // response itself is untouched (still the default handler's). A 4xx is the client's and does not.
+  app.addHook("onError", async (req, _reply, err) => {
+    const status = (err as { statusCode?: number }).statusCode ?? 500;
+    // The route PATTERN, not req.url: the same failure groups across card ids, and whatever a query
+    // string carries (a search term, a path) stays out of the log.
+    if (status >= 500) logger.error({ err, method: req.method, route: req.routeOptions.url }, "request failed");
   });
 
   app.get("/api/health", async () => ({ ok: true, version: "0.1.0" }));
@@ -189,6 +200,7 @@ function startDoneRetentionSweep(): NodeJS.Timeout {
 }
 
 async function main(): Promise<void> {
+  logUnownedRejections();
   await mkdir(config.dataDir, { recursive: true });
   const app = await buildServer();
   // The outbox backstop. Started HERE and not in buildServer(): tests build servers by the dozen
