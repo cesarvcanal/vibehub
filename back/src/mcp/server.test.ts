@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { INSTRUCTIONS, createMcpServer } from "./server.js";
+import { EXTERNAL_INSTRUCTIONS, INSTRUCTIONS, createMcpServer } from "./server.js";
 
 /**
  * The MCP server hands its `instructions` to every connecting agent, and every card has this server
@@ -110,5 +110,19 @@ describe("MCP server instructions (the maestro persona)", () => {
     // The persona tells the agent to use the Cofre and never to ask for a password in the chat.
     expect(INSTRUCTIONS).toContain("vibehub_credential_fill");
     expect(INSTRUCTIONS.toLowerCase()).toContain("cofre");
+  });
+});
+
+describe("MCP server instructions for an external app (ChatGPT, Claude.ai)", () => {
+  const externalFile = join(dirname(fileURLToPath(import.meta.url)), "..", "services", "brain", "personas", "external.md");
+
+  it("come straight from external.md", () => {
+    expect(EXTERNAL_INSTRUCTIONS).toBe(readFileSync(externalFile, "utf8").trim());
+  });
+
+  it("keep the merge behind the user's explicit word and name only the tools the app has", () => {
+    expect(EXTERNAL_INSTRUCTIONS).toContain("authorized: true");
+    expect(EXTERNAL_INSTRUCTIONS).toContain("vibehub_create_card");
+    expect(EXTERNAL_INSTRUCTIONS).not.toContain("vibehub_report");
   });
 });

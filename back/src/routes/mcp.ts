@@ -3,16 +3,22 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createMcpServer } from "../mcp/server.js";
 import { runnerToken } from "../runtime/runner.js";
 import { currentUser, tokenMatches } from "../auth/session.js";
+import { issuer, userForAccessToken } from "../auth/oauth.js";
+import type { PublicUser } from "../auth/users.js";
 import { logger } from "../utils/logger.js";
 
 /**
  * MCP endpoint — how an agent INSIDE a card reaches the board it is running on (the maestro tools).
  *
- * Authentication is the runner's service token, as a Bearer header: the caller is a Claude process
- * in the runner container, which has no cookie jar but does have the token that vibehub planted
- * there. An OWNER's browser session is also accepted, so the endpoint can be exercised from the UI
- * or curl while debugging — a member's is not: these tools reach every card on the board and can
- * type into any of them, which is exactly what a member is not allowed to do.
+ * Three credentials, three callers:
+ *  - the runner's service token, as a Bearer header: a Claude process in a card (no cookie jar, but
+ *    the token vibehub planted there) — the maestro tools, reaching every card;
+ *  - an OAuth access token (auth/oauth.ts): an app on the internet (ChatGPT, Claude.ai) acting as
+ *    ONE user — the external tools, narrowed to that user's role and shares;
+ *  - an OWNER's browser session, so the maestro tools can be exercised from the UI or curl while
+ *    debugging. A member's session is not: those tools reach every card on the board.
+ *
+ * The 401 points at the OAuth metadata (RFC 9728), which is how an MCP client discovers it can sign in.
  *
  * Stateless on purpose: one server and one transport per request, both closed when the response
  * ends. There is no session to leak between cards.
@@ -28,15 +34,22 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
   app.post("/mcp", async (request, reply) => {
     // The actor is decided by the credential that ACTUALLY authenticated: an owner's browser that
     // also sends a stale or junk bearer is still the browser, and the audit must say so.
-    const actor = tokenMatches(bearerToken(request.headers.authorization), await runnerToken())
-      ? "card"
-      : (await currentUser(request))?.role === "owner" ? "browser" : null;
+    const bearer = bearerToken(request.headers.authorization);
+    let actor: "card" | "external" | "browser" | null = null;
+    let user: PublicUser | null = null;
+    if (tokenMatches(bearer, await runnerToken())) {
+      actor = "card";
+    } else if ((user = await userForAccessToken(bearer))) {
+      actor = "external";
+    } else if ((await currentUser(request))?.role === "owner") {
+      actor = "browser";
+    }
     if (!actor) {
-      reply.header("WWW-Authenticate", "Bearer");
+      reply.header("WWW-Authenticate", `Bearer resource_metadata="${issuer()}/.well-known/oauth-protected-resource"`);
       return await reply.code(401).send({ error: "invalid or missing MCP token" });
     }
 
-    const server = createMcpServer(actor);
+    const server = actor === "external" && user ? createMcpServer("external", user) : createMcpServer(actor);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     reply.raw.on("close", () => {
       void transport.close();
