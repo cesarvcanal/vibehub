@@ -400,3 +400,68 @@ describe("feed de UM agente — sob demanda", () => {
     ]);
   });
 });
+
+/**
+ * O DESFECHO da rodada (17/10/2026): duas frotas de 35 subagentes foram MORTAS (`status: "killed"` no
+ * `<base>/workflows/<runId>.json` que o harness grava ao lado de `scripts/`). Uma frota morta nunca
+ * escreve o `result` dos agentes que estavam em voo — pelo diário ela ficava "rodando" para sempre,
+ * e o painel girava spinner em agente que não existia mais. O desfecho vem do snapshot, não do diário.
+ */
+describe("desfecho da rodada — o snapshot do harness diz se ela acabou", () => {
+  let fx: Fixture;
+  beforeEach(() => { fx = fleetFixture(); });
+  afterEach(() => { rmSync(fx.root, { recursive: true, force: true }); });
+
+  const snapshotFile = (status: unknown) =>
+    writeFileSync(join(fx.scripts, "..", "wf_abc12.json"), JSON.stringify({ runId: "wf_abc12", status, workflowProgress: [{ status: "running" }] }));
+
+  async function probeRun() {
+    const wf = await load();
+    return wf.parseWorkflowProbe(runProbe(wf.WORKFLOW_PROBE_JS, [fx.runs, fx.scripts]))[0]!;
+  }
+
+  it("sem snapshot (rodada em andamento): sem desfecho, agentes como o diário diz", async () => {
+    const run = await probeRun();
+    expect(run.outcome).toBeUndefined();
+    expect(run.agents.map((a) => a.status)).toEqual(["done", "running", "running"]);
+  });
+
+  it("killed: desfecho 'killed' e quem estava em voo vira 'stopped' — nunca mais 'running'", async () => {
+    snapshotFile("killed");
+    const run = await probeRun();
+    expect(run.outcome).toBe("killed");
+    expect(run.agents.map((a) => [a.id, a.status])).toEqual([["a01f", "done"], ["a02f", "stopped"], ["a03f", "stopped"]]);
+    // O concluído segue com o que devolveu; o interrompido não inventa resultado.
+    expect(run.agents[0]!.result).toBeTruthy();
+    expect(run.agents[1]!.result).toBeUndefined();
+  });
+
+  it("completed: o desfecho chega, mas a sonda NÃO dá por parado quem não respondeu — o back espera um tique", async () => {
+    // O snapshot "completed" sai 8ms depois da última linha do diário (produção): uma corrida
+    // de leitura não pode carimbar "interrompido" num agente que respondeu.
+    snapshotFile("completed");
+    const run = await probeRun();
+    expect(run.outcome).toBe("completed");
+    expect(run.agents.map((a) => a.status)).toEqual(["done", "running", "running"]);
+  });
+
+  it("failed/error viram 'failed'; status desconhecido, ausente ou snapshot quebrado = sem desfecho", async () => {
+    snapshotFile("error");
+    expect((await probeRun()).outcome).toBe("failed");
+    snapshotFile("running");
+    expect((await probeRun()).outcome).toBeUndefined();
+    snapshotFile(42);
+    expect((await probeRun()).outcome).toBeUndefined();
+    writeFileSync(join(fx.scripts, "..", "wf_abc12.json"), "{ quebrado");
+    expect((await probeRun()).outcome).toBeUndefined();
+  });
+
+  it("parseWorkflowProbe sozinho: desfecho com lixo vira undefined; com desfecho, todo não-concluído é 'stopped'", async () => {
+    const wf = await load();
+    const [lixo] = wf.parseWorkflowProbe(probe([{ runId: "wf_a", outcome: "<script>", agents: [AGENT()] }]));
+    expect(lixo!.outcome).toBeUndefined();
+    expect(lixo!.agents[0]!.status).toBe("running");
+    const [morta] = wf.parseWorkflowProbe(probe([{ runId: "wf_a", outcome: "killed", agents: [AGENT(), AGENT({ id: "a2", status: "done", result: "ok" })] }]));
+    expect(morta!.agents.map((a) => a.status)).toEqual(["stopped", "done"]);
+  });
+});

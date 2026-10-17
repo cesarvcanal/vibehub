@@ -56,7 +56,7 @@ import { logger } from "../utils/logger.js";
  *   { "type": "question_result", "id": string, "answers"?: [{ "selected": string[] }], "timedOut"?: boolean }
  *   { "type": "result", "isError": boolean, "sessionId"?: string, "subtype"?: string, "result"?: string, "permissionDenials"?: unknown[] }
  *   { "type": "rewound", "ok": boolean, "uuid"?: string, "reason"?: string, "originalText"?: string } // an edit was applied
- *   { "type": "workflow_progress", "runId": string, "name": string, "total": number, "done": number, "agents": [...], "at": number, "finished": boolean } // = WorkflowRun (services/sdk/workflow.ts); total/done count the whole journal, agents is capped
+ *   { "type": "workflow_progress", "runId": string, "name": string, "total": number, "done": number, "agents": [...], "at": number, "finished": boolean, "outcome"?: "completed"|"killed"|"failed" } // = WorkflowRun (services/sdk/workflow.ts); total/done count the whole journal, agents is capped
  *   { "type": "system_note", "text": string, "at": number }  // the panel's own line (persisted)
  *   { "type": "user_ack" | "user_nack", "cid": string, "reason"?: string } // the receipt of a send
  *   { "type": "error", "message": string }
