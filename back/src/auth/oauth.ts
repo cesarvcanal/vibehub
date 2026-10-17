@@ -16,6 +16,9 @@ import { sessionUser, type PublicUser } from "./users.js";
  * shares (see mcp/externalTools.ts). It dies with the account, and with every session of it when the
  * password changes — it is checked against `sessionsValidAfter` exactly like a cookie is.
  *
+ * No setting names the public address: every URL is the origin of the request that asks (see
+ * {@link originOf}), so the same install answers on its VPN name and on a public domain alike.
+ *
  * Tokens are stored HASHED: the file holding them is a list of who connected what, not a list of
  * credentials someone who reads `/data` could replay.
  */
@@ -87,34 +90,54 @@ export class OAuthError extends Error {
 
 /* ------------------------------------------------------------------ metadata */
 
-/** The public origin the metadata announces — `VIBEHUB_MCP_PUBLIC_URL`, else `VIBEHUB_PUBLIC_URL`. */
-export function issuer(): string {
-  return (config.mcpPublicUrl || config.publicUrl).replace(/\/+$/, "");
+/** What the origin is read from: the request's headers and the protocol Fastify saw. */
+export interface RequestOrigin {
+  headers: Record<string, string | string[] | undefined>;
+  protocol?: string;
 }
 
-/** The resource every token is for: the MCP endpoint on the public origin. */
-export function resourceUrl(): string {
-  return `${issuer()}/mcp`;
+const HOST_RE = /^[a-z0-9.-]+(:\d{1,5})?$/i;
+const first = (v: string | string[] | undefined): string => String(Array.isArray(v) ? v[0] : v ?? "").split(",")[0]!.trim();
+
+/**
+ * The origin the client used to reach us: the host it asked for and the protocol in front of it,
+ * as the gateway forwards them (`X-Forwarded-Host`/`-Proto`, else `Host` and the socket's).
+ *
+ * Read per request on purpose, so nothing has to be configured: whoever comes through
+ * `mcp.example.com` is told to sign in and redeem at `mcp.example.com`, and the same install still
+ * answers its LAN or VPN name with that name. These values only shape the metadata and the
+ * `resource` a token is checked against IN THAT SAME request — a forged header misleads nobody but
+ * the client that sent it.
+ */
+export function originOf(req: RequestOrigin): string {
+  const proto = first(req.headers["x-forwarded-proto"]) || req.protocol || "http";
+  const host = first(req.headers["x-forwarded-host"]) || first(req.headers.host);
+  if (!HOST_RE.test(host) || !["http", "https"].includes(proto)) return config.publicUrl.replace(/\/+$/, "");
+  return `${proto}://${host}`;
+}
+
+/** The resource every token is for: the MCP endpoint on that origin. */
+export function resourceUrl(origin: string): string {
+  return `${origin}/mcp`;
 }
 
 /** RFC 9728 — where a client that got a 401 from `/mcp` learns how to authenticate. */
-export function protectedResourceMetadata() {
+export function protectedResourceMetadata(origin: string) {
   return {
-    resource: resourceUrl(),
-    authorization_servers: [issuer()],
+    resource: resourceUrl(origin),
+    authorization_servers: [origin],
     bearer_methods_supported: ["header"],
     scopes_supported: [MCP_SCOPE],
   };
 }
 
 /** RFC 8414 — the authorization server's endpoints and what it supports. */
-export function authorizationServerMetadata() {
-  const base = issuer();
+export function authorizationServerMetadata(origin: string) {
   return {
-    issuer: base,
-    authorization_endpoint: `${base}/oauth/authorize`,
-    token_endpoint: `${base}/oauth/token`,
-    registration_endpoint: `${base}/oauth/register`,
+    issuer: origin,
+    authorization_endpoint: `${origin}/oauth/authorize`,
+    token_endpoint: `${origin}/oauth/token`,
+    registration_endpoint: `${origin}/oauth/register`,
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code"],
     code_challenge_methods_supported: ["S256"],
@@ -203,7 +226,7 @@ export function redirectMatches(registered: readonly string[], requested: string
  * redirected: an unknown client or a redirect it never registered must not become an open
  * redirect, so these are answered on the page itself, not sent back to `redirect_uri`.
  */
-export async function validateAuthorizeRequest(q: {
+export async function validateAuthorizeRequest(origin: string, q: {
   clientId: string;
   redirectUri: string;
   codeChallenge: string;
@@ -219,8 +242,8 @@ export async function validateAuthorizeRequest(q: {
   if (!/^[A-Za-z0-9_-]{43,128}$/.test(q.codeChallenge)) {
     throw new OAuthError("invalid_request", "code_challenge is required (PKCE S256)");
   }
-  if (q.resource && q.resource.replace(/\/+$/, "") !== resourceUrl()) {
-    throw new OAuthError("invalid_target", `this server only issues tokens for ${resourceUrl()}`);
+  if (q.resource && q.resource.replace(/\/+$/, "") !== resourceUrl(origin)) {
+    throw new OAuthError("invalid_target", `this server only issues tokens for ${resourceUrl(origin)}`);
   }
   return client;
 }
@@ -248,7 +271,7 @@ const hashToken = (token: string): string => createHash("sha256").update(token).
  * Redeems a code for an access token (RFC 6749 §4.1.3 + PKCE). The code is gone after the first
  * try, right or wrong: a replay — or a guess at the verifier — never gets a second chance.
  */
-export async function redeemCode(input: {
+export async function redeemCode(origin: string, input: {
   code: string;
   codeVerifier: string;
   clientId: string;
@@ -263,8 +286,8 @@ export async function redeemCode(input: {
   if (!pkceMatches(String(input.codeVerifier ?? ""), pending.codeChallenge)) {
     throw new OAuthError("invalid_grant", "code_verifier does not match the code_challenge");
   }
-  if (input.resource && input.resource.replace(/\/+$/, "") !== resourceUrl()) {
-    throw new OAuthError("invalid_target", `this server only issues tokens for ${resourceUrl()}`);
+  if (input.resource && input.resource.replace(/\/+$/, "") !== resourceUrl(origin)) {
+    throw new OAuthError("invalid_target", `this server only issues tokens for ${resourceUrl(origin)}`);
   }
   const client = await findClient(pending.clientId);
   if (!client) throw new OAuthError("invalid_client", "the client was removed");

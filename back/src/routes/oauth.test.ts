@@ -15,6 +15,8 @@ import type { FastifyInstance } from "fastify";
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 
 const PUBLIC = "https://mcp-vh.example.com";
+/** What the edge forwards: the public host, and that the client came in over https. */
+const EDGE = { host: "mcp-vh.example.com", "x-forwarded-proto": "https" };
 const REDIRECT = "https://chatgpt.com/connector/oauth/abc123";
 
 let dir = "";
@@ -30,7 +32,7 @@ async function boot(): Promise<FastifyInstance> {
   env.config.secretKey = "";
   env.config.sessionSecret = "";
   env.config.insecureCookies = true;
-  env.config.mcpPublicUrl = `${PUBLIC}/`;
+  env.config.publicUrl = "http://10.0.0.5:3010";
   vi.doMock("../runtime/runner.js", () => ({
     provisionRunner: vi.fn(async () => undefined),
     startRunner: vi.fn(async () => undefined),
@@ -82,6 +84,12 @@ beforeEach(async () => {
 });
 afterEach(async () => { await app?.close(); await rm(dir, { recursive: true, force: true }); });
 
+/** Every request arrives through the edge, as in production. */
+type InjectOpts = Parameters<FastifyInstance["inject"]>[0] & { headers?: Record<string, string> };
+async function inject(opts: InjectOpts) {
+  return await app.inject({ ...(opts as object), headers: { ...EDGE, ...(opts.headers ?? {}) } } as Parameters<FastifyInstance["inject"]>[0]);
+}
+
 function cookieOf(res: { cookies: { name: string; value: string }[] }): string {
   return `vibehub_session=${res.cookies.find((c) => c.name === "vibehub_session")?.value ?? ""}`;
 }
@@ -97,7 +105,7 @@ function pkce() {
 }
 
 async function register(redirect = REDIRECT): Promise<string> {
-  const res = await app.inject({
+  const res = await inject({
     method: "POST", url: "/oauth/register", payload: { client_name: "ChatGPT", redirect_uris: [redirect] },
   });
   expect(res.statusCode).toBe(201);
@@ -106,7 +114,7 @@ async function register(redirect = REDIRECT): Promise<string> {
 
 /** Signs in on the consent page; returns the code the page sends the browser back with. */
 async function authorize(clientId: string, challenge: string, username: string, password: string, state = "st") {
-  const res = await app.inject({
+  const res = await inject({
     method: "POST", url: "/oauth/authorize",
     ...form({
       client_id: clientId, redirect_uri: REDIRECT, code_challenge: challenge, code_challenge_method: "S256",
@@ -119,7 +127,7 @@ async function authorize(clientId: string, challenge: string, username: string, 
 }
 
 async function token(clientId: string, code: string, verifier: string) {
-  return await app.inject({
+  return await inject({
     method: "POST", url: "/oauth/token",
     ...form({ grant_type: "authorization_code", code, code_verifier: verifier, client_id: clientId, redirect_uri: REDIRECT }),
   });
@@ -137,7 +145,7 @@ async function connect(username: string, password: string): Promise<string> {
 }
 
 async function mcp(bearer: string, method: string, params: Record<string, unknown> = {}) {
-  const res = await app.inject({
+  const res = await inject({
     method: "POST", url: "/mcp",
     headers: { authorization: `Bearer ${bearer}`, accept: "application/json, text/event-stream" },
     payload: { jsonrpc: "2.0", id: 1, method, params },
@@ -156,24 +164,24 @@ interface World { owner: string; memberId: string; projectId: string; cardA: str
 
 /** An owner with one project and two cards, plus a member ("alex") given nothing yet. */
 async function world(): Promise<World> {
-  const owner = cookieOf(await app.inject({
+  const owner = cookieOf(await inject({
     method: "POST", url: "/api/setup/owner", payload: { username: "owner", password: "supersecret" },
   }));
-  const memberId = (await app.inject({
+  const memberId = (await inject({
     method: "POST", url: "/api/users", headers: { cookie: owner },
     payload: { username: "alex", password: "supersecret", role: "member" },
   })).json().user.id as string;
-  const projectId = (await app.inject({
+  const projectId = (await inject({
     method: "POST", url: "/api/projects", headers: { cookie: owner }, payload: { name: "erp-aux" },
   })).json().project.id as string;
-  const newCard = async (title: string) => (await app.inject({
+  const newCard = async (title: string) => (await inject({
     method: "POST", url: "/api/cards", headers: { cookie: owner }, payload: { projectId, title },
   })).json().card.id as string;
   return { owner, memberId, projectId, cardA: await newCard("conciliação"), cardB: await newCard("boletos") };
 }
 
 async function share(w: World, cardId: string, level: "work" | "view") {
-  const res = await app.inject({
+  const res = await inject({
     method: "POST", url: `/api/cards/${cardId}/shares`, headers: { cookie: w.owner },
     payload: { userId: w.memberId, level },
   });
@@ -182,13 +190,13 @@ async function share(w: World, cardId: string, level: "work" | "view") {
 
 describe("discovery", () => {
   it("announces the public origin, not the internal one, in both metadata documents", async () => {
-    const prm = (await app.inject({ method: "GET", url: "/.well-known/oauth-protected-resource" })).json();
+    const prm = (await inject({ method: "GET", url: "/.well-known/oauth-protected-resource" })).json();
     expect(prm.resource).toBe(`${PUBLIC}/mcp`);
     expect(prm.authorization_servers).toEqual([PUBLIC]);
-    const suffixed = (await app.inject({ method: "GET", url: "/.well-known/oauth-protected-resource/mcp" })).json();
+    const suffixed = (await inject({ method: "GET", url: "/.well-known/oauth-protected-resource/mcp" })).json();
     expect(suffixed).toEqual(prm);
 
-    const as = (await app.inject({ method: "GET", url: "/.well-known/oauth-authorization-server" })).json();
+    const as = (await inject({ method: "GET", url: "/.well-known/oauth-authorization-server" })).json();
     expect(as.issuer).toBe(PUBLIC);
     expect(as.authorization_endpoint).toBe(`${PUBLIC}/oauth/authorize`);
     expect(as.token_endpoint).toBe(`${PUBLIC}/oauth/token`);
@@ -197,15 +205,31 @@ describe("discovery", () => {
   });
 
   it("a 401 on /mcp points at the protected-resource metadata (how a client learns to sign in)", async () => {
-    const res = await app.inject({ method: "POST", url: "/mcp", payload: {} });
+    const res = await inject({ method: "POST", url: "/mcp", payload: {} });
     expect(res.statusCode).toBe(401);
     expect(res.headers["www-authenticate"]).toBe(
       `Bearer resource_metadata="${PUBLIC}/.well-known/oauth-protected-resource"`,
     );
   });
 
+  it("answers each origin with its own URLs — the VPN name gets the VPN name, nothing to configure", async () => {
+    const vpn = (await app.inject({
+      method: "GET", url: "/.well-known/oauth-authorization-server", headers: { host: "dev.multi" },
+    })).json();
+    expect(vpn.issuer).toBe("http://dev.multi");
+    expect(vpn.token_endpoint).toBe("http://dev.multi/oauth/token");
+  });
+
+  it("a malformed Host falls back to the configured public URL instead of echoing it", async () => {
+    const res = (await app.inject({
+      method: "GET", url: "/.well-known/oauth-authorization-server",
+      headers: { host: "evil.com\"><script>", "x-forwarded-proto": "https" },
+    })).json();
+    expect(res.issuer).toBe("http://10.0.0.5:3010");
+  });
+
   it("an unknown .well-known path is a JSON 404, never the app's HTML", async () => {
-    const res = await app.inject({ method: "GET", url: "/.well-known/openid-configuration" });
+    const res = await inject({ method: "GET", url: "/.well-known/openid-configuration" });
     expect(res.statusCode).toBe(404);
   });
 });
@@ -213,14 +237,14 @@ describe("discovery", () => {
 describe("registration", () => {
   it("refuses a plain-http redirect that is not loopback, and an empty list", async () => {
     for (const redirect_uris of [["http://evil.example.com/cb"], [], "https://x"]) {
-      const res = await app.inject({ method: "POST", url: "/oauth/register", payload: { client_name: "x", redirect_uris } });
+      const res = await inject({ method: "POST", url: "/oauth/register", payload: { client_name: "x", redirect_uris } });
       expect(res.statusCode).toBe(400);
       expect(res.json().error).toBe("invalid_redirect_uri");
     }
   });
 
   it("accepts a loopback http redirect (desktop clients)", async () => {
-    const res = await app.inject({
+    const res = await inject({
       method: "POST", url: "/oauth/register", payload: { client_name: "cli", redirect_uris: ["http://127.0.0.1:53111/cb"] },
     });
     expect(res.statusCode).toBe(201);
@@ -237,17 +261,17 @@ describe("authorize", () => {
       code_challenge_method: "S256", state: "s",
     }).toString();
 
-    const page = await app.inject({ method: "GET", url: `/oauth/authorize?${q(REDIRECT)}` });
+    const page = await inject({ method: "GET", url: `/oauth/authorize?${q(REDIRECT)}` });
     expect(page.statusCode).toBe(200);
     expect(page.headers["content-type"]).toContain("text/html");
     expect(page.body).toContain("ChatGPT");
     expect(page.body).toContain('name="password"');
 
-    const evil = await app.inject({ method: "GET", url: `/oauth/authorize?${q("https://evil.example.com/cb")}` });
+    const evil = await inject({ method: "GET", url: `/oauth/authorize?${q("https://evil.example.com/cb")}` });
     expect(evil.statusCode).toBe(400);
     expect(evil.body).not.toContain("evil.example.com/cb?code");
 
-    const posted = await app.inject({
+    const posted = await inject({
       method: "POST", url: "/oauth/authorize",
       ...form({ client_id: clientId, redirect_uri: "https://evil.example.com/cb", code_challenge: challenge,
         code_challenge_method: "S256", username: "owner", password: "supersecret" }),
@@ -260,14 +284,14 @@ describe("authorize", () => {
     await world();
     const clientId = await register();
     const base = { response_type: "code", client_id: clientId, redirect_uri: REDIRECT, state: "s" };
-    const plain = await app.inject({
+    const plain = await inject({
       method: "GET",
       url: `/oauth/authorize?${new URLSearchParams({ ...base, code_challenge: "x".repeat(43), code_challenge_method: "plain" })}`,
     });
     expect(plain.statusCode).toBe(400);
-    const none = await app.inject({ method: "GET", url: `/oauth/authorize?${new URLSearchParams(base)}` });
+    const none = await inject({ method: "GET", url: `/oauth/authorize?${new URLSearchParams(base)}` });
     expect(none.statusCode).toBe(400);
-    const other = await app.inject({
+    const other = await inject({
       method: "GET",
       url: `/oauth/authorize?${new URLSearchParams({ ...base, code_challenge: pkce().challenge, resource: "https://other.example.com/mcp" })}`,
     });
@@ -333,7 +357,7 @@ describe("token", () => {
     const { code } = await authorize(clientId, challenge, "owner", "supersecret");
     expect((await token(otherId, code as string, verifier)).statusCode).toBe(400);
 
-    const refresh = await app.inject({ method: "POST", url: "/oauth/token", ...form({ grant_type: "refresh_token" }) });
+    const refresh = await inject({ method: "POST", url: "/oauth/token", ...form({ grant_type: "refresh_token" }) });
     expect(refresh.statusCode).toBe(400);
     expect(refresh.json().error).toBe("unsupported_grant_type");
   });
@@ -370,12 +394,12 @@ describe("/mcp with an OAuth token", () => {
     const access = await connect("alex", "supersecret");
     expect((await mcp(access, "tools/list")).res.statusCode).toBe(200);
 
-    const alex = cookieOf(await app.inject({
+    const alex = cookieOf(await inject({
       method: "POST", url: "/api/auth/login", payload: { username: "alex", password: "supersecret" },
     }));
     // A password change revokes sessions issued before it; make sure "before" is strictly earlier.
     await new Promise((r) => setTimeout(r, 5));
-    const changed = await app.inject({
+    const changed = await inject({
       method: "POST", url: "/api/auth/password", headers: { cookie: alex },
       payload: { password: "evenmoresecret" },
     });
@@ -384,7 +408,7 @@ describe("/mcp with an OAuth token", () => {
 
     const again = await connect("alex", "evenmoresecret");
     expect((await mcp(again, "tools/list")).res.statusCode).toBe(200);
-    await app.inject({ method: "DELETE", url: `/api/users/${w.memberId}`, headers: { cookie: w.owner } });
+    await inject({ method: "DELETE", url: `/api/users/${w.memberId}`, headers: { cookie: w.owner } });
     expect((await mcp(again, "tools/list")).res.statusCode).toBe(401);
   });
 

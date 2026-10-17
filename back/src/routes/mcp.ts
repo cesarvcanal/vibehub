@@ -3,7 +3,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createMcpServer } from "../mcp/server.js";
 import { runnerToken } from "../runtime/runner.js";
 import { currentUser, tokenMatches } from "../auth/session.js";
-import { issuer, userForAccessToken } from "../auth/oauth.js";
+import { originOf, userForAccessToken } from "../auth/oauth.js";
 import type { PublicUser } from "../auth/users.js";
 import { logger } from "../utils/logger.js";
 
@@ -45,7 +45,7 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
       actor = "browser";
     }
     if (!actor) {
-      reply.header("WWW-Authenticate", `Bearer resource_metadata="${issuer()}/.well-known/oauth-protected-resource"`);
+      reply.header("WWW-Authenticate", `Bearer resource_metadata="${originOf(request)}/.well-known/oauth-protected-resource"`);
       return await reply.code(401).send({ error: "invalid or missing MCP token" });
     }
 

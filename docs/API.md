@@ -320,10 +320,11 @@ of the newest transcript.
 ## MCP — the board, from outside (ChatGPT, Claude.ai)
 
 An app on the internet connects to the same `/mcp` with OAuth 2.1 and drives the board **as one
-user**: their role and their shares decide every tool, exactly as on the board. Set
-`VIBEHUB_MCP_PUBLIC_URL` to the public origin the app reaches (e.g. `https://mcp.example.com`); a
-gateway only has to publish `/mcp`, `/oauth/` and `/.well-known/oauth-` — the board itself can stay
-on a VPN. The connector URL is `<VIBEHUB_MCP_PUBLIC_URL>/mcp`.
+user**: their role and their shares decide every tool, exactly as on the board. Nothing to
+configure: every OAuth URL is built from the origin of the request (`X-Forwarded-Host`/`-Proto`, else
+`Host`), so a gateway that publishes `/mcp`, `/oauth/` and `/.well-known/oauth-` of
+`mcp.example.com` gets `https://mcp.example.com/...` back — the board itself can stay on a VPN. The
+connector URL is `https://<that domain>/mcp`.
 
 | Method | Path | Body / notes |
 |---|---|---|
