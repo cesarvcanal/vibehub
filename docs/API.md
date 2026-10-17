@@ -20,7 +20,8 @@ CHANGES the card or reaches its session answers `403` to a `view` share. Card-sc
 (`/api/cards/:id/...`) answer **404** when the card is not visible to the caller — to somebody who
 cannot see a card, that card does not exist, and a 403 would confirm the id names something real.
 The listings (`/api/projects`, `/api/cards`, `/api/projects/:id/cards`) are filtered to what the
-caller may see rather than refused. `/mcp` accepts the runner token or an **owner** session.
+caller may see rather than refused. `/mcp` accepts the runner token, an **owner** session, or an
+OAuth access token (see "MCP — the board, from outside"), which reaches what its user reaches.
 
 ## Setup & auth
 
@@ -315,3 +316,37 @@ context, worktree and branch.
 The instruction travels over stdin inside a quoted heredoc and is typed with `tmux send-keys -l`, so
 an instruction that contains the word "Enter" is text, not a keystroke. Reading is a read-only tail
 of the newest transcript.
+
+## MCP — the board, from outside (ChatGPT, Claude.ai)
+
+An app on the internet connects to the same `/mcp` with OAuth 2.1 and drives the board **as one
+user**: their role and their shares decide every tool, exactly as on the board. Set
+`VIBEHUB_MCP_PUBLIC_URL` to the public origin the app reaches (e.g. `https://mcp.example.com`); a
+gateway only has to publish `/mcp`, `/oauth/` and `/.well-known/oauth-` — the board itself can stay
+on a VPN. The connector URL is `<VIBEHUB_MCP_PUBLIC_URL>/mcp`.
+
+| Method | Path | Body / notes |
+|---|---|---|
+| GET | `/.well-known/oauth-protected-resource` | **public** — RFC 9728 (also under `/mcp` suffixed). The 401 of `/mcp` points here. |
+| GET | `/.well-known/oauth-authorization-server` | **public** — RFC 8414. Code flow, PKCE `S256` only, public clients. |
+| POST | `/oauth/register` | **public** — RFC 7591. `{ client_name, redirect_uris }`; https, or loopback http. At most 100 clients. |
+| GET | `/oauth/authorize` | **public** — the sign-in page (vibehub username + password). An unknown client or unregistered `redirect_uri` is an error page, never a redirect. |
+| POST | `/oauth/authorize` | **public**, form — signs in, issues a 10-minute single-use code, sends the browser back with `code`, `state`, `iss`. Failures throttled per address+username. |
+| POST | `/oauth/token` | **public**, form — `grant_type=authorization_code` + `code_verifier` → `{ access_token: "vhm_…", expires_in }` (90 days, no refresh token). |
+
+Tokens are stored hashed in `oauth.json` and die with the account, or when its password changes.
+
+| Tool | Who / what |
+|---|---|
+| `vibehub_list_projects` | the projects the user reaches; `canCreateCards` (owner only) |
+| `vibehub_list_terminals` | the cards the user reaches, with their `access` (`work` / `view`) |
+| `vibehub_create_card` | **owner** — creates a card and opens it (answers `opening` while the workspace is prepared) |
+| `vibehub_open_card` | `work` — opens or resumes a session |
+| `vibehub_send_to_terminal` | `work` — the user's own message, attributed to them (like the chat composer) |
+| `vibehub_read_terminal` | `view` — the card's last answers |
+| `vibehub_move_cards` | `work` on each card — `done` or `backlog` |
+| `vibehub_deliver` | `work` — PR + checks; merges only with `authorized: true` |
+
+A card the user cannot see answers `card not found`; a `view` share answers `read-only`. The
+card-only tools (`vibehub_report`, `vibehub_preview`, credentials…) are not offered: the app has no
+card of its own.
