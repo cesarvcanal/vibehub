@@ -73,6 +73,13 @@ describe("groupAgentsByPhase / phasePills", () => {
       { title: "Síntese", done: 0, total: 0, state: "waiting" },
     ]);
   });
+
+  it("rodada terminada: fase com agente que não respondeu é 'stopped', não 'current'", () => {
+    const agents = [A("a1", { phase: "Verify", status: "done" }), A("a2", { phase: "Verify" }), A("a3", { phase: "Review", status: "stopped" })];
+    expect(phasePills(agents, ["Review", "Verify"], true).map((p) => p.state)).toEqual(["stopped", "stopped"]);
+    // Em andamento, quem roda segue 'current'; o 'stopped' explícito nunca é 'current'.
+    expect(phasePills(agents, ["Review", "Verify"]).map((p) => p.state)).toEqual(["stopped", "current"]);
+  });
 });
 
 describe("feedLines", () => {

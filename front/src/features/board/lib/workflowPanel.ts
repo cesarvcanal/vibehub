@@ -82,16 +82,24 @@ export interface PhasePill {
   title: string;
   done: number;
   total: number;
-  /** done = todos os que começaram nela terminaram; current = alguém rodando; waiting = ninguém ainda. */
-  state: "done" | "current" | "waiting";
+  /**
+   * done = todos os que começaram nela terminaram; current = alguém rodando; waiting = ninguém ainda;
+   * stopped = ninguém rodando, mas alguém parou sem responder (rodada morta ou abandonada).
+   */
+  state: "done" | "current" | "waiting" | "stopped";
 }
 
-/** Uma pílula por fase do plano (inclusive as que ainda não começaram) e por fase só citada. */
-export function phasePills(agents: readonly WorkflowAgentFrame[], plan: readonly string[]): PhasePill[] {
+/**
+ * Uma pílula por fase do plano (inclusive as que ainda não começaram) e por fase só citada.
+ * `finished`: numa rodada terminada, quem não respondeu não está mais rodando.
+ */
+export function phasePills(agents: readonly WorkflowAgentFrame[], plan: readonly string[], finished = false): PhasePill[] {
   return orderedPhases(agents, plan).map((title) => {
     const list = agents.filter((a) => a.phase === title);
     const done = list.filter((a) => a.status === "done").length;
-    const state = list.length > 0 && done === list.length ? "done" : list.length > done ? "current" : "waiting";
+    const running = finished ? 0 : list.filter((a) => a.status === "running").length;
+    const state: PhasePill["state"] =
+      list.length === 0 ? "waiting" : done === list.length ? "done" : running > 0 ? "current" : "stopped";
     return { title, done, total: list.length, state };
   });
 }

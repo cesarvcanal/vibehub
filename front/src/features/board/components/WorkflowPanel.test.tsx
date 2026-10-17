@@ -249,3 +249,65 @@ describe("WorkflowPanel — quadro de um back antigo (blue/green)", () => {
     expect(screen.getByTestId("workflow-feed")).toHaveTextContent("0 ferramentas");
   });
 });
+
+/**
+ * Produção, 17/10/2026: o painel ficou horas com spinner em agentes de rodadas que já tinham acabado
+ * (uma MORTA, outra abandonada pela sondagem). Quadro terminado não pode girar nem contar tempo.
+ */
+describe("WorkflowPanel — rodada terminada com agente que nunca respondeu", () => {
+  const spinners = () => document.querySelectorAll(".animate-spin").length;
+
+  it("back antigo (agente ainda 'running' num quadro finished): sem spinner, tempo congelado, 'interrompido'", () => {
+    renderPanel(workflowRow({
+      finished: true,
+      startedAt: T0 - 600_000,
+      agents: [agent("a1", { startedAt: T0 - 600_000, lastAt: T0 - 540_000 }), agent("a2", { status: "done", startedAt: T0 - 600_000, endedAt: T0 - 590_000 })],
+    }));
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    expect(spinners()).toBe(0);
+    const [stopped] = screen.getAllByTestId("sdk-workflow-agent");
+    expect(within(stopped!).getByTestId("workflow-agent-time")).toHaveTextContent("1m");
+    expect(within(stopped!).getByTestId("workflow-agent-now")).toHaveTextContent("interrompido");
+    act(() => { vi.advanceTimersByTime(60_000); });
+    expect(within(stopped!).getByTestId("workflow-agent-time")).toHaveTextContent("1m");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("rodada MORTA: o cabeçalho diz 'interrompido' (não 'concluído') e o agente 'stopped' não gira", () => {
+    renderPanel(workflowRow({
+      finished: true,
+      outcome: "killed",
+      agents: [agent("a1", { status: "stopped" }), agent("a2", { status: "done", result: "ok" })],
+    }));
+    const header = screen.getByRole("button", { expanded: false });
+    expect(header).toHaveTextContent("interrompido");
+    expect(header).not.toHaveTextContent("concluído");
+    fireEvent.click(header);
+    expect(spinners()).toBe(0);
+    expect(screen.getAllByTestId("sdk-workflow-agent")[0]).toHaveAttribute("data-status", "stopped");
+  });
+
+  it("abrir o agente interrompido: diz que não vai responder e NÃO fica re-pedindo o feed", () => {
+    const { sent, answer } = renderPanel(workflowRow({ finished: true, outcome: "killed", agents: [agent("a1", { status: "stopped" })] }));
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    fireEvent.click(screen.getByTestId("sdk-workflow-agent"));
+    answer("a1", []);
+    expect(screen.getByTestId("sdk-workflow-result")).toHaveTextContent("interrompido");
+    expect(screen.getByTestId("sdk-workflow-result")).not.toHaveTextContent("ainda trabalhando");
+    expect(spinners()).toBe(0);
+    const asked = sent.length;
+    act(() => { vi.advanceTimersByTime(20_000); });
+    expect(sent.length).toBe(asked);
+  });
+
+  it("o tempo de uma rodada interrompida diz 'Interrompido após', não 'Concluído em'", () => {
+    renderPanel(workflowRow({
+      finished: true,
+      outcome: "killed",
+      startedAt: T0 - 600_000,
+      agents: [agent("a1", { status: "stopped", startedAt: T0 - 600_000, lastAt: T0 - 60_000 })],
+    }));
+    expect(screen.getByTestId("workflow-eta")).toHaveTextContent("Interrompido após 9m");
+    expect(screen.getByTestId("workflow-eta")).not.toHaveTextContent("Concluído");
+  });
+});

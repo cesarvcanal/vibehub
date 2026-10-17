@@ -48,8 +48,10 @@ export function WorkflowPanel({ row }: { row: WorkflowRow }) {
   const visible = usePageVisible();
   const now = useNow(!row.finished && running > 0 && visible);
   const percent = row.total > 0 ? Math.round((row.done / row.total) * 100) : 0;
+  // Acabou sem todos responderem (morta, falhou, ou o back desistiu de acompanhar): não é "concluído".
+  const interrupted = row.finished && (row.outcome === "killed" || row.outcome === "failed" || row.agents.some((a) => isStopped(a, true)));
   const plan = (row.phases ?? []).map((p) => p.title);
-  const pills = phasePills(row.agents, plan);
+  const pills = phasePills(row.agents, plan, row.finished);
 
   return (
     <div
@@ -66,7 +68,7 @@ export function WorkflowPanel({ row }: { row: WorkflowRow }) {
       >
         <ChevronRight className={cn("h-3 w-3 shrink-0 transition-transform", open && "rotate-90")} />
         {row.finished ? (
-          <Waypoints className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+          <Waypoints className={cn("h-3.5 w-3.5 shrink-0", interrupted ? "text-muted-foreground" : "text-emerald-500")} />
         ) : (
           <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
         )}
@@ -76,7 +78,13 @@ export function WorkflowPanel({ row }: { row: WorkflowRow }) {
           {t("sdk.workflowAgents", { done: row.done, total: row.total })}
         </span>
         <span className="shrink-0 text-muted-foreground/80">
-          {row.finished ? t("sdk.workflowDone") : t("sdk.workflowRunning")}
+          {!row.finished
+            ? t("sdk.workflowRunning")
+            : row.outcome === "failed"
+              ? t("sdk.workflowFailed")
+              : interrupted
+                ? t("sdk.workflowInterrupted")
+                : t("sdk.workflowDone")}
         </span>
       </button>
 
@@ -84,13 +92,16 @@ export function WorkflowPanel({ row }: { row: WorkflowRow }) {
         <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-border/60">
           <div
             data-testid="sdk-workflow-bar"
-            className={cn("h-full rounded-full transition-all", row.finished ? "bg-emerald-500" : "bg-primary")}
+            className={cn(
+              "h-full rounded-full transition-all",
+              !row.finished ? "bg-primary" : interrupted ? "bg-muted-foreground/50" : "bg-emerald-500",
+            )}
             style={{ width: `${percent}%` }}
           />
         </div>
       ) : null}
 
-      <WorkflowStatusLine row={row} running={running} now={now} t={t} />
+      <WorkflowStatusLine row={row} running={running} interrupted={interrupted} now={now} t={t} />
 
       {open ? (
         <div className="mt-2 space-y-2">
@@ -115,12 +126,18 @@ export function WorkflowPanel({ row }: { row: WorkflowRow }) {
 }
 
 /** "Rodando há 3m 12s · Faltam ~2m (média de 1m 10s por agente) · 2 trabalhando · 5 na fila". */
-function WorkflowStatusLine({ row, running, now, t }: { row: WorkflowRow; running: number; now: number; t: Translate }) {
+function WorkflowStatusLine({
+  row, running, interrupted, now, t,
+}: {
+  row: WorkflowRow; running: number; interrupted: boolean; now: number; t: Translate;
+}) {
   const startedAt = row.startedAt;
   let eta: string | null = null;
   if (row.finished) {
     const end = Math.max(0, ...row.agents.map((a) => a.endedAt ?? a.lastAt ?? 0));
-    if (startedAt !== undefined && end >= startedAt) eta = t("sdk.workflowDoneIn", { elapsed: formatDuration(end - startedAt) });
+    if (startedAt !== undefined && end >= startedAt) {
+      eta = t(interrupted ? "sdk.workflowStoppedAfter" : "sdk.workflowDoneIn", { elapsed: formatDuration(end - startedAt) });
+    }
   } else {
     const estimate = estimateWorkflowRemaining(row, now);
     eta = estimate
@@ -157,7 +174,7 @@ function PhasePills({ pills, t }: { pills: PhasePill[]; t: Translate }) {
             "inline-flex items-center gap-1 rounded-full border px-2 py-px",
             pill.state === "done" && "border-emerald-500/40 text-emerald-600 dark:text-emerald-400",
             pill.state === "current" && "border-primary text-foreground",
-            pill.state === "waiting" && "border-border/70 text-muted-foreground/70",
+            (pill.state === "waiting" || pill.state === "stopped") && "border-border/70 text-muted-foreground/70",
           )}
         >
           {pill.state === "done" ? (
@@ -220,14 +237,15 @@ function AgentItem({
   agent: WorkflowAgentFrame; runId: string; finished: boolean; now: number; showing: boolean; onToggle: () => void; t: Translate;
 }) {
   const done = agent.status === "done";
-  const time = agentTime(agent, now);
-  const doing = nowLine(agent, now, t);
+  const stopped = isStopped(agent, finished);
+  const time = agentTime(agent, now, stopped);
+  const doing = stopped ? t("sdk.workflowAgentStopped") : nowLine(agent, now, t);
   return (
     <li>
       <button
         type="button"
         data-testid="sdk-workflow-agent"
-        data-status={agent.status}
+        data-status={stopped ? "stopped" : agent.status}
         aria-expanded={showing}
         onClick={onToggle}
         className={cn("flex w-full min-w-0 flex-col rounded px-1 py-0.5 text-left hover:bg-muted/60", showing && "bg-muted/60")}
@@ -235,6 +253,8 @@ function AgentItem({
         <span className="flex w-full min-w-0 items-center gap-1.5">
           {done ? (
             <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
+          ) : stopped ? (
+            <Circle className="h-3 w-3 shrink-0 text-muted-foreground" />
           ) : (
             <Loader2 className="h-3 w-3 shrink-0 animate-spin text-primary" />
           )}
@@ -251,14 +271,26 @@ function AgentItem({
           </span>
         ) : null}
       </button>
-      {showing ? <AgentFeed agent={agent} runId={runId} polling={!finished && !done} now={now} t={t} /> : null}
+      {showing ? <AgentFeed agent={agent} runId={runId} polling={!finished && !done} stopped={stopped} now={now} t={t} /> : null}
     </li>
   );
 }
 
-/** Decorrido para quem roda, duração para quem terminou; "" quando o quadro não traz tempo. */
-function agentTime(agent: WorkflowAgentFrame, now: number): string {
+/**
+ * Não respondeu e não vai mais responder: `stopped` do back, ou ainda "running" num quadro TERMINADO
+ * (um back antigo no blue/green não marca). Sem isto, spinner e relógio andando para sempre.
+ */
+function isStopped(agent: WorkflowAgentFrame, finished: boolean): boolean {
+  return agent.status === "stopped" || (finished && agent.status !== "done");
+}
+
+/** Decorrido para quem roda, duração para quem terminou ou parou; "" quando o quadro não traz tempo. */
+function agentTime(agent: WorkflowAgentFrame, now: number, stopped: boolean): string {
   if (agent.startedAt === undefined) return "";
+  if (stopped) {
+    const end = agent.endedAt ?? agent.lastAt;
+    return end !== undefined && end >= agent.startedAt ? formatDuration(end - agent.startedAt) : "";
+  }
   if (agent.status === "running") return formatDuration(now - agent.startedAt);
   return agent.endedAt !== undefined ? formatDuration(agent.endedAt - agent.startedAt) : "";
 }
@@ -326,13 +358,13 @@ function useAgentFeed(runId: string, agentId: string, polling: boolean): Workflo
 }
 
 function AgentFeed({
-  agent, runId, polling, now, t,
+  agent, runId, polling, stopped, now, t,
 }: {
-  agent: WorkflowAgentFrame; runId: string; polling: boolean; now: number; t: Translate;
+  agent: WorkflowAgentFrame; runId: string; polling: boolean; stopped: boolean; now: number; t: Translate;
 }) {
   const feed = useAgentFeed(runId, agent.id, polling);
   const done = agent.status === "done";
-  const lines = feed ? feedLines(feed.items, { running: !done, now, endedAt: agent.endedAt }) : [];
+  const lines = feed ? feedLines(feed.items, { running: !done && !stopped, now, endedAt: agent.endedAt ?? (stopped ? agent.lastAt : undefined) }) : [];
   const tools = agent.toolCount ?? 0;
   const footer = [
     t("sdk.workflowToolCount", { n: tools, count: agent.toolCountPartial ? `${tools}+` : String(tools) }),
@@ -351,6 +383,8 @@ function AgentFeed({
       >
         {done ? (
           agent.result ? formatAgentResult(agent.result) : t("sdk.workflowNoResult")
+        ) : stopped ? (
+          t("sdk.workflowAgentStoppedDetail")
         ) : (
           <span className="inline-flex items-center gap-1">
             <Loader2 className="h-3 w-3 animate-spin" />

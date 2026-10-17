@@ -1370,6 +1370,13 @@ describe("workflow — a frota visível no chat", () => {
     });
   });
 
+  it("o desfecho da rodada (killed/completed/failed) chega ao quadro; lixo some", () => {
+    const killed = feed([call(SCRIPT), progress({ finished: true, outcome: "killed" })]).rows.find((r) => r.kind === "workflow");
+    expect(killed).toMatchObject({ finished: true, outcome: "killed" });
+    const junk = feed([call(SCRIPT), progress({ outcome: "<b>" as never })]).rows.find((r) => r.kind === "workflow");
+    expect(junk).not.toHaveProperty("outcome");
+  });
+
   it("o progresso vira UMA linha, com o plano da chamada da tool grudado nela", () => {
     const state = feed([call(SCRIPT), progress()]);
     const row = state.rows.find((r) => r.kind === "workflow");
