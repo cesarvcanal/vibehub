@@ -20,6 +20,7 @@ import { boardRoutes } from "./routes/board.js";
 import { sessionRoutes } from "./routes/session.js";
 import { agentRoutes } from "./routes/agent.js";
 import { mcpRoutes } from "./routes/mcp.js";
+import { oauthRoutes } from "./routes/oauth.js";
 import { credentialsRoutes } from "./routes/credentials.js";
 import { cardSessionRoutes } from "./routes/cardSession.js";
 import { chatRoutes } from "./routes/chat.js";
@@ -81,6 +82,7 @@ export async function buildServer() {
   await app.register(sessionRoutes);
   await app.register(agentRoutes);
   await app.register(mcpRoutes);
+  await app.register(oauthRoutes);
   await app.register(credentialsRoutes);
   await app.register(cardSessionRoutes);
   await app.register(chatRoutes);
@@ -114,8 +116,11 @@ export async function buildServer() {
 
   // Paths that are API surface, so an unknown one answers JSON instead of quietly rendering the UI.
   // `/mcp` lives outside `/api` because MCP clients expect a root-level endpoint — without this, a
-  // build that lost the route would hand an MCP client a page of HTML and a 200.
-  const isApiPath = (url: string): boolean => url.startsWith("/api") || url.startsWith("/mcp");
+  // build that lost the route would hand an MCP client a page of HTML and a 200. The same goes for
+  // the OAuth door in front of it (`/oauth`, `/.well-known`): a client probing a metadata URL we do
+  // not serve must get a 404, not the app's HTML.
+  const isApiPath = (url: string): boolean =>
+    url.startsWith("/api") || url.startsWith("/mcp") || url.startsWith("/oauth") || url.startsWith("/.well-known");
 
   app.setNotFoundHandler(async (req, reply) => {
     if (isApiPath(req.url) || !hasBuiltUi) {
