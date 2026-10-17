@@ -45,6 +45,7 @@ describe("runSettled / runChanged", () => {
     expect(runChanged(base, { ...base })).toBe(false);
     expect(runChanged(base, { ...base, at: 11 })).toBe(true);
     expect(runChanged(base, { ...base, finished: true })).toBe(true);
+    expect(runChanged(base, { ...base, outcome: "killed" })).toBe(true);
     expect(runChanged(base, { ...base, total: 2, agents: [...base.agents, { id: "a2", label: "", phase: "", status: "running", toolCount: 0 }] })).toBe(true);
     expect(runChanged(base, { ...base, done: 1, agents: [{ id: "a1", label: "l", phase: "", status: "done", toolCount: 0 }] })).toBe(true);
     // The counts alone are enough: agent 201 answering moves nothing in the drawn list.
@@ -291,5 +292,159 @@ describe("runChanged — atividade, fase e ferramentas também redesenham", () =
     expect(runChanged(base, { ...base, agents: [{ ...agent, phase: "Q" }] })).toBe(true);
     expect(runChanged(base, { ...base, agents: [{ ...agent, toolCount: 2 }] })).toBe(true);
     expect(runChanged(base, { ...base, phases: ["P", "Q"] })).toBe(true);
+  });
+});
+
+/**
+ * Produção, 17/10/2026: uma rodada de review durou 1h43 (4 subagentes) e o painel congelou com spinner
+ * na marca de 1h — o teto contava do INÍCIO da sondagem, com o diário ainda andando. Duas outras
+ * (35 subagentes) foram mortas: sem `result` para quem estava em voo, nunca "assentavam" e a tela
+ * girava até o teto. Estes testes reproduzem os dois congelamentos.
+ */
+describe("watchCardWorkflows — rodada longa e rodada morta", () => {
+  const dirs = () => ({ runs: "/runs", scripts: "/scripts" });
+
+  it("uma rodada que AINDA ANDA passa de uma hora sem ser abandonada", async () => {
+    vi.useFakeTimers();
+    const wf = await load();
+    const published: Array<{ finished: boolean }> = [];
+    let clock = 1_000;
+    let moving = 0;
+    runScript.mockImplementation(async () => ({ stdout: probe([{ runId: "wf_a", at: (moving += 1), agents: [AGENT()] }]), stderr: "" }));
+    wf.watchCardWorkflows("l1", { label: "card", dirs, watchers: () => 1, publish: (r) => published.push(r), now: () => clock });
+    await vi.advanceTimersByTimeAsync(10);
+    // 1h43 em passos de 5 min, o diário mexendo a cada tique.
+    for (let t = 0; t < 103; t += 5) {
+      clock += 5 * 60_000;
+      await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS);
+    }
+    expect(published.at(-1)!.finished).toBe(false);
+    const calls = runScript.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS);
+    expect(runScript.mock.calls.length).toBe(calls + 1); // segue sondando
+    wf.resetWorkflowWatchesForTesting();
+  });
+
+  it("um agente longo que só mexe no PRÓPRIO transcript (diário parado) também conta como movimento", async () => {
+    vi.useFakeTimers();
+    const wf = await load();
+    const published: Array<{ finished: boolean }> = [];
+    let clock = 1_000;
+    let tools = 0;
+    runScript.mockImplementation(async () => ({ stdout: probe([{ runId: "wf_a", at: 7, agents: [AGENT({ toolCount: (tools += 1) })] }]), stderr: "" }));
+    wf.watchCardWorkflows("l2", { label: "card", dirs, watchers: () => 1, publish: (r) => published.push(r), now: () => clock });
+    await vi.advanceTimersByTimeAsync(10);
+    for (let t = 0; t < 90; t += 5) {
+      clock += 5 * 60_000;
+      await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS);
+    }
+    expect(published.at(-1)!.finished).toBe(false);
+    wf.resetWorkflowWatchesForTesting();
+  });
+
+  it("parada de verdade (nada muda por WATCH_STALL_MS com agente em voo): fecha, e quem estava em voo vira 'stopped'", async () => {
+    vi.useFakeTimers();
+    const wf = await load();
+    const published: Array<{ finished: boolean; agents: Array<{ status: string }> }> = [];
+    let clock = 1_000;
+    runScript.mockResolvedValue({ stdout: probe([{ runId: "wf_a", at: 7, agents: [AGENT(), AGENT({ id: "a2", status: "done", result: "ok" })] }]), stderr: "" });
+    wf.watchCardWorkflows("l3", { label: "card", dirs, watchers: () => 1, publish: (r) => published.push(r), now: () => clock });
+    await vi.advanceTimersByTimeAsync(10);
+    clock += wf.WATCH_STALL_MS + 1;
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS);
+    const last = published.at(-1)!;
+    expect(last.finished).toBe(true);
+    expect(last.agents.map((a) => a.status)).toEqual(["stopped", "done"]);
+    expect(wf.lastWorkflowRuns("l3")[0]!.agents[0]!.status).toBe("stopped");
+    const calls = runScript.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS * 3);
+    expect(runScript.mock.calls.length).toBe(calls);
+  });
+
+  it("o teto absoluto continua existindo, e é bem maior que uma hora", async () => {
+    const wf = await load();
+    expect(wf.WATCH_MAX_MS).toBeGreaterThanOrEqual(4 * 60 * 60_000);
+    expect(wf.WATCH_STALL_MS).toBeLessThan(wf.WATCH_MAX_MS);
+  });
+
+  it("rodada MORTA (desfecho no snapshot): termina NA HORA, sem esperar silêncio nem teto, e a sondagem para", async () => {
+    vi.useFakeTimers();
+    const wf = await load();
+    const published: Array<{ finished: boolean; outcome?: string; agents: Array<{ status: string }> }> = [];
+    runScript.mockResolvedValueOnce({ stdout: probe([{ runId: "wf_a", at: 7, total: 35, done: 30, agents: [AGENT()] }]), stderr: "" });
+    wf.watchCardWorkflows("l4", { label: "card", dirs, watchers: () => 1, publish: (r) => published.push(r) });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(published.at(-1)!.finished).toBe(false);
+    runScript.mockResolvedValue({ stdout: probe([{ runId: "wf_a", at: 8, total: 35, done: 30, outcome: "killed", agents: [AGENT()] }]), stderr: "" });
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS);
+    expect(published.at(-1)).toMatchObject({ finished: true, outcome: "killed", agents: [{ status: "stopped" }] });
+    const calls = runScript.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS * 3);
+    expect(runScript.mock.calls.length).toBe(calls);
+    wf.resetWorkflowWatchesForTesting();
+  });
+
+  it("qualquer desistência (runner caído) também não deixa agente 'running' num quadro terminado", async () => {
+    vi.useFakeTimers();
+    const wf = await load();
+    const published: Array<{ finished: boolean; agents: Array<{ status: string }> }> = [];
+    runScript.mockResolvedValueOnce({ stdout: probe([{ runId: "wf_a", agents: [AGENT()] }]), stderr: "" });
+    wf.watchCardWorkflows("l5", { label: "card", dirs, watchers: () => 1, publish: (r) => published.push(r) });
+    await vi.advanceTimersByTimeAsync(10);
+    runScript.mockRejectedValue(new Error("runner down"));
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS * (wf.WATCH_MAX_FAILURES + 2));
+    expect(published.at(-1)).toMatchObject({ finished: true, agents: [{ status: "stopped" }] });
+    wf.resetWorkflowWatchesForTesting();
+  });
+
+  it("transcript grande (toolCount saturado, mesma ferramenta): o lastAt andando ainda é movimento", async () => {
+    // Revisão: um agente em laço de espera (`Bash sleep 60` aguardando CI) não muda nada que o
+    // runChanged compara — só o último timestamp do transcript anda.
+    vi.useFakeTimers();
+    const wf = await load();
+    const published: Array<{ finished: boolean }> = [];
+    let clock = 1_000;
+    const activity = { kind: "tool", tool: "Bash", target: "sleep 60" };
+    runScript.mockImplementation(async () => ({
+      stdout: probe([{ runId: "wf_a", at: 7, agents: [AGENT({ toolCount: 900, toolCountPartial: true, activity, startedAt: 500, lastAt: clock })] }]),
+      stderr: "",
+    }));
+    wf.watchCardWorkflows("l6", { label: "card", dirs, watchers: () => 1, publish: (r) => published.push(r), now: () => clock });
+    await vi.advanceTimersByTimeAsync(10);
+    for (let t = 0; t < 90; t += 5) {
+      clock += 5 * 60_000;
+      await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS);
+    }
+    expect(published.at(-1)!.finished).toBe(false);
+    wf.resetWorkflowWatchesForTesting();
+  });
+
+  it("completed com um `result` atrasado: espera um tique, e o agente sai CONCLUÍDO, nunca 'stopped'", async () => {
+    vi.useFakeTimers();
+    const wf = await load();
+    const published: Array<{ finished: boolean; agents: Array<{ status: string }> }> = [];
+    runScript.mockResolvedValueOnce({ stdout: probe([{ runId: "wf_a", at: 7, total: 2, done: 1, outcome: "completed", agents: [AGENT(), AGENT({ id: "a2", status: "done", result: "ok" })] }]), stderr: "" });
+    wf.watchCardWorkflows("l7", { label: "card", dirs, watchers: () => 1, publish: (r) => published.push(r) });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(published.at(-1)!.finished).toBe(false);
+    runScript.mockResolvedValue({ stdout: probe([{ runId: "wf_a", at: 8, total: 2, done: 2, outcome: "completed", agents: [AGENT({ status: "done", result: "fim" }), AGENT({ id: "a2", status: "done", result: "ok" })] }]), stderr: "" });
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS);
+    expect(published.at(-1)).toMatchObject({ finished: true, agents: [{ status: "done" }, { status: "done" }] });
+    expect(published.flatMap((r) => r.agents.map((a) => a.status))).not.toContain("stopped");
+    wf.resetWorkflowWatchesForTesting();
+  });
+
+  it("completed e o `result` nunca vem: fecha no tique seguinte, com o agente 'stopped'", async () => {
+    vi.useFakeTimers();
+    const wf = await load();
+    const published: Array<{ finished: boolean; agents: Array<{ status: string }> }> = [];
+    runScript.mockResolvedValue({ stdout: probe([{ runId: "wf_a", at: 7, total: 1, done: 0, outcome: "completed", agents: [AGENT()] }]), stderr: "" });
+    wf.watchCardWorkflows("l8", { label: "card", dirs, watchers: () => 1, publish: (r) => published.push(r) });
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS);
+    expect(published.at(-1)).toMatchObject({ finished: true, agents: [{ status: "stopped" }] });
+    const calls = runScript.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS * 3);
+    expect(runScript.mock.calls.length).toBe(calls);
   });
 });

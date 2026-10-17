@@ -32,7 +32,8 @@ export type WorkflowActivity =
 export interface WorkflowAgentFrame {
   id: string;
   label: string;
-  status: "running" | "done";
+  /** `stopped` = estava em voo quando a rodada acabou (morta, ou o back desistiu): não vai responder. */
+  status: "running" | "done" | "stopped";
   result?: string;
   phase?: string;
   startedAt?: number;
@@ -118,6 +119,8 @@ export interface SdkEvent {
   done?: number;
   at?: number;
   finished?: boolean;
+  /** O desfecho que o harness gravou para a rodada (`workflow_progress`). Ausente enquanto roda. */
+  outcome?: WorkflowOutcome;
   message?: string;
   raw?: string;
   /** Message provenance on `user` events — who sent it (see lib/chat.ts `MessageOrigin`). */
@@ -337,7 +340,11 @@ export type SdkRow =
       done: number;
       at: number;
       finished: boolean;
+      outcome?: WorkflowOutcome;
     };
+
+export type WorkflowOutcome = "completed" | "killed" | "failed";
+const WORKFLOW_OUTCOMES: ReadonlySet<unknown> = new Set<WorkflowOutcome>(["completed", "killed", "failed"]);
 
 export interface SdkChatState {
   rows: SdkRow[];
@@ -1343,6 +1350,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         done: typeof event.done === "number" ? event.done : agents.filter((a) => a.status === "done").length,
         at: typeof event.at === "number" ? event.at : 0,
         finished: event.finished === true,
+        ...(WORKFLOW_OUTCOMES.has(event.outcome) ? { outcome: event.outcome } : {}),
       };
       const at = state.rows.findIndex((r) => r.kind === "workflow" && r.runId === runId);
       if (at >= 0) return { ...state, rows: [...state.rows.slice(0, at), row, ...state.rows.slice(at + 1)] };

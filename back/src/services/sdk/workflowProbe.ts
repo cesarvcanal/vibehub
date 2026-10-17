@@ -25,7 +25,8 @@ export interface WorkflowAgent {
   label: string;
   /** A fase do script em que ele roda (`phase` do diário / `workflowPhase` do meta). "" = sem fase. */
   phase: string;
-  status: "running" | "done";
+  /** `stopped` = estava em voo quando a rodada acabou (morta, ou a sondagem desistiu): nunca vai responder. */
+  status: "running" | "done" | "stopped";
   /** O que ele devolveu, aparado — só nos que terminaram. */
   result?: string;
   /** Primeiro e último `timestamp` do transcript, em ms. Ausentes quando o arquivo não tem nenhum. */
@@ -63,6 +64,24 @@ export interface WorkflowRun {
   at: number;
   /** A rodada silenciou sem nada em voo — o painel pode parar o spinner. */
   finished: boolean;
+  /**
+   * O desfecho que o HARNESS gravou no snapshot da rodada (`<base>/workflows/<runId>.json`). Ausente
+   * enquanto ela roda. É a única fonte que sabe de uma rodada MORTA: o diário dela simplesmente para,
+   * sem o `result` de quem estava em voo.
+   */
+  outcome?: WorkflowOutcome;
+}
+
+export type WorkflowOutcome = "completed" | "killed" | "failed";
+
+/** O `status` do snapshot do harness, normalizado. Qualquer outra coisa (inclusive "running") = sem desfecho. PURE. */
+export function workflowOutcome(status: unknown): WorkflowOutcome | undefined {
+  if (typeof status !== "string") return undefined;
+  const s = status.toLowerCase();
+  if (s === "completed") return "completed";
+  if (s === "killed" || s === "cancelled" || s === "canceled" || s === "stopped") return "killed";
+  if (s === "failed" || s === "error" || s === "errored") return "failed";
+  return undefined;
 }
 
 /** Um passo do feed de UM subagente (sob demanda). `thinking` nunca carrega texto. */
@@ -244,6 +263,16 @@ function agentOf(dir,a){
   if(info.activity)out.activity=info.activity;
   return {agent:out,mtime:info.mtime};
 }
+// O snapshot que o harness grava ao lado de scripts/ quando a rodada ACABA. Só o status interessa;
+// o resto (resultado, progresso) pode ser grande — snapshot grande demais fica sem desfecho.
+function outcomeOf(scriptsDir,runId){
+  try{
+    const f=p.join(p.dirname(scriptsDir),runId+'.json');
+    const st=statOf(f);if(!st||st.size>8388608)return '';
+    const o=JSON.parse(fs.readFileSync(f,'utf8'));
+    return o&&typeof o.status==='string'?o.status.slice(0,32):'';
+  }catch(e){return ''}
+}
 function main(dir,scriptsDir,settled){
   let names=[];
   try{names=fs.readdirSync(dir)}catch(e){return []}
@@ -286,6 +315,8 @@ function main(dir,scriptsDir,settled){
     const script=scriptOf(scriptsDir,r.runId);
     const run={runId:r.runId,name:script.name,phases:script.phases,at:r.at,total:all.length,done:done,agents:list};
     if(first||oldest)run.startedAt=first||oldest;
+    const outcome=outcomeOf(scriptsDir,r.runId);
+    if(outcome)run.outcome=outcome;
     out.push(run);
   }
   return out;
@@ -426,6 +457,11 @@ function parseActivity(value: unknown): WorkflowActivity | undefined {
   return undefined;
 }
 
+/** Rodada acabada: quem não respondeu não vai mais responder. PURE. */
+export function stopInFlight(agents: WorkflowAgent[]): WorkflowAgent[] {
+  return agents.map((a) => (a.status === "running" ? { ...a, status: "stopped" as const } : a));
+}
+
 function parseAgent(value: unknown): WorkflowAgent | null {
   const a = asFields(value);
   const id = asString(a?.id);
@@ -493,6 +529,7 @@ export function parseWorkflowProbe(
     // A sonda só mede o início pelos agentes que leu; os conhecidos entram com o que já se sabia.
     const starts = [asInstant(o.startedAt), ...known.map((a) => a.startedAt)].filter((t): t is number => t !== undefined);
     const startedAt = starts.length > 0 ? Math.min(...starts) : undefined;
+    const outcome = workflowOutcome(o.outcome);
     runs.push({
       runId,
       name: asString(o.name),
@@ -500,9 +537,12 @@ export function parseWorkflowProbe(
       ...(startedAt !== undefined ? { startedAt } : {}),
       total,
       done,
-      agents,
+      // Morta/falhou: quem estava em voo morreu junto. "completed" não — o back dá um tique de graça
+      // para o último `result` do diário (ver workflow.ts) antes de dar alguém por parado.
+      agents: outcome === "killed" || outcome === "failed" ? stopInFlight(agents) : agents,
       at: typeof o.at === "number" && Number.isFinite(o.at) ? o.at : 0,
       finished: false,
+      ...(outcome ? { outcome } : {}),
     });
   }
   return runs;

@@ -7,6 +7,7 @@ import {
   buildWorkflowProbeScript,
   parseAgentFeed,
   parseWorkflowProbe,
+  stopInFlight,
   type WorkflowActivity,
   type WorkflowAgent,
   type WorkflowFeedItem,
@@ -42,7 +43,8 @@ import {
  *
  * As travas são deliberadas (a frota pode durar uma hora e ninguém quer um laço no servidor): uma
  * sondagem por card, só enquanto alguém está com o chat aberto, parada sozinha quando o diário
- * silencia sem agente em voo, e um teto duro de tempo além do qual ela desiste de qualquer jeito.
+ * silencia sem agente em voo (ou quando o harness grava o desfecho), desistência quando NADA muda por
+ * tempo demais, e um teto duro de tempo além do qual ela desiste de qualquer jeito.
  */
 
 /** Nada em voo: todo subagente que começou já devolveu (e pelo menos um começou). Conta pelo
@@ -72,7 +74,7 @@ function agentChanged(a: WorkflowAgent, b: WorkflowAgent | undefined): boolean {
 export function runChanged(previous: WorkflowRun | undefined, next: WorkflowRun): boolean {
   if (!previous) return true;
   if (previous.runId !== next.runId || previous.at !== next.at) return true;
-  if (previous.finished !== next.finished) return true;
+  if (previous.finished !== next.finished || previous.outcome !== next.outcome) return true;
   if (previous.total !== next.total || previous.done !== next.done) return true;
   if (previous.phases.join("\n") !== next.phases.join("\n")) return true;
   if (previous.agents.length !== next.agents.length) return true;
@@ -85,8 +87,14 @@ export function runChanged(previous: WorkflowRun | undefined, next: WorkflowRun)
 export const WATCH_INTERVAL_MS = 4_000;
 /** Diário parado por tanto tempo, sem nada em voo ⇒ a rodada acabou e a sondagem se encerra. */
 export const WATCH_QUIET_MS = 90_000;
+/**
+ * Nenhuma rodada mudou NADA (diário, agente, ferramenta, atividade) por tanto tempo com agente em voo
+ * ⇒ a frota está parada de verdade e a sondagem desiste. Conta do último MOVIMENTO, não do início:
+ * contar do início abandonava, na marca de 1h, uma rodada de 1h43 que ainda andava (17/10/2026).
+ */
+export const WATCH_STALL_MS = 60 * 60_000;
 /** Teto duro: nenhuma sondagem vive mais que isto, aconteça o que acontecer. */
-export const WATCH_MAX_MS = 60 * 60_000;
+export const WATCH_MAX_MS = 6 * 60 * 60_000;
 /** Sondagens seguidas com erro antes de desistir — runner caído não se resolve insistindo. */
 export const WATCH_MAX_FAILURES = 5;
 /**
@@ -100,12 +108,33 @@ interface TrackedRun {
   last: WorkflowRun;
   /** A última vez que ESTA rodada se mexeu (ou que não havia ninguém olhando). */
   movedAt: number;
+  /** O maior `lastAt` (timestamp do transcript) já visto nos agentes dela. */
+  lastAt: number;
+}
+
+/** O timestamp mais recente escrito por qualquer agente da rodada — é do ARQUIVO, não do relógio. */
+function latestAgentAt(run: WorkflowRun): number {
+  return run.agents.reduce((max, a) => Math.max(max, a.lastAt ?? 0), 0);
+}
+
+/**
+ * A rodada acabou? Morta/falhou: na hora. Concluída: com tudo assentado, ou no tique SEGUINTE ao
+ * desfecho (o `result` do último agente pode estar a milissegundos do snapshot). Sem desfecho:
+ * silenciosa há bastante tempo E sem nada em voo — as duas juntas, porque uma frota pode passar um
+ * minuto inteiro sem escrever enquanto um subagente longo pensa. PURE.
+ */
+function runEnded(run: WorkflowRun, previous: WorkflowRun | undefined, quietFor: number): boolean {
+  if (run.outcome === "killed" || run.outcome === "failed") return true;
+  if (run.outcome === "completed") return runSettled(run) || previous?.outcome === "completed";
+  return runSettled(run) && quietFor >= WATCH_QUIET_MS;
 }
 
 interface Watch {
   timer: NodeJS.Timeout;
   /** Quando a sondagem começou — o teto duro mede daqui. */
   startedAt: number;
+  /** A última vez que QUALQUER rodada mudou algo na tela — a desistência por parada mede daqui. */
+  activeAt: number;
   failures: number;
   /** Tiques seguidos sem rodada nenhuma no diretório. */
   empty: number;
@@ -154,7 +183,8 @@ function closeWatch(cardId: string, reason: string, label: string): void {
   if (!watch) return;
   for (const tracked of watch.runs.values()) {
     if (tracked.last.finished) continue;
-    const closed: WorkflowRun = { ...tracked.last, finished: true };
+    // Quem estava em voo não é mais acompanhado: deixar "running" num quadro terminado é spinner eterno.
+    const closed: WorkflowRun = { ...tracked.last, agents: stopInFlight(tracked.last.agents), finished: true };
     tracked.last = closed;
     remember(cardId, closed);
     try {
@@ -177,12 +207,14 @@ export function watchCardWorkflows(cardId: string, deps: WatchDeps): void {
   const existing = watches.get(cardId);
   if (existing) {
     for (const tracked of existing.runs.values()) tracked.movedAt = now();
+    existing.activeAt = now();
     existing.empty = 0;
     return;
   }
   const watch: Watch = {
     timer: null as unknown as NodeJS.Timeout,
     startedAt: now(),
+    activeAt: now(),
     failures: 0,
     empty: 0,
     busy: false,
@@ -196,10 +228,15 @@ export function watchCardWorkflows(cardId: string, deps: WatchDeps): void {
       closeWatch(cardId, "ceiling", deps.label);
       return;
     }
+    if (now() - watch.activeAt > WATCH_STALL_MS) {
+      closeWatch(cardId, "stalled", deps.label);
+      return;
+    }
     // Ninguém com o chat aberto: não se gasta um `docker exec` por ninguém. O relógio do silêncio
     // anda junto, senão a rodada seria dada como terminada só porque ninguém estava olhando.
     if (deps.watchers() <= 0) {
       for (const tracked of watch.runs.values()) tracked.movedAt = now();
+      watch.activeAt = now();
       return;
     }
     const dirs = deps.dirs();
@@ -240,15 +277,22 @@ export function watchCardWorkflows(cardId: string, deps: WatchDeps): void {
     for (const run of runs) {
       const tracked = watch.runs.get(run.runId);
       const movedAt = !tracked || tracked.last.at !== run.at ? now() : tracked.movedAt;
-      // Terminada = silenciosa há bastante tempo E sem nada em voo. As duas condições juntas: uma
-      // frota pode passar um minuto inteiro sem escrever enquanto um subagente longo pensa.
-      run.finished = runSettled(run) && now() - movedAt >= WATCH_QUIET_MS;
+      // Um agente em laço (mesma ferramenta, transcript além do que se lê) não muda nada que o
+      // runChanged compara; o timestamp do transcript dele anda — isso também é movimento.
+      const lastAt = Math.max(tracked?.lastAt ?? 0, latestAgentAt(run));
+      if (lastAt > (tracked?.lastAt ?? 0)) watch.activeAt = now();
+      // Terminada = o harness gravou o desfecho (inclusive MORTA: o diário dela nunca assenta), ou
+      // assentada e silenciosa. Quadro terminado nunca leva agente "running": seria spinner eterno.
+      run.finished = runEnded(run, tracked?.last, now() - movedAt);
+      if (run.finished) run.agents = stopInFlight(run.agents);
       if (runChanged(tracked?.last, run)) {
-        watch.runs.set(run.runId, { last: run, movedAt });
+        watch.activeAt = now();
+        watch.runs.set(run.runId, { last: run, movedAt, lastAt });
         remember(cardId, run);
         deps.publish(run);
       } else if (tracked) {
         tracked.movedAt = movedAt;
+        tracked.lastAt = lastAt;
       }
     }
     // Só se encerra quando TODA rodada que esta sondagem acompanha chegou ao fim: um segundo
