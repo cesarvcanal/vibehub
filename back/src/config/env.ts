@@ -115,13 +115,6 @@ export interface VibehubConfig {
    * not control — it carries the runner service token.
    */
   publicUrl: string;
-  /**
-   * The PUBLIC origin MCP clients on the internet (ChatGPT, Claude.ai) reach `/mcp` through — the
-   * issuer of the OAuth metadata and the `resource` its tokens are bound to. A separate setting
-   * because `publicUrl` is the runner's callback, an internal address that must never be the one a
-   * client outside is told to use. Empty = `publicUrl` (an install without a public door).
-   */
-  mcpPublicUrl: string;
   runner: {
     kind: RunnerHostKind;
     /** ssh only: host to reach, user, and private key path. */
@@ -161,7 +154,6 @@ export const config: VibehubConfig = {
   host: str("VIBEHUB_HOST", "0.0.0.0"),
   dataDir: resolve(str("VIBEHUB_DATA_DIR", "data")),
   publicUrl: str("VIBEHUB_PUBLIC_URL", `http://127.0.0.1:${int("VIBEHUB_PORT", 3010)}`),
-  mcpPublicUrl: str("VIBEHUB_MCP_PUBLIC_URL", ""),
   runner: {
     kind: (str("VIBEHUB_RUNNER_KIND", "local") === "ssh" ? "ssh" : "local") as RunnerHostKind,
     sshHost: str("VIBEHUB_RUNNER_SSH_HOST", ""),

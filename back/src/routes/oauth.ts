@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   OAuthError, authorizationServerMetadata, issueCode, protectedResourceMetadata, redeemCode, registerClient,
-  validateAuthorizeRequest, MCP_SCOPE,
+  validateAuthorizeRequest, originOf, MCP_SCOPE,
 } from "../auth/oauth.js";
 import { isUsername, verifyCredentials } from "../auth/users.js";
 import { AttemptLimiter, LOGIN_ATTEMPTS_PER_ACCOUNT } from "./auth.js";
@@ -147,10 +147,10 @@ export async function oauthRoutes(app: FastifyInstance): Promise<void> {
 
   // RFC 9728 lets a client look the metadata up with the resource's path appended — and some only do.
   for (const path of ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"]) {
-    app.get(path, async (_req, reply) => await reply.send(protectedResourceMetadata()));
+    app.get(path, async (req, reply) => await reply.send(protectedResourceMetadata(originOf(req))));
   }
-  app.get("/.well-known/oauth-authorization-server", async (_req, reply) =>
-    await reply.send(authorizationServerMetadata()),
+  app.get("/.well-known/oauth-authorization-server", async (req, reply) =>
+    await reply.send(authorizationServerMetadata(originOf(req))),
   );
 
   app.post<{ Body: { client_name?: unknown; redirect_uris?: unknown } }>("/oauth/register", async (req, reply) => {
@@ -178,7 +178,7 @@ export async function oauthRoutes(app: FastifyInstance): Promise<void> {
     reply.type("text/html").header("cache-control", "no-store").header("x-frame-options", "DENY");
     if (req.query?.response_type !== "code") return await reply.code(400).send(errorPage(lang, "response_type must be 'code'"));
     try {
-      const client = await validateAuthorizeRequest(p);
+      const client = await validateAuthorizeRequest(originOf(req), p);
       return await reply.send(loginPage(lang, p, client.clientName));
     } catch (err) {
       return await reply.code(400).send(errorPage(lang, (err as Error).message));
@@ -191,7 +191,7 @@ export async function oauthRoutes(app: FastifyInstance): Promise<void> {
     reply.type("text/html").header("cache-control", "no-store").header("x-frame-options", "DENY");
     let clientName = "";
     try {
-      clientName = (await validateAuthorizeRequest(p)).clientName;
+      clientName = (await validateAuthorizeRequest(originOf(req), p)).clientName;
     } catch (err) {
       return await reply.code(400).send(errorPage(lang, (err as Error).message));
     }
@@ -217,7 +217,7 @@ export async function oauthRoutes(app: FastifyInstance): Promise<void> {
     const back = new URL(p.redirectUri);
     back.searchParams.set("code", code);
     if (p.state) back.searchParams.set("state", p.state);
-    back.searchParams.set("iss", authorizationServerMetadata().issuer);
+    back.searchParams.set("iss", originOf(req));
     return await reply.send(redirectPage(lang, back.toString()));
   });
 
@@ -228,7 +228,7 @@ export async function oauthRoutes(app: FastifyInstance): Promise<void> {
       return await reply.code(400).send({ error: "unsupported_grant_type", error_description: "only authorization_code is supported" });
     }
     try {
-      const token = await redeemCode({
+      const token = await redeemCode(originOf(req), {
         code: s("code"), codeVerifier: s("code_verifier"), clientId: s("client_id"), redirectUri: s("redirect_uri"),
         resource: s("resource") || undefined,
       });
