@@ -13,6 +13,7 @@
 // keeps the file free of runtime imports (and of the probe's config/host side of the graph).
 import type { WorkflowFeedItem, WorkflowRun } from "./workflowProbe.js";
 import type { RateLimitEvent } from "./rateLimit.js";
+import type { RawTaskEvent, RawToolResultEvent } from "./toolResult.js";
 
 /* ------------------------------------------------------------------ events */
 
@@ -228,7 +229,7 @@ export interface CatalogEvent { type: "catalog"; commands: SlashCommandInfo[] }
  */
 export interface LocalOutputEvent { type: "local_output"; text: string }
 /** One live background task, as the driver forwards it from the CLI. */
-export interface BackgroundTaskInfo { id: string; type: string; description: string }
+export interface BackgroundTaskInfo { id: string; type: string; description: string; /** A chamada que disparou a tarefa — liga a bandeja ao card dela. */ toolUseId?: string }
 /**
  * O conjunto VIVO de tarefas em segundo plano (um Bash com `run_in_background`, um subagente, um
  * monitor) — o trabalho que segue depois do `result` do turno. Sinal de NÍVEL vindo do CLI
@@ -272,6 +273,8 @@ export interface ParseErrorEvent { type: "parse_error"; raw: string }
 export type WorkflowProgressEvent = { type: "workflow_progress" } & WorkflowRun;
 
 export type DriverEvent =
+  | RawToolResultEvent
+  | RawTaskEvent
   | AssistantTextEvent
   | AssistantDeltaEvent
   | ThinkingEvent
@@ -308,6 +311,10 @@ const DRIVER_EVENT_TYPES = new Set([
   "tool_use_start",
   "tool_input_progress",
   "tool_progress",
+  "tool_result",
+  "task_started",
+  "task_progress",
+  "task_notification",
   "session",
   "permission",
   "permission_request",

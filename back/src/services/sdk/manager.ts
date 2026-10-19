@@ -10,6 +10,7 @@ import { writeCardCatalog } from "./catalog.js";
 import { normalizeRateLimit, type RateLimitInfo } from "./rateLimit.js";
 import { forgetCardWorkflows, lastWorkflowRuns, readAgentFeed, watchCardWorkflows } from "./workflow.js";
 import { InvalidWorkflowIdError } from "./workflowProbe.js";
+import { mergeTaskEvent, toolResultEvent, type AgentTaskEvent, type RawTaskEvent, type RawToolResultEvent } from "./toolResult.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
   NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseWorkflowFeedFrame, encodeControl,
@@ -68,6 +69,9 @@ const KEEPALIVE_MS = 25_000;
  */
 export const TYPING_RELAY_MIN_MS = 1_000;
 
+/** Quantos subagentes/tarefas a sessão lembra (as terminadas mais antigas saem primeiro). */
+export const TASKS_MAX = 200;
+
 export interface DriverSession {
   cardId: string;
   /** Log label (the card's worktree slug). */
@@ -93,6 +97,12 @@ export interface DriverSession {
    * conecta depois, nunca gravado — e, enquanto não estiver vazio, o driver NÃO está ocioso.
    */
   backgroundTasks: BackgroundTaskInfo[];
+  /**
+   * O estado de cada SUBAGENTE (ou tarefa) disparado por uma chamada, pelo id dessa chamada — o que
+   * a frota e a bandeja mostram (contadores, a frase do que ele faz agora, o fim). Estado da sessão:
+   * reenviado a quem conecta; só o FIM entra no histórico.
+   */
+  tasks: Map<string, AgentTaskEvent>;
   /**
    * O último aviso de limite do plano POR JANELA (`five_hour`, `seven_day`, …), como o CLI emitiu.
    * Estado da sessão: reenviado a quem conecta depois, nunca gravado.
@@ -407,6 +417,25 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   // lado como "ele terminou" (produção, 2026-10-02). A sondagem do diário começa aqui, no instante
   // da chamada, e se encerra sozinha (ver services/sdk/workflow.ts): é ela quem alimenta o painel.
   if (event.type === "tool_use" && event.name === "Workflow") startWorkflowWatch(session);
+  if (event.type === "tool_result") {
+    // O resultado CRU (texto + estruturado capados) vira o RESUMO da linha; o cru não sai daqui.
+    event = toolResultEvent(event as RawToolResultEvent) as unknown as DriverEvent;
+  }
+  if (event.type === "task_started" || event.type === "task_progress" || event.type === "task_notification") {
+    const raw = event as RawTaskEvent;
+    const key = raw.toolUseId || [...session.tasks.values()].find((t) => t.taskId === raw.taskId)?.toolUseId;
+    const merged = key ? mergeTaskEvent(session.tasks.get(key), { ...raw, toolUseId: key }, Date.now()) : null;
+    if (!merged) return;
+    session.tasks.set(merged.toolUseId, merged);
+    // Teto: uma sessão longa dispara centenas de tarefas; as terminadas mais antigas saem primeiro.
+    if (session.tasks.size > TASKS_MAX) {
+      for (const [id, task] of session.tasks) {
+        if (session.tasks.size <= TASKS_MAX) break;
+        if (task.status !== "running") session.tasks.delete(id);
+      }
+    }
+    event = merged as unknown as DriverEvent;
+  }
   if (event.type === "background_tasks") {
     // Normalizado AQUI, no lado que fala com o navegador (como o catálogo): o que sai é só o que a
     // tela desenha, e um item torto do driver não derruba a aba de ninguém.
@@ -414,11 +443,18 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     const tasks: BackgroundTaskInfo[] = Array.isArray(raw)
       ? raw
         .filter((t): t is Record<string, unknown> => typeof t === "object" && t !== null && typeof (t as { id?: unknown }).id === "string")
-        .map((t) => ({
-          id: t.id as string,
-          type: typeof t.type === "string" ? t.type : "",
-          description: typeof t.description === "string" ? t.description : "",
-        }))
+        .map((t) => {
+          const id = t.id as string;
+          const toolUseId = typeof t.toolUseId === "string" && t.toolUseId
+            ? t.toolUseId
+            : [...session.tasks.values()].find((task) => task.taskId === id)?.toolUseId;
+          return {
+            id,
+            type: typeof t.type === "string" ? t.type : "",
+            description: typeof t.description === "string" ? t.description : "",
+            ...(toolUseId ? { toolUseId } : {}),
+          };
+        })
       : [];
     event = { type: "background_tasks", tasks };
     if (tasks.length === 0) session.backgroundSince = undefined;
@@ -618,6 +654,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     ready: false,
     activeTurns: 0,
     backgroundTasks: [],
+    tasks: new Map(),
     rateLimits: new Map(),
     rewinds: [],
     idleTimer: null,
@@ -1138,6 +1175,11 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
   // `sleep` de deploy roda precisa ver isso no primeiro quadro — o aviso do CLI só vem na mudança.
   if (session.backgroundTasks.length > 0) {
     try { socket.send(JSON.stringify({ type: "background_tasks", tasks: session.backgroundTasks })); } catch { /* going away */ }
+  }
+
+  // O estado de cada subagente também (contadores, "o que ele faz agora"): o CLI só fala na mudança.
+  for (const task of session.tasks.values()) {
+    try { socket.send(JSON.stringify(task)); } catch { /* going away */ }
   }
 
   // O aviso de limite do plano também: o CLI só o emite quando a leitura muda, e quem abre o card
