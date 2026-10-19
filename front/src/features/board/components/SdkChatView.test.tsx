@@ -613,6 +613,17 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
   });
 });
 
+describe("SdkChatView — a conversa não estica a página", () => {
+  it("o scroller é o bloco de contenção de tudo que é absoluto dentro dele", async () => {
+    // O `sr-only` do card de diff é `position: absolute`. Com o scroller sem `relative`, ele se
+    // ancorava no wrapper de fora, ficava na altura dele na conversa e criava rolagem vazia na
+    // página inteira — uma tela de nada abaixo do composer.
+    renderSdkChat();
+    await socket();
+    expect(screen.getByTestId("sdk-chat-scroller")).toHaveClass("relative");
+  });
+});
+
 describe("SdkChatView — 'ir pro fim' flutuante", () => {
   function fakeScrollMetrics(el: HTMLElement, { scrollTop = 0 } = {}) {
     Object.defineProperty(el, "scrollHeight", { configurable: true, value: 1000 });

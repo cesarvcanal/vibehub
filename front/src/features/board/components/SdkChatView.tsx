@@ -1127,7 +1127,11 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         aria-label={ariaLabel ?? t("sdk.aria")}
         aria-busy={streaming || undefined}
         data-testid="sdk-chat-scroller"
-        className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain rounded-md border border-border/60 bg-card/30 px-3 py-3"
+        // `relative` is load-bearing: it makes the scroller the containing block of anything
+        // absolute inside the conversation (the diff card's `sr-only` label, for one). Without it
+        // those anchor to the wrapper outside, keep their place deep in the history, and give the
+        // whole page an empty scroll below the composer.
+        className="relative min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain rounded-md border border-border/60 bg-card/30 px-3 py-3"
       >
         {/* WHAT IS RUNNING — pinned to the top of the conversation for as long as work runs, so a
             long turn never leaves the person scrolling to find out whether anything is happening. */}

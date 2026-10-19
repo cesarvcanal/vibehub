@@ -284,7 +284,11 @@ export function ChatView({
         aria-label={ariaLabel ?? t("chat.aria")}
         aria-live="polite"
         data-testid="chat-scroller"
-        className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain rounded-md border border-border/60 bg-card/30 px-3 py-3"
+        // `relative` is load-bearing: it makes the scroller the containing block of anything
+        // absolute inside the conversation (the diff card's `sr-only` label, for one). Without it
+        // those anchor to the wrapper outside, keep their place deep in the history, and give the
+        // whole page an empty scroll below the composer.
+        className="relative min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain rounded-md border border-border/60 bg-card/30 px-3 py-3"
       >
         {empty && !settled ? (
           // Connecting, or the replay has not landed yet. Saying "no messages" here would be a lie
