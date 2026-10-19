@@ -98,6 +98,16 @@ describe("inflight markers", () => {
     expect(parseMarker("not json")).toBeNull();
   });
 
+  it("parseMarker: o bloco de segundo plano vem inteiro ou não vem — nunca torto", () => {
+    const ok = { startedAt: 9, background: { tasks: ["suíte", "", 3], since: 5, idle: true } };
+    expect(parseMarker(JSON.stringify(ok))?.background).toEqual({ tasks: ["suíte"], since: 5, idle: true });
+    expect(parseMarker(JSON.stringify({ startedAt: 9, background: { tasks: ["x"], since: 5 } }))?.background?.idle).toBe(false);
+    expect(parseMarker(JSON.stringify({ startedAt: 9, background: { tasks: [], since: 5, idle: true } }))?.background).toBeUndefined();
+    expect(parseMarker(JSON.stringify({ startedAt: 9, background: { tasks: ["x"] } }))?.background).toBeUndefined();
+    expect(parseMarker(JSON.stringify({ startedAt: 9, background: "x" }))?.background).toBeUndefined();
+    expect(parseMarker(JSON.stringify({ startedAt: 9, background: null }))).toEqual({ startedAt: 9, preview: undefined, attempts: 0 });
+  });
+
   it("inflightPreview flattens whitespace and caps the length", () => {
     expect(inflightPreview("  faz\n o   deploy ")).toBe("faz o deploy");
     const long = "x".repeat(INFLIGHT_PREVIEW_MAX * 2);

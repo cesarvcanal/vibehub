@@ -13,7 +13,7 @@ import {
 } from "./inflight.js";
 import { installCardSdkDriver, sdkDriverCommand } from "./driver.js";
 import { restoreMissingWorkspace } from "../board/workspace.js";
-import { ensureDriverSession, injectSystemTurn, shutdownAllDrivers } from "./manager.js";
+import { BACKGROUND_HOLD_MAX_MS, ensureDriverSession, injectSystemTurn, shutdownAllDrivers } from "./manager.js";
 import { stopAllMirrors } from "./mirror.js";
 import { transcriptDirFor } from "../maestro/cardSession.js";
 import { effectiveAccountSlug } from "../board/registry.js";
@@ -60,6 +60,29 @@ export const RESUME_CONTINUATION_TEXT =
   "Continue de onde parou: o processo anterior foi interrompido por um reinício do servidor do painel (deploy). " +
   "Retome a tarefa em andamento e conclua o que estava fazendo.";
 
+/**
+ * A continuação de um turno que tinha trabalho em segundo plano: o reinício matou essas tarefas e o
+ * aviso de término delas nunca virá. Sem dizer isso, o agente "retomava" esperando por um resultado
+ * que não chega — ou nem havia retomada, e o card parava calado no meio da entrega. PURE.
+ */
+export function resumeContinuationText(marker: InflightMarker): string {
+  const tasks = marker.background?.tasks ?? [];
+  if (tasks.length === 0) return RESUME_CONTINUATION_TEXT;
+  const list = tasks.slice(0, 8).map((t) => `- ${t}`).join("\n");
+  return `${RESUME_CONTINUATION_TEXT} O reinício também encerrou o que estava rodando em segundo plano — ` +
+    `o resultado disso não vai chegar:\n${list}\nConfira o estado atual, rode de novo o que ainda for ` +
+    `necessário e siga até o fim.`;
+}
+
+/**
+ * Só segundo plano, e há muito tempo (um `npm run dev`, um `tail -f`): não é uma entrega no meio
+ * do caminho, é um processo de fundo. Acordar o agente a cada deploy por causa dele seria ruído. PURE.
+ */
+export function isStaleBackgroundOnly(marker: InflightMarker, now: number): boolean {
+  const bg = marker.background;
+  return !!bg && bg.idle && now - bg.since > BACKGROUND_HOLD_MAX_MS;
+}
+
 /** Quem assina a linha e o turno injetado: o painel, nunca uma pessoa. */
 export const SYSTEM_ORIGIN: MessageOrigin = { kind: "system", name: "vibehub" };
 
@@ -79,6 +102,9 @@ export const NOTE_NOT_AGAIN =
   "O turno foi interrompido de novo por uma atualização do painel, sem avançar desde a última retomada " +
   "(ou depois de muitas retomadas seguidas). Para evitar um loop, não vou retomar automaticamente outra " +
   "vez — mande uma mensagem para continuar.";
+export const NOTE_BACKGROUND_STALE =
+  "Uma atualização do painel encerrou as tarefas que rodavam em segundo plano neste card havia horas " +
+  "(sem turno em andamento). Não vou retomar sozinho — mande uma mensagem se precisar delas de volta.";
 export const NOTE_AUTO_OFF =
   "O turno foi interrompido por uma atualização do painel. A retomada automática está desligada " +
   "(sdkAutoResume) — mande uma mensagem para continuar.";
@@ -201,6 +227,13 @@ export async function resumeInterruptedTurns(deps: ResumeDeps = realDeps): Promi
         logger.info({ audit: true, action: "sdk.resume.off", card: card.worktreeSlug }, "interrupted sdk turn noted — auto-resume off");
         return;
       }
+      if (isStaleBackgroundOnly(marker, Date.now())) {
+        await deps.appendNote(cardId, NOTE_BACKGROUND_STALE);
+        await deps.clearMarker(cardId);
+        summary.noted.push(cardId);
+        logger.info({ audit: true, action: "sdk.resume.background_stale", card: card.worktreeSlug }, "long-lived background work ended by the restart — noted, not resumed");
+        return;
+      }
       if (!mayResumeAgain(marker)) {
         await deps.appendNote(cardId, NOTE_NOT_AGAIN);
         await deps.clearMarker(cardId);
@@ -226,12 +259,13 @@ export async function resumeInterruptedTurns(deps: ResumeDeps = realDeps): Promi
       });
       // attempts: marker.attempts + 1, SEM progresso — o marcador do turno retomado só ganha
       // `progressed` quando a IA produzir algo (manager); se morrer antes disso, o próximo boot só anota.
-      deps.inject(session, RESUME_CONTINUATION_TEXT, SYSTEM_ORIGIN, marker.attempts + 1);
+      deps.inject(session, resumeContinuationText(marker), SYSTEM_ORIGIN, marker.attempts + 1);
       summary.resumed.push(cardId);
       logger.info(
         {
           audit: true, action: "sdk.resume", card: card.worktreeSlug,
           interruptedAt: marker.startedAt, preview: marker.preview, attempt: marker.attempts + 1,
+          background: marker.background?.tasks,
         },
         "interrupted sdk turn resumed after the panel restart",
       );
