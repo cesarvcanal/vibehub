@@ -3,6 +3,8 @@ import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import {
+  Maximize2,
+  FileDiff,
   AlertTriangle,
   Brain,
   ChevronRight,
@@ -55,6 +57,8 @@ import { createReconnectBackoff, type ConnectionState } from "@/features/board/l
 import { reasoningTranslator, useReasoningTranslation } from "@/features/board/lib/reasoningTranslation";
 import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
 import { ToolDiffCard } from "@/features/board/components/ToolDiffCard";
+import { SdkDetailContext, SdkDetailHost, SdkFleet, StatusIcon, ToolResultText, useChangedFiles, type DetailView } from "@/features/board/components/SdkDetail";
+import { DetailChannelContext, createDetailChannel, parseDetailResponse, toolStatus, type DetailChannel } from "@/features/board/lib/sdkDetail";
 import { toolDiff } from "@/features/board/lib/toolDiff";
 import {
   buildDecisionReply,
@@ -225,6 +229,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   const socketRef = React.useRef<WebSocket | null>(null);
   /** Onde a resposta de um `workflow_feed` é entregue (o painel do workflow escuta; ver lib/workflowFeed.ts). */
   const workflowFeedRef = React.useRef<WorkflowFeedChannel | null>(null);
+  /** Onde a resposta de um `detail` é entregue (os modais escutam; ver lib/sdkDetail.ts). */
+  const detailChannelRef = React.useRef<DetailChannel | null>(null);
   const statusRef = React.useRef<SdkChatViewProps["onStatus"]>(onStatus);
   statusRef.current = onStatus;
   const [connected, setConnected] = React.useState(false);
@@ -373,6 +379,12 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
           return;
         }
         // O feed de um subagente que ESTA aba pediu: vai ao painel, nunca ao reducer nem às linhas.
+        // O detalhe que ESTA aba pediu (uma ação, um subagente, as mudanças): vai ao modal.
+        if (parsed.type === "detail") {
+          const detail = parseDetailResponse(parsed as Parameters<typeof parseDetailResponse>[0]);
+          if (detail) detailChannelRef.current?.deliver(detail);
+          return;
+        }
         if (parsed.type === "workflow_feed") {
           const feed = parseWorkflowFeedResponse(parsed);
           if (feed) workflowFeedRef.current?.deliver(feed);
@@ -473,6 +485,11 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
 
   const workflowFeed = React.useMemo(() => createWorkflowFeedChannel(sendFrame), [sendFrame]);
   workflowFeedRef.current = workflowFeed;
+  const detailChannel = React.useMemo(() => createDetailChannel(sendFrame), [sendFrame]);
+  detailChannelRef.current = detailChannel;
+  /** A pilha de modais abertos (ação aberta de dentro de um subagente volta para ele). */
+  const [detailStack, setDetailStack] = React.useState<DetailView[]>([]);
+  const detailApi = React.useMemo(() => ({ open: (view: DetailView) => setDetailStack((prev) => [...prev, view]) }), []);
 
   /**
    * "Está digitando" para as outras abas do card: um frame na primeira tecla, um a cada poucos
@@ -1143,6 +1160,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
 
   return (
     <WorkflowFeedContext.Provider value={workflowFeed}>
+    <DetailChannelContext.Provider value={detailChannel}>
+    <SdkDetailContext.Provider value={detailApi}>
     <div ref={rootRef} className={cn("flex min-h-0 min-w-0 flex-1 flex-col", className)}>
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <div
@@ -1202,6 +1221,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
           >
             {entry.kind === "tools" ? (
               <SdkToolGroup rows={entry.rows} />
+            ) : entry.kind === "agents" ? (
+              <SdkFleet rows={entry.rows} tasks={state.agentTasks} children={split.children} />
             ) : (
               <SdkChatRow
                 row={entry.row}
@@ -1246,7 +1267,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
           "Trabalhando…" apagou com o `result`, e sem esta faixa o chat parecia parado enquanto o
           Claude ainda esperava algo (produção, 2026-10-07). Só com a wire de pé: uma tela
           desconectada não pode garantir nada; a reconexão reacende pelo reenvio do back. */}
-      {connected && state.backgroundTasks.length > 0 ? <SdkBackgroundTray tasks={state.backgroundTasks} /> : null}
+      {connected && state.backgroundTasks.length > 0 ? <SdkBackgroundTray tasks={state.backgroundTasks} agentTasks={state.agentTasks} rows={state.rows} /> : null}
 
       {/* PENDING DECISIONS — the questions still waiting on the user, surfaced right above the
           composer so they never drown in a long turn. Clicking one jumps to it in the chat. */}
@@ -1321,14 +1342,40 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       <div className="mt-1 flex items-center gap-2 px-1 text-[11px] text-muted-foreground/70" data-testid="sdk-chat-footer">
         <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", connected ? "bg-emerald-500" : "bg-amber-500")} />
         <span>{t("sdk.beta")}</span>
+        <span className="flex-1" />
+        <SdkChangesButton rows={state.rows} />
         {state.sessionId ? (
           <span className="min-w-0 truncate font-mono" title={state.sessionId}>
             {t("sdk.session", { id: state.sessionId.slice(0, 8) })}
           </span>
         ) : null}
       </div>
+      <SdkDetailHost rows={state.rows} tasks={state.agentTasks} stack={detailStack} onStack={setDetailStack} />
     </div>
+    </SdkDetailContext.Provider>
+    </DetailChannelContext.Provider>
     </WorkflowFeedContext.Provider>
+  );
+}
+
+/** "Mudanças": os arquivos que o Claude e os subagentes alteraram nesta conversa — abre o modal. */
+function SdkChangesButton({ rows }: { rows: readonly SdkRow[] }) {
+  const t = useT();
+  const { open } = React.useContext(SdkDetailContext);
+  const files = useChangedFiles(rows);
+  const added = files.reduce((n, f) => n + f.added, 0);
+  const removed = files.reduce((n, f) => n + f.removed, 0);
+  return (
+    <button
+      type="button"
+      data-testid="sdk-changes"
+      onClick={() => open({ kind: "changes" })}
+      className="flex shrink-0 items-center gap-1 rounded border border-border/70 px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+    >
+      <FileDiff className="h-3 w-3" />
+      <span>{t("sdk.changes.button", { n: files.length })}</span>
+      {files.length ? <span className="tabular-nums"><span className="text-emerald-500">+{added}</span> <span className="text-red-500">−{removed}</span></span> : null}
+    </button>
   );
 }
 
@@ -1337,8 +1384,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
  * Code. Lista o que está vivo pela descrição que o próprio modelo deu à tarefa. Teto de altura pelo
  * mesmo motivo da fila: irmã do scroller, ela não pode espremer a conversa.
  */
-function SdkBackgroundTray({ tasks }: { tasks: readonly BackgroundTask[] }) {
+function SdkBackgroundTray({ tasks, agentTasks, rows }: { tasks: readonly BackgroundTask[]; agentTasks: SdkChatState["agentTasks"]; rows: readonly SdkRow[] }) {
   const t = useT();
+  const { open } = React.useContext(SdkDetailContext);
   return (
     <div
       data-testid="sdk-background-tasks"
@@ -1350,12 +1398,40 @@ function SdkBackgroundTray({ tasks }: { tasks: readonly BackgroundTask[] }) {
         <span>{t("sdk.backgroundTitle", { n: tasks.length })}</span>
         <span className="min-w-0 truncate font-normal opacity-80">{t("sdk.backgroundHint")}</span>
       </div>
-      {tasks.map((task) => (
-        <div key={task.id} data-testid="sdk-background-task" className="flex items-start gap-1.5 px-1 text-xs text-muted-foreground">
-          <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-70" />
-          <span className="min-w-0 break-words">{task.description.trim() || t("sdk.backgroundUnnamed")}</span>
-        </div>
-      ))}
+      {tasks.map((task) => {
+        // A tarefa liga à chamada que a disparou: um subagente abre a linha do tempo dele; um Bash
+        // em segundo plano abre a ação. Sem a ligação (CLI antigo), é só a descrição — como antes.
+        const call = task.toolUseId ? rows.find((r) => r.kind === "tool" && r.id === task.toolUseId) : undefined;
+        const isAgent = call?.kind === "tool" ? isAgentTool(call.name) : task.type === "local_agent";
+        const live = task.toolUseId ? agentTasks[task.toolUseId] : undefined;
+        const now = live?.summary || live?.lastTool || "";
+        const label = task.description.trim() || t("sdk.backgroundUnnamed");
+        if (!task.toolUseId) {
+          return (
+            <div key={task.id} data-testid="sdk-background-task" className="flex items-start gap-1.5 px-1 text-xs text-muted-foreground">
+              <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-70" />
+              <span className="min-w-0 break-words">{label}</span>
+            </div>
+          );
+        }
+        const id = task.toolUseId;
+        return (
+          <button
+            key={task.id}
+            type="button"
+            data-testid="sdk-background-task"
+            data-clickable="true"
+            onClick={() => open(isAgent ? { kind: "agent", id } : { kind: "action", id })}
+            className="grid w-full grid-cols-[0.875rem_minmax(7rem,12rem)_minmax(0,1fr)_auto_0.875rem] items-center gap-2 rounded px-1 py-0.5 text-left text-xs text-muted-foreground hover:bg-sky-500/15 hover:text-foreground"
+          >
+            <Loader2 className="h-3 w-3 shrink-0 animate-spin text-sky-500" />
+            <span className="min-w-0 truncate text-foreground/90">{label}</span>
+            <span className="min-w-0 truncate font-mono text-[11px]">{now}</span>
+            <span className="shrink-0 tabular-nums text-[11px]">{live?.toolUses ? t("sdk.result.actions", { n: live.toolUses }) : ""}</span>
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-70" />
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -1749,21 +1825,30 @@ function SdkActivityBar({
  */
 function SdkToolRow({ row }: { row: Extract<SdkRow, { kind: "tool" }> }) {
   const t = useT();
+  const { open } = React.useContext(SdkDetailContext);
   const headline = toolHeadline(row.name, row.input);
+  const status = toolStatus(row);
   const detail = headline.background ? t("sdk.toolBackground") : headline.detail;
   // PROVISÓRIA: o modelo ainda escreve o input — a linha diz o quê e quanto ("Escrevendo x.ts… 12 KB").
   const pending = row.pending === true;
   return (
-    <div data-testid="sdk-tool" data-tool={row.name} data-pending={pending || undefined} className="min-w-0 pl-0.5 text-xs">
+    <button
+      type="button"
+      data-testid="sdk-tool"
+      data-tool={row.name}
+      data-pending={pending || undefined}
+      data-status={status}
+      disabled={pending}
+      title={pending ? undefined : t("sdk.detail.open")}
+      onClick={() => open({ kind: "action", id: row.id })}
+      className="group -ml-1 block w-[calc(100%+0.25rem)] min-w-0 rounded border border-transparent py-0.5 pl-1.5 pr-1 text-left text-xs enabled:hover:border-border/70 enabled:hover:bg-muted/50"
+    >
       <div className="flex items-baseline gap-1.5 text-muted-foreground">
-        {pending ? (
-          <Loader2 className="h-3 w-3 shrink-0 translate-y-0.5 animate-spin opacity-70" />
-        ) : (
-          <Wrench className="h-3 w-3 shrink-0 translate-y-0.5 opacity-70" />
-        )}
-        <span data-testid="sdk-tool-title" className="min-w-0 truncate font-medium text-foreground/90">
+        <StatusIcon status={status} className="translate-y-0.5" />
+        <span data-testid="sdk-tool-title" className="min-w-0 flex-1 truncate font-medium text-foreground/90">
           {pending ? toolLiveLabel(row) : headline.title}
         </span>
+        {!pending ? <Maximize2 aria-hidden className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-60" /> : null}
       </div>
       {detail ? (
         <div
@@ -1775,7 +1860,8 @@ function SdkToolRow({ row }: { row: Extract<SdkRow, { kind: "tool" }> }) {
           <span className={cn("min-w-0 truncate", !headline.background && "font-mono")}>{detail}</span>
         </div>
       ) : null}
-    </div>
+      <ToolResultText name={row.name} result={row.result} />
+    </button>
   );
 }
 
