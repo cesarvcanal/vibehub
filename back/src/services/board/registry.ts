@@ -1661,6 +1661,14 @@ export async function applyCardStatus(cardId: string, status: CardStatus): Promi
     // would relight the dot on a card that is parked, which is how "Paused" started reading as
     // "Aguardando". Nothing here is a lie the board has to show: the session is gone.
     if (card.pausedAt) return card;
+    // A NEW TURN starts (idle -> working): whatever the agent declared about the previous one no
+    // longer describes the work, and a stale "ready" over a card that is busy again is exactly the
+    // incoherence the board must not show. A report made DURING this turn arrives while the status
+    // is already `working`, so it survives the hooks that keep firing until the turn ends.
+    if (status === "working" && card.status !== "working") {
+      card.declaredState = undefined;
+      card.declaredSummary = undefined;
+    }
     card.status = status;
     card.statusAt = Date.now();
     // A hook fired, so there IS a session again — whoever started it. Hibernation is a statement
@@ -1690,7 +1698,8 @@ export async function applyCardStatus(cardId: string, status: CardStatus): Promi
 /**
  * Records the agent's DECLARED STATE and one-line summary on a card (the `vibehub_report` tool). It
  * writes ONLY `declaredState`/`declaredSummary` — never the column, never the dot: this is the
- * agent's own read of the task, orthogonal to the mirror rule. The summary is normalized to a single
+ * agent's own read of the task, orthogonal to the mirror rule. It lasts until the next turn starts
+ * (applyCardStatus clears it on idle -> working). The summary is normalized to a single
  * capped line. Unknown card -> undefined (the caller decides the error).
  */
 export async function reportCardState(

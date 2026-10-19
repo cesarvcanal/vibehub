@@ -1,4 +1,4 @@
-import type { CardColumn, CardStatus, DeclaredState } from "@/api/types";
+import type { CardColumn, DeclaredState } from "@/api/types";
 import type { BoardCard, BoardProject } from "@/features/board/api";
 import { t } from "@/i18n";
 
@@ -207,35 +207,80 @@ export function moveProjectLocal(projects: BoardProject[], id: string, toIndex: 
   return ordered.map((p, i) => ({ ...p, position: i }));
 }
 
-export interface StatusDot {
-  /** Green = the agent is working; amber = it needs you; grey = the terminal went cold. */
-  tone: "ok" | "warn" | "cold";
+/**
+ * Where a card stands, in ONE word — the icon every place in the app draws for it (sidebar, recent
+ * list, kanban tile, terminal header). It folds together the four signals that used to be read
+ * separately and disagreed with each other: the runner hook (`status`), the agent's own report
+ * (`declaredState`), the column the user filed it under, and whether a session is behind it at all.
+ *
+ *  - `working`    — the hook says Claude is in a turn right now. The only state that moves.
+ *  - `done`       — filed under Done by the user.
+ *  - `paused`     — parked by the user; the session is gone.
+ *  - `hibernated` — the session went cold on its own.
+ *  - `needs_me` / `blocked` / `ready` — the agent's own word, once its turn is over.
+ *  - `your_turn`  — the turn ended and the agent said nothing about it: neutral, not an alarm.
+ *  - `idle`       — a live session that has not reported anything yet (just opened/restarted).
+ *
+ * Amber/red are reserved for the two states that really ask something of you.
+ */
+export type CardStateKind =
+  | "working"
+  | "done"
+  | "paused"
+  | "hibernated"
+  | "needs_me"
+  | "blocked"
+  | "ready"
+  | "your_turn"
+  | "idle";
+
+export interface CardState {
+  kind: CardStateKind;
+  /** Label in the active language — tooltip and accessible name. */
   label: string;
-  /** Pulses — reserved for "something is happening right now". */
-  live: boolean;
+  /** The one-line summary the agent reported, when the state came from it. */
+  summary?: string;
 }
 
+const DECLARED_KIND: Partial<Record<DeclaredState, CardStateKind>> = {
+  needs_me: "needs_me",
+  blocked: "blocked",
+  ready: "ready",
+};
+
 /**
- * The dot on a card. No status at all means NO dot: the runner has not reported anything, and
- * inventing a state the agent never claimed is worse than showing nothing.
+ * The state of a card, or null for one that was never opened (a backlog note has no state to show).
+ * Order matters: a hibernated session first (nothing is running behind it), then a running turn —
+ * a pending pause keeps working until the turn ends — then the user's own filing (done/paused),
+ * then the agent's report, then the raw hook.
+ * PURE (given the language).
  */
-export function statusDot(status: CardStatus | null | undefined): StatusDot | null {
-  if (status === "working") return { tone: "ok", label: t("status.working"), live: true };
-  if (status === "waiting") return { tone: "warn", label: t("status.waitingForYou"), live: false };
+export function cardState(
+  card: Pick<
+    BoardCard,
+    "status" | "hibernatedAt" | "pausedAt" | "column" | "openedAt" | "declaredState" | "declaredSummary"
+  >,
+): CardState | null {
+  const make = (kind: CardStateKind, summary?: string): CardState => ({
+    kind,
+    label: t(`status.${kind}`),
+    ...(summary ? { summary } : {}),
+  });
+  // No process behind it: a spinner over a dead session would be a lie, whatever the last hook said.
+  if (card.hibernatedAt) return make("hibernated");
+  if (card.status === "working") return make("working");
+  if (card.column === "done") return make("done");
+  if (card.pausedAt) return make("paused");
+  const declared = card.declaredState ? DECLARED_KIND[card.declaredState] : undefined;
+  if (declared) return make(declared, card.declaredSummary?.trim() || undefined);
+  if (card.status === "waiting") return make("your_turn");
+  if (card.openedAt) return make("idle");
   return null;
 }
 
-/**
- * The dot on a CARD, which is the status dot plus the one thing a status cannot say: the session is
- * gone. A hibernated card kept its column and its place on the board on purpose — the only thing
- * that changed is that nothing is running behind it — so the grey dot is the whole signal, and it
- * beats the last status because that status describes a process that no longer exists.
- */
-export function cardDot(
-  card: Pick<BoardCard, "status" | "hibernatedAt">,
-): StatusDot | null {
-  if (card.hibernatedAt) return { tone: "cold", label: t("status.hibernated"), live: false };
-  return statusDot(card.status);
+/** Tooltip text: the label, and the agent's summary under it when there is one. */
+export function cardStateTitle(state: CardState): string {
+  return state.summary ? `${state.label}\n${state.summary}` : state.label;
 }
 
 /**
@@ -244,13 +289,6 @@ export function cardDot(
  */
 export const SELECTED_ROW =
   "relative bg-primary/[0.06] before:absolute before:inset-y-1 before:left-0 before:z-10 before:w-[3px] before:rounded-r-full before:bg-primary/70 before:content-['']";
-
-/** Tailwind background for a dot tone. One place, so every dot in the app is the same colour. */
-export function dotClass(tone: StatusDot["tone"]): string {
-  if (tone === "ok") return "bg-emerald-400";
-  if (tone === "warn") return "bg-amber-400";
-  return "bg-muted-foreground/50";
-}
 
 /** The declared-state chip: the agent's own word on where the work stands, colour-coded. */
 export interface StateChip {

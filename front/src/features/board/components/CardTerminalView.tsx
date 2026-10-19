@@ -36,7 +36,8 @@ import { VncPanel } from "@/features/board/components/VncPanel";
 import { PreviewChip, PreviewMenu } from "@/features/board/components/PreviewMenu";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
 import { CardOutbox } from "@/features/board/components/CardOutbox";
-import { nextPosition, statusDot } from "@/features/board/lib/board";
+import { cardState, nextPosition } from "@/features/board/lib/board";
+import { CardStateIcon } from "@/features/board/components/CardStateIcon";
 import { boardTitle, useDocumentTitle } from "@/features/board/lib/documentTitle";
 import type { ConnectionState } from "@/features/board/lib/reconnect";
 import { readCardMode, writeCardMode, type CardViewMode } from "@/features/board/lib/chat";
@@ -433,7 +434,7 @@ export function CardTerminalView({
     [cardId],
   );
 
-  const dot = statusDot(card?.status);
+  const state = card ? cardState(card) : null;
   /**
    * Is the agent's turn running? The card record answers on a desktop, where the sidebar polls the
    * board; on a phone the sidebar is not mounted, so the session poll (every 5s, already running
@@ -737,7 +738,7 @@ export function CardTerminalView({
   );
 
   /**
-   * IDENTITY: back, the menu handle, the status dot, the title, the project. What this screen IS.
+   * IDENTITY: back, the menu handle, the state icon, the title, the project. What this screen IS.
    *
    * The back arrow is the first thing in the bar on EVERY width. On a phone the only other way out
    * was opening the drawer and tapping the card you are already looking at; on a desktop the board
@@ -772,18 +773,7 @@ export function CardTerminalView({
           <Menu className="h-4 w-4" />
         </Button>
       ) : null}
-          {dot ? (
-            <span
-              role="status"
-              aria-label={dot.label}
-              title={dot.label}
-              className={cn(
-                "inline-block h-2.5 w-2.5 shrink-0 rounded-full",
-                dot.tone === "ok" ? "bg-emerald-400" : "bg-amber-400",
-                dot.live && "dot-live",
-              )}
-            />
-          ) : null}
+          {state ? <CardStateIcon state={state} announce className="h-3.5 w-3.5" /> : null}
           {editingTitle !== null ? (
             <input
               aria-label={t("cardView.cardTitle")}

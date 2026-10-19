@@ -256,7 +256,12 @@ export const en: Record<string, string> = {
   "column.done.hint": "Finished. Always a manual move.",
 
   "status.working": "Working",
-  "status.waitingForYou": "Waiting for you",
+  "status.done": "Done",
+  "status.ready": "Ready — the agent says the work is done",
+  "status.needs_me": "Needs you — the agent is waiting for a decision",
+  "status.blocked": "Blocked — the agent cannot go on",
+  "status.your_turn": "Turn finished — your move",
+  "status.idle": "Open, no activity yet",
   "status.paused": "Paused",
   "status.hibernated": "Hibernated — the terminal was closed after sitting idle. Open it to carry on.",
 

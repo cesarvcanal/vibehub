@@ -36,12 +36,31 @@ describe("CardTile — what the card says", () => {
     renderApp(<CardTile card={card({ status: "working" })} onOpen={vi.fn()} />);
     const tile = screen.getByRole("link", { name: "fix the totals" });
     expect(within(tile).queryByText("Working")).not.toBeInTheDocument();
-    expect(within(tile).queryByText("Waiting for you")).not.toBeInTheDocument();
+    expect(within(tile).queryByText("Turn finished — your move")).not.toBeInTheDocument();
   });
 
-  it("still carries the status on the dot, for anyone who cannot see colour", () => {
+  it("still carries the state on the icon, for anyone who cannot see colour", () => {
     renderApp(<CardTile card={card({ status: "waiting", column: "waiting" })} onOpen={vi.fn()} />);
-    expect(screen.getByRole("status", { name: "Waiting for you" })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Turn finished — your move" })).toBeInTheDocument();
+  });
+
+  it("shows the agent's own report on the icon once the turn is over", () => {
+    renderApp(
+      <CardTile
+        card={card({ status: "waiting", column: "waiting", openedAt: 1, declaredState: "needs_me", declaredSummary: "qual branch?" })}
+        onOpen={vi.fn()}
+      />,
+    );
+    const icon = screen.getByRole("status", { name: "Needs you — the agent is waiting for a decision" });
+    expect(icon).toHaveAttribute("data-state", "needs_me");
+    expect(icon.getAttribute("title")).toContain("qual branch?");
+  });
+
+  it("spins only while the agent is working", () => {
+    renderApp(<CardTile card={card({ status: "working", column: "working", openedAt: 1 })} onOpen={vi.fn()} />);
+    expect(screen.getByRole("status", { name: "Working" }).querySelector("svg")?.getAttribute("class")).toContain(
+      "animate-spin",
+    );
   });
 
   it("says a pause is waiting for the turn to end — something no column shows", () => {
