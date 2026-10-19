@@ -25,6 +25,7 @@ import {
 import { get, post } from "@/lib/api";
 import { MOBILE_QUERY } from "@/lib/useIsMobile";
 import { SLASH_MENU_LIMIT } from "@/features/board/lib/slashMenu";
+import { reloadHeld } from "@/lib/versionCheck";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -494,6 +495,24 @@ describe("TerminalComposer", () => {
     // What was typed is untouched: the runner path is not copy for a human to read.
     expect(box).toHaveValue("look at this");
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  /** Uma versão nova do vibehub recarrega a aba sozinha quando ociosa — nunca com um anexo subindo:
+   *  o F5 levaria a imagem embora (ela só existe no navegador até o upload terminar). */
+  it("an upload in flight HOLDS the automatic reload of a new version, and lets go when it lands", async () => {
+    let land: (path: string) => void = () => {};
+    const onUploadImage = vi.fn(() => new Promise<string>((resolve) => { land = resolve; }));
+    const { unmount } = renderComposer(<TerminalComposer onSend={vi.fn()} onUploadImage={onUploadImage} />);
+    expect(reloadHeld()).toBe(false);
+    fireEvent.paste(screen.getByRole("textbox"), {
+      clipboardData: { items: [], files: [new File(["x"], "shot.png", { type: "image/png" })] },
+    });
+    await screen.findByTestId("composer-attachment");
+    expect(reloadHeld()).toBe(true);
+    await act(async () => { land("/work/.uploads/c1/shot.png"); });
+    await waitFor(() => expect(screen.getByTestId("composer-attachment").dataset.status).toBe("ready"));
+    expect(reloadHeld()).toBe(false);
+    unmount();
   });
 
   it("the path only exists at send time, appended to the message", async () => {

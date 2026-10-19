@@ -4000,3 +4000,27 @@ describe("SdkChatView — editar a PRIMEIRA mensagem, reenviada com as mesmas pa
     expect(JSON.parse(ws.sent[0]!)).not.toHaveProperty("first");
   });
 });
+
+/**
+ * RECARREGAR NÃO PARA A IA. A aba recarrega sozinha numa versão nova do vibehub (lib/versionCheck)
+ * e a pessoa dá F5 quando quer: nenhum dos dois pode interromper o trabalho. O turno vive no
+ * servidor (manager.test: "sem página, turno vivo"); o lado da tela é este — sair da página no meio
+ * de um turno só fecha o socket, nunca manda `interrupt`.
+ */
+describe("SdkChatView — sair da página no meio de um turno não interrompe nada", () => {
+  it("desmontar com o turno rodando não manda interrupt", async () => {
+    const { unmount } = renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    await userEvent.type(screen.getByRole("textbox"), "tarefa longa{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "trabalhando" });
+    ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } });
+
+    unmount();
+
+    const types = ws.rawSent.map((raw) => (JSON.parse(raw) as { type?: string }).type);
+    expect(types).not.toContain("interrupt");
+  });
+});
