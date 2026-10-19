@@ -1029,7 +1029,7 @@ describe("sdk-driver.mjs — o Opus bloqueava toda mensagem (card #3684)", () =>
 
   it("o catch de runStream passa o texto humano pelo tradutor antes de emitir — não substitui, encadeia", () => {
     const run = source.slice(source.indexOf("async function runStream()"), source.indexOf("async function endStream()"));
-    expect(run).toContain('emit({ type: "error", message: humanizeSafeguardError(detail) });');
+    expect(run).toContain('emit({ type: "error", message: missingCwdError(humanizeSafeguardError(detail)) });');
   });
 });
 

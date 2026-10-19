@@ -472,8 +472,18 @@ no meio do turno** — 2x em produção o card ficou mudo. A resposta:
   e só então apaga o batimento). Se o turno terminar no antigo durante a espera, o marcador some e
   nada é retomado. Cada card espera na sua própria tarefa; marcador sem `owner` (versão anterior)
   segue órfão na hora; batimentos de processos mortos são recolhidos no boot.
-- **Sem loop:** o turno retomado nasce com `attempts: 1`; se um segundo deploy o matar, o próximo
-  boot só escreve a linha ("não vou retomar de novo") e para explicitamente.
+- **Sem loop, sem largar trabalho pela metade (2026-10-19):** o turno retomado nasce com
+  `attempts: N+1` e sem `progressed`; o manager grava `progressed: true` no marcador na primeira
+  saída da IA (texto ou ferramenta). Outro deploy no meio dele retoma DE NOVO só se ele avançou e
+  ainda não gastou `MAX_AUTO_RESUMES` (5) seguidas; a retomada que morre sem produzir nada (o loop
+  de verdade) ou o teto só escrevem a linha ("não vou retomar de novo") e param. Mensagem de pessoa
+  zera a cadeia. As operações do marcador são serializadas por card, para um `progressed` atrasado
+  nunca ressuscitar o marcador de um turno que já fechou.
+- **Worktree apagada:** se a pasta do card sumiu (a própria IA rodou `git worktree remove` depois
+  de um merge), o connect do chat e o sweep de boot reprovisionam a worktree com o script de
+  abertura antes de subir o driver (`restoreMissingWorkspace`). Se ainda assim faltar, o driver
+  troca o falso erro de libc do SDK ("native binary ... failed to launch") por uma mensagem que diz
+  que a pasta não existe.
 - **Filler do harness filtrado:** o par que o Claude Code sintetiza ao retomar sessão cortada —
   `[Request interrupted by user]` + `No response requested.` — é descartado em todo caminho que lê
   transcript (chat clássico, merge do replay, mirror) e também vindo ao vivo do driver: no chat

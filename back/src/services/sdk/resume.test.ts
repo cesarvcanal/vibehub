@@ -17,6 +17,7 @@ import {
   writeInflightMarker,
 } from "./inflight.js";
 import {
+  MAX_AUTO_RESUMES,
   NOTE_AUTO_OFF,
   NOTE_NOT_AGAIN,
   NOTE_RESUMING,
@@ -87,6 +88,7 @@ function deps(over: Partial<ResumeDeps> = {}, settings: Settings = settingsWith(
     getProject: async (id) => (id === "p1" ? project : undefined),
     settings: async () => settings,
     installDriver: async () => { installed += 1; },
+    restoreWorkspace: async () => false,
     commandFor: async () => ({ file: "docker", args: ["exec"] }),
     ensureSession: ensureDriverSession,
     inject: injectSystemTurn,
@@ -159,7 +161,7 @@ describe("resumeInterruptedTurns — the boot sweep", () => {
     });
   });
 
-  it("attempts >= 1 (the interrupted turn WAS already a resume): only the line, no loop", async () => {
+  it("attempts >= 1 SEM progresso (a retomada morreu antes de fazer qualquer coisa): only the line, no loop", async () => {
     await writeInflightMarker(CARD, { startedAt: 1, attempts: 1 });
     const summary = await resumeInterruptedTurns(deps());
     expect(summary).toEqual({ resumed: [], noted: [CARD] });
@@ -170,6 +172,45 @@ describe("resumeInterruptedTurns — the boot sweep", () => {
     expect((history[0] as { text: string }).text).toBe(NOTE_NOT_AGAIN);
     // Marker consumed — the NEXT boot finds nothing and stays quiet.
     expect(await readInflightMarker(CARD)).toBeNull();
+  });
+
+  it("o turno retomado AVANÇOU e morreu em outro deploy: retoma de novo — o trabalho não fica pela metade", async () => {
+    await writeInflightMarker(CARD, { startedAt: 1, attempts: 1, progressed: true });
+    const summary = await resumeInterruptedTurns(deps());
+    expect(summary.resumed).toEqual([CARD]);
+    expect(spawned.length).toBe(1);
+    // A nova retomada nasce SEM progresso: se morrer antes de fazer qualquer coisa, a próxima só anota.
+    await vi.waitFor(async () => {
+      const marker = await readInflightMarker(CARD);
+      expect(marker?.attempts).toBe(2);
+      expect(marker?.progressed).toBeUndefined();
+    });
+  });
+
+  it("o turno retomado só ganha 'avançou' quando a IA produz algo — texto ou ferramenta", async () => {
+    await writeInflightMarker(CARD, { startedAt: 1, attempts: 0 });
+    await resumeInterruptedTurns(deps());
+    await vi.waitFor(async () => { expect((await readInflightMarker(CARD))?.attempts).toBe(1); });
+    const out = spawned[0]!.stdout;
+    out.emit("data", Buffer.from(JSON.stringify({ type: "ready" }) + "\n"));
+    out.emit("data", Buffer.from(JSON.stringify({ type: "session", sessionId: "11111111-2222-3333-4444-555555555555" }) + "\n"));
+    await new Promise((r) => setTimeout(r, 20));
+    expect((await readInflightMarker(CARD))?.progressed).toBeUndefined();
+    out.emit("data", Buffer.from(JSON.stringify({ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }) + "\n"));
+    await vi.waitFor(async () => {
+      const marker = await readInflightMarker(CARD);
+      expect(marker?.progressed).toBe(true);
+      expect(marker?.attempts).toBe(1);
+    });
+  });
+
+  it("o teto de retomadas seguidas para mesmo com progresso — um turno que derruba o próprio painel não vira loop", async () => {
+    await writeInflightMarker(CARD, { startedAt: 1, attempts: MAX_AUTO_RESUMES, progressed: true });
+    const summary = await resumeInterruptedTurns(deps());
+    expect(summary).toEqual({ resumed: [], noted: [CARD] });
+    expect(spawned.length).toBe(0);
+    const history = await readHistory(CARD);
+    expect((history[0] as { text: string }).text).toBe(NOTE_NOT_AGAIN);
   });
 
   it("sdkAutoResume off: only the line saying so, marker consumed, no driver", async () => {

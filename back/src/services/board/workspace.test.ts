@@ -2318,3 +2318,40 @@ describe("aplicar identidade na worktree", () => {
     expect(() => buildIdentityScript({ ...base, identity: { ...base.identity, email: "a b@x.com" } })).toThrow();
   });
 });
+
+describe("restoreMissingWorkspace — a IA apagou a própria worktree", () => {
+  // Produção, 2026-10-19: pediram "mergeia e apaga a branch" e a IA do card rodou
+  // `git worktree remove` na pasta em que ela mesma vivia. Dali em diante toda mensagem do card
+  // morria no spawn do CLI (cwd inexistente), com o falso erro de libc do SDK.
+  it("pasta presente: só a sondagem, nada reprovisionado", async () => {
+    const { card } = await seed();
+    runScript.mockResolvedValueOnce({ stdout: "present\n", stderr: "" });
+    expect(await ws.restoreMissingWorkspace(card.id)).toBe(false);
+    expect(runScript).toHaveBeenCalledTimes(1);
+    expect(scriptAt(0)).toContain(`[ -d '/work/acme--erp-aux-worktrees/${card.worktreeSlug}' ]`);
+    expect(scriptAt(0)).not.toContain("worktree add");
+  });
+
+  it("pasta sumiu: roda o script de abertura (recria a worktree) sem mexer na coluna do card", async () => {
+    const { card } = await seed();
+    runScript.mockResolvedValueOnce({ stdout: "missing\n", stderr: "" });
+    expect(await ws.restoreMissingWorkspace(card.id)).toBe(true);
+    expect(runScript.mock.calls.length).toBeGreaterThanOrEqual(2); // sondagem, abertura (+ identidade, se houver)
+    expect(scriptAt(1)).toContain("worktree add");
+    const after = await reg.getCard(card.id);
+    expect(after?.column).toBe(card.column);
+    expect(after?.openedAt).toBe(card.openedAt);
+  });
+
+  it("runner fora do ar na sondagem: não lança — o chat segue e o driver explica o que houver", async () => {
+    const { card } = await seed();
+    runScript.mockRejectedValueOnce(new Error("host command timed out"));
+    expect(await ws.restoreMissingWorkspace(card.id)).toBe(false);
+    expect(runScript).toHaveBeenCalledTimes(1);
+  });
+
+  it("card que não existe: false, nada roda", async () => {
+    expect(await ws.restoreMissingWorkspace("nope")).toBe(false);
+    expect(runScript).not.toHaveBeenCalled();
+  });
+});

@@ -33,6 +33,7 @@
 // the second lock on the same door, in case the driver is ever spawned by another path. An API key
 // in the environment would silently bill the API instead of the Max subscription.
 
+import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -124,6 +125,25 @@ function humanizeSafeguardError(text) {
     "\n\n(Isso é um falso positivo conhecido do classificador de segurança da Anthropic — mais " +
     "comum no Opus, sem relação com o conteúdo desta conversa. Tente reenviar a mensagem ou " +
     "trocar de modelo.)"
+  );
+}
+
+/**
+ * A PASTA DO CARD SUMIU. O SDK sobe o CLI com `spawn(cwd)`, e um cwd inexistente dá ENOENT — que o
+ * SDK relata como "native binary ... exists but failed to launch" e põe a culpa na libc (musl x
+ * glibc). Quem lê isso vai atrás do binário, e o binário está bom: o que acontece de verdade é a
+ * worktree do card ter sido apagada (branch mergeada e limpa) com o card ainda aberto, e alguém
+ * mandar ou editar uma mensagem nele (produção, 2026-10-19). Com o cwd faltando, ESTE é o erro.
+ * PURA a menos do `existsSync` e do trace.
+ */
+function missingCwdError(text) {
+  if (existsSync(CWD)) return text;
+  // O texto do SDK fica só no log: na tela ele mandaria a pessoa atrás do binário errado.
+  trace(`cwd missing, SDK said: ${text}`);
+  return (
+    `A pasta de trabalho deste card não existe mais (${CWD}) — a worktree foi removida, ` +
+    "provavelmente depois do merge e da limpeza da branch. Conclua este card ou abra um novo; " +
+    "a conversa não tem onde rodar."
   );
 }
 
@@ -884,7 +904,7 @@ async function runStream() {
     if (myQuery !== null && closingQuery === myQuery) trace(`stream closed on purpose: ${raw}`);
     else {
       const detail = humanErrorText(raw);
-      if (detail !== "") emit({ type: "error", message: humanizeSafeguardError(detail) });
+      if (detail !== "") emit({ type: "error", message: missingCwdError(humanizeSafeguardError(detail)) });
       else trace(`stream error with nothing to tell: ${raw}`);
     }
   } finally {

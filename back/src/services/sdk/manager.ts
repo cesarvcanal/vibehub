@@ -4,7 +4,7 @@ import * as registry from "../board/registry.js";
 import { onCardDriverProbe, type DriverActivity } from "../board/agentState.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
 import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, clearHistoryBeforeLastClear, readHistory, replayableHistoryEvent, rewindHistory, type HistoryEvent } from "./history.js";
-import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inflight.js";
+import { clearInflightMarker, inflightPreview, writeInflightMarker, type InflightMarker } from "./inflight.js";
 import { createLineReader, forgetDriverKeys, noteDriverEventFor, onOutsideTurn } from "./mirror.js";
 import { writeCardCatalog } from "./catalog.js";
 import { normalizeRateLimit, type RateLimitInfo } from "./rateLimit.js";
@@ -119,6 +119,12 @@ export interface DriverSession {
    * still emits, right under the sentence that stops mid-way instead of on top of it.
    */
   pendingInterruptNote?: string;
+  /**
+   * The marker of an AUTOMATIC resume (injectSystemTurn) that has not produced anything yet. The
+   * first text or tool call rewrites it with `progressed: true` — the proof the boot sweep needs
+   * to resume it again after another deploy (see ./resume.ts). A person's turn clears it.
+   */
+  resumeAwaitingProgress?: InflightMarker;
   /**
    * THE EDITS IN FLIGHT, oldest first — one entry per `edit_user` written to stdin, consumed in
    * order by the `rewound` answers that come back. A `rewound` that belongs to nothing (a driver
@@ -365,6 +371,10 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   // answer — shown, it reads as Claude dismissing the person's message (the production symptom).
   if (event.type === "assistant_text" && typeof (event as { text?: unknown }).text === "string"
     && isHarnessFiller("assistant", (event as { text: string }).text)) return;
+  if (session.resumeAwaitingProgress && (event.type === "assistant_text" || event.type === "tool_use")) {
+    void writeInflightMarker(session.cardId, { ...session.resumeAwaitingProgress, progressed: true });
+    session.resumeAwaitingProgress = undefined;
+  }
   if (event.type === "ready") {
     session.ready = true;
     // Stamp the manager's live turn count on the frame: a message may already be queued on the
@@ -844,7 +854,7 @@ export function handleClientFrame(
     relayToPeers(session, sender, edited);
     relayToPeers(session, sender, line);
     // Same durable in-flight promise a plain user turn earns (see #64's boot sweep).
-    void writeInflightMarker(session.cardId, { startedAt: at, preview: inflightPreview(control.text), attempts: 0 });
+    markPersonTurn(session, { startedAt: at, preview: inflightPreview(control.text), attempts: 0 });
     rememberCid(session, control.cid, { persisted, line });
     void settleOrphanQuestions(session);
     return { kind: "accepted", cid: control.cid, persisted };
@@ -861,7 +871,7 @@ export function handleClientFrame(
     // The durable "turn in flight" record: if a deploy kills the back (and this driver with it)
     // before the result arrives, the boot sweep finds this marker and the turn is not silently
     // lost. attempts: 0 — a person's own turn always earns one automatic resume.
-    void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(control.text), attempts: 0 });
+    markPersonTurn(session, { startedAt: Date.now(), preview: inflightPreview(control.text), attempts: 0 });
     rememberCid(session, control.cid, { persisted, line });
     void settleOrphanQuestions(session);
     return { kind: "accepted", cid: control.cid, persisted };
@@ -980,7 +990,7 @@ async function answerOrphanQuestion(session: DriverSession, control: QuestionAns
   clearIdleTimer(session);
   noteChatActivity(session);
   noteDriverEventFor(session.cardId, { type: "user", text });
-  void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(text), attempts: 0 });
+  markPersonTurn(session, { startedAt: Date.now(), preview: inflightPreview(text), attempts: 0 });
   session.answeringOrphans.delete(control.id);
   session.settledOrphans.add(control.id);
   settleQuestionCard(session, { type: "question_result", id: control.id, answers: control.answers, sent: text });
@@ -1013,7 +1023,15 @@ function chargeReceipt(session: DriverSession, sent: AcceptedSend): Promise<bool
 export function injectSystemTurn(session: DriverSession, text: string, origin: MessageOrigin, attempts: number): void {
   try { session.child.stdin.write(encodeControl({ type: "user", text })); } catch { /* driver gone; close will fire */ }
   recordInjectedTurn(session, text, origin);
-  void writeInflightMarker(session.cardId, { startedAt: Date.now(), preview: inflightPreview(text), attempts });
+  const marker: InflightMarker = { startedAt: Date.now(), preview: inflightPreview(text), attempts };
+  session.resumeAwaitingProgress = marker;
+  void writeInflightMarker(session.cardId, marker);
+}
+
+/** A PERSON's turn entered the driver: a fresh in-flight marker, and the resume chain starts over. */
+function markPersonTurn(session: DriverSession, marker: InflightMarker): void {
+  session.resumeAwaitingProgress = undefined;
+  void writeInflightMarker(session.cardId, marker);
 }
 
 /**

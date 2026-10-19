@@ -853,6 +853,45 @@ export async function prepareCard(cardId: string, by?: string): Promise<Card> {
   return updated;
 }
 
+/** Probes whether the card's worktree directory exists in the runner: prints `present`/`missing`. PURE. */
+export function buildWorkspaceProbeScript(containerName: string, cwd: string): string {
+  assertSafeRemotePath(cwd);
+  const DELIM = "VIBEHUB_WS_PROBE";
+  return [
+    "set -e",
+    `docker exec -i ${shQuote(containerName)} bash -s <<'${DELIM}'`,
+    `if [ -d ${shQuote(cwd)} ]; then echo present; else echo missing; fi`,
+    DELIM,
+  ].join("\n");
+}
+
+/**
+ * THE CARD'S FOLDER VANISHED UNDER IT (produção, 2026-10-19): asked to "merge and delete the
+ * branch", the card's own agent ran `git worktree remove` on the directory it lived in. Every
+ * message after that died spawning the CLI (cwd missing), behind the SDK's misleading libc error.
+ *
+ * Run before a driver is spawned: a missing worktree is provisioned again by the SAME idempotent
+ * open script (branch if it survives, else the base; identity and credential re-applied), and the
+ * conversation goes on. The board is not touched — the card keeps its column. Never throws: a
+ * runner that cannot be probed is the connect's next step to report. Returns whether it rebuilt.
+ */
+export async function restoreMissingWorkspace(cardId: string): Promise<boolean> {
+  try {
+    const card = await getCard(cardId);
+    const project = card ? await getProject(card.projectId) : undefined;
+    if (!card || !project) return false;
+    const { cwd } = cardWorkPaths(project, card);
+    const { stdout } = await hostExecutor().runScript(buildWorkspaceProbeScript(config.runner.container, cwd), { timeoutMs: 15_000 });
+    if (stdout.trim() !== "missing") return false;
+    await provisionWorkspace(cardId);
+    logger.warn({ audit: true, action: "card.workspace.restored", card: card.worktreeSlug }, "card worktree was missing — provisioned again");
+    return true;
+  } catch (err) {
+    logger.warn({ card: cardId, detail: (err as Error).message }, "could not check/restore the card worktree");
+    return false;
+  }
+}
+
 // ---- Image upload into a card (paste/drag on the terminal) ----
 
 /** Ceiling for the DECODED file (the route's bodyLimit covers the base64+JSON envelope). */

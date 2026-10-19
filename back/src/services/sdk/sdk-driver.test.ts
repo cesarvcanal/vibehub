@@ -38,6 +38,11 @@ export function query({ prompt, options }) {
   let interruptAnswer = Promise.resolve();
   const interrupted = () => new Promise((resolve) => { onInterrupt = resolve; });
   async function* run() {
+    // O SDK de verdade sobe o binário com spawn(cwd): pasta inexistente vira ENOENT, que ele relata
+    // como "binário existe mas não subiu" e culpa a libc (produção, 2026-10-19).
+    if (!existsSync(options.cwd)) {
+      throw new ReferenceError("Claude Code native binary at /root/.vibehub-sdk/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude exists but failed to launch. This usually means the binary does not match this system's libc.");
+    }
     for await (const m of prompt) {
       const text = m.message.content;
       yield { type: "system", subtype: "init", session_id: SESSION };
@@ -230,9 +235,9 @@ function waitableLines<T>(stream: NodeJS.ReadableStream, parse: (line: string) =
   return { items, wait };
 }
 
-function startDriver(extraArgs: string[] = []): RunningDriver {
+function startDriver(extraArgs: string[] = [], cwd = sandbox): RunningDriver {
   // CLAUDE_CONFIG_DIR with no `projects/`: the disk has no fork point, the memory one decides.
-  const child = spawn(process.execPath, [driverPath, "--cwd", sandbox, ...extraArgs], {
+  const child = spawn(process.execPath, [driverPath, "--cwd", cwd, ...extraArgs], {
     env: { ...process.env, CLAUDE_CONFIG_DIR: sandbox },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -484,5 +489,20 @@ describe("sdk-driver.mjs — a inteligência do card sobrevive ao ultrathink", (
     await driver.waitMark("effort:none");
     await driver.waitFor((e) => e.type === "result");
     await driver.waitMark('flags:{"effortLevel":null}');
+  }, 60_000);
+});
+
+describe("sdk-driver.mjs — a pasta do card sumiu", () => {
+  it("diz que a pasta de trabalho não existe mais, em vez do erro de libc do SDK", async () => {
+    const gone = join(sandbox, "worktree-removida");
+    const driver = startDriver([], gone);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "hello" });
+    const error = await driver.waitFor((e) => e.type === "error");
+    expect(error.message).toContain(gone);
+    expect(error.message).toMatch(/não existe mais/);
+    expect(error.message).not.toMatch(/libc/);
+    // O turno fecha: sem isso o "Trabalhando…" girava para sempre.
+    await driver.waitFor((e) => e.type === "result");
   }, 60_000);
 });

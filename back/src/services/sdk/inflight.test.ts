@@ -92,6 +92,8 @@ describe("inflight markers", () => {
     expect(parseMarker(JSON.stringify({ attempts: 2 }))).toBeNull(); // no startedAt = not a marker
     expect(parseMarker(JSON.stringify({ startedAt: 9, owner: "outra-instancia" }))?.owner).toBe("outra-instancia");
     expect(parseMarker(JSON.stringify({ startedAt: 9, owner: 42 }))?.owner).toBeUndefined();
+    expect(parseMarker(JSON.stringify({ startedAt: 9, attempts: 1, progressed: true }))?.progressed).toBe(true);
+    expect(parseMarker(JSON.stringify({ startedAt: 9, attempts: 1, progressed: "sim" }))?.progressed).toBeUndefined();
     expect(parseMarker("null")).toBeNull();
     expect(parseMarker("not json")).toBeNull();
   });
