@@ -43,6 +43,16 @@ import { join } from "node:path";
 
 delete process.env.ANTHROPIC_API_KEY;
 
+// O SDK avisa no stderr, a cada boot, que `bypassPermissions` faz o `canUseTool` não ser consultado
+// para PERMISSÃO — é a configuração deliberada daqui (o gate é o hook PreToolUse; o canUseTool só
+// recebe AskUserQuestion, que o SDK roteia em todo modo). O aviso caía na cauda do stderr que o
+// manager anexa ao relatório de morte do driver e se passava pela causa da morte.
+const emitWarning = process.emitWarning.bind(process);
+process.emitWarning = (warning, options, ...rest) => {
+  if (options?.code === "CLAUDE_SDK_CAN_USE_TOOL_SHADOWED") return;
+  emitWarning(warning, options, ...rest);
+};
+
 /* --------------------------------------------------------------- argv */
 
 function argOf(flag) {

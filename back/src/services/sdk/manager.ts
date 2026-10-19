@@ -689,8 +689,13 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     // A sondagem da frota também: ela publica NESTA sessão. Deixada de pé, ela ainda recusaria ser
     // substituída pela do driver seguinte (a segunda chamada só estende a primeira).
     if (!succeeded) forgetCardWorkflows(opts.cardId);
-    const stderrNote = session.stderrTail.trim() === "" ? "" : ` — stderr: ${session.stderrTail.trim().slice(-400)}`;
-    broadcast(session, { type: "error", message: `driver exited (code ${code ?? "?"})${stderrNote}` });
+    // Parada PEDIDA (troca de conta/modelo, pausa, restart, ocioso) não é falha: o kill chega como
+    // `code null` e o stderr só tem ruído de boot — anunciar "driver exited (code ?)" em vermelho a
+    // cada troca de conta era alarme falso. Só fecha os sockets; o reconnect do front sobe o sucessor.
+    if (!deliberate) {
+      const stderrNote = session.stderrTail.trim() === "" ? "" : ` — stderr: ${session.stderrTail.trim().slice(-400)}`;
+      broadcast(session, { type: "error", message: `driver exited (code ${code ?? "?"})${stderrNote}` });
+    }
     for (const socket of session.sockets) {
       try { socket.close(); } catch { /* already closed */ }
     }
