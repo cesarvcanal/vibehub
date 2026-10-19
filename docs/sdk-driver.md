@@ -511,6 +511,15 @@ no meio do turno** — 2x em produção o card ficou mudo. A resposta:
   de verdade) ou o teto só escrevem a linha ("não vou retomar de novo") e param. Mensagem de pessoa
   zera a cadeia. As operações do marcador são serializadas por card, para um `progressed` atrasado
   nunca ressuscitar o marcador de um turno que já fechou.
+- **Trabalho que nenhuma mensagem abriu (2026-10-19):** o marcador cobre todo trabalho que um
+  deploy mataria, não só o turno de quem mandou mensagem: o turno que o PRÓPRIO CLI abre (a tarefa
+  em segundo plano acabou, um `ScheduleWakeup` venceu — detectado pelo primeiro passo do principal
+  com `activeTurns == 0`), as tarefas em segundo plano vivas (`background_tasks`) e um
+  `ScheduleWakeup` pendente. O marcador leva `background: { tasks, since, idle }`, e a fala de
+  retomada lista o que morreu ("o resultado disso não vai chegar — rode de novo"). Era o caso que
+  escapava: testes em background → o CLI abre o turno → o agente chama o deploy → card parado sem
+  aviso. Segundo plano sozinho há mais de `BACKGROUND_HOLD_MAX_MS` (um dev server) só ganha a nota.
+  Passo de subagente (`parentToolUseId`) não conta como turno do principal.
 - **Worktree apagada:** se a pasta do card sumiu (a própria IA rodou `git worktree remove` depois
   de um merge), o connect do chat e o sweep de boot reprovisionam a worktree com o script de
   abertura antes de subir o driver (`restoreMissingWorkspace`). Se ainda assim faltar, o driver

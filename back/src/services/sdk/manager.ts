@@ -4,7 +4,7 @@ import * as registry from "../board/registry.js";
 import { onCardDriverProbe, type DriverActivity } from "../board/agentState.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
 import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, clearHistoryBeforeLastClear, readHistory, replayableHistoryEvent, rewindHistory, unwrapEditedMessage, type HistoryEvent } from "./history.js";
-import { clearInflightMarker, inflightPreview, writeInflightMarker, type InflightMarker } from "./inflight.js";
+import { clearInflightMarker, inflightPreview, writeInflightMarker, type InflightBackground, type InflightMarker } from "./inflight.js";
 import { createLineReader, forgetDriverKeys, noteDriverEventFor, onOutsideTurn } from "./mirror.js";
 import { writeCardCatalog } from "./catalog.js";
 import { normalizeRateLimit, type RateLimitInfo } from "./rateLimit.js";
@@ -125,6 +125,17 @@ export interface DriverSession {
    * to resume it again after another deploy (see ./resume.ts). A person's turn clears it.
    */
   resumeAwaitingProgress?: InflightMarker;
+  /** O marcador de trabalho em voo que este manager gravou por último (null/ausente = nenhum). */
+  marker?: InflightMarker;
+  /**
+   * Um turno que o PRÓPRIO CLI abriu — sem mensagem no stdin: a tarefa em segundo plano acabou, o
+   * retorno agendado venceu. Não passa por `activeTurns` (ninguém mandou nada), mas é trabalho em
+   * voo igual: foi num turno destes que o agente chamou o deploy e o card parou calado (produção,
+   * 2026-10-19). Fecha no `result` dele.
+   */
+  autonomousTurn: boolean;
+  /** Um retorno agendado (ScheduleWakeup) ainda por vencer: o motivo, como o agente o descreveu. */
+  pendingWakeup?: string;
   /**
    * THE EDITS IN FLIGHT, oldest first — one entry per `edit_user` written to stdin, consumed in
    * order by the `rewound` answers that come back. A `rewound` that belongs to nothing (a driver
@@ -371,8 +382,11 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   // answer — shown, it reads as Claude dismissing the person's message (the production symptom).
   if (event.type === "assistant_text" && typeof (event as { text?: unknown }).text === "string"
     && isHarnessFiller("assistant", (event as { text: string }).text)) return;
+  if (event.type === "assistant_text" || event.type === "tool_use" || event.type === "thinking") {
+    noteAgentWork(session, event);
+  }
   if (session.resumeAwaitingProgress && (event.type === "assistant_text" || event.type === "tool_use")) {
-    void writeInflightMarker(session.cardId, { ...session.resumeAwaitingProgress, progressed: true });
+    putMarker(session, { ...(session.marker ?? session.resumeAwaitingProgress), progressed: true });
     session.resumeAwaitingProgress = undefined;
   }
   if (event.type === "ready") {
@@ -424,6 +438,7 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     if (tasks.length === 0) session.backgroundSince = undefined;
     else if (session.backgroundTasks.length === 0) session.backgroundSince = Date.now();
     session.backgroundTasks = tasks;
+    syncInflightMarker(session);
     // O relógio do idle é refeito a cada mudança: com tarefa viva ele espera o teto dela; quando a
     // última termina sem turno em voo e sem ninguém olhando, AGORA começam os 15 min — o mesmo
     // ponto em que um `result` o arma.
@@ -449,9 +464,11 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     session.activeTurns = Math.max(0, session.activeTurns - 1);
     interruptNoteToFlush = session.pendingInterruptNote;
     session.pendingInterruptNote = undefined;
-    // The last turn in flight CLOSED: the durable "turn in flight" marker comes off. A deploy that
-    // lands after this point interrupts nothing — no marker, no boot-resume (see ./inflight.ts).
-    if (session.activeTurns === 0) void clearInflightMarker(session.cardId);
+    session.autonomousTurn = false;
+    // The last turn in flight CLOSED: the durable marker comes off — unless work goes on in the
+    // background (a task, a scheduled wake-up), which a deploy would kill just the same: then it
+    // stays, now saying what is running (see `syncInflightMarker`).
+    syncInflightMarker(session);
     maybeScheduleIdleStop(session);
   }
   let silenced = false;
@@ -617,6 +634,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     sockets: new Set(),
     ready: false,
     activeTurns: 0,
+    autonomousTurn: false,
     backgroundTasks: [],
     rateLimits: new Map(),
     rewinds: [],
@@ -1040,13 +1058,92 @@ export function injectSystemTurn(session: DriverSession, text: string, origin: M
   recordInjectedTurn(session, text, origin);
   const marker: InflightMarker = { startedAt: Date.now(), preview: inflightPreview(text), attempts };
   session.resumeAwaitingProgress = marker;
-  void writeInflightMarker(session.cardId, marker);
+  putMarker(session, marker);
 }
 
 /** A PERSON's turn entered the driver: a fresh in-flight marker, and the resume chain starts over. */
 function markPersonTurn(session: DriverSession, marker: InflightMarker): void {
   session.resumeAwaitingProgress = undefined;
+  putMarker(session, marker);
+}
+
+/** O que o marcador diz de um turno que o próprio CLI abriu — ninguém escreveu nada. */
+export const AUTONOMOUS_TURN_PREVIEW = "(turno aberto pelo próprio Claude: retorno de tarefa em segundo plano ou agendada)";
+
+/**
+ * O TRABALHO EM SEGUNDO PLANO vivo agora, para o marcador: as tarefas do CLI e o retorno agendado.
+ * Vazio = nada segue depois do turno.
+ */
+function backgroundWork(session: DriverSession): string[] {
+  const tasks = session.backgroundTasks.map((t) => t.description || t.type || "tarefa em segundo plano");
+  if (session.pendingWakeup !== undefined) tasks.push(`retorno agendado (ScheduleWakeup): ${session.pendingWakeup}`);
+  return tasks;
+}
+
+/** Grava o marcador com o segundo plano de agora, e lembra dele. */
+function putMarker(session: DriverSession, base: InflightMarker): void {
+  const tasks = backgroundWork(session);
+  const { background: previous, ...rest } = base;
+  const background: InflightBackground | undefined = tasks.length === 0 ? undefined : {
+    tasks,
+    since: previous?.since ?? session.backgroundSince ?? Date.now(),
+    idle: session.activeTurns === 0 && !session.autonomousTurn,
+  };
+  const marker: InflightMarker = background ? { ...rest, background } : rest;
+  session.marker = marker;
   void writeInflightMarker(session.cardId, marker);
+}
+
+/**
+ * O marcador acompanha o estado da sessão: existe enquanto HÁ trabalho que um deploy mataria — um
+ * turno de alguém, um turno que o próprio CLI abriu, uma tarefa em segundo plano, um retorno
+ * agendado — e some quando não há mais nada. Só regrava quando o que ele diz mudou.
+ */
+function syncInflightMarker(session: DriverSession): void {
+  if (session.closed) return;
+  const turnRunning = session.activeTurns > 0 || session.autonomousTurn;
+  const tasks = backgroundWork(session);
+  if (!turnRunning && tasks.length === 0) {
+    session.marker = undefined;
+    void clearInflightMarker(session.cardId);
+    return;
+  }
+  const current = session.marker;
+  if (current) {
+    const same = (current.background?.tasks ?? []).join("\n") === tasks.join("\n")
+      && (tasks.length === 0 || current.background?.idle === !turnRunning);
+    if (same) return;
+    putMarker(session, current);
+    return;
+  }
+  putMarker(session, { startedAt: Date.now(), preview: AUTONOMOUS_TURN_PREVIEW, attempts: 0 });
+}
+
+/**
+ * Um passo do agente (texto, raciocínio, ferramenta). Do PRINCIPAL, sem turno contado, é um turno que
+ * o CLI abriu sozinho — a notificação de uma tarefa em segundo plano, um retorno agendado vencendo.
+ * E o ScheduleWakeup do principal agenda (ou cancela) um retorno: trabalho pendente igual.
+ */
+function noteAgentWork(session: DriverSession, event: DriverEvent): void {
+  if ((event as { parentToolUseId?: unknown }).parentToolUseId) return;
+  let changed = false;
+  if (session.activeTurns === 0 && !session.autonomousTurn) {
+    session.autonomousTurn = true;
+    // O retorno agendado que estava pendente é, quase sempre, o que acabou de abrir este turno.
+    session.pendingWakeup = undefined;
+    changed = true;
+  }
+  if (event.type === "tool_use" && (event as { name?: unknown }).name === "ScheduleWakeup") {
+    const input = ((event as { input?: unknown }).input ?? {}) as { stop?: unknown; reason?: unknown; prompt?: unknown };
+    if (input.stop === true) session.pendingWakeup = undefined;
+    else {
+      const why = typeof input.reason === "string" && input.reason.trim() !== "" ? input.reason
+        : typeof input.prompt === "string" ? input.prompt : "";
+      session.pendingWakeup = inflightPreview(why).slice(0, 120) || "sem descrição";
+    }
+    changed = true;
+  }
+  if (changed) syncInflightMarker(session);
 }
 
 /**
@@ -1234,6 +1331,7 @@ export function stopCardDriver(cardId: string): void {
   try { session.child.kill(); } catch { /* already gone */ }
   // A DELIBERATE stop (pause, hibernate, restart, delete, model switch, idle) abandons the turn on
   // purpose — the marker comes off so the next boot does not "resume" something a person ended.
+  session.marker = undefined;
   void clearInflightMarker(cardId);
   // A sondagem da frota é filha deste driver: sem ele não há a quem publicar nem sessão para ler.
   forgetCardWorkflows(cardId);
