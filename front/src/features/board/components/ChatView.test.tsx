@@ -615,6 +615,16 @@ describe("ChatView", () => {
   });
 });
 
+describe("ChatView — a conversa não estica a página", () => {
+  it("o scroller é o bloco de contenção de tudo que é absoluto dentro dele", async () => {
+    // Mesmo defeito do chat nativo: um filho `absolute` se ancorava fora do scroller e a página
+    // ganhava rolagem vazia abaixo do composer.
+    renderApp(<ChatView cardId="c1" working={false} />);
+    await socket();
+    expect(screen.getByTestId("chat-scroller")).toHaveClass("relative");
+  });
+});
+
 describe("ChatView — 'ir pro fim' flutuante (mesmo comportamento do chat nativo)", () => {
   it("appears when scrolled up, badges on a new message without auto-scroll, click returns and hides", async () => {
     renderApp(<ChatView cardId="c1" working={false} />);
