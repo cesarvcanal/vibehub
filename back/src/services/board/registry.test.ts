@@ -702,6 +702,25 @@ describe("board registry (persisted)", () => {
       expect(opened?.status).toBe("waiting");
     });
 
+    it("a NEW turn (idle -> working) clears what the agent declared about the previous one", async () => {
+      const card = await cardIn("waiting");
+      await reg.applyCardStatus(card.id, "waiting");
+      await reg.reportCardState(card.id, "ready", "PR aberto");
+      const after = await reg.applyCardStatus(card.id, "working");
+      expect(after?.declaredState).toBeUndefined();
+      expect(after?.declaredSummary).toBeUndefined();
+    });
+
+    it("a report made DURING a turn survives the hooks that keep firing, and the Stop that ends it", async () => {
+      const card = await cardIn("waiting");
+      await reg.applyCardStatus(card.id, "working");
+      await reg.reportCardState(card.id, "needs_me", "qual branch?");
+      expect((await reg.applyCardStatus(card.id, "working"))?.declaredState).toBe("needs_me");
+      const after = await reg.applyCardStatus(card.id, "waiting");
+      expect(after?.declaredState).toBe("needs_me");
+      expect(after?.declaredSummary).toBe("qual branch?");
+    });
+
     it("an unknown card returns undefined (the caller decides the 404)", async () => {
       expect(await reg.applyCardStatus("nope", "working")).toBeUndefined();
       expect(await reg.applyOpenTerminal("nope")).toBeUndefined();
