@@ -18,6 +18,7 @@ import {
 } from "@/features/board/lib/slashMenu";
 import { UltraFieldOverlay } from "@/features/board/components/UltraText";
 import { t as translate, useT } from "@/i18n";
+import { useReloadHold } from "@/lib/versionCheck";
 
 /**
  * A text field under the terminal: write (or speak, or paste, or drop an image) HERE, review, then
@@ -901,6 +902,10 @@ export function TerminalComposer({
   const canRecord = Boolean(cardId && voice?.available);
 
   const [recording, setRecording] = React.useState<RecordingState>("idle");
+  // A new vibehub version reloads the tab on its own when it is idle — never while this field holds
+  // something only the browser has: an image still uploading, or audio being recorded/transcribed.
+  const holdId = React.useId();
+  useReloadHold(`composer:${holdId}`, hasPendingUpload(attachments) || recording !== "idle");
   /**
    * How long the current recording has been running. Without it a phone recording is a red button
    * and nothing else — you cannot tell a five-second thought from a two-minute one you forgot to
