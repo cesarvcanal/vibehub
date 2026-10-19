@@ -5,7 +5,7 @@ import { CardTile } from "@/features/board/components/CardTile";
 import { CardTerminalView } from "@/features/board/components/CardTerminalView";
 import { SettingsDialog } from "@/features/settings/SettingsDialog";
 import { applyOutcomeMessage } from "@/features/board/lib/applyOutcome";
-import { columnHint, columnLabel, statusDot } from "@/features/board/lib/board";
+import { cardState, columnHint, columnLabel } from "@/features/board/lib/board";
 import { LANGUAGE_KEY, setLanguage, t } from "@/i18n";
 import type { BoardCard, BoardProject } from "@/features/board/api";
 import type { CardColumn } from "@/api/types";
@@ -77,10 +77,14 @@ describe("pt-BR — the board", () => {
     expect(columnHint("done")).toBe("Concluído. Sempre um movimento manual.");
   });
 
-  it("translates the two statuses a dot can carry", () => {
+  it("translates a card's state", () => {
     setLanguage("pt-BR");
-    expect(statusDot("working")?.label).toBe("Trabalhando");
-    expect(statusDot("waiting")?.label).toBe("Aguardando você");
+    const base = { column: "waiting" as const, openedAt: 1 };
+    expect(cardState({ ...base, status: "working" })?.label).toBe("Trabalhando");
+    expect(cardState({ ...base, status: "waiting" })?.label).toBe("Turno terminou — sua vez");
+    expect(cardState({ ...base, status: "waiting", declaredState: "ready" })?.label).toBe(
+      "Pronto — o agente diz que terminou",
+    );
   });
 
   it("translates a card tile, chips and menu included", async () => {

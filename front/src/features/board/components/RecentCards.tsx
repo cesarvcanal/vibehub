@@ -1,8 +1,8 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Pause } from "lucide-react";
 import { cn, isNewTabClick } from "@/lib/utils";
-import { SELECTED_ROW, cardDot, cardHref, dotClass, recentCards } from "@/features/board/lib/board";
+import { SELECTED_ROW, cardHref, cardState, recentCards } from "@/features/board/lib/board";
+import { CardStateIcon } from "@/features/board/components/CardStateIcon";
 import { ALL_CARDS_KEY, boardApi, type BoardCard, type BoardProject } from "@/features/board/api";
 import { useT } from "@/i18n";
 
@@ -122,9 +122,7 @@ function RecentRow({
   active: boolean;
   onOpen: () => void;
 }) {
-  const t = useT();
-  const dot = cardDot(card);
-  const paused = Boolean(card.pausedAt);
+  const state = cardState(card);
 
   return (
     <a
@@ -143,20 +141,10 @@ function RecentRow({
           : "text-muted-foreground hover:bg-card/60 hover:text-foreground",
       )}
     >
-      <span
-        title={paused ? t("status.paused") : dot?.label}
-        className="mt-1.5 inline-flex h-2 w-2 shrink-0 items-center justify-center"
-      >
-        {paused ? (
-          <Pause aria-hidden className="h-2.5 w-2.5 text-muted-foreground/70" />
-        ) : dot ? (
-          // No `role`/`aria-label` here: this span sits INSIDE the link, and an accessible name on
-          // it becomes part of the link's own name. The title carries the meaning for the mouse.
-          <span
-            data-tone={dot.tone}
-            className={cn("inline-block h-2 w-2 rounded-full", dotClass(dot.tone), dot.live && "dot-live")}
-          />
-        ) : null}
+      {/* No `announce` here: this sits INSIDE the link, and an accessible name on it would become
+          part of the link's own name. The title carries the meaning for the mouse. */}
+      <span className="mt-1 inline-flex h-3 w-3 shrink-0 items-center justify-center">
+        {state ? <CardStateIcon state={state} /> : null}
       </span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm leading-snug">{card.title}</span>

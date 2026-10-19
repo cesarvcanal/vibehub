@@ -13,14 +13,13 @@ import {
   sortByRecency,
   sortCards,
   sortProjects,
-  cardDot,
   cardHref,
+  cardState,
+  cardStateTitle,
   declaredStateChip,
-  dotClass,
   locationHref,
   recentCards,
   splitSidebarCards,
-  statusDot,
   writeLocation,
 } from "@/features/board/lib/board";
 import type { BoardCard, BoardProject } from "@/features/board/api";
@@ -170,39 +169,55 @@ describe("dropPosition", () => {
   });
 });
 
-describe("statusDot", () => {
-  it("is green and live while the agent is working", () => {
-    expect(statusDot("working")).toEqual({ tone: "ok", label: "Working", live: true });
+describe("cardState", () => {
+  const kind = (o: Partial<BoardCard>) => cardState(card({ id: "a", ...o }))?.kind ?? null;
+
+  it("has no state for a card that was never opened", () => {
+    expect(kind({})).toBeNull();
   });
 
-  it("is amber and still while it waits for you", () => {
-    expect(statusDot("waiting")).toEqual({ tone: "warn", label: "Waiting for you", live: false });
+  it("is idle — never blank — for a live session that has not reported yet", () => {
+    expect(kind({ column: "waiting", openedAt: 1 })).toBe("idle");
   });
 
-  it("shows NO dot when the runner has reported nothing", () => {
-    expect(statusDot(null)).toBeNull();
-    expect(statusDot(undefined)).toBeNull();
-  });
-});
-
-describe("cardDot", () => {
-  it("is the status dot for a card with a session", () => {
-    expect(cardDot(card({ id: "a", status: "working" }))?.tone).toBe("ok");
-    expect(cardDot(card({ id: "a", status: "waiting" }))?.tone).toBe("warn");
-    expect(cardDot(card({ id: "a" }))).toBeNull();
+  it("is working while the hook says so", () => {
+    expect(cardState(card({ id: "a", status: "working", openedAt: 1 }))).toEqual({
+      kind: "working",
+      label: "Working",
+    });
   });
 
-  it("goes grey and still once the card is hibernated, whatever the last status said", () => {
-    const dot = cardDot(card({ id: "a", status: "waiting", hibernatedAt: 5 }));
-    expect(dot?.tone).toBe("cold");
-    expect(dot?.live).toBe(false);
-    // A green dot on a card with no process behind it would be a lie.
-    expect(cardDot(card({ id: "a", status: "working", hibernatedAt: 5 }))?.tone).toBe("cold");
+  it("is a neutral 'your turn' when the turn ended and the agent said nothing", () => {
+    expect(kind({ status: "waiting", openedAt: 1 })).toBe("your_turn");
   });
 
-  it("gives each tone its own colour", () => {
-    const classes = (["ok", "warn", "cold"] as const).map(dotClass);
-    expect(new Set(classes).size).toBe(3);
+  it("takes the agent's own report once the turn is over, summary included", () => {
+    expect(kind({ status: "waiting", openedAt: 1, declaredState: "needs_me" })).toBe("needs_me");
+    expect(kind({ status: "waiting", openedAt: 1, declaredState: "blocked" })).toBe("blocked");
+    const ready = cardState(
+      card({ id: "a", status: "waiting", openedAt: 1, declaredState: "ready", declaredSummary: " PR #9 aberto " }),
+    );
+    expect(ready).toMatchObject({ kind: "ready", summary: "PR #9 aberto" });
+    expect(cardStateTitle(ready!)).toBe(`${ready!.label}\nPR #9 aberto`);
+  });
+
+  it("ignores a declared 'working' — the hook is the one that knows whether a turn is running", () => {
+    expect(kind({ status: "waiting", openedAt: 1, declaredState: "working" })).toBe("your_turn");
+  });
+
+  it("lets a running turn beat a report and a pending pause", () => {
+    expect(kind({ status: "working", openedAt: 1, declaredState: "ready" })).toBe("working");
+    expect(kind({ status: "working", openedAt: 1, column: "paused" })).toBe("working");
+  });
+
+  it("puts the user's filing over the agent's report", () => {
+    expect(kind({ column: "done", openedAt: 1, declaredState: "needs_me" })).toBe("done");
+    expect(kind({ column: "paused", openedAt: 1, pausedAt: 2, declaredState: "ready" })).toBe("paused");
+  });
+
+  it("is hibernated whatever the last status said — nothing runs behind it", () => {
+    expect(kind({ status: "waiting", openedAt: 1, hibernatedAt: 5 })).toBe("hibernated");
+    expect(kind({ status: "working", openedAt: 1, hibernatedAt: 5 })).toBe("hibernated");
   });
 });
 

@@ -257,7 +257,12 @@ export const ptBR: Record<string, string> = {
   "column.done.hint": "Concluído. Sempre um movimento manual.",
 
   "status.working": "Trabalhando",
-  "status.waitingForYou": "Aguardando você",
+  "status.done": "Concluído",
+  "status.ready": "Pronto — o agente diz que terminou",
+  "status.needs_me": "Precisa de você — o agente espera uma decisão",
+  "status.blocked": "Bloqueado — o agente não consegue seguir",
+  "status.your_turn": "Turno terminou — sua vez",
+  "status.idle": "Aberto, sem atividade ainda",
   "status.paused": "Pausado",
   "status.hibernated": "Hibernado — o terminal fechou por ficar parado. Abra pra continuar.",
 

@@ -93,17 +93,22 @@ describe("RecentCards", () => {
     expect((await screen.findByText("fix the totals")).closest("a")).not.toHaveAttribute("aria-current");
   });
 
-  it("shows a hibernated conversation with a grey dot instead of a status", async () => {
+  it("shows a hibernated conversation with the moon instead of a status", async () => {
     serve([
       card({ id: "c1", projectId: "p1", title: "gone cold", openedAt: 10, status: null, hibernatedAt: 20 }),
     ]);
 
     renderApp(<RecentCards projects={projects} activeCardId={null} onOpenCard={vi.fn()} />);
     const row = (await screen.findByText("gone cold")).closest("a");
-    const dot = row?.querySelector("[data-tone]");
+    expect(row?.querySelector("[data-state]")).toHaveAttribute("data-state", "hibernated");
+  });
 
-    expect(dot).toHaveAttribute("data-tone", "cold");
-    expect(dot?.className).toContain("bg-muted-foreground");
+  it("never leaves a live conversation without an icon, even before its first hook", async () => {
+    serve([card({ id: "c1", projectId: "p1", title: "just opened", column: "waiting", openedAt: 10, status: null })]);
+
+    renderApp(<RecentCards projects={projects} activeCardId={null} onOpenCard={vi.fn()} />);
+    const row = (await screen.findByText("just opened")).closest("a");
+    expect(row?.querySelector("[data-state]")).toHaveAttribute("data-state", "idle");
   });
 
   it("lists the WHOLE history — more than five — inside its own scrollable box", async () => {
