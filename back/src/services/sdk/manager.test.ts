@@ -730,6 +730,17 @@ describe("end of life", () => {
     expect(last.message).toContain("TypeError: boom");
   });
 
+  it("parada pedida (troca de conta/modelo) fecha os sockets SEM anunciar erro", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stderr.emit("data", Buffer.from("Warning: canUseTool will not be invoked\n"));
+    notifyCardSessionKill(CARD); // o que applySessionChange → killCardSession faz na troca de conta
+    spawned[0]!.emit("close", null); // o kill chega como sinal: code null
+    expect(sentTypes(socket)).not.toContain("error");
+    expect(socket.closed).toBe(true);
+  });
+
   it("a dead driver tells the sockets and closes them (the front's reconnect takes over)", () => {
     const session = ensure();
     const socket = fakeSocket();
