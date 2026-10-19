@@ -18,8 +18,8 @@ import { logger } from "../../utils/logger.js";
  * The boot sweep (see ./resume.ts) turns those orphans into a visible system line in the card's
  * history and (once, never in a loop) an automatic resume.
  *
- * `attempts` is the loop-guard: 0 = a normal user turn; >=1 = this turn IS already an automatic
- * resume — a second death does not resume again, it says so and stops.
+ * `attempts` + `progressed` are the loop-guard: 0 = a normal user turn; >=1 = this turn IS already
+ * an automatic resume — it earns another one only if it made progress, up to MAX_AUTO_RESUMES.
  *
  * `owner` + o BATIMENTO: o deploy do tech.multi é BLUE/GREEN — o container novo sobe e fica saudável
  * com o antigo AINDA no ar, rodando o turno. "Existe marcador no boot" deixou de significar "o turno
@@ -42,8 +42,14 @@ export interface InflightMarker {
   startedAt: number;
   /** Head of the LAST user message sent — what the interrupted work was about. */
   preview?: string;
-  /** Automatic resumes already spent on this turn. >=1 blocks another one (no loops). */
+  /** Automatic resumes already spent on this chain of turns (0 = a person's own turn). */
   attempts: number;
+  /**
+   * The resumed turn PRODUCED something (text or a tool call) before it died. It is what tells a
+   * deploy that happened to land mid-work (resume again) from a resume that dies on arrival — the
+   * loop the guard exists for (see ./resume.ts).
+   */
+  progressed?: boolean;
   /** O processo do back que escreveu o marcador. Ausente = escrito por uma versão sem dono. */
   owner?: string;
 }
@@ -83,8 +89,25 @@ export function inflightPreview(text: string): string {
   return flat.length > INFLIGHT_PREVIEW_MAX ? `${flat.slice(0, INFLIGHT_PREVIEW_MAX - 1)}…` : flat;
 }
 
+/**
+ * One card's marker operations, IN THE ORDER they were asked for. Callers fire-and-forget (`void`),
+ * and a write's mkdir+writeFile can otherwise land AFTER a later rm — a finished turn's marker
+ * resurrected, and the next boot resuming work that was already done.
+ */
+const markerQueues = new Map<string, Promise<void>>();
+function inOrder(cardId: string, op: () => Promise<void>): Promise<void> {
+  const next = (markerQueues.get(cardId) ?? Promise.resolve()).then(op);
+  markerQueues.set(cardId, next);
+  void next.then(() => { if (markerQueues.get(cardId) === next) markerQueues.delete(cardId); });
+  return next;
+}
+
 /** Write (or overwrite) a card's marker. Never throws — the send must not fail on a disk hiccup. */
-export async function writeInflightMarker(cardId: string, marker: InflightMarker): Promise<void> {
+export function writeInflightMarker(cardId: string, marker: InflightMarker): Promise<void> {
+  return inOrder(cardId, () => writeMarkerNow(cardId, marker));
+}
+
+async function writeMarkerNow(cardId: string, marker: InflightMarker): Promise<void> {
   try {
     const file = markerFile(cardId);
     await mkdir(join(file, ".."), { recursive: true });
@@ -95,7 +118,11 @@ export async function writeInflightMarker(cardId: string, marker: InflightMarker
 }
 
 /** Remove a card's marker (the turn closed, or the sweep consumed it). Idempotent, never throws. */
-export async function clearInflightMarker(cardId: string): Promise<void> {
+export function clearInflightMarker(cardId: string): Promise<void> {
+  return inOrder(cardId, () => clearMarkerNow(cardId));
+}
+
+async function clearMarkerNow(cardId: string): Promise<void> {
   try {
     await rm(markerFile(cardId), { force: true });
   } catch (err) {
@@ -151,6 +178,7 @@ export function parseMarker(raw: string): InflightMarker | null {
     preview: typeof m.preview === "string" ? m.preview : undefined,
     attempts,
     owner: typeof m.owner === "string" && m.owner !== "" ? m.owner : undefined,
+    ...(m.progressed === true ? { progressed: true } : {}),
   };
 }
 

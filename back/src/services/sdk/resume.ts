@@ -12,6 +12,7 @@ import {
   type InflightMarker,
 } from "./inflight.js";
 import { installCardSdkDriver, sdkDriverCommand } from "./driver.js";
+import { restoreMissingWorkspace } from "../board/workspace.js";
 import { ensureDriverSession, injectSystemTurn, shutdownAllDrivers } from "./manager.js";
 import { stopAllMirrors } from "./mirror.js";
 import { transcriptDirFor } from "../maestro/cardSession.js";
@@ -34,8 +35,12 @@ import { logger } from "../../utils/logger.js";
  *     persistida no card) e injeta um turno de CONTINUAÇÃO com proveniência de sistema — a mensagem
  *     nunca parece fala do usuário (mecanismo de origem do #48), e chega ao driver como turno de
  *     usuário NORMAL (nunca embrulhada em notificação — a lição do "No response requested.");
- *  3. attempts >= 1 (o turno interrompido JÁ ERA um resume automático): só a linha de sistema e o
- *     estado parado explícito — nunca um loop de deploy→resume→deploy→resume.
+ *  3. attempts >= 1 (o turno interrompido JÁ ERA um resume automático): retoma DE NOVO só se ele
+ *     avançou (`progressed`: a IA escreveu ou rodou alguma coisa antes de morrer) e ainda não gastou
+ *     MAX_AUTO_RESUMES. Num dia de muitos deploys o trabalho segue até o fim (produção, 2026-10-19:
+ *     a segunda atualização seguida largava a tarefa pela metade); o que não avança é o loop de
+ *     verdade — a retomada que morre ao chegar — e esse para com a linha de sistema e o estado
+ *     parado explícito. O teto cobre o caso que avança E derruba o painel a cada volta.
  *
  * Melhor esforço por card: um card que falha não impede os outros, e falha alguma derruba o boot.
  *
@@ -58,12 +63,22 @@ export const RESUME_CONTINUATION_TEXT =
 /** Quem assina a linha e o turno injetado: o painel, nunca uma pessoa. */
 export const SYSTEM_ORIGIN: MessageOrigin = { kind: "system", name: "vibehub" };
 
+/** Retomadas automáticas seguidas, no máximo, sem uma mensagem de pessoa no meio. */
+export const MAX_AUTO_RESUMES = 5;
+
+/** O turno interrompido merece outra retomada automática? PURA. */
+export function mayResumeAgain(marker: InflightMarker): boolean {
+  if (marker.attempts === 0) return true;
+  return marker.progressed === true && marker.attempts < MAX_AUTO_RESUMES;
+}
+
 /** As linhas de sistema que o card ganha, conforme o caso. */
 export const NOTE_RESUMING =
   "O turno foi interrompido por uma atualização do painel — retomando automaticamente…";
 export const NOTE_NOT_AGAIN =
-  "O turno foi interrompido de novo por uma atualização do painel. Para evitar um loop, não vou retomar " +
-  "automaticamente outra vez — mande uma mensagem para continuar.";
+  "O turno foi interrompido de novo por uma atualização do painel, sem avançar desde a última retomada " +
+  "(ou depois de muitas retomadas seguidas). Para evitar um loop, não vou retomar automaticamente outra " +
+  "vez — mande uma mensagem para continuar.";
 export const NOTE_AUTO_OFF =
   "O turno foi interrompido por uma atualização do painel. A retomada automática está desligada " +
   "(sdkAutoResume) — mande uma mensagem para continuar.";
@@ -76,6 +91,7 @@ export interface ResumeDeps {
   getProject: typeof registry.getProject;
   settings: typeof getSettings;
   installDriver: typeof installCardSdkDriver;
+  restoreWorkspace: typeof restoreMissingWorkspace;
   commandFor: typeof sdkDriverCommand;
   ensureSession: typeof ensureDriverSession;
   inject: typeof injectSystemTurn;
@@ -94,6 +110,7 @@ const realDeps: ResumeDeps = {
   getProject: registry.getProject,
   settings: getSettings,
   installDriver: installCardSdkDriver,
+  restoreWorkspace: restoreMissingWorkspace,
   commandFor: sdkDriverCommand,
   ensureSession: ensureDriverSession,
   inject: injectSystemTurn,
@@ -184,18 +201,19 @@ export async function resumeInterruptedTurns(deps: ResumeDeps = realDeps): Promi
         logger.info({ audit: true, action: "sdk.resume.off", card: card.worktreeSlug }, "interrupted sdk turn noted — auto-resume off");
         return;
       }
-      if (marker.attempts >= 1) {
+      if (!mayResumeAgain(marker)) {
         await deps.appendNote(cardId, NOTE_NOT_AGAIN);
         await deps.clearMarker(cardId);
         summary.noted.push(cardId);
         logger.warn(
-          { audit: true, action: "sdk.resume.loop_guard", card: card.worktreeSlug, attempts: marker.attempts },
+          { audit: true, action: "sdk.resume.loop_guard", card: card.worktreeSlug, attempts: marker.attempts, progressed: !!marker.progressed },
           "interrupted sdk turn NOT resumed again — loop guard",
         );
         return;
       }
       await deps.appendNote(cardId, NOTE_RESUMING);
       await (install ??= deps.installDriver());
+      await deps.restoreWorkspace(card.id);
       // O resume usa a chave persistida no card (resumeSessionId — gravada pelo manager a cada
       // session/result). O probe de transcript do connect não roda aqui: é o mesmo alvo na prática,
       // e o boot não deve depender de um ls no runner para cada card.
@@ -206,14 +224,14 @@ export async function resumeInterruptedTurns(deps: ResumeDeps = realDeps): Promi
         command,
         transcriptDir: transcriptDirFor(project, card, effectiveAccountSlug(card, project)),
       });
-      // attempts: marker.attempts + 1 — o marcador do turno retomado nasce já gastando a única
-      // retomada automática; se ESTE turno morrer por outro deploy, o próximo boot só anota.
+      // attempts: marker.attempts + 1, SEM progresso — o marcador do turno retomado só ganha
+      // `progressed` quando a IA produzir algo (manager); se morrer antes disso, o próximo boot só anota.
       deps.inject(session, RESUME_CONTINUATION_TEXT, SYSTEM_ORIGIN, marker.attempts + 1);
       summary.resumed.push(cardId);
       logger.info(
         {
           audit: true, action: "sdk.resume", card: card.worktreeSlug,
-          interruptedAt: marker.startedAt, preview: marker.preview,
+          interruptedAt: marker.startedAt, preview: marker.preview, attempt: marker.attempts + 1,
         },
         "interrupted sdk turn resumed after the panel restart",
       );
