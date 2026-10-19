@@ -122,7 +122,11 @@ describe("script builders (pure)", () => {
  * `/login`. Run in a real bash.
  */
 describe("writeTokenLines — the file's age only moves when the value does (real bash)", () => {
-  async function run(force: boolean, existing?: string): Promise<{ value: string; touched: boolean }> {
+  async function run(
+    force: boolean,
+    existing?: string,
+    credentials?: string,
+  ): Promise<{ value: string | null; touched: boolean }> {
     const { token } = await fresh();
     const dir = await mkdtemp(join(tmpdir(), "vh-tokfile-"));
     try {
@@ -132,8 +136,10 @@ describe("writeTokenLines — the file's age only moves when the value does (rea
         await writeFile(file, existing);
         await utimes(file, old, old);
       }
-      execFileSync("bash", ["-c", token.writeTokenLines(dir, TOKEN, { force }).join("\n")]);
-      const value = await readFile(file, "utf8");
+      if (credentials !== undefined) await writeFile(join(dir, ".credentials.json"), credentials);
+      execFileSync("bash", ["-c", ["set -e", ...token.writeTokenLines(dir, TOKEN, { force })].join("\n")]);
+      const value = await readFile(file, "utf8").catch(() => null);
+      if (value === null) return { value, touched: false };
       const touched = existing === undefined || (await stat(file)).mtimeMs / 1000 > old + 1;
       expect((await stat(file)).mode & 0o777).toBe(0o600);
       return { value, touched };
@@ -152,6 +158,25 @@ describe("writeTokenLines — the file's age only moves when the value does (rea
 
   it("card open, no file yet → written", async () => {
     expect(await run(false)).toEqual({ value: TOKEN, touched: true });
+  });
+
+  const LOGIN = JSON.stringify({ claudeAiOauth: { accessToken: "a", refreshToken: "r", expiresAt: 1 } });
+
+  it("card open, a refreshable /login and NO token file (the revoked one was moved away) → not planted", async () => {
+    expect(await run(false, undefined, LOGIN)).toEqual({ value: null, touched: false });
+  });
+
+  it("card open, a refreshable /login and a DIFFERENT token → untouched (the login keeps the lead)", async () => {
+    expect(await run(false, "sk-ant-oat01-OLD", LOGIN)).toEqual({ value: "sk-ant-oat01-OLD", touched: false });
+  });
+
+  it("card open, a /login WITHOUT refresh token cannot win → the token is still seeded", async () => {
+    const dead = JSON.stringify({ claudeAiOauth: { accessToken: "a" } });
+    expect(await run(false, undefined, dead)).toEqual({ value: TOKEN, touched: true });
+  });
+
+  it("saving the token in the UI (force) with a /login present → written anyway (the person chose it)", async () => {
+    expect(await run(true, undefined, LOGIN)).toEqual({ value: TOKEN, touched: true });
   });
 
   it("saving the token in the UI (force) → always rewritten, even with the same value", async () => {
