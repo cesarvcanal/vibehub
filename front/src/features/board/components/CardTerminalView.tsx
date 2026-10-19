@@ -70,6 +70,7 @@ import {
   type BoardProject,
 } from "@/features/board/api";
 import { AccountUsageBars, useMinuteTick } from "@/features/board/components/AccountUsageBars";
+import { PlanUsageMeter } from "@/features/board/components/PlanUsage";
 import { pillPercent } from "@/features/board/lib/usage";
 import type { CardColumn } from "@/api/types";
 import { t as translate, useT } from "@/i18n";
@@ -938,6 +939,16 @@ export function CardTerminalView({
               </DropdownMenuContent>
             </DropdownMenu>
           ) : null}
+          {/* O MEMBRO não troca a conta (é do dono), mas precisa saber em qual conta o card roda: o
+              mesmo pill, só leitura. */}
+          {card && !isOwner ? (
+            <span data-testid="card-account-readonly" title={t("plan.accountReadOnly")} className={cn(PILL, "inline-flex items-center hover:border-border/60 hover:text-muted-foreground")}>
+              <span className="sr-only">{t("plan.account")}: </span>
+              {accountName}
+            </span>
+          ) : null}
+          {/* Quanto do plano dessa conta já foi — para todo mundo que trabalha no card. */}
+          {card ? <PlanUsageMeter cardId={cardId} accountName={accountName} active={active} /> : null}
           {showTerminal ? <ConnectionIndicator state={connection} /> : null}
         </div>
     </>
@@ -984,6 +995,7 @@ export function CardTerminalView({
       ) : null}
 
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        {card ? <PlanUsageMeter cardId={cardId} accountName={accountName} active={active} className="h-9 rounded-md" /> : null}
         {showTerminal ? <ConnectionIndicator state={connection} /> : null}
         <PreviewMenu cardId={cardId} compact disabled={!showTerminal} previews={card?.previews} />
         <DropdownMenu>
@@ -1020,13 +1032,11 @@ export function CardTerminalView({
                 <DropdownMenuSeparator />
                 <DropdownMenuLabel>{t("cardView.model")}</DropdownMenuLabel>
                 {modelItems}
-                {isOwner ? (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuLabel>{t("cardView.claudeAccount")}</DropdownMenuLabel>
-                    {accountItems}
-                  </>
-                ) : null}
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>{t("cardView.claudeAccount")}</DropdownMenuLabel>
+                {isOwner ? accountItems : (
+                  <DropdownMenuItem disabled data-testid="card-account-readonly-item">{accountName}</DropdownMenuItem>
+                )}
               </>
             ) : null}
           </DropdownMenuContent>

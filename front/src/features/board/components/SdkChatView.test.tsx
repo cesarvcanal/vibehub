@@ -3745,3 +3745,42 @@ describe("SdkChatView — o buffer de tokens e a queda do fio", () => {
     }
   });
 });
+
+/**
+ * O AVISO DE LIMITE DO PLANO — o "You've used 91% of your session limit" do rodapé do terminal, no
+ * canto direito da faixa do "está digitando", na cor de quanto falta.
+ */
+describe("SdkChatView — o aviso de limite do plano", () => {
+  afterEach(() => cleanup());
+  const inTwoHours = () => Date.now() + 2 * 3_600_000;
+
+  it("aparece com o tom de quanto já foi, e some quando um driver novo sobe", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    expect(screen.queryByTestId("plan-alert")).toBeNull();
+
+    ws.deliver({ type: "rate_limit", status: "allowed_warning", window: "five_hour", utilization: 88, resetsAt: inTwoHours() });
+    const alert = screen.getByTestId("plan-alert");
+    expect(alert.getAttribute("data-tone")).toBe("orange");
+    expect(alert).toHaveTextContent(/^88% of the session limit used — resets in 1h 59m|^88% of the session limit used — resets in 2h 00m/);
+
+    ws.deliver({ type: "rate_limit", status: "rejected", window: "five_hour", utilization: 100, resetsAt: inTwoHours() });
+    expect(screen.getByTestId("plan-alert").getAttribute("data-tone")).toBe("red");
+    expect(screen.getByTestId("plan-alert")).toHaveTextContent("The session limit is used up");
+
+    ws.deliver({ type: "ready" });
+    expect(screen.queryByTestId("plan-alert")).toBeNull();
+  });
+
+  it("fica quieto enquanto há margem, e ignora um frame torto", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "rate_limit", status: "allowed", window: "five_hour", utilization: 40, resetsAt: inTwoHours() });
+    ws.deliver({ type: "rate_limit", status: "bogus", window: "five_hour", utilization: 99 });
+    expect(screen.queryByTestId("plan-alert")).toBeNull();
+  });
+});

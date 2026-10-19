@@ -1,6 +1,7 @@
 import * as React from "react";
 import { flushSync } from "react-dom";
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Brain,
@@ -23,6 +24,8 @@ import { wsUrl } from "@/lib/ws";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/providers/auth";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
+import { PlanUsageAlert, cardRateLimitsKey, useCardPlanUsage } from "@/features/board/components/PlanUsage";
+import { planAlert, planWindows } from "@/features/board/lib/planUsage";
 import { LinkifiedText, Markdown, SenderTag } from "@/features/board/components/ChatView";
 import { originRole, type MessageOrigin } from "@/features/board/lib/chat";
 import {
@@ -490,6 +493,20 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     return () => clearTimeout(timer);
   }, [peers, peersNow]);
   const typingPeers = typingNames(peers, peersNow, viewer);
+
+  /**
+   * O AVISO DE LIMITE DO PLANO, no canto direito da faixa do "está digitando". Os avisos ao vivo
+   * chegam por ESTE socket; publicados no cache, o medidor do topo do card lê os mesmos (ver
+   * PlanUsage.tsx). A leitura periódica cobre as janelas sobre as quais o CLI ainda não falou.
+   */
+  const queryClient = useQueryClient();
+  React.useEffect(() => {
+    queryClient.setQueryData(cardRateLimitsKey(cardId), state.rateLimits);
+  }, [queryClient, cardId, state.rateLimits]);
+  const plan = useCardPlanUsage(cardId, active);
+  // O chat redesenha a cada frame do socket; a contagem "renova em" anda junto, sem relógio próprio.
+  const alertNow = Date.now();
+  const usageAlert = planAlert(planWindows(plan.data?.usage, state.rateLimits, alertNow), state.rateLimits, alertNow);
 
   /**
    * A TURN goes out with a receipt: the words are written to the outbox (disk) BEFORE the frame
@@ -1263,7 +1280,13 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
 
       {/* The interrupt button lives INSIDE the composer — right column, above the microphone —
           in the same seat as the transcript chat's stop. The interrupt frame is still this view's. */}
-      <PeerTypingIndicator names={typingPeers} className="mt-1.5" />
+      {/* Uma faixa, dois recados: quem está digitando à esquerda, o aviso do plano à direita. */}
+      <div className="mt-1.5 flex items-center justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <PeerTypingIndicator names={typingPeers} />
+        </div>
+        <PlanUsageAlert alert={usageAlert} now={alertNow} className="max-w-[70%] shrink" />
+      </div>
 
       <TerminalComposer
         className="mt-1.5"

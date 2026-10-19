@@ -823,6 +823,18 @@ describe("CardTerminalView — the card bar", () => {
     expect(pill.textContent).not.toMatch(/inherited/i);
   });
 
+  it("a member sees the account in use as a read-only pill, next to the plan meter", async () => {
+    serveSession({ account: { slug: null, name: "Main" } });
+    serveMember();
+    renderWithCache([card({ openedAt: 10 })]);
+
+    const pill = await screen.findByTestId("card-account-readonly");
+    await waitFor(() => expect(pill).toHaveTextContent("Main"));
+    expect(pill.tagName).toBe("SPAN");
+    expect(screen.queryByRole("button", { name: "Claude account" })).toBeNull();
+    expect(screen.getByTestId("plan-meter")).toBeInTheDocument();
+  });
+
   it("the account menu is one EXPLICIT row per account, the built-in profile first", async () => {
     serveSession({ account: { slug: null, name: "Main" } });
     const user = userEvent.setup();
@@ -1155,7 +1167,7 @@ describe("CardTerminalView — the phone", () => {
     expect(within(menu).getByRole("menuitemcheckbox", { name: /Sonnet/ })).toBeInTheDocument();
   });
 
-  it("keeps the account rows out of a member's overflow menu — only the model is theirs", async () => {
+  it("shows a member which account the card runs on, without the rows to switch it", async () => {
     serveMember();
     setViewport(true);
     const user = userEvent.setup();
@@ -1165,7 +1177,9 @@ describe("CardTerminalView — the phone", () => {
     await user.click(await screen.findByTestId("card-bar-more"));
     const menu = await screen.findByRole("menu");
     expect(within(menu).getByText("Model")).toBeInTheDocument();
-    expect(within(menu).queryByText("Claude account")).not.toBeInTheDocument();
+    expect(within(menu).getByText("Claude account")).toBeInTheDocument();
+    const item = within(menu).getByTestId("card-account-readonly-item");
+    expect(item).toHaveAttribute("aria-disabled", "true");
   });
 
   it("opens the browser pane from the overflow menu", async () => {

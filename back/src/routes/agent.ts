@@ -4,7 +4,7 @@ import { requireCardAccess, requireCardWork } from "../auth/access.js";
 import * as registry from "../services/board/registry.js";
 import { cardWorkPaths, restartStaggered, applyProjectBrainEverywhere } from "../services/board/workspace.js";
 import { setAccountToken, removeAccountToken, accountsTokenStatus } from "../services/accounts/token.js";
-import { allAccountsUsage } from "../services/accounts/usage.js";
+import { accountUsage, allAccountsUsage, usageKey } from "../services/accounts/usage.js";
 import {
   applyMcpsEverywhere, setMcpSecretById, mcpSecretsStatus, deleteMcpSecrets,
 } from "../services/mcp/mcp.js";
@@ -374,6 +374,19 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       const { code, body } = fail(err);
       return await reply.code(code).send(body);
     }
+  });
+
+  /**
+   * PLAN USAGE of the account THIS card runs on — for whoever can open the card, member included.
+   * The member does not choose the account (that stays the owner's), but the limit stops their work
+   * just the same, so they get to see how close it is. Only this one account: never the list.
+   */
+  app.get<{ Params: { id: string } }>("/api/cards/:id/usage", { preHandler: requireCardAccess }, async (req, reply) => {
+    const card = await registry.getCard(req.params.id);
+    const project = card ? await registry.getProject(card.projectId) : undefined;
+    if (!card || !project) return await reply.code(404).send({ error: "card not found" });
+    const slug = registry.effectiveAccountSlug(card, project);
+    return await reply.send({ slug: usageKey(slug), usage: await accountUsage(slug) });
   });
 
   /** The board's own view of what a card maps to in the runner — handy for debugging an import. */
