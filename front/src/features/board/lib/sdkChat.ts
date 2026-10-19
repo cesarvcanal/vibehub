@@ -13,6 +13,7 @@ import { normalizeMessage, parseOrigin, type MessageOrigin } from "@/features/bo
 import type { SlashCommandInfo } from "@/features/board/lib/slashMenu";
 import type { ServerText } from "@/features/board/lib/sdkOutbox";
 import { hasToolDiff } from "@/features/board/lib/toolDiff";
+import type { RateLimitInfo } from "@/features/board/lib/planUsage";
 import { t as translate } from "@/i18n";
 
 /* ----------------------------------------------------------------- events */
@@ -77,6 +78,7 @@ export interface SdkEvent {
     | "catalog"
     | "local_output"
     | "background_tasks"
+    | "rate_limit"
     | "conversation_reset"
     | "result"
     | "workflow_progress"
@@ -131,6 +133,11 @@ export interface SdkEvent {
   trigger?: string;
   /** On `background_tasks`: the WHOLE live set (replace, never merge) — see `backgroundTasks`. */
   tasks?: BackgroundTask[];
+  /** On `rate_limit`: the plan limit reading of ONE window (see `rateLimits`). */
+  status?: string;
+  window?: string;
+  utilization?: number;
+  resetsAt?: number;
   /** On `catalog`: every skill/command this session can run — what the composer's "/" offers. */
   commands?: SlashCommandInfo[];
   /** On `user_question`: the questions with their selectable options. */
@@ -402,6 +409,12 @@ export interface SdkChatState {
    * houver algo vivo — o "1 background task" do rodapé do Claude Code.
    */
   backgroundTasks: BackgroundTask[];
+  /**
+   * O AVISO DE LIMITE DO PLANO por janela (`five_hour`, `seven_day`, …), o último que o CLI emitiu —
+   * o "You've used 91% of your session limit" do rodapé do terminal. Estado, não conversa: vira a
+   * faixa colorida ao lado do "está digitando" (ver lib/planUsage.ts).
+   */
+  rateLimits: Record<string, RateLimitInfo>;
   /** Monotonic counter for rows the driver did not name. */
   seq: number;
 }
@@ -410,6 +423,7 @@ export const INITIAL_SDK_STATE: SdkChatState = {
   rows: [],
   workflowMeta: {},
   backgroundTasks: [],
+  rateLimits: {},
   ready: false,
   turnActive: false,
   terminalBurst: false,
@@ -1088,6 +1102,20 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       if (tasks.length === 0 && state.backgroundTasks.length === 0) return state;
       return { ...state, backgroundTasks: tasks };
     }
+    case "rate_limit": {
+      // Uma janela por vez, SUBSTITUINDO a leitura anterior dela. Normalizado na fronteira: um
+      // frame torto não pinta faixa nenhuma.
+      const status = event.status;
+      if (status !== "allowed" && status !== "allowed_warning" && status !== "rejected") return state;
+      if (typeof event.window !== "string" || !event.window) return state;
+      const info: RateLimitInfo = {
+        status,
+        window: event.window,
+        ...(typeof event.utilization === "number" && Number.isFinite(event.utilization) ? { utilization: event.utilization } : {}),
+        ...(typeof event.resetsAt === "number" && Number.isFinite(event.resetsAt) ? { resetsAt: event.resetsAt } : {}),
+      };
+      return { ...state, rateLimits: { ...state.rateLimits, [info.window]: info } };
+    }
     case "conversation_reset": {
       // /clear: o modelo começou do zero numa sessão nova. A tela esquece a conversa antiga como
       // o Claude Code faz — senão o /clear parecia não ter feito nada. Fica o que é da SESSÃO do
@@ -1145,6 +1173,9 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         // vigente logo atrás deste `ready` (ver `attachSocket`). Zerar aqui é o que impede uma faixa
         // "rodando em segundo plano" pendurada depois que o processo que a rodava morreu.
         backgroundTasks: [],
+        // Idem o aviso de limite: o back reenvia o vigente atrás do `ready`; um driver novo (conta
+        // trocada, inclusive) não herda o aviso da conta anterior.
+        rateLimits: {},
         rows: event.turnActive === true ? settleStreaming(state.rows) : dropProvisionalTools(settleStreaming(state.rows)),
       };
       if (event.resume) {

@@ -221,6 +221,8 @@ export const ALL_CARDS_KEY = ["board", "cards", "@all"] as const;
 export const cardsKey = (projectId: string) => ["board", "cards", projectId] as const;
 export const cardKey = (cardId: string) => ["board", "card", cardId] as const;
 export const cardSessionKey = (cardId: string) => ["board", "card", cardId, "session"] as const;
+/** Plan usage of the account ONE card runs on — shared by the bar's meter and the chat's alert. */
+export const cardUsageKey = (cardId: string) => ["board", "card", cardId, "usage"] as const;
 /** The card's outbox: what was composed and has not reached the agent yet. */
 export const cardMessagesKey = (cardId: string) => ["board", "card", cardId, "messages"] as const;
 export const cardBrowserKey = (cardId: string) => ["board", "card", cardId, "browser"] as const;
@@ -340,6 +342,12 @@ export interface AccountUsage {
   /** Epoch ms the back-off lifts. */
   retryAt?: number;
   error?: UsageError;
+}
+
+/** `GET /cards/:id/usage`: the reading of the account this card runs on (`default` = built-in). */
+export interface CardUsageResponse {
+  slug: string;
+  usage: AccountUsage;
 }
 
 export interface AccountsUsageResponse {
@@ -577,6 +585,9 @@ export const boardApi = {
     get<Partial<AccountsUsageResponse>>("/accounts/usage").then(
       (r): AccountsUsageResponse => ({ bySlug: r?.bySlug ?? {}, fetchedAt: r?.fetchedAt ?? 0 }),
     ),
+
+  /** Plan usage of the account a card runs on — readable by anyone who can open the card. */
+  cardUsage: (cardId: string) => get<CardUsageResponse>(`/cards/${encodeURIComponent(cardId)}/usage`),
 
   createAccount: (label: string) =>
     post<{ account: BoardAccount }>("/accounts", { name: label }).then((r) => r.account),
