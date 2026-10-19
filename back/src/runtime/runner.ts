@@ -175,7 +175,14 @@ export function buildSetupScript(opts: {
     "apt-get install -y -qq tmux git ripgrep curl procps xvfb x11vnc novnc websockify socat >/dev/null",
     // gh CLI from the official repo — the agent opens PRs and checks CI. Auth is the user's own.
     'if ! command -v gh >/dev/null; then mkdir -p /etc/apt/keyrings && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list && apt-get update -qq && apt-get install -y -qq gh >/dev/null; fi',
+    // Claude Code CLI (the account login terminal and the TUI sessions run it). An npm update cut
+    // off halfway leaves a `.claude-code-XXXX` staging dir that makes every later install fail with
+    // ENOTEMPTY — and once left the package with no `/usr/local/bin/claude` link while the install
+    // "succeeded". So: clear the leftover, install, and FAIL the setup if `claude` is not on PATH,
+    // instead of finding out when somebody clicks "Sign in" and gets `command not found`.
+    'rm -rf "$(npm root -g)"/@anthropic-ai/.claude-code-*',
     "npm i -g @anthropic-ai/claude-code >/dev/null 2>&1",
+    'command -v claude >/dev/null || { echo "vibehub setup: Claude Code installed but no claude binary on PATH" >&2; exit 1; }',
     // Headful Chromium for the card browser (the same binary the Playwright MCP drives over CDP).
     "npx --yes playwright install --with-deps chromium >/dev/null 2>&1 || true",
     "mkdir -p /root/.claude /work/scratch /work/.browser",
