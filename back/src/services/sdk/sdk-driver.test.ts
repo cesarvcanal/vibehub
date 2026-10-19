@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -34,6 +34,8 @@ const CLEARED = "99999999-2222-3333-4444-555555555555";
 export function query({ prompt, options }) {
   const index = ++created;
   mark("effort:" + (options.effort ?? "none"));
+  // Which sign-in this CLI was born with (the warm catalogue's throwaway CLI says so too).
+  mark("auth:" + ((options.env ?? process.env).CLAUDE_CODE_OAUTH_TOKEN ?? "login"));
   let onInterrupt = () => {};
   let interruptAnswer = Promise.resolve();
   const interrupted = () => new Promise((resolve) => { onInterrupt = resolve; });
@@ -175,6 +177,8 @@ interface RunningDriver {
   waitFor(match: (e: DriverEvent) => boolean, from?: number): Promise<DriverEvent>;
   /** Resolves once the fake SDK has printed `fake:<name>` (see FAKE_SDK). */
   waitMark(name: string): Promise<void>;
+  /** Every `fake:` mark so far, in order. */
+  marks: string[];
 }
 
 let sandbox = "";
@@ -253,6 +257,7 @@ function startDriver(extraArgs: string[] = [], cwd = sandbox, configDir = sandbo
     waitMark: async (name) => {
       await marks.wait((mark) => mark === name, 0, () => `marks: ${marks.items.join(", ")}`);
     },
+    marks: marks.items,
   };
 }
 
@@ -302,6 +307,58 @@ describe("sdk-driver.mjs — editar uma mensagem que o modelo nunca leu", () => 
  * mais nova e rebobinava para depois da primeira resposta — "ficou como se eu tivesse editado a
  * segunda". Com `first`, não há o que procurar: nada antes dela fica, a conversa recomeça.
  */
+/**
+ * O LOGIN QUE SÓ VALIA DEPOIS DE "REINICIAR" (produção, 2026-10-19): o CLI nasce com o ambiente do
+ * spawn e fica vivo entre as mensagens; a pessoa fazia `/login` e o chat seguia no token revogado
+ * até alguém clicar em Reiniciar. O driver relê o perfil antes de cada envio e reabre o CLI quando
+ * o login mudou — em segundo plano, na mesma sessão.
+ */
+describe("sdk-driver.mjs — um login novo vale na próxima mensagem, sem Reiniciar", () => {
+  const LOGIN = JSON.stringify({ claudeAiOauth: { accessToken: "a", refreshToken: "r-1", expiresAt: 1 } });
+  const authMarks = (driver: RunningDriver): string[] => driver.marks.filter((m) => m.startsWith("auth:"));
+
+  async function profileWithToken(name: string): Promise<string> {
+    const config = join(sandbox, name);
+    await mkdir(config, { recursive: true });
+    await writeFile(join(config, ".oauth-token"), "sk-revogado");
+    const old = Date.now() / 1000 - 86_400;
+    await utimes(join(config, ".oauth-token"), old, old);
+    return config;
+  }
+
+  it("um /login feito com o driver de pé: a mensagem seguinte sobe um CLI novo, já no login", async () => {
+    const config = await profileWithToken("profile-relogin");
+    const driver = startDriver([], sandbox, config);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "hello" });
+    await driver.waitFor((e) => e.type === "result");
+    expect(authMarks(driver).at(-1)).toBe("auth:sk-revogado");
+    const before = authMarks(driver).length;
+
+    await writeFile(join(config, ".credentials.json"), LOGIN); // o /login, agora
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "de novo" });
+    await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:de novo", from);
+    expect(authMarks(driver).length).toBe(before + 1);
+    expect(authMarks(driver).at(-1)).toBe("auth:login");
+    // Na mesma conversa: o CLI novo retoma a sessão, não abre outra.
+    expect(driver.events.slice(from).some((e) => e.type === "error")).toBe(false);
+  }, 60_000);
+
+  it("nada mudou no perfil: o mesmo CLI segue, sem reabrir", async () => {
+    const config = await profileWithToken("profile-same");
+    const driver = startDriver([], sandbox, config);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "hello" });
+    await driver.waitFor((e) => e.type === "result");
+    const before = authMarks(driver).length;
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "de novo" });
+    await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:de novo", from);
+    expect(authMarks(driver).length).toBe(before);
+  }, 60_000);
+});
+
 describe("sdk-driver.mjs — editar a PRIMEIRA mensagem com uma cópia igual mais abaixo", () => {
   async function driverOnDuplicates(name: string) {
     const config = join(sandbox, name);

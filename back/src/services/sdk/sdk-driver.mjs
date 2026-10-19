@@ -9,7 +9,9 @@
 // and the permission gate MIRROR `back/src/services/sdk/protocol.ts` — keep them in step.
 //
 // Auth: CLAUDE_CODE_OAUTH_TOKEN is exported by the spawn command (read from the card profile's
-// .oauth-token, exactly like the TUI's sessionCommand), so `query()` boots already logged in.
+// .oauth-token, exactly like the TUI's sessionCommand), so `query()` boots already logged in. The
+// driver re-reads the profile before every stream and before every send (see `applyAuth`): a
+// sign-in made while it runs takes over on the next message, with no "Reiniciar".
 //
 // Permission model: `--permission-gate` picks the mode (mirror of `sdkGateAction` in protocol.ts).
 //   - "same-as-terminal": the native chat mirrors the Terminal tab — the runner's own Claude
@@ -33,7 +35,7 @@
 // the second lock on the same door, in case the driver is ever spawned by another path. An API key
 // in the environment would silently bill the API instead of the Max subscription.
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -504,6 +506,7 @@ async function warmCatalog() {
   const ch = makeChannel();
   warmChannel = ch;
   try {
+    applyAuth(); // the throwaway CLI signs in like the real one would
     const options = baseOptions();
     options.env = { ...process.env, VIBEHUB_STATUS_URL: "" };
     const handle = query({ prompt: ch, options });
@@ -756,6 +759,8 @@ function createToolInputTracker(throttleMs) {
 }
 
 async function runStream() {
+  // The sign-in this CLI is born with — the newest one in the profile, read NOW (see `applyAuth`).
+  streamAuth = applyAuth();
   const options = baseOptions();
   if (lastSessionId) options.resume = lastSessionId;
   if (pendingResumeAt && lastSessionId) {
@@ -1241,6 +1246,92 @@ async function reanchorIfStale() {
   absorbedSinceFork = false;
 }
 
+/* ------------------------------------------------------------- auth */
+
+/**
+ * WHICH SIGN-IN the next CLI uses — the same rule as `oauthTokenGuard` (accounts/profiles.ts), which
+ * the spawn command applies once at boot: the profile's `.oauth-token` (setup-token) is used UNLESS a
+ * `.credentials.json` NEWER than it carries a refresh token (a `/login` made after the token).
+ *
+ * The spawn command decides only once, and the CLI process keeps the environment it was born with —
+ * so a login made while the driver ran was ignored until someone clicked "Reiniciar" (produção,
+ * 2026-10-19: the person logged in again and the chat kept answering "OAuth token revoked"). The
+ * driver re-reads the profile itself: before every stream (here) and before every send
+ * (`reauthIfChanged`). PURE: the file facts come in, the decision comes out.
+ */
+function decideAuth({ token, tokenMtimeMs, credsMtimeMs, credsHasRefresh }) {
+  if (!token) return { token: null };
+  if (credsMtimeMs !== null && credsMtimeMs > tokenMtimeMs && credsHasRefresh) return { token: null };
+  return { token };
+}
+
+/** The profile this driver signs in from: CLAUDE_CONFIG_DIR, or the default one. */
+function profileDir() {
+  return process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+}
+
+/** Reads the two files that decide the sign-in. Never throws: a missing file is a missing file. */
+function readAuthFacts() {
+  const dir = profileDir();
+  let token = null;
+  let tokenMtimeMs = 0;
+  let credsMtimeMs = null;
+  let credsHasRefresh = false;
+  try {
+    const file = join(dir, ".oauth-token");
+    token = readFileSync(file, "utf8").trim() || null;
+    tokenMtimeMs = statSync(file).mtimeMs;
+  } catch { token = null; }
+  try {
+    const file = join(dir, ".credentials.json");
+    credsMtimeMs = statSync(file).mtimeMs;
+    const oauth = JSON.parse(readFileSync(file, "utf8")).claudeAiOauth;
+    credsHasRefresh = !!(oauth && typeof oauth.refreshToken === "string" && oauth.refreshToken !== "");
+  } catch { /* no login file, or one that cannot be read: it cannot win */ }
+  return { token, tokenMtimeMs, credsMtimeMs, credsHasRefresh };
+}
+
+/**
+ * Sets (or clears) CLAUDE_CODE_OAUTH_TOKEN for the NEXT CLI, and returns the fingerprint of the
+ * sign-in it chose — what `reauthIfChanged` compares. The fingerprint carries the login file's age
+ * too: a new `/login` (another account, or the same one again) is a different sign-in even when the
+ * decision is "login" both times. Neither value is ever logged or emitted.
+ */
+function applyAuth() {
+  const facts = readAuthFacts();
+  const { token } = decideAuth(facts);
+  if (token) process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
+  else delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  return authFingerprint(facts, token);
+}
+
+function authFingerprint(facts, token) {
+  return token ? `token:${facts.tokenMtimeMs}:${token.length}:${token.slice(-6)}` : `login:${facts.credsMtimeMs ?? "none"}`;
+}
+
+/** The sign-in the OPEN stream's CLI was born with (null = no stream yet). */
+let streamAuth = null;
+
+/**
+ * A SIGN-IN CHANGED since the open stream started (someone logged in, or saved a new token): the
+ * stream is closed so this send opens a fresh CLI on the new sign-in — resuming the SAME session, so
+ * the conversation does not notice. The background "Reiniciar" the person used to have to click.
+ *
+ * Never with a turn in flight (killing it would lose the work; the message joins it as always) nor
+ * with background tasks running (they die with the CLI) — the next send checks again.
+ */
+async function reauthIfChanged() {
+  if (!currentQuery || turnActive || backgroundTasksOwner !== null) return;
+  const facts = readAuthFacts();
+  if (authFingerprint(facts, decideAuth(facts).token) === streamAuth) return;
+  try {
+    await endStream();
+  } catch {
+    return; // the old stream survived — the next send tries again
+  }
+  trace("the profile's sign-in changed — the next message opens a new CLI on it");
+}
+
 async function rewindAndSend(text, fallback, original, releaseQuestions = () => {}, first = false) {
   const supersede = (reason) => {
     emit({ type: "rewound", ok: false, reason });
@@ -1350,6 +1441,7 @@ rl.on("line", (line) => {
     // fim real do arquivo: uma mensagem enviada de um ponto velho órfã o que o terminal escreveu.
     serialized(async () => {
       await reanchorIfStale();
+      await reauthIfChanged();
       sendUser(control.text);
       supersedePendingQuestions();
     });
@@ -1363,6 +1455,7 @@ rl.on("line", (line) => {
     // outra vez, e o ponto em memória que a decisão consultaria é de uma linha do tempo vencida.
     serialized(async () => {
       await reanchorIfStale();
+      await reauthIfChanged();
       await rewindAndSend(control.text, control.fallback, control.original, supersedePendingQuestions, control.first === true);
     });
     return;

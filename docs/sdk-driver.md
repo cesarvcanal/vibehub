@@ -425,6 +425,14 @@ so a profile holding both used to run on the token forever — a revoked setup-t
 `.credentials.json` NEWER than it carries a refresh token. Saving a token in the UI rewrites the
 file (takes the lead back); the card open re-seeds it from the vault only when the value changed, so
 opening a card never steals the lead from a login.
+
+**No "Reiniciar" after a login.** The spawn command decides once, and the CLI keeps the environment
+it was born with — so a login made while the driver ran was ignored until someone restarted the
+card. The driver applies the same rule itself (`decideAuth`/`applyAuth` in sdk-driver.mjs) before
+every stream, and before every send (`reauthIfChanged`) compares the profile's sign-in with the one
+the open CLI was born with: changed → the stream is closed and the message opens a fresh CLI on the
+new sign-in, resuming the same session. Never with a turn in flight or background tasks running
+(they would die with the CLI) — the next send checks again.
 The spawn line **`unset ANTHROPIC_API_KEY`** before `exec node`, and the driver itself runs
 `delete process.env.ANTHROPIC_API_KEY` on boot — two locks on the same door, both tested. An
 inherited API key would silently outrank the token and bill the API instead of the subscription;
