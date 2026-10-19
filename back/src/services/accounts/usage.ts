@@ -2,6 +2,7 @@ import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.
 import { config } from "../../config/env.js";
 import { listAccounts } from "../board/registry.js";
 import { DEFAULT_ACCOUNT_SLUG, profileDirFor } from "./profiles.js";
+import { resolveAccountToken } from "./token.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -16,7 +17,16 @@ import { logger } from "../../utils/logger.js";
  * which Claude Code writes on `/login` and refreshes on its own. The long-lived `setup-token` in
  * our vault does NOT carry the `user:profile` scope and is rejected, which is why this module never
  * touches it: an account logged in ONLY by setup-token has no `claudeAiOauth` block at all and is
- * reported as `no_credentials` (the UI then says which command fixes it).
+ * reported as `no_credentials` (the UI then says which command fixes it) — UNLESS the fallback
+ * below can read it.
+ *
+ * THE FALLBACK: THE PLAN'S OWN HEADERS. Every inference call answered for a Claude plan carries
+ * `anthropic-ratelimit-unified-<window>-utilization` / `-reset` — the same numbers Claude Code turns
+ * into its "You've used 91% of your session limit". The setup-token DOES carry `user:inference`, so
+ * when the profile has no usable interactive login (never had one, or its refresh token expired and
+ * Claude Code blanked the access token) we spend ONE minimal call — Haiku, one output token — and
+ * read the windows off the headers. Cheaper on the plan than it sounds (a few dozen tokens), and
+ * cached for `PROBE_FRESH_MS` so a board left open is a handful of calls an hour, not one a minute.
  *
  * WHERE THE TOKEN LIVES, AND FOR HOW LONG. It is read out of the runner with a READ-ONLY
  * `docker exec … cat` (every path validated and shell-quoted, nothing user-supplied reaching the
@@ -54,6 +64,15 @@ export const BACKOFF_MAX_MS = 1_800_000;
 
 /** Pause between accounts in `allAccountsUsage`, so a listing is a queue and not a fan-out. */
 export const SERIAL_DELAY_MS = 250;
+
+/** Inference endpoint the fallback probes for the plan's rate-limit headers. */
+export const MESSAGES_URL = "https://api.anthropic.com/v1/messages";
+
+/** Cheapest model on every plan: the probe only wants the headers. */
+export const PROBE_MODEL = "claude-haiku-4-5";
+
+/** A probe spends (a little) plan, so its reading stays fresh longer than the free endpoint's. */
+export const PROBE_FRESH_MS = 300_000;
 
 /** A single HTTPS call gets this long; the UI is polling and would rather have "unreachable". */
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -214,6 +233,40 @@ function stale(good: AccountUsage, error: UsageError, retryAt?: number): Account
   return { ...good, stale: true, error, ...(retryAt ? { retryAt } : {}) };
 }
 
+/**
+ * Header claim → the window it fills. `5h`/`7d` are what the API sends today; the strongest-model
+ * window is matched under both spellings its claim name has had.
+ */
+const HEADER_WINDOWS: readonly (readonly [claim: string, field: "fiveHour" | "sevenDay" | "sevenDayOpus"])[] = [
+  ["5h", "fiveHour"],
+  ["7d", "sevenDay"],
+  ["7d_opus", "sevenDayOpus"],
+  ["7d-opus", "sevenDayOpus"],
+];
+
+/**
+ * The windows out of the `anthropic-ratelimit-unified-*` headers of an inference answer, or
+ * undefined when there are none. Utilization comes as a FRACTION (0.07) and the reset as epoch
+ * SECONDS; both are converted to the units of the usage endpoint (0..100, ISO). PURE.
+ */
+export function parseRateLimitHeaders(
+  headers: { get(name: string): string | null },
+): Pick<AccountUsage, "fiveHour" | "sevenDay" | "sevenDayOpus"> | undefined {
+  const out: Pick<AccountUsage, "fiveHour" | "sevenDay" | "sevenDayOpus"> = {};
+  for (const [claim, field] of HEADER_WINDOWS) {
+    if (out[field]) continue;
+    const raw = headers.get(`anthropic-ratelimit-unified-${claim}-utilization`);
+    const fraction = raw === null || raw.trim() === "" ? NaN : Number(raw);
+    if (!Number.isFinite(fraction)) continue;
+    const resetRaw = Number(headers.get(`anthropic-ratelimit-unified-${claim}-reset`));
+    const resetsAt = Number.isFinite(resetRaw) && resetRaw > 0 ? new Date(resetRaw * 1000).toISOString() : null;
+    // Two decimals: 0.07 * 100 is 7.000000000000001 in floating point.
+    const pct = Math.round(fraction * 10_000) / 100;
+    out[field] = { utilization: Math.min(100, Math.max(0, pct)), resetsAt };
+  }
+  return out.fiveHour || out.sevenDay || out.sevenDayOpus ? out : undefined;
+}
+
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -264,6 +317,46 @@ async function callUsageEndpoint(token: string, at: number): Promise<AccountUsag
 }
 
 /**
+ * The fallback: one minimal inference call with the long-lived token, read for its headers. A 429
+ * still counts when it carries the headers — that is exactly "this plan is out", at 100%. The token
+ * is a parameter and dies with the frame, like the endpoint's.
+ */
+async function probeViaInference(token: string, at: number): Promise<AccountUsage> {
+  let res: Response;
+  try {
+    res = await fetch(MESSAGES_URL, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "anthropic-beta": OAUTH_BETA,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: PROBE_MODEL,
+        max_tokens: 1,
+        // An OAuth plan token is only served as Claude Code; this is the line Claude Code sends.
+        system: "You are Claude Code, Anthropic's official CLI for Claude.",
+        messages: [{ role: "user", content: "." }],
+      }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch {
+    return failed("unreachable", at);
+  }
+  const windows = res.headers ? parseRateLimitHeaders(res.headers) : undefined;
+  // The body is not wanted either way; drain it so the socket goes back to the pool.
+  let body: unknown = null;
+  try {
+    body = await res.json();
+  } catch {
+    body = null;
+  }
+  if (windows) return { available: true, ...windows, fetchedAt: at };
+  return failed(res.ok ? "unreachable" : classifyFailure(res.status, body), at);
+}
+
+/**
  * Usage of ONE account, cache first.
  *
  * Returns `{ result, called }` so the serial walk in `allAccountsUsage` only pauses when a real
@@ -286,13 +379,24 @@ async function usageFor(slug: string | undefined): Promise<{ result: AccountUsag
   }
 
   const { token, runnerDown } = await readAccessToken(profileDirFor(slug));
-  if (!token) {
-    const result = failed(runnerDown ? "unreachable" : "no_credentials", now);
+  let result: AccountUsage | undefined = token ? await callUsageEndpoint(token, now) : undefined;
+  let freshMs = FRESH_MS;
+
+  // No usable interactive login — none at all, or one the endpoint refuses — and the account has a
+  // long-lived token: read the plan off an inference call's headers instead of giving up.
+  if (!runnerDown && (!result || result.error === "unauthorized")) {
+    const longLived = await resolveAccountToken(key).catch(() => undefined);
+    if (longLived) {
+      result = await probeViaInference(longLived, now);
+      freshMs = PROBE_FRESH_MS;
+    }
+  }
+
+  if (!result) {
+    result = failed(runnerDown ? "unreachable" : "no_credentials", now);
     cache.set(key, { ...entry, last: result, freshUntil: now + FRESH_MS, strikes: 0, blockedUntil: 0 });
     return { result, called: false };
   }
-
-  const result = await callUsageEndpoint(token, now);
 
   if (result.error === "rate_limited") {
     const strikes = entry.strikes + 1;
@@ -306,7 +410,7 @@ async function usageFor(slug: string | undefined): Promise<{ result: AccountUsag
   cache.set(key, {
     good: result.available ? result : entry.good,
     last: result,
-    freshUntil: now + FRESH_MS,
+    freshUntil: now + freshMs,
     strikes: 0,
     blockedUntil: 0,
   });

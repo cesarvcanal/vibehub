@@ -7,7 +7,8 @@ import { join } from "node:path";
  * PLAN USAGE PER ACCOUNT. What is actually dangerous here — and therefore what is pinned:
  *  - the access token never reaches a log line, the response, or argv;
  *  - the docker command is READ-ONLY and fully quoted;
- *  - a profile logged in only by setup-token (no `claudeAiOauth`) is `no_credentials`, not a crash;
+ *  - a profile logged in only by setup-token (no `claudeAiOauth`) is read off an inference call's
+ *    rate-limit headers with the vault token — and is `no_credentials`, not a crash, without one;
  *  - a 429 backs off exponentially and keeps serving the last good numbers as stale;
  *  - a fresh reading is served from cache instead of hitting runner or network again.
  * The board is REAL (temp data dir); the host executor and `fetch` are mocked.
@@ -41,9 +42,26 @@ let runScript: ReturnType<typeof vi.fn>;
 let fetchMock: ReturnType<typeof vi.fn>;
 let logged: string[] = [];
 
+const LONG_LIVED = "sk-ant-oat01-LONGLIVED-do-not-leak-0987654321";
+
 /** An HTTP answer shaped the way `fetch` returns one. */
-function response(status: number, body: unknown) {
-  return { ok: status >= 200 && status < 300, status, json: async () => body };
+function response(status: number, body: unknown, headers: Record<string, string> = {}) {
+  return { ok: status >= 200 && status < 300, status, json: async () => body, headers: new Headers(headers) };
+}
+
+/** The plan headers of an inference answer, as the API sent them during development. */
+const PLAN_HEADERS = {
+  "anthropic-ratelimit-unified-5h-utilization": "0.07",
+  "anthropic-ratelimit-unified-5h-reset": "1792434600",
+  "anthropic-ratelimit-unified-7d-utilization": "0.4",
+  "anthropic-ratelimit-unified-7d-reset": "1792990800",
+};
+
+/** Puts a long-lived `setup-token` in the vault for `slug`, as `setAccountToken` would. */
+async function storeLongLived(slug: string) {
+  const { secretSet } = await import("../../secrets/vault.js");
+  const { accountTokenKey } = await import("./token.js");
+  await secretSet(accountTokenKey(slug), LONG_LIVED);
 }
 
 async function fresh(stdout = credentials()) {
@@ -117,6 +135,19 @@ describe("pure parsing", () => {
     expect(usage.classifyFailure(400, { error: { type: "invalid_request", message: "missing scope user:profile" } }))
       .toBe("unauthorized");
     expect(usage.classifyFailure(500, null)).toBe("unreachable");
+  });
+
+  it("reads the plan windows off the rate-limit headers: fraction → %, epoch seconds → ISO", async () => {
+    const { usage } = await fresh();
+    expect(usage.parseRateLimitHeaders(new Headers(PLAN_HEADERS))).toEqual({
+      fiveHour: { utilization: 7, resetsAt: "2026-10-19T18:30:00.000Z" },
+      sevenDay: { utilization: 40, resetsAt: "2026-10-26T05:00:00.000Z" },
+    });
+    expect(
+      usage.parseRateLimitHeaders(new Headers({ "anthropic-ratelimit-unified-7d_opus-utilization": "2" })),
+    ).toEqual({ sevenDayOpus: { utilization: 100, resetsAt: null } });
+    expect(usage.parseRateLimitHeaders(new Headers({ "anthropic-ratelimit-unified-5h-utilization": "" }))).toBeUndefined();
+    expect(usage.parseRateLimitHeaders(new Headers({ "x-other": "1" }))).toBeUndefined();
   });
 
   it("backs off 2min, 4min, 8min… capped at 30min", async () => {
@@ -210,6 +241,83 @@ describe("accountUsage", () => {
     expect(result).toMatchObject({ available: false, error: "unauthorized" });
   });
 
+  it("with no interactive login, the vault token reads the plan off one minimal inference call", async () => {
+    const { usage } = await fresh(MCP_ONLY_CREDENTIALS);
+    await storeLongLived("tech");
+    fetchMock.mockResolvedValueOnce(response(200, { type: "message" }, PLAN_HEADERS));
+
+    const result = await usage.accountUsage("tech");
+    expect(result).toMatchObject({ available: true });
+    expect(result.error).toBeUndefined();
+    expect(result.fiveHour).toEqual({ utilization: 7, resetsAt: "2026-10-19T18:30:00.000Z" });
+    expect(result.sevenDay).toEqual({ utilization: 40, resetsAt: "2026-10-26T05:00:00.000Z" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, { method: string; headers: Record<string, string>; body: string }];
+    expect(url).toBe(usage.MESSAGES_URL);
+    expect(init.method).toBe("POST");
+    expect(init.headers.authorization).toBe(`Bearer ${LONG_LIVED}`);
+    const body = JSON.parse(init.body);
+    expect(body).toMatchObject({ model: usage.PROBE_MODEL, max_tokens: 1 });
+  });
+
+  it("an expired interactive login (blank access token) falls back the same way", async () => {
+    const { usage } = await fresh(credentials(""));
+    await storeLongLived("default");
+    fetchMock.mockResolvedValueOnce(response(200, {}, PLAN_HEADERS));
+    expect((await usage.accountUsage(undefined)).sevenDay?.utilization).toBe(40);
+  });
+
+  it("a login the usage endpoint refuses also falls back to the probe", async () => {
+    const { usage } = await fresh();
+    await storeLongLived("tech");
+    fetchMock
+      .mockResolvedValueOnce(response(401, { error: { type: "authentication_error" } }))
+      .mockResolvedValueOnce(response(200, {}, PLAN_HEADERS));
+    const result = await usage.accountUsage("tech");
+    expect(result.available).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a plan that is out still answers with headers: 429 with numbers is a reading at 100%", async () => {
+    const { usage } = await fresh(MCP_ONLY_CREDENTIALS);
+    await storeLongLived("tech");
+    fetchMock.mockResolvedValueOnce(
+      response(429, { error: { type: "rate_limit_error" } }, { "anthropic-ratelimit-unified-7d-utilization": "1.0" }),
+    );
+    const result = await usage.accountUsage("tech");
+    expect(result).toMatchObject({ available: true, sevenDay: { utilization: 100, resetsAt: null } });
+  });
+
+  it("a probe reading stays fresh for PROBE_FRESH_MS — it spends plan, so it is not repeated every minute", async () => {
+    const { usage } = await fresh(MCP_ONLY_CREDENTIALS);
+    await storeLongLived("tech");
+    fetchMock.mockResolvedValue(response(200, {}, PLAN_HEADERS));
+    await usage.accountUsage("tech");
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + usage.FRESH_MS + 1);
+    await usage.accountUsage("tech");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    vi.spyOn(Date, "now").mockReturnValue(now + usage.PROBE_FRESH_MS + 1);
+    await usage.accountUsage("tech");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a probe answer with no plan headers is classified like any failure", async () => {
+    const { usage } = await fresh(MCP_ONLY_CREDENTIALS);
+    await storeLongLived("tech");
+    fetchMock.mockResolvedValueOnce(response(401, { error: { type: "authentication_error" } }));
+    expect((await usage.accountUsage("tech")).error).toBe("unauthorized");
+  });
+
+  it("a runner that is down is unreachable — and the probe is not tried", async () => {
+    const { usage } = await fresh();
+    await storeLongLived("tech");
+    runScript.mockRejectedValueOnce(new Error("docker: command not found"));
+    expect((await usage.accountUsage("tech")).error).toBe("unreachable");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("a runner that is down is unreachable, not no_credentials", async () => {
     const { usage } = await fresh();
     runScript.mockRejectedValueOnce(new Error("docker: command not found"));
@@ -283,6 +391,16 @@ describe("the token never escapes", () => {
     for (const line of logged) expect(line).not.toContain(ACCESS_TOKEN);
     // The script sent to the host only names the FILE; the value comes back on stdout.
     for (const call of runScript.mock.calls) expect(String(call[0])).not.toContain(ACCESS_TOKEN);
+  });
+
+  it("the long-lived token of the probe is in no response, log line or argv either", async () => {
+    const { usage } = await fresh(MCP_ONLY_CREDENTIALS);
+    await storeLongLived("tech");
+    fetchMock.mockResolvedValue(response(200, {}, PLAN_HEADERS));
+    const ok = await usage.accountUsage("tech");
+    expect(JSON.stringify(ok)).not.toContain(LONG_LIVED);
+    for (const line of logged) expect(line).not.toContain(LONG_LIVED);
+    for (const call of runScript.mock.calls) expect(String(call[0])).not.toContain(LONG_LIVED);
   });
 });
 
