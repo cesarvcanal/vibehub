@@ -1366,7 +1366,7 @@ function SdkBackgroundTray({ tasks }: { tasks: readonly BackgroundTask[] }) {
  * Cada linha carrega os dois gestos que a fila promete: o lápis (volta pro campo, e SAI da fila —
  * nada de ser enviada no meio da correção) e o X (desisti dessa).
  */
-function SdkQueueTray({
+function SdkQueueTrayView({
   queue,
   onEdit,
   onRemove,
@@ -1411,7 +1411,9 @@ function SdkQueueTray({
             data-testid="sdk-queued-text"
             className="min-w-0 flex-1 max-h-24 overflow-y-auto overscroll-contain whitespace-pre-wrap break-words text-foreground/90"
           >
-            {message.text}
+            {/* Mesmo render da bolha: o caminho de um print colado vira a miniatura dele — esperar
+                na fila lendo `/work/.uploads/…/1792-image.png` não diz qual imagem vai. */}
+            <LinkifiedText text={message.text} compact />
           </span>
           {/* NO CAMPO, sendo reescrita: ela guarda o lugar dela na fila e não oferece gesto nenhum —
               o campo é que manda agora (Enter grava por cima, o X de lá desiste da correção). */}
@@ -1461,6 +1463,10 @@ function SdkQueueTray({
     </div>
   );
 }
+
+/* Memoised: the tray only shows while a turn streams, which is when SdkChatView re-renders on
+   every delta — and each queued row is now tokenised, not printed. The callbacks are stable. */
+const SdkQueueTray = React.memo(SdkQueueTrayView);
 
 /**
  * The tray of decisions still waiting on the user — collapsible, with a count badge. Expanded by

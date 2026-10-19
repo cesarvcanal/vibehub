@@ -2595,6 +2595,65 @@ describe("SdkChatView — a fila não rouba a tela da conversa", () => {
     expect(body).toHaveTextContent("linha 120 da instrução gigante");
   });
 
+  const CARD = "2f76af45-3e76-4e32-a49d-bc30b799713d";
+  const shot = (file: string) => `/work/.uploads/${CARD}/${file}`;
+
+  /** Um turno rodando e `text` esperando na fila. Devolve o campo, pra quem quiser editar. */
+  async function queueText(text: string) {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    const box = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+    await userEvent.type(box, "primeira{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "trabalhando…" });
+    fireEvent.change(box, { target: { value: text } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await screen.findByTestId("sdk-queued");
+    return box;
+  }
+
+  it("uma imagem anexada na mensagem em espera aparece como miniatura, não como caminho", async () => {
+    await queueText(`olha esse erro ${shot("1792422236057-image.png")}`);
+    const body = screen.getByTestId("sdk-queued-text");
+    const image = within(body).getByTestId("chat-image");
+    expect(image).toHaveAttribute("src", `/api/cards/${CARD}/uploads/1792422236057-image.png`);
+    // altura FIXA (não max): a imagem chegando depois não estica a bandeja nem esconde a conversa
+    expect(image.className).toMatch(/\bh-16\b/);
+    expect(image.closest("a")!.className).toMatch(/inline-block/); // duas lado a lado, não empilhadas
+    expect(body).toHaveTextContent("olha esse erro");
+    expect(body).not.toHaveTextContent("/work/.uploads");
+  });
+
+  it("duas imagens na mesma mensagem viram duas miniaturas", async () => {
+    await queueText(`compara ${shot("1-a.png")} ${shot("2-b.png")}`);
+    expect(within(screen.getByTestId("sdk-queued-text")).getAllByTestId("chat-image")).toHaveLength(2);
+  });
+
+  it("imagem que não carrega na fila volta a ser o caminho — nunca o ícone de imagem quebrada", async () => {
+    await queueText(`olha ${shot("1-sumiu.png")}`);
+    fireEvent.error(within(screen.getByTestId("sdk-queued-text")).getByTestId("chat-image"));
+    await waitFor(() => expect(screen.queryByTestId("chat-image")).not.toBeInTheDocument());
+    expect(screen.getByTestId("sdk-queued-text")).toHaveTextContent(shot("1-sumiu.png"));
+  });
+
+  it("editar a mensagem trocando a imagem não herda a falha da imagem anterior", async () => {
+    const box = await queueText(`olha ${shot("1-sumiu.png")}`);
+    fireEvent.error(within(screen.getByTestId("sdk-queued-text")).getByTestId("chat-image"));
+    await waitFor(() => expect(screen.queryByTestId("chat-image")).not.toBeInTheDocument());
+    await userEvent.click(screen.getByTestId("sdk-queued-edit"));
+    fireEvent.change(box, { target: { value: `olha ${shot("2-nova.png")}` } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    const image = await within(screen.getByTestId("sdk-queued-text")).findByTestId("chat-image");
+    expect(image).toHaveAttribute("src", `/api/cards/${CARD}/uploads/2-nova.png`);
+  });
+
+  it("na fila, ultrathink é texto comum — a pintura é só do campo e da bolha", async () => {
+    await queueText("ultrathink sobre isso");
+    expect(screen.getByTestId("sdk-queued-text").querySelector(".vh-ultra-char")).toBeNull();
+  });
+
   it("a bandeja fica FORA do scroller da conversa — ela não é uma linha do histórico", async () => {
     await queueHuge();
     const scroller = screen.getByTestId("sdk-chat-scroller");
