@@ -3,16 +3,39 @@ import { ChevronRight, FilePen, FilePlus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
 import type { SdkRow } from "@/features/board/lib/sdkChat";
-import type { DiffLine, ToolDiff } from "@/features/board/lib/toolDiff";
+import { inlineMarks, type DiffLine, type InlineMark, type ToolDiff } from "@/features/board/lib/toolDiff";
 
-/** Acima disto o card nasce recolhido: um diff longo empurraria a conversa inteira pra cima. */
-const OPEN_BY_DEFAULT_MAX = 20;
-
-const LINE_STYLE: Record<DiffLine["kind"], { prefix: string; className: string }> = {
-  add: { prefix: "+", className: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" },
-  del: { prefix: "−", className: "bg-red-500/10 text-red-600 dark:text-red-400" },
-  ctx: { prefix: " ", className: "text-muted-foreground" },
+/**
+ * O código fica na cor normal do texto — verde/vermelho no texto inteiro cansa e apaga a sintaxe.
+ * Quem diz o tipo da linha é o fundo, a barra à esquerda e o sinal; o trecho que mudou dentro da
+ * linha ganha o fundo mais forte (`mark`).
+ */
+const LINE_STYLE: Record<DiffLine["kind"], { prefix: string; className: string; sign: string; mark: string }> = {
+  add: {
+    prefix: "+",
+    className: "border-emerald-500/70 bg-emerald-500/10 text-foreground",
+    sign: "text-emerald-600 dark:text-emerald-400",
+    mark: "rounded-sm bg-emerald-500/30",
+  },
+  del: {
+    prefix: "−",
+    className: "border-red-500/70 bg-red-500/10 text-foreground/80",
+    sign: "text-red-600 dark:text-red-400",
+    mark: "rounded-sm bg-red-500/30 line-through decoration-red-500/50",
+  },
+  ctx: { prefix: " ", className: "border-transparent text-muted-foreground", sign: "", mark: "" },
 };
+
+function LineText({ text, mark, className }: { text: string; mark: InlineMark | null; className: string }) {
+  if (!mark) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, mark[0])}
+      <span data-testid="sdk-diff-mark" className={className}>{text.slice(mark[0], mark[1])}</span>
+      {text.slice(mark[1])}
+    </>
+  );
+}
 
 function basename(path: string): string {
   const parts = path.split(/[\\/]/);
@@ -23,25 +46,28 @@ function DiffBody({ diff }: { diff: ToolDiff }) {
   const t = useT();
   if (diff.hunks.length === 0 && !diff.hidden) return null;
   return (
-    <div className="mt-2 max-h-64 overflow-auto rounded border border-border/60 bg-background/70 font-mono text-[11px] leading-relaxed">
+    <div className="mt-2 max-h-96 overflow-auto rounded border border-border/60 bg-background/70 font-mono text-xs leading-relaxed">
       {/* min-w-max: a linha longa rola DENTRO do card e o fundo colorido acompanha até o fim dela. */}
       <div className="min-w-max py-0.5">
-        {diff.hunks.map((hunk, h) => (
-          <React.Fragment key={h}>
-            {h > 0 ? (
-              <div aria-hidden data-testid="sdk-diff-gap" className="select-none px-2 text-muted-foreground/60">⋯</div>
-            ) : null}
-            {hunk.map((line, i) => {
-              const style = LINE_STYLE[line.kind];
-              return (
-                <div key={i} data-testid="sdk-diff-line" data-kind={line.kind} className={cn("whitespace-pre px-2", style.className)}>
-                  <span aria-hidden className="inline-block w-3 select-none opacity-70">{style.prefix}</span>
-                  {line.text}
-                </div>
-              );
-            })}
-          </React.Fragment>
-        ))}
+        {diff.hunks.map((hunk, h) => {
+          const marks = inlineMarks(hunk);
+          return (
+            <React.Fragment key={h}>
+              {h > 0 ? (
+                <div aria-hidden data-testid="sdk-diff-gap" className="select-none border-y border-border/40 bg-muted/40 px-2 text-muted-foreground/60">⋯</div>
+              ) : null}
+              {hunk.map((line, i) => {
+                const style = LINE_STYLE[line.kind];
+                return (
+                  <div key={i} data-testid="sdk-diff-line" data-kind={line.kind} className={cn("whitespace-pre border-l-2 pl-1.5 pr-2", style.className)}>
+                    <span aria-hidden className={cn("inline-block w-4 select-none font-semibold", style.sign)}>{style.prefix}</span>
+                    <LineText text={line.text} mark={marks[i] ?? null} className={style.mark} />
+                  </div>
+                );
+              })}
+            </React.Fragment>
+          );
+        })}
         {diff.hidden ? (
           <div data-testid="sdk-diff-truncated" className="px-2 italic text-muted-foreground/80">
             {t("sdk.diffTruncated", { n: diff.hidden })}
@@ -55,11 +81,11 @@ function DiffBody({ diff }: { diff: ToolDiff }) {
 /**
  * O card de uma ferramenta que alterou código, no estilo do Cursor: o arquivo, o contador `+N −M`
  * e só os trechos alterados. Mesmo esqueleto visual do `SdkWorkflowCard` (cabeçalho-botão com
- * chevron), aberto por padrão só quando o diff é curto.
+ * chevron). Nasce aberto — o que a IA mudou é o que se quer ver; o corpo tem altura máxima e rola.
  */
 export function ToolDiffCard({ row, diff }: { row: Extract<SdkRow, { kind: "tool" }>; diff: ToolDiff }) {
   const t = useT();
-  const [open, setOpen] = React.useState(diff.added + diff.removed <= OPEN_BY_DEFAULT_MAX);
+  const [open, setOpen] = React.useState(true);
   const Icon = diff.created ? FilePlus : FilePen;
   const badge = diff.created ? t("sdk.diffWrote") : diff.replaceAll ? t("sdk.diffReplaceAll") : null;
 

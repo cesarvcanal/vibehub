@@ -147,6 +147,45 @@ export function lineDiff(before: string, after: string, context: number = 2): Li
   return capHunks(coarse ? { ...diff, truncated: true } : diff, DIFF_SHOWN_MAX);
 }
 
+/** Trecho `[início, fim)` de uma linha que de fato mudou em relação ao seu par do outro lado. */
+export type InlineMark = readonly [start: number, end: number];
+
+/**
+ * O que mudou DENTRO de cada linha de um trecho: um bloco de `−` seguido de um bloco de `+` do mesmo
+ * tamanho é pareado linha a linha, e de cada par sai o miolo entre o começo e o fim em comum. É o
+ * que deixa ver `2` → `3` numa linha longa sem comparar as duas no olho. Blocos de tamanhos
+ * diferentes, linha toda trocada ou sem par: null (a cor da linha já diz tudo). PURE.
+ */
+export function inlineMarks(hunk: readonly DiffLine[]): (InlineMark | null)[] {
+  const marks: (InlineMark | null)[] = hunk.map(() => null);
+  let i = 0;
+  while (i < hunk.length) {
+    if (hunk[i]!.kind !== "del") {
+      i++;
+      continue;
+    }
+    const delStart = i;
+    while (i < hunk.length && hunk[i]!.kind === "del") i++;
+    const addStart = i;
+    while (i < hunk.length && hunk[i]!.kind === "add") i++;
+    const count = addStart - delStart;
+    if (i - addStart !== count) continue;
+    for (let k = 0; k < count; k++) {
+      const before = hunk[delStart + k]!.text;
+      const after = hunk[addStart + k]!.text;
+      const limit = Math.min(before.length, after.length);
+      let prefix = 0;
+      while (prefix < limit && before[prefix] === after[prefix]) prefix++;
+      let suffix = 0;
+      while (suffix < limit - prefix && before[before.length - 1 - suffix] === after[after.length - 1 - suffix]) suffix++;
+      if (prefix + suffix === 0) continue;
+      if (before.length - suffix > prefix) marks[delStart + k] = [prefix, before.length - suffix];
+      if (after.length - suffix > prefix) marks[addStart + k] = [prefix, after.length - suffix];
+    }
+  }
+  return marks;
+}
+
 /** Texto inteiro como linhas adicionadas, desenhando no máximo `max`. */
 function allAdded(text: string, max: number): LineDiff {
   const lines = splitLines(text);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DIFF_SHOWN_MAX, WRITE_SHOWN_MAX, hasToolDiff, lineDiff, toolDiff, type DiffLine } from "@/features/board/lib/toolDiff";
+import { DIFF_SHOWN_MAX, WRITE_SHOWN_MAX, hasToolDiff, inlineMarks, lineDiff, toolDiff, type DiffLine } from "@/features/board/lib/toolDiff";
 
 const add = (text: string): DiffLine => ({ kind: "add", text });
 const del = (text: string): DiffLine => ({ kind: "del", text });
@@ -144,5 +144,25 @@ describe("hasToolDiff", () => {
     const started = performance.now();
     for (let i = 0; i < 1000; i++) hasToolDiff("Edit", input);
     expect(performance.now() - started).toBeLessThan(50);
+  });
+});
+
+describe("inlineMarks", () => {
+  it("marks only the changed middle of a paired −/+ line", () => {
+    expect(inlineMarks([ctx("a"), del("const b = 2;"), add("const b = 3;")])).toEqual([null, [10, 11], [10, 11]]);
+  });
+
+  it("pairs blocks of the same size line by line", () => {
+    expect(inlineMarks([del("x = 1"), del("y = 1"), add("x = 10"), add("y = 1")])).toEqual([null, null, [5, 6], null]);
+  });
+
+  it("an insertion inside the line marks only the + side", () => {
+    expect(inlineMarks([del("foo()"), add("foo(bar)")])).toEqual([null, [4, 7]]);
+  });
+
+  it("leaves unpaired blocks and fully different lines alone", () => {
+    expect(inlineMarks([del("a"), add("b"), add("c")])).toEqual([null, null, null]);
+    expect(inlineMarks([del("abc"), add("xyz")])).toEqual([null, null]);
+    expect(inlineMarks([add("only added")])).toEqual([null]);
   });
 });

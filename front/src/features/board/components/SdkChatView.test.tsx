@@ -3369,6 +3369,8 @@ describe("SdkChatView — o diff do que a IA editou", () => {
       ["del", "−const b = 2;"],
       ["add", "+const b = 3;"],
     ]);
+    // O que mudou dentro da linha vem destacado, dos dois lados.
+    expect(within(card).getAllByTestId("sdk-diff-mark").map((mark) => mark.textContent)).toEqual(["2", "3"]);
   });
 
   it("três ferramentas antes do Edit dobram sozinhas — o card do diff fica de fora, na tela", async () => {
@@ -3396,7 +3398,7 @@ describe("SdkChatView — o diff do que a IA editou", () => {
     expect(screen.getByTestId("sdk-tool").getAttribute("data-tool")).toBe("Edit");
   });
 
-  it("um Write grande começa recolhido e abre no clique, com o resto contado", async () => {
+  it("um Write grande também nasce aberto, com o resto contado, e recolhe no clique", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -3405,15 +3407,15 @@ describe("SdkChatView — o diff do que a IA editou", () => {
 
     const card = screen.getByTestId("sdk-diff");
     expect(within(card).getByTestId("sdk-diff-added")).toHaveTextContent("+60");
-    const toggle = within(card).getByRole("button", { expanded: false });
-    expect(within(card).queryAllByTestId("sdk-diff-line")).toHaveLength(0);
-
-    fireEvent.click(toggle);
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    const toggle = within(card).getByRole("button", { expanded: true });
     const shown = within(card).getAllByTestId("sdk-diff-line");
     expect(shown).toHaveLength(40);
     expect(shown.every((line) => line.getAttribute("data-kind") === "add")).toBe(true);
     expect(within(card).getByTestId("sdk-diff-truncated")).toHaveTextContent("20 more lines not shown");
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(within(card).queryAllByTestId("sdk-diff-line")).toHaveLength(0);
   });
 
   /**
