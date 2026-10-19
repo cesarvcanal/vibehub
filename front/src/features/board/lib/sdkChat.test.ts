@@ -1112,6 +1112,32 @@ describe("currentActivity (what the sticky bar reports)", () => {
     state = appendUserRow(state, "outra pergunta", undefined, { awaiting: true });
     expect(currentActivity(state)).toBeNull();
   });
+
+  /* Produção, 19/10/2026: o modelo rodava a suíte de testes havia 9 minutos e a tela dizia
+     "Executando… 27m · turno longo, ainda trabalhando" — porque a pessoa mandou mensagens no meio
+     do turno, e a barra parava na bolha dela como se fosse a que ABRIU o turno. */
+  it("a mensagem ABSORVIDA no turno em curso não esconde a ferramenta que segue rodando", () => {
+    let state = ready();
+    state = appendUserRow(state, "roda os testes", undefined, { awaiting: true });
+    state = applySdkEvent(state, {
+      type: "tool_use", id: "t1", name: "Bash", input: { description: "Rodando a suíte do back", command: "npx vitest run" },
+    });
+    state = appendUserRow(state, "conforme for terminando, vai commitando");
+    state = applySdkEvent(state, { type: "turn_absorbed" });
+    state = appendUserRow(state, "um commit por trabalho");
+    state = applySdkEvent(state, { type: "turn_absorbed" });
+    expect(currentActivity(state)).toEqual({ kind: "tool", label: "Rodando a suíte do back", rowId: "t1" });
+    expect(liveActivityDetail(state)).toBe("Rodando a suíte do back");
+  });
+
+  it("a mensagem que ABRE um turno novo segue sendo o limite (não herda a ferramenta do anterior)", () => {
+    let state = ready();
+    state = applySdkEvent(state, { type: "tool_use", id: "t1", name: "Bash", input: { command: "old" } });
+    state = applySdkEvent(state, { type: "result", subtype: "success", isError: false });
+    state = appendUserRow(state, "nova", undefined, { awaiting: true });
+    expect(currentActivity(state)).toBeNull();
+    expect(liveActivityDetail(state)).toBeNull();
+  });
 });
 
 /**

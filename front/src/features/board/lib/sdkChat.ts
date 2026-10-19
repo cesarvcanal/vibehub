@@ -826,6 +826,9 @@ export interface SdkActivity {
 export function currentActivity(state: SdkChatState): SdkActivity | null {
   for (let i = state.rows.length - 1; i >= 0; i -= 1) {
     const row = state.rows[i] as SdkRow;
+    // A message ABSORBED into the running turn did not open it: the work before it is still the
+    // turn's, and stopping here hid a 9-minute test run behind the canned "ainda trabalhando".
+    if (row.kind === "user" && row.absorbed === true) continue;
     if (row.kind === "user") return null; // the turn's own message: nothing after it to report
     const subagent = subagentActivity(state.rows, row);
     if (subagent !== null) return { kind: "tool", label: subagent, rowId: row.id };
@@ -916,6 +919,7 @@ export function turnHasRoomForMore(state: SdkChatState): boolean {
 export function liveActivityDetail(state: SdkChatState): string | null {
   for (let i = state.rows.length - 1; i >= 0; i -= 1) {
     const row = state.rows[i] as SdkRow;
+    if (row.kind === "user" && row.absorbed === true) continue; // entrou no turno, não o abriu
     if (row.kind === "user") return null; // a mensagem do turno: nada depois dela para relatar
     const subagent = subagentActivity(state.rows, row);
     if (subagent !== null) return subagent;
