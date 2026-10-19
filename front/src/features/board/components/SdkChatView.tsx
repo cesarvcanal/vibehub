@@ -1364,7 +1364,7 @@ function SdkBackgroundTray({ tasks }: { tasks: readonly BackgroundTask[] }) {
  * Cada linha carrega os dois gestos que a fila promete: o lápis (volta pro campo, e SAI da fila —
  * nada de ser enviada no meio da correção) e o X (desisti dessa).
  */
-function SdkQueueTray({
+function SdkQueueTrayView({
   queue,
   onEdit,
   onRemove,
@@ -1461,6 +1461,10 @@ function SdkQueueTray({
     </div>
   );
 }
+
+/* Memoised: the tray only shows while a turn streams, which is when SdkChatView re-renders on
+   every delta — and each queued row is now tokenised, not printed. The callbacks are stable. */
+const SdkQueueTray = React.memo(SdkQueueTrayView);
 
 /**
  * The tray of decisions still waiting on the user — collapsible, with a count badge. Expanded by

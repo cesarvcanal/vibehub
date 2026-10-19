@@ -639,7 +639,12 @@ export function LinkifiedText({ text, compact = false }: { text: string; compact
             {token.value}
           </a>
         ) : token.type === "image" ? (
-          <UploadedImage key={i} cardId={token.cardId} file={token.file} compact={compact} />
+          // Keyed by the path too: a queued row is rewritten IN PLACE (same id) when it is edited,
+          // and a new image at the same index must not inherit the old one's `broken`.
+          <UploadedImage key={`${i}:${token.value}`} cardId={token.cardId} file={token.file} compact={compact} />
+        ) : compact ? (
+          // The two reserved words are painted only in the field and the bubble (see UltraText).
+          <React.Fragment key={i}>{token.value}</React.Fragment>
         ) : (
           <UltraText key={i} text={token.value} />
         ),
@@ -660,7 +665,10 @@ export function LinkifiedText({ text, compact = false }: { text: string; compact
  * cleaned up. The path comes back as text then — still the truth, never a broken-image icon.
  *
  * `compact` is the thumbnail for tight spots (the queue tray above the composer): enough to tell
- * which screenshot is waiting, without a 256px picture eating the tray's height cap.
+ * which screenshot is waiting, without a 256px picture eating the tray's height cap. Its height is
+ * FIXED, not a max — the tray is a sibling of the conversation scroller, and a lazy image that grew
+ * it on arrival would push the agent's latest lines below the fold. Inline, so two screenshots sit
+ * side by side instead of stacking past the row's own cap.
  */
 function UploadedImage({ cardId, file, compact = false }: { cardId: string; file: string; compact?: boolean }) {
   const t = useT();
@@ -668,7 +676,12 @@ function UploadedImage({ cardId, file, compact = false }: { cardId: string; file
   const src = uploadImageUrl(cardId, file);
   if (broken) return <>{`/work/.uploads/${cardId}/${file}`}</>;
   return (
-    <a href={src} target="_blank" rel="noreferrer noopener" className="mt-1 block w-fit">
+    <a
+      href={src}
+      target="_blank"
+      rel="noreferrer noopener"
+      className={cn("mt-1 w-fit", compact ? "mr-1 inline-block align-top" : "block")}
+    >
       <img
         src={src}
         alt={t("chat.attachedImage")}
@@ -678,7 +691,7 @@ function UploadedImage({ cardId, file, compact = false }: { cardId: string; file
         onError={() => setBroken(true)}
         className={cn(
           "max-w-full rounded-md border border-border/70 object-contain",
-          compact ? "max-h-16" : "max-h-64",
+          compact ? "h-16 w-auto" : "max-h-64",
         )}
       />
     </a>

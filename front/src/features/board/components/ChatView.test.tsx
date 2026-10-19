@@ -164,6 +164,9 @@ describe("ChatView", () => {
     expect(image.closest("a")).toHaveAttribute("href", `/api/cards/${card}/uploads/1790375878344-image.png`);
     // The words around it are still the words: only the path became a picture.
     expect(screen.getByTestId("chat-user")).toHaveTextContent("olha isso");
+    // The bubble keeps the big picture; the compact thumbnail is the queue tray's alone.
+    expect(image.className).toMatch(/max-h-64/);
+    expect(image.className).not.toMatch(/\bh-16\b/);
   });
 
   it("falls back to the path when the image cannot be fetched — never a broken-image icon", async () => {
