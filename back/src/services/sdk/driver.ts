@@ -6,6 +6,7 @@ import { config } from "../../config/env.js";
 import { cardWorkPaths } from "../board/workspace.js";
 import { accountConfigDir } from "../accounts/profiles.js";
 import { oauthTokenPath, DEFAULT_CLAUDE_DIR } from "../accounts/profiles.js";
+import { carryTranscriptsCommand } from "../accounts/carryTranscripts.js";
 import { effectiveAccountSlug, modelPin, isValidEffort, assertSessionId, type Card, type Project } from "../board/registry.js";
 import { cardCdpEndpoint } from "../browser/ports.js";
 import { statusUrl } from "../../runtime/runner.js";
@@ -185,6 +186,9 @@ export function buildSdkDriverCommandLine(opts: SdkDriverCommandOpts): string {
     `export NODE_PATH=${shQuote(`${SDK_DRIVER_DIR}/node_modules`)}; ` +
     `if [ -s ${shQuote(tokenFile)} ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${shQuote(tokenFile)})"; fi; ` +
     (opts.configDir ? `export CLAUDE_CONFIG_DIR=${shQuote(opts.configDir)}; ` : "") +
+    // `--resume <id>` looks for the transcript in THIS profile; after an account switch it lives in
+    // the previous one ("No conversation found with session ID") — carry it over first.
+    `${carryTranscriptsCommand(opts.profileDir, shQuote(opts.cwd))}; ` +
     cardEnv +
     `exec node ${shQuote(SDK_DRIVER_PATH)} --cwd ${shQuote(opts.cwd)}${resume}${model}${effort}${gate}`;
   const argv = ["docker", "exec", "-i", opts.containerName, "bash", "-c", script];
