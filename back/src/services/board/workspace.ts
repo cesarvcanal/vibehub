@@ -60,8 +60,6 @@ const CARD_ID_RE = /^[0-9a-zA-Z-]{8,64}$/;
 
 /** Heredoc delimiters — reserved words, never derived from user input. */
 const OPEN_DELIM = "VIBEHUB_OPEN";
-const UPLOAD_DELIM = "VIBEHUB_UPLOAD";
-const B64_DELIM = "VIBEHUB_B64";
 
 /**
  * How long a card's OPEN script may run: cloning a big repository takes minutes (the rest of the
@@ -931,22 +929,21 @@ export interface UploadScriptOpts {
 }
 
 /**
- * Script that writes the file INSIDE the runner: a docker exec with the base64 in a heredoc (the
- * whole script travels over STDIN — the content NEVER passes through argv). The delimiters contain
- * `_`, which is not in the base64 alphabet, so the payload can never close them. PURE/testable.
+ * Script that writes the file INSIDE the runner, over STDIN (the content NEVER passes through argv):
+ * ONE command line, then the base64 as the rest of the stream.
+ *
+ * The `exec` is the point. Bash reads a script from a pipe ONE BYTE PER read() — so the commands it
+ * starts can inherit the rest of the stream — and the old shape put the payload inside a heredoc,
+ * parsed twice (host bash, then the container's `bash -s`): ~19 s per level for a 5 MB screenshot,
+ * the "colei a imagem e ela demora muito para carregar" of produção (2026-10-19). Here bash reads
+ * only the first line and hands its stdin to `docker exec -i`, which streams the payload in blocks
+ * straight into `base64 -d` (0.25 s for the same 5 MB). Nothing after the payload is ever parsed as
+ * shell: the process reading it is base64, not bash. PURE/testable.
  */
 export function buildUploadScript(opts: UploadScriptOpts): string {
   if (!B64_RE.test(opts.base64)) throw new Error("invalid base64 content");
-  return [
-    "set -e",
-    `docker exec -i ${shQuote(opts.containerName)} bash -s <<'${UPLOAD_DELIM}'`,
-    "set -e",
-    `mkdir -p ${shQuote(opts.destDir)}`,
-    `base64 -d > ${shQuote(opts.destPath)} <<'${B64_DELIM}'`,
-    opts.base64,
-    B64_DELIM,
-    UPLOAD_DELIM,
-  ].join("\n");
+  const inside = `mkdir -p ${shQuote(opts.destDir)} && base64 -d > ${shQuote(opts.destPath)}`;
+  return `exec docker exec -i ${shQuote(opts.containerName)} sh -c ${shQuote(inside)}\n${opts.base64}\n`;
 }
 
 /**
