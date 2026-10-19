@@ -2,7 +2,7 @@ import { hostExecutor, shQuote, assertSafeRemotePath, HostExecError } from "../.
 import { config } from "../../config/env.js";
 import { secretGet, secretSet, secretDelete, secretList } from "../../secrets/vault.js";
 import { listAccounts, assertAccountSlug } from "../board/registry.js";
-import { DEFAULT_ACCOUNT_SLUG, profileDirFor, oauthTokenPath } from "./profiles.js";
+import { DEFAULT_ACCOUNT_SLUG, profileDirFor, oauthTokenPath, refreshableLoginTest } from "./profiles.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -89,21 +89,25 @@ export function removeGhTokenLines(cardId: string): string[] {
  * has none yet). Shared by the card open (seeding from the vault) and the token route. PURE.
  *
  * The file's AGE is part of the auth rule — a `/login` newer than the token wins over it (see
- * `oauthTokenGuard`) — so the card open (`force` off) rewrites it only when the VALUE changed:
- * re-seeding the same token on every open would make it "newer" than the login and bring a revoked
- * token back each time a card opened. Saving a token in the UI (`force`) always rewrites: it is the
- * person choosing that token now.
+ * `oauthTokenGuard`) — so the card open (`force` off) NEVER plants the token in a profile that holds
+ * a refreshable `/login`: any write there makes the token "newer" than the login and hands the
+ * session back to it. Moving a revoked token out of the way (the file missing) used to count as "the
+ * value changed", and the next re-provision brought the revoked token back over a working login
+ * (produção, 2026-10-19, conta `tech`). Without a login, it rewrites only when the VALUE changed.
+ * Saving a token in the UI (`force`) always rewrites: it is the person choosing that token now.
  */
 export function writeTokenLines(profileDir: string, token: string, opts: { force?: boolean } = {}): string[] {
   assertSafeRemotePath(profileDir);
-  const file = oauthTokenPath(profileDir);
+  const file = shQuote(oauthTokenPath(profileDir));
   const value = shQuote(assertOauthToken(token));
-  const write = `printf '%s' ${value} > ${shQuote(file)}`;
+  const write = `printf '%s' ${value} > ${file}`;
   return [
     `mkdir -p ${shQuote(profileDir)}`,
     "umask 077",
-    opts.force ? write : `if [ "$(cat ${shQuote(file)} 2>/dev/null)" != ${value} ]; then ${write}; fi`,
-    `chmod 600 ${shQuote(file)}`,
+    opts.force
+      ? write
+      : `if ! ${refreshableLoginTest(profileDir)} && [ "$(cat ${file} 2>/dev/null)" != ${value} ]; then ${write}; fi`,
+    `if [ -f ${file} ]; then chmod 600 ${file}; fi`,
   ];
 }
 

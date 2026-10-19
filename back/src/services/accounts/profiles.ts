@@ -64,10 +64,22 @@ export const CREDENTIALS_FILE = ".credentials.json";
  */
 export function oauthTokenGuard(profileDir: string): string {
   const token = shQuote(oauthTokenPath(profileDir));
-  const creds = shQuote(`${profileDir}/${CREDENTIALS_FILE}`);
   return (
-    `if [ -s ${token} ] && ! { [ ${creds} -nt ${token} ] && ` +
-    `grep -Eq '"refreshToken"[[:space:]]*:[[:space:]]*"[^"]' ${creds}; }; ` +
+    `if [ -s ${token} ] && ! { [ ${credentialsPath(profileDir)} -nt ${token} ] && ` +
+    `${refreshableLoginTest(profileDir)}; }; ` +
     `then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${token})"; fi; `
   );
+}
+
+/** The profile's `.credentials.json`, shell-quoted. PURE. */
+function credentialsPath(profileDir: string): string {
+  return shQuote(`${profileDir}/${CREDENTIALS_FILE}`);
+}
+
+/**
+ * Shell test: the profile holds a `/login` that can keep itself alive (a refresh token). Silent and
+ * false when the file is missing. PURE.
+ */
+export function refreshableLoginTest(profileDir: string): string {
+  return `grep -Eq '"refreshToken"[[:space:]]*:[[:space:]]*"[^"]' ${credentialsPath(profileDir)} 2>/dev/null`;
 }
