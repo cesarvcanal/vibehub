@@ -120,9 +120,12 @@ describe("waitForTurn — wait for the card's turn to end instead of polling", (
     const { maestro, registry, card } = await load();
     const since = Date.now();
     await registry.applyCardStatus(card.id, "working");
-    setTimeout(() => { void registry.applyCardStatus(card.id, "waiting"); }, 60);
+    // Kept, and awaited before the test ends: the wait returns on the in-memory status, while the
+    // store is still renaming board.json into a tmp dir that afterEach is about to delete.
+    const ended = new Promise((resolve) => setTimeout(() => resolve(registry.applyCardStatus(card.id, "waiting")), 60));
     runScript.mockResolvedValue(transcript(assistantText(since + 1, "Feito: 3 testes novos.")));
     const out = await maestro.waitForTurn(card.id, { since, timeoutMs: 2000, pollMs: 20 });
+    await ended;
     expect(out.outcome).toBe("finished");
     expect(out.answers).toEqual(["Feito: 3 testes novos."]);
     expect(out.activity.map((e) => e.text)).toEqual(["Feito: 3 testes novos."]);
@@ -154,9 +157,12 @@ describe("waitForTurn — wait for the card's turn to end instead of polling", (
     const { maestro, registry, history, card } = await load();
     const since = Date.now();
     await registry.applyCardStatus(card.id, "working");
-    setTimeout(() => { void history.appendHistory(card.id, { type: "user_question", id: "q1", questions: Q, at: Date.now() }); }, 40);
+    const asked = new Promise((resolve) =>
+      setTimeout(() => resolve(history.appendHistory(card.id, { type: "user_question", id: "q1", questions: Q, at: Date.now() })), 40),
+    );
     const started = Date.now();
     const out = await maestro.waitForTurn(card.id, { since, timeoutMs: 5000, pollMs: 20 });
+    await asked;
     expect(out.outcome).toBe("question");
     expect(out.pendingQuestion).toMatchObject({ id: "q1", source: "chat" });
     expect(Date.now() - started).toBeLessThan(2000);
