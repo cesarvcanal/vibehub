@@ -616,7 +616,9 @@ function rewindDecision(sessionId, fork, absorbed, isLast) {
  * message; the first assistant above it is the fork point.
  *
  * `{ found: true, uuid: null }` = the message is the very first of the session: the rewind is a
- * brand-new session. Only claimed when the chain truly ends there — a compaction boundary or a
+ * brand-new session. `{ found: false, absent: true }` = the live branch was read WHOLE, down to its
+ * root, and the message is not on it: the model never read it (its turn died before the CLI wrote
+ * it — the "No conversation found" after an account switch). Only a complete walk may say so. Only claimed when the chain truly ends there — a compaction boundary or a
  * parent missing from the file is NOT the start of the conversation, and treating it as one would
  * throw the whole context away, so those answer `found: false` and the driver keeps its plan B.
  *
@@ -661,7 +663,7 @@ function forkPointFromTranscript(jsonl, original) {
       return { found: false };
     }
     if (entry.parentUuid === null || entry.parentUuid === undefined) {
-      return hit ? { found: true, uuid: null } : { found: false };
+      return hit ? { found: true, uuid: null } : { found: false, absent: true };
     }
     entry = byUuid.get(entry.parentUuid);
   }
@@ -1253,6 +1255,15 @@ async function rewindAndSend(text, fallback, original, releaseQuestions = () => 
   // did. (The front sends an edit only after the interrupted turn reported its end, so the
   // transcript already holds the message being edited.)
   const disk = lastSessionId ? forkPointFromTranscript(await readSessionTranscript(lastSessionId), original) : { found: false };
+  if (disk.absent) {
+    // The model never read the original: there is nothing to correct and nothing to rewind. The
+    // edit is simply the message — the CLEAN words, as a normal turn (the supersede wrapper would
+    // tell the model to "disregard" a message it has never seen).
+    emit({ type: "rewound", ok: false, reason: "not-delivered" });
+    sendUser(text);
+    releaseQuestions();
+    return;
+  }
   let at;
   if (disk.found) {
     at = disk.uuid;

@@ -173,7 +173,7 @@ export interface RewoundEvent {
    * because a history event's `at` is a TIMESTAMP, and these two share a type.
    */
   uuid?: string;
-  reason?: "no-fork-point" | "absorbed";
+  reason?: "no-fork-point" | "absorbed" | "not-delivered";
   /** On `ok: true`: the edited message's original words — the screen cuts from THAT row. */
   originalText?: string;
   /**

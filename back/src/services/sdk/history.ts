@@ -260,6 +260,43 @@ export function rewindHistory(
 }
 
 /**
+ * The edit went to the model with its CLEAN words but nothing was rewound — the original never
+ * reached the model (the driver's `not-delivered`). Nothing is cut: every row in the log still
+ * happened. Only the wrapper goes, from the edit's own line: the first user line with those words
+ * right after the MOST RECENT marker for `originalText`, so an older edit's correct wrapper stays.
+ * Same reason as the repair in `rewindHistory` — `replayDedupeKey` matches the transcript by
+ * `sent`, and a wrapper the model never got made the next connect draw the message twice.
+ *
+ * Returns whether the line was changed.
+ */
+export function unwrapEditedMessage(cardId: string, originalText: string, replacementText: string): Promise<boolean> {
+  let changed = false;
+  return appendHistoryBarrier(cardId, async () => {
+    const file = historyFile(cardId);
+    let raw: string;
+    try {
+      raw = await readFile(file, "utf8");
+    } catch {
+      return;
+    }
+    const events = parseHistory(raw);
+    let mark = -1;
+    for (let i = 0; i < events.length; i += 1) {
+      const e = events[i] as HistoryEvent;
+      if (e.type === "message_edited" && e.originalText === originalText) mark = i;
+    }
+    if (mark === -1) return;
+    const at = events.findIndex((e, i) => i > mark && e.type === "user" && e.text === replacementText);
+    const line = events[at] as (HistoryEvent & { sent?: string }) | undefined;
+    if (!line || line.sent === undefined) return;
+    const { sent: _dropped, ...rest } = line;
+    events[at] = rest as HistoryEvent;
+    changed = true;
+    await writeFileAtomic(file, events.map((e) => JSON.stringify(e)).join("\n") + "\n");
+  }).then(() => changed);
+}
+
+/**
  * Drops the "turno interrompido" notes left STRANDED after the cut.
  *
  * The note narrates a half answer ("a resposta acima ficou pela metade") that the rewind has just

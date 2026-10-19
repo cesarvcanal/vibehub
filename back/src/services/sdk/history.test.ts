@@ -11,6 +11,7 @@ import {
   removeHistory,
   replayableHistoryEvent,
   rewindHistory,
+  unwrapEditedMessage,
   HISTORY_COMPACT_FACTOR,
   SDK_HISTORY_DIR,
   type HistoryEvent,
@@ -516,5 +517,54 @@ describe("removeHistory (the card is being deleted)", () => {
 
   it("refuses an id that is not id-shaped — no path from a URL reaches the fs", async () => {
     await expect(removeHistory("../../etc/passwd")).rejects.toThrow(/invalid card id/);
+  });
+});
+
+/**
+ * A edição de uma mensagem que o modelo NUNCA leu vai com o texto limpo. A linha da edição foi
+ * gravada com `sent` = invólucro (ninguém sabia ainda a forma), e é por `sent` que o replay casa a
+ * linha com o transcript: deixá-lo ali fazia a próxima conexão desenhar a mensagem DUAS vezes.
+ */
+describe("unwrapEditedMessage — tira o invólucro de uma edição que foi limpa", () => {
+  const read = async (): Promise<HistoryEvent[]> => {
+    const raw = await readFile(join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`), "utf8");
+    return raw.split("\n").filter((l) => l.trim() !== "").map((l) => JSON.parse(l) as HistoryEvent);
+  };
+
+  it("tira o `sent` da linha logo após o marcador, sem cortar nada", async () => {
+    const events: HistoryEvent[] = [
+      { type: "user", text: "A" },
+      { type: "message_edited", originalText: "A" },
+      { type: "user", text: "B", sent: "[correção…]" } as HistoryEvent,
+    ];
+    for (const e of events) await appendHistory(CARD, e);
+    expect(await unwrapEditedMessage(CARD, "A", "B")).toBe(true);
+    expect(await read()).toEqual([
+      { type: "user", text: "A" },
+      { type: "message_edited", originalText: "A" },
+      { type: "user", text: "B" },
+    ]);
+  });
+
+  it("ancorado no marcador MAIS RECENTE: o invólucro de uma edição antiga (que foi supersede) fica", async () => {
+    const events: HistoryEvent[] = [
+      { type: "user", text: "A" },
+      { type: "message_edited", originalText: "A" },
+      { type: "user", text: "A", sent: "[antigo]" } as HistoryEvent,
+      { type: "message_edited", originalText: "A" },
+      { type: "user", text: "A", sent: "[novo]" } as HistoryEvent,
+    ];
+    for (const e of events) await appendHistory(CARD, e);
+    expect(await unwrapEditedMessage(CARD, "A", "A")).toBe(true);
+    const kept = await read();
+    expect((kept[2] as { sent?: string }).sent).toBe("[antigo]");
+    expect((kept[4] as { sent?: string }).sent).toBeUndefined();
+  });
+
+  it("sem marcador, sem a linha ou sem log: não mexe em nada", async () => {
+    expect(await unwrapEditedMessage(CARD, "A", "B")).toBe(false);
+    await appendHistory(CARD, { type: "user", text: "B", sent: "[x]" } as HistoryEvent);
+    expect(await unwrapEditedMessage(CARD, "A", "B")).toBe(false);
+    expect((await read())[0]).toEqual({ type: "user", text: "B", sent: "[x]" });
   });
 });

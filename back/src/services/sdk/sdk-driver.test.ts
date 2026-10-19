@@ -235,10 +235,10 @@ function waitableLines<T>(stream: NodeJS.ReadableStream, parse: (line: string) =
   return { items, wait };
 }
 
-function startDriver(extraArgs: string[] = [], cwd = sandbox): RunningDriver {
+function startDriver(extraArgs: string[] = [], cwd = sandbox, configDir = sandbox): RunningDriver {
   // CLAUDE_CONFIG_DIR with no `projects/`: the disk has no fork point, the memory one decides.
   const child = spawn(process.execPath, [driverPath, "--cwd", cwd, ...extraArgs], {
-    env: { ...process.env, CLAUDE_CONFIG_DIR: sandbox },
+    env: { ...process.env, CLAUDE_CONFIG_DIR: configDir },
     stdio: ["pipe", "pipe", "pipe"],
   });
   children.push(child);
@@ -264,6 +264,37 @@ async function driverAfterOneTurn(): Promise<RunningDriver> {
   await driver.waitFor((e) => e.type === "result");
   return driver;
 }
+
+/**
+ * A MENSAGEM QUE NUNCA CHEGOU (produção, 2026-10-19): o turno morreu antes de o CLI gravá-la, a
+ * pessoa edita, e o modelo recebia "[correção do usuário — desconsidere a mensagem anterior…]" sobre
+ * uma mensagem que nunca leu. Com o transcript dizendo que ela não está no ramo vivo, a edição É a
+ * mensagem: texto limpo, turno normal, sem rebobinar.
+ */
+describe("sdk-driver.mjs — editar uma mensagem que o modelo nunca leu", () => {
+  it("vai o texto LIMPO, como mensagem normal, e o driver diz `not-delivered`", async () => {
+    const config = join(sandbox, "profile-not-delivered");
+    const projects = join(config, "projects", sandbox.replace(/[^A-Za-z0-9]/g, "-"));
+    await mkdir(projects, { recursive: true });
+    const entry = (o: Record<string, unknown>) => JSON.stringify({ isSidechain: false, sessionId: "s", ...o });
+    await writeFile(join(projects, "11111111-2222-3333-4444-555555555555.jsonl"), [
+      entry({ type: "user", uuid: "u1", parentUuid: null, message: { role: "user", content: "hello" } }),
+      entry({ type: "assistant", uuid: "a1", parentUuid: "u1", message: { role: "assistant", content: [{ type: "text", text: "oi" }] } }),
+    ].join("\n") + "\n");
+    const driver = startDriver([], sandbox, config);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "hello" });
+    await driver.waitFor((e) => e.type === "result");
+    const from = driver.events.length;
+
+    driver.send({ type: "edit_user", original: "nunca chegou", text: "certa", fallback: "WRAPPED" });
+    const rewound = await driver.waitFor((e) => e.type === "rewound", from);
+    expect(rewound).toEqual({ type: "rewound", ok: false, reason: "not-delivered" });
+    await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:certa", from);
+    const texts = driver.events.slice(from).filter((e) => e.type === "assistant_text").map((e) => e.text);
+    expect(texts).not.toContain("reply:WRAPPED");
+  }, 60_000);
+});
 
 describe("sdk-driver.mjs — o stream que não soltou não manda mais em nada", () => {
   it("depois do teardown desistir, o stream velho só é drenado: nada de texto, de result nem de turno fechado no stream novo", async () => {
