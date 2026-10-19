@@ -49,7 +49,7 @@ export interface ToolResultEvent {
   type: "tool_result";
   id: string;
   parentToolUseId?: string;
-  result: ToolResultSummary;
+  toolResult: ToolResultSummary;
 }
 
 const ERROR_MAX = 200;
@@ -136,7 +136,7 @@ export function toolResultEvent(raw: RawToolResultEvent): ToolResultEvent {
     type: "tool_result",
     id: raw.id,
     ...(raw.parentToolUseId ? { parentToolUseId: raw.parentToolUseId } : {}),
-    result: summarizeToolResult(raw),
+    toolResult: summarizeToolResult(raw),
   };
 }
 

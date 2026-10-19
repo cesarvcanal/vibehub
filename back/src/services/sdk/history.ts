@@ -103,7 +103,7 @@ export function replayableHistoryEvent(event: HistoryEvent): boolean {
     // subagentes é muito (centenas por frota) e empurraria a conversa para fora da janela do
     // replay — a linha do tempo de um subagente vem do transcript (./detail.ts).
     case "tool_result":
-      return !(event as { parentToolUseId?: unknown }).parentToolUseId && "result" in event;
+      return !(event as { parentToolUseId?: unknown }).parentToolUseId && "toolResult" in event;
     // O FIM de um subagente (concluído, falhou, parado), para o card dele assentar depois do F5.
     case "agent_task":
       return (event as { status?: unknown }).status !== "running";

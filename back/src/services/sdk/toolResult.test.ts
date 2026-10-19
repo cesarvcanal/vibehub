@@ -52,7 +52,7 @@ describe("summarizeToolResult — a linha de resultado de cada ação", () => {
 
   it("o frame que sai não carrega o cru (texto/estruturado)", () => {
     const out = toolResultEvent({ type: "tool_result", id: "t", text: "segredo\n", structured: { stdout: "segredo" }, parentToolUseId: "p" });
-    expect(out).toEqual({ type: "tool_result", id: "t", parentToolUseId: "p", result: { lines: 1 } });
+    expect(out).toEqual({ type: "tool_result", id: "t", parentToolUseId: "p", toolResult: { lines: 1 } });
   });
 
   it("helpers", () => {
@@ -64,8 +64,8 @@ describe("summarizeToolResult — a linha de resultado de cada ação", () => {
 
 describe("histórico — o que dos resultados e subagentes é gravado", () => {
   it("resultado do principal sim; de subagente não; cru nunca", () => {
-    expect(replayableHistoryEvent({ type: "tool_result", id: "t", result: { lines: 1 } })).toBe(true);
-    expect(replayableHistoryEvent({ type: "tool_result", id: "t", parentToolUseId: "p", result: { lines: 1 } })).toBe(false);
+    expect(replayableHistoryEvent({ type: "tool_result", id: "t", toolResult: { lines: 1 } })).toBe(true);
+    expect(replayableHistoryEvent({ type: "tool_result", id: "t", parentToolUseId: "p", toolResult: { lines: 1 } })).toBe(false);
     expect(replayableHistoryEvent({ type: "tool_result", id: "t", text: "cru" } as never)).toBe(false);
   });
 
