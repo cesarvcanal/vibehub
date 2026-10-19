@@ -296,6 +296,49 @@ describe("sdk-driver.mjs — editar uma mensagem que o modelo nunca leu", () => 
   }, 60_000);
 });
 
+/**
+ * O BUG DO REENVIO (produção, 2026-10-19): a primeira mensagem morreu num erro de autenticação e foi
+ * reenviada com as MESMAS palavras. Editar a primeira bolha procurava pelas palavras, achava a cópia
+ * mais nova e rebobinava para depois da primeira resposta — "ficou como se eu tivesse editado a
+ * segunda". Com `first`, não há o que procurar: nada antes dela fica, a conversa recomeça.
+ */
+describe("sdk-driver.mjs — editar a PRIMEIRA mensagem com uma cópia igual mais abaixo", () => {
+  async function driverOnDuplicates(name: string) {
+    const config = join(sandbox, name);
+    const projects = join(config, "projects", sandbox.replace(/[^A-Za-z0-9]/g, "-"));
+    await mkdir(projects, { recursive: true });
+    const entry = (o: Record<string, unknown>) => JSON.stringify({ isSidechain: false, sessionId: "s", ...o });
+    await writeFile(join(projects, "11111111-2222-3333-4444-555555555555.jsonl"), [
+      entry({ type: "user", uuid: "u1", parentUuid: null, message: { role: "user", content: "dup" } }),
+      entry({ type: "assistant", uuid: "a1", parentUuid: "u1", message: { role: "assistant", content: [{ type: "text", text: "erro" }] } }),
+      entry({ type: "user", uuid: "u2", parentUuid: "a1", message: { role: "user", content: "dup" } }),
+      entry({ type: "assistant", uuid: "a2", parentUuid: "u2", message: { role: "assistant", content: [{ type: "text", text: "erro" }] } }),
+    ].join("\n") + "\n");
+    const driver = startDriver([], sandbox, config);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "hello" });
+    await driver.waitFor((e) => e.type === "result");
+    return driver;
+  }
+
+  it("com `first`, recomeça a conversa (rewound ok SEM uuid) em vez de voltar para a segunda cópia", async () => {
+    const driver = await driverOnDuplicates("profile-first-dup");
+    const from = driver.events.length;
+    driver.send({ type: "edit_user", original: "dup", text: "nova", fallback: "WRAPPED", first: true });
+    const rewound = await driver.waitFor((e) => e.type === "rewound", from);
+    expect(rewound).toEqual({ type: "rewound", ok: true, originalText: "dup" });
+    await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:nova", from);
+  }, 60_000);
+
+  it("sem `first`, as palavras continuam achando a cópia mais nova (a regra de sempre, inalterada)", async () => {
+    const driver = await driverOnDuplicates("profile-not-first-dup");
+    const from = driver.events.length;
+    driver.send({ type: "edit_user", original: "dup", text: "nova", fallback: "WRAPPED" });
+    const rewound = await driver.waitFor((e) => e.type === "rewound", from);
+    expect(rewound).toEqual({ type: "rewound", ok: true, uuid: "a1", originalText: "dup" });
+  }, 60_000);
+});
+
 describe("sdk-driver.mjs — o stream que não soltou não manda mais em nada", () => {
   it("depois do teardown desistir, o stream velho só é drenado: nada de texto, de result nem de turno fechado no stream novo", async () => {
     const driver = await driverAfterOneTurn();

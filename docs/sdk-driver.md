@@ -147,6 +147,14 @@ senão abririam um stream na ponta velha e a edição cairia dentro dele. O `rew
 leva `originalText`, e a tela corta a partir da linha com essas palavras (não da editada mais nova —
 um supersede anterior mais abaixo também fica "editada").
 
+**A primeira mensagem é dita pelo nome, não pelas palavras (2026-10-19).** Palavras não dizem QUAL
+cópia foi clicada: uma mensagem reenviada depois de um erro tem as mesmas, e as três camadas pegavam
+a mais nova — editar a primeira rebobinava para depois da primeira resposta ("ficou como se eu
+tivesse editado a segunda"). Quando a bolha editada é a primeira mensagem da tela, o `edit_user`
+leva `first: true`: o driver recomeça a sessão sem procurar nada no transcript (`rewound` ok, sem
+`uuid`), o manager carimba `first` no marcador `message_edited` e no `rewound` da tela, e log
+(`rewindHistory`) e tela (`markUserEdited`/`dropRewoundRows`) cortam desde a PRIMEIRA cópia.
+
 Risco residual conhecido: editar a **primeira** mensagem abre sessão nova; se o driver morrer antes
 de essa sessão gravar o primeiro arquivo (~1s), o próximo spawn retoma a sessão antiga.
 
@@ -409,6 +417,14 @@ escrito num CLI que ainda não existe se perde.
 
 The driver authenticates **exclusively** with `CLAUDE_CODE_OAUTH_TOKEN`, read from the card
 profile's `.oauth-token` (the Max subscription's setup-token, same as the TUI's session command).
+
+**The newest sign-in wins (2026-10-19).** The variable beats `.credentials.json` inside Claude Code,
+so a profile holding both used to run on the token forever — a revoked setup-token kept answering
+"OAuth token revoked" while a fresh `/login` sat unused next to it. `oauthTokenGuard`
+(accounts/profiles.ts, shared by the driver and the TUI) exports the token only when no
+`.credentials.json` NEWER than it carries a refresh token. Saving a token in the UI rewrites the
+file (takes the lead back); the card open re-seeds it from the vault only when the value changed, so
+opening a card never steals the lead from a login.
 The spawn line **`unset ANTHROPIC_API_KEY`** before `exec node`, and the driver itself runs
 `delete process.env.ANTHROPIC_API_KEY` on boot — two locks on the same door, both tested. An
 inherited API key would silently outrank the token and bill the API instead of the subscription;

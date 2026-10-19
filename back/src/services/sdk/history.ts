@@ -54,7 +54,7 @@ export type HistoryEvent = (
       sent?: string;
     }
   /** The user edited a sent message: the row whose text matches `originalText` is drawn "editada". */
-  | { type: "message_edited"; originalText: string }
+  | { type: "message_edited"; originalText: string; /** The FIRST copy was edited, not the newest. */ first?: boolean }
   | { type: "system_note"; text: string }
 ) & {
   at?: number;
@@ -221,12 +221,15 @@ function parseHistory(raw: string): HistoryEvent[] {
  * into an OLDER edit whose wrapper was correct — stripping it there recreates the duplicate bubble
  * on a message nobody touched.
  *
+ * `first`: the edit was of the conversation's FIRST message (see `EditUserControl.first`).
+ *
  * Returns how many events were dropped — 0 meaning "nothing cut".
  */
 export function rewindHistory(
   cardId: string,
   originalText: string,
   replacementText?: string,
+  opts: { first?: boolean } = {},
 ): Promise<number> {
   let dropped = 0;
   return appendHistoryBarrier(cardId, async () => {
@@ -239,12 +242,14 @@ export function rewindHistory(
     }
     const events = parseHistory(raw);
     // The LAST occurrence of each end, because the same words can be said twice in a conversation
-    // and it is the most recent pair that was just edited.
+    // and it is the most recent pair that was just edited — unless the edit says it was the FIRST
+    // message: then the cut starts at the first copy (a message re-sent after an error has the same
+    // words, and the newest copy is the wrong one).
     let start = -1;
     let mark = -1;
     for (let i = 0; i < events.length; i += 1) {
       const e = events[i] as HistoryEvent;
-      if (e.type === "user" && e.text === originalText) start = i;
+      if (e.type === "user" && e.text === originalText && !(opts.first && start !== -1)) start = i;
       if (e.type === "message_edited" && e.originalText === originalText) mark = i;
     }
     // One end missing, or an order that cannot be: NOTHING is rewritten — not the cut, not the

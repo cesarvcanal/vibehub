@@ -1241,7 +1241,7 @@ async function reanchorIfStale() {
   absorbedSinceFork = false;
 }
 
-async function rewindAndSend(text, fallback, original, releaseQuestions = () => {}) {
+async function rewindAndSend(text, fallback, original, releaseQuestions = () => {}, first = false) {
   const supersede = (reason) => {
     emit({ type: "rewound", ok: false, reason });
     sendUser(typeof fallback === "string" && fallback !== "" ? fallback : text);
@@ -1254,7 +1254,14 @@ async function rewindAndSend(text, fallback, original, releaseQuestions = () => 
   // Decided BEFORE any teardown: an edit that ends as a supersede keeps the live CLI, as it always
   // did. (The front sends an edit only after the interrupted turn reported its end, so the
   // transcript already holds the message being edited.)
-  const disk = lastSessionId ? forkPointFromTranscript(await readSessionTranscript(lastSessionId), original) : { found: false };
+  //
+  // The FIRST message of the conversation needs no search at all: nothing before it is kept, so the
+  // answer is always "start over". Searching by words was the bug — a message re-sent after an error
+  // has the same words, the newest copy matched, and editing the first message rewound to the
+  // second (produção, 2026-10-19).
+  const disk = first
+    ? { found: true, uuid: null }
+    : lastSessionId ? forkPointFromTranscript(await readSessionTranscript(lastSessionId), original) : { found: false };
   if (disk.absent) {
     // The model never read the original: there is nothing to correct and nothing to rewind. The
     // edit is simply the message — the CLEAN words, as a normal turn (the supersede wrapper would
@@ -1356,7 +1363,7 @@ rl.on("line", (line) => {
     // outra vez, e o ponto em memória que a decisão consultaria é de uma linha do tempo vencida.
     serialized(async () => {
       await reanchorIfStale();
-      await rewindAndSend(control.text, control.fallback, control.original, supersedePendingQuestions);
+      await rewindAndSend(control.text, control.fallback, control.original, supersedePendingQuestions, control.first === true);
     });
     return;
   }

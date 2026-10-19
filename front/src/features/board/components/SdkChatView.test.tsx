@@ -3940,3 +3940,63 @@ describe("SdkChatView — editar de novo a mensagem editada sobrescreve, não em
     expect(screen.getAllByTestId("sdk-edit")).toHaveLength(1);
   });
 });
+
+/**
+ * A SEQUÊNCIA DE PRODUÇÃO (card mcp-chat-gpt, 2026-10-19): a primeira mensagem morreu num erro de
+ * autenticação e foi reenviada com as MESMAS palavras. Editar a PRIMEIRA bolha tinha de deixar só a
+ * versão nova — mas tela, log e driver acham a mensagem pelas palavras e pegavam a cópia mais nova:
+ * "ficou como se eu tivesse editado a segunda".
+ */
+describe("SdkChatView — editar a PRIMEIRA mensagem, reenviada com as mesmas palavras", () => {
+  const A = "preciso que voce crie um mcp para o vibehub";
+  const ERRO = "Failed to authenticate: OAuth token revoked.";
+
+  async function textbox(): Promise<HTMLTextAreaElement> {
+    return (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+  }
+
+  it("o frame diz `first`, e o rebobinar deixa só a mensagem nova", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "user", text: A, at: 1 });
+    ws.deliver({ type: "assistant_text", text: ERRO });
+    ws.deliver({ type: "user", text: A, at: 2 });
+    ws.deliver({ type: "assistant_text", text: ERRO });
+    ws.deliver({ type: "ready" });
+    expect(screen.getAllByTestId("sdk-user")).toHaveLength(2);
+
+    await userEvent.click(screen.getAllByTestId("sdk-edit")[0]!);
+    const box = await textbox();
+    await userEvent.clear(box);
+    await userEvent.type(box, "nova versão{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    const frame = JSON.parse(ws.sent[0]!) as { type: string; original: string; text: string; cid: string; first?: boolean };
+    expect(frame).toMatchObject({ type: "edit_user", original: A, text: "nova versão", first: true });
+    ws.deliver({ type: "user_ack", cid: frame.cid } as SdkEvent);
+    ws.deliver({ type: "rewound", ok: true, originalText: A, text: "nova versão", first: true } as SdkEvent);
+
+    const bubbles = screen.getAllByTestId("sdk-user");
+    expect(bubbles).toHaveLength(1);
+    expect(bubbles[0]).toHaveTextContent("nova versão");
+    expect(screen.queryByText(ERRO)).toBeNull();
+  });
+
+  it("editar a SEGUNDA cópia não é `first` (a regra de sempre)", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "user", text: A, at: 1 });
+    ws.deliver({ type: "assistant_text", text: ERRO });
+    ws.deliver({ type: "user", text: A, at: 2 });
+    ws.deliver({ type: "assistant_text", text: ERRO });
+    ws.deliver({ type: "ready" });
+
+    await userEvent.click(screen.getAllByTestId("sdk-edit")[1]!);
+    const box = await textbox();
+    await userEvent.clear(box);
+    await userEvent.type(box, "nova versão{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    expect(JSON.parse(ws.sent[0]!)).not.toHaveProperty("first");
+  });
+});

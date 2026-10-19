@@ -142,7 +142,7 @@ export interface DriverSession {
    * the second overwrote the first, and then the first `rewound` cut the log at the WRONG message —
    * deleting a correction the person wrote and the model had already read.
    */
-  rewinds: Array<{ original: string; text: string }>;
+  rewinds: Array<{ original: string; text: string; first?: boolean }>;
   /**
    * OS RECIBOS JÁ EMITIDOS — `cid` → o envio que o driver já leu (`AcceptedSend`): a promessa de
    * durabilidade que o primeiro envio ganhou e a linha que ela grava.
@@ -475,8 +475,8 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
       // parada que foi de outra pessoa.
       session.pendingInterruptNote = undefined;
       // Which row is the edit's new message, for the screen's cut (see `RewoundEvent.text`).
-      event = { ...event, text: edit.text };
-      void rewindHistory(session.cardId, edit.original, edit.text).then((dropped) => {
+      event = edit.first ? { ...event, text: edit.text, first: true } : { ...event, text: edit.text };
+      void rewindHistory(session.cardId, edit.original, edit.text, { first: edit.first }).then((dropped) => {
         logger.info(
           { audit: true, action: "sdk.rewind", card: session.label, dropped },
           "the conversation was rewound to before an edited message",
@@ -843,20 +843,21 @@ export function handleClientFrame(
     // is safe (see `rewindAndSend` in sdk-driver.mjs): `text` is what the model reads when the
     // conversation can be taken back to before the original, `fallback` the supersede used when it
     // cannot. Either way the edit reaches the model — the choice is never "nothing happens".
-    if (!writeToDriver(session, { type: "edit_user", original: control.original, text: control.text, fallback: wrapped })) {
+    const first = control.first === true ? { first: true } : {};
+    if (!writeToDriver(session, { type: "edit_user", original: control.original, text: control.text, fallback: wrapped, ...first })) {
       return { kind: "refused", cid: control.cid, reason: "driver-gone" };
     }
     // Which message a `rewound: ok` will cut the log back to, and which words went in its place.
     // Enqueued BEFORE the driver can answer, and in send order — the answers come back in the same
     // order, one per edit.
-    session.rewinds.push({ original: control.original, text: control.text });
+    session.rewinds.push({ original: control.original, text: control.text, ...first });
     session.activeTurns += 1;
     clearIdleTimer(session);
     noteChatActivity(session);
     // The transcript will carry the WRAPPED words — that is what the mirror must not re-emit.
     noteDriverEventFor(session.cardId, { type: "user", text: wrapped });
     const at = Date.now();
-    const edited: HistoryEvent = { type: "message_edited", originalText: control.original, at };
+    const edited: HistoryEvent = { type: "message_edited", originalText: control.original, ...first, at };
     void appendHistory(session.cardId, edited);
     const line: HistoryEvent = { type: "user", text: control.text, sent: wrapped, at, from: origin };
     const persisted = appendHistoryReported(session.cardId, line);
