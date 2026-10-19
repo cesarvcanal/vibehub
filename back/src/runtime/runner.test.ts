@@ -155,6 +155,16 @@ describe("buildSetupScript", () => {
     expect(script).toContain("npm i -g @anthropic-ai/claude-code");
     expect(script).toContain("playwright install");
   });
+  it("clears npm's leftover staging dir before installing Claude Code, and fails without a claude on PATH", () => {
+    const lines = buildSetupScript(base).split("\n");
+    const cleanup = lines.findIndex((l) => l.includes("@anthropic-ai/.claude-code-*"));
+    const install = lines.findIndex((l) => l.startsWith("npm i -g @anthropic-ai/claude-code"));
+    const check = lines.findIndex((l) => l.startsWith("command -v claude"));
+    expect(cleanup).toBeGreaterThan(-1);
+    expect(cleanup).toBeLessThan(install);
+    expect(check).toBeGreaterThan(install);
+    expect(lines[check]).toContain("exit 1");
+  });
   it("uses the configured git identity, not a hard-coded one", () => {
     const script = buildSetupScript(base);
     expect(script).toContain("git config --global user.name 'Ada Lovelace'");
