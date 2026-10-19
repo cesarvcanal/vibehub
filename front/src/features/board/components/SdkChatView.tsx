@@ -1409,7 +1409,9 @@ function SdkQueueTray({
             data-testid="sdk-queued-text"
             className="min-w-0 flex-1 max-h-24 overflow-y-auto overscroll-contain whitespace-pre-wrap break-words text-foreground/90"
           >
-            {message.text}
+            {/* Mesmo render da bolha: o caminho de um print colado vira a miniatura dele — esperar
+                na fila lendo `/work/.uploads/…/1792-image.png` não diz qual imagem vai. */}
+            <LinkifiedText text={message.text} compact />
           </span>
           {/* NO CAMPO, sendo reescrita: ela guarda o lugar dela na fila e não oferece gesto nenhum —
               o campo é que manda agora (Enter grava por cima, o X de lá desiste da correção). */}

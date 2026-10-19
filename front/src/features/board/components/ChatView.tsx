@@ -624,7 +624,7 @@ function CopyButton({ text }: { text: string }) {
  * still be a link. Only what `linkifyTokens` recognises (http/https, preview paths) ever becomes
  * an href, so `javascript:` and friends stay literal text. Exported for the native SDK chat.
  */
-export function LinkifiedText({ text }: { text: string }) {
+export function LinkifiedText({ text, compact = false }: { text: string; compact?: boolean }) {
   return (
     <>
       {linkifyTokens(text).map((token, i) =>
@@ -639,7 +639,7 @@ export function LinkifiedText({ text }: { text: string }) {
             {token.value}
           </a>
         ) : token.type === "image" ? (
-          <UploadedImage key={i} cardId={token.cardId} file={token.file} />
+          <UploadedImage key={i} cardId={token.cardId} file={token.file} compact={compact} />
         ) : (
           <UltraText key={i} text={token.value} />
         ),
@@ -658,8 +658,11 @@ export function LinkifiedText({ text }: { text: string }) {
  *
  * `onError` is the case that matters: the card was deleted, the runner is down, the file was
  * cleaned up. The path comes back as text then — still the truth, never a broken-image icon.
+ *
+ * `compact` is the thumbnail for tight spots (the queue tray above the composer): enough to tell
+ * which screenshot is waiting, without a 256px picture eating the tray's height cap.
  */
-function UploadedImage({ cardId, file }: { cardId: string; file: string }) {
+function UploadedImage({ cardId, file, compact = false }: { cardId: string; file: string; compact?: boolean }) {
   const t = useT();
   const [broken, setBroken] = React.useState(false);
   const src = uploadImageUrl(cardId, file);
@@ -673,7 +676,10 @@ function UploadedImage({ cardId, file }: { cardId: string; file: string }) {
         data-testid="chat-image"
         loading="lazy"
         onError={() => setBroken(true)}
-        className="max-h-64 max-w-full rounded-md border border-border/70 object-contain"
+        className={cn(
+          "max-w-full rounded-md border border-border/70 object-contain",
+          compact ? "max-h-16" : "max-h-64",
+        )}
       />
     </a>
   );

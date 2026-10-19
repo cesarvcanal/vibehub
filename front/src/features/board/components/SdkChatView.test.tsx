@@ -2556,6 +2556,27 @@ describe("SdkChatView — a fila não rouba a tela da conversa", () => {
     expect(body).toHaveTextContent("linha 120 da instrução gigante");
   });
 
+  it("uma imagem anexada na mensagem em espera aparece como miniatura, não como caminho", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    const box = screen.getByTestId("terminal-composer").querySelector("textarea")!;
+    await userEvent.type(box, "primeira{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "trabalhando…" });
+    const card = "2f76af45-3e76-4e32-a49d-bc30b799713d";
+    fireEvent.change(box, { target: { value: `olha esse erro /work/.uploads/${card}/1792422236057-image.png` } });
+    fireEvent.keyDown(box, { key: "Enter" });
+
+    const body = await screen.findByTestId("sdk-queued-text");
+    const image = within(body).getByTestId("chat-image");
+    expect(image).toHaveAttribute("src", `/api/cards/${card}/uploads/1792422236057-image.png`);
+    expect(image.className).toMatch(/max-h-16/); // miniatura: não estoura o teto da bandeja
+    expect(body).toHaveTextContent("olha esse erro");
+    expect(body).not.toHaveTextContent("/work/.uploads");
+  });
+
   it("a bandeja fica FORA do scroller da conversa — ela não é uma linha do histórico", async () => {
     await queueHuge();
     const scroller = screen.getByTestId("sdk-chat-scroller");
