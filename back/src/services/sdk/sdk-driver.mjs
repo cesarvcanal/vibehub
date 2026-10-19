@@ -794,6 +794,17 @@ async function runStream() {
           // answer exists ONLY here, and swallowing it makes the command look broken.
           if (msg.content.trim() !== "") emit({ type: "local_output", text: msg.content });
         }
+      } else if (msg.type === "rate_limit_event" && msg.rate_limit_info && typeof msg.rate_limit_info === "object") {
+        // O AVISO DE LIMITE DO PLANO (o "You've used 91% of your session limit" do rodapé do CLI).
+        // Repassado cru: as unidades (fração, epoch em segundos) são acertadas no back, em rateLimit.ts.
+        const info = msg.rate_limit_info;
+        emit({
+          type: "rate_limit",
+          status: info.status,
+          window: info.rateLimitType,
+          utilization: info.utilization,
+          resetsAt: info.resetsAt,
+        });
       } else if (msg.type === "conversation_reset") {
         // /clear (ou outro fluxo de "sessão nova" do CLI): o modelo começa do zero numa sessão NOVA
         // — a próxima mensagem `system` traz o id dela, e o `session` sai por lá. O que este driver

@@ -14,6 +14,7 @@ vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 
 let dir = "";
 let app: FastifyInstance;
+const accountUsage = vi.fn();
 
 async function boot(): Promise<FastifyInstance> {
   vi.resetModules();
@@ -43,6 +44,11 @@ async function boot(): Promise<FastifyInstance> {
       applySessionChange: vi.fn(async () => null),
       killCardSession: vi.fn(async () => undefined),
     };
+  });
+  // The plan usage reads a credential out of the runner and calls Anthropic; neither exists here.
+  vi.doMock("../services/accounts/usage.js", async () => {
+    const actual = await vi.importActual<typeof import("../services/accounts/usage.js")>("../services/accounts/usage.js");
+    return { ...actual, accountUsage };
   });
   const { buildServer } = await import("../index.js");
   const server = await buildServer();
@@ -250,5 +256,36 @@ describe("what sharing never does", () => {
       method: "GET", url: `/api/cards/${w.cardId}/shares`, headers: { cookie: w.owner },
     });
     expect(shares.json().shares).toEqual([]);
+  });
+});
+
+/**
+ * The plan usage of the account a card runs on: a member does not pick the account, but the limit
+ * stops their work just the same — so the card's own reading is theirs to see, and nothing more.
+ */
+describe("the plan usage of a card's account", () => {
+  const reading = { available: true, fiveHour: { utilization: 91, resetsAt: "2026-10-19T20:00:00Z" }, fetchedAt: 1 };
+
+  it("is readable by a member the card was shared with, for that card's account only", async () => {
+    const w = await world();
+    accountUsage.mockResolvedValue(reading);
+    // Not shared yet: the card does not exist for them.
+    expect((await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/usage`, headers: { cookie: w.member } })).statusCode)
+      .toBe(404);
+
+    await share(w, "cards", w.cardId);
+    const res = await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/usage`, headers: { cookie: w.member } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ slug: "default", usage: reading });
+    // No pin on the card nor on the project: the runner's built-in profile.
+    expect(accountUsage).toHaveBeenCalledWith(undefined);
+    // The install-wide listing stays the owner's.
+    expect((await app.inject({ method: "GET", url: "/api/accounts/usage", headers: { cookie: w.member } })).statusCode)
+      .toBe(403);
+  });
+
+  it("answers 401 without a session", async () => {
+    const w = await world();
+    expect((await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/usage` })).statusCode).toBe(401);
   });
 });

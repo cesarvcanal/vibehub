@@ -12,6 +12,7 @@
 // Type-only (erased at compile time): the workflow frame's shape IS the probe's result, and this
 // keeps the file free of runtime imports (and of the probe's config/host side of the graph).
 import type { WorkflowFeedItem, WorkflowRun } from "./workflowProbe.js";
+import type { RateLimitEvent } from "./rateLimit.js";
 
 /* ------------------------------------------------------------------ events */
 
@@ -238,6 +239,12 @@ export interface BackgroundTasksEvent { type: "background_tasks"; tasks: Backgro
  * sem o contexto anterior. A tela e o log do card têm de esquecer a conversa antiga junto — senão o
  * /clear parecia não ter funcionado, e o F5 trazia tudo de volta.
  */
+/**
+ * O aviso de limite do plano, ao vivo (o `rate_limit_event` do CLI). Estado da SESSÃO, como as
+ * tarefas em segundo plano: substitui a leitura anterior da mesma janela, nunca entra no histórico,
+ * e é reenviado a quem conecta depois. Unidades já normalizadas pelo manager (ver ./rateLimit.ts).
+ */
+export type { RateLimitEvent };
 export interface ConversationResetEvent { type: "conversation_reset"; trigger?: string }
 /** The driver is up and ready to accept the first user message. The back stamps `turnActive` on
  *  every `ready` it sends (real or synthesized on reattach) with the manager's live turn count, so
@@ -281,6 +288,7 @@ export type DriverEvent =
   | CatalogEvent
   | LocalOutputEvent
   | BackgroundTasksEvent
+  | RateLimitEvent
   | ConversationResetEvent
   | ResultEvent
   | ReadyEvent
@@ -308,6 +316,7 @@ const DRIVER_EVENT_TYPES = new Set([
   "catalog",
   "local_output",
   "background_tasks",
+  "rate_limit",
   "conversation_reset",
   "result",
   "ready",

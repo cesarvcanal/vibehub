@@ -2039,3 +2039,40 @@ describe("conversation_reset — o /clear limpa a conversa de verdade", () => {
     }, { timeout: 5000 });
   });
 });
+
+/**
+ * O AVISO DE LIMITE DO PLANO (o "You've used 91% of your session limit" do rodapé do CLI): estado da
+ * sessão, como as tarefas em segundo plano — normalizado, reenviado a quem conecta, nunca gravado.
+ */
+describe("rate_limit — o aviso de limite do plano", () => {
+  const warn = { type: "rate_limit", status: "allowed_warning", window: "five_hour", utilization: 0.91, resetsAt: 1_792_440_000 };
+  const parsed = (socket: ReturnType<typeof fakeSocket>) =>
+    socket.sent.map((s) => JSON.parse(s) as { type: string }).filter((e) => e.type === "rate_limit");
+
+  it("sai em percentual e epoch em ms, e é reenviado (um por janela) a uma aba que conecta depois", async () => {
+    const session = ensure();
+    const s1 = fakeSocket();
+    attachSocket(session, s1 as never);
+    spawned[0]!.stdout.emit("data", line(warn));
+    spawned[0]!.stdout.emit("data", line({ ...warn, utilization: 0.93 }));
+    spawned[0]!.stdout.emit("data", line({ type: "rate_limit", status: "allowed", window: "seven_day", utilization: 0.4 }));
+    const expected = { type: "rate_limit", status: "allowed_warning", window: "five_hour", utilization: 93, resetsAt: 1_792_440_000_000 };
+    expect(parsed(s1)[1]).toEqual(expected);
+
+    const late = fakeSocket();
+    attachSocket(session, late as never);
+    expect(parsed(late)).toEqual([expected, { type: "rate_limit", status: "allowed", window: "seven_day", utilization: 40 }]);
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect((await readHistory(CARD)).some((e) => e.type === "rate_limit")).toBe(false);
+  });
+
+  it("descarta um aviso torto em vez de mandá-lo à tela", () => {
+    const session = ensure();
+    const s1 = fakeSocket();
+    attachSocket(session, s1 as never);
+    spawned[0]!.stdout.emit("data", line({ type: "rate_limit", status: "whatever", window: "five_hour" }));
+    spawned[0]!.stdout.emit("data", line({ type: "rate_limit", status: "rejected" }));
+    expect(parsed(s1)).toEqual([]);
+  });
+});

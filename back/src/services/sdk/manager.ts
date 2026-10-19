@@ -7,6 +7,7 @@ import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, clearHistor
 import { clearInflightMarker, inflightPreview, writeInflightMarker } from "./inflight.js";
 import { createLineReader, forgetDriverKeys, noteDriverEventFor, onOutsideTurn } from "./mirror.js";
 import { writeCardCatalog } from "./catalog.js";
+import { normalizeRateLimit, type RateLimitInfo } from "./rateLimit.js";
 import { forgetCardWorkflows, lastWorkflowRuns, readAgentFeed, watchCardWorkflows } from "./workflow.js";
 import { InvalidWorkflowIdError } from "./workflowProbe.js";
 import { isHarnessFiller } from "../chat/chat.js";
@@ -92,6 +93,11 @@ export interface DriverSession {
    * conecta depois, nunca gravado — e, enquanto não estiver vazio, o driver NÃO está ocioso.
    */
   backgroundTasks: BackgroundTaskInfo[];
+  /**
+   * O último aviso de limite do plano POR JANELA (`five_hour`, `seven_day`, …), como o CLI emitiu.
+   * Estado da sessão: reenviado a quem conecta depois, nunca gravado.
+   */
+  rateLimits: Map<string, RateLimitInfo>;
   /** Quando o conjunto deixou de ser vazio — o início da contagem de `BACKGROUND_HOLD_MAX_MS`. */
   backgroundSince?: number;
   /**
@@ -414,6 +420,12 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     clearIdleTimer(session);
     maybeScheduleIdleStop(session);
   }
+  if (event.type === "rate_limit") {
+    const info = normalizeRateLimit(event);
+    if (!info) return;
+    session.rateLimits.set(info.window, info);
+    event = { type: "rate_limit", ...info };
+  }
   if (event.type === "turn_absorbed") {
     // Streaming input: this send folded into the turn ALREADY running (the model absorbs it at its
     // next step) — it will not produce its own `result`, so its +1 comes back off. Floor at 1: an
@@ -587,6 +599,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     ready: false,
     activeTurns: 0,
     backgroundTasks: [],
+    rateLimits: new Map(),
     rewinds: [],
     idleTimer: null,
     stderrTail: "",
@@ -1092,6 +1105,12 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
   // `sleep` de deploy roda precisa ver isso no primeiro quadro — o aviso do CLI só vem na mudança.
   if (session.backgroundTasks.length > 0) {
     try { socket.send(JSON.stringify({ type: "background_tasks", tasks: session.backgroundTasks })); } catch { /* going away */ }
+  }
+
+  // O aviso de limite do plano também: o CLI só o emite quando a leitura muda, e quem abre o card
+  // com a sessão a 92% precisa ver a faixa no primeiro quadro, não depois da próxima resposta.
+  for (const info of session.rateLimits.values()) {
+    try { socket.send(JSON.stringify({ type: "rate_limit", ...info })); } catch { /* going away */ }
   }
 
   // A frota do workflow é da mesma natureza do catálogo: estado, não conversa. Ela não está no
