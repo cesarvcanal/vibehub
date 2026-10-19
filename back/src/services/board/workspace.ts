@@ -15,7 +15,7 @@ import {
   type Card, type CardStatus, type Project, type RestartReason,
 } from "./registry.js";
 import { getSettings } from "../settings/settings.js";
-import { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir, profileDirFor, oauthTokenPath } from "../accounts/profiles.js";
+import { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir, profileDirFor, oauthTokenGuard } from "../accounts/profiles.js";
 import { firstRunSeedCommand } from "../accounts/firstRun.js";
 import { carryTranscriptsCommand } from "../accounts/carryTranscripts.js";
 import { resolveAccountToken, writeTokenLines, ghTokenPath, writeGhTokenLines, removeGhTokenLines } from "../accounts/token.js";
@@ -104,7 +104,8 @@ export interface SessionCommandOpts {
  *
  * Conditional prefix: if the profile holds an `.oauth-token` (long-lived token from
  * `claude setup-token`), export CLAUDE_CODE_OAUTH_TOKEN read FROM THE FILE — Claude then starts
- * already logged in, no `/login`. With no file nothing changes (the profile's normal login).
+ * already logged in, no `/login`. With no file nothing changes (the profile's normal login), and a
+ * `/login` NEWER than the token wins over it (see `oauthTokenGuard`).
  *
  * Then the FIRST-RUN seed (see accounts/firstRun.ts): the profile's `.claude.json` gets
  * `hasCompletedOnboarding` and the worktree's trust, so a card never opens on the setup wizard or on
@@ -123,7 +124,6 @@ export function sessionCommand(opts: SessionCommandOpts | boolean): string {
   const o: SessionCommandOpts = typeof opts === "boolean" ? { resume: opts } : opts;
   const profileDir = o.profileDir ?? DEFAULT_CLAUDE_DIR;
   assertSafeRemotePath(profileDir);
-  const tokenFile = oauthTokenPath(profileDir);
   // IS_SANDBOX=1: the runner is root inside an isolated container; without it Claude refuses to run
   // without permission prompts ("cannot be used with root"). Belt for runners provisioned before the
   // container environment carried the flag.
@@ -137,7 +137,7 @@ export function sessionCommand(opts: SessionCommandOpts | boolean): string {
   }
   const guard =
     `export IS_SANDBOX=1; ` +
-    `if [ -s ${tokenFile} ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${tokenFile})"; fi; ` +
+    oauthTokenGuard(profileDir) +
     // Claude's first-run walls (setup wizard + trust dialog) taken down for THIS profile and THIS
     // worktree. It lives in the session command — not in the open script — because the websocket's
     // attach-or-create also creates sessions, and a card born that way used to land on the wizard.

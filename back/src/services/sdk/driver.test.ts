@@ -577,7 +577,7 @@ describe("sdk-driver.mjs — editar rebobina, mas só quando é seguro", () => {
     // A janela é o RAMO do `edit_user`, não um número de caracteres: um comentário a mais ali
     // dentro não é uma regressão, e foi o que esta medida de 600 chars passou a chamar de uma.
     const handler = source.slice(source.indexOf('control.type === "edit_user"'), source.indexOf('control.type === "permission_decision"'));
-    expect(handler).toContain("rewindAndSend(control.text, control.fallback, control.original, supersedePendingQuestions)");
+    expect(handler).toContain("rewindAndSend(control.text, control.fallback, control.original, supersedePendingQuestions, control.first === true)");
     // supersede: as palavras entram ANTES de soltar; rebobinar: solta antes de derrubar o turno
     const fn = source.slice(source.indexOf("async function rewindAndSend("), source.indexOf("/* ------------------------------------------------------------- stdin */"));
     const sup = fn.slice(fn.indexOf("const supersede = "), fn.indexOf("};", fn.indexOf("const supersede = ")));

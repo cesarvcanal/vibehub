@@ -1,4 +1,5 @@
 import { assertAccountSlug } from "../board/registry.js";
+import { shQuote } from "../../runtime/host.js";
 
 /**
  * CLAUDE CODE PROFILES inside the runner. The DEFAULT account is `/root/.claude` (a session for it
@@ -42,4 +43,31 @@ export function profileDirFor(slug: string | undefined): string {
 /** Path of a profile's long-lived token file. PURE. */
 export function oauthTokenPath(profileDir: string): string {
   return `${profileDir}/${OAUTH_TOKEN_FILE}`;
+}
+
+/** Claude Code's own credential file inside a profile — what `/login` writes (refreshable). */
+export const CREDENTIALS_FILE = ".credentials.json";
+
+/**
+ * Shell guard that exports CLAUDE_CODE_OAUTH_TOKEN from the profile's `.oauth-token` — UNLESS a
+ * `/login` made after that token is sitting in the same profile.
+ *
+ * The variable beats `.credentials.json` inside Claude Code, so an account holding BOTH used to run
+ * on the long-lived token forever: a revoked setup-token kept answering "OAuth token revoked" while
+ * a fresh `/login` (account login terminal or a card's own terminal) sat unused next to it — the
+ * login "did not stick" (produção, 2026-10-19, account `tech`). The rule is "the newest sign-in
+ * wins": the token yields only to a credentials file that is NEWER than it and carries a refresh
+ * token (a `.credentials.json` without one cannot keep itself alive, so it never wins). Saving a
+ * token in the UI rewrites the file and takes the lead back; a card open re-seeds it only when the
+ * value changed (see `writeTokenLines`), so opening a card never steals the lead from a login.
+ * Paths are validated and shell-quoted; the token is read from the file, never placed in argv. PURE.
+ */
+export function oauthTokenGuard(profileDir: string): string {
+  const token = shQuote(oauthTokenPath(profileDir));
+  const creds = shQuote(`${profileDir}/${CREDENTIALS_FILE}`);
+  return (
+    `if [ -s ${token} ] && ! { [ ${creds} -nt ${token} ] && ` +
+    `grep -Eq '"refreshToken"[[:space:]]*:[[:space:]]*"[^"]' ${creds}; }; ` +
+    `then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${token})"; fi; `
+  );
 }

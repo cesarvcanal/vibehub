@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat, utimes, writeFile, readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -112,6 +113,49 @@ describe("script builders (pure)", () => {
     const { token } = await fresh();
     const script = token.buildRemoveTokenScript("vibehub-runner", "/root/.claude-profiles/personal");
     expect(script).toContain("rm -f '/root/.claude-profiles/personal/.oauth-token'");
+  });
+});
+
+/**
+ * The token file's AGE decides who signs a session in (see `oauthTokenGuard`): the card open must
+ * not refresh it when nothing changed, or every open would bring a revoked token back over a newer
+ * `/login`. Run in a real bash.
+ */
+describe("writeTokenLines — the file's age only moves when the value does (real bash)", () => {
+  async function run(force: boolean, existing?: string): Promise<{ value: string; touched: boolean }> {
+    const { token } = await fresh();
+    const dir = await mkdtemp(join(tmpdir(), "vh-tokfile-"));
+    try {
+      const file = join(dir, ".oauth-token");
+      const old = Date.now() / 1000 - 86_400;
+      if (existing !== undefined) {
+        await writeFile(file, existing);
+        await utimes(file, old, old);
+      }
+      execFileSync("bash", ["-c", token.writeTokenLines(dir, TOKEN, { force }).join("\n")]);
+      const value = await readFile(file, "utf8");
+      const touched = existing === undefined || (await stat(file)).mtimeMs / 1000 > old + 1;
+      expect((await stat(file)).mode & 0o777).toBe(0o600);
+      return { value, touched };
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("card open, same token already there → file untouched (a newer /login keeps the lead)", async () => {
+    expect(await run(false, TOKEN)).toEqual({ value: TOKEN, touched: false });
+  });
+
+  it("card open, the vault holds a DIFFERENT token → rewritten", async () => {
+    expect(await run(false, "sk-ant-oat01-OLD")).toEqual({ value: TOKEN, touched: true });
+  });
+
+  it("card open, no file yet → written", async () => {
+    expect(await run(false)).toEqual({ value: TOKEN, touched: true });
+  });
+
+  it("saving the token in the UI (force) → always rewritten, even with the same value", async () => {
+    expect(await run(true, TOKEN)).toEqual({ value: TOKEN, touched: true });
   });
 });
 

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { cardCdpEndpoint } from "../browser/ports.js";
 import { firstRunSeedCommand } from "../accounts/firstRun.js";
 import { carryTranscriptsCommand } from "../accounts/carryTranscripts.js";
+import { oauthTokenGuard } from "../accounts/profiles.js";
 
 /**
  * A card's workspace in the runner (open + terminal + pause + restart + drop). The INVARIANTS the
@@ -29,13 +30,13 @@ const CONTAINER = "vibehub-runner";
 
 /**
  * The LONG-LIVED TOKEN prefix every Claude session carries: a guard in the session's SHELL (not in
- * tmux's argv) — if the profile has an .oauth-token, export CLAUDE_CODE_OAUTH_TOKEN; otherwise
- * nothing happens. It ends with the FIRST-RUN seed (own unit test in accounts/firstRun.test.ts),
+ * tmux's argv) — if the profile has an .oauth-token (and no NEWER `/login`), export
+ * CLAUDE_CODE_OAUTH_TOKEN; otherwise nothing happens (own unit test in accounts/profiles.test.ts). It ends with the FIRST-RUN seed (own unit test in accounts/firstRun.test.ts),
  * which is what keeps a session from opening on Claude's setup wizard or trust dialog.
  */
 const guard = (dir = "/root/.claude") =>
   `export IS_SANDBOX=1; ` +
-  `if [ -s ${dir}/.oauth-token ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${dir}/.oauth-token)"; fi; ` +
+  oauthTokenGuard(dir) +
   `${firstRunSeedCommand(dir, '"$PWD"')}; ` +
   `${carryTranscriptsCommand(dir, '"$PWD"')}; `;
 const CLAUDE = `${guard()}claude; exec bash`;

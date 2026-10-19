@@ -5,7 +5,7 @@ import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.
 import { config } from "../../config/env.js";
 import { cardWorkPaths } from "../board/workspace.js";
 import { accountConfigDir } from "../accounts/profiles.js";
-import { oauthTokenPath, DEFAULT_CLAUDE_DIR } from "../accounts/profiles.js";
+import { oauthTokenGuard, DEFAULT_CLAUDE_DIR } from "../accounts/profiles.js";
 import { carryTranscriptsCommand } from "../accounts/carryTranscripts.js";
 import { effectiveAccountSlug, modelPin, isValidEffort, assertSessionId, type Card, type Project } from "../board/registry.js";
 import { cardCdpEndpoint } from "../browser/ports.js";
@@ -160,7 +160,6 @@ export function buildSdkDriverCommandLine(opts: SdkDriverCommandOpts): string {
   assertSafeRemotePath(opts.cwd);
   assertSafeRemotePath(opts.profileDir);
   if (opts.configDir) assertSafeRemotePath(opts.configDir);
-  const tokenFile = oauthTokenPath(opts.profileDir);
   const pin = modelPin(opts.model);
   const model = pin ? ` --model ${shQuote(pin)}` : "";
   const effort = isValidEffort(opts.effort) ? ` --effort ${shQuote(opts.effort)}` : "";
@@ -181,10 +180,11 @@ export function buildSdkDriverCommandLine(opts: SdkDriverCommandOpts): string {
     // AUTH RULE (project rule): the driver signs in with CLAUDE_CODE_OAUTH_TOKEN (the Max
     // subscription's setup-token, same as the TUI) and NEVER with an API key — an inherited
     // ANTHROPIC_API_KEY would silently swallow the token and bill the API, so it is unset first.
+    // The token yields only to a NEWER `/login` in the same profile (see `oauthTokenGuard`).
     `unset ANTHROPIC_API_KEY; ` +
     `export IS_SANDBOX=1; ` +
     `export NODE_PATH=${shQuote(`${SDK_DRIVER_DIR}/node_modules`)}; ` +
-    `if [ -s ${shQuote(tokenFile)} ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${shQuote(tokenFile)})"; fi; ` +
+    oauthTokenGuard(opts.profileDir) +
     (opts.configDir ? `export CLAUDE_CONFIG_DIR=${shQuote(opts.configDir)}; ` : "") +
     // `--resume <id>` looks for the transcript in THIS profile; after an account switch it lives in
     // the previous one ("No conversation found with session ID") — carry it over first.

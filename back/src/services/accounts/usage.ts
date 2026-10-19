@@ -1,7 +1,7 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import { listAccounts } from "../board/registry.js";
-import { DEFAULT_ACCOUNT_SLUG, profileDirFor } from "./profiles.js";
+import { DEFAULT_ACCOUNT_SLUG, profileDirFor, CREDENTIALS_FILE } from "./profiles.js";
 import { resolveAccountToken } from "./token.js";
 import { logger } from "../../utils/logger.js";
 
@@ -50,8 +50,8 @@ export const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 /** Beta header the endpoint requires alongside the OAuth bearer. */
 export const OAUTH_BETA = "oauth-2025-04-20";
 
-/** Claude Code's own credential file inside a profile directory. */
-export const CREDENTIALS_FILE = ".credentials.json";
+/** Claude Code's own credential file inside a profile directory (owned by profiles.ts). */
+export { CREDENTIALS_FILE };
 
 /** How long a successful reading stays fresh. Matches the front-end's 60s poll. */
 export const FRESH_MS = 60_000;

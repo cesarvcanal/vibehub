@@ -87,14 +87,22 @@ export function removeGhTokenLines(cardId: string): string[] {
  * Lines for the BODY of a script running INSIDE the runner: write the token to
  * `<profile>/.oauth-token` with mode 600, creating the profile directory first (a brand new account
  * has none yet). Shared by the card open (seeding from the vault) and the token route. PURE.
+ *
+ * The file's AGE is part of the auth rule — a `/login` newer than the token wins over it (see
+ * `oauthTokenGuard`) — so the card open (`force` off) rewrites it only when the VALUE changed:
+ * re-seeding the same token on every open would make it "newer" than the login and bring a revoked
+ * token back each time a card opened. Saving a token in the UI (`force`) always rewrites: it is the
+ * person choosing that token now.
  */
-export function writeTokenLines(profileDir: string, token: string): string[] {
+export function writeTokenLines(profileDir: string, token: string, opts: { force?: boolean } = {}): string[] {
   assertSafeRemotePath(profileDir);
   const file = oauthTokenPath(profileDir);
+  const value = shQuote(assertOauthToken(token));
+  const write = `printf '%s' ${value} > ${shQuote(file)}`;
   return [
     `mkdir -p ${shQuote(profileDir)}`,
     "umask 077",
-    `printf '%s' ${shQuote(assertOauthToken(token))} > ${shQuote(file)}`,
+    opts.force ? write : `if [ "$(cat ${shQuote(file)} 2>/dev/null)" != ${value} ]; then ${write}; fi`,
     `chmod 600 ${shQuote(file)}`,
   ];
 }
@@ -105,7 +113,7 @@ export function buildWriteTokenScript(containerName: string, profileDir: string,
     "set -e",
     `docker exec -i ${shQuote(containerName)} bash -s <<'${DELIM}'`,
     "set -e",
-    ...writeTokenLines(profileDir, token),
+    ...writeTokenLines(profileDir, token, { force: true }),
     DELIM,
   ].join("\n");
 }
