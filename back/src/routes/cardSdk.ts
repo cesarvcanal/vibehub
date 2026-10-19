@@ -7,6 +7,7 @@ import * as registry from "../services/board/registry.js";
 import { recordCardActor, authorsTheTurn } from "../services/board/actor.js";
 import { getSettings } from "../services/settings/settings.js";
 import { installCardSdkDriver, sdkDriverCommand } from "../services/sdk/driver.js";
+import { restoreMissingWorkspace } from "../services/board/workspace.js";
 import {
   attachSocket,
   ensureDriverSession,
@@ -133,6 +134,9 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
           stopHearing();
           return;
         }
+        // The driver is about to be spawned IN the worktree: if the folder is gone (the card's own
+        // agent removed it after a merge), rebuild it first — otherwise the CLI cannot start at all.
+        await restoreMissingWorkspace(card.id);
       }
       // ONE read-only probe: the newest transcript in the card's worktree. It answers two things —
       // which session the driver must RESUME (the card's one conversation, whichever mode wrote it

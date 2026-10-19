@@ -47,6 +47,10 @@ vi.mock("../services/sdk/driver.js", () => ({
   installCardSdkDriver: () => h.install?.promise ?? Promise.resolve(),
   sdkDriverCommand: () => Promise.resolve({ file: "docker", args: ["exec"] }),
 }));
+vi.mock("../services/board/workspace.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/board/workspace.js")>()),
+  restoreMissingWorkspace: () => Promise.resolve(false),
+}));
 vi.mock("../runtime/host.js", () => ({
   hostExecutor: () => ({ runScript: () => Promise.resolve({ stdout: "" }) }),
 }));
