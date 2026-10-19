@@ -125,4 +125,15 @@ describe("MCP server instructions for an external app (ChatGPT, Claude.ai)", () 
     expect(EXTERNAL_INSTRUCTIONS).toContain("vibehub_create_card");
     expect(EXTERNAL_INSTRUCTIONS).not.toContain("vibehub_report");
   });
+
+  it("teach the voice loop: send → wait → relay the question → report what changed", () => {
+    // By voice nobody looks at the board: the assistant must wait instead of polling, relay a card's
+    // question with its options instead of deciding, and say what was done before delivering.
+    expect(EXTERNAL_INSTRUCTIONS).toContain("vibehub_wait_for_card");
+    expect(EXTERNAL_INSTRUCTIONS).toContain("sentAt");
+    expect(EXTERNAL_INSTRUCTIONS).toContain("pendingQuestion");
+    expect(EXTERNAL_INSTRUCTIONS).toContain("vibehub_card_activity");
+    expect(EXTERNAL_INSTRUCTIONS).toContain("vibehub_card_changes");
+    expect(EXTERNAL_INSTRUCTIONS.toLowerCase()).toContain("voice");
+  });
 });

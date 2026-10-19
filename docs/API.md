@@ -343,10 +343,15 @@ Tokens are stored hashed in `oauth.json` and die with the account, or when its p
 | `vibehub_list_terminals` | the cards the user reaches, with their `access` (`work` / `view`) |
 | `vibehub_create_card` | **owner** — creates a card and opens it (answers `opening` while the workspace is prepared) |
 | `vibehub_open_card` | `work` — opens or resumes a session |
-| `vibehub_send_to_terminal` | `work` — the user's own message, attributed to them (like the chat composer) |
-| `vibehub_read_terminal` | `view` — the card's last answers |
+| `vibehub_send_to_terminal` | `work` — the user's own message, attributed to them; goes into the live native chat when there is one, else the terminal prompt. Returns `sentAt` |
+| `vibehub_wait_for_card` | `view` — holds up to 50 s until the turn ends or the card needs the user: `outcome` `finished` / `question` / `permission` / `timeout` / `not_started` / `no session`, with `answers`, `activity` and what is pending. `since` = the send's `sentAt` |
+| `vibehub_read_terminal` | `view` — the card's last answers, plus `pendingQuestion` (the question card or terminal menu waiting on the user) |
+| `vibehub_card_activity` | `view` — situation, `busy`, `pendingQuestion` / `pendingPermission` and recent events (messages, one line per tool call, answers); `since` for only what is new |
+| `vibehub_card_changes` | `view` — read-only git: branch, commits ahead of the base, files changed, uncommitted work, the branch's PR |
 | `vibehub_move_cards` | `work` on each card — `done` or `backlog` |
 | `vibehub_deliver` | `work` — PR + checks; merges only with `authorized: true` |
+
+The read tools carry `readOnlyHint`, so the app does not ask the user to confirm every poll.
 
 A card the user cannot see answers `card not found`; a `view` share answers `read-only`. The
 card-only tools (`vibehub_report`, `vibehub_preview`, credentials…) are not offered: the app has no
