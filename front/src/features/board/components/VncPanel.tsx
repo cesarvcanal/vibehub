@@ -8,6 +8,8 @@ import { wsUrl } from "@/lib/ws";
 import { apiErrorMessage } from "@/lib/apiError";
 import { boardApi, cardBrowserKey } from "@/features/board/api";
 import { useAuth } from "@/providers/auth";
+import { ChunkLoadFailure, importChunk } from "@/lib/lazyChunk";
+import { useReloadHold } from "@/lib/versionCheck";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -54,6 +56,10 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
   const t = useT();
   const [state, setState] = React.useState<State>("idle");
   const [error, setError] = React.useState<string | null>(null);
+  /** The error is "this page is an old version": only a page reload helps, so the pane offers it. */
+  const [reloadOffer, setReloadOffer] = React.useState(false);
+  /** The first load of noVNC failed (a deploy restarting the server) and the loader is recovering. */
+  const [recovering, setRecovering] = React.useState(false);
   const screenRef = React.useRef<HTMLDivElement | null>(null);
   const rfbRef = React.useRef<{ disconnect: () => void; viewOnly: boolean; scaleViewport: boolean; clipViewport: boolean } | null>(null);
   const qc = useQueryClient();
@@ -88,6 +94,10 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
 
   // The connect callback reads the CURRENT holder without re-creating itself (a new callback would
   // re-run the auto-connect effect and reconnect the socket).
+  // The version watcher reloads an idle tab by itself after a deploy. With your hands on this browser
+  // (a login being typed, a form half filled) that reload would close the pane under you.
+  useReloadHold(`vnc:${cardId}`, iDrive);
+
   const iDriveRef = React.useRef(iDrive);
   iDriveRef.current = iDrive;
 
@@ -156,6 +166,8 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
     const attempt = ++attemptRef.current;
     const overtaken = () => attempt !== attemptRef.current;
     setError(null);
+    setReloadOffer(false);
+    setRecovering(false);
     setState("starting");
     try {
       await boardApi.startCardBrowser(cardId);
@@ -170,13 +182,26 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
     setState("connecting");
     let RFB: typeof import("@novnc/novnc").default;
     try {
-      RFB = (await import("@novnc/novnc")).default;
+      // A deploy restarting the server mid-load used to leave this pane on an error whose "Try
+      // again" could never work (see lib/lazyChunk.ts); the loader now waits and reloads the chunk.
+      RFB = (await importChunk(() => import("@novnc/novnc"), {
+        onRecovering: () => {
+          if (!overtaken()) setRecovering(true);
+        },
+      })).default;
     } catch (err) {
       if (overtaken()) return;
+      setRecovering(false);
       setState("error");
-      setError(apiErrorMessage(err, translate("vnc.loadError")));
+      if (err instanceof ChunkLoadFailure) {
+        setReloadOffer(err.reason === "stale");
+        setError(translate(err.reason === "stale" ? "vnc.newVersion" : "vnc.serverRestarting"));
+      } else {
+        setError(apiErrorMessage(err, translate("vnc.loadError")));
+      }
       return;
     }
+    setRecovering(false);
     // Unmounted, closed or superseded while the chunk was loading.
     if (overtaken() || !screenRef.current) return;
 
@@ -291,14 +316,20 @@ export function VncPanel({ cardId, onClose }: { cardId: string; onClose: () => v
               <div className="flex flex-col items-center gap-2 text-center text-xs text-destructive">
                 <AlertTriangle className="h-6 w-6" />
                 <p className="max-w-md">{error ?? t("error.generic")}</p>
-                <Button variant="outline" size="sm" onClick={() => void connect()}>
-                  {t("common.tryAgain")}
-                </Button>
+                {reloadOffer ? (
+                  <Button variant="outline" size="sm" data-testid="vnc-reload-page" onClick={() => window.location.reload()}>
+                    {t("vnc.reloadPage")}
+                  </Button>
+                ) : (
+                  <Button variant="outline" size="sm" onClick={() => void connect()}>
+                    {t("common.tryAgain")}
+                  </Button>
+                )}
               </div>
             ) : state === "starting" || state === "connecting" ? (
               <div className="flex flex-col items-center gap-2 text-center text-xs text-muted-foreground">
                 <Loader2 className="h-6 w-6 animate-spin" />
-                <p>{state === "starting" ? t("vnc.starting") : t("vnc.connecting")}</p>
+                <p>{state === "starting" ? t("vnc.starting") : recovering ? t("vnc.recovering") : t("vnc.connecting")}</p>
               </div>
             ) : (
               <div className="flex flex-col items-center gap-3 text-center text-xs text-muted-foreground">

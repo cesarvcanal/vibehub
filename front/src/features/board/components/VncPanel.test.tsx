@@ -5,6 +5,8 @@ import userEvent from "@testing-library/user-event";
 import { VncPanel } from "@/features/board/components/VncPanel";
 import { renderApp } from "@/test/render";
 import { post } from "@/lib/api";
+import { ChunkLoadFailure } from "@/lib/lazyChunk";
+import { reloadHeld, resetReloadHoldsForTesting } from "@/lib/versionCheck";
 
 /**
  * The Navegador pane, where the whole question is WHOSE HANDS ARE ON THE BROWSER:
@@ -72,7 +74,21 @@ const { instances, FakeRfb } = vi.hoisted(() => {
 });
 vi.mock("@novnc/novnc", () => ({ default: FakeRfb }));
 
+// The chunk loader is real by default (it just calls the import above); a test swaps it to play a
+// deploy happening under the pane.
+const chunk = vi.hoisted(() => ({ override: null as null | (() => Promise<unknown>) }));
+vi.mock("@/lib/lazyChunk", async (orig) => {
+  const actual = await orig<typeof import("@/lib/lazyChunk")>();
+  return {
+    ...actual,
+    importChunk: (load: () => Promise<unknown>, deps?: unknown) =>
+      chunk.override ? chunk.override() : actual.importChunk(load, deps as never),
+  };
+});
+
 beforeEach(() => {
+  chunk.override = null;
+  resetReloadHoldsForTesting();
   instances.length = 0;
   window.localStorage.clear();
   status = { live: true, busy: false, control: "agent", controlBy: null };
@@ -177,5 +193,52 @@ describe("VncPanel — one client per pane", () => {
     // ...and only the current one does.
     await act(async () => starts[1]!());
     await waitFor(() => expect(instances).toHaveLength(1));
+  });
+});
+
+describe("VncPanel — a deploy under the pane", () => {
+  // Production, 2026-10-19: the pane loaded noVNC while the vibehub restarted for a deploy, showed
+  // "Failed to fetch dynamically imported module" and its "Try again" could never work (the browser
+  // caches the failed import). The loader now recovers by itself; what is left for the pane is to
+  // say what happened in words and offer the one thing that still helps.
+  it("the new version renamed the chunk: says so and offers a page reload", async () => {
+    chunk.override = () => Promise.reject(new ChunkLoadFailure("stale"));
+    const reload = vi.fn();
+    vi.stubGlobal("location", { ...window.location, reload });
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    renderApp(<VncPanel cardId="c1" onClose={() => undefined} />);
+    expect(await screen.findByText(/new version/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Failed to fetch/i)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("vnc-reload-page"));
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("the server did not come back: says it is restarting, and Try again stays", async () => {
+    chunk.override = () => Promise.reject(new ChunkLoadFailure("server_down"));
+    renderApp(<VncPanel cardId="c1" onClose={() => undefined} />);
+    expect(await screen.findByText(/restarting/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
+    expect(screen.queryByTestId("vnc-reload-page")).not.toBeInTheDocument();
+
+    chunk.override = null; // back up: Try again now connects
+    await userEvent.click(screen.getByRole("button", { name: /try again/i }));
+    await waitFor(() => expect(instances).toHaveLength(1));
+  });
+});
+
+describe("VncPanel — the new-version reload never closes a browser someone is driving", () => {
+  // The version watcher reloads an idle tab by itself after a deploy. A reload closes this pane and
+  // kills the session on screen — in the middle of a login being typed by hand, that is lost work.
+  it("holds the automatic reload while you have control, and lets it go when you give it back", async () => {
+    await renderLive();
+    expect(reloadHeld()).toBe(false); // only watching: a reload costs nothing
+
+    await userEvent.click(screen.getByTestId("vnc-control-toggle"));
+    await waitFor(() => expect(reloadHeld()).toBe(true));
+
+    await userEvent.click(screen.getByTestId("vnc-control-toggle"));
+    await waitFor(() => expect(reloadHeld()).toBe(false));
   });
 });
