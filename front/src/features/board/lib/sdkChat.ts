@@ -259,7 +259,9 @@ export type QuestionOutcome = "pending" | "answered" | "unanswered" | "supersede
 export type SdkRow =
   /** A message the person sent. `sent` = it reached the driver's stdin (the socket was open).
    *  `from` = provenance on replayed/external messages: another card's agent, another person.
-   *  `edited` = a later version SUPERSEDED this one (drawn dimmed, with the "editada" badge).
+   *  `edited` = a later version SUPERSEDED this one. Kept in the state (a rewind cuts from it), but
+   *  NOT drawn: an edit reads as the bubble changing, not as a second bubble under a greyed one.
+   *  `revision` = this row IS the new version of an edited message (it carries the "editada" badge).
    *  `absorbed` = it arrived mid-turn and the driver folded it into the RUNNING turn (streaming
    *  input). Bookkeeping only — the bubble is NOT labelled: quem está na conversa vê a mensagem
    *  entrar no turno em andamento na própria tela, e a etiqueta só repetia isso por escrito. */
@@ -275,6 +277,7 @@ export type SdkRow =
       cid?: string;
       from?: MessageOrigin;
       edited?: boolean;
+      revision?: boolean;
       absorbed?: boolean;
       /** When the SERVER recorded it (the replay's / an external frame's `at`). Absent on one's own
        *  live sends — the receipt carries no time. The outbox anchors on it: see `sendMark`. */
@@ -394,6 +397,12 @@ export interface SdkChatState {
    * fresh driver: whatever we interrupted is long gone).
    */
   interruptRequested: boolean;
+  /**
+   * A `message_edited` was folded and its new version has not arrived yet: the NEXT user row is that
+   * version and gets the "editada" badge (replay and another socket's edit both send the marker
+   * first, then the message).
+   */
+  revisionPending?: boolean;
   /**
    * O PLANO de cada workflow que esta sessão disparou, por `meta.name` — a descrição e as fases
    * declaradas no script. Vem da CHAMADA da tool (o script inteiro está no `input`), e o progresso
@@ -1076,8 +1085,10 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       // or a message the terminal mirror lifted from the TUI.
       if (!event.text) return state;
       const marked = markSource(state, viaTerminal);
-      return appendUserRow({ ...marked, rows: settleStreaming(marked.rows) }, event.text, event.from, {
+      const { revisionPending, ...rest } = marked;
+      return appendUserRow({ ...rest, rows: settleStreaming(marked.rows) }, event.text, event.from, {
         at: typeof event.at === "number" ? event.at : undefined,
+        revision: revisionPending === true,
       });
     }
     case "catalog": {
@@ -1462,7 +1473,8 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       // with the "editada" badge (the new version follows as its own row). Matching is by
       // normalized text — the history has no row ids, and the same rule folds live and replay.
       if (!event.originalText) return state;
-      return markUserEdited(state, event.originalText);
+      const marked = markUserEdited(state, event.originalText);
+      return marked === state ? state : { ...marked, revisionPending: true };
     }
     case "result": {
       const next: SdkChatState = {
@@ -1510,14 +1522,16 @@ export function appendUserRow(
   state: SdkChatState,
   text: string,
   from?: MessageOrigin,
-  opts?: { awaiting?: boolean; cid?: string; state?: "sending" | "sent" | "undelivered"; at?: number },
+  opts?: { awaiting?: boolean; cid?: string; state?: "sending" | "sent" | "undelivered"; at?: number; revision?: boolean },
 ): SdkChatState {
   const { id, seq } = nextId(state, "u");
+  const row: SdkRow = { kind: "user", id, text, state: opts?.state ?? "sent", cid: opts?.cid, from, at: opts?.at };
+  if (opts?.revision === true) row.revision = true;
   return {
     ...state,
     seq,
     awaiting: opts?.awaiting === true ? true : state.awaiting,
-    rows: [...state.rows, { kind: "user", id, text, state: opts?.state ?? "sent", cid: opts?.cid, from, at: opts?.at }],
+    rows: [...state.rows, row],
   };
 }
 

@@ -906,12 +906,14 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       } else if (!dispatchEditFrame(original, text, editCid)) {
         throw new Error(translate("sdk.offline")); // the composer keeps the words
       }
-      // Drawn now, in both paths: the original dims with its "editada" badge, the new version is
-      // the standing message. The history writes the same two lines, so a replay agrees.
+      // Drawn now, in both paths: the original leaves the screen and the new version, with the
+      // "editada" badge, is the standing message. The history writes the same two lines, so a
+      // replay agrees.
       setState((prev) => appendUserRow(markUserEdited(prev, original), text, selfOriginRef.current, {
         awaiting: true,
         cid: editCid,
         state: "sending",
+        revision: true,
       }));
       setEditing(null);
       return;
@@ -2007,12 +2009,16 @@ const SdkChatRow = React.memo(function SdkChatRow({
     return <SdkThinkingRow text={row.text} streaming={row.streaming} />;
   }
 
+  // A superseded version is not drawn: the edit replaces the bubble instead of stacking a greyed
+  // copy above the new one. The row stays in the state — a rewind cuts the conversation from it.
+  if (row.kind === "user" && row.edited === true) return null;
+
   if (row.kind === "user") {
     // Same reading rules as the transcript chat: your own message keeps the right-aligned primary
     // bubble; another card's agent gets the green robot bubble (name links to its card), another
     // person a neutral one with their name.
     const role = originRole(row.from, viewer);
-    const editedBadge = row.edited ? (
+    const editedBadge = row.revision ? (
       <div data-testid="sdk-user-edited" className="mt-1 text-right text-[10px] italic text-muted-foreground/80">
         {t("sdk.edited")}
       </div>
@@ -2064,12 +2070,11 @@ const SdkChatRow = React.memo(function SdkChatRow({
     ) : null;
     if (role !== "self" && row.from) {
       return (
-        <div className="flex flex-col items-start" data-testid="sdk-user" data-role={role} data-edited={row.edited || undefined}>
+        <div className="flex flex-col items-start" data-testid="sdk-user" data-role={role} data-revision={row.revision || undefined}>
           <div
             className={cn(
               "max-w-[85%] select-text whitespace-pre-wrap break-words rounded-lg border px-3 py-2 text-sm",
               role === "agent" ? "border-emerald-500/40 bg-emerald-500/10" : "border-border/70 bg-muted/50",
-              row.edited && "opacity-60",
             )}
           >
             <SenderTag from={row.from} />
@@ -2086,11 +2091,8 @@ const SdkChatRow = React.memo(function SdkChatRow({
         <div
           data-testid="sdk-user"
           data-state={row.state}
-          data-edited={row.edited || undefined}
-          className={cn(
-            "max-w-[85%] select-text whitespace-pre-wrap break-words rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-sm",
-            row.edited && "opacity-60",
-          )}
+          data-revision={row.revision || undefined}
+          className="max-w-[85%] select-text whitespace-pre-wrap break-words rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-sm"
         >
           {replyHeader}
           <LinkifiedText text={bodyText} />
@@ -2098,10 +2100,9 @@ const SdkChatRow = React.memo(function SdkChatRow({
           {undelivered}
         </div>
         {/* The pencil: hover-revealed on a desktop, simply there on touch (no hover to reveal it).
-            A superseded message offers no pencil — the standing version is the one to edit. Neither
-            does an ANSWER to a decision: its text carries the wrapper, and putting that back in the
+            A superseded message is not drawn at all (above). Nor does an ANSWER to a decision: its text carries the wrapper, and putting that back in the
             field would show the person plumbing instead of their own words. Answer again instead. */}
-        {!row.edited && !reply && row.state !== "undelivered" && onEdit ? (
+        {!reply && row.state !== "undelivered" && onEdit ? (
           <button
             type="button"
             data-testid="sdk-edit"
