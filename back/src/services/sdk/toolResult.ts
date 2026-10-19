@@ -16,6 +16,8 @@ export interface RawToolResultEvent {
   text?: string;
   textLength?: number;
   structured?: unknown;
+  /** Linhas contadas ANTES do corte: stdout+stderr (Bash) ou, sem eles, o texto inteiro. */
+  outputLines?: number;
   parentToolUseId?: string;
 }
 
@@ -115,7 +117,7 @@ export function summarizeToolResult(raw: RawToolResultEvent): ToolResultSummary 
     // Bash
     if (typeof s.stdout === "string" || typeof s.stderr === "string") {
       if (typeof s.backgroundTaskId === "string" && s.backgroundTaskId) return { background: true };
-      const out = lineCount(String(s.stdout ?? "")) + lineCount(String(s.stderr ?? ""));
+      const out = num(raw.outputLines) ?? lineCount(String(s.stdout ?? "")) + lineCount(String(s.stderr ?? ""));
       return { ...(out === 0 ? { empty: true } : { lines: out }), ...(s.interrupted === true ? { interrupted: true } : {}) };
     }
     // Grep / Glob
@@ -124,7 +126,7 @@ export function summarizeToolResult(raw: RawToolResultEvent): ToolResultSummary 
       return { files: num(s.numFiles), ...(s.mode === "content" && lines !== undefined ? { matches: lines } : {}) };
     }
   }
-  const lines = lineCount(text);
+  const lines = num(raw.outputLines) ?? lineCount(text);
   return lines === 0 ? { empty: true } : { lines };
 }
 

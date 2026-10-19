@@ -190,3 +190,58 @@ export async function readCardChanges(cardId: string): Promise<CardChanges & { c
   );
   return { cardId: card.id, title: card.title, ...changes };
 }
+
+/* ------------------------------------------------------------- o diff de UM arquivo */
+
+/** Teto do diff de um arquivo (vai inteiro para um frame do websocket). */
+export const FILE_DIFF_MAX_BYTES = 400_000;
+
+/**
+ * Um caminho RELATIVO ao worktree, sem `..`, sem começar por `/` ou `-` (não pode virar flag do git)
+ * e só com caracteres de nome de arquivo comuns. Lança no resto. PURE.
+ */
+export function assertWorktreeRelativePath(path: string): string {
+  const p = String(path ?? "");
+  if (p === "" || p.length > 500) throw new Error("invalid path");
+  if (p.startsWith("/") || p.startsWith("-") || p.split("/").includes("..")) throw new Error(`invalid path: ${p}`);
+  if (!/^[A-Za-z0-9 _./@+-]+$/.test(p)) throw new Error(`invalid path: ${p}`);
+  return p;
+}
+
+/**
+ * O que mudou em UM arquivo desde a base do branch: commitado E não commitado (o worktree contra o
+ * merge-base). Arquivo que o git ainda não conhece vira o diff contra o vazio. Só leitura. PURE.
+ */
+export function buildFileDiffScript(containerName: string, cwd: string, base: string, path: string): string {
+  assertSafeRemotePath(cwd);
+  const baseName = assertBranchName(base);
+  const file = assertWorktreeRelativePath(path);
+  const body = [
+    "set +e",
+    `cd ${shQuote(cwd)} 2>/dev/null || { echo "${MARKER} error cwd"; exit 0; }`,
+    `B=${shQuote(`origin/${baseName}`)}`,
+    `git rev-parse --verify -q "$B" >/dev/null 2>&1 || B=${shQuote(baseName)}`,
+    'MB=$(git merge-base HEAD "$B" 2>/dev/null || echo HEAD)',
+    `if git ls-files --error-unmatch -- ${shQuote(file)} >/dev/null 2>&1 || git cat-file -e "$MB:"${shQuote(file)} 2>/dev/null; then`,
+    `  git diff --no-color --no-ext-diff "$MB" -- ${shQuote(file)} | head -c ${FILE_DIFF_MAX_BYTES}`,
+    "else",
+    `  git diff --no-color --no-ext-diff --no-index -- /dev/null ${shQuote(file)} | head -c ${FILE_DIFF_MAX_BYTES}`,
+    "fi",
+  ];
+  return [`docker exec -i ${shQuote(containerName)} bash -s <<'${DELIM}'`, ...body, DELIM].join("\n");
+}
+
+/** O diff de um arquivo do card (texto unificado do git). Lança quando o worktree não está lá. */
+export async function readCardFileDiff(cardId: string, path: string): Promise<{ path: string; diff: string; truncated: boolean }> {
+  const card = await getCard(cardId);
+  if (!card) throw new Error("card not found");
+  const project = await getProject(card.projectId);
+  if (!project) throw new Error("project for this card not found");
+  const { cwd } = cardWorkPaths(project, card);
+  const { stdout } = await hostExecutor().runScript(
+    buildFileDiffScript(config.runner.container, cwd, card.base || project.baseBranch, path),
+    { timeoutMs: 30_000 },
+  );
+  if (stdout.includes(`${MARKER} error cwd`)) throw new Error("the card's worktree is not there — open the card first");
+  return { path, diff: stdout, truncated: Buffer.byteLength(stdout) >= FILE_DIFF_MAX_BYTES };
+}

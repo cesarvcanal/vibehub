@@ -569,6 +569,33 @@ export function parseWorkflowFeedFrame(raw: string): WorkflowFeedRequest | null 
 }
 
 /**
+ * O pedido de DETALHE — o que a tela abre quando alguém clica (ver ./detail.ts):
+ * `{ "type": "detail", "req": "tool"|"agent"|"changes"|"file", "id"?: string, "path"?: string, "nonce"?: string }`.
+ * Sob demanda e só para a aba que pediu, como o feed do workflow: não é turno, não vai ao driver nem
+ * ao histórico. `null` = não é um pedido de detalhe. PURE.
+ */
+export interface DetailRequest { req: "tool" | "agent" | "changes" | "file"; id: string; path: string; nonce: string }
+
+const DETAIL_KINDS = new Set(["tool", "agent", "changes", "file"]);
+
+export function parseDetailFrame(raw: string): DetailRequest | null {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as { type?: unknown; req?: unknown; id?: unknown; path?: unknown; nonce?: unknown };
+    if (parsed.type !== "detail" || typeof parsed.req !== "string" || !DETAIL_KINDS.has(parsed.req)) return null;
+    return {
+      req: parsed.req as DetailRequest["req"],
+      id: typeof parsed.id === "string" ? parsed.id.slice(0, 200) : "",
+      path: typeof parsed.path === "string" ? parsed.path.slice(0, 600) : "",
+      nonce: typeof parsed.nonce === "string" ? parsed.nonce.slice(0, 64) : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * A resposta a um `workflow_feed`, só para o socket que pediu. `error` diz por que veio vazia:
  * `invalid-id` (ids fora do formato do harness), `no-session` (a sessão ainda não tem id — não há
  * onde ler) ou `probe-failed` (o runner não respondeu).

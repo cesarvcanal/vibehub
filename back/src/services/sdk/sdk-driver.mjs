@@ -575,6 +575,18 @@ function prunedResult(value, depth = 0) {
   return null;
 }
 
+/** Quantas linhas um texto tem (sem as quebras finais). */
+function lineTotal(t) {
+  const s = String(t ?? "").replace(/\s+$/, "");
+  return s === "" ? 0 : s.split("\n").length;
+}
+
+/** Linhas de stdout+stderr de um resultado de Bash, contadas antes do corte; null se não é Bash. */
+function outputLines(r) {
+  if (!r || typeof r !== "object" || (typeof r.stdout !== "string" && typeof r.stderr !== "string")) return null;
+  return lineTotal(r.stdout) + lineTotal(r.stderr);
+}
+
 /** Os frames `tool_result` de uma mensagem `user` do CLI (principal ou subagente). PURE. */
 function toolResultFrames(msg) {
   const content = msg && msg.message && msg.message.content;
@@ -583,9 +595,13 @@ function toolResultFrames(msg) {
   const blocks = content.filter((b) => b && b.type === "tool_result" && typeof b.tool_use_id === "string");
   return blocks.map((b) => {
     const text = resultText(b.content);
-    const frame = { type: "tool_result", id: b.tool_use_id, isError: b.is_error === true, text: text.slice(0, RESULT_TEXT_MAX), textLength: text.length };
+    const frame = { type: "tool_result", id: b.tool_use_id, isError: b.is_error === true, text: text.slice(0, RESULT_TEXT_MAX), textLength: text.length, outputLines: lineTotal(text) };
     // O estruturado é da MENSAGEM: só é deste bloco quando ele é o único.
-    if (blocks.length === 1 && msg.tool_use_result !== undefined && msg.tool_use_result !== null) frame.structured = prunedResult(msg.tool_use_result);
+    if (blocks.length === 1 && msg.tool_use_result !== undefined && msg.tool_use_result !== null) {
+      frame.structured = prunedResult(msg.tool_use_result);
+      const lines = outputLines(msg.tool_use_result);
+      if (lines !== null) frame.outputLines = lines;
+    }
     if (parent) frame.parentToolUseId = parent;
     return frame;
   });

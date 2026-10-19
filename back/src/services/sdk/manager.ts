@@ -10,12 +10,14 @@ import { writeCardCatalog } from "./catalog.js";
 import { normalizeRateLimit, type RateLimitInfo } from "./rateLimit.js";
 import { forgetCardWorkflows, lastWorkflowRuns, readAgentFeed, watchCardWorkflows } from "./workflow.js";
 import { InvalidWorkflowIdError } from "./workflowProbe.js";
+import { InvalidDetailIdError, readAgentTimeline, readToolDetail } from "./detail.js";
+import { readCardChanges, readCardFileDiff } from "../maestro/changes.js";
 import { mergeTaskEvent, toolResultEvent, type AgentTaskEvent, type RawTaskEvent, type RawToolResultEvent } from "./toolResult.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
-  NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseWorkflowFeedFrame, encodeControl,
+  NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
   type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type UserQuestionItem,
-  type WorkflowFeedEvent, type WorkflowFeedRequest,
+  type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest,
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { logger } from "../../utils/logger.js";
@@ -625,6 +627,60 @@ function createFeedResponder(session: DriverSession, socket: WebSocket): (reques
   };
 }
 
+/** A resposta a um pedido de detalhe (ver `parseDetailFrame`), já com o motivo quando falhou. */
+export async function detailReply(session: Pick<DriverSession, "cardId" | "label" | "transcriptDir">, request: DetailRequest): Promise<object> {
+  const base = { type: "detail", req: request.req, ...(request.id ? { id: request.id } : {}), ...(request.path ? { path: request.path } : {}), ...(request.nonce ? { nonce: request.nonce } : {}) };
+  try {
+    if (request.req === "changes") return { ...base, data: await readCardChanges(session.cardId) };
+    if (request.req === "file") return { ...base, data: await readCardFileDiff(session.cardId, request.path) };
+    const dir = session.transcriptDir;
+    if (!dir) return { ...base, error: "no-session" };
+    const data = request.req === "tool" ? await readToolDetail(dir, request.id) : await readAgentTimeline(dir, request.id);
+    return { ...base, data };
+  } catch (err) {
+    if (err instanceof InvalidDetailIdError) return { ...base, error: "invalid-id" };
+    logger.debug({ card: session.label, req: request.req, detail: (err as Error).message }, "detail probe failed");
+    return { ...base, error: "probe-failed" };
+  }
+}
+
+/**
+ * Quem responde aos pedidos de detalhe de UM socket: um `docker exec` por vez por aba, e da fila só
+ * fica o MAIS RECENTE de cada pedido (a mesma ação pedida de novo, o mesmo subagente sendo
+ * atualizado) — cliques rápidos ou a atualização de uma linha do tempo não empilham sondagens.
+ */
+export function createDetailResponder(
+  session: Pick<DriverSession, "cardId" | "label" | "transcriptDir">,
+  socket: Pick<WebSocket, "send" | "readyState">,
+  answer: (request: DetailRequest) => Promise<object> = (request) => detailReply(session, request),
+): (request: DetailRequest) => void {
+  let busy = false;
+  const queue = new Map<string, DetailRequest>();
+  const run = async (request: DetailRequest): Promise<void> => {
+    busy = true;
+    try {
+      const frame = await answer(request);
+      try { socket.send(JSON.stringify(frame)); } catch { /* going away */ }
+    } finally {
+      busy = false;
+      const next = queue.values().next();
+      if (!next.done) {
+        queue.delete(`${next.value.req}:${next.value.id}:${next.value.path}`);
+        if (socket.readyState === WebSocket.OPEN) void run(next.value);
+      }
+    }
+  };
+  return (request) => {
+    if (busy) {
+      const key = `${request.req}:${request.id}:${request.path}`;
+      queue.delete(key);
+      queue.set(key, request);
+      // Teto: quem pede demais perde os mais velhos.
+      while (queue.size > 8) queue.delete(queue.keys().next().value as string);
+    } else void run(request);
+  };
+}
+
 /* ------------------------------------------------------------------- API */
 
 export interface EnsureDriverOpts {
@@ -1230,6 +1286,7 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
   };
 
   const answerFeed = createFeedResponder(session, socket);
+  const answerDetail = createDetailResponder(session, socket);
 
   socket.on("message", (raw: Buffer) => {
     const text = raw.toString();
@@ -1239,6 +1296,12 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
       return;
     }
     // O feed de um subagente do workflow: sob demanda, só para esta aba — nem driver, nem histórico.
+    // O detalhe de uma ação, de um subagente ou das mudanças do card: idem, só para esta aba.
+    const detail = parseDetailFrame(text);
+    if (detail !== null) {
+      answerDetail(detail);
+      return;
+    }
     const feed = parseWorkflowFeedFrame(text);
     if (feed !== null) {
       answerFeed(feed);
