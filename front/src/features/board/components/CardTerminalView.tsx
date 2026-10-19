@@ -948,7 +948,7 @@ export function CardTerminalView({
             </span>
           ) : null}
           {/* Quanto do plano dessa conta já foi — para todo mundo que trabalha no card. */}
-          {card ? <PlanUsageMeter cardId={cardId} accountName={accountName} active={active} /> : null}
+          {card ? <PlanUsageMeter cardId={cardId} accountName={accountName} active={active} isOwner={isOwner} /> : null}
           {showTerminal ? <ConnectionIndicator state={connection} /> : null}
         </div>
     </>
@@ -995,7 +995,7 @@ export function CardTerminalView({
       ) : null}
 
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
-        {card ? <PlanUsageMeter cardId={cardId} accountName={accountName} active={active} className="h-9 rounded-md" /> : null}
+        {card ? <PlanUsageMeter cardId={cardId} accountName={accountName} active={active} isOwner={isOwner} className="h-9 rounded-md" /> : null}
         {showTerminal ? <ConnectionIndicator state={connection} /> : null}
         <PreviewMenu cardId={cardId} compact disabled={!showTerminal} previews={card?.previews} />
         <DropdownMenu>

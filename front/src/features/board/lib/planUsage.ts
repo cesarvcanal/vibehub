@@ -131,7 +131,47 @@ export function planWindows(
   return out;
 }
 
-/** A janela mais cheia — o número que o medidor do topo mostra. Null sem nenhuma. PURE. */
+/**
+ * A janela SEMANAL (todos os modelos) — o número que o medidor do topo mostra: é ela que diz se a
+ * semana vai fechar, e é por ela que o dono acompanha o plano. Null sem leitura. PURE.
+ */
+export function weeklyWindow(windows: readonly PlanWindow[]): PlanWindow | null {
+  return windows.find((w) => w.key === "seven_day") ?? null;
+}
+
+/**
+ * A cor de um percentual numa escala CONTÍNUA, verde → amarelo → laranja → vermelho: o medidor vai
+ * esquentando conforme a semana enche, em vez de pular de cor em degraus. Verde até 50%; depois o
+ * matiz desliza entre âncoras que batem com os tons do aviso — amarelo em 70%, laranja em 85%,
+ * vermelho de 95% em diante. PURE.
+ */
+const HUE_STOPS: readonly (readonly [pct: number, hue: number])[] = [
+  [50, 142],
+  [70, 50],
+  [85, 28],
+  [95, 4],
+  [100, 0],
+];
+
+export function usageHue(utilization: number): number {
+  const pct = Math.min(100, Math.max(0, Number.isFinite(utilization) ? utilization : 0));
+  if (pct <= HUE_STOPS[0]![0]) return HUE_STOPS[0]![1];
+  for (let i = 1; i < HUE_STOPS.length; i++) {
+    const [p1, h1] = HUE_STOPS[i]!;
+    if (pct <= p1) {
+      const [p0, h0] = HUE_STOPS[i - 1]!;
+      return Math.round(h0 + ((pct - p0) / (p1 - p0)) * (h1 - h0));
+    }
+  }
+  return 0;
+}
+
+/** `hsl(…)` do percentual, com alfa opcional (0..1). PURE. */
+export function usageColor(utilization: number, alpha = 1): string {
+  return `hsl(${usageHue(utilization)} 80% 50% / ${alpha})`;
+}
+
+/** A janela mais cheia. Null sem nenhuma. PURE. */
 export function peakWindow(windows: readonly PlanWindow[]): PlanWindow | null {
   let peak: PlanWindow | null = null;
   for (const w of windows) if (!peak || w.utilization > peak.utilization) peak = w;

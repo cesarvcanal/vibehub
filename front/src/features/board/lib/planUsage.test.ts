@@ -5,7 +5,10 @@ import {
   peakWindow,
   planAlert,
   planWindows,
+  usageColor,
+  usageHue,
   usageTone,
+  weeklyWindow,
   type RateLimitInfo,
 } from "@/features/board/lib/planUsage";
 import { resetLanguage, setLanguage } from "@/i18n";
@@ -118,5 +121,31 @@ describe("alertSentence", () => {
     setLanguage("en");
     expect(alertSentence({ window: "five_hour", tone: "yellow", rejected: false, utilization: 75, resetsAt: null }, NOW))
       .toBe("75% of the session limit used");
+  });
+});
+
+describe("weeklyWindow", () => {
+  it("is the weekly window even when the session is fuller", () => {
+    expect(weeklyWindow(planWindows(usage(92, 40), {}, NOW))).toMatchObject({ key: "seven_day", utilization: 40 });
+    expect(weeklyWindow(planWindows({ available: true, fiveHour: { utilization: 3, resetsAt: null }, fetchedAt: 0 }, {}, NOW))).toBeNull();
+  });
+});
+
+describe("usageHue", () => {
+  it("stays green up to 50% and warms continuously to red at 100%", () => {
+    expect(usageHue(0)).toBe(142);
+    expect(usageHue(50)).toBe(142);
+    const hues = [60, 70, 85, 95, 100].map(usageHue);
+    expect(hues).toEqual([...hues].sort((a, b) => b - a));
+    expect(usageHue(70)).toBe(50); // amarelo
+    expect(usageHue(85)).toBe(28); // laranja
+    expect(usageHue(95)).toBe(4); // vermelho
+    expect(usageHue(100)).toBe(0);
+  });
+
+  it("clamps and survives a bad number", () => {
+    expect(usageHue(140)).toBe(0);
+    expect(usageHue(Number.NaN)).toBe(142);
+    expect(usageColor(100, 0.5)).toBe("hsl(0 80% 50% / 0.5)");
   });
 });
