@@ -87,6 +87,7 @@ import {
   liveUserCids,
   markInterruptRequested,
   markUserEdited,
+  isFirstUserRow,
   parseSdkFrame,
   settleUserRow,
   formatTurnElapsed,
@@ -514,12 +515,13 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    * socket aceitou" (which a half-open connection also does, into the void) and "o servidor tem".
    */
   const sendTurn = React.useCallback(
-    (frame: { type: "user" | "edit_user"; text: string; original?: string }, shown: string, cid: string): void => {
+    (frame: { type: "user" | "edit_user"; text: string; original?: string; first?: boolean }, shown: string, cid: string): void => {
       const entry: OutboxMessage = {
         cid,
         text: shown,
         at: Date.now(),
         original: frame.original,
+        ...(frame.first ? { first: true } : {}),
         from: selfOriginRef.current,
         // O que o servidor JÁ tinha com estas palavras, ancorado no relógio dele: a reconciliação
         // só aceita uma ocorrência além destas como prova de entrega (o "sim" de ontem não entrega
@@ -628,7 +630,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   /** The message being edited (a SUPERSEDE — the model read the original; see docs/sdk-driver.md). */
   const [editing, setEditing] = React.useState<{ rowId: string; original: string } | null>(null);
   /** An edit waiting for the interrupted turn to END (its result/aborted) before it goes. */
-  const [pendingEdit, setPendingEdit] = React.useState<{ original: string; text: string; cid: string } | null>(null);
+  const [pendingEdit, setPendingEdit] = React.useState<{ original: string; text: string; cid: string; first: boolean } | null>(null);
   /** The reserved word the CURRENT turn was sent with — what the activity bar reports as effort. */
   const [escalation, setEscalation] = React.useState<{ ultrathink: boolean; ultracode: boolean } | null>(null);
 
@@ -651,9 +653,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
 
   /** Push the edit frame. Returns whether the socket took it (a refusal is toasted, not thrown). */
   const dispatchEditFrame = React.useCallback(
-    (original: string, text: string, cid: string = newCid()): boolean => {
+    (original: string, text: string, cid: string = newCid(), first: boolean = false): boolean => {
       try {
-        sendTurn({ type: "edit_user", original, text }, text, cid);
+        sendTurn({ type: "edit_user", original, text, ...(first ? { first: true } : {}) }, text, cid);
         return true;
       } catch (err) {
         toast.error((err as Error).message);
@@ -670,12 +672,12 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     if (!pendingEdit) return;
     if (!state.turnActive) {
       setPendingEdit(null);
-      dispatchEditFrame(pendingEdit.original, pendingEdit.text, pendingEdit.cid);
+      dispatchEditFrame(pendingEdit.original, pendingEdit.text, pendingEdit.cid, pendingEdit.first);
       return;
     }
     const timer = setTimeout(() => {
       setPendingEdit(null);
-      dispatchEditFrame(pendingEdit.original, pendingEdit.text, pendingEdit.cid);
+      dispatchEditFrame(pendingEdit.original, pendingEdit.text, pendingEdit.cid, pendingEdit.first);
     }, EDIT_INTERRUPT_GRACE_MS);
     return () => clearTimeout(timer);
   }, [pendingEdit, state.turnActive, dispatchEditFrame]);
@@ -893,6 +895,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     if (editing) {
       const { original } = editing;
       const editCid = newCid();
+      // Words alone cannot say WHICH copy was clicked: a message re-sent after an error has the
+      // same ones, and every layer picked the newest — editing the first message edited the second
+      // (produção, 2026-10-19). The first message is named as such, and the conversation restarts.
+      const first = isFirstUserRow(rowsRef.current, editing.rowId);
       if (chat.turnActive) {
         // AQUI é onde o turno para — no envio da correção, não no clique do lápis (ver `beginEdit`).
         // A decisão foi tomada: a mensagem que está sendo respondida foi superada, e deixar o turno
@@ -902,14 +908,14 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         if (!sendInterrupt("edit")) {
           throw new Error(translate("sdk.offline")); // the composer keeps the words
         }
-        setPendingEdit({ original, text, cid: editCid });
-      } else if (!dispatchEditFrame(original, text, editCid)) {
+        setPendingEdit({ original, text, cid: editCid, first });
+      } else if (!dispatchEditFrame(original, text, editCid, first)) {
         throw new Error(translate("sdk.offline")); // the composer keeps the words
       }
       // Drawn now, in both paths: the original leaves the screen and the new version, with the
       // "editada" badge, is the standing message. The history writes the same two lines, so a
       // replay agrees.
-      setState((prev) => appendUserRow(markUserEdited(prev, original), text, selfOriginRef.current, {
+      setState((prev) => appendUserRow(markUserEdited(prev, original, { first }), text, selfOriginRef.current, {
         awaiting: true,
         cid: editCid,
         state: "sending",
@@ -966,7 +972,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     setOutbox((prev) => retryOutbox(prev, entry, Date.now(), sendMark(deliveredUserTexts(rowsRef.current), entry.text)));
     try {
       sendFrame(entry.original !== undefined
-        ? { type: "edit_user", original: entry.original, text: entry.text, cid }
+        ? { type: "edit_user", original: entry.original, text: entry.text, cid, ...(entry.first ? { first: true } : {}) }
         : { type: "user", text: entry.text, cid });
     } catch (err) {
       toast.error((err as Error).message);

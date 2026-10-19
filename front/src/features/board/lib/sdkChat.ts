@@ -155,6 +155,12 @@ export interface SdkEvent {
    */
   originalText?: string;
   /**
+   * On `message_edited` / `rewound`: the edit was of the conversation's FIRST message, so the row
+   * is the FIRST with those words, not the newest — a message re-sent after an error has the same
+   * words (produção, 2026-10-19).
+   */
+  first?: boolean;
+  /**
    * On `rewound`: the edit REWOUND the conversation (the model no longer has the original, the
    * half answer, or the tools between them) and the screen has to drop those rows too. `false`
    * means the driver fell back to a supersede and everything on screen still stands.
@@ -1466,14 +1472,14 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       // `rewindAndSend`), and then nothing is dropped — the supersede it sent instead means every
       // row on screen is still part of the conversation.
       if (event.ok !== true) return state;
-      return dropRewoundRows(state, event.originalText, event.text);
+      return dropRewoundRows(state, event.originalText, event.text, event.first === true);
     }
     case "message_edited": {
       // The user superseded a message he sent: the LAST user row with those words is drawn dimmed
       // with the "editada" badge (the new version follows as its own row). Matching is by
       // normalized text — the history has no row ids, and the same rule folds live and replay.
       if (!event.originalText) return state;
-      const marked = markUserEdited(state, event.originalText);
+      const marked = markUserEdited(state, event.originalText, { first: event.first === true });
       return marked === state ? state : { ...marked, revisionPending: true };
     }
     case "result": {
@@ -1596,16 +1602,25 @@ export function deliveredUserTexts(rows: readonly SdkRow[], viewer?: string): Se
 }
 
 /** Mark the LAST not-yet-edited user row whose words match as superseded ("editada"). PURE. */
-export function markUserEdited(state: SdkChatState, originalText: string): SdkChatState {
+export function markUserEdited(state: SdkChatState, originalText: string, opts: { first?: boolean } = {}): SdkChatState {
   const target = normalizeMessage(originalText);
   if (target === "") return state;
-  for (let i = state.rows.length - 1; i >= 0; i -= 1) {
+  // `first`: the edit was of the conversation's first message — the FIRST row with those words.
+  const n = state.rows.length;
+  for (let k = 0; k < n; k += 1) {
+    const i = opts.first ? k : n - 1 - k;
     const row = state.rows[i]!;
     if (row.kind !== "user" || row.edited === true || normalizeMessage(row.text) !== target) continue;
     const rows = [...state.rows.slice(0, i), { ...row, edited: true }, ...state.rows.slice(i + 1)];
     return { ...state, rows };
   }
   return state;
+}
+
+/** Is `rowId` the conversation's FIRST user row — nothing a person said comes before it? PURE. */
+export function isFirstUserRow(rows: readonly SdkRow[], rowId: string): boolean {
+  const first = rows.find((row) => row.kind === "user");
+  return first !== undefined && first.id === rowId;
 }
 
 /**
@@ -1637,7 +1652,7 @@ export function markUserEdited(state: SdkChatState, originalText: string): SdkCh
  * edit of an older message must not stop at a row further down that an earlier supersede already
  * marked "editada" — that row is gone for the model too. Without it, the newest edited row. PURE.
  */
-export function dropRewoundRows(state: SdkChatState, originalText?: string, newText?: string): SdkChatState {
+export function dropRewoundRows(state: SdkChatState, originalText?: string, newText?: string, first: boolean = false): SdkChatState {
   const target = originalText === undefined ? "" : normalizeMessage(originalText);
   let editedAt = -1;
   let lastUserAt = -1;
@@ -1645,7 +1660,12 @@ export function dropRewoundRows(state: SdkChatState, originalText?: string, newT
     const row = state.rows[i]!;
     if (row.kind !== "user") continue;
     if (lastUserAt === -1) lastUserAt = i;
-    if (row.edited === true && (target === "" || normalizeMessage(row.text) === target)) { editedAt = i; break; }
+    if (row.edited === true && (target === "" || normalizeMessage(row.text) === target)) {
+      editedAt = i;
+      // `first` (the conversation's first message was edited): keep walking up to the FIRST copy —
+      // the newer ones with the same words are re-sends, and they go with the cut.
+      if (!first) break;
+    }
   }
   // `editedAt >= lastUserAt` is the whole identity case: the edited row IS the newest message, so
   // there is nothing between them to drop. Past it the cut always removes at least one row.
@@ -1657,7 +1677,10 @@ export function dropRewoundRows(state: SdkChatState, originalText?: string, newT
   const key = newText === undefined ? "" : normalizeMessage(newText);
   let keepFrom = lastUserAt;
   if (key !== "") {
-    const found = state.rows.findIndex((row, i) => i > editedAt && row.kind === "user" && normalizeMessage(row.text) === key);
+    // With `first` the LAST match: the copies in between are the re-sends being cut, and the new
+    // words may well be the same as theirs.
+    const isNew = (row: SdkRow, i: number): boolean => i > editedAt && row.kind === "user" && normalizeMessage(row.text) === key;
+    const found = first ? state.rows.findLastIndex(isNew) : state.rows.findIndex(isNew);
     if (found !== -1) keepFrom = found;
   }
   const tail = state.rows.slice(keepFrom).filter((row) => !narratesTheCutTurn(row));

@@ -1359,6 +1359,29 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
     await logAssentado();
   });
 
+  it("editar a PRIMEIRA mensagem: `first` vai ao driver, ao marcador e ao `rewound` da tela, e o log corta desde a primeira cópia", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"dup"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "erro" }));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: true }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"dup"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "erro" }));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: true }));
+    socket.emit("message", Buffer.from(`{"type":"edit_user","original":"dup","text":"nova","first":true}`));
+    const control = spawned[0]!.stdin.written.map((w) => JSON.parse(w) as { type: string; first?: boolean }).find((c) => c.type === "edit_user");
+    expect(control?.first).toBe(true);
+    await vi.waitFor(async () => expect((await readHistory(CARD)).find((e) => e.type === "message_edited")).toMatchObject({ first: true }));
+    const viewer = fakeSocket();
+    attachSocket(ensure(), viewer as never);
+    emit({ type: "rewound", ok: true, originalText: "dup" });
+    const rewound = viewer.sent.map((s) => JSON.parse(s) as { type: string; first?: boolean }).find((e) => e.type === "rewound");
+    expect(rewound?.first).toBe(true);
+    await vi.waitFor(async () => expect((await readHistory(CARD)).map((e) => e.type)).toEqual(["user"]));
+    expect((await readHistory(CARD))[0]).toMatchObject({ type: "user", text: "nova" });
+  });
+
   it("ok: true corta o miolo e deixa o log igual ao que o modelo tem", async () => {
     await conversaComEdicao();
     emit({ type: "rewound", ok: true, uuid: "abc" });

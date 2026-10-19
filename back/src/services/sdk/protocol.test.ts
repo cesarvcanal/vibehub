@@ -430,6 +430,13 @@ describe("edit_user — editar uma mensagem enviada (supersede)", () => {
       original: "roda os teste",
       text: "roda os testes",
     });
+    // `first` only as a real boolean true — anything else is simply not a first-message edit
+    expect(parseSdkClientFrame(`{"type":"edit_user","original":"a","text":"b","first":true}`)).toEqual({
+      type: "edit_user", original: "a", text: "b", first: true,
+    });
+    expect(parseSdkClientFrame(`{"type":"edit_user","original":"a","text":"b","first":"yes"}`)).toEqual({
+      type: "edit_user", original: "a", text: "b",
+    });
     // no original / no text / blank text: not an edit — refused, never guessed
     expect(parseSdkClientFrame(`{"type":"edit_user","text":"nova"}`)).toBeNull();
     expect(parseSdkClientFrame(`{"type":"edit_user","original":"velha"}`)).toBeNull();

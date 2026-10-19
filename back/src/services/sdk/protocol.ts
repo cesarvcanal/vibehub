@@ -182,6 +182,8 @@ export interface RewoundEvent {
    * send can land between the edit and this confirmation.
    */
   text?: string;
+  /** On `ok: true`, stamped by the back: the edit was of the FIRST message (see `EditUserControl`). */
+  first?: boolean;
 }
 
 /** End of a turn. */
@@ -378,8 +380,14 @@ export interface QuestionAnswerControl { type: "question_answer"; id: string; an
  *
  * `original` is the message being replaced (how the front marks it "editada"), `text` the version
  * that now stands. Provenance stays the USER's: it is his speech, corrected.
+ *
+ * `first`: the bubble edited is the FIRST message of the conversation on the screen. Words alone
+ * cannot say which copy was clicked — a message re-sent after an error has the same words, and every
+ * layer used to pick the NEWEST copy, so editing the first message rewound to the second (produção,
+ * 2026-10-19). With `first` there is nothing before it to keep: the driver starts a new session and
+ * the log and the screen cut from the first copy.
  */
-export interface EditUserControl { type: "edit_user"; original: string; text: string; cid?: string; fallback?: string }
+export interface EditUserControl { type: "edit_user"; original: string; text: string; cid?: string; fallback?: string; first?: boolean }
 /**
  * A conversa andou FORA do chat (a aba Terminal escreveu na mesma sessão): a corrente aberta do
  * driver não está mais no fim do arquivo. Ele marca e religa no PRÓXIMO envio — ver `staleView` no
@@ -495,7 +503,9 @@ export function parseSdkClientFrame(raw: string): DriverControl | null {
         typeof parsed.text === "string" &&
         parsed.text.trim() !== ""
       ) {
-        return { type: "edit_user", original: (parsed as { original: string }).original, text: parsed.text, cid: frameCid(parsed) };
+        const edit: EditUserControl = { type: "edit_user", original: (parsed as { original: string }).original, text: parsed.text, cid: frameCid(parsed) };
+        if ((parsed as { first?: unknown }).first === true) edit.first = true;
+        return edit;
       }
       return null;
     } catch {

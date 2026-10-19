@@ -33,6 +33,8 @@ export interface OutboxMessage {
   at: number;
   /** Uma correção de mensagem já enviada carrega o original (o supersede do back). */
   original?: string;
+  /** …e diz se era a PRIMEIRA mensagem da conversa (ver `EditUserControl.first` no back). */
+  first?: boolean;
   /**
    * Já foi dada por NÃO ENTREGUE (o back recusou, ou o prazo do recibo venceu).
    *
@@ -120,6 +122,7 @@ export function readOutbox(cardId: string): OutboxMessage[] {
       // localStorage é entrada não confiável: um autor malformado vira "sem autor", nunca lixo.
       from: parseOrigin(m.from),
       seenBefore: typeof m.seenBefore === "number" && m.seenBefore >= 0 ? m.seenBefore : undefined,
+      first: m.first === true ? true : undefined,
       since: typeof m.since === "number" && Number.isFinite(m.since) ? m.since : undefined,
       unsent: m.unsent === true ? true : undefined,
     }));

@@ -207,6 +207,32 @@ describe("rewindHistory — o corte tem de ser exato nos dois sentidos", () => {
     return raw.split("\n").filter((l) => l.trim() !== "").map((l) => JSON.parse(l) as HistoryEvent);
   };
 
+  it("editar a PRIMEIRA mensagem, reenviada depois com as mesmas palavras, corta desde a primeira cópia (produção, 2026-10-19)", async () => {
+    await write([
+      { type: "user", text: "crie o mcp" },
+      { type: "assistant_text", text: "Failed to authenticate" },
+      { type: "user", text: "crie o mcp" },
+      { type: "assistant_text", text: "Failed to authenticate" },
+      { type: "message_edited", originalText: "crie o mcp", first: true },
+      { type: "user", text: "crie o mcp, agora sim", sent: "[correção…] crie o mcp, agora sim" },
+    ]);
+    expect(await rewindHistory(CARD, "crie o mcp", "crie o mcp, agora sim", { first: true })).toBe(5);
+    expect(await read()).toEqual([{ type: "user", text: "crie o mcp, agora sim" }]);
+  });
+
+  it("sem `first`, a mesma conversa corta só desde a cópia mais nova (a regra de sempre)", async () => {
+    await write([
+      { type: "user", text: "crie o mcp" },
+      { type: "assistant_text", text: "Failed to authenticate" },
+      { type: "user", text: "crie o mcp" },
+      { type: "assistant_text", text: "Failed to authenticate" },
+      { type: "message_edited", originalText: "crie o mcp" },
+      { type: "user", text: "nova" },
+    ]);
+    expect(await rewindHistory(CARD, "crie o mcp", "nova")).toBe(3);
+    expect((await read()).map((e) => e.type)).toEqual(["user", "assistant_text", "user"]);
+  });
+
   it("corta exatamente o miolo: o original, a resposta pela metade e a nota — e nada mais", async () => {
     await write([
       { type: "user", text: "primeira" },
