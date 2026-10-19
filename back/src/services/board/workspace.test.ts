@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cardCdpEndpoint } from "../browser/ports.js";
 import { firstRunSeedCommand } from "../accounts/firstRun.js";
+import { carryTranscriptsCommand } from "../accounts/carryTranscripts.js";
 
 /**
  * A card's workspace in the runner (open + terminal + pause + restart + drop). The INVARIANTS the
@@ -35,7 +36,8 @@ const CONTAINER = "vibehub-runner";
 const guard = (dir = "/root/.claude") =>
   `export IS_SANDBOX=1; ` +
   `if [ -s ${dir}/.oauth-token ]; then export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${dir}/.oauth-token)"; fi; ` +
-  `${firstRunSeedCommand(dir, '"$PWD"')}; `;
+  `${firstRunSeedCommand(dir, '"$PWD"')}; ` +
+  `${carryTranscriptsCommand(dir, '"$PWD"')}; `;
 const CLAUDE = `${guard()}claude; exec bash`;
 const CLAUDE_C = `${guard()}claude -c || claude; exec bash`;
 /** The per-card GH_TOKEN guard every CARD session carries (`[ -s ]`-guarded: no file, no export). */
@@ -383,7 +385,9 @@ describe("the card's Claude account (CLAUDE_CONFIG_DIR per profile)", () => {
     const { card } = await seed();
     await ws.openCard(card.id);
     expect(scriptAt(0)).not.toContain("CLAUDE_CONFIG_DIR");
-    expect(scriptAt(0)).not.toContain(".claude-profiles");
+    // The only mention of the named profiles is the transcript carry SCANNING them (the glob); no
+    // account profile is ever the session's own.
+    expect(scriptAt(0)).not.toMatch(/\.claude-profiles\/[a-z0-9]/);
   });
 
   it("the PROJECT account: profile guaranteed BEFORE tmux, settings.json seeded (status hooks), -e CLAUDE_CONFIG_DIR", async () => {

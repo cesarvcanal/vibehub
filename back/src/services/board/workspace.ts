@@ -17,6 +17,7 @@ import {
 import { getSettings } from "../settings/settings.js";
 import { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir, profileDirFor, oauthTokenPath } from "../accounts/profiles.js";
 import { firstRunSeedCommand } from "../accounts/firstRun.js";
+import { carryTranscriptsCommand } from "../accounts/carryTranscripts.js";
 import { resolveAccountToken, writeTokenLines, ghTokenPath, writeGhTokenLines, removeGhTokenLines } from "../accounts/token.js";
 import { cardBrowserPorts, cardCdpEndpoint } from "../browser/ports.js";
 import { claudeProjectsDirName } from "../import/import.js";
@@ -142,6 +143,9 @@ export function sessionCommand(opts: SessionCommandOpts | boolean): string {
     // attach-or-create also creates sessions, and a card born that way used to land on the wizard.
     // `$PWD` is the session's cwd (tmux new-session -c <worktree>), resolved when the line runs.
     `${firstRunSeedCommand(profileDir, '"$PWD"')}; ` +
+    // The card's conversation, wherever it was written: an account switch restarts Claude on a
+    // profile that never saw it, and `claude -c` would open on nothing (see carryTranscripts.ts).
+    `${carryTranscriptsCommand(profileDir, '"$PWD"')}; ` +
     ghGuard;
   // The pin is a COMMAND-LINE flag, not `ANTHROPIC_DEFAULT_MODEL`: that variable is only the default
   // for when nothing else says anything, and the profile's own settings.json (`"model"`, written by
