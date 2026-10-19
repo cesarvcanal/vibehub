@@ -9,9 +9,13 @@ import { cardAgentState, cardAwaitingChoice, cardDriverActivity } from "../board
 import { profileDirFor } from "../accounts/profiles.js";
 import { transcriptDirFor, sessionGoneError } from "./cardSession.js";
 import { recordOrigin, type MessageOrigin } from "../chat/provenance.js";
-import { publishExternalMessage } from "../sdk/history.js";
+import { publishExternalMessage, readHistory } from "../sdk/history.js";
 import { liveDriverSession, sendAgentTurn } from "../sdk/manager.js";
 import { logger } from "../../utils/logger.js";
+import {
+  activityFromTranscript, pendingPermissionFromHistory, pendingQuestionFromHistory, pendingQuestionFromTranscript,
+  type ActivityEvent, type PendingPermission, type PendingQuestion,
+} from "./feed.js";
 
 /**
  * MAESTRO — one card's agent coordinating the OTHER cards.
@@ -272,6 +276,14 @@ export interface SendOpts {
    * typed at the tmux prompt.
    */
   origin?: MessageOrigin;
+  /**
+   * A PERSON's message from OUTSIDE the board (the external MCP — ChatGPT acting as the user) takes
+   * the same route as an agent's: the live native-chat driver when there is one, the tmux prompt
+   * otherwise. The board's own composer does not need this (it talks to the driver over its socket);
+   * a message typed into tmux while the conversation lives in the driver lands in ANOTHER Claude
+   * process — the chat forks, and a question card waiting in the driver is never answered.
+   */
+  viaNativeChat?: boolean;
 }
 
 /**
@@ -295,7 +307,7 @@ export async function agentOriginFor(fromCardId?: string): Promise<MessageOrigin
 }
 
 export async function sendToTerminal(cardId: string, text: string, opts: SendOpts = {}): Promise<SendResult> {
-  const { by, respectHumanActive = false, guardInteractiveMenu = false, requireAgent = false, origin } = opts;
+  const { by, respectHumanActive = false, guardInteractiveMenu = false, requireAgent = false, origin, viaNativeChat = false } = opts;
   const instruction = String(text ?? "").trim();
   if (!instruction) throw new Error("empty text: there is nothing to send to the terminal");
   const card = await getCard(cardId);
@@ -315,7 +327,7 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
   const fromAgent = origin?.kind === "agent";
   // The native chat takes the turn only while it is in use (a live driver). Without one, the
   // terminal is where the card is being worked, so the instruction is typed there.
-  const driver = fromAgent ? liveDriverSession(card.id) : null;
+  const driver = fromAgent || viaNativeChat ? liveDriverSession(card.id) : null;
   if (driver && origin) {
     const project = await getProject(card.projectId);
     if (!project) throw new Error("project for this card not found");
@@ -422,6 +434,11 @@ export interface ReadResult {
   situation: TerminalSituation;
   /** Last assistant answers, oldest first. Empty = no transcript yet. */
   answers: string[];
+  /**
+   * The question the card is waiting on the user for, null = none. An answer's text often ends in
+   * "which one do you want?" while the real options live in a question card the text never shows.
+   */
+  pendingQuestion: PendingQuestion | null;
 }
 
 /**
@@ -429,24 +446,205 @@ export interface ReadResult {
  * NOT require a live session: what was said is still readable after a pause or a restart.
  */
 export async function readTerminal(cardId: string, last = 3): Promise<ReadResult> {
-  const card = await getCard(cardId);
-  if (!card) throw new Error("card not found");
-  const project = await getProject(card.projectId);
-  if (!project) throw new Error("project for this card not found");
-
-  const transcriptDir = transcriptDirFor(project, card, effectiveAccountSlug(card, project));
+  const { card, transcript } = await readCardTranscript(cardId);
   const n = Math.max(1, Math.min(20, Math.floor(last) || 3));
-
-  const { stdout } = await hostExecutor().runScript(
-    buildReadTranscriptScript(config.runner.container, transcriptDir, TAIL_LINES),
-    { timeoutMs: 30_000 },
-  );
-  const answers = parseAssistantTranscript(stdout, n);
+  const answers = parseAssistantTranscript(transcript, n);
   logger.info(
     { audit: true, action: "maestro.read", card: card.worktreeSlug, session: card.tmuxSession, answers: answers.length },
     "card transcript read (last assistant answers)",
   );
-  return { cardId: card.id, title: card.title, situation: terminalSituation(card), answers };
+  const pending = await pendingFor(card.id, transcript);
+  return { cardId: card.id, title: card.title, situation: terminalSituation(card), answers, pendingQuestion: pending.question };
+}
+
+/** The card and the tail of its newest transcript (read-only; no live session needed). */
+async function readCardTranscript(cardId: string): Promise<{ card: Card; transcript: string }> {
+  const card = await getCard(cardId);
+  if (!card) throw new Error("card not found");
+  const project = await getProject(card.projectId);
+  if (!project) throw new Error("project for this card not found");
+  const transcriptDir = transcriptDirFor(project, card, effectiveAccountSlug(card, project));
+  const { stdout } = await hostExecutor().runScript(
+    buildReadTranscriptScript(config.runner.container, transcriptDir, TAIL_LINES),
+    { timeoutMs: 30_000 },
+  );
+  return { card, transcript: stdout };
+}
+
+/** How much of the sdk history the pending checks look at — the open cards are always at the end. */
+const PENDING_HISTORY_EVENTS = 200;
+
+/**
+ * What the card is waiting on the user for: the native chat's question/permission card (the sdk
+ * history, local disk) or — when there is none — a question menu in the terminal (the transcript).
+ * `transcript` absent = history only (the cheap check a wait loop can afford on every tick).
+ */
+async function pendingFor(
+  cardId: string, transcript?: string,
+): Promise<{ question: PendingQuestion | null; permission: PendingPermission | null }> {
+  const events = await readHistory(cardId, PENDING_HISTORY_EVENTS);
+  const now = Date.now();
+  const question = pendingQuestionFromHistory(events, now) ?? (transcript ? pendingQuestionFromTranscript(transcript) : null);
+  return { question, permission: pendingPermissionFromHistory(events, now) };
+}
+
+/** Is a turn running: the hook's dot says working, or the native chat's driver is mid-turn. */
+function isBusy(card: Card): boolean {
+  return card.status === "working" || cardDriverActivity(card.id) === "turn";
+}
+
+export interface ActivityResult {
+  cardId: string;
+  title: string;
+  situation: TerminalSituation;
+  /** A turn is running right now (hook dot or native-chat driver). */
+  busy: boolean;
+  declaredState: DeclaredState | null;
+  declaredSummary: string | null;
+  pendingQuestion: PendingQuestion | null;
+  pendingPermission: PendingPermission | null;
+  /** What the card did, oldest first (see feed.ts). */
+  events: ActivityEvent[];
+  /** The server's clock when this was read — pass it back as `since` to get only what is new. */
+  now: number;
+}
+
+/** How many activity events a read returns at most. */
+export const ACTIVITY_LIMIT_MAX = 100;
+
+/**
+ * What a card is doing and did: situation, what it waits on, and its recent activity (messages, tool
+ * calls, answers). `since` (epoch ms) keeps only newer events. Read-only; no live session needed.
+ */
+export async function readCardActivity(cardId: string, opts: { since?: number; limit?: number } = {}): Promise<ActivityResult> {
+  const now = Date.now();
+  const { card, transcript } = await readCardTranscript(cardId);
+  const limit = Math.max(1, Math.min(ACTIVITY_LIMIT_MAX, Math.floor(opts.limit ?? 30) || 30));
+  const pending = await pendingFor(card.id, transcript);
+  logger.info({ audit: true, action: "maestro.activity", card: card.worktreeSlug }, "card activity read");
+  return {
+    cardId: card.id,
+    title: card.title,
+    situation: terminalSituation(card),
+    busy: isBusy(card),
+    declaredState: card.declaredState ?? null,
+    declaredSummary: card.declaredSummary ?? null,
+    pendingQuestion: pending.question,
+    pendingPermission: pending.permission,
+    events: activityFromTranscript(transcript, { since: opts.since, limit }),
+    now,
+  };
+}
+
+/**
+ * How long one wait may hold the call. A tool call from a chat app has its own deadline (around a
+ * minute); past that the app gives up on the call and the user hears an error instead of "still
+ * working". The caller simply waits again.
+ */
+export const WAIT_MAX_MS = 50_000;
+const WAIT_POLL_MS = 1_500;
+
+/**
+ * - `finished`: the turn ended — `answers` is what the card said.
+ * - `question` / `permission`: the card is waiting on the user (see `pendingQuestion` / `pendingPermission`).
+ * - `timeout`: still working when the wait ran out — `activity` is what it did so far; wait again.
+ * - `not_started`: the card is idle and no turn began after `since` (the message may not have landed).
+ * - `no session`: the card is not open — nothing will happen until it is.
+ */
+export type WaitOutcome = "finished" | "question" | "permission" | "timeout" | "not_started" | "no session";
+
+export interface WaitResult {
+  cardId: string;
+  title: string;
+  outcome: WaitOutcome;
+  situation: TerminalSituation;
+  busy: boolean;
+  waitedMs: number;
+  /** The last answers (text), oldest first. */
+  answers: string[];
+  /** What the card did after `since` (or its latest events when `since` is absent). */
+  activity: ActivityEvent[];
+  pendingQuestion: PendingQuestion | null;
+  pendingPermission: PendingPermission | null;
+  now: number;
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Waits for a card's turn to end — or for it to need the user — and answers with what it said.
+ *
+ * `since` is the moment the instruction was sent (`vibehub_send_to_terminal` returns it). It is what
+ * keeps the classic race out: right after a send, the card still shows the PREVIOUS turn's "waiting"
+ * dot for a second or two before the hook flips it to working, and reading that as "finished" would
+ * report an answer to a message the card has not even read. So the turn counts as ended only once a
+ * turn was SEEN (busy during the wait, or a hook stamped after `since`) and is no longer running.
+ */
+export async function waitForTurn(
+  cardId: string,
+  opts: { since?: number; timeoutMs?: number; pollMs?: number; last?: number } = {},
+): Promise<WaitResult> {
+  const started = Date.now();
+  const timeoutMs = Math.max(0, Math.min(WAIT_MAX_MS, opts.timeoutMs ?? WAIT_MAX_MS));
+  const pollMs = Math.max(10, opts.pollMs ?? WAIT_POLL_MS);
+  const deadline = started + timeoutMs;
+  const since = opts.since;
+  let sawBusy = false;
+  let outcome: WaitOutcome | null = null;
+
+  for (;;) {
+    const card = await getCard(cardId);
+    if (!card) throw new Error("card not found");
+    if (!hasLiveSession(card)) {
+      outcome = "no session";
+      break;
+    }
+    const busy = isBusy(card);
+    if (busy) sawBusy = true;
+    const pending = await pendingFor(card.id);
+    if (pending.question) {
+      outcome = "question";
+      break;
+    }
+    if (pending.permission) {
+      outcome = "permission";
+      break;
+    }
+    const turnSeen = since === undefined || sawBusy || (card.statusAt ?? 0) >= since;
+    if (!busy && turnSeen) {
+      outcome = "finished";
+      break;
+    }
+    if (Date.now() >= deadline) break;
+    await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
+  }
+
+  const { card, transcript } = await readCardTranscript(cardId);
+  const pending = await pendingFor(card.id, transcript);
+  const busy = isBusy(card);
+  const activity = activityFromTranscript(transcript, { since, limit: 30 });
+  if (outcome === null || outcome === "finished") {
+    if (pending.question) outcome = "question";
+    else if (outcome === null) {
+      // Ran out of time: still working, or idle with nothing new since the send.
+      outcome = busy || sawBusy ? "timeout" : activity.some((e) => e.kind === "assistant") ? "finished" : "not_started";
+    }
+  }
+  const n = Math.max(1, Math.min(20, Math.floor(opts.last ?? 3) || 3));
+  logger.info({ audit: true, action: "maestro.wait", card: card.worktreeSlug, outcome, waitedMs: Date.now() - started }, "card wait ended");
+  return {
+    cardId: card.id,
+    title: card.title,
+    outcome,
+    situation: terminalSituation(card),
+    busy,
+    waitedMs: Date.now() - started,
+    answers: parseAssistantTranscript(transcript, n),
+    activity,
+    pendingQuestion: pending.question,
+    pendingPermission: pending.permission,
+    now: Date.now(),
+  };
 }
 
 /* ----------------------------------------------------------- session introspection */

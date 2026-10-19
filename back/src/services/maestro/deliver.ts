@@ -1,6 +1,8 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
-import { getCard, getProject, assertBranchName, listGithubConnections } from "../board/registry.js";
+import {
+  getCard, getProject, assertBranchName, listGithubConnections, type Card, type Project,
+} from "../board/registry.js";
 import { cardWorkPaths, cardBranch } from "../board/workspace.js";
 import { tokenFor } from "../github/client.js";
 import { resolveIdentity } from "../github/identity.js";
@@ -72,7 +74,7 @@ export interface DeliverOpts {
 const MARKER = "__VIBEHUB_DELIVER__";
 
 /** Lines that plant the connection token and export `GH_TOKEN` from it (token over stdin only). PURE. */
-function ghTokenPreamble(cardId: string, token: string): string[] {
+export function ghTokenPreamble(cardId: string, token: string): string[] {
   return [
     "set -e",
     ...writeGhTokenLines(cardId, token),
@@ -153,6 +155,20 @@ function reasonForStage(stage: string): DeliverReason {
 }
 
 /**
+ * The connection token of the identity IN FORCE on this card: the ACTOR's (whoever worked it last),
+ * falling back to the project's and the install's — the SAME resolution the card's open uses, so a
+ * PR opens (or is read) under the account whose name is already on the commits. A card with no actor
+ * behaves exactly as before: the project's connection.
+ */
+export async function cardConnectionToken(card: Card, project: Project): Promise<string> {
+  const actor = card.actorUserId ? await getUserGit(card.actorUserId) : null;
+  const identity = resolveIdentity({
+    actor, project, settings: await getSettings(), connections: await listGithubConnections(),
+  });
+  return await tokenFor(identity.connectionId);
+}
+
+/**
  * Delivers a card: push → PR → gate → (authorized) merge. The gate always runs before the merge, so
  * an unauthorized call still comes back with the truth ("green, ready — say the word"). Merging
  * happens only when `authorized === true` and the gate is green.
@@ -174,15 +190,7 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
   const { cwd } = cardWorkPaths(project, card);
   const container = config.runner.container;
 
-  // The connection token of the identity IN FORCE on this card: the ACTOR's (whoever worked it
-  // last), falling back to the project's and the install's — the SAME resolution the card's open
-  // uses, so the PR opens under the account whose name is already on the commits. A card with no
-  // actor behaves exactly as before: the project's connection.
-  const actor = card.actorUserId ? await getUserGit(card.actorUserId) : null;
-  const identity = resolveIdentity({
-    actor, project, settings: await getSettings(), connections: await listGithubConnections(),
-  });
-  const token = await tokenFor(identity.connectionId);
+  const token = await cardConnectionToken(card, project);
 
   // (a)+(b) push and resolve the PR.
   const prOut = await hostExecutor().runScript(

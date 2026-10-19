@@ -5,7 +5,10 @@ import { cardLevel, visibleProjects } from "../auth/access.js";
 import * as registry from "../services/board/registry.js";
 import * as workspace from "../services/board/workspace.js";
 import { recordCardActor } from "../services/board/actor.js";
-import { listTerminals, sendToTerminal, readTerminal } from "../services/maestro/maestro.js";
+import {
+  listTerminals, sendToTerminal, readTerminal, readCardActivity, waitForTurn, WAIT_MAX_MS, ACTIVITY_LIMIT_MAX,
+} from "../services/maestro/maestro.js";
+import { readCardChanges } from "../services/maestro/changes.js";
 import { deliver } from "../services/maestro/deliver.js";
 import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX, type CardMoveOutcome } from "./cardMove.js";
 import { logger } from "../utils/logger.js";
@@ -28,6 +31,12 @@ import { logger } from "../utils/logger.js";
 
 const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] });
 const fail = (e: unknown) => ok({ error: (e as Error).message });
+
+/**
+ * Reads that change nothing. ChatGPT asks the user to CONFIRM every call to a tool that is not marked
+ * read-only — by voice, a confirmation on every poll of a card would make following it unusable.
+ */
+const READ_ONLY = { readOnlyHint: true, openWorldHint: false } as const;
 
 /** How long a tool waits for an open before answering "still opening" (a first clone takes minutes). */
 export const OPEN_WAIT_MS = 20_000;
@@ -85,6 +94,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         "A card always belongs to a project: use the id here to create a card or to filter terminals. " +
         "`canCreateCards` says whether this account may create cards (only the owner may).",
       inputSchema: {},
+      annotations: READ_ONLY,
     },
     async () => {
       try {
@@ -112,6 +122,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
       inputSchema: {
         project: z.string().optional().describe("project id, or part of its name. Absent = every project you can reach."),
       },
+      annotations: READ_ONLY,
     },
     async (a) => {
       try {
@@ -187,23 +198,29 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         "Send an instruction to a card, as YOUR message: it arrives in that card's conversation " +
         "exactly as if you had typed it on the board. The card's agent does not hear this " +
         "conversation, so send a SELF-CONTAINED instruction (what to do, where, what done looks " +
-        "like), not a fragment. Fails clearly when the card has no live session (open it first), " +
-        "when no Claude is running there, or when its terminal is waiting on a menu choice.",
+        "like), not a fragment. Also how you ANSWER a card's pending question (say the chosen option). " +
+        "Returns `sentAt`: pass it to vibehub_wait_for_card as `since`. Fails clearly when the card " +
+        "has no live session (open it first), when no Claude is running there, or when its terminal " +
+        "is waiting on a menu choice.",
       inputSchema: {
         cardId: z.string().describe("id of the destination card (from vibehub_list_terminals)"),
         text: z.string().min(1).describe("the instruction, self-contained"),
       },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
     async (a) => {
       try {
         await requireLevel(user, a.cardId, "work");
         await recordCardActor(user, a.cardId);
-        return ok(await sendToTerminal(a.cardId, a.text, {
+        const sentAt = Date.now();
+        const sent = await sendToTerminal(a.cardId, a.text, {
           by: user.id,
           guardInteractiveMenu: true,
           requireAgent: true,
+          viaNativeChat: true,
           origin: { kind: user.role === "owner" ? "owner" : "user", name: user.username },
-        }));
+        });
+        return ok({ ...sent, sentAt, next: "call vibehub_wait_for_card with this cardId and since=sentAt" });
       } catch (e) {
         return fail(e);
       }
@@ -214,17 +231,100 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     "vibehub_read_terminal",
     {
       description:
-        "Read the LAST answers of a card's agent, as clean text. Use it after sending, once the " +
-        "card's situation turns 'waiting' (its turn is over). `last` = how many answers (default 3).",
+        "Read the LAST answers of a card's agent, as clean text, plus `pendingQuestion`: the question " +
+        "it is waiting on you for (with its options), null when none. `last` = how many answers " +
+        "(default 3). To wait for a turn to end, use vibehub_wait_for_card instead.",
       inputSchema: {
         cardId: z.string().describe("id of the card to read (from vibehub_list_terminals)"),
         last: z.number().int().min(1).max(20).optional().describe("how many answers to return (default 3)"),
       },
+      annotations: READ_ONLY,
     },
     async (a) => {
       try {
         await requireLevel(user, a.cardId, "view");
         return ok(await readTerminal(a.cardId, a.last ?? 3));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_wait_for_card",
+    {
+      description:
+        "Wait for a card's turn to END (or for it to need the user) and get what it said — use it " +
+        "right after vibehub_send_to_terminal, with `since` = the `sentAt` it returned. Holds the call " +
+        `up to ${WAIT_MAX_MS / 1000}s. \`outcome\`: 'finished' (read \`answers\`), 'question' (relay ` +
+        "`pendingQuestion` with its options to the user; answer by sending their choice), 'permission' " +
+        "(a sensitive action waits for Allow/Deny on the board — tell the user), 'timeout' (still " +
+        "working: tell the user briefly what `activity` shows, then wait again), 'not_started' (the " +
+        "card did not start a turn after `since`), 'no session' (open the card first).",
+      inputSchema: {
+        cardId: z.string().describe("id of the card (from vibehub_list_terminals)"),
+        since: z.number().int().optional().describe("epoch ms of your send (`sentAt`); keeps an old answer from reading as the new one"),
+        timeoutSeconds: z.number().int().min(1).max(WAIT_MAX_MS / 1000).optional()
+          .describe(`how long to wait at most (default and max ${WAIT_MAX_MS / 1000})`),
+      },
+      annotations: READ_ONLY,
+    },
+    async (a) => {
+      try {
+        await requireLevel(user, a.cardId, "view");
+        return ok(await waitForTurn(a.cardId, {
+          since: a.since,
+          timeoutMs: (a.timeoutSeconds ?? WAIT_MAX_MS / 1000) * 1000,
+        }));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_card_activity",
+    {
+      description:
+        "What a card is doing and has done: situation, `busy` (a turn is running), what it is " +
+        "waiting on you for (`pendingQuestion`, `pendingPermission`), and its recent `events` — your " +
+        "messages, each tool call as one line (the file it edited, the command it ran) and its " +
+        "answers, oldest first. `since` (epoch ms, e.g. the previous call's `now`) returns only what " +
+        "is new. Use it to tell the user what the card is up to while it works.",
+      inputSchema: {
+        cardId: z.string().describe("id of the card (from vibehub_list_terminals)"),
+        since: z.number().int().optional().describe("epoch ms; only events after it"),
+        limit: z.number().int().min(1).max(ACTIVITY_LIMIT_MAX).optional().describe("newest events to return (default 30)"),
+      },
+      annotations: READ_ONLY,
+    },
+    async (a) => {
+      try {
+        await requireLevel(user, a.cardId, "view");
+        return ok(await readCardActivity(a.cardId, { since: a.since, limit: a.limit }));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_card_changes",
+    {
+      description:
+        "What a card has produced in git: its branch, the commits ahead of its base (newest first), " +
+        "the files it changed, what is not committed yet, and its pull request (url, state) when " +
+        "there is one. Read only — it never pushes or fetches. Use it to tell the user what was " +
+        "actually done before delivering.",
+      inputSchema: {
+        cardId: z.string().describe("id of the card (from vibehub_list_terminals)"),
+      },
+      annotations: READ_ONLY,
+    },
+    async (a) => {
+      try {
+        await requireLevel(user, a.cardId, "view");
+        return ok(await readCardChanges(a.cardId));
       } catch (e) {
         return fail(e);
       }
