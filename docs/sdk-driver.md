@@ -161,6 +161,14 @@ sempre, que continua existindo):
   (`resumeDropsTurn`), mas ele exige o prompt uuid do próprio envio, que o driver nunca vê; então
   o driver recusa por conta própria.
 
+- **`not-delivered`** — o transcript foi lido inteiro, até a raiz do ramo vivo, e a mensagem
+  original não está lá: o modelo nunca a leu (o turno morreu antes de o CLI gravá-la — o "No
+  conversation found" depois de trocar a conta). Não há o que corrigir nem rebobinar: vai o texto
+  LIMPO, como turno normal, sem derrubar o stream (2026-10-19 — antes ia o invólucro "desconsidere a
+  mensagem anterior" falando de uma mensagem que o modelo não conhecia). Nada é cortado; o manager
+  registra o texto limpo como fala do driver (espelho) e tira o `sent` da linha (`unwrapEditedMessage`).
+  Transcript vazio, compactação ou pai ausente continuam "não sei" e caem no supersede.
+
 O evento `rewound` (`{ ok, uuid?, reason? }`) diz qual dos dois aconteceu, e **as três camadas têm
 de concordar**: o modelo (a sessão truncada), o log (`rewindHistory` corta do original até o
 marcador `message_edited`) e a tela (`dropRewoundRows` corta as mesmas linhas). Com `ok: false`

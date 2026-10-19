@@ -3882,3 +3882,61 @@ describe("SdkChatView — o aviso de limite do plano", () => {
     expect(screen.queryByTestId("plan-alert")).toBeNull();
   });
 });
+
+/**
+ * A SEQUÊNCIA DE PRODUÇÃO (card review-entrada-mercadoria-albert, 2026-10-19): a mensagem não foi
+ * por causa de um erro, a pessoa editou, e depois editou DE NOVO a editada — sem mudar as palavras.
+ * Era para ser UMA mensagem sobrescrita; a tela chegou a mostrar três. Aqui, os eventos exatos que o
+ * log daquele card tem, ao vivo e depois de uma reconexão.
+ */
+describe("SdkChatView — editar de novo a mensagem editada sobrescreve, não empilha", () => {
+  const A = "eu preciso que voce seja mais clara";
+
+  async function textbox(): Promise<HTMLTextAreaElement> {
+    return (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+  }
+
+  it("ao vivo: depois do replay e da segunda edição, UMA bolha com o selo", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "user", text: A, at: 1 });
+    ws.deliver({ type: "message_edited", originalText: A });
+    ws.deliver({ type: "user", text: A, at: 2 });
+    ws.deliver({ type: "ready", resume: "7f0ce176-edd7-4251-a73a-77ed1efe59e7" } as SdkEvent);
+    expect(screen.getAllByTestId("sdk-user")).toHaveLength(1);
+
+    await userEvent.click(screen.getByTestId("sdk-edit"));
+    await userEvent.type(await textbox(), "{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    const frame = JSON.parse(ws.sent[0]!) as { type: string; original: string; text: string; cid: string };
+    expect(frame).toMatchObject({ type: "edit_user", original: A, text: A });
+    ws.deliver({ type: "user_ack", cid: frame.cid } as SdkEvent);
+    ws.deliver({ type: "rewound", ok: false, reason: "not-delivered" } as SdkEvent);
+    ws.deliver({ type: "assistant_text", text: "Explicando de forma simples." });
+    ws.deliver({ type: "result", isError: false });
+
+    const bubbles = screen.getAllByTestId("sdk-user");
+    expect(bubbles).toHaveLength(1);
+    expect(bubbles[0]).toHaveTextContent(A);
+    expect(bubbles[0]).toHaveAttribute("data-revision", "true");
+  });
+
+  it("depois de uma reconexão (o log com as duas edições): continua UMA bolha", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "user", text: A, at: 1 });
+    ws.deliver({ type: "message_edited", originalText: A });
+    ws.deliver({ type: "user", text: A, at: 2 });
+    ws.deliver({ type: "message_edited", originalText: A });
+    ws.deliver({ type: "user", text: A, at: 3 });
+    ws.deliver({ type: "assistant_text", text: "Explicando de forma simples." });
+    ws.deliver({ type: "ready" });
+
+    const bubbles = screen.getAllByTestId("sdk-user");
+    expect(bubbles).toHaveLength(1);
+    expect(bubbles[0]).toHaveAttribute("data-revision", "true");
+    expect(screen.getAllByTestId("sdk-edit")).toHaveLength(1);
+  });
+});

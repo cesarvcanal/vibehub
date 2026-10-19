@@ -3,7 +3,7 @@ import { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
 import { onCardDriverProbe, type DriverActivity } from "../board/agentState.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
-import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, clearHistoryBeforeLastClear, readHistory, replayableHistoryEvent, rewindHistory, type HistoryEvent } from "./history.js";
+import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, clearHistoryBeforeLastClear, readHistory, replayableHistoryEvent, rewindHistory, unwrapEditedMessage, type HistoryEvent } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker, type InflightMarker } from "./inflight.js";
 import { createLineReader, forgetDriverKeys, noteDriverEventFor, onOutsideTurn } from "./mirror.js";
 import { writeCardCatalog } from "./catalog.js";
@@ -482,6 +482,15 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
           "the conversation was rewound to before an edited message",
         );
       });
+    } else if (!event.ok && event.reason === "not-delivered" && edit) {
+      // The original never reached the model, so the driver sent the CLEAN words as a plain turn
+      // (no rewind, nothing to cut — the rest of the log still happened). Same two repairs as a
+      // rewind: the transcript will carry the clean text, so the mirror must know it as the
+      // driver's own, and the log line loses the wrapper the replay would look for.
+      if (edit.text !== "") {
+        noteDriverEventFor(session.cardId, { type: "user", text: edit.text });
+        void unwrapEditedMessage(session.cardId, edit.original, edit.text);
+      }
     } else if (event.ok) {
       // Um `ok: true` SEM dono (driver repetindo, frame atrasado) não chega à tela: lá ele não é
       // inofensivo como aqui. `dropRewoundRows` corta da última linha "editada" até a última

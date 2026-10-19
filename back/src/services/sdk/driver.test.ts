@@ -553,13 +553,24 @@ describe("sdk-driver.mjs — editar rebobina, mas só quando é seguro", () => {
 
   it("a edição NUNCA some: os dois caminhos terminam mandando a mensagem", () => {
     const fn = source.slice(source.indexOf("async function rewindAndSend("), source.indexOf("/* ------------------------------------------------------------- stdin */"));
-    // recusa -> supersede; falha ao derrubar o stream -> supersede; sucesso -> texto limpo
-    expect(fn.match(/sendUser\(/g) ?? []).toHaveLength(2); // o do supersede e o do sucesso
+    // recusa -> supersede; falha ao derrubar o stream -> supersede; sucesso -> texto limpo;
+    // original que nunca chegou -> texto limpo, sem rebobinar
+    expect(fn.match(/sendUser\(/g) ?? []).toHaveLength(3);
     expect(fn.match(/\bsupersede\("/g) ?? []).toHaveLength(1); // falha ao derrubar
     expect(fn).toContain("supersede(decision.reason)"); // recusa
     expect(fn).toContain("} catch {");
     // e o plano B cai pro texto limpo se o manager não mandou fallback nenhum
     expect(fn.match(/typeof fallback === "string" && fallback !== "" \? fallback : text/g) ?? []).toHaveLength(1);
+  });
+
+  it("original que o modelo nunca leu: vai o texto LIMPO, sem invólucro e sem derrubar o stream", () => {
+    const fn = source.slice(source.indexOf("async function rewindAndSend("), source.indexOf("/* ------------------------------------------------------------- stdin */"));
+    const branch = fn.slice(fn.indexOf("disk.absent"), fn.indexOf("await endStream()"));
+    expect(branch).toContain('emit({ type: "rewound", ok: false, reason: "not-delivered" })');
+    expect(branch).toContain("sendUser(text)");
+    // as palavras entram ANTES de soltar os cartões, como no envio normal
+    expect(branch.indexOf("releaseQuestions()")).toBeGreaterThan(branch.indexOf("sendUser(text)"));
+    expect(branch.indexOf("return;")).toBeGreaterThan(branch.indexOf("releaseQuestions()"));
   });
 
   it("a mensagem vai ANTES de liberar os cartões de pergunta (mesma ordem do envio normal)", () => {
@@ -618,7 +629,7 @@ describe("sdk-driver.mjs — editar rebobina, mas só quando é seguro", () => {
  */
 describe("sdk-driver.mjs — forkPointFromTranscript acha o ponto de volta no disco", () => {
   const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
-  type Fork = { found: false } | { found: true; uuid: string | null };
+  type Fork = { found: false; absent?: true } | { found: true; uuid: string | null };
   const forkPointFromTranscript = ((): ((jsonl: string, original: string) => Fork) => {
     const from = source.indexOf("function forkPointFromTranscript(");
     expect(from).toBeGreaterThan(0);
@@ -674,7 +685,8 @@ describe("sdk-driver.mjs — forkPointFromTranscript acha o ponto de volta no di
       user("new", "a1", "nova"),
       assistant("anew", "new"),
     ].join("\n");
-    expect(forkPointFromTranscript(jsonl, "velha")).toEqual({ found: false });
+    // o modelo não tem "velha" no ramo vivo: para ele essa mensagem não existe
+    expect(forkPointFromTranscript(jsonl, "velha")).toEqual({ found: false, absent: true });
     expect(forkPointFromTranscript(jsonl, "nova")).toEqual({ found: true, uuid: "a1" });
   });
 
@@ -736,11 +748,22 @@ describe("sdk-driver.mjs — forkPointFromTranscript acha o ponto de volta no di
     expect(forkPointFromTranscript(jsonl, "orfã")).toEqual({ found: false });
   });
 
-  it("texto que não está na conversa, ou transcript vazio: não achou (o driver cai no plano B)", () => {
-    expect(forkPointFromTranscript(conversa, "nunca dita")).toEqual({ found: false });
+  it("transcript vazio ou texto vazio: não achou, e NÃO afirma que a mensagem não chegou", () => {
     expect(forkPointFromTranscript("", "oi")).toEqual({ found: false });
     expect(forkPointFromTranscript(conversa, "   ")).toEqual({ found: false });
   });
+
+  /**
+   * A MENSAGEM QUE NUNCA CHEGOU (produção, 2026-10-19): o turno morreu antes de o CLI gravá-la
+   * ("No conversation found with session ID", depois de trocar a conta do card). A pessoa edita, e
+   * o modelo recebia "[correção do usuário — desconsidere a mensagem anterior: «…»]" falando de uma
+   * mensagem que ele nunca leu. Só quando o ramo vivo foi lido INTEIRO até a raiz dá pra afirmar
+   * que ela não está lá — compactação e cadeia cortada continuam "não sei" (testes acima).
+   */
+  it("o ramo vivo lido até a raiz sem a mensagem: ela nunca chegou ao modelo (absent)", () => {
+    expect(forkPointFromTranscript(conversa, "nunca dita")).toEqual({ found: false, absent: true });
+  });
+
 });
 
 /**

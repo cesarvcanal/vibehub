@@ -1382,6 +1382,24 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
     }
   });
 
+  /**
+   * O ORIGINAL NUNCA CHEGOU AO MODELO: o driver mandou o texto limpo (`not-delivered`). Nada é
+   * cortado — o resto da conversa ainda vale —, mas o texto limpo é fala do driver (senão o espelho
+   * o republica do transcript) e o log perde o invólucro (senão o replay o desenha duas vezes).
+   */
+  it("ok: false `not-delivered`: nada cortado, texto limpo conhecido e o log sem invólucro", async () => {
+    forgetDriverKeys(CARD);
+    await conversaComEdicao();
+    emit({ type: "rewound", ok: false, reason: "not-delivered" });
+    await vi.waitFor(() => expect(driverKeysFor(CARD).has("user:certa")).toBe(true));
+    await vi.waitFor(async () => {
+      const events = await readHistory(CARD);
+      expect(events.map((e) => e.type)).toEqual(ANTES_DO_REWOUND);
+      expect((events.at(-1) as { text: string; sent?: string })).toEqual(expect.objectContaining({ text: "certa" }));
+      expect((events.at(-1) as { sent?: string }).sent).toBeUndefined();
+    });
+  });
+
   it("um `rewound` que não pertence a edição nenhuma não corta nada", async () => {
     const session = ensure();
     const socket = fakeSocket();
