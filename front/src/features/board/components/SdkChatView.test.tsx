@@ -788,11 +788,13 @@ describe("SdkChatView — editar mensagem enviada (supersede)", () => {
 
     await waitFor(() => expect(ws.sent.length).toBe(1));
     expect(JSON.parse(ws.sent[0]!)).toMatchObject({ type: "edit_user", original: "sobe pra prod", text: "sobe pra dev" });
-    // the original dims with the badge; the new version stands; edit mode is over
+    // the bubble CHANGES: one bubble, the new words, with the badge — no greyed copy above it
     const bubbles = screen.getAllByTestId("sdk-user");
-    expect(bubbles[0]).toHaveAttribute("data-edited", "true");
+    expect(bubbles).toHaveLength(1);
+    expect(bubbles[0]).toHaveTextContent("sobe pra dev");
+    expect(bubbles[0]).toHaveAttribute("data-revision", "true");
     expect(screen.getByTestId("sdk-user-edited")).toHaveTextContent(/editada|edited/);
-    expect(bubbles[1]).toHaveTextContent("sobe pra dev");
+    expect(screen.queryByText("sobe pra prod")).not.toBeInTheDocument();
     expect(screen.queryByTestId("composer-editing")).not.toBeInTheDocument();
   });
 
@@ -929,11 +931,48 @@ describe("SdkChatView — editar mensagem enviada (supersede)", () => {
     ws.deliver({ type: "user", text: "sobe pra dev" });
     ws.deliver({ type: "ready" });
 
+    // after an F5 too: only the standing version, badged — the superseded one is not drawn
     const bubbles = screen.getAllByTestId("sdk-user");
-    expect(bubbles[0]).toHaveAttribute("data-edited", "true");
-    expect(bubbles[1]).not.toHaveAttribute("data-edited");
-    // a superseded message offers no pencil — only the standing version does
+    expect(bubbles).toHaveLength(1);
+    expect(bubbles[0]).toHaveTextContent("sobe pra dev");
+    expect(bubbles[0]).toHaveAttribute("data-revision", "true");
     expect(screen.getAllByTestId("sdk-edit")).toHaveLength(1);
+  });
+
+  it("a supersede the driver could NOT rewind still shows ONE bubble (the reported screen)", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "seja mais claro" });
+    ws.deliver({ type: "result", isError: true, subtype: "error_during_execution", result: "No conversation found" });
+
+    await userEvent.click(screen.getByTestId("sdk-edit"));
+    const box = await textbox();
+    await userEvent.clear(box);
+    await userEvent.type(box, "seja mais claro, por favor{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "rewound", ok: false, reason: "no-fork-point" });
+
+    const bubbles = screen.getAllByTestId("sdk-user");
+    expect(bubbles).toHaveLength(1);
+    expect(bubbles[0]).toHaveTextContent("seja mais claro, por favor");
+  });
+
+  it("only the edit's new version carries the badge — a later message does not", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "user", text: "a" });
+    ws.deliver({ type: "message_edited", originalText: "a" });
+    ws.deliver({ type: "user", text: "b" });
+    ws.deliver({ type: "user", text: "c" });
+    ws.deliver({ type: "ready" });
+
+    const bubbles = screen.getAllByTestId("sdk-user");
+    expect(bubbles.map((b) => b.textContent)).toEqual([expect.stringContaining("b"), "c"]);
+    expect(bubbles[0]).toHaveAttribute("data-revision", "true");
+    expect(bubbles[1]).not.toHaveAttribute("data-revision");
   });
 });
 

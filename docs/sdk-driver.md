@@ -233,7 +233,8 @@ edição não reescreve o passado — é um **supersede**:
 
   A proveniência continua a do USUÁRIO — é fala dele, corrigida.
 - A história (ndjson) ganha duas linhas: `{ "type": "message_edited", "originalText" }` (a bolha
-  original é redesenhada atenuada com o selo "editada" — no replay também) e o novo
+  original sai da tela e a nova versão leva o selo "editada" — no replay também; desde 2026-10-19
+  a edição troca a bolha em vez de empilhar uma cópia apagada em cima da nova) e o novo
   `{ "type": "user", "text": <limpo>, "sent": <embrulhado> }`. `text` é o que a TELA mostra;
   `sent` é a APOSTA de o que vai pro stdin, feita antes de o driver escolher — e é pelo `sent` que
   `replayDedupeKey` casa a linha embrulhada que o transcript vai carregar.
