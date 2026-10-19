@@ -917,6 +917,141 @@ describe("inflight markers — a durabilidade do turno em voo (o bug do deploy)"
   });
 });
 
+/**
+ * O CASO QUE ESCAPOU DE DOIS PRS (produção, 2026-10-19, card e35d): o turno da pessoa fechou com
+ * os testes rodando em segundo plano; quando eles acabaram, o PRÓPRIO CLI abriu um turno novo, o
+ * agente chamou o deploy (vibehub_deliver) e o deploy matou esse turno. Só mensagem de pessoa ou de
+ * sistema gravava o marcador — o turno autônomo e o segundo plano não tinham nenhum, então o boot
+ * não retomou nada e o card ficou 44 min parado até alguém perguntar "eai?".
+ */
+describe("inflight markers — trabalho que nenhuma mensagem abriu (segundo plano, turno do próprio CLI)", () => {
+  const settle = () => new Promise((r) => setTimeout(r, 20));
+  const emit = (event: object) => spawned[0]!.stdout.emit("data", line(event));
+
+  async function personTurnThatClosed(): Promise<void> {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"roda a suíte e entrega"}`));
+    await vi.waitFor(async () => expect(await readInflightMarker(CARD)).not.toBeNull());
+  }
+
+  it("O CASO REAL: tarefa em segundo plano → turno aberto pelo CLI → deploy: o marcador está lá para o boot", async () => {
+    await personTurnThatClosed();
+    emit({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npx vitest run", run_in_background: true } });
+    emit({ type: "background_tasks", tasks: [{ id: "b1", type: "local_bash", description: "suíte do front" }] });
+    emit({ type: "result", isError: false });
+    await vi.waitFor(async () => {
+      const marker = await readInflightMarker(CARD);
+      expect(marker?.background).toEqual({ tasks: ["suíte do front"], since: expect.any(Number), idle: true });
+    });
+    // a suíte acaba: o CLI abre o turno sozinho, sem nada no stdin
+    emit({ type: "background_tasks", tasks: [] });
+    emit({ type: "assistant_text", text: "Front verde. Entregando." });
+    emit({ type: "tool_use", id: "t2", name: "mcp__vibehub__vibehub_deliver", input: { branch: "main" } });
+    await settle();
+    const marker = await readInflightMarker(CARD);
+    expect(marker).not.toBeNull();
+    expect(marker!.background).toBeUndefined();
+    // o deploy: SIGTERM no back
+    shutdownAllDrivers();
+    await settle();
+    expect(await readInflightMarker(CARD)).not.toBeNull();
+  });
+
+  it("turno aberto pelo CLI sem segundo plano anunciado: marcador enquanto roda, some no result dele", async () => {
+    await personTurnThatClosed();
+    emit({ type: "result", isError: false });
+    await vi.waitFor(async () => expect(await readInflightMarker(CARD)).toBeNull());
+    emit({ type: "thinking", text: "a notificação chegou" });
+    await vi.waitFor(async () => {
+      const marker = await readInflightMarker(CARD);
+      expect(marker?.preview).toMatch(/próprio Claude/);
+      expect(marker?.attempts).toBe(0);
+    });
+    emit({ type: "result", isError: false });
+    await vi.waitFor(async () => expect(await readInflightMarker(CARD)).toBeNull());
+  });
+
+  it("o passo de um SUBAGENTE em segundo plano não é um turno do principal: nenhum marcador sozinho", async () => {
+    await personTurnThatClosed();
+    emit({ type: "result", isError: false });
+    await vi.waitFor(async () => expect(await readInflightMarker(CARD)).toBeNull());
+    emit({ type: "tool_use", id: "s1", name: "Read", input: {}, parentToolUseId: "agent-1" });
+    emit({ type: "assistant_text", text: "achei", parentToolUseId: "agent-1" });
+    await settle();
+    expect(await readInflightMarker(CARD)).toBeNull();
+  });
+
+  it("segundo plano que acaba SEM turno depois: o marcador sai", async () => {
+    await personTurnThatClosed();
+    emit({ type: "background_tasks", tasks: [{ id: "b1", type: "local_agent", description: "review" }] });
+    emit({ type: "result", isError: false });
+    await vi.waitFor(async () => expect((await readInflightMarker(CARD))?.background?.idle).toBe(true));
+    emit({ type: "background_tasks", tasks: [] });
+    await vi.waitFor(async () => expect(await readInflightMarker(CARD)).toBeNull());
+  });
+
+  it("ScheduleWakeup pendente segura o marcador; o stop:true o libera", async () => {
+    await personTurnThatClosed();
+    emit({ type: "tool_use", id: "w1", name: "ScheduleWakeup", input: { delaySeconds: 600, reason: "esperar o CI", prompt: "/loop ci" } });
+    emit({ type: "result", isError: false });
+    await vi.waitFor(async () => {
+      expect((await readInflightMarker(CARD))?.background?.tasks).toEqual(["retorno agendado (ScheduleWakeup): esperar o CI"]);
+    });
+    // o retorno vence: o CLI abre o turno; ele não reagenda e para o loop
+    emit({ type: "tool_use", id: "w2", name: "ScheduleWakeup", input: { stop: true } });
+    await vi.waitFor(async () => expect((await readInflightMarker(CARD))?.background).toBeUndefined());
+    emit({ type: "result", isError: false });
+    await vi.waitFor(async () => expect(await readInflightMarker(CARD)).toBeNull());
+  });
+
+  it("o retorno agendado que vence abre o turno e deixa de ser pendente", async () => {
+    await personTurnThatClosed();
+    emit({ type: "tool_use", id: "w1", name: "ScheduleWakeup", input: { delaySeconds: 60, prompt: "checar deploy" } });
+    emit({ type: "result", isError: false });
+    await vi.waitFor(async () => expect((await readInflightMarker(CARD))?.background?.tasks?.[0]).toMatch(/checar deploy/));
+    emit({ type: "assistant_text", text: "voltei" });
+    emit({ type: "result", isError: false });
+    await vi.waitFor(async () => expect(await readInflightMarker(CARD)).toBeNull());
+  });
+
+  it("mensagem da pessoa com segundo plano vivo: o marcador novo (attempts 0) diz o que segue rodando, idle=false", async () => {
+    await personTurnThatClosed();
+    emit({ type: "background_tasks", tasks: [{ id: "b1", type: "local_bash", description: "npm test" }] });
+    emit({ type: "result", isError: false });
+    const socket = fakeSocket();
+    attachSocket(ensure(), socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"e aí?"}`));
+    await vi.waitFor(async () => {
+      const marker = await readInflightMarker(CARD);
+      expect(marker?.preview).toBe("e aí?");
+      expect(marker?.attempts).toBe(0);
+      expect(marker?.background).toMatchObject({ tasks: ["npm test"], idle: false });
+    });
+  });
+
+  it("a retomada que avança grava progressed SEM perder o segundo plano (e mantém attempts)", async () => {
+    const session = ensure();
+    emit({ type: "background_tasks", tasks: [{ id: "b1", type: "local_bash", description: "build" }] });
+    injectSystemTurn(session, "continue", { kind: "system", name: "vibehub" }, 2);
+    emit({ type: "tool_use", id: "x", name: "Bash", input: {} });
+    await vi.waitFor(async () => {
+      const marker = await readInflightMarker(CARD);
+      expect(marker).toMatchObject({ attempts: 2, progressed: true, background: { tasks: ["build"] } });
+    });
+  });
+
+  it("parada deliberada com segundo plano vivo: o marcador sai mesmo assim", async () => {
+    await personTurnThatClosed();
+    emit({ type: "background_tasks", tasks: [{ id: "b1", type: "local_bash", description: "dev server" }] });
+    emit({ type: "result", isError: false });
+    await vi.waitFor(async () => expect(await readInflightMarker(CARD)).not.toBeNull());
+    stopCardDriver(CARD);
+    await vi.waitFor(async () => expect(await readInflightMarker(CARD)).toBeNull());
+  });
+});
+
 describe("harness filler — 'No response requested.' nunca vira resposta no chat", () => {
   it("drops the canned close-out arriving live from a resumed session", async () => {
     const session = ensure();

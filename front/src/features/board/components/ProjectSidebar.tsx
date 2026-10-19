@@ -21,15 +21,15 @@ import { Logo } from "@/components/Logo";
 import { AccountRow } from "@/components/AccountRow";
 import {
   SELECTED_ROW,
-  cardDot,
+  cardState,
   cardHref,
-  dotClass,
   gapToPosition,
   isBelowMidpoint,
   nextPosition,
   projectHref,
   splitSidebarCards,
 } from "@/features/board/lib/board";
+import { CardStateIcon } from "@/features/board/components/CardStateIcon";
 import { useExpandedProjects } from "@/features/board/lib/sidebarExpanded";
 import { RecentCards } from "@/features/board/components/RecentCards";
 import { ShareDialog } from "@/features/board/components/ShareDialog";
@@ -941,7 +941,7 @@ function SidebarCard({
   onFinish: (card: BoardCard) => void;
 }) {
   const t = useT();
-  const dot = cardDot(card);
+  const state = cardState(card);
   const paused = Boolean(card.pausedAt);
   const canPause = Boolean(card.openedAt) && !paused && !card.hibernatedAt;
 
@@ -992,17 +992,9 @@ function SidebarCard({
             : "text-muted-foreground hover:bg-card/60 hover:text-foreground",
         )}
       >
-        <span
-          title={paused ? t("status.paused") : dot?.label}
-          className="inline-flex h-2 w-2 shrink-0 items-center justify-center"
-        >
-          {paused ? (
-            <Pause aria-hidden className="h-2.5 w-2.5 text-muted-foreground/70" />
-          ) : dot ? (
-            <span
-              className={cn("inline-block h-2 w-2 rounded-full", dotClass(dot.tone), dot.live && "dot-live")}
-            />
-          ) : null}
+        {/* Always the same 12px slot, so titles stay aligned whether or not there is a state. */}
+        <span className="inline-flex h-3 w-3 shrink-0 items-center justify-center">
+          {state ? <CardStateIcon state={state} /> : null}
         </span>
         <span className="truncate">{card.title}</span>
       </a>

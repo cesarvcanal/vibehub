@@ -239,13 +239,13 @@ describe("BoardPage — the board", () => {
     expect(screen.queryByRole("heading", { name: "billing" })).not.toBeInTheDocument();
   });
 
-  it("shows a status dot only for the cards the runner reported on", async () => {
+  it("shows a state icon only for the cards that have a state", async () => {
     renderApp(<BoardPage />, { route: "/?project=p1" });
     await screen.findByRole("region", { name: "Working" });
     expect(screen.getByRole("status", { name: "Working" })).toBeInTheDocument();
-    expect(screen.getByRole("status", { name: "Waiting for you" })).toBeInTheDocument();
-    // The backlog card has no status, so it must have no dot at all — not even a placeholder.
-    expect(screen.queryAllByRole("status", { name: /working|waiting for you/i })).toHaveLength(2);
+    expect(screen.getByRole("status", { name: "Turn finished — your move" })).toBeInTheDocument();
+    // The backlog card was never opened, so it has no icon at all — not even a placeholder.
+    expect(screen.queryAllByRole("status", { name: /working|your move/i })).toHaveLength(2);
   });
 
   it("shows the card's own account and no model chip", async () => {

@@ -1283,7 +1283,7 @@ describe("image upload into the card", () => {
     expect(long.endsWith(".png")).toBe(true);
   });
 
-  it("the base64 rides INSIDE the script (stdin) — never in argv; the path comes back", async () => {
+  it("the base64 rides on the script's stdin, after one exec line — never in argv nor in a heredoc; the path comes back", async () => {
     const { card } = await seed();
     const b64 = Buffer.from("image-content").toString("base64");
     const { path } = await ws.uploadCardImage(card.id, "Screen Area (1).PNG", b64, "local:tester");
@@ -1291,11 +1291,14 @@ describe("image upload into the card", () => {
     expect(path).toMatch(new RegExp(`^/work/\\.uploads/${card.id}/\\d+-screen-area-1-\\.png$`));
     expect(runScript).toHaveBeenCalledTimes(1);
     const script = scriptAt(0);
-    expect(script).toContain(`docker exec -i '${CONTAINER}' bash -s`);
-    expect(script).toContain(`mkdir -p '/work/.uploads/${card.id}'`);
-    expect(script).toContain(`base64 -d > '${path}'`);
-    // the payload goes into the script's heredoc, delimited by a token outside the base64 alphabet
-    expect(script).toContain(`<<'VIBEHUB_B64'\n${b64}\nVIBEHUB_B64`);
+    const [command, payload, rest] = script.split("\n");
+    // bash parses ONE line and hands the stream to docker: the payload is read by base64, not bash
+    expect(command).toMatch(new RegExp(`^exec docker exec -i '${CONTAINER}' sh -c `));
+    expect(command).toContain(`mkdir -p '\\''/work/.uploads/${card.id}'\\''`);
+    expect(command).toContain(`base64 -d > '\\''${path}'\\''`);
+    expect(payload).toBe(b64);
+    expect(rest).toBe("");
+    expect(script).not.toContain("<<");
   });
 
   it("refuses: over 10 MB, invalid base64 (injection) and an unknown card — nothing runs on the host", async () => {

@@ -52,6 +52,20 @@ export interface InflightMarker {
   progressed?: boolean;
   /** O processo do back que escreveu o marcador. Ausente = escrito por uma versão sem dono. */
   owner?: string;
+  /**
+   * TRABALHO EM SEGUNDO PLANO vivo quando o marcador foi gravado: as tarefas do CLI (Bash com
+   * run_in_background, subagente, monitor) e um retorno agendado (ScheduleWakeup). Elas morrem com o
+   * driver num deploy, e o turno que as esperava nunca vem — sem isto o card parava calado no meio
+   * da entrega (produção, 2026-10-19). `idle` = nenhum turno rodava, só o segundo plano; `since` =
+   * desde quando o segundo plano está vivo (o teto que separa espera de deploy de `npm run dev`).
+   */
+  background?: InflightBackground;
+}
+
+export interface InflightBackground {
+  tasks: string[];
+  since: number;
+  idle: boolean;
 }
 
 /** A identidade DESTE processo do back — nasce no boot e assina os marcadores que ele escreve. */
@@ -179,7 +193,18 @@ export function parseMarker(raw: string): InflightMarker | null {
     attempts,
     owner: typeof m.owner === "string" && m.owner !== "" ? m.owner : undefined,
     ...(m.progressed === true ? { progressed: true } : {}),
+    ...(parseBackground(m.background) ?? {}),
   };
+}
+
+/** O bloco de segundo plano de um marcador, ou nada quando ele não tem a forma esperada. PURE. */
+function parseBackground(raw: unknown): { background: InflightBackground } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const b = raw as Partial<InflightBackground>;
+  if (!Array.isArray(b.tasks) || typeof b.since !== "number" || !Number.isFinite(b.since)) return null;
+  const tasks = b.tasks.filter((t): t is string => typeof t === "string" && t !== "");
+  if (tasks.length === 0) return null;
+  return { background: { tasks, since: b.since, idle: b.idle === true } };
 }
 
 /** Um batimento DESTE processo. Nunca lança: sem batimento, o pior caso é o comportamento antigo. */

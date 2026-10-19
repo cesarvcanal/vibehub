@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { config } from "../../config/env.js";
 import type { Card, Project } from "../board/registry.js";
 import type { Settings } from "../settings/settings.js";
-import { ensureDriverSession, injectSystemTurn, resetSdkSessionsForTesting, setDriverSpawnerForTesting } from "./manager.js";
+import { BACKGROUND_HOLD_MAX_MS, ensureDriverSession, injectSystemTurn, resetSdkSessionsForTesting, setDriverSpawnerForTesting } from "./manager.js";
 import { readHistory } from "./history.js";
 import {
   INFLIGHT_OWNER,
@@ -19,11 +19,14 @@ import {
 import {
   MAX_AUTO_RESUMES,
   NOTE_AUTO_OFF,
+  NOTE_BACKGROUND_STALE,
   NOTE_NOT_AGAIN,
   NOTE_RESUMING,
   RESUME_CONTINUATION_TEXT,
   SYSTEM_ORIGIN,
   handOffSdkOnShutdown,
+  isStaleBackgroundOnly,
+  resumeContinuationText,
   resumeInterruptedTurns,
   type ResumeDeps,
 } from "./resume.js";
@@ -159,6 +162,61 @@ describe("resumeInterruptedTurns — the boot sweep", () => {
     await vi.waitFor(async () => {
       expect((await readInflightMarker(CARD))?.attempts).toBe(1);
     });
+  });
+
+  it("O CASO REAL (2026-10-19): turno com segundo plano morto pelo deploy é retomado, e o agente sabe o que morreu", async () => {
+    await writeInflightMarker(CARD, {
+      startedAt: 1, preview: "(turno aberto pelo próprio Claude: retorno de tarefa em segundo plano ou agendada)", attempts: 0,
+      background: { tasks: ["suíte do front", "retorno agendado (ScheduleWakeup): esperar o CI"], since: Date.now() - 60_000, idle: true },
+    });
+    const summary = await resumeInterruptedTurns(deps());
+    expect(summary.resumed).toEqual([CARD]);
+    const frames = spawned[0]!.stdin.written.map((s) => JSON.parse(s) as { type: string; text: string });
+    expect(frames).toHaveLength(1);
+    expect(frames[0]!.text.startsWith(RESUME_CONTINUATION_TEXT)).toBe(true);
+    expect(frames[0]!.text).toContain("- suíte do front");
+    expect(frames[0]!.text).toContain("- retorno agendado (ScheduleWakeup): esperar o CI");
+    await vi.waitFor(async () => expect((await readInflightMarker(CARD))?.attempts).toBe(1));
+  });
+
+  it("segundo plano SOZINHO há mais que o teto (um dev server): só a nota, sem acordar o agente", async () => {
+    await writeInflightMarker(CARD, {
+      startedAt: 1, attempts: 0,
+      background: { tasks: ["npm run dev"], since: Date.now() - BACKGROUND_HOLD_MAX_MS - 1, idle: true },
+    });
+    const summary = await resumeInterruptedTurns(deps());
+    expect(summary).toEqual({ resumed: [], noted: [CARD] });
+    expect(spawned).toHaveLength(0);
+    const history = await readHistory(CARD);
+    expect(history.map((e) => (e as { text?: string }).text)).toEqual([NOTE_BACKGROUND_STALE]);
+    expect(await readInflightMarker(CARD)).toBeNull();
+  });
+
+  it("segundo plano antigo MAS com um turno rodando: é trabalho em andamento, retoma", async () => {
+    await writeInflightMarker(CARD, {
+      startedAt: 1, attempts: 0,
+      background: { tasks: ["npm run dev"], since: Date.now() - BACKGROUND_HOLD_MAX_MS - 1, idle: false },
+    });
+    expect((await resumeInterruptedTurns(deps())).resumed).toEqual([CARD]);
+  });
+
+  it("o teto de retomadas vale também para o segundo plano: sem progresso, não acorda de novo", async () => {
+    await writeInflightMarker(CARD, { startedAt: 1, attempts: 1, background: { tasks: ["x"], since: Date.now(), idle: true } });
+    const summary = await resumeInterruptedTurns(deps());
+    expect(summary.noted).toEqual([CARD]);
+    expect(spawned).toHaveLength(0);
+  });
+
+  it("resumeContinuationText / isStaleBackgroundOnly — puras", () => {
+    expect(resumeContinuationText({ startedAt: 1, attempts: 0 })).toBe(RESUME_CONTINUATION_TEXT);
+    const many = Array.from({ length: 12 }, (_, i) => `t${i}`);
+    const text = resumeContinuationText({ startedAt: 1, attempts: 0, background: { tasks: many, since: 0, idle: true } });
+    expect(text).toContain("- t7");
+    expect(text).not.toContain("- t8"); // a lista é curta: contexto, não inventário
+    const now = 10 * BACKGROUND_HOLD_MAX_MS;
+    expect(isStaleBackgroundOnly({ startedAt: 1, attempts: 0 }, now)).toBe(false);
+    expect(isStaleBackgroundOnly({ startedAt: 1, attempts: 0, background: { tasks: ["x"], since: now - BACKGROUND_HOLD_MAX_MS, idle: true } }, now)).toBe(false);
+    expect(isStaleBackgroundOnly({ startedAt: 1, attempts: 0, background: { tasks: ["x"], since: now - BACKGROUND_HOLD_MAX_MS - 1, idle: true } }, now)).toBe(true);
   });
 
   it("attempts >= 1 SEM progresso (a retomada morreu antes de fazer qualquer coisa): only the line, no loop", async () => {

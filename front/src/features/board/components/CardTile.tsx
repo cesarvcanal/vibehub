@@ -9,7 +9,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { cardDot, cardHref, declaredStateChip, dotClass } from "@/features/board/lib/board";
+import { cardHref, cardState, declaredStateChip } from "@/features/board/lib/board";
+import { CardStateIcon } from "@/features/board/components/CardStateIcon";
 import {
   ContextMenu,
   useContextMenuPoint,
@@ -22,7 +23,7 @@ import { useAuth } from "@/providers/auth";
 import { ShareDialog } from "@/features/board/components/ShareDialog";
 
 /**
- * One card on the board: a status dot and a title, and nothing else it can avoid saying.
+ * One card on the board: a state icon and a title, and nothing else it can avoid saying.
  *
  * It is a REAL link, so the operating system's habits work — Cmd/Ctrl/Shift-click and middle-click
  * open the card in another tab, hovering shows where it goes. A plain left click is intercepted and
@@ -37,7 +38,7 @@ import { ShareDialog } from "@/features/board/components/ShareDialog";
  *
  * The card carries no line repeating its own column ("Working" under a card sitting in the Working
  * column is a word that has already been read) and no chip for a setting it merely inherited. It
- * speaks up only when something is true that neither the position nor the dot can show: a pause
+ * speaks up only when something is true that neither the position nor the state icon can show: a pause
  * waiting for the turn to end, or a configuration change that lands at the next restart.
  */
 export function CardTile({
@@ -86,7 +87,7 @@ export function CardTile({
   // Sharing is the owner's: a member has been given this card, not the right to hand it on.
   const { isOwner } = useAuth();
   const [shareOpen, setShareOpen] = React.useState(false);
-  const dot = cardDot(card);
+  const state = cardState(card);
   /** The agent's own word on where the work stands (`vibehub_report`). Null = it has said nothing. */
   const stateChip = declaredStateChip(card);
   const paused = Boolean(card.pausedAt);
@@ -211,28 +212,16 @@ export function CardTile({
         deleting && "pointer-events-none animate-pulse opacity-50",
       )}
     >
-      {/* No dot and no pause icon means no element at all: an empty 12px box in front of every
-          backlog title is a column of nothing, indented for no reason. */}
-      {paused ? (
-        <span title={t("status.paused")} className="mt-1 inline-flex shrink-0 text-muted-foreground/70">
-          <Pause aria-hidden className="h-3 w-3" />
-        </span>
-      ) : dot ? (
-        <span title={dot.label} className="mt-1.5 inline-flex shrink-0">
-          <span
-            role="status"
-            aria-label={dot.label}
-            className={cn("inline-block h-2.5 w-2.5 rounded-full", dotClass(dot.tone), dot.live && "dot-live")}
-          />
-        </span>
-      ) : null}
+      {/* No state means no element at all: an empty box in front of every backlog title is a
+          column of nothing, indented for no reason. */}
+      {state ? <CardStateIcon state={state} announce className="mt-1 h-3.5 w-3.5" /> : null}
 
       <div className="min-w-0 flex-1">
         <div title={card.title} className="line-clamp-2 text-sm font-medium leading-snug text-foreground">
           {card.title}
         </div>
 
-        {/* Only ever a line the column header and the dot cannot already tell you. */}
+        {/* Only ever a line the column header and the state icon cannot already tell you. */}
         {pausingWhenIdle ? (
           <div
             title={t("card.pausingWhenIdleHint")}
