@@ -1753,7 +1753,7 @@ describe("ferramenta sendo gerada (tool_use_start → progresso → tool_use)", 
     const input = { file_path: "/w/a.ts", content: "linha\n" };
     const done = applySdkEvent(generating, { type: "tool_use", id: "w1", name: "Write", input });
     expect(done.rows.filter((row) => row.kind === "tool")).toEqual([
-      { kind: "tool", id: "w1", name: "Write", summary: toolSummary(input), input },
+      { kind: "tool", id: "w1", name: "Write", summary: toolSummary(input), input, live: true },
     ]);
     const at = generating.rows.findIndex((row) => row.id === "w1");
     expect(done.rows.findIndex((row) => row.id === "w1")).toBe(at);

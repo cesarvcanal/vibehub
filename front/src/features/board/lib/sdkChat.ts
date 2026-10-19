@@ -68,6 +68,9 @@ export interface SdkEvent {
     | "tool_use_start"
     | "tool_input_progress"
     | "tool_progress"
+    | "tool_result"
+    | "agent_task"
+    | "detail"
     | "permission"
     | "permission_request"
     | "user_question"
@@ -187,6 +190,20 @@ export interface SdkEvent {
   filePath?: string;
   /** On `tool_progress`: how long the tool has been running. */
   elapsedSeconds?: number;
+  /** On `tool_result`: o RESUMO do que a ferramenta devolveu (o back resume; ver ToolResultSummary). */
+  toolResult?: ToolResultSummary;
+  /** On `agent_task` (e nas tarefas de `background_tasks`): a chamada que disparou o subagente. */
+  toolUseId?: string;
+  /** On `agent_task`: os números e a frase do subagente (ver `AgentTask`). */
+  taskId?: string;
+  subagentType?: string;
+  taskType?: string;
+  toolUses?: number;
+  tokens?: number;
+  durationMs?: number;
+  lastTool?: string;
+  summary?: string;
+  description?: string;
   /**
    * On `peer_typing` (relayed by the BACK from the card's other sockets, never persisted): whether
    * the person in `name` is typing. Handled by the view (see lib/peerTyping.ts), not the reducer.
@@ -194,8 +211,46 @@ export interface SdkEvent {
   active?: boolean;
 }
 
-/** One live background task (mirror of `BackgroundTaskInfo` in the back's protocol). */
-export interface BackgroundTask { id: string; type: string; description: string }
+/** One live background task (mirror of `BackgroundTaskInfo` in the back's protocol). `toolUseId` =
+ *  a chamada que a disparou: é por ela que a bandeja abre o subagente (ou a ação). */
+export interface BackgroundTask { id: string; type: string; description: string; toolUseId?: string }
+
+/**
+ * O RESUMO do que uma ferramenta devolveu — espelho de `ToolResultSummary` do back
+ * (back/src/services/sdk/toolResult.ts). Números, não frases: a tela traduz (`toolResultLine`).
+ */
+export interface ToolResultSummary {
+  isError?: boolean;
+  error?: string;
+  lines?: number;
+  startLine?: number;
+  totalLines?: number;
+  files?: number;
+  matches?: number;
+  added?: number;
+  removed?: number;
+  created?: boolean;
+  empty?: boolean;
+  interrupted?: boolean;
+  background?: boolean;
+  agent?: { toolUses?: number; durationMs?: number; tokens?: number };
+}
+
+/** O estado de UM subagente/tarefa (espelho de `AgentTaskEvent` do back), pela chamada que o disparou. */
+export interface AgentTask {
+  toolUseId: string;
+  taskId: string;
+  status: "running" | "completed" | "failed" | "stopped";
+  description?: string;
+  subagentType?: string;
+  toolUses?: number;
+  tokens?: number;
+  durationMs?: number;
+  lastTool?: string;
+  /** Rodando: o que ele faz agora. Terminado: o resumo final. */
+  summary?: string;
+  startedAt?: number;
+}
 
 /** One question of a `user_question` (mirror of `UserQuestionItem` in the back's protocol). */
 export interface SdkQuestion {
@@ -315,6 +370,10 @@ export type SdkRow =
       inputBytes?: number;
       filePath?: string;
       elapsedSeconds?: number;
+      /** O que a ferramenta DEVOLVEU (resumo): é o que diz se deu certo — ausente enquanto roda. */
+      result?: ToolResultSummary;
+      /** Nasceu ao vivo (não do replay): sem resultado, ela ESTÁ rodando — do replay, não se sabe. */
+      live?: boolean;
     }
   /** The "Permitir / Negar" card — a sensitive call waiting on the human (or how it ended). */
   | { kind: "permission"; id: string; tool: string; summary: string; reason?: string; outcome: PermissionOutcome }
@@ -425,6 +484,11 @@ export interface SdkChatState {
    */
   backgroundTasks: BackgroundTask[];
   /**
+   * O ESTADO DE CADA SUBAGENTE pela chamada que o disparou (`agent_task`): status, contadores e a
+   * frase do que ele está fazendo agora. É o que a frota e a bandeja desenham.
+   */
+  agentTasks: Record<string, AgentTask>;
+  /**
    * O AVISO DE LIMITE DO PLANO por janela (`five_hour`, `seven_day`, …), o último que o CLI emitiu —
    * o "You've used 91% of your session limit" do rodapé do terminal. Estado, não conversa: vira a
    * faixa colorida ao lado do "está digitando" (ver lib/planUsage.ts).
@@ -438,6 +502,7 @@ export const INITIAL_SDK_STATE: SdkChatState = {
   rows: [],
   workflowMeta: {},
   backgroundTasks: [],
+  agentTasks: {},
   rateLimits: {},
   ready: false,
   turnActive: false,
@@ -1069,6 +1134,16 @@ function replaceRowAt(rows: readonly SdkRow[], at: number, row: SdkRow): SdkRow[
  * never comes once the turn is over (interrupted mid-input, the CLI died): kept, they would spin
  * forever — and the conversation never had that call, so a replay would not draw it either. PURE.
  */
+/**
+ * O turno do principal ACABOU: uma ação dele que nasceu ao vivo e não teve resultado (interrompida,
+ * o CLI morreu) não está mais rodando — sem isso o ícone girava para sempre. As de subagente seguem:
+ * um subagente em segundo plano trabalha depois do `result` do turno. PURE.
+ */
+function settleLiveTools(rows: SdkRow[]): SdkRow[] {
+  if (!rows.some((r) => r.kind === "tool" && r.live === true && !r.result && !r.parent)) return rows;
+  return rows.map((r) => (r.kind === "tool" && r.live === true && !r.result && !r.parent ? { ...r, live: false } : r));
+}
+
 function dropProvisionalTools(rows: SdkRow[]): SdkRow[] {
   return rows.some((row) => row.kind === "tool" && row.pending === true)
     ? rows.filter((row) => !(row.kind === "tool" && row.pending === true))
@@ -1119,9 +1194,39 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
           id: t.id,
           type: typeof t.type === "string" ? t.type : "",
           description: typeof t.description === "string" ? t.description : "",
+          ...(typeof t.toolUseId === "string" && t.toolUseId ? { toolUseId: t.toolUseId } : {}),
         }));
       if (tasks.length === 0 && state.backgroundTasks.length === 0) return state;
       return { ...state, backgroundTasks: tasks };
+    }
+    case "tool_result": {
+      // O resultado de uma ação: assenta a linha dela (principal ou subagente), no lugar. Linha que
+      // não está na tela (fora da janela do replay) não tem onde assentar — nada a fazer.
+      if (!event.id || !event.toolResult || typeof event.toolResult !== "object") return state;
+      const at = state.rows.findIndex((r) => r.kind === "tool" && r.id === event.id);
+      const row = state.rows[at];
+      if (!row || row.kind !== "tool") return state;
+      return { ...state, rows: replaceRowAt(state.rows, at, { ...row, result: event.toolResult }) };
+    }
+    case "agent_task": {
+      // Estado, não conversa: substitui o do mesmo subagente.
+      if (!event.toolUseId || !event.taskId) return state;
+      const status = event.status === "completed" || event.status === "failed" || event.status === "stopped" ? event.status : "running";
+      const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+      const task: AgentTask = {
+        toolUseId: event.toolUseId,
+        taskId: event.taskId,
+        status,
+        ...(typeof event.description === "string" ? { description: event.description } : {}),
+        ...(typeof event.subagentType === "string" ? { subagentType: event.subagentType } : {}),
+        ...(num(event.toolUses) !== undefined ? { toolUses: num(event.toolUses) } : {}),
+        ...(num(event.tokens) !== undefined ? { tokens: num(event.tokens) } : {}),
+        ...(num(event.durationMs) !== undefined ? { durationMs: num(event.durationMs) } : {}),
+        ...(typeof event.lastTool === "string" ? { lastTool: event.lastTool } : {}),
+        ...(typeof event.summary === "string" ? { summary: event.summary } : {}),
+        ...(num(event.startedAt) !== undefined ? { startedAt: num(event.startedAt) } : {}),
+      };
+      return { ...state, agentTasks: { ...state.agentTasks, [task.toolUseId]: task } };
     }
     case "rate_limit": {
       // Uma janela por vez, SUBSTITUINDO a leitura anterior dela. Normalizado na fronteira: um
@@ -1197,7 +1302,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         // Idem o aviso de limite: o back reenvia o vigente atrás do `ready`; um driver novo (conta
         // trocada, inclusive) não herda o aviso da conta anterior.
         rateLimits: {},
-        rows: event.turnActive === true ? settleStreaming(state.rows) : dropProvisionalTools(settleStreaming(state.rows)),
+        rows: event.turnActive === true ? settleStreaming(state.rows) : settleLiveTools(dropProvisionalTools(settleStreaming(state.rows))),
       };
       if (event.resume) {
         next.sessionId = event.resume;
@@ -1323,6 +1428,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         const parent = event.parentToolUseId;
         return appendSubagentRow(state, (id) => ({
           kind: "tool", id, name: event.name ?? "?", summary: toolSummary(event.input), input: event.input, parent,
+          ...(state.ready && !viaTerminal ? { live: true } : {}),
         }), event.id);
       }
       const marked = markSource(state, viaTerminal);
@@ -1335,7 +1441,10 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       const workflowMeta = meta
         ? { ...marked.workflowMeta, [meta.name]: { description: meta.description, phases: meta.phases } }
         : marked.workflowMeta;
-      const row: SdkRow = { kind: "tool", id: event.id ?? id, name: event.name ?? "?", summary: toolSummary(event.input), input: event.input };
+      const row: SdkRow = {
+        kind: "tool", id: event.id ?? id, name: event.name ?? "?", summary: toolSummary(event.input), input: event.input,
+        ...(marked.ready && !viaTerminal ? { live: true } : {}),
+      };
       // O input completo da chamada que já está na tela como PROVISÓRIA: a mesma linha, no mesmo
       // lugar — um card só, que agora sabe o que faz (o diff do Edit/Write aparece aqui).
       const provisional = provisionalToolAt(rows, event.id);
@@ -1492,7 +1601,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         turnActive: false,
         awaiting: false,
         interruptRequested: false,
-        rows: dropProvisionalTools(settleStreaming(state.rows)),
+        rows: settleLiveTools(dropProvisionalTools(settleStreaming(state.rows))),
       };
       if (event.sessionId) next.sessionId = event.sessionId;
       if (!event.isError) return next;
@@ -1746,7 +1855,16 @@ export function answerQuestion(
 /* --------------------------------------------------------------- folding */
 
 /** A run of consecutive tool rows folds into one block, like the transcript chat does. */
-export type SdkRenderRow = { kind: "row"; id: string; row: SdkRow } | { kind: "tools"; id: string; rows: SdkRow[] };
+export type SdkRenderRow =
+  | { kind: "row"; id: string; row: SdkRow }
+  | { kind: "tools"; id: string; rows: SdkRow[] }
+  /** SUBAGENTES disparados em sequência: uma frota, cada um na sua linha (nunca dobrados em "N ações"). */
+  | { kind: "agents"; id: string; rows: SdkRow[] };
+
+/** As tools que disparam um subagente: `Agent` (nome atual no Claude Code) e `Task` (o antigo). */
+function isAgentCall(row: SdkRow): boolean {
+  return row.kind === "tool" && !row.pending && (row.name === "Agent" || row.name === "Task");
+}
 
 export const SDK_TOOL_FOLD_MIN = 3;
 
@@ -1759,6 +1877,11 @@ export const SDK_TOOL_FOLD_MIN = 3;
 export function groupSdkRows(rows: readonly SdkRow[], min: number = SDK_TOOL_FOLD_MIN): SdkRenderRow[] {
   const out: SdkRenderRow[] = [];
   let run: SdkRow[] = [];
+  let fleet: SdkRow[] = [];
+  const flushFleet = (): void => {
+    if (fleet.length > 0) out.push({ kind: "agents", id: fleet[0]!.id, rows: fleet });
+    fleet = [];
+  };
   const flush = (): void => {
     if (run.length === 0) return;
     if (run.length >= Math.max(2, min)) out.push({ kind: "tools", id: run[0]!.id, rows: run });
@@ -1766,6 +1889,12 @@ export function groupSdkRows(rows: readonly SdkRow[], min: number = SDK_TOOL_FOL
     run = [];
   };
   for (const row of rows) {
+    if (isAgentCall(row)) {
+      flush();
+      fleet.push(row);
+      continue;
+    }
+    flushFleet();
     if (row.kind === "tool" && !row.pending && !hasToolDiff(row.name, row.input)) {
       run.push(row);
       continue;
@@ -1774,5 +1903,6 @@ export function groupSdkRows(rows: readonly SdkRow[], min: number = SDK_TOOL_FOL
     out.push({ kind: "row", id: row.id, row });
   }
   flush();
+  flushFleet();
   return out;
 }

@@ -442,6 +442,9 @@ function baseOptions() {
     // bloqueio `[reasoning_extraction]` do Opus (card #3684). O raciocínio é traduzido no NAVEGADOR,
     // só na exibição — ver front/src/features/board/lib/reasoningTranslation.ts.
     systemPrompt: { type: "preset", preset: "claude_code" },
+    // A frase "o que ele está fazendo agora" de cada subagente (`task_progress.summary`, ~30s),
+    // a mesma linha viva do terminal. Custo pequeno: reaproveita o cache do próprio subagente.
+    agentProgressSummaries: true,
     hooks: { PreToolUse: [{ hooks: [preToolUse] }] },
     // AskUserQuestion always lands here (every permission mode) — the chat's question card.
     canUseTool,
@@ -543,6 +546,95 @@ let announcedSessionId = null; // last session id emitted as a `session` event (
 // tela está mostrando agora. Quando ESSE processo morre, as tarefas morrem com ele — e o CLI, morto,
 // não manda o aviso de conjunto vazio: quem manda é o driver (ver o `finally` de `runStream`).
 let backgroundTasksOwner = null;
+
+/* ------------------------------------------------- o que cada ferramenta DEVOLVEU */
+// O chat só via a CHAMADA (nome + input): o resultado vinha numa mensagem `user` que o driver
+// descartava — nada de "deu certo", "7 linhas", "erro: …". Aqui o resultado sai CAPADO: o bastante
+// para o back resumir a linha da tela; o detalhe inteiro é lido do transcript sob demanda.
+const RESULT_TEXT_MAX = 4000;
+const RESULT_FIELD_MAX = 2000;
+
+/** O texto de um `tool_result` (string ou blocos). */
+function resultText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((b) => (b && b.type === "text" && typeof b.text === "string" ? b.text : "")).join("\n");
+}
+
+/** O `tool_use_result` estruturado, podado: strings capadas, listas curtas, profundidade limitada. */
+function prunedResult(value, depth = 0) {
+  if (value === null || typeof value === "number" || typeof value === "boolean") return value;
+  if (typeof value === "string") return value.length > RESULT_FIELD_MAX ? value.slice(0, RESULT_FIELD_MAX) : value;
+  if (depth >= 4) return null;
+  if (Array.isArray(value)) return value.slice(0, 40).map((v) => prunedResult(v, depth + 1));
+  if (typeof value === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) if (v !== undefined) out[k] = prunedResult(v, depth + 1);
+    return out;
+  }
+  return null;
+}
+
+/** Quantas linhas um texto tem (sem as quebras finais). */
+function lineTotal(t) {
+  const s = String(t ?? "").replace(/\s+$/, "");
+  return s === "" ? 0 : s.split("\n").length;
+}
+
+/** Linhas de stdout+stderr de um resultado de Bash, contadas antes do corte; null se não é Bash. */
+function outputLines(r) {
+  if (!r || typeof r !== "object" || (typeof r.stdout !== "string" && typeof r.stderr !== "string")) return null;
+  return lineTotal(r.stdout) + lineTotal(r.stderr);
+}
+
+/** Os frames `tool_result` de uma mensagem `user` do CLI (principal ou subagente). PURE. */
+function toolResultFrames(msg) {
+  const content = msg && msg.message && msg.message.content;
+  if (!Array.isArray(content)) return [];
+  const parent = typeof msg.parent_tool_use_id === "string" && msg.parent_tool_use_id !== "" ? msg.parent_tool_use_id : null;
+  const blocks = content.filter((b) => b && b.type === "tool_result" && typeof b.tool_use_id === "string");
+  return blocks.map((b) => {
+    const text = resultText(b.content);
+    const frame = { type: "tool_result", id: b.tool_use_id, isError: b.is_error === true, text: text.slice(0, RESULT_TEXT_MAX), textLength: text.length, outputLines: lineTotal(text) };
+    // O estruturado é da MENSAGEM: só é deste bloco quando ele é o único.
+    if (blocks.length === 1 && msg.tool_use_result !== undefined && msg.tool_use_result !== null) {
+      frame.structured = prunedResult(msg.tool_use_result);
+      const lines = outputLines(msg.tool_use_result);
+      if (lines !== null) frame.outputLines = lines;
+    }
+    if (parent) frame.parentToolUseId = parent;
+    return frame;
+  });
+}
+
+/* ------------------------------------------------- subagentes: início, progresso, fim */
+// task_id → tool_use_id da chamada que o disparou: liga a bandeja de segundo plano ao card dele.
+const taskTools = new Map();
+
+/** O frame de um `task_started`/`task_progress`/`task_notification` do CLI, ou null. PURE (fora o mapa). */
+function taskFrame(msg) {
+  if (!msg || typeof msg.task_id !== "string" || msg.ambient === true || msg.skip_transcript === true) return null;
+  const toolUseId = typeof msg.tool_use_id === "string" && msg.tool_use_id !== "" ? msg.tool_use_id : taskTools.get(msg.task_id);
+  if (toolUseId) taskTools.set(msg.task_id, toolUseId);
+  const base = { taskId: msg.task_id, ...(toolUseId ? { toolUseId } : {}) };
+  const usage = msg.usage && typeof msg.usage === "object" ? msg.usage : null;
+  const counts = usage ? { toolUses: usage.tool_uses, tokens: usage.total_tokens, durationMs: usage.duration_ms } : {};
+  if (msg.subtype === "task_started") {
+    return { type: "task_started", ...base, description: String(msg.description ?? ""),
+      ...(msg.subagent_type ? { subagentType: String(msg.subagent_type) } : {}),
+      ...(msg.task_type ? { taskType: String(msg.task_type) } : {}) };
+  }
+  if (msg.subtype === "task_progress") {
+    return { type: "task_progress", ...base, ...counts,
+      ...(msg.last_tool_name ? { lastTool: String(msg.last_tool_name) } : {}),
+      ...(typeof msg.summary === "string" && msg.summary.trim() ? { summary: msg.summary.slice(0, 300) } : {}) };
+  }
+  if (msg.subtype === "task_notification") {
+    return { type: "task_notification", ...base, status: String(msg.status ?? "completed"), ...counts,
+      ...(typeof msg.summary === "string" ? { summary: msg.summary.slice(0, RESULT_TEXT_MAX) } : {}) };
+  }
+  return null;
+}
 
 /* ------------------------------------------------- rewind (editar = voltar no tempo) */
 // Editing a message REWINDS the conversation: the session resumes at the point right before that
@@ -823,9 +915,13 @@ async function runStream() {
               id: t.task_id,
               type: typeof t.task_type === "string" ? t.task_type : "",
               description: typeof t.description === "string" ? t.description : "",
+              ...(taskTools.has(t.task_id) ? { toolUseId: taskTools.get(t.task_id) } : {}),
             }));
           backgroundTasksOwner = tasks.length > 0 ? myQuery : null;
           emit({ type: "background_tasks", tasks });
+        } else if (msg.subtype === "task_started" || msg.subtype === "task_progress" || msg.subtype === "task_notification") {
+          const frame = taskFrame(msg);
+          if (frame) emit(frame);
         } else if (msg.subtype === "local_command_output" && typeof msg.content === "string") {
           // A command the CLI answers itself (/cost, /usage): no turn, no assistant message — the
           // answer exists ONLY here, and swallowing it makes the command look broken.
@@ -895,6 +991,9 @@ async function runStream() {
             emit({ type: "tool_use", id: block.id, name: block.name, input: block.input, ...origin });
           }
         }
+      } else if (msg.type === "user") {
+        // O RESULTADO de cada ferramenta (do principal e dos subagentes) — ver `toolResultFrames`.
+        for (const frame of toolResultFrames(msg)) emit(frame);
       } else if (msg.type === "result") {
         // In streaming input mode the CLI emits ONE result per turn and keeps running — the
         // stream stays open for the next message. Absorbed sends never produce their own result.

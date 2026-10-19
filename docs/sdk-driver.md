@@ -50,6 +50,9 @@ The websocket sends **one JSON text frame per event**:
 { "type": "local_output", "text": "…" }                    // resposta de um comando LOCAL (/cost, /usage)
 { "type": "conversation_reset", "trigger"?: "clear" }      // o /clear zerou o contexto: sessão NOVA no CLI; o back apaga o log do card e grava a nota "conversation-cleared"; o front limpa a tela
 { "type": "background_tasks", "tasks": [ { "id": "…", "type": "local_bash", "description": "…" } ] } // o conjunto VIVO de tarefas em segundo plano (substitui o anterior; [] = nada rodando). Estado, não conversa: nunca gravado, reenviado a quem conecta; enquanto não vazio o driver não é desligado por ociosidade
+{ "type": "tool_result", "id": "toolu_…", "parentToolUseId"?: "…", "toolResult": { "lines"?: n, "isError"?: true, "error"?: "…", "added"?: n, "removed"?: n, … } } // o RESUMO do que a ferramenta devolveu
+{ "type": "agent_task", "toolUseId": "toolu_…", "taskId": "…", "status": "running"|"completed"|"failed"|"stopped", "toolUses"?: n, "durationMs"?: n, "summary"?: "…" } // estado de um subagente
+{ "type": "detail", "req": "tool"|"agent"|"changes"|"file", "id"?: "…", "path"?: "…", "nonce"?: "…", "data"?: {…}, "error"?: "…" } // resposta a um pedido de detalhe, só para a aba que pediu
 { "type": "thinking", "text": "…" }                        // o raciocínio do modelo (bloco fechado)
 { "type": "thinking_delta", "text": "…" }                  // …e o mesmo, token a token, ao vivo
 { "type": "user_question", "id": "…", "questions": [ { "question": "…", "header"?: "…", "options": [ { "label": "…", "description"?: "…" } ], "multiSelect"?: bool } ] }
@@ -989,3 +992,29 @@ O que a mensagem alheia ao vivo exigiu em volta:
 - **Fila de envio.** `deliveredUserTexts(rows, viewer)` ignora mensagens de outras pessoas: o mesmo
   texto vindo de outro não prova que o meu envio chegou, nem vira âncora (`sendMark`) do próximo.
 - **Turno do sistema.** A retomada pós-deploy (`injectSystemTurn`) também é repassada a quem olha.
+
+## Ver o que o Claude está fazendo — resultado, subagentes e detalhe (2026-10-19)
+
+O pedido: "no terminal eu clico e vejo o que ele está fazendo, onde está mexendo, o que mudou, o que
+pensou; no chat não". A causa estava no driver: ele descartava as mensagens `user` com `tool_result`,
+então a tela só tinha a CHAMADA de cada ferramenta — nada de "deu certo", nada para abrir.
+
+- **Resultado de cada ação.** O driver repassa o resultado capado (`toolResultFrames`: texto até 4 KB,
+  `tool_use_result` podado, e as linhas contadas ANTES do corte). O back resume (`toolResult.ts`,
+  `summarizeToolResult`) e só o resumo segue: `tool_result { id, toolResult }`. A linha da conversa
+  ganha o ícone (rodando / ok / erro) e a frase do terminal ("7 linhas", "+3 −1", "erro: …"). Só o do
+  agente PRINCIPAL entra no histórico — o dos subagentes são centenas por frota e empurrariam a conversa
+  para fora da janela do replay.
+- **Subagentes.** `task_started`/`task_progress`/`task_notification` do CLI viram UM estado por chamada
+  (`agent_task`, `mergeTaskEvent`), reenviado a quem conecta; só o fim é gravado. O driver liga
+  `agentProgressSummaries` — a frase "o que ele faz agora" de cada subagente, a cada ~30 s — e as
+  entradas de `background_tasks` passam a dizer a chamada (`toolUseId`). Na tela, chamadas de subagente
+  seguidas viram uma FROTA (uma linha por subagente), não mais um "N ações" dobrado; a bandeja de
+  segundo plano é clicável.
+- **Detalhe sob demanda.** `{ type: "detail", req }` pelo websocket, respondido só à aba que pediu (um
+  `docker exec` por vez; da fila fica o mais recente de cada pedido). Nada novo é guardado: a sondagem
+  (`detail.ts`) lê o transcript que o Claude Code já grava — a ação pelo id (input, saída, estruturado,
+  o raciocínio de logo antes, de quem é), a linha do tempo de um subagente (achado pelo `toolUseId` do
+  `agent-<id>.meta.json` ou pelo `agentId` do resultado da chamada) — e o git do worktree (`changes.ts`:
+  a lista do branch e o diff de um arquivo contra o merge-base). Por isso vale para conversas antigas,
+  para o que foi feito pelo Terminal e depois de qualquer F5.

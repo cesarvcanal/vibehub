@@ -10,11 +10,14 @@ import { writeCardCatalog } from "./catalog.js";
 import { normalizeRateLimit, type RateLimitInfo } from "./rateLimit.js";
 import { forgetCardWorkflows, lastWorkflowRuns, readAgentFeed, watchCardWorkflows } from "./workflow.js";
 import { InvalidWorkflowIdError } from "./workflowProbe.js";
+import { InvalidDetailIdError, readAgentTimeline, readToolDetail } from "./detail.js";
+import { readCardChanges, readCardFileDiff } from "../maestro/changes.js";
+import { mergeTaskEvent, toolResultEvent, type AgentTaskEvent, type RawTaskEvent, type RawToolResultEvent } from "./toolResult.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
-  NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseWorkflowFeedFrame, encodeControl,
+  NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
   type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type UserQuestionItem,
-  type WorkflowFeedEvent, type WorkflowFeedRequest,
+  type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest,
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { logger } from "../../utils/logger.js";
@@ -68,6 +71,9 @@ const KEEPALIVE_MS = 25_000;
  */
 export const TYPING_RELAY_MIN_MS = 1_000;
 
+/** Quantos subagentes/tarefas a sessão lembra (as terminadas mais antigas saem primeiro). */
+export const TASKS_MAX = 200;
+
 export interface DriverSession {
   cardId: string;
   /** Log label (the card's worktree slug). */
@@ -93,6 +99,12 @@ export interface DriverSession {
    * conecta depois, nunca gravado — e, enquanto não estiver vazio, o driver NÃO está ocioso.
    */
   backgroundTasks: BackgroundTaskInfo[];
+  /**
+   * O estado de cada SUBAGENTE (ou tarefa) disparado por uma chamada, pelo id dessa chamada — o que
+   * a frota e a bandeja mostram (contadores, a frase do que ele faz agora, o fim). Estado da sessão:
+   * reenviado a quem conecta; só o FIM entra no histórico.
+   */
+  tasks: Map<string, AgentTaskEvent>;
   /**
    * O último aviso de limite do plano POR JANELA (`five_hour`, `seven_day`, …), como o CLI emitiu.
    * Estado da sessão: reenviado a quem conecta depois, nunca gravado.
@@ -421,6 +433,25 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   // lado como "ele terminou" (produção, 2026-10-02). A sondagem do diário começa aqui, no instante
   // da chamada, e se encerra sozinha (ver services/sdk/workflow.ts): é ela quem alimenta o painel.
   if (event.type === "tool_use" && event.name === "Workflow") startWorkflowWatch(session);
+  if (event.type === "tool_result") {
+    // O resultado CRU (texto + estruturado capados) vira o RESUMO da linha; o cru não sai daqui.
+    event = toolResultEvent(event as RawToolResultEvent) as unknown as DriverEvent;
+  }
+  if (event.type === "task_started" || event.type === "task_progress" || event.type === "task_notification") {
+    const raw = event as RawTaskEvent;
+    const key = raw.toolUseId || [...session.tasks.values()].find((t) => t.taskId === raw.taskId)?.toolUseId;
+    const merged = key ? mergeTaskEvent(session.tasks.get(key), { ...raw, toolUseId: key }, Date.now()) : null;
+    if (!merged) return;
+    session.tasks.set(merged.toolUseId, merged);
+    // Teto: uma sessão longa dispara centenas de tarefas; as terminadas mais antigas saem primeiro.
+    if (session.tasks.size > TASKS_MAX) {
+      for (const [id, task] of session.tasks) {
+        if (session.tasks.size <= TASKS_MAX) break;
+        if (task.status !== "running") session.tasks.delete(id);
+      }
+    }
+    event = merged as unknown as DriverEvent;
+  }
   if (event.type === "background_tasks") {
     // Normalizado AQUI, no lado que fala com o navegador (como o catálogo): o que sai é só o que a
     // tela desenha, e um item torto do driver não derruba a aba de ninguém.
@@ -428,11 +459,18 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     const tasks: BackgroundTaskInfo[] = Array.isArray(raw)
       ? raw
         .filter((t): t is Record<string, unknown> => typeof t === "object" && t !== null && typeof (t as { id?: unknown }).id === "string")
-        .map((t) => ({
-          id: t.id as string,
-          type: typeof t.type === "string" ? t.type : "",
-          description: typeof t.description === "string" ? t.description : "",
-        }))
+        .map((t) => {
+          const id = t.id as string;
+          const toolUseId = typeof t.toolUseId === "string" && t.toolUseId
+            ? t.toolUseId
+            : [...session.tasks.values()].find((task) => task.taskId === id)?.toolUseId;
+          return {
+            id,
+            type: typeof t.type === "string" ? t.type : "",
+            description: typeof t.description === "string" ? t.description : "",
+            ...(toolUseId ? { toolUseId } : {}),
+          };
+        })
       : [];
     event = { type: "background_tasks", tasks };
     if (tasks.length === 0) session.backgroundSince = undefined;
@@ -606,6 +644,60 @@ function createFeedResponder(session: DriverSession, socket: WebSocket): (reques
   };
 }
 
+/** A resposta a um pedido de detalhe (ver `parseDetailFrame`), já com o motivo quando falhou. */
+export async function detailReply(session: Pick<DriverSession, "cardId" | "label" | "transcriptDir">, request: DetailRequest): Promise<object> {
+  const base = { type: "detail", req: request.req, ...(request.id ? { id: request.id } : {}), ...(request.path ? { path: request.path } : {}), ...(request.nonce ? { nonce: request.nonce } : {}) };
+  try {
+    if (request.req === "changes") return { ...base, data: await readCardChanges(session.cardId) };
+    if (request.req === "file") return { ...base, data: await readCardFileDiff(session.cardId, request.path) };
+    const dir = session.transcriptDir;
+    if (!dir) return { ...base, error: "no-session" };
+    const data = request.req === "tool" ? await readToolDetail(dir, request.id) : await readAgentTimeline(dir, request.id);
+    return { ...base, data };
+  } catch (err) {
+    if (err instanceof InvalidDetailIdError) return { ...base, error: "invalid-id" };
+    logger.debug({ card: session.label, req: request.req, detail: (err as Error).message }, "detail probe failed");
+    return { ...base, error: "probe-failed" };
+  }
+}
+
+/**
+ * Quem responde aos pedidos de detalhe de UM socket: um `docker exec` por vez por aba, e da fila só
+ * fica o MAIS RECENTE de cada pedido (a mesma ação pedida de novo, o mesmo subagente sendo
+ * atualizado) — cliques rápidos ou a atualização de uma linha do tempo não empilham sondagens.
+ */
+export function createDetailResponder(
+  session: Pick<DriverSession, "cardId" | "label" | "transcriptDir">,
+  socket: Pick<WebSocket, "send" | "readyState">,
+  answer: (request: DetailRequest) => Promise<object> = (request) => detailReply(session, request),
+): (request: DetailRequest) => void {
+  let busy = false;
+  const queue = new Map<string, DetailRequest>();
+  const run = async (request: DetailRequest): Promise<void> => {
+    busy = true;
+    try {
+      const frame = await answer(request);
+      try { socket.send(JSON.stringify(frame)); } catch { /* going away */ }
+    } finally {
+      busy = false;
+      const next = queue.values().next();
+      if (!next.done) {
+        queue.delete(`${next.value.req}:${next.value.id}:${next.value.path}`);
+        if (socket.readyState === WebSocket.OPEN) void run(next.value);
+      }
+    }
+  };
+  return (request) => {
+    if (busy) {
+      const key = `${request.req}:${request.id}:${request.path}`;
+      queue.delete(key);
+      queue.set(key, request);
+      // Teto: quem pede demais perde os mais velhos.
+      while (queue.size > 8) queue.delete(queue.keys().next().value as string);
+    } else void run(request);
+  };
+}
+
 /* ------------------------------------------------------------------- API */
 
 export interface EnsureDriverOpts {
@@ -636,6 +728,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     activeTurns: 0,
     autonomousTurn: false,
     backgroundTasks: [],
+    tasks: new Map(),
     rateLimits: new Map(),
     rewinds: [],
     idleTimer: null,
@@ -1237,6 +1330,11 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
     try { socket.send(JSON.stringify({ type: "background_tasks", tasks: session.backgroundTasks })); } catch { /* going away */ }
   }
 
+  // O estado de cada subagente também (contadores, "o que ele faz agora"): o CLI só fala na mudança.
+  for (const task of session.tasks.values()) {
+    try { socket.send(JSON.stringify(task)); } catch { /* going away */ }
+  }
+
   // O aviso de limite do plano também: o CLI só o emite quando a leitura muda, e quem abre o card
   // com a sessão a 92% precisa ver a faixa no primeiro quadro, não depois da próxima resposta.
   for (const info of session.rateLimits.values()) {
@@ -1285,6 +1383,7 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
   };
 
   const answerFeed = createFeedResponder(session, socket);
+  const answerDetail = createDetailResponder(session, socket);
 
   socket.on("message", (raw: Buffer) => {
     const text = raw.toString();
@@ -1294,6 +1393,12 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
       return;
     }
     // O feed de um subagente do workflow: sob demanda, só para esta aba — nem driver, nem histórico.
+    // O detalhe de uma ação, de um subagente ou das mudanças do card: idem, só para esta aba.
+    const detail = parseDetailFrame(text);
+    if (detail !== null) {
+      answerDetail(detail);
+      return;
+    }
     const feed = parseWorkflowFeedFrame(text);
     if (feed !== null) {
       answerFeed(feed);

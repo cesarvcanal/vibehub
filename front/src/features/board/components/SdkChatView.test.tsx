@@ -7,14 +7,14 @@ import { OUTBOX_ACK_TIMEOUT_MS } from "@/features/board/lib/sdkOutbox";
 import { RECONNECT_MAX_MS } from "@/features/board/lib/reconnect";
 import { PEER_TYPING_TTL_MS } from "@/features/board/lib/peerTyping";
 import { renderApp } from "@/test/render";
-import type { SdkEvent } from "@/features/board/lib/sdkChat";
+import type { SdkEvent, SdkRow } from "@/features/board/lib/sdkChat";
 import { resetLanguage, setLanguage } from "@/i18n";
 import { resetReasoningTranslatorForTesting } from "@/features/board/lib/reasoningTranslation";
 import { get } from "@/lib/api";
 import { LinkifiedText, Markdown } from "@/features/board/components/ChatView";
 import { resetDraftsForTesting } from "@/features/board/components/TerminalComposer";
 import { ME_KEY } from "@/providers/auth";
-import { SdkAgentCard } from "@/features/board/components/SdkAgentCard";
+import { fleetPropsEqual } from "@/features/board/components/SdkDetail";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -47,7 +47,7 @@ vi.mock("@/features/board/components/ChatView", async (importOriginal) => {
 // redesenhá-lo.
 vi.mock("@/features/board/components/SdkAgentCard", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/features/board/components/SdkAgentCard")>();
-  return { ...actual, SdkAgentCard: vi.fn(actual.SdkAgentCard) };
+  return actual;
 });
 
 vi.mock("sonner", () => ({
@@ -2141,7 +2141,7 @@ describe("SdkChatView — subagentes", () => {
     type: "tool_use", id: "t1", name: "Agent", input: { description: "explora o chat", subagent_type: "Explore" },
   };
 
-  it("o card do Agent tem o ícone de robô, e as ações do subagente ficam recolhidas sob ele", async () => {
+  it("o subagente vira uma linha da frota; o clique abre a linha do tempo dele, pedida ao back", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -2150,28 +2150,35 @@ describe("SdkChatView — subagentes", () => {
     ws.deliver({ type: "tool_use", id: "c1", name: "Read", input: { file_path: "/w/sdkChat.ts" }, parentToolUseId: "t1" });
     ws.deliver({ type: "assistant_text", text: "achei o reducer", parentToolUseId: "t1" });
     ws.deliver({ type: "tool_use", id: "c2", name: "Grep", input: { pattern: "toolHeadline" }, parentToolUseId: "t1" });
+    ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "running", toolUses: 2, summary: "Lendo o reducer" });
 
-    const card = screen.getByTestId("sdk-agent");
-    expect(card.querySelector(".lucide-bot")).not.toBeNull();
-    expect(card.querySelector(".lucide-wrench")).toBeNull();
-    expect(within(card).getByTestId("sdk-tool-title")).toHaveTextContent("Agent(explora o chat)");
+    const fleet = screen.getByTestId("sdk-fleet");
+    const agent = within(fleet).getByTestId("sdk-fleet-agent");
+    expect(agent).toHaveAttribute("data-status", "running");
+    expect(agent).toHaveTextContent("explora o chat");
+    expect(agent).toHaveTextContent("Lendo o reducer");
+    expect(agent).toHaveTextContent("2 actions");
+    // As ações do subagente não aparecem como passos do principal.
+    expect(screen.queryAllByTestId("sdk-tool")).toHaveLength(0);
+    expect(screen.queryByText("achei o reducer")).toBeNull();
 
-    // Recolhido por padrão: o contador e a última ação, nada mais.
-    const summary = within(card).getByTestId("sdk-subagent-summary");
-    expect(summary).toHaveTextContent("2 actions");
-    expect(summary).toHaveTextContent("Explore · Grep(toolHeadline)");
-    expect(screen.queryByTestId("sdk-subagent-rows")).toBeNull();
-    // As ações do subagente não aparecem como passos do principal: a única linha de ferramenta é a
-    // própria chamada do Agent.
-    expect(screen.getAllByTestId("sdk-tool").map((el) => el.getAttribute("data-tool"))).toEqual(["Agent"]);
-
-    fireEvent.click(summary);
-    const rows = within(card).getByTestId("sdk-subagent-rows");
-    expect(rows).toHaveClass("border-l");
-    expect(rows).toHaveTextContent("by the subagent");
-    expect(within(rows).getByText("Read(sdkChat.ts)")).toBeInTheDocument();
-    expect(within(rows).getByText("achei o reducer")).toBeInTheDocument();
-    for (const toolRow of screen.getAllByTestId("sdk-tool")) expect(card.contains(toolRow)).toBe(true);
+    fireEvent.click(agent);
+    const dialog = await screen.findByTestId("sdk-detail");
+    expect(dialog).toHaveAttribute("data-view", "agent");
+    await waitFor(() => expect(ws.sent.map((f) => JSON.parse(f) as { type: string; req?: string; id?: string }).some((f) => f.type === "detail" && f.req === "agent" && f.id === "t1")).toBe(true));
+    const ask = ws.sent.map((f) => JSON.parse(f) as { type: string; req?: string; nonce?: string }).find((f) => f.type === "detail" && f.req === "agent")!;
+    ws.deliver({
+      type: "detail", req: "agent", id: "t1", nonce: ask.nonce,
+      data: { found: true, prompt: "Explore o chat", items: [
+        { kind: "thinking", at: 1, text: "vou ler o reducer" },
+        { kind: "tool", at: 2, id: "c1", name: "Read", input: { file_path: "/w/sdkChat.ts" }, result: { lines: 40 } },
+        { kind: "text", at: 3, text: "achei o reducer" },
+      ] },
+    } as never);
+    expect(await within(dialog).findByTestId("sdk-timeline-thinking")).toHaveTextContent("vou ler o reducer");
+    expect(within(dialog).getByTestId("sdk-timeline-tool")).toHaveTextContent("Read(sdkChat.ts)");
+    expect(within(dialog).getByTestId("sdk-timeline-tool")).toHaveTextContent("40 lines");
+    expect(within(dialog).getByTestId("sdk-agent-now")).toHaveTextContent("Lendo o reducer");
   });
 
   it("o texto do subagente não vira resposta do agente principal", async () => {
@@ -2188,21 +2195,15 @@ describe("SdkChatView — subagentes", () => {
     expect(answers[0]).toHaveTextContent("Resumo do principal.");
   });
 
-  it("um token da resposta do principal não redesenha o card do subagente", async () => {
-    renderSdkChat();
-    const ws = await socket();
-    ws.accept();
-    ws.deliver({ type: "ready" });
-    ws.deliver(agentCall);
-    ws.deliver({ type: "tool_use", id: "c1", name: "Read", input: { file_path: "/w/a.ts" }, parentToolUseId: "t1" });
-    const before = vi.mocked(SdkAgentCard).mock.calls.length;
-    ws.deliver({ type: "assistant_delta", text: "Enquanto " });
-    ws.deliver({ type: "assistant_delta", text: "isso, " });
-    ws.deliver({ type: "assistant_delta", text: "sigo." });
-    expect(vi.mocked(SdkAgentCard).mock.calls.length).toBe(before);
-    // E uma ação NOVA do subagente redesenha, sim.
-    ws.deliver({ type: "tool_use", id: "c2", name: "Grep", input: { pattern: "x" }, parentToolUseId: "t1" });
-    expect(vi.mocked(SdkAgentCard).mock.calls.length).toBeGreaterThan(before);
+  it("um token da resposta do principal não redesenha a frota", () => {
+    const row: SdkRow = { kind: "tool", id: "t1", name: "Agent", summary: "", input: {} };
+    const kids: SdkRow[] = [{ kind: "tool", id: "c1", name: "Read", summary: "", parent: "t1" }];
+    const children = new Map([["t1", kids]]);
+    const tasks = {};
+    const before = { rows: [row], tasks, children };
+    expect(fleetPropsEqual(before, { rows: [row], tasks, children: new Map([["t1", kids]]) })).toBe(true);
+    expect(fleetPropsEqual(before, { rows: [row], tasks, children: new Map([["t1", [...kids]]]) })).toBe(false);
+    expect(fleetPropsEqual(before, { rows: [row], tasks: {}, children })).toBe(false);
   });
 
   it("a barra de atividade diz que é o subagente trabalhando", async () => {
@@ -3563,7 +3564,7 @@ describe("SdkChatView — o diff do que a IA editou", () => {
     expect(screen.queryByTestId("sdk-agent")).toBeNull();
     expect(within(screen.getByTestId("sdk-tool")).getByTestId("sdk-tool-title")).toHaveTextContent("Preparing Agent…");
     ws.deliver({ type: "tool_use", id: "a1", name: "Agent", input: { description: "explora o chat", subagent_type: "Explore" } });
-    expect(screen.getAllByTestId("sdk-agent")).toHaveLength(1);
+    expect(screen.getAllByTestId("sdk-fleet-agent")).toHaveLength(1);
     expect(document.querySelector("[data-pending]")).toBeNull();
   });
 
@@ -4022,5 +4023,71 @@ describe("SdkChatView — sair da página no meio de um turno não interrompe na
 
     const types = ws.rawSent.map((raw) => (JSON.parse(raw) as { type?: string }).type);
     expect(types).not.toContain("interrupt");
+  });
+});
+
+/** VER O QUE O CLAUDE ESTÁ FAZENDO: cada ação diz como terminou, e o clique abre o detalhe. */
+describe("SdkChatView — o detalhe de cada ação", () => {
+  const detailAsks = (ws: FakeSocket) =>
+    ws.sent.map((f) => JSON.parse(f) as { type: string; req?: string; id?: string; nonce?: string }).filter((f) => f.type === "detail");
+
+  it("a linha mostra o resultado; o clique abre o modal com comando, saída e o porquê; as setas andam", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "lista as PRs" });
+    ws.deliver({ type: "tool_use", id: "b1", name: "Bash", input: { command: "gh pr list", description: "Lista as PRs" } });
+    expect(screen.getByTestId("sdk-tool")).toHaveAttribute("data-status", "running");
+    ws.deliver({ type: "tool_result", id: "b1", toolResult: { lines: 7 } });
+    ws.deliver({ type: "tool_use", id: "b2", name: "Bash", input: { command: "false" } });
+    ws.deliver({ type: "tool_result", id: "b2", toolResult: { isError: true, error: "saiu com código 1" } });
+    const [first, second] = screen.getAllByTestId("sdk-tool");
+    expect(first).toHaveAttribute("data-status", "ok");
+    expect(within(first!).getByTestId("sdk-tool-result")).toHaveTextContent("7 lines");
+    expect(second).toHaveAttribute("data-status", "error");
+    expect(within(second!).getByTestId("sdk-tool-result")).toHaveTextContent("error: saiu com código 1");
+
+    fireEvent.click(first!);
+    const dialog = await screen.findByTestId("sdk-detail");
+    expect(dialog).toHaveAttribute("data-view", "action");
+    await waitFor(() => expect(detailAsks(ws).some((f) => f.req === "tool" && f.id === "b1")).toBe(true));
+    const ask = detailAsks(ws).find((f) => f.id === "b1")!;
+    ws.deliver({ type: "detail", req: "tool", id: "b1", nonce: ask.nonce, data: { found: true, by: "main", name: "Bash", input: { command: "gh pr list" }, structured: { stdout: "#510 a\n#511 b\n", stderr: "" }, thinking: "Primeiro a lista.", result: { lines: 2 } } } as never);
+    expect(await within(dialog).findByTestId("sdk-detail-why")).toHaveTextContent("Primeiro a lista.");
+    expect(within(dialog).getByText("#510 a")).toBeInTheDocument();
+    expect(within(dialog).getByTestId("sdk-detail-position")).toHaveTextContent("1 of 2");
+
+    fireEvent.click(within(dialog).getByTestId("sdk-detail-next"));
+    await waitFor(() => expect(within(screen.getByTestId("sdk-detail")).getByTestId("sdk-detail-position")).toHaveTextContent("2 of 2"));
+    await waitFor(() => expect(detailAsks(ws).some((f) => f.req === "tool" && f.id === "b2")).toBe(true));
+  });
+
+  it("a bandeja de segundo plano abre o subagente da tarefa", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "t9", name: "Agent", input: { description: "Review PR 510", run_in_background: true } });
+    ws.deliver({ type: "background_tasks", tasks: [{ id: "k9", type: "local_agent", description: "Review PR 510", toolUseId: "t9" }] });
+    const task = screen.getByTestId("sdk-background-task");
+    expect(task).toHaveAttribute("data-clickable", "true");
+    fireEvent.click(task);
+    expect(await screen.findByTestId("sdk-detail")).toHaveAttribute("data-view", "agent");
+    await waitFor(() => expect(detailAsks(ws).some((f) => f.req === "agent" && f.id === "t9")).toBe(true));
+  });
+
+  it("Mudanças lista os arquivos que o Claude alterou", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "e1", name: "Edit", input: { file_path: "/w/a.ts", old_string: "a", new_string: "b" } });
+    ws.deliver({ type: "tool_result", id: "e1", toolResult: { added: 1, removed: 1 } });
+    expect(screen.getByTestId("sdk-changes")).toHaveTextContent("+1");
+    fireEvent.click(screen.getByTestId("sdk-changes"));
+    const dialog = await screen.findByTestId("sdk-detail");
+    expect(dialog).toHaveAttribute("data-view", "changes");
+    expect(within(dialog).getByTestId("sdk-changes-file")).toHaveTextContent("a.ts");
   });
 });

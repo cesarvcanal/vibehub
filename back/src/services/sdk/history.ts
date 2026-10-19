@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { basename, dirname, join } from "node:path";
 import { dataPath } from "../../config/env.js";
 import { NOTE_TURN_INTERRUPTED, NOTE_TURN_INTERRUPTED_EDIT, type DriverEvent } from "./protocol.js";
+import type { AgentTaskEvent, ToolResultEvent } from "./toolResult.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { logger } from "../../utils/logger.js";
 import { isAtomicWriteTmp, writeFileAtomic } from "../../store/atomicWrite.js";
@@ -56,6 +57,8 @@ export type HistoryEvent = (
   /** The user edited a sent message: the row whose text matches `originalText` is drawn "editada". */
   | { type: "message_edited"; originalText: string; /** The FIRST copy was edited, not the newest. */ first?: boolean }
   | { type: "system_note"; text: string }
+  | ToolResultEvent
+  | AgentTaskEvent
 ) & {
   at?: number;
   from?: MessageOrigin;
@@ -96,6 +99,14 @@ export function replayableHistoryEvent(event: HistoryEvent): boolean {
     // The edit marker: without it a replay would draw the superseded message as if it still stood.
     case "message_edited":
       return true;
+    // O resumo do resultado (a linha "7 linhas" / "erro: …"): só do agente PRINCIPAL. O dos
+    // subagentes é muito (centenas por frota) e empurraria a conversa para fora da janela do
+    // replay — a linha do tempo de um subagente vem do transcript (./detail.ts).
+    case "tool_result":
+      return !(event as { parentToolUseId?: unknown }).parentToolUseId && "toolResult" in event;
+    // O FIM de um subagente (concluído, falhou, parado), para o card dele assentar depois do F5.
+    case "agent_task":
+      return (event as { status?: unknown }).status !== "running";
     case "permission":
       return typeof (event as { id?: unknown }).id === "string";
     default:
