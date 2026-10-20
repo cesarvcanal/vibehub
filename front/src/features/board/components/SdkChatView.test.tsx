@@ -3444,6 +3444,26 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     const tray = await screen.findByTestId("sdk-background-tasks");
     expect(tray).toHaveTextContent(/background task/i);
   });
+
+  it("a faixa tem o desenho do painel de subagentes: cada tarefa é uma linha rodando; sem ligação, não é clicável", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "t9", name: "Agent", input: { description: "Review backend", run_in_background: true } });
+    ws.deliver({ type: "background_tasks", tasks: [
+      { id: "k9", type: "local_agent", description: "Review backend", toolUseId: "t9" },
+      { id: "k1", type: "local_bash", description: "Wait for jest" },
+    ] });
+    const tray = await screen.findByTestId("sdk-background-tasks");
+    expect(tray).toHaveAttribute("data-count", "2");
+    const [linked, loose] = within(tray).getAllByTestId("sdk-background-task");
+    expect(linked).toHaveAttribute("data-status", "running");
+    expect(linked.tagName).toBe("BUTTON");
+    expect(loose).toHaveAttribute("data-status", "running");
+    expect(loose.tagName).toBe("DIV");
+    expect(loose).not.toHaveAttribute("data-clickable");
+  });
 });
 
 describe("SdkChatView — /clear", () => {
