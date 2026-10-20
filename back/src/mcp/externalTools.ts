@@ -10,6 +10,7 @@ import {
 } from "../services/maestro/maestro.js";
 import { readCardChanges } from "../services/maestro/changes.js";
 import { deliver } from "../services/maestro/deliver.js";
+import { inboxFor, takeUndelivered, type CardEvent } from "../services/events/cardEvents.js";
 import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX, type CardMoveOutcome } from "./cardMove.js";
 import { logger } from "../utils/logger.js";
 
@@ -84,8 +85,51 @@ async function openForUser(user: PublicUser, card: registry.Card) {
   };
 }
 
+/** A card event as the assistant gets it: the card by title (what is spoken), the time readable. */
+function forAssistant(e: CardEvent) {
+  return {
+    cardId: e.cardId,
+    card: e.title,
+    kind: e.kind,
+    at: new Date(e.at).toISOString(),
+    ...(e.questions ? { questions: e.questions } : {}),
+    ...(e.tool ? { tool: e.tool } : {}),
+    ...(e.reason ? { reason: e.reason } : {}),
+    ...(e.state ? { state: e.state } : {}),
+    ...(e.summary ? { summary: e.summary } : {}),
+  };
+}
+
+type ToolResult = { content: { type: "text"; text: string }[] };
+
+/**
+ * What happened on the board since this person last heard, as one more block of the answer. An MCP
+ * server cannot start a turn of the app, so this is how the news reaches the conversation: on the
+ * next tool call, whichever it is, once. A failure to read the log never costs the answer itself.
+ */
+async function withNews(user: PublicUser, result: ToolResult): Promise<ToolResult> {
+  let fresh: CardEvent[];
+  try {
+    fresh = await takeUndelivered(user);
+  } catch (err) {
+    logger.warn({ by: user.username, detail: (err as Error).message }, "could not read the card events for the external MCP");
+    return result;
+  }
+  if (fresh.length === 0) return result;
+  const news = {
+    notifications: fresh.map(forAssistant),
+    hint: "new on the board since the user last heard — tell them briefly before anything else",
+  };
+  return { ...result, content: [...result.content, { type: "text", text: JSON.stringify(news, null, 2) }] };
+}
+
 export function registerExternalTools(server: McpServer, user: PublicUser): void {
-  server.registerTool(
+  // Every tool answer carries the news (see withNews) — except the inbox, which IS the news.
+  const registerTool = ((name: string, config: unknown, cb: (...args: unknown[]) => Promise<ToolResult>) =>
+    server.registerTool(name, config as never, (async (...args: unknown[]) =>
+      name === "vibehub_inbox" ? await cb(...args) : await withNews(user, await cb(...args))) as never)) as McpServer["registerTool"];
+
+  registerTool(
     "vibehub_list_projects",
     {
       description:
@@ -108,7 +152,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
   );
 
-  server.registerTool(
+  registerTool(
     "vibehub_list_terminals",
     {
       description:
@@ -138,7 +182,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
   );
 
-  server.registerTool(
+  registerTool(
     "vibehub_create_card",
     {
       description:
@@ -170,7 +214,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
   );
 
-  server.registerTool(
+  registerTool(
     "vibehub_open_card",
     {
       description:
@@ -190,7 +234,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
   );
 
-  server.registerTool(
+  registerTool(
     "vibehub_send_to_terminal",
     {
       description:
@@ -226,7 +270,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
   );
 
-  server.registerTool(
+  registerTool(
     "vibehub_read_terminal",
     {
       description:
@@ -249,7 +293,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
   );
 
-  server.registerTool(
+  registerTool(
     "vibehub_wait_for_card",
     {
       description:
@@ -281,7 +325,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
   );
 
-  server.registerTool(
+  registerTool(
     "vibehub_card_activity",
     {
       description:
@@ -307,7 +351,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
   );
 
-  server.registerTool(
+  registerTool(
     "vibehub_card_changes",
     {
       description:
@@ -330,7 +374,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
   );
 
-  server.registerTool(
+  registerTool(
     "vibehub_move_cards",
     {
       description:
@@ -365,7 +409,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
   );
 
-  server.registerTool(
+  registerTool(
     "vibehub_deliver",
     {
       description:
@@ -387,6 +431,30 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         // Ordering the delivery IS an order: the push, the PR and the merge go out as this person.
         await recordCardActor(user, a.cardId);
         return ok(await deliver(a.cardId, { branch: a.branch, authorized: a.authorized === true, by: user.id }));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+  registerTool(
+    "vibehub_inbox",
+    {
+      description:
+        "What happened on the board that the user has not dealt with yet: cards that FINISHED a turn, " +
+        "asked a QUESTION (with its options), wait for a PERMISSION on the board, or declared they " +
+        "NEED the user. Only open events — an answered question or a card that moved on leaves the " +
+        "list. Check it when the user asks for news or resumes the conversation. Other tool answers " +
+        "also carry new events once, as `notifications`. `since` (a previous `cursor`) returns only newer ones.",
+      inputSchema: {
+        since: z.number().int().optional().describe("a previous answer's `cursor`; only events after it"),
+      },
+      annotations: READ_ONLY,
+    },
+    async (a) => {
+      try {
+        await takeUndelivered(user); // listed here = heard: the next answers do not repeat it
+        const inbox = await inboxFor(user, { since: a.since });
+        return ok({ events: inbox.events.map(forAssistant), cursor: inbox.cursor });
       } catch (e) {
         return fail(e);
       }

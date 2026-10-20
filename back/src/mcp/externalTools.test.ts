@@ -212,3 +212,58 @@ describe("reach — the assistant is the person, never more", () => {
     await close();
   });
 });
+
+describe("the inbox — what happened on the board while the user was not asking", () => {
+  const blocks = async (client: Client, name: string, args: Record<string, unknown> = {}) =>
+    ((await client.callTool({ name, arguments: args })).content as { type: string; text: string }[]).map((b) => JSON.parse(b.text) as Record<string, unknown>);
+
+  it("vibehub_inbox is listed and read-only (no confirmation per check, by voice)", async () => {
+    const env = await load();
+    const { client, close } = await env.connect(env.owner);
+    const tool = (await client.listTools()).tools.find((t) => t.name === "vibehub_inbox");
+    await close();
+    expect(tool?.annotations?.readOnlyHint).toBe(true);
+  });
+
+  it("lists the open events of the cards the user reaches, by title, with the question's options", async () => {
+    const env = await load();
+    const events = await import("../services/events/cardEvents.js");
+    await events.observeDriverEvent(env.card.id, { type: "user_question", id: "q1", questions: Q });
+    const { call, close } = await env.connect(env.owner);
+    const inbox = await call("vibehub_inbox");
+    await close();
+    expect(inbox.events).toEqual([expect.objectContaining({ cardId: env.card.id, card: "login", kind: "question", questions: Q })]);
+    expect(typeof inbox.cursor).toBe("number");
+  });
+
+  it("a member hears nothing about a card not shared with them", async () => {
+    const env = await load();
+    const events = await import("../services/events/cardEvents.js");
+    await events.observeCardStatus(env.card.id, "working", "waiting");
+    const { call, close } = await env.connect(env.member);
+    expect((await call("vibehub_inbox")).events).toEqual([]);
+    await close();
+  });
+
+  it("any other tool answer carries what is NEW, once — the next answer does not repeat it", async () => {
+    const env = await load();
+    const events = await import("../services/events/cardEvents.js");
+    await events.observeCardStatus(env.card.id, "working", "waiting");
+    const { client, close } = await env.connect(env.owner);
+    const first = await blocks(client, "vibehub_list_projects");
+    expect(first).toHaveLength(2);
+    expect(first[1]!.notifications).toEqual([expect.objectContaining({ cardId: env.card.id, card: "login", kind: "turn_finished" })]);
+    expect(await blocks(client, "vibehub_list_projects")).toHaveLength(1);
+    await close();
+  });
+
+  it("reading the inbox counts as heard: the next answer does not repeat it either", async () => {
+    const env = await load();
+    const events = await import("../services/events/cardEvents.js");
+    await events.observeCardStatus(env.card.id, "working", "waiting");
+    const { client, close } = await env.connect(env.owner);
+    expect(await blocks(client, "vibehub_inbox")).toHaveLength(1);
+    expect(await blocks(client, "vibehub_list_projects")).toHaveLength(1);
+    await close();
+  });
+});
