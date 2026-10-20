@@ -442,7 +442,8 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
       description:
         "What happened on the board that the user has not dealt with yet: cards that FINISHED a turn, " +
         "asked a QUESTION (with its options), wait for a PERMISSION on the board, or declared they " +
-        "NEED the user. Only open events — an answered question or a card that moved on leaves the " +
+        "NEED the user. A turn_finished only says the card stopped — read it (vibehub_read_terminal): " +
+        "a terminal card waiting on a menu question stops the same way. Only open events — an answered question or a card that moved on leaves the " +
         "list. Check it when the user asks for news or resumes the conversation. Other tool answers " +
         "also carry new events once, as `notifications`. `since` (a previous `cursor`) returns only newer ones.",
       inputSchema: {
