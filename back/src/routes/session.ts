@@ -4,7 +4,7 @@ import pty from "node-pty";
 import type { FastifyInstance } from "fastify";
 import { WebSocket } from "ws";
 import { requestUser, requireOwner, sessionUserId } from "../auth/session.js";
-import { recordCardActor } from "../services/board/actor.js";
+import { recordCardActor, isCardActor } from "../services/board/actor.js";
 import { requireCardAccess, requireCardWork, requestCardLevel } from "../auth/access.js";
 import * as registry from "../services/board/registry.js";
 import * as workspace from "../services/board/workspace.js";
@@ -230,10 +230,9 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{ Params: { id: string } }>("/api/cards/:id/open", { preHandler: requireCardWork }, async (req, reply) => {
     try {
-      // BEFORE the open: the open itself resolves the identity to write into the worktree, so the
-      // actor has to be on the card by then or the first commit of a card somebody else opened
-      // would still be attributed to them.
-      await recordCardActor(await requestUser(req), req.params.id);
+      // Opening is NOT an order: it never stamps the author (that would take the authorship of the
+      // work in flight from whoever asked for it). The open applies the identity of the card's
+      // current author; the first message of whoever opened it makes them the author.
       return await reply.send({ card: await workspace.openCard(req.params.id) });
     } catch (err) {
       const message = (err as Error).message;
@@ -486,9 +485,9 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
         return;
       }
       const shell = req.query?.shell === "1";
-      // Attaching the terminal IS working the card — unless the share is `view`, which
-      // recordCardActor checks for (this route's guard is requireCardAccess, not requireCardWork).
-      await recordCardActor(await requestUser(req), req.params.id);
+      // Who is on this socket — stamped as the card's author when they TYPE (see onInput below),
+      // never for attaching: watching a card is not an order.
+      const typist = await requestUser(req);
       // SNAPSHOT: `getCard` hands back the live cached record, which the provisioning below mutates
       // in place. The attach command has to be built from the card as it is NOW — a card that never
       // had a conversation must be born with a plain `claude`, never with `claude -c` (which prints
@@ -575,6 +574,9 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
           if (shouldStampHumanActive(card.id)) {
             void registry.markCardHumanActive(card.id).catch(() => { /* best effort, never fails a keystroke */ });
           }
+          // Typing IS the order. Cheap when nothing changes (isCardActor is sync); a `view` share
+          // never gets here (readOnly) and recordCardActor checks the level anyway.
+          if (!readOnly && !isCardActor(typist, card.id)) void recordCardActor(typist, card.id);
         },
       });
       if (readOnly) socket.send("\r\n[vibehub] this card is shared with you read-only\r\n");
