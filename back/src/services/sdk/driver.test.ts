@@ -126,6 +126,19 @@ describe("buildSdkDriverCommandLine", () => {
     expect(bare).not.toContain("VIBEHUB_CARD_ID");
   });
 
+  it("exports the card's git include — the native chat's git acts as the card's author in ANY repository", () => {
+    const line = buildSdkDriverCommandLine({ ...base, cardId: "card-1" });
+    // The PATH, never a token: the identity behind it is rewritten in the file on every author switch.
+    expect(line).toContain("GIT_CONFIG_COUNT=");
+    expect(line).toContain("GIT_CONFIG_KEY_0=");
+    expect(line).toContain("include.path");
+    expect(line).toContain("GIT_CONFIG_VALUE_0=");
+    expect(line).toContain("/root/.vibehub/git/card-1.gitconfig");
+    // A token exported at spawn would be frozen there — the gh wrapper reads the card's file instead.
+    expect(line).not.toContain("GH_TOKEN");
+    expect(buildSdkDriverCommandLine(base)).not.toContain("GIT_CONFIG_COUNT");
+  });
+
   it("caps test-runner workers in every driver session — the runner's cores are shared by all cards", () => {
     const line = buildSdkDriverCommandLine(base);
     expect(line).toContain("export VITEST_MAX_THREADS=2; ");
