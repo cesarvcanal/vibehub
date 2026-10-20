@@ -487,8 +487,10 @@ describe("terminal websocket setup", () => {
     ws.send("ls\r");
     await settle();
     release();
-    await vi.waitFor(() => expect(term.write).toHaveBeenCalledWith("ls\r"));
-    await vi.waitFor(() => expect(appliedStatus).toHaveBeenCalledWith(id, "working"));
+    // 5 s, não o 1 s padrão: o caminho passa pela fila do board e pelo replay do pty, e com o runner
+    // ocupado (os outros cards rodando testes) 1 s não bastava — falhava na suíte, passava sozinho.
+    await vi.waitFor(() => expect(term.write).toHaveBeenCalledWith("ls\r"), { timeout: 5_000 });
+    await vi.waitFor(() => expect(appliedStatus).toHaveBeenCalledWith(id, "working"), { timeout: 5_000 });
     ws.close();
     await closed(ws);
   });
