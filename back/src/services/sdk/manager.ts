@@ -81,6 +81,22 @@ export const BACKGROUND_SETTLE_MS = 15_000;
 /** Quantos subagentes/tarefas a sessão lembra (as terminadas mais antigas saem primeiro). */
 export const TASKS_MAX = 200;
 
+/**
+ * A RETOMADA PRECISA PEGAR. O CLI que volta de um processo morto com trabalho em segundo plano abre
+ * primeiro um turno SÓ DELE — a notificação de que a tarefa morreu — e o fecha com um `result`
+ * vazio; às vezes a continuação injetada some junto e nunca vira turno (produção, 2026-10-20, card
+ * 4f4b: 16 min parado com "Retomando a sessão…" como última linha). Depois de um `result` sem nada
+ * do agente, a retomada espera este tempo por um sinal de vida e reenvia a continuação.
+ */
+export const RESUME_CONFIRM_MS = 20_000;
+
+/** Reenvios da continuação, no máximo, antes de desistir com uma linha no chat. */
+export const RESUME_RETRIES_MAX = 2;
+
+export const NOTE_RESUME_NOT_TAKEN =
+  "A retomada automática não pegou: o Claude não respondeu à continuação depois do reinício. " +
+  "Mande uma mensagem para continuar.";
+
 export interface DriverSession {
   cardId: string;
   /** Log label (the card's worktree slug). */
@@ -146,6 +162,13 @@ export interface DriverSession {
    * to resume it again after another deploy (see ./resume.ts). A person's turn clears it.
    */
   resumeAwaitingProgress?: InflightMarker;
+  /**
+   * A continuação dessa retomada, para o reenvio (ver RESUME_CONFIRM_MS). Vive junto com
+   * `resumeAwaitingProgress`: sai no primeiro texto ou ferramenta, numa mensagem de pessoa, ao desistir.
+   */
+  resumeWatch?: { text: string; origin: MessageOrigin; retries: number; timer?: NodeJS.Timeout };
+  /** Contador de sinais de vida do agente principal (delta, raciocínio, ferramenta) — o watchdog compara. */
+  agentSignals: number;
   /** O marcador de trabalho em voo que este manager gravou por último (null/ausente = nenhum). */
   marker?: InflightMarker;
   /**
@@ -486,9 +509,10 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   if (event.type === "assistant_text" || event.type === "tool_use" || event.type === "thinking") {
     noteAgentWork(session, event);
   }
+  if (AGENT_SIGNALS.has(event.type) && !(event as { parentToolUseId?: unknown }).parentToolUseId) session.agentSignals += 1;
   if (session.resumeAwaitingProgress && (event.type === "assistant_text" || event.type === "tool_use")) {
     putMarker(session, { ...(session.marker ?? session.resumeAwaitingProgress), progressed: true });
-    session.resumeAwaitingProgress = undefined;
+    endResumeWatch(session);
   }
   if (event.type === "ready") {
     session.ready = true;
@@ -602,6 +626,9 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     interruptNoteToFlush = session.pendingInterruptNote;
     session.pendingInterruptNote = undefined;
     session.autonomousTurn = false;
+    // Uma retomada que fechou sem o agente produzir nada ainda não pegou: o vigia decide (ver
+    // RESUME_CONFIRM_MS) — e o marcador fica, para o próximo deploy saber dela.
+    if (session.resumeWatch && !isTurnInFlight(session)) armResumeWatch(session);
     // The last turn in flight CLOSED: the durable marker comes off — unless work goes on in the
     // background (a task, a scheduled wake-up), which a deploy would kill just the same: then it
     // stays, now saying what is running (see `syncInflightMarker`).
@@ -832,6 +859,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     ready: false,
     activeTurns: 0,
     autonomousTurn: false,
+    agentSignals: 0,
     backgroundTasks: [],
     tasks: new Map(),
     rateLimits: new Map(),
@@ -891,6 +919,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     // their sockets — the front's reconnect loop spawns the successor on its next connect.
     const deliberate = session.closed; // stopCardDriver stamped it BEFORE killing
     clearIdleTimer(session);
+    clearTimeout(session.resumeWatch?.timer);
     session.closed = true;
     if (sessions.get(opts.cardId) === session) sessions.delete(opts.cardId);
     // O estado POR CARD só é deste driver enquanto nenhum sucessor assumiu o card. Um `close` pode
@@ -908,6 +937,14 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     // A sondagem da frota também: ela publica NESTA sessão. Deixada de pé, ela ainda recusaria ser
     // substituída pela do driver seguinte (a segunda chamada só estende a primeira).
     if (!succeeded) forgetCardWorkflows(opts.cardId);
+    // Uma QUEDA com trabalho em voo (OOM, kill, o docker exec que morreu) e o back de pé: o marcador
+    // deste processo vivo nunca seria órfão para o sweep de boot — quem retoma é avisado agora.
+    if (!deliberate && !succeeded && session.marker) {
+      const marker = session.marker;
+      for (const listener of crashListeners) {
+        try { listener(opts.cardId, marker); } catch { /* um ouvinte não derruba o close */ }
+      }
+    }
     // Parada PEDIDA (troca de conta/modelo, pausa, restart, ocioso) não é falha: o kill chega como
     // `code null` e o stderr só tem ruído de boot — anunciar "driver exited (code ?)" em vermelho a
     // cada troca de conta era alarme falso. Só fecha os sockets; o reconnect do front sobe o sucessor.
@@ -1269,14 +1306,80 @@ export function injectSystemTurn(session: DriverSession, text: string, origin: M
   // órfã não pode ficar de pé ao lado dela (produção, 2026-10-19 — a pessoa respondeu duas vezes).
   void settleOrphanQuestions(session);
   const marker: InflightMarker = { startedAt: Date.now(), preview: inflightPreview(text), attempts };
+  endResumeWatch(session);
   session.resumeAwaitingProgress = marker;
+  session.resumeWatch = { text, origin, retries: 0 };
   putMarker(session, marker);
 }
 
 /** A PERSON's turn entered the driver: a fresh in-flight marker, and the resume chain starts over. */
 function markPersonTurn(session: DriverSession, marker: InflightMarker): void {
-  session.resumeAwaitingProgress = undefined;
+  endResumeWatch(session);
   putMarker(session, marker);
+}
+
+/** O que conta como o agente principal dando sinal de vida — o raciocínio longo antes do texto, inclusive. */
+const AGENT_SIGNALS: ReadonlySet<string> = new Set([
+  "assistant_delta", "assistant_text", "thinking_delta", "thinking", "tool_use_start", "tool_input_progress", "tool_use", "tool_progress",
+]);
+
+function endResumeWatch(session: DriverSession): void {
+  clearTimeout(session.resumeWatch?.timer);
+  session.resumeWatch = undefined;
+  session.resumeAwaitingProgress = undefined;
+}
+
+/** Arma (ou rearma) o prazo da retomada a partir de agora. */
+function armResumeWatch(session: DriverSession): void {
+  const watch = session.resumeWatch;
+  if (!watch) return;
+  clearTimeout(watch.timer);
+  const signals = session.agentSignals;
+  watch.timer = setTimeout(() => checkResumeWatch(session, signals), RESUME_CONFIRM_MS);
+  watch.timer.unref?.();
+}
+
+/**
+ * O prazo venceu: houve sinal de vida (ou um turno abriu) desde então — espera mais; nada — a
+ * continuação se perdeu no CLI e vai de novo, até RESUME_RETRIES_MAX. Esgotado, uma linha no chat:
+ * o card nunca fica parado calado.
+ */
+function checkResumeWatch(session: DriverSession, signalsAtArm: number): void {
+  const watch = session.resumeWatch;
+  if (!watch || session.closed) return;
+  watch.timer = undefined;
+  if (isTurnInFlight(session)) return; // o result desse turno rearma
+  if (session.agentSignals !== signalsAtArm) { armResumeWatch(session); return; }
+  if (watch.retries < RESUME_RETRIES_MAX && canAcceptTurn(session) && writeToDriver(session, { type: "user", text: watch.text })) {
+    watch.retries += 1;
+    recordInjectedTurn(session, watch.text, watch.origin);
+    syncInflightMarker(session);
+    logger.warn(
+      { audit: true, action: "sdk.resume.retry", card: session.label, retry: watch.retries },
+      "the automatic resume closed with nothing from the agent — continuation sent again",
+    );
+    return;
+  }
+  endResumeWatch(session);
+  emitSystemNote(session, NOTE_RESUME_NOT_TAKEN);
+  syncInflightMarker(session);
+  maybeScheduleIdleStop(session);
+  logger.warn(
+    { audit: true, action: "sdk.resume.not_taken", card: session.label, retries: watch.retries },
+    "the automatic resume never took — the card says so and waits for a person",
+  );
+}
+
+type CrashListener = (cardId: string, marker: InflightMarker) => void;
+const crashListeners = new Set<CrashListener>();
+
+/**
+ * Quem quer saber de um driver que CAIU (sem ninguém pedir) com trabalho em voo — a retomada em
+ * processo (resume.ts). Devolve o cancelamento da inscrição.
+ */
+export function onDriverCrashWithWork(listener: CrashListener): () => void {
+  crashListeners.add(listener);
+  return () => { crashListeners.delete(listener); };
 }
 
 /** O que o marcador diz de um turno que o próprio CLI abriu — ninguém escreveu nada. */
@@ -1314,7 +1417,8 @@ function putMarker(session: DriverSession, base: InflightMarker): void {
 function syncInflightMarker(session: DriverSession): void {
   if (session.closed) return;
   syncBoardStatus(session);
-  const turnRunning = session.activeTurns > 0 || session.autonomousTurn;
+  // A retomada que ainda não pegou é trabalho em voo: o reenvio vem aí (ver RESUME_CONFIRM_MS).
+  const turnRunning = session.activeTurns > 0 || session.autonomousTurn || session.resumeWatch !== undefined;
   const tasks = backgroundWork(session);
   if (!turnRunning && tasks.length === 0) {
     session.marker = undefined;
@@ -1591,6 +1695,7 @@ export function stopCardDriver(cardId: string): void {
   sessions.delete(cardId);
   clearIdleTimer(session);
   clearTimeout(session.backgroundSettleTimer);
+  clearTimeout(session.resumeWatch?.timer);
   session.closed = true;
   try { session.child.stdin.end(); } catch { /* already gone */ }
   try { session.child.kill(); } catch { /* already gone */ }
@@ -1613,6 +1718,7 @@ export function stopCardDriver(cardId: string): void {
 export function shutdownAllDrivers(): void {
   for (const session of sessions.values()) {
     clearIdleTimer(session);
+    clearTimeout(session.resumeWatch?.timer);
     session.closed = true;
     try { session.child.stdin.end(); } catch { /* already gone */ }
     try { session.child.kill(); } catch { /* already gone */ }

@@ -19,6 +19,10 @@ import {
   missedDuringSetup,
   onPeerTurn,
   injectSystemTurn,
+  NOTE_RESUME_NOT_TAKEN,
+  RESUME_CONFIRM_MS,
+  RESUME_RETRIES_MAX,
+  onDriverCrashWithWork,
   resetSdkSessionsForTesting,
   setDriverSpawnerForTesting,
   shutdownAllDrivers,
@@ -2411,5 +2415,168 @@ describe("attachSocket — beforeTurn segura a mensagem até a identidade aterri
     const written = spawned[0]!.stdin.written;
     expect(written.findIndex((w) => w.includes("segunda"))).toBeGreaterThan(written.findIndex((w) => w.includes("primeira")));
     expect(writesOf("primeira").length).toBe(1);
+  });
+});
+
+/**
+ * A RETOMADA QUE NÃO PEGOU (produção, 2026-10-20, card 4f4b, 18:18 e 19:02): o boot retomou o turno,
+ * mas o CLI recém-subido abriu primeiro um turno SÓ DELE — a notificação de que o subagente morreu
+ * com o processo anterior — e fechou com um `result` vazio ("No response requested."). A
+ * continuação nunca virou turno; o manager contou aquele `result` como o fim da retomada, apagou o
+ * marcador e o card ficou 16 min parado, com "Retomando a sessão…" como última linha, até a pessoa
+ * escrever. Reproduzido no CLI real (SDK 0.3.300): o `result ""` do arranque chega antes do turno.
+ */
+describe("retomada automática — confirmação de que pegou", () => {
+  const CONT = "Continue de onde parou";
+  const SYS = { kind: "system", name: "vibehub" } as const;
+  const emit = (event: object) => spawned[0]!.stdout.emit("data", line(event));
+  const userWrites = () => spawned[0]!.stdin.written
+    .map((s) => JSON.parse(s) as { type: string; text?: string })
+    .filter((f) => f.type === "user");
+
+  it("o result do arranque fecha sem a IA produzir nada: a continuação é reenviada", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const session = ensure();
+    injectSystemTurn(session, CONT, SYS, 1);
+    emit({ type: "assistant_text", text: "No response requested." }); // o enchimento do harness
+    emit({ type: "result", isError: false });
+    vi.advanceTimersByTime(RESUME_CONFIRM_MS - 1);
+    expect(userWrites()).toHaveLength(1);
+    vi.advanceTimersByTime(2);
+    expect(userWrites()).toEqual([{ type: "user", text: CONT }, { type: "user", text: CONT }]);
+    expect(session.activeTurns).toBe(1);
+  });
+
+  it("enquanto a retomada não pegou, o marcador fica — com as MESMAS attempts (o próximo deploy ainda sabe)", async () => {
+    const session = ensure();
+    injectSystemTurn(session, CONT, SYS, 2);
+    emit({ type: "result", isError: false });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(await readInflightMarker(CARD)).toMatchObject({ attempts: 2 });
+    expect((await readInflightMarker(CARD))?.progressed).toBeUndefined();
+  });
+
+  it("o turno de verdade chega logo depois do result vazio: nada é reenviado e attempts não zera", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const session = ensure();
+    injectSystemTurn(session, CONT, SYS, 2);
+    emit({ type: "result", isError: false });
+    emit({ type: "tool_use", id: "t1", name: "Bash", input: {} });
+    vi.advanceTimersByTime(RESUME_CONFIRM_MS * 3);
+    expect(userWrites()).toHaveLength(1);
+    vi.useRealTimers();
+    await vi.waitFor(async () => expect(await readInflightMarker(CARD)).toMatchObject({ attempts: 2, progressed: true }));
+  });
+
+  it("sinal de vida sem texto ainda (raciocínio em curso) adia o reenvio", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const session = ensure();
+    injectSystemTurn(session, CONT, SYS, 1);
+    emit({ type: "result", isError: false });
+    vi.advanceTimersByTime(RESUME_CONFIRM_MS - 100);
+    emit({ type: "thinking_delta", text: "hmm" });
+    vi.advanceTimersByTime(200);
+    expect(userWrites()).toHaveLength(1);
+  });
+
+  it("a pessoa escreveu na janela: a mensagem dela manda, nada de continuação extra", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const session = ensure();
+    injectSystemTurn(session, CONT, SYS, 1);
+    emit({ type: "result", isError: false });
+    handleClientFrame(session, `{"type":"user","text":"e aí?"}`);
+    vi.advanceTimersByTime(RESUME_CONFIRM_MS * 3);
+    expect(userWrites().map((f) => f.text)).toEqual([CONT, "e aí?"]);
+  });
+
+  it("esgotadas as tentativas: uma linha no chat diz que não pegou, e o marcador sai", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const session = ensure();
+    injectSystemTurn(session, CONT, SYS, 1);
+    for (let i = 0; i <= RESUME_RETRIES_MAX; i++) {
+      emit({ type: "result", isError: false });
+      vi.advanceTimersByTime(RESUME_CONFIRM_MS + 1);
+    }
+    expect(userWrites()).toHaveLength(1 + RESUME_RETRIES_MAX);
+    expect(session.activeTurns).toBe(0);
+    vi.useRealTimers();
+    await vi.waitFor(async () => {
+      const notes = (await readHistory(CARD)).filter((e) => e.type === "system_note");
+      expect(notes.map((n) => (n as { text: string }).text)).toEqual([NOTE_RESUME_NOT_TAKEN]);
+      expect(await readInflightMarker(CARD)).toBeNull();
+    });
+  });
+
+  it("o driver morreu na janela: nada é escrito num pipe morto", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const session = ensure();
+    injectSystemTurn(session, CONT, SYS, 1);
+    emit({ type: "result", isError: false });
+    stopCardDriver(CARD);
+    vi.advanceTimersByTime(RESUME_CONFIRM_MS * 3);
+    expect(userWrites()).toHaveLength(1);
+    expect(session.closed).toBe(true);
+  });
+
+  it("turno de pessoa que fecha sem texto não é vigiado (o watchdog é só da retomada)", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const session = ensure();
+    handleClientFrame(session, `{"type":"user","text":"/compact"}`);
+    emit({ type: "result", isError: false });
+    vi.advanceTimersByTime(RESUME_CONFIRM_MS * 3);
+    expect(userWrites()).toHaveLength(1);
+  });
+});
+
+/**
+ * O DRIVER CAIU SOZINHO (OOM, kill, docker exec que morreu) com o back de pé: o marcador ficava no
+ * disco assinado por um processo VIVO — o sweep de boot não o via como órfão — e o turno só
+ * "voltava" no próximo deploy, horas depois e fora de contexto. A queda com trabalho em voo agora
+ * avisa quem cuida da retomada (resume.ts), na hora.
+ */
+describe("queda do driver com trabalho em voo", () => {
+  const emit = (event: object) => spawned[0]!.stdout.emit("data", line(event));
+
+  it("queda não pedida com turno em voo: avisa com o card e o marcador", () => {
+    const seen: Array<{ cardId: string; attempts: number }> = [];
+    const off = onDriverCrashWithWork((cardId, marker) => seen.push({ cardId, attempts: marker.attempts }));
+    const session = ensure();
+    handleClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
+    spawned[0]!.emit("close", 137);
+    off();
+    expect(seen).toEqual([{ cardId: CARD, attempts: 0 }]);
+  });
+
+  it("parada pedida (pausa, troca de modelo, ocioso) não é queda", () => {
+    const seen: string[] = [];
+    const off = onDriverCrashWithWork((cardId) => seen.push(cardId));
+    const session = ensure();
+    handleClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
+    stopCardDriver(CARD);
+    spawned[0]!.emit("close", null);
+    off();
+    expect(seen).toEqual([]);
+  });
+
+  it("o desligamento do back (SIGTERM) não é queda: quem retoma é o boot do próximo", () => {
+    const seen: string[] = [];
+    const off = onDriverCrashWithWork((cardId) => seen.push(cardId));
+    const session = ensure();
+    handleClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
+    shutdownAllDrivers();
+    spawned[0]!.emit("close", null);
+    off();
+    expect(seen).toEqual([]);
+  });
+
+  it("queda sem nada em voo: nada a retomar", () => {
+    const seen: string[] = [];
+    const off = onDriverCrashWithWork((cardId) => seen.push(cardId));
+    const session = ensure();
+    handleClientFrame(session, `{"type":"user","text":"oi"}`);
+    emit({ type: "result", isError: false });
+    spawned[0]!.emit("close", 1);
+    off();
+    expect(seen).toEqual([]);
   });
 });
