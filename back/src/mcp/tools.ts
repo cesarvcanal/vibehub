@@ -1,7 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { listTerminals, sendToTerminal, readTerminal, reportState, agentOriginFor } from "../services/maestro/maestro.js";
-import { DECLARED_STATES } from "../services/board/registry.js";
+import { DECLARED_STATES, getCard } from "../services/board/registry.js";
+import { recordMessage, MESSAGE_TYPES, SEVERITIES, type MessageType, type Severity } from "../services/events/cardEvents.js";
+import { replyTo } from "./events.js";
 import { runGate } from "../services/maestro/gate.js";
 import { deliver } from "../services/maestro/deliver.js";
 import { relayCardActor } from "../services/board/actor.js";
@@ -62,18 +64,62 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
           "YOUR OWN card id — the $VIBEHUB_CARD_ID of this terminal. Always pass it: it is how the " +
           "destination card's chat shows WHO sent the message (your card's name, linked back to it).",
         ),
+        inReplyTo: z.string().optional().describe(
+          "the eventId this message ANSWERS (a card.event with needsAnswer): the card is told which " +
+          "question it settles, and the event closes",
+        ),
       },
     },
     async (a) => {
       try {
-        return ok(await sendToTerminal(a.cardId, a.text, {
+        const reply = await replyTo(a.cardId, a.inReplyTo, a.text);
+        const sent = await sendToTerminal(a.cardId, reply.text, {
           by: actor,
           // The order came from the PERSON behind the sending card: the destination works as them —
           // once the send is certain to go (a refused send leaves the authorship alone).
           beforeDeliver: () => relayCardActor(a.from, a.cardId),
           respectHumanActive: true,
           origin: await agentOriginFor(a.from),
-        }));
+        });
+        await reply.settle();
+        return ok(sent);
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_notify",
+    {
+      description:
+        "Send a MESSAGE about THIS card to whoever follows the board (people and other AI agents " +
+        "subscribed to card.event over MCP push; it also lands in their inbox). `type` says what it " +
+        "is for: 'info', 'error', 'done' are news; 'question' and 'approval' FORMALLY ask for an answer " +
+        "and need `question` (a question also needs 2+ `options`, and `recommended` must be one of " +
+        "them). Only these two ask — a '?' inside an info asks nothing. Sending does not pause your " +
+        "turn and nothing acts on its own: an answer, if any, arrives as a new message to this card. " +
+        "Retrying? Pass the same `idempotencyKey` and it is announced once. `card` is YOUR OWN card id " +
+        "($VIBEHUB_CARD_ID).",
+      inputSchema: {
+        card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this terminal"),
+        type: z.enum(MESSAGE_TYPES as unknown as [MessageType, ...MessageType[]]).describe("info | question | approval | error | done"),
+        text: z.string().min(1).max(2000).describe("what happened, readable on its own"),
+        severity: z.enum(SEVERITIES as unknown as [Severity, ...Severity[]]).optional().describe("info | warning | critical"),
+        context: z.string().max(2000).optional().describe("what led here — what the reader needs to decide"),
+        question: z.string().max(500).optional().describe("question/approval: exactly what is being asked"),
+        options: z.array(z.object({ label: z.string().min(1).max(80), description: z.string().max(300).optional() }))
+          .max(6).optional().describe("the choices (a question needs 2+)"),
+        recommended: z.string().optional().describe("the label of the option you recommend"),
+        idempotencyKey: z.string().max(80).optional().describe("same key = same message (safe retries)"),
+      },
+    },
+    async (a) => {
+      try {
+        const { card, ...message } = a;
+        if (!(await getCard(card))) throw new Error("card not found");
+        const event = await recordMessage({ cardId: card, ...message });
+        return ok({ eventId: event.id, cursor: String(event.seq), needsAnswer: !event.resolvedAt });
       } catch (e) {
         return fail(e);
       }

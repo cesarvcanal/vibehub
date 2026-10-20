@@ -5,6 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerMaestroTools } from "./tools.js";
 import { registerCredentialTools } from "./credentialTools.js";
 import { registerExternalTools } from "./externalTools.js";
+import { registerEvents } from "./events.js";
 import type { PublicUser } from "../auth/users.js";
 import { logger } from "../utils/logger.js";
 
@@ -69,10 +70,12 @@ export function createMcpServer(actor = "mcp", user?: PublicUser): McpServer {
     if (!user) throw new Error("an external MCP server needs the user it acts for");
     const server = new McpServer({ name: "vibehub", version: "0.1.0" }, { instructions: EXTERNAL_INSTRUCTIONS });
     registerExternalTools(server, user);
+    registerEvents(server, user);
     return server;
   }
   const server = new McpServer({ name: "vibehub", version: "0.1.0" }, { instructions: INSTRUCTIONS });
   registerMaestroTools(server, actor);
   registerCredentialTools(server, actor);
+  registerEvents(server, null);
   return server;
 }
