@@ -39,13 +39,14 @@ afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 const PR = "https://github.com/acme/repo/pull/7";
 
 /** Wire the runner: one canned reply per phase, chosen by the script's content. */
-function wire(over: { push?: string; probe?: string; run?: string; merge?: string } = {}) {
+function wire(over: { push?: string; probe?: string; run?: string; merge?: string; ci?: string } = {}) {
   const push = over.push ?? `pushed\n__VIBEHUB_DELIVER__ pr ${PR}`;
   const probe = over.probe ?? ['pkg=0', 'test=0', 'tsconfig=0', 'localtsc=0', '__VIBEHUB_GATE_JSON__', '{"checks":["npm test"]}'].join("\n");
   const run = over.run ?? "ran\n__VIBEHUB_GATE__ pass\n";
   const merge = over.merge ?? "Merged\n__VIBEHUB_DELIVER__ merged\n";
   runScript.mockImplementation(async (script: string) => {
     if (script.includes("gh pr merge")) return { stdout: merge, stderr: "" };
+    if (script.includes("gh pr checks")) return { stdout: `${over.ci ?? ""}\n__VIBEHUB_CI__ done\n`, stderr: "" };
     if (script.includes("git push --force-with-lease")) return { stdout: push, stderr: "" };
     if (script.includes("__VIBEHUB_GATE_JSON__")) return { stdout: probe, stderr: "" };
     if (script.includes('echo "__VIBEHUB_GATE__ pass"')) return { stdout: run, stderr: "" };
@@ -102,6 +103,73 @@ describe("parsePushAndPr / parseMerge", () => {
     const { deliver } = await load();
     expect(deliver.parseMerge("__VIBEHUB_DELIVER__ merged\n").merged).toBe(true);
     expect(deliver.parseMerge("nope\n__VIBEHUB_DELIVER__ error merge\n").merged).toBe(false);
+  });
+});
+
+const localGateRan = () => scripts().some((s) => s.includes("__VIBEHUB_GATE_JSON__"));
+
+describe("parseCiChecks", () => {
+  it("reads the verdict of the PR's checks", async () => {
+    const { deliver } = await load();
+    const p = deliver.parseCiChecks;
+    expect(p('[{"name":"back","bucket":"pass"},{"name":"lint","bucket":"skipping"}]\n__VIBEHUB_CI__ done')).toMatchObject({ verdict: "pass" });
+    expect(p('[{"name":"back","bucket":"pass"},{"name":"front","bucket":"fail"}]')).toEqual({ verdict: "fail", output: "CI do PR vermelho: front" });
+    expect(p('[{"name":"e2e","bucket":"cancel"}]').verdict).toBe("fail");
+    expect(p('[{"name":"front","bucket":"pending"}]')).toEqual({ verdict: "pending", output: "CI do PR ainda rodando: front" });
+  });
+  it("no checks, an empty list or an unreadable answer is 'none' — the local gate decides", async () => {
+    const { deliver } = await load();
+    expect(deliver.parseCiChecks("no checks reported on the 'x' branch\n__VIBEHUB_CI__ done").verdict).toBe("none");
+    expect(deliver.parseCiChecks("[]").verdict).toBe("none");
+    expect(deliver.parseCiChecks("HTTP 502 [oops").verdict).toBe("none");
+    expect(deliver.parseCiChecks("").verdict).toBe("none");
+  });
+});
+
+describe("buildCiChecksScript", () => {
+  it("polls with the card's token over stdin, bounded, and waits for checks to appear only when the repo has workflows", async () => {
+    const { deliver } = await load();
+    const s = deliver.buildCiChecksScript("vibehub-runner", "card1", TOKEN, "/work/scratch/x", PR);
+    const dockerLine = s.split("\n").find((l) => l.startsWith("docker exec")) ?? "";
+    expect(dockerLine).not.toContain(TOKEN);
+    expect(s).toContain(`gh pr checks '${PR}' --json name,bucket`);
+    expect(s).toContain(`-lt ${Math.ceil(deliver.CI_WAIT_SECONDS / deliver.CI_POLL_SECONDS)} ] || break`);
+    expect(s).toContain(`[ "$WF" = 1 ] && [ "$i" -lt ${Math.ceil(deliver.CI_APPEAR_SECONDS / deliver.CI_POLL_SECONDS)} ] || break`);
+  });
+});
+
+describe("deliver uses the PR's CI as the gate when there is one", () => {
+  it("green CI merges WITHOUT running the suite again in the runner", async () => {
+    const { deliver, card } = await makeCard();
+    wire({ ci: '[{"name":"back","bucket":"pass"},{"name":"front","bucket":"pass"}]' });
+    const out = await deliver.deliver(card.id, { branch: "main", authorized: true });
+    expect(out).toMatchObject({ merged: true, reason: "merged" });
+    expect(localGateRan()).toBe(false);
+  });
+
+  it("red CI stops the merge and names the failing check", async () => {
+    const { deliver, card } = await makeCard();
+    wire({ ci: '[{"name":"back","bucket":"pass"},{"name":"front","bucket":"fail"}]' });
+    const out = await deliver.deliver(card.id, { branch: "main", authorized: true });
+    expect(out).toMatchObject({ merged: false, reason: "gate", output: "CI do PR vermelho: front" });
+    expect(mergeRan()).toBe(false);
+  });
+
+  it("CI still running past the wait is red — never merged on a guess", async () => {
+    const { deliver, card } = await makeCard();
+    wire({ ci: '[{"name":"front","bucket":"pending"}]' });
+    const out = await deliver.deliver(card.id, { branch: "main", authorized: true });
+    expect(out).toMatchObject({ merged: false, reason: "gate" });
+    expect(out.output).toContain("ainda rodando");
+    expect(mergeRan()).toBe(false);
+  });
+
+  it("a PR with no CI falls back to the local gate", async () => {
+    const { deliver, card } = await makeCard();
+    wire({ ci: "no checks reported on the 'card/x' branch", run: "1 failing\n__VIBEHUB_GATE__ fail\n" });
+    const out = await deliver.deliver(card.id, { branch: "main", authorized: true });
+    expect(localGateRan()).toBe(true);
+    expect(out).toMatchObject({ merged: false, reason: "gate" });
   });
 });
 

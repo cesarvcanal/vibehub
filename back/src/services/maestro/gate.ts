@@ -1,4 +1,4 @@
-import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
+import { hostExecutor, shQuote, assertSafeRemotePath, HostExecError, CONTAINER_DEADLINE_MARGIN_MS } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import { getCard, getProject } from "../board/registry.js";
 import { cardWorkPaths } from "../board/workspace.js";
@@ -48,6 +48,10 @@ export const GATE_REUSE_MS = 10 * 60_000;
 export const DEFAULT_TSC_CHECK = "node_modules/.bin/tsc --noEmit";
 /** The default test command: the package's own `test` script. */
 export const DEFAULT_TEST_CHECK = "npm test";
+/** How long the checks may run, in total. Past it they are KILLED inside the runner (see buildGateRunScript). */
+export const GATE_RUN_TIMEOUT_MS = 600_000;
+/** What the gate answers when the checks ran out of time — said plainly, not as a runner error. */
+export const GATE_TIMEOUT_OUTPUT = `os checks passaram de ${GATE_RUN_TIMEOUT_MS / 60_000} min e foram interrompidos no runner`;
 /** Cap on how many checks a gate.json may declare — a bound, not a policy. */
 export const MAX_GATE_CHECKS = 20;
 /** How much of the output to keep, in bytes: enough to see the failure, never a whole build log. */
@@ -174,7 +178,11 @@ export function buildGateRunScript(containerName: string, cwd: string, checks: s
   }
   parts.push(`echo "${RESULT_MARKER} pass"`);
   const inner = parts.join("; ");
-  return `docker exec ${shQuote(containerName)} sh -c ${shQuote(inner)} _ ${shQuote(cwd)}`;
+  // The deadline lives INSIDE the runner too: when the host gives up on a slow suite, `timeout`
+  // kills the whole process group — otherwise the test runners kept going as orphans, eating the
+  // CPU every other card (and the next gate) needed.
+  const seconds = Math.floor((GATE_RUN_TIMEOUT_MS - CONTAINER_DEADLINE_MARGIN_MS) / 1000);
+  return `docker exec ${shQuote(containerName)} timeout -s KILL ${seconds} sh -c ${shQuote(inner)} _ ${shQuote(cwd)}`;
 }
 
 /** The verdict from the run output: `pass` only when the pass marker is present and none failed. PURE. */
@@ -250,8 +258,17 @@ export async function runGate(cardId: string): Promise<GateResult> {
     return { ran: true, passed: true, output: green.output, reused: true };
   }
 
-  const runOut = await hostExecutor().runScript(buildGateRunScript(container, cwd, plan.checks), { timeoutMs: 600_000 });
-  const { passed, output } = parseGateRun(runOut.stdout);
+  let stdout: string;
+  try {
+    stdout = (await hostExecutor().runScript(buildGateRunScript(container, cwd, plan.checks), { timeoutMs: GATE_RUN_TIMEOUT_MS })).stdout;
+  } catch (err) {
+    // 137 = SIGKILL from the in-container deadline; `timedOut` = the host one. Either way: red, said plainly.
+    if (!(err instanceof HostExecError) || !(err.timedOut || err.exitCode === 137)) throw err;
+    greenVerdicts.delete(card.id);
+    logger.info({ audit: true, action: "maestro.gate", card: card.worktreeSlug, ran: true, passed: false, timedOut: true }, "gate timed out");
+    return { ran: true, passed: false, output: GATE_TIMEOUT_OUTPUT };
+  }
+  const { passed, output } = parseGateRun(stdout);
   const cleaned = cleanOutput(output);
   if (passed && reuseKey) greenVerdicts.set(card.id, { key: reuseKey, at: probedAt, output: cleaned });
   else greenVerdicts.delete(card.id);

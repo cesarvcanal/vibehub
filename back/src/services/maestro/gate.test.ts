@@ -202,6 +202,33 @@ describe("runGate", () => {
     expect(r).toMatchObject({ ran: true, passed: false });
     expect(r.output).toContain("1 failing");
   });
+
+  it("checks that run out of time are KILLED inside the runner and come back red, said plainly", async () => {
+    const { gate, registry } = await load();
+    const { HostExecError } = await import("../../runtime/host.js");
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "x" });
+    for (const err of [new HostExecError("host command timed out", { timedOut: true }), new HostExecError("killed", { exitCode: 137 })]) {
+      runScript.mockImplementation(async (script: string) => {
+        if (script.includes("__VIBEHUB_GATE_JSON__")) return { stdout: '__VIBEHUB_GATE_JSON__\n{"checks":["npm test"]}', stderr: "" };
+        expect(script).toMatch(/docker exec 'vibehub-runner' timeout -s KILL \d+ sh -c/);
+        throw err;
+      });
+      expect(await gate.runGate(c.id)).toEqual({ ran: true, passed: false, output: gate.GATE_TIMEOUT_OUTPUT });
+    }
+  });
+
+  it("any other runner failure still propagates — the caller decides", async () => {
+    const { gate, registry } = await load();
+    const { HostExecError } = await import("../../runtime/host.js");
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "x" });
+    runScript.mockImplementation(async (script: string) => {
+      if (script.includes("__VIBEHUB_GATE_JSON__")) return { stdout: '__VIBEHUB_GATE_JSON__\n{"checks":["npm test"]}', stderr: "" };
+      throw new HostExecError("ssh down", { accessError: true });
+    });
+    await expect(gate.runGate(c.id)).rejects.toThrow("ssh down");
+  });
 });
 
 describe("runGate reuses a GREEN verdict for the same commit on a clean tree", () => {
