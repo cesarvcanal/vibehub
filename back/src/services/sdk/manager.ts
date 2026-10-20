@@ -1310,9 +1310,30 @@ export function injectSystemTurn(session: DriverSession, text: string, origin: M
  * result): the card would sit idle until a person wrote. Once, the order goes again — in words that
  * cannot be read as an automatic notice; a second stall is a visible note, never a loop.
  */
+/**
+ * How long a stalled resume waits before the order goes again. On a resume the CLI first CLOSES the
+ * interrupted turn with the harness filler — a `result` that lands before the continuation is even
+ * read; sending again right there doubled the order. Anything the agent does in this window
+ * (text, a tool call, a person writing) clears the stall.
+ */
+let reengageGraceMs = 15_000;
+
+export function setReengageGraceForTesting(ms: number): void {
+  reengageGraceMs = ms;
+}
+
 function reengageStalledResume(session: DriverSession): void {
   const stalled = session.resumeAwaitingProgress;
   if (!stalled) return;
+  const timer = setTimeout(() => {
+    // Progress (or a person's turn) cleared it, or a turn is running and its own result decides.
+    if (session.closed || session.resumeAwaitingProgress !== stalled || session.activeTurns > 0 || session.autonomousTurn) return;
+    stalledResumeDecided(session, stalled);
+  }, reengageGraceMs);
+  timer.unref?.();
+}
+
+function stalledResumeDecided(session: DriverSession, stalled: InflightMarker): void {
   session.resumeAwaitingProgress = undefined;
   if (session.resumeReengaged) {
     session.resumeReengaged = false;
