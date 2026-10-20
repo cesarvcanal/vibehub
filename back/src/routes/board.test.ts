@@ -389,6 +389,20 @@ describe("status callback", () => {
     expect(current.column).toBe("working");
   });
 
+  it("um card concluído no meio do turno fica em done até a pessoa abrir um turno novo", async () => {
+    const projectId = await makeProject();
+    const card = await makeCard(projectId);
+    await postStatus(card, "working", RUNNER_TOKEN); // o turno em que o agente se conclui
+    await app.inject({ method: "PATCH", url: `/api/cards/${card}`, headers: { cookie }, payload: { column: "done" } });
+    const column = async () => (await app.inject({ method: "GET", url: `/api/cards/${card}`, headers: { cookie } })).json().card.column;
+    await postStatus(card, "working", RUNNER_TOKEN); // PreToolUse das ferramentas seguintes do mesmo turno
+    expect(await column()).toBe("done");
+    await postStatus(card, "waiting", RUNNER_TOKEN); // Stop
+    expect(await column()).toBe("done");
+    await postStatus(card, "working", RUNNER_TOKEN); // a pessoa escreveu de novo
+    expect(await column()).toBe("working");
+  });
+
   it("carries out a PENDING restart once the flagged card goes idle", async () => {
     const projectId = await makeProject();
     const card = await makeCard(projectId);
