@@ -409,7 +409,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         }
         // Qualquer outro evento entra DEPOIS dos tokens que chegaram antes dele.
         flushDeltas();
-        commitState((prev) => applySdkEvent(prev, parsed));
+        // O estado de um subagente leva a hora em que chegou, no relógio desta aba: é dali que o
+        // tempo de quem roda conta (o relógio do runner pode não bater com o do navegador).
+        const stamped = parsed.type === "agent_task" ? { ...parsed, receivedAt: Date.now() } : parsed;
+        commitState((prev) => applySdkEvent(prev, stamped));
       };
       next.onerror = () => {
         /* onclose always follows */

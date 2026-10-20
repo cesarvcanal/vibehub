@@ -13,14 +13,16 @@ import type { AgentTask, SdkRow, ToolResultSummary } from "@/features/board/lib/
 
 /* ------------------------------------------------------------ a linha de resultado */
 
-/** Duração legível: `850 ms`, `4,2 s`, `1m 24s`. PURE. */
+/** Duração legível: `850 ms`, `4,2 s`, `1m 24s`, `3h 07m`. PURE. */
 export function formatDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return "";
   if (ms < 1000) return `${Math.round(ms)} ms`;
   const s = ms / 1000;
   if (s < 60) return `${s.toFixed(1).replace(".", translate("sdk.result.decimal"))} s`;
   const whole = Math.floor(s);
-  return `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, "0")}s`;
+  const minutes = Math.floor(whole / 60);
+  if (minutes < 60) return `${minutes}m ${String(whole % 60).padStart(2, "0")}s`;
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
 
 /** Quantos tokens, curto: `900`, `41 mil` / `41k`. PURE. */
@@ -83,10 +85,15 @@ export function agentStatus(row: Extract<SdkRow, { kind: "tool" }>, task: AgentT
   return row.live ? "running" : "unknown";
 }
 
+/** Silêncio do subagente além do qual o relógio para: quem morreu sem aviso não conta para sempre. */
+export const AGENT_CLOCK_STALE_MS = 30 * 60_000;
+
 /**
  * Há quanto tempo o subagente trabalha. O `durationMs` do CLI só chega com um `task_progress`, e
- * um subagente parado numa ação longa não manda nenhum — a linha congelava. Rodando, conta desde o
- * `startedAt` (sem nunca voltar atrás do que o CLI já mediu); terminado, a duração final. PURE.
+ * um subagente parado numa ação longa não manda nenhum — a linha congelava. Rodando, soma ao que o
+ * CLI mediu o tempo desde que esta aba recebeu a medida (o relógio dela, sem diferença com o do
+ * runner), até `AGENT_CLOCK_STALE_MS` de silêncio; terminado, a duração final. Rodando, em segundos
+ * inteiros: um relógio que anda de segundo em segundo não mostra décimos. PURE.
  */
 export function agentElapsedMs(
   status: ToolStatus,
@@ -95,8 +102,9 @@ export function agentElapsedMs(
   now: number,
 ): number | undefined {
   const measured = task?.durationMs ?? result?.durationMs;
-  if (status !== "running" || task?.startedAt === undefined) return measured;
-  return Math.max(measured ?? 0, now - task.startedAt);
+  if (status !== "running" || task?.receivedAt === undefined) return measured;
+  const silence = Math.min(Math.max(0, now - task.receivedAt), AGENT_CLOCK_STALE_MS);
+  return Math.floor(((measured ?? 0) + silence) / 1000) * 1000;
 }
 
 /** O nome de um subagente pela chamada: a descrição que o modelo deu, senão o tipo. PURE. */

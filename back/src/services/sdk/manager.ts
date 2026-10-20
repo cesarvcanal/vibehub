@@ -12,7 +12,7 @@ import { forgetCardWorkflows, lastWorkflowRuns, readAgentFeed, watchCardWorkflow
 import { InvalidWorkflowIdError } from "./workflowProbe.js";
 import { InvalidDetailIdError, readAgentTimeline, readToolDetail } from "./detail.js";
 import { readCardChanges, readCardFileDiff } from "../maestro/changes.js";
-import { mergeTaskEvent, toolResultEvent, type AgentTaskEvent, type RawTaskEvent, type RawToolResultEvent } from "./toolResult.js";
+import { mergeTaskEvent, taskSnapshot, toolResultEvent, type AgentTaskEvent, type RawTaskEvent, type RawToolResultEvent } from "./toolResult.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
   NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
@@ -1331,8 +1331,10 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
   }
 
   // O estado de cada subagente também (contadores, "o que ele faz agora"): o CLI só fala na mudança.
+  // O tempo vai até agora: a aba conta a partir do que recebe, e o último progresso pode ser velho.
+  const now = Date.now();
   for (const task of session.tasks.values()) {
-    try { socket.send(JSON.stringify(task)); } catch { /* going away */ }
+    try { socket.send(JSON.stringify(taskSnapshot(task, now))); } catch { /* going away */ }
   }
 
   // O aviso de limite do plano também: o CLI só o emite quando a leitura muda, e quem abre o card

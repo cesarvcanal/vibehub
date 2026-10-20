@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { firstErrorLine, lineCount, mergeTaskEvent, summarizeToolResult, toolResultEvent } from "./toolResult.js";
+import { firstErrorLine, lineCount, mergeTaskEvent, summarizeToolResult, taskSnapshot, toolResultEvent } from "./toolResult.js";
 import { replayableHistoryEvent } from "./history.js";
 
 describe("summarizeToolResult — a linha de resultado de cada ação", () => {
@@ -91,5 +91,31 @@ describe("mergeTaskEvent — o estado de um subagente", () => {
 
   it("status desconhecido no fim vira concluído", () => {
     expect(mergeTaskEvent(undefined, { type: "task_notification", taskId: "k", toolUseId: "u", status: "weird" }, 0)!.status).toBe("completed");
+  });
+});
+
+/**
+ * O ESTADO QUE UMA ABA RECEBE AO CONECTAR. O `durationMs` é o do último progresso do CLI, que pode
+ * ser de minutos atrás (um subagente parado num jest longo não manda nenhum). A aba conta a partir
+ * do que recebe, então o back manda o tempo de AGORA, medido no próprio relógio — sem a diferença
+ * entre o relógio do navegador e o do runner.
+ */
+describe("taskSnapshot — o subagente para uma aba que acabou de conectar", () => {
+  const running = mergeTaskEvent(undefined, { type: "task_started", taskId: "k", toolUseId: "u" }, 1_000)!;
+
+  it("rodando: o tempo vai até agora, mesmo sem progresso novo", () => {
+    const moving = mergeTaskEvent(running, { type: "task_progress", taskId: "k", durationMs: 186_000 }, 187_000)!;
+    expect(taskSnapshot(moving, 1_000 + 300_000).durationMs).toBe(300_000);
+  });
+
+  it("rodando: nunca menos do que o CLI já mediu", () => {
+    const moving = mergeTaskEvent(running, { type: "task_progress", taskId: "k", durationMs: 50_000 }, 2_000)!;
+    expect(taskSnapshot(moving, 10_000).durationMs).toBe(50_000);
+  });
+
+  it("terminado: a duração final, intocada (e o mesmo objeto)", () => {
+    const done = mergeTaskEvent(running, { type: "task_notification", taskId: "k", status: "completed" }, 5_000)!;
+    const withTime = { ...done, durationMs: 4_000 };
+    expect(taskSnapshot(withTime, 999_999)).toBe(withTime);
   });
 });

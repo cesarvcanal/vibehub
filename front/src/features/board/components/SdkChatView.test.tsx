@@ -2149,22 +2149,23 @@ describe("SdkChatView — subagentes", () => {
       ws.accept();
       ws.deliver({ type: "ready" });
       ws.deliver(agentCall);
-      const startedAt = Date.now() - 186_000;
-      ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "running", toolUses: 18, durationMs: 186_000, startedAt });
+      // o relógio do runner não entra: um startedAt de outro relógio não muda o que a tela mostra
+      ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "running", toolUses: 18, durationMs: 186_000, startedAt: 1 });
       const agent = within(screen.getByTestId("sdk-fleet")).getByTestId("sdk-fleet-agent");
-      expect(agent).toHaveTextContent("3m 06s");
+      // o relógio real também anda com `shouldAdvanceTime`: um runner lento pode somar um segundo
+      expect(agent).toHaveTextContent(/3m 0[67]s/);
 
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
-      expect(agent).toHaveTextContent("4m 06s");
+      expect(agent).toHaveTextContent(/4m 0[67]s/);
 
       // o modal do subagente conta junto com a linha da frota
       fireEvent.click(agent);
-      expect(await screen.findByTestId("sdk-agent-elapsed")).toHaveTextContent("4m 06s");
-      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
-      expect(screen.getByTestId("sdk-agent-elapsed")).toHaveTextContent("4m 08s");
+      expect(await screen.findByTestId("sdk-agent-elapsed")).toHaveTextContent(/4m 0[678]s/);
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(screen.getByTestId("sdk-agent-elapsed")).toHaveTextContent(/5m 0[6789]s/);
 
       // terminado, o relógio para na duração final
-      ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "completed", toolUses: 20, durationMs: 250_000, startedAt });
+      ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "completed", toolUses: 20, durationMs: 250_000 });
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
       expect(agent).toHaveTextContent("4m 10s");
       expect(screen.getByTestId("sdk-agent-elapsed")).toHaveTextContent("4m 10s");

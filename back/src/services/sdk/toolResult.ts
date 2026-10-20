@@ -212,3 +212,13 @@ export function mergeTaskEvent(previous: AgentTaskEvent | undefined, raw: RawTas
   }
   return next;
 }
+
+/**
+ * O subagente como uma aba que acabou de conectar deve vê-lo. O `durationMs` guardado é o do último
+ * progresso do CLI, que pode ser de minutos atrás; a aba conta a partir do que recebe, então o
+ * tempo vai até agora, medido no relógio do back (o mesmo do `startedAt`). PURE.
+ */
+export function taskSnapshot(task: AgentTaskEvent, now: number): AgentTaskEvent {
+  if (task.status !== "running" || task.startedAt === undefined) return task;
+  return { ...task, durationMs: Math.max(task.durationMs ?? 0, now - task.startedAt) };
+}

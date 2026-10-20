@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { setLanguage } from "@/i18n";
 import { INITIAL_SDK_STATE, applySdkEvent, groupSdkRows, type AgentTask, type SdkChatState, type SdkRow } from "@/features/board/lib/sdkChat";
 import {
+  AGENT_CLOCK_STALE_MS,
   agentElapsedMs,
   agentStatus,
   bashOutput,
@@ -44,6 +45,8 @@ describe("a linha de resultado, como a do terminal", () => {
     expect(formatDuration(850)).toBe("850 ms");
     expect(formatDuration(4200)).toBe("4,2 s");
     expect(formatDuration(84_000)).toBe("1m 24s");
+    expect(formatDuration(3_599_000)).toBe("59m 59s");
+    expect(formatDuration(11_242_000)).toBe("3h 07m");
   });
 });
 
@@ -157,25 +160,41 @@ describe("o que vem do detalhe", () => {
 /**
  * O RELÓGIO DA FROTA. O `durationMs` do CLI só chega com um `task_progress`, e um subagente parado
  * numa ação longa (um jest de minutos) não manda nenhum: o tempo da linha congelava. Rodando, a
- * tela conta sozinha desde o `startedAt`; terminado, vale a duração final.
+ * tela soma ao que o CLI mediu o tempo desde que ESTA aba recebeu a medida; terminado, vale a
+ * duração final.
  */
 describe("agentElapsedMs", () => {
   const task = (over: Partial<AgentTask> = {}): AgentTask => ({ toolUseId: "t1", taskId: "k1", status: "running", ...over });
 
-  it("rodando: conta desde o startedAt, mesmo sem progresso novo", () => {
-    expect(agentElapsedMs("running", task({ startedAt: 1_000, durationMs: 186_000 }), undefined, 1_000 + 300_000)).toBe(300_000);
+  it("rodando: anda desde que a medida chegou, mesmo sem progresso novo", () => {
+    expect(agentElapsedMs("running", task({ durationMs: 186_000, receivedAt: 5_000 }), undefined, 5_000 + 60_000)).toBe(246_000);
   });
 
-  it("rodando: nunca anda pra trás do que o CLI já mediu (relógio do navegador atrasado)", () => {
-    expect(agentElapsedMs("running", task({ startedAt: 10_000, durationMs: 50_000 }), undefined, 20_000)).toBe(50_000);
+  it("conta no relógio da aba: o startedAt do runner (outro relógio) não entra na conta", () => {
+    // o runner está 3 min atrás do navegador: contar do startedAt dele inflaria o tempo
+    expect(agentElapsedMs("running", task({ startedAt: 0, durationMs: 10_000, receivedAt: 180_000 }), undefined, 180_000)).toBe(10_000);
   });
 
-  it("rodando sem startedAt: fica no que o CLI mandou", () => {
+  it("rodando, em segundos inteiros — um relógio por segundo não mostra décimos", () => {
+    expect(agentElapsedMs("running", task({ durationMs: 12_400, receivedAt: 0 }), undefined, 1_000)).toBe(13_000);
+  });
+
+  it("relógio da aba voltando: nunca menos do que o CLI mediu", () => {
+    expect(agentElapsedMs("running", task({ durationMs: 50_000, receivedAt: 20_000 }), undefined, 10_000)).toBe(50_000);
+  });
+
+  it("morto sem aviso (nenhum fim chegou): o relógio para depois de 30 min de silêncio", () => {
+    const stuck = task({ durationMs: 60_000, receivedAt: 0 });
+    expect(agentElapsedMs("running", stuck, undefined, AGENT_CLOCK_STALE_MS + 5 * 60_000)).toBe(60_000 + AGENT_CLOCK_STALE_MS);
+    expect(agentElapsedMs("running", stuck, undefined, AGENT_CLOCK_STALE_MS * 10)).toBe(60_000 + AGENT_CLOCK_STALE_MS);
+  });
+
+  it("rodando sem a hora de chegada: fica no que o CLI mandou", () => {
     expect(agentElapsedMs("running", task({ durationMs: 7_000 }), undefined, 999_999)).toBe(7_000);
   });
 
   it("terminado: a duração final, sem contar o relógio", () => {
-    expect(agentElapsedMs("ok", task({ status: "completed", startedAt: 1_000, durationMs: 42_000 }), undefined, 9_999_999)).toBe(42_000);
+    expect(agentElapsedMs("ok", task({ status: "completed", durationMs: 42_000, receivedAt: 0 }), undefined, 9_999_999)).toBe(42_000);
     expect(agentElapsedMs("ok", undefined, { toolUses: 3, durationMs: 8_000 }, 9_999_999)).toBe(8_000);
   });
 
