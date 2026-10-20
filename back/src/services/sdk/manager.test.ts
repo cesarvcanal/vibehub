@@ -19,6 +19,8 @@ import {
   missedDuringSetup,
   onPeerTurn,
   injectSystemTurn,
+  RESUME_REENGAGE_TEXT,
+  NOTE_RESUME_STALLED,
   resetSdkSessionsForTesting,
   setDriverSpawnerForTesting,
   shutdownAllDrivers,
@@ -1056,12 +1058,17 @@ describe("inflight markers — trabalho que nenhuma mensagem abriu (segundo plan
     expect(await readInflightMarker(CARD)).toBeNull();
   });
 
-  it("segundo plano que acaba SEM turno depois: o marcador sai", async () => {
+  it("segundo plano que acaba sem turno depois: o aviso segura o marcador até a parada do driver", async () => {
     await personTurnThatClosed();
     emit({ type: "background_tasks", tasks: [{ id: "b1", type: "local_agent", description: "review" }] });
     emit({ type: "result", isError: false });
     await vi.waitFor(async () => expect((await readInflightMarker(CARD))?.background?.idle).toBe(true));
     emit({ type: "background_tasks", tasks: [] });
+    // Antes o marcador saía aqui — e um deploy nesse intervalo apagava o aviso sem retomada.
+    await vi.waitFor(async () => {
+      expect((await readInflightMarker(CARD))?.background?.tasks).toEqual(["aviso de término ainda não entregue: review"]);
+    });
+    stopCardDriver(CARD);
     await vi.waitFor(async () => expect(await readInflightMarker(CARD)).toBeNull());
   });
 
@@ -1113,6 +1120,74 @@ describe("inflight markers — trabalho que nenhuma mensagem abriu (segundo plan
       const marker = await readInflightMarker(CARD);
       expect(marker).toMatchObject({ attempts: 2, progressed: true, background: { tasks: ["build"] } });
     });
+  });
+
+  /**
+   * A RETOMADA QUE NÃO RETOMOU (produção, 2026-10-20). Depois de um deploy, o turno injetado
+   * fechou só com o filler "No response requested." — que o manager esconde — e o card ficou parado
+   * até alguém escrever. O `result` de um turno de retomada SEM progresso agora reenvia a ordem,
+   * uma vez, dizendo com todas as letras que não é notificação automática.
+   */
+  it("retomada que fecha sem avançar (só o filler) é reenviada UMA vez, com o texto de reengate", async () => {
+    const session = ensure();
+    injectSystemTurn(session, "continue de onde parou", { kind: "system", name: "vibehub" }, 1);
+    emit({ type: "assistant_text", text: "No response requested." });
+    emit({ type: "result", isError: false });
+    await vi.waitFor(() => {
+      const sends = spawned[0]!.stdin.written.map((w) => JSON.parse(w) as { type: string; text?: string })
+        .filter((f) => f.type === "user");
+      expect(sends.length).toBe(2);
+      expect(sends[1]!.text).toBe(RESUME_REENGAGE_TEXT);
+    });
+    expect(session.activeTurns).toBe(1);
+    // O reengate também não avançou: agora é nota visível, não um terceiro envio.
+    emit({ type: "result", isError: false });
+    await vi.waitFor(async () => {
+      const history = await readHistory(CARD);
+      expect(history.some((e) => e.type === "system_note" && e.text === NOTE_RESUME_STALLED)).toBe(true);
+    });
+    expect(spawned[0]!.stdin.written.filter((w) => w.includes('"type":"user"')).length).toBe(2);
+  });
+
+  it("retomada que avança fecha normalmente — nada é reenviado", async () => {
+    const session = ensure();
+    injectSystemTurn(session, "continue de onde parou", { kind: "system", name: "vibehub" }, 1);
+    emit({ type: "tool_use", id: "x", name: "Bash", input: {} });
+    emit({ type: "result", isError: false });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(spawned[0]!.stdin.written.filter((w) => w.includes('"type":"user"')).length).toBe(1);
+    expect(session.activeTurns).toBe(0);
+  });
+
+  it("um turno de PESSOA que fecha sem avançar não é reenviado (só a retomada do painel)", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"oi"}`));
+    emit({ type: "result", isError: false });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(spawned[0]!.stdin.written.filter((w) => w.includes('"type":"user"')).length).toBe(1);
+  });
+
+  /**
+   * O AVISO QUE O DEPLOY APAGOU (produção, 2026-10-20, card comando-btw): o último revisor em
+   * segundo plano terminou, a IA fechou o turno dizendo "falta altitude" — o aviso de término ainda
+   * na fila do CLI, à espera do próximo turno — e o deploy veio antes. Sem tarefa viva e sem turno,
+   * o marcador tinha saído: nada a retomar, card parado. O aviso pendente agora É trabalho.
+   */
+  it("tarefa de segundo plano que termina deixa o aviso PENDENTE no marcador até um turno começar", async () => {
+    await personTurnThatClosed();
+    emit({ type: "background_tasks", tasks: [{ id: "b1", type: "local_agent", description: "Altitude review" }] });
+    emit({ type: "result", isError: false });
+    emit({ type: "background_tasks", tasks: [] });
+    await vi.waitFor(async () => {
+      const marker = await readInflightMarker(CARD);
+      expect(marker?.background?.tasks).toEqual(["aviso de término ainda não entregue: Altitude review"]);
+    });
+    // O CLI abre o turno do aviso: entregue — e quando esse turno fecha, nada mais fica.
+    emit({ type: "assistant_text", text: "Altitude chegou." });
+    emit({ type: "result", isError: false });
+    await vi.waitFor(async () => expect(await readInflightMarker(CARD)).toBeNull());
   });
 
   it("parada deliberada com segundo plano vivo: o marcador sai mesmo assim", async () => {
