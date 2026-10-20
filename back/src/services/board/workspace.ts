@@ -33,6 +33,7 @@ import {
 } from "../brain/brain.js";
 import { logger } from "../../utils/logger.js";
 import { testWorkerTmuxArgs } from "../../runtime/testWorkers.js";
+import { CARD_ID_RE } from "./cardId.js";
 
 export { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir };
 
@@ -56,12 +57,6 @@ export { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir };
  * every call. vibehub has exactly one runner (`config.runner.container`) reached through one host
  * executor, so the IP parameter and the per-server lookup are gone.
  */
-
-/**
- * Card ids are UUIDs minted by the registry, and an id NAMES directories in the runner (its
- * uploads, its gh-token file). Anything not plainly id-shaped is refused rather than resolved.
- */
-const CARD_ID_RE = /^[0-9a-zA-Z-]{8,64}$/;
 
 /** Heredoc delimiters — reserved words, never derived from user input. */
 const OPEN_DELIM = "VIBEHUB_OPEN";

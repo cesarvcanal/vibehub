@@ -7,6 +7,7 @@ import type { AgentTaskEvent, ToolResultEvent } from "./toolResult.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { logger } from "../../utils/logger.js";
 import { isAtomicWriteTmp, writeFileAtomic } from "../../store/atomicWrite.js";
+import { CARD_ID_RE } from "../board/cardId.js";
 
 /**
  * SDK CHAT HISTORY — the per-card event log that makes the native chat's conversation SURVIVE.
@@ -67,12 +68,6 @@ export type HistoryEvent = (
   /** The transcript event id a mirrored event came from — the exact dedupe key on replay. */
   tid?: string;
 };
-
-/**
- * Card ids are UUIDs minted by the registry. The id also names a file on disk, so anything that is
- * not plainly id-shaped is refused rather than resolved — no path from a URL ever touches the fs.
- */
-const CARD_ID_RE = /^[0-9a-zA-Z-]{8,64}$/;
 
 function historyFile(cardId: string): string {
   if (!CARD_ID_RE.test(cardId)) throw new Error(`invalid card id for sdk history: '${cardId}'`);

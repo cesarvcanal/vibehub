@@ -4,6 +4,7 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { join } from "node:path";
 import { dataPath } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
+import { CARD_ID_RE } from "../board/cardId.js";
 
 /**
  * IN-FLIGHT TURN MARKERS — the durable record that a card's SDK driver has a turn RUNNING.
@@ -88,9 +89,6 @@ const OWNER_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
 function ownerFile(owner: string): string {
   return dataPath(SDK_INFLIGHT_DIR, "owners", owner);
 }
-
-/** Same id rule as sdk-history: the card id names a file, so only id-shaped values touch the fs. */
-const CARD_ID_RE = /^[0-9a-zA-Z-]{8,64}$/;
 
 function markerFile(cardId: string): string {
   if (!CARD_ID_RE.test(cardId)) throw new Error(`invalid card id for sdk inflight marker: '${cardId}'`);

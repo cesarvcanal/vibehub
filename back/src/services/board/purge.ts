@@ -19,6 +19,7 @@ import { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, DEFAULT_CLAUDE_JSON } from "..
 import { logger } from "../../utils/logger.js";
 import { isAtomicWriteTmp } from "../../store/atomicWrite.js";
 import { forgetCardActor } from "./actor.js";
+import { CARD_ID_RE } from "./cardId.js";
 
 /**
  * CARD PURGE — deleting a card ERASES the card, not the tile that showed it.
@@ -311,8 +312,6 @@ export function parseOrphanListing(stdout: string): OrphanEntry[] {
   return out;
 }
 
-/** Card ids name directories; the same rule as everywhere else that turns an id into a path. */
-const CARD_ID_RE = /^[0-9a-zA-Z-]{8,64}$/;
 /** Worktree slugs, as the registry mints them. */
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 /** A browser profile directory: `card-` plus the head of an id. */
