@@ -34,7 +34,8 @@ import { sweepDoneCards, DONE_SWEEP_INTERVAL_MS } from "./services/board/retenti
 import { startOutboxFlusher } from "./services/board/outbox.js";
 import { startRunnerReaper } from "./services/reaper/reaper.js";
 import { pruneStaleInflightOwners, startInflightOwnerHeartbeat } from "./services/sdk/inflight.js";
-import { handOffSdkOnShutdown, resumeInterruptedTurns } from "./services/sdk/resume.js";
+import { handOffSdkOnShutdown, resumeAfterDriverCrash, resumeInterruptedTurns } from "./services/sdk/resume.js";
+import { onDriverCrashWithWork } from "./services/sdk/manager.js";
 import { restartSessionsIfSpecChanged } from "./services/board/sessionSpec.js";
 
 /**
@@ -253,6 +254,9 @@ async function main(): Promise<void> {
       logger.info({ resumed: summary.resumed.length, noted: summary.noted.length }, "sdk boot resume done");
     }
   });
+  // …e o driver que CAI sozinho com o back de pé (OOM, kill, o docker exec que morreu): a mesma
+  // retomada, na hora — sem isto o turno esperava um deploy para voltar. Ver resumeAfterDriverCrash.
+  onDriverCrashWithWork((cardId, marker) => { void resumeAfterDriverCrash(cardId, marker); });
   // Graceful shutdown (melhor esforço): o docker stop de um deploy manda SIGTERM e dá uns segundos.
   // Encerrar o stdin dos drivers é o adeus limpo (EOF = exit do driver, atravessa o docker exec);
   // os marcadores de turno em voo FICAM no disco — são eles que contam ao próximo boot o que este

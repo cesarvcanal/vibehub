@@ -9,6 +9,9 @@ import {
   driverTurnRunning,
   ensureDriverSession,
   handleClientFrame,
+  injectSystemTurn,
+  onDriverCrashWithWork,
+  RESUME_CONFIRM_MS,
   resetSdkSessionsForTesting,
   setDriverSpawnerForTesting,
 } from "./manager.js";
@@ -156,4 +159,76 @@ describe("sdk manager — a bolinha do card segue o driver", () => {
     expect(applied.map((a) => a.status)).toEqual(["working", "waiting"]);
   });
 
+});
+
+/**
+ * A RETOMADA NÃO PISCA "AGUARDANDO". No CLI real, o turno vazio do arranque fecha com um `result`
+ * segundos antes do turno de verdade (E2E, 2026-10-20). Contada como fim de turno, a bolinha ia a
+ * `waiting` e voltava a `working` — e o aviso de "turno terminou" (services/events) saía no meio da
+ * retomada. Enquanto o vigia espera, o card segue trabalhando; só a desistência o põe em espera.
+ */
+describe("sdk manager — a bolinha durante a retomada", () => {
+  const emit = (event: object) => spawned[0]!.stdout.emit("data", line(event));
+
+  it("o result vazio do arranque não põe o card em aguardando; o turno de verdade fecha normal", async () => {
+    const session = ensure();
+    injectSystemTurn(session, "continue", { kind: "system", name: "vibehub" }, 1);
+    await flush();
+    emit({ type: "result", isError: false });
+    await flush();
+    expect(applied).toEqual([{ cardId: CARD, status: "working" }]);
+    expect(driverTurnRunning(CARD)).toBe(true);
+    emit({ type: "tool_use", id: "t", name: "Bash", input: {} });
+    emit({ type: "result", isError: false });
+    await flush();
+    expect(applied).toEqual([{ cardId: CARD, status: "working" }, { cardId: CARD, status: "waiting" }]);
+  });
+
+  it("a retomada que não pegou nem com o reenvio: aguardando, uma vez", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const session = ensure();
+      injectSystemTurn(session, "continue", { kind: "system", name: "vibehub" }, 1);
+      for (let i = 0; i < 2; i++) {
+        emit({ type: "result", isError: false });
+        vi.advanceTimersByTime(RESUME_CONFIRM_MS + 1);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+    await flush();
+    expect(applied).toEqual([{ cardId: CARD, status: "working" }, { cardId: CARD, status: "waiting" }]);
+    expect(driverTurnRunning(CARD)).toBe(false);
+  });
+});
+
+/**
+ * A QUEDA DO DRIVER E A BOLINHA. O close forçava `waiting` — a transição que a central de eventos
+ * (#182) lê como "turno terminou" — e 10 s depois a retomada da queda voltava a `working`: o aviso
+ * já tinha saído para quem estava longe do quadro. Com quem retoma inscrito, a bolinha espera o
+ * veredito dele (resume.ts acerta para `waiting` quando não retoma).
+ */
+describe("sdk manager — a bolinha numa queda com trabalho em voo", () => {
+  it("com quem retome inscrito: segue trabalhando", async () => {
+    const off = onDriverCrashWithWork(() => undefined);
+    try {
+      const session = ensure();
+      handleClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
+      await flush();
+      spawned[0]!.emit("close", 137);
+      await flush();
+      expect(applied).toEqual([{ cardId: CARD, status: "working" }]);
+    } finally {
+      off();
+    }
+  });
+
+  it("sem ninguém para retomar: aguardando, como sempre", async () => {
+    const session = ensure();
+    handleClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
+    await flush();
+    spawned[0]!.emit("close", 137);
+    await flush();
+    expect(applied).toEqual([{ cardId: CARD, status: "working" }, { cardId: CARD, status: "waiting" }]);
+  });
 });
