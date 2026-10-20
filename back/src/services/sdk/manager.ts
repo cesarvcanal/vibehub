@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
-import { onCardDriverProbe, type DriverActivity } from "../board/agentState.js";
+import { onCardBackgroundProbe, onCardDriverProbe, reportCardStatusFromDriver, type DriverActivity } from "../board/agentState.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
 import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, clearHistoryBeforeLastClear, readHistory, replayableHistoryEvent, rewindHistory, unwrapEditedMessage, type HistoryEvent } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker, type InflightBackground, type InflightMarker } from "./inflight.js";
@@ -71,6 +71,13 @@ const KEEPALIVE_MS = 25_000;
  */
 export const TYPING_RELAY_MIN_MS = 1_000;
 
+/**
+ * Quanto esperar, depois que a última tarefa em segundo plano termina, antes de dar o card como
+ * ocioso. Quase sempre o CLI abre um turno sozinho para contar o resultado — e o `Stop` desse turno
+ * é quem diz "aguardando". Só quando nenhum turno abriu nesse intervalo o manager fala por ele.
+ */
+export const BACKGROUND_SETTLE_MS = 15_000;
+
 /** Quantos subagentes/tarefas a sessão lembra (as terminadas mais antigas saem primeiro). */
 export const TASKS_MAX = 200;
 
@@ -112,6 +119,8 @@ export interface DriverSession {
   rateLimits: Map<string, RateLimitInfo>;
   /** Quando o conjunto deixou de ser vazio — o início da contagem de `BACKGROUND_HOLD_MAX_MS`. */
   backgroundSince?: number;
+  /** O acerto do status do card depois que o segundo plano esvaziou (ver BACKGROUND_SETTLE_MS). */
+  backgroundSettleTimer?: NodeJS.Timeout;
   /**
    * The session's command CATALOGUE (what the chat's "/" menu offers), as last reported by the
    * driver. Kept HERE, next to `ready`: it is session state, not conversation — it is never
@@ -322,6 +331,41 @@ function isTurnInFlight(session: Pick<DriverSession, "activeTurns" | "autonomous
   return session.activeTurns > 0 || session.autonomousTurn;
 }
 
+/**
+ * O STATUS DO CARD acompanha o segundo plano (produção, 2026-10-20: o board mostrava "aguardando" com
+ * a suíte rodando em background). Enquanto há tarefa viva, o `waiting` do hook `Stop` vale como
+ * `working` (services/board/status.ts); este é o outro lado — as bordas que nenhum hook cobre:
+ *  - o conjunto deixou de ser vazio: `working`, porque o `Stop` pode ter chegado ANTES deste evento;
+ *  - esvaziou e, passado BACKGROUND_SETTLE_MS, nenhum turno abriu: `waiting`, porque nenhum `Stop`
+ *    virá dizer que o Claude chegou ao prompt. Só quando o card ainda está `working`.
+ */
+function syncBackgroundStatus(session: DriverSession, hadTasks: boolean): void {
+  const hasTasks = session.backgroundTasks.length > 0;
+  if (hasTasks === hadTasks) return;
+  clearTimeout(session.backgroundSettleTimer);
+  session.backgroundSettleTimer = undefined;
+  if (hasTasks) {
+    reportCardStatusFromDriver(session.cardId, "working");
+    return;
+  }
+  session.backgroundSettleTimer = setTimeout(() => {
+    session.backgroundSettleTimer = undefined;
+    if (session.closed || session.backgroundTasks.length > 0) return;
+    if (session.activeTurns > 0 || session.autonomousTurn) return;
+    void registry.getCard(session.cardId).then((card) => {
+      if (card?.status === "working") reportCardStatusFromDriver(session.cardId, "waiting");
+    }).catch(() => { /* best-effort, like a hook */ });
+  }, BACKGROUND_SETTLE_MS);
+  session.backgroundSettleTimer.unref?.();
+}
+
+/** Uma tarefa viva, dentro do teto, segura o card em `working` (ver services/board/status.ts). */
+export function driverHoldsBackgroundWork(cardId: string): boolean {
+  const session = sessions.get(cardId);
+  if (!session || session.closed) return false;
+  return backgroundHoldLeft(session) > 0;
+}
+
 /** Quanto falta do teto em que as tarefas em segundo plano seguram o driver (0 = não seguram). */
 function backgroundHoldLeft(session: Pick<DriverSession, "backgroundTasks" | "backgroundSince">): number {
   if (session.backgroundTasks.length === 0 || session.backgroundSince === undefined) return 0;
@@ -483,9 +527,11 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
         })
       : [];
     event = { type: "background_tasks", tasks };
+    const hadTasks = session.backgroundTasks.length > 0;
     if (tasks.length === 0) session.backgroundSince = undefined;
-    else if (session.backgroundTasks.length === 0) session.backgroundSince = Date.now();
+    else if (!hadTasks) session.backgroundSince = Date.now();
     session.backgroundTasks = tasks;
+    syncBackgroundStatus(session, hadTasks);
     syncInflightMarker(session);
     // O relógio do idle é refeito a cada mudança: com tarefa viva ele espera o teto dela; quando a
     // última termina sem turno em voo e sem ninguém olhando, AGORA começam os 15 min — o mesmo
@@ -1449,6 +1495,7 @@ export function stopCardDriver(cardId: string): void {
   if (!session) return;
   sessions.delete(cardId);
   clearIdleTimer(session);
+  clearTimeout(session.backgroundSettleTimer);
   session.closed = true;
   try { session.child.stdin.end(); } catch { /* already gone */ }
   try { session.child.kill(); } catch { /* already gone */ }
@@ -1498,3 +1545,7 @@ onCardInUseProbe((cardId) => isCardChatInUse(cardId));
 // do back, não do painel do tmux), então sem isto a visão de sessão lia o card como "Claude saiu" —
 // o banner "Claude parou" por cima de uma conversa que estava respondendo.
 onCardDriverProbe((cardId) => driverActivity(cardId));
+
+// …e a quarta: uma tarefa em segundo plano viva é trabalho — o `Stop` do turno que a disparou não
+// pode pôr o card em "aguardando" (ver services/board/status.ts).
+onCardBackgroundProbe((cardId) => driverHoldsBackgroundWork(cardId));

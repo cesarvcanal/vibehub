@@ -554,7 +554,9 @@ describe("built-in browser server", () => {
     const parsed = JSON.parse(inj.json) as { type: string; command: string; args: string[] };
     expect(parsed.type).toBe("stdio");
     expect(parsed.command).toBe("npx");
-    expect(parsed.args).toContain("@playwright/mcp@latest");
+    // Versão exata: `@latest` faria o npx consultar o registro a cada boot de CLI.
+    expect(parsed.args).toContain(mod.BROWSER_MCP_PACKAGE);
+    expect(mod.BROWSER_MCP_PACKAGE).toMatch(/^@playwright\/mcp@\d+\.\d+\.\d+$/);
     const i = parsed.args.indexOf("--cdp-endpoint");
     expect(i).toBeGreaterThanOrEqual(0);
     // The endpoint is the shell reference expanded per SESSION (never a baked-in per-card URL), with
