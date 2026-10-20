@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { config } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
 import { buildSdkDriverCommandLine } from "../sdk/driver.js";
+import { statusUrl } from "../../runtime/runner.js";
 import { terminalRemoteArgs, restartStaggered } from "./workspace.js";
 
 /**
@@ -16,7 +17,9 @@ import { terminalRemoteArgs, restartStaggered } from "./workspace.js";
  *
  * The fingerprint is the session's OWN command line, built for a fixed sample card by the same pure
  * builders the real open uses (terminal and native chat). Any change to what a session is born with
- * changes it — no version number to remember to bump. A deploy that does not touch it restarts
+ * changes it — no version number to remember to bump. The status URL is the REAL one: every session
+ * bakes it into VIBEHUB_STATUS_URL, so a new public URL must restart them too (with a fixed sample
+ * here, a corrected URL never reached the open sessions — their hooks kept the dead address). A deploy that does not touch it restarts
  * nothing. The sweep is the same staggered restart the brain/MCP save uses: idle cards now (they
  * resume the same conversation), working cards flagged and restarted the moment they go idle.
  */
@@ -33,11 +36,11 @@ export function sessionSpecFingerprint(): string {
       profileDir: "/root/.claude",
       cdpEndpoint: "http://127.0.0.1:9222",
       cardId: SAMPLE_CARD_ID,
-      statusUrl: "http://127.0.0.1/api/runner/status",
+      statusUrl: statusUrl(),
     }),
     terminal: terminalRemoteArgs("runner", "card-sample", SAMPLE_CWD, {
       cardId: SAMPLE_CARD_ID,
-      statusUrl: "http://127.0.0.1/api/runner/status",
+      statusUrl: statusUrl(),
     }),
   };
   return createHash("sha256").update(JSON.stringify(spec)).digest("hex");
