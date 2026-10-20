@@ -1543,14 +1543,18 @@ function noteAgentWork(session: DriverSession, event: DriverEvent): void {
 /**
  * Another card's AGENT talking to this one (`vibehub_send_to_terminal`): a normal user turn of the
  * card's own driver, so it lands in the conversation the card is really having — not in the tmux
- * TUI, whose Claude never rereads what the driver wrote. No in-flight marker: the boot-resume
- * continues a PERSON's interrupted turn; an agent's turn is for the agent that sent it to retry.
+ * TUI, whose Claude never rereads what the driver wrote. Also the way a PERSON's order arrives from
+ * the external MCP (ChatGPT, `viaNativeChat`).
+ *
+ * The turn gets the in-flight marker like any other: a deploy kills it just the same, and nobody on
+ * the other side retries — the ChatGPT never learns the turn died, the sending agent reads a card
+ * still "working". Without it the boot had nothing to resume and the board kept the dead process's
+ * `working` (produção, card a28ffa23, 2026-10-20). A new order restarts the resume chain (attempts 0).
  * Returns false (nothing recorded) when the driver can no longer take a turn.
  */
 export function sendAgentTurn(session: DriverSession, text: string, origin: MessageOrigin): boolean {
   if (!writeInjectedTurn(session, text, origin)) return false;
-  // A conversa seguiu por outro lado: o que vier daqui é deste turno, não da retomada.
-  endResumeWatch(session);
+  markPersonTurn(session, { startedAt: Date.now(), preview: inflightPreview(text), attempts: 0 });
   return true;
 }
 
