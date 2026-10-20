@@ -221,7 +221,7 @@ const LIST_DELIM = "VIBEHUB_ORPHAN_LIST";
 const SWEEP_DELIM = "VIBEHUB_ORPHAN_SWEEP";
 const CLAUDE_JSON_DELIM = "VIBEHUB_ORPHAN_CLAUDE_JSON";
 
-export type OrphanKind = "upload" | "browser" | "gh" | "transcript" | "worktree";
+export type OrphanKind = "upload" | "browser" | "gh" | "git" | "transcript" | "worktree";
 
 /** One candidate artifact in the runner, as the listing script reports it. */
 export interface OrphanEntry {
@@ -288,6 +288,8 @@ export function buildOrphanListScript(containerName: string): string {
     find("upload", "/work/.uploads", "-type d"),
     find("browser", BROWSER_DATA_DIR, "-type d"),
     find("gh", "/root/.vibehub/gh", "-type f -name '*.token'"),
+    // The card's git include: the name and e-mail of whoever worked it (github/runnerIdentity.ts).
+    find("git", "/root/.vibehub/git", "-type f -name '*.gitconfig'"),
     find("transcript", `${DEFAULT_CLAUDE_DIR}/projects ${CLAUDE_PROFILES_DIR}/*/projects`, "-type d"),
     find("worktree", "/work/*-worktrees /work/scratch", "-type d"),
     "true",
@@ -295,7 +297,7 @@ export function buildOrphanListScript(containerName: string): string {
   ].join("\n");
 }
 
-const ORPHAN_KINDS: ReadonlySet<string> = new Set<OrphanKind>(["upload", "browser", "gh", "transcript", "worktree"]);
+const ORPHAN_KINDS: ReadonlySet<string> = new Set<OrphanKind>(["upload", "browser", "gh", "git", "transcript", "worktree"]);
 
 /** Parses the listing (`kind \t path \t mtime-seconds`). Anything malformed is skipped. PURE. */
 export function parseOrphanListing(stdout: string): OrphanEntry[] {
@@ -372,6 +374,11 @@ export function planOrphanPurge(
         break;
       case "gh": {
         const id = name.endsWith(".token") ? name.slice(0, -".token".length) : "";
+        orphan = CARD_ID_RE.test(id) && !live.ids.has(id);
+        break;
+      }
+      case "git": {
+        const id = name.endsWith(".gitconfig") ? name.slice(0, -".gitconfig".length) : "";
         orphan = CARD_ID_RE.test(id) && !live.ids.has(id);
         break;
       }

@@ -6,6 +6,7 @@ import { cardCdpEndpoint } from "../browser/ports.js";
 import { firstRunSeedCommand } from "../accounts/firstRun.js";
 import { carryTranscriptsCommand } from "../accounts/carryTranscripts.js";
 import { oauthTokenGuard } from "../accounts/profiles.js";
+import { shQuote } from "../../runtime/host.js";
 
 /**
  * A card's workspace in the runner (open + terminal + pause + restart + drop). The INVARIANTS the
@@ -49,7 +50,7 @@ const gitEnvFor = (cardId: string) => [
   "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=include.path", `GIT_CONFIG_VALUE_0=/root/.vibehub/git/${cardId}.gitconfig`,
 ];
 /** The session command as it appears INSIDE a script: one shell-quoted argument (it contains quotes of its own). */
-const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+const sq = shQuote;
 
 vi.mock("../../runtime/host.js", async (orig) => ({
   ...(await orig<typeof import("../../runtime/host.js")>()),
@@ -2268,7 +2269,11 @@ describe("aplicar identidade na worktree", () => {
     const { execFile } = await import("node:child_process");
     const { promisify } = await import("node:util");
     const { mkdtemp: mkTemp } = await import("node:fs/promises");
-    const run = promisify(execFile);
+    // Git com ambiente LIMPO: rodando dentro de um card, o processo herda o include git do próprio card
+    // (GIT_CONFIG_COUNT/KEY_0/VALUE_0, escopo de comando) — ele ganharia de tudo que este teste grava.
+    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_CONFIG")));
+    const exec = promisify(execFile);
+    const run = (file: string, args: string[]) => exec(file, args, { env });
     const root = await mkTemp(join(tmpdir(), "vibehub-wt-"));
     const repo = join(root, "repo");
 
