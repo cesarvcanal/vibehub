@@ -166,7 +166,6 @@ export function isHumanActive(card: Pick<Card, "humanActiveAt">, now: number = D
  * See `restartPendingAt` on the card and `shouldRestartOnStatus`.
  */
 export type RestartReason = "brain" | "mcp" | "plugin" | "config" | "deploy";
-export const RESTART_REASONS: readonly RestartReason[] = ["brain", "mcp", "plugin", "config", "deploy"] as const;
 
 /**
  * Claude models a card may pin: FAMILY aliases, not versioned ids. When set, the session starts with
@@ -437,7 +436,6 @@ export interface Card {
  */
 export type ShareKind = "card" | "project";
 export type ShareLevel = "work" | "view";
-export const SHARE_LEVELS: readonly ShareLevel[] = ["work", "view"] as const;
 
 /** A whitelisted share level. THROWS otherwise — it decides what a member may do. PURE. */
 export function assertShareLevel(level: string): ShareLevel {
@@ -2134,10 +2132,6 @@ export async function settleMcpDrops(paid: readonly McpDrop[]): Promise<void> {
 // ---------------------------------------------------------------------------
 // Shares — who else can reach a card or a project
 // ---------------------------------------------------------------------------
-
-export async function listShares(): Promise<Share[]> {
-  return (await store.load()).shares;
-}
 
 /** Every share on one thing. */
 export async function sharesForTarget(kind: ShareKind, targetId: string): Promise<Share[]> {

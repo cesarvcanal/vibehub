@@ -36,11 +36,6 @@ export async function cardLevel(user: PublicUser | null, cardId: string): Promis
   return registry.strongerLevel(direct, viaProject);
 }
 
-/** May this user see this card at all? */
-export async function canAccessCard(user: PublicUser | null, cardId: string): Promise<boolean> {
-  return (await cardLevel(user, cardId)) !== null;
-}
-
 /**
  * May this user see this project? The project itself may be shared, or ONE of its cards may be —
  * a card you were given has to appear somewhere, and where it appears is under its project.
