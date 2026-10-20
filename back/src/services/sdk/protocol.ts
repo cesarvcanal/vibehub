@@ -438,6 +438,9 @@ export type DriverControl =
  * O `/btw` no menu "/". O CLI o trata como comando de terminal (ou nem o lista no modo SDK), e
  * quem responde aqui é o próprio painel — então a entrada é nossa, e substitui a do CLI se houver.
  */
+/** Teto da pergunta lateral: ela vai ao prompt, ao log do card e a cada aba. */
+export const BTW_QUESTION_MAX = 8_000;
+
 export const BTW_COMMAND: SlashCommandInfo = {
   name: "btw",
   source: "command",
@@ -553,7 +556,7 @@ export function parseSdkClientFrame(raw: string): DriverControl | null {
         const question = typeof (parsed as { question?: unknown }).question === "string"
           ? (parsed as { question: string }).question.trim()
           : "";
-        return question ? { type: "btw", id: parsed.id, question } : null;
+        return question ? { type: "btw", id: parsed.id, question: question.slice(0, BTW_QUESTION_MAX) } : null;
       }
       if (
         parsed.type === "edit_user" &&

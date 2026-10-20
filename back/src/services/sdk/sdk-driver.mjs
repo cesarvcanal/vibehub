@@ -639,7 +639,12 @@ function queueBtw(id, question) {
     return;
   }
   btwPending += 1;
-  btwChain = btwChain.then(() => answerBtw(id, question)).finally(() => { btwPending -= 1; }); // answerBtw never throws
+  // O `catch` é o que mantém a fila viva: uma rejeição (um `emit` num stdout quebrado) deixaria a
+  // corrente rejeitada para sempre e toda pergunta seguinte sem resposta.
+  btwChain = btwChain
+    .then(() => answerBtw(id, question))
+    .catch((err) => { process.stderr.write(`btw failed: ${err && err.message ? err.message : String(err)}\n`); })
+    .finally(() => { btwPending -= 1; });
 }
 
 let currentQuery = null; // the live query() iterator, so an interrupt can reach it mid-turn

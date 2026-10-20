@@ -1725,10 +1725,11 @@ function isPendingBtw(row: SdkRow): row is BtwRow & { askedAt: number } {
 }
 
 /**
- * O prazo de uma pergunta lateral na TELA: o do driver (3 min) e uma folga. Passado dele sem
- * resposta, o driver que a respondia morreu (deploy, hibernação) — e ninguém mais vai responder.
+ * O prazo de uma pergunta lateral na TELA. O driver responde UMA por vez (até 3 na fila) e cada uma
+ * tem 3 min — o prazo cobre a fila inteira e uma folga. Passado dele sem resposta, o driver que a
+ * respondia morreu (deploy, hibernação) e ninguém mais vai responder.
  */
-export const BTW_EXPIRE_MS = 4 * 60_000;
+export const BTW_EXPIRE_MS = 10 * 60_000;
 
 /** As perguntas desta aba que passaram do prazo viram erro. Nada vencido = o MESMO estado. PURE. */
 export function expireBtwRows(state: SdkChatState, now: number): SdkChatState {

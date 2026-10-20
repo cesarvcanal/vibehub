@@ -714,11 +714,12 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     const timers = btwTimersRef.current;
     return () => { for (const timer of timers) clearTimeout(timer); };
   }, []);
-  const armBtwExpiry = React.useCallback((): void => {
+  const armBtwExpiry = React.useCallback((askedAt: number): void => {
+    // Do MESMO `askedAt` da linha: o timer nunca dispara um instante antes do prazo que ela conta.
     const timer = setTimeout(() => {
       btwTimersRef.current.delete(timer);
       setState((prev) => expireBtwRows(prev, Date.now()));
-    }, BTW_EXPIRE_MS);
+    }, askedAt + BTW_EXPIRE_MS - Date.now());
     btwTimersRef.current.add(timer);
   }, []);
 
@@ -995,8 +996,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       if (!wireUp) throw new Error(translate("sdk.offline")); // the composer keeps the words
       const btwId = newCid();
       sendFrame({ type: "btw", id: btwId, question: btw }); // throws offline: the composer keeps the words
-      setState((prev) => appendBtwRow(prev, btwId, btw, Date.now()));
-      armBtwExpiry();
+      const askedAt = Date.now();
+      setState((prev) => appendBtwRow(prev, btwId, btw, askedAt));
+      armBtwExpiry(askedAt);
       return;
     }
     const waits = !wireUp || chat.turnActive || chat.awaiting || pendingEdit;

@@ -98,10 +98,12 @@ export function replayableHistoryEvent(event: HistoryEvent): boolean {
     case "question_result":
     // The edit marker: without it a replay would draw the superseded message as if it still stood.
     case "message_edited":
-    // O /btw: a resposta carrega a pergunta — é a ÚNICA linha dele no log (a pergunta não entra
-    // como `user`, nem aqui nem no contexto do modelo).
-    case "btw_answer":
       return true;
+    // O /btw: a resposta carrega a pergunta — é a ÚNICA linha dele no log (a pergunta não entra
+    // como `user`, nem aqui nem no contexto do modelo). Só a que RESPONDEU: uma falha passageira
+    // (fila cheia, prazo) redesenhada em todo F5 seria um aviso eterno de algo que já passou.
+    case "btw_answer":
+      return typeof (event as { text?: unknown }).text === "string";
     // O resumo do resultado (a linha "7 linhas" / "erro: …"): só do agente PRINCIPAL. O dos
     // subagentes é muito (centenas por frota) e empurraria a conversa para fora da janela do
     // replay — a linha do tempo de um subagente vem do transcript (./detail.ts).

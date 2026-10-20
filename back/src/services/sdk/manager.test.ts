@@ -1937,6 +1937,20 @@ describe("attachSocket — \"está digitando\" entre as abas do card", () => {
     expect(peerFrames(mussa).length).toBe(3);
   });
 
+  it("mandar um /btw também encerra o \"digitando\" nas outras abas", () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    const mussa = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    attachSocket(session, mussa as never, MUSSA);
+    cesar.emit("message", typing(true));
+    cesar.emit("message", Buffer.from(JSON.stringify({ type: "btw", id: "b1", question: "e aí?" })));
+    expect(peerFrames(mussa)).toEqual([
+      { type: "peer_typing", name: "cesar", active: true },
+      { type: "peer_typing", name: "cesar", active: false },
+    ]);
+  });
+
   it("o \"parou\" passa sempre (fura a janela) — e só quando havia um \"digitando\" no ar", () => {
     const session = ensure();
     const cesar = fakeSocket();
@@ -2406,6 +2420,7 @@ describe("/btw — pergunta lateral", () => {
     handleClientFrame(session, btwFrame, undefined, socket as never);
     const answer = socket.sent.map((s) => JSON.parse(s) as Record<string, unknown>).find((e) => e.type === "btw_answer");
     expect(answer).toMatchObject({ id: "b1", question: "o que falta?", error: expect.any(String) });
+    expect(String(answer!.error)).not.toBe("driver-gone"); // frase para a pessoa, não código interno
     expect(driverControls()).toEqual([]);
   });
 });

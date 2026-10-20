@@ -1979,3 +1979,9 @@ describe("/btw na tela", () => {
     expect(currentActivity(state)).toMatchObject({ kind: "tool" });
   });
 });
+
+describe("/btw — prazo da tela", () => {
+  it("cobre a fila inteira do driver: 3 perguntas de 3 min cada nunca expiram antes da vez delas", () => {
+    expect(BTW_EXPIRE_MS).toBeGreaterThan(3 * 3 * 60_000);
+  });
+});
