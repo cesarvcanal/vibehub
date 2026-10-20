@@ -377,12 +377,42 @@ describe("delivery — one signed event per POST", () => {
     expect(deliveries()).toHaveLength(1);
   });
 
-  it("an event over 256 KiB is never sent", async () => {
+  it("an event over 256 KiB is summarized to fit: one POST under the limit, same eventId, marked truncated", async () => {
     await env.webhooks.subscribeWebhook(asOwner(), params());
-    await env.events.recordMessage({ cardId: card.id, type: "info", text: "x".repeat(270 * 1024) });
+    const e = await env.events.recordMessage({ cardId: card.id, type: "info", text: "x".repeat(300 * 1024), context: "y".repeat(100 * 1024) });
     await env.webhooks.pumpWebhooks();
-    expect(deliveries()).toHaveLength(0);
-    expect(await env.webhooks.pendingForTesting()).toHaveLength(0);
+    expect(deliveries()).toHaveLength(1);
+    const r = deliveries()[0]!;
+    expect(Buffer.byteLength(r.body)).toBeLessThanOrEqual(256 * 1024);
+    const body = verify(r);
+    expect(body.eventId).toBe(e.id);
+    expect(body.data).toMatchObject({ cardId: card.id, truncated: true });
+    expect(String(body.data.text).length).toBeLessThan(300 * 1024);
+  });
+
+  it("logs never carry the signing secret, the credential or the callback path", async () => {
+    const { logger } = await import("../../utils/logger.js");
+    const lines: string[] = [];
+    for (const level of ["info", "warn", "error", "debug"] as const) {
+      vi.spyOn(logger, level).mockImplementation(((...args: unknown[]) => { lines.push(JSON.stringify(args)); }) as never);
+    }
+    receiver.respond = () => ({ status: 200, body: "{}" });
+    await env.webhooks.subscribeWebhook(asOwner(), params({}, { url: receiver.url("receiver.test", "/hooks/private-path-123") })).catch(() => undefined);
+    receiver.respond = echoChallenge;
+    await env.webhooks.subscribeWebhook(asOwner(), params({}, { url: receiver.url("receiver.test", "/hooks/private-path-456") }));
+    receiver.respond = () => ({ status: 500, body: "{}" });
+    await env.events.recordMessage({ cardId: card.id, type: "info", text: "x".repeat(300 * 1024) });
+    await env.webhooks.pumpWebhooks();
+    live.delete(sha("tok-owner"));
+    await env.events.recordMessage({ cardId: card.id, type: "info", text: "revoked now" });
+    await env.webhooks.pumpWebhooks(Date.now() + 60 * 60_000);
+    vi.restoreAllMocks();
+    const all = lines.join("\n");
+    expect(lines.length).toBeGreaterThan(0);
+    expect(all).not.toContain(SECRET);
+    expect(all).not.toContain(SECRET.slice(6, 30));
+    expect(all).not.toContain("private-path");
+    expect(all).not.toContain(sha("tok-owner"));
   });
 });
 

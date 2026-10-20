@@ -93,6 +93,7 @@ export const DEFINITION = {
       options: { type: "array", items: { type: "object", properties: { label: { type: "string" }, description: { type: "string" } } } },
       recommended: { type: "string" },
       state: { type: "string" }, summary: { type: "string" }, tool: { type: "string" }, reason: { type: "string" },
+      truncated: { type: "boolean", description: "long text fields were cut so the event fits one webhook delivery (256 KiB)" },
     },
     required: ["contractVersion", "type", "kind", "severity", "needsAnswer", "text", "cardId", "projectId", "cardTitle", "correlationId", "at"],
   },

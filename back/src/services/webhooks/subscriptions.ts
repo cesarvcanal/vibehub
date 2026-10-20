@@ -163,7 +163,9 @@ function assertSecret(secret: unknown): string {
 /** The principal as it is NOW: the person, `null` for the board, `false` when the credential no longer holds. */
 async function holder(p: { key: string; credential: string }): Promise<PublicUser | null | false> {
   if (p.key === "board") {
-    const now = Buffer.from(sha256(await runnerToken()));
+    const token = await runnerToken();
+    if (!token) return false;
+    const now = Buffer.from(sha256(token));
     const kept = Buffer.from(p.credential);
     return now.length === kept.length && timingSafeEqual(now, kept) ? null : false;
   }
@@ -372,6 +374,27 @@ export async function unsubscribeWebhook(principal: WebhookPrincipal | null, raw
 
 /* ------------------------------------------------------------------ delivery */
 
+/** Free text an event may carry at length: what a summary cuts first. */
+const LONG_FIELDS = ["context", "text", "summary", "reason", "question"] as const;
+const SUMMARY_CHARS = 4_000;
+
+/**
+ * The body, serialized ONCE (what is signed is what is sent). Past the size limit the long free-text
+ * fields are cut and `data.truncated` set — a summary still wakes the agent, which can read the full
+ * record with a tool; null when even that does not fit.
+ */
+function fitted(occurrence: { data: Record<string, unknown> }): string | null {
+  const body = JSON.stringify(occurrence);
+  if (Buffer.byteLength(body, "utf8") <= WEBHOOKS.maxBodyBytes) return body;
+  const data: Record<string, unknown> = { ...occurrence.data, truncated: true };
+  for (const field of LONG_FIELDS) {
+    const value = data[field];
+    if (typeof value === "string" && value.length > SUMMARY_CHARS) data[field] = `${value.slice(0, SUMMARY_CHARS)}…`;
+  }
+  const summary = JSON.stringify({ ...occurrence, data });
+  return Buffer.byteLength(summary, "utf8") <= WEBHOOKS.maxBodyBytes ? summary : null;
+}
+
 type Outcome = { kind: "done" } | { kind: "drop"; error?: string } | { kind: "retry"; error: string } | { kind: "revoked" };
 
 async function attempt(p: PendingDelivery, now: number): Promise<Outcome> {
@@ -382,9 +405,9 @@ async function attempt(p: PendingDelivery, now: number): Promise<Outcome> {
   if (who === false) return { kind: "revoked" };
   const event: CardEvent | undefined = (await eventsAfter(p.seq - 1)).events.find((e) => e.seq === p.seq);
   if (!event || !(await canHear(who, event))) return { kind: "drop" };
-  const body = JSON.stringify(await occurrenceOf(event, watermark(doc, sub)));
-  if (Buffer.byteLength(body, "utf8") > WEBHOOKS.maxBodyBytes) {
-    logger.warn({ subscription: sub.id, event: event.id }, "MCP events: event over 256 KiB, not delivered");
+  const body = fitted(await occurrenceOf(event, watermark(doc, sub)));
+  if (!body) {
+    logger.warn({ subscription: sub.id, event: event.id }, "MCP events: event over 256 KiB even summarized, not delivered");
     return { kind: "drop" };
   }
   const secrets = [await openSecret(sub.secret)];
