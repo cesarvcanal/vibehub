@@ -109,7 +109,7 @@ function readable(e: CardEvent, question?: string, options?: { label: string; de
 }
 
 /** The event as the MCP Events `EventOccurrence`: stable contract, structured `data` + readable `text`. */
-export async function occurrenceOf(e: CardEvent) {
+async function occurrenceOf(e: CardEvent) {
   const type = typeOf(e);
   const first = e.questions?.[0];
   const options = first?.options.map((o) => ({ label: o.label, ...(o.description ? { description: o.description } : {}) }));

@@ -15,8 +15,8 @@ import { logger } from "../../utils/logger.js";
  * by voice) only learns it when a tool answers. So the moments are recorded here, once each, on disk,
  * and read back per person — the inbox (`inboxFor`) and the "what is new since you last heard"
  * handover (`takeUndelivered`). Nothing here PUSHES by itself: an MCP server cannot start a turn of
- * an app that is not connected. The sinks that do push (mcp/events.ts — a live MCP Events stream, a
- * signed webhook) hear each new event through `onCardEvent` and replay the log with `eventsAfter`.
+ * an app that is not connected. The sink that does push (mcp/events.ts — a live MCP Events stream)
+ * hears each new event through `onCardEvent` and replays the log with `eventsAfter`.
  *
  * Rules:
  *  - IDEMPOTENT by `id`: the caller derives it from the moment (the question's id, the permission's
@@ -337,7 +337,7 @@ onCardConcluded((cardId) => void observeCardConcluded(cardId));
 export function observeCardConcluded(cardId: string): Promise<void> {
   return inOrder(cardId, async () => {
     const card = await getCard(cardId);
-    if (!card) return;
+    if (card?.column !== "done") return; // brought back before this ran: it is not concluded
     await recordCardEvent({ id: `concluded:${cardId}:${card.parkedAt ?? card.doneAt ?? 0}`, cardId, kind: "concluded", resolved: true });
   });
 }

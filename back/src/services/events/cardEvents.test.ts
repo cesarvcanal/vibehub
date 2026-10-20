@@ -338,7 +338,7 @@ describe("observers — where the moments come from", () => {
   });
 });
 
-describe("the push feed — what sinks (MCP Events stream, webhooks) are fed from", () => {
+describe("the push feed — what the MCP Events stream is fed from", () => {
   it("a recorded event reaches every listener once, with the card's project; a duplicate reaches nobody", async () => {
     const env = await load();
     const heard: unknown[] = [];
@@ -373,8 +373,9 @@ describe("the push feed — what sinks (MCP Events stream, webhooks) are fed fro
     const env = await load();
     const heard: string[] = [];
     env.events.onCardEvent((e) => heard.push(e.kind));
+    await env.registry.updateCard(env.card.id, { column: "done" });
     await env.events.observeCardConcluded(env.card.id);
-    await env.events.observeCardConcluded(env.card.id); // the same conclusion reported twice
+    await env.events.observeCardConcluded(env.card.id); // the same conclusion reported again
     expect(heard).toEqual(["concluded"]);
     const { events } = await env.events.eventsAfter(0);
     expect(events[0]).toMatchObject({ kind: "concluded", resolvedAt: expect.any(Number) });

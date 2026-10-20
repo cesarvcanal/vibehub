@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { listTerminals, sendToTerminal, readTerminal, reportState, agentOriginFor } from "../services/maestro/maestro.js";
-import { DECLARED_STATES, getCard } from "../services/board/registry.js";
+import { DECLARED_STATES } from "../services/board/registry.js";
 import { recordMessage, MESSAGE_TYPES, SEVERITIES, type MessageType, type Severity } from "../services/events/cardEvents.js";
 import { replyTo } from "./events.js";
 import { runGate } from "../services/maestro/gate.js";
@@ -117,7 +117,6 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     async (a) => {
       try {
         const { card, ...message } = a;
-        if (!(await getCard(card))) throw new Error("card not found");
         const event = await recordMessage({ cardId: card, ...message });
         return ok({ eventId: event.id, cursor: String(event.seq), needsAnswer: !event.resolvedAt });
       } catch (e) {
