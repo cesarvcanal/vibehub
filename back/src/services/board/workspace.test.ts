@@ -829,6 +829,26 @@ describe("restart (single and all) — a working card is protected", () => {
     expect(ws.cardsToHibernate(cards, now, 3 * 60 * 60_000, inUse).map((c) => c.id)).toEqual(["cold"]);
   });
 
+  it("cardsToHibernate: um card CONCLUÍDO dorme após DONE_HIBERNATE_MS de silêncio, mesmo 'working', com chat vivo e com o ajuste em 'nunca'", () => {
+    const now = 1_700_000_000_000;
+    const silent = now - ws.DONE_HIBERNATE_MS;
+    const recent = now - 60_000;
+    const cards = [
+      // concluded mid-turn: the last report was `working` and the idle one never came
+      { id: "stuck", column: "done" as const, openedAt: silent, pausedAt: null, status: "working" as const, statusAt: silent },
+      { id: "quiet", column: "done" as const, openedAt: silent, pausedAt: null, status: "waiting" as const, statusAt: silent },
+      // still talking (hooks keep moving statusAt) — a real turn is never cut
+      { id: "busy", column: "done" as const, openedAt: silent, pausedAt: null, status: "working" as const, statusAt: recent },
+      // somebody typed into it a minute ago
+      { id: "typed", column: "done" as const, openedAt: silent, pausedAt: null, status: null, statusAt: silent, humanActiveAt: recent },
+      // an OPEN card with the same silence follows the idle setting, not this clock
+      { id: "open", column: "waiting" as const, openedAt: silent, pausedAt: null, status: "waiting" as const, statusAt: silent },
+    ];
+    const allDriving = () => true;
+    expect(ws.cardsToHibernate(cards, now, 0, allDriving).map((c) => c.id)).toEqual(["stuck", "quiet"]);
+    expect(ws.cardsToHibernate(cards, now, 3 * 60 * 60_000).map((c) => c.id)).toEqual(["stuck", "quiet"]);
+  });
+
   it("isCardInUse: o veto é registrado (o manager do SDK pendura hasDriverSession aqui)", () => {
     expect(ws.isCardInUse("qualquer")).toBe(false);
     const off = ws.onCardInUseProbe((id) => id === "em-uso");
