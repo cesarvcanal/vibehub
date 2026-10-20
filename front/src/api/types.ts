@@ -382,7 +382,7 @@ export interface Card {
    */
   restartPendingAt?: number | null;
   /** Which write scheduled the deferred restart. */
-  restartReason?: "brain" | "mcp" | "plugin" | "config";
+  restartReason?: "brain" | "mcp" | "plugin" | "config" | "deploy";
   /**
    * What the agent inside the card SAID about its own work (via `vibehub_report`): 'working' (still
    * on it), 'ready' (done, ready to deliver/review), 'needs_me' (wants a decision from the user) or

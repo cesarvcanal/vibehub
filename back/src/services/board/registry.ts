@@ -160,12 +160,13 @@ export function isHumanActive(card: Pick<Card, "humanActiveAt">, now: number = D
 
 /**
  * REASON a session restart is PENDING on a card: the shared brain or the MCP servers were edited, or
- * the card's own model/account was switched (`config`), while the card was `working`. It is only a
+ * the card's own model/account was switched (`config`), or a deploy changed what a session is born
+ * with (`deploy`, see sessionSpec.ts), while the card was `working`. It is only a
  * LABEL (so the UI can tell them apart in a badge); the restart mechanics are identical either way.
  * See `restartPendingAt` on the card and `shouldRestartOnStatus`.
  */
-export type RestartReason = "brain" | "mcp" | "plugin" | "config";
-export const RESTART_REASONS: readonly RestartReason[] = ["brain", "mcp", "plugin", "config"] as const;
+export type RestartReason = "brain" | "mcp" | "plugin" | "config" | "deploy";
+export const RESTART_REASONS: readonly RestartReason[] = ["brain", "mcp", "plugin", "config", "deploy"] as const;
 
 /**
  * Claude models a card may pin: FAMILY aliases, not versioned ids. When set, the session starts with
