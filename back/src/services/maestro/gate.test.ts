@@ -142,6 +142,89 @@ describe("run script + parse", () => {
     // the marker lines are stripped from what we show
     expect(gate.parseGateRun("kept\n__VIBEHUB_GATE__ pass\n").output).toBe("kept");
   });
+
+  it("runs the checks under an in-container deadline that kills the whole group", async () => {
+    const { gate } = await load();
+    const s = gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], 600_000);
+    expect(s).toMatch(/^docker exec 'c' timeout -s KILL 585 sh -c /);
+    expect(s).toContain('if [ $? -eq 137 ]; then echo "__VIBEHUB_GATE__ timeout 585"; fi');
+    expect(() => gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], 10_000)).toThrow();
+  });
+
+  it("a timed-out run is red, flagged, and says why", async () => {
+    const { gate } = await load();
+    const r = gate.parseGateRun("RUN v1\n__VIBEHUB_GATE__ timeout 585\n");
+    expect(r).toMatchObject({ passed: false, timedOut: true });
+    expect(r.output).toContain("RUN v1");
+    expect(r.output).toContain("prazo de 585s");
+    expect(r.output).not.toContain("__VIBEHUB_GATE__");
+    expect(gate.parseGateRun("x\n__VIBEHUB_GATE__ pass\n").timedOut).toBe(false);
+  });
+});
+
+describe("runGate under load", () => {
+  const probe = '__VIBEHUB_GATE_JSON__\n{"checks":["npm test"]}';
+  const isRun = (s: string) => s.includes('echo "__VIBEHUB_GATE__ pass"');
+
+  it("a second call for the same card while its gate runs joins it — one suite, one answer", async () => {
+    const { gate, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "x" });
+    let finish!: () => void;
+    let runs = 0;
+    runScript.mockImplementation(async (script: string) => {
+      if (!isRun(script)) return { stdout: probe, stderr: "" };
+      runs++;
+      await new Promise<void>((r) => { finish = r; });
+      return { stdout: "ok\n__VIBEHUB_GATE__ pass\n", stderr: "" };
+    });
+    const a = gate.runGate(c.id);
+    const b = gate.runGate(c.id);
+    await vi.waitFor(() => expect(runs).toBe(1));
+    finish();
+    expect(await a).toMatchObject({ passed: true });
+    expect(await b).toBe(await a);
+    expect(runs).toBe(1);
+  });
+
+  it("caps runs across cards at GATE_MAX_CONCURRENT; the next starts when one ends, even if it failed", async () => {
+    const { gate, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const cards = [];
+    for (let i = 0; i < gate.GATE_MAX_CONCURRENT + 1; i++) cards.push(await registry.createCard({ projectId: p.id, title: `c${i}` }));
+    let active = 0;
+    let peak = 0;
+    const releases: Array<(fail: boolean) => void> = [];
+    runScript.mockImplementation(async (script: string) => {
+      if (!isRun(script)) return { stdout: probe, stderr: "" };
+      active++;
+      peak = Math.max(peak, active);
+      const fail = await new Promise<boolean>((r) => releases.push(r));
+      active--;
+      if (fail) throw new Error("host command timed out");
+      return { stdout: "__VIBEHUB_GATE__ pass\n", stderr: "" };
+    });
+    const results = cards.map((c) => gate.runGate(c.id).catch((e: Error) => e.message));
+    await vi.waitFor(() => expect(releases).toHaveLength(gate.GATE_MAX_CONCURRENT));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(releases).toHaveLength(gate.GATE_MAX_CONCURRENT); // the last one is queued
+    releases[0](true); // a host failure still frees the slot
+    await vi.waitFor(() => expect(releases).toHaveLength(gate.GATE_MAX_CONCURRENT + 1));
+    releases.slice(1).forEach((r) => r(false));
+    const out = await Promise.all(results);
+    expect(out.filter((o) => o === "host command timed out")).toHaveLength(1);
+    expect(out.filter((o) => typeof o === "object" && o.passed)).toHaveLength(gate.GATE_MAX_CONCURRENT);
+    expect(peak).toBe(gate.GATE_MAX_CONCURRENT);
+  });
+
+  it("a timed-out run comes back red with timedOut", async () => {
+    const { gate, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "x" });
+    runScript.mockImplementation(async (script: string) =>
+      isRun(script) ? { stdout: "slow\n__VIBEHUB_GATE__ timeout 585\n", stderr: "" } : { stdout: probe, stderr: "" });
+    expect(await gate.runGate(c.id)).toMatchObject({ ran: true, passed: false, timedOut: true });
+  });
 });
 
 describe("redaction and tail", () => {

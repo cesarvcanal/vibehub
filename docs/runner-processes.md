@@ -38,6 +38,18 @@ abaixo existem pra essa classe de vazamento nunca voltar.
    grupo inteiro no prazo — bash e todo `git` debaixo dele —, antes de o Node desistir. O servidor
    tmux, que se desprende numa sessão própria, fica de fora de propósito.
 
+5. **Gate com prazo, fila e sem duplicata** (`back/src/services/maestro/gate.ts`): o gate do
+   `vibehub_deliver` rodava `npm test` via `docker exec` sem `timeout` — quando o Node desistia
+   (10 min), a suíte seguia órfã no runner. O maestro tentava de novo e empilhava outra suíte por
+   cima; com 4-5 cards entregando ao mesmo tempo (cada vitest abre workers = nº de CPUs) a carga
+   passou de 18 em 8 núcleos, uma suíte de ~2 min (no CI) passou de 20 e nenhum gate fechava
+   (incidente de 2026-10-20, card fix-loading-spinner-chat: 24 min num fix de 2 linhas). Agora:
+   `timeout -s KILL` dentro do container mata o grupo inteiro no prazo e o resultado volta como
+   `timedOut`; uma segunda chamada pro mesmo card enquanto o gate roda reaproveita a mesma execução;
+   no máximo `GATE_MAX_CONCURRENT` (2) gates rodam juntos, o resto espera na fila. Cada execução
+   loga `waitedMs` (fila) e `durationMs` (suíte) em `maestro.gate` — "por que demorou" se responde
+   no log do back.
+
 ## Zumbis: o runner nasce com `--init`
 
 O comando do runner é `sleep infinity`, que nunca chama `wait()`: sem um init de verdade como
