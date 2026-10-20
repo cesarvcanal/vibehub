@@ -290,6 +290,13 @@ function parseTarget(params: Record<string, unknown>): Target {
   return { name: params.name, args: parsed.data, url: delivery.url };
 }
 
+/** Throws when this principal already holds the most live subscriptions it may (`id` aside: a refresh). */
+function assertUnderCap(doc: WebhookDoc, key: string, id: string, now: number): void {
+  if (doc.subscriptions.filter((s) => s.key === key && s.expiresAt > now && s.id !== id).length >= WEBHOOKS.maxPerPrincipal) {
+    throw new EventsError(ERR.RESOURCE_EXHAUSTED, "too many webhook subscriptions", { limit: "subscriptions", max: WEBHOOKS.maxPerPrincipal });
+  }
+}
+
 /** The safe-to-persist cursor: nothing at or before it is still waiting to be delivered. */
 function watermark(doc: WebhookDoc, sub: StoredSubscription): string {
   const waiting = doc.pending.filter((p) => p.subId === sub.id).map((p) => p.seq);
@@ -314,9 +321,7 @@ export async function subscribeWebhook(principal: WebhookPrincipal | null, raw: 
   const id = subscriptionId(principal.key, target.url, target.name, target.args);
   const before = await store.load();
   const existing = before.subscriptions.find((s) => s.id === id && s.expiresAt > now);
-  if (!existing && before.subscriptions.filter((s) => s.key === principal.key && s.expiresAt > now).length >= WEBHOOKS.maxPerPrincipal) {
-    throw new EventsError(ERR.RESOURCE_EXHAUSTED, "too many webhook subscriptions", { limit: "subscriptions", max: WEBHOOKS.maxPerPrincipal });
-  }
+  if (!existing) assertUnderCap(before, principal.key, id, now); // before the challenge: no POST over the cap
   const vKey = verifiedKey(principal.key, target.url);
   const verifiedAt = before.verified[vKey];
   if (verifiedAt === undefined || now - verifiedAt > WEBHOOKS.verificationTtlMs) await verifyCallback(principal.key, id, target.url, secret);
@@ -324,9 +329,10 @@ export async function subscribeWebhook(principal: WebhookPrincipal | null, raw: 
   // Where a NEW (or lapsed) subscription starts: now, or replay from the client's cursor — bounded
   // by maxAgeMs and by what retention still has (`truncated` when either skipped something).
   let start = cursor ?? log.head;
-  let truncated = cursor !== null && (await eventsAfter(cursor)).truncated;
-  if (cursor !== null && maxAgeMs) {
-    const old = (await eventsAfter(cursor)).events.filter((e) => e.at < now - maxAgeMs);
+  const replay = cursor === null ? null : await eventsAfter(cursor);
+  let truncated = replay?.truncated ?? false;
+  if (replay && maxAgeMs) {
+    const old = replay.events.filter((e) => e.at < now - maxAgeMs);
     if (old.length) {
       start = Math.max(start, ...old.map((e) => e.seq));
       truncated = true;
@@ -340,9 +346,7 @@ export async function subscribeWebhook(principal: WebhookPrincipal | null, raw: 
     let sub = doc.subscriptions.find((s) => s.id === id);
     const live = sub !== undefined && sub.expiresAt > now;
     // The cap again, inside the queue: parallel subscribes all passed the early check before verifying.
-    if (!live && doc.subscriptions.filter((s) => s.key === principal.key && s.expiresAt > now && s.id !== id).length >= WEBHOOKS.maxPerPrincipal) {
-      throw new EventsError(ERR.RESOURCE_EXHAUSTED, "too many webhook subscriptions", { limit: "subscriptions", max: WEBHOOKS.maxPerPrincipal });
-    }
+    if (!live) assertUnderCap(doc, principal.key, id, now);
     doc.verified[vKey] = verifiedAt !== undefined && now - verifiedAt <= WEBHOOKS.verificationTtlMs ? verifiedAt : now;
     if (!sub || !live) {
       doc.subscriptions = doc.subscriptions.filter((s) => s.id !== id);
