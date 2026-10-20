@@ -1,6 +1,7 @@
 import { hostExecutor, shQuote, assertSafeRemotePath, CONTAINER_DEADLINE_MARGIN_MS } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
-import { getCard, getProject } from "../board/registry.js";
+import { testWorkerExports } from "../../runtime/testWorkers.js";
+import { getCard, getProject, assertBranchName } from "../board/registry.js";
 import { cardWorkPaths } from "../board/workspace.js";
 import { logger } from "../../utils/logger.js";
 
@@ -13,7 +14,10 @@ import { logger } from "../../utils/logger.js";
  *
  * WHAT it runs:
  *  - `.vibehub/gate.json` in the worktree, when present: `{ "checks": ["cmd", "cmd", …] }`. Those
- *    commands, in order — the repo decides what "green" means.
+ *    commands, in order — the repo decides what "green" means. They run with `VIBEHUB_BASE_REF`
+ *    (`origin/<card base>`) in the environment, so a repo can test only what the card changed
+ *    (`vitest run --changed "$VIBEHUB_BASE_REF"`) instead of every suite it has — CI still runs
+ *    the whole thing on the PR.
  *  - otherwise sensible defaults, each ONLY when it is actually resolvable in the worktree: a
  *    typecheck (`tsc --noEmit`) when there is a tsconfig AND a local tsc, and `npm test` when
  *    package.json declares a `test` script.
@@ -177,19 +181,25 @@ export function gateReuseKey(probe: Pick<GateProbe, "headSha" | "cleanTree">, ch
  * check commands come from the repo (gate.json) or the defaults; they ARE commands, so they are
  * embedded to be interpreted — but the whole inner script is one shell-quoted argument, so nothing
  * in a check can break out of the structure. The cwd is `$1`, validated. The whole run is bounded by
- * an in-container deadline; reaching it prints `__VIBEHUB_GATE__ timeout <s>`. PURE.
+ * an in-container deadline; reaching it prints `__VIBEHUB_GATE__ timeout <s>`. With a `baseBranch`, the
+ * checks see `VIBEHUB_BASE_REF=origin/<base>`. PURE.
  */
 export function buildGateRunScript(
   containerName: string,
   cwd: string,
   checks: string[],
-  timeoutMs: number = GATE_RUN_TIMEOUT_MS,
+  opts: { timeoutMs?: number; baseBranch?: string } = {},
 ): string {
   assertSafeRemotePath(cwd);
+  const timeoutMs = opts.timeoutMs ?? GATE_RUN_TIMEOUT_MS;
   const parts: string[] = [
     "exec 2>&1",
     `cd "$1" || { echo "${RESULT_MARKER} error"; exit 0; }`,
+    testWorkerExports().trim(),
   ];
+  // The branch the card's work is compared against, for checks that test only what changed
+  // (`vitest run --changed "$VIBEHUB_BASE_REF"`). Validated, then quoted: it is data, not a command.
+  if (opts.baseBranch) parts.push(`export VIBEHUB_BASE_REF=${shQuote(`origin/${assertBranchName(opts.baseBranch)}`)}`);
   for (const check of checks) {
     parts.push(`printf '\\n=== gate: %s ===\\n' ${shQuote(check)}`);
     parts.push(`if ${check}; then :; else echo "${RESULT_MARKER} fail"; exit 0; fi`);
@@ -330,7 +340,9 @@ async function runGateNow(cardId: string): Promise<GateResult> {
   const startedAt = Date.now();
   let runOut: { stdout: string };
   try {
-    runOut = await hostExecutor().runScript(buildGateRunScript(container, cwd, plan.checks), { timeoutMs: GATE_RUN_TIMEOUT_MS });
+    runOut = await hostExecutor().runScript(buildGateRunScript(container, cwd, plan.checks, { baseBranch: card.base || project.baseBranch }),
+      { timeoutMs: GATE_RUN_TIMEOUT_MS },
+    );
   } catch (err) {
     logger.warn(
       { audit: true, action: "maestro.gate", card: card.worktreeSlug, waitedMs: startedAt - queuedAt, durationMs: Date.now() - startedAt, detail: (err as Error).message },

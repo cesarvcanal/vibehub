@@ -253,6 +253,7 @@ describe("openCard", () => {
     expect(script).toContain(`VIBEHUB_CARD_ID='${card.id}'`);
     expect(script).toContain(`VIBEHUB_STATUS_URL='${STATUS_URL}'`);
     expect(script).toContain(`PW_CDP_ENDPOINT='${cardCdpEndpoint(card.id)}'`);
+    expect(script).toContain("-e VITEST_MAX_THREADS=2 -e VITEST_MIN_THREADS=1 -e VITEST_MAX_FORKS=2 -e VITEST_MIN_FORKS=1");
     expect(script).toContain(sq(claudeFor(card.id)));
 
     // the open rule: backlog → waiting
@@ -448,6 +449,8 @@ describe("terminalRemoteArgs / cardAttachArgs (the websocket's COMPLETE attach-o
       "-e", "VIBEHUB_CARD_ID=id-1", "-e", `VIBEHUB_STATUS_URL=${STATUS_URL}`,
       "-e", `PW_CDP_ENDPOINT=${cardCdpEndpoint("id-1")}`,
       "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8",
+      // test runners share the runner's cores with every card: worker cap
+      "-e", "VITEST_MAX_THREADS=2", "-e", "VITEST_MIN_THREADS=1", "-e", "VITEST_MAX_FORKS=2", "-e", "VITEST_MIN_FORKS=1",
       CLAUDE,
     ]);
   });
@@ -824,6 +827,26 @@ describe("restart (single and all) — a working card is protected", () => {
     ];
     const inUse = (id: string) => id === "driving"; // what hasDriverSession answers in production
     expect(ws.cardsToHibernate(cards, now, 3 * 60 * 60_000, inUse).map((c) => c.id)).toEqual(["cold"]);
+  });
+
+  it("cardsToHibernate: um card CONCLUÍDO dorme após DONE_HIBERNATE_MS de silêncio, mesmo 'working', com chat vivo e com o ajuste em 'nunca'", () => {
+    const now = 1_700_000_000_000;
+    const silent = now - ws.DONE_HIBERNATE_MS;
+    const recent = now - 60_000;
+    const cards = [
+      // concluded mid-turn: the last report was `working` and the idle one never came
+      { id: "stuck", column: "done" as const, openedAt: silent, pausedAt: null, status: "working" as const, statusAt: silent },
+      { id: "quiet", column: "done" as const, openedAt: silent, pausedAt: null, status: "waiting" as const, statusAt: silent },
+      // still talking (hooks keep moving statusAt) — a real turn is never cut
+      { id: "busy", column: "done" as const, openedAt: silent, pausedAt: null, status: "working" as const, statusAt: recent },
+      // somebody typed into it a minute ago
+      { id: "typed", column: "done" as const, openedAt: silent, pausedAt: null, status: null, statusAt: silent, humanActiveAt: recent },
+      // an OPEN card with the same silence follows the idle setting, not this clock
+      { id: "open", column: "waiting" as const, openedAt: silent, pausedAt: null, status: "waiting" as const, statusAt: silent },
+    ];
+    const allDriving = () => true;
+    expect(ws.cardsToHibernate(cards, now, 0, allDriving).map((c) => c.id)).toEqual(["stuck", "quiet"]);
+    expect(ws.cardsToHibernate(cards, now, 3 * 60 * 60_000).map((c) => c.id)).toEqual(["stuck", "quiet"]);
   });
 
   it("isCardInUse: o veto é registrado (o manager do SDK pendura hasDriverSession aqui)", () => {
@@ -2081,6 +2104,10 @@ describe("buildCardPurgeScript (everything the card left on the runner's disk)",
     // `projects[<cwd>]` in .claude.json holds the PROMPT HISTORY typed in that directory.
     expect(s).toContain('if [ -f "$P/.claude.json" ]; then');
     expect(s).toContain(`"$P/.claude.json" '${CWD}'`);
+    // The DEFAULT account runs with no CLAUDE_CONFIG_DIR, so Claude keeps its state in $HOME —
+    // `/root/.claude.json`, OUTSIDE `/root/.claude`. Missing it left every default-account card's
+    // prompt history behind (22 dead cwds in production on 2026-10-20).
+    expect(s).toContain(`"/root/.claude.json" '${CWD}'`);
     expect(s).toContain("delete c.projects[w];");
   });
 

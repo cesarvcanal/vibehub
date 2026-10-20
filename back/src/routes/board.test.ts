@@ -289,6 +289,35 @@ describe("status callback", () => {
     expect(withCookie.statusCode).toBe(401);
   });
 
+  it("ignora um waiting atrasado enquanto o chat nativo tem turno rodando — e aplica quando o turno fecha", async () => {
+    const projectId = await makeProject();
+    const card = await makeCard(projectId);
+    const { EventEmitter } = await import("node:events");
+    const manager = await import("../services/sdk/manager.js");
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new EventEmitter(), stderr: new EventEmitter(), exitCode: null, kill: () => {},
+      stdin: Object.assign(new EventEmitter(), { writable: true, write: () => true, end: () => {} }),
+    });
+    manager.setDriverSpawnerForTesting(() => child as never);
+    try {
+      const session = manager.ensureDriverSession({ cardId: card, label: "t", command: { file: "docker", args: [] } });
+      manager.handleClientFrame(session, `{"type":"user","text":"oi"}`);
+      await vi.waitFor(async () => expect((await (await registry()).getCard(card))?.status).toBe("working"));
+
+      await postStatus(card, "waiting", RUNNER_TOKEN);
+      expect((await (await registry()).getCard(card))?.status).toBe("working");
+
+      child.stdout.emit("data", Buffer.from(JSON.stringify({ type: "result", isError: false }) + "\n"));
+      expect((await postStatus(card, "waiting", RUNNER_TOKEN)).json()).toEqual({ ok: true, applied: true });
+      expect((await (await registry()).getCard(card))?.status).toBe("waiting");
+    } finally {
+      manager.resetSdkSessionsForTesting();
+      manager.setDriverSpawnerForTesting(null);
+      // o append do log do chat ainda pode estar na fila: deixa drenar antes do rm do afterEach
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  });
+
   it("401s a wrong token of the same length", async () => {
     const projectId = await makeProject();
     const card = await makeCard(projectId);
@@ -358,6 +387,20 @@ describe("status callback", () => {
     await postStatus(card, "working", RUNNER_TOKEN);
     const current = (await app.inject({ method: "GET", url: `/api/cards/${card}`, headers: { cookie } })).json().card;
     expect(current.column).toBe("working");
+  });
+
+  it("um card concluído no meio do turno fica em done até a pessoa abrir um turno novo", async () => {
+    const projectId = await makeProject();
+    const card = await makeCard(projectId);
+    await postStatus(card, "working", RUNNER_TOKEN); // o turno em que o agente se conclui
+    await app.inject({ method: "PATCH", url: `/api/cards/${card}`, headers: { cookie }, payload: { column: "done" } });
+    const column = async () => (await app.inject({ method: "GET", url: `/api/cards/${card}`, headers: { cookie } })).json().card.column;
+    await postStatus(card, "working", RUNNER_TOKEN); // PreToolUse das ferramentas seguintes do mesmo turno
+    expect(await column()).toBe("done");
+    await postStatus(card, "waiting", RUNNER_TOKEN); // Stop
+    expect(await column()).toBe("done");
+    await postStatus(card, "working", RUNNER_TOKEN); // a pessoa escreveu de novo
+    expect(await column()).toBe("working");
   });
 
   it("carries out a PENDING restart once the flagged card goes idle", async () => {

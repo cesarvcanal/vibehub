@@ -15,7 +15,7 @@ import {
   type Card, type CardStatus, type Project, type RestartReason,
 } from "./registry.js";
 import { getSettings } from "../settings/settings.js";
-import { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir, profileDirFor, oauthTokenGuard } from "../accounts/profiles.js";
+import { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, DEFAULT_CLAUDE_JSON, accountConfigDir, profileDirFor, oauthTokenGuard } from "../accounts/profiles.js";
 import { firstRunSeedCommand } from "../accounts/firstRun.js";
 import { carryTranscriptsCommand } from "../accounts/carryTranscripts.js";
 import { resolveAccountToken, writeTokenLines, ghTokenPath, writeGhTokenLines, removeGhTokenLines } from "../accounts/token.js";
@@ -28,6 +28,7 @@ import {
   PROJECT_BRAIN_FILE,
 } from "../brain/brain.js";
 import { logger } from "../../utils/logger.js";
+import { testWorkerTmuxArgs } from "../../runtime/testWorkers.js";
 
 export { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir };
 
@@ -459,6 +460,8 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
       // Explicit UTF-8 in the session: .profile covers login shells, but tmux decides the encoding
       // from the environment it is given — without this, accents become "_" (seen in production).
       ` -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8` +
+      // Test runners share the runner's cores with every other card: cap their workers.
+      ` ${testWorkerTmuxArgs().join(" ")}` +
       // Non-default account: the session's Claude uses the account profile (isolated credentials/state).
       (opts.accountConfigDir ? ` -e CLAUDE_CONFIG_DIR=${shQuote(opts.accountConfigDir)}` : "") +
       ` ${shQuote(sessionCommand({ resume: !!opts.resume, resumeSessionId: opts.resumeSessionId, profileDir, model: opts.model, effort: opts.effort, ghTokenFile: ghTokenPath(opts.cardId) }))}`,
@@ -519,6 +522,7 @@ export function terminalRemoteArgs(containerName: string, tmuxSession: string, c
     // websocket's attach-or-create needs the variable for the card's Playwright MCP too.
     "-e", `PW_CDP_ENDPOINT=${cardCdpEndpoint(opts.cardId)}`,
     "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8",
+    ...testWorkerTmuxArgs(),
     ...(opts.accountConfigDir ? ["-e", `CLAUDE_CONFIG_DIR=${opts.accountConfigDir}`] : []),
     opts.shell
       ? "exec bash"
@@ -1597,19 +1601,34 @@ export function lastActivityAt(card: Pick<Card, "statusAt" | "openedAt" | "human
  * life is older than `idleMs`. `working` is excluded whatever the clock says — a long task is not an
  * abandoned one, and the hooks stop talking while Claude thinks.
  *
- * `idleMs <= 0` selects NOTHING: that is how the setting spells "never hibernate". PURE/testable.
+ * `idleMs <= 0` selects no OPEN card: that is how the setting spells "never hibernate". Cards in `done`
+ * follow `DONE_HIBERNATE_MS` instead. PURE/testable.
  */
-export function cardsToHibernate<T extends Pick<Card, "id" | "openedAt" | "pausedAt" | "hibernatedAt" | "status" | "statusAt" | "humanActiveAt">>(
+export function cardsToHibernate<
+  T extends Pick<Card, "id" | "openedAt" | "pausedAt" | "hibernatedAt" | "status" | "statusAt" | "humanActiveAt"> & { column?: Card["column"] },
+>(
   cards: T[],
   now: number,
   idleMs: number,
   inUse: (cardId: string) => boolean = () => false,
 ): T[] {
-  if (!(idleMs > 0)) return [];
-  return cards.filter(
-    (c) => hasLiveSession(c) && c.status !== "working" && !inUse(c.id) && now - lastActivityAt(c) >= idleMs,
-  );
+  return cards.filter((c) => {
+    if (!hasLiveSession(c)) return false;
+    const silentFor = now - lastActivityAt(c);
+    // A FINISHED card is put to sleep on its own, short clock — whatever the idle setting says, and
+    // even with a `working` status: an agent that concludes its own card does it mid-turn, and the
+    // status the board kept can be the last `working` that never got its idle report. Silence is
+    // what counts: every hook of a really running turn moves `statusAt`. Without this, concluded
+    // cards kept a Claude (two, with the native chat) alive in the runner for days. The native-chat
+    // veto does not apply either: the driver of a finished card is exactly what is being collected,
+    // and a message typed into it moves `humanActiveAt`, which restarts this clock.
+    if (c.column === "done") return silentFor >= DONE_HIBERNATE_MS;
+    return idleMs > 0 && c.status !== "working" && !inUse(c.id) && silentFor >= idleMs;
+  });
 }
+
+/** How long a card in `done` may stay silent before its session is put to sleep. */
+export const DONE_HIBERNATE_MS = 60 * 60_000;
 
 /** True while a {@link sweepIdleCards} pass is on its way through the cards. */
 let idleSweepRunning = false;
@@ -1922,7 +1941,8 @@ export function ownBranch(card: Pick<Card, "branch" | "worktreeSlug">): string |
  *    "deleted" a lie: the card vanished from the board and its transcript stayed on disk, readable,
  *    and resumable by any new session opened on the same path;
  *  - `<profile>/todos/<sessionId>*` — the task lists Claude Code keeps per session of that cwd;
- *  - the `projects[<cwd>]` entry of each profile's `.claude.json` — the prompt history.
+ *  - the `projects[<cwd>]` entry of each profile's `.claude.json` — the prompt history — and of
+ *    the default account's, which lives in $HOME ({@link DEFAULT_CLAUDE_JSON}).
  *
  * Every path is DERIVED (board values, validated and shell-quoted) — nothing from a request reaches
  * a shell. PURE/testable.
@@ -1980,6 +2000,10 @@ export function buildCardPurgeScript(o: CardPurgeScriptOpts): string {
     `    node -e ${shQuote(CLAUDE_JSON_PURGE_JS)} "$P/.claude.json" ${shQuote(o.cwd)} >/dev/null 2>&1 || true`,
     "  fi",
     "done",
+    // The DEFAULT account's .claude.json lives in $HOME, outside every profile directory above.
+    `if [ -f "${DEFAULT_CLAUDE_JSON}" ]; then`,
+    `  node -e ${shQuote(CLAUDE_JSON_PURGE_JS)} "${DEFAULT_CLAUDE_JSON}" ${shQuote(o.cwd)} >/dev/null 2>&1 || true`,
+    "fi",
     "true",
   );
   return [

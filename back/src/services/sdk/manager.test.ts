@@ -249,6 +249,31 @@ describe("attachSocket — multiplexing (duas abas = uma sessão)", () => {
     expect(ready.turnActive).toBe(false);
   });
 
+  // Produção, 2026-10-20 (cards cfb8 e 4f4b): depois da retomada pós-deploy o CLI seguiu num turno
+  // que ele mesmo abriu (a tarefa em segundo plano tinha morrido). Quem abria ou recarregava o card
+  // recebia `turnActive: false`: o chat nascia parado, a ferramenta rodando sem spinner, e a pessoa
+  // mandava "continue" para um card que estava trabalhando.
+  it("the synthesized `ready` says a turn is IN FLIGHT during a turn the CLI opened by itself", () => {
+    const session = ensure();
+    const s1 = fakeSocket();
+    attachSocket(session, s1 as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    s1.emit("message", Buffer.from(`{"type":"user","text":"roda a suíte em background"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    // a tarefa terminou: o CLI acorda o modelo sem mensagem nenhuma
+    spawned[0]!.stdout.emit("data", line({ type: "tool_use", id: "toolu_w", name: "Bash", input: { command: "npx vitest run" } }));
+    const s2 = fakeSocket();
+    attachSocket(session, s2 as never);
+    const ready = JSON.parse(s2.sent[0]!) as { type: string; turnActive?: boolean };
+    expect(ready.type).toBe("ready");
+    expect(ready.turnActive).toBe(true);
+    // o result desse turno fecha: quem chega depois vê o card parado de verdade
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    const s3 = fakeSocket();
+    attachSocket(session, s3 as never);
+    expect((JSON.parse(s3.sent[0]!) as { turnActive?: boolean }).turnActive).toBe(false);
+  });
+
   it("the driver's REAL `ready` is stamped with the live turn count (message queued before boot)", () => {
     const session = ensure();
     const s1 = fakeSocket();
@@ -2169,6 +2194,26 @@ describe("background_tasks — o trabalho que segue depois do turno", () => {
     spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
     expect(session.activeTurns).toBe(0);
     expect(driverActivity(CARD)).toBe("idle");
+  });
+
+  it("o turno que o CLI abre sozinho conta como trabalho: o board vê `turn` e o idle stop não o mata", () => {
+    vi.useFakeTimers();
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"espera o deploy"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    socket.emit("close");
+    spawned[0]!.stdout.emit("data", line({ type: "tool_use", id: "toolu_w", name: "Bash", input: { command: "npx vitest run" } }));
+    expect(driverActivity(CARD)).toBe("turn");
+    expect(isCardChatInUse(CARD)).toBe(true);
+    vi.advanceTimersByTime(DRIVER_IDLE_MS * 3);
+    expect(spawned[0]!.killed).toBe(false);
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    expect(driverActivity(CARD)).toBe("idle");
+    vi.advanceTimersByTime(DRIVER_IDLE_MS + 1);
+    expect(spawned[0]!.killed).toBe(true);
   });
 
   it("CLI que cai no meio do turno autônomo não deixa o driver ocupado para sempre", () => {

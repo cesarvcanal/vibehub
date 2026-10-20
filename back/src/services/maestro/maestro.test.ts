@@ -648,11 +648,13 @@ describe("session introspection", () => {
     const acct = await registry.createAccount({ name: "Tech" });
     const p = await registry.createProject({ name: "billing", defaultAccountSlug: acct.slug });
     const c = await registry.createCard({ projectId: p.id, title: "x" });
-    runScript.mockResolvedValueOnce({ stdout: line({ type: "assistant", message: { model: "claude-opus-5", content: [] } }), stderr: "" });
+    runScript.mockResolvedValueOnce({ stdout: line({ type: "assistant", effort: "xhigh", message: { model: "claude-opus-5", content: [] } }), stderr: "" });
     const info = await maestro.sessionInfo(c.id);
     expect(info).toEqual({
       model: "claude-opus-5",
       modelLabel: "Opus 5",
+      // Unpinned card: the level comes from the transcript's stamp, so the menu can tick it.
+      effort: "xhigh",
       account: { slug: acct.slug, name: "Tech" },
       // A card that was never opened has no session for the chat to be waiting on.
       situation: "no session",
@@ -748,7 +750,7 @@ describe("model signals", () => {
       line({ type: "assistant", timestamp: "2026-08-22T03:00:00Z", message: { model: "claude-fable-5", content: [] } }),
       line({ type: "assistant", timestamp: "2026-08-22T03:05:00Z", message: { model: "<synthetic>", content: [] } }),
     ].join("\n");
-    expect(maestro.parseLastTurn(jsonl)).toEqual({ model: "claude-fable-5", at: Date.parse("2026-08-22T03:00:00Z") });
+    expect(maestro.parseLastTurn(jsonl)).toEqual({ model: "claude-fable-5", at: Date.parse("2026-08-22T03:00:00Z"), effort: null });
   });
 
   it("a /model choice newer than the last reply wins; an older one loses", async () => {
@@ -779,8 +781,44 @@ describe("model signals", () => {
     const { maestro } = await load();
     const out = maestro.parseSessionOutput('{"type":"assistant"}\n' + maestro.SESSION_MARKER + "\n1787370000\n{\"model\":\"fable\"}");
     expect(out.transcript.trim()).toBe('{"type":"assistant"}');
-    expect(out.settings).toEqual({ model: "fable", at: 1787370000000 });
-    expect(maestro.parseSessionOutput("only transcript").settings).toEqual({ model: null, at: 0 });
+    expect(out.settings).toEqual({ model: "fable", at: 1787370000000, effort: null });
+    expect(maestro.parseSessionOutput("only transcript").settings).toEqual({ model: null, at: 0, effort: null });
+    const withLevel = maestro.parseSessionOutput(maestro.SESSION_MARKER + '\n1787370000\n{"effortLevel":"xhigh"}');
+    expect(withLevel.settings.effort).toBe("xhigh");
+    // A level the whitelist does not know is not a reading.
+    expect(maestro.parseSessionOutput(maestro.SESSION_MARKER + '\n1\n{"effortLevel":"turbo"}').settings.effort).toBeNull();
+  });
+
+  it("reads the reasoning level Claude Code stamps on each assistant turn", async () => {
+    const { maestro } = await load();
+    const line = (obj: unknown) => JSON.stringify(obj);
+    const jsonl = [
+      line({ type: "assistant", timestamp: "2026-08-22T03:00:00Z", effort: "medium", message: { model: "claude-opus-5", content: [] } }),
+      line({ type: "assistant", timestamp: "2026-08-22T03:05:00Z", effort: "max", message: { model: "claude-opus-5", content: [] } }),
+      line({ type: "assistant", timestamp: "2026-08-22T03:06:00Z", message: { model: "<synthetic>", content: [] } }),
+    ].join("\n");
+    expect(maestro.parseLastTurn(jsonl).effort).toBe("max");
+    // A turn with no stamp (older CLI) or an unknown word is not a reading.
+    expect(maestro.parseLastTurn(line({ type: "assistant", message: { model: "claude-opus-5" } })).effort).toBeNull();
+    expect(maestro.parseLastTurn(line({ type: "assistant", effort: "turbo", message: { model: "claude-opus-5" } })).effort).toBeNull();
+  });
+
+  it("picks the effort in use: a newer pin change, else the last reply, else the pin, else settings", async () => {
+    const { maestro } = await load();
+    const turn = { effort: "medium", at: 1000 };
+    // Unpinned card: the transcript is the truth — this is what the menu ticks.
+    expect(maestro.pickEffort(turn, { effort: null })).toBe("medium");
+    // Pin set AFTER the last reply: the session restarted onto it.
+    expect(maestro.pickEffort(turn, { effort: null }, { effort: "max", at: 2000 })).toBe("max");
+    // `/effort` typed in the terminal after the pin: the newer reply wins.
+    expect(maestro.pickEffort({ effort: "low", at: 3000 }, { effort: null }, { effort: "max", at: 2000 })).toBe("low");
+    // Pin CLEARED after the last reply: the old stamp is stale; the account's settings decide, or nothing does.
+    expect(maestro.pickEffort({ effort: "max", at: 1000 }, { effort: null }, { effort: null, at: 2000 })).toBeNull();
+    expect(maestro.pickEffort({ effort: "max", at: 1000 }, { effort: "high" }, { effort: null, at: 2000 })).toBe("high");
+    // Nothing answered yet: pin, then settings.json.
+    expect(maestro.pickEffort({ effort: null, at: 0 }, { effort: "high" }, { effort: "low", at: 0 })).toBe("low");
+    expect(maestro.pickEffort({ effort: null, at: 0 }, { effort: "high" })).toBe("high");
+    expect(maestro.pickEffort({ effort: null, at: 0 }, { effort: null })).toBeNull();
   });
 
   it("labels the aliases settings.json uses", async () => {

@@ -2,7 +2,7 @@ import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.
 import { config } from "../../config/env.js";
 import {
   listProjects, listAllCards, getCard, getProject, hasLiveSession, effectiveAccountSlug,
-  listAccounts, getConfig, isHumanActive, reportCardState, CLAUDE_MODELS,
+  listAccounts, getConfig, isHumanActive, reportCardState, CLAUDE_MODELS, isValidEffort,
   type Card, type Project, type BoardColumn, type CardStatus, type DeclaredState,
 } from "../board/registry.js";
 import { cardAgentState, cardAwaitingChoice, cardDriverActivity } from "../board/agentState.js";
@@ -678,9 +678,10 @@ export function parseLastModel(jsonl: string): string | null {
 }
 
 /** The last assistant turn's model and WHEN it happened (epoch ms, 0 when unknown). PURE. */
-export function parseLastTurn(jsonl: string): { model: string | null; at: number } {
+export function parseLastTurn(jsonl: string): { model: string | null; at: number; effort: string | null } {
   let model: string | null = null;
   let at = 0;
+  let effort: string | null = null;
   for (const line of jsonl.split(/\r?\n/)) {
     const s = line.trim();
     if (!s) continue;
@@ -698,9 +699,29 @@ export function parseLastTurn(jsonl: string): { model: string | null; at: number
       model = m;
       const ts = (obj as { timestamp?: unknown }).timestamp;
       at = typeof ts === "string" ? Date.parse(ts) || 0 : typeof ts === "number" ? ts : 0;
+      // Claude Code stamps every assistant turn with the session's reasoning level (`effort`) — the
+      // only place that says what an UNPINNED card is really running on.
+      const e = (obj as { effort?: unknown }).effort;
+      effort = isValidEffort(typeof e === "string" ? e : null) ? (e as string) : null;
     }
   }
-  return { model, at };
+  return { model, at, effort };
+}
+
+/**
+ * The reasoning level the session is on. Same contest as `pickModel`: a pin change (set OR cleared)
+ * NEWER than the last reply restarted the session onto it, so it is the truth until the next reply —
+ * and a cleared pin means "the account decides", unknown until that reply says so. Otherwise the
+ * last reply's stamp wins (`/effort` typed in the terminal), then the pin, then settings.json's
+ * `effortLevel`. PURE.
+ */
+export function pickEffort(
+  lastTurn: { effort: string | null; at: number },
+  settings: { effort: string | null },
+  pin: { effort: string | null; at: number } = { effort: null, at: 0 },
+): string | null {
+  if (pin.at && pin.at >= lastTurn.at) return pin.effort ?? settings.effort;
+  return lastTurn.effort ?? pin.effort ?? settings.effort;
 }
 
 /**
@@ -745,29 +766,33 @@ export const SESSION_MARKER = "__VIBEHUB_SETTINGS__";
 /** Splits the script output into the transcript tail and the settings model/mtime. PURE. */
 export function parseSessionOutput(stdout: string): {
   transcript: string;
-  settings: { model: string | null; at: number };
+  settings: { model: string | null; at: number; effort: string | null };
 } {
   const idx = stdout.indexOf(SESSION_MARKER);
-  if (idx < 0) return { transcript: stdout, settings: { model: null, at: 0 } };
+  if (idx < 0) return { transcript: stdout, settings: { model: null, at: 0, effort: null } };
   const transcript = stdout.slice(0, idx);
   const rest = stdout.slice(idx + SESSION_MARKER.length).trim();
-  if (!rest) return { transcript, settings: { model: null, at: 0 } };
+  if (!rest) return { transcript, settings: { model: null, at: 0, effort: null } };
   const nl = rest.indexOf("\n");
   const mtime = Number.parseInt(nl < 0 ? rest : rest.slice(0, nl), 10);
   let model: string | null = null;
+  let effort: string | null = null;
   try {
-    const json = JSON.parse(nl < 0 ? "{}" : rest.slice(nl + 1)) as { model?: unknown };
+    const json = JSON.parse(nl < 0 ? "{}" : rest.slice(nl + 1)) as { model?: unknown; effortLevel?: unknown };
     if (typeof json.model === "string" && json.model) model = json.model;
+    if (typeof json.effortLevel === "string" && isValidEffort(json.effortLevel)) effort = json.effortLevel;
   } catch {
     /* unreadable settings — ignore */
   }
-  return { transcript, settings: { model, at: Number.isFinite(mtime) ? mtime * 1000 : 0 } };
+  return { transcript, settings: { model, at: Number.isFinite(mtime) ? mtime * 1000 : 0, effort } };
 }
 
 export interface SessionInfo {
   /** Raw model id from the transcript, or null before the first reply. */
   model: string | null;
   modelLabel: string | null;
+  /** Reasoning level the session runs on (one of CLAUDE_EFFORTS), or null while nothing says. */
+  effort: string | null;
   /** The EFFECTIVE account (card → project → default) with its display name. */
   account: { slug: string | null; name: string };
   /**
@@ -791,6 +816,7 @@ export async function sessionInfo(cardId: string): Promise<SessionInfo> {
   const name = slug ? (accounts.find((a) => a.slug === slug)?.name ?? slug) : (config.defaultAccountLabel ?? "default");
 
   let model: string | null = null;
+  let effort: string | null = card.effort ?? null;
   try {
     const profileDir = profileDirFor(slug);
     const { stdout } = await hostExecutor().runScript(
@@ -798,7 +824,9 @@ export async function sessionInfo(cardId: string): Promise<SessionInfo> {
       { timeoutMs: 15_000 },
     );
     const { transcript, settings } = parseSessionOutput(stdout);
-    model = pickModel(parseLastTurn(transcript), settings, { model: card.model ?? null, at: card.modelAt ?? 0 });
+    const lastTurn = parseLastTurn(transcript);
+    model = pickModel(lastTurn, settings, { model: card.model ?? null, at: card.modelAt ?? 0 });
+    effort = pickEffort(lastTurn, settings, { effort: card.effort ?? null, at: card.effortAt ?? 0 });
   } catch {
     model = null; // runner unreachable or no transcript yet — the UI shows the default
   }
@@ -832,6 +860,7 @@ export async function sessionInfo(cardId: string): Promise<SessionInfo> {
   return {
     model,
     modelLabel: modelLabelFor(model),
+    effort,
     account: { slug: slug ?? null, name },
     situation,
   };

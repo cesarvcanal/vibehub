@@ -131,6 +131,9 @@ describe("run script + parse", () => {
     expect(s).toContain("if node_modules/.bin/tsc --noEmit; then");
     expect(s).toContain('echo "__VIBEHUB_GATE__ fail"');
     expect(s).toContain('echo "__VIBEHUB_GATE__ pass"');
+    // the checks run with the test-worker cap, set before the first one
+    expect(s.indexOf("export VITEST_MAX_THREADS=2;")).toBeGreaterThan(-1);
+    expect(s.indexOf("export VITEST_MAX_THREADS=2;")).toBeLessThan(s.indexOf("if npm test"));
   });
 
   it("passed only when the pass marker is there and nothing failed", async () => {
@@ -145,10 +148,19 @@ describe("run script + parse", () => {
 
   it("runs the checks under an in-container deadline that kills the whole group", async () => {
     const { gate } = await load();
-    const s = gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], 600_000);
+    const s = gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], { timeoutMs: 600_000 });
     expect(s).toMatch(/^docker exec 'c' timeout -s KILL 585 sh -c /);
     expect(s).toContain('if [ $? -eq 137 ]; then echo "__VIBEHUB_GATE__ timeout 585"; fi');
-    expect(() => gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], 10_000)).toThrow();
+    expect(() => gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], { timeoutMs: 10_000 })).toThrow();
+  });
+
+  it("exposes the card's base as VIBEHUB_BASE_REF, validated, before the checks", async () => {
+    const { gate } = await load();
+    const s = gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], { baseBranch: "main" });
+    expect(s).toContain("export VIBEHUB_BASE_REF='\\''origin/main'\\''");
+    expect(s.indexOf("VIBEHUB_BASE_REF")).toBeLessThan(s.indexOf("if npm test"));
+    expect(gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"])).not.toContain("VIBEHUB_BASE_REF");
+    expect(() => gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], { baseBranch: "main; rm -rf /" })).toThrow();
   });
 
   it("a timed-out run is red, flagged, and says why", async () => {

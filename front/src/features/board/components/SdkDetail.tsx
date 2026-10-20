@@ -12,6 +12,7 @@ import {
   agentStatus,
   bashOutput,
   changedFiles,
+  detailHasResult,
   formatDuration,
   formatTokens,
   parseUnifiedDiff,
@@ -54,6 +55,8 @@ export const SdkDetailContext = React.createContext<SdkDetailApi>({ open: () => 
 
 /** De quanto em quanto a linha do tempo de um subagente rodando é pedida de novo. */
 export const AGENT_POLL_MS = 4_000;
+/** De quanto em quanto uma ação ainda sem resultado é pedida de novo. */
+export const ACTION_POLL_MS = 4_000;
 
 /* --------------------------------------------------------------------- peças */
 
@@ -205,51 +208,117 @@ export function SdkFleetView({ rows, tasks, children }: FleetProps) {
   const done = statuses.filter((s) => s === "ok" || s === "error").length;
   const running = statuses.filter((s) => s === "running").length;
   return (
-    <div data-testid="sdk-fleet" data-count={agents.length} className="rounded-md border border-border/70 bg-muted/40 px-2.5 py-2 text-xs">
-      <div className="flex items-center gap-1.5">
-        <Bot className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <span className="font-medium text-foreground/90">{t("sdk.fleet.title", { n: agents.length })}</span>
-        {agents.length > 1 ? (
-          <span className="text-muted-foreground">{t("sdk.fleet.count", { done, running })}</span>
-        ) : null}
+    <FleetPanel
+      testId="sdk-fleet"
+      count={agents.length}
+      icon={<Bot className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+      title={t("sdk.fleet.title", { n: agents.length })}
+      subtitle={agents.length > 1 ? t("sdk.fleet.count", { done, running }) : undefined}
+      progress={agents.length > 1 ? done / agents.length : undefined}
+    >
+      {agents.map((row, i) => {
+        const task = tasks[row.id];
+        const kids = children.get(row.id) ?? [];
+        const lastKid = [...kids].reverse().find((k) => k.kind === "tool") as ToolRow | undefined;
+        const now = task?.status === "running" || !task
+          ? task?.summary || (task?.lastTool ? task.lastTool : lastKid ? toolHeadline(lastKid.name, lastKid.input).title : "")
+          : t(task.status === "completed" ? "sdk.fleet.finished" : "sdk.fleet.stopped");
+        return (
+          <FleetRow
+            key={row.id}
+            testId="sdk-fleet-agent"
+            status={statuses[i] as ToolStatus}
+            name={agentName(row.input)}
+            now={now}
+            actions={task?.toolUses ?? row.result?.agent?.toolUses ?? kids.filter((k) => k.kind === "tool").length}
+            durationMs={task?.durationMs ?? row.result?.agent?.durationMs}
+            onClick={() => open({ kind: "agent", id: row.id })}
+          />
+        );
+      })}
+    </FleetPanel>
+  );
+}
+
+/**
+ * A MOLDURA da frota: cabeçalho, barra de progresso opcional e as linhas. Exportada para a faixa de
+ * segundo plano usar o mesmo desenho — o trabalho em andamento tem uma cara só na tela.
+ */
+export function FleetPanel({
+  testId,
+  count,
+  icon,
+  title,
+  subtitle,
+  progress,
+  role,
+  className,
+  children,
+}: {
+  testId: string;
+  count: number;
+  icon: React.ReactNode;
+  title: React.ReactNode;
+  subtitle?: React.ReactNode;
+  /** 0..1; sem valor, sem barra. */
+  progress?: number;
+  role?: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div role={role} data-testid={testId} data-count={count} className={cn("rounded-md border border-border/70 bg-muted/40 px-2.5 py-2 text-xs", className)}>
+      <div className="flex min-w-0 items-center gap-1.5">
+        {icon}
+        <span className="shrink-0 font-medium text-foreground/90">{title}</span>
+        {subtitle ? <span className="min-w-0 truncate text-muted-foreground">{subtitle}</span> : null}
       </div>
-      {agents.length > 1 ? (
+      {progress !== undefined ? (
         <div className="mb-1 mt-2 h-1 overflow-hidden rounded-full bg-border/60">
-          <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${Math.round((done / agents.length) * 100)}%` }} />
+          <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${Math.round(progress * 100)}%` }} />
         </div>
       ) : null}
-      <div className="mt-1 space-y-0.5">
-        {agents.map((row, i) => {
-          const task = tasks[row.id];
-          const status = statuses[i] as ToolStatus;
-          const kids = children.get(row.id) ?? [];
-          const lastKid = [...kids].reverse().find((k) => k.kind === "tool") as ToolRow | undefined;
-          const now = task?.status === "running" || !task
-            ? task?.summary || (task?.lastTool ? task.lastTool : lastKid ? toolHeadline(lastKid.name, lastKid.input).title : "")
-            : t(task.status === "completed" ? "sdk.fleet.finished" : "sdk.fleet.stopped");
-          const actions = task?.toolUses ?? row.result?.agent?.toolUses ?? kids.filter((k) => k.kind === "tool").length;
-          const duration = task?.durationMs ?? row.result?.agent?.durationMs;
-          return (
-            <button
-              key={row.id}
-              type="button"
-              data-testid="sdk-fleet-agent"
-              data-status={status}
-              onClick={() => open({ kind: "agent", id: row.id })}
-              className="grid w-full grid-cols-[1rem_minmax(7rem,12rem)_minmax(0,1fr)_auto_0.75rem] items-center gap-2 rounded px-1 py-1 text-left hover:bg-background/60"
-            >
-              <StatusIcon status={status} className="h-3.5 w-3.5" />
-              <span className="min-w-0 truncate font-medium text-foreground/90">{agentName(row.input)}</span>
-              <span className="min-w-0 truncate text-muted-foreground">{now}</span>
-              <span className="shrink-0 tabular-nums text-[11px] text-muted-foreground/80">
-                {[actions ? t("sdk.result.actions", { n: actions }) : null, duration ? formatDuration(duration) : null].filter(Boolean).join(" · ")}
-              </span>
-              <ChevronRight className="h-3 w-3 text-muted-foreground/60" />
-            </button>
-          );
-        })}
-      </div>
+      <div className="mt-1 space-y-0.5">{children}</div>
     </div>
+  );
+}
+
+/** Uma linha da frota: status, nome, o que faz agora, "N ações · tempo". Sem `onClick`, não é botão. */
+export function FleetRow({
+  testId,
+  status,
+  name,
+  now,
+  actions,
+  durationMs,
+  onClick,
+}: {
+  testId: string;
+  status: ToolStatus;
+  name: string;
+  now: string;
+  actions?: number;
+  durationMs?: number;
+  onClick?: () => void;
+}) {
+  const t = useT();
+  const cls = "grid w-full grid-cols-[1rem_minmax(7rem,12rem)_minmax(0,1fr)_auto_0.75rem] items-center gap-2 rounded px-1 py-1 text-left";
+  const cells = (
+    <>
+      <StatusIcon status={status} className="h-3.5 w-3.5" />
+      <span className="min-w-0 truncate font-medium text-foreground/90">{name}</span>
+      <span className="min-w-0 truncate text-muted-foreground">{now}</span>
+      <span className="shrink-0 tabular-nums text-[11px] text-muted-foreground/80">
+        {[actions ? t("sdk.result.actions", { n: actions }) : null, durationMs ? formatDuration(durationMs) : null].filter(Boolean).join(" · ")}
+      </span>
+      {onClick ? <ChevronRight className="h-3 w-3 text-muted-foreground/60" /> : <span />}
+    </>
+  );
+  if (!onClick) return <div data-testid={testId} data-status={status} className={cls}>{cells}</div>;
+  return (
+    <button type="button" data-testid={testId} data-status={status} data-clickable="true" onClick={onClick} className={cn(cls, "hover:bg-background/60")}>
+      {cells}
+    </button>
   );
 }
 
@@ -332,12 +401,19 @@ function ActionView({
 }) {
   const t = useT();
   const row = rows.find((r) => r.kind === "tool" && r.id === view.id) as ToolRow | undefined;
-  const { data, loading, error } = useDetail<ToolDetailData>("tool", { id: view.id }, view.id);
+  const rowStatus: ToolStatus | null = row ? (row.name === "Agent" || row.name === "Task" ? agentStatus(row, tasks[row.id]) : toolStatus(row)) : null;
+  // Enquanto a ação roda (ou o transcript ainda não tem o resultado dela), o detalhe é pedido de
+  // novo: a saída aparece sozinha quando o comando termina, sem fechar e abrir o modal.
+  const [waiting, setWaiting] = React.useState(false);
+  const { data, loading, error } = useDetail<ToolDetailData>("tool", { id: view.id }, view.id, rowStatus === "running" || waiting ? ACTION_POLL_MS : undefined, rowStatus ?? "");
   const detail = data && data.found ? data : null;
+  // Rodando e ainda sem resultado — ou nem gravada no transcript ainda: é espera, não "sem saída".
+  const pendingResult = detail !== null ? !detailHasResult(detail) : rowStatus === "running" && data !== null;
+  React.useEffect(() => setWaiting(pendingResult), [pendingResult]);
   const name = detail?.name || row?.name || "?";
   const input = detail?.input ?? row?.input;
   const result = detail?.result ?? row?.result;
-  const status: ToolStatus = row ? (row.name === "Agent" || row.name === "Task" ? agentStatus(row, tasks[row.id]) : toolStatus(row)) : result ? (result.isError ? "error" : "ok") : "unknown";
+  const status: ToolStatus = rowStatus ?? (result ? (result.isError ? "error" : "ok") : pendingResult ? "running" : "unknown");
   const headline = toolHeadline(name, input);
   const seq = actionSequence(view, rows);
   const at = seq.indexOf(view.id);
@@ -371,11 +447,17 @@ function ActionView({
             <div data-testid="sdk-detail-why" className="whitespace-pre-wrap border-l-2 border-primary/50 pl-3 text-[13px] italic leading-relaxed text-muted-foreground">{detail.thinking}</div>
           </Section>
         ) : null}
-        <ActionBody name={name} input={input} detail={detail} row={row} onOpenAgent={onOpenAgent} />
+        <ActionBody name={name} input={input} detail={pendingResult ? null : detail} row={row} onOpenAgent={onOpenAgent} />
+        {pendingResult ? (
+          <div data-testid="sdk-detail-pending" className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+            {status === "running" || status === "unknown" ? t("sdk.detail.stillRunning") : t("sdk.detail.resultPending")}
+          </div>
+        ) : null}
         {loading && !detail ? (
           <div data-testid="sdk-detail-loading" className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />{t("sdk.detail.loading")}</div>
         ) : null}
-        {!loading && !detail ? (
+        {!loading && !detail && !pendingResult ? (
           <div data-testid="sdk-detail-missing" className="text-xs italic text-muted-foreground">{error === "offline" ? t("sdk.detail.offline") : error ? t("sdk.detail.failedToLoad") : t("sdk.detail.notFound")}</div>
         ) : null}
       </div>

@@ -9,6 +9,7 @@ import {
   mcpSecretNames,
   mcpSecretStatus,
   modelInUse,
+  effortInUse,
   whitelistModel,
 } from "@/features/board/api";
 import type { BoardAccount, BoardCard, BoardMcp, CardSessionInfo } from "@/features/board/api";
@@ -78,7 +79,7 @@ describe("mcpSecretStatus", () => {
 /* --------------------------------------------------------------- the pills */
 
 function session(overrides: Partial<CardSessionInfo> = {}): CardSessionInfo {
-  return { model: null, modelLabel: null, account: { slug: null, name: "" }, situation: "waiting", ...overrides };
+  return { model: null, modelLabel: null, effort: null, account: { slug: null, name: "" }, situation: "waiting", ...overrides };
 }
 
 /**
@@ -134,6 +135,26 @@ describe("modelInUse", () => {
     // Without a server label, the family still names it.
     expect(modelInUse(null, session({ model: "opus" })).label).toBe("Opus");
     expect(modelInUse(null, session({ model: "claude-sonnet-5-20260101" })).label).toBe("Sonnet");
+  });
+});
+
+describe("effortInUse", () => {
+  it("ticks the level the session RUNS on, even when the card pins nothing", () => {
+    expect(effortInUse({ effort: null }, session({ effort: "medium" }))).toBe("medium");
+  });
+
+  it("the server's reading beats the pin (it already weighs a fresh pin against the transcript)", () => {
+    expect(effortInUse({ effort: "max" }, session({ effort: "low" }))).toBe("low");
+  });
+
+  it("falls back to the pin while there is no reading; nothing at all is unknown, not a guess", () => {
+    expect(effortInUse({ effort: "high" }, session({ effort: null }))).toBe("high");
+    expect(effortInUse({ effort: "high" }, null)).toBe("high");
+    expect(effortInUse(null, session())).toBeUndefined();
+  });
+
+  it("ignores a level the menu does not know", () => {
+    expect(effortInUse({ effort: "low" }, session({ effort: "turbo" }))).toBe("low");
   });
 });
 

@@ -57,7 +57,7 @@ import { createReconnectBackoff, type ConnectionState } from "@/features/board/l
 import { reasoningTranslator, useReasoningTranslation } from "@/features/board/lib/reasoningTranslation";
 import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
 import { ToolDiffCard } from "@/features/board/components/ToolDiffCard";
-import { SdkDetailContext, SdkDetailHost, SdkFleet, StatusIcon, ToolResultText, useChangedFiles, type DetailView } from "@/features/board/components/SdkDetail";
+import { FleetPanel, FleetRow, SdkDetailContext, SdkDetailHost, SdkFleet, StatusIcon, ToolResultText, useChangedFiles, type DetailView } from "@/features/board/components/SdkDetail";
 import { DetailChannelContext, createDetailChannel, parseDetailResponse, toolStatus, type DetailChannel } from "@/features/board/lib/sdkDetail";
 import { toolDiff } from "@/features/board/lib/toolDiff";
 import {
@@ -532,7 +532,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    * socket aceitou" (which a half-open connection also does, into the void) and "o servidor tem".
    */
   const sendTurn = React.useCallback(
-    (frame: { type: "user" | "edit_user"; text: string; original?: string; first?: boolean }, shown: string, cid: string): void => {
+    (frame: { type: "user" | "edit_user"; text: string; original?: string; first?: boolean; now?: boolean }, shown: string, cid: string): void => {
       const entry: OutboxMessage = {
         cid,
         text: shown,
@@ -772,7 +772,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    * campo (nada rodando) ou da fila (o turno anterior acabou de fechar).
    */
   const dispatchTurn = React.useCallback(
-    (text: string): void => {
+    (text: string, now = false): void => {
       // `ultrathink` / `ultracode` no que está indo AGORA: o driver sobe o esforço DESTE turno, e a
       // barra de atividade é onde isso fica visível — o painel escalava em silêncio. Lido na
       // entrega, não na digitação: uma mensagem que esperou escala o turno que ELA abre.
@@ -783,7 +783,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       // the status ladder: "Preparando…"/"Pensando…" until the driver's first event.
       const cid = newCid();
       setState((prev) => appendUserRow(prev, text, selfOriginRef.current, { awaiting: true, cid, state: "sending" }));
-      sendTurn({ type: "user", text }, text, cid);
+      sendTurn(now ? { type: "user", text, now: true } : { type: "user", text }, text, cid);
     },
     [sendTurn],
   );
@@ -807,9 +807,11 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    *
    * Esperar é o padrão certo — uma mensagem dobrada no meio de um raciocínio entra como interrupção
    * de contexto, não como pergunta nova. Mas nem todo recado quer esperar: "para, tá errado", "o
-   * que você tá fazendo?" são justamente para AGORA, e o driver aceita (a mensagem entra no turno
-   * em andamento e volta marcada "entrou no turno em andamento" — o `turn_absorbed`). Então a
-   * espera é uma ESCOLHA da pessoa, não uma sentença da tela.
+   * que você tá fazendo?" são justamente para AGORA. Vai com `now`: se uma ferramenta está rodando,
+   * o driver a interrompe e a mensagem abre um turno novo — empurrada sem isso, o CLI só a lia quando
+   * a ferramenta devolvesse (um deploy preso deixou a pessoa falando sozinha por 24 min). Sem
+   * ferramenta rodando, ela entra no turno em andamento (o `turn_absorbed`). Então a espera é uma
+   * ESCOLHA da pessoa, não uma sentença da tela.
    *
    * Sem fio de pé nada sai da fila: forçar um envio que não pode acontecer só trocaria uma mensagem
    * guardada por uma bolha condenada — exatamente o que a fila existe para não fazer.
@@ -823,7 +825,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     }
     setQueue((prev) => dequeue(prev, id));
     try {
-      dispatchTurn(target.text);
+      dispatchTurn(target.text, true);
     } catch (err) {
       toast.error((err as Error).message);
     }
@@ -1381,58 +1383,44 @@ function SdkChangesButton({ rows }: { rows: readonly SdkRow[] }) {
 
 /**
  * A FAIXA "RODANDO EM SEGUNDO PLANO" — o equivalente do "1 background task" no rodapé do Claude
- * Code. Lista o que está vivo pela descrição que o próprio modelo deu à tarefa. Teto de altura pelo
- * mesmo motivo da fila: irmã do scroller, ela não pode espremer a conversa.
+ * Code. Lista o que está vivo pela descrição que o próprio modelo deu à tarefa, com o MESMO desenho
+ * do painel de subagentes da conversa: fixa acima do campo enquanto houver trabalho rodando. Teto de
+ * altura pelo mesmo motivo da fila: irmã do scroller, ela não pode espremer a conversa.
  */
 function SdkBackgroundTray({ tasks, agentTasks, rows }: { tasks: readonly BackgroundTask[]; agentTasks: SdkChatState["agentTasks"]; rows: readonly SdkRow[] }) {
   const t = useT();
   const { open } = React.useContext(SdkDetailContext);
   return (
-    <div
-      data-testid="sdk-background-tasks"
+    <FleetPanel
+      testId="sdk-background-tasks"
       role="status"
-      className="mt-1.5 flex max-h-[20vh] shrink-0 flex-col gap-1 overflow-y-auto overscroll-contain rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-1.5"
+      count={tasks.length}
+      icon={<Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />}
+      title={t("sdk.backgroundTitle", { n: tasks.length })}
+      subtitle={t("sdk.backgroundHint")}
+      className="mt-1.5 max-h-[20vh] shrink-0 overflow-y-auto overscroll-contain"
     >
-      <div className="flex items-center gap-1.5 text-[11px] font-medium text-sky-700 dark:text-sky-300">
-        <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
-        <span>{t("sdk.backgroundTitle", { n: tasks.length })}</span>
-        <span className="min-w-0 truncate font-normal opacity-80">{t("sdk.backgroundHint")}</span>
-      </div>
       {tasks.map((task) => {
         // A tarefa liga à chamada que a disparou: um subagente abre a linha do tempo dele; um Bash
-        // em segundo plano abre a ação. Sem a ligação (CLI antigo), é só a descrição — como antes.
-        const call = task.toolUseId ? rows.find((r) => r.kind === "tool" && r.id === task.toolUseId) : undefined;
-        const isAgent = call?.kind === "tool" ? isAgentTool(call.name) : task.type === "local_agent";
-        const live = task.toolUseId ? agentTasks[task.toolUseId] : undefined;
-        const now = live?.summary || live?.lastTool || "";
-        const label = task.description.trim() || t("sdk.backgroundUnnamed");
-        if (!task.toolUseId) {
-          return (
-            <div key={task.id} data-testid="sdk-background-task" className="flex items-start gap-1.5 px-1 text-xs text-muted-foreground">
-              <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-70" />
-              <span className="min-w-0 break-words">{label}</span>
-            </div>
-          );
-        }
+        // em segundo plano abre a ação. Sem a ligação (CLI antigo), é só a descrição — sem clique.
         const id = task.toolUseId;
+        const call = id ? rows.find((r) => r.kind === "tool" && r.id === id) : undefined;
+        const isAgent = call?.kind === "tool" ? isAgentTool(call.name) : task.type === "local_agent";
+        const live = id ? agentTasks[id] : undefined;
         return (
-          <button
+          <FleetRow
             key={task.id}
-            type="button"
-            data-testid="sdk-background-task"
-            data-clickable="true"
-            onClick={() => open(isAgent ? { kind: "agent", id } : { kind: "action", id })}
-            className="grid w-full grid-cols-[0.875rem_minmax(7rem,12rem)_minmax(0,1fr)_auto_0.875rem] items-center gap-2 rounded px-1 py-0.5 text-left text-xs text-muted-foreground hover:bg-sky-500/15 hover:text-foreground"
-          >
-            <Loader2 className="h-3 w-3 shrink-0 animate-spin text-sky-500" />
-            <span className="min-w-0 truncate text-foreground/90">{label}</span>
-            <span className="min-w-0 truncate font-mono text-[11px]">{now}</span>
-            <span className="shrink-0 tabular-nums text-[11px]">{live?.toolUses ? t("sdk.result.actions", { n: live.toolUses }) : ""}</span>
-            <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-70" />
-          </button>
+            testId="sdk-background-task"
+            status="running"
+            name={task.description.trim() || t("sdk.backgroundUnnamed")}
+            now={live?.summary || live?.lastTool || ""}
+            actions={live?.toolUses}
+            durationMs={live?.durationMs}
+            onClick={id ? () => open(isAgent ? { kind: "agent", id } : { kind: "action", id }) : undefined}
+          />
         );
       })}
-    </div>
+    </FleetPanel>
   );
 }
 

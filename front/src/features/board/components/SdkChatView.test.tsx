@@ -2724,7 +2724,8 @@ describe("SdkChatView — forçar o envio de uma mensagem da fila", () => {
     await userEvent.click(screen.getByTestId("sdk-queued-send-now"));
 
     await waitFor(() => expect(ws.sent.length).toBe(2));
-    expect(JSON.parse(ws.sent[1]!)).toMatchObject({ type: "user", text: "o que você tá fazendo ?" });
+    // `now`: com uma ferramenta presa o driver interrompe para ela ser lida já (ver sendUserNow)
+    expect(JSON.parse(ws.sent[1]!)).toMatchObject({ type: "user", text: "o que você tá fazendo ?", now: true });
     // saiu da espera e virou conversa: é isso que "foi entregue" significa nesta tela
     await waitFor(() => expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument());
     const bubbles = screen.getAllByTestId("sdk-user");
@@ -3444,6 +3445,26 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     const tray = await screen.findByTestId("sdk-background-tasks");
     expect(tray).toHaveTextContent(/background task/i);
   });
+
+  it("a faixa tem o desenho do painel de subagentes: cada tarefa é uma linha rodando; sem ligação, não é clicável", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "t9", name: "Agent", input: { description: "Review backend", run_in_background: true } });
+    ws.deliver({ type: "background_tasks", tasks: [
+      { id: "k9", type: "local_agent", description: "Review backend", toolUseId: "t9" },
+      { id: "k1", type: "local_bash", description: "Wait for jest" },
+    ] });
+    const tray = await screen.findByTestId("sdk-background-tasks");
+    expect(tray).toHaveAttribute("data-count", "2");
+    const [linked, loose] = within(tray).getAllByTestId("sdk-background-task");
+    expect(linked).toHaveAttribute("data-status", "running");
+    expect(linked.tagName).toBe("BUTTON");
+    expect(loose).toHaveAttribute("data-status", "running");
+    expect(loose.tagName).toBe("DIV");
+    expect(loose).not.toHaveAttribute("data-clickable");
+  });
 });
 
 describe("SdkChatView — /clear", () => {
@@ -4080,6 +4101,70 @@ describe("SdkChatView — o detalhe de cada ação", () => {
     fireEvent.click(within(dialog).getByTestId("sdk-detail-next"));
     await waitFor(() => expect(within(screen.getByTestId("sdk-detail")).getByTestId("sdk-detail-position")).toHaveTextContent("2 of 2"));
     await waitFor(() => expect(detailAsks(ws).some((f) => f.req === "tool" && f.id === "b2")).toBe(true));
+  });
+
+  it("comando ainda rodando: diz que roda (não 'terminou sem imprimir'), pede de novo e mostra a saída quando termina", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "r1", name: "Bash", input: { command: "npx vitest run" } });
+    fireEvent.click(screen.getByTestId("sdk-tool"));
+    const dialog = await screen.findByTestId("sdk-detail");
+    await waitFor(() => expect(detailAsks(ws).filter((f) => f.id === "r1")).toHaveLength(1));
+    const first = detailAsks(ws).find((f) => f.id === "r1")!;
+    // O transcript só tem a chamada: sem resultado ainda.
+    ws.deliver({ type: "detail", req: "tool", id: "r1", nonce: first.nonce, data: { found: true, by: "main", name: "Bash", input: { command: "npx vitest run" }, startedAt: 1 } } as never);
+    expect(await within(dialog).findByTestId("sdk-detail-pending")).toHaveTextContent("Still running");
+    expect(within(dialog).queryByText("The command finished without printing anything.")).toBeNull();
+    expect(within(dialog).queryByTestId("sdk-detail-missing")).toBeNull();
+
+    // O comando termina: o modal pede de novo sozinho e mostra a saída.
+    ws.deliver({ type: "tool_result", id: "r1", toolResult: { lines: 1 } });
+    await waitFor(() => expect(detailAsks(ws).filter((f) => f.id === "r1").length).toBeGreaterThan(1));
+    const again = detailAsks(ws).filter((f) => f.id === "r1").at(-1)!;
+    ws.deliver({ type: "detail", req: "tool", id: "r1", nonce: again.nonce, data: { found: true, by: "main", name: "Bash", input: { command: "npx vitest run" }, structured: { stdout: "Tests 12 passed\n", stderr: "" }, result: { lines: 1 }, startedAt: 1, endedAt: 2 } } as never);
+    expect(await within(dialog).findByText("Tests 12 passed")).toBeInTheDocument();
+    expect(within(dialog).queryByTestId("sdk-detail-pending")).toBeNull();
+  });
+
+  it("ação rodando que ainda não chegou no transcript: diz que roda, não 'conversa apagada'", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "n1", name: "Bash", input: { command: "sleep 60" } });
+    fireEvent.click(screen.getByTestId("sdk-tool"));
+    const dialog = await screen.findByTestId("sdk-detail");
+    await waitFor(() => expect(detailAsks(ws).some((f) => f.id === "n1")).toBe(true));
+    const ask = detailAsks(ws).find((f) => f.id === "n1")!;
+    ws.deliver({ type: "detail", req: "tool", id: "n1", nonce: ask.nonce, data: { found: false } } as never);
+    expect(await within(dialog).findByTestId("sdk-detail-pending")).toHaveTextContent("Still running");
+    expect(within(dialog).queryByTestId("sdk-detail-missing")).toBeNull();
+  });
+
+  it("reabrir o modal mostra na hora o detalhe que já veio, sem 'Carregando' de novo", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "c1", name: "Bash", input: { command: "ls" } });
+    ws.deliver({ type: "tool_result", id: "c1", toolResult: { lines: 1 } });
+    fireEvent.click(screen.getByTestId("sdk-tool"));
+    let dialog = await screen.findByTestId("sdk-detail");
+    await waitFor(() => expect(detailAsks(ws).some((f) => f.id === "c1")).toBe(true));
+    const ask = detailAsks(ws).find((f) => f.id === "c1")!;
+    ws.deliver({ type: "detail", req: "tool", id: "c1", nonce: ask.nonce, data: { found: true, by: "main", name: "Bash", input: { command: "ls" }, structured: { stdout: "README.md\n", stderr: "" }, result: { lines: 1 } } } as never);
+    expect(await within(dialog).findByText("README.md")).toBeInTheDocument();
+
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("sdk-detail")).toBeNull());
+    fireEvent.click(screen.getByTestId("sdk-tool"));
+    dialog = await screen.findByTestId("sdk-detail");
+    expect(within(dialog).getByText("README.md")).toBeInTheDocument();
+    expect(within(dialog).queryByTestId("sdk-detail-loading")).toBeNull();
+    // E ainda pede de novo, para atualizar por cima.
+    await waitFor(() => expect(detailAsks(ws).filter((f) => f.id === "c1")).toHaveLength(2));
   });
 
   it("a bandeja de segundo plano abre o subagente da tarefa", async () => {

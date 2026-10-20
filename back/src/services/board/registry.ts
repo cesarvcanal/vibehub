@@ -160,12 +160,13 @@ export function isHumanActive(card: Pick<Card, "humanActiveAt">, now: number = D
 
 /**
  * REASON a session restart is PENDING on a card: the shared brain or the MCP servers were edited, or
- * the card's own model/account was switched (`config`), while the card was `working`. It is only a
+ * the card's own model/account was switched (`config`), or a deploy changed what a session is born
+ * with (`deploy`, see sessionSpec.ts), while the card was `working`. It is only a
  * LABEL (so the UI can tell them apart in a badge); the restart mechanics are identical either way.
  * See `restartPendingAt` on the card and `shouldRestartOnStatus`.
  */
-export type RestartReason = "brain" | "mcp" | "plugin" | "config";
-export const RESTART_REASONS: readonly RestartReason[] = ["brain", "mcp", "plugin", "config"] as const;
+export type RestartReason = "brain" | "mcp" | "plugin" | "config" | "deploy";
+export const RESTART_REASONS: readonly RestartReason[] = ["brain", "mcp", "plugin", "config", "deploy"] as const;
 
 /**
  * Claude models a card may pin: FAMILY aliases, not versioned ids. When set, the session starts with
@@ -290,6 +291,8 @@ export interface Card {
   modelAt?: number;
   /** Reasoning level for THIS card (one of CLAUDE_EFFORTS). Absent = the account's own (no flag). */
   effort?: string;
+  /** WHEN the effort pin last changed (set OR cleared), epoch ms — same contest as `modelAt`. */
+  effortAt?: number;
   /**
    * When the card's terminal was opened for the FIRST time (worktree and session already exist in
    * the runner). Present = the front-end may attach the websocket immediately (attach-or-create) and
@@ -888,8 +891,16 @@ export function columnAfterOpen(current: BoardColumn): BoardColumn {
  * So leaving a pause is now always something a PERSON does — opening the card, dragging it out of
  * the column — never something a report does. A hook cannot undo a decision it does not know about.
  */
-export function reactivatesOnActivity(card: Pick<Card, "column" | "pausedAt">, status: CardStatus): boolean {
+export function reactivatesOnActivity(
+  card: Pick<Card, "column" | "pausedAt"> & { status?: CardStatus | null },
+  status: CardStatus,
+): boolean {
   if (card.pausedAt) return false;
+  // Só um turno NOVO (ocioso -> trabalhando) traz o card de volta. O agente que se conclui
+  // (`vibehub_move_cards`) o faz NO MEIO do turno, e cada ferramenta seguinte dele dispara um
+  // `working` (PreToolUse): sem isto o card saía de `done` no instante seguinte, e o "concluído"
+  // nunca ficava (produção, 2026-10-20). `card.status` aqui é o de ANTES do relato.
+  if (card.status === "working") return false;
   return status === "working" && card.column === "done";
 }
 
@@ -1559,6 +1570,7 @@ export async function updateCard(id: string, patch: UpdateCardInput): Promise<Ca
     }
     if (patch.effort !== undefined) {
       next.effort = patch.effort === null || !String(patch.effort).trim() ? undefined : assertEffort(patch.effort);
+      if (next.effort !== card.effort) next.effortAt = Date.now();
     }
     // Imported session / own branch: validated here (uuid / assertBranchName) because both become
     // argv or script content in the runner and must never pass through raw. null clears.
@@ -1665,6 +1677,7 @@ export async function applyCardStatus(cardId: string, status: CardStatus): Promi
     // longer describes the work, and a stale "ready" over a card that is busy again is exactly the
     // incoherence the board must not show. A report made DURING this turn arrives while the status
     // is already `working`, so it survives the hooks that keep firing until the turn ends.
+    const reactivate = reactivatesOnActivity(card, status); // read BEFORE the status is overwritten
     if (status === "working" && card.status !== "working") {
       card.declaredState = undefined;
       card.declaredSummary = undefined;
@@ -1675,7 +1688,7 @@ export async function applyCardStatus(cardId: string, status: CardStatus): Promi
     // about silence and this is the opposite of silence.
     if (card.hibernatedAt) card.hibernatedAt = null;
     let target: BoardColumn;
-    if (reactivatesOnActivity(card, status)) {
+    if (reactivate) {
       card.pausedAt = null;
       target = "working";
     } else {

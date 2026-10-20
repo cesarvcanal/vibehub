@@ -12,6 +12,7 @@ import { cardCdpEndpoint } from "../browser/ports.js";
 import { statusUrl } from "../../runtime/runner.js";
 import { getSettings } from "../settings/settings.js";
 import type { SdkPermissionGateMode } from "./protocol.js";
+import { testWorkerExports } from "../../runtime/testWorkers.js";
 
 /**
  * SDK DRIVER (service) — spawns and addresses the per-card Agent-SDK driver process inside the runner.
@@ -169,7 +170,8 @@ export function buildSdkDriverCommandLine(opts: SdkDriverCommandOpts): string {
   // PW_CDP_ENDPOINT points the `navegador` MCP at the card's own Chromium; VIBEHUB_CARD_ID +
   // VIBEHUB_STATUS_URL feed the status hooks in the runner's settings.json (loaded via
   // settingSources), so the activity dot follows the native chat too.
-  let cardEnv = "";
+  // The test-worker cap travels too (see runtime/testWorkers.ts).
+  let cardEnv = testWorkerExports();
   if (opts.cdpEndpoint) cardEnv += `export PW_CDP_ENDPOINT=${shQuote(assertSafeUrl(opts.cdpEndpoint))}; `;
   if (opts.cardId) {
     if (!CARD_ID_RE.test(opts.cardId)) throw new Error(`invalid card id: '${opts.cardId}'`);

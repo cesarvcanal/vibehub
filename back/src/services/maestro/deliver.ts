@@ -25,7 +25,10 @@ import { logger } from "../../utils/logger.js";
  * Steps:
  *   a. push the card branch (`--force-with-lease` — the card owns its branch).
  *   b. open a PR to the target branch, or reuse the open one.
- *   c. run the GATE (see gate.ts). If it ran and did not pass, STOP — do not merge.
+ *   c. the GATE. When the pull request has GitHub CI checks, THEY are the gate: wait for them (bounded)
+ *      and read their verdict — the CI already runs the full suite on a clean machine, and running it
+ *      again inside the shared runner duplicated the work and timed out on a loaded box. Without CI
+ *      checks, the local gate runs as before (see gate.ts). Red either way: STOP — do not merge.
  *   d. MERGE only when the caller passed `authorized: true` AND the gate is green. A merge commit,
  *      NEVER a squash.
  *
@@ -72,6 +75,17 @@ export interface DeliverOpts {
 }
 
 const MARKER = "__VIBEHUB_DELIVER__";
+const CI_MARKER = "__VIBEHUB_CI__";
+
+/** How often the CI checks are re-read while some are still running. */
+export const CI_POLL_SECONDS = 20;
+/** How long the deliver waits for running CI checks before giving up (red, "still running"). */
+export const CI_WAIT_SECONDS = 15 * 60;
+/**
+ * Right after the push GitHub may not have registered the checks yet ("no checks reported"). A repo
+ * that HAS workflows gets this long for them to show up before the deliver falls back to the local gate.
+ */
+export const CI_APPEAR_SECONDS = 2 * 60;
 
 /** Lines that plant the connection token and export `GH_TOKEN` from it (token over stdin only). PURE. */
 export function ghTokenPreamble(cardId: string, token: string): string[] {
@@ -132,6 +146,76 @@ export function buildMergeScript(
   return dockerBashScript(containerName, body);
 }
 
+/**
+ * Script for step (c) when the PR has CI: wait for the PR to point at the pushed commit, read `gh pr
+ * checks` until nothing is pending (or the wait runs out), then print the last JSON read and a marker. While checks have not been registered yet,
+ * a repo with workflows keeps asking for `CI_APPEAR_SECONDS`; one without stops at once. PURE.
+ */
+export function buildCiChecksScript(
+  containerName: string, cardId: string, token: string, cwd: string, prUrl: string,
+): string {
+  assertSafeRemotePath(cwd);
+  const rounds = Math.ceil(CI_WAIT_SECONDS / CI_POLL_SECONDS);
+  const appearRounds = Math.ceil(CI_APPEAR_SECONDS / CI_POLL_SECONDS);
+  const body = [
+    ...ghTokenPreamble(cardId, token),
+    `cd ${shQuote(cwd)} || { echo "${CI_MARKER} error"; exit 0; }`,
+    `WF=0; for f in .github/workflows/*.yml .github/workflows/*.yaml; do [ -e "$f" ] && WF=1; done`,
+    `HEAD=$(git rev-parse HEAD)`,
+    `i=0`,
+    `while :; do`,
+    `  i=$((i+1))`,
+    // A reused PR moves to the pushed commit a few seconds AFTER the push: until it does, its checks
+    // are the OLD head's — a stale green. Read nothing until the PR points at what was pushed.
+    `  PH=$(gh pr view ${shQuote(prUrl)} --json headRefOid --jq .headRefOid 2>/dev/null)`,
+    `  if [ "$PH" != "$HEAD" ]; then`,
+    `    if [ "$i" -lt ${appearRounds} ]; then sleep ${CI_POLL_SECONDS}; continue; fi`,
+    `    echo "${CI_MARKER} stale"; exit 0`,
+    `  fi`,
+    `  J=$(gh pr checks ${shQuote(prUrl)} --json name,bucket 2>&1)`,
+    `  case "$J" in`,
+    `    *'"bucket":"pending"'*) [ "$i" -lt ${rounds} ] || break ;;`,
+    `    *"no checks reported"*) [ "$WF" = 1 ] && [ "$i" -lt ${appearRounds} ] || break ;;`,
+    `    *) break ;;`,
+    `  esac`,
+    `  sleep ${CI_POLL_SECONDS}`,
+    `done`,
+    `printf '%s\n' "$J"`,
+    `echo "${CI_MARKER} done"`,
+  ];
+  return dockerBashScript(containerName, body);
+}
+
+/**
+ * The CI verdict from what `gh pr checks --json name,bucket` printed:
+ *  - `none`: no checks on the PR (or the answer was unreadable) — the local gate decides;
+ *  - `pass`: every check passed or was skipped;
+ *  - `fail`: some check failed or was cancelled (named in `output`);
+ *  - `pending`: checks still running when the wait ran out, or the PR never moved to the pushed
+ *    commit (`stale`) — red either way. PURE.
+ */
+export function parseCiChecks(stdout: string): { verdict: "none" | "pass" | "fail" | "pending"; output: string } {
+  if (stdout.includes(`${CI_MARKER} stale`)) {
+    return { verdict: "pending", output: "o PR ainda não aponta para o commit enviado — o CI dele não foi lido" };
+  }
+  const body = stdout.replace(new RegExp(`${CI_MARKER} \\S+.*`, "g"), "").trim();
+  const start = body.indexOf("[");
+  let checks: { name?: string; bucket?: string }[] | null = null;
+  if (start >= 0) {
+    try {
+      const parsed: unknown = JSON.parse(body.slice(start));
+      if (Array.isArray(parsed)) checks = parsed as { name?: string; bucket?: string }[];
+    } catch { /* not the JSON we asked for */ }
+  }
+  if (!checks || checks.length === 0) return { verdict: "none", output: "" };
+  const named = (buckets: string[]) => checks!.filter((c) => buckets.includes(String(c.bucket))).map((c) => c.name || "?");
+  const failed = named(["fail", "cancel"]);
+  if (failed.length) return { verdict: "fail", output: `CI do PR vermelho: ${failed.join(", ")}` };
+  const pending = named(["pending"]);
+  if (pending.length) return { verdict: "pending", output: `CI do PR ainda rodando: ${pending.join(", ")}` };
+  return { verdict: "pass", output: `CI do PR verde: ${checks.map((c) => c.name || "?").join(", ")}` };
+}
+
 /** Parses the push+PR output into a resolved PR url or a staged error. PURE. */
 export function parsePushAndPr(stdout: string): { ok: true; prUrl: string } | { ok: false; stage: string; output: string } {
   const pr = new RegExp(`${MARKER} pr (\\S+)`).exec(stdout);
@@ -166,6 +250,20 @@ export async function cardConnectionToken(card: Card, project: Project): Promise
     actor, project, settings: await getSettings(), connections: await listGithubConnections(),
   });
   return await tokenFor(identity.connectionId);
+}
+
+/**
+ * The PR's CI as the gate: its verdict, or null when the PR has no CI checks (the local gate
+ * decides). Checks still running past the wait are red — never merged on a guess.
+ */
+async function ciGate(container: string, cardId: string, token: string, cwd: string, prUrl: string): Promise<GateResult | null> {
+  const out = await hostExecutor().runScript(
+    buildCiChecksScript(container, cardId, token, cwd, prUrl),
+    { timeoutMs: (CI_WAIT_SECONDS + 2 * CI_POLL_SECONDS) * 1000 + 60_000 },
+  );
+  const ci = parseCiChecks(out.stdout);
+  if (ci.verdict === "none") return null;
+  return { ran: true, passed: ci.verdict === "pass", output: ci.output };
 }
 
 /**
@@ -207,11 +305,11 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
   }
   const prUrl = pr.prUrl;
 
-  // (c) the gate. A gate that errors (runner blip) blocks the merge — deploying past an unknown
-  // state is worse than making the maestro try again.
+  // (c) the gate — the PR's CI when it has one, the local gate otherwise. A gate that errors
+  // (runner blip) blocks the merge — deploying past an unknown state is worse than trying again.
   let gate: GateResult;
   try {
-    gate = await runGate(card.id);
+    gate = (await ciGate(container, card.id, token, cwd, prUrl)) ?? (await runGate(card.id));
   } catch (err) {
     logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "gate could not run — treating as red");
     return { prUrl, merged: false, reason: "gate", branch: target, cardBranch: source, ...lock, output: (err as Error).message };

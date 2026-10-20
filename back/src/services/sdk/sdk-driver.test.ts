@@ -102,6 +102,13 @@ export function query({ prompt, options }) {
         yield { type: "result", subtype: "success", session_id: SESSION, result: "ok" };
         continue;
       }
+      if (text === "wake-die") {
+        // O TURNO QUE O CLI ABRE SOZINHO: o turno da pessoa fecha, uma tarefa em segundo plano
+        // termina e o CLI acorda o modelo sem mensagem nenhuma — e o processo cai no meio desse turno.
+        yield { type: "result", subtype: "success", session_id: SESSION, result: "ok" };
+        yield { type: "assistant", uuid: "a-wake", parent_tool_use_id: null, session_id: SESSION, message: { content: [{ type: "text", text: "acordei" }] } };
+        throw new Error("CLI process exited with code 1");
+      }
       if (text === "sub") {
         // UM SUBAGENTE (Agent/Task) TRABALHANDO: o CLI repassa o stream e as mensagens dele com
         // parent_tool_use_id = o id da chamada que o disparou. A ÚLTIMA mensagem antes do result é
@@ -144,6 +151,22 @@ export function query({ prompt, options }) {
         yield { type: "result", subtype: "success", session_id: SESSION, result: "ok" };
         continue;
       }
+      if (text === "hangtool") {
+        // UMA FERRAMENTA PRESA (o vibehub_deliver de 24 min): o CLI só lê a próxima mensagem quando
+        // ela devolve — este laço nem puxa o prompt seguinte antes disso, como o CLI de verdade
+        // (medido no SDK, 2026-10-20). Só um interrupt a solta, com o "rejected" que o CLI escreve.
+        const stop = interrupted();
+        yield { type: "assistant", uuid: "a-hang", parent_tool_use_id: null, session_id: SESSION, message: { content: [
+          { type: "tool_use", id: "toolu_hang", name: "mcp__vibehub__vibehub_deliver", input: {} },
+        ] } };
+        mark("hangtool:running");
+        await stop;
+        yield { type: "user", parent_tool_use_id: null, session_id: SESSION, message: { content: [
+          { type: "tool_result", tool_use_id: "toolu_hang", is_error: true, content: "The user doesn't want to proceed with this tool use." },
+        ] } };
+        yield { type: "result", subtype: "error_during_execution", is_error: true, terminal_reason: "aborted_tools", session_id: SESSION };
+        continue;
+      }
       if (text.includes("slow")) {
         mark("slow:running");
         while (!existsSync(join(options.cwd, "release-slow"))) await sleep(20);
@@ -153,7 +176,7 @@ export function query({ prompt, options }) {
     }
   }
   const handle = run();
-  handle.interrupt = () => { onInterrupt(); return interruptAnswer; };
+  handle.interrupt = () => { mark("interrupt"); onInterrupt(); return interruptAnswer; };
   handle.supportedCommands = async () => [];
   handle.initializationResult = async () => ({});
   handle.applyFlagSettings = async (settings) => { mark("flags:" + JSON.stringify(settings)); };
@@ -460,6 +483,69 @@ describe("sdk-driver.mjs — editar com um turno parado não espera minutos", ()
   }, 60_000);
 });
 
+/**
+ * O "ENVIAR AGORA" DA FILA (2026-10-20): a mensagem entrava no CLI, mas o CLI só a lê quando a
+ * ferramenta em curso devolve — com um vibehub_deliver preso 24 min, a pessoa falava sozinha esse
+ * tempo todo. Com ferramenta do principal rodando, `now` interrompe e entrega a mensagem como turno
+ * NOVO; sem ferramenta rodando, o modelo a lê no passo seguinte e ela continua dobrando no turno.
+ */
+describe("sdk-driver.mjs — enviar agora", () => {
+  it("com uma ferramenta presa, interrompe e o modelo responde à mensagem num turno próprio", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "hangtool" });
+    await driver.waitMark("hangtool:running");
+    await driver.waitFor((e) => e.type === "tool_use" && e.id === "toolu_hang", from);
+    driver.send({ type: "user", text: "urgent", now: true });
+    const reply = await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:urgent", from);
+    await driver.waitFor((e) => e.type === "result", driver.events.indexOf(reply));
+    const after = driver.events.slice(from);
+    // Um turno próprio: dois results (o interrompido e o da mensagem), nenhum `turn_absorbed` —
+    // o manager conta o +1 do envio e fecha nos dois results, sem spinner eterno nem fechado cedo.
+    expect(after.filter((e) => e.type === "turn_absorbed")).toHaveLength(0);
+    expect(after.filter((e) => e.type === "result")).toHaveLength(2);
+    expect(after.find((e) => e.type === "result")?.isError).toBe(false); // interrompido não é falha
+    expect(driver.marks).toContain("interrupt");
+  }, 60_000);
+
+  it("sem `now`, a mensagem continua esperando a ferramenta (nada é interrompido)", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "hangtool" });
+    await driver.waitMark("hangtool:running");
+    driver.send({ type: "user", text: "later" });
+    await driver.waitFor((e) => e.type === "turn_absorbed", from);
+    expect(driver.marks).not.toContain("interrupt");
+  }, 60_000);
+
+  it("com o modelo escrevendo (sem ferramenta rodando), `now` dobra no turno e não interrompe", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "slow" });
+    await driver.waitMark("slow:running");
+    driver.send({ type: "user", text: "fold", now: true });
+    await driver.waitFor((e) => e.type === "turn_absorbed", from);
+    expect(driver.marks).not.toContain("interrupt");
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:fold", from);
+  }, 60_000);
+
+  it("a ferramenta que DEVOLVEU deixa de contar: `now` depois disso não interrompe", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "hangtool" });
+    await driver.waitMark("hangtool:running");
+    driver.send({ type: "interrupt" });
+    await driver.waitFor((e) => e.type === "result", from);
+    const marksBefore = driver.marks.filter((m) => m === "interrupt").length;
+    driver.send({ type: "user", text: "slow" });
+    await driver.waitMark("slow:running");
+    driver.send({ type: "user", text: "fold", now: true });
+    await driver.waitFor((e) => e.type === "turn_absorbed", from);
+    expect(driver.marks.filter((m) => m === "interrupt")).toHaveLength(marksBefore);
+  }, 60_000);
+});
+
 describe("sdk-driver.mjs — tarefas em segundo plano", () => {
   it("repassa o conjunto VIVO de tarefas em segundo plano que o CLI anuncia, inclusive quando ele esvazia", async () => {
     const driver = startDriver();
@@ -492,6 +578,21 @@ describe("sdk-driver.mjs — tarefas em segundo plano", () => {
     await driver.waitFor((e) => e.type === "background_tasks" && Array.isArray(e.tasks) && e.tasks.length === 1);
     const off = await driver.waitFor((e) => e.type === "background_tasks" && Array.isArray(e.tasks) && e.tasks.length === 0);
     expect(off.tasks).toEqual([]);
+  });
+});
+
+describe("sdk-driver.mjs — o turno que o CLI abre sozinho", () => {
+  // Produção, 2026-10-20: depois de uma retomada pós-deploy o CLI seguia num turno que ninguém
+  // mandou (a tarefa em segundo plano terminou). O driver não sabia desse turno: se o stream caísse
+  // no meio dele, nenhum `result` fechava — e o manager via o card "trabalhando" para sempre.
+  it("o stream que cai no meio do turno autônomo fecha esse turno com o result `aborted` que ele deve", async () => {
+    const driver = startDriver();
+    await driver.waitFor((e) => e.type === "ready");
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "wake-die" });
+    await driver.waitFor((e) => e.type === "assistant_text" && e.text === "acordei", from);
+    const owed = await driver.waitFor((e) => e.type === "result" && e.subtype === "aborted", from);
+    expect(owed).toEqual({ type: "result", subtype: "aborted", isError: false, sessionId: "11111111-2222-3333-4444-555555555555" });
   });
 });
 

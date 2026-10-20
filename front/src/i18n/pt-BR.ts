@@ -640,6 +640,8 @@ export const ptBR: Record<string, string> = {
   "sdk.detail.command": "Comando",
   "sdk.detail.output": "Saída",
   "sdk.detail.noOutput": "O comando terminou sem imprimir nada.",
+  "sdk.detail.stillRunning": "Ainda rodando — a saída aparece aqui quando o comando terminar.",
+  "sdk.detail.resultPending": "Terminou; esperando o resultado chegar no transcript…",
   "sdk.detail.stderr": "Erros (stderr)",
   "sdk.detail.notApplied": "não aplicado",
   "sdk.detail.newFile": "arquivo novo",
