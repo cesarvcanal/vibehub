@@ -8,6 +8,7 @@ import {
 import * as outbox from "../services/board/outbox.js";
 import { purgeRemovedCards } from "../services/board/purge.js";
 import { runnerToken } from "../runtime/runner.js";
+import { driverTurnRunning } from "../services/sdk/manager.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -284,6 +285,15 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
     // SNAPSHOT the primitives — `getCard` hands back the LIVE cached card, so applyCardStatus mutates
     // that very object and reading these fields afterwards would always show the post-status state.
     const before = await registry.getCard(String(body.card ?? ""));
+    // Um `waiting` com o turno do chat nativo ainda rodando é hook atrasado (o SessionStart de uma
+    // sessão retomada chegando depois do turno começar): aplicado, deixava o card cinza com o chat
+    // trabalhando. Pausa/restart pendente passam — é o `waiting` deles que executa o efeito.
+    if (
+      status === "waiting" && before && driverTurnRunning(before.id)
+      && before.column !== "paused" && !before.restartPendingAt
+    ) {
+      return await reply.send({ ok: true, applied: false });
+    }
     const wasPending = Boolean(before?.restartPendingAt);
     const wasLive = before ? registry.hasLiveSession(before) : false;
     const wasColumn = before?.column;
