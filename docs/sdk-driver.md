@@ -523,6 +523,14 @@ no meio do turno** — 2x em produção o card ficou mudo. A resposta:
   escapava: testes em background → o CLI abre o turno → o agente chama o deploy → card parado sem
   aviso. Segundo plano sozinho há mais de `BACKGROUND_HOLD_MAX_MS` (um dev server) só ganha a nota.
   Passo de subagente (`parentToolUseId`) não conta como turno do principal.
+- **O turno autônomo é turno em voo em todo lugar (2026-10-20):** só o marcador olhava para ele. O
+  `ready` de quem conecta ou recarrega, o idle stop e o status do board (`driverActivity`) contavam
+  só `activeTurns`: depois da retomada o CLI seguia num turno que ele mesmo abriu, e o chat reaberto
+  nascia "parado", a ferramenta sem spinner, e a pessoa mandava "continue" a um card trabalhando
+  (cards cfb8 e 4f4b). Agora a regra é uma só (`isTurnInFlight`). O driver também passa a conhecer
+  esse turno (fala do principal sem turno aberto): mensagem no meio dele vira `turn_absorbed`, e o
+  stream que cai antes do `result` fecha com o `aborted` devido. Um `error` sem esse result também
+  encerra o turno autônomo no manager, para nunca deixar o card "trabalhando" para sempre.
 - **Worktree apagada:** se a pasta do card sumiu (a própria IA rodou `git worktree remove` depois
   de um merge), o connect do chat e o sweep de boot reprovisionam a worktree com o script de
   abertura antes de subir o driver (`restoreMissingWorkspace`). Se ainda assim faltar, o driver

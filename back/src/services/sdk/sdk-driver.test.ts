@@ -102,6 +102,13 @@ export function query({ prompt, options }) {
         yield { type: "result", subtype: "success", session_id: SESSION, result: "ok" };
         continue;
       }
+      if (text === "wake-die") {
+        // O TURNO QUE O CLI ABRE SOZINHO: o turno da pessoa fecha, uma tarefa em segundo plano
+        // termina e o CLI acorda o modelo sem mensagem nenhuma — e o processo cai no meio desse turno.
+        yield { type: "result", subtype: "success", session_id: SESSION, result: "ok" };
+        yield { type: "assistant", uuid: "a-wake", parent_tool_use_id: null, session_id: SESSION, message: { content: [{ type: "text", text: "acordei" }] } };
+        throw new Error("CLI process exited with code 1");
+      }
       if (text === "sub") {
         // UM SUBAGENTE (Agent/Task) TRABALHANDO: o CLI repassa o stream e as mensagens dele com
         // parent_tool_use_id = o id da chamada que o disparou. A ÚLTIMA mensagem antes do result é
@@ -492,6 +499,21 @@ describe("sdk-driver.mjs — tarefas em segundo plano", () => {
     await driver.waitFor((e) => e.type === "background_tasks" && Array.isArray(e.tasks) && e.tasks.length === 1);
     const off = await driver.waitFor((e) => e.type === "background_tasks" && Array.isArray(e.tasks) && e.tasks.length === 0);
     expect(off.tasks).toEqual([]);
+  });
+});
+
+describe("sdk-driver.mjs — o turno que o CLI abre sozinho", () => {
+  // Produção, 2026-10-20: depois de uma retomada pós-deploy o CLI seguia num turno que ninguém
+  // mandou (a tarefa em segundo plano terminou). O driver não sabia desse turno: se o stream caísse
+  // no meio dele, nenhum `result` fechava — e o manager via o card "trabalhando" para sempre.
+  it("o stream que cai no meio do turno autônomo fecha esse turno com o result `aborted` que ele deve", async () => {
+    const driver = startDriver();
+    await driver.waitFor((e) => e.type === "ready");
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "wake-die" });
+    await driver.waitFor((e) => e.type === "assistant_text" && e.text === "acordei", from);
+    const owed = await driver.waitFor((e) => e.type === "result" && e.subtype === "aborted", from);
+    expect(owed).toEqual({ type: "result", subtype: "aborted", isError: false, sessionId: "11111111-2222-3333-4444-555555555555" });
   });
 });
 
