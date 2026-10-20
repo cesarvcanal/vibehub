@@ -635,6 +635,51 @@ describe("pergunta órfã — o cartão sobreviveu ao driver que o abriu", () =>
     expect(await results()).toHaveLength(1);
   });
 
+  // ---- produção, 2026-10-19 (cards 98f4e270 e 8c417f8e): a bandeja cobrava a pergunta VELHA ----
+  // O deploy matou o driver com a pergunta Q1 de pé; a retomada automática fez o Claude perguntar
+  // de novo (Q2), a pessoa respondeu Q2 CLICANDO — e Q1 seguiu pendente para sempre, porque só uma
+  // MENSAGEM varria as órfãs. Meia hora depois a bandeja ainda mandava responder Q1.
+
+  const orphanResult = async () =>
+    (await readHistory(CARD)).find((e) => e.type === "question_result" && (e as { id?: string }).id === "q_3_1791402112898") as
+      | { superseded?: boolean; answers?: unknown }
+      | undefined;
+
+  it("a retomada automática encerra a órfã — o agente vai perguntar de novo, a velha não fica cobrando", async () => {
+    const { successor } = await orphanedCard();
+    injectSystemTurn(successor, "continue de onde parou", { kind: "system", name: "vibehub" }, 1);
+    await vi.waitFor(async () => expect(await orphanResult()).toMatchObject({ superseded: true }));
+  });
+
+  it("uma pergunta NOVA do driver vivo encerra a órfã — responder a nova pelo clique não deixa a velha de pé", async () => {
+    await orphanedCard();
+    spawned[1]!.stdout.emit("data", line({ type: "user_question", id: "q_1_1792423287705", questions: QUESTIONS }));
+    await vi.waitFor(async () => expect(await orphanResult()).toMatchObject({ superseded: true }));
+    // a nova é do driver vivo: só ele a encerra
+    expect((await readHistory(CARD)).some((e) => e.type === "question_result" && (e as { id?: string }).id === "q_1_1792423287705")).toBe(false);
+  });
+
+  it("clicar UMA órfã encerra as outras órfãs — a conversa seguiu com aquela resposta", async () => {
+    ensure();
+    spawned[0]!.stdout.emit("data", line({ type: "user_question", id: "q_1_old", questions: QUESTIONS }));
+    spawned[0]!.exitCode = 1;
+    spawned[0]!.emit("close", 1);
+    ensure();
+    spawned[1]!.stdout.emit("data", line({ type: "user_question", id: "q_1_new", questions: QUESTIONS }));
+    await vi.waitFor(async () => expect((await readHistory(CARD)).filter((e) => e.type === "user_question")).toHaveLength(2));
+    spawned[1]!.exitCode = 1;
+    spawned[1]!.emit("close", 1);
+    const third = ensure();
+    const socket = fakeSocket();
+    attachSocket(third, socket as never, { kind: "user", name: "cesar" });
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "question_answer", id: "q_1_new", answers: [{ selected: ["No item"] }] })));
+    await vi.waitFor(async () => {
+      const results = (await readHistory(CARD)).filter((e) => e.type === "question_result") as { id: string; superseded?: boolean; answers?: unknown }[];
+      expect(results.find((r) => r.id === "q_1_new")?.answers).toEqual([{ selected: ["No item"] }]);
+      expect(results.find((r) => r.id === "q_1_old")).toMatchObject({ superseded: true });
+    });
+  });
+
   it("uma pergunta que o driver VIVO ainda espera não é tocada pelo manager — quem a encerra é o driver", async () => {
     const session = ensure();
     const socket = fakeSocket();
