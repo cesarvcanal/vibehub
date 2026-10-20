@@ -2,6 +2,7 @@ import { appendFile, mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { dataPath } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
+import { CARD_ID_RE } from "../board/cardId.js";
 
 /**
  * MESSAGE PROVENANCE — who put a message into a card's conversation.
@@ -53,9 +54,6 @@ export const PROVENANCE_CACHE_MAX = 200;
  * — so this is generous. An event with no timestamp matches the newest entry for its text.
  */
 export const PROVENANCE_MATCH_WINDOW_MS = 30 * 60_000;
-
-/** Same id rule as the sdk history: the card id names a file, so only id-shaped values touch the fs. */
-const CARD_ID_RE = /^[0-9a-zA-Z-]{8,64}$/;
 
 function provenanceFile(cardId: string): string {
   if (!CARD_ID_RE.test(cardId)) throw new Error(`invalid card id for provenance: '${cardId}'`);

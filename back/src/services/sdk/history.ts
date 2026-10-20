@@ -7,6 +7,7 @@ import type { AgentTaskEvent, ToolResultEvent } from "./toolResult.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { logger } from "../../utils/logger.js";
 import { isAtomicWriteTmp, writeFileAtomic } from "../../store/atomicWrite.js";
+import { CARD_ID_RE } from "../board/cardId.js";
 
 /**
  * SDK CHAT HISTORY — the per-card event log that makes the native chat's conversation SURVIVE.
@@ -68,12 +69,6 @@ export type HistoryEvent = (
   tid?: string;
 };
 
-/**
- * Card ids are UUIDs minted by the registry. The id also names a file on disk, so anything that is
- * not plainly id-shaped is refused rather than resolved — no path from a URL ever touches the fs.
- */
-const CARD_ID_RE = /^[0-9a-zA-Z-]{8,64}$/;
-
 function historyFile(cardId: string): string {
   if (!CARD_ID_RE.test(cardId)) throw new Error(`invalid card id for sdk history: '${cardId}'`);
   return dataPath(SDK_HISTORY_DIR, `${cardId}.ndjson`);
@@ -99,6 +94,11 @@ export function replayableHistoryEvent(event: HistoryEvent): boolean {
     // The edit marker: without it a replay would draw the superseded message as if it still stood.
     case "message_edited":
       return true;
+    // O /btw: a resposta carrega a pergunta — é a ÚNICA linha dele no log (a pergunta não entra
+    // como `user`, nem aqui nem no contexto do modelo). Só a que RESPONDEU: uma falha passageira
+    // (fila cheia, prazo) redesenhada em todo F5 seria um aviso eterno de algo que já passou.
+    case "btw_answer":
+      return typeof (event as { text?: unknown }).text === "string";
     // O resumo do resultado (a linha "7 linhas" / "erro: …"): só do agente PRINCIPAL. O dos
     // subagentes é muito (centenas por frota) e empurraria a conversa para fora da janela do
     // replay — a linha do tempo de um subagente vem do transcript (./detail.ts).

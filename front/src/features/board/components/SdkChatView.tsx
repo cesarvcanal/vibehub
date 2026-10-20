@@ -80,7 +80,11 @@ import {
   CONVERSATION_CLEARED_NOTE,
   answerQuestion,
   applySdkEvent,
+  appendBtwRow,
   appendUserRow,
+  BTW_EXPIRE_MS,
+  expireBtwRows,
+  btwQuestion,
   coalesceDeltas,
   decidePermission,
   deliveredUserTexts,
@@ -714,6 +718,22 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     return () => clearTimeout(timer);
   }, [pendingEdit, state.turnActive, dispatchEditFrame]);
 
+  // O prazo das perguntas laterais desta aba: a que o driver nunca respondeu (morreu no meio, um
+  // deploy) vira erro em vez de "Respondendo…" para sempre. Um timer por pergunta, armado no envio.
+  const btwTimersRef = React.useRef(new Set<ReturnType<typeof setTimeout>>());
+  React.useEffect(() => {
+    const timers = btwTimersRef.current;
+    return () => { for (const timer of timers) clearTimeout(timer); };
+  }, []);
+  const armBtwExpiry = React.useCallback((askedAt: number): void => {
+    // Do MESMO `askedAt` da linha: o timer nunca dispara um instante antes do prazo que ela conta.
+    const timer = setTimeout(() => {
+      btwTimersRef.current.delete(timer);
+      setState((prev) => expireBtwRows(prev, Date.now()));
+    }, askedAt + BTW_EXPIRE_MS - Date.now());
+    btwTimersRef.current.add(timer);
+  }, []);
+
   /* -------------------------------------------------------- replying to a decision */
 
   /**
@@ -976,6 +996,21 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     // E o CHAT CARREGANDO também (fio de pé, servidor ainda no setup, sem `ready`): o back só guarda
     // o frame num buffer que um F5 joga fora — a fila é que sobrevive a ele (produção, 2026-10-20).
     const wireUp = connected && socketRef.current?.readyState === WebSocket.OPEN;
+    // O /btw é a pergunta feita JUSTAMENTE com o turno rodando: esperar o fim do turno na fila seria
+    // o oposto do comando. Sai na hora, num frame próprio, e vira uma linha pendente — quem responde
+    // é uma consulta à parte, não o turno (ver `answerBtw` em sdk-driver.mjs).
+    // Com o fio caído ela NÃO espera na fila: de lá ela sairia como mensagem comum — um turno do
+    // agente, o oposto do comando. Fica no campo, com o aviso, para a pessoa mandar quando voltar.
+    const btw = btwQuestion(text);
+    if (btw !== null) {
+      if (!wireUp) throw new Error(translate("sdk.offline")); // the composer keeps the words
+      const btwId = newCid();
+      sendFrame({ type: "btw", id: btwId, question: btw }); // throws offline: the composer keeps the words
+      const askedAt = Date.now();
+      setState((prev) => appendBtwRow(prev, btwId, btw, askedAt));
+      armBtwExpiry(askedAt);
+      return;
+    }
     const waits = !wireUp || !chat.ready || chat.turnActive || chat.awaiting || pendingEdit;
     if (waits && pendingRef.current.length === 0) {
       setQueue((prev) => enqueue(prev, { id: newQueueId(), text, at: Date.now(), from: selfOriginRef.current }));
@@ -2099,6 +2134,25 @@ const SdkChatRow = React.memo(function SdkChatRow({
         className="whitespace-pre-wrap rounded-md border border-border/70 bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground"
       >
         {row.text}
+      </div>
+    );
+  }
+
+  if (row.kind === "btw") {
+    // A resposta do /btw: emoldurada e com a pergunta, para nunca ser lida como o turno falando.
+    return (
+      <div data-testid="sdk-btw" className="rounded-md border border-dashed border-border/70 bg-muted/30 px-3 py-2 text-sm">
+        <div className="text-xs text-muted-foreground">{t("sdk.btwLabel")}</div>
+        <div className="mt-1 whitespace-pre-wrap text-xs italic text-muted-foreground">{row.question}</div>
+        <div className="mt-2">
+          {row.text !== undefined ? (
+            <Markdown text={row.text} />
+          ) : row.error !== undefined ? (
+            t("sdk.btwError", { error: row.error })
+          ) : (
+            <span className="text-xs text-muted-foreground">{t("sdk.btwPending")}</span>
+          )}
+        </div>
       </div>
     );
   }

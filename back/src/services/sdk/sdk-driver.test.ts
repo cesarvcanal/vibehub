@@ -39,6 +39,27 @@ export function query({ prompt, options }) {
   let onInterrupt = () => {};
   let interruptAnswer = Promise.resolve();
   const interrupted = () => new Promise((resolve) => { onInterrupt = resolve; });
+  if (options.forkSession) {
+    // O /btw: uma consulta LATERAL, que bifurca a sessão e nunca escreve nela. Diz com que opções
+    // nasceu, e responde com o que leu — "btwfail" simula o CLI caindo no meio.
+    mark("btw:" + JSON.stringify({
+      resume: options.resume ?? null,
+      persist: options.persistSession,
+      tools: options.tools,
+      mcp: options.mcpServers,
+      strict: options.strictMcpConfig,
+      status: (options.env ?? {}).VIBEHUB_STATUS_URL,
+      hooks: options.hooks ?? null,
+    }));
+    const handle = (async function* () {
+      if (prompt.includes("btwfail")) throw new Error("CLI caiu");
+      if (prompt.includes("btwslow")) while (!existsSync(join(options.cwd, "release-btw"))) await sleep(20);
+      yield { type: "assistant", uuid: "a-btw", message: { content: [{ type: "text", text: "btw-reply:" + prompt }] } };
+      yield { type: "result", subtype: "success", session_id: "fork-" + index, result: "ok" };
+    })();
+    handle.interrupt = async () => {};
+    return handle;
+  }
   async function* run() {
     // O SDK de verdade sobe o binário com spawn(cwd): pasta inexistente vira ENOENT, que ele relata
     // como "binário existe mas não subiu" e culpa a libc (produção, 2026-10-19).
@@ -222,6 +243,7 @@ afterEach(async () => {
   for (const child of children.splice(0)) child.kill();
   await rm(join(sandbox, "release-slow"), { force: true });
   await rm(join(sandbox, "release-tool"), { force: true });
+  await rm(join(sandbox, "release-btw"), { force: true });
 });
 
 afterAll(async () => {
@@ -736,5 +758,86 @@ describe("sdk-driver.mjs — a pasta do card sumiu", () => {
     expect(error.message).not.toMatch(/libc/);
     // O turno fecha: sem isso o "Trabalhando…" girava para sempre.
     await driver.waitFor((e) => e.type === "result");
+  }, 60_000);
+});
+
+/**
+ * O /btw: a pessoa pergunta algo enquanto o turno roda, e a resposta vem de uma consulta LATERAL —
+ * a sessão bifurcada (o contexto todo), sem ferramentas, sem gravar nada na sessão de verdade e sem
+ * tocar no turno em andamento.
+ */
+describe("sdk-driver.mjs — /btw", () => {
+  it("responde com o turno rodando, sem interrompê-lo, numa bifurcação sem ferramentas", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "slow" });
+    await driver.waitMark("slow:running");
+
+    driver.send({ type: "btw", id: "b1", question: "o que falta?" });
+    const answer = await driver.waitFor((e) => e.type === "btw_answer", from);
+    expect(answer.id).toBe("b1");
+    expect(answer.question).toBe("o que falta?");
+    expect(String(answer.text)).toContain("btw-reply:");
+    expect(String(answer.text)).toContain("o que falta?");
+    expect(answer.error).toBeUndefined();
+
+    const opts = JSON.parse(driver.marks.find((m) => m.startsWith("btw:"))!.slice("btw:".length)) as Record<string, unknown>;
+    expect(opts).toMatchObject({
+      resume: "11111111-2222-3333-4444-555555555555",
+      persist: false,
+      tools: [],
+      mcp: {},
+      strict: true,
+      status: "",
+      hooks: null,
+    });
+    expect(driver.marks).not.toContain("interrupt");
+
+    // O turno de verdade segue e fecha sozinho.
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:slow", from);
+  }, 60_000);
+
+  it("UMA pergunta lateral por vez: a segunda espera a primeira responder", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    driver.send({ type: "btw", id: "lenta", question: "btwslow" });
+    driver.send({ type: "btw", id: "rapida", question: "e esta?" });
+    while (!driver.marks.some((m) => m.startsWith("btw:"))) await new Promise((resolve) => setTimeout(resolve, 20));
+    // A ausência não tem evento para esperar: uma folga curta, e a prova de verdade é a ordem abaixo.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(driver.marks.filter((m) => m.startsWith("btw:"))).toHaveLength(1);
+    expect(driver.events.slice(from).some((e) => e.type === "btw_answer")).toBe(false);
+
+    await writeFile(join(sandbox, "release-btw"), "");
+    const second = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "rapida", from);
+    const answers = driver.events.slice(from).filter((e) => e.type === "btw_answer").map((e) => e.id);
+    expect(answers).toEqual(["lenta", "rapida"]);
+    expect(String(second.text)).toContain("e esta?");
+  }, 60_000);
+
+  it("fila com teto: a pergunta além dele é recusada NA HORA, as outras seguem", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    for (const id of ["q1", "q2", "q3", "q4"]) driver.send({ type: "btw", id, question: "btwslow " + id });
+    const refused = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "q4", from);
+    expect(String(refused.error)).toMatch(/fila/);
+    expect(driver.events.slice(from).filter((e) => e.type === "btw_answer")).toHaveLength(1);
+
+    await writeFile(join(sandbox, "release-btw"), "");
+    await driver.waitFor((e) => e.type === "btw_answer" && e.id === "q3", from);
+    const answered = driver.events.slice(from).filter((e) => e.type === "btw_answer" && e.text).map((e) => e.id);
+    expect(answered).toEqual(["q1", "q2", "q3"]);
+  }, 60_000);
+
+  it("uma falha vira resposta com erro — nunca derruba o driver", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    driver.send({ type: "btw", id: "b2", question: "btwfail" });
+    const answer = await driver.waitFor((e) => e.type === "btw_answer", from);
+    expect(answer).toMatchObject({ id: "b2", question: "btwfail" });
+    expect(String(answer.error)).toContain("CLI caiu");
+    driver.send({ type: "user", text: "depois" });
+    await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:depois", from);
   }, 60_000);
 });

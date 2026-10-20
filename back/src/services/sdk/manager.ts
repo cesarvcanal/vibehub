@@ -15,7 +15,7 @@ import { readCardChanges, readCardFileDiff } from "../maestro/changes.js";
 import { mergeTaskEvent, taskSnapshot, toolResultEvent, type AgentTaskEvent, type RawTaskEvent, type RawToolResultEvent } from "./toolResult.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
-  NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
+  NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
   type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type UserQuestionItem,
   type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest,
 } from "./protocol.js";
@@ -285,7 +285,8 @@ export type ClientFrameOutcome =
   /** `persisted` resolves `true` once the message is on disk, `false` when that write failed. */
   | { kind: "accepted"; cid?: string; persisted: Promise<boolean> }
   | { kind: "refused"; cid?: string; reason: string }
-  | { kind: "ignored" };
+  /** `sent`: a frame that went out without being a turn (the /btw) — the typing is over all the same. */
+  | { kind: "ignored"; sent?: true };
 
 /** How much stderr the post-mortem keeps. Enough for a stack trace, bounded against a chatty child. */
 export const STDERR_TAIL_MAX = 2000;
@@ -550,7 +551,7 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     const raw = event as unknown as { commands?: unknown; skills?: unknown; plugins?: unknown; hidden?: unknown };
     event = {
       type: "catalog",
-      commands: normalizeSlashCommands(raw.commands, { skills: raw.skills, plugins: raw.plugins, hidden: raw.hidden }),
+      commands: withBtwCommand(normalizeSlashCommands(raw.commands, { skills: raw.skills, plugins: raw.plugins, hidden: raw.hidden })),
     };
     session.catalog = event;
     // EM DISCO também: o driver anuncia o catálogo uma vez, ao subir, e o menu "/" precisa existir
@@ -1173,6 +1174,23 @@ export function handleClientFrame(
     void settleOrphanQuestions(session);
     return { kind: "accepted", cid: control.cid, persisted };
   }
+  if (control.type === "btw") {
+    // O /btw NÃO é turno: o driver o responde numa consulta à parte (ver `answerBtw` em
+    // sdk-driver.mjs). Nada de contagem de turno, marcador em voo ou log — só a resposta, que
+    // carrega a pergunta, entra no histórico. Driver morto: quem perguntou sabe na hora, em vez de
+    // ficar com a linha pendente para sempre.
+    if (canAcceptTurn(session) && writeToDriver(session, control)) {
+      noteChatActivity(session);
+    } else {
+      try {
+        sender?.send(JSON.stringify({
+          type: "btw_answer", id: control.id, question: control.question,
+          error: "o agente deste card não está rodando — pergunte de novo daqui a pouco",
+        }));
+      } catch { /* that socket is going away */ }
+    }
+    return { kind: "ignored", sent: true };
+  }
   if (control.type === "question_answer" && !session.ownQuestions.has(control.id)) {
     // ÓRFÃ: este driver nunca fez esta pergunta. Repassá-la devolvia "no pending question with id"
     // e a resposta se perdia — ela vira mensagem (ver `answerOrphanQuestion`).
@@ -1686,7 +1704,7 @@ export function attachSocket(
   const deliver = (text: string): void => {
     const outcome = handleClientFrame(session, text, origin, socket);
     // The message is out: whoever wrote it stopped typing — even if the front's own "parou" is lost.
-    if (outcome.kind === "accepted") noteTyping(false);
+    if (outcome.kind === "accepted" || (outcome.kind === "ignored" && outcome.sent)) noteTyping(false);
     replyFrameOutcome(socket, outcome);
   };
   /** The tail of this socket's held frames; null = nothing held, frames go straight through. */

@@ -224,7 +224,7 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
       description:
         "Deliver a card: push its branch, open (or reuse) a pull request to `branch`, run the gate, " +
         "and — ONLY when `authorized` is true and the gate is green — merge the PR with a merge commit " +
-        "(never a squash). All git/gh runs as the project's GitHub connection. Returns { prUrl, " +
+        "(never a squash). All git/gh runs as the GitHub account of whoever sent the card its latest order (falling back to the project's). Returns { prUrl, " +
         "merged, reason }: `reason` is 'merged' on success, or 'gate' (checks red), 'unauthorized' " +
         "(prepared the PR but was not told to merge), 'locked' (see below), or a git failure. Pass " +
         "`authorized:true` ONLY when the user named where to ship (e.g. 'sobe pra dev'); NEVER by " +

@@ -21,6 +21,9 @@ import {
   interruptNote,
   NOTE_TURN_INTERRUPTED,
   NOTE_TURN_INTERRUPTED_EDIT,
+  withBtwCommand,
+  BTW_COMMAND,
+  BTW_QUESTION_MAX,
 } from "./protocol.js";
 
 describe("parseDriverLine", () => {
@@ -641,5 +644,35 @@ describe("buildOrphanAnswerText", () => {
     expect(text).not.toContain("«A?»");
     expect(text).toContain("«B?» → sim");
     expect(buildOrphanAnswerText(null, [{ selected: ["x"] }])).toContain("pergunta 1 → x");
+  });
+});
+
+describe("/btw — pergunta lateral, sem interromper o turno", () => {
+  it("o navegador manda a pergunta num frame próprio, com id e pergunta não vazia", () => {
+    expect(parseSdkClientFrame(`{"type":"btw","id":"b1","question":" o que falta? "}`)).toEqual({
+      type: "btw", id: "b1", question: "o que falta?",
+    });
+    expect(parseSdkClientFrame(`{"type":"btw","id":"b1","question":"   "}`)).toBeNull();
+    expect(parseSdkClientFrame(`{"type":"btw","question":"q"}`)).toBeNull();
+    expect(parseSdkClientFrame(`{"type":"btw","id":"${"x".repeat(65)}","question":"q"}`)).toBeNull();
+    const huge = parseSdkClientFrame(JSON.stringify({ type: "btw", id: "b1", question: "y".repeat(BTW_QUESTION_MAX + 50) }));
+    expect((huge as { question: string }).question.length).toBe(BTW_QUESTION_MAX);
+  });
+
+  it("o driver aceita a resposta (btw_answer) como evento do protocolo", () => {
+    expect(parseDriverLine(`{"type":"btw_answer","id":"b1","question":"q","text":"r"}`)).toEqual({
+      type: "btw_answer", id: "b1", question: "q", text: "r",
+    });
+  });
+
+  it("o controle btw vai ao driver com id e pergunta", () => {
+    expect(encodeControl({ type: "btw", id: "b1", question: "q" })).toBe(`{"type":"btw","id":"b1","question":"q"}\n`);
+  });
+
+  it("o menu \"/\" sempre oferece o /btw, uma vez só", () => {
+    const once = withBtwCommand([{ name: "code-review", source: "skill" }]);
+    expect(once.map((c) => c.name)).toEqual(["code-review", "btw"]);
+    expect(once[1]).toEqual(BTW_COMMAND);
+    expect(withBtwCommand(once).filter((c) => c.name === "btw").length).toBe(1);
   });
 });

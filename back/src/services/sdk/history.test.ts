@@ -594,3 +594,10 @@ describe("unwrapEditedMessage — tira o invólucro de uma edição que foi limp
     expect((await read())[0]).toEqual({ type: "user", text: "B", sent: "[x]" });
   });
 });
+
+describe("/btw no log do card", () => {
+  it("a resposta fica (o F5 a redesenha); a falha passageira não vira linha eterna", () => {
+    expect(replayableHistoryEvent({ type: "btw_answer", id: "b1", question: "q", text: "r" })).toBe(true);
+    expect(replayableHistoryEvent({ type: "btw_answer", id: "b2", question: "q", error: "fila cheia" })).toBe(false);
+  });
+});

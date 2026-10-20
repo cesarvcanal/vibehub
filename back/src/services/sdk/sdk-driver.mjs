@@ -496,6 +496,27 @@ async function emitCatalogFrom(init, queryHandle) {
 }
 
 /**
+ * As opções de um CLI DESCARTÁVEL (o catálogo de aquecimento, o /btw): entra como o de verdade, mas
+ * sem MCP nenhum e com os hooks de status mudos — não é um turno do card, e o painel não pode
+ * ouvi-lo como se fosse.
+ */
+function throwawayOptions(abort) {
+  applyAuth(); // the throwaway CLI signs in like the real one would
+  const options = baseOptions();
+  options.env = { ...process.env, VIBEHUB_STATUS_URL: "" };
+  options.strictMcpConfig = true;
+  options.mcpServers = {};
+  options.abortController = abort;
+  // Nada do que só serve a um turno de verdade: sem gate de ferramenta, sem cartão de pergunta, sem
+  // deltas ao vivo nem resumos de subagente.
+  delete options.hooks;
+  delete options.canUseTool;
+  options.includePartialMessages = false;
+  options.agentProgressSummaries = false;
+  return options;
+}
+
+/**
  * O MENU "/" ANTES DA PRIMEIRA MENSAGEM (produção, 26/09/2026: card novo, digitar "/code-re" não
  * oferecia nada). O catálogo só chegava pelo `init`, e o `init` só existe quando um turno começa —
  * ou seja, num card recém-aberto o menu ficava vazio justamente na hora em que a pessoa quer
@@ -531,13 +552,7 @@ async function warmCatalog() {
   const abort = new AbortController();
   warmAbort = abort;
   try {
-    applyAuth(); // the throwaway CLI signs in like the real one would
-    const options = baseOptions();
-    options.env = { ...process.env, VIBEHUB_STATUS_URL: "" };
-    options.strictMcpConfig = true;
-    options.mcpServers = {};
-    options.abortController = abort;
-    const handle = query({ prompt: ch, options });
+    const handle = query({ prompt: ch, options: throwawayOptions(abort) });
     // A consulta só ganha vida sendo iterada — e nada do que ela diz interessa: o único objetivo é
     // ter um CLI de pé para responder a pergunta abaixo.
     void (async () => { try { for await (const _ of handle) { /* descartado */ } } catch { /* idem */ } })();
@@ -552,6 +567,84 @@ async function warmCatalog() {
     warmChannel = null;
     warmAbort = null;
   }
+}
+
+/* ------------------------------------------------- /btw (a pergunta lateral) */
+// O `/btw` do terminal: uma pergunta feita com o turno rodando, respondida SEM interrompê-lo e sem
+// entrar na conversa. No modo SDK o CLI não o oferece, então o driver faz o mesmo à mão: uma
+// consulta à parte que BIFURCA a sessão (`resume` + `forkSession` — o contexto inteiro, até onde o
+// transcript já foi gravado), sem ferramentas, sem MCP, sem hooks de status e sem gravar nada em
+// disco (`persistSession: false`). O turno de verdade nem fica sabendo.
+
+/** Teto de uma resposta lateral: uma consulta pendurada não pode deixar a pergunta sem resposta. */
+const BTW_TIMEOUT_MS = 3 * 60_000;
+
+/** O que o modelo lê: a pergunta, com o aviso de que é lateral e de que não há ferramentas. */
+function btwPrompt(question) {
+  return (
+    "<system-reminder>Pergunta LATERAL do usuário, feita enquanto você trabalha na tarefa principal. " +
+    "Responda curto e direto, só com o que já está nesta conversa. Aqui você NÃO tem ferramentas: não " +
+    "tente ler arquivos nem rodar comandos — se o contexto não basta, diga isso. Esta resposta não " +
+    "interrompe nem muda a tarefa principal.</system-reminder>\n\n" + question
+  );
+}
+
+async function answerBtw(id, question) {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), BTW_TIMEOUT_MS);
+  const texts = [];
+  let failure = null;
+  try {
+    const options = throwawayOptions(abort);
+    options.tools = [];
+    options.maxTurns = 1;
+    options.persistSession = false;
+    if (lastSessionId) {
+      options.resume = lastSessionId;
+      options.forkSession = true;
+    }
+    for await (const msg of query({ prompt: btwPrompt(question), options })) {
+      if (msg.type === "assistant" && !msg.parent_tool_use_id) {
+        const text = resultText(msg.message?.content).trim();
+        if (text) texts.push(text);
+      } else if (msg.type === "result" && msg.is_error && texts.length === 0) {
+        failure = typeof msg.result === "string" && msg.result ? msg.result : String(msg.subtype ?? "error");
+      }
+    }
+  } catch (err) {
+    failure = err && err.message ? err.message : String(err);
+  } finally {
+    clearTimeout(timer);
+  }
+  // O prazo venceu: o SDK pode encerrar a consulta abortada calado ou lançando — o motivo é o prazo.
+  if (abort.signal.aborted && texts.length === 0) failure = `sem resposta em ${BTW_TIMEOUT_MS / 60_000} min`;
+  const text = texts.join("\n\n");
+  if (text) emit({ type: "btw_answer", id, question, text });
+  else emit({ type: "btw_answer", id, question, error: failure ?? "resposta vazia" });
+}
+
+/**
+ * UMA pergunta lateral por vez: cada uma sobe um CLI e lê a conversa inteira, então cinco perguntas
+ * seguidas viram uma fila, não cinco processos disputando a CPU do runner com o turno de verdade.
+ */
+let btwChain = Promise.resolve();
+/** Quantas perguntas laterais cabem de uma vez (a que roda + as que esperam). */
+const BTW_QUEUE_MAX = 3;
+let btwPending = 0;
+function queueBtw(id, question) {
+  // Além do teto, a recusa é imediata: cada uma pode levar minutos, e a quinta pergunta de uma rajada
+  // responderia quando ninguém mais se lembra dela.
+  if (btwPending >= BTW_QUEUE_MAX) {
+    emit({ type: "btw_answer", id, question, error: `fila cheia (${BTW_QUEUE_MAX} perguntas laterais em andamento)` });
+    return;
+  }
+  btwPending += 1;
+  // O `catch` é o que mantém a fila viva: uma rejeição (um `emit` num stdout quebrado) deixaria a
+  // corrente rejeitada para sempre e toda pergunta seguinte sem resposta.
+  btwChain = btwChain
+    .then(() => answerBtw(id, question))
+    .catch((err) => { process.stderr.write(`btw failed: ${err && err.message ? err.message : String(err)}\n`); })
+    .finally(() => { btwPending -= 1; });
 }
 
 let currentQuery = null; // the live query() iterator, so an interrupt can reach it mid-turn
@@ -1635,6 +1728,11 @@ rl.on("line", (line) => {
       await reauthIfChanged();
       await rewindAndSend(control.text, control.fallback, control.original, supersedePendingQuestions, control.first === true);
     });
+    return;
+  }
+  if (control && control.type === "btw" && typeof control.id === "string" && typeof control.question === "string") {
+    // FORA da fila `serialized`: a pergunta lateral não espera nada nem segura nada.
+    queueBtw(control.id, control.question);
     return;
   }
   if (control && control.type === "reanchor") {

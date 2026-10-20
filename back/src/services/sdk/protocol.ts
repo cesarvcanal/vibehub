@@ -228,6 +228,13 @@ export interface CatalogEvent { type: "catalog"; commands: SlashCommandInfo[] }
  * turn. Without this the chat swallowed the answer and the command looked like it did nothing.
  */
 export interface LocalOutputEvent { type: "local_output"; text: string }
+/**
+ * A resposta de um `/btw` — a pergunta LATERAL que a pessoa fez com o turno rodando. Vem de uma
+ * consulta à parte (a sessão bifurcada, sem ferramentas, sem gravar nada nela), então o agente
+ * principal nunca a lê e o turno dele segue intocado. `error` no lugar de `text` quando a consulta
+ * falhou. Fica no log do card: é conversa da pessoa, e o F5 redesenha pergunta e resposta.
+ */
+export interface BtwAnswerEvent { type: "btw_answer"; id: string; question: string; text?: string; error?: string }
 /** One live background task, as the driver forwards it from the CLI. */
 export interface BackgroundTaskInfo { id: string; type: string; description: string; /** A chamada que disparou a tarefa — liga a bandeja ao card dela. */ toolUseId?: string }
 /**
@@ -292,6 +299,7 @@ export type DriverEvent =
   | RewoundEvent
   | CatalogEvent
   | LocalOutputEvent
+  | BtwAnswerEvent
   | BackgroundTasksEvent
   | RateLimitEvent
   | ConversationResetEvent
@@ -324,6 +332,7 @@ const DRIVER_EVENT_TYPES = new Set([
   "rewound",
   "catalog",
   "local_output",
+  "btw_answer",
   "background_tasks",
   "rate_limit",
   "conversation_reset",
@@ -411,13 +420,38 @@ export interface EditUserControl { type: "edit_user"; original: string; text: st
  * sdk-driver.mjs. Nasce no back (espelho), nunca no navegador.
  */
 export interface ReanchorControl { type: "reanchor" }
+/**
+ * A pergunta de um `/btw`, já sem o comando — o composer reconhece o comando e manda este frame
+ * próprio (nunca um `user`). `id` é do navegador e casa a resposta (`btw_answer`) com a linha dele.
+ */
+export interface BtwControl { type: "btw"; id: string; question: string }
 export type DriverControl =
   | UserControl
+  | BtwControl
   | InterruptControl
   | PermissionDecisionControl
   | QuestionAnswerControl
   | EditUserControl
   | ReanchorControl;
+
+/**
+ * O `/btw` no menu "/". O CLI o trata como comando de terminal (ou nem o lista no modo SDK), e
+ * quem responde aqui é o próprio painel — então a entrada é nossa, e substitui a do CLI se houver.
+ */
+/** Teto da pergunta lateral: ela vai ao prompt, ao log do card e a cada aba. */
+export const BTW_QUESTION_MAX = 8_000;
+
+export const BTW_COMMAND: SlashCommandInfo = {
+  name: "btw",
+  source: "command",
+  description: "Pergunta lateral: responde com o contexto da conversa, sem interromper o turno",
+  argumentHint: "<pergunta>",
+};
+
+/** O catálogo com o `/btw` no fim, uma vez só. PURE. */
+export function withBtwCommand(commands: SlashCommandInfo[]): SlashCommandInfo[] {
+  return [...commands.filter((c) => c.name !== BTW_COMMAND.name), BTW_COMMAND];
+}
 
 /**
  * The supersede wrapper an EDITED message wears on its way to the MODEL. The original was already
@@ -517,6 +551,12 @@ export function parseSdkClientFrame(raw: string): DriverControl | null {
       if (parsed.type === "question_answer" && typeof parsed.id === "string") {
         const answers = parseQuestionAnswers((parsed as { answers?: unknown }).answers);
         if (answers) return { type: "question_answer", id: parsed.id, answers };
+      }
+      if (parsed.type === "btw" && typeof parsed.id === "string" && parsed.id !== "" && parsed.id.length <= 64) {
+        const question = typeof (parsed as { question?: unknown }).question === "string"
+          ? (parsed as { question: string }).question.trim()
+          : "";
+        return question ? { type: "btw", id: parsed.id, question: question.slice(0, BTW_QUESTION_MAX) } : null;
       }
       if (
         parsed.type === "edit_user" &&

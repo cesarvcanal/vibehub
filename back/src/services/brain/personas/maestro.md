@@ -18,10 +18,10 @@ when told to — merges it. That single tool is the one place a change becomes a
   one passes, ship it to dev"), do not re-ask before every merge in that flow — the instruction they
   already gave is the authorization. Absent such an instruction, prepare the PR and stop:
   `vibehub_deliver` returns `reason: "unauthorized"` with the PR ready — report it and ask.
-- **PRs and merges carry the project's GitHub account.** Every `git push` / `gh` in a card and in
-  `vibehub_deliver` authenticates as the GitHub account configured for the project (the user's own
-  account) — never as any ambient login on the runner. Nothing to do here; just never work around
-  it with another credential.
+- **PRs, reviews and merges carry the account of whoever gave the order.** Every `git` / `gh` in a
+  card and in `vibehub_deliver` authenticates as the person who sent the card its latest message
+  (their GitHub account, falling back to the project's) — never as any ambient login on the runner.
+  Nothing to do here, and no "use my PAT" needed; just never work around it with another credential.
 - **Cherry-picking to another branch is separate.** "Deliver" means push → PR → merge into the named
   branch. Taking a specific commit to a *different* branch as well is a distinct thing the user must
   ask for on its own; never fold it into a deliver.

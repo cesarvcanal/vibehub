@@ -12,6 +12,7 @@ import {
   TYPING_RELAY_MIN_MS,
   attachSocket,
   driverActivity,
+  driverTurnRunning,
   ensureDriverSession,
   handleClientFrame,
   hasDriverSession,
@@ -30,6 +31,7 @@ import {
   stopCardDriver,
 } from "./manager.js";
 import { readInflightMarker } from "./inflight.js";
+import { BTW_COMMAND } from "./protocol.js";
 import { createMirrorState, driverKeysFor, forgetDriverKeys, mirrorNewEvents } from "./mirror.js";
 import { notifyCardSessionKill } from "../board/workspace.js";
 import { mergeTranscriptReplay } from "./transcript.js";
@@ -317,6 +319,7 @@ describe("the command catalogue (the chat's \"/\" menu)", () => {
     expect(frame.commands).toEqual([
       { name: "code-review", source: "skill", description: "Review the diff for bugs", argumentHint: "[<pr#>]", aliases: ["review"] },
       { name: "superpowers:brainstorm", source: "plugin", description: "brainstorm" },
+      BTW_COMMAND,
     ]);
   });
 
@@ -1155,6 +1158,24 @@ describe("inflight markers — trabalho que nenhuma mensagem abriu (segundo plan
     expect(spawned[0]!.stdin.written.filter((w) => w.includes('"type":"user"')).length).toBe(2);
   });
 
+  /**
+   * O FALSO POSITIVO (produção, 2026-10-20, logo depois do fix): ao retomar, o CLI primeiro FECHA o
+   * turno velho com o filler ("No response requested.") — um `result` que chega antes de a
+   * continuação ser lida. Reenviar ali mandava a ordem duas vezes. O reenvio agora espera um
+   * instante e só vai se nada andou nesse meio-tempo.
+   */
+  it("o result do turno velho chega antes da continuação andar: NÃO reenvia", async () => {
+    const session = ensure();
+    injectSystemTurn(session, "continue de onde parou", { kind: "system", name: "vibehub" }, 1);
+    emit({ type: "assistant_text", text: "No response requested." });
+    emit({ type: "result", isError: false });
+    // A continuação começa a andar dentro da janela.
+    emit({ type: "tool_use", id: "t1", name: "Bash", input: {} });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(spawned[0]!.stdin.written.filter((w) => w.includes('"type":"user"')).length).toBe(1);
+    expect(session.activeTurns).toBe(0);
+  });
+
   it("retomada que avança fecha normalmente — nada é reenviado", async () => {
     const session = ensure();
     injectSystemTurn(session, "continue de onde parou", { kind: "system", name: "vibehub" }, 1);
@@ -1534,7 +1555,7 @@ describe("o recibo de entrega — nenhuma mensagem some em silêncio", () => {
 
     await vi.waitFor(async () => {
       const saved = await readCardCatalog(CARD);
-      expect(saved?.commands.map((c) => c.name)).toEqual(["code-review"]);
+      expect(saved?.commands.map((c) => c.name)).toEqual(["code-review", "btw"]);
     });
   });
 
@@ -2016,6 +2037,20 @@ describe("attachSocket — \"está digitando\" entre as abas do card", () => {
     vi.advanceTimersByTime(TYPING_RELAY_MIN_MS);
     cesar.emit("message", typing(true));
     expect(peerFrames(mussa).length).toBe(3);
+  });
+
+  it("mandar um /btw também encerra o \"digitando\" nas outras abas", () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    const mussa = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    attachSocket(session, mussa as never, MUSSA);
+    cesar.emit("message", typing(true));
+    cesar.emit("message", Buffer.from(JSON.stringify({ type: "btw", id: "b1", question: "e aí?" })));
+    expect(peerFrames(mussa)).toEqual([
+      { type: "peer_typing", name: "cesar", active: true },
+      { type: "peer_typing", name: "cesar", active: false },
+    ]);
   });
 
   it("o \"parou\" passa sempre (fura a janela) — e só quando havia um \"digitando\" no ar", () => {
@@ -2699,5 +2734,59 @@ describe("queda do driver com trabalho em voo", () => {
     spawned[0]!.emit("close", 1);
     off();
     expect(seen).toEqual([]);
+  });
+});
+
+/**
+ * O /btw: uma pergunta LATERAL, feita com o turno rodando, que o agente principal nunca lê. Chega
+ * num frame próprio, vai ao driver como controle próprio, não conta turno e só a resposta (que
+ * carrega a pergunta) fica no log do card.
+ */
+describe("/btw — pergunta lateral", () => {
+  function driverControls(): Array<Record<string, unknown>> {
+    return spawned[0]!.stdin.written.map((w) => JSON.parse(w) as Record<string, unknown>);
+  }
+  const btwFrame = JSON.stringify({ type: "btw", id: "b1", question: "o que falta?" });
+
+  it("vai ao driver como controle btw, sem virar turno nem marcador de turno em voo", async () => {
+    const session = ensure();
+    handleClientFrame(session, btwFrame);
+    expect(driverControls()).toEqual([{ type: "btw", id: "b1", question: "o que falta?" }]);
+    expect(driverTurnRunning(CARD)).toBe(false);
+    expect(await readInflightMarker(CARD)).toBeNull();
+  });
+
+  it("com um turno rodando, não mexe na contagem dele", () => {
+    const session = ensure();
+    handleClientFrame(session, JSON.stringify({ type: "user", text: "roda os testes" }));
+    expect(driverTurnRunning(CARD)).toBe(true);
+    handleClientFrame(session, btwFrame);
+    spawned[0]!.stdout.emit("data", line({ type: "result", subtype: "success" }));
+    expect(driverTurnRunning(CARD)).toBe(false);
+  });
+
+  it("a resposta vai a todas as abas e fica no log do card (o F5 a redesenha)", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    handleClientFrame(session, btwFrame);
+    spawned[0]!.stdout.emit("data", line({ type: "btw_answer", id: "b1", question: "o que falta?", text: "falta o PR" }));
+    expect(sentTypes(socket)).toContain("btw_answer");
+    await vi.waitFor(async () => {
+      const history = await readHistory(CARD);
+      expect(history.some((e) => e.type === "btw_answer" && (e as { text?: string }).text === "falta o PR")).toBe(true);
+    });
+  });
+
+  it("driver morto: quem perguntou recebe a falha na hora, em vez de esperar para sempre", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.exitCode = 1;
+    handleClientFrame(session, btwFrame, undefined, socket as never);
+    const answer = socket.sent.map((s) => JSON.parse(s) as Record<string, unknown>).find((e) => e.type === "btw_answer");
+    expect(answer).toMatchObject({ id: "b1", question: "o que falta?", error: expect.any(String) });
+    expect(String(answer!.error)).not.toBe("driver-gone"); // frase para a pessoa, não código interno
+    expect(driverControls()).toEqual([]);
   });
 });
