@@ -1006,6 +1006,15 @@ function normalizeColumns(cards: Card[], projectId: string, columns: BoardColumn
   }
 }
 
+/** Who hears that a card ENTERED `done` (services/events/cardEvents.ts) — told after the change is applied. */
+type ConcludedSink = (cardId: string) => void;
+const concludedSinks = new Set<ConcludedSink>();
+
+export function onCardConcluded(sink: ConcludedSink): () => void {
+  concludedSinks.add(sink);
+  return () => concludedSinks.delete(sink);
+}
+
 /** Puts the card in the target column at the requested (clamped) position, renumbering both columns. */
 function placeCard(cards: Card[], card: Card, column: BoardColumn, position?: number): void {
   const from = card.column;
@@ -1013,7 +1022,11 @@ function placeCard(cards: Card[], card: Card, column: BoardColumn, position?: nu
   // patch, the mirror rule, the pause). Only CROSSING the border counts: reordering inside `done`
   // must not buy a finished card another six months, and leaving `done` throws the stamp away.
   if (column === "done") {
-    if (from !== "done") card.doneAt = Date.now();
+    if (from !== "done") {
+      card.doneAt = Date.now();
+      // Told on the next microtask: placeCard runs inside a mutation, which must finish first.
+      queueMicrotask(() => { for (const sink of concludedSinks) sink(card.id); });
+    }
   } else if (card.doneAt !== undefined) {
     card.doneAt = undefined;
   }
