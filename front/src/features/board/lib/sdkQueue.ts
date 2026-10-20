@@ -178,3 +178,37 @@ export function foreignToOutbox(
   }
   return { own, foreign };
 }
+
+/**
+ * O CAMINHO DE VOLTA: uma mensagem que o servidor NÃO tem (a reconciliação do reconnect a deu por
+ * `missing`) e que nunca recebeu veredito volta pra FILA — e o despacho a entrega quando o chat
+ * terminar de carregar, como qualquer outra espera.
+ *
+ * O bug que isto fecha (produção, 2026-10-20): o chat estava recarregando (reconexão, setup do
+ * driver) e a pessoa mandou uma mensagem. O frame ficou no buffer do back, o F5 fechou o socket no
+ * meio do setup e o back o descartou ("closed during setup — nothing attached"). No reload ela
+ * voltava "não entregue ao servidor", pedindo um Reenviar para algo que só precisava ESPERAR.
+ *
+ * Fica de fora, com reenviar/descartar como antes:
+ * - a que já levou veredito (`undelivered`: recusa do back ou prazo vencido numa conexão que podia
+ *   responder) — o servidor falhou com ela, e reenviar sozinho em laço é pior que perguntar;
+ * - a que nunca saiu deste navegador (`unsent`) ou é de OUTRA conta — sair por esta conexão a
+ *   gravaria no nome errado; sem leitor conhecido ainda (`/auth/me` em voo), não se decide;
+ * - a correção de mensagem já enviada (`original`): ela não é um texto solto, é um supersede. PURE.
+ */
+export function outboxToQueue(
+  missing: readonly OutboxMessage[],
+  viewer: string | undefined,
+): { queued: QueuedMessage[]; kept: OutboxMessage[] } {
+  const queued: QueuedMessage[] = [];
+  const kept: OutboxMessage[] = [];
+  for (const m of missing) {
+    const own = !m.from || (viewer !== undefined && m.from.name === viewer);
+    if (own && !m.undelivered && !m.unsent && m.original === undefined) {
+      queued.push({ id: m.cid, text: m.text, at: m.at, ...(m.from ? { from: m.from } : {}) });
+    } else {
+      kept.push(m);
+    }
+  }
+  return { queued, kept };
+}

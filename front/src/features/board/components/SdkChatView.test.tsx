@@ -1338,8 +1338,8 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     expect(screen.queryByTestId("sdk-chat-working")).not.toBeInTheDocument();
   });
 
-  it("F5 com mensagem não confirmada: ela volta na tela, marcada e com o texto intacto", async () => {
-    // O que o navegador anterior deixou em disco, sem recibo.
+  it("F5 com mensagem não confirmada: ela volta pra fila e sai sozinha quando o chat carrega", async () => {
+    // O que o navegador anterior deixou em disco, sem recibo e sem veredito.
     localStorage.setItem(
       "vibehub.sdkOutbox.c1",
       JSON.stringify([{ cid: "c-antigo", text: "a instrução longa que sumia", at: Date.now() }]),
@@ -1349,9 +1349,28 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     ws.accept();
     ws.deliver({ type: "ready" }); // o replay do servidor não traz a mensagem — ele nunca a recebeu
 
-    const bubble = await screen.findByTestId("sdk-user");
+    await waitFor(() => expect(ws.sent).toHaveLength(1));
+    expect(JSON.parse(ws.sent[0]!)).toMatchObject({ type: "user", text: "a instrução longa que sumia" });
+    const bubble = screen.getByTestId("sdk-user");
     expect(bubble).toHaveTextContent("a instrução longa que sumia");
+    expect(bubble).toHaveAttribute("data-state", "sending");
+    expect(screen.queryByTestId("sdk-user-undelivered")).not.toBeInTheDocument();
+  });
+
+  it("F5 com mensagem que JÁ levou veredito (recusa/prazo): volta marcada, com reenviar — sem laço", async () => {
+    localStorage.setItem(
+      "vibehub.sdkOutbox.c1",
+      JSON.stringify([{ cid: "c-antigo", text: "a instrução recusada", at: Date.now(), undelivered: true }]),
+    );
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    const bubble = await screen.findByTestId("sdk-user");
+    expect(bubble).toHaveTextContent("a instrução recusada");
     expect(bubble).toHaveAttribute("data-state", "undelivered");
+    expect(ws.sent).toHaveLength(0);
   });
 
   it("F5 quando a mensagem TINHA sido gravada: o replay manda, a bolha é normal e não duplica", async () => {
@@ -1388,9 +1407,11 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     second.deliver({ type: "user", text: "sim" }); // o servidor só tem o "sim" de antes
     second.deliver({ type: "ready" });
 
-    // o "sim" de agora volta MARCADO, com reenviar — em vez de sumir como se tivesse chegado
-    await waitFor(() => expect(screen.getAllByTestId("sdk-user")).toHaveLength(2));
-    expect(screen.getAllByTestId("sdk-user")[1]).toHaveAttribute("data-state", "undelivered");
+    // o "sim" de agora SAI DE NOVO, sozinho — em vez de sumir como se tivesse chegado
+    await waitFor(() => expect(second.sent).toHaveLength(1));
+    expect(JSON.parse(second.sent[0]!)).toMatchObject({ type: "user", text: "sim" });
+    expect(screen.getAllByTestId("sdk-user")).toHaveLength(2);
+    expect(screen.getAllByTestId("sdk-user")[1]).toHaveAttribute("data-state", "sending");
     expect(localStorage.getItem("vibehub.sdkOutbox.c1")).toContain("sim");
   });
 
@@ -1427,7 +1448,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     expect(screen.queryByTestId("sdk-user-undelivered")).not.toBeInTheDocument();
   });
 
-  it("conversa longa: a janela andou e o 'ok' de agora NÃO está nela — continua marcado", async () => {
+  it("conversa longa: a janela andou e o 'ok' de agora NÃO está nela — sai de novo, sozinho", async () => {
     renderSdkChat();
     const first = await socket();
     first.accept();
@@ -1445,8 +1466,10 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     second.deliver({ type: "user", text: "ok", at: 6 });
     second.deliver({ type: "ready" });
 
-    await waitFor(() => expect(screen.getAllByTestId("sdk-user")).toHaveLength(3));
-    expect(screen.getAllByTestId("sdk-user")[2]).toHaveAttribute("data-state", "undelivered");
+    await waitFor(() => expect(second.sent).toHaveLength(1));
+    expect(JSON.parse(second.sent[0]!)).toMatchObject({ type: "user", text: "ok" });
+    expect(screen.getAllByTestId("sdk-user")).toHaveLength(3);
+    expect(screen.getAllByTestId("sdk-user")[2]).toHaveAttribute("data-state", "sending");
   });
 
   it("Reenviar manda as MESMAS palavras (mesmo recibo: o servidor nunca teve a primeira)", async () => {
@@ -1553,12 +1576,12 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
       }
     });
 
-    it("F5 com a mensagem antiga em disco: a bolha volta marcada e a conexão fica quieta", async () => {
+    it("F5 com a mensagem antiga (já com veredito) em disco: a bolha volta marcada e a conexão fica quieta", async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       try {
         localStorage.setItem(
           "vibehub.sdkOutbox.c1",
-          JSON.stringify([{ cid: "c-antigo", text: "a instrução longa que sumia", at: Date.now() - 60_000 }]),
+          JSON.stringify([{ cid: "c-antigo", text: "a instrução longa que sumia", at: Date.now() - 60_000, undelivered: true }]),
         );
         renderSdkChat();
         const ws = await socket();
@@ -4230,5 +4253,82 @@ describe("SdkChatView — o detalhe de cada ação", () => {
     const dialog = await screen.findByTestId("sdk-detail");
     expect(dialog).toHaveAttribute("data-view", "changes");
     expect(within(dialog).getByTestId("sdk-changes-file")).toHaveTextContent("a.ts");
+  });
+});
+
+/**
+ * O F5 NO MEIO DO CARREGAMENTO (produção, 2026-10-20): o chat estava recarregando (reconexão,
+ * driver subindo, histórico chegando) e a pessoa mandou uma mensagem. O back guardou o frame no
+ * buffer do setup; a tela não mostrava nada, ela deu F5, e o socket fechado no meio do setup fez o
+ * back descartar o buffer. No reload a mensagem voltava "não entregue ao servidor", pedindo um
+ * Reenviar. O pedido: "mesmo que não foi enviado deveria ficar na fila, esperar carregar… carregou,
+ * envia". A mensagem sem veredito volta pra FILA e sai sozinha quando o chat fica pronto.
+ */
+describe("SdkChatView — mensagem enviada durante o carregamento sobrevive ao F5", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("enviada com o chat carregando, F5 antes do recibo: no reload ela sai sozinha, sem 'não entregue'", async () => {
+    const { unmount } = renderSdkChat();
+    const first = await socket();
+    first.accept(); // o aperto de mão terminou, mas o back ainda monta a conexão (sem `ready`)
+    first.deliver({ type: "user", text: "pedido antigo", at: 1 });
+    await userEvent.type(screen.getByRole("textbox"), "atualize meus prs com dev{Enter}");
+    await waitFor(() => expect(first.sent).toHaveLength(1));
+
+    // F5: a aba some antes do `ready` — o back fecha o setup e descarta o frame bufferado.
+    unmount();
+    renderSdkChat();
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
+    const second = FakeSocket.instances[1] as FakeSocket;
+    second.accept();
+    second.deliver({ type: "user", text: "pedido antigo", at: 1 }); // o servidor não tem a nova
+    second.deliver({ type: "ready" });
+
+    await waitFor(() => expect(second.sent).toHaveLength(1));
+    const frame = JSON.parse(second.sent[0]!) as { type: string; text: string; cid: string };
+    expect(frame).toMatchObject({ type: "user", text: "atualize meus prs com dev" });
+    expect(screen.getAllByTestId("sdk-user")).toHaveLength(2);
+    expect(screen.getAllByTestId("sdk-user")[1]).toHaveAttribute("data-state", "sending");
+    expect(screen.queryByTestId("sdk-user-undelivered")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument();
+
+    // O recibo chega: a cópia em disco é esquecida, a bolha é uma mensagem normal.
+    second.deliver({ type: "user_ack", cid: frame.cid } as SdkEvent);
+    await waitFor(() => expect(screen.getAllByTestId("sdk-user")[1]).toHaveAttribute("data-state", "sent"));
+    await waitFor(() => expect(localStorage.getItem("vibehub.sdkOutbox.c1")).toBeNull());
+  });
+
+  it("volta pra FRENTE da fila: o que foi escrito antes sai antes", async () => {
+    localStorage.setItem(
+      "vibehub.sdkOutbox.c1",
+      JSON.stringify([{ cid: "c-perdido", text: "primeira", at: Date.now() - 2_000 }]),
+    );
+    localStorage.setItem(
+      "vibehub.sdkQueue.c1",
+      JSON.stringify([{ id: "q-depois", text: "segunda", at: Date.now() - 1_000 }]),
+    );
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    await waitFor(() => expect(ws.sent).toHaveLength(1));
+    expect(JSON.parse(ws.sent[0]!)).toMatchObject({ type: "user", text: "primeira" });
+    expect(screen.getByTestId("sdk-queued")).toHaveTextContent("segunda");
+  });
+
+  it("mensagem de OUTRA conta no outbox não sai por esta conexão: fica marcada", async () => {
+    localStorage.setItem(
+      "vibehub.sdkOutbox.c1",
+      JSON.stringify([{ cid: "c-alheio", text: "de outra pessoa", at: Date.now(), from: { kind: "user", name: "outra" } }]),
+    );
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    expect(await screen.findByTestId("sdk-user-undelivered")).toBeInTheDocument();
+    expect(screen.getByTestId("sdk-user")).toHaveTextContent("de outra pessoa");
+    expect(ws.sent).toHaveLength(0);
   });
 });

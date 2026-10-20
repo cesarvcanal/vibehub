@@ -128,6 +128,7 @@ import {
   lastQueued,
   markEditing,
   newQueueId,
+  outboxToQueue,
   readQueue,
   releaseEditing,
   updateQueued,
@@ -266,6 +267,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    * e é só nesse instante que ela sobe pra conversa, como bolha de verdade, com recibo.
    */
   const [queue, setQueue] = React.useState<QueuedMessage[]>(() => releaseEditing(readQueue(cardId)));
+  /** O que a fila tem AGORA, sem re-armar os callbacks a cada mensagem escrita. */
+  const queueRef = React.useRef(queue);
+  queueRef.current = queue;
   React.useEffect(() => {
     writeQueue(cardId, queue);
   }, [cardId, queue]);
@@ -578,13 +582,23 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     const live = liveUserCids(state.rows);
     const pending = outboxRef.current.filter((m) => !live.has(m.cid));
     if (pending.length === 0) return;
-    const { delivered, missing } = reconcileOutbox(deliveredUserTexts(state.rows, viewer), pending);
-    if (delivered.length > 0 || missing.length > 0) {
-      // Entregue sai da fila; a que o servidor não tem FICA, já com o veredito dado — a fila é a
-      // cópia recuperável dela, e uma entrada vencida que ninguém marca é o que fazia o watchdog
-      // derrubar o socket em todo tique.
+    const reconciled = reconcileOutbox(deliveredUserTexts(state.rows, viewer), pending);
+    const { delivered } = reconciled;
+    // A que se perdeu sem veredito (o F5 no meio do carregamento) volta pra FILA e sai sozinha
+    // quando o chat estiver pronto — na frente do que foi escrito depois dela (ver `outboxToQueue`).
+    const { queued, kept: missing } = outboxToQueue(reconciled.missing, viewer);
+    if (queued.length > 0) {
+      // O ref já na hora: o despacho roda neste MESMO commit (também acordado pelo `ready`) e, lendo
+      // a fila de antes, mandaria na frente o que foi escrito depois.
+      queueRef.current = [...queued, ...queueRef.current];
+      setQueue(queueRef.current);
+    }
+    if (delivered.length > 0 || reconciled.missing.length > 0) {
+      // Entregue (ou devolvida à fila) sai do outbox; a que o servidor não tem FICA, já com o
+      // veredito dado — o outbox é a cópia recuperável dela, e uma entrada vencida que ninguém
+      // marca é o que fazia o watchdog derrubar o socket em todo tique.
       setOutbox((prev) => markUndelivered(
-        delivered.reduce((acc, m) => dropFromOutbox(acc, m.cid), prev),
+        [...delivered, ...queued.map((q) => ({ cid: q.id }))].reduce((acc, m) => dropFromOutbox(acc, m.cid), prev),
         missing.map((m) => m.cid),
       ));
     }
@@ -744,10 +758,6 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   }, [leaveComposerModes]);
 
   /* ------------------------------------------------------------ a fila */
-
-  /** O que a fila tem AGORA, sem re-armar os callbacks a cada mensagem escrita. */
-  const queueRef = React.useRef(queue);
-  queueRef.current = queue;
 
   /**
    * A TROCA DE CONTA com mensagens esperando na fila: as de OUTRA conta saem da fila e viram cópias
