@@ -70,9 +70,8 @@ async function settleWithin<T>(work: Promise<T>, ms: number, what: string, cardI
 }
 
 async function openForUser(user: PublicUser, card: registry.Card) {
-  // BEFORE the open, as the board's /open does: the open resolves the git identity written into
-  // the worktree, so the actor has to be on the card by then.
-  await recordCardActor(user, card.id);
+  // No author stamp: opening is not an order (the board's /open does not stamp either). The send
+  // that follows is, and stamps.
   const result = await settleWithin(workspace.openCard(card.id, user.id), OPEN_WAIT_MS, "open from the external MCP", card.id);
   if (result.done) return { cardId: card.id, title: card.title, opened: true };
   return {
@@ -385,6 +384,8 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     async (a) => {
       try {
         await requireLevel(user, a.cardId, "work");
+        // Ordering the delivery IS an order: the push, the PR and the merge go out as this person.
+        await recordCardActor(user, a.cardId);
         return ok(await deliver(a.cardId, { branch: a.branch, authorized: a.authorized === true, by: user.id }));
       } catch (e) {
         return fail(e);

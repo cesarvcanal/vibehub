@@ -4,6 +4,7 @@ import { listTerminals, sendToTerminal, readTerminal, reportState, agentOriginFo
 import { DECLARED_STATES } from "../services/board/registry.js";
 import { runGate } from "../services/maestro/gate.js";
 import { deliver } from "../services/maestro/deliver.js";
+import { relayCardActor } from "../services/board/actor.js";
 import { announcePreview } from "../services/preview/announce.js";
 import { recordLearning } from "../services/brain/learn.js";
 import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX } from "./cardMove.js";
@@ -65,6 +66,8 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     },
     async (a) => {
       try {
+        // The order came from the PERSON behind the sending card: the destination works as them.
+        await relayCardActor(a.from, a.cardId);
         return ok(await sendToTerminal(a.cardId, a.text, {
           by: actor,
           respectHumanActive: true,

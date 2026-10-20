@@ -1,4 +1,4 @@
-import type { PublicUser } from "../../auth/users.js";
+import { findUser, type PublicUser } from "../../auth/users.js";
 import { cardLevel } from "../../auth/access.js";
 import { stampCardActor, getCard } from "./registry.js";
 import { reapplyCardIdentity } from "./workspace.js";
@@ -73,6 +73,24 @@ export async function recordCardActor(
     clearTimeout(timer);
   } catch (err) {
     logger.warn({ card: cardId, detail: (err as Error).message }, "could not record the card's actor");
+  }
+}
+
+/**
+ * A card delegating to another (the maestro's `vibehub_send_to_terminal`) passes on an order a
+ * PERSON gave it: the sender card's author becomes the destination's, so what that order makes the
+ * other card commit, push or merge carries the person behind it. Same rules as a message — the level
+ * is checked, and the switch lands before the caller sends. No sender, no author: nothing changes.
+ * Never rejects.
+ */
+export async function relayCardActor(fromCardId: string | undefined, toCardId: string): Promise<void> {
+  if (!fromCardId) return;
+  try {
+    const authorId = (await getCard(fromCardId))?.actorUserId;
+    if (!authorId) return;
+    await recordCardActor(await findUser(authorId), toCardId);
+  } catch (err) {
+    logger.warn({ card: toCardId, detail: (err as Error).message }, "could not relay the sender card's author");
   }
 }
 
