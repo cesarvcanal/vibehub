@@ -639,6 +639,8 @@ export const en: Record<string, string> = {
   "sdk.detail.command": "Command",
   "sdk.detail.output": "Output",
   "sdk.detail.noOutput": "The command finished without printing anything.",
+  "sdk.detail.stillRunning": "Still running — the output shows up here when the command finishes.",
+  "sdk.detail.resultPending": "Finished; waiting for the result to reach the transcript…",
   "sdk.detail.stderr": "Errors (stderr)",
   "sdk.detail.notApplied": "not applied",
   "sdk.detail.newFile": "new file",

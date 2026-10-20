@@ -160,32 +160,63 @@ export function parseDetailResponse(event: { type?: string; req?: unknown; id?: 
 
 export const DetailChannelContext = React.createContext<DetailChannel | null>(null);
 
+/** Quantos detalhes cada canal lembra (o mais antigo sai primeiro). */
+export const DETAIL_CACHE_MAX = 200;
+
+/**
+ * O último detalhe que chegou, por canal (card) e pedido: reabrir o modal mostra na hora o que já
+ * veio, em vez de "Carregando…" de novo a cada abertura, e o pedido novo só atualiza por cima.
+ */
+const detailCache = new WeakMap<DetailChannel, Map<string, unknown>>();
+
+function cacheOf(channel: DetailChannel): Map<string, unknown> {
+  let cache = detailCache.get(channel);
+  if (!cache) {
+    cache = new Map();
+    detailCache.set(channel, cache);
+  }
+  return cache;
+}
+
+function remember(channel: DetailChannel, slot: string, data: unknown): void {
+  const cache = cacheOf(channel);
+  cache.delete(slot);
+  cache.set(slot, data);
+  if (cache.size > DETAIL_CACHE_MAX) cache.delete(cache.keys().next().value as string);
+}
+
 /**
  * Pede uma vez e escuta a resposta (e, com `pollMs`, pede de novo enquanto aberto). `key` muda =
- * pedido novo. Devolve o último dado e o estado do pedido.
+ * pedido novo. Devolve o último dado e o estado do pedido; o que já veio antes para o mesmo pedido
+ * aparece de cara enquanto o pedido novo corre. `nudge` muda = pede de novo na hora, mantendo o dado.
  */
 export function useDetail<T>(
   req: DetailResponse["req"],
   opts: { id?: string; path?: string },
   key: string | null,
   pollMs?: number,
+  nudge?: string,
 ): { data: T | null; loading: boolean; error: string | null } {
   const channel = React.useContext(DetailChannelContext);
-  const [state, setState] = React.useState<{ key: string | null; data: T | null; loading: boolean; error: string | null }>({ key: null, data: null, loading: false, error: null });
+  const slot = `${req}|${key ?? ""}`;
+  const cached = (): T | null => (channel && key !== null ? ((cacheOf(channel).get(slot) as T | undefined) ?? null) : null);
+  const [state, setState] = React.useState<{ key: string | null; data: T | null; loading: boolean; error: string | null }>(() => ({ key: null, data: null, loading: false, error: null }));
   const id = opts.id;
   const path = opts.path;
   React.useEffect(() => {
     if (!channel || key === null) return;
     let alive = true;
     let pending: string | null = null;
-    setState((prev) => (prev.key === key ? prev : { key, data: null, loading: true, error: null }));
+    setState((prev) => (prev.key === key ? prev : { key, data: cached(), loading: true, error: null }));
     const ask = (): void => {
       pending = channel.request(req, { id, path });
       if (pending === null) setState((prev) => ({ ...prev, key, loading: false, error: prev.data ? null : "offline" }));
     };
     const off = channel.subscribe((response) => {
       if (!alive || response.req !== req || response.nonce !== pending) return;
-      setState({ key, data: (response.data as T | undefined) ?? null, loading: false, error: response.error ?? null });
+      const data = (response.data as T | undefined) ?? null;
+      if (data !== null && !response.error) remember(channel, slot, data);
+      setState((prev) => ({ key, data: data ?? (response.error ? prev.data : null), loading: false, error: response.error ?? null }));
     });
     ask();
     const timer = pollMs ? setInterval(ask, pollMs) : null;
@@ -194,8 +225,13 @@ export function useDetail<T>(
       off();
       if (timer) clearInterval(timer);
     };
-  }, [channel, req, id, path, key, pollMs]);
-  return state.key === key ? { data: state.data, loading: state.loading, error: state.error } : { data: null, loading: key !== null, error: null };
+  }, [channel, req, id, path, key, pollMs, nudge]);
+  return state.key === key ? { data: state.data, loading: state.loading, error: state.error } : { data: cached(), loading: key !== null, error: null };
+}
+
+/** A ação já tem resultado no transcript? Sem ele ela ainda roda (ou o transcript não gravou). PURE. */
+export function detailHasResult(detail: Pick<ToolDetailData, "result" | "endedAt" | "text" | "structured"> | null): boolean {
+  return !!detail && (detail.result !== undefined || detail.endedAt !== undefined || detail.text !== undefined || detail.structured !== undefined);
 }
 
 /* ------------------------------------------------------- o que vem do back */
