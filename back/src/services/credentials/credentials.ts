@@ -221,7 +221,3 @@ export async function markCredentialUsed(id: string): Promise<void> {
     if (c) c.usedAt = new Date().toISOString();
   });
 }
-
-export function resetCredentialsForTesting(): void {
-  store.resetForTesting();
-}

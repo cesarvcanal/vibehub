@@ -333,12 +333,6 @@ async function readRunnerStatus(): Promise<RunnerStatusView> {
   }
 }
 
-/** Drops the cached status — tests and hot-reload only. */
-export function resetRunnerStatusCacheForTesting(): void {
-  lastStatus = null;
-  statusInFlight = null;
-}
-
 /** Starts a stopped runner (after a host reboot, say). */
 export async function startRunner(): Promise<void> {
   await hostExecutor().runScript(`docker start ${shQuote(config.runner.container)} >/dev/null`, { timeoutMs: 60_000 });

@@ -325,9 +325,3 @@ export async function userForAccessToken(token: string | undefined, now: number 
   if (!record || record.expiresAt <= now) return null;
   return await sessionUser(record.userId, record.issuedAt);
 }
-
-/** Test hook: forget every pending code and the cached document. */
-export function resetOAuthForTesting(): void {
-  codes.clear();
-  store.resetForTesting();
-}
