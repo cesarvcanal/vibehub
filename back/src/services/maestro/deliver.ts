@@ -147,8 +147,8 @@ export function buildMergeScript(
 }
 
 /**
- * Script for step (c) when the PR has CI: read `gh pr checks` until nothing is pending (or the wait
- * runs out), then print the last JSON read and a marker. While checks have not been registered yet,
+ * Script for step (c) when the PR has CI: wait for the PR to point at the pushed commit, read `gh pr
+ * checks` until nothing is pending (or the wait runs out), then print the last JSON read and a marker. While checks have not been registered yet,
  * a repo with workflows keeps asking for `CI_APPEAR_SECONDS`; one without stops at once. PURE.
  */
 export function buildCiChecksScript(
@@ -160,10 +160,18 @@ export function buildCiChecksScript(
   const body = [
     ...ghTokenPreamble(cardId, token),
     `cd ${shQuote(cwd)} || { echo "${CI_MARKER} error"; exit 0; }`,
-    `WF=0; ls .github/workflows/*.yml .github/workflows/*.yaml >/dev/null 2>&1 && WF=1`,
+    `WF=0; for f in .github/workflows/*.yml .github/workflows/*.yaml; do [ -e "$f" ] && WF=1; done`,
+    `HEAD=$(git rev-parse HEAD)`,
     `i=0`,
     `while :; do`,
     `  i=$((i+1))`,
+    // A reused PR moves to the pushed commit a few seconds AFTER the push: until it does, its checks
+    // are the OLD head's — a stale green. Read nothing until the PR points at what was pushed.
+    `  PH=$(gh pr view ${shQuote(prUrl)} --json headRefOid --jq .headRefOid 2>/dev/null)`,
+    `  if [ "$PH" != "$HEAD" ]; then`,
+    `    if [ "$i" -lt ${appearRounds} ]; then sleep ${CI_POLL_SECONDS}; continue; fi`,
+    `    echo "${CI_MARKER} stale"; exit 0`,
+    `  fi`,
     `  J=$(gh pr checks ${shQuote(prUrl)} --json name,bucket 2>&1)`,
     `  case "$J" in`,
     `    *'"bucket":"pending"'*) [ "$i" -lt ${rounds} ] || break ;;`,
@@ -183,9 +191,13 @@ export function buildCiChecksScript(
  *  - `none`: no checks on the PR (or the answer was unreadable) — the local gate decides;
  *  - `pass`: every check passed or was skipped;
  *  - `fail`: some check failed or was cancelled (named in `output`);
- *  - `pending`: checks still running when the wait ran out. PURE.
+ *  - `pending`: checks still running when the wait ran out, or the PR never moved to the pushed
+ *    commit (`stale`) — red either way. PURE.
  */
 export function parseCiChecks(stdout: string): { verdict: "none" | "pass" | "fail" | "pending"; output: string } {
+  if (stdout.includes(`${CI_MARKER} stale`)) {
+    return { verdict: "pending", output: "o PR ainda não aponta para o commit enviado — o CI dele não foi lido" };
+  }
   const body = stdout.replace(new RegExp(`${CI_MARKER} \\S+.*`, "g"), "").trim();
   const start = body.indexOf("[");
   let checks: { name?: string; bucket?: string }[] | null = null;

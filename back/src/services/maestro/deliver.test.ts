@@ -124,6 +124,10 @@ describe("parseCiChecks", () => {
     expect(deliver.parseCiChecks("HTTP 502 [oops").verdict).toBe("none");
     expect(deliver.parseCiChecks("").verdict).toBe("none");
   });
+  it("a PR that never moved to the pushed commit is NOT read as green", async () => {
+    const { deliver } = await load();
+    expect(deliver.parseCiChecks("__VIBEHUB_CI__ stale\n")).toMatchObject({ verdict: "pending" });
+  });
 });
 
 describe("buildCiChecksScript", () => {
@@ -135,6 +139,11 @@ describe("buildCiChecksScript", () => {
     expect(s).toContain(`gh pr checks '${PR}' --json name,bucket`);
     expect(s).toContain(`-lt ${Math.ceil(deliver.CI_WAIT_SECONDS / deliver.CI_POLL_SECONDS)} ] || break`);
     expect(s).toContain(`[ "$WF" = 1 ] && [ "$i" -lt ${Math.ceil(deliver.CI_APPEAR_SECONDS / deliver.CI_POLL_SECONDS)} ] || break`);
+    // each glob tested alone: a repo with only *.yml still counts as having workflows
+    expect(s).toContain('for f in .github/workflows/*.yml .github/workflows/*.yaml; do [ -e "$f" ] && WF=1; done');
+    // the checks are read only once the PR points at the pushed commit
+    expect(s.indexOf(`gh pr view '${PR}' --json headRefOid`)).toBeGreaterThan(-1);
+    expect(s.indexOf(`gh pr view '${PR}' --json headRefOid`)).toBeLessThan(s.indexOf("gh pr checks"));
   });
 });
 
@@ -162,6 +171,19 @@ describe("deliver uses the PR's CI as the gate when there is one", () => {
     expect(out).toMatchObject({ merged: false, reason: "gate" });
     expect(out.output).toContain("ainda rodando");
     expect(mergeRan()).toBe(false);
+  });
+
+  it("a PR stuck on an older commit is red — its checks are not this push's", async () => {
+    const { deliver, card } = await makeCard();
+    runScript.mockImplementation(async (script: string) => {
+      if (script.includes("git push --force-with-lease")) return { stdout: `__VIBEHUB_DELIVER__ pr ${PR}`, stderr: "" };
+      if (script.includes("gh pr checks")) return { stdout: "__VIBEHUB_CI__ stale\n", stderr: "" };
+      return { stdout: "", stderr: "" };
+    });
+    const out = await deliver.deliver(card.id, { branch: "main", authorized: true });
+    expect(out).toMatchObject({ merged: false, reason: "gate" });
+    expect(mergeRan()).toBe(false);
+    expect(localGateRan()).toBe(false);
   });
 
   it("a PR with no CI falls back to the local gate", async () => {
