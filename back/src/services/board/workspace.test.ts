@@ -1969,8 +1969,8 @@ describe("card push as the project's GitHub connection (GH_TOKEN)", () => {
 
   it("open WITH a connection token writes it 600 over stdin — the file is what git and gh read, never the env", () => {
     const script = ws.buildOpenScript({ ...openOpts, ghToken: GH });
-    expect(script).toContain(`printf '%s' '${GH}' > '/root/.vibehub/gh/id-1.token'`);
-    expect(script).toContain("chmod 600 '/root/.vibehub/gh/id-1.token'");
+    expect(script).toContain(`printf '%s' '${GH}' > "$T"`);
+    expect(script).toContain(`mv -f "$T" '/root/.vibehub/gh/id-1.token'`);
     // the value appears ONLY on the write line
     expect(script.split(GH).length - 1).toBe(1);
     expect(script).not.toContain("GH_TOKEN");
@@ -1999,8 +1999,8 @@ describe("card push as the project's GitHub connection (GH_TOKEN)", () => {
       // and tokenFor falls back to the first connected account
       expect(gh.tokenFor).toHaveBeenCalledWith(undefined);
       for (const script of [scriptAt(0), lastScript()]) {
-        expect(script).toContain(`printf '%s' '${GH}' > '/root/.vibehub/gh/${card.id}.token'`);
-        expect(script).toContain(`chmod 600 '/root/.vibehub/gh/${card.id}.token'`);
+        expect(script).toContain(`printf '%s' '${GH}' > "$T"`);
+        expect(script).toContain(`mv -f "$T" '/root/.vibehub/gh/${card.id}.token'`);
       }
     } finally {
       vi.mocked(gh.tokenFor).mockReset();
@@ -2283,7 +2283,7 @@ describe("aplicar identidade na worktree", () => {
     /** The identity script, minus the docker wrapper: the lines that actually touch git. */
     const apply = async (cwd: string, name: string, email: string) => {
       const script = buildIdentityScript({
-        containerName: "x", cardId: "card-1", cwd: "/work/placeholder", identity: { name, email },
+        containerName: "x", cardId: "card-1", cwd: "/work/placeholder", identity: { name, email }, token: TOKEN,
       });
       for (const line of script.split("\n")) {
         const m = /^git -C '\/work\/placeholder' config (.*?)(?: \|\| true)?$/.exec(line);
@@ -2318,9 +2318,17 @@ describe("aplicar identidade na worktree", () => {
     // de 5s é apertado numa máquina ocupada, e o que importa aqui é a asserção, não o relógio.
   }, 60_000);
 
-  it("ZERA a lista de helpers ANTES de instalar o que lê o arquivo do card", async () => {
+  it("sem token, a worktree NÃO zera os helpers — o login que a instalação tem continua valendo", async () => {
     const { buildIdentityScript } = await import("./workspace.js");
     const s = buildIdentityScript(base);
+    // Zerar e instalar um helper que não acha arquivo deixava o push SEM credencial nenhuma.
+    expect(s).toContain("config --worktree --unset-all credential.https://github.com.helper || true");
+    expect(s).not.toContain("--add credential.https://github.com.helper");
+  });
+
+  it("ZERA a lista de helpers ANTES de instalar o que lê o arquivo do card", async () => {
+    const { buildIdentityScript } = await import("./workspace.js");
+    const s = buildIdentityScript({ ...base, token: TOKEN });
     const key = "credential.https://github.com.helper";
     const unsetAll = s.indexOf(`--unset-all ${key}`);
     const reset = s.indexOf(`--add ${key} ''`);
@@ -2334,7 +2342,7 @@ describe("aplicar identidade na worktree", () => {
 
   it("o token do card só é oferecido ao github.com — e o helper genérico de versões anteriores é removido", async () => {
     const { buildIdentityScript } = await import("./workspace.js");
-    const s = buildIdentityScript(base);
+    const s = buildIdentityScript({ ...base, token: TOKEN });
     // O helper genérico respondia a QUALQUER host: um remote que pedisse credencial levava o PAT.
     expect(s).not.toMatch(/--add credential\.helper /);
     // Worktrees configuradas antes disto têm o genérico gravado: sai, senão continua respondendo.
@@ -2371,7 +2379,7 @@ describe("aplicar identidade na worktree", () => {
 
   it("com token escreve o arquivo do card; sem token REMOVE (nada obsoleto sobra)", async () => {
     const { buildIdentityScript } = await import("./workspace.js");
-    expect(buildIdentityScript({ ...base, token: TOKEN })).toContain("> '/root/.vibehub/gh/card-1.token'");
+    expect(buildIdentityScript({ ...base, token: TOKEN })).toContain(`mv -f "$T" '/root/.vibehub/gh/card-1.token'`);
     expect(buildIdentityScript(base)).toContain("rm -f '/root/.vibehub/gh/card-1.token'");
   });
 
