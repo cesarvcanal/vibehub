@@ -126,6 +126,12 @@ describe("buildSdkDriverCommandLine", () => {
     expect(bare).not.toContain("VIBEHUB_CARD_ID");
   });
 
+  it("caps test-runner workers in every driver session — the runner's cores are shared by all cards", () => {
+    const line = buildSdkDriverCommandLine(base);
+    expect(line).toContain("export VITEST_MAX_THREADS=2; ");
+    expect(line).toContain("export VITEST_MAX_FORKS=2; ");
+  });
+
   it("rejects an unsafe cdp/status URL or card id rather than passing it to the shell", () => {
     expect(() => buildSdkDriverCommandLine({ ...base, cdpEndpoint: "http://x'; rm -rf /" })).toThrow();
     expect(() => buildSdkDriverCommandLine({ ...base, statusUrl: "ftp://nope" })).toThrow();

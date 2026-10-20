@@ -28,6 +28,7 @@ import {
   PROJECT_BRAIN_FILE,
 } from "../brain/brain.js";
 import { logger } from "../../utils/logger.js";
+import { testWorkerTmuxArgs } from "../../runtime/testWorkers.js";
 
 export { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir };
 
@@ -459,6 +460,8 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
       // Explicit UTF-8 in the session: .profile covers login shells, but tmux decides the encoding
       // from the environment it is given — without this, accents become "_" (seen in production).
       ` -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8` +
+      // Test runners share the runner's cores with every other card: cap their workers.
+      ` ${testWorkerTmuxArgs().join(" ")}` +
       // Non-default account: the session's Claude uses the account profile (isolated credentials/state).
       (opts.accountConfigDir ? ` -e CLAUDE_CONFIG_DIR=${shQuote(opts.accountConfigDir)}` : "") +
       ` ${shQuote(sessionCommand({ resume: !!opts.resume, resumeSessionId: opts.resumeSessionId, profileDir, model: opts.model, effort: opts.effort, ghTokenFile: ghTokenPath(opts.cardId) }))}`,
@@ -519,6 +522,7 @@ export function terminalRemoteArgs(containerName: string, tmuxSession: string, c
     // websocket's attach-or-create needs the variable for the card's Playwright MCP too.
     "-e", `PW_CDP_ENDPOINT=${cardCdpEndpoint(opts.cardId)}`,
     "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8",
+    ...testWorkerTmuxArgs(),
     ...(opts.accountConfigDir ? ["-e", `CLAUDE_CONFIG_DIR=${opts.accountConfigDir}`] : []),
     opts.shell
       ? "exec bash"

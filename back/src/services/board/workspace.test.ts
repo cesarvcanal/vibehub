@@ -253,6 +253,7 @@ describe("openCard", () => {
     expect(script).toContain(`VIBEHUB_CARD_ID='${card.id}'`);
     expect(script).toContain(`VIBEHUB_STATUS_URL='${STATUS_URL}'`);
     expect(script).toContain(`PW_CDP_ENDPOINT='${cardCdpEndpoint(card.id)}'`);
+    expect(script).toContain("-e VITEST_MAX_THREADS=2 -e VITEST_MIN_THREADS=1 -e VITEST_MAX_FORKS=2 -e VITEST_MIN_FORKS=1");
     expect(script).toContain(sq(claudeFor(card.id)));
 
     // the open rule: backlog → waiting
@@ -448,6 +449,8 @@ describe("terminalRemoteArgs / cardAttachArgs (the websocket's COMPLETE attach-o
       "-e", "VIBEHUB_CARD_ID=id-1", "-e", `VIBEHUB_STATUS_URL=${STATUS_URL}`,
       "-e", `PW_CDP_ENDPOINT=${cardCdpEndpoint("id-1")}`,
       "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8",
+      // test runners share the runner's cores with every card: worker cap
+      "-e", "VITEST_MAX_THREADS=2", "-e", "VITEST_MIN_THREADS=1", "-e", "VITEST_MAX_FORKS=2", "-e", "VITEST_MIN_FORKS=1",
       CLAUDE,
     ]);
   });
