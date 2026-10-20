@@ -17,6 +17,8 @@ import {
   writeInflightMarker,
 } from "./inflight.js";
 import {
+  CRASH_RESUME_DELAY_MS,
+  CRASH_TEXTS,
   MAX_AUTO_RESUMES,
   NOTE_AUTO_OFF,
   NOTE_BACKGROUND_STALE,
@@ -26,6 +28,7 @@ import {
   SYSTEM_ORIGIN,
   handOffSdkOnShutdown,
   isStaleBackgroundOnly,
+  resumeAfterDriverCrash,
   resumeContinuationText,
   resumeInterruptedTurns,
   type ResumeDeps,
@@ -100,6 +103,7 @@ function deps(over: Partial<ResumeDeps> = {}, settings: Settings = settingsWith(
     // não bate: é o processo antigo de um deploy, já morto. O sweep sob teste faz o papel do NOVO.
     selfOwner: NOVO,
     ownerAlive: isInflightOwnerAlive,
+    turnRunning: () => false,
     wait: async () => undefined,
     appendNote: async (cardId, text) => {
       const { appendHistory } = await import("./history.js");
@@ -424,5 +428,82 @@ describe("handOffSdkOnShutdown — o adeus do processo antigo", () => {
     expect(session.closed).toBe(true);
     expect(await readInflightMarker(CARD)).not.toBeNull();
     expect(await isInflightOwnerAlive(INFLIGHT_OWNER)).toBe(false);
+  });
+});
+
+/**
+ * O DRIVER CAIU com o back de pé (OOM, kill, o docker exec que morreu): o marcador é deste processo,
+ * que segue vivo — o sweep de boot nunca o veria como órfão. A retomada acontece aqui, na hora, com
+ * as mesmas regras do boot (nota visível, continuação de sistema, trava anti-loop) e as palavras
+ * certas: não houve atualização do painel nenhuma.
+ */
+describe("resumeAfterDriverCrash — o driver caiu, o back não", () => {
+  const crashDeps = (over: Partial<ResumeDeps> = {}) => deps({ selfOwner: INFLIGHT_OWNER, ...over });
+
+  it("retoma o turno da pessoa depois de uma espera, com nota e continuação que falam de queda", async () => {
+    const waits: number[] = [];
+    const marker = { startedAt: 5, preview: "tarefa longa", attempts: 0 };
+    await writeInflightMarker(CARD, marker);
+    const outcome = await resumeAfterDriverCrash(CARD, marker, crashDeps({ wait: async (ms) => { waits.push(ms); } }));
+    expect(outcome).toBe("resumed");
+    expect(waits).toEqual([CRASH_RESUME_DELAY_MS]);
+    expect(spawned.length).toBe(1);
+    const frames = spawned[0]!.stdin.written.map((s) => JSON.parse(s) as { type: string; text?: string });
+    expect(frames).toEqual([{ type: "user", text: CRASH_TEXTS.continuation }]);
+    await vi.waitFor(async () => {
+      const history = await readHistory(CARD);
+      expect(history.map((e) => e.type)).toEqual(["system_note", "user"]);
+      expect((history[0] as { text: string }).text).toBe(CRASH_TEXTS.resuming);
+      expect(history[1]!.from).toEqual(SYSTEM_ORIGIN);
+      expect((await readInflightMarker(CARD))?.attempts).toBe(1);
+    });
+  });
+
+  it("a pessoa seguiu enquanto isso (o marcador já é de outro turno): nada", async () => {
+    const crashed = { startedAt: 5, attempts: 0 };
+    await writeInflightMarker(CARD, { startedAt: 9, preview: "nova mensagem", attempts: 0 });
+    expect(await resumeAfterDriverCrash(CARD, crashed, crashDeps())).toBe("skipped");
+    expect(spawned.length).toBe(0);
+    expect(await readHistory(CARD)).toEqual([]);
+  });
+
+  it("o marcador sumiu (o turno acabou de outro jeito): nada", async () => {
+    expect(await resumeAfterDriverCrash(CARD, { startedAt: 5, attempts: 0 }, crashDeps())).toBe("skipped");
+    expect(spawned.length).toBe(0);
+  });
+
+  it("um driver sucessor já está com turno rodando: nada (sem dois turnos na mesma sessão)", async () => {
+    const marker = { startedAt: 5, attempts: 0 };
+    await writeInflightMarker(CARD, marker);
+    expect(await resumeAfterDriverCrash(CARD, marker, crashDeps({ turnRunning: () => true }))).toBe("skipped");
+    expect(spawned.length).toBe(0);
+    expect(await readInflightMarker(CARD)).not.toBeNull();
+  });
+
+  it("a retomada que caiu antes de avançar: só a linha, sem loop", async () => {
+    const marker = { startedAt: 5, attempts: 1 };
+    await writeInflightMarker(CARD, marker);
+    expect(await resumeAfterDriverCrash(CARD, marker, crashDeps())).toBe("noted");
+    expect(spawned.length).toBe(0);
+    const history = await readHistory(CARD);
+    expect(history.map((e) => (e as { text?: string }).text)).toEqual([CRASH_TEXTS.notAgain]);
+    expect(await readInflightMarker(CARD)).toBeNull();
+  });
+
+  it("sdkAutoResume desligado: a linha diz, e o marcador sai", async () => {
+    const marker = { startedAt: 5, attempts: 0 };
+    await writeInflightMarker(CARD, marker);
+    const outcome = await resumeAfterDriverCrash(CARD, marker, deps({ selfOwner: INFLIGHT_OWNER }, settingsWith({ sdkAutoResume: false })));
+    expect(outcome).toBe("noted");
+    expect(((await readHistory(CARD))[0] as { text: string }).text).toBe(CRASH_TEXTS.autoOff);
+    expect(await readInflightMarker(CARD)).toBeNull();
+  });
+
+  it("nunca lança: uma falha vira log e o marcador sai", async () => {
+    const marker = { startedAt: 5, attempts: 0 };
+    await writeInflightMarker(CARD, marker);
+    const outcome = await resumeAfterDriverCrash(CARD, marker, crashDeps({ commandFor: async () => { throw new Error("runner fora"); } }));
+    expect(outcome).toBe("noted");
+    expect(await readInflightMarker(CARD)).toBeNull();
   });
 });

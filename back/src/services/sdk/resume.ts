@@ -13,7 +13,7 @@ import {
 } from "./inflight.js";
 import { installCardSdkDriver, sdkDriverCommand } from "./driver.js";
 import { restoreMissingWorkspace } from "../board/workspace.js";
-import { BACKGROUND_HOLD_MAX_MS, ensureDriverSession, injectSystemTurn, shutdownAllDrivers } from "./manager.js";
+import { BACKGROUND_HOLD_MAX_MS, driverTurnRunning, ensureDriverSession, injectSystemTurn, shutdownAllDrivers } from "./manager.js";
 import { stopAllMirrors } from "./mirror.js";
 import { transcriptDirFor } from "../maestro/cardSession.js";
 import { effectiveAccountSlug } from "../board/registry.js";
@@ -65,11 +65,11 @@ export const RESUME_CONTINUATION_TEXT =
  * aviso de término delas nunca virá. Sem dizer isso, o agente "retomava" esperando por um resultado
  * que não chega — ou nem havia retomada, e o card parava calado no meio da entrega. PURE.
  */
-export function resumeContinuationText(marker: InflightMarker): string {
+export function resumeContinuationText(marker: InflightMarker, base: string = RESUME_CONTINUATION_TEXT): string {
   const tasks = marker.background?.tasks ?? [];
-  if (tasks.length === 0) return RESUME_CONTINUATION_TEXT;
+  if (tasks.length === 0) return base;
   const list = tasks.slice(0, 8).map((t) => `- ${t}`).join("\n");
-  return `${RESUME_CONTINUATION_TEXT} O reinício também encerrou o que estava rodando em segundo plano — ` +
+  return `${base} O reinício também encerrou o que estava rodando em segundo plano — ` +
     `o resultado disso não vai chegar:\n${list}\nConfira o estado atual, rode de novo o que ainda for ` +
     `necessário e siga até o fim.`;
 }
@@ -109,6 +109,43 @@ export const NOTE_AUTO_OFF =
   "O turno foi interrompido por uma atualização do painel. A retomada automática está desligada " +
   "(sdkAutoResume) — mande uma mensagem para continuar.";
 
+/** As palavras de uma retomada: o que o card lê e o que o agente recebe, conforme a causa. */
+export interface ResumeTexts {
+  resuming: string;
+  notAgain: string;
+  backgroundStale: string;
+  autoOff: string;
+  continuation: string;
+}
+
+const DEPLOY_TEXTS: ResumeTexts = {
+  resuming: NOTE_RESUMING,
+  notAgain: NOTE_NOT_AGAIN,
+  backgroundStale: NOTE_BACKGROUND_STALE,
+  autoOff: NOTE_AUTO_OFF,
+  continuation: RESUME_CONTINUATION_TEXT,
+};
+
+/** A queda do driver com o back de pé — não houve atualização do painel, e o card não pode dizer que houve. */
+export const CRASH_TEXTS: ResumeTexts = {
+  resuming: "O processo do Claude deste card caiu no meio do turno — retomando automaticamente…",
+  notAgain:
+    "O processo do Claude deste card caiu de novo, sem avançar desde a última retomada (ou depois de muitas " +
+    "retomadas seguidas). Para evitar um loop, não vou retomar automaticamente outra vez — mande uma mensagem para continuar.",
+  backgroundStale:
+    "O processo do Claude deste card caiu e encerrou as tarefas que rodavam em segundo plano havia horas " +
+    "(sem turno em andamento). Não vou retomar sozinho — mande uma mensagem se precisar delas de volta.",
+  autoOff:
+    "O processo do Claude deste card caiu no meio do turno. A retomada automática está desligada " +
+    "(sdkAutoResume) — mande uma mensagem para continuar.",
+  continuation:
+    "Continue de onde parou: o processo anterior do Claude deste card caiu no meio do trabalho (foi encerrado " +
+    "de fora, sem reinício do painel). Retome a tarefa em andamento e conclua o que estava fazendo.",
+};
+
+/** Quanto a retomada de uma queda espera: o runner que derrubou o driver (memória, reinício) respira antes. */
+export const CRASH_RESUME_DELAY_MS = 10_000;
+
 /** Test seams: every side effect the sweep performs, replaceable as one bundle. */
 export interface ResumeDeps {
   listMarkers: typeof listInflightMarkers;
@@ -126,6 +163,8 @@ export interface ResumeDeps {
   /** A identidade deste processo: o marcador que ela assina é um turno vivo DAQUI, não um órfão. */
   selfOwner: string;
   ownerAlive: typeof isInflightOwnerAlive;
+  /** Um driver deste card está com turno rodando agora (o sucessor que a pessoa já usou). */
+  turnRunning: (cardId: string) => boolean;
   wait: (ms: number) => Promise<void>;
 }
 
@@ -144,6 +183,7 @@ const realDeps: ResumeDeps = {
   readMarker: readInflightMarker,
   selfOwner: INFLIGHT_OWNER,
   ownerAlive: isInflightOwnerAlive,
+  turnRunning: driverTurnRunning,
   wait: (ms) => new Promise((resolve) => { setTimeout(resolve, ms).unref?.(); }),
 };
 
@@ -203,6 +243,7 @@ export async function resumeInterruptedTurns(deps: ResumeDeps = realDeps): Promi
   // Cada card na sua própria tarefa: o turno vivo de um card não atrasa a retomada de outro.
   // O install do driver no runner é um só, compartilhado por todos.
   let install: Promise<void> | null = null;
+  const installOnce = (): Promise<void> => (install ??= deps.installDriver());
   await Promise.all(markers.map(async ({ cardId, marker: first }) => {
     let marker: InflightMarker | null;
     try {
@@ -212,71 +253,112 @@ export async function resumeInterruptedTurns(deps: ResumeDeps = realDeps): Promi
       return;
     }
     if (!marker) return;
-    try {
-      const card = await deps.getCard(cardId);
-      const project = card ? await deps.getProject(card.projectId) : undefined;
-      if (!card || !project) {
-        // The card is gone (deleted between the marker and this boot): nothing to tell, no one to tell it to.
-        await deps.clearMarker(cardId);
-        return;
-      }
-      if (!settings.sdkDriver || !settings.sdkAutoResume) {
-        await deps.appendNote(cardId, NOTE_AUTO_OFF);
-        await deps.clearMarker(cardId);
-        summary.noted.push(cardId);
-        logger.info({ audit: true, action: "sdk.resume.off", card: card.worktreeSlug }, "interrupted sdk turn noted — auto-resume off");
-        return;
-      }
-      if (isStaleBackgroundOnly(marker, Date.now())) {
-        await deps.appendNote(cardId, NOTE_BACKGROUND_STALE);
-        await deps.clearMarker(cardId);
-        summary.noted.push(cardId);
-        logger.info({ audit: true, action: "sdk.resume.background_stale", card: card.worktreeSlug }, "long-lived background work ended by the restart — noted, not resumed");
-        return;
-      }
-      if (!mayResumeAgain(marker)) {
-        await deps.appendNote(cardId, NOTE_NOT_AGAIN);
-        await deps.clearMarker(cardId);
-        summary.noted.push(cardId);
-        logger.warn(
-          { audit: true, action: "sdk.resume.loop_guard", card: card.worktreeSlug, attempts: marker.attempts, progressed: !!marker.progressed },
-          "interrupted sdk turn NOT resumed again — loop guard",
-        );
-        return;
-      }
-      await deps.appendNote(cardId, NOTE_RESUMING);
-      await (install ??= deps.installDriver());
-      await deps.restoreWorkspace(card.id);
-      // O resume usa a chave persistida no card (resumeSessionId — gravada pelo manager a cada
-      // session/result). O probe de transcript do connect não roda aqui: é o mesmo alvo na prática,
-      // e o boot não deve depender de um ls no runner para cada card.
-      const command = await deps.commandFor(project, card);
-      const session = deps.ensureSession({
-        cardId: card.id,
-        label: card.worktreeSlug,
-        command,
-        transcriptDir: transcriptDirFor(project, card, effectiveAccountSlug(card, project)),
-      });
-      // attempts: marker.attempts + 1, SEM progresso — o marcador do turno retomado só ganha
-      // `progressed` quando a IA produzir algo (manager); se morrer antes disso, o próximo boot só anota.
-      deps.inject(session, resumeContinuationText(marker), SYSTEM_ORIGIN, marker.attempts + 1);
-      summary.resumed.push(cardId);
-      logger.info(
-        {
-          audit: true, action: "sdk.resume", card: card.worktreeSlug,
-          interruptedAt: marker.startedAt, preview: marker.preview, attempt: marker.attempts + 1,
-          background: marker.background?.tasks,
-        },
-        "interrupted sdk turn resumed after the panel restart",
-      );
-    } catch (err) {
-      logger.warn({ card: cardId, detail: (err as Error).message }, "could not resume an interrupted sdk turn");
-      // The marker stays only when nothing was written: with the note already down, keeping the
-      // marker would note the same interruption again on the next boot. Best-effort cleanup:
-      await deps.clearMarker(cardId).catch(() => undefined);
-    }
+    const outcome = await resumeCard(cardId, marker, settings, deps, installOnce, DEPLOY_TEXTS);
+    if (outcome === "resumed") summary.resumed.push(cardId);
+    else if (outcome === "noted") summary.noted.push(cardId);
   }));
   return summary;
+}
+
+/**
+ * UM card cujo turno morreu: a linha visível e, se as regras deixam, a retomada. A mesma para o
+ * boot (deploy) e para a queda do driver; só as palavras mudam. Nunca lança. "gone" = o card não
+ * existe mais (marcador varrido em silêncio).
+ */
+async function resumeCard(
+  cardId: string,
+  marker: InflightMarker,
+  settings: Awaited<ReturnType<typeof getSettings>>,
+  deps: ResumeDeps,
+  installOnce: () => Promise<void>,
+  texts: ResumeTexts,
+): Promise<"resumed" | "noted" | "gone"> {
+  try {
+    const card = await deps.getCard(cardId);
+    const project = card ? await deps.getProject(card.projectId) : undefined;
+    if (!card || !project) {
+      // The card is gone (deleted between the marker and this boot): nothing to tell, no one to tell it to.
+      await deps.clearMarker(cardId);
+      return "gone";
+    }
+    if (!settings.sdkDriver || !settings.sdkAutoResume) {
+      await deps.appendNote(cardId, texts.autoOff);
+      await deps.clearMarker(cardId);
+      logger.info({ audit: true, action: "sdk.resume.off", card: card.worktreeSlug }, "interrupted sdk turn noted — auto-resume off");
+      return "noted";
+    }
+    if (isStaleBackgroundOnly(marker, Date.now())) {
+      await deps.appendNote(cardId, texts.backgroundStale);
+      await deps.clearMarker(cardId);
+      logger.info({ audit: true, action: "sdk.resume.background_stale", card: card.worktreeSlug }, "long-lived background work ended by the restart — noted, not resumed");
+      return "noted";
+    }
+    if (!mayResumeAgain(marker)) {
+      await deps.appendNote(cardId, texts.notAgain);
+      await deps.clearMarker(cardId);
+      logger.warn(
+        { audit: true, action: "sdk.resume.loop_guard", card: card.worktreeSlug, attempts: marker.attempts, progressed: !!marker.progressed },
+        "interrupted sdk turn NOT resumed again — loop guard",
+      );
+      return "noted";
+    }
+    await deps.appendNote(cardId, texts.resuming);
+    await installOnce();
+    await deps.restoreWorkspace(card.id);
+    // O resume usa a chave persistida no card (resumeSessionId — gravada pelo manager a cada
+    // session/result). O probe de transcript do connect não roda aqui: é o mesmo alvo na prática,
+    // e o boot não deve depender de um ls no runner para cada card.
+    const command = await deps.commandFor(project, card);
+    const session = deps.ensureSession({
+      cardId: card.id,
+      label: card.worktreeSlug,
+      command,
+      transcriptDir: transcriptDirFor(project, card, effectiveAccountSlug(card, project)),
+    });
+    // attempts: marker.attempts + 1, SEM progresso — o marcador do turno retomado só ganha
+    // `progressed` quando a IA produzir algo (manager); se morrer antes disso, o próximo boot só anota.
+    deps.inject(session, resumeContinuationText(marker, texts.continuation), SYSTEM_ORIGIN, marker.attempts + 1);
+    logger.info(
+      {
+        audit: true, action: "sdk.resume", card: card.worktreeSlug, cause: texts === CRASH_TEXTS ? "crash" : "restart",
+        interruptedAt: marker.startedAt, preview: marker.preview, attempt: marker.attempts + 1,
+        background: marker.background?.tasks,
+      },
+      "interrupted sdk turn resumed",
+    );
+    return "resumed";
+  } catch (err) {
+    logger.warn({ card: cardId, detail: (err as Error).message }, "could not resume an interrupted sdk turn");
+    // The marker stays only when nothing was written: with the note already down, keeping the
+    // marker would note the same interruption again on the next boot. Best-effort cleanup:
+    await deps.clearMarker(cardId).catch(() => undefined);
+    return "noted";
+  }
+}
+
+/**
+ * O DRIVER CAIU com o back de pé (OOM, kill, o docker exec que morreu) e havia trabalho em voo. O
+ * marcador é deste processo, vivo — o sweep de boot nunca o veria como órfão, e o turno só voltaria
+ * no próximo deploy, fora de hora. Espera um pouco (o runner que derrubou o driver respira), relê o
+ * marcador e só retoma se NADA andou nesse meio-tempo: o mesmo turno (a pessoa não mandou outra
+ * mensagem num driver sucessor) e nenhum turno rodando. Daí em diante, as regras do boot.
+ */
+export async function resumeAfterDriverCrash(
+  cardId: string,
+  crashed: InflightMarker,
+  deps: ResumeDeps = realDeps,
+): Promise<"resumed" | "noted" | "skipped"> {
+  try {
+    await deps.wait(CRASH_RESUME_DELAY_MS);
+    const marker = await deps.readMarker(cardId);
+    if (!marker || marker.startedAt !== crashed.startedAt || deps.turnRunning(cardId)) return "skipped";
+    const settings = await deps.settings();
+    const outcome = await resumeCard(cardId, marker, settings, deps, () => deps.installDriver(), CRASH_TEXTS);
+    return outcome === "gone" ? "skipped" : outcome;
+  } catch (err) {
+    logger.warn({ card: cardId, detail: (err as Error).message }, "could not resume after an sdk driver crash");
+    return "skipped";
+  }
 }
 
 /**
