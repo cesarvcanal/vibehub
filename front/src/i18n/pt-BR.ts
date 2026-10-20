@@ -510,6 +510,8 @@ export const ptBR: Record<string, string> = {
   "sdk.resumed": "Retomando a sessão {id}",
   "sdk.terminalActivity": "Atividade no terminal — a conversa seguiu na aba Terminal",
   "sdk.offline": "Sem conexão — a mensagem não foi enviada. Ela fica no campo.",
+  "sdk.btwLabel": "Pergunta lateral (/btw) — respondida à parte, o turno seguiu sem ela",
+  "sdk.btwError": "Não deu para responder: {error}",
   "sdk.permissionTitle": "Permissão necessária",
   "sdk.permissionTimeoutHint": "Sem resposta, nega sozinho em 5 minutos.",
   "sdk.allow": "Permitir",

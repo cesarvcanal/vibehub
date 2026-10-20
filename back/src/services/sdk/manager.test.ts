@@ -12,6 +12,7 @@ import {
   TYPING_RELAY_MIN_MS,
   attachSocket,
   driverActivity,
+  driverTurnRunning,
   ensureDriverSession,
   handleClientFrame,
   hasDriverSession,
@@ -25,6 +26,7 @@ import {
   stopCardDriver,
 } from "./manager.js";
 import { readInflightMarker } from "./inflight.js";
+import { BTW_COMMAND } from "./protocol.js";
 import { createMirrorState, driverKeysFor, forgetDriverKeys, mirrorNewEvents } from "./mirror.js";
 import { notifyCardSessionKill } from "../board/workspace.js";
 import { mergeTranscriptReplay } from "./transcript.js";
@@ -312,6 +314,7 @@ describe("the command catalogue (the chat's \"/\" menu)", () => {
     expect(frame.commands).toEqual([
       { name: "code-review", source: "skill", description: "Review the diff for bugs", argumentHint: "[<pr#>]", aliases: ["review"] },
       { name: "superpowers:brainstorm", source: "plugin", description: "brainstorm" },
+      BTW_COMMAND,
     ]);
   });
 
@@ -1450,7 +1453,7 @@ describe("o recibo de entrega — nenhuma mensagem some em silêncio", () => {
 
     await vi.waitFor(async () => {
       const saved = await readCardCatalog(CARD);
-      expect(saved?.commands.map((c) => c.name)).toEqual(["code-review"]);
+      expect(saved?.commands.map((c) => c.name)).toEqual(["code-review", "btw"]);
     });
   });
 
@@ -2351,5 +2354,61 @@ describe("rate_limit — o aviso de limite do plano", () => {
     spawned[0]!.stdout.emit("data", line({ type: "rate_limit", status: "whatever", window: "five_hour" }));
     spawned[0]!.stdout.emit("data", line({ type: "rate_limit", status: "rejected" }));
     expect(parsed(s1)).toEqual([]);
+  });
+});
+
+/**
+ * O /btw: uma pergunta LATERAL, feita com o turno rodando, que o agente principal nunca lê. Ela vai
+ * ao driver como controle próprio (não como mensagem), não conta turno e a resposta fica gravada na
+ * conversa do card, ao lado da pergunta.
+ */
+describe("/btw — pergunta lateral", () => {
+  function driverControls(): Array<Record<string, unknown>> {
+    return spawned[0]!.stdin.written.map((w) => JSON.parse(w) as Record<string, unknown>);
+  }
+
+  it("vai ao driver como controle btw, sem virar turno nem marcador de turno em voo", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    const outcome = handleClientFrame(session, JSON.stringify({ type: "user", text: "/btw o que falta?", cid: "c-btw" }));
+    expect(outcome).toMatchObject({ kind: "accepted", cid: "c-btw" });
+    const controls = driverControls();
+    expect(controls).toHaveLength(1);
+    expect(controls[0]).toMatchObject({ type: "btw", question: "o que falta?" });
+    expect(typeof controls[0]!.id).toBe("string");
+    expect(controls.some((c) => c.type === "user")).toBe(false);
+    expect(driverTurnRunning(CARD)).toBe(false);
+    expect(await readInflightMarker(CARD)).toBeNull();
+  });
+
+  it("com um turno rodando, não mexe na contagem dele", () => {
+    const session = ensure();
+    handleClientFrame(session, JSON.stringify({ type: "user", text: "roda os testes" }));
+    expect(driverTurnRunning(CARD)).toBe(true);
+    handleClientFrame(session, JSON.stringify({ type: "user", text: "/btw e aí?" }));
+    spawned[0]!.stdout.emit("data", line({ type: "result", subtype: "success" }));
+    expect(driverTurnRunning(CARD)).toBe(false);
+  });
+
+  it("a pergunta e a resposta ficam no log do card (o F5 redesenha as duas)", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    handleClientFrame(session, JSON.stringify({ type: "user", text: "/btw o que falta?" }));
+    const id = driverControls()[0]!.id as string;
+    spawned[0]!.stdout.emit("data", line({ type: "btw_answer", id, question: "o que falta?", text: "falta o PR" }));
+    expect(sentTypes(socket)).toContain("btw_answer");
+    await vi.waitFor(async () => {
+      const history = await readHistory(CARD);
+      expect(history.some((e) => e.type === "user" && e.text === "/btw o que falta?")).toBe(true);
+      expect(history.some((e) => e.type === "btw_answer" && (e as { text?: string }).text === "falta o PR")).toBe(true);
+    });
+  });
+
+  it("/btw sem pergunta segue como mensagem comum", () => {
+    const session = ensure();
+    handleClientFrame(session, JSON.stringify({ type: "user", text: "/btw" }));
+    expect(driverControls()[0]).toMatchObject({ type: "user", text: "/btw" });
   });
 });

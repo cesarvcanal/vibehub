@@ -554,6 +554,68 @@ async function warmCatalog() {
   }
 }
 
+/* ------------------------------------------------- /btw (a pergunta lateral) */
+// O `/btw` do terminal: uma pergunta feita com o turno rodando, respondida SEM interrompê-lo e sem
+// entrar na conversa. No modo SDK o CLI não o oferece, então o driver faz o mesmo à mão: uma
+// consulta à parte que BIFURCA a sessão (`resume` + `forkSession` — o contexto inteiro, até onde o
+// transcript já foi gravado), sem ferramentas, sem MCP, sem hooks de status e sem gravar nada em
+// disco (`persistSession: false`). O turno de verdade nem fica sabendo.
+
+/** Teto de uma resposta lateral: uma consulta pendurada não pode deixar a pergunta sem resposta. */
+const BTW_TIMEOUT_MS = 3 * 60_000;
+
+/** O que o modelo lê: a pergunta, com o aviso de que é lateral e de que não há ferramentas. */
+function btwPrompt(question) {
+  return (
+    "<system-reminder>Pergunta LATERAL do usuário, feita enquanto você trabalha na tarefa principal. " +
+    "Responda curto e direto, só com o que já está nesta conversa. Aqui você NÃO tem ferramentas: não " +
+    "tente ler arquivos nem rodar comandos — se o contexto não basta, diga isso. Esta resposta não " +
+    "interrompe nem muda a tarefa principal.</system-reminder>\n\n" + question
+  );
+}
+
+async function answerBtw(id, question) {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), BTW_TIMEOUT_MS);
+  const texts = [];
+  let failure = null;
+  try {
+    applyAuth();
+    const options = baseOptions();
+    delete options.hooks;
+    delete options.canUseTool;
+    options.includePartialMessages = false;
+    options.agentProgressSummaries = false;
+    options.tools = [];
+    options.strictMcpConfig = true;
+    options.mcpServers = {};
+    options.maxTurns = 1;
+    options.persistSession = false;
+    options.env = { ...process.env, VIBEHUB_STATUS_URL: "" };
+    options.abortController = abort;
+    if (lastSessionId) {
+      options.resume = lastSessionId;
+      options.forkSession = true;
+    }
+    for await (const msg of query({ prompt: btwPrompt(question), options })) {
+      if (msg.type === "assistant" && !msg.parent_tool_use_id && Array.isArray(msg.message?.content)) {
+        for (const block of msg.message.content) {
+          if (block && block.type === "text" && typeof block.text === "string" && block.text.trim() !== "") texts.push(block.text);
+        }
+      } else if (msg.type === "result" && msg.is_error && texts.length === 0) {
+        failure = typeof msg.result === "string" && msg.result ? msg.result : String(msg.subtype ?? "error");
+      }
+    }
+  } catch (err) {
+    failure = abort.signal.aborted ? "sem resposta em 3 min" : (err && err.message ? err.message : String(err));
+  } finally {
+    clearTimeout(timer);
+  }
+  const text = texts.join("\n\n").trim();
+  if (text) emit({ type: "btw_answer", id, question, text });
+  else emit({ type: "btw_answer", id, question, error: failure ?? "resposta vazia" });
+}
+
 let currentQuery = null; // the live query() iterator, so an interrupt can reach it mid-turn
 let channel = null; // feeds the live query's prompt stream (null = no stream running)
 let turnActive = false; // a turn is running, or a message is already fed and about to start one
@@ -1635,6 +1697,11 @@ rl.on("line", (line) => {
       await reauthIfChanged();
       await rewindAndSend(control.text, control.fallback, control.original, supersedePendingQuestions, control.first === true);
     });
+    return;
+  }
+  if (control && control.type === "btw" && typeof control.id === "string" && typeof control.question === "string") {
+    // FORA da fila `serialized`: a pergunta lateral não espera nada nem segura nada.
+    void answerBtw(control.id, control.question);
     return;
   }
   if (control && control.type === "reanchor") {

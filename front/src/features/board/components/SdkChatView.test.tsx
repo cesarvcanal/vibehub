@@ -4232,3 +4232,31 @@ describe("SdkChatView — o detalhe de cada ação", () => {
     expect(within(dialog).getByTestId("sdk-changes-file")).toHaveTextContent("a.ts");
   });
 });
+
+/**
+ * O /btw: a pergunta LATERAL, feita justamente com o turno rodando. Esperar na fila seria esperar o
+ * fim do turno — o oposto do comando —, então ela sai na hora, não acende o "Preparando…" e a
+ * resposta aparece como linha própria, nunca como bolha do Claude.
+ */
+describe("SdkChatView — /btw", () => {
+  it("com o turno rodando, NÃO espera na fila: sai na hora e a resposta vira linha própria", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.type(box, "faz a tarefa{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "Fazendo…" }); // o turno está rodando
+
+    await userEvent.type(box, "/btw o que falta?{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(2));
+    expect(JSON.parse(ws.sent[1]!)).toMatchObject({ type: "user", text: "/btw o que falta?" });
+    expect(screen.queryByTestId("sdk-queue")).toBeNull();
+
+    ws.deliver({ type: "btw_answer", id: "b1", question: "o que falta?", text: "falta abrir o PR" });
+    const row = await screen.findByTestId("sdk-btw");
+    expect(row).toHaveTextContent("o que falta?");
+    expect(row).toHaveTextContent("falta abrir o PR");
+  });
+});

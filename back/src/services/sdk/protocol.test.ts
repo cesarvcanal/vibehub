@@ -21,6 +21,9 @@ import {
   interruptNote,
   NOTE_TURN_INTERRUPTED,
   NOTE_TURN_INTERRUPTED_EDIT,
+  btwQuestion,
+  withBtwCommand,
+  BTW_COMMAND,
 } from "./protocol.js";
 
 describe("parseDriverLine", () => {
@@ -641,5 +644,38 @@ describe("buildOrphanAnswerText", () => {
     expect(text).not.toContain("«A?»");
     expect(text).toContain("«B?» → sim");
     expect(buildOrphanAnswerText(null, [{ selected: ["x"] }])).toContain("pergunta 1 → x");
+  });
+});
+
+describe("/btw — pergunta lateral, sem interromper o turno", () => {
+  it("reconhece o comando e devolve só a pergunta", () => {
+    expect(btwQuestion("/btw qual o status do deploy?")).toBe("qual o status do deploy?");
+    expect(btwQuestion("  /btw   o que falta?  ")).toBe("o que falta?");
+    expect(btwQuestion("/btw linha 1\nlinha 2")).toBe("linha 1\nlinha 2");
+  });
+
+  it("não confunde com mensagem comum, comando parecido ou /btw sem pergunta", () => {
+    expect(btwQuestion("me explica o /btw")).toBeNull();
+    expect(btwQuestion("/btwx algo")).toBeNull();
+    expect(btwQuestion("/btw")).toBeNull();
+    expect(btwQuestion("/btw    ")).toBeNull();
+    expect(btwQuestion("/clear")).toBeNull();
+  });
+
+  it("o driver aceita a resposta (btw_answer) como evento do protocolo", () => {
+    expect(parseDriverLine(`{"type":"btw_answer","id":"b1","question":"q","text":"r"}`)).toEqual({
+      type: "btw_answer", id: "b1", question: "q", text: "r",
+    });
+  });
+
+  it("o controle btw vai ao driver com id e pergunta", () => {
+    expect(encodeControl({ type: "btw", id: "b1", question: "q" })).toBe(`{"type":"btw","id":"b1","question":"q"}\n`);
+  });
+
+  it("o menu \"/\" sempre oferece o /btw, uma vez só", () => {
+    const once = withBtwCommand([{ name: "code-review", source: "skill" }]);
+    expect(once.map((c) => c.name)).toEqual(["code-review", "btw"]);
+    expect(once[1]).toEqual(BTW_COMMAND);
+    expect(withBtwCommand(once).filter((c) => c.name === "btw").length).toBe(1);
   });
 });

@@ -5,6 +5,7 @@ import {
   appendUserRow,
   coalesceDeltas,
   answerQuestion,
+  btwQuestion,
   currentActivity,
   decidePermission,
   deliveredUserTexts,
@@ -1910,5 +1911,49 @@ describe("coalesceDeltas — os tokens de um frame viram um evento só", () => {
       { type: "assistant_delta", text: "." },
     ];
     expect(replay(coalesceDeltas(events)).rows).toEqual(replay(events).rows);
+  });
+});
+
+/**
+ * O /btw: pergunta LATERAL, respondida por uma consulta à parte enquanto o turno segue. Nem a
+ * pergunta nem a resposta são o turno: não acendem o "Preparando…", não seguram a fila e não
+ * apagam o que a barra de atividade está mostrando.
+ */
+describe("/btw na tela", () => {
+  const ready = (): SdkChatState => applySdkEvent(INITIAL_SDK_STATE, { type: "ready" });
+
+  it("reconhece o comando como o back reconhece", () => {
+    expect(btwQuestion("/btw o que falta?")).toBe("o que falta?");
+    expect(btwQuestion("  /btw   x ")).toBe("x");
+    expect(btwQuestion("/btw")).toBeNull();
+    expect(btwQuestion("/btwx y")).toBeNull();
+    expect(btwQuestion("fala do /btw")).toBeNull();
+  });
+
+  it("a resposta é uma linha própria, com a pergunta, sem mexer no turno", () => {
+    const busy = feed([{ type: "ready", turnActive: true }]);
+    const state = feed([{ type: "btw_answer", id: "b1", question: "o que falta?", text: "falta o PR" }], busy);
+    expect(state.rows).toEqual([{ kind: "btw", id: expect.any(String), question: "o que falta?", text: "falta o PR" }]);
+    expect(state.turnActive).toBe(true);
+    expect(state.awaiting).toBe(busy.awaiting);
+  });
+
+  it("a falha também é uma linha, com o erro", () => {
+    const state = feed([{ type: "btw_answer", id: "b2", question: "q", error: "CLI caiu" }]);
+    expect(state.rows).toEqual([{ kind: "btw", id: expect.any(String), question: "q", error: "CLI caiu" }]);
+  });
+
+  it("a pergunta /btw não segura a fila nem esconde a ferramenta em curso", () => {
+    let state = feed([
+      { type: "ready" },
+      { type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test", description: "Roda os testes" } },
+    ], appendUserRow(ready(), "roda os testes", undefined, { awaiting: true }));
+    state = { ...state, turnActive: true };
+    state = appendUserRow(state, "/btw o que falta?");
+    expect(turnHasRoomForMore(state)).toBe(true);
+    expect(currentActivity(state)).toMatchObject({ kind: "tool" });
+    state = feed([{ type: "btw_answer", id: "b1", question: "o que falta?", text: "falta o PR" }], state);
+    expect(turnHasRoomForMore(state)).toBe(true);
+    expect(currentActivity(state)).toMatchObject({ kind: "tool" });
   });
 });

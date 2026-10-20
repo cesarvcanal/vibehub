@@ -39,6 +39,26 @@ export function query({ prompt, options }) {
   let onInterrupt = () => {};
   let interruptAnswer = Promise.resolve();
   const interrupted = () => new Promise((resolve) => { onInterrupt = resolve; });
+  if (options.forkSession) {
+    // O /btw: uma consulta LATERAL, que bifurca a sessão e nunca escreve nela. Diz com que opções
+    // nasceu, e responde com o que leu — "btwfail" simula o CLI caindo no meio.
+    mark("btw:" + JSON.stringify({
+      resume: options.resume ?? null,
+      persist: options.persistSession,
+      tools: options.tools,
+      mcp: options.mcpServers,
+      strict: options.strictMcpConfig,
+      status: (options.env ?? {}).VIBEHUB_STATUS_URL,
+      hooks: options.hooks ?? null,
+    }));
+    const handle = (async function* () {
+      if (prompt.includes("btwfail")) throw new Error("CLI caiu");
+      yield { type: "assistant", uuid: "a-btw", message: { content: [{ type: "text", text: "btw-reply:" + prompt }] } };
+      yield { type: "result", subtype: "success", session_id: "fork-" + index, result: "ok" };
+    })();
+    handle.interrupt = async () => {};
+    return handle;
+  }
   async function* run() {
     // O SDK de verdade sobe o binário com spawn(cwd): pasta inexistente vira ENOENT, que ele relata
     // como "binário existe mas não subiu" e culpa a libc (produção, 2026-10-19).
@@ -736,5 +756,54 @@ describe("sdk-driver.mjs — a pasta do card sumiu", () => {
     expect(error.message).not.toMatch(/libc/);
     // O turno fecha: sem isso o "Trabalhando…" girava para sempre.
     await driver.waitFor((e) => e.type === "result");
+  }, 60_000);
+});
+
+/**
+ * O /btw: a pessoa pergunta algo enquanto o turno roda, e a resposta vem de uma consulta LATERAL —
+ * a sessão bifurcada (o contexto todo), sem ferramentas, sem gravar nada na sessão de verdade e sem
+ * tocar no turno em andamento.
+ */
+describe("sdk-driver.mjs — /btw", () => {
+  it("responde com o turno rodando, sem interrompê-lo, numa bifurcação sem ferramentas", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "slow" });
+    await driver.waitMark("slow:running");
+
+    driver.send({ type: "btw", id: "b1", question: "o que falta?" });
+    const answer = await driver.waitFor((e) => e.type === "btw_answer", from);
+    expect(answer.id).toBe("b1");
+    expect(answer.question).toBe("o que falta?");
+    expect(String(answer.text)).toContain("btw-reply:");
+    expect(String(answer.text)).toContain("o que falta?");
+    expect(answer.error).toBeUndefined();
+
+    const opts = JSON.parse(driver.marks.find((m) => m.startsWith("btw:"))!.slice("btw:".length)) as Record<string, unknown>;
+    expect(opts).toMatchObject({
+      resume: "11111111-2222-3333-4444-555555555555",
+      persist: false,
+      tools: [],
+      mcp: {},
+      strict: true,
+      status: "",
+      hooks: null,
+    });
+    expect(driver.marks).not.toContain("interrupt");
+
+    // O turno de verdade segue e fecha sozinho.
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:slow", from);
+  }, 60_000);
+
+  it("uma falha vira resposta com erro — nunca derruba o driver", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    driver.send({ type: "btw", id: "b2", question: "btwfail" });
+    const answer = await driver.waitFor((e) => e.type === "btw_answer", from);
+    expect(answer).toMatchObject({ id: "b2", question: "btwfail" });
+    expect(String(answer.error)).toContain("CLI caiu");
+    driver.send({ type: "user", text: "depois" });
+    await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:depois", from);
   }, 60_000);
 });

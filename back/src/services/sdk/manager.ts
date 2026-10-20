@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
 import { onCardBackgroundProbe, onCardDriverProbe, reportCardStatusFromDriver, type DriverActivity } from "../board/agentState.js";
@@ -15,7 +16,7 @@ import { readCardChanges, readCardFileDiff } from "../maestro/changes.js";
 import { mergeTaskEvent, taskSnapshot, toolResultEvent, type AgentTaskEvent, type RawTaskEvent, type RawToolResultEvent } from "./toolResult.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
-  NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
+  NOTE_CONVERSATION_CLEARED, btwQuestion, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
   type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type UserQuestionItem,
   type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest,
 } from "./protocol.js";
@@ -510,7 +511,7 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     const raw = event as unknown as { commands?: unknown; skills?: unknown; plugins?: unknown; hidden?: unknown };
     event = {
       type: "catalog",
-      commands: normalizeSlashCommands(raw.commands, { skills: raw.skills, plugins: raw.plugins, hidden: raw.hidden }),
+      commands: withBtwCommand(normalizeSlashCommands(raw.commands, { skills: raw.skills, plugins: raw.plugins, hidden: raw.hidden })),
     };
     session.catalog = event;
     // EM DISCO também: o driver anuncia o catálogo uma vez, ao subir, e o menu "/" precisa existir
@@ -1092,6 +1093,21 @@ export function handleClientFrame(
     markPersonTurn(session, { startedAt: at, preview: inflightPreview(control.text), attempts: 0 });
     rememberCid(session, control.cid, { persisted, line });
     void settleOrphanQuestions(session);
+    return { kind: "accepted", cid: control.cid, persisted };
+  }
+  const btw = control.type === "user" ? btwQuestion(control.text) : null;
+  if (control.type === "user" && btw !== null) {
+    // O /btw NÃO é turno: vai ao driver como controle próprio, que responde numa consulta à parte
+    // (ver `answerBtw` em sdk-driver.mjs). Nada de contagem de turno, marcador de turno em voo ou
+    // chave do espelho — o modelo principal nunca o lê, e o transcript da sessão não o carrega.
+    if (!writeToDriver(session, { type: "btw", id: randomUUID(), question: btw })) {
+      return { kind: "refused", cid: control.cid, reason: "driver-gone" };
+    }
+    noteChatActivity(session);
+    const line: HistoryEvent = { type: "user", text: control.text, at: Date.now(), from: origin };
+    const persisted = appendHistoryReported(session.cardId, line);
+    relayToPeers(session, sender, line);
+    rememberCid(session, control.cid, { persisted, line });
     return { kind: "accepted", cid: control.cid, persisted };
   }
   if (control.type === "user") {

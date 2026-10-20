@@ -80,6 +80,7 @@ export interface SdkEvent {
     | "rewound"
     | "catalog"
     | "local_output"
+    | "btw_answer"
     | "background_tasks"
     | "rate_limit"
     | "conversation_reset"
@@ -107,6 +108,9 @@ export interface SdkEvent {
   isError?: boolean;
   subtype?: string;
   result?: string;
+  /** On `btw_answer`: a pergunta lateral respondida, e o erro quando a consulta falhou. */
+  question?: string;
+  error?: string;
   /** On `workflow_progress` (synthesised by the BACK, see back/src/services/sdk/workflow.ts): the
    *  live snapshot of a Workflow's fleet of subagents. `name` carries the script's name. */
   runId?: string;
@@ -398,6 +402,11 @@ export type SdkRow =
    * reported it — and, like the terminal notes, it lives in the session only.
    */
   | { kind: "command_output"; id: string; text: string }
+  /**
+   * A resposta de um `/btw`: a pergunta LATERAL feita com o turno rodando, respondida à parte (o
+   * agente principal nunca a leu). Linha própria, nunca bolha do Claude — não é o turno falando.
+   */
+  | { kind: "btw"; id: string; question: string; text?: string; error?: string }
   /**
    * A FROTA DE UM WORKFLOW, ao vivo — a linha que faltava.
    *
@@ -908,6 +917,7 @@ export function currentActivity(state: SdkChatState): SdkActivity | null {
     // A message ABSORBED into the running turn did not open it: the work before it is still the
     // turn's, and stopping here hid a 9-minute test run behind the canned "ainda trabalhando".
     if (row.kind === "user" && row.absorbed === true) continue;
+    if (isBtwRow(row)) continue; // a pergunta lateral não abriu turno nenhum
     if (row.kind === "user") return null; // the turn's own message: nothing after it to report
     const subagent = subagentActivity(state.rows, row);
     if (subagent !== null) return { kind: "tool", label: subagent, rowId: row.id };
@@ -927,6 +937,22 @@ export function currentActivity(state: SdkChatState): SdkActivity | null {
     if (row.kind === "assistant") return row.streaming ? { kind: "answering", label: "", rowId: row.id } : null;
   }
   return null;
+}
+
+/**
+ * A pergunta de um `/btw` — ou null quando a mensagem não é um. Mesma regra do back
+ * (back/src/services/sdk/protocol.ts `btwQuestion`): a mensagem INTEIRA começa pelo comando, e
+ * `/btw` sem pergunta é mensagem comum. PURE.
+ */
+export function btwQuestion(text: string): string | null {
+  const match = /^\/btw(?:\s+([\s\S]*))?$/.exec(text.trim());
+  const question = match?.[1]?.trim();
+  return question ? question : null;
+}
+
+/** A linha é do /btw (a pergunta ou a resposta) — fora do turno. PURE. */
+function isBtwRow(row: SdkRow): boolean {
+  return row.kind === "btw" || (row.kind === "user" && btwQuestion(row.text) !== null);
 }
 
 /**
@@ -972,6 +998,8 @@ export function turnHasRoomForMore(state: SdkChatState): boolean {
     const row = state.rows[i] as SdkRow;
     // A última coisa dita é nossa: ou não há turno (a fila anda como sempre andou), ou ela acabou
     // de ser entregue e o modelo ainda não reagiu — o respiro já foi dela.
+    // O /btw não é turno: nem a pergunta nem a resposta gastam o respiro de ninguém.
+    if (isBtwRow(row)) continue;
     if (row.kind === "user") return !state.turnActive;
     // Ferramenta: trabalho em curso, não frase em curso — e é aqui que o turno passa o tempo dele.
     if (row.kind === "tool") return true;
@@ -999,6 +1027,7 @@ export function liveActivityDetail(state: SdkChatState): string | null {
   for (let i = state.rows.length - 1; i >= 0; i -= 1) {
     const row = state.rows[i] as SdkRow;
     if (row.kind === "user" && row.absorbed === true) continue; // entrou no turno, não o abriu
+    if (isBtwRow(row)) continue; // a pergunta lateral não abriu turno nenhum
     if (row.kind === "user") return null; // a mensagem do turno: nada depois dela para relatar
     const subagent = subagentActivity(state.rows, row);
     if (subagent !== null) return subagent;
@@ -1284,6 +1313,16 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         awaiting: false,
         rows: [...settleStreaming(state.rows), { kind: "command_output", id, text: event.text }],
       };
+    }
+    case "btw_answer": {
+      // Não toca em `awaiting` nem em `turnActive`: a pergunta lateral não é o turno, e o turno
+      // que estava rodando segue rodando.
+      if (typeof event.question !== "string" || (!event.text && !event.error)) return state;
+      const { id, seq } = nextId(state, "btw");
+      const row: SdkRow = event.text
+        ? { kind: "btw", id, question: event.question, text: event.text }
+        : { kind: "btw", id, question: event.question, error: event.error };
+      return { ...state, seq, rows: [...state.rows, row] };
     }
     case "system_note": {
       // The PANEL talking (a deploy interrupted a turn, the boot resumed it): one muted centered

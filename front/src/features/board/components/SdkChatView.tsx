@@ -81,6 +81,7 @@ import {
   answerQuestion,
   applySdkEvent,
   appendUserRow,
+  btwQuestion,
   coalesceDeltas,
   decidePermission,
   deliveredUserTexts,
@@ -966,6 +967,20 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     // da fila só anda quando o turno fecha, então enfileirar com uma pergunta de pé — inclusive com
     // o fio fora do ar — seria esperar por um fim de turno que só a própria mensagem pode causar.
     const wireUp = connected && socketRef.current?.readyState === WebSocket.OPEN;
+    // O /btw é a pergunta feita JUSTAMENTE com o turno rodando: esperar o fim do turno na fila seria
+    // o oposto do comando. Com o fio de pé ele sai na hora, e sem acender o "Preparando…" — quem
+    // responde é uma consulta à parte, não o turno (ver `answerBtw` em sdk-driver.mjs).
+    if (wireUp && btwQuestion(text) !== null) {
+      const cid = newCid();
+      setState((prev) => appendUserRow(prev, text, selfOriginRef.current, { cid, state: "sending" }));
+      try {
+        sendTurn({ type: "user", text }, text, cid);
+      } catch (err) {
+        toast.error((err as Error).message);
+        throw err; // the composer keeps the words
+      }
+      return;
+    }
     const waits = !wireUp || chat.turnActive || chat.awaiting || pendingEdit;
     if (waits && pendingRef.current.length === 0) {
       setQueue((prev) => enqueue(prev, { id: newQueueId(), text, at: Date.now(), from: selfOriginRef.current }));
@@ -2089,6 +2104,19 @@ const SdkChatRow = React.memo(function SdkChatRow({
         className="whitespace-pre-wrap rounded-md border border-border/70 bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground"
       >
         {row.text}
+      </div>
+    );
+  }
+
+  if (row.kind === "btw") {
+    // A resposta do /btw: emoldurada e com a pergunta, para nunca ser lida como o turno falando.
+    return (
+      <div data-testid="sdk-btw" className="rounded-md border border-dashed border-border/70 bg-muted/30 px-3 py-2 text-sm">
+        <div className="text-xs text-muted-foreground">{t("sdk.btwLabel")}</div>
+        <div className="mt-1 whitespace-pre-wrap text-xs italic text-muted-foreground">{row.question}</div>
+        <div className="mt-2">
+          {row.text !== undefined ? <Markdown text={row.text} /> : t("sdk.btwError", { error: row.error ?? "" })}
+        </div>
       </div>
     );
   }
