@@ -326,6 +326,12 @@ describe("pause decisions (hasLiveSession / shouldEndSessionOnMove / shouldEndSe
     expect(reactivatesOnActivity({ column: "backlog" }, "working")).toBe(false);
   });
 
+  it("reactivatesOnActivity: só um turno novo tira o card de done — não o resto do turno que o concluiu", () => {
+    expect(reactivatesOnActivity({ column: "done", status: "working" }, "working")).toBe(false);
+    expect(reactivatesOnActivity({ column: "done", status: "waiting" }, "working")).toBe(true);
+    expect(reactivatesOnActivity({ column: "done", status: null }, "working")).toBe(true);
+  });
+
   /**
    * A PAUSE IS NOT UNDONE BY A HOOK. Ending a session makes the dying Claude (tmux, or the SDK
    * driver on a native-chat card) fire its own hooks on the way out; they land after `pausedAt` is

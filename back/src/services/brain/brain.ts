@@ -59,6 +59,10 @@ credential in this runner reaches every repository the connected account can rea
 3. Prefer small, focused commits with messages that explain WHY. Keep unrelated changes apart.
 4. Tests are part of the work, not a follow-up: cover the happy path, the edges, and the failure
    you just fixed. Do not claim something works until you have run it.
+   Run the tests your change AFFECTS — the files you touched and what imports them
+   (\`vitest run <files>\`, \`vitest related <files>\`, \`vitest run --changed origin/<base>\`) — not
+   the whole suite of every package. The runner's CPUs are shared by every card on the board; the
+   full suite is the delivery gate's and CI's job.
 5. Do not push, open pull requests, or deploy unless you were asked to.
 
 ## Reporting

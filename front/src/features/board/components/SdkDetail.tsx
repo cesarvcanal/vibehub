@@ -6,7 +6,8 @@ import { useNow, usePageVisible } from "@/lib/useNow";
 import { useT } from "@/i18n";
 import { Markdown } from "@/features/board/components/ChatView";
 import { toolHeadline, type AgentTask, type SdkRow, type ToolResultSummary } from "@/features/board/lib/sdkChat";
-import { toolDiff } from "@/features/board/lib/toolDiff";
+import { hunksToRows, toolDiff } from "@/features/board/lib/toolDiff";
+import { DiffView, SyntaxText, useCodeTokens } from "@/features/board/components/DiffView";
 import {
   agentElapsedMs,
   agentName,
@@ -88,8 +89,10 @@ function StatusPill({ status }: { status: ToolStatus }) {
   );
 }
 
-function CodeBlock({ text, start = 1, numbered = true, tone }: { text: string; start?: number; numbered?: boolean; tone?: "error" }) {
-  const lines = text.replace(/\n$/, "").split("\n");
+function CodeBlock({ text, start = 1, numbered = true, tone, path }: { text: string; start?: number; numbered?: boolean; tone?: "error"; path?: string }) {
+  const code = text.replace(/\n$/, "");
+  const lines = code.split("\n");
+  const tokens = useCodeTokens(code, path);
   return (
     <div
       className={cn(
@@ -101,7 +104,7 @@ function CodeBlock({ text, start = 1, numbered = true, tone }: { text: string; s
         {lines.map((line, i) => (
           <div key={i} className={cn("grid", numbered ? "grid-cols-[3rem_1fr]" : "grid-cols-1 pl-3")}>
             {numbered ? <span className="select-none pr-3 text-right text-muted-foreground/50">{start + i}</span> : null}
-            <span className="whitespace-pre pr-4">{line || " "}</span>
+            <span className="whitespace-pre pr-4">{line ? <SyntaxText text={line} tokens={tokens?.[i]} /> : " "}</span>
           </div>
         ))}
       </div>
@@ -109,32 +112,8 @@ function CodeBlock({ text, start = 1, numbered = true, tone }: { text: string; s
   );
 }
 
-function DiffBlock({ rows }: { rows: DiffRow[] }) {
-  return (
-    <div className="max-h-[56vh] overflow-auto rounded-md border border-border/70 bg-background/70 font-mono text-xs leading-relaxed">
-      <div className="min-w-max py-0.5">
-        {rows.map((row, i) => (
-          <div
-            key={i}
-            data-testid="sdk-detail-diff-line"
-            data-kind={row.kind}
-            className={cn(
-              "whitespace-pre border-l-2 pl-1.5 pr-3",
-              row.kind === "add" && "border-emerald-500/70 bg-emerald-500/10 text-foreground",
-              row.kind === "del" && "border-red-500/70 bg-red-500/10 text-foreground/80",
-              row.kind === "ctx" && "border-transparent text-muted-foreground",
-              row.kind === "hunk" && "border-transparent bg-muted/40 text-muted-foreground/70",
-            )}
-          >
-            <span aria-hidden className={cn("inline-block w-4 select-none font-semibold", row.kind === "add" && "text-emerald-500", row.kind === "del" && "text-red-500")}>
-              {row.kind === "add" ? "+" : row.kind === "del" ? "−" : " "}
-            </span>
-            {row.text}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+function DiffBlock({ rows, path }: { rows: readonly DiffRow[]; path?: string | null }) {
+  return <DiffView rows={rows} path={path} className="max-h-[56vh] rounded-md border-border/70" lineTestId="sdk-detail-diff-line" hunkTestId="sdk-detail-diff-line" />;
 }
 
 function Section({ label, aside, children }: { label: React.ReactNode; aside?: React.ReactNode; children: React.ReactNode }) {
@@ -230,51 +209,118 @@ export function SdkFleetView({ rows, tasks, children }: FleetProps) {
   const visible = usePageVisible();
   const now = useNow(running > 0 && visible);
   return (
-    <div data-testid="sdk-fleet" data-count={agents.length} className="rounded-md border border-border/70 bg-muted/40 px-2.5 py-2 text-xs">
-      <div className="flex items-center gap-1.5">
-        <Bot className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <span className="font-medium text-foreground/90">{t("sdk.fleet.title", { n: agents.length })}</span>
-        {agents.length > 1 ? (
-          <span className="text-muted-foreground">{t("sdk.fleet.count", { done, running })}</span>
-        ) : null}
+    <FleetPanel
+      testId="sdk-fleet"
+      count={agents.length}
+      icon={<Bot className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+      title={t("sdk.fleet.title", { n: agents.length })}
+      subtitle={agents.length > 1 ? t("sdk.fleet.count", { done, running }) : undefined}
+      progress={agents.length > 1 ? done / agents.length : undefined}
+    >
+      {agents.map((row, i) => {
+        const task = tasks[row.id];
+        const kids = children.get(row.id) ?? [];
+        const lastKid = [...kids].reverse().find((k) => k.kind === "tool") as ToolRow | undefined;
+        const status = statuses[i] as ToolStatus;
+        const doing = task?.status === "running" || !task
+          ? task?.summary || (task?.lastTool ? task.lastTool : lastKid ? toolHeadline(lastKid.name, lastKid.input).title : "")
+          : t(task.status === "completed" ? "sdk.fleet.finished" : "sdk.fleet.stopped");
+        return (
+          <FleetRow
+            key={row.id}
+            testId="sdk-fleet-agent"
+            status={status}
+            name={agentName(row.input)}
+            now={doing}
+            actions={task?.toolUses ?? row.result?.agent?.toolUses ?? kids.filter((k) => k.kind === "tool").length}
+            durationMs={agentElapsedMs(status, task, row.result?.agent, now)}
+            onClick={() => open({ kind: "agent", id: row.id })}
+          />
+        );
+      })}
+    </FleetPanel>
+  );
+}
+
+/**
+ * A MOLDURA da frota: cabeçalho, barra de progresso opcional e as linhas. Exportada para a faixa de
+ * segundo plano usar o mesmo desenho — o trabalho em andamento tem uma cara só na tela.
+ */
+export function FleetPanel({
+  testId,
+  count,
+  icon,
+  title,
+  subtitle,
+  progress,
+  role,
+  className,
+  children,
+}: {
+  testId: string;
+  count: number;
+  icon: React.ReactNode;
+  title: React.ReactNode;
+  subtitle?: React.ReactNode;
+  /** 0..1; sem valor, sem barra. */
+  progress?: number;
+  role?: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div role={role} data-testid={testId} data-count={count} className={cn("rounded-md border border-border/70 bg-muted/40 px-2.5 py-2 text-xs", className)}>
+      <div className="flex min-w-0 items-center gap-1.5">
+        {icon}
+        <span className="shrink-0 font-medium text-foreground/90">{title}</span>
+        {subtitle ? <span className="min-w-0 truncate text-muted-foreground">{subtitle}</span> : null}
       </div>
-      {agents.length > 1 ? (
+      {progress !== undefined ? (
         <div className="mb-1 mt-2 h-1 overflow-hidden rounded-full bg-border/60">
-          <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${Math.round((done / agents.length) * 100)}%` }} />
+          <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${Math.round(progress * 100)}%` }} />
         </div>
       ) : null}
-      <div className="mt-1 space-y-0.5">
-        {agents.map((row, i) => {
-          const task = tasks[row.id];
-          const status = statuses[i] as ToolStatus;
-          const kids = children.get(row.id) ?? [];
-          const lastKid = [...kids].reverse().find((k) => k.kind === "tool") as ToolRow | undefined;
-          const doing = task?.status === "running" || !task
-            ? task?.summary || (task?.lastTool ? task.lastTool : lastKid ? toolHeadline(lastKid.name, lastKid.input).title : "")
-            : t(task.status === "completed" ? "sdk.fleet.finished" : "sdk.fleet.stopped");
-          const actions = task?.toolUses ?? row.result?.agent?.toolUses ?? kids.filter((k) => k.kind === "tool").length;
-          const duration = agentElapsedMs(status, task, row.result?.agent, now);
-          return (
-            <button
-              key={row.id}
-              type="button"
-              data-testid="sdk-fleet-agent"
-              data-status={status}
-              onClick={() => open({ kind: "agent", id: row.id })}
-              className="grid w-full grid-cols-[1rem_minmax(7rem,12rem)_minmax(0,1fr)_auto_0.75rem] items-center gap-2 rounded px-1 py-1 text-left hover:bg-background/60"
-            >
-              <StatusIcon status={status} className="h-3.5 w-3.5" />
-              <span className="min-w-0 truncate font-medium text-foreground/90">{agentName(row.input)}</span>
-              <span className="min-w-0 truncate text-muted-foreground">{doing}</span>
-              <span className="shrink-0 tabular-nums text-[11px] text-muted-foreground/80">
-                {[actions ? t("sdk.result.actions", { n: actions }) : null, duration ? formatDuration(duration) : null].filter(Boolean).join(" · ")}
-              </span>
-              <ChevronRight className="h-3 w-3 text-muted-foreground/60" />
-            </button>
-          );
-        })}
-      </div>
+      <div className="mt-1 space-y-0.5">{children}</div>
     </div>
+  );
+}
+
+/** Uma linha da frota: status, nome, o que faz agora, "N ações · tempo". Sem `onClick`, não é botão. */
+export function FleetRow({
+  testId,
+  status,
+  name,
+  now,
+  actions,
+  durationMs,
+  onClick,
+}: {
+  testId: string;
+  status: ToolStatus;
+  name: string;
+  now: string;
+  actions?: number;
+  durationMs?: number;
+  onClick?: () => void;
+}) {
+  const t = useT();
+  const cls = "grid w-full grid-cols-[1rem_minmax(7rem,12rem)_minmax(0,1fr)_auto_0.75rem] items-center gap-2 rounded px-1 py-1 text-left";
+  const cells = (
+    <>
+      <StatusIcon status={status} className="h-3.5 w-3.5" />
+      <span className="min-w-0 truncate font-medium text-foreground/90">{name}</span>
+      <span className="min-w-0 truncate text-muted-foreground">{now}</span>
+      <span className="shrink-0 tabular-nums text-[11px] text-muted-foreground/80">
+        {[actions ? t("sdk.result.actions", { n: actions }) : null, durationMs ? formatDuration(durationMs) : null].filter(Boolean).join(" · ")}
+      </span>
+      {onClick ? <ChevronRight className="h-3 w-3 text-muted-foreground/60" /> : <span />}
+    </>
+  );
+  if (!onClick) return <div data-testid={testId} data-status={status} className={cls}>{cells}</div>;
+  return (
+    <button type="button" data-testid={testId} data-status={status} data-clickable="true" onClick={onClick} className={cn(cls, "hover:bg-background/60")}>
+      {cells}
+    </button>
   );
 }
 
@@ -447,18 +493,18 @@ function ActionBody({ name, input, detail, row, onOpenAgent }: { name: string; i
   if (name === "Read") {
     if (!detail || detail.isError) return <>{file ? <FileLabel path={file} /> : null}{detail?.isError ? <ErrorBox text={detail.text ?? ""} /> : null}</>;
     const { content, startLine } = readContent(detail);
-    return <Section label={<FileLabel path={file} />}><CodeBlock text={content} start={startLine} /></Section>;
+    return <Section label={<FileLabel path={file} />}><CodeBlock text={content} start={startLine} path={file} /></Section>;
   }
   if (name === "Edit" || name === "Write" || name === "MultiEdit" || name === "NotebookEdit") {
     const fromResult = detail ? patchRows(detail.structured) : null;
     const fromInput = toolDiff(name, input);
-    const rows: DiffRow[] | null = fromResult ?? (fromInput ? fromInput.hunks.flatMap((h, i) => [...(i > 0 ? [{ kind: "hunk" as const, text: "⋯" }] : []), ...h.map((l) => ({ kind: l.kind, text: l.text }))]) : null);
+    const rows: DiffRow[] | null = fromResult ?? (fromInput ? hunksToRows(fromInput.hunks) : null);
     const created = name === "Write" && (fromInput?.created ?? false);
     return (
       <>
         {detail?.isError ? <ErrorBox text={detail.text ?? ""} label={t("sdk.detail.notApplied")} /> : null}
         <Section label={<FileLabel path={file} />} aside={<span>{created ? t("sdk.detail.newFile") : detail?.isError ? "" : t("sdk.detail.applied")}</span>}>
-          {rows && rows.length ? <DiffBlock rows={rows} /> : name === "Write" ? <CodeBlock text={field(input, "content")} /> : null}
+          {rows && rows.length ? <DiffBlock rows={rows} path={file} /> : name === "Write" ? <CodeBlock text={field(input, "content")} path={file} /> : null}
         </Section>
       </>
     );
@@ -712,7 +758,7 @@ function ChangesView({ rows, onOpenAction }: { rows: readonly SdkRow[]; onOpenAc
                       <span className="flex-1" />
                       <button type="button" onClick={() => onOpenAction(row.id)} className="flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground"><Maximize2 className="h-3 w-3" />{t("sdk.changes.openAction")}</button>
                     </div>
-                    {d ? <DiffBlock rows={d.hunks.flatMap((h, i) => [...(i > 0 ? [{ kind: "hunk" as const, text: "⋯" }] : []), ...h.map((l) => ({ kind: l.kind, text: l.text }))])} /> : null}
+                    {d ? <DiffBlock rows={hunksToRows(d.hunks)} path={current.path} /> : null}
                   </section>
                 );
               })}
@@ -738,7 +784,7 @@ function ChangesView({ rows, onOpenAction }: { rows: readonly SdkRow[]; onOpenAc
           </div>
           <div className="min-h-0 overflow-auto px-4 py-3">
             {!gitFile ? <p className="text-xs italic text-muted-foreground">{t("sdk.changes.pickFile")}</p>
-              : diff.data ? (diff.data.diff.trim() ? <DiffBlock rows={parseUnifiedDiff(diff.data.diff)} /> : <p className="text-xs italic text-muted-foreground">{t("sdk.changes.noDiff")}</p>)
+              : diff.data ? (diff.data.diff.trim() ? <DiffBlock rows={parseUnifiedDiff(diff.data.diff)} path={gitFile} /> : <p className="text-xs italic text-muted-foreground">{t("sdk.changes.noDiff")}</p>)
               : diff.loading ? <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />{t("sdk.detail.loading")}</div>
               : <p className="text-xs italic text-muted-foreground">{t("sdk.detail.failedToLoad")}</p>}
           </div>

@@ -146,6 +146,7 @@ function serve() {
 function serveSession(info: {
   model?: string | null;
   modelLabel?: string | null;
+  effort?: string | null;
   account?: { slug: string | null; name: string };
   situation?: string;
 }) {
@@ -155,6 +156,7 @@ function serveSession(info: {
       return Promise.resolve({
         model: info.model ?? null,
         modelLabel: info.modelLabel ?? null,
+        effort: info.effort ?? null,
         account: info.account ?? { slug: null, name: "" },
         situation: info.situation ?? "waiting",
       });
@@ -799,6 +801,17 @@ describe("CardTerminalView — the card bar", () => {
     await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/cards/c1", { effort: "max" }));
     await waitFor(() => expect(screen.getByTestId("xterm").getAttribute("data-reconnect")).not.toBe(before));
     expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/Max/));
+  });
+
+  it("an UNPINNED card still ticks the level its session runs on — read from the transcript", async () => {
+    serveSession({ model: "claude-opus-5-5", modelLabel: "Opus 5.5", effort: "medium" });
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10, effort: undefined })]);
+
+    await waitFor(() => expect(screen.getByLabelText("Model")).toHaveTextContent("Opus 5.5 · Medium"));
+    await openMenu(user, "Model");
+    expect(screen.getByRole("menuitemcheckbox", { name: "Medium" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("menuitemcheckbox", { name: "Max" })).toHaveAttribute("aria-checked", "false");
   });
 
   it("the pinned level is ticked, and clearing it is an action that sends null", async () => {

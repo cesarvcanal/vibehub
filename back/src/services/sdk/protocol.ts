@@ -362,7 +362,17 @@ export function parseDriverLine(line: string): DriverEvent | null {
  * "gravei esta mensagem" (`user_ack`) or "não peguei" (`user_nack`). Without it a send into a
  * half-open socket looked identical to a delivered one, and the message vanished on the next F5.
  */
-export interface UserControl { type: "user"; text: string; cid?: string }
+export interface UserControl {
+  type: "user";
+  text: string;
+  cid?: string;
+  /**
+   * O "Enviar agora" da fila: com uma ferramenta do principal rodando, o driver interrompe para a
+   * mensagem ser lida já — sem isso o CLI só a lê quando a ferramenta devolve (ver `sendUserNow`
+   * em sdk-driver.mjs). Ausente = o envio de sempre, que dobra no turno em andamento.
+   */
+  now?: true;
+}
 /**
  * Stop the running turn. `reason` is the front saying WHY it stopped — today only `"edit"`: the
  * person clicked the pencil to correct a message while the agent was still working on the old one
@@ -496,7 +506,11 @@ export function parseSdkClientFrame(raw: string): DriverControl | null {
           ? { type: "interrupt", reason: "edit" }
           : { type: "interrupt" };
       }
-      if (parsed.type === "user" && typeof parsed.text === "string") return { type: "user", text: parsed.text, cid: frameCid(parsed) };
+      if (parsed.type === "user" && typeof parsed.text === "string") {
+        const user: UserControl = { type: "user", text: parsed.text, cid: frameCid(parsed) };
+        if ((parsed as { now?: unknown }).now === true) user.now = true;
+        return user;
+      }
       if (parsed.type === "permission_decision" && typeof parsed.id === "string" && typeof parsed.allow === "boolean") {
         return { type: "permission_decision", id: parsed.id, allow: parsed.allow };
       }

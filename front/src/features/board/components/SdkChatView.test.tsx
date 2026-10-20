@@ -183,6 +183,25 @@ describe("SdkChatView", () => {
     expect(onStatus).toHaveBeenCalledWith("open");
   });
 
+  it("spins the running tool's icon without a transform utility fighting the animation", async () => {
+    // `animate-spin` anima o `transform`; um `translate-*` no mesmo elemento virava o ponto de
+    // partida da animação e o spinner só deslizava 2px e voltava, sem girar.
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } });
+
+    const tool = screen.getByTestId("sdk-tool");
+    expect(tool).toHaveAttribute("data-status", "running");
+    const spinners = Array.from(document.querySelectorAll("svg.animate-spin"));
+    expect(spinners.length).toBeGreaterThan(0);
+    expect(tool.querySelector("svg.animate-spin")).not.toBeNull();
+    for (const svg of spinners) {
+      expect(svg.getAttribute("class")).not.toMatch(/(^|\s)-?(translate|rotate|scale|skew)-/);
+    }
+  });
+
   it("renders the streamed answer and the tool calls as compact lines", async () => {
     renderSdkChat();
     const ws = await socket();
@@ -2158,6 +2177,10 @@ describe("SdkChatView — subagentes", () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
       expect(agent).toHaveTextContent(/4m 0[67]s/);
 
+      // a faixa de segundo plano mostra o mesmo relógio
+      ws.deliver({ type: "background_tasks", tasks: [{ id: "b1", type: "local_agent", description: "explora o chat", toolUseId: "t1" }] });
+      expect(screen.getByTestId("sdk-background-task")).toHaveTextContent(/4m 0[678]s/);
+
       // o modal do subagente conta junto com a linha da frota
       fireEvent.click(agent);
       expect(await screen.findByTestId("sdk-agent-elapsed")).toHaveTextContent(/4m 0[678]s/);
@@ -2738,7 +2761,8 @@ describe("SdkChatView — forçar o envio de uma mensagem da fila", () => {
     await userEvent.click(screen.getByTestId("sdk-queued-send-now"));
 
     await waitFor(() => expect(ws.sent.length).toBe(2));
-    expect(JSON.parse(ws.sent[1]!)).toMatchObject({ type: "user", text: "o que você tá fazendo ?" });
+    // `now`: com uma ferramenta presa o driver interrompe para ela ser lida já (ver sendUserNow)
+    expect(JSON.parse(ws.sent[1]!)).toMatchObject({ type: "user", text: "o que você tá fazendo ?", now: true });
     // saiu da espera e virou conversa: é isso que "foi entregue" significa nesta tela
     await waitFor(() => expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument());
     const bubbles = screen.getAllByTestId("sdk-user");
@@ -3457,6 +3481,26 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     ws.deliver({ type: "background_tasks", tasks: [{ id: "b1" } as never] });
     const tray = await screen.findByTestId("sdk-background-tasks");
     expect(tray).toHaveTextContent(/background task/i);
+  });
+
+  it("a faixa tem o desenho do painel de subagentes: cada tarefa é uma linha rodando; sem ligação, não é clicável", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "t9", name: "Agent", input: { description: "Review backend", run_in_background: true } });
+    ws.deliver({ type: "background_tasks", tasks: [
+      { id: "k9", type: "local_agent", description: "Review backend", toolUseId: "t9" },
+      { id: "k1", type: "local_bash", description: "Wait for jest" },
+    ] });
+    const tray = await screen.findByTestId("sdk-background-tasks");
+    expect(tray).toHaveAttribute("data-count", "2");
+    const [linked, loose] = within(tray).getAllByTestId("sdk-background-task");
+    expect(linked).toHaveAttribute("data-status", "running");
+    expect(linked.tagName).toBe("BUTTON");
+    expect(loose).toHaveAttribute("data-status", "running");
+    expect(loose.tagName).toBe("DIV");
+    expect(loose).not.toHaveAttribute("data-clickable");
   });
 });
 

@@ -512,16 +512,31 @@ async function emitCatalogFrom(init, queryHandle) {
  *  - `catalogAnnounced` fica FALSO: este catálogo é provisório (sem as listas do `init`, todo
  *    comando aparece como "comando"), e o primeiro `init` de verdade o substitui com os rótulos
  *    certos — skill, plugin, e os comandos que só fazem sentido num terminal, escondidos.
+ *
+ * E é LEVE (produção, 2026-10-20: depois de um reinício do painel, a retomada de um card levou 81s só
+ * para o CLI aceitar a mensagem). Cada aba que reconecta sobe um driver, e cada driver subia este CLI
+ * com TODOS os MCPs do perfil — dois `npx @playwright/mcp`, as conexões HTTP —, dez de uma vez, ao lado
+ * dos dez CLIs que retomavam de verdade. Agora:
+ *  - nenhum MCP (`strictMcpConfig` + `mcpServers` vazio): o menu só perde os prompts de MCP até o
+ *    primeiro `init`, que traz o catálogo completo de qualquer jeito;
+ *  - a mensagem de verdade MATA esta consulta (abort), em vez de só fechar a entrada e deixá-la
+ *    terminar de subir disputando CPU com o CLI que vai responder.
  */
 let warmChannel = null;
+let warmAbort = null;
 async function warmCatalog() {
   if (catalogAnnounced || channel || warmChannel) return;
   const ch = makeChannel();
   warmChannel = ch;
+  const abort = new AbortController();
+  warmAbort = abort;
   try {
     applyAuth(); // the throwaway CLI signs in like the real one would
     const options = baseOptions();
     options.env = { ...process.env, VIBEHUB_STATUS_URL: "" };
+    options.strictMcpConfig = true;
+    options.mcpServers = {};
+    options.abortController = abort;
     const handle = query({ prompt: ch, options });
     // A consulta só ganha vida sendo iterada — e nada do que ela diz interessa: o único objetivo é
     // ter um CLI de pé para responder a pergunta abaixo.
@@ -535,12 +550,19 @@ async function warmCatalog() {
   } finally {
     ch.end(); // fecha a corrente de entrada: sem mais mensagens, o CLI descartável sai sozinho
     warmChannel = null;
+    warmAbort = null;
   }
 }
 
 let currentQuery = null; // the live query() iterator, so an interrupt can reach it mid-turn
 let channel = null; // feeds the live query's prompt stream (null = no stream running)
 let turnActive = false; // a turn is running, or a message is already fed and about to start one
+// As ferramentas do PRINCIPAL chamadas e ainda sem resultado. Enquanto há uma, o CLI não lê mensagem
+// nova nenhuma: a que chega fica parada até ela devolver (medido no SDK, 2026-10-20 — 51s cegos atrás
+// de um Bash de 60s). É o que o "Enviar agora" consulta para decidir se precisa interromper.
+const toolsInFlight = new Set();
+// Quem espera o turno corrente fechar (o "Enviar agora" que interrompeu): soltos no `result`.
+let turnEndWaiters = [];
 let announcedSessionId = null; // last session id emitted as a `session` event (dedupe)
 // O stream (= processo do CLI) que anunciou o conjunto NÃO VAZIO de tarefas em segundo plano que a
 // tela está mostrando agora. Quando ESSE processo morre, as tarefas morrem com ele — e o CLI, morto,
@@ -978,6 +1000,11 @@ async function runStream() {
         // principal a um ponto que não é dela. Só o principal move o ponto de volta.
         const parent = typeof msg.parent_tool_use_id === "string" && msg.parent_tool_use_id !== "" ? msg.parent_tool_use_id : null;
         if (msg.uuid && parent === null) lastAssistantUuid = msg.uuid;
+        // Fala do principal SEM turno aberto = o CLI abriu um turno sozinho (uma tarefa em segundo
+        // plano terminou, um ScheduleWakeup venceu). Ele passa a ser o turno em voo: uma mensagem
+        // agora é absorvida nele (`turn_absorbed`), e se o stream cair antes do `result` o finally
+        // fecha com o aborted que ele deve — senão o manager via o card trabalhando para sempre.
+        if (parent === null && !turnActive) turnActive = true;
         const origin = parent === null ? {} : { parentToolUseId: parent };
         for (const block of msg.message.content) {
           if (block.type === "text") emit({ type: "assistant_text", text: block.text, ...origin });
@@ -987,18 +1014,25 @@ async function runStream() {
           // O raciocínio de um subagente fica de fora: a linha de raciocínio da tela é a do principal.
           else if (block.type === "thinking") { if (block.thinking && parent === null) emit({ type: "thinking", text: block.thinking }); }
           else if (block.type === "tool_use") {
-            if (parent === null) toolInput.done(block.id); // o input está completo: acabou o progresso dele
+            if (parent === null) {
+              toolInput.done(block.id); // o input está completo: acabou o progresso dele
+              toolsInFlight.add(block.id);
+            }
             emit({ type: "tool_use", id: block.id, name: block.name, input: block.input, ...origin });
           }
         }
       } else if (msg.type === "user") {
         // O RESULTADO de cada ferramenta (do principal e dos subagentes) — ver `toolResultFrames`.
-        for (const frame of toolResultFrames(msg)) emit(frame);
+        for (const frame of toolResultFrames(msg)) {
+          if (!frame.parentToolUseId) toolsInFlight.delete(frame.id);
+          emit(frame);
+        }
       } else if (msg.type === "result") {
         // In streaming input mode the CLI emits ONE result per turn and keeps running — the
         // stream stays open for the next message. Absorbed sends never produce their own result.
         if (msg.session_id) lastSessionId = msg.session_id;
         turnActive = false;
+        turnEnded();
         void clearUltra(); // the keyword was for THIS turn
         // An ABORTED turn is not a failed one: the turn ends because someone stopped it (the stop
         // button, an edit, a deploy), and the conversation already says so in its own words.
@@ -1062,6 +1096,7 @@ async function runStream() {
  * ends without one leaves the driver "busy" forever (no idle stop, the in-flight marker kept).
  */
 function closeTurnAborted() {
+  turnEnded();
   if (!turnActive) return;
   turnActive = false;
   emit({ type: "result", subtype: "aborted", isError: false, sessionId: lastSessionId });
@@ -1228,6 +1263,7 @@ function sendUser(text) {
     // A consulta descartável do catálogo (se ainda estiver de pé) não tem mais razão de existir —
     // e deixá-la viva gastaria um CLI inteiro ao lado do que vai responder de verdade.
     if (warmChannel) warmChannel.end();
+    if (warmAbort) warmAbort.abort();
     channel = makeChannel();
     void runStream();
   }
@@ -1262,6 +1298,37 @@ function sendUser(text) {
   // takes back this send's +1 on its turn count, and the front labels the bubble ("entrou no
   // turno em andamento"). Emitted AFTER the push so a result racing past can never precede it.
   if (absorbed) emit({ type: "turn_absorbed" });
+}
+
+/** O turno corrente acabou (result ou stream morto): nenhuma ferramenta segue rodando, e quem esperava é solto. */
+function turnEnded() {
+  toolsInFlight.clear();
+  const waiters = turnEndWaiters;
+  turnEndWaiters = [];
+  for (const resolve of waiters) resolve();
+}
+
+/** Quanto o "Enviar agora" espera o turno interrompido fechar antes de mandar a mensagem assim mesmo. */
+const SEND_NOW_TIMEOUT_MS = 10_000;
+
+/**
+ * O "ENVIAR AGORA" da fila. Com uma ferramenta do principal rodando, empurrar a mensagem não basta:
+ * o CLI só a lê quando a ferramenta devolve — e um vibehub_deliver preso deixou a pessoa falando
+ * sozinha por 24 min. Então interrompe (o que o Esc do terminal faz), espera o turno interrompido
+ * fechar e manda a mensagem como turno NOVO, com result próprio. Sem ferramenta rodando o modelo lê
+ * a mensagem no passo seguinte, em segundos: ela dobra no turno como qualquer outra, sem cortar nada.
+ * O teto da espera nunca segura a mensagem: venceu, ela vai pelo caminho normal.
+ */
+async function sendUserNow(text) {
+  if (turnActive && toolsInFlight.size > 0 && currentQuery && typeof currentQuery.interrupt === "function") {
+    const closed = new Promise((resolve) => { turnEndWaiters.push(resolve); });
+    // Uma pergunta ou permissão pendente é desse turno que está sendo cortado.
+    denyPendingPermissions();
+    for (const id of [...pendingQuestions.keys()]) resolveQuestion(id, null);
+    currentQuery.interrupt().catch(() => { /* um turno que já acabou não se interrompe — e tudo bem */ });
+    await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, SEND_NOW_TIMEOUT_MS))]);
+  }
+  sendUser(text);
 }
 
 /** How long the teardown waits for the CLI to acknowledge an interrupt before closing the channel anyway. */
@@ -1551,7 +1618,8 @@ rl.on("line", (line) => {
     serialized(async () => {
       await reanchorIfStale();
       await reauthIfChanged();
-      sendUser(control.text);
+      if (control.now === true) await sendUserNow(control.text);
+      else sendUser(control.text);
       supersedePendingQuestions();
     });
     return;

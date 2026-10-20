@@ -291,6 +291,11 @@ export interface CardSessionInfo {
   model: string | null;
   /** Display name for that model when the server knows one. */
   modelLabel: string | null;
+  /**
+   * Reasoning level the session runs on, as the server read it (Claude Code stamps it on every
+   * assistant turn), or null while nothing says — a server that predates the field included.
+   */
+  effort: string | null;
   /** The account the session is really using. */
   account: { slug: string | null; name: string };
   /**
@@ -470,6 +475,7 @@ export const boardApi = {
       (r): CardSessionInfo => ({
         model: r?.model ?? null,
         modelLabel: r?.modelLabel ?? null,
+        effort: r?.effort ?? null,
         account: { slug: r?.account?.slug ?? null, name: r?.account?.name ?? "" },
         // A server that predates the field simply never looks busy — better than looking stuck.
         situation: r?.situation ?? "waiting",
@@ -773,6 +779,18 @@ export function effortLabel(level: ClaudeEffort): string {
 export function pinnedEffort(card: { effort?: string | null } | null | undefined): ClaudeEffort | undefined {
   const level = card?.effort;
   return CLAUDE_EFFORTS.find((e) => e === level);
+}
+
+/**
+ * The level the session is REALLY on: the server's reading first (it already weighs a fresh pin
+ * against the transcript), the card's pin while there is no reading. Undefined = nobody knows yet —
+ * an unpinned card before its first reply. PURE.
+ */
+export function effortInUse(
+  card: { effort?: string | null } | null | undefined,
+  session: { effort?: string | null } | null | undefined,
+): ClaudeEffort | undefined {
+  return pinnedEffort({ effort: session?.effort }) ?? pinnedEffort(card);
 }
 
 /** Slug the token routes use to address the built-in profile, which has no account record. */

@@ -289,6 +289,13 @@ describe("user questions — AskUserQuestion over the chat", () => {
     );
   });
 
+  it("parseSdkClientFrame keeps `now` only when it is literally true, and encodeControl hands it to the driver", () => {
+    expect(parseSdkClientFrame(`{"type":"user","text":"para","now":true,"cid":"c1"}`)).toEqual({ type: "user", text: "para", now: true, cid: "c1" });
+    expect(parseSdkClientFrame(`{"type":"user","text":"para","now":"yes"}`)).toEqual({ type: "user", text: "para", cid: undefined });
+    expect(parseSdkClientFrame(`{"type":"user","text":"para"}`)).not.toHaveProperty("now");
+    expect(JSON.parse(encodeControl({ type: "user", text: "para", now: true, cid: "c1" }))).toEqual({ type: "user", text: "para", now: true });
+  });
+
   it("parseSdkClientFrame accepts a question_answer frame and refuses a malformed one", () => {
     expect(parseSdkClientFrame(`{"type":"question_answer","id":"q_1","answers":[{"selected":["A","texto livre"]}]}`)).toEqual({
       type: "question_answer", id: "q_1", answers: [{ selected: ["A", "texto livre"] }],

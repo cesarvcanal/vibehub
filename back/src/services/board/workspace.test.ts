@@ -253,6 +253,7 @@ describe("openCard", () => {
     expect(script).toContain(`VIBEHUB_CARD_ID='${card.id}'`);
     expect(script).toContain(`VIBEHUB_STATUS_URL='${STATUS_URL}'`);
     expect(script).toContain(`PW_CDP_ENDPOINT='${cardCdpEndpoint(card.id)}'`);
+    expect(script).toContain("-e VITEST_MAX_THREADS=2 -e VITEST_MIN_THREADS=1 -e VITEST_MAX_FORKS=2 -e VITEST_MIN_FORKS=1");
     expect(script).toContain(sq(claudeFor(card.id)));
 
     // the open rule: backlog → waiting
@@ -448,6 +449,8 @@ describe("terminalRemoteArgs / cardAttachArgs (the websocket's COMPLETE attach-o
       "-e", "VIBEHUB_CARD_ID=id-1", "-e", `VIBEHUB_STATUS_URL=${STATUS_URL}`,
       "-e", `PW_CDP_ENDPOINT=${cardCdpEndpoint("id-1")}`,
       "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8",
+      // test runners share the runner's cores with every card: worker cap
+      "-e", "VITEST_MAX_THREADS=2", "-e", "VITEST_MIN_THREADS=1", "-e", "VITEST_MAX_FORKS=2", "-e", "VITEST_MIN_FORKS=1",
       CLAUDE,
     ]);
   });
@@ -2081,6 +2084,10 @@ describe("buildCardPurgeScript (everything the card left on the runner's disk)",
     // `projects[<cwd>]` in .claude.json holds the PROMPT HISTORY typed in that directory.
     expect(s).toContain('if [ -f "$P/.claude.json" ]; then');
     expect(s).toContain(`"$P/.claude.json" '${CWD}'`);
+    // The DEFAULT account runs with no CLAUDE_CONFIG_DIR, so Claude keeps its state in $HOME —
+    // `/root/.claude.json`, OUTSIDE `/root/.claude`. Missing it left every default-account card's
+    // prompt history behind (22 dead cwds in production on 2026-10-20).
+    expect(s).toContain(`"/root/.claude.json" '${CWD}'`);
     expect(s).toContain("delete c.projects[w];");
   });
 

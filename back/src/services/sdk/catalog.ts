@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { dataPath } from "../../config/env.js";
 import type { CatalogEvent } from "./protocol.js";
@@ -65,4 +65,14 @@ export async function writeCardCatalog(cardId: string, catalog: CatalogEvent): P
   } catch {
     /* sem durabilidade nesta instalação: a sessão em memória ainda serve esta conexão */
   }
+}
+
+/**
+ * Apaga o catálogo do card — parte da PURGA (services/board/purge.ts). Lança quando o rm falha, para
+ * que a purga reporte o passo em vez de dizer "apagado" por cima de um arquivo que ficou.
+ */
+export async function removeCardCatalog(cardId: string): Promise<void> {
+  const file = catalogFile(cardId);
+  if (!file) return;
+  await rm(file, { force: true });
 }
