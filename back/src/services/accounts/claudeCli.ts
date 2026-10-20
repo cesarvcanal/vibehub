@@ -27,10 +27,11 @@ export const CLAUDE_MISSING_MESSAGE =
  * literal from our own code (e.g. "/login"), never user input. Returns non-zero when there is no
  * binary at all, after printing CLAUDE_MISSING_MESSAGE. `sdkGlob` exists for the tests. PURE.
  */
-export function resolvedClaudeCommand(args: string, sdkGlob: string = SDK_CLAUDE_GLOB): string {
+export function resolvedClaudeCommand(args: string, sdkGlob: string = SDK_CLAUDE_GLOB, runner: string = ""): string {
+  const run = runner ? `${runner} ` : "";
   return (
     `VIBEHUB_CLAUDE="$(command -v claude || ls -1 ${sdkGlob} 2>/dev/null | head -1)"; ` +
-    `if [ -n "$VIBEHUB_CLAUDE" ] && [ -x "$VIBEHUB_CLAUDE" ]; then "$VIBEHUB_CLAUDE" ${args}; ` +
+    `if [ -n "$VIBEHUB_CLAUDE" ] && [ -x "$VIBEHUB_CLAUDE" ]; then ${run}"$VIBEHUB_CLAUDE" ${args}; ` +
     `else echo ${shQuote(CLAUDE_MISSING_MESSAGE)}; false; fi`
   );
 }

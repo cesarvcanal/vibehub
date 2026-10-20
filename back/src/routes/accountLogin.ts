@@ -22,6 +22,17 @@ import { logger } from "../utils/logger.js";
  * The command is fixed and built from validated parts: the container from config, the profile dir
  * derived from a validated slug ("default" = the built-in profile), everything shell-quoted.
  */
+/**
+ * Deadlines for what the login panel leaves running INSIDE the runner. Closing the panel kills only
+ * the local `docker exec -it` client — the `claude /login` it started went on, one per panel ever
+ * opened (seven of them, 25-28h old, on 2026-10-20). `--foreground` keeps the TUI on the tty (a
+ * background group would be stopped on its first read); the command is the direct child, so it is
+ * the one killed. A login is minutes of work: half an hour is plenty.
+ */
+export const LOGIN_DEADLINE = "timeout --foreground -s KILL 1800";
+/** The shell left behind to read the closing message, bounded the same way. */
+export const SHELL_AFTER_LOGIN = "timeout --foreground -s KILL 300 bash";
+
 export async function accountLoginRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { slug: string } }>(
     "/api/accounts/:slug/login-terminal",
@@ -36,7 +47,8 @@ export async function accountLoginRoutes(app: FastifyInstance): Promise<void> {
       // runs on the SDK's own copy (see claudeCli.ts).
       const inner =
         `${firstRunSeedCommand(profileDir)}; ` +
-        `${resolvedClaudeCommand("/login")}; echo; echo '--- login flow ended — you can close this panel ---'; exec bash`;
+        `${resolvedClaudeCommand("/login", undefined, LOGIN_DEADLINE)}; echo; ` +
+        `echo '--- login flow ended — you can close this panel ---'; exec ${SHELL_AFTER_LOGIN}`;
       const line =
         `docker exec -it ${shQuote(config.runner.container)} ` +
         `env LANG=C.UTF-8 LC_ALL=C.UTF-8 CLAUDE_CONFIG_DIR=${shQuote(profileDir)} ` +

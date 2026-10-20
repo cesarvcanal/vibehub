@@ -67,6 +67,18 @@ describe.skipIf(process.platform === "win32")("resolvedClaudeCommand", () => {
     expect(run(glob()).out).toBe(CLAUDE_MISSING_MESSAGE);
   });
 
+  it("a runner prefix bounds the binary: a login left open is killed at the deadline", async () => {
+    await writeFile(join(globalBin, "claude"), "#!/bin/sh\nexec sleep 30\n");
+    await chmod(join(globalBin, "claude"), 0o755);
+    const started = Date.now();
+    const r = spawnSync("bash", ["-c", resolvedClaudeCommand("/login", glob(), "timeout --foreground -s KILL 1")], {
+      env: { PATH: `${globalBin}:/usr/bin:/bin` },
+      encoding: "utf8",
+    });
+    expect(r.status).toBe(137);
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
   it("looks for the SDK binary under the driver's directory by default", () => {
     expect(SDK_CLAUDE_GLOB).toBe("/root/.vibehub-sdk/node_modules/@anthropic-ai/claude-agent-sdk-linux-*/claude");
     expect(resolvedClaudeCommand("/login")).toContain(SDK_CLAUDE_GLOB);

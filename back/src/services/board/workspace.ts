@@ -1601,19 +1601,34 @@ export function lastActivityAt(card: Pick<Card, "statusAt" | "openedAt" | "human
  * life is older than `idleMs`. `working` is excluded whatever the clock says — a long task is not an
  * abandoned one, and the hooks stop talking while Claude thinks.
  *
- * `idleMs <= 0` selects NOTHING: that is how the setting spells "never hibernate". PURE/testable.
+ * `idleMs <= 0` selects no OPEN card: that is how the setting spells "never hibernate". Cards in `done`
+ * follow `DONE_HIBERNATE_MS` instead. PURE/testable.
  */
-export function cardsToHibernate<T extends Pick<Card, "id" | "openedAt" | "pausedAt" | "hibernatedAt" | "status" | "statusAt" | "humanActiveAt">>(
+export function cardsToHibernate<
+  T extends Pick<Card, "id" | "openedAt" | "pausedAt" | "hibernatedAt" | "status" | "statusAt" | "humanActiveAt"> & { column?: Card["column"] },
+>(
   cards: T[],
   now: number,
   idleMs: number,
   inUse: (cardId: string) => boolean = () => false,
 ): T[] {
-  if (!(idleMs > 0)) return [];
-  return cards.filter(
-    (c) => hasLiveSession(c) && c.status !== "working" && !inUse(c.id) && now - lastActivityAt(c) >= idleMs,
-  );
+  return cards.filter((c) => {
+    if (!hasLiveSession(c)) return false;
+    const silentFor = now - lastActivityAt(c);
+    // A FINISHED card is put to sleep on its own, short clock — whatever the idle setting says, and
+    // even with a `working` status: an agent that concludes its own card does it mid-turn, and the
+    // status the board kept can be the last `working` that never got its idle report. Silence is
+    // what counts: every hook of a really running turn moves `statusAt`. Without this, concluded
+    // cards kept a Claude (two, with the native chat) alive in the runner for days. The native-chat
+    // veto does not apply either: the driver of a finished card is exactly what is being collected,
+    // and a message typed into it moves `humanActiveAt`, which restarts this clock.
+    if (c.column === "done") return silentFor >= DONE_HIBERNATE_MS;
+    return idleMs > 0 && c.status !== "working" && !inUse(c.id) && silentFor >= idleMs;
+  });
 }
+
+/** How long a card in `done` may stay silent before its session is put to sleep. */
+export const DONE_HIBERNATE_MS = 60 * 60_000;
 
 /** True while a {@link sweepIdleCards} pass is on its way through the cards. */
 let idleSweepRunning = false;
