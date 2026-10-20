@@ -1131,8 +1131,9 @@ describe("inflight markers — trabalho que nenhuma mensagem abriu (segundo plan
   /**
    * A RETOMADA QUE NÃO RETOMOU (produção, 2026-10-20). Depois de um deploy, o turno injetado
    * fechou só com o filler "No response requested." — que o manager esconde — e o card ficou parado
-   * até alguém escrever. O `result` de um turno de retomada SEM progresso agora reenvia a ordem,
-   * uma vez, dizendo com todas as letras que não é notificação automática.
+   * até alguém escrever. Um turno de retomada que fecha SEM progresso, e segue sem sinal de vida por
+   * RESUME_CONFIRM_MS, ganha a ordem de novo — uma vez, dizendo com todas as letras que não é
+   * notificação automática.
    */
   it("retomada que fecha sem avançar (só o filler) é reenviada UMA vez, com o texto de reengate", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -1161,17 +1162,18 @@ describe("inflight markers — trabalho que nenhuma mensagem abriu (segundo plan
   /**
    * O FALSO POSITIVO (produção, 2026-10-20, logo depois do fix): ao retomar, o CLI primeiro FECHA o
    * turno velho com o filler ("No response requested.") — um `result` que chega antes de a
-   * continuação ser lida. Reenviar ali mandava a ordem duas vezes. O reenvio agora espera um
-   * instante e só vai se nada andou nesse meio-tempo.
+   * continuação ser lida. Reenviar ali mandava a ordem duas vezes. O reenvio espera a janela e só
+   * vai se nada andou nesse meio-tempo.
    */
-  it("o result do turno velho chega antes da continuação andar: NÃO reenvia", async () => {
+  it("o result do turno velho chega antes da continuação andar: NÃO reenvia", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const session = ensure();
     injectSystemTurn(session, "continue de onde parou", { kind: "system", name: "vibehub" }, 1);
     emit({ type: "assistant_text", text: "No response requested." });
     emit({ type: "result", isError: false });
     // A continuação começa a andar dentro da janela.
     emit({ type: "tool_use", id: "t1", name: "Bash", input: {} });
-    await new Promise((r) => setTimeout(r, 200));
+    vi.advanceTimersByTime(RESUME_CONFIRM_MS * 3);
     expect(spawned[0]!.stdin.written.filter((w) => w.includes('"type":"user"')).length).toBe(1);
     expect(session.activeTurns).toBe(0);
   });
@@ -2672,6 +2674,14 @@ describe("retomada automática — confirmação de que pegou", () => {
     emit({ type: "result", isError: false });
     vi.advanceTimersByTime(RESUME_CONFIRM_MS * 3);
     expect(userWrites().map((f) => f.text)).toEqual([CONT, "do outro card"]);
+  });
+
+  it("na janela o chat conta como em uso: nem hibernar nem desligar por ociosidade derrubam a retomada", () => {
+    const session = ensure();
+    injectSystemTurn(session, CONT, SYS, 1);
+    emit({ type: "result", isError: false });
+    expect(isCardChatInUse(CARD)).toBe(true);
+    expect(driverActivity(CARD)).toBe("turn");
   });
 
   it("turno de pessoa que fecha sem texto não é vigiado (o watchdog é só da retomada)", () => {

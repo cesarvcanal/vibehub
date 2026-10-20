@@ -10,6 +10,7 @@ import {
   ensureDriverSession,
   handleClientFrame,
   injectSystemTurn,
+  onDriverCrashWithWork,
   RESUME_CONFIRM_MS,
   resetSdkSessionsForTesting,
   setDriverSpawnerForTesting,
@@ -198,5 +199,36 @@ describe("sdk manager — a bolinha durante a retomada", () => {
     await flush();
     expect(applied).toEqual([{ cardId: CARD, status: "working" }, { cardId: CARD, status: "waiting" }]);
     expect(driverTurnRunning(CARD)).toBe(false);
+  });
+});
+
+/**
+ * A QUEDA DO DRIVER E A BOLINHA. O close forçava `waiting` — a transição que a central de eventos
+ * (#182) lê como "turno terminou" — e 10 s depois a retomada da queda voltava a `working`: o aviso
+ * já tinha saído para quem estava longe do quadro. Com quem retoma inscrito, a bolinha espera o
+ * veredito dele (resume.ts acerta para `waiting` quando não retoma).
+ */
+describe("sdk manager — a bolinha numa queda com trabalho em voo", () => {
+  it("com quem retome inscrito: segue trabalhando", async () => {
+    const off = onDriverCrashWithWork(() => undefined);
+    try {
+      const session = ensure();
+      handleClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
+      await flush();
+      spawned[0]!.emit("close", 137);
+      await flush();
+      expect(applied).toEqual([{ cardId: CARD, status: "working" }]);
+    } finally {
+      off();
+    }
+  });
+
+  it("sem ninguém para retomar: aguardando, como sempre", async () => {
+    const session = ensure();
+    handleClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
+    await flush();
+    spawned[0]!.emit("close", 137);
+    await flush();
+    expect(applied).toEqual([{ cardId: CARD, status: "working" }, { cardId: CARD, status: "waiting" }]);
   });
 });

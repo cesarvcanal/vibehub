@@ -346,8 +346,10 @@ export function isCardChatInUse(cardId: string): boolean {
  * dispara a tarefa fecha na hora, e um driver "ocioso" sem ninguém na aba era desligado — matando o
  * trabalho que o Claude tinha acabado de dizer que estava esperando.
  */
-function isDriverBusy(session: Pick<DriverSession, "activeTurns" | "autonomousTurn" | "backgroundTasks" | "backgroundSince">): boolean {
-  return isTurnInFlight(session) || backgroundHoldLeft(session) > 0;
+function isDriverBusy(session: Pick<DriverSession, "activeTurns" | "autonomousTurn" | "resumeWatch" | "backgroundTasks" | "backgroundSince">): boolean {
+  // A retomada que o vigia ainda espera conta (ver `turnRunning`): hibernar ou desligar por
+  // ociosidade nessa janela mataria justamente a retomada.
+  return turnRunning(session) || backgroundHoldLeft(session) > 0;
 }
 
 /**
@@ -956,7 +958,11 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     if (!succeeded) forgetDriverKeys(opts.cardId);
     // Um driver que morre com turno aberto não manda `Stop`: sem isto a bolinha ficava verde num
     // chat parado. Só sem sucessor — o seguinte já fala pelo card.
-    if (!succeeded && session.boardStatus === "working") syncBoardStatus(session, { force: true });
+    // Exceto numa QUEDA que alguém vai retomar (ver abaixo): ali `waiting` seria lido como "turno
+    // terminou" pela central de eventos, e 10 s depois o card voltava a trabalhar. Quem retoma acerta
+    // a bolinha se não retomar (resume.ts).
+    const crashWithWork = !deliberate && !succeeded && session.marker !== undefined && crashListeners.size > 0;
+    if (!succeeded && session.boardStatus === "working" && !crashWithWork) syncBoardStatus(session, { force: true });
     // A inscrição no espelho também: deixada de pé, ela escreveria no stdin de um driver morto.
     session.offOutside?.();
     delete session.offOutside;
@@ -965,8 +971,8 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     if (!succeeded) forgetCardWorkflows(opts.cardId);
     // Uma QUEDA com trabalho em voo (OOM, kill, o docker exec que morreu) e o back de pé: o marcador
     // deste processo vivo nunca seria órfão para o sweep de boot — quem retoma é avisado agora.
-    if (!deliberate && !succeeded && session.marker) {
-      const marker = session.marker;
+    if (crashWithWork) {
+      const marker = session.marker!;
       for (const listener of crashListeners) {
         try { listener(opts.cardId, marker); } catch (err) {
           // Um ouvinte não derruba o close — mas não some calado.
@@ -1434,20 +1440,20 @@ export function onDriverCrashWithWork(listener: CrashListener): () => void {
 }
 
 /**
- * A segunda chance de uma retomada que fechou SEM AVANÇAR. Produção, 2026-10-20: depois de um
- * deploy, o turno injetado voltou só com o filler do harness ("No response requested." — que o
+ * A segunda chance de uma retomada que fechou SEM AVANÇAR — depois de um deploy ou de uma queda do
+ * driver; por isso as palavras não dizem qual. Produção, 2026-10-20: depois de um deploy, o turno injetado voltou só com o filler do harness ("No response requested." — que o
  * manager esconde), e o card ficou parado até alguém escrever. Junto com os avisos de tarefa que o
  * CLI anexa ("NOT USER INPUT"), a continuação lia como mais um aviso automático. Este texto diz o
  * contrário com todas as letras.
  */
 export const RESUME_REENGAGE_TEXT =
-  "O painel retomou este card depois de um reinício e a sua última resposta não continuou o trabalho. " +
+  "O painel retomou este card depois de uma interrupção e a sua última resposta não continuou o trabalho. " +
   "Isto NÃO é uma notificação automática: é a ordem de continuar. Confira o estado atual (git status, " +
   "testes, PRs, o que estava rodando) e siga a tarefa em andamento até o fim.";
 
 /** O reengate também não avançou: nada de terceiro envio — a pessoa fica sabendo. */
 export const NOTE_RESUME_STALLED =
-  "A retomada automática depois do reinício do painel não fez o agente continuar. " +
+  "A retomada automática não fez o agente continuar. " +
   "Mande uma mensagem para ele seguir de onde parou.";
 
 /** O que o marcador diz de um turno que o próprio CLI abriu — ninguém escreveu nada. */

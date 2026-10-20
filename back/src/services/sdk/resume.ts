@@ -12,6 +12,7 @@ import {
 } from "./inflight.js";
 import { installCardSdkDriver, sdkDriverCommand } from "./driver.js";
 import { restoreMissingWorkspace } from "../board/workspace.js";
+import { reportCardStatusFromDriver } from "../board/agentState.js";
 import { BACKGROUND_HOLD_MAX_MS, SYSTEM_ORIGIN, driverTurnRunning, ensureDriverSession, injectSystemTurn, shutdownAllDrivers } from "./manager.js";
 import { stopAllMirrors } from "./mirror.js";
 import { transcriptDirFor } from "../maestro/cardSession.js";
@@ -60,7 +61,8 @@ export const RESUME_CONTINUATION_TEXT =
   "Retome a tarefa em andamento e conclua o que estava fazendo.";
 
 /**
- * A continuação de um turno que tinha trabalho em segundo plano: o reinício matou essas tarefas e o
+ * A continuação de um turno que tinha trabalho em segundo plano: a interrupção (deploy ou queda do
+ * driver) matou essas tarefas e o
  * aviso de término delas nunca virá. Sem dizer isso, o agente "retomava" esperando por um resultado
  * que não chega — ou nem havia retomada, e o card parava calado no meio da entrega. PURE.
  */
@@ -68,7 +70,7 @@ export function resumeContinuationText(marker: InflightMarker, base: string = RE
   const tasks = marker.background?.tasks ?? [];
   if (tasks.length === 0) return base;
   const list = tasks.slice(0, 8).map((t) => `- ${t}`).join("\n");
-  return `${base} O reinício também encerrou o que estava rodando em segundo plano — ` +
+  return `${base} A interrupção também encerrou o que estava rodando em segundo plano — ` +
     `o resultado disso não vai chegar:\n${list}\nConfira o estado atual, rode de novo o que ainda for ` +
     `necessário e siga até o fim.`;
 }
@@ -82,8 +84,6 @@ export function isStaleBackgroundOnly(marker: InflightMarker, now: number): bool
   return !!bg && bg.idle && now - bg.since > BACKGROUND_HOLD_MAX_MS;
 }
 
-/** Quem assina a linha e o turno injetado: o painel, nunca uma pessoa (definido no manager). */
-export { SYSTEM_ORIGIN };
 
 /** Retomadas automáticas seguidas, no máximo, sem uma mensagem de pessoa no meio. */
 export const MAX_AUTO_RESUMES = 5;
@@ -113,7 +113,7 @@ export const NOTE_RESUME_FAILED =
   "A retomada automática falhou antes de chegar ao Claude. Mande uma mensagem para continuar.";
 
 /** As palavras de uma retomada: o que o card lê e o que o agente recebe, conforme a causa. */
-export interface ResumeTexts {
+interface ResumeTexts {
   cause: "restart" | "crash";
   resuming: string;
   notAgain: string;
@@ -149,6 +149,9 @@ export const CRASH_TEXTS: ResumeTexts = {
     "de fora, sem reinício do painel). Retome a tarefa em andamento e conclua o que estava fazendo.",
 };
 
+/** Este processo recebeu SIGTERM (handOffSdkOnShutdown). */
+let shuttingDown = false;
+
 /** Quanto a retomada de uma queda espera: o runner que derrubou o driver (memória, reinício) respira antes. */
 export const CRASH_RESUME_DELAY_MS = 10_000;
 
@@ -171,6 +174,10 @@ export interface ResumeDeps {
   ownerAlive: typeof isInflightOwnerAlive;
   /** Um driver deste card está com turno rodando agora (o sucessor que a pessoa já usou). */
   turnRunning: (cardId: string) => boolean;
+  /** Este processo recebeu SIGTERM: quem retoma agora é o processo novo, não este. */
+  stopping: () => boolean;
+  /** A bolinha vai a `waiting` — a queda que não virou retomada (o manager a segurou em `working`). */
+  reportIdle: (cardId: string) => void;
   wait: (ms: number) => Promise<void>;
 }
 
@@ -190,6 +197,8 @@ const realDeps: ResumeDeps = {
   selfOwner: INFLIGHT_OWNER,
   ownerAlive: isInflightOwnerAlive,
   turnRunning: driverTurnRunning,
+  stopping: () => shuttingDown,
+  reportIdle: (cardId) => reportCardStatusFromDriver(cardId, "waiting"),
   wait: (ms) => new Promise((resolve) => { setTimeout(resolve, ms).unref?.(); }),
 };
 
@@ -268,8 +277,9 @@ export async function resumeInterruptedTurns(deps: ResumeDeps = realDeps): Promi
 
 /**
  * UM card cujo turno morreu: a linha visível e, se as regras deixam, a retomada. A mesma para o
- * boot (deploy) e para a queda do driver; só as palavras mudam. Nunca lança. "gone" = o card não
- * existe mais (marcador varrido em silêncio).
+ * boot (deploy) e para a queda do driver; só as palavras mudam. Nunca lança. "skipped" = nada a
+ * dizer nem a retomar: o card sumiu ou foi parado de propósito (marcador varrido em silêncio), ou a
+ * conversa andou durante a preparação.
  */
 async function resumeCard(
   cardId: string,
@@ -285,6 +295,12 @@ async function resumeCard(
     const project = card ? await deps.getProject(card.projectId) : undefined;
     if (!card || !project) {
       // The card is gone (deleted between the marker and this boot): nothing to tell, no one to tell it to.
+      await deps.clearMarker(cardId);
+      return "skipped";
+    }
+    if (!registry.hasLiveSession(card)) {
+      // Pausado ou hibernado depois da queda: o card foi parado DE PROPÓSITO — a pausa não teve driver
+      // vivo para limpar o marcador (ele já tinha caído). Retomar seria desfazer a decisão da pessoa.
       await deps.clearMarker(cardId);
       return "skipped";
     }
@@ -320,6 +336,7 @@ async function resumeCard(
     // A preparação leva segundos (install, workspace, comando): se nesse meio-tempo a conversa
     // SEGUIU — a pessoa escreveu num driver que o reconnect subiu, e o marcador já é o turno dela —
     // a continuação cairia em cima do turno de alguém. Conferido aqui, logo antes de injetar.
+    if (deps.stopping()) return "skipped"; // o marcador fica: é o recado para o processo novo
     if (await conversationMovedOn(cardId, marker, deps)) {
       logger.info({ audit: true, action: "sdk.resume.superseded", card: card.worktreeSlug }, "the conversation moved on while the resume was being prepared — not injected");
       return "skipped";
@@ -371,15 +388,24 @@ export async function resumeAfterDriverCrash(
   crashed: InflightMarker,
   deps: ResumeDeps = realDeps,
 ): Promise<"resumed" | "noted" | "skipped"> {
+  let outcome: "resumed" | "noted" | "skipped" = "skipped";
   try {
     await deps.wait(CRASH_RESUME_DELAY_MS);
+    // SIGTERM na espera: o marcador é o recado para o processo novo, que retoma ele mesmo.
+    if (deps.stopping()) return "skipped";
     // Conferido já aqui também: uma queda superada não ganha nem a linha "retomando…".
-    if (await conversationMovedOn(cardId, crashed, deps)) return "skipped";
-    return await resumeCard(cardId, crashed, await deps.settings(), deps, () => deps.installDriver(), CRASH_TEXTS);
+    if (!(await conversationMovedOn(cardId, crashed, deps))) {
+      outcome = await resumeCard(cardId, crashed, await deps.settings(), deps, () => deps.installDriver(), CRASH_TEXTS);
+    }
   } catch (err) {
     logger.warn({ card: cardId, detail: (err as Error).message }, "could not resume after an sdk driver crash");
-    return "skipped";
+    // Deixado, o marcador deste processo vivo seria retomado no próximo deploy, fora de hora.
+    await deps.clearMarker(cardId).catch(() => undefined);
   }
+  // O manager segurou a bolinha em `working` à espera deste veredito: sem retomada e sem turno
+  // vivo noutro driver, ela vai a `waiting` — o "turno terminou" de verdade, uma vez.
+  if (outcome !== "resumed" && !deps.stopping() && !deps.turnRunning(cardId)) deps.reportIdle(cardId);
+  return outcome;
 }
 
 /**
@@ -392,6 +418,7 @@ export async function resumeAfterDriverCrash(
  * Síncrono — o docker stop dá segundos, não promessas.
  */
 export function handOffSdkOnShutdown(): void {
+  shuttingDown = true; // uma retomada de queda em espera não sobe mais nada (ver resumeAfterDriverCrash)
   try { stopAllMirrors(); } catch { /* best-effort by design */ }
   try { shutdownAllDrivers(); } catch { /* best-effort by design */ }
   releaseInflightOwnerSync();
