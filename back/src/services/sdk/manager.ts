@@ -605,7 +605,13 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
       );
     }
   }
-  if (event.type === "user_question") session.ownQuestions.add(event.id);
+  if (event.type === "user_question") {
+    session.ownQuestions.add(event.id);
+    // Uma pergunta NOVA é onde a conversa está: a órfã de antes do reinício já não é o que o agente
+    // espera (em geral é a mesma, refeita pela retomada). Respondida a nova pelo clique, a velha
+    // ficava cobrando na bandeja — só uma mensagem a varria.
+    void settleOrphanQuestions(session);
+  }
   if (!silenced) broadcast(session, event);
   if (event.type === "conversation_reset" && (event.trigger === undefined || event.trigger === "clear")) {
     // O /clear limpou o CONTEXTO do modelo; o log do card tem de ir junto, senão o F5 devolvia a
@@ -1092,7 +1098,9 @@ function settleQuestionCard(session: DriverSession, result: Extract<DriverEvent,
 }
 
 /**
- * FALAR É RESPONDER, também para a órfã. Com o driver vivo, uma mensagem libera o cartão que ele
+ * FALAR É RESPONDER, também para a órfã — e a conversa SEGUIR também é: qualquer turno que entra
+ * no modelo (mensagem, retomada automática, a resposta de outra órfã) ou uma pergunta nova do driver
+ * vivo encerra as órfãs. Com o driver vivo, uma mensagem libera o cartão que ele
  * espera (`supersedePendingQuestions` no driver). A órfã não tem driver para isso: ficava pendente
  * no histórico e a bandeja voltava a pedir uma resposta que a pessoa acabara de dar.
  */
@@ -1166,6 +1174,9 @@ async function answerOrphanQuestion(session: DriverSession, control: QuestionAns
   session.answeringOrphans.delete(control.id);
   session.settledOrphans.add(control.id);
   settleQuestionCard(session, { type: "question_result", id: control.id, answers: control.answers, sent: text });
+  // A conversa seguiu com ESTA resposta: as outras órfãs (perguntas de drivers ainda mais antigos)
+  // saem junto, como sairiam com uma mensagem.
+  void settleOrphanQuestions(session);
   logger.info(
     { audit: true, action: "sdk.question.orphan", card: session.label },
     "an answer to a question whose driver died was delivered as a message",
@@ -1195,6 +1206,9 @@ function chargeReceipt(session: DriverSession, sent: AcceptedSend): Promise<bool
 export function injectSystemTurn(session: DriverSession, text: string, origin: MessageOrigin, attempts: number): void {
   try { session.child.stdin.write(encodeControl({ type: "user", text })); } catch { /* driver gone; close will fire */ }
   recordInjectedTurn(session, text, origin);
+  // A retomada é um turno como outro qualquer: o agente refaz a pergunta que o reinício cortou, e a
+  // órfã não pode ficar de pé ao lado dela (produção, 2026-10-19 — a pessoa respondeu duas vezes).
+  void settleOrphanQuestions(session);
   const marker: InflightMarker = { startedAt: Date.now(), preview: inflightPreview(text), attempts };
   session.resumeAwaitingProgress = marker;
   putMarker(session, marker);
