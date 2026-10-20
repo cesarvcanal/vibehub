@@ -2160,6 +2160,43 @@ describe("SdkChatView — subagentes", () => {
     type: "tool_use", id: "t1", name: "Agent", input: { description: "explora o chat", subagent_type: "Explore" },
   };
 
+  it("o tempo do subagente rodando anda sozinho, sem esperar progresso novo do CLI", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready" });
+      ws.deliver(agentCall);
+      // o relógio do runner não entra: um startedAt de outro relógio não muda o que a tela mostra
+      ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "running", toolUses: 18, durationMs: 186_000, startedAt: 1 });
+      const agent = within(screen.getByTestId("sdk-fleet")).getByTestId("sdk-fleet-agent");
+      // o relógio real também anda com `shouldAdvanceTime`: um runner lento pode somar um segundo
+      expect(agent).toHaveTextContent(/3m 0[67]s/);
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(agent).toHaveTextContent(/4m 0[67]s/);
+
+      // a faixa de segundo plano mostra o mesmo relógio
+      ws.deliver({ type: "background_tasks", tasks: [{ id: "b1", type: "local_agent", description: "explora o chat", toolUseId: "t1" }] });
+      expect(screen.getByTestId("sdk-background-task")).toHaveTextContent(/4m 0[678]s/);
+
+      // o modal do subagente conta junto com a linha da frota
+      fireEvent.click(agent);
+      expect(await screen.findByTestId("sdk-agent-elapsed")).toHaveTextContent(/4m 0[678]s/);
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(screen.getByTestId("sdk-agent-elapsed")).toHaveTextContent(/5m 0[6789]s/);
+
+      // terminado, o relógio para na duração final
+      ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "completed", toolUses: 20, durationMs: 250_000 });
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(agent).toHaveTextContent("4m 10s");
+      expect(screen.getByTestId("sdk-agent-elapsed")).toHaveTextContent("4m 10s");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("o subagente vira uma linha da frota; o clique abre a linha do tempo dele, pedida ao back", async () => {
     renderSdkChat();
     const ws = await socket();

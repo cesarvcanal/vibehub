@@ -22,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useNow, usePageVisible } from "@/lib/useNow";
 import { wsUrl } from "@/lib/ws";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/providers/auth";
@@ -58,7 +59,7 @@ import { reasoningTranslator, useReasoningTranslation } from "@/features/board/l
 import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
 import { ToolDiffCard } from "@/features/board/components/ToolDiffCard";
 import { FleetPanel, FleetRow, SdkDetailContext, SdkDetailHost, SdkFleet, StatusIcon, ToolResultText, useChangedFiles, type DetailView } from "@/features/board/components/SdkDetail";
-import { DetailChannelContext, createDetailChannel, parseDetailResponse, toolStatus, type DetailChannel } from "@/features/board/lib/sdkDetail";
+import { DetailChannelContext, agentElapsedMs, createDetailChannel, parseDetailResponse, toolStatus, type DetailChannel } from "@/features/board/lib/sdkDetail";
 import { toolDiff } from "@/features/board/lib/toolDiff";
 import {
   buildDecisionReply,
@@ -409,7 +410,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         }
         // Qualquer outro evento entra DEPOIS dos tokens que chegaram antes dele.
         flushDeltas();
-        commitState((prev) => applySdkEvent(prev, parsed));
+        // O estado de um subagente leva a hora em que chegou, no relógio desta aba: é dali que o
+        // tempo de quem roda conta (o relógio do runner pode não bater com o do navegador).
+        const stamped = parsed.type === "agent_task" ? { ...parsed, receivedAt: Date.now() } : parsed;
+        commitState((prev) => applySdkEvent(prev, stamped));
       };
       next.onerror = () => {
         /* onclose always follows */
@@ -1390,6 +1394,8 @@ function SdkChangesButton({ rows }: { rows: readonly SdkRow[] }) {
 function SdkBackgroundTray({ tasks, agentTasks, rows }: { tasks: readonly BackgroundTask[]; agentTasks: SdkChatState["agentTasks"]; rows: readonly SdkRow[] }) {
   const t = useT();
   const { open } = React.useContext(SdkDetailContext);
+  // A faixa só existe com trabalho rodando: o relógio anda enquanto ela está à vista.
+  const now = useNow(usePageVisible());
   return (
     <FleetPanel
       testId="sdk-background-tasks"
@@ -1415,7 +1421,7 @@ function SdkBackgroundTray({ tasks, agentTasks, rows }: { tasks: readonly Backgr
             name={task.description.trim() || t("sdk.backgroundUnnamed")}
             now={live?.summary || live?.lastTool || ""}
             actions={live?.toolUses}
-            durationMs={live?.durationMs}
+            durationMs={agentElapsedMs("running", live, undefined, now)}
             onClick={id ? () => open(isAgent ? { kind: "agent", id } : { kind: "action", id }) : undefined}
           />
         );

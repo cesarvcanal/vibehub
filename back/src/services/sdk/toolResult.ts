@@ -178,6 +178,10 @@ export interface AgentTaskEvent {
   summary?: string;
   /** Quando o back viu a tarefa começar (ms) — o relógio da tela. */
   startedAt?: number;
+  /** Quando chegou o último frame do CLI desta tarefa (ms, relógio do back). */
+  lastAt?: number;
+  /** Só no que sai para a aba (taskSnapshot): há quanto tempo a tarefa está calada. */
+  quietMs?: number;
 }
 
 const STATUSES = new Set(["completed", "failed", "stopped"]);
@@ -191,6 +195,7 @@ export function mergeTaskEvent(previous: AgentTaskEvent | undefined, raw: RawTas
     type: "agent_task",
     toolUseId,
     taskId: raw.taskId,
+    lastAt: now,
   };
   if (raw.description) next.description = raw.description.slice(0, 300);
   if (raw.subagentType) next.subagentType = raw.subagentType.slice(0, 80);
@@ -211,4 +216,24 @@ export function mergeTaskEvent(previous: AgentTaskEvent | undefined, raw: RawTas
     next.status = "running";
   }
   return next;
+}
+
+/**
+ * Silêncio do subagente além do qual o relógio para: quem morreu sem aviso (o driver caiu antes do
+ * `task_notification`) não conta para sempre. O mesmo teto do front (AGENT_CLOCK_STALE_MS).
+ */
+export const TASK_CLOCK_STALE_MS = 30 * 60_000;
+
+/**
+ * O subagente como sai para uma aba — ao vivo e ao conectar. O `durationMs` guardado é o do último
+ * frame do CLI que trouxe uso, e o progresso periódico muitas vezes vem sem: repassá-lo fazia a aba
+ * voltar no tempo. Rodando, o tempo vai até agora no relógio do back (o mesmo do `startedAt`, sem
+ * diferença com o do navegador), nunca menos do que o CLI mediu e parado no teto de silêncio; e
+ * `quietMs` diz à aba há quanto tempo ele está calado, para ela parar no mesmo teto. PURE.
+ */
+export function taskSnapshot(task: AgentTaskEvent, now: number): AgentTaskEvent {
+  if (task.status !== "running" || task.startedAt === undefined) return task;
+  const lastAt = task.lastAt ?? now;
+  const until = Math.min(now, lastAt + TASK_CLOCK_STALE_MS);
+  return { ...task, durationMs: Math.max(task.durationMs ?? 0, until - task.startedAt), quietMs: Math.max(0, now - lastAt) };
 }

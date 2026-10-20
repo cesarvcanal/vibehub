@@ -2,12 +2,14 @@ import * as React from "react";
 import { Bot, Brain, ChevronLeft, ChevronRight, CircleCheck, CircleX, Copy, FileDiff, GitBranch, Loader2, Maximize2, MessageSquare, Wrench } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { useNow, usePageVisible } from "@/lib/useNow";
 import { useT } from "@/i18n";
 import { Markdown } from "@/features/board/components/ChatView";
 import { toolHeadline, type AgentTask, type SdkRow, type ToolResultSummary } from "@/features/board/lib/sdkChat";
 import { hunksToRows, toolDiff } from "@/features/board/lib/toolDiff";
 import { DiffView, SyntaxText, useCodeTokens } from "@/features/board/components/DiffView";
 import {
+  agentElapsedMs,
   agentName,
   agentStatus,
   bashOutput,
@@ -207,6 +209,8 @@ export function SdkFleetView({ rows, tasks, children }: FleetProps) {
   const statuses = agents.map((row) => agentStatus(row, tasks[row.id]));
   const done = statuses.filter((s) => s === "ok" || s === "error").length;
   const running = statuses.filter((s) => s === "running").length;
+  const visible = usePageVisible();
+  const now = useNow(running > 0 && visible);
   return (
     <FleetPanel
       testId="sdk-fleet"
@@ -220,18 +224,19 @@ export function SdkFleetView({ rows, tasks, children }: FleetProps) {
         const task = tasks[row.id];
         const kids = children.get(row.id) ?? [];
         const lastKid = [...kids].reverse().find((k) => k.kind === "tool") as ToolRow | undefined;
-        const now = task?.status === "running" || !task
+        const status = statuses[i] as ToolStatus;
+        const doing = task?.status === "running" || !task
           ? task?.summary || (task?.lastTool ? task.lastTool : lastKid ? toolHeadline(lastKid.name, lastKid.input).title : "")
           : t(task.status === "completed" ? "sdk.fleet.finished" : "sdk.fleet.stopped");
         return (
           <FleetRow
             key={row.id}
             testId="sdk-fleet-agent"
-            status={statuses[i] as ToolStatus}
+            status={status}
             name={agentName(row.input)}
-            now={now}
+            now={doing}
             actions={task?.toolUses ?? row.result?.agent?.toolUses ?? kids.filter((k) => k.kind === "tool").length}
-            durationMs={task?.durationMs ?? row.result?.agent?.durationMs}
+            durationMs={agentElapsedMs(status, task, row.result?.agent, now)}
             onClick={() => open({ kind: "agent", id: row.id })}
           />
         );
@@ -589,6 +594,9 @@ function AgentView({
   const task = tasks[id];
   const status = row ? agentStatus(row, task) : task ? (task.status === "running" ? "running" : task.status === "completed" ? "ok" : "error") : "unknown";
   const running = status === "running";
+  const visible = usePageVisible();
+  const now = useNow(running && visible);
+  const elapsed = agentElapsedMs(status, task, row?.result?.agent, now);
   const [tab, setTab] = React.useState<"timeline" | "task" | "report">("timeline");
   const { data, loading, error } = useDetail<AgentTimelineData>("agent", { id }, id, running ? AGENT_POLL_MS : undefined);
   const timeline = data && data.found ? data : null;
@@ -617,7 +625,7 @@ function AgentView({
         <DialogDescription asChild>
           <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
             {timeline?.startedAt ? <span>{t("sdk.detail.started", { at: formatTime(timeline.startedAt) })}</span> : null}
-            {task?.durationMs ? <span>{formatDuration(task.durationMs)}</span> : null}
+            {elapsed ? <span data-testid="sdk-agent-elapsed">{formatDuration(elapsed)}</span> : null}
             {typeof toolUses === "number" ? <span>{t("sdk.result.actions", { n: toolUses })}</span> : null}
             {task?.tokens ? <span>{t("sdk.detail.tokens", { n: formatTokens(task.tokens) })}</span> : null}
           </div>

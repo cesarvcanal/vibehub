@@ -119,6 +119,10 @@ export interface SdkEvent {
   phases?: string[];
   /** Quando a rodada começou (ms). */
   startedAt?: number;
+  /** On `agent_task`: quando ESTA aba recebeu o frame (relógio dela), carimbado na chegada. */
+  receivedAt?: number;
+  /** On `agent_task`: há quanto tempo o subagente estava calado quando o back mandou o frame. */
+  quietMs?: number;
   /** A contagem do diário INTEIRO — a lista de `agents` tem teto, ela não. */
   total?: number;
   done?: number;
@@ -250,6 +254,10 @@ export interface AgentTask {
   /** Rodando: o que ele faz agora. Terminado: o resumo final. */
   summary?: string;
   startedAt?: number;
+  /** Quando ESTA aba recebeu este estado, no relógio dela — de onde o tempo de quem roda conta. */
+  receivedAt?: number;
+  /** Há quanto tempo o subagente estava calado quando o back mandou este estado. */
+  quietMs?: number;
 }
 
 /** One question of a `user_question` (mirror of `UserQuestionItem` in the back's protocol). */
@@ -1225,6 +1233,8 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         ...(typeof event.lastTool === "string" ? { lastTool: event.lastTool } : {}),
         ...(typeof event.summary === "string" ? { summary: event.summary } : {}),
         ...(num(event.startedAt) !== undefined ? { startedAt: num(event.startedAt) } : {}),
+        ...(num(event.receivedAt) !== undefined ? { receivedAt: num(event.receivedAt) } : {}),
+        ...(num(event.quietMs) !== undefined ? { quietMs: num(event.quietMs) } : {}),
       };
       return { ...state, agentTasks: { ...state.agentTasks, [task.toolUseId]: task } };
     }

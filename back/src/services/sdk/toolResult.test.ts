@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { firstErrorLine, lineCount, mergeTaskEvent, summarizeToolResult, toolResultEvent } from "./toolResult.js";
+import { firstErrorLine, lineCount, mergeTaskEvent, summarizeToolResult, TASK_CLOCK_STALE_MS, taskSnapshot, toolResultEvent } from "./toolResult.js";
 import { replayableHistoryEvent } from "./history.js";
 
 describe("summarizeToolResult — a linha de resultado de cada ação", () => {
@@ -91,5 +91,41 @@ describe("mergeTaskEvent — o estado de um subagente", () => {
 
   it("status desconhecido no fim vira concluído", () => {
     expect(mergeTaskEvent(undefined, { type: "task_notification", taskId: "k", toolUseId: "u", status: "weird" }, 0)!.status).toBe("completed");
+  });
+});
+
+/**
+ * O TEMPO QUE SAI PARA A ABA. O `durationMs` do CLI só vem com uso (`usage`), e o progresso que o
+ * CLI manda a cada ~30s muitas vezes vem sem: repassar o guardado fazia a aba voltar no tempo. Todo
+ * frame de subagente que sai (ao vivo ou ao conectar) leva o tempo de AGORA no relógio do back, e
+ * há quanto tempo ele está calado — para a aba parar o relógio de quem morreu sem aviso.
+ */
+describe("taskSnapshot — o subagente como sai para a aba", () => {
+  const running = mergeTaskEvent(undefined, { type: "task_started", taskId: "k", toolUseId: "u" }, 1_000)!;
+
+  it("rodando: o tempo vai até agora, mesmo com um progresso sem uso (durationMs velho)", () => {
+    const measured = mergeTaskEvent(running, { type: "task_progress", taskId: "k", durationMs: 120_000 }, 121_000)!;
+    const noUsage = mergeTaskEvent(measured, { type: "task_progress", taskId: "k", summary: "Rodando o jest" }, 241_000)!;
+    expect(noUsage.durationMs).toBe(120_000);
+    expect(taskSnapshot(noUsage, 241_000)).toMatchObject({ durationMs: 240_000, quietMs: 0 });
+  });
+
+  it("calado: diz há quanto tempo, e o tempo para no teto de silêncio", () => {
+    const moving = mergeTaskEvent(running, { type: "task_progress", taskId: "k", durationMs: 50_000 }, 51_000)!;
+    expect(taskSnapshot(moving, 51_000 + 60_000)).toMatchObject({ durationMs: 110_000, quietMs: 60_000 });
+    // morto sem aviso: cinco horas depois, uma aba que conecta não vê cinco horas
+    const later = taskSnapshot(moving, 51_000 + 5 * 3_600_000);
+    expect(later.durationMs).toBe(50_000 + TASK_CLOCK_STALE_MS);
+    expect(later.quietMs).toBe(5 * 3_600_000);
+  });
+
+  it("nunca menos do que o CLI já mediu (o startedAt é de quando ESTE back viu a tarefa)", () => {
+    const afterRestart = mergeTaskEvent(undefined, { type: "task_progress", taskId: "k", toolUseId: "u", durationMs: 300_000 }, 1_000)!;
+    expect(taskSnapshot(afterRestart, 2_000).durationMs).toBe(300_000);
+  });
+
+  it("terminado: a duração final, intocada (e o mesmo objeto)", () => {
+    const done = { ...mergeTaskEvent(running, { type: "task_notification", taskId: "k", status: "completed" }, 5_000)!, durationMs: 4_000 };
+    expect(taskSnapshot(done, 999_999)).toBe(done);
   });
 });

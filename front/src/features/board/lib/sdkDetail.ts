@@ -14,14 +14,16 @@ import type { DiffRow } from "@/features/board/lib/toolDiff";
 
 /* ------------------------------------------------------------ a linha de resultado */
 
-/** Duração legível: `850 ms`, `4,2 s`, `1m 24s`. PURE. */
+/** Duração legível: `850 ms`, `4,2 s`, `1m 24s`, `3h 07m`. PURE. */
 export function formatDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return "";
   if (ms < 1000) return `${Math.round(ms)} ms`;
   const s = ms / 1000;
   if (s < 60) return `${s.toFixed(1).replace(".", translate("sdk.result.decimal"))} s`;
   const whole = Math.floor(s);
-  return `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, "0")}s`;
+  const minutes = Math.floor(whole / 60);
+  if (minutes < 60) return `${minutes}m ${String(whole % 60).padStart(2, "0")}s`;
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
 
 /** Quantos tokens, curto: `900`, `41 mil` / `41k`. PURE. */
@@ -82,6 +84,32 @@ export function agentStatus(row: Extract<SdkRow, { kind: "tool" }>, task: AgentT
     return row.result.background ? (row.live ? "running" : "unknown") : "ok";
   }
   return row.live ? "running" : "unknown";
+}
+
+/**
+ * Silêncio do subagente além do qual o relógio para: quem morreu sem aviso não conta para sempre.
+ * O mesmo teto do back (TASK_CLOCK_STALE_MS em back/src/services/sdk/toolResult.ts).
+ */
+export const AGENT_CLOCK_STALE_MS = 30 * 60_000;
+
+/**
+ * Há quanto tempo o subagente trabalha. O back manda, em todo frame, o tempo até aquele instante
+ * no relógio dele; rodando, a aba soma o tempo desde que recebeu o frame, no relógio DELA (sem
+ * diferença entre os dois), até o teto de silêncio — que já começa gasto pelo `quietMs` com que o
+ * frame saiu. Terminado, a duração final. Rodando, em segundos inteiros: um relógio que anda de
+ * segundo em segundo não mostra décimos. PURE.
+ */
+export function agentElapsedMs(
+  status: ToolStatus,
+  task: AgentTask | undefined,
+  result: ToolResultSummary["agent"] | undefined,
+  now: number,
+): number | undefined {
+  const measured = task?.durationMs ?? result?.durationMs;
+  if (status !== "running" || task?.receivedAt === undefined) return measured;
+  const budget = Math.max(0, AGENT_CLOCK_STALE_MS - (task.quietMs ?? 0));
+  const silence = Math.min(Math.max(0, now - task.receivedAt), budget);
+  return Math.floor(((measured ?? 0) + silence) / 1000) * 1000;
 }
 
 /** O nome de um subagente pela chamada: a descrição que o modelo deu, senão o tipo. PURE. */
