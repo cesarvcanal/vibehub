@@ -298,12 +298,6 @@ export function startOutboxFlusher(intervalMs = OUTBOX_TICK_MS): void {
   ticker.unref?.();
 }
 
-export function stopOutboxFlusher(): void {
-  if (!ticker) return;
-  clearInterval(ticker);
-  ticker = null;
-}
-
 /**
  * Records WHO sent a message that just landed in the terminal.
  *
