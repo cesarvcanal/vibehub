@@ -532,7 +532,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    * socket aceitou" (which a half-open connection also does, into the void) and "o servidor tem".
    */
   const sendTurn = React.useCallback(
-    (frame: { type: "user" | "edit_user"; text: string; original?: string; first?: boolean }, shown: string, cid: string): void => {
+    (frame: { type: "user" | "edit_user"; text: string; original?: string; first?: boolean; now?: boolean }, shown: string, cid: string): void => {
       const entry: OutboxMessage = {
         cid,
         text: shown,
@@ -772,7 +772,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    * campo (nada rodando) ou da fila (o turno anterior acabou de fechar).
    */
   const dispatchTurn = React.useCallback(
-    (text: string): void => {
+    (text: string, now = false): void => {
       // `ultrathink` / `ultracode` no que está indo AGORA: o driver sobe o esforço DESTE turno, e a
       // barra de atividade é onde isso fica visível — o painel escalava em silêncio. Lido na
       // entrega, não na digitação: uma mensagem que esperou escala o turno que ELA abre.
@@ -783,7 +783,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       // the status ladder: "Preparando…"/"Pensando…" until the driver's first event.
       const cid = newCid();
       setState((prev) => appendUserRow(prev, text, selfOriginRef.current, { awaiting: true, cid, state: "sending" }));
-      sendTurn({ type: "user", text }, text, cid);
+      sendTurn(now ? { type: "user", text, now: true } : { type: "user", text }, text, cid);
     },
     [sendTurn],
   );
@@ -807,9 +807,11 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    *
    * Esperar é o padrão certo — uma mensagem dobrada no meio de um raciocínio entra como interrupção
    * de contexto, não como pergunta nova. Mas nem todo recado quer esperar: "para, tá errado", "o
-   * que você tá fazendo?" são justamente para AGORA, e o driver aceita (a mensagem entra no turno
-   * em andamento e volta marcada "entrou no turno em andamento" — o `turn_absorbed`). Então a
-   * espera é uma ESCOLHA da pessoa, não uma sentença da tela.
+   * que você tá fazendo?" são justamente para AGORA. Vai com `now`: se uma ferramenta está rodando,
+   * o driver a interrompe e a mensagem abre um turno novo — empurrada sem isso, o CLI só a lia quando
+   * a ferramenta devolvesse (um deploy preso deixou a pessoa falando sozinha por 24 min). Sem
+   * ferramenta rodando, ela entra no turno em andamento (o `turn_absorbed`). Então a espera é uma
+   * ESCOLHA da pessoa, não uma sentença da tela.
    *
    * Sem fio de pé nada sai da fila: forçar um envio que não pode acontecer só trocaria uma mensagem
    * guardada por uma bolha condenada — exatamente o que a fila existe para não fazer.
@@ -823,7 +825,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     }
     setQueue((prev) => dequeue(prev, id));
     try {
-      dispatchTurn(target.text);
+      dispatchTurn(target.text, true);
     } catch (err) {
       toast.error((err as Error).message);
     }
