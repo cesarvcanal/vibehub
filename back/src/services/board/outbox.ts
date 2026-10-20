@@ -304,12 +304,6 @@ export function stopOutboxFlusher(): void {
   ticker = null;
 }
 
-/** Tests only. */
-export function resetOutboxForTesting(): void {
-  store.resetForTesting();
-  flushLocks.clear();
-}
-
 /**
  * Records WHO sent a message that just landed in the terminal.
  *

@@ -198,7 +198,3 @@ export async function markSetupCompleted(): Promise<Settings> {
     return doc.settings;
   });
 }
-
-export function resetSettingsForTesting(): void {
-  store.resetForTesting();
-}

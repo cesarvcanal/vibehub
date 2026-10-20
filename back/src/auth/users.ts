@@ -236,7 +236,3 @@ export async function removeUser(userId: string): Promise<PublicUser> {
     return publicUser(user);
   });
 }
-
-export function resetUsersForTesting(): void {
-  store.resetForTesting();
-}

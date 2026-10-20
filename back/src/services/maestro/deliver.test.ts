@@ -72,10 +72,13 @@ describe("buildPushAndPrScript", () => {
     const dockerLine = s.split("\n").find((l) => l.startsWith("docker exec")) ?? "";
     expect(dockerLine).toContain("docker exec -i");
     expect(dockerLine).not.toContain(TOKEN);
-    // the token is only ever written by printf (a bash builtin — no argv), inside the heredoc body
+    // the token only ever appears in an `export` (a bash builtin — no argv), inside the heredoc body
     const tokenLines = s.split("\n").filter((l) => l.includes(TOKEN));
     expect(tokenLines.length).toBe(1);
-    expect(tokenLines[0]).toContain("printf '%s'");
+    expect(tokenLines[0]).toContain("export GH_TOKEN=");
+    // and the CARD's token file is not touched: rewriting it here raced the card's own author
+    // switch and could leave the next author's commits pushing with this delivery's token
+    expect(s).not.toContain("/root/.vibehub/gh/");
     // git push is force-with-lease, and the PR targets the given branch
     expect(s).toContain("git push --force-with-lease origin 'card/fix-1'");
     expect(s).toContain("gh pr create --base 'dev' --head 'card/fix-1' --fill");

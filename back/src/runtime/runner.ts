@@ -3,6 +3,7 @@ import { config } from "../config/env.js";
 import { hostExecutor, shQuote, HostExecError } from "./host.js";
 import { secretEnsure, secretGet } from "../secrets/vault.js";
 import { logger } from "../utils/logger.js";
+import { installGhWrapperLines } from "../services/github/runnerIdentity.js";
 
 /**
  * THE RUNNER — one container where every card's terminal lives. It is a plain Docker container
@@ -197,17 +198,13 @@ export function buildSetupScript(opts: {
     `git config --global user.name ${shQuote(git.name)}`,
     `git config --global user.email ${shQuote(git.email)}`,
     "git config --global --add safe.directory '*'",
-    // `gh` SHIM. The install-wide identity above is only the FALLBACK: a card's real author and
-    // credential are written per-worktree when the card opens, and rewritten whenever the person
-    // working it changes (see services/board/workspace.ts buildIdentityScript). `git` picks that up
-    // by itself — it reads config and runs the credential helper on every call. `gh` does not: it
-    // reads GH_TOKEN from the environment, which the tmux session exported ONCE when it was born.
-    // Without this shim, a `gh pr create` typed into a session that was opened by somebody else
-    // would open the PR as that person, silently. Reading the file at call time fixes it.
-    "grep -q VIBEHUB_GH_SHIM /root/.bashrc 2>/dev/null || cat >> /root/.bashrc <<'VIBEHUB_GH_SHIM'",
-    "# VIBEHUB_GH_SHIM",
-    'gh() { local f="/root/.vibehub/gh/$VIBEHUB_CARD_ID.token"; if [ -n "$VIBEHUB_CARD_ID" ] && [ -s "$f" ]; then GH_TOKEN="$(cat "$f")" command gh "$@"; else command gh "$@"; fi; }',
-    "VIBEHUB_GH_SHIM",
+    // `gh` WRAPPER. The install-wide identity above is only the FALLBACK: a card's real author and
+    // credential follow whoever sent it the latest order, rewritten in per-card FILES on every switch
+    // (services/board/workspace.ts buildIdentityScript). git reads those by itself; gh reads a token
+    // from its environment, which is frozen when a process is born. The wrapper, ahead of the real gh
+    // in PATH, hands it the card's file on every call — for every process, not only a shell that
+    // sources .bashrc (where a function-shim used to live, unseen by the native chat's Claude).
+    ...installGhWrapperLines(),
     "cat > /root/.claude/settings.json <<'VIBEHUB_SETTINGS'",
     settingsJson,
     "VIBEHUB_SETTINGS",
@@ -334,12 +331,6 @@ async function readRunnerStatus(): Promise<RunnerStatusView> {
     const detail = err instanceof HostExecError ? err.message : String(err);
     return { ...base, detail };
   }
-}
-
-/** Drops the cached status — tests and hot-reload only. */
-export function resetRunnerStatusCacheForTesting(): void {
-  lastStatus = null;
-  statusInFlight = null;
 }
 
 /** Starts a stopped runner (after a host reboot, say). */

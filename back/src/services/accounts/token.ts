@@ -43,20 +43,25 @@ export function assertOauthToken(token: string): string {
  * GITHUB token per card — lets the card's own `git push` / `gh pr` act as the PROJECT's GitHub
  * connection (the account the project connected) instead of the runner's ambient `gh` login (the org). Same rules as the
  * Claude token: the value is written to a per-card file inside the runner over STDIN (mode 600,
- * never argv, never logged), and the session exports `GH_TOKEN` by reading that file. The runner's
- * git credential helper is already `gh auth git-credential`, so a set `GH_TOKEN` steers BOTH `git`
- * and `gh` to the connection identity — while cards without a connection keep the ambient login.
+ * never argv, never logged). Nothing exports it into a session: the card's git credential helper and
+ * the `gh` wrapper read that file on EVERY call (github/runnerIdentity.ts), so a change of author
+ * reaches processes already running — while cards without a connection keep the ambient login.
  */
-const GH_TOKEN_DIR = "/root/.vibehub/gh";
+export const GH_TOKEN_DIR = "/root/.vibehub/gh";
 /** A card id is a uuid; keep the charset tight so it can name a file safely. PURE. */
 const CARD_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 /** A GitHub token (ghp_…, github_pat_…, gho_…, or a classic 40-hex): safe charset, no spaces. */
 const GH_TOKEN_RE = /^[A-Za-z0-9_]{20,255}$/;
 
+/** A card id safe to name a per-card file in the runner. THROWS otherwise. PURE. */
+export function assertCardFileId(cardId: string): string {
+  if (!CARD_ID_RE.test(cardId)) throw new Error(`invalid card id: ${cardId}`);
+  return cardId;
+}
+
 /** Per-card file that holds the GitHub token inside the runner. THROWS on a bad id. PURE. */
 export function ghTokenPath(cardId: string): string {
-  if (!CARD_ID_RE.test(cardId)) throw new Error(`invalid card id: ${cardId}`);
-  return `${GH_TOKEN_DIR}/${cardId}.token`;
+  return `${GH_TOKEN_DIR}/${assertCardFileId(cardId)}.token`;
 }
 
 /** A GitHub token sane enough to go into a script (still shell-quoted). THROWS otherwise. PURE. */
@@ -69,11 +74,15 @@ export function assertGhToken(token: string): string {
 /** Script lines that WRITE the card's GitHub token (mode 600) inside the runner. PURE. */
 export function writeGhTokenLines(cardId: string, token: string): string[] {
   const file = ghTokenPath(cardId);
+  // Temp file + rename: a gh or git push reading mid-write would see an EMPTY file, and the gh
+  // wrapper treats an empty file as "no token" — the runner's own login, the org account.
   return [
     `mkdir -p ${shQuote(GH_TOKEN_DIR)}`,
     "umask 077",
-    `printf '%s' ${shQuote(assertGhToken(token))} > ${shQuote(file)}`,
-    `chmod 600 ${shQuote(file)}`,
+    `T=$(mktemp ${shQuote(`${file}.XXXXXX`)})`,
+    `printf '%s' ${shQuote(assertGhToken(token))} > "$T"`,
+    `chmod 600 "$T"`,
+    `mv -f "$T" ${shQuote(file)}`,
   ];
 }
 

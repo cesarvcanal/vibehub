@@ -286,17 +286,20 @@ is `requireCardWork`.
   header. It never lands in `/work/<repo>/.git/config`, which the agent can read — and the agent
   processes untrusted repository content with network egress.
 - **Whose** token and whose commit author: resolved field by field as **card actor → project →
-  install** (`services/github/identity.ts`). The actor is whoever touched the card last at `work`
-  level (`services/board/actor.ts`); a card with no actor resolves exactly as it did before actors
-  existed. So two people sharing a card each commit as themselves.
-- That identity is applied **per worktree** and READ AT CALL TIME, never exported into the session:
-  `GH_TOKEN` is exported once when the tmux session is born, so rewriting the card's token file
-  would not reach a session somebody else opened — the push would silently go out as the previous
-  person. Instead the commit author is `--local` git config in the worktree, the credential helper
-  `cat`s the card's token file on every git call (with the helper list RESET first, or the global
-  `gh auth git-credential` answers earlier with the stale token), and a `gh` shim in `/root/.bashrc`
-  re-exports `GH_TOKEN` from that file before delegating. Switching actor is two `git config` calls
-  and one file write — no session restart, no lost conversation.
+  install** (`services/github/identity.ts`). The actor is whoever sent the card its latest ORDER at
+  `work` level — a chat message, a keystroke in its terminal, a maestro relay, a delivery
+  (`services/board/actor.ts`); opening or watching a card never takes the authorship. A card with no
+  actor resolves exactly as it did before actors existed. So two people sharing a card each commit
+  as themselves.
+- That identity is enforced through per-card FILES read AT CALL TIME, never exported into a session
+  (a process's environment is frozen at birth, so a `GH_TOKEN` exported then would push as the
+  previous person after a switch). Every card process is born with `GIT_CONFIG_*` env including a
+  per-card git config (author + a github.com-only credential helper that `cat`s the card's token
+  file, after resetting the helper list), so it holds in the worktree and in any other repo the card
+  clones; `/usr/local/bin/gh` is a wrapper that reads the same token file on every call
+  (`services/github/runnerIdentity.ts`). Applications are serialized per card, and a chat message
+  from a new author is held until that person's identity landed — no session restart, no lost
+  conversation.
 - The **runner service token** is written host-side into the `/root` bind mount at mode 600, so it
   survives a container recreate, and the status hook reads it from disk at call time rather than
   having it baked into `settings.json`.

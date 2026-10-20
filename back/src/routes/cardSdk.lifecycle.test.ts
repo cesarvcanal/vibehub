@@ -23,13 +23,18 @@ const h = vi.hoisted(() => ({
   install: null as null | { promise: Promise<void>; resolve: () => void },
   acquireCalls: 0,
   externalSubscriptions: 0,
+  /** Who the route stamped as the card's author, in order. */
+  stamps: [] as string[],
 }));
 
 // A rota lê o autor com `requestUser` (o usuário que o gate já resolveu); sem gate aqui, ninguém.
-vi.mock("../auth/session.js", () => ({ requestUser: () => Promise.resolve(null) }));
-vi.mock("../services/board/actor.js", () => ({
-  recordCardActor: () => Promise.resolve(),
-  authorsTheTurn: () => false,
+vi.mock("../auth/session.js", () => ({
+  requestUser: () => Promise.resolve({ id: "u-mussa", username: "mussa", role: "member", createdAt: "" }),
+}));
+vi.mock("../services/board/actor.js", async (importOriginal) => ({
+  authorsTheTurn: (await importOriginal<typeof import("../services/board/actor.js")>()).authorsTheTurn,
+  isCardActor: () => false,
+  recordCardActor: (user: { id: string } | null) => { h.stamps.push(user?.id ?? "-"); return Promise.resolve(); },
 }));
 vi.mock("../services/settings/settings.js", () => ({ getSettings: () => Promise.resolve({ sdkDriver: true }) }));
 vi.mock("../services/board/registry.js", async (importOriginal) => {
@@ -136,6 +141,7 @@ beforeEach(() => {
   spawnedCount = 0;
   h.acquireCalls = 0;
   h.externalSubscriptions = 0;
+  h.stamps = [];
   let resolve: () => void = () => undefined;
   const promise = new Promise<void>((r) => { resolve = r; });
   h.install = { promise, resolve };
@@ -182,5 +188,23 @@ describe("/api/cards/:id/sdk — a aba que fecha no meio do setup", () => {
     expect(isCardChatInUse(CARD)).toBe(false);
     expect(h.acquireCalls).toBe(0);
     expect(h.externalSubscriptions).toBe(0);
+  });
+});
+
+describe("/api/cards/:id/sdk — só a ORDEM troca o autor do card", () => {
+  it("conectar (abrir o card para olhar) não carimba ninguém; a mensagem carimba", async () => {
+    const handler = await captureHandler();
+    const socket = fakeSocket();
+    h.install?.resolve();
+    await handler(socket as unknown as WebSocket, { params: { id: CARD } });
+    await new Promise((r) => setTimeout(r, 0));
+    // O Mussa só abriu o card em que o César pediu um review: a autoria do review segue do César.
+    expect(h.stamps).toEqual([]);
+
+    socket.emit("message", Buffer.from(`{"type":"interrupt"}`));
+    expect(h.stamps).toEqual([]);
+    socket.emit("message", Buffer.from(`{"type":"user","text":"corrige o que o review apontou"}`));
+    expect(h.stamps).toEqual(["u-mussa"]);
+    socket.close();
   });
 });

@@ -186,3 +186,40 @@ César Canal.
 Pré-requisitos operacionais (não são código):
 1. O Mussa cola o PAT dele na tela de GitHub do vibehub, label `mussa`. O token não passa por chat.
 2. O César cria o usuário `mussa` com senha de 8+ caracteres e vincula essa conexão a ele.
+
+## Revisão 2026-10-20 — a autoria segue quem deu a última ORDEM, em todo git e gh do card
+
+Caso real: o César pediu um review de PR num card; depois o Mussa mandou "corrige". O review, o
+merge e o apagar da branch saíram como a conta da org — e corrigir isso exigia dizer "use meu PAT".
+
+### O que estava errado
+
+1. **`gh` = conta da org.** O shim do `/root/.bashrc` (seção D.3) só existia em runner
+   reprovisionado depois dele, e só um shell que lê `.bashrc` o via: o Claude do chat nativo, scripts
+   e MCPs rodavam o `/usr/bin/gh` logado como `multiversoatacado`.
+2. **`GH_TOKEN` exportado no boot da sessão tmux** — credencial congelada; depois de uma troca de
+   autor, empurrava como a pessoa anterior.
+3. **Clones extras** (`_repos/<repo>`, regra "terminal sem cerca") commitavam como o global do runner
+   (`vibehub`) e empurravam com o login da org: a config `--worktree` só vale na worktree.
+4. **Abrir/olhar trocava o autor** (connect do chat nativo, `/open`, anexar o terminal): quem só
+   abria o card tomava a autoria do trabalho em andamento de outra pessoa.
+5. **A troca era fire-and-forget**: a mensagem chegava ao agente antes da identidade nova, e duas
+   trocas seguidas podiam aterrissar fora de ordem.
+6. O helper de credencial respondia a **qualquer host** com o PAT do GitHub.
+
+### Como ficou
+
+| Peça | Arquivo |
+|---|---|
+| `/usr/local/bin/gh`: wrapper que lê `/root/.vibehub/gh/<card>.token` a cada chamada (substitui o shim); instalado no setup do runner e em toda aplicação de identidade | `back/src/services/github/runnerIdentity.ts` |
+| Todo processo do card nasce com `GIT_CONFIG_COUNT/KEY_0/VALUE_0` = `include.path=/root/.vibehub/git/<card>.gitconfig` (escopo de comando): autor + credencial em qualquer repositório; arquivo reescrito a cada troca | idem; `workspace.ts` (tmux), `sdk/driver.ts` |
+| Sem `GH_TOKEN` no boot da sessão | `workspace.ts` `sessionCommand` |
+| Helper de credencial só para `https://github.com` (worktree e include) | `runnerIdentity.ts` |
+| Só ORDEM carimba: mensagem do chat, prompt do composer, digitar no terminal, send/deliver do MCP externo, e a ordem delegada por outro card (`relayCardActor`) | `actor.ts`, `cardSdk.ts`, `session.ts`, `mcp/*` |
+| `recordCardActor` espera a identidade aterrissar (limite 20 s); o chat segura a mensagem de quem assume o card — e o que vem depois no mesmo socket — até lá | `actor.ts`, `sdk/manager.ts` `attachSocket` |
+| Uma aplicação de identidade por vez por card, resolvida na hora de rodar; a abertura resolve de novo depois do clone; o driver só nasce com a identidade aplicada | `workspace.ts` `syncCardIdentity`, `cardSdk.ts` |
+
+Limite conhecido: no terminal tmux a tecla vai ao pty na hora; a troca começa no primeiro caractere
+e aterrissa (< 1 s) bem antes de o agente agir sobre o Enter, mas não é segurada como no chat.
+Sessões tmux nascidas antes do deploy mantêm o `GH_TOKEN` antigo no ambiente — o wrapper o ignora,
+mas o git de clones extras nelas só pega o include ao reiniciar a sessão.

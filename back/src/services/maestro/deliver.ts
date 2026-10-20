@@ -8,7 +8,7 @@ import { tokenFor } from "../github/client.js";
 import { resolveIdentity } from "../github/identity.js";
 import { getUserGit } from "../../auth/userGit.js";
 import { getSettings } from "../settings/settings.js";
-import { ghTokenPath, writeGhTokenLines } from "../accounts/token.js";
+import { assertGhToken } from "../accounts/token.js";
 import { runGate, cleanOutput, type GateResult } from "./gate.js";
 import { logger } from "../../utils/logger.js";
 
@@ -16,11 +16,10 @@ import { logger } from "../../utils/logger.js";
  * DELIVER — "sobe pra X": take a card's branch and ship it, as the card's ACTOR.
  *
  * The whole flow runs SERVER-SIDE and every git/gh command runs in the runner authenticated as the
- * person who worked the card last (falling back to the project's connection, which is what every
- * card did before actors existed) — the token is fetched with `tokenFor(identity.connectionId)` and passed
- * to the runner over STDIN inside the script (the same per-card `GH_TOKEN` file the card session
- * already uses), NEVER in argv and never in a log line. The runner's git credential helper is
- * `gh auth git-credential`, so a set `GH_TOKEN` steers both `git push` and `gh`.
+ * person who sent the card its latest order (falling back to the project's connection) — the token is
+ * fetched with `tokenFor(identity.connectionId)` and exported as the script's own `GH_TOKEN` over
+ * STDIN, NEVER in argv and never in a log line. `gh` reads it; the push goes through the worktree's
+ * credential helper, which reads the card's token file — the same identity, already in place.
  *
  * Steps:
  *   a. push the card branch (`--force-with-lease` — the card owns its branch).
@@ -88,11 +87,12 @@ export const CI_WAIT_SECONDS = 15 * 60;
 export const CI_APPEAR_SECONDS = 2 * 60;
 
 /** Lines that plant the connection token and export `GH_TOKEN` from it (token over stdin only). PURE. */
-export function ghTokenPreamble(cardId: string, token: string): string[] {
+export function ghTokenPreamble(token: string): string[] {
   return [
     "set -e",
-    ...writeGhTokenLines(cardId, token),
-    `export GH_TOKEN="$(cat ${shQuote(ghTokenPath(cardId))})"`,
+    // This script's OWN credential, never the card's token file: rewriting that file here raced the
+    // card's author switch (the next author's pushes would go out with this delivery's token).
+    `export GH_TOKEN=${shQuote(assertGhToken(token))}`,
     // From here we handle failures ourselves and fold stderr in, so the output is capturable.
     "set +e",
     "exec 2>&1",
@@ -115,7 +115,7 @@ export function buildPushAndPrScript(
 ): string {
   assertSafeRemotePath(cwd);
   const body = [
-    ...ghTokenPreamble(cardId, token),
+    ...ghTokenPreamble(token),
     `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
     `if ! git push --force-with-lease origin ${shQuote(branch)}; then echo "${MARKER} error push"; exit 0; fi`,
     `URL=$(gh pr list --head ${shQuote(branch)} --base ${shQuote(target)} --state open --json url --jq '.[0].url' 2>/dev/null)`,
@@ -139,7 +139,7 @@ export function buildMergeScript(
 ): string {
   assertSafeRemotePath(cwd);
   const body = [
-    ...ghTokenPreamble(cardId, token),
+    ...ghTokenPreamble(token),
     `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
     `if gh pr merge ${shQuote(prUrl)} --merge; then echo "${MARKER} merged"; else echo "${MARKER} error merge"; fi`,
   ];
@@ -158,7 +158,7 @@ export function buildCiChecksScript(
   const rounds = Math.ceil(CI_WAIT_SECONDS / CI_POLL_SECONDS);
   const appearRounds = Math.ceil(CI_APPEAR_SECONDS / CI_POLL_SECONDS);
   const body = [
-    ...ghTokenPreamble(cardId, token),
+    ...ghTokenPreamble(token),
     `cd ${shQuote(cwd)} || { echo "${CI_MARKER} error"; exit 0; }`,
     `WF=0; for f in .github/workflows/*.yml .github/workflows/*.yaml; do [ -e "$f" ] && WF=1; done`,
     `HEAD=$(git rev-parse HEAD)`,

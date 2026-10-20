@@ -155,6 +155,19 @@ describe("buildSetupScript", () => {
     expect(script).toContain("npm i -g @anthropic-ai/claude-code");
     expect(script).toContain("playwright install");
   });
+  it("installs the gh WRAPPER right after gh itself — and no longer plants the `.bashrc` shim", () => {
+    const lines = buildSetupScript(base).split("\n");
+    const gh = lines.findIndex((l) => l.includes("apt-get install -y -qq gh"));
+    const wrapper = lines.findIndex((l) => l.includes("VIBEHUB_GH_WRAPPER"));
+    expect(gh).toBeGreaterThan(-1);
+    // After: the wrapper only installs over a real /usr/bin/gh.
+    expect(wrapper).toBeGreaterThan(gh);
+    expect(lines.join("\n")).toContain("/usr/local/bin/gh");
+    // The shim was a bash FUNCTION: only a shell that sources .bashrc ever saw it — not the native
+    // chat's Claude, not a script — so `gh` there ran as the runner's own login.
+    expect(lines.join("\n")).not.toContain("VIBEHUB_GH_SHIM");
+  });
+
   it("clears npm's leftover staging dir before installing Claude Code, and fails without a claude on PATH", () => {
     const lines = buildSetupScript(base).split("\n");
     const cleanup = lines.findIndex((l) => l.includes("@anthropic-ai/.claude-code-*"));

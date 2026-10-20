@@ -19,7 +19,7 @@
  * Tudo aqui é puro ou trivialmente falsificável — as regras são testes, não capturas de tela.
  */
 
-import { parseOrigin, type MessageOrigin } from "@/features/board/lib/chat";
+import { originRole, parseOrigin, type MessageOrigin } from "@/features/board/lib/chat";
 import type { OutboxMessage } from "@/features/board/lib/sdkOutbox";
 
 /** Uma mensagem escrita, ainda não entregue, ainda editável. */
@@ -44,6 +44,12 @@ export interface QueuedMessage {
    * errado (ver `foreignToOutbox`).
    */
   from?: MessageOrigin;
+  /**
+   * O recibo de um envio que JÁ saiu e voltou pra cá (ver `outboxToQueue`). Despachada com ele, a
+   * mensagem que o servidor afinal tinha é só a cobrança do recibo (`acceptedCids` no back), nunca
+   * um segundo turno. Some quando o texto é reescrito: aí é outra mensagem.
+   */
+  cid?: string;
 }
 
 const QUEUE_PREFIX = "vibehub.sdkQueue.";
@@ -72,6 +78,7 @@ export function readQueue(cardId: string): QueuedMessage[] {
         at: typeof m.at === "number" ? m.at : Date.now(),
         // localStorage é entrada não confiável: um autor malformado vira "sem autor", nunca lixo.
         from: parseOrigin(m.from),
+        cid: typeof m.cid === "string" ? m.cid : undefined,
       }));
   } catch {
     return [];
@@ -148,7 +155,7 @@ export function updateQueued(
   at: number,
 ): QueuedMessage[] {
   if (!messages.some((m) => m.id === id)) return [...messages, { id, text, at }];
-  return messages.map((m) => (m.id === id ? { ...m, text, at, editing: false } : m));
+  return messages.map((m) => (m.id === id ? { ...m, text, at, editing: false, cid: undefined } : m));
 }
 
 /**
@@ -177,4 +184,48 @@ export function foreignToOutbox(
     }
   }
   return { own, foreign };
+}
+
+/** Até quando uma mensagem perdida sem veredito volta pra fila sozinha (ver `outboxToQueue`). */
+export const REQUEUE_MAX_AGE_MS = 10 * 60_000;
+
+/**
+ * O CAMINHO DE VOLTA: uma mensagem que o servidor NÃO tem (a reconciliação do reconnect a deu por
+ * `missing`) e que nunca recebeu veredito volta pra FILA — e o despacho a entrega quando o chat
+ * terminar de carregar, como qualquer outra espera.
+ *
+ * O bug que isto fecha (produção, 2026-10-20): o chat estava recarregando (reconexão, setup do
+ * driver) e a pessoa mandou uma mensagem. O frame ficou no buffer do back, o F5 fechou o socket no
+ * meio do setup e o back o descartou ("closed during setup — nothing attached"). No reload ela
+ * voltava "não entregue ao servidor", pedindo um Reenviar para algo que só precisava ESPERAR.
+ *
+ * Fica de fora, com reenviar/descartar como antes:
+ * - a que já levou veredito (`undelivered`: recusa do back ou prazo vencido numa conexão que podia
+ *   responder) — o servidor falhou com ela, e reenviar sozinho em laço é pior que perguntar;
+ * - a que nunca saiu deste navegador (`unsent`) ou é de OUTRA conta — sair por esta conexão a
+ *   gravaria no nome errado. Sem leitor conhecido ainda (`/auth/me` em voo) ela VAI pra fila: é a
+ *   fila que separa as de outra conta quando ele chega (`foreignToOutbox`), e a reconciliação roda
+ *   uma vez só — decidir "não é minha" no escuro a condenava para sempre;
+ * - a correção de mensagem já enviada (`original`): ela não é um texto solto, é um supersede;
+ * - a VELHA (`REQUEUE_MAX_AGE_MS`): um "sobe pra prod" de três dias atrás, de uma aba fechada antes
+ *   do recibo, não pode virar turno sozinho ao abrir o card — ela volta marcada e a pessoa decide.
+ * PURE.
+ */
+export function outboxToQueue(
+  missing: readonly OutboxMessage[],
+  viewer: string | undefined,
+  now: number,
+): { queued: QueuedMessage[]; kept: OutboxMessage[] } {
+  const queued: QueuedMessage[] = [];
+  const kept: OutboxMessage[] = [];
+  for (const m of missing) {
+    const own = viewer === undefined || originRole(m.from, viewer) === "self";
+    const fresh = now - m.at < REQUEUE_MAX_AGE_MS;
+    if (own && fresh && !m.undelivered && !m.unsent && m.original === undefined) {
+      queued.push({ id: m.cid, cid: m.cid, text: m.text, at: m.at, ...(m.from ? { from: m.from } : {}) });
+    } else {
+      kept.push(m);
+    }
+  }
+  return { queued, kept };
 }

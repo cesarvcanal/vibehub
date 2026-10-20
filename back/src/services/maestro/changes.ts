@@ -75,7 +75,7 @@ export function buildChangesScript(
   const baseName = assertBranchName(base);
   const section = (name: string) => `echo "${MARKER} ${name}"`;
   const body = [
-    ...(token ? ghTokenPreamble(cardId, token) : ["set +e"]),
+    ...(token ? ghTokenPreamble(token) : ["set +e"]),
     `cd ${shQuote(cwd)} 2>/dev/null || { echo "${MARKER} error cwd"; exit 0; }`,
     section("branch"),
     "git rev-parse --abbrev-ref HEAD 2>/dev/null",

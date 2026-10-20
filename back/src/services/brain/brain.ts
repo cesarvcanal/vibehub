@@ -472,7 +472,3 @@ export async function appendProjectLearning(
   }
   return result;
 }
-
-export function resetBrainStoreForTesting(): void {
-  store.resetForTesting();
-}

@@ -1022,14 +1022,17 @@ describe("inflight markers — trabalho que nenhuma mensagem abriu (segundo plan
     emit({ type: "background_tasks", tasks: [] });
     emit({ type: "assistant_text", text: "Front verde. Entregando." });
     emit({ type: "tool_use", id: "t2", name: "mcp__vibehub__vibehub_deliver", input: { branch: "main" } });
-    await settle();
-    const marker = await readInflightMarker(CARD);
-    expect(marker).not.toBeNull();
-    expect(marker!.background).toBeUndefined();
+    // ESPERA a gravação, não um relógio: o marcador vai a disco por uma fila assíncrona, e os 20 ms
+    // fixos que estavam aqui não bastam numa máquina ocupada (falhava rodando o arquivo sozinho).
+    await vi.waitFor(async () => {
+      const marker = await readInflightMarker(CARD);
+      expect(marker).not.toBeNull();
+      expect(marker!.background).toBeUndefined();
+    });
     // o deploy: SIGTERM no back
     shutdownAllDrivers();
     await settle();
-    expect(await readInflightMarker(CARD)).not.toBeNull();
+    await vi.waitFor(async () => expect(await readInflightMarker(CARD)).not.toBeNull());
   });
 
   it("turno aberto pelo CLI sem segundo plano anunciado: marcador enquanto roda, some no result dele", async () => {
@@ -2368,6 +2371,63 @@ describe("rate_limit — o aviso de limite do plano", () => {
     spawned[0]!.stdout.emit("data", line({ type: "rate_limit", status: "whatever", window: "five_hour" }));
     spawned[0]!.stdout.emit("data", line({ type: "rate_limit", status: "rejected" }));
     expect(parsed(s1)).toEqual([]);
+  });
+});
+
+/**
+ * A ORDEM ESPERA A IDENTIDADE DE QUEM A DEU. Quando a mensagem é de outra pessoa (troca de autor), o
+ * driver só a recebe depois que o token e o autor dela aterrissaram no runner — e o que vem depois,
+ * desse socket, não passa na frente dela.
+ */
+describe("attachSocket — beforeTurn segura a mensagem até a identidade aterrissar", () => {
+  const writesOf = (text: string) => spawned[0]!.stdin.written.filter((w) => w.includes(text));
+
+  it("sem troca pendente, o frame vai na hora (nada de await por mensagem)", () => {
+    const session = ensure();
+    const s1 = fakeSocket();
+    attachSocket(session, s1 as never, undefined, { beforeTurn: () => undefined });
+    s1.emit("message", Buffer.from(`{"type":"user","text":"commita"}`));
+    expect(writesOf("commita").length).toBe(1);
+  });
+
+  it("com troca pendente, a mensagem espera — e a interrupção que veio depois não a ultrapassa", async () => {
+    const session = ensure();
+    const s1 = fakeSocket();
+    let landed!: () => void;
+    const identity = new Promise<void>((r) => { landed = r; });
+    attachSocket(session, s1 as never, undefined, {
+      beforeTurn: (raw) => (raw.includes("corrige") ? identity : undefined),
+    });
+    s1.emit("message", Buffer.from(`{"type":"user","text":"corrige o review"}`));
+    s1.emit("message", Buffer.from(`{"type":"interrupt"}`));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(writesOf("corrige o review").length).toBe(0);
+    expect(writesOf(`"interrupt"`).length).toBe(0);
+
+    landed();
+    await new Promise((r) => setTimeout(r, 20));
+    const written = spawned[0]!.stdin.written;
+    const user = written.findIndex((w) => w.includes("corrige o review"));
+    const stop = written.findIndex((w) => w.includes(`"interrupt"`));
+    expect(user).toBeGreaterThan(-1);
+    expect(stop).toBeGreaterThan(user);
+  });
+
+  it("o funil devolvido entrega os frames guardados no setup pela MESMA fila", async () => {
+    const session = ensure();
+    const s1 = fakeSocket();
+    let landed!: () => void;
+    const identity = new Promise<void>((r) => { landed = r; });
+    const feed = attachSocket(session, s1 as never, undefined, {
+      beforeTurn: (raw) => (raw.includes("primeira") ? identity : undefined),
+    });
+    feed(`{"type":"user","text":"primeira"}`);
+    s1.emit("message", Buffer.from(`{"type":"user","text":"segunda"}`));
+    landed();
+    await new Promise((r) => setTimeout(r, 20));
+    const written = spawned[0]!.stdin.written;
+    expect(written.findIndex((w) => w.includes("segunda"))).toBeGreaterThan(written.findIndex((w) => w.includes("primeira")));
+    expect(writesOf("primeira").length).toBe(1);
   });
 });
 
