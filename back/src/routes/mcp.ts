@@ -49,7 +49,15 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
       return await reply.code(401).send({ error: "invalid or missing MCP token" });
     }
 
-    const server = actor === "external" && user ? createMcpServer("external", user) : createMcpServer(actor);
+    // The credential, checked again while an event stream stays open (a stream must not outlive it).
+    const principal = async () => {
+      if (actor === "card") return tokenMatches(bearer, await runnerToken()) ? null : false;
+      if (actor === "external") return (await userForAccessToken(bearer)) ?? false;
+      return (await currentUser(request))?.role === "owner" ? null : false;
+    };
+    const server = actor === "external" && user
+      ? createMcpServer("external", user, principal)
+      : createMcpServer(actor, undefined, principal);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     reply.raw.on("close", () => {
       void transport.close();

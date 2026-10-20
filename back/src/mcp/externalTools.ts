@@ -11,6 +11,7 @@ import {
 import { readCardChanges } from "../services/maestro/changes.js";
 import { deliver } from "../services/maestro/deliver.js";
 import { inboxFor, markDelivered, takeUndelivered, type CardEvent } from "../services/events/cardEvents.js";
+import { sendAnswer } from "./events.js";
 import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX, type CardMoveOutcome } from "./cardMove.js";
 import { logger } from "../utils/logger.js";
 
@@ -250,10 +251,13 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         "like), not a fragment. Also how you ANSWER a card's pending question (say the chosen option). " +
         "Returns `sentAt`: pass it to vibehub_wait_for_card as `since`. Fails clearly when the card " +
         "has no live session (open it first), when no Claude is running there, or when its terminal " +
-        "is waiting on a menu choice.",
+        "is waiting on a menu choice. Answering an event that asked for something (a pushed card.event " +
+        "with needsAnswer, or an inbox entry)? Pass its eventId as `inReplyTo`: the card is told which " +
+        "question this answers, and the event closes.",
       inputSchema: {
         cardId: z.string().describe("id of the destination card (from vibehub_list_terminals)"),
         text: z.string().min(1).describe("the instruction, self-contained"),
+        inReplyTo: z.string().optional().describe("the eventId this message answers (card.event / inbox)"),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
@@ -261,14 +265,14 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
       try {
         await requireLevel(user, a.cardId, "work");
         const sentAt = Date.now();
-        const sent = await sendToTerminal(a.cardId, a.text, {
+        const sent = await sendAnswer(a.cardId, a.inReplyTo, a.text, (text) => sendToTerminal(a.cardId, text, {
           by: user.id,
           beforeDeliver: () => recordCardActor(user, a.cardId),
           guardInteractiveMenu: true,
           requireAgent: true,
           viaNativeChat: true,
           origin: { kind: user.role === "owner" ? "owner" : "user", name: user.username },
-        });
+        }));
         return ok({ ...sent, sentAt, next: "call vibehub_wait_for_card with this cardId and since=sentAt" });
       } catch (e) {
         return fail(e);
