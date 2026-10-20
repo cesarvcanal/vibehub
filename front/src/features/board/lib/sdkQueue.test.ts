@@ -171,19 +171,19 @@ describe("sdkQueue — o caminho de volta (outboxToQueue)", () => {
 
   it("a que se perdeu sem veredito volta pra fila, com o texto, a hora e o autor", () => {
     const { queued, kept } = outboxToQueue([{ cid: "c1", text: "oi", at: 5, from: me }], "cesar");
-    expect(queued).toEqual([{ id: "c1", text: "oi", at: 5, from: me }]);
+    expect(queued).toEqual([{ id: "c1", cid: "c1", text: "oi", at: 5, from: me }]);
     expect(kept).toEqual([]);
   });
 
   it("sem autor (gravada antes do campo) é de quem está na aba", () => {
-    expect(outboxToQueue([{ cid: "c1", text: "oi", at: 5 }], "cesar").queued).toEqual([{ id: "c1", text: "oi", at: 5 }]);
+    expect(outboxToQueue([{ cid: "c1", text: "oi", at: 5 }], "cesar").queued).toEqual([{ id: "c1", cid: "c1", text: "oi", at: 5 }]);
     expect(outboxToQueue([{ cid: "c1", text: "oi", at: 5 }], undefined).queued).toHaveLength(1);
   });
 
   it("fica no outbox: veredito dado, nunca enviada, de outra conta, correção, ou leitor desconhecido", () => {
     const cases = [
       { cid: "a", text: "x", at: 1, undelivered: true },
-      { cid: "b", text: "x", at: 1, unsent: true, undelivered: true, from: other },
+      { cid: "b", text: "x", at: 1, unsent: true },
       { cid: "c", text: "x", at: 1, from: other },
       { cid: "d", text: "novo", at: 1, original: "velho" },
     ];
@@ -199,5 +199,12 @@ describe("sdkQueue — o caminho de volta (outboxToQueue)", () => {
       "cesar",
     );
     expect(queued.map((m) => m.id)).toEqual(["1", "3"]);
+  });
+
+  it("o recibo sobrevive ao disco e some quando o texto é reescrito (aí é outra mensagem)", () => {
+    writeQueue("cx", [{ id: "q", cid: "c9", text: "a", at: 1 }]);
+    const [read] = readQueue("cx");
+    expect(read!.cid).toBe("c9");
+    expect(updateQueued([read!], "q", "b", 2)[0]!.cid).toBeUndefined();
   });
 });

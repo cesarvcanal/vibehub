@@ -582,25 +582,22 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     const live = liveUserCids(state.rows);
     const pending = outboxRef.current.filter((m) => !live.has(m.cid));
     if (pending.length === 0) return;
-    const reconciled = reconcileOutbox(deliveredUserTexts(state.rows, viewer), pending);
-    const { delivered } = reconciled;
-    // A que se perdeu sem veredito (o F5 no meio do carregamento) volta pra FILA e sai sozinha
-    // quando o chat estiver pronto — na frente do que foi escrito depois dela (ver `outboxToQueue`).
-    const { queued, kept: missing } = outboxToQueue(reconciled.missing, viewer);
+    const { delivered, missing: lost } = reconcileOutbox(deliveredUserTexts(state.rows, viewer), pending);
+    // A que se perdeu sem veredito volta pra FILA e sai sozinha quando o chat estiver pronto — na
+    // frente do que foi escrito depois dela (ver `outboxToQueue`).
+    const { queued, kept: missing } = outboxToQueue(lost, viewer);
     if (queued.length > 0) {
       // O ref já na hora: o despacho roda neste MESMO commit (também acordado pelo `ready`) e, lendo
       // a fila de antes, mandaria na frente o que foi escrito depois.
       queueRef.current = [...queued, ...queueRef.current];
       setQueue(queueRef.current);
     }
-    if (delivered.length > 0 || reconciled.missing.length > 0) {
+    if (delivered.length > 0 || lost.length > 0) {
       // Entregue (ou devolvida à fila) sai do outbox; a que o servidor não tem FICA, já com o
       // veredito dado — o outbox é a cópia recuperável dela, e uma entrada vencida que ninguém
       // marca é o que fazia o watchdog derrubar o socket em todo tique.
-      setOutbox((prev) => markUndelivered(
-        [...delivered, ...queued.map((q) => ({ cid: q.id }))].reduce((acc, m) => dropFromOutbox(acc, m.cid), prev),
-        missing.map((m) => m.cid),
-      ));
+      const gone = new Set([...delivered.map((m) => m.cid), ...queued.map((q) => q.cid)]);
+      setOutbox((prev) => markUndelivered(prev.filter((m) => !gone.has(m.cid)), missing.map((m) => m.cid)));
     }
     if (missing.length > 0) {
       setState((prev) => missing.reduce(
@@ -786,7 +783,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
    * campo (nada rodando) ou da fila (o turno anterior acabou de fechar).
    */
   const dispatchTurn = React.useCallback(
-    (text: string, now = false): void => {
+    (text: string, now = false, cid: string = newCid()): void => {
       // `ultrathink` / `ultracode` no que está indo AGORA: o driver sobe o esforço DESTE turno, e a
       // barra de atividade é onde isso fica visível — o painel escalava em silêncio. Lido na
       // entrega, não na digitação: uma mensagem que esperou escala o turno que ELA abre.
@@ -795,7 +792,6 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
       // Drawn FIRST, as "sending": the bubble exists the instant it goes, but it only claims to be
       // sent when the back says it gravou (`user_ack`) — see lib/sdkOutbox.ts. `awaiting` starts
       // the status ladder: "Preparando…"/"Pensando…" until the driver's first event.
-      const cid = newCid();
       setState((prev) => appendUserRow(prev, text, selfOriginRef.current, { awaiting: true, cid, state: "sending" }));
       sendTurn(now ? { type: "user", text, now: true } : { type: "user", text }, text, cid);
     },
@@ -839,7 +835,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     }
     setQueue((prev) => dequeue(prev, id));
     try {
-      dispatchTurn(target.text, true);
+      dispatchTurn(target.text, true, target.cid);
     } catch (err) {
       toast.error((err as Error).message);
     }
@@ -879,7 +875,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     if (!head) return;
     setQueue((prev) => dequeue(prev, head.id));
     try {
-      dispatchTurn(head.text);
+      // Uma que voltou do outbox sai com o recibo de origem: se o servidor a tinha, é só o recibo.
+      dispatchTurn(head.text, false, head.cid);
     } catch (err) {
       // `sendTurn` já marcou a bolha como NÃO ENTREGUE, com reenviar/descartar: o texto está na
       // conversa, recuperável. Ela não volta pra fila — duas cópias da mesma mensagem é pior.
@@ -975,8 +972,11 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     // A exceção da decisão pendente vale para as DUAS esperas, e é o que a mantém segura: o despacho
     // da fila só anda quando o turno fecha, então enfileirar com uma pergunta de pé — inclusive com
     // o fio fora do ar — seria esperar por um fim de turno que só a própria mensagem pode causar.
+    //
+    // E o CHAT CARREGANDO também (fio de pé, servidor ainda no setup, sem `ready`): o back só guarda
+    // o frame num buffer que um F5 joga fora — a fila é que sobrevive a ele (produção, 2026-10-20).
     const wireUp = connected && socketRef.current?.readyState === WebSocket.OPEN;
-    const waits = !wireUp || chat.turnActive || chat.awaiting || pendingEdit;
+    const waits = !wireUp || !chat.ready || chat.turnActive || chat.awaiting || pendingEdit;
     if (waits && pendingRef.current.length === 0) {
       setQueue((prev) => enqueue(prev, { id: newQueueId(), text, at: Date.now(), from: selfOriginRef.current }));
       return;

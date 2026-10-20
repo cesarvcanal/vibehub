@@ -19,7 +19,7 @@
  * Tudo aqui é puro ou trivialmente falsificável — as regras são testes, não capturas de tela.
  */
 
-import { parseOrigin, type MessageOrigin } from "@/features/board/lib/chat";
+import { originRole, parseOrigin, type MessageOrigin } from "@/features/board/lib/chat";
 import type { OutboxMessage } from "@/features/board/lib/sdkOutbox";
 
 /** Uma mensagem escrita, ainda não entregue, ainda editável. */
@@ -44,6 +44,12 @@ export interface QueuedMessage {
    * errado (ver `foreignToOutbox`).
    */
   from?: MessageOrigin;
+  /**
+   * O recibo de um envio que JÁ saiu e voltou pra cá (ver `outboxToQueue`). Despachada com ele, a
+   * mensagem que o servidor afinal tinha é só a cobrança do recibo (`acceptedCids` no back), nunca
+   * um segundo turno. Some quando o texto é reescrito: aí é outra mensagem.
+   */
+  cid?: string;
 }
 
 const QUEUE_PREFIX = "vibehub.sdkQueue.";
@@ -72,6 +78,7 @@ export function readQueue(cardId: string): QueuedMessage[] {
         at: typeof m.at === "number" ? m.at : Date.now(),
         // localStorage é entrada não confiável: um autor malformado vira "sem autor", nunca lixo.
         from: parseOrigin(m.from),
+        cid: typeof m.cid === "string" ? m.cid : undefined,
       }));
   } catch {
     return [];
@@ -148,7 +155,7 @@ export function updateQueued(
   at: number,
 ): QueuedMessage[] {
   if (!messages.some((m) => m.id === id)) return [...messages, { id, text, at }];
-  return messages.map((m) => (m.id === id ? { ...m, text, at, editing: false } : m));
+  return messages.map((m) => (m.id === id ? { ...m, text, at, editing: false, cid: undefined } : m));
 }
 
 /**
@@ -203,9 +210,8 @@ export function outboxToQueue(
   const queued: QueuedMessage[] = [];
   const kept: OutboxMessage[] = [];
   for (const m of missing) {
-    const own = !m.from || (viewer !== undefined && m.from.name === viewer);
-    if (own && !m.undelivered && !m.unsent && m.original === undefined) {
-      queued.push({ id: m.cid, text: m.text, at: m.at, ...(m.from ? { from: m.from } : {}) });
+    if (originRole(m.from, viewer) === "self" && !m.undelivered && !m.unsent && m.original === undefined) {
+      queued.push({ id: m.cid, cid: m.cid, text: m.text, at: m.at, ...(m.from ? { from: m.from } : {}) });
     } else {
       kept.push(m);
     }

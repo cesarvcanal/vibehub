@@ -1025,19 +1025,19 @@ describe("SdkChatView — mensagem dobrada no turno por OUTRO remetente (turn_ab
 });
 
 describe("SdkChatView — escada de estados (Preparando → Pensando → Respondendo)", () => {
-  it("cold driver: the send shows Preparando…, ready turns it into Pensando…, the first token into Respondendo…", async () => {
+  it("cold driver: the send WAITS in the queue, ready sends it as Pensando…, the first token is Respondendo…", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept(); // socket open, driver still booting (no ready yet)
 
     const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
     await userEvent.type(box, "oi{Enter}");
-    await waitFor(() => expect(ws.sent.length).toBe(1));
-
-    const indicator = screen.getByTestId("sdk-chat-working");
-    expect(indicator).toHaveAttribute("data-phase", "preparing");
+    // O back só guardaria o frame num buffer que um F5 joga fora: a fila é que sobrevive.
+    expect(ws.sent).toHaveLength(0);
+    expect(screen.getByTestId("sdk-queued")).toHaveTextContent("oi");
 
     ws.deliver({ type: "ready" });
+    await waitFor(() => expect(ws.sent.length).toBe(1));
     expect(screen.getByTestId("sdk-chat-working")).toHaveAttribute("data-phase", "thinking");
 
     // O primeiro token JÁ É a resposta sendo escrita — o indicador diz isso, em vez do
@@ -1647,7 +1647,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
    * assumiu este socket —, nunca de antes dele.
    */
   describe("o prazo do recibo só corre quando o servidor pode responder", () => {
-    it("enviada enquanto o back ainda monta a conexão: o prazo não vence, a bolha não mente", async () => {
+    it("escrita enquanto o back ainda monta a conexão: espera na fila, nada vence, nada é condenado", async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       try {
         renderSdkChat();
@@ -1655,12 +1655,12 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         ws.accept(); // o aperto de mão terminou — mas o back ainda está no setup, sem `ready`
         const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
         await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
-        await waitFor(() => expect(ws.sent.length).toBe(1));
 
         await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS); });
 
-        // Nada aqui é prova de nada: o servidor nem chegou a ouvir ainda.
-        expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sending");
+        // Nada saiu (um F5 aqui não perde nada) e nada é acusado: o servidor nem chegou a ouvir.
+        expect(ws.sent).toHaveLength(0);
+        expect(screen.getByTestId("sdk-queued")).toHaveTextContent("instrução longa");
         expect(screen.queryByTestId("sdk-user-undelivered")).not.toBeInTheDocument();
         expect(ws.readyState).not.toBe(3); // e o socket do setup em andamento NÃO é derrubado
       } finally {
@@ -1676,13 +1676,13 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         ws.accept();
         const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
         await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
-        await waitFor(() => expect(ws.sent.length).toBe(1));
-        const cid = (JSON.parse(ws.sent[0]!) as { cid: string }).cid;
 
         // O setup do back (sonda de transcript + replay + spawn) demorou mais que o prazo…
         await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS * 2); });
-        // …e então ele atende o socket e responde o frame que estava bufferado.
+        // …e então ele atende o socket: a fila anda, e o recibo vem.
         ws.deliver({ type: "ready" });
+        await waitFor(() => expect(ws.sent.length).toBe(1));
+        const cid = (JSON.parse(ws.sent[0]!) as { cid: string }).cid;
         ws.deliver({ type: "user_ack", cid } as SdkEvent);
 
         await waitFor(() => expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sent"));
@@ -1709,11 +1709,11 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         ws.accept();
         const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
         await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
-        await waitFor(() => expect(ws.sent.length).toBe(1));
 
         await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS * 2); });
-        ws.deliver({ type: "ready" }); // o replay vem sem ela: o back ainda nem leu o frame
+        ws.deliver({ type: "ready" }); // o replay vem sem ela: ela ainda estava na fila
 
+        await waitFor(() => expect(ws.sent.length).toBe(1));
         expect(screen.getAllByTestId("sdk-user")).toHaveLength(1);
         expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sending");
       } finally {
@@ -1729,10 +1729,10 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         ws.accept();
         const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
         await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
-        await waitFor(() => expect(ws.sent.length).toBe(1));
 
         await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS * 2); });
         ws.deliver({ type: "ready" }); // o servidor assumiu o socket AGORA: o prazo nasce aqui
+        await waitFor(() => expect(ws.sent.length).toBe(1));
 
         await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS / 2); });
         expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sending");
@@ -2991,6 +2991,9 @@ describe("SdkChatView — o indicador diz o que a IA está dizendo", () => {
     ws.accept();
     const box = screen.getByTestId("terminal-composer").querySelector("textarea")!;
     await userEvent.type(box, "sobe pra prod{Enter}"); // sem `ready`: a sessão ainda está subindo
+    // forçada pela pessoa, ela sai mesmo assim — e a sessão ainda não tem o que dizer
+    await userEvent.click(screen.getByTestId("sdk-queued-send-now"));
+    await waitFor(() => expect(ws.sent.length).toBe(1));
 
     expect(await screen.findByTestId("sdk-working-note")).toHaveTextContent(/preparando a sessão|preparing the session/i);
   });
@@ -4256,14 +4259,7 @@ describe("SdkChatView — o detalhe de cada ação", () => {
   });
 });
 
-/**
- * O F5 NO MEIO DO CARREGAMENTO (produção, 2026-10-20): o chat estava recarregando (reconexão,
- * driver subindo, histórico chegando) e a pessoa mandou uma mensagem. O back guardou o frame no
- * buffer do setup; a tela não mostrava nada, ela deu F5, e o socket fechado no meio do setup fez o
- * back descartar o buffer. No reload a mensagem voltava "não entregue ao servidor", pedindo um
- * Reenviar. O pedido: "mesmo que não foi enviado deveria ficar na fila, esperar carregar… carregou,
- * envia". A mensagem sem veredito volta pra FILA e sai sozinha quando o chat fica pronto.
- */
+/** O F5 no meio do carregamento (produção, 2026-10-20) — ver `send` e `outboxToQueue`. */
 describe("SdkChatView — mensagem enviada durante o carregamento sobrevive ao F5", () => {
   beforeEach(() => localStorage.clear());
 
@@ -4273,9 +4269,11 @@ describe("SdkChatView — mensagem enviada durante o carregamento sobrevive ao F
     first.accept(); // o aperto de mão terminou, mas o back ainda monta a conexão (sem `ready`)
     first.deliver({ type: "user", text: "pedido antigo", at: 1 });
     await userEvent.type(screen.getByRole("textbox"), "atualize meus prs com dev{Enter}");
-    await waitFor(() => expect(first.sent).toHaveLength(1));
+    // Nada sai antes do `ready`: o back só a guardaria num buffer que o F5 joga fora.
+    expect(first.sent).toHaveLength(0);
+    expect(screen.getByTestId("sdk-queued")).toHaveTextContent("atualize meus prs com dev");
 
-    // F5: a aba some antes do `ready` — o back fecha o setup e descarta o frame bufferado.
+    // F5 antes do `ready`.
     unmount();
     renderSdkChat();
     await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
