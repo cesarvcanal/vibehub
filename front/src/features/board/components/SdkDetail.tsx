@@ -12,6 +12,7 @@ import {
   agentStatus,
   bashOutput,
   changedFiles,
+  detailHasResult,
   formatDuration,
   formatTokens,
   parseUnifiedDiff,
@@ -54,6 +55,8 @@ export const SdkDetailContext = React.createContext<SdkDetailApi>({ open: () => 
 
 /** De quanto em quanto a linha do tempo de um subagente rodando é pedida de novo. */
 export const AGENT_POLL_MS = 4_000;
+/** De quanto em quanto uma ação ainda sem resultado é pedida de novo. */
+export const ACTION_POLL_MS = 4_000;
 
 /* --------------------------------------------------------------------- peças */
 
@@ -398,12 +401,19 @@ function ActionView({
 }) {
   const t = useT();
   const row = rows.find((r) => r.kind === "tool" && r.id === view.id) as ToolRow | undefined;
-  const { data, loading, error } = useDetail<ToolDetailData>("tool", { id: view.id }, view.id);
+  const rowStatus: ToolStatus | null = row ? (row.name === "Agent" || row.name === "Task" ? agentStatus(row, tasks[row.id]) : toolStatus(row)) : null;
+  // Enquanto a ação roda (ou o transcript ainda não tem o resultado dela), o detalhe é pedido de
+  // novo: a saída aparece sozinha quando o comando termina, sem fechar e abrir o modal.
+  const [waiting, setWaiting] = React.useState(false);
+  const { data, loading, error } = useDetail<ToolDetailData>("tool", { id: view.id }, view.id, rowStatus === "running" || waiting ? ACTION_POLL_MS : undefined, rowStatus ?? "");
   const detail = data && data.found ? data : null;
+  // Rodando e ainda sem resultado — ou nem gravada no transcript ainda: é espera, não "sem saída".
+  const pendingResult = detail !== null ? !detailHasResult(detail) : rowStatus === "running" && data !== null;
+  React.useEffect(() => setWaiting(pendingResult), [pendingResult]);
   const name = detail?.name || row?.name || "?";
   const input = detail?.input ?? row?.input;
   const result = detail?.result ?? row?.result;
-  const status: ToolStatus = row ? (row.name === "Agent" || row.name === "Task" ? agentStatus(row, tasks[row.id]) : toolStatus(row)) : result ? (result.isError ? "error" : "ok") : "unknown";
+  const status: ToolStatus = rowStatus ?? (result ? (result.isError ? "error" : "ok") : pendingResult ? "running" : "unknown");
   const headline = toolHeadline(name, input);
   const seq = actionSequence(view, rows);
   const at = seq.indexOf(view.id);
@@ -437,11 +447,17 @@ function ActionView({
             <div data-testid="sdk-detail-why" className="whitespace-pre-wrap border-l-2 border-primary/50 pl-3 text-[13px] italic leading-relaxed text-muted-foreground">{detail.thinking}</div>
           </Section>
         ) : null}
-        <ActionBody name={name} input={input} detail={detail} row={row} onOpenAgent={onOpenAgent} />
+        <ActionBody name={name} input={input} detail={pendingResult ? null : detail} row={row} onOpenAgent={onOpenAgent} />
+        {pendingResult ? (
+          <div data-testid="sdk-detail-pending" className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+            {status === "running" || status === "unknown" ? t("sdk.detail.stillRunning") : t("sdk.detail.resultPending")}
+          </div>
+        ) : null}
         {loading && !detail ? (
           <div data-testid="sdk-detail-loading" className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />{t("sdk.detail.loading")}</div>
         ) : null}
-        {!loading && !detail ? (
+        {!loading && !detail && !pendingResult ? (
           <div data-testid="sdk-detail-missing" className="text-xs italic text-muted-foreground">{error === "offline" ? t("sdk.detail.offline") : error ? t("sdk.detail.failedToLoad") : t("sdk.detail.notFound")}</div>
         ) : null}
       </div>
