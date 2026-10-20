@@ -200,7 +200,7 @@ describe("card lifecycle routes", () => {
     expect(res.json().ok).toBe(true);
     expect(res.json().incomplete).not.toContain("runner");
     expect(res.json().steps.map((s: { name: string }) => s.name)).toEqual(
-      ["sessions", "previews", "browser", "board", "runner", "chat-history", "provenance", "inflight", "outbox"],
+      ["sessions", "previews", "browser", "board", "runner", "chat-history", "provenance", "inflight", "catalog", "outbox"],
     );
     expect((await app.inject({ method: "GET", url: `/api/cards/${id}`, headers: { cookie } })).statusCode).toBe(404);
   });

@@ -2084,6 +2084,10 @@ describe("buildCardPurgeScript (everything the card left on the runner's disk)",
     // `projects[<cwd>]` in .claude.json holds the PROMPT HISTORY typed in that directory.
     expect(s).toContain('if [ -f "$P/.claude.json" ]; then');
     expect(s).toContain(`"$P/.claude.json" '${CWD}'`);
+    // The DEFAULT account runs with no CLAUDE_CONFIG_DIR, so Claude keeps its state in $HOME —
+    // `/root/.claude.json`, OUTSIDE `/root/.claude`. Missing it left every default-account card's
+    // prompt history behind (22 dead cwds in production on 2026-10-20).
+    expect(s).toContain(`"/root/.claude.json" '${CWD}'`);
     expect(s).toContain("delete c.projects[w];");
   });
 

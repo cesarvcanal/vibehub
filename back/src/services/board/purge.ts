@@ -7,6 +7,7 @@ import { cardWorkPaths, purgeCardWorkspace, killCardSessionOrThrow, CARD_BRANCH_
 import { cardsWithPending, purgeCardQueue } from "./outbox.js";
 import { removeHistory, SDK_HISTORY_DIR } from "../sdk/history.js";
 import { clearInflightMarker, SDK_INFLIGHT_DIR } from "../sdk/inflight.js";
+import { removeCardCatalog, SDK_CATALOG_DIR } from "../sdk/catalog.js";
 import { removeProvenance, PROVENANCE_DIR } from "../chat/provenance.js";
 import { stopCardBrowser } from "../browser/browser.js";
 import { markBrowserDown } from "../browser/activity.js";
@@ -14,7 +15,7 @@ import { dropPendingCaptures } from "../credentials/capture.js";
 import { stopAllCardPreviews } from "../preview/lifecycle.js";
 import { claudeProjectsDirName } from "../import/import.js";
 import { cardBrowserPorts, BROWSER_DATA_DIR } from "../browser/ports.js";
-import { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR } from "../accounts/profiles.js";
+import { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, DEFAULT_CLAUDE_JSON } from "../accounts/profiles.js";
 import { logger } from "../../utils/logger.js";
 import { isAtomicWriteTmp } from "../../store/atomicWrite.js";
 
@@ -28,8 +29,9 @@ import { isAtomicWriteTmp } from "../../store/atomicWrite.js";
  *    data dir AND the Claude Code TRANSCRIPTS (`<profile>/projects/<cwd>/<session>.jsonl`) inside
  *    the runner, which also made a NEW card born on the same worktree path resume the deleted
  *    card's conversation;
- *  - who sent each message (`provenance/<id>.ndjson`), the interrupted-turn marker, and whatever
- *    the user had typed and not yet delivered (the outbox queue);
+ *  - who sent each message (`provenance/<id>.ndjson`), the interrupted-turn marker, the "/" menu
+ *    the card's driver announced (`sdk-catalog/<id>.json`), and whatever the user had typed and not
+ *    yet delivered (the outbox queue);
  *  - the card's Chromium profile — cookies and logged-in sessions — plus the browser itself, still
  *    RUNNING on a port a later card could be handed;
  *  - its GitHub token file, a live credential;
@@ -157,6 +159,9 @@ async function eraseEverything(card: Card, steps: PurgeStep[], by?: string, proj
   await step(steps, "inflight", async () => {
     await clearInflightMarker(card.id);
   });
+  await step(steps, "catalog", async () => {
+    await removeCardCatalog(card.id);
+  });
   await step(steps, "outbox", async () => {
     const dropped = await purgeCardQueue(card.id);
     return dropped ? `${dropped} queued message(s) dropped` : undefined;
@@ -211,6 +216,7 @@ export const SWEEP_MAX = 200;
 /** Heredoc delimiters of the sweep scripts — reserved words, never derived from input. */
 const LIST_DELIM = "VIBEHUB_ORPHAN_LIST";
 const SWEEP_DELIM = "VIBEHUB_ORPHAN_SWEEP";
+const CLAUDE_JSON_DELIM = "VIBEHUB_ORPHAN_CLAUDE_JSON";
 
 export type OrphanKind = "upload" | "browser" | "gh" | "transcript" | "worktree";
 
@@ -232,6 +238,8 @@ export interface LiveCardArtifacts {
   slugs: Set<string>;
   /** Claude Code `projects/<name>` directory names of every live card's cwd. */
   transcriptDirs: Set<string>;
+  /** The cwd of every live card, as `.claude.json` keys its `projects` map. */
+  cwds: Set<string>;
 }
 
 /** Reads the board and derives everything a live card owns. */
@@ -244,6 +252,7 @@ export async function liveCardArtifacts(): Promise<LiveCardArtifacts> {
     browserDirs: new Set(),
     slugs: new Set(),
     transcriptDirs: new Set(),
+    cwds: new Set(),
   };
   for (const card of cards) {
     live.ids.add(card.id);
@@ -252,7 +261,9 @@ export async function liveCardArtifacts(): Promise<LiveCardArtifacts> {
     const project = byId.get(card.projectId);
     if (!project) continue;
     try {
-      live.transcriptDirs.add(claudeProjectsDirName(cardWorkPaths(project, card).cwd));
+      const { cwd } = cardWorkPaths(project, card);
+      live.transcriptDirs.add(claudeProjectsDirName(cwd));
+      live.cwds.add(cwd);
     } catch {
       // A card whose paths cannot be derived owns nothing the sweep can name — and a listing entry
       // it might have matched is left alone anyway (the sweep only deletes what it can attribute).
@@ -312,6 +323,18 @@ const BROWSER_DIR_RE = /^card-[0-9a-zA-Z]{1,8}$/;
  */
 const CARD_TRANSCRIPT_DIR_RE = /^-work-(?:.+-worktrees|scratch)-[0-9a-zA-Z-]+$/;
 
+/**
+ * Does a live card own this transcript directory? Its own cwd's, or one of a SUBDIRECTORY of its
+ * worktree (`cd back && claude` in the card's shell names the transcript `<cwd-dir>-back`). The
+ * prefix can also match a different, dead card whose slug extends a live one — that only KEEPS an
+ * orphan, the safe side to err on.
+ */
+function ownedTranscriptDir(name: string, liveDirs: ReadonlySet<string>): boolean {
+  if (liveDirs.has(name)) return true;
+  for (const dir of liveDirs) if (name.startsWith(`${dir}-`)) return true;
+  return false;
+}
+
 export interface OrphanPlan {
   /** What this pass will erase. */
   purge: OrphanEntry[];
@@ -352,7 +375,7 @@ export function planOrphanPurge(
         break;
       }
       case "transcript":
-        orphan = CARD_TRANSCRIPT_DIR_RE.test(name) && !live.transcriptDirs.has(name);
+        orphan = CARD_TRANSCRIPT_DIR_RE.test(name) && !ownedTranscriptDir(name, live.transcriptDirs);
         break;
       case "worktree":
         orphan = SLUG_RE.test(name) && !live.slugs.has(name);
@@ -416,9 +439,48 @@ export function buildOrphanPurgeScript(containerName: string, entries: readonly 
   ].join("\n");
 }
 
+/**
+ * The node program that drops, from one `.claude.json`, the `projects[<cwd>]` entries (the prompt
+ * history typed in that directory) of card cwds that are PROVABLY dead: card-shaped
+ * (`/work/<repo>-worktrees/<slug>` or `/work/scratch/<slug>`), not the cwd of any live card
+ * (argv[2], a JSON array) and with no directory on disk. The worktree sweep cannot reach these: by
+ * the time a stale entry is noticed its directory is usually long gone, so nothing lists it.
+ * Prints how many went; a missing or unreadable file is 0 and is never rewritten. One line, DOUBLE
+ * quotes only, atomic write — same discipline as the card purge's own program.
+ */
+export const CLAUDE_JSON_SWEEP_JS = [
+  'const fs=require("fs"),f=process.argv[1];let live;try{live=new Set(JSON.parse(process.argv[2]))}catch(e){console.log(0);process.exit(0)}',
+  'let c;try{c=JSON.parse(fs.readFileSync(f,"utf8"))}catch(e){console.log(0);process.exit(0)}',
+  "const p=c&&c.projects;if(!p||typeof p!==\"object\"){console.log(0);process.exit(0)}",
+  "const shape=/^\\/work\\/(?:[^/]+-worktrees|scratch)\\/[a-z0-9][a-z0-9-]{0,63}$/;let n=0;",
+  "for(const k of Object.keys(p)){if(shape.test(k)&&!live.has(k)&&!fs.existsSync(k)){delete p[k];n++}}",
+  'if(n){const t=f+".vibehub-sweep-tmp";fs.writeFileSync(t,JSON.stringify(c,null,2),{mode:0o600});fs.renameSync(t,f)}',
+  "console.log(n)",
+].join("");
+
+/**
+ * Runs {@link CLAUDE_JSON_SWEEP_JS} on every `.claude.json` in the runner: each account profile's
+ * and the default account's, which lives in $HOME. The live cwds travel as one shell-quoted JSON
+ * argument — they are derived from validated board values. PURE.
+ */
+export function buildClaudeJsonSweepScript(containerName: string, liveCwds: Iterable<string>): string {
+  const live = shQuote(JSON.stringify([...liveCwds]));
+  const js = shQuote(CLAUDE_JSON_SWEEP_JS);
+  return [
+    "set -e",
+    `docker exec -i ${shQuote(containerName)} bash -s <<'${CLAUDE_JSON_DELIM}'`,
+    `for F in ${DEFAULT_CLAUDE_JSON} ${DEFAULT_CLAUDE_DIR}/.claude.json ${CLAUDE_PROFILES_DIR}/*/.claude.json; do`,
+    '  [ -f "$F" ] || continue',
+    `  node -e ${js} "$F" ${live} 2>/dev/null || true`,
+    "done",
+    "true",
+    CLAUDE_JSON_DELIM,
+  ].join("\n");
+}
+
 /** What one sweep pass did. */
 export interface SweepSummary {
-  /** Files under the data dir (chat history, provenance, in-flight markers) that were deleted. */
+  /** Files under the data dir (chat history, provenance, in-flight markers, "/" catalogs) that were deleted. */
   dataFiles: number;
   /** Outbox queues of cards that no longer exist. */
   outboxQueues: number;
@@ -426,6 +488,8 @@ export interface SweepSummary {
   runnerArtifacts: number;
   /** Orphans the cap left for the next pass. */
   truncated: number;
+  /** `.claude.json` prompt histories of dead card cwds dropped this pass. */
+  promptHistories: number;
   /** Browser slots of deleted cards released this pass, their Chromium finally stopped. */
   browserSlots: number;
   /** true = the runner half did not run (host down). The data-dir half still did. */
@@ -437,6 +501,7 @@ const DATA_DIRS: ReadonlyArray<{ dir: string; suffix: string }> = [
   { dir: SDK_HISTORY_DIR, suffix: ".ndjson" },
   { dir: PROVENANCE_DIR, suffix: ".ndjson" },
   { dir: SDK_INFLIGHT_DIR, suffix: ".json" },
+  { dir: SDK_CATALOG_DIR, suffix: ".json" },
 ];
 
 /**
@@ -506,7 +571,8 @@ export async function sweepOrphanCardData(
   const now = opts.now ?? Date.now();
   const graceMs = opts.graceMs ?? SWEEP_GRACE_MS;
   const summary: SweepSummary = {
-    dataFiles: 0, outboxQueues: 0, runnerArtifacts: 0, truncated: 0, browserSlots: 0, runnerFailed: false,
+    dataFiles: 0, outboxQueues: 0, runnerArtifacts: 0, truncated: 0, promptHistories: 0, browserSlots: 0,
+    runnerFailed: false,
   };
   let live: LiveCardArtifacts;
   try {
@@ -543,6 +609,13 @@ export async function sweepOrphanCardData(
       });
       summary.runnerArtifacts = plan.purge.length;
     }
+    const { stdout: dropped } = await hostExecutor().runScript(
+      buildClaudeJsonSweepScript(config.runner.container, live.cwds),
+      { timeoutMs: 60_000 },
+    );
+    summary.promptHistories = String(dropped ?? "")
+      .split("\n")
+      .reduce((sum, line) => sum + (Number.parseInt(line, 10) || 0), 0);
   } catch (err) {
     summary.runnerFailed = true;
     logger.warn({ detail: (err as Error).message }, "the orphan sweep did not reach the runner this pass");
@@ -550,7 +623,8 @@ export async function sweepOrphanCardData(
 
   summary.browserSlots = await retryBrowserSlotHolds();
 
-  const total = summary.dataFiles + summary.outboxQueues + summary.runnerArtifacts + summary.browserSlots;
+  const total =
+    summary.dataFiles + summary.outboxQueues + summary.runnerArtifacts + summary.promptHistories + summary.browserSlots;
   if (total > 0 || summary.truncated > 0) {
     logger.info(
       { audit: true, action: "card.orphan_sweep", ...summary },
