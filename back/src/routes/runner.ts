@@ -136,9 +136,3 @@ export async function runnerRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 }
-
-export function resetRunnerRoutesForTesting(): void {
-  provisioning = null;
-  logBuffer = [];
-  subscribers.clear();
-}

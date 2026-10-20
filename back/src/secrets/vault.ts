@@ -178,10 +178,3 @@ export async function secretList(): Promise<{ key: string; updatedAt: string | n
     .sort()
     .map((key) => ({ key, updatedAt: doc.updatedAt[key] ?? null }));
 }
-
-export function resetVaultForTesting(): void {
-  cache = null;
-  loading = null;
-  keyPromise = null;
-  queue = Promise.resolve();
-}
