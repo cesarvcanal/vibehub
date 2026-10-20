@@ -43,8 +43,8 @@ async function load() {
   });
   const registry = await import("./registry.js");
   registry.resetForTesting();
-  const { recordCardActor, authorsTheTurn, isCardActor } = await import("./actor.js");
-  return { registry, recordCardActor, authorsTheTurn, isCardActor };
+  const { recordCardActor, authorsTheTurn, isCardActor, relayCardActor } = await import("./actor.js");
+  return { registry, recordCardActor, authorsTheTurn, isCardActor, relayCardActor };
 }
 
 const owner = { id: "u-cesar", username: "cesar", role: "owner" as const, createdAt: "" };
@@ -288,5 +288,42 @@ describe("a troca de autor aterrissa antes da mensagem que a causou", () => {
     expect(isCardActor(owner, card.id)).toBe(false);
     expect(isCardActor(mussa, card.id)).toBe(true);
     expect(isCardActor(null, card.id)).toBe(false);
+  });
+});
+
+/**
+ * O MAESTRO REPASSA A ORDEM DE UMA PESSOA. Quando o card do César delega ao card B, quem deu a ordem
+ * foi o César: o trabalho de B que ela provoca sai com a conta dele.
+ */
+describe("relayCardActor — a ordem delegada por outro card leva o autor junto", () => {
+  it("o autor do card remetente vira o autor do destino", async () => {
+    const { registry, relayCardActor } = await load();
+    const users = await import("../../auth/users.js");
+    const cesar = await users.createUser("cesar", "senha-forte-1", "owner");
+    const project = await registry.createProject({ name: "widgets" });
+    const maestro = await registry.createCard({ projectId: project.id, title: "maestro" });
+    const alvo = await registry.createCard({ projectId: project.id, title: "alvo" });
+    await registry.stampCardActor(maestro.id, cesar.id);
+    await registry.stampCardActor(alvo.id, "u-mussa");
+
+    await relayCardActor(maestro.id, alvo.id);
+    expect((await registry.getCard(alvo.id))?.actorUserId).toBe(cesar.id);
+  });
+
+  it("remetente sem autor, desconhecido ou sem acesso de trabalho ao destino: nada muda", async () => {
+    const { registry, relayCardActor } = await load();
+    const users = await import("../../auth/users.js");
+    const semAcesso = await users.createUser("fulano", "senha-forte-1", "member");
+    const project = await registry.createProject({ name: "widgets" });
+    const maestro = await registry.createCard({ projectId: project.id, title: "maestro" });
+    const alvo = await registry.createCard({ projectId: project.id, title: "alvo" });
+    await registry.stampCardActor(alvo.id, "u-mussa");
+
+    await relayCardActor(maestro.id, alvo.id);
+    await relayCardActor(undefined, alvo.id);
+    await relayCardActor("card-que-nao-existe", alvo.id);
+    await registry.stampCardActor(maestro.id, semAcesso.id);
+    await relayCardActor(maestro.id, alvo.id);
+    expect((await registry.getCard(alvo.id))?.actorUserId).toBe("u-mussa");
   });
 });
