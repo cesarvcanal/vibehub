@@ -94,7 +94,10 @@ export async function recordCardActor(
 export async function relayCardActor(fromCardId: string | undefined, toCardId: string): Promise<void> {
   if (!fromCardId) return;
   try {
-    const authorId = (await getCard(fromCardId))?.actorUserId;
+    const [from, to] = await Promise.all([getCard(fromCardId), getCard(toCardId)]);
+    // `from` is self-declared by the calling agent: only a card of the SAME project may pass its
+    // author on, so a stray or injected id cannot borrow just anybody's identity across the board.
+    const authorId = from && to && from.projectId === to.projectId ? from.actorUserId : undefined;
     if (!authorId) return;
     await recordCardActor(await findUser(authorId), toCardId);
   } catch (err) {

@@ -827,3 +827,32 @@ describe("model signals", () => {
     expect(maestro.modelLabelFor("sonnet")).toBe("Sonnet");
   });
 });
+
+/**
+ * A TROCA DE AUTOR SÓ ACONTECE SE A ORDEM FOR ENTREGUE. O maestro carimbava o autor do remetente no
+ * destino ANTES do envio — e um envio recusado (alguém digitando ali, sessão morta) deixava a autoria
+ * trocada sem ordem nenhuma ter chegado.
+ */
+describe("sendToTerminal — beforeDeliver roda só quando a mensagem vai mesmo", () => {
+  it("envio recusado: o gancho não roda", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "alguém digitando" });
+    await registry.applyOpenTerminal(c.id);
+    await registry.markCardHumanActive(c.id, Date.now());
+    const beforeDeliver = vi.fn(async () => undefined);
+    await expect(maestro.sendToTerminal(c.id, "roda", { respectHumanActive: true, beforeDeliver })).rejects.toThrow(/human-active/);
+    expect(beforeDeliver).not.toHaveBeenCalled();
+  });
+
+  it("envio que vai: o gancho roda ANTES de digitar no terminal", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "livre" });
+    await registry.applyOpenTerminal(c.id);
+    const order: string[] = [];
+    runScript.mockImplementation(async () => { order.push("send"); return { stdout: "", stderr: "" }; });
+    await maestro.sendToTerminal(c.id, "roda", { beforeDeliver: async () => { order.push("autor"); } });
+    expect(order).toEqual(["autor", "send"]);
+  });
+});

@@ -66,10 +66,11 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     },
     async (a) => {
       try {
-        // The order came from the PERSON behind the sending card: the destination works as them.
-        await relayCardActor(a.from, a.cardId);
         return ok(await sendToTerminal(a.cardId, a.text, {
           by: actor,
+          // The order came from the PERSON behind the sending card: the destination works as them —
+          // once the send is certain to go (a refused send leaves the authorship alone).
+          beforeDeliver: () => relayCardActor(a.from, a.cardId),
           respectHumanActive: true,
           origin: await agentOriginFor(a.from),
         }));

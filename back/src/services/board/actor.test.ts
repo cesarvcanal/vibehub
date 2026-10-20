@@ -322,6 +322,11 @@ describe("relayCardActor — a ordem delegada por outro card leva o autor junto"
     await relayCardActor(maestro.id, alvo.id);
     await relayCardActor(undefined, alvo.id);
     await relayCardActor("card-que-nao-existe", alvo.id);
+    // Um card de OUTRO projeto não empresta o autor dele (o `from` é declarado pelo próprio agente).
+    const outro = await registry.createProject({ name: "outro" });
+    const deFora = await registry.createCard({ projectId: outro.id, title: "de fora" });
+    await registry.stampCardActor(deFora.id, (await users.createUser("cesar", "senha-forte-1", "owner")).id);
+    await relayCardActor(deFora.id, alvo.id);
     await registry.stampCardActor(maestro.id, semAcesso.id);
     await relayCardActor(maestro.id, alvo.id);
     expect((await registry.getCard(alvo.id))?.actorUserId).toBe("u-mussa");
