@@ -24,6 +24,7 @@ import {
   NOTE_BACKGROUND_STALE,
   NOTE_NOT_AGAIN,
   NOTE_RESUMING,
+  NOTE_RESUME_FAILED,
   RESUME_CONTINUATION_TEXT,
   SYSTEM_ORIGIN,
   handOffSdkOnShutdown,
@@ -308,6 +309,8 @@ describe("resumeInterruptedTurns — the boot sweep", () => {
     // re-note the same interruption forever.
     const history = await readHistory(CARD);
     expect((history[0] as { text: string }).text).toBe(NOTE_RESUMING);
+    // …e o card não fica dizendo "retomando…" para sempre: a linha seguinte diz que não deu.
+    expect(history.map((e) => (e as { text?: string }).text)).toEqual([NOTE_RESUMING, NOTE_RESUME_FAILED]);
     expect(await readInflightMarker(CARD)).toBeNull();
   });
 });
@@ -504,6 +507,7 @@ describe("resumeAfterDriverCrash — o driver caiu, o back não", () => {
     await writeInflightMarker(CARD, marker);
     const outcome = await resumeAfterDriverCrash(CARD, marker, crashDeps({ commandFor: async () => { throw new Error("runner fora"); } }));
     expect(outcome).toBe("noted");
+    expect((await readHistory(CARD)).map((e) => (e as { text?: string }).text)).toEqual([CRASH_TEXTS.resuming, NOTE_RESUME_FAILED]);
     expect(await readInflightMarker(CARD)).toBeNull();
   });
 });

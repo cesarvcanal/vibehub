@@ -109,8 +109,13 @@ export const NOTE_AUTO_OFF =
   "O turno foi interrompido por uma atualização do painel. A retomada automática está desligada " +
   "(sdkAutoResume) — mande uma mensagem para continuar.";
 
+/** A linha que segue um "retomando…" que não deu certo — o card não fica prometendo para sempre. */
+export const NOTE_RESUME_FAILED =
+  "A retomada automática falhou antes de chegar ao Claude. Mande uma mensagem para continuar.";
+
 /** As palavras de uma retomada: o que o card lê e o que o agente recebe, conforme a causa. */
 export interface ResumeTexts {
+  cause: "restart" | "crash";
   resuming: string;
   notAgain: string;
   backgroundStale: string;
@@ -119,6 +124,7 @@ export interface ResumeTexts {
 }
 
 const DEPLOY_TEXTS: ResumeTexts = {
+  cause: "restart",
   resuming: NOTE_RESUMING,
   notAgain: NOTE_NOT_AGAIN,
   backgroundStale: NOTE_BACKGROUND_STALE,
@@ -128,6 +134,7 @@ const DEPLOY_TEXTS: ResumeTexts = {
 
 /** A queda do driver com o back de pé — não houve atualização do painel, e o card não pode dizer que houve. */
 export const CRASH_TEXTS: ResumeTexts = {
+  cause: "crash",
   resuming: "O processo do Claude deste card caiu no meio do turno — retomando automaticamente…",
   notAgain:
     "O processo do Claude deste card caiu de novo, sem avançar desde a última retomada (ou depois de muitas " +
@@ -273,6 +280,7 @@ async function resumeCard(
   installOnce: () => Promise<void>,
   texts: ResumeTexts,
 ): Promise<"resumed" | "noted" | "gone"> {
+  let announced = false;
   try {
     const card = await deps.getCard(cardId);
     const project = card ? await deps.getProject(card.projectId) : undefined;
@@ -303,6 +311,7 @@ async function resumeCard(
       return "noted";
     }
     await deps.appendNote(cardId, texts.resuming);
+    announced = true;
     await installOnce();
     await deps.restoreWorkspace(card.id);
     // O resume usa a chave persistida no card (resumeSessionId — gravada pelo manager a cada
@@ -320,7 +329,7 @@ async function resumeCard(
     deps.inject(session, resumeContinuationText(marker, texts.continuation), SYSTEM_ORIGIN, marker.attempts + 1);
     logger.info(
       {
-        audit: true, action: "sdk.resume", card: card.worktreeSlug, cause: texts === CRASH_TEXTS ? "crash" : "restart",
+        audit: true, action: "sdk.resume", card: card.worktreeSlug, cause: texts.cause,
         interruptedAt: marker.startedAt, preview: marker.preview, attempt: marker.attempts + 1,
         background: marker.background?.tasks,
       },
@@ -329,6 +338,8 @@ async function resumeCard(
     return "resumed";
   } catch (err) {
     logger.warn({ card: cardId, detail: (err as Error).message }, "could not resume an interrupted sdk turn");
+    // Depois de um "retomando…" na tela, o silêncio seria a mesma parada calada de sempre.
+    if (announced) await deps.appendNote(cardId, NOTE_RESUME_FAILED).catch(() => undefined);
     // The marker stays only when nothing was written: with the note already down, keeping the
     // marker would note the same interruption again on the next boot. Best-effort cleanup:
     await deps.clearMarker(cardId).catch(() => undefined);

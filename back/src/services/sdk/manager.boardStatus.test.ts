@@ -9,6 +9,8 @@ import {
   driverTurnRunning,
   ensureDriverSession,
   handleClientFrame,
+  injectSystemTurn,
+  RESUME_CONFIRM_MS,
   resetSdkSessionsForTesting,
   setDriverSpawnerForTesting,
 } from "./manager.js";
@@ -156,4 +158,45 @@ describe("sdk manager — a bolinha do card segue o driver", () => {
     expect(applied.map((a) => a.status)).toEqual(["working", "waiting"]);
   });
 
+});
+
+/**
+ * A RETOMADA NÃO PISCA "AGUARDANDO". No CLI real, o turno vazio do arranque fecha com um `result`
+ * segundos antes do turno de verdade (E2E, 2026-10-20). Contada como fim de turno, a bolinha ia a
+ * `waiting` e voltava a `working` — e o aviso de "turno terminou" (services/events) saía no meio da
+ * retomada. Enquanto o vigia espera, o card segue trabalhando; só a desistência o põe em espera.
+ */
+describe("sdk manager — a bolinha durante a retomada", () => {
+  const emit = (event: object) => spawned[0]!.stdout.emit("data", line(event));
+
+  it("o result vazio do arranque não põe o card em aguardando; o turno de verdade fecha normal", async () => {
+    const session = ensure();
+    injectSystemTurn(session, "continue", { kind: "system", name: "vibehub" }, 1);
+    await flush();
+    emit({ type: "result", isError: false });
+    await flush();
+    expect(applied).toEqual([{ cardId: CARD, status: "working" }]);
+    expect(driverTurnRunning(CARD)).toBe(true);
+    emit({ type: "tool_use", id: "t", name: "Bash", input: {} });
+    emit({ type: "result", isError: false });
+    await flush();
+    expect(applied).toEqual([{ cardId: CARD, status: "working" }, { cardId: CARD, status: "waiting" }]);
+  });
+
+  it("a retomada que não pegou nem com o reenvio: aguardando, uma vez", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const session = ensure();
+      injectSystemTurn(session, "continue", { kind: "system", name: "vibehub" }, 1);
+      for (let i = 0; i < 2; i++) {
+        emit({ type: "result", isError: false });
+        vi.advanceTimersByTime(RESUME_CONFIRM_MS + 1);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+    await flush();
+    expect(applied).toEqual([{ cardId: CARD, status: "working" }, { cardId: CARD, status: "waiting" }]);
+    expect(driverTurnRunning(CARD)).toBe(false);
+  });
 });

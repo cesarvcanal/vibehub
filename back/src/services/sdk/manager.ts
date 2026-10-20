@@ -150,22 +150,18 @@ export interface DriverSession {
    */
   pendingInterruptNote?: string;
   /**
-   * The marker of an AUTOMATIC resume (injectSystemTurn) that has not produced anything yet. The
-   * first text or tool call rewrites it with `progressed: true` — the proof the boot sweep needs
-   * to resume it again after another deploy (see ./resume.ts). A person's turn clears it.
-   */
-  resumeAwaitingProgress?: InflightMarker;
-  /**
    * Background tasks that FINISHED and whose completion notice the CLI has not delivered yet — it
    * opens a turn for it when the model is free. Until then the notice is work a deploy would erase.
    */
   pendingNotices: string[];
   /**
-   * O vigia dessa retomada (ver RESUME_CONFIRM_MS). Vive junto com `resumeAwaitingProgress`: sai no
-   * primeiro texto ou ferramenta, numa mensagem de pessoa, ou ao desistir. `reengaged` = a ordem já
-   * foi reenviada uma vez — a próxima falta vira nota, nunca um terceiro envio.
+   * An AUTOMATIC resume (injectSystemTurn) that has not produced anything yet. `marker` is its
+   * in-flight marker: the first text or tool call rewrites it with `progressed: true` — the proof the
+   * boot sweep needs to resume it again after another deploy (see ./resume.ts). Until then the vigia
+   * (RESUME_CONFIRM_MS) watches it; `reengaged` = the order already went again once, so the next
+   * stall is a note, never a third send. A person's turn clears it.
    */
-  resumeWatch?: { reengaged: boolean; timer?: NodeJS.Timeout };
+  resumeWatch?: { marker: InflightMarker; reengaged: boolean; timer?: NodeJS.Timeout };
   /** Contador de sinais de vida do agente principal (delta, raciocínio, ferramenta) — o vigia compara. */
   agentSignals: number;
   /** O marcador de trabalho em voo que este manager gravou por último (null/ausente = nenhum). */
@@ -407,9 +403,13 @@ export function driverActivity(cardId: string): DriverActivity {
   return isDriverBusy(session) ? "turn" : "idle";
 }
 
-/** Um turno rodando neste driver — o mesmo "Trabalhando…" que o chat mostra. */
-function turnRunning(session: Pick<DriverSession, "activeTurns" | "autonomousTurn">): boolean {
-  return session.activeTurns > 0 || session.autonomousTurn;
+/**
+ * Um turno rodando neste driver — o mesmo "Trabalhando…" que o chat mostra. A retomada que o vigia
+ * ainda espera conta: o `result` vazio do arranque não é o fim dela, e uma bolinha que piscasse
+ * "aguardando" ali soltaria o aviso de turno terminado no meio da retomada.
+ */
+function turnRunning(session: Pick<DriverSession, "activeTurns" | "autonomousTurn" | "resumeWatch">): boolean {
+  return session.activeTurns > 0 || session.autonomousTurn || session.resumeWatch !== undefined;
 }
 
 /**
@@ -509,8 +509,8 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     noteAgentWork(session, event);
   }
   if (AGENT_SIGNALS.has(event.type) && !(event as { parentToolUseId?: unknown }).parentToolUseId) session.agentSignals += 1;
-  if (session.resumeAwaitingProgress && (event.type === "assistant_text" || event.type === "tool_use")) {
-    putMarker(session, { ...(session.marker ?? session.resumeAwaitingProgress), progressed: true });
+  if (session.resumeWatch && (event.type === "assistant_text" || event.type === "tool_use")) {
+    putMarker(session, { ...(session.marker ?? session.resumeWatch.marker), progressed: true });
     endResumeWatch(session);
   }
   if (event.type === "ready") {
@@ -1312,8 +1312,7 @@ export function injectSystemTurn(session: DriverSession, text: string, origin: M
   void settleOrphanQuestions(session);
   const marker: InflightMarker = { startedAt: Date.now(), preview: inflightPreview(text), attempts };
   endResumeWatch(session);
-  session.resumeAwaitingProgress = marker;
-  session.resumeWatch = { reengaged: false };
+  session.resumeWatch = { marker, reengaged: false };
   putMarker(session, marker);
 }
 
@@ -1333,7 +1332,6 @@ const AGENT_SIGNALS: ReadonlySet<string> = new Set([
 function endResumeWatch(session: DriverSession): void {
   clearTimeout(session.resumeWatch?.timer);
   session.resumeWatch = undefined;
-  session.resumeAwaitingProgress = undefined;
 }
 
 /** Arma (ou rearma) o prazo da retomada a partir de agora. */
@@ -1423,7 +1421,7 @@ function putMarker(session: DriverSession, base: InflightMarker): void {
   const background: InflightBackground | undefined = tasks.length === 0 ? undefined : {
     tasks,
     since: previous?.since ?? session.backgroundSince ?? Date.now(),
-    idle: session.activeTurns === 0 && !session.autonomousTurn,
+    idle: !turnRunning(session),
   };
   const marker: InflightMarker = background ? { ...rest, background } : rest;
   session.marker = marker;
@@ -1439,9 +1437,9 @@ function syncInflightMarker(session: DriverSession): void {
   if (session.closed) return;
   syncBoardStatus(session);
   // A retomada que ainda não pegou é trabalho em voo: o reenvio vem aí (ver RESUME_CONFIRM_MS).
-  const turnRunning = session.activeTurns > 0 || session.autonomousTurn || session.resumeWatch !== undefined;
+  const running = turnRunning(session);
   const tasks = backgroundWork(session);
-  if (!turnRunning && tasks.length === 0) {
+  if (!running && tasks.length === 0) {
     session.marker = undefined;
     void clearInflightMarker(session.cardId);
     return;
@@ -1449,7 +1447,7 @@ function syncInflightMarker(session: DriverSession): void {
   const current = session.marker;
   if (current) {
     const same = (current.background?.tasks ?? []).join("\n") === tasks.join("\n")
-      && (tasks.length === 0 || current.background?.idle === !turnRunning);
+      && (tasks.length === 0 || current.background?.idle === !running);
     if (same) return;
     putMarker(session, current);
     return;
