@@ -496,6 +496,27 @@ async function emitCatalogFrom(init, queryHandle) {
 }
 
 /**
+ * As opções de um CLI DESCARTÁVEL (o catálogo de aquecimento, o /btw): entra como o de verdade, mas
+ * sem MCP nenhum e com os hooks de status mudos — não é um turno do card, e o painel não pode
+ * ouvi-lo como se fosse.
+ */
+function throwawayOptions(abort) {
+  applyAuth(); // the throwaway CLI signs in like the real one would
+  const options = baseOptions();
+  options.env = { ...process.env, VIBEHUB_STATUS_URL: "" };
+  options.strictMcpConfig = true;
+  options.mcpServers = {};
+  options.abortController = abort;
+  // Nada do que só serve a um turno de verdade: sem gate de ferramenta, sem cartão de pergunta, sem
+  // deltas ao vivo nem resumos de subagente.
+  delete options.hooks;
+  delete options.canUseTool;
+  options.includePartialMessages = false;
+  options.agentProgressSummaries = false;
+  return options;
+}
+
+/**
  * O MENU "/" ANTES DA PRIMEIRA MENSAGEM (produção, 26/09/2026: card novo, digitar "/code-re" não
  * oferecia nada). O catálogo só chegava pelo `init`, e o `init` só existe quando um turno começa —
  * ou seja, num card recém-aberto o menu ficava vazio justamente na hora em que a pessoa quer
@@ -522,21 +543,6 @@ async function emitCatalogFrom(init, queryHandle) {
  *  - a mensagem de verdade MATA esta consulta (abort), em vez de só fechar a entrada e deixá-la
  *    terminar de subir disputando CPU com o CLI que vai responder.
  */
-/**
- * As opções de um CLI DESCARTÁVEL (o catálogo de aquecimento, o /btw): entra como o de verdade, mas
- * sem MCP nenhum e com os hooks de status mudos — não é um turno do card, e o painel não pode
- * ouvi-lo como se fosse.
- */
-function throwawayOptions(abort) {
-  applyAuth(); // the throwaway CLI signs in like the real one would
-  const options = baseOptions();
-  options.env = { ...process.env, VIBEHUB_STATUS_URL: "" };
-  options.strictMcpConfig = true;
-  options.mcpServers = {};
-  options.abortController = abort;
-  return options;
-}
-
 let warmChannel = null;
 let warmAbort = null;
 async function warmCatalog() {
@@ -590,10 +596,6 @@ async function answerBtw(id, question) {
   let failure = null;
   try {
     const options = throwawayOptions(abort);
-    delete options.hooks;
-    delete options.canUseTool;
-    options.includePartialMessages = false;
-    options.agentProgressSummaries = false;
     options.tools = [];
     options.maxTurns = 1;
     options.persistSession = false;

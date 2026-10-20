@@ -1117,13 +1117,13 @@ export function handleClientFrame(
     // sdk-driver.mjs). Nada de contagem de turno, marcador em voo ou log — só a resposta, que
     // carrega a pergunta, entra no histórico. Driver morto: quem perguntou sabe na hora, em vez de
     // ficar com a linha pendente para sempre.
-    if (!canAcceptTurn(session) || !writeToDriver(session, control)) {
+    if (canAcceptTurn(session) && writeToDriver(session, control)) {
+      noteChatActivity(session);
+    } else {
       try {
         sender?.send(JSON.stringify({ type: "btw_answer", id: control.id, question: control.question, error: "driver-gone" }));
       } catch { /* that socket is going away */ }
-      return { kind: "ignored" };
     }
-    noteChatActivity(session);
     return { kind: "ignored" };
   }
   if (control.type === "question_answer" && !session.ownQuestions.has(control.id)) {

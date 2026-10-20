@@ -82,6 +82,7 @@ import {
   applySdkEvent,
   appendBtwRow,
   appendUserRow,
+  BTW_EXPIRE_MS,
   expireBtwRows,
   btwQuestion,
   coalesceDeltas,
@@ -707,13 +708,19 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
   }, [pendingEdit, state.turnActive, dispatchEditFrame]);
 
   // O prazo das perguntas laterais desta aba: a que o driver nunca respondeu (morreu no meio, um
-  // deploy) vira erro em vez de "Respondendo…" para sempre.
-  const hasPendingBtw = state.rows.some((row) => row.kind === "btw" && row.askedAt !== undefined && row.text === undefined && row.error === undefined);
+  // deploy) vira erro em vez de "Respondendo…" para sempre. Um timer por pergunta, armado no envio.
+  const btwTimersRef = React.useRef(new Set<ReturnType<typeof setTimeout>>());
   React.useEffect(() => {
-    if (!hasPendingBtw) return;
-    const timer = setInterval(() => setState((prev) => expireBtwRows(prev, Date.now())), 15_000);
-    return () => clearInterval(timer);
-  }, [hasPendingBtw]);
+    const timers = btwTimersRef.current;
+    return () => { for (const timer of timers) clearTimeout(timer); };
+  }, []);
+  const armBtwExpiry = React.useCallback((): void => {
+    const timer = setTimeout(() => {
+      btwTimersRef.current.delete(timer);
+      setState((prev) => expireBtwRows(prev, Date.now()));
+    }, BTW_EXPIRE_MS);
+    btwTimersRef.current.add(timer);
+  }, []);
 
   /* -------------------------------------------------------- replying to a decision */
 
@@ -987,13 +994,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     if (btw !== null) {
       if (!wireUp) throw new Error(translate("sdk.offline")); // the composer keeps the words
       const btwId = newCid();
-      try {
-        sendFrame({ type: "btw", id: btwId, question: btw });
-      } catch (err) {
-        toast.error((err as Error).message);
-        throw err; // the composer keeps the words
-      }
+      sendFrame({ type: "btw", id: btwId, question: btw }); // throws offline: the composer keeps the words
       setState((prev) => appendBtwRow(prev, btwId, btw, Date.now()));
+      armBtwExpiry();
       return;
     }
     const waits = !wireUp || chat.turnActive || chat.awaiting || pendingEdit;

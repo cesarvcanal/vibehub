@@ -1134,13 +1134,7 @@ function appendSubagentRow(state: SdkChatState, build: (id: string) => SdkRow, p
   const marked = markSource(state, false);
   const { id, seq } = nextId(marked, "a");
   const row = build(preferredId ?? id);
-  const last = marked.rows[marked.rows.length - 1];
-  const stillWriting = last && (last.kind === "assistant" || last.kind === "thinking") && last.streaming;
-  return {
-    ...marked,
-    seq,
-    rows: stillWriting ? [...marked.rows.slice(0, -1), row, last] : [...marked.rows, row],
-  };
+  return { ...marked, seq, rows: withSideRow(marked.rows, row) };
 }
 
 /** Where the PROVISIONAL tool row with this id sits (see `pending`), or -1. PURE. */
@@ -1321,16 +1315,12 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       // que estava rodando segue rodando. A pergunta desta aba já tem linha (pendente); a de outra
       // aba, ou a do replay, ganha uma agora.
       if (typeof event.id !== "string" || typeof event.question !== "string" || (!event.text && !event.error)) return state;
+      const outcome = event.text ? { text: event.text, error: undefined } : { error: event.error };
       const at = state.rows.findIndex((row) => row.kind === "btw" && row.btwId === event.id);
-      if (at >= 0) {
-        const rows = [...state.rows];
-        const { error: _expired, ...row } = rows[at] as Extract<SdkRow, { kind: "btw" }>;
-        rows[at] = event.text ? { ...row, text: event.text } : { ...row, error: event.error };
-        return { ...state, rows };
-      }
-      const { id, seq } = nextId(state, "btw");
-      const row: SdkRow = { kind: "btw", id, btwId: event.id, question: event.question, ...(event.text ? { text: event.text } : { error: event.error }) };
-      return { ...state, seq, rows: withSideRow(state.rows, row) };
+      if (at < 0) return pushBtwRow(state, { btwId: event.id, question: event.question, ...outcome });
+      const rows = [...state.rows];
+      rows[at] = { ...(rows[at] as Extract<SdkRow, { kind: "btw" }>), ...outcome };
+      return { ...state, rows };
     }
     case "system_note": {
       // The PANEL talking (a deploy interrupted a turn, the boot resumed it): one muted centered
@@ -1576,12 +1566,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       // essa linha aqui (o `settleStreaming` de todas as outras) faria o bloco consolidado que vem
       // logo depois virar uma SEGUNDA linha: a mesma frase duas vezes, com o painel no meio. Então
       // a linha aberta continua sendo a última — o painel entra logo antes dela.
-      const last = state.rows[state.rows.length - 1];
-      const stillWriting = last && (last.kind === "assistant" || last.kind === "thinking") && last.streaming;
-      return {
-        ...state,
-        rows: stillWriting ? [...state.rows.slice(0, -1), row, last] : [...state.rows, row],
-      };
+      return { ...state, rows: withSideRow(state.rows, row) };
     }
     case "permission_request": {
       if (!event.id) return state;
@@ -1722,10 +1707,21 @@ function withSideRow(rows: SdkRow[], row: SdkRow): SdkRow[] {
   return stillWriting ? [...rows.slice(0, -1), row, last] : [...rows, row];
 }
 
+type BtwRow = Extract<SdkRow, { kind: "btw" }>;
+
+function pushBtwRow(state: SdkChatState, fields: Omit<BtwRow, "kind" | "id">): SdkChatState {
+  const { id, seq } = nextId(state, "btw");
+  return { ...state, seq, rows: withSideRow(state.rows, { kind: "btw", id, ...fields }) };
+}
+
 /** A pergunta de um /btw desta aba, pendente até a resposta (`btw_answer`) preenchê-la. PURE. */
 export function appendBtwRow(state: SdkChatState, btwId: string, question: string, askedAt: number): SdkChatState {
-  const { id, seq } = nextId(state, "btw");
-  return { ...state, seq, rows: withSideRow(state.rows, { kind: "btw", id, btwId, question, askedAt }) };
+  return pushBtwRow(state, { btwId, question, askedAt });
+}
+
+/** Uma pergunta DESTA aba ainda sem resposta nem erro. PURE. */
+function isPendingBtw(row: SdkRow): row is BtwRow & { askedAt: number } {
+  return row.kind === "btw" && row.askedAt !== undefined && row.text === undefined && row.error === undefined;
 }
 
 /**
@@ -1736,8 +1732,7 @@ export const BTW_EXPIRE_MS = 4 * 60_000;
 
 /** As perguntas desta aba que passaram do prazo viram erro. Nada vencido = o MESMO estado. PURE. */
 export function expireBtwRows(state: SdkChatState, now: number): SdkChatState {
-  const stale = (row: SdkRow): boolean =>
-    row.kind === "btw" && row.text === undefined && row.error === undefined && row.askedAt !== undefined && now - row.askedAt >= BTW_EXPIRE_MS;
+  const stale = (row: SdkRow): boolean => isPendingBtw(row) && now - row.askedAt >= BTW_EXPIRE_MS;
   if (!state.rows.some(stale)) return state;
   return { ...state, rows: state.rows.map((row) => (stale(row) ? { ...row, error: translate("sdk.btwExpired") } : row)) };
 }
