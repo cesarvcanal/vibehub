@@ -270,7 +270,13 @@ export async function resumeInterruptedTurns(deps: ResumeDeps = realDeps): Promi
     if (!marker) return;
     const outcome = await resumeCard(cardId, marker, settings, deps, installOnce, DEPLOY_TEXTS);
     if (outcome === "resumed") summary.resumed.push(cardId);
-    else if (outcome === "noted") summary.noted.push(cardId);
+    else if (outcome === "noted") {
+      summary.noted.push(cardId);
+      // O `working` no board é do processo que morreu com o turno: nenhum hook nem driver daqui vai
+      // apagá-lo (produção, card a28ffa23, 2026-10-20). Só no "noted": o "skipped" é card parado de
+      // propósito (um relato o desibernaria) ou conversa que seguiu num turno vivo, dono da bolinha.
+      settleUnresumed(cardId, outcome, deps);
+    }
   }));
   return summary;
 }
@@ -402,10 +408,17 @@ export async function resumeAfterDriverCrash(
     // Deixado, o marcador deste processo vivo seria retomado no próximo deploy, fora de hora.
     await deps.clearMarker(cardId).catch(() => undefined);
   }
-  // O manager segurou a bolinha em `working` à espera deste veredito: sem retomada e sem turno
-  // vivo noutro driver, ela vai a `waiting` — o "turno terminou" de verdade, uma vez.
-  if (outcome !== "resumed" && !deps.stopping() && !deps.turnRunning(cardId)) deps.reportIdle(cardId);
+  // O manager segurou a bolinha em `working` à espera deste veredito.
+  settleUnresumed(cardId, outcome, deps);
   return outcome;
+}
+
+/**
+ * O turno morto que NÃO virou retomada: sem turno vivo noutro driver, a bolinha vai a `waiting` — o
+ * "turno terminou" de verdade, uma vez. Num SIGTERM quem decide é o processo novo.
+ */
+function settleUnresumed(cardId: string, outcome: "resumed" | "noted" | "skipped", deps: ResumeDeps): void {
+  if (outcome !== "resumed" && !deps.stopping() && !deps.turnRunning(cardId)) deps.reportIdle(cardId);
 }
 
 /**

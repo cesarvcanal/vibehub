@@ -41,6 +41,17 @@ describe("sessionSpecFingerprint", () => {
     vi.doUnmock("../../runtime/testWorkers.js");
     expect(after).not.toBe(before);
   });
+  it("changes when the address the status hooks report to changes (VIBEHUB_PUBLIC_URL)", async () => {
+    // Every session is born with VIBEHUB_STATUS_URL baked in. A deploy that moves it (a new public
+    // URL, the fix for a URL that pointed at a blue/green port) must restart the sessions, or their
+    // hooks go on posting to the old address (ECONNREFUSED in production, 2026-10-20).
+    const spec = await load();
+    const { config } = await import("../../config/env.js"); // the instance the module just loaded reads
+    config.publicUrl = "http://10.8.0.25:20003";
+    const before = spec.sessionSpecFingerprint();
+    config.publicUrl = "http://dev.multi";
+    expect(spec.sessionSpecFingerprint()).not.toBe(before);
+  });
 });
 
 describe("restartSessionsIfSpecChanged", () => {
