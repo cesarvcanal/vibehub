@@ -513,6 +513,7 @@ export const ptBR: Record<string, string> = {
   "sdk.btwLabel": "Pergunta lateral (/btw) — respondida à parte, o turno seguiu sem ela",
   "sdk.btwError": "Não deu para responder: {error}",
   "sdk.btwPending": "Respondendo…",
+  "sdk.btwExpired": "Sem resposta — a consulta lateral não voltou (o driver reiniciou ou caiu). Pergunte de novo.",
   "sdk.permissionTitle": "Permissão necessária",
   "sdk.permissionTimeoutHint": "Sem resposta, nega sozinho em 5 minutos.",
   "sdk.allow": "Permitir",

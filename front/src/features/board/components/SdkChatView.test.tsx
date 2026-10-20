@@ -4239,6 +4239,21 @@ describe("SdkChatView — o detalhe de cada ação", () => {
  * resposta aparece como linha própria, nunca como bolha do Claude.
  */
 describe("SdkChatView — /btw", () => {
+  it("com o fio caído NÃO vai pra fila (lá viraria um turno do agente): avisa e mantém as palavras", async () => {
+    renderSdkChat();
+    const first = await socket();
+    first.accept();
+    first.deliver({ type: "ready" });
+    act(() => { first.readyState = 3; first.onclose?.(); });
+
+    await userEvent.type(screen.getByRole("textbox"), "/btw o que falta?{Enter}");
+
+    expect(first.sent).toHaveLength(0);
+    expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sdk-btw")).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveValue("/btw o que falta?");
+  });
+
   it("com o turno rodando, NÃO espera na fila: sai na hora e a resposta vira linha própria", async () => {
     renderSdkChat();
     const ws = await socket();

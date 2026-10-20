@@ -412,6 +412,8 @@ export type SdkRow =
       /** O id da pergunta (o do frame `btw`), que casa a resposta com esta linha. */
       btwId: string;
       question: string;
+      /** Quando ESTA aba perguntou (ms) — o relógio do prazo. Ausente na linha de outra aba/replay. */
+      askedAt?: number;
       /** Sem `text` nem `error`: ainda respondendo. */
       text?: string;
       error?: string;
@@ -1319,15 +1321,16 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       // que estava rodando segue rodando. A pergunta desta aba já tem linha (pendente); a de outra
       // aba, ou a do replay, ganha uma agora.
       if (typeof event.id !== "string" || typeof event.question !== "string" || (!event.text && !event.error)) return state;
-      const answer = event.text ? { text: event.text } : { error: event.error };
       const at = state.rows.findIndex((row) => row.kind === "btw" && row.btwId === event.id);
       if (at >= 0) {
         const rows = [...state.rows];
-        rows[at] = { ...(rows[at] as Extract<SdkRow, { kind: "btw" }>), ...answer };
+        const { error: _expired, ...row } = rows[at] as Extract<SdkRow, { kind: "btw" }>;
+        rows[at] = event.text ? { ...row, text: event.text } : { ...row, error: event.error };
         return { ...state, rows };
       }
       const { id, seq } = nextId(state, "btw");
-      return { ...state, seq, rows: [...state.rows, { kind: "btw", id, btwId: event.id, question: event.question, ...answer }] };
+      const row: SdkRow = { kind: "btw", id, btwId: event.id, question: event.question, ...(event.text ? { text: event.text } : { error: event.error }) };
+      return { ...state, seq, rows: withSideRow(state.rows, row) };
     }
     case "system_note": {
       // The PANEL talking (a deploy interrupted a turn, the boot resumed it): one muted centered
@@ -1708,10 +1711,35 @@ export function appendUserRow(
   };
 }
 
+/**
+ * Uma linha do /btw entra ANTES do texto ainda escorrendo do turno (como a de um subagente): o fluxo
+ * de deltas só escreve na ÚLTIMA linha, e uma linha lateral no fim partia a resposta em duas bolhas,
+ * a primeira presa em "escrevendo" para sempre. PURE.
+ */
+function withSideRow(rows: SdkRow[], row: SdkRow): SdkRow[] {
+  const last = rows[rows.length - 1];
+  const stillWriting = last && (last.kind === "assistant" || last.kind === "thinking") && last.streaming;
+  return stillWriting ? [...rows.slice(0, -1), row, last] : [...rows, row];
+}
+
 /** A pergunta de um /btw desta aba, pendente até a resposta (`btw_answer`) preenchê-la. PURE. */
-export function appendBtwRow(state: SdkChatState, btwId: string, question: string): SdkChatState {
+export function appendBtwRow(state: SdkChatState, btwId: string, question: string, askedAt: number): SdkChatState {
   const { id, seq } = nextId(state, "btw");
-  return { ...state, seq, rows: [...state.rows, { kind: "btw", id, btwId, question }] };
+  return { ...state, seq, rows: withSideRow(state.rows, { kind: "btw", id, btwId, question, askedAt }) };
+}
+
+/**
+ * O prazo de uma pergunta lateral na TELA: o do driver (3 min) e uma folga. Passado dele sem
+ * resposta, o driver que a respondia morreu (deploy, hibernação) — e ninguém mais vai responder.
+ */
+export const BTW_EXPIRE_MS = 4 * 60_000;
+
+/** As perguntas desta aba que passaram do prazo viram erro. Nada vencido = o MESMO estado. PURE. */
+export function expireBtwRows(state: SdkChatState, now: number): SdkChatState {
+  const stale = (row: SdkRow): boolean =>
+    row.kind === "btw" && row.text === undefined && row.error === undefined && row.askedAt !== undefined && now - row.askedAt >= BTW_EXPIRE_MS;
+  if (!state.rows.some(stale)) return state;
+  return { ...state, rows: state.rows.map((row) => (stale(row) ? { ...row, error: translate("sdk.btwExpired") } : row)) };
 }
 
 /**

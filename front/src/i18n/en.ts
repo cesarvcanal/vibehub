@@ -512,6 +512,7 @@ export const en: Record<string, string> = {
   "sdk.btwLabel": "Side question (/btw) — answered on the side, the turn went on without it",
   "sdk.btwError": "Could not answer: {error}",
   "sdk.btwPending": "Answering…",
+  "sdk.btwExpired": "No answer — the side query never came back (the driver restarted or died). Ask again.",
   "sdk.permissionTitle": "Permission needed",
   "sdk.permissionTimeoutHint": "No answer denies it after 5 minutes.",
   "sdk.allow": "Allow",

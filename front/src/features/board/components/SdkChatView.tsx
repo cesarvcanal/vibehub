@@ -82,6 +82,7 @@ import {
   applySdkEvent,
   appendBtwRow,
   appendUserRow,
+  expireBtwRows,
   btwQuestion,
   coalesceDeltas,
   decidePermission,
@@ -705,6 +706,15 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     return () => clearTimeout(timer);
   }, [pendingEdit, state.turnActive, dispatchEditFrame]);
 
+  // O prazo das perguntas laterais desta aba: a que o driver nunca respondeu (morreu no meio, um
+  // deploy) vira erro em vez de "Respondendo…" para sempre.
+  const hasPendingBtw = state.rows.some((row) => row.kind === "btw" && row.askedAt !== undefined && row.text === undefined && row.error === undefined);
+  React.useEffect(() => {
+    if (!hasPendingBtw) return;
+    const timer = setInterval(() => setState((prev) => expireBtwRows(prev, Date.now())), 15_000);
+    return () => clearInterval(timer);
+  }, [hasPendingBtw]);
+
   /* -------------------------------------------------------- replying to a decision */
 
   /**
@@ -971,8 +981,11 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     // O /btw é a pergunta feita JUSTAMENTE com o turno rodando: esperar o fim do turno na fila seria
     // o oposto do comando. Sai na hora, num frame próprio, e vira uma linha pendente — quem responde
     // é uma consulta à parte, não o turno (ver `answerBtw` em sdk-driver.mjs).
+    // Com o fio caído ela NÃO espera na fila: de lá ela sairia como mensagem comum — um turno do
+    // agente, o oposto do comando. Fica no campo, com o aviso, para a pessoa mandar quando voltar.
     const btw = btwQuestion(text);
-    if (wireUp && btw !== null) {
+    if (btw !== null) {
+      if (!wireUp) throw new Error(translate("sdk.offline")); // the composer keeps the words
       const btwId = newCid();
       try {
         sendFrame({ type: "btw", id: btwId, question: btw });
@@ -980,7 +993,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
         toast.error((err as Error).message);
         throw err; // the composer keeps the words
       }
-      setState((prev) => appendBtwRow(prev, btwId, btw));
+      setState((prev) => appendBtwRow(prev, btwId, btw, Date.now()));
       return;
     }
     const waits = !wireUp || chat.turnActive || chat.awaiting || pendingEdit;

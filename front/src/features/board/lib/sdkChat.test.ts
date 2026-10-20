@@ -7,6 +7,8 @@ import {
   answerQuestion,
   appendBtwRow,
   btwQuestion,
+  expireBtwRows,
+  BTW_EXPIRE_MS,
   currentActivity,
   decidePermission,
   deliveredUserTexts,
@@ -1932,10 +1934,10 @@ describe("/btw na tela", () => {
 
   it("a pergunta vira linha pendente e a resposta a preenche, sem mexer no turno", () => {
     const busy = feed([{ type: "ready", turnActive: true }]);
-    const asked = appendBtwRow(busy, "b1", "o que falta?");
-    expect(asked.rows).toEqual([{ kind: "btw", id: expect.any(String), btwId: "b1", question: "o que falta?" }]);
+    const asked = appendBtwRow(busy, "b1", "o que falta?", 1_000);
+    expect(asked.rows).toEqual([{ kind: "btw", id: expect.any(String), btwId: "b1", question: "o que falta?", askedAt: 1_000 }]);
     const answered = feed([{ type: "btw_answer", id: "b1", question: "o que falta?", text: "falta o PR" }], asked);
-    expect(answered.rows).toEqual([{ kind: "btw", id: asked.rows[0]!.id, btwId: "b1", question: "o que falta?", text: "falta o PR" }]);
+    expect(answered.rows).toEqual([{ kind: "btw", id: asked.rows[0]!.id, btwId: "b1", question: "o que falta?", askedAt: 1_000, text: "falta o PR" }]);
     expect(answered.turnActive).toBe(true);
     expect(answered.awaiting).toBe(busy.awaiting);
   });
@@ -1945,12 +1947,34 @@ describe("/btw na tela", () => {
     expect(state.rows).toEqual([{ kind: "btw", id: expect.any(String), btwId: "b2", question: "q", error: "CLI caiu" }]);
   });
 
+  it("com o turno escrevendo, a linha entra ANTES do texto em curso — que segue na mesma bolha", () => {
+    const streaming = feed([{ type: "ready" }, { type: "assistant_delta", text: "Estou rod" }]);
+    const asked = appendBtwRow(streaming, "b1", "q", 1_000);
+    const other = feed([{ type: "btw_answer", id: "b9", question: "de outra aba", text: "r" }], asked);
+    const after = feed([{ type: "assistant_delta", text: "ando os testes" }], other);
+    expect(after.rows.map((r) => r.kind)).toEqual(["btw", "btw", "assistant"]);
+    const bubble = after.rows[2] as Extract<SdkRow, { kind: "assistant" }>;
+    expect(bubble.text).toBe("Estou rodando os testes");
+    expect(bubble.streaming).toBe(true);
+  });
+
+  it("pergunta sem resposta além do prazo vira erro (driver morto, deploy) — nunca pendente para sempre", () => {
+    const asked = appendBtwRow(INITIAL_SDK_STATE, "b1", "q", 1_000);
+    expect(expireBtwRows(asked, 1_000 + BTW_EXPIRE_MS - 1)).toBe(asked);
+    const expired = expireBtwRows(asked, 1_000 + BTW_EXPIRE_MS);
+    expect(expired.rows[0]).toMatchObject({ kind: "btw", btwId: "b1", error: expect.any(String) });
+    // a resposta que chegar atrasada ainda vale mais que o aviso
+    const late = feed([{ type: "btw_answer", id: "b1", question: "q", text: "veio" }], expired);
+    expect(late.rows[0]).toMatchObject({ text: "veio" });
+    expect((late.rows[0] as { error?: string }).error).toBeUndefined();
+  });
+
   it("a linha do /btw não segura a fila nem esconde a ferramenta em curso", () => {
     let state = feed([
       { type: "ready" },
       { type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test", description: "Roda os testes" } },
     ], appendUserRow(INITIAL_SDK_STATE, "roda os testes", undefined, { awaiting: true }));
-    state = appendBtwRow({ ...state, turnActive: true }, "b1", "o que falta?");
+    state = appendBtwRow({ ...state, turnActive: true }, "b1", "o que falta?", 1_000);
     expect(turnHasRoomForMore(state)).toBe(true);
     expect(currentActivity(state)).toMatchObject({ kind: "tool" });
   });

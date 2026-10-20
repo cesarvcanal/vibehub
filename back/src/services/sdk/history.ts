@@ -98,7 +98,8 @@ export function replayableHistoryEvent(event: HistoryEvent): boolean {
     case "question_result":
     // The edit marker: without it a replay would draw the superseded message as if it still stood.
     case "message_edited":
-    // A resposta de um /btw: conversa da pessoa, como a pergunta (que já entra como `user`).
+    // O /btw: a resposta carrega a pergunta — é a ÚNICA linha dele no log (a pergunta não entra
+    // como `user`, nem aqui nem no contexto do modelo).
     case "btw_answer":
       return true;
     // O resumo do resultado (a linha "7 linhas" / "erro: …"): só do agente PRINCIPAL. O dos

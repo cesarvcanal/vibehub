@@ -610,12 +610,12 @@ async function answerBtw(id, question) {
       }
     }
   } catch (err) {
-    failure = abort.signal.aborted
-      ? `sem resposta em ${BTW_TIMEOUT_MS / 60_000} min`
-      : (err && err.message ? err.message : String(err));
+    failure = err && err.message ? err.message : String(err);
   } finally {
     clearTimeout(timer);
   }
+  // O prazo venceu: o SDK pode encerrar a consulta abortada calado ou lançando — o motivo é o prazo.
+  if (abort.signal.aborted && texts.length === 0) failure = `sem resposta em ${BTW_TIMEOUT_MS / 60_000} min`;
   const text = texts.join("\n\n");
   if (text) emit({ type: "btw_answer", id, question, text });
   else emit({ type: "btw_answer", id, question, error: failure ?? "resposta vazia" });
@@ -626,8 +626,18 @@ async function answerBtw(id, question) {
  * seguidas viram uma fila, não cinco processos disputando a CPU do runner com o turno de verdade.
  */
 let btwChain = Promise.resolve();
+/** Quantas perguntas laterais cabem de uma vez (a que roda + as que esperam). */
+const BTW_QUEUE_MAX = 3;
+let btwPending = 0;
 function queueBtw(id, question) {
-  btwChain = btwChain.then(() => answerBtw(id, question)); // answerBtw never throws
+  // Além do teto, a recusa é imediata: cada uma pode levar minutos, e a quinta pergunta de uma rajada
+  // responderia quando ninguém mais se lembra dela.
+  if (btwPending >= BTW_QUEUE_MAX) {
+    emit({ type: "btw_answer", id, question, error: `fila cheia (${BTW_QUEUE_MAX} perguntas laterais em andamento)` });
+    return;
+  }
+  btwPending += 1;
+  btwChain = btwChain.then(() => answerBtw(id, question)).finally(() => { btwPending -= 1; }); // answerBtw never throws
 }
 
 let currentQuery = null; // the live query() iterator, so an interrupt can reach it mid-turn

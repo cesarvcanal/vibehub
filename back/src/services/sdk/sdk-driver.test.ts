@@ -816,6 +816,20 @@ describe("sdk-driver.mjs — /btw", () => {
     expect(String(second.text)).toContain("e esta?");
   }, 60_000);
 
+  it("fila com teto: a pergunta além dele é recusada NA HORA, as outras seguem", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    for (const id of ["q1", "q2", "q3", "q4"]) driver.send({ type: "btw", id, question: "btwslow " + id });
+    const refused = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "q4", from);
+    expect(String(refused.error)).toMatch(/fila/);
+    expect(driver.events.slice(from).filter((e) => e.type === "btw_answer")).toHaveLength(1);
+
+    await writeFile(join(sandbox, "release-btw"), "");
+    await driver.waitFor((e) => e.type === "btw_answer" && e.id === "q3", from);
+    const answered = driver.events.slice(from).filter((e) => e.type === "btw_answer" && e.text).map((e) => e.id);
+    expect(answered).toEqual(["q1", "q2", "q3"]);
+  }, 60_000);
+
   it("uma falha vira resposta com erro — nunca derruba o driver", async () => {
     const driver = await driverAfterOneTurn();
     const from = driver.events.length;
