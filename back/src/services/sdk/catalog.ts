@@ -1,7 +1,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { dataPath } from "../../config/env.js";
-import type { CatalogEvent } from "./protocol.js";
+import { withBtwCommand, type CatalogEvent } from "./protocol.js";
 
 /**
  * O CATÁLOGO DO CARD EM DISCO — o que o menu "/" oferece, sobrevivendo ao driver que o anunciou.
@@ -42,7 +42,8 @@ export async function readCardCatalog(cardId: string): Promise<CatalogEvent | nu
     if (!parsed || typeof parsed !== "object") return null;
     const event = parsed as CatalogEvent;
     if (event.type !== "catalog" || !Array.isArray(event.commands)) return null;
-    return event;
+    // Um arquivo gravado antes do /btw existir não o tem — e quem o responde é o painel, não o CLI.
+    return { ...event, commands: withBtwCommand(event.commands) };
   } catch {
     return null; // sem arquivo, ou um arquivo torto: o driver anuncia o dele daqui a pouco
   }

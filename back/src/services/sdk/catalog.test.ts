@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { readCardCatalog, writeCardCatalog } from "./catalog.js";
 import { config } from "../../config/env.js";
+import { withBtwCommand, type CatalogEvent } from "./protocol.js";
 
 /**
  * O BUG DO CÉSAR (produção, 2026-09-28): "quando eu começava a digitar o /, de primeira não
@@ -43,26 +44,36 @@ describe("o catálogo do card sobrevive ao driver (o menu '/' que não abria de 
     ],
   };
 
+  /** O que o connect entrega: a lista gravada, sempre com o /btw (o painel é quem o responde). */
+  const menu = (catalog: CatalogEvent): CatalogEvent => ({ ...catalog, commands: withBtwCommand(catalog.commands) });
+
+  it("um arquivo gravado antes do /btw existir também o oferece — sem esperar o driver anunciar", async () => {
+    await writeCardCatalog(CARD, CATALOG);
+    expect((await readCardCatalog(CARD))?.commands.map((c) => c.name)).toEqual([
+      "code-review", "superpowers:systematic-debugging", "btw",
+    ]);
+  });
+
   it("sem nada em disco: nenhuma lista — e nunca uma exceção", async () => {
     expect(await readCardCatalog(CARD)).toBeNull();
   });
 
   it("gravado por um driver, lido pelo connect seguinte — sem driver nenhum no meio", async () => {
     await writeCardCatalog(CARD, CATALOG);
-    expect(await readCardCatalog(CARD)).toEqual(CATALOG);
+    expect(await readCardCatalog(CARD)).toEqual(menu(CATALOG));
   });
 
   it("o anúncio do driver novo SUBSTITUI a lista antiga (skills entram e saem do projeto)", async () => {
     await writeCardCatalog(CARD, CATALOG);
     const novo = { type: "catalog" as const, commands: [{ name: "deploy", description: "Sobe pra prod" }] };
     await writeCardCatalog(CARD, novo);
-    expect(await readCardCatalog(CARD)).toEqual(novo);
+    expect(await readCardCatalog(CARD)).toEqual(menu(novo));
   });
 
   it("uma lista VAZIA não é gravada: ela apagaria um menu bom por um driver que subiu capenga", async () => {
     await writeCardCatalog(CARD, CATALOG);
     await writeCardCatalog(CARD, { type: "catalog", commands: [] });
-    expect(await readCardCatalog(CARD)).toEqual(CATALOG);
+    expect(await readCardCatalog(CARD)).toEqual(menu(CATALOG));
   });
 
   it("arquivo corrompido não derruba o connect — é um menu vazio, não um erro", async () => {

@@ -4345,3 +4345,50 @@ describe("SdkChatView — mensagem enviada durante o carregamento sobrevive ao F
     expect(ws.sent).toHaveLength(0);
   });
 });
+
+/**
+ * O /btw: a pergunta LATERAL, feita justamente com o turno rodando. Esperar na fila seria esperar o
+ * fim do turno — o oposto do comando —, então ela sai na hora, não acende o "Preparando…" e a
+ * resposta aparece como linha própria, nunca como bolha do Claude.
+ */
+describe("SdkChatView — /btw", () => {
+  it("com o fio caído NÃO vai pra fila (lá viraria um turno do agente): avisa e mantém as palavras", async () => {
+    renderSdkChat();
+    const first = await socket();
+    first.accept();
+    first.deliver({ type: "ready" });
+    act(() => { first.readyState = 3; first.onclose?.(); });
+
+    await userEvent.type(screen.getByRole("textbox"), "/btw o que falta?{Enter}");
+
+    expect(first.sent).toHaveLength(0);
+    expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sdk-btw")).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveValue("/btw o que falta?");
+  });
+
+  it("com o turno rodando, NÃO espera na fila: sai na hora e a resposta vira linha própria", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.type(box, "faz a tarefa{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "Fazendo…" }); // o turno está rodando
+
+    await userEvent.type(box, "/btw o que falta?{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(2));
+    const frame = JSON.parse(ws.sent[1]!) as { type: string; id: string; question: string };
+    expect(frame).toMatchObject({ type: "btw", question: "o que falta?" });
+    expect(screen.queryByTestId("sdk-queue")).toBeNull();
+    expect(await screen.findByTestId("sdk-btw")).toHaveTextContent("o que falta?"); // pendente
+
+    ws.deliver({ type: "btw_answer", id: frame.id, question: "o que falta?", text: "falta abrir o PR" });
+    await waitFor(() => expect(screen.getByTestId("sdk-btw")).toHaveTextContent("falta abrir o PR"));
+    expect(screen.getAllByTestId("sdk-btw")).toHaveLength(1);
+    const row = screen.getByTestId("sdk-btw");
+    expect(row).toHaveTextContent("o que falta?");
+    expect(row).toHaveTextContent("falta abrir o PR");
+  });
+});
