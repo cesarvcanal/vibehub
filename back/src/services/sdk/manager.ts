@@ -1,5 +1,4 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
 import { onCardBackgroundProbe, onCardDriverProbe, reportCardStatusFromDriver, type DriverActivity } from "../board/agentState.js";
@@ -16,7 +15,7 @@ import { readCardChanges, readCardFileDiff } from "../maestro/changes.js";
 import { mergeTaskEvent, taskSnapshot, toolResultEvent, type AgentTaskEvent, type RawTaskEvent, type RawToolResultEvent } from "./toolResult.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
-  NOTE_CONVERSATION_CLEARED, btwQuestion, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
+  NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
   type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type UserQuestionItem,
   type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest,
 } from "./protocol.js";
@@ -1095,21 +1094,6 @@ export function handleClientFrame(
     void settleOrphanQuestions(session);
     return { kind: "accepted", cid: control.cid, persisted };
   }
-  const btw = control.type === "user" ? btwQuestion(control.text) : null;
-  if (control.type === "user" && btw !== null) {
-    // O /btw NÃO é turno: vai ao driver como controle próprio, que responde numa consulta à parte
-    // (ver `answerBtw` em sdk-driver.mjs). Nada de contagem de turno, marcador de turno em voo ou
-    // chave do espelho — o modelo principal nunca o lê, e o transcript da sessão não o carrega.
-    if (!writeToDriver(session, { type: "btw", id: randomUUID(), question: btw })) {
-      return { kind: "refused", cid: control.cid, reason: "driver-gone" };
-    }
-    noteChatActivity(session);
-    const line: HistoryEvent = { type: "user", text: control.text, at: Date.now(), from: origin };
-    const persisted = appendHistoryReported(session.cardId, line);
-    relayToPeers(session, sender, line);
-    rememberCid(session, control.cid, { persisted, line });
-    return { kind: "accepted", cid: control.cid, persisted };
-  }
   if (control.type === "user") {
     if (!writeToDriver(session, control)) return { kind: "refused", cid: control.cid, reason: "driver-gone" };
     session.activeTurns += 1;
@@ -1127,6 +1111,20 @@ export function handleClientFrame(
     rememberCid(session, control.cid, { persisted, line });
     void settleOrphanQuestions(session);
     return { kind: "accepted", cid: control.cid, persisted };
+  }
+  if (control.type === "btw") {
+    // O /btw NÃO é turno: o driver o responde numa consulta à parte (ver `answerBtw` em
+    // sdk-driver.mjs). Nada de contagem de turno, marcador em voo ou log — só a resposta, que
+    // carrega a pergunta, entra no histórico. Driver morto: quem perguntou sabe na hora, em vez de
+    // ficar com a linha pendente para sempre.
+    if (!canAcceptTurn(session) || !writeToDriver(session, control)) {
+      try {
+        sender?.send(JSON.stringify({ type: "btw_answer", id: control.id, question: control.question, error: "driver-gone" }));
+      } catch { /* that socket is going away */ }
+      return { kind: "ignored" };
+    }
+    noteChatActivity(session);
+    return { kind: "ignored" };
   }
   if (control.type === "question_answer" && !session.ownQuestions.has(control.id)) {
     // ÓRFÃ: este driver nunca fez esta pergunta. Repassá-la devolvia "no pending question with id"

@@ -2358,26 +2358,20 @@ describe("rate_limit — o aviso de limite do plano", () => {
 });
 
 /**
- * O /btw: uma pergunta LATERAL, feita com o turno rodando, que o agente principal nunca lê. Ela vai
- * ao driver como controle próprio (não como mensagem), não conta turno e a resposta fica gravada na
- * conversa do card, ao lado da pergunta.
+ * O /btw: uma pergunta LATERAL, feita com o turno rodando, que o agente principal nunca lê. Chega
+ * num frame próprio, vai ao driver como controle próprio, não conta turno e só a resposta (que
+ * carrega a pergunta) fica no log do card.
  */
 describe("/btw — pergunta lateral", () => {
   function driverControls(): Array<Record<string, unknown>> {
     return spawned[0]!.stdin.written.map((w) => JSON.parse(w) as Record<string, unknown>);
   }
+  const btwFrame = JSON.stringify({ type: "btw", id: "b1", question: "o que falta?" });
 
   it("vai ao driver como controle btw, sem virar turno nem marcador de turno em voo", async () => {
     const session = ensure();
-    const socket = fakeSocket();
-    attachSocket(session, socket as never);
-    const outcome = handleClientFrame(session, JSON.stringify({ type: "user", text: "/btw o que falta?", cid: "c-btw" }));
-    expect(outcome).toMatchObject({ kind: "accepted", cid: "c-btw" });
-    const controls = driverControls();
-    expect(controls).toHaveLength(1);
-    expect(controls[0]).toMatchObject({ type: "btw", question: "o que falta?" });
-    expect(typeof controls[0]!.id).toBe("string");
-    expect(controls.some((c) => c.type === "user")).toBe(false);
+    handleClientFrame(session, btwFrame);
+    expect(driverControls()).toEqual([{ type: "btw", id: "b1", question: "o que falta?" }]);
     expect(driverTurnRunning(CARD)).toBe(false);
     expect(await readInflightMarker(CARD)).toBeNull();
   });
@@ -2386,29 +2380,32 @@ describe("/btw — pergunta lateral", () => {
     const session = ensure();
     handleClientFrame(session, JSON.stringify({ type: "user", text: "roda os testes" }));
     expect(driverTurnRunning(CARD)).toBe(true);
-    handleClientFrame(session, JSON.stringify({ type: "user", text: "/btw e aí?" }));
+    handleClientFrame(session, btwFrame);
     spawned[0]!.stdout.emit("data", line({ type: "result", subtype: "success" }));
     expect(driverTurnRunning(CARD)).toBe(false);
   });
 
-  it("a pergunta e a resposta ficam no log do card (o F5 redesenha as duas)", async () => {
+  it("a resposta vai a todas as abas e fica no log do card (o F5 a redesenha)", async () => {
     const session = ensure();
     const socket = fakeSocket();
     attachSocket(session, socket as never);
-    handleClientFrame(session, JSON.stringify({ type: "user", text: "/btw o que falta?" }));
-    const id = driverControls()[0]!.id as string;
-    spawned[0]!.stdout.emit("data", line({ type: "btw_answer", id, question: "o que falta?", text: "falta o PR" }));
+    handleClientFrame(session, btwFrame);
+    spawned[0]!.stdout.emit("data", line({ type: "btw_answer", id: "b1", question: "o que falta?", text: "falta o PR" }));
     expect(sentTypes(socket)).toContain("btw_answer");
     await vi.waitFor(async () => {
       const history = await readHistory(CARD);
-      expect(history.some((e) => e.type === "user" && e.text === "/btw o que falta?")).toBe(true);
       expect(history.some((e) => e.type === "btw_answer" && (e as { text?: string }).text === "falta o PR")).toBe(true);
     });
   });
 
-  it("/btw sem pergunta segue como mensagem comum", () => {
+  it("driver morto: quem perguntou recebe a falha na hora, em vez de esperar para sempre", () => {
     const session = ensure();
-    handleClientFrame(session, JSON.stringify({ type: "user", text: "/btw" }));
-    expect(driverControls()[0]).toMatchObject({ type: "user", text: "/btw" });
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.exitCode = 1;
+    handleClientFrame(session, btwFrame, undefined, socket as never);
+    const answer = socket.sent.map((s) => JSON.parse(s) as Record<string, unknown>).find((e) => e.type === "btw_answer");
+    expect(answer).toMatchObject({ id: "b1", question: "o que falta?", error: expect.any(String) });
+    expect(driverControls()).toEqual([]);
   });
 });

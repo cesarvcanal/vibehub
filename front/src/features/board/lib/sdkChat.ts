@@ -406,7 +406,16 @@ export type SdkRow =
    * A resposta de um `/btw`: a pergunta LATERAL feita com o turno rodando, respondida à parte (o
    * agente principal nunca a leu). Linha própria, nunca bolha do Claude — não é o turno falando.
    */
-  | { kind: "btw"; id: string; question: string; text?: string; error?: string }
+  | {
+      kind: "btw";
+      id: string;
+      /** O id da pergunta (o do frame `btw`), que casa a resposta com esta linha. */
+      btwId: string;
+      question: string;
+      /** Sem `text` nem `error`: ainda respondendo. */
+      text?: string;
+      error?: string;
+    }
   /**
    * A FROTA DE UM WORKFLOW, ao vivo — a linha que faltava.
    *
@@ -917,7 +926,6 @@ export function currentActivity(state: SdkChatState): SdkActivity | null {
     // A message ABSORBED into the running turn did not open it: the work before it is still the
     // turn's, and stopping here hid a 9-minute test run behind the canned "ainda trabalhando".
     if (row.kind === "user" && row.absorbed === true) continue;
-    if (isBtwRow(row)) continue; // a pergunta lateral não abriu turno nenhum
     if (row.kind === "user") return null; // the turn's own message: nothing after it to report
     const subagent = subagentActivity(state.rows, row);
     if (subagent !== null) return { kind: "tool", label: subagent, rowId: row.id };
@@ -940,19 +948,14 @@ export function currentActivity(state: SdkChatState): SdkActivity | null {
 }
 
 /**
- * A pergunta de um `/btw` — ou null quando a mensagem não é um. Mesma regra do back
- * (back/src/services/sdk/protocol.ts `btwQuestion`): a mensagem INTEIRA começa pelo comando, e
- * `/btw` sem pergunta é mensagem comum. PURE.
+ * A pergunta de um `/btw` — ou null quando a mensagem não é um. O comando é a mensagem INTEIRA
+ * começando por ele, como no terminal; `/btw` sem pergunta segue como mensagem comum. Só o composer
+ * pergunta isto: dali em diante o /btw é um frame e uma linha próprios. PURE.
  */
 export function btwQuestion(text: string): string | null {
   const match = /^\/btw(?:\s+([\s\S]*))?$/.exec(text.trim());
   const question = match?.[1]?.trim();
   return question ? question : null;
-}
-
-/** A linha é do /btw (a pergunta ou a resposta) — fora do turno. PURE. */
-function isBtwRow(row: SdkRow): boolean {
-  return row.kind === "btw" || (row.kind === "user" && btwQuestion(row.text) !== null);
 }
 
 /**
@@ -998,8 +1001,6 @@ export function turnHasRoomForMore(state: SdkChatState): boolean {
     const row = state.rows[i] as SdkRow;
     // A última coisa dita é nossa: ou não há turno (a fila anda como sempre andou), ou ela acabou
     // de ser entregue e o modelo ainda não reagiu — o respiro já foi dela.
-    // O /btw não é turno: nem a pergunta nem a resposta gastam o respiro de ninguém.
-    if (isBtwRow(row)) continue;
     if (row.kind === "user") return !state.turnActive;
     // Ferramenta: trabalho em curso, não frase em curso — e é aqui que o turno passa o tempo dele.
     if (row.kind === "tool") return true;
@@ -1027,7 +1028,6 @@ export function liveActivityDetail(state: SdkChatState): string | null {
   for (let i = state.rows.length - 1; i >= 0; i -= 1) {
     const row = state.rows[i] as SdkRow;
     if (row.kind === "user" && row.absorbed === true) continue; // entrou no turno, não o abriu
-    if (isBtwRow(row)) continue; // a pergunta lateral não abriu turno nenhum
     if (row.kind === "user") return null; // a mensagem do turno: nada depois dela para relatar
     const subagent = subagentActivity(state.rows, row);
     if (subagent !== null) return subagent;
@@ -1316,13 +1316,18 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
     }
     case "btw_answer": {
       // Não toca em `awaiting` nem em `turnActive`: a pergunta lateral não é o turno, e o turno
-      // que estava rodando segue rodando.
-      if (typeof event.question !== "string" || (!event.text && !event.error)) return state;
+      // que estava rodando segue rodando. A pergunta desta aba já tem linha (pendente); a de outra
+      // aba, ou a do replay, ganha uma agora.
+      if (typeof event.id !== "string" || typeof event.question !== "string" || (!event.text && !event.error)) return state;
+      const answer = event.text ? { text: event.text } : { error: event.error };
+      const at = state.rows.findIndex((row) => row.kind === "btw" && row.btwId === event.id);
+      if (at >= 0) {
+        const rows = [...state.rows];
+        rows[at] = { ...(rows[at] as Extract<SdkRow, { kind: "btw" }>), ...answer };
+        return { ...state, rows };
+      }
       const { id, seq } = nextId(state, "btw");
-      const row: SdkRow = event.text
-        ? { kind: "btw", id, question: event.question, text: event.text }
-        : { kind: "btw", id, question: event.question, error: event.error };
-      return { ...state, seq, rows: [...state.rows, row] };
+      return { ...state, seq, rows: [...state.rows, { kind: "btw", id, btwId: event.id, question: event.question, ...answer }] };
     }
     case "system_note": {
       // The PANEL talking (a deploy interrupted a turn, the boot resumed it): one muted centered
@@ -1701,6 +1706,12 @@ export function appendUserRow(
     awaiting: opts?.awaiting === true ? true : state.awaiting,
     rows: [...state.rows, row],
   };
+}
+
+/** A pergunta de um /btw desta aba, pendente até a resposta (`btw_answer`) preenchê-la. PURE. */
+export function appendBtwRow(state: SdkChatState, btwId: string, question: string): SdkChatState {
+  const { id, seq } = nextId(state, "btw");
+  return { ...state, seq, rows: [...state.rows, { kind: "btw", id, btwId, question }] };
 }
 
 /**

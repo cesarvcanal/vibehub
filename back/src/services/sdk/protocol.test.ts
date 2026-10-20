@@ -21,7 +21,6 @@ import {
   interruptNote,
   NOTE_TURN_INTERRUPTED,
   NOTE_TURN_INTERRUPTED_EDIT,
-  btwQuestion,
   withBtwCommand,
   BTW_COMMAND,
 } from "./protocol.js";
@@ -648,18 +647,13 @@ describe("buildOrphanAnswerText", () => {
 });
 
 describe("/btw — pergunta lateral, sem interromper o turno", () => {
-  it("reconhece o comando e devolve só a pergunta", () => {
-    expect(btwQuestion("/btw qual o status do deploy?")).toBe("qual o status do deploy?");
-    expect(btwQuestion("  /btw   o que falta?  ")).toBe("o que falta?");
-    expect(btwQuestion("/btw linha 1\nlinha 2")).toBe("linha 1\nlinha 2");
-  });
-
-  it("não confunde com mensagem comum, comando parecido ou /btw sem pergunta", () => {
-    expect(btwQuestion("me explica o /btw")).toBeNull();
-    expect(btwQuestion("/btwx algo")).toBeNull();
-    expect(btwQuestion("/btw")).toBeNull();
-    expect(btwQuestion("/btw    ")).toBeNull();
-    expect(btwQuestion("/clear")).toBeNull();
+  it("o navegador manda a pergunta num frame próprio, com id e pergunta não vazia", () => {
+    expect(parseSdkClientFrame(`{"type":"btw","id":"b1","question":" o que falta? "}`)).toEqual({
+      type: "btw", id: "b1", question: "o que falta?",
+    });
+    expect(parseSdkClientFrame(`{"type":"btw","id":"b1","question":"   "}`)).toBeNull();
+    expect(parseSdkClientFrame(`{"type":"btw","question":"q"}`)).toBeNull();
+    expect(parseSdkClientFrame(`{"type":"btw","id":"${"x".repeat(65)}","question":"q"}`)).toBeNull();
   });
 
   it("o driver aceita a resposta (btw_answer) como evento do protocolo", () => {

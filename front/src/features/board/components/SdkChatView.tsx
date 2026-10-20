@@ -80,6 +80,7 @@ import {
   CONVERSATION_CLEARED_NOTE,
   answerQuestion,
   applySdkEvent,
+  appendBtwRow,
   appendUserRow,
   btwQuestion,
   coalesceDeltas,
@@ -968,17 +969,18 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     // o fio fora do ar — seria esperar por um fim de turno que só a própria mensagem pode causar.
     const wireUp = connected && socketRef.current?.readyState === WebSocket.OPEN;
     // O /btw é a pergunta feita JUSTAMENTE com o turno rodando: esperar o fim do turno na fila seria
-    // o oposto do comando. Com o fio de pé ele sai na hora, e sem acender o "Preparando…" — quem
-    // responde é uma consulta à parte, não o turno (ver `answerBtw` em sdk-driver.mjs).
-    if (wireUp && btwQuestion(text) !== null) {
-      const cid = newCid();
-      setState((prev) => appendUserRow(prev, text, selfOriginRef.current, { cid, state: "sending" }));
+    // o oposto do comando. Sai na hora, num frame próprio, e vira uma linha pendente — quem responde
+    // é uma consulta à parte, não o turno (ver `answerBtw` em sdk-driver.mjs).
+    const btw = btwQuestion(text);
+    if (wireUp && btw !== null) {
+      const btwId = newCid();
       try {
-        sendTurn({ type: "user", text }, text, cid);
+        sendFrame({ type: "btw", id: btwId, question: btw });
       } catch (err) {
         toast.error((err as Error).message);
         throw err; // the composer keeps the words
       }
+      setState((prev) => appendBtwRow(prev, btwId, btw));
       return;
     }
     const waits = !wireUp || chat.turnActive || chat.awaiting || pendingEdit;
@@ -2115,7 +2117,13 @@ const SdkChatRow = React.memo(function SdkChatRow({
         <div className="text-xs text-muted-foreground">{t("sdk.btwLabel")}</div>
         <div className="mt-1 whitespace-pre-wrap text-xs italic text-muted-foreground">{row.question}</div>
         <div className="mt-2">
-          {row.text !== undefined ? <Markdown text={row.text} /> : t("sdk.btwError", { error: row.error ?? "" })}
+          {row.text !== undefined ? (
+            <Markdown text={row.text} />
+          ) : row.error !== undefined ? (
+            t("sdk.btwError", { error: row.error })
+          ) : (
+            <span className="text-xs text-muted-foreground">{t("sdk.btwPending")}</span>
+          )}
         </div>
       </div>
     );

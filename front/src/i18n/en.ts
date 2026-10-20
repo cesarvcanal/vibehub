@@ -511,6 +511,7 @@ export const en: Record<string, string> = {
   "sdk.offline": "Not connected — the message was not sent. It stays in the field.",
   "sdk.btwLabel": "Side question (/btw) — answered on the side, the turn went on without it",
   "sdk.btwError": "Could not answer: {error}",
+  "sdk.btwPending": "Answering…",
   "sdk.permissionTitle": "Permission needed",
   "sdk.permissionTimeoutHint": "No answer denies it after 5 minutes.",
   "sdk.allow": "Allow",

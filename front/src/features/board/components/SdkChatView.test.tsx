@@ -4251,11 +4251,15 @@ describe("SdkChatView — /btw", () => {
 
     await userEvent.type(box, "/btw o que falta?{Enter}");
     await waitFor(() => expect(ws.sent.length).toBe(2));
-    expect(JSON.parse(ws.sent[1]!)).toMatchObject({ type: "user", text: "/btw o que falta?" });
+    const frame = JSON.parse(ws.sent[1]!) as { type: string; id: string; question: string };
+    expect(frame).toMatchObject({ type: "btw", question: "o que falta?" });
     expect(screen.queryByTestId("sdk-queue")).toBeNull();
+    expect(await screen.findByTestId("sdk-btw")).toHaveTextContent("o que falta?"); // pendente
 
-    ws.deliver({ type: "btw_answer", id: "b1", question: "o que falta?", text: "falta abrir o PR" });
-    const row = await screen.findByTestId("sdk-btw");
+    ws.deliver({ type: "btw_answer", id: frame.id, question: "o que falta?", text: "falta abrir o PR" });
+    await waitFor(() => expect(screen.getByTestId("sdk-btw")).toHaveTextContent("falta abrir o PR"));
+    expect(screen.getAllByTestId("sdk-btw")).toHaveLength(1);
+    const row = screen.getByTestId("sdk-btw");
     expect(row).toHaveTextContent("o que falta?");
     expect(row).toHaveTextContent("falta abrir o PR");
   });

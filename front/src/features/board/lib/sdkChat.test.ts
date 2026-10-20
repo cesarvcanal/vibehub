@@ -5,6 +5,7 @@ import {
   appendUserRow,
   coalesceDeltas,
   answerQuestion,
+  appendBtwRow,
   btwQuestion,
   currentActivity,
   decidePermission,
@@ -1915,44 +1916,41 @@ describe("coalesceDeltas — os tokens de um frame viram um evento só", () => {
 });
 
 /**
- * O /btw: pergunta LATERAL, respondida por uma consulta à parte enquanto o turno segue. Nem a
- * pergunta nem a resposta são o turno: não acendem o "Preparando…", não seguram a fila e não
- * apagam o que a barra de atividade está mostrando.
+ * O /btw: pergunta LATERAL, respondida por uma consulta à parte enquanto o turno segue. É uma linha
+ * própria — pendente ao sair, preenchida quando a resposta chega — e nunca o turno: não acende o
+ * "Preparando…", não segura a fila e não apaga o que a barra de atividade está mostrando.
  */
 describe("/btw na tela", () => {
-  const ready = (): SdkChatState => applySdkEvent(INITIAL_SDK_STATE, { type: "ready" });
-
-  it("reconhece o comando como o back reconhece", () => {
+  it("reconhece o comando: a mensagem inteira começa por ele, e precisa de pergunta", () => {
     expect(btwQuestion("/btw o que falta?")).toBe("o que falta?");
     expect(btwQuestion("  /btw   x ")).toBe("x");
+    expect(btwQuestion("/btw linha 1\nlinha 2")).toBe("linha 1\nlinha 2");
     expect(btwQuestion("/btw")).toBeNull();
     expect(btwQuestion("/btwx y")).toBeNull();
     expect(btwQuestion("fala do /btw")).toBeNull();
   });
 
-  it("a resposta é uma linha própria, com a pergunta, sem mexer no turno", () => {
+  it("a pergunta vira linha pendente e a resposta a preenche, sem mexer no turno", () => {
     const busy = feed([{ type: "ready", turnActive: true }]);
-    const state = feed([{ type: "btw_answer", id: "b1", question: "o que falta?", text: "falta o PR" }], busy);
-    expect(state.rows).toEqual([{ kind: "btw", id: expect.any(String), question: "o que falta?", text: "falta o PR" }]);
-    expect(state.turnActive).toBe(true);
-    expect(state.awaiting).toBe(busy.awaiting);
+    const asked = appendBtwRow(busy, "b1", "o que falta?");
+    expect(asked.rows).toEqual([{ kind: "btw", id: expect.any(String), btwId: "b1", question: "o que falta?" }]);
+    const answered = feed([{ type: "btw_answer", id: "b1", question: "o que falta?", text: "falta o PR" }], asked);
+    expect(answered.rows).toEqual([{ kind: "btw", id: asked.rows[0]!.id, btwId: "b1", question: "o que falta?", text: "falta o PR" }]);
+    expect(answered.turnActive).toBe(true);
+    expect(answered.awaiting).toBe(busy.awaiting);
   });
 
-  it("a falha também é uma linha, com o erro", () => {
+  it("resposta de pergunta feita em outra aba (ou no replay): linha nova, com o erro quando falhou", () => {
     const state = feed([{ type: "btw_answer", id: "b2", question: "q", error: "CLI caiu" }]);
-    expect(state.rows).toEqual([{ kind: "btw", id: expect.any(String), question: "q", error: "CLI caiu" }]);
+    expect(state.rows).toEqual([{ kind: "btw", id: expect.any(String), btwId: "b2", question: "q", error: "CLI caiu" }]);
   });
 
-  it("a pergunta /btw não segura a fila nem esconde a ferramenta em curso", () => {
+  it("a linha do /btw não segura a fila nem esconde a ferramenta em curso", () => {
     let state = feed([
       { type: "ready" },
       { type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test", description: "Roda os testes" } },
-    ], appendUserRow(ready(), "roda os testes", undefined, { awaiting: true }));
-    state = { ...state, turnActive: true };
-    state = appendUserRow(state, "/btw o que falta?");
-    expect(turnHasRoomForMore(state)).toBe(true);
-    expect(currentActivity(state)).toMatchObject({ kind: "tool" });
-    state = feed([{ type: "btw_answer", id: "b1", question: "o que falta?", text: "falta o PR" }], state);
+    ], appendUserRow(INITIAL_SDK_STATE, "roda os testes", undefined, { awaiting: true }));
+    state = appendBtwRow({ ...state, turnActive: true }, "b1", "o que falta?");
     expect(turnHasRoomForMore(state)).toBe(true);
     expect(currentActivity(state)).toMatchObject({ kind: "tool" });
   });

@@ -420,7 +420,10 @@ export interface EditUserControl { type: "edit_user"; original: string; text: st
  * sdk-driver.mjs. Nasce no back (espelho), nunca no navegador.
  */
 export interface ReanchorControl { type: "reanchor" }
-/** A pergunta de um `/btw`, já sem o comando. `id` casa a resposta (`btw_answer`) com ela. */
+/**
+ * A pergunta de um `/btw`, já sem o comando — o composer reconhece o comando e manda este frame
+ * próprio (nunca um `user`). `id` é do navegador e casa a resposta (`btw_answer`) com a linha dele.
+ */
 export interface BtwControl { type: "btw"; id: string; question: string }
 export type DriverControl =
   | UserControl
@@ -430,16 +433,6 @@ export type DriverControl =
   | QuestionAnswerControl
   | EditUserControl
   | ReanchorControl;
-
-/**
- * A pergunta de um `/btw` — ou null quando a mensagem não é um (inclusive `/btw` sem pergunta, que
- * segue como mensagem comum). O comando é a mensagem INTEIRA começando por ele, como no terminal. PURE.
- */
-export function btwQuestion(text: string): string | null {
-  const match = /^\/btw(?:\s+([\s\S]*))?$/.exec(text.trim());
-  const question = match?.[1]?.trim();
-  return question ? question : null;
-}
 
 /**
  * O `/btw` no menu "/". O CLI o trata como comando de terminal (ou nem o lista no modo SDK), e
@@ -555,6 +548,12 @@ export function parseSdkClientFrame(raw: string): DriverControl | null {
       if (parsed.type === "question_answer" && typeof parsed.id === "string") {
         const answers = parseQuestionAnswers((parsed as { answers?: unknown }).answers);
         if (answers) return { type: "question_answer", id: parsed.id, answers };
+      }
+      if (parsed.type === "btw" && typeof parsed.id === "string" && parsed.id !== "" && parsed.id.length <= 64) {
+        const question = typeof (parsed as { question?: unknown }).question === "string"
+          ? (parsed as { question: string }).question.trim()
+          : "";
+        return question ? { type: "btw", id: parsed.id, question } : null;
       }
       if (
         parsed.type === "edit_user" &&

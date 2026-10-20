@@ -522,6 +522,21 @@ async function emitCatalogFrom(init, queryHandle) {
  *  - a mensagem de verdade MATA esta consulta (abort), em vez de só fechar a entrada e deixá-la
  *    terminar de subir disputando CPU com o CLI que vai responder.
  */
+/**
+ * As opções de um CLI DESCARTÁVEL (o catálogo de aquecimento, o /btw): entra como o de verdade, mas
+ * sem MCP nenhum e com os hooks de status mudos — não é um turno do card, e o painel não pode
+ * ouvi-lo como se fosse.
+ */
+function throwawayOptions(abort) {
+  applyAuth(); // the throwaway CLI signs in like the real one would
+  const options = baseOptions();
+  options.env = { ...process.env, VIBEHUB_STATUS_URL: "" };
+  options.strictMcpConfig = true;
+  options.mcpServers = {};
+  options.abortController = abort;
+  return options;
+}
+
 let warmChannel = null;
 let warmAbort = null;
 async function warmCatalog() {
@@ -531,13 +546,7 @@ async function warmCatalog() {
   const abort = new AbortController();
   warmAbort = abort;
   try {
-    applyAuth(); // the throwaway CLI signs in like the real one would
-    const options = baseOptions();
-    options.env = { ...process.env, VIBEHUB_STATUS_URL: "" };
-    options.strictMcpConfig = true;
-    options.mcpServers = {};
-    options.abortController = abort;
-    const handle = query({ prompt: ch, options });
+    const handle = query({ prompt: ch, options: throwawayOptions(abort) });
     // A consulta só ganha vida sendo iterada — e nada do que ela diz interessa: o único objetivo é
     // ter um CLI de pé para responder a pergunta abaixo.
     void (async () => { try { for await (const _ of handle) { /* descartado */ } } catch { /* idem */ } })();
@@ -580,40 +589,45 @@ async function answerBtw(id, question) {
   const texts = [];
   let failure = null;
   try {
-    applyAuth();
-    const options = baseOptions();
+    const options = throwawayOptions(abort);
     delete options.hooks;
     delete options.canUseTool;
     options.includePartialMessages = false;
     options.agentProgressSummaries = false;
     options.tools = [];
-    options.strictMcpConfig = true;
-    options.mcpServers = {};
     options.maxTurns = 1;
     options.persistSession = false;
-    options.env = { ...process.env, VIBEHUB_STATUS_URL: "" };
-    options.abortController = abort;
     if (lastSessionId) {
       options.resume = lastSessionId;
       options.forkSession = true;
     }
     for await (const msg of query({ prompt: btwPrompt(question), options })) {
-      if (msg.type === "assistant" && !msg.parent_tool_use_id && Array.isArray(msg.message?.content)) {
-        for (const block of msg.message.content) {
-          if (block && block.type === "text" && typeof block.text === "string" && block.text.trim() !== "") texts.push(block.text);
-        }
+      if (msg.type === "assistant" && !msg.parent_tool_use_id) {
+        const text = resultText(msg.message?.content).trim();
+        if (text) texts.push(text);
       } else if (msg.type === "result" && msg.is_error && texts.length === 0) {
         failure = typeof msg.result === "string" && msg.result ? msg.result : String(msg.subtype ?? "error");
       }
     }
   } catch (err) {
-    failure = abort.signal.aborted ? "sem resposta em 3 min" : (err && err.message ? err.message : String(err));
+    failure = abort.signal.aborted
+      ? `sem resposta em ${BTW_TIMEOUT_MS / 60_000} min`
+      : (err && err.message ? err.message : String(err));
   } finally {
     clearTimeout(timer);
   }
-  const text = texts.join("\n\n").trim();
+  const text = texts.join("\n\n");
   if (text) emit({ type: "btw_answer", id, question, text });
   else emit({ type: "btw_answer", id, question, error: failure ?? "resposta vazia" });
+}
+
+/**
+ * UMA pergunta lateral por vez: cada uma sobe um CLI e lê a conversa inteira, então cinco perguntas
+ * seguidas viram uma fila, não cinco processos disputando a CPU do runner com o turno de verdade.
+ */
+let btwChain = Promise.resolve();
+function queueBtw(id, question) {
+  btwChain = btwChain.then(() => answerBtw(id, question)); // answerBtw never throws
 }
 
 let currentQuery = null; // the live query() iterator, so an interrupt can reach it mid-turn
@@ -1701,7 +1715,7 @@ rl.on("line", (line) => {
   }
   if (control && control.type === "btw" && typeof control.id === "string" && typeof control.question === "string") {
     // FORA da fila `serialized`: a pergunta lateral não espera nada nem segura nada.
-    void answerBtw(control.id, control.question);
+    queueBtw(control.id, control.question);
     return;
   }
   if (control && control.type === "reanchor") {

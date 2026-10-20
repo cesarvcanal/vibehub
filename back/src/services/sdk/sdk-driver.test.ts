@@ -53,6 +53,7 @@ export function query({ prompt, options }) {
     }));
     const handle = (async function* () {
       if (prompt.includes("btwfail")) throw new Error("CLI caiu");
+      if (prompt.includes("btwslow")) while (!existsSync(join(options.cwd, "release-btw"))) await sleep(20);
       yield { type: "assistant", uuid: "a-btw", message: { content: [{ type: "text", text: "btw-reply:" + prompt }] } };
       yield { type: "result", subtype: "success", session_id: "fork-" + index, result: "ok" };
     })();
@@ -242,6 +243,7 @@ afterEach(async () => {
   for (const child of children.splice(0)) child.kill();
   await rm(join(sandbox, "release-slow"), { force: true });
   await rm(join(sandbox, "release-tool"), { force: true });
+  await rm(join(sandbox, "release-btw"), { force: true });
 });
 
 afterAll(async () => {
@@ -794,6 +796,24 @@ describe("sdk-driver.mjs — /btw", () => {
     // O turno de verdade segue e fecha sozinho.
     await releaseSlowTurn();
     await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:slow", from);
+  }, 60_000);
+
+  it("UMA pergunta lateral por vez: a segunda espera a primeira responder", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    driver.send({ type: "btw", id: "lenta", question: "btwslow" });
+    driver.send({ type: "btw", id: "rapida", question: "e esta?" });
+    while (!driver.marks.some((m) => m.startsWith("btw:"))) await new Promise((resolve) => setTimeout(resolve, 20));
+    // A ausência não tem evento para esperar: uma folga curta, e a prova de verdade é a ordem abaixo.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(driver.marks.filter((m) => m.startsWith("btw:"))).toHaveLength(1);
+    expect(driver.events.slice(from).some((e) => e.type === "btw_answer")).toBe(false);
+
+    await writeFile(join(sandbox, "release-btw"), "");
+    const second = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "rapida", from);
+    const answers = driver.events.slice(from).filter((e) => e.type === "btw_answer").map((e) => e.id);
+    expect(answers).toEqual(["lenta", "rapida"]);
+    expect(String(second.text)).toContain("e esta?");
   }, 60_000);
 
   it("uma falha vira resposta com erro — nunca derruba o driver", async () => {

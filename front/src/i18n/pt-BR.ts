@@ -512,6 +512,7 @@ export const ptBR: Record<string, string> = {
   "sdk.offline": "Sem conexão — a mensagem não foi enviada. Ela fica no campo.",
   "sdk.btwLabel": "Pergunta lateral (/btw) — respondida à parte, o turno seguiu sem ela",
   "sdk.btwError": "Não deu para responder: {error}",
+  "sdk.btwPending": "Respondendo…",
   "sdk.permissionTitle": "Permissão necessária",
   "sdk.permissionTimeoutHint": "Sem resposta, nega sozinho em 5 minutos.",
   "sdk.allow": "Permitir",
