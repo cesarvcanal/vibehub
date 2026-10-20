@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DIFF_SHOWN_MAX, WRITE_SHOWN_MAX, hasToolDiff, inlineMarks, lineDiff, toolDiff, type DiffLine } from "@/features/board/lib/toolDiff";
+import { DIFF_SHOWN_MAX, WRITE_SHOWN_MAX, hasToolDiff, diffRowsView, hunksToRows, inlineMarks, lineDiff, toolDiff, type DiffLine } from "@/features/board/lib/toolDiff";
 
 const add = (text: string): DiffLine => ({ kind: "add", text });
 const del = (text: string): DiffLine => ({ kind: "del", text });
@@ -164,5 +164,28 @@ describe("inlineMarks", () => {
     expect(inlineMarks([del("a"), add("b"), add("c")])).toEqual([null, null, null]);
     expect(inlineMarks([del("abc"), add("xyz")])).toEqual([null, null]);
     expect(inlineMarks([add("only added")])).toEqual([null]);
+  });
+});
+
+describe("hunksToRows / diffRowsView", () => {
+  it("trechos viram linhas com ⋯ entre eles", () => {
+    const rows = hunksToRows([[{ kind: "ctx", text: "a" }], [{ kind: "add", text: "b" }]]);
+    expect(rows).toEqual([{ kind: "ctx", text: "a" }, { kind: "hunk", text: "⋯" }, { kind: "add", text: "b" }]);
+  });
+
+  it("numera pelo começo do trecho: a removida pelo arquivo antigo, as demais pelo novo", () => {
+    const view = diffRowsView([
+      { kind: "hunk", text: "@@ -10,3 +20,3 @@", oldStart: 10, newStart: 20 },
+      { kind: "ctx", text: "a" },
+      { kind: "del", text: "valor = 2" },
+      { kind: "add", text: "valor = 3" },
+      { kind: "ctx", text: "c" },
+    ]);
+    expect(view.map((v) => v.num)).toEqual([null, 20, 11, 21, 22]);
+    expect(view.map((v) => v.mark)).toEqual([null, null, [8, 9], [8, 9], null]);
+  });
+
+  it("sem o começo do trecho, não inventa número", () => {
+    expect(diffRowsView([{ kind: "hunk", text: "⋯" }, { kind: "add", text: "x" }]).map((v) => v.num)).toEqual([null, null]);
   });
 });
