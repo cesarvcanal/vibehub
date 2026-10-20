@@ -83,6 +83,22 @@ export function agentStatus(row: Extract<SdkRow, { kind: "tool" }>, task: AgentT
   return row.live ? "running" : "unknown";
 }
 
+/**
+ * Há quanto tempo o subagente trabalha. O `durationMs` do CLI só chega com um `task_progress`, e
+ * um subagente parado numa ação longa não manda nenhum — a linha congelava. Rodando, conta desde o
+ * `startedAt` (sem nunca voltar atrás do que o CLI já mediu); terminado, a duração final. PURE.
+ */
+export function agentElapsedMs(
+  status: ToolStatus,
+  task: AgentTask | undefined,
+  result: ToolResultSummary["agent"] | undefined,
+  now: number,
+): number | undefined {
+  const measured = task?.durationMs ?? result?.durationMs;
+  if (status !== "running" || task?.startedAt === undefined) return measured;
+  return Math.max(measured ?? 0, now - task.startedAt);
+}
+
 /** O nome de um subagente pela chamada: a descrição que o modelo deu, senão o tipo. PURE. */
 export function agentName(input: unknown): string {
   const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;

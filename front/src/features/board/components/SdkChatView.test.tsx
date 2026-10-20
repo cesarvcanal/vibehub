@@ -2141,6 +2141,31 @@ describe("SdkChatView — subagentes", () => {
     type: "tool_use", id: "t1", name: "Agent", input: { description: "explora o chat", subagent_type: "Explore" },
   };
 
+  it("o tempo do subagente rodando anda sozinho, sem esperar progresso novo do CLI", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready" });
+      ws.deliver(agentCall);
+      const startedAt = Date.now() - 186_000;
+      ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "running", toolUses: 18, durationMs: 186_000, startedAt });
+      const agent = within(screen.getByTestId("sdk-fleet")).getByTestId("sdk-fleet-agent");
+      expect(agent).toHaveTextContent("3m 06s");
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(agent).toHaveTextContent("4m 06s");
+
+      // terminado, o relógio para na duração final
+      ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "completed", toolUses: 20, durationMs: 250_000, startedAt });
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(agent).toHaveTextContent("4m 10s");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("o subagente vira uma linha da frota; o clique abre a linha do tempo dele, pedida ao back", async () => {
     renderSdkChat();
     const ws = await socket();

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { setLanguage } from "@/i18n";
-import { INITIAL_SDK_STATE, applySdkEvent, groupSdkRows, type SdkChatState, type SdkRow } from "@/features/board/lib/sdkChat";
+import { INITIAL_SDK_STATE, applySdkEvent, groupSdkRows, type AgentTask, type SdkChatState, type SdkRow } from "@/features/board/lib/sdkChat";
 import {
+  agentElapsedMs,
   agentStatus,
   bashOutput,
   changedFiles,
@@ -150,5 +151,35 @@ describe("o que vem do detalhe", () => {
     expect(seen).toEqual([`tool:${nonce}`]);
     expect(createDetailChannel(() => { throw new Error("off"); }).request("agent", { id: "x" })).toBeNull();
     expect(parseDetailResponse({ type: "detail", req: "rm" })).toBeNull();
+  });
+});
+
+/**
+ * O RELÓGIO DA FROTA. O `durationMs` do CLI só chega com um `task_progress`, e um subagente parado
+ * numa ação longa (um jest de minutos) não manda nenhum: o tempo da linha congelava. Rodando, a
+ * tela conta sozinha desde o `startedAt`; terminado, vale a duração final.
+ */
+describe("agentElapsedMs", () => {
+  const task = (over: Partial<AgentTask> = {}): AgentTask => ({ toolUseId: "t1", taskId: "k1", status: "running", ...over });
+
+  it("rodando: conta desde o startedAt, mesmo sem progresso novo", () => {
+    expect(agentElapsedMs("running", task({ startedAt: 1_000, durationMs: 186_000 }), undefined, 1_000 + 300_000)).toBe(300_000);
+  });
+
+  it("rodando: nunca anda pra trás do que o CLI já mediu (relógio do navegador atrasado)", () => {
+    expect(agentElapsedMs("running", task({ startedAt: 10_000, durationMs: 50_000 }), undefined, 20_000)).toBe(50_000);
+  });
+
+  it("rodando sem startedAt: fica no que o CLI mandou", () => {
+    expect(agentElapsedMs("running", task({ durationMs: 7_000 }), undefined, 999_999)).toBe(7_000);
+  });
+
+  it("terminado: a duração final, sem contar o relógio", () => {
+    expect(agentElapsedMs("ok", task({ status: "completed", startedAt: 1_000, durationMs: 42_000 }), undefined, 9_999_999)).toBe(42_000);
+    expect(agentElapsedMs("ok", undefined, { toolUses: 3, durationMs: 8_000 }, 9_999_999)).toBe(8_000);
+  });
+
+  it("sem dado nenhum: nada", () => {
+    expect(agentElapsedMs("running", undefined, undefined, 1)).toBeUndefined();
   });
 });

@@ -7,6 +7,7 @@ import { Markdown } from "@/features/board/components/ChatView";
 import { toolHeadline, type AgentTask, type SdkRow, type ToolResultSummary } from "@/features/board/lib/sdkChat";
 import { toolDiff } from "@/features/board/lib/toolDiff";
 import {
+  agentElapsedMs,
   agentName,
   agentStatus,
   bashOutput,
@@ -225,6 +226,8 @@ export function SdkFleetView({ rows, tasks, children }: FleetProps) {
   const statuses = agents.map((row) => agentStatus(row, tasks[row.id]));
   const done = statuses.filter((s) => s === "ok" || s === "error").length;
   const running = statuses.filter((s) => s === "running").length;
+  const ticking = agents.some((row, i) => statuses[i] === "running" && tasks[row.id]?.startedAt !== undefined);
+  const now = useSecondTick(ticking);
   return (
     <div data-testid="sdk-fleet" data-count={agents.length} className="rounded-md border border-border/70 bg-muted/40 px-2.5 py-2 text-xs">
       <div className="flex items-center gap-1.5">
@@ -245,11 +248,11 @@ export function SdkFleetView({ rows, tasks, children }: FleetProps) {
           const status = statuses[i] as ToolStatus;
           const kids = children.get(row.id) ?? [];
           const lastKid = [...kids].reverse().find((k) => k.kind === "tool") as ToolRow | undefined;
-          const now = task?.status === "running" || !task
+          const doing = task?.status === "running" || !task
             ? task?.summary || (task?.lastTool ? task.lastTool : lastKid ? toolHeadline(lastKid.name, lastKid.input).title : "")
             : t(task.status === "completed" ? "sdk.fleet.finished" : "sdk.fleet.stopped");
           const actions = task?.toolUses ?? row.result?.agent?.toolUses ?? kids.filter((k) => k.kind === "tool").length;
-          const duration = task?.durationMs ?? row.result?.agent?.durationMs;
+          const duration = agentElapsedMs(status, task, row.result?.agent, now);
           return (
             <button
               key={row.id}
@@ -261,7 +264,7 @@ export function SdkFleetView({ rows, tasks, children }: FleetProps) {
             >
               <StatusIcon status={status} className="h-3.5 w-3.5" />
               <span className="min-w-0 truncate font-medium text-foreground/90">{agentName(row.input)}</span>
-              <span className="min-w-0 truncate text-muted-foreground">{now}</span>
+              <span className="min-w-0 truncate text-muted-foreground">{doing}</span>
               <span className="shrink-0 tabular-nums text-[11px] text-muted-foreground/80">
                 {[actions ? t("sdk.result.actions", { n: actions }) : null, duration ? formatDuration(duration) : null].filter(Boolean).join(" · ")}
               </span>
@@ -272,6 +275,18 @@ export function SdkFleetView({ rows, tasks, children }: FleetProps) {
       </div>
     </div>
   );
+}
+
+/** O relógio da frota: um tique por segundo enquanto há subagente rodando; parado, não agenda nada. */
+function useSecondTick(active: boolean): number {
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  return now;
 }
 
 /* --------------------------------------------------------------- os modais */
