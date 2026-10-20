@@ -18,8 +18,8 @@ import { logger } from "../../utils/logger.js";
  * The whole flow runs SERVER-SIDE and every git/gh command runs in the runner authenticated as the
  * person who worked the card last (falling back to the project's connection, which is what every
  * card did before actors existed) — the token is fetched with `tokenFor(identity.connectionId)` and passed
- * to the runner over STDIN inside the script (the same per-card `GH_TOKEN` file the card session
- * already uses), NEVER in argv and never in a log line. The runner's git credential helper is
+ * to the runner over STDIN inside the script (the same per-card token file the card's own git and gh
+ * read), NEVER in argv and never in a log line. The runner's git credential helper is
  * `gh auth git-credential`, so a set `GH_TOKEN` steers both `git push` and `gh`.
  *
  * Steps:

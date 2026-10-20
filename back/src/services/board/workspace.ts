@@ -714,8 +714,8 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
 
     // The account's long-lived token (vault) — seeded into the profile inside the script (stdin).
     const oauthToken = await resolveAccountToken(accountSlug);
-    // The identity IN FORCE for this card: the ACTOR's (whoever touched it last), falling back to
-    // the project's connection and the install's `settings.git` — see services/github/identity.ts.
+    // The identity IN FORCE for this card: the ACTOR's (whoever sent it the latest order), falling
+    // back to the project's connection and the install's `settings.git` — see services/github/identity.ts.
     // A card with no actor resolves to exactly what it resolved to before actors existed.
     // BEST-EFFORT: a missing/unconfigured connection must not stop a card from opening — absent
     // means the token file is removed and only then does the card fall back to the ambient login.

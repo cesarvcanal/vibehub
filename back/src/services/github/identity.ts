@@ -8,9 +8,9 @@ import type { Settings } from "../settings/settings.js";
  * registered only a name keeps the project's connection; treating the identity as one indivisible
  * record would silently drop half of what was configured.
  *
- * Order per field: the card's ACTOR (whoever touched it last) -> the PROJECT -> the INSTALL. A card
- * with no actor resolves to exactly what it resolved to before this file existed, which is what
- * makes the whole feature additive.
+ * Order per field: the card's ACTOR (whoever sent it the latest order) -> the PROJECT -> the
+ * INSTALL. A card with no actor resolves to exactly what it resolved to before this file existed,
+ * which is what makes the whole feature additive.
  *
  * The actor's connection is only honoured while it still EXISTS. An id left behind by a connection
  * the owner removed falls through to the project, because the alternative is every push of that
