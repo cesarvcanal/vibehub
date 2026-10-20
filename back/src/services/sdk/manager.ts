@@ -155,6 +155,8 @@ export interface DriverSession {
    * 2026-10-19). Fecha no `result` dele.
    */
   autonomousTurn: boolean;
+  /** O status que este driver gravou por último na bolinha do card (ver `syncBoardStatus`). */
+  boardStatus?: registry.CardStatus;
   /** Um retorno agendado (ScheduleWakeup) ainda por vencer: o motivo, como o agente o descreveu. */
   pendingWakeup?: string;
   /**
@@ -371,6 +373,39 @@ export function driverActivity(cardId: string): DriverActivity {
   const session = sessions.get(cardId);
   if (!session || session.closed) return "none";
   return isDriverBusy(session) ? "turn" : "idle";
+}
+
+/** Um turno rodando neste driver — o mesmo "Trabalhando…" que o chat mostra. */
+function turnRunning(session: Pick<DriverSession, "activeTurns" | "autonomousTurn">): boolean {
+  return session.activeTurns > 0 || session.autonomousTurn;
+}
+
+/**
+ * O driver do chat nativo deste card tem um turno rodando agora? Um `waiting` que chega com o turno
+ * em voo é hook atrasado — o SessionStart de uma sessão retomada aterrissando depois do turno já
+ * ter começado, ou o `Stop` correndo na frente do `result` — e não pode apagar a bolinha (ver
+ * services/board/status.ts).
+ */
+export function driverTurnRunning(cardId: string): boolean {
+  const session = sessions.get(cardId);
+  return !!session && !session.closed && turnRunning(session);
+}
+
+/**
+ * A BOLINHA DO CARD segue o driver, em processo. Ela vivia só dos hooks do CLI — um curl de dentro
+ * do container, com 3s de prazo — e um hook perdido (deploy do back, rede, driver morto sem `Stop`)
+ * deixava o card cinza com o chat trabalhando, ou verde com o chat parado (produção, 2026-10-20). O
+ * manager sabe exatamente quando um turno abre e fecha, então reporta ele mesmo, só quando muda —
+ * pelo mesmo caminho dos hooks, que executa pausa/restart pendente e a fila no `waiting`.
+ */
+function syncBoardStatus(session: DriverSession, opts: { force?: boolean } = {}): void {
+  if (session.closed && !opts.force) return;
+  const status: registry.CardStatus = turnRunning(session) && !session.closed ? "working" : "waiting";
+  if (session.boardStatus === status) return;
+  session.boardStatus = status;
+  void registry.getCard(session.cardId).then((card) => {
+    if (card && card.status !== status) reportCardStatusFromDriver(session.cardId, status);
+  }).catch(() => { /* best-effort, like a hook */ });
 }
 
 /* ---------------------------------------------------------------- helpers */
@@ -840,6 +875,9 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     const succeeded = sessions.has(opts.cardId);
     // A memória de dedupe é do DRIVER: ele acabou, ela acaba junto — o sucessor fala do zero.
     if (!succeeded) forgetDriverKeys(opts.cardId);
+    // Um driver que morre com turno aberto não manda `Stop`: sem isto a bolinha ficava verde num
+    // chat parado. Só sem sucessor — o seguinte já fala pelo card.
+    if (!succeeded && session.boardStatus === "working") syncBoardStatus(session, { force: true });
     // A inscrição no espelho também: deixada de pé, ela escreveria no stdin de um driver morto.
     session.offOutside?.();
     delete session.offOutside;
@@ -1014,6 +1052,7 @@ export function handleClientFrame(
     // order, one per edit.
     session.rewinds.push({ original: control.original, text: control.text, ...first });
     session.activeTurns += 1;
+    syncBoardStatus(session);
     clearIdleTimer(session);
     noteChatActivity(session);
     // The transcript will carry the WRAPPED words — that is what the mirror must not re-emit.
@@ -1034,6 +1073,7 @@ export function handleClientFrame(
   if (control.type === "user") {
     if (!writeToDriver(session, control)) return { kind: "refused", cid: control.cid, reason: "driver-gone" };
     session.activeTurns += 1;
+    syncBoardStatus(session);
     clearIdleTimer(session);
     noteChatActivity(session);
     noteDriverEventFor(session.cardId, control);
@@ -1159,6 +1199,7 @@ async function answerOrphanQuestion(session: DriverSession, control: QuestionAns
     return;
   }
   session.activeTurns += 1;
+  syncBoardStatus(session);
   clearIdleTimer(session);
   noteChatActivity(session);
   noteDriverEventFor(session.cardId, { type: "user", text });
@@ -1240,6 +1281,7 @@ function putMarker(session: DriverSession, base: InflightMarker): void {
  */
 function syncInflightMarker(session: DriverSession): void {
   if (session.closed) return;
+  syncBoardStatus(session);
   const turnRunning = session.activeTurns > 0 || session.autonomousTurn;
   const tasks = backgroundWork(session);
   if (!turnRunning && tasks.length === 0) {
@@ -1300,6 +1342,7 @@ export function sendAgentTurn(session: DriverSession, text: string, origin: Mess
 
 function recordInjectedTurn(session: DriverSession, text: string, origin: MessageOrigin): void {
   session.activeTurns += 1;
+  syncBoardStatus(session);
   clearIdleTimer(session);
   noteDriverEventFor(session.cardId, { type: "user", text });
   const line: HistoryEvent = { type: "user", text, at: Date.now(), from: origin };
@@ -1530,4 +1573,5 @@ onCardDriverProbe((cardId) => driverActivity(cardId));
 
 // …e a quarta: uma tarefa em segundo plano viva é trabalho — o `Stop` do turno que a disparou não
 // pode pôr o card em "aguardando" (ver services/board/status.ts).
-onCardBackgroundProbe((cardId) => driverHoldsBackgroundWork(cardId));
+// O mesmo vale para um turno em voo: o `waiting` que chega com ele aberto é hook atrasado.
+onCardBackgroundProbe((cardId) => driverHoldsBackgroundWork(cardId) || driverTurnRunning(cardId));
