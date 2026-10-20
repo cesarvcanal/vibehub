@@ -314,6 +314,32 @@ describe("status callback", () => {
     expect(current.column).toBe("waiting");
   });
 
+  it("a Stop while the native chat holds a background task keeps the card working", async () => {
+    // Produção, 2026-10-20: o turno disparou a suíte em background e fechou; o `Stop` punha o card
+    // em "aguardando" com o chat mostrando "1 tarefa rodando em segundo plano".
+    const { onCardBackgroundProbe } = await import("../services/board/agentState.js");
+    const projectId = await makeProject();
+    const card = await makeCard(projectId);
+    await app.inject({ method: "PATCH", url: `/api/cards/${card}`, headers: { cookie }, payload: { column: "waiting" } });
+    await postStatus(card, "working", RUNNER_TOKEN);
+    let holding = true;
+    const off = onCardBackgroundProbe((id) => holding && id === card);
+    try {
+      await postStatus(card, "waiting", RUNNER_TOKEN);
+      let current = (await app.inject({ method: "GET", url: `/api/cards/${card}`, headers: { cookie } })).json().card;
+      expect(current.status).toBe("working");
+      expect(current.column).toBe("working");
+
+      holding = false; // a tarefa terminou: o próximo Stop vale de novo
+      await postStatus(card, "waiting", RUNNER_TOKEN);
+      current = (await app.inject({ method: "GET", url: `/api/cards/${card}`, headers: { cookie } })).json().card;
+      expect(current.status).toBe("waiting");
+      expect(current.column).toBe("waiting");
+    } finally {
+      off();
+    }
+  });
+
   it("never drags a card out of done on an idle report", async () => {
     const projectId = await makeProject();
     const card = await makeCard(projectId);

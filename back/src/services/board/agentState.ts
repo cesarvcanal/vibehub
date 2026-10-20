@@ -178,3 +178,51 @@ export function cardDriverActivity(cardId: string): DriverActivity {
   }
   return best;
 }
+
+/* ------------------------------------- the native chat's BACKGROUND work (the status it implies) */
+
+/**
+ * Does the card's native chat driver hold a live background task (a `run_in_background` Bash, an
+ * async subagent) inside its hold cap? While it does, a `waiting` from the Stop hook is not the
+ * agent reaching its prompt — the turn that launched the task closed, and the CLI resumes the
+ * moment the task ends (see services/board/status.ts). REGISTERED, for the same cycle as above.
+ */
+type BackgroundProbe = (cardId: string) => boolean;
+const backgroundProbes = new Set<BackgroundProbe>();
+
+export function onCardBackgroundProbe(probe: BackgroundProbe): () => void {
+  backgroundProbes.add(probe);
+  return () => backgroundProbes.delete(probe);
+}
+
+export function cardHoldsBackgroundWork(cardId: string): boolean {
+  for (const probe of backgroundProbes) {
+    try {
+      if (probe(cardId)) return true;
+    } catch {
+      /* a broken probe must not hold a card in "working" */
+    }
+  }
+  return false;
+}
+
+/**
+ * Where the sdk manager sends a status the HOOKS cannot: the last background task ended and no
+ * turn opened after it, so no Stop will ever fire to say the card went idle (or a task outlived a
+ * Stop that raced ahead of it). The board's status service registers itself here — the sdk layer
+ * reaches it without importing it (its imports lead back to the manager).
+ */
+type StatusSink = (cardId: string, status: "working" | "waiting") => Promise<unknown>;
+const statusSinks = new Set<StatusSink>();
+
+export function onCardStatusSink(sink: StatusSink): () => void {
+  statusSinks.add(sink);
+  return () => statusSinks.delete(sink);
+}
+
+/** Fire-and-forget: a failed write is logged by the sink's own caller path, never thrown here. */
+export function reportCardStatusFromDriver(cardId: string, status: "working" | "waiting"): void {
+  for (const sink of statusSinks) {
+    void sink(cardId, status).catch(() => { /* best-effort, like a hook */ });
+  }
+}

@@ -1,6 +1,7 @@
 import * as React from "react";
 import { t as translate } from "@/i18n";
 import type { AgentTask, SdkRow, ToolResultSummary } from "@/features/board/lib/sdkChat";
+import type { DiffRow } from "@/features/board/lib/toolDiff";
 
 /**
  * VER O QUE O CLAUDE ESTÁ FAZENDO — as regras puras do detalhe que abre quando se clica numa ação,
@@ -253,16 +254,26 @@ type Fields = Record<string, unknown>;
 const asFields = (v: unknown): Fields => (v && typeof v === "object" && !Array.isArray(v) ? (v as Fields) : {});
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
-/** Uma linha de diff: o que a tela pinta. */
-export interface DiffRow { kind: "add" | "del" | "ctx" | "hunk"; text: string }
+export type { DiffRow };
 
 /** Um diff unificado (do git ou do `structuredPatch`) em linhas. Cabeçalhos de arquivo saem. PURE. */
 export function parseUnifiedDiff(diff: string): DiffRow[] {
   const out: DiffRow[] = [];
+  // Cabeçalho só existe ANTES do primeiro `@@` de cada arquivo: dentro do trecho, `--- x` é a linha
+  // `-- x` removida (um comentário SQL, um `---` de markdown), não o nome do arquivo.
+  let inHunk = false;
   for (const line of String(diff ?? "").split("\n")) {
-    if (line.startsWith("diff --git") || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ")
-      || line.startsWith("new file mode") || line.startsWith("deleted file mode") || line.startsWith("similarity index")) continue;
-    if (line.startsWith("@@")) out.push({ kind: "hunk", text: line });
+    if (line.startsWith("diff --git")) {
+      inHunk = false;
+      continue;
+    }
+    if (!inHunk && (line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ")
+      || line.startsWith("new file mode") || line.startsWith("deleted file mode") || line.startsWith("similarity index"))) continue;
+    if (line.startsWith("@@")) {
+      inHunk = true;
+      const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line);
+      out.push(m ? { kind: "hunk", text: line, oldStart: Number(m[1]), newStart: Number(m[2]) } : { kind: "hunk", text: line });
+    }
     else if (line.startsWith("+")) out.push({ kind: "add", text: line.slice(1) });
     else if (line.startsWith("-")) out.push({ kind: "del", text: line.slice(1) });
     else if (line.startsWith(" ")) out.push({ kind: "ctx", text: line.slice(1) });
@@ -278,7 +289,11 @@ export function patchRows(structured: unknown): DiffRow[] | null {
   const out: DiffRow[] = [];
   for (const hunk of patch) {
     const h = asFields(hunk);
-    out.push({ kind: "hunk", text: `@@ -${h.oldStart ?? "?"},${h.oldLines ?? "?"} +${h.newStart ?? "?"},${h.newLines ?? "?"} @@` });
+    out.push({
+      kind: "hunk",
+      text: `@@ -${h.oldStart ?? "?"},${h.oldLines ?? "?"} +${h.newStart ?? "?"},${h.newLines ?? "?"} @@`,
+      ...(typeof h.oldStart === "number" && typeof h.newStart === "number" ? { oldStart: h.oldStart, newStart: h.newStart } : {}),
+    });
     for (const l of Array.isArray(h.lines) ? h.lines : []) {
       if (typeof l !== "string") continue;
       if (l.startsWith("+")) out.push({ kind: "add", text: l.slice(1) });

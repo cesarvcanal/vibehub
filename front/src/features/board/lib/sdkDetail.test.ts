@@ -113,12 +113,17 @@ describe("subagentes", () => {
 describe("o que vem do detalhe", () => {
   it("diff unificado do git em linhas, sem cabeçalhos", () => {
     const rows = parseUnifiedDiff("diff --git a/x b/x\nindex 1..2\n--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n ctx\n-old\n+new\n\\ No newline at end of file");
-    expect(rows).toEqual([{ kind: "hunk", text: "@@ -1,2 +1,2 @@" }, { kind: "ctx", text: "ctx" }, { kind: "del", text: "old" }, { kind: "add", text: "new" }]);
+    expect(rows).toEqual([{ kind: "hunk", text: "@@ -1,2 +1,2 @@", oldStart: 1, newStart: 1 }, { kind: "ctx", text: "ctx" }, { kind: "del", text: "old" }, { kind: "add", text: "new" }]);
+  });
+
+  it("dentro do trecho, `--- `/`+++ ` são linhas removidas/adicionadas, não cabeçalho", () => {
+    const rows = parseUnifiedDiff("diff --git a/q.sql b/q.sql\n--- a/q.sql\n+++ b/q.sql\n@@ -1,2 +1,2 @@\n--- nota antiga\n+++ nota nova\n select 1;");
+    expect(rows.map((r) => [r.kind, r.text])).toEqual([["hunk", "@@ -1,2 +1,2 @@"], ["del", "-- nota antiga"], ["add", "++ nota nova"], ["ctx", "select 1;"]]);
   });
 
   it("structuredPatch do Edit em linhas", () => {
     expect(patchRows({ structuredPatch: [{ oldStart: 3, oldLines: 1, newStart: 3, newLines: 2, lines: [" a", "-b", "+c"] }] }))
-      .toEqual([{ kind: "hunk", text: "@@ -3,1 +3,2 @@" }, { kind: "ctx", text: "a" }, { kind: "del", text: "b" }, { kind: "add", text: "c" }]);
+      .toEqual([{ kind: "hunk", text: "@@ -3,1 +3,2 @@", oldStart: 3, newStart: 3 }, { kind: "ctx", text: "a" }, { kind: "del", text: "b" }, { kind: "add", text: "c" }]);
     expect(patchRows({})).toBeNull();
   });
 

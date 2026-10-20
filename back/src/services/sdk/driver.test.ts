@@ -340,6 +340,16 @@ describe("sdk-driver.mjs — o menu \"/\" antes da primeira mensagem", () => {
     expect(source).toContain("if (warmChannel) warmChannel.end();");
   });
 
+  it("sobe sem MCP nenhum — no reinício eram dez CLIs descartáveis lançando npx e conexões", () => {
+    expect(source).toContain("options.strictMcpConfig = true;");
+    expect(source).toContain("options.mcpServers = {};");
+  });
+
+  it("a mensagem de verdade mata o CLI descartável (abort), não espera ele terminar de subir", () => {
+    expect(source).toContain("options.abortController = abort;");
+    expect(source).toMatch(/if \(warmChannel\) warmChannel\.end\(\);\s*\n\s*if \(warmAbort\) warmAbort\.abort\(\);/);
+  });
+
   it("não marca o catálogo como anunciado: o `init` de verdade ainda substitui este", () => {
     expect(source).toContain("if (catalogAnnounced || channel || warmChannel) return;");
     expect(source).not.toMatch(/warmCatalog[\s\S]{0,800}catalogAnnounced = true/);

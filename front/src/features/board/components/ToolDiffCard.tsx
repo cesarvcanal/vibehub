@@ -5,39 +5,8 @@ import { useT } from "@/i18n";
 import type { SdkRow } from "@/features/board/lib/sdkChat";
 import { SdkDetailContext, StatusIcon, ToolResultText } from "@/features/board/components/SdkDetail";
 import { toolStatus } from "@/features/board/lib/sdkDetail";
-import { inlineMarks, type DiffLine, type InlineMark, type ToolDiff } from "@/features/board/lib/toolDiff";
-
-/**
- * O código fica na cor normal do texto — verde/vermelho no texto inteiro cansa e apaga a sintaxe.
- * Quem diz o tipo da linha é o fundo, a barra à esquerda e o sinal; o trecho que mudou dentro da
- * linha ganha o fundo mais forte (`mark`).
- */
-const LINE_STYLE: Record<DiffLine["kind"], { prefix: string; className: string; sign: string; mark: string }> = {
-  add: {
-    prefix: "+",
-    className: "border-emerald-500/70 bg-emerald-500/10 text-foreground",
-    sign: "text-emerald-600 dark:text-emerald-400",
-    mark: "rounded-sm bg-emerald-500/30",
-  },
-  del: {
-    prefix: "−",
-    className: "border-red-500/70 bg-red-500/10 text-foreground/80",
-    sign: "text-red-600 dark:text-red-400",
-    mark: "rounded-sm bg-red-500/30 line-through decoration-red-500/50",
-  },
-  ctx: { prefix: " ", className: "border-transparent text-muted-foreground", sign: "", mark: "" },
-};
-
-function LineText({ text, mark, className }: { text: string; mark: InlineMark | null; className: string }) {
-  if (!mark) return <>{text}</>;
-  return (
-    <>
-      {text.slice(0, mark[0])}
-      <span data-testid="sdk-diff-mark" className={className}>{text.slice(mark[0], mark[1])}</span>
-      {text.slice(mark[1])}
-    </>
-  );
-}
+import { hunksToRows, type ToolDiff } from "@/features/board/lib/toolDiff";
+import { DiffView } from "@/features/board/components/DiffView";
 
 function basename(path: string): string {
   const parts = path.split(/[\\/]/);
@@ -48,35 +17,13 @@ function DiffBody({ diff }: { diff: ToolDiff }) {
   const t = useT();
   if (diff.hunks.length === 0 && !diff.hidden) return null;
   return (
-    <div className="mt-2 max-h-96 overflow-auto rounded border border-border/60 bg-background/70 font-mono text-xs leading-relaxed">
-      {/* min-w-max: a linha longa rola DENTRO do card e o fundo colorido acompanha até o fim dela. */}
-      <div className="min-w-max py-0.5">
-        {diff.hunks.map((hunk, h) => {
-          const marks = inlineMarks(hunk);
-          return (
-            <React.Fragment key={h}>
-              {h > 0 ? (
-                <div aria-hidden data-testid="sdk-diff-gap" className="select-none border-y border-border/40 bg-muted/40 px-2 text-muted-foreground/60">⋯</div>
-              ) : null}
-              {hunk.map((line, i) => {
-                const style = LINE_STYLE[line.kind];
-                return (
-                  <div key={i} data-testid="sdk-diff-line" data-kind={line.kind} className={cn("whitespace-pre border-l-2 pl-1.5 pr-2", style.className)}>
-                    <span aria-hidden className={cn("inline-block w-4 select-none font-semibold", style.sign)}>{style.prefix}</span>
-                    <LineText text={line.text} mark={marks[i] ?? null} className={style.mark} />
-                  </div>
-                );
-              })}
-            </React.Fragment>
-          );
-        })}
-        {diff.hidden ? (
-          <div data-testid="sdk-diff-truncated" className="px-2 italic text-muted-foreground/80">
-            {t("sdk.diffTruncated", { n: diff.hidden })}
-          </div>
-        ) : null}
-      </div>
-    </div>
+    <DiffView rows={hunksToRows(diff.hunks)} path={diff.file} className="mt-2 max-h-96 rounded border-border/60" lineTestId="sdk-diff-line" hunkTestId="sdk-diff-gap">
+      {diff.hidden ? (
+        <div data-testid="sdk-diff-truncated" className="px-2 italic text-muted-foreground/80">
+          {t("sdk.diffTruncated", { n: diff.hidden })}
+        </div>
+      ) : null}
+    </DiffView>
   );
 }
 

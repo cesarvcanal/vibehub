@@ -1830,7 +1830,9 @@ function SdkToolRow({ row }: { row: Extract<SdkRow, { kind: "tool" }> }) {
       className="group -ml-1 block w-[calc(100%+0.25rem)] min-w-0 rounded border border-transparent py-0.5 pl-1.5 pr-1 text-left text-xs enabled:hover:border-border/70 enabled:hover:bg-muted/50"
     >
       <div className="flex items-baseline gap-1.5 text-muted-foreground">
-        <StatusIcon status={status} className="translate-y-0.5" />
+        {/* Desce o ícone até a linha do texto com `top`, não com `translate`: o `animate-spin` é
+            dono do `transform`, e um translate ali fazia o spinner só deslizar 2px e voltar, sem girar. */}
+        <StatusIcon status={status} className="relative top-0.5" />
         <span data-testid="sdk-tool-title" className="min-w-0 flex-1 truncate font-medium text-foreground/90">
           {pending ? toolLiveLabel(row) : headline.title}
         </span>
