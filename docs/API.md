@@ -356,3 +356,59 @@ The read tools carry `readOnlyHint`, so the app does not ask the user to confirm
 A card the user cannot see answers `card not found`; a `view` share answers `read-only`. The
 card-only tools (`vibehub_report`, `vibehub_preview`, credentials…) are not offered: the app has no
 card of its own.
+
+## MCP 2026-07-28 and MCP Events webhooks (ChatGPT Work)
+
+The same `/mcp`, behind the same credentials, also speaks protocol **2026-07-28** (stateless: no
+`initialize`; the version rides in the `MCP-Protocol-Version` header and in `params._meta`). A request
+recognised as modern is answered by `back/src/mcp/modern.ts`; everything else still goes to the SDK, so
+legacy clients see no change.
+
+| Method (2026-07-28) | Answer |
+|---|---|
+| `server/discover` | `{ resultType: "complete", supportedVersions: ["2026-07-28"], capabilities: { tools: {}, events: {} }, instructions, ttlMs, cacheScope: "private" }` |
+| `tools/list`, `tools/call` | the caller's own tools (same ACL as their legacy session), plus `resultType` |
+| `events/list` | `card.event`, `delivery: ["webhook"]`, filters `cardId` / `projectId` / `types` / `kinds` |
+| `events/subscribe` | `{ name, arguments, delivery: { mode: "webhook", url, secret: "whsec_…" }, cursor, ttlMs? }` → `{ id, refreshBefore, cursor, truncated }` |
+| `events/unsubscribe` | `{ name, arguments, delivery: { url } }` → `{}` (idempotent) |
+
+Errors: header/body disagreement `400` + `-32020`; another modern version `400` + `-32022`
+(`data.supported`); unknown method `404` + `-32601`. Events errors are JSON-RPC errors (HTTP 200):
+`-32602` invalid params, `-32011` unknown event, `-32012` forbidden, `-32013` limit, `-32014` delivery
+mode, `-32015` callback verification (`data.reason`). `-32015` is the code OpenAI documents for
+ChatGPT; the others follow the same draft revision (the current draft renumbers them `-32023…-32027`,
+which the legacy push stream keeps).
+
+**Delivery** (`back/src/services/webhooks/`): before the first event to a URL, a signed
+`{"type":"verification","challenge":…}` that the endpoint must echo in a 2xx (cached per principal +
+URL). Then one `EventOccurrence` per POST (`eventId`, `name`, `timestamp`, `data`, `cursor`), Standard
+Webhooks headers (`webhook-id` = `eventId`, `webhook-timestamp`, `webhook-signature`) plus
+`X-MCP-Subscription-Id`, at most 256 KiB (long text is cut and `data.truncated` set). Transient
+failures are retried with backoff (5 attempts); `410`, `413` and other definitive 4xx are not. The
+credential that subscribed (kept hashed) and the board's ACL are re-checked at every delivery — a
+revoked token drops the subscription. Callbacks must be `https`, resolve only to public addresses
+(checked at every connect, the socket pinned to the checked address), and redirects are never
+followed. Subscriptions, the verification cache and pending deliveries persist in
+`webhook-subscriptions.json` (signing secrets encrypted with the vault key). `VIBEHUB_WEBHOOK_ALLOW_PRIVATE=1`
+lifts the address check — tests only; never set it on an install.
+
+### Turning it on in ChatGPT (manual, per OpenAI's MCP Events guide)
+
+Preconditions: the connector URL `https://<public domain>/mcp` already works in ChatGPT (OAuth), and
+the vibehub server can make **outbound HTTPS** requests to the internet (the callbacks are ChatGPT's).
+
+1. Deploy this version; in ChatGPT, rescan the vibehub plugin/connector so it re-reads tools and
+   events. The plugin page should list the `card.event` event next to the tools.
+2. Open a **Work chat** (ChatGPT web, or the desktop app with **Work** and **Cloud** selected; a dot
+   also works). MCP Events is not available in ordinary chats or voice.
+3. Ask ChatGPT to monitor vibehub, naming the filter and what to do, e.g. "Subscribe to vibehub
+   card.event for project erp, kinds question and needs_me. When one arrives, tell me the question and
+   the options, and answer it with vibehub_send_to_terminal only after I confirm."
+4. On the server, confirm `events/subscribe` arrived and the verification passed (log line
+   `MCP events` or the subscription in `webhook-subscriptions.json`).
+5. Make a card ask something (`vibehub_notify` type `question`, or an AskUserQuestion in the native
+   chat) and confirm the callback got a 2xx.
+6. **The real test**: without typing anything in that Work chat, ChatGPT must start a run on its own
+   and act on the event as instructed. Only this step proves the agent woke up; steps 4–5 only prove
+   that the webhook was delivered.
+7. Stop monitoring in ChatGPT and confirm the server processed `events/unsubscribe` (no more POSTs).
