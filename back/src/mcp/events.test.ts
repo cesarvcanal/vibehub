@@ -319,6 +319,22 @@ describe("filters, isolation and lifecycle", () => {
     expect(sent).toHaveLength(1);
   });
 
+  it("a failed send does not reopen a question the card already moved past while the answer was in flight", async () => {
+    const env = await boot();
+    const posted = await tool(TOKEN, "vibehub_notify", question(env));
+    const maestro = await import("../services/maestro/maestro.js");
+    let fail!: () => void;
+    vi.mocked(maestro.sendToTerminal).mockImplementationOnce(() => new Promise((_, reject) => { fail = () => reject(new Error("no live session")); }));
+    const answer = tool(OWNER_TOKEN, "vibehub_send_to_terminal", { cardId: env.card.id, text: "Mongo", inReplyTo: posted.eventId });
+    await vi.waitFor(() => expect(fail).toBeTypeOf("function"));
+    await env.events.observeCardStatus(env.card.id, "waiting", "working"); // the card moved on meanwhile
+    fail();
+    expect((await answer).error).toMatch(/no live session/);
+    const { events } = await env.events.eventsAfter(0);
+    expect(events.find((e) => e.id === posted.eventId)?.resolvedAt).toEqual(expect.any(Number));
+    expect((await tool(OWNER_TOKEN, "vibehub_send_to_terminal", { cardId: env.card.id, text: "Mongo", inReplyTo: posted.eventId })).error).toMatch(/not waiting/);
+  });
+
   it("caps the open streams per subscriber", async () => {
     const env = await boot();
     env.mcpEvents.STREAM.maxPerPrincipal = 2;

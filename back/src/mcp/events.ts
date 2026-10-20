@@ -193,6 +193,7 @@ export function registerEvents(server: McpServer, user: PublicUser | null, princ
     const ended = new Promise<void>((resolve) => { end = resolve; });
     extra.signal.addEventListener("abort", () => end(), { once: true });
     let over = extra.signal.aborted;
+    if (over) end(); // closed before the handler ran: the listener above will never fire
     /** The principal as it is now; when the credential is gone, the stream says so and ends. */
     const who = async () => {
       const now = over ? false : await principal();
@@ -251,12 +252,14 @@ export function registerEvents(server: McpServer, user: PublicUser | null, princ
  */
 export async function sendAnswer<T>(cardId: string, inReplyTo: string | undefined, text: string, send: (text: string) => Promise<T>): Promise<T> {
   if (!inReplyTo) return send(text);
-  const { event, release } = await claimReply(cardId, inReplyTo);
+  const { event, settle } = await claimReply(cardId, inReplyTo);
   const asked = event.questions?.[0]?.question ?? event.summary ?? event.text;
+  let delivered = false;
   try {
-    return await send(`[resposta a ${event.id}${asked ? ` — "${asked}"` : ""}]\n${text}`);
-  } catch (err) {
-    await release();
-    throw err;
+    const sent = await send(`[resposta a ${event.id}${asked ? ` — "${asked}"` : ""}]\n${text}`);
+    delivered = true;
+    return sent;
+  } finally {
+    await settle(delivered);
   }
 }

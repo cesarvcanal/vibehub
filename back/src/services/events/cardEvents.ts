@@ -66,9 +66,11 @@ export interface CardEvent {
   /** message: the option label the sender recommends (one of `questions[0].options`). */
   recommended?: string;
   resolvedAt?: number;
+  /** An answer in flight (`claimReply`): resolved by it, reopened only by the same claim. */
+  claim?: string;
 }
 
-export type CardEventInput = Omit<CardEvent, "seq" | "at" | "title" | "projectId" | "resolvedAt"> & {
+export type CardEventInput = Omit<CardEvent, "seq" | "at" | "title" | "projectId" | "resolvedAt" | "claim"> & {
   at?: number;
   /** Recorded already resolved: news to push, nothing left open to answer (a conclusion). */
   resolved?: boolean;
@@ -197,12 +199,17 @@ export async function recordCardEvent(input: CardEventInput): Promise<CardEvent 
 
 /** Resolves a card's open events — only the one with `id`, answering `refId` / of `kind` when given. Returns how many. */
 export async function resolveCardEvents(cardId: string, opts: { id?: string; refId?: string; kind?: CardEventKind } = {}): Promise<number> {
-  const matches = (e: CardEvent) => e.cardId === cardId && !e.resolvedAt && (opts.id === undefined || e.id === opts.id)
+  // An event under an answer in flight counts as open here: this resolution is the real one, and
+  // taking the claim away keeps a failed send from reopening it afterwards.
+  const matches = (e: CardEvent) => e.cardId === cardId && (!e.resolvedAt || e.claim !== undefined) && (opts.id === undefined || e.id === opts.id)
     && (opts.refId === undefined || e.refId === opts.refId) && (opts.kind === undefined || e.kind === opts.kind);
   return store.mutate((doc) => {
     const now = Date.now();
     const open = doc.events.filter(matches);
-    for (const e of open) e.resolvedAt = now;
+    for (const e of open) {
+      e.resolvedAt = now;
+      e.claim = undefined;
+    }
     return open.length;
   });
 }
@@ -390,21 +397,26 @@ const ANSWERABLE = new Set<CardEventKind>(["question", "permission", "needs_me",
 
 /**
  * CLAIMS the answer to the open event of this card that `eventId` names: resolved here, atomically,
- * so of two answers at the same time only one goes out — the other throws. `release` reopens it,
- * for when the answer could not be delivered after all.
+ * so of two answers at the same time only one goes out — the other throws. `settle` ends the claim:
+ * delivered keeps it resolved; not delivered reopens it — unless something else resolved it
+ * meanwhile (the card moved on), which took the claim away.
  */
-export async function claimReply(cardId: string, eventId: string): Promise<{ event: CardEvent; release: () => Promise<unknown> }> {
+export async function claimReply(cardId: string, eventId: string): Promise<{ event: CardEvent; settle: (delivered: boolean) => Promise<unknown> }> {
+  const claim = randomUUID();
   const event = await store.mutate((doc) => {
     const found = doc.events.find((e) => e.id === eventId && e.cardId === cardId);
     if (!found || found.resolvedAt || !ANSWERABLE.has(found.kind)) {
       throw new Error(`event '${eventId}' of this card is not waiting on an answer`);
     }
     found.resolvedAt = Date.now();
+    found.claim = claim;
     return { ...found };
   });
-  const release = () => store.mutate((doc) => {
+  const settle = (delivered: boolean) => store.mutate((doc) => {
     const found = doc.events.find((e) => e.id === eventId);
-    if (found) found.resolvedAt = undefined;
+    if (found?.claim !== claim) return;
+    found.claim = undefined;
+    if (!delivered) found.resolvedAt = undefined;
   });
-  return { event, release };
+  return { event, settle };
 }
