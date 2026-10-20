@@ -32,9 +32,10 @@ export async function reportCardStatus(cardId: string, reported: registry.CardSt
   const wasStatus = before?.status;
   const card = await registry.applyCardStatus(cardId, status);
   // What a person away from the board hears (services/events/cardEvents.ts): a turn that ended, or
-  // a new one clearing what was open. A log that fails never fails the hook.
+  // a new one clearing what was open. Fire-and-forget: the hook has a 3s budget, and a log that
+  // fails never fails the hook.
   if (card) {
-    await observeCardStatus(card.id, wasStatus, status).catch((err: unknown) => {
+    void observeCardStatus(card.id, wasStatus, status).catch((err: unknown) => {
       logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not record the card event");
     });
   }

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { JsonStore } from "../../store/jsonStore.js";
 import { dataPath } from "../../config/env.js";
 import { cardLevel } from "../../auth/access.js";
@@ -87,25 +88,26 @@ export async function recordCardEvent(input: CardEventInput): Promise<CardEvent 
   return store.mutate((doc) => {
     if (doc.events.some((e) => e.id === input.id)) return null;
     const now = Date.now();
-    if (input.kind === "needs_me") {
-      for (const e of doc.events) {
-        if (e.cardId === input.cardId && e.kind === "needs_me" && !e.resolvedAt) e.resolvedAt = now;
-      }
-    }
+    const open = (kind: CardEventKind) => doc.events.filter((e) => e.cardId === input.cardId && e.kind === kind && !e.resolvedAt);
+    // One end of turn per turn: two hooks reporting the same end (the CLI's and the driver's) are one.
+    if (input.kind === "turn_finished" && open("turn_finished").length > 0) return null;
+    // The newest "I need you" is the one that stands.
+    if (input.kind === "needs_me") for (const e of open("needs_me")) e.resolvedAt = now;
     const event: CardEvent = { ...input, seq: ++doc.seq, at: input.at ?? now, title: card.title };
     doc.events = pruneCardEvents([...doc.events, event], now);
     return event;
   });
 }
 
-/** Resolves a card's open events — only the one answering `refId` when given. Returns how many. */
-export async function resolveCardEvents(cardId: string, opts: { refId?: string } = {}): Promise<number> {
+/** Resolves a card's open events — only those answering `refId` / of `kind` when given. Returns how many. */
+export async function resolveCardEvents(cardId: string, opts: { refId?: string; kind?: CardEventKind } = {}): Promise<number> {
   return store.mutate((doc) => {
     const now = Date.now();
     let n = 0;
     for (const e of doc.events) {
       if (e.cardId !== cardId || e.resolvedAt) continue;
       if (opts.refId !== undefined && e.refId !== opts.refId) continue;
+      if (opts.kind !== undefined && e.kind !== opts.kind) continue;
       e.resolvedAt = now;
       n++;
     }
@@ -168,53 +170,78 @@ export async function markDelivered(user: PublicUser, upTo: number): Promise<num
 /* ------------------------------------------------------------------ observers */
 
 /**
+ * The observers run ONE AT A TIME, in the order they were called. Their callers fire and forget, and
+ * a question's result can arrive right behind the question: run concurrently, the resolve could land
+ * before the record and leave an answered question open. A failure stays with its own call.
+ */
+let observing: Promise<unknown> = Promise.resolve();
+function inOrder(work: () => Promise<void>): Promise<void> {
+  const next = observing.then(work);
+  observing = next.catch(() => undefined);
+  return next;
+}
+
+/**
  * A card's status report, seen against the status it had: a turn that ENDS (working → waiting) is a
  * turn_finished, with what the agent declared about it; a turn that STARTS resolves everything the
  * card had open (whoever answered, the card moved on).
  */
-export async function observeCardStatus(cardId: string, was: CardStatus | null | undefined, now: CardStatus): Promise<void> {
-  if (now === "working" && was !== "working") {
-    await resolveCardEvents(cardId);
-    return;
-  }
-  if (now !== "waiting" || was !== "working") return;
-  const card = await getCard(cardId);
-  if (!card) return;
-  const at = Date.now();
-  await recordCardEvent({
-    id: `turn:${cardId}:${at}`,
-    cardId,
-    kind: "turn_finished",
-    at,
-    ...(card.declaredState ? { state: card.declaredState } : {}),
-    ...(card.declaredSummary ? { summary: card.declaredSummary } : {}),
+export function observeCardStatus(cardId: string, was: CardStatus | null | undefined, now: CardStatus): Promise<void> {
+  return inOrder(async () => {
+    if (now === "working" && was !== "working") {
+      await resolveCardEvents(cardId);
+      return;
+    }
+    if (now !== "waiting" || was !== "working") return;
+    const card = await getCard(cardId);
+    if (!card) return;
+    await recordCardEvent({
+      id: `turn:${randomUUID()}`,
+      cardId,
+      kind: "turn_finished",
+      ...(card.declaredState ? { state: card.declaredState } : {}),
+      ...(card.declaredSummary ? { summary: card.declaredSummary } : {}),
+    });
   });
 }
 
 /** The native chat's stream: its question and permission cards open an event; their outcome resolves it. */
-export async function observeDriverEvent(cardId: string, event: DriverEvent): Promise<void> {
+export function observeDriverEvent(cardId: string, event: DriverEvent): Promise<void> {
   switch (event.type) {
     case "user_question":
-      await recordCardEvent({ id: `question:${event.id}`, cardId, kind: "question", refId: event.id, questions: event.questions });
-      return;
-    case "permission_request":
-      await recordCardEvent({
-        id: `permission:${event.id}`, cardId, kind: "permission", refId: event.id, tool: event.tool,
-        ...(event.reason ? { reason: event.reason } : {}),
+      return inOrder(async () => {
+        await recordCardEvent({ id: `question:${event.id}`, cardId, kind: "question", refId: event.id, questions: event.questions });
       });
-      return;
+    case "permission_request":
+      return inOrder(async () => {
+        await recordCardEvent({
+          id: `permission:${event.id}`, cardId, kind: "permission", refId: event.id, tool: event.tool,
+          ...(event.reason ? { reason: event.reason } : {}),
+        });
+      });
     case "question_result":
-      await resolveCardEvents(cardId, { refId: event.id });
-      return;
-    case "permission":
-      if (event.id) await resolveCardEvents(cardId, { refId: event.id });
-      return;
+      return inOrder(async () => {
+        await resolveCardEvents(cardId, { refId: event.id });
+      });
+    case "permission": {
+      const id = event.id;
+      return id ? inOrder(async () => { await resolveCardEvents(cardId, { refId: id }); }) : Promise.resolve();
+    }
+    default:
+      return Promise.resolve();
   }
 }
 
-/** The agent declared it needs the person (`vibehub_report` needs_me / blocked). */
-export async function observeDeclaredState(cardId: string, state: DeclaredState, summary: string | undefined): Promise<void> {
-  if (state !== "needs_me" && state !== "blocked") return;
-  const at = Date.now();
-  await recordCardEvent({ id: `state:${cardId}:${at}`, cardId, kind: "needs_me", at, state, ...(summary ? { summary } : {}) });
+/**
+ * The agent's declared state: needs_me / blocked is "I need you"; anything declared after it means
+ * the card moved on, and the previous "I need you" closes.
+ */
+export function observeDeclaredState(cardId: string, state: DeclaredState, summary: string | undefined): Promise<void> {
+  return inOrder(async () => {
+    if (state !== "needs_me" && state !== "blocked") {
+      await resolveCardEvents(cardId, { kind: "needs_me" });
+      return;
+    }
+    await recordCardEvent({ id: `state:${randomUUID()}`, cardId, kind: "needs_me", state, ...(summary ? { summary } : {}) });
+  });
 }

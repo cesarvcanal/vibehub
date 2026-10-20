@@ -43,16 +43,19 @@ describe("reportCardStatus → card events", () => {
     await env.reportCardStatus(env.card.id, "working");
     await env.reportCardStatus(env.card.id, "waiting");
     await env.reportCardStatus(env.card.id, "waiting"); // a repeated hook is not a second turn
-    const inbox = await env.events.inboxFor(env.owner);
-    expect(inbox.events.map((e) => e.kind)).toEqual(["turn_finished"]);
-    expect(inbox.events[0]).toMatchObject({ cardId: env.card.id, title: "login" });
+    await vi.waitFor(async () => {
+      const inbox = await env.events.inboxFor(env.owner);
+      expect(inbox.events.map((e) => e.kind)).toEqual(["turn_finished"]);
+      expect(inbox.events[0]).toMatchObject({ cardId: env.card.id, title: "login" });
+    });
   });
 
   it("the next turn starting clears it", async () => {
     const env = await load();
     await env.reportCardStatus(env.card.id, "working");
     await env.reportCardStatus(env.card.id, "waiting");
+    await vi.waitFor(async () => expect((await env.events.inboxFor(env.owner)).events).toHaveLength(1));
     await env.reportCardStatus(env.card.id, "working");
-    expect((await env.events.inboxFor(env.owner)).events).toEqual([]);
+    await vi.waitFor(async () => expect((await env.events.inboxFor(env.owner)).events).toEqual([]));
   });
 });

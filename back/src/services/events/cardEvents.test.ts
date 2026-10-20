@@ -250,6 +250,31 @@ describe("observers — where the moments come from", () => {
     expect((await env.events.inboxFor(env.owner)).events).toEqual([]);
   });
 
+  it("a question and its result arriving together still end resolved (arrival order is kept)", async () => {
+    const env = await load();
+    await Promise.all([
+      env.events.observeDriverEvent(env.card.id, { type: "user_question", id: "q1", questions: Q }),
+      env.events.observeDriverEvent(env.card.id, { type: "question_result", id: "q1", superseded: true }),
+    ]);
+    expect((await env.events.inboxFor(env.owner)).events).toEqual([]);
+  });
+
+  it("two hooks reporting the same end of turn record it once", async () => {
+    const env = await load();
+    await Promise.all([
+      env.events.observeCardStatus(env.card.id, "working", "waiting"),
+      env.events.observeCardStatus(env.card.id, "working", "waiting"),
+    ]);
+    expect((await env.events.inboxFor(env.owner)).events).toHaveLength(1);
+  });
+
+  it("declaring anything else after needs_me closes it — the card moved on", async () => {
+    const env = await load();
+    await env.events.observeDeclaredState(env.card.id, "needs_me", "qual banco?");
+    await env.events.observeDeclaredState(env.card.id, "ready", "pronto");
+    expect((await env.events.inboxFor(env.owner)).events).toEqual([]);
+  });
+
   it("declaring needs_me or blocked is a needs_me; ready or working is not", async () => {
     const env = await load();
     await env.events.observeDeclaredState(env.card.id, "ready", "pronto");

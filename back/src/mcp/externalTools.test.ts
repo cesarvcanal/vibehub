@@ -231,6 +231,8 @@ describe("the inbox — what happened on the board while the user was not asking
     const tool = (await client.listTools()).tools.find((t) => t.name === "vibehub_inbox");
     await close();
     expect(tool?.annotations?.readOnlyHint).toBe(true);
+    // The wrapper that attaches the news keeps each tool's own schema.
+    expect(Object.keys(tool?.inputSchema.properties ?? {})).toEqual(["since"]);
   });
 
   it("lists the open events of the cards the user reaches, by title, with the question's options", async () => {
