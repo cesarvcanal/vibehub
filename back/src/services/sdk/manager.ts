@@ -697,18 +697,9 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   // no page is open — that is the whole point of the detach.
   noteDriverEventFor(session.cardId, event);
   if (replayableHistoryEvent(event)) void appendHistory(session.cardId, { ...event, at: Date.now() });
-  observeForInbox(session.cardId, event);
-}
-
-/**
- * Feeds the card-event log (services/events/cardEvents.ts): what a person away from the board hears
- * about — a question, a permission, and their outcome. Never throws: a log that fails costs a
- * notice, never the chat.
- */
-function observeForInbox(cardId: string, event: DriverEvent): void {
-  void observeDriverEvent(cardId, event).catch((err: unknown) => {
-    logger.warn({ card: cardId, detail: (err as Error).message }, "could not record the card event");
-  });
+  // What a person away from the board hears (services/events/cardEvents.ts): questions,
+  // permissions and their outcome.
+  void observeDriverEvent(session.cardId, event);
 }
 
 /**
@@ -1198,7 +1189,7 @@ async function orphanQuestions(session: DriverSession): Promise<Map<string, User
 function settleQuestionCard(session: DriverSession, result: Extract<DriverEvent, { type: "question_result" }>): void {
   broadcast(session, result);
   void appendHistory(session.cardId, { ...result, at: Date.now() });
-  observeForInbox(session.cardId, result);
+  void observeDriverEvent(session.cardId, result);
 }
 
 /**

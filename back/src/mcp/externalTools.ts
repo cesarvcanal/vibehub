@@ -87,20 +87,14 @@ async function openForUser(user: PublicUser, card: registry.Card) {
 
 /** A card event as the assistant gets it: the card by title (what is spoken), the time readable. */
 function forAssistant(e: CardEvent) {
+  // Absent fields are undefined, and JSON leaves them out.
   return {
-    cardId: e.cardId,
-    card: e.title,
-    kind: e.kind,
-    at: new Date(e.at).toISOString(),
-    ...(e.questions ? { questions: e.questions } : {}),
-    ...(e.tool ? { tool: e.tool } : {}),
-    ...(e.reason ? { reason: e.reason } : {}),
-    ...(e.state ? { state: e.state } : {}),
-    ...(e.summary ? { summary: e.summary } : {}),
+    cardId: e.cardId, card: e.title, kind: e.kind, at: new Date(e.at).toISOString(),
+    questions: e.questions, tool: e.tool, reason: e.reason, state: e.state, summary: e.summary,
   };
 }
 
-type ToolResult = { content: { type: "text"; text: string }[] };
+type ToolResult = ReturnType<typeof ok>;
 
 /**
  * What happened on the board since this person last heard, as one more block of the answer. An MCP
@@ -116,18 +110,18 @@ async function withNews(user: PublicUser, result: ToolResult): Promise<ToolResul
     return result;
   }
   if (fresh.length === 0) return result;
-  const news = {
+  const news = ok({
     notifications: fresh.map(forAssistant),
     hint: "new on the board since the user last heard — tell them briefly before anything else",
-  };
-  return { ...result, content: [...result.content, { type: "text", text: JSON.stringify(news, null, 2) }] };
+  });
+  return { ...result, content: [...result.content, ...news.content] };
 }
 
 export function registerExternalTools(server: McpServer, user: PublicUser): void {
-  // Every tool answer carries the news (see withNews) — except the inbox, which IS the news.
+  // Every tool answer carries the news (see withNews) — except the inbox, which IS the news and
+  // registers on `server` directly. The casts only bridge the SDK's overloads; config passes as is.
   const registerTool = ((name: string, config: unknown, cb: (...args: unknown[]) => Promise<ToolResult>) =>
-    server.registerTool(name, config as never, (async (...args: unknown[]) =>
-      name === "vibehub_inbox" ? await cb(...args) : await withNews(user, await cb(...args))) as never)) as McpServer["registerTool"];
+    server.registerTool(name, config as never, (async (...args: unknown[]) => await withNews(user, await cb(...args))) as never)) as McpServer["registerTool"];
 
   registerTool(
     "vibehub_list_projects",
@@ -436,7 +430,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
       }
     },
   );
-  registerTool(
+  server.registerTool(
     "vibehub_inbox",
     {
       description:

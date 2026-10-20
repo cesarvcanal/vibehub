@@ -325,9 +325,9 @@ describe("reportState (declared state)", () => {
     const p = await registry.createProject({ name: "billing" });
     const c = await registry.createCard({ projectId: p.id, title: "worker" });
     await maestro.reportState(c.id, "needs_me", "which currency?");
-    expect((await events.inboxFor(owner)).events).toEqual([
+    await vi.waitFor(async () => expect((await events.inboxFor(owner)).events).toEqual([
       expect.objectContaining({ kind: "needs_me", cardId: c.id, state: "needs_me", summary: "which currency?" }),
-    ]);
+    ]));
   });
 });
 

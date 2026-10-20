@@ -573,9 +573,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
             });
             // A revived card starts a new turn: what it had open before the pause or the "done" is
             // over, and must not resurface in anyone's inbox now that the card is visible again.
-            void observeCardStatus(card.id, null, "working").catch((err: unknown) => {
-              logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not record the card event");
-            });
+            void observeCardStatus(card.id, null, "working");
           }
           if (shouldStampHumanActive(card.id)) {
             void registry.markCardHumanActive(card.id).catch(() => { /* best effort, never fails a keystroke */ });

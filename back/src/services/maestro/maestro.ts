@@ -425,10 +425,7 @@ export async function reportState(cardId: string, state: string, summary?: strin
   const card = await reportCardState(cardId, state, summary); // validates the state; unknown card -> undefined
   if (!card) throw new Error("card not found");
   // "I need you" is what a person away from the board must hear (services/events/cardEvents.ts).
-  // The report is already recorded: a log that fails must not turn it into an error.
-  await observeDeclaredState(card.id, card.declaredState as DeclaredState, card.declaredSummary).catch((err: unknown) => {
-    logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not record the card event");
-  });
+  void observeDeclaredState(card.id, card.declaredState as DeclaredState, card.declaredSummary);
   logger.info(
     {
       audit: true, action: "maestro.report", card: card.worktreeSlug,

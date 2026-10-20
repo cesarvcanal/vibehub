@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { JsonStore } from "../../store/jsonStore.js";
 import { dataPath } from "../../config/env.js";
-import { cardLevel } from "../../auth/access.js";
+import { visibleCards } from "../../auth/access.js";
 import type { PublicUser } from "../../auth/users.js";
 import { getCard, type Card, type CardStatus, type DeclaredState } from "../board/registry.js";
 import type { DriverEvent, UserQuestionItem } from "../sdk/protocol.js";
+import { logger } from "../../utils/logger.js";
 
 /**
  * CARD EVENTS — the moments a person AWAY from the board must hear about: a card finished its turn,
@@ -101,41 +102,28 @@ export async function recordCardEvent(input: CardEventInput): Promise<CardEvent 
 
 /** Resolves a card's open events — only those answering `refId` / of `kind` when given. Returns how many. */
 export async function resolveCardEvents(cardId: string, opts: { refId?: string; kind?: CardEventKind } = {}): Promise<number> {
+  const matches = (e: CardEvent) => e.cardId === cardId && !e.resolvedAt
+    && (opts.refId === undefined || e.refId === opts.refId) && (opts.kind === undefined || e.kind === opts.kind);
   return store.mutate((doc) => {
     const now = Date.now();
-    let n = 0;
-    for (const e of doc.events) {
-      if (e.cardId !== cardId || e.resolvedAt) continue;
-      if (opts.refId !== undefined && e.refId !== opts.refId) continue;
-      if (opts.kind !== undefined && e.kind !== opts.kind) continue;
-      e.resolvedAt = now;
-      n++;
-    }
-    return n;
+    const open = doc.events.filter(matches);
+    for (const e of open) e.resolvedAt = now;
+    return open.length;
   });
 }
 
-/** Does this person hear about this card's events right now? */
-async function hears(user: PublicUser, card: Card | undefined): Promise<boolean> {
-  if (!card || card.column === "done" || card.column === "paused" || card.pausedAt) return false;
-  if (card.actorUserId && card.actorUserId !== user.id) return false;
-  return (await cardLevel(user, card.id)) !== null;
-}
-
-/** The open events this person hears about, oldest first, newer than `since` when given. */
+/**
+ * The open events this person hears about, oldest first, newer than `since` when given: the cards
+ * they may see (auth/access.ts), minus concluded and paused ones and cards someone else is working.
+ */
 async function openFor(user: PublicUser, events: readonly CardEvent[], since = 0): Promise<CardEvent[]> {
-  const verdicts = new Map<string, boolean>();
-  const out: CardEvent[] = [];
-  for (const e of events) {
-    if (e.resolvedAt || e.seq <= since) continue;
-    let ok = verdicts.get(e.cardId);
-    if (ok === undefined) {
-      ok = await hears(user, await getCard(e.cardId));
-      verdicts.set(e.cardId, ok);
-    }
-    if (ok) out.push(e);
-  }
-  return out;
+  const pending = events.filter((e) => !e.resolvedAt && e.seq > since);
+  if (pending.length === 0) return [];
+  const cards = (await Promise.all([...new Set(pending.map((e) => e.cardId))].map((id) => getCard(id))))
+    .filter((c): c is Card => !!c && c.column !== "done" && c.column !== "paused" && !c.pausedAt)
+    .filter((c) => !c.actorUserId || c.actorUserId === user.id);
+  const heard = new Set((await visibleCards(user, cards)).map((c) => c.id));
+  return pending.filter((e) => heard.has(e.cardId));
 }
 
 /** The person's inbox: open events, oldest first. `cursor` = the newest `seq` in the log. */
@@ -150,7 +138,9 @@ export async function inboxFor(user: PublicUser, opts: { since?: number } = {}):
  */
 export async function takeUndelivered(user: PublicUser): Promise<CardEvent[]> {
   const doc = await store.load();
-  const fresh = await openFor(user, doc.events, doc.delivered[user.id] ?? 0);
+  const delivered = doc.delivered[user.id] ?? 0;
+  if (doc.seq <= delivered) return []; // the common case: every answer of a quiet board
+  const fresh = await openFor(user, doc.events, delivered);
   if (fresh.length === 0) return [];
   // Two answers at the same time read the same cursor: the one that advances it first keeps the
   // events, the other drops what it no longer owns — inside the queued mutation, where it is exact.
@@ -160,6 +150,8 @@ export async function takeUndelivered(user: PublicUser): Promise<CardEvent[]> {
 
 /** Counts everything up to `upTo` as heard by this person. Returns the position it had before. */
 export async function markDelivered(user: PublicUser, upTo: number): Promise<number> {
+  const known = (await store.load()).delivered[user.id] ?? 0;
+  if (known >= upTo) return known;
   return store.mutate((d) => {
     const before = d.delivered[user.id] ?? 0;
     d.delivered[user.id] = Math.max(before, upTo);
@@ -172,13 +164,16 @@ export async function markDelivered(user: PublicUser, upTo: number): Promise<num
 /**
  * The observers run ONE AT A TIME, in the order they were called. Their callers fire and forget, and
  * a question's result can arrive right behind the question: run concurrently, the resolve could land
- * before the record and leave an answered question open. A failure stays with its own call.
+ * before the record and leave an answered question open. They NEVER reject: a log that fails is
+ * logged here and costs a notice, never the hook, the chat or the report that fed it.
  */
-let observing: Promise<unknown> = Promise.resolve();
-function inOrder(work: () => Promise<void>): Promise<void> {
-  const next = observing.then(work);
-  observing = next.catch(() => undefined);
-  return next;
+let observing: Promise<void> = Promise.resolve();
+function inOrder(cardId: string, work: () => Promise<unknown>): Promise<void> {
+  observing = observing.then(work).then(
+    () => undefined,
+    (err: unknown) => logger.warn({ card: cardId, detail: (err as Error).message }, "could not record the card event"),
+  );
+  return observing;
 }
 
 /**
@@ -187,20 +182,13 @@ function inOrder(work: () => Promise<void>): Promise<void> {
  * card had open (whoever answered, the card moved on).
  */
 export function observeCardStatus(cardId: string, was: CardStatus | null | undefined, now: CardStatus): Promise<void> {
-  return inOrder(async () => {
-    if (now === "working" && was !== "working") {
-      await resolveCardEvents(cardId);
-      return;
-    }
-    if (now !== "waiting" || was !== "working") return;
+  if (now === "working" && was !== "working") return inOrder(cardId, () => resolveCardEvents(cardId));
+  if (now !== "waiting" || was !== "working") return Promise.resolve();
+  return inOrder(cardId, async () => {
     const card = await getCard(cardId);
     if (!card) return;
     await recordCardEvent({
-      id: `turn:${randomUUID()}`,
-      cardId,
-      kind: "turn_finished",
-      ...(card.declaredState ? { state: card.declaredState } : {}),
-      ...(card.declaredSummary ? { summary: card.declaredSummary } : {}),
+      id: `turn:${randomUUID()}`, cardId, kind: "turn_finished", state: card.declaredState, summary: card.declaredSummary,
     });
   });
 }
@@ -209,26 +197,20 @@ export function observeCardStatus(cardId: string, was: CardStatus | null | undef
 export function observeDriverEvent(cardId: string, event: DriverEvent): Promise<void> {
   switch (event.type) {
     case "user_question":
-      return inOrder(async () => {
-        await recordCardEvent({ id: `question:${event.id}`, cardId, kind: "question", refId: event.id, questions: event.questions });
-      });
+      return inOrder(cardId, () => recordCardEvent({
+        id: `question:${event.id}`, cardId, kind: "question", refId: event.id, questions: event.questions,
+      }));
     case "permission_request":
-      return inOrder(async () => {
-        await recordCardEvent({
-          id: `permission:${event.id}`, cardId, kind: "permission", refId: event.id, tool: event.tool,
-          ...(event.reason ? { reason: event.reason } : {}),
-        });
-      });
+      return inOrder(cardId, () => recordCardEvent({
+        id: `permission:${event.id}`, cardId, kind: "permission", refId: event.id, tool: event.tool, reason: event.reason,
+      }));
     case "question_result":
-      return inOrder(async () => {
-        await resolveCardEvents(cardId, { refId: event.id });
-      });
     case "permission": {
-      const id = event.id;
-      return id ? inOrder(async () => { await resolveCardEvents(cardId, { refId: id }); }) : Promise.resolve();
+      const refId = event.id; // a permission with no id was never asked: nothing to resolve
+      return refId ? inOrder(cardId, () => resolveCardEvents(cardId, { refId })) : Promise.resolve();
     }
     default:
-      return Promise.resolve();
+      return Promise.resolve(); // the rest of the stream (text, tools, thinking) is not news
   }
 }
 
@@ -237,11 +219,8 @@ export function observeDriverEvent(cardId: string, event: DriverEvent): Promise<
  * the card moved on, and the previous "I need you" closes.
  */
 export function observeDeclaredState(cardId: string, state: DeclaredState, summary: string | undefined): Promise<void> {
-  return inOrder(async () => {
-    if (state !== "needs_me" && state !== "blocked") {
-      await resolveCardEvents(cardId, { kind: "needs_me" });
-      return;
-    }
-    await recordCardEvent({ id: `state:${randomUUID()}`, cardId, kind: "needs_me", state, ...(summary ? { summary } : {}) });
-  });
+  if (state !== "needs_me" && state !== "blocked") {
+    return inOrder(cardId, () => resolveCardEvents(cardId, { kind: "needs_me" }));
+  }
+  return inOrder(cardId, () => recordCardEvent({ id: `state:${randomUUID()}`, cardId, kind: "needs_me", state, summary }));
 }
