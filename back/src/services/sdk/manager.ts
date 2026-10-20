@@ -20,6 +20,7 @@ import {
   type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest,
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
+import { observeDriverEvent } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -696,6 +697,9 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   // no page is open — that is the whole point of the detach.
   noteDriverEventFor(session.cardId, event);
   if (replayableHistoryEvent(event)) void appendHistory(session.cardId, { ...event, at: Date.now() });
+  // What a person away from the board hears (services/events/cardEvents.ts): questions,
+  // permissions and their outcome.
+  void observeDriverEvent(session.cardId, event);
 }
 
 /**
@@ -1185,6 +1189,7 @@ async function orphanQuestions(session: DriverSession): Promise<Map<string, User
 function settleQuestionCard(session: DriverSession, result: Extract<DriverEvent, { type: "question_result" }>): void {
   broadcast(session, result);
   void appendHistory(session.cardId, { ...result, at: Date.now() });
+  void observeDriverEvent(session.cardId, result);
 }
 
 /**

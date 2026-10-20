@@ -380,7 +380,7 @@ describe("/mcp with an OAuth token", () => {
     expect(res.statusCode).toBe(200);
     const names = (body.result.tools as { name: string }[]).map((t) => t.name).sort();
     expect(names).toEqual([
-      "vibehub_card_activity", "vibehub_card_changes", "vibehub_create_card", "vibehub_deliver",
+      "vibehub_card_activity", "vibehub_card_changes", "vibehub_create_card", "vibehub_deliver", "vibehub_inbox",
       "vibehub_list_projects", "vibehub_list_terminals", "vibehub_move_cards", "vibehub_open_card",
       "vibehub_read_terminal", "vibehub_send_to_terminal", "vibehub_wait_for_card",
     ]);

@@ -2,6 +2,7 @@ import * as registry from "./registry.js";
 import { killCardSession, restartCard } from "./workspace.js";
 import * as outbox from "./outbox.js";
 import { cardHoldsBackgroundWork, onCardStatusSink } from "./agentState.js";
+import { observeCardStatus } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -28,7 +29,15 @@ export async function reportCardStatus(cardId: string, reported: registry.CardSt
   const wasLive = before ? registry.hasLiveSession(before) : false;
   const wasColumn = before?.column;
   const pendingReason = before?.restartReason;
+  const wasStatus = before?.status;
   const card = await registry.applyCardStatus(cardId, status);
+  // What a person away from the board hears (services/events/cardEvents.ts): a turn that ended, or
+  // a new one clearing what was open. Started now, with what was declared at this moment (the card
+  // is the live cached object); awaited only at the end, so it never holds the pause, the restart or
+  // the flush back. It never rejects.
+  const observed = card
+    ? observeCardStatus(card.id, wasStatus, status, { state: card.declaredState, summary: card.declaredSummary })
+    : undefined;
   // A PAUSE BEATS the pending restart: a card whose PENDING PAUSE is due now is going to sleep, so
   // restarting it would be wasted work — applyCardStatus already dropped the flag in that case.
   const pausing = wasColumn ? registry.shouldEndSessionOnStatus(status, wasColumn, wasLive) : false;
@@ -66,6 +75,7 @@ export async function reportCardStatus(cardId: string, reported: registry.CardSt
   // moment for anything queued for this card, and the reason a message typed while Claude was
   // down lands the instant it comes back. Fire-and-forget: the hook has a 3s timeout.
   if (card && status === "waiting") void outbox.flushCard(card.id);
+  await observed;
   return card;
 }
 

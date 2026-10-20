@@ -11,6 +11,7 @@ import * as workspace from "../services/board/workspace.js";
 import * as browser from "../services/browser/browser.js";
 import * as outbox from "../services/board/outbox.js";
 import { purgeCard } from "../services/board/purge.js";
+import { observeCardStatus } from "../services/events/cardEvents.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -570,6 +571,9 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
             void registry.applyCardStatus(card.id, "working").catch((err: unknown) => {
               logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not revive the card on input");
             });
+            // A revived card starts a new turn: what it had open before the pause or the "done" is
+            // over, and must not resurface in anyone's inbox now that the card is visible again.
+            void observeCardStatus(card.id, null, "working");
           }
           if (shouldStampHumanActive(card.id)) {
             void registry.markCardHumanActive(card.id).catch(() => { /* best effort, never fails a keystroke */ });
