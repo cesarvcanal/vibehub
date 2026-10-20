@@ -19,6 +19,8 @@ let dir = "";
 let app: FastifyInstance;
 let base = "";
 let sent: { cardId: string; text: string }[] = [];
+/** Tokens taken away mid-test (what a revoked or expired OAuth token looks like to the server). */
+const revoked = new Set<string>();
 /** Every stream a test opened: closed after it, pass or fail (an open one holds app.close()). */
 const open: AbortController[] = [];
 
@@ -27,6 +29,7 @@ type Env = Awaited<ReturnType<typeof boot>>;
 async function boot() {
   vi.resetModules();
   sent = [];
+  revoked.clear();
   const env = await import("../config/env.js");
   env.config.dataDir = dir;
   env.config.secretKey = "";
@@ -44,12 +47,14 @@ async function boot() {
   const member = users.publicUser(await users.createUser("mussa", "senha-forte-456", "member"));
   vi.doMock("../auth/oauth.js", async (original) => ({
     ...(await original<typeof import("../auth/oauth.js")>()),
-    userForAccessToken: vi.fn(async (t: string | undefined) => (t === OWNER_TOKEN ? owner : t === MEMBER_TOKEN ? member : null)),
+    userForAccessToken: vi.fn(async (t: string | undefined) =>
+      (t && revoked.has(t) ? null : t === OWNER_TOKEN ? owner : t === MEMBER_TOKEN ? member : null)),
   }));
   // A send reaches a terminal; here it is recorded instead (no runner in a test).
   vi.doMock("../services/maestro/maestro.js", async (original) => ({
     ...(await original<typeof import("../services/maestro/maestro.js")>()),
     sendToTerminal: vi.fn(async (cardId: string, text: string) => {
+      await new Promise((r) => setTimeout(r, 20)); // a send takes a moment: room for a race
       sent.push({ cardId, text });
       return { cardId, delivered: true };
     }),
@@ -277,6 +282,54 @@ describe("filters, isolation and lifecycle", () => {
     await new Promise((r) => setTimeout(r, 200));
     expect(stream.events().map((m) => m.params.data.text)).toEqual([expect.stringContaining("compartilhado")]);
     stream.close();
+  });
+
+  it("a token revoked while the stream is open ends it: terminated, nothing more delivered, listener gone", async () => {
+    const env = await boot();
+    await env.registry.shareWith({ kind: "card", targetId: env.card.id, userId: env.member.id, level: "view" });
+    const stream = await openStream(MEMBER_TOKEN, {});
+    await stream.next("notifications/events/active");
+    revoked.add(MEMBER_TOKEN);
+    await tool(TOKEN, "vibehub_notify", { card: env.card.id, type: "info", text: "depois da revogação" });
+    const end = await stream.next("notifications/events/terminated");
+    expect(end.params.error.code).toBe(-32024);
+    await stream.done;
+    expect(stream.events()).toEqual([]);
+    expect(env.events.cardEventListenerCount()).toBe(0);
+  });
+
+  it("two answers to the same question at the same time: one reaches the card, the other is refused", async () => {
+    const env = await boot();
+    const posted = await tool(TOKEN, "vibehub_notify", question(env));
+    const [a, b] = await Promise.all([
+      tool(OWNER_TOKEN, "vibehub_send_to_terminal", { cardId: env.card.id, text: "Mongo", inReplyTo: posted.eventId }),
+      tool(TOKEN, "vibehub_send_to_terminal", { cardId: env.card.id, text: "MySQL", inReplyTo: posted.eventId }),
+    ]);
+    expect([a.error, b.error].filter(Boolean)).toEqual([expect.stringMatching(/not waiting/)]);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("a send that fails leaves the question open, to be answered again", async () => {
+    const env = await boot();
+    const posted = await tool(TOKEN, "vibehub_notify", question(env));
+    const maestro = await import("../services/maestro/maestro.js");
+    vi.mocked(maestro.sendToTerminal).mockRejectedValueOnce(new Error("no live session"));
+    expect((await tool(OWNER_TOKEN, "vibehub_send_to_terminal", { cardId: env.card.id, text: "Mongo", inReplyTo: posted.eventId })).error).toMatch(/no live session/);
+    expect((await tool(OWNER_TOKEN, "vibehub_send_to_terminal", { cardId: env.card.id, text: "Mongo", inReplyTo: posted.eventId })).error).toBeUndefined();
+    expect(sent).toHaveLength(1);
+  });
+
+  it("caps the open streams per subscriber", async () => {
+    const env = await boot();
+    env.mcpEvents.STREAM.maxPerPrincipal = 2;
+    const a = await openStream(MEMBER_TOKEN, {});
+    const b = await openStream(MEMBER_TOKEN, {});
+    await a.next("notifications/events/active");
+    await b.next("notifications/events/active");
+    const c = await rpc(MEMBER_TOKEN, "events/stream", { name: "card.event" });
+    expect(c.error?.code).toBe(-32025);
+    const owner = await openStream(OWNER_TOKEN, {}); // someone else is not counted against them
+    await owner.next("notifications/events/active");
   });
 
   it("a member cannot answer a card shared read-only", async () => {

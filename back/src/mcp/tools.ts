@@ -3,7 +3,7 @@ import { z } from "zod";
 import { listTerminals, sendToTerminal, readTerminal, reportState, agentOriginFor } from "../services/maestro/maestro.js";
 import { DECLARED_STATES } from "../services/board/registry.js";
 import { recordMessage, MESSAGE_TYPES, SEVERITIES, type MessageType, type Severity } from "../services/events/cardEvents.js";
-import { replyTo } from "./events.js";
+import { sendAnswer } from "./events.js";
 import { runGate } from "../services/maestro/gate.js";
 import { deliver } from "../services/maestro/deliver.js";
 import { relayCardActor } from "../services/board/actor.js";
@@ -72,17 +72,14 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     },
     async (a) => {
       try {
-        const reply = await replyTo(a.cardId, a.inReplyTo, a.text);
-        const sent = await sendToTerminal(a.cardId, reply.text, {
+        return ok(await sendAnswer(a.cardId, a.inReplyTo, a.text, async (text) => sendToTerminal(a.cardId, text, {
           by: actor,
           // The order came from the PERSON behind the sending card: the destination works as them —
           // once the send is certain to go (a refused send leaves the authorship alone).
           beforeDeliver: () => relayCardActor(a.from, a.cardId),
           respectHumanActive: true,
           origin: await agentOriginFor(a.from),
-        });
-        await reply.settle();
-        return ok(sent);
+        })));
       } catch (e) {
         return fail(e);
       }

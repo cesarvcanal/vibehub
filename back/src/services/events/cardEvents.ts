@@ -388,11 +388,23 @@ export async function recordMessage(input: MessageInput): Promise<CardEvent> {
 /** The kinds an `inReplyTo` may answer: what asked someone for something. */
 const ANSWERABLE = new Set<CardEventKind>(["question", "permission", "needs_me", "message"]);
 
-/** The open event of this card that `eventId` names and that waits for an answer — or throws. */
-export async function replyTarget(cardId: string, eventId: string): Promise<CardEvent> {
-  const event = (await store.load()).events.find((e) => e.id === eventId && e.cardId === cardId);
-  if (!event || event.resolvedAt || !ANSWERABLE.has(event.kind)) {
-    throw new Error(`event '${eventId}' of this card is not waiting on an answer`);
-  }
-  return event;
+/**
+ * CLAIMS the answer to the open event of this card that `eventId` names: resolved here, atomically,
+ * so of two answers at the same time only one goes out — the other throws. `release` reopens it,
+ * for when the answer could not be delivered after all.
+ */
+export async function claimReply(cardId: string, eventId: string): Promise<{ event: CardEvent; release: () => Promise<unknown> }> {
+  const event = await store.mutate((doc) => {
+    const found = doc.events.find((e) => e.id === eventId && e.cardId === cardId);
+    if (!found || found.resolvedAt || !ANSWERABLE.has(found.kind)) {
+      throw new Error(`event '${eventId}' of this card is not waiting on an answer`);
+    }
+    found.resolvedAt = Date.now();
+    return { ...found };
+  });
+  const release = () => store.mutate((doc) => {
+    const found = doc.events.find((e) => e.id === eventId);
+    if (found) found.resolvedAt = undefined;
+  });
+  return { event, release };
 }

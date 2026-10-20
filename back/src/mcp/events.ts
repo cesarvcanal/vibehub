@@ -4,7 +4,7 @@ import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import type { PublicUser } from "../auth/users.js";
 import { getCard } from "../services/board/registry.js";
 import {
-  canHear, eventsAfter, onCardEvent, replyTarget, resolveCardEvents, MESSAGE_TYPES, type CardEvent, type CardEventKind, type MessageType,
+  canHear, claimReply, eventsAfter, onCardEvent, MESSAGE_TYPES, type CardEvent, type CardEventKind, type MessageType,
 } from "../services/events/cardEvents.js";
 import { logger } from "../utils/logger.js";
 
@@ -27,11 +27,23 @@ export const CARD_EVENT = "card.event";
 /** Contract version of the payload (`data`): bumped only on an incompatible change. */
 export const CONTRACT_VERSION = 1;
 /** Knobs a test turns. The draft asks for a heartbeat at least every 30s. */
-export const STREAM = { heartbeatMs: 25_000 };
+export const STREAM = { heartbeatMs: 25_000, maxPerPrincipal: 10 };
+
+/**
+ * Who the stream is for, asked again at every event and heartbeat: the person (as they are NOW —
+ * role and shares), `null` for the board itself, `false` once the credential no longer holds
+ * (revoked, expired, rotated). A stream never outlives the credential that opened it.
+ */
+export type Principal = () => Promise<PublicUser | null | false>;
+
+/** Open streams per principal (user id, or "board"). */
+const openStreams = new Map<string, number>();
 
 const SUBSCRIPTION_ID = "io.modelcontextprotocol/subscriptionId";
 /** Draft error codes (provisional numbering of the MCP Events sketch). */
 const NOT_FOUND = -32023;
+const FORBIDDEN = -32024;
+const RESOURCE_EXHAUSTED = -32025;
 
 const KIND_TYPE: Record<Exclude<CardEventKind, "message">, MessageType> = {
   turn_finished: "info", question: "question", permission: "approval", needs_me: "question", failed: "error", concluded: "done",
@@ -149,9 +161,11 @@ const streamRequest = z.object({ method: z.literal("events/stream"), params: z.o
 
 /**
  * Adds the events methods to one server. `user` = the person an external client acts for; `null` =
- * the board itself (a card's service token), which hears every card.
+ * the board itself (a card's service token), which hears every card. `principal` re-checks the
+ * credential while a stream is open (default: it never changes — only for tests and in-process use).
  */
-export function registerEvents(server: McpServer, user: PublicUser | null): void {
+export function registerEvents(server: McpServer, user: PublicUser | null, principal: Principal = async () => user): void {
+  const key = user?.id ?? "board";
   server.server.registerCapabilities({ events: {} } as never);
   server.server.setRequestHandler(listRequest, () => ({ events: [DEFINITION] }));
   server.server.setRequestHandler(streamRequest, async (request, extra) => {
@@ -162,6 +176,9 @@ export function registerEvents(server: McpServer, user: PublicUser | null): void
     const filter = parsed.data;
     const from = parseCursor(params.cursor);
     const maxAgeMs = typeof params.maxAgeMs === "number" && params.maxAgeMs > 0 ? params.maxAgeMs : undefined;
+    if ((openStreams.get(key) ?? 0) >= STREAM.maxPerPrincipal) {
+      throw new McpError(RESOURCE_EXHAUSTED, "too many open event streams", { limit: "streams", max: STREAM.maxPerPrincipal });
+    }
 
     const meta = { [SUBSCRIPTION_ID]: extra.requestId };
     const notify = (method: string, body: object) => extra.sendNotification({ method, params: { ...body, _meta: meta } } as never);
@@ -172,10 +189,26 @@ export function registerEvents(server: McpServer, user: PublicUser | null): void
     };
     /** The highest `seq` looked at: an event at or below it was already sent or skipped. */
     let checked = 0;
+    let end!: () => void;
+    const ended = new Promise<void>((resolve) => { end = resolve; });
+    extra.signal.addEventListener("abort", () => end(), { once: true });
+    let over = extra.signal.aborted;
+    /** The principal as it is now; when the credential is gone, the stream says so and ends. */
+    const who = async () => {
+      const now = over ? false : await principal();
+      if (now === false && !over) {
+        over = true;
+        await notify("notifications/events/terminated", { error: { code: FORBIDDEN, message: "Forbidden: the credential no longer holds" } });
+        end();
+      }
+      return now;
+    };
     const offer = (e: CardEvent) => queue(async () => {
       if (e.seq <= checked) return;
       checked = e.seq;
-      if (!matches(filter, e) || (maxAgeMs && e.at < Date.now() - maxAgeMs) || !(await canHear(user, e))) return;
+      if (!matches(filter, e) || (maxAgeMs && e.at < Date.now() - maxAgeMs)) return;
+      const now = await who();
+      if (now === false || !(await canHear(now, e))) return;
       await notify("notifications/events/event", await occurrenceOf(e));
     });
 
@@ -184,8 +217,11 @@ export function registerEvents(server: McpServer, user: PublicUser | null): void
     const held: CardEvent[] = [];
     let live = false;
     const off = onCardEvent((e) => (live ? offer(e) : held.push(e)));
-    const beat = setInterval(() => queue(() => notify("notifications/events/heartbeat", { cursor: String(checked) })), STREAM.heartbeatMs);
+    const beat = setInterval(() => queue(async () => {
+      if ((await who()) !== false) await notify("notifications/events/heartbeat", { cursor: String(checked) });
+    }), STREAM.heartbeatMs);
     beat.unref();
+    openStreams.set(key, (openStreams.get(key) ?? 0) + 1);
     try {
       const log = await eventsAfter(from ?? Number.MAX_SAFE_INTEGER);
       const replay = from === null ? [] : log.events;
@@ -195,26 +231,32 @@ export function registerEvents(server: McpServer, user: PublicUser | null): void
       for (const e of replay) offer(e);
       for (const e of held) offer(e);
       live = true;
-      if (!extra.signal.aborted) await new Promise((resolve) => extra.signal.addEventListener("abort", resolve, { once: true }));
+      await ended;
+      await chain; // the terminated frame, if that is why it ended, goes out before the result
     } finally {
       off();
       clearInterval(beat);
+      const left = (openStreams.get(key) ?? 1) - 1;
+      if (left > 0) openStreams.set(key, left);
+      else openStreams.delete(key);
     }
     return { _meta: {} };
   });
 }
 
 /**
- * An answer to an event (`inReplyTo`): the text the card receives — tied to what it asked, so its
- * agent knows which question this settles — and `settle`, to call once the send went out. Throws
- * when the event is not this card's or no longer waits on an answer (already answered, moved on).
+ * Sends `text` to a card — as the answer to the event `inReplyTo` names, when given: the card is told
+ * which question it settles, and the event is claimed BEFORE the send (two answers at once: one goes
+ * out, the other is refused) and reopened if the send fails.
  */
-export async function replyTo(cardId: string, inReplyTo: string | undefined, text: string): Promise<{ text: string; settle: () => Promise<unknown> }> {
-  if (!inReplyTo) return { text, settle: async () => undefined };
-  const event = await replyTarget(cardId, inReplyTo);
+export async function sendAnswer<T>(cardId: string, inReplyTo: string | undefined, text: string, send: (text: string) => Promise<T>): Promise<T> {
+  if (!inReplyTo) return send(text);
+  const { event, release } = await claimReply(cardId, inReplyTo);
   const asked = event.questions?.[0]?.question ?? event.summary ?? event.text;
-  return {
-    text: `[resposta a ${event.id}${asked ? ` — "${asked}"` : ""}]\n${text}`,
-    settle: () => resolveCardEvents(cardId, { id: event.id }),
-  };
+  try {
+    return await send(`[resposta a ${event.id}${asked ? ` — "${asked}"` : ""}]\n${text}`);
+  } catch (err) {
+    await release();
+    throw err;
+  }
 }

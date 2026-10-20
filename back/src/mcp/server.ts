@@ -5,7 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerMaestroTools } from "./tools.js";
 import { registerCredentialTools } from "./credentialTools.js";
 import { registerExternalTools } from "./externalTools.js";
-import { registerEvents } from "./events.js";
+import { registerEvents, type Principal } from "./events.js";
 import type { PublicUser } from "../auth/users.js";
 import { logger } from "../utils/logger.js";
 
@@ -63,19 +63,20 @@ export const EXTERNAL_INSTRUCTIONS = loadPersona("external.md", EXTERNAL_FALLBAC
  * its own (so none of the "your own card" tools make sense) and acts as ONE user, so every tool
  * checks that user's reach. The maestro tools stay exactly what a card gets.
  */
-export function createMcpServer(actor: "external", user: PublicUser): McpServer;
-export function createMcpServer(actor?: string): McpServer;
-export function createMcpServer(actor = "mcp", user?: PublicUser): McpServer {
+export function createMcpServer(actor: "external", user: PublicUser, principal?: Principal): McpServer;
+export function createMcpServer(actor?: string, user?: undefined, principal?: Principal): McpServer;
+/** `principal` re-checks the caller's credential while an event stream is open (mcp/events.ts). */
+export function createMcpServer(actor = "mcp", user?: PublicUser, principal?: Principal): McpServer {
   if (actor === "external") {
     if (!user) throw new Error("an external MCP server needs the user it acts for");
     const server = new McpServer({ name: "vibehub", version: "0.1.0" }, { instructions: EXTERNAL_INSTRUCTIONS });
     registerExternalTools(server, user);
-    registerEvents(server, user);
+    registerEvents(server, user, principal);
     return server;
   }
   const server = new McpServer({ name: "vibehub", version: "0.1.0" }, { instructions: INSTRUCTIONS });
   registerMaestroTools(server, actor);
   registerCredentialTools(server, actor);
-  registerEvents(server, null);
+  registerEvents(server, null, principal);
   return server;
 }

@@ -11,7 +11,7 @@ import {
 import { readCardChanges } from "../services/maestro/changes.js";
 import { deliver } from "../services/maestro/deliver.js";
 import { inboxFor, markDelivered, takeUndelivered, type CardEvent } from "../services/events/cardEvents.js";
-import { replyTo } from "./events.js";
+import { sendAnswer } from "./events.js";
 import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX, type CardMoveOutcome } from "./cardMove.js";
 import { logger } from "../utils/logger.js";
 
@@ -264,17 +264,15 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     async (a) => {
       try {
         await requireLevel(user, a.cardId, "work");
-        const reply = await replyTo(a.cardId, a.inReplyTo, a.text);
         const sentAt = Date.now();
-        const sent = await sendToTerminal(a.cardId, reply.text, {
+        const sent = await sendAnswer(a.cardId, a.inReplyTo, a.text, (text) => sendToTerminal(a.cardId, text, {
           by: user.id,
           beforeDeliver: () => recordCardActor(user, a.cardId),
           guardInteractiveMenu: true,
           requireAgent: true,
           viaNativeChat: true,
           origin: { kind: user.role === "owner" ? "owner" : "user", name: user.username },
-        });
-        await reply.settle();
+        }));
         return ok({ ...sent, sentAt, next: "call vibehub_wait_for_card with this cardId and since=sentAt" });
       } catch (e) {
         return fail(e);
