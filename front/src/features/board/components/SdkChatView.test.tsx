@@ -2724,7 +2724,8 @@ describe("SdkChatView — forçar o envio de uma mensagem da fila", () => {
     await userEvent.click(screen.getByTestId("sdk-queued-send-now"));
 
     await waitFor(() => expect(ws.sent.length).toBe(2));
-    expect(JSON.parse(ws.sent[1]!)).toMatchObject({ type: "user", text: "o que você tá fazendo ?" });
+    // `now`: com uma ferramenta presa o driver interrompe para ela ser lida já (ver sendUserNow)
+    expect(JSON.parse(ws.sent[1]!)).toMatchObject({ type: "user", text: "o que você tá fazendo ?", now: true });
     // saiu da espera e virou conversa: é isso que "foi entregue" significa nesta tela
     await waitFor(() => expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument());
     const bubbles = screen.getAllByTestId("sdk-user");
