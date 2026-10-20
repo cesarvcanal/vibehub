@@ -23,6 +23,7 @@ import {
   RESUME_REENGAGE_TEXT,
   NOTE_RESUME_STALLED,
   onDriverCrashWithWork,
+  sendAgentTurn,
   resetSdkSessionsForTesting,
   setDriverSpawnerForTesting,
   shutdownAllDrivers,
@@ -2592,6 +2593,50 @@ describe("retomada automática — confirmação de que pegou", () => {
     vi.advanceTimersByTime(RESUME_CONFIRM_MS * 3);
     expect(userWrites()).toHaveLength(1);
     expect(session.closed).toBe(true);
+  });
+
+  it("a pessoa clicou Parar na retomada: o painel não manda a ordem de novo por cima", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const session = ensure();
+    injectSystemTurn(session, CONT, SYS, 1);
+    handleClientFrame(session, `{"type":"interrupt"}`);
+    emit({ type: "result", isError: false });
+    vi.advanceTimersByTime(RESUME_CONFIRM_MS * 3);
+    expect(userWrites()).toHaveLength(1);
+    expect(driverActivity(CARD)).toBe("idle");
+  });
+
+  it("um turno que termina sem result (erro do stream) não deixa o vigia preso: ele volta a valer", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const session = ensure();
+    injectSystemTurn(session, CONT, SYS, 1);
+    emit({ type: "result", isError: false });
+    emit({ type: "thinking", text: "hmm" }); // o CLI abriu um turno sozinho
+    vi.advanceTimersByTime(RESUME_CONFIRM_MS + 1);
+    emit({ type: "error", message: "stream caiu" }); // …que morreu sem result
+    vi.advanceTimersByTime(RESUME_CONFIRM_MS + 1);
+    expect(userWrites().map((f) => f.text)).toEqual([CONT, RESUME_REENGAGE_TEXT]);
+  });
+
+  it("o que um SUBAGENTE faz não prova que a retomada pegou", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const session = ensure();
+    injectSystemTurn(session, CONT, SYS, 1);
+    emit({ type: "tool_use", id: "s1", name: "Bash", input: {}, parentToolUseId: "toolu_x" });
+    emit({ type: "result", isError: false });
+    vi.advanceTimersByTime(RESUME_CONFIRM_MS + 1);
+    expect(userWrites().map((f) => f.text)).toEqual([CONT, RESUME_REENGAGE_TEXT]);
+  });
+
+  it("outro card falou com este na janela: a conversa seguiu, nada de reenvio", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const session = ensure();
+    injectSystemTurn(session, CONT, SYS, 1);
+    emit({ type: "result", isError: false });
+    sendAgentTurn(session, "do outro card", { kind: "agent", name: "maestro" } as never);
+    emit({ type: "result", isError: false });
+    vi.advanceTimersByTime(RESUME_CONFIRM_MS * 3);
+    expect(userWrites().map((f) => f.text)).toEqual([CONT, "do outro card"]);
   });
 
   it("turno de pessoa que fecha sem texto não é vigiado (o watchdog é só da retomada)", () => {

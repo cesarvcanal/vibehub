@@ -279,7 +279,7 @@ async function resumeCard(
   deps: ResumeDeps,
   installOnce: () => Promise<void>,
   texts: ResumeTexts,
-): Promise<"resumed" | "noted" | "gone"> {
+): Promise<"resumed" | "noted" | "gone" | "superseded"> {
   let announced = false;
   try {
     const card = await deps.getCard(cardId);
@@ -318,6 +318,14 @@ async function resumeCard(
     // session/result). O probe de transcript do connect não roda aqui: é o mesmo alvo na prática,
     // e o boot não deve depender de um ls no runner para cada card.
     const command = await deps.commandFor(project, card);
+    // A preparação leva segundos (install, workspace, comando): se nesse meio-tempo a conversa
+    // SEGUIU — a pessoa escreveu num driver que o reconnect subiu, e o marcador já é o turno dela —
+    // a continuação cairia em cima do turno de alguém. Conferido aqui, logo antes de injetar.
+    const now = await deps.readMarker(cardId);
+    if (!now || now.startedAt !== marker.startedAt || deps.turnRunning(cardId)) {
+      logger.info({ audit: true, action: "sdk.resume.superseded", card: card.worktreeSlug }, "the conversation moved on while the resume was being prepared — not injected");
+      return "superseded";
+    }
     const session = deps.ensureSession({
       cardId: card.id,
       label: card.worktreeSlug,
@@ -365,7 +373,7 @@ export async function resumeAfterDriverCrash(
     if (!marker || marker.startedAt !== crashed.startedAt || deps.turnRunning(cardId)) return "skipped";
     const settings = await deps.settings();
     const outcome = await resumeCard(cardId, marker, settings, deps, () => deps.installDriver(), CRASH_TEXTS);
-    return outcome === "gone" ? "skipped" : outcome;
+    return outcome === "gone" || outcome === "superseded" ? "skipped" : outcome;
   } catch (err) {
     logger.warn({ card: cardId, detail: (err as Error).message }, "could not resume after an sdk driver crash");
     return "skipped";

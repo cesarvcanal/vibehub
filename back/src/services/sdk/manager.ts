@@ -86,9 +86,13 @@ export const TASKS_MAX = 200;
  * primeiro um turno SÓ DELE — a notificação de que a tarefa morreu — e o fecha com um `result`
  * vazio; às vezes a continuação injetada some junto e nunca vira turno (produção, 2026-10-20, card
  * 4f4b: 16 min parado com "Retomando a sessão…" como última linha). Depois de um `result` sem nada
- * do agente, a retomada espera este tempo por um sinal de vida antes de reenviar a ordem.
+ * do agente, a retomada espera este tempo por um sinal de vida antes de reenviar a ordem. É também o
+ * custo do engano oposto: um turno de verdade que leve mais que isto para dar o primeiro sinal (CPU
+ * disputada, MCP subindo) recebe a ordem duas vezes — por isso folgado, e nunca mais de um reenvio.
+ * Limite conhecido: se o CLI responder com TEXTO à própria notificação e engolir a continuação, esse
+ * texto conta como "pegou" — em produção só se viu o enchimento "No response requested.".
  */
-export const RESUME_CONFIRM_MS = 20_000;
+export const RESUME_CONFIRM_MS = 45_000;
 
 export interface DriverSession {
   cardId: string;
@@ -508,8 +512,10 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   if (event.type === "assistant_text" || event.type === "tool_use" || event.type === "thinking") {
     noteAgentWork(session, event);
   }
-  if (AGENT_SIGNALS.has(event.type) && !(event as { parentToolUseId?: unknown }).parentToolUseId) session.agentSignals += 1;
-  if (session.resumeWatch && (event.type === "assistant_text" || event.type === "tool_use")) {
+  const fromMain = !(event as { parentToolUseId?: unknown }).parentToolUseId;
+  if (fromMain && AGENT_SIGNALS.has(event.type)) session.agentSignals += 1;
+  // Só o PRINCIPAL prova que a retomada pegou — um subagente falando não é o agente continuando.
+  if (session.resumeWatch && fromMain && (event.type === "assistant_text" || event.type === "tool_use")) {
     putMarker(session, { ...(session.marker ?? session.resumeWatch.marker), progressed: true });
     endResumeWatch(session);
   }
@@ -1167,6 +1173,12 @@ export function handleClientFrame(
     // survive the interrupt and run; its extra result is absorbed by the floor-at-zero above.)
     // Clamping here keeps an abandoned backlog from pinning the driver past the idle stop forever.
     session.activeTurns = Math.min(session.activeTurns, 1);
+    // A pessoa mandou PARAR: a retomada que o vigia esperava acaba aqui — reenviar a ordem depois
+    // seria o painel desfazendo o clique dela.
+    if (session.resumeWatch) {
+      endResumeWatch(session);
+      syncInflightMarker(session);
+    }
     // Only a stop that actually CUT something gets narrated — a stop click with nothing running
     // would otherwise write a note claiming a turn was interrupted when none was.
     if (session.activeTurns > 0) session.pendingInterruptNote = interruptNote(control);
@@ -1355,8 +1367,9 @@ function checkResumeWatch(session: DriverSession, signalsAtArm: number): void {
   const watch = session.resumeWatch;
   if (!watch || session.closed) return;
   watch.timer = undefined;
-  if (isTurnInFlight(session)) return; // o result desse turno rearma
-  if (session.agentSignals !== signalsAtArm) { armResumeWatch(session); return; }
+  // Um turno aberto ou um sinal de vida: espera mais. Rearmar (e não esperar o `result` daquele
+  // turno) é o que impede um vigia preso — o turno pode acabar num erro de stream, sem `result`.
+  if (isTurnInFlight(session) || session.agentSignals !== signalsAtArm) { armResumeWatch(session); return; }
   if (!watch.reengaged && canAcceptTurn(session) && writeToDriver(session, { type: "user", text: RESUME_REENGAGE_TEXT })) {
     watch.reengaged = true;
     recordInjectedTurn(session, RESUME_REENGAGE_TEXT, { kind: "system", name: "vibehub" });
@@ -1494,6 +1507,8 @@ function noteAgentWork(session: DriverSession, event: DriverEvent): void {
 export function sendAgentTurn(session: DriverSession, text: string, origin: MessageOrigin): boolean {
   if (!canAcceptTurn(session) || !writeToDriver(session, { type: "user", text })) return false;
   recordInjectedTurn(session, text, origin);
+  // A conversa seguiu por outro lado: o que vier daqui é deste turno, não da retomada.
+  endResumeWatch(session);
   return true;
 }
 

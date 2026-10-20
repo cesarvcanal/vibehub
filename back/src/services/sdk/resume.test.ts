@@ -301,6 +301,19 @@ describe("resumeInterruptedTurns — the boot sweep", () => {
     expect(await readHistory(CARD)).toEqual([]);
   });
 
+  it("alguém escreveu NESTE processo enquanto o sweep preparava a retomada: nada é injetado", async () => {
+    await writeInflightMarker(CARD, { startedAt: 1, attempts: 0 });
+    const summary = await resumeInterruptedTurns(deps({
+      restoreWorkspace: async () => {
+        await writeInflightMarker(CARD, { startedAt: 7, preview: "mensagem nova", attempts: 0 });
+        return false;
+      },
+    }));
+    expect(summary.resumed).toEqual([]);
+    expect(spawned.length).toBe(0);
+    expect(await readInflightMarker(CARD)).toMatchObject({ startedAt: 7 });
+  });
+
   it("a card that fails does not take the sweep down (best-effort per card)", async () => {
     await writeInflightMarker(CARD, { startedAt: 1, attempts: 0 });
     const summary = await resumeInterruptedTurns(deps({ commandFor: async () => { throw new Error("runner down"); } }));
@@ -481,6 +494,21 @@ describe("resumeAfterDriverCrash — o driver caiu, o back não", () => {
     expect(await resumeAfterDriverCrash(CARD, marker, crashDeps({ turnRunning: () => true }))).toBe("skipped");
     expect(spawned.length).toBe(0);
     expect(await readInflightMarker(CARD)).not.toBeNull();
+  });
+
+  it("a pessoa seguiu DURANTE a preparação (sucessor + mensagem): a continuação não cai em cima dela", async () => {
+    const marker = { startedAt: 5, attempts: 0 };
+    await writeInflightMarker(CARD, marker);
+    const outcome = await resumeAfterDriverCrash(CARD, marker, crashDeps({
+      // Enquanto o comando do driver é montado, o front reconecta e a pessoa manda a dela.
+      commandFor: async () => {
+        await writeInflightMarker(CARD, { startedAt: 9, preview: "a da pessoa", attempts: 0 });
+        return { file: "docker", args: ["exec"] };
+      },
+    }));
+    expect(outcome).toBe("skipped");
+    expect(spawned.length).toBe(0);
+    expect(await readInflightMarker(CARD)).toMatchObject({ startedAt: 9, attempts: 0 });
   });
 
   it("a retomada que caiu antes de avançar: só a linha, sem loop", async () => {
