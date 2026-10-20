@@ -362,7 +362,8 @@ function ActionView({
   const [waiting, setWaiting] = React.useState(false);
   const { data, loading, error } = useDetail<ToolDetailData>("tool", { id: view.id }, view.id, rowStatus === "running" || waiting ? ACTION_POLL_MS : undefined, rowStatus ?? "");
   const detail = data && data.found ? data : null;
-  const pendingResult = detail !== null && !detailHasResult(detail);
+  // Rodando e ainda sem resultado — ou nem gravada no transcript ainda: é espera, não "sem saída".
+  const pendingResult = detail !== null ? !detailHasResult(detail) : rowStatus === "running" && data !== null;
   React.useEffect(() => setWaiting(pendingResult), [pendingResult]);
   const name = detail?.name || row?.name || "?";
   const input = detail?.input ?? row?.input;
@@ -411,7 +412,7 @@ function ActionView({
         {loading && !detail ? (
           <div data-testid="sdk-detail-loading" className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />{t("sdk.detail.loading")}</div>
         ) : null}
-        {!loading && !detail ? (
+        {!loading && !detail && !pendingResult ? (
           <div data-testid="sdk-detail-missing" className="text-xs italic text-muted-foreground">{error === "offline" ? t("sdk.detail.offline") : error ? t("sdk.detail.failedToLoad") : t("sdk.detail.notFound")}</div>
         ) : null}
       </div>

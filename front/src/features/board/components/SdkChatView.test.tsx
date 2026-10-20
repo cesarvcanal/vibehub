@@ -4107,6 +4107,21 @@ describe("SdkChatView — o detalhe de cada ação", () => {
     expect(within(dialog).queryByTestId("sdk-detail-pending")).toBeNull();
   });
 
+  it("ação rodando que ainda não chegou no transcript: diz que roda, não 'conversa apagada'", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "n1", name: "Bash", input: { command: "sleep 60" } });
+    fireEvent.click(screen.getByTestId("sdk-tool"));
+    const dialog = await screen.findByTestId("sdk-detail");
+    await waitFor(() => expect(detailAsks(ws).some((f) => f.id === "n1")).toBe(true));
+    const ask = detailAsks(ws).find((f) => f.id === "n1")!;
+    ws.deliver({ type: "detail", req: "tool", id: "n1", nonce: ask.nonce, data: { found: false } } as never);
+    expect(await within(dialog).findByTestId("sdk-detail-pending")).toHaveTextContent("Still running");
+    expect(within(dialog).queryByTestId("sdk-detail-missing")).toBeNull();
+  });
+
   it("reabrir o modal mostra na hora o detalhe que já veio, sem 'Carregando' de novo", async () => {
     renderSdkChat();
     const ws = await socket();
