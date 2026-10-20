@@ -243,6 +243,8 @@ describe("the inbox — what happened on the board while the user was not asking
     const inbox = await call("vibehub_inbox");
     await close();
     expect(inbox.events).toEqual([expect.objectContaining({ cardId: env.card.id, card: "login", kind: "question", questions: Q })]);
+    // The time in the server's own zone, with its offset — never a bare UTC "Z" read aloud as local.
+    expect((inbox.events as { at: string }[])[0]!.at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/);
     expect(typeof inbox.cursor).toBe("number");
   });
 

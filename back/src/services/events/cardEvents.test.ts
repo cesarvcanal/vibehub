@@ -117,6 +117,33 @@ describe("resolution — what is no longer waiting leaves the inbox", () => {
   });
 });
 
+describe("parking — what came before a card was concluded or paused is over", () => {
+  it("a card concluded and brought back (by any path) does not resurface its old events", async () => {
+    const env = await load();
+    await env.events.recordCardEvent({ id: "turn:old", cardId: env.card.id, kind: "turn_finished" });
+    await env.registry.updateCard(env.card.id, { column: "done" });
+    await env.registry.updateCard(env.card.id, { column: "backlog" });
+    expect((await env.events.inboxFor(env.owner)).events).toEqual([]);
+  });
+
+  it("a card paused and brought back does not either", async () => {
+    const env = await load();
+    await env.events.recordCardEvent({ id: "q:old", cardId: env.card.id, kind: "question", refId: "q0" });
+    await env.registry.updateCard(env.card.id, { column: "paused" });
+    await env.registry.updateCard(env.card.id, { column: "waiting" });
+    expect((await env.events.inboxFor(env.owner)).events).toEqual([]);
+  });
+
+  it("what happens after it came back is news again", async () => {
+    const env = await load();
+    await env.registry.updateCard(env.card.id, { column: "done" });
+    await env.registry.updateCard(env.card.id, { column: "backlog" });
+    await new Promise((r) => setTimeout(r, 5));
+    await env.events.recordCardEvent({ id: "turn:new", cardId: env.card.id, kind: "turn_finished" });
+    expect((await env.events.inboxFor(env.owner)).events.map((e) => e.id)).toEqual(["turn:new"]);
+  });
+});
+
 describe("who hears about it", () => {
   it("a member hears nothing about a card that was not shared with them", async () => {
     const env = await load();
@@ -189,6 +216,17 @@ describe("pruneCardEvents (retention) — PURE", () => {
       { ...base, seq: 3, id: "fresh-resolved", at: now - 10, resolvedAt: now - 5 },
     ], now);
     expect(kept.map((e) => e.id)).toEqual(["old-open", "fresh-resolved"]);
+  });
+
+  it("past the cap, resolved events go first — an open question is never evicted for a closed one", async () => {
+    const { pruneCardEvents, MAX_EVENTS } = await import("./cardEvents.js");
+    const now = 1_800_000_000_000;
+    const base = { cardId: "c", kind: "turn_finished" as const, title: "t", at: now };
+    const open = { ...base, seq: 1, id: "open-oldest", kind: "question" as const };
+    const resolved = Array.from({ length: MAX_EVENTS }, (_, i) => ({ ...base, seq: i + 2, id: `r${i}`, resolvedAt: now }));
+    const kept = pruneCardEvents([open, ...resolved], now);
+    expect(kept).toHaveLength(MAX_EVENTS);
+    expect(kept[0]!.id).toBe("open-oldest");
   });
 
   it("caps the log at the newest MAX_EVENTS", async () => {
@@ -273,6 +311,21 @@ describe("observers — where the moments come from", () => {
     await env.events.observeDeclaredState(env.card.id, "needs_me", "qual banco?");
     await env.events.observeDeclaredState(env.card.id, "ready", "pronto");
     expect((await env.events.inboxFor(env.owner)).events).toEqual([]);
+  });
+
+  it("the same 'I need you' reported twice is announced once", async () => {
+    const env = await load();
+    await env.events.observeDeclaredState(env.card.id, "needs_me", "qual banco?");
+    await env.events.takeUndelivered(env.owner);
+    await env.events.observeDeclaredState(env.card.id, "needs_me", "qual banco?");
+    expect(await env.events.takeUndelivered(env.owner)).toEqual([]);
+    expect((await env.events.inboxFor(env.owner)).events).toHaveLength(1);
+  });
+
+  it("turn_finished carries what was declared WHEN the turn ended, even if the card moved on since", async () => {
+    const env = await load();
+    await env.events.observeCardStatus(env.card.id, "working", "waiting", { state: "needs_me", summary: "qual banco?" });
+    expect((await env.events.inboxFor(env.owner)).events[0]).toMatchObject({ kind: "turn_finished", state: "needs_me", summary: "qual banco?" });
   });
 
   it("declaring needs_me or blocked is a needs_me; ready or working is not", async () => {

@@ -85,11 +85,23 @@ async function openForUser(user: PublicUser, card: registry.Card) {
   };
 }
 
+/**
+ * A moment in the SERVER's zone with its offset ("2026-10-20T18:05:00-03:00"): the assistant reads
+ * times aloud, and a bare UTC "Z" is heard as local and comes out hours off.
+ */
+export function localIso(ms: number): string {
+  const d = new Date(ms);
+  const off = -d.getTimezoneOffset();
+  const pad = (n: number) => String(Math.trunc(Math.abs(n))).padStart(2, "0");
+  const local = new Date(ms + off * 60_000).toISOString().slice(0, 19);
+  return `${local}${off >= 0 ? "+" : "-"}${pad(off / 60)}:${pad(off % 60)}`;
+}
+
 /** A card event as the assistant gets it: the card by title (what is spoken), the time readable. */
 function forAssistant(e: CardEvent) {
   // Absent fields are undefined, and JSON leaves them out.
   return {
-    cardId: e.cardId, card: e.title, kind: e.kind, at: new Date(e.at).toISOString(),
+    cardId: e.cardId, card: e.title, kind: e.kind, at: localIso(e.at),
     questions: e.questions, tool: e.tool, reason: e.reason, state: e.state, summary: e.summary,
   };
 }

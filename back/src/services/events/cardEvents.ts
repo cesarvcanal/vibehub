@@ -3,7 +3,7 @@ import { JsonStore } from "../../store/jsonStore.js";
 import { dataPath } from "../../config/env.js";
 import { visibleCards } from "../../auth/access.js";
 import type { PublicUser } from "../../auth/users.js";
-import { getCard, type Card, type CardStatus, type DeclaredState } from "../board/registry.js";
+import { getCard, listAllCards, type Card, type CardStatus, type DeclaredState } from "../board/registry.js";
 import type { DriverEvent, UserQuestionItem } from "../sdk/protocol.js";
 import { logger } from "../../utils/logger.js";
 
@@ -79,7 +79,11 @@ const store = new JsonStore<EventsDoc>(
 /** The log after retention: resolved events past RESOLVED_RETENTION_MS go, then the newest MAX_EVENTS stay. PURE. */
 export function pruneCardEvents(events: readonly CardEvent[], now: number): CardEvent[] {
   const kept = events.filter((e) => !e.resolvedAt || now - e.resolvedAt <= RESOLVED_RETENTION_MS);
-  return kept.slice(-MAX_EVENTS);
+  if (kept.length <= MAX_EVENTS) return kept;
+  // Past the cap the oldest RESOLVED go first: an open question is never evicted for a closed one.
+  let excess = kept.length - MAX_EVENTS;
+  const pruned = kept.filter((e) => !(e.resolvedAt && excess > 0 && excess-- > 0));
+  return pruned.slice(-MAX_EVENTS);
 }
 
 /** Records one moment. `null` = already recorded (same id) or the card does not exist. */
@@ -92,8 +96,12 @@ export async function recordCardEvent(input: CardEventInput): Promise<CardEvent 
     const open = (kind: CardEventKind) => doc.events.filter((e) => e.cardId === input.cardId && e.kind === kind && !e.resolvedAt);
     // One end of turn per turn: two hooks reporting the same end (the CLI's and the driver's) are one.
     if (input.kind === "turn_finished" && open("turn_finished").length > 0) return null;
-    // The newest "I need you" is the one that stands.
-    if (input.kind === "needs_me") for (const e of open("needs_me")) e.resolvedAt = now;
+    // The newest "I need you" is the one that stands; the same one reported again is no news.
+    if (input.kind === "needs_me") {
+      const standing = open("needs_me");
+      if (standing.some((e) => e.state === input.state && e.summary === input.summary)) return null;
+      for (const e of standing) e.resolvedAt = now;
+    }
     const event: CardEvent = { ...input, seq: ++doc.seq, at: input.at ?? now, title: card.title };
     doc.events = pruneCardEvents([...doc.events, event], now);
     return event;
@@ -119,11 +127,13 @@ export async function resolveCardEvents(cardId: string, opts: { refId?: string; 
 async function openFor(user: PublicUser, events: readonly CardEvent[], since = 0): Promise<CardEvent[]> {
   const pending = events.filter((e) => !e.resolvedAt && e.seq > since);
   if (pending.length === 0) return [];
-  const cards = (await Promise.all([...new Set(pending.map((e) => e.cardId))].map((id) => getCard(id))))
-    .filter((c): c is Card => !!c && c.column !== "done" && c.column !== "paused" && !c.pausedAt)
+  const ids = new Set(pending.map((e) => e.cardId));
+  const cards = (await listAllCards())
+    .filter((c) => ids.has(c.id) && c.column !== "done" && c.column !== "paused" && !c.pausedAt)
     .filter((c) => !c.actorUserId || c.actorUserId === user.id);
-  const heard = new Set((await visibleCards(user, cards)).map((c) => c.id));
-  return pending.filter((e) => heard.has(e.cardId));
+  const heard = new Map((await visibleCards(user, cards)).map((c) => [c.id, c.parkedAt ?? 0]));
+  // An event from before the card was last parked is over, however the card came back.
+  return pending.filter((e) => heard.has(e.cardId) && e.at > heard.get(e.cardId)!);
 }
 
 /** The person's inbox: open events, oldest first. `cursor` = the newest `seq` in the log. */
@@ -181,15 +191,17 @@ function inOrder(cardId: string, work: () => Promise<unknown>): Promise<void> {
  * turn_finished, with what the agent declared about it; a turn that STARTS resolves everything the
  * card had open (whoever answered, the card moved on).
  */
-export function observeCardStatus(cardId: string, was: CardStatus | null | undefined, now: CardStatus): Promise<void> {
+export function observeCardStatus(
+  cardId: string, was: CardStatus | null | undefined, now: CardStatus,
+  /** What the agent had declared WHEN the turn ended — read by the caller, before a new turn clears it. */
+  declared?: { state?: DeclaredState; summary?: string },
+): Promise<void> {
   if (now === "working" && was !== "working") return inOrder(cardId, () => resolveCardEvents(cardId));
   if (now !== "waiting" || was !== "working") return Promise.resolve();
   return inOrder(cardId, async () => {
-    const card = await getCard(cardId);
-    if (!card) return;
-    await recordCardEvent({
-      id: `turn:${randomUUID()}`, cardId, kind: "turn_finished", state: card.declaredState, summary: card.declaredSummary,
-    });
+    const card = declared ? undefined : await getCard(cardId);
+    const { state, summary } = declared ?? { state: card?.declaredState, summary: card?.declaredSummary };
+    await recordCardEvent({ id: `turn:${randomUUID()}`, cardId, kind: "turn_finished", state, summary });
   });
 }
 

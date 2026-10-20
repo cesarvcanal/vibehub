@@ -33,7 +33,9 @@ export async function reportCardStatus(cardId: string, reported: registry.CardSt
   const card = await registry.applyCardStatus(cardId, status);
   // What a person away from the board hears (services/events/cardEvents.ts): a turn that ended, or
   // a new one clearing what was open. Fire-and-forget: the hook has a 3s budget.
-  if (card) void observeCardStatus(card.id, wasStatus, status);
+  if (card) {
+    void observeCardStatus(card.id, wasStatus, status, { state: card.declaredState, summary: card.declaredSummary });
+  }
   // A PAUSE BEATS the pending restart: a card whose PENDING PAUSE is due now is going to sleep, so
   // restarting it would be wasted work — applyCardStatus already dropped the flag in that case.
   const pausing = wasColumn ? registry.shouldEndSessionOnStatus(status, wasColumn, wasLive) : false;
