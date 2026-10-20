@@ -184,7 +184,9 @@ describe("deploy no meio de uma ordem do maestro (card a28ffa23)", () => {
     const b = await bootProcess();
     expect(await sweep(b, { sdkDriver: true, sdkAutoResume: true })).toEqual({ resumed: [], noted: [] });
     await settle();
-    expect((await b.registry.getCard(cardId))?.hibernatedAt).toBeTruthy();
+    const card = await b.registry.getCard(cardId);
+    expect(card?.hibernatedAt).toBeTruthy();
+    expect(card?.status ?? null).toBeNull(); // nenhum relato: a hibernação apagou a bolinha com a sessão
   });
 
   it("sem retomada (auto-resume desligado), a bolinha não fica 'working' do processo morto", async () => {
