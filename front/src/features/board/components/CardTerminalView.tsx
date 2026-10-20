@@ -65,6 +65,7 @@ import {
   FEATURES_KEY,
   modelInUse,
   pinnedEffort,
+  effortInUse,
   projectAccountSlug,
   whitelistModel,
   type BoardCard,
@@ -379,8 +380,9 @@ export function CardTerminalView({
   // ("opus") and a dated transcript id both tick the whitelisted row instead of growing a second one.
   const modelRow = whitelistModel(model.id);
   const modelUnlisted = !modelRow;
-  // The level is the card's PIN, not a reading: the transcript does not record the effort a turn ran on.
-  const effort = pinnedEffort(card);
+  // Like the model: the level the session RUNS on (the transcript stamps it on every turn), so an
+  // unpinned card still ticks its row instead of leaving the operator guessing.
+  const effort = effortInUse(card, session);
   const accountName = accountInUseName(card, session, accounts, inheritedAccount);
   const defaultAccountName = defaultAccountLabelOr(accountsData?.defaultLabel);
 
