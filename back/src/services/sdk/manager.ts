@@ -1410,19 +1410,34 @@ export function replyFrameOutcome(socket: WebSocket, outcome: ClientFrameOutcome
   });
 }
 
+export interface AttachOpts {
+  /**
+   * Asked for every frame before it reaches the driver. A returned promise HOLDS that frame — and
+   * every later frame of this socket, so nothing overtakes it — until it settles (it must never
+   * reject). The route uses it so a message from a new author waits for that person's GitHub
+   * identity to land in the runner. `undefined` = go now: the common case costs no await.
+   */
+  beforeTurn?: (raw: string) => Promise<void> | undefined;
+}
+
 /**
  * Attach one websocket to the card's live driver: events fan out to it, its controls funnel in.
  * `origin` is who types on THIS socket — stamped on the messages it persists. Detaching (socket
  * close/error) never touches the driver; it only arms the idle stop when nothing else holds it.
+ *
+ * Returns this socket's FUNNEL — what its `message` listener feeds — so the route can hand it the
+ * frames buffered during its setup and they take the same ordered path as the live ones.
  */
-export function attachSocket(session: DriverSession, socket: WebSocket, origin?: MessageOrigin): void {
+export function attachSocket(
+  session: DriverSession, socket: WebSocket, origin?: MessageOrigin, opts: AttachOpts = {},
+): (raw: string) => void {
   // A socket that is no longer OPEN already fired (or is about to fire) its `close` — before the
   // listener below exists. Attached, it would never be detached: `sockets` never empties, the idle
   // stop never arms, `isCardChatInUse` vetoes the hibernation forever and the ping interval leaks.
   // The route checks this after its own awaits; this is the manager's own guard on its invariant.
   if (socket.readyState !== WebSocket.OPEN) {
     maybeScheduleIdleStop(session);
-    return;
+    return () => undefined;
   }
   disableNagle(socket);
   clearIdleTimer(session);
@@ -1508,8 +1523,16 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
   const answerFeed = createFeedResponder(session, socket);
   const answerDetail = createDetailResponder(session, socket);
 
-  socket.on("message", (raw: Buffer) => {
-    const text = raw.toString();
+  const deliver = (text: string): void => {
+    const outcome = handleClientFrame(session, text, origin, socket);
+    // The message is out: whoever wrote it stopped typing — even if the front's own "parou" is lost.
+    if (outcome.kind === "accepted") noteTyping(false);
+    replyFrameOutcome(socket, outcome);
+  };
+  /** The tail of this socket's held frames; null = nothing held, frames go straight through. */
+  let held: Promise<void> | null = null;
+
+  const funnel = (text: string): void => {
     const typing = parseTypingFrame(text);
     if (typing !== null) {
       noteTyping(typing);
@@ -1527,11 +1550,23 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
       answerFeed(feed);
       return;
     }
-    const outcome = handleClientFrame(session, text, origin, socket);
-    // The message is out: whoever wrote it stopped typing — even if the front's own "parou" is lost.
-    if (outcome.kind === "accepted") noteTyping(false);
-    replyFrameOutcome(socket, outcome);
-  });
+    const gate = opts.beforeTurn?.(text);
+    if (!held && !gate) {
+      deliver(text);
+      return;
+    }
+    const next: Promise<void> = (held ?? Promise.resolve())
+      .then(() => gate)
+      .then(() => deliver(text))
+      .catch((err: unknown) => {
+        logger.warn({ card: session.label, detail: (err as Error).message }, "a held chat frame could not be delivered");
+      });
+    held = next;
+    void next.then(() => {
+      if (held === next) held = null;
+    });
+  };
+  socket.on("message", (raw: Buffer) => funnel(raw.toString()));
 
   const detach = (): void => {
     clearInterval(keepalive);
@@ -1542,6 +1577,7 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
   };
   socket.on("close", detach);
   socket.on("error", detach);
+  return funnel;
 }
 
 /**
