@@ -51,12 +51,21 @@ export async function canAccessProject(user: PublicUser | null, projectId: strin
   return cards.some((c) => c.projectId === projectId && cardIds.has(c.id));
 }
 
-/** Narrows a project list to what this user may see. */
+/**
+ * Narrows a project list to what this user may see — the rule of {@link canAccessProject}, with the
+ * shares and the cards read ONCE for the whole list (per project, it reloaded both and scanned every
+ * card again: projects x cards on every board load of a member).
+ */
 export async function visibleProjects(user: PublicUser | null, projects: Project[]): Promise<Project[]> {
   if (!user) return [];
   if (user.role === "owner") return projects;
-  const allowed = await Promise.all(projects.map((p) => canAccessProject(user, p.id)));
-  return projects.filter((_, i) => allowed[i]);
+  const shares = await registry.sharesForUser(user.id);
+  const reachable = new Set(shares.filter((s) => s.kind === "project").map((s) => s.targetId));
+  const cardIds = new Set(shares.filter((s) => s.kind === "card").map((s) => s.targetId));
+  if (cardIds.size > 0) {
+    for (const c of await registry.listAllCards()) if (cardIds.has(c.id)) reachable.add(c.projectId);
+  }
+  return projects.filter((p) => reachable.has(p.id));
 }
 
 /** Narrows a card list to what this user may see. */
