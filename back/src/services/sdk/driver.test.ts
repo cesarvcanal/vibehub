@@ -126,6 +126,12 @@ describe("buildSdkDriverCommandLine", () => {
     expect(bare).not.toContain("VIBEHUB_CARD_ID");
   });
 
+  it("caps test-runner workers in every driver session — the runner's cores are shared by all cards", () => {
+    const line = buildSdkDriverCommandLine(base);
+    expect(line).toContain("export VITEST_MAX_THREADS=2; ");
+    expect(line).toContain("export VITEST_MAX_FORKS=2; ");
+  });
+
   it("rejects an unsafe cdp/status URL or card id rather than passing it to the shell", () => {
     expect(() => buildSdkDriverCommandLine({ ...base, cdpEndpoint: "http://x'; rm -rf /" })).toThrow();
     expect(() => buildSdkDriverCommandLine({ ...base, statusUrl: "ftp://nope" })).toThrow();
@@ -338,6 +344,16 @@ describe("sdk-driver.mjs — o menu \"/\" antes da primeira mensagem", () => {
   it("encerra a consulta descartável — nada de um CLI a mais vivo por card", () => {
     expect(source).toMatch(/finally\s*\{\s*\n\s*ch\.end\(\);/);
     expect(source).toContain("if (warmChannel) warmChannel.end();");
+  });
+
+  it("sobe sem MCP nenhum — no reinício eram dez CLIs descartáveis lançando npx e conexões", () => {
+    expect(source).toContain("options.strictMcpConfig = true;");
+    expect(source).toContain("options.mcpServers = {};");
+  });
+
+  it("a mensagem de verdade mata o CLI descartável (abort), não espera ele terminar de subir", () => {
+    expect(source).toContain("options.abortController = abort;");
+    expect(source).toMatch(/if \(warmChannel\) warmChannel\.end\(\);\s*\n\s*if \(warmAbort\) warmAbort\.abort\(\);/);
   });
 
   it("não marca o catálogo como anunciado: o `init` de verdade ainda substitui este", () => {

@@ -183,6 +183,25 @@ describe("SdkChatView", () => {
     expect(onStatus).toHaveBeenCalledWith("open");
   });
 
+  it("spins the running tool's icon without a transform utility fighting the animation", async () => {
+    // `animate-spin` anima o `transform`; um `translate-*` no mesmo elemento virava o ponto de
+    // partida da animação e o spinner só deslizava 2px e voltava, sem girar.
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } });
+
+    const tool = screen.getByTestId("sdk-tool");
+    expect(tool).toHaveAttribute("data-status", "running");
+    const spinners = Array.from(document.querySelectorAll("svg.animate-spin"));
+    expect(spinners.length).toBeGreaterThan(0);
+    expect(tool.querySelector("svg.animate-spin")).not.toBeNull();
+    for (const svg of spinners) {
+      expect(svg.getAttribute("class")).not.toMatch(/(^|\s)-?(translate|rotate|scale|skew)-/);
+    }
+  });
+
   it("renders the streamed answer and the tool calls as compact lines", async () => {
     renderSdkChat();
     const ws = await socket();

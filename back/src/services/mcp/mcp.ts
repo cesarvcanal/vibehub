@@ -282,6 +282,14 @@ export const BUILTIN_MAESTRO_NAME = "vibehub";
 export const BUILTIN_BROWSER_NAME = "navegador";
 
 /**
+ * O pacote do MCP de navegador, em VERSÃO FIXA, nunca `@latest`: todo CLI que sobe (cada card, cada
+ * retomada, cada reinício do painel) lança este MCP, e `npx -y …@latest` vai ao registro do npm a CADA
+ * boot perguntar se há versão nova — medido no runner (2026-10-20): ~25s com `@latest` contra ~6s com
+ * a versão exata, que sai do cache do npx. Subir a versão é trocar esta constante.
+ */
+export const BROWSER_MCP_PACKAGE = "@playwright/mcp@0.0.83";
+
+/**
  * The built-in BROWSER MCP every card gets: a Playwright MCP wired over CDP to the card's OWN live
  * Chromium — the exact browser the user watches (and can take over) on the card's noVNC canvas —
  * instead of a private headless browser of its own. This is what makes "access site X and do Y"
@@ -307,7 +315,7 @@ export function builtinBrowserInjection(): McpInjection {
     json: JSON.stringify({
       type: "stdio",
       command: "npx",
-      args: ["-y", "@playwright/mcp@latest", "--cdp-endpoint", endpoint],
+      args: ["-y", BROWSER_MCP_PACKAGE, "--cdp-endpoint", endpoint],
     }),
   };
 }

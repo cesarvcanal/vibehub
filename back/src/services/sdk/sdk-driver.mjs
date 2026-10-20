@@ -512,16 +512,31 @@ async function emitCatalogFrom(init, queryHandle) {
  *  - `catalogAnnounced` fica FALSO: este catálogo é provisório (sem as listas do `init`, todo
  *    comando aparece como "comando"), e o primeiro `init` de verdade o substitui com os rótulos
  *    certos — skill, plugin, e os comandos que só fazem sentido num terminal, escondidos.
+ *
+ * E é LEVE (produção, 2026-10-20: depois de um reinício do painel, a retomada de um card levou 81s só
+ * para o CLI aceitar a mensagem). Cada aba que reconecta sobe um driver, e cada driver subia este CLI
+ * com TODOS os MCPs do perfil — dois `npx @playwright/mcp`, as conexões HTTP —, dez de uma vez, ao lado
+ * dos dez CLIs que retomavam de verdade. Agora:
+ *  - nenhum MCP (`strictMcpConfig` + `mcpServers` vazio): o menu só perde os prompts de MCP até o
+ *    primeiro `init`, que traz o catálogo completo de qualquer jeito;
+ *  - a mensagem de verdade MATA esta consulta (abort), em vez de só fechar a entrada e deixá-la
+ *    terminar de subir disputando CPU com o CLI que vai responder.
  */
 let warmChannel = null;
+let warmAbort = null;
 async function warmCatalog() {
   if (catalogAnnounced || channel || warmChannel) return;
   const ch = makeChannel();
   warmChannel = ch;
+  const abort = new AbortController();
+  warmAbort = abort;
   try {
     applyAuth(); // the throwaway CLI signs in like the real one would
     const options = baseOptions();
     options.env = { ...process.env, VIBEHUB_STATUS_URL: "" };
+    options.strictMcpConfig = true;
+    options.mcpServers = {};
+    options.abortController = abort;
     const handle = query({ prompt: ch, options });
     // A consulta só ganha vida sendo iterada — e nada do que ela diz interessa: o único objetivo é
     // ter um CLI de pé para responder a pergunta abaixo.
@@ -535,6 +550,7 @@ async function warmCatalog() {
   } finally {
     ch.end(); // fecha a corrente de entrada: sem mais mensagens, o CLI descartável sai sozinho
     warmChannel = null;
+    warmAbort = null;
   }
 }
 
@@ -1228,6 +1244,7 @@ function sendUser(text) {
     // A consulta descartável do catálogo (se ainda estiver de pé) não tem mais razão de existir —
     // e deixá-la viva gastaria um CLI inteiro ao lado do que vai responder de verdade.
     if (warmChannel) warmChannel.end();
+    if (warmAbort) warmAbort.abort();
     channel = makeChannel();
     void runStream();
   }

@@ -1,6 +1,7 @@
-import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
+import { hostExecutor, shQuote, assertSafeRemotePath, CONTAINER_DEADLINE_MARGIN_MS } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
-import { getCard, getProject } from "../board/registry.js";
+import { testWorkerExports } from "../../runtime/testWorkers.js";
+import { getCard, getProject, assertBranchName } from "../board/registry.js";
 import { cardWorkPaths } from "../board/workspace.js";
 import { logger } from "../../utils/logger.js";
 
@@ -13,7 +14,10 @@ import { logger } from "../../utils/logger.js";
  *
  * WHAT it runs:
  *  - `.vibehub/gate.json` in the worktree, when present: `{ "checks": ["cmd", "cmd", …] }`. Those
- *    commands, in order — the repo decides what "green" means.
+ *    commands, in order — the repo decides what "green" means. They run with `VIBEHUB_BASE_REF`
+ *    (`origin/<card base>`) in the environment, so a repo can test only what the card changed
+ *    (`vitest run --changed "$VIBEHUB_BASE_REF"`) instead of every suite it has — CI still runs
+ *    the whole thing on the PR.
  *  - otherwise sensible defaults, each ONLY when it is actually resolvable in the worktree: a
  *    typecheck (`tsc --noEmit`) when there is a tsconfig AND a local tsc, and `npm test` when
  *    package.json declares a `test` script.
@@ -35,6 +39,8 @@ export interface GateResult {
   output: string;
   /** true = the checks did not run now: this is a green verdict from moments ago (see `GATE_REUSE_MS`). */
   reused?: true;
+  /** true = the checks hit `GATE_RUN_TIMEOUT_MS` and were KILLED inside the runner (a red verdict). */
+  timedOut?: true;
 }
 
 /**
@@ -52,6 +58,20 @@ export const DEFAULT_TEST_CHECK = "npm test";
 export const MAX_GATE_CHECKS = 20;
 /** How much of the output to keep, in bytes: enough to see the failure, never a whole build log. */
 export const GATE_OUTPUT_TAIL_BYTES = 4_000;
+
+/**
+ * Node-side deadline for the run round trip. The checks themselves get an in-container deadline
+ * `CONTAINER_DEADLINE_MARGIN_MS` shorter (see `buildGateRunScript`), so it is the runner that stops
+ * them — and the verdict still comes back — before the Node side gives up.
+ */
+export const GATE_RUN_TIMEOUT_MS = 600_000;
+/**
+ * How many gates run at once on the runner. Every gate is a full `npm test` (two vitest pools, each
+ * sized to the CPU count), and they all share the runner's cores with the cards' own sessions: with
+ * five cards delivering at once a 2-minute suite took over 10, every gate timed out, and every retry
+ * added one more suite to the pile. The rest queue.
+ */
+export const GATE_MAX_CONCURRENT = 2;
 
 const PROBE_MARKER = "__VIBEHUB_GATE_JSON__";
 const RESULT_MARKER = "__VIBEHUB_GATE__";
@@ -160,32 +180,60 @@ export function gateReuseKey(probe: Pick<GateProbe, "headSha" | "cleanTree">, ch
  * folded into stdout. It ends with a `__VIBEHUB_GATE__ pass|fail|error` line the parser reads. The
  * check commands come from the repo (gate.json) or the defaults; they ARE commands, so they are
  * embedded to be interpreted — but the whole inner script is one shell-quoted argument, so nothing
- * in a check can break out of the structure. The cwd is `$1`, validated. PURE.
+ * in a check can break out of the structure. The cwd is `$1`, validated. The whole run is bounded by
+ * an in-container deadline; reaching it prints `__VIBEHUB_GATE__ timeout <s>`. With a `baseBranch`, the
+ * checks see `VIBEHUB_BASE_REF=origin/<base>`. PURE.
  */
-export function buildGateRunScript(containerName: string, cwd: string, checks: string[]): string {
+export function buildGateRunScript(
+  containerName: string,
+  cwd: string,
+  checks: string[],
+  opts: { timeoutMs?: number; baseBranch?: string } = {},
+): string {
   assertSafeRemotePath(cwd);
+  const timeoutMs = opts.timeoutMs ?? GATE_RUN_TIMEOUT_MS;
   const parts: string[] = [
     "exec 2>&1",
     `cd "$1" || { echo "${RESULT_MARKER} error"; exit 0; }`,
+    testWorkerExports().trim(),
   ];
+  // The branch the card's work is compared against, for checks that test only what changed
+  // (`vitest run --changed "$VIBEHUB_BASE_REF"`). Validated, then quoted: it is data, not a command.
+  if (opts.baseBranch) parts.push(`export VIBEHUB_BASE_REF=${shQuote(`origin/${assertBranchName(opts.baseBranch)}`)}`);
   for (const check of checks) {
     parts.push(`printf '\\n=== gate: %s ===\\n' ${shQuote(check)}`);
     parts.push(`if ${check}; then :; else echo "${RESULT_MARKER} fail"; exit 0; fi`);
   }
   parts.push(`echo "${RESULT_MARKER} pass"`);
   const inner = parts.join("; ");
-  return `docker exec ${shQuote(containerName)} sh -c ${shQuote(inner)} _ ${shQuote(cwd)}`;
+  // `timeout` runs the checks in a process group of its own and KILLs the whole group on the
+  // deadline. Without it, the Node timeout only killed the local `docker exec` client and the suite
+  // went on inside the runner, orphaned, eating CPU while the maestro retried on top of it (see
+  // docs/runner-processes.md). 137 is how `timeout -s KILL` reports the deadline.
+  const seconds = Math.floor((timeoutMs - CONTAINER_DEADLINE_MARGIN_MS) / 1000);
+  if (seconds < 1) throw new Error(`timeout too short for an in-container deadline: ${timeoutMs}ms`);
+  return (
+    `docker exec ${shQuote(containerName)} timeout -s KILL ${seconds} sh -c ${shQuote(inner)} _ ${shQuote(cwd)}; ` +
+    `if [ $? -eq 137 ]; then echo "${RESULT_MARKER} timeout ${seconds}"; fi`
+  );
 }
 
 /** The verdict from the run output: `pass` only when the pass marker is present and none failed. PURE. */
-export function parseGateRun(stdout: string): { passed: boolean; output: string } {
+export function parseGateRun(stdout: string): { passed: boolean; output: string; timedOut: boolean } {
   const passIdx = stdout.lastIndexOf(`${RESULT_MARKER} pass`);
   const failIdx = stdout.lastIndexOf(`${RESULT_MARKER} fail`);
   const errIdx = stdout.lastIndexOf(`${RESULT_MARKER} error`);
-  const passed = passIdx >= 0 && failIdx < 0 && errIdx < 0;
+  const timeout = new RegExp(`${RESULT_MARKER} timeout (\\d+)`).exec(stdout);
+  const passed = passIdx >= 0 && failIdx < 0 && errIdx < 0 && !timeout;
   // Strip the marker lines from what we show — they are protocol, not output.
-  const output = stdout.replace(new RegExp(`${RESULT_MARKER} (pass|fail|error)\\r?\\n?`, "g"), "").trimEnd();
-  return { passed, output };
+  let output = stdout.replace(new RegExp(`${RESULT_MARKER} (pass|fail|error|timeout \\d+)\\r?\\n?`, "g"), "").trimEnd();
+  if (timeout) {
+    output +=
+      `\n\n[vibehub] o gate passou do prazo de ${timeout[1]}s e foi encerrado (todos os processos dele mortos ` +
+      `no runner). Rodar de novo na mesma hora tende a estourar igual: veja se a suíte travou ou se o runner ` +
+      `está sobrecarregado antes de repetir.`;
+  }
+  return { passed, output, timedOut: !!timeout };
 }
 
 /**
@@ -217,13 +265,50 @@ export function cleanOutput(text: string): string {
 /** Each card's last green verdict, timed from when its tree was probed. In memory only. */
 const greenVerdicts = new Map<string, { key: string; at: number; output: string }>();
 
+/** The gate in flight per card: a second call while one runs gets the SAME answer, not a second suite. */
+const inFlight = new Map<string, Promise<GateResult>>();
+
+/** Slots for `GATE_MAX_CONCURRENT` runs; the queue is FIFO. */
+let running = 0;
+const waiting: Array<() => void> = [];
+
+async function acquireSlot(): Promise<void> {
+  if (running < GATE_MAX_CONCURRENT) {
+    running++;
+    return;
+  }
+  await new Promise<void>((resolve) => waiting.push(resolve));
+}
+
+function releaseSlot(): void {
+  const next = waiting.shift();
+  if (next) next(); // the slot passes straight to the next in line
+  else running--;
+}
+
 /**
  * Runs the gate for a card: probe the worktree, decide the checks, run them. Two host round trips
  * (probe is cheap; the run is where the time goes). A worktree with nothing to check returns
  * `{ ran: false }` without a second round trip, and a green verdict for the same commit on a clean
  * tree within `GATE_REUSE_MS` is answered without running the checks again.
+ *
+ * A call for a card whose gate is already running JOINS that run (the maestro retrying after its own
+ * client gave up must not start a second suite), and runs across cards are capped at
+ * `GATE_MAX_CONCURRENT`. Each run logs how long it queued and ran, so "why did the delivery take 20
+ * minutes" is answered by the log, not by guessing.
  */
-export async function runGate(cardId: string): Promise<GateResult> {
+export function runGate(cardId: string): Promise<GateResult> {
+  const current = inFlight.get(cardId);
+  if (current) {
+    logger.info({ action: "maestro.gate", cardId }, "gate already running for this card — joining it");
+    return current;
+  }
+  const run = runGateNow(cardId).finally(() => inFlight.delete(cardId));
+  inFlight.set(cardId, run);
+  return run;
+}
+
+async function runGateNow(cardId: string): Promise<GateResult> {
   const card = await getCard(cardId);
   if (!card) throw new Error("card not found");
   const project = await getProject(card.projectId);
@@ -250,14 +335,33 @@ export async function runGate(cardId: string): Promise<GateResult> {
     return { ran: true, passed: true, output: green.output, reused: true };
   }
 
-  const runOut = await hostExecutor().runScript(buildGateRunScript(container, cwd, plan.checks), { timeoutMs: 600_000 });
-  const { passed, output } = parseGateRun(runOut.stdout);
+  const queuedAt = Date.now();
+  await acquireSlot();
+  const startedAt = Date.now();
+  let runOut: { stdout: string };
+  try {
+    runOut = await hostExecutor().runScript(buildGateRunScript(container, cwd, plan.checks, { baseBranch: card.base || project.baseBranch }),
+      { timeoutMs: GATE_RUN_TIMEOUT_MS },
+    );
+  } catch (err) {
+    logger.warn(
+      { audit: true, action: "maestro.gate", card: card.worktreeSlug, waitedMs: startedAt - queuedAt, durationMs: Date.now() - startedAt, detail: (err as Error).message },
+      "gate run failed on the host",
+    );
+    throw err;
+  } finally {
+    releaseSlot();
+  }
+  const { passed, output, timedOut } = parseGateRun(runOut.stdout);
   const cleaned = cleanOutput(output);
   if (passed && reuseKey) greenVerdicts.set(card.id, { key: reuseKey, at: probedAt, output: cleaned });
   else greenVerdicts.delete(card.id);
   logger.info(
-    { audit: true, action: "maestro.gate", card: card.worktreeSlug, ran: true, passed, checks: plan.checks.length },
-    "gate ran",
+    {
+      audit: true, action: "maestro.gate", card: card.worktreeSlug, ran: true, passed, checks: plan.checks.length,
+      head: probe.headSha, waitedMs: startedAt - queuedAt, durationMs: Date.now() - startedAt, ...(timedOut ? { timedOut } : {}),
+    },
+    timedOut ? "gate timed out — killed in the runner" : "gate ran",
   );
-  return { ran: true, passed, output: cleaned };
+  return { ran: true, passed, output: cleaned, ...(timedOut ? { timedOut: true as const } : {}) };
 }
