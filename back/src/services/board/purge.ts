@@ -18,6 +18,7 @@ import { cardBrowserPorts, BROWSER_DATA_DIR } from "../browser/ports.js";
 import { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, DEFAULT_CLAUDE_JSON } from "../accounts/profiles.js";
 import { logger } from "../../utils/logger.js";
 import { isAtomicWriteTmp } from "../../store/atomicWrite.js";
+import { forgetCardActor } from "./actor.js";
 
 /**
  * CARD PURGE — deleting a card ERASES the card, not the tile that showed it.
@@ -101,6 +102,7 @@ export async function purgeCard(cardId: string, by?: string): Promise<PurgeRepor
   // the card first), so the deletions below cannot race new content into existence.
   await step(steps, "board", async () => {
     await registry.removeCard(card.id);
+    forgetCardActor(card.id);
   });
 
   // The card is off the board, its slot held there until its browser is known to be down.

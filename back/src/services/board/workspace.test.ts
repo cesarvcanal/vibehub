@@ -2090,6 +2090,8 @@ describe("buildCardPurgeScript (everything the card left on the runner's disk)",
     expect(s).toContain(`rm -rf '/work/.uploads/${CARD_ID}'`);
     // A LIVE CREDENTIAL: the per-card GitHub token file used to outlive the card it belonged to.
     expect(s).toContain(`rm -f '/root/.vibehub/gh/${CARD_ID}.token'`);
+    // The card's git include (name and e-mail of whoever worked it) and any temp a failed write left.
+    expect(s).toContain(`rm -f '/root/.vibehub/git/${CARD_ID}.gitconfig' '/root/.vibehub/git/${CARD_ID}.gitconfig'.*`);
     // Cookies and logged-in sessions of the card's browser.
     expect(s).toContain(`rm -rf '/work/.browser/card-e3f1ab5a'`);
   });
