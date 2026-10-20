@@ -9,6 +9,7 @@
     "build": "npm --prefix back run build & B=$!; npm --prefix front run build & F=$!; wait $B; b=$?; wait $F; f=$?; exit $((b|f))",
     "test": "npm --prefix back run test & B=$!; npm --prefix front run test & F=$!; wait $B; b=$?; wait $F; f=$?; exit $((b|f))",
     "install:all": "npm --prefix back install && npm --prefix front install",
+    "test:changed": "sh scripts/gate-changed.sh back && sh scripts/gate-changed.sh front",
     "test:seq": "npm --prefix back run test && npm --prefix front run test",
     "build:seq": "npm --prefix back run build && npm --prefix front run build"
   },
