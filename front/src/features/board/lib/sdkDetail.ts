@@ -85,15 +85,18 @@ export function agentStatus(row: Extract<SdkRow, { kind: "tool" }>, task: AgentT
   return row.live ? "running" : "unknown";
 }
 
-/** Silêncio do subagente além do qual o relógio para: quem morreu sem aviso não conta para sempre. */
+/**
+ * Silêncio do subagente além do qual o relógio para: quem morreu sem aviso não conta para sempre.
+ * O mesmo teto do back (TASK_CLOCK_STALE_MS em back/src/services/sdk/toolResult.ts).
+ */
 export const AGENT_CLOCK_STALE_MS = 30 * 60_000;
 
 /**
- * Há quanto tempo o subagente trabalha. O `durationMs` do CLI só chega com um `task_progress`, e
- * um subagente parado numa ação longa não manda nenhum — a linha congelava. Rodando, soma ao que o
- * CLI mediu o tempo desde que esta aba recebeu a medida (o relógio dela, sem diferença com o do
- * runner), até `AGENT_CLOCK_STALE_MS` de silêncio; terminado, a duração final. Rodando, em segundos
- * inteiros: um relógio que anda de segundo em segundo não mostra décimos. PURE.
+ * Há quanto tempo o subagente trabalha. O back manda, em todo frame, o tempo até aquele instante
+ * no relógio dele; rodando, a aba soma o tempo desde que recebeu o frame, no relógio DELA (sem
+ * diferença entre os dois), até o teto de silêncio — que já começa gasto pelo `quietMs` com que o
+ * frame saiu. Terminado, a duração final. Rodando, em segundos inteiros: um relógio que anda de
+ * segundo em segundo não mostra décimos. PURE.
  */
 export function agentElapsedMs(
   status: ToolStatus,
@@ -103,7 +106,8 @@ export function agentElapsedMs(
 ): number | undefined {
   const measured = task?.durationMs ?? result?.durationMs;
   if (status !== "running" || task?.receivedAt === undefined) return measured;
-  const silence = Math.min(Math.max(0, now - task.receivedAt), AGENT_CLOCK_STALE_MS);
+  const budget = Math.max(0, AGENT_CLOCK_STALE_MS - (task.quietMs ?? 0));
+  const silence = Math.min(Math.max(0, now - task.receivedAt), budget);
   return Math.floor(((measured ?? 0) + silence) / 1000) * 1000;
 }
 

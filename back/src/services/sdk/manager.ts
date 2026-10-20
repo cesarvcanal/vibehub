@@ -450,7 +450,7 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
         if (task.status !== "running") session.tasks.delete(id);
       }
     }
-    event = merged as unknown as DriverEvent;
+    event = taskSnapshot(merged, Date.now()) as unknown as DriverEvent;
   }
   if (event.type === "background_tasks") {
     // Normalizado AQUI, no lado que fala com o navegador (como o catálogo): o que sai é só o que a
@@ -1331,7 +1331,7 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
   }
 
   // O estado de cada subagente também (contadores, "o que ele faz agora"): o CLI só fala na mudança.
-  // O tempo vai até agora: a aba conta a partir do que recebe, e o último progresso pode ser velho.
+  // O tempo vai até agora (taskSnapshot): a aba conta a partir do que recebe.
   const now = Date.now();
   for (const task of session.tasks.values()) {
     try { socket.send(JSON.stringify(taskSnapshot(task, now))); } catch { /* going away */ }

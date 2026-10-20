@@ -189,6 +189,13 @@ describe("agentElapsedMs", () => {
     expect(agentElapsedMs("running", stuck, undefined, AGENT_CLOCK_STALE_MS * 10)).toBe(60_000 + AGENT_CLOCK_STALE_MS);
   });
 
+  it("o teto já começa gasto pelo silêncio com que o frame saiu do back", () => {
+    const quiet = task({ durationMs: 60_000, receivedAt: 0, quietMs: AGENT_CLOCK_STALE_MS - 60_000 });
+    expect(agentElapsedMs("running", quiet, undefined, 5 * 60_000)).toBe(120_000);
+    // calado além do teto ao sair: não anda nada
+    expect(agentElapsedMs("running", task({ durationMs: 60_000, receivedAt: 0, quietMs: 5 * 3_600_000 }), undefined, 60_000)).toBe(60_000);
+  });
+
   it("rodando sem a hora de chegada: fica no que o CLI mandou", () => {
     expect(agentElapsedMs("running", task({ durationMs: 7_000 }), undefined, 999_999)).toBe(7_000);
   });
