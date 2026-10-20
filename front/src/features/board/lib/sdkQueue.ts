@@ -186,6 +186,9 @@ export function foreignToOutbox(
   return { own, foreign };
 }
 
+/** Até quando uma mensagem perdida sem veredito volta pra fila sozinha (ver `outboxToQueue`). */
+export const REQUEUE_MAX_AGE_MS = 10 * 60_000;
+
 /**
  * O CAMINHO DE VOLTA: uma mensagem que o servidor NÃO tem (a reconciliação do reconnect a deu por
  * `missing`) e que nunca recebeu veredito volta pra FILA — e o despacho a entrega quando o chat
@@ -200,17 +203,25 @@ export function foreignToOutbox(
  * - a que já levou veredito (`undelivered`: recusa do back ou prazo vencido numa conexão que podia
  *   responder) — o servidor falhou com ela, e reenviar sozinho em laço é pior que perguntar;
  * - a que nunca saiu deste navegador (`unsent`) ou é de OUTRA conta — sair por esta conexão a
- *   gravaria no nome errado; sem leitor conhecido ainda (`/auth/me` em voo), não se decide;
- * - a correção de mensagem já enviada (`original`): ela não é um texto solto, é um supersede. PURE.
+ *   gravaria no nome errado. Sem leitor conhecido ainda (`/auth/me` em voo) ela VAI pra fila: é a
+ *   fila que separa as de outra conta quando ele chega (`foreignToOutbox`), e a reconciliação roda
+ *   uma vez só — decidir "não é minha" no escuro a condenava para sempre;
+ * - a correção de mensagem já enviada (`original`): ela não é um texto solto, é um supersede;
+ * - a VELHA (`REQUEUE_MAX_AGE_MS`): um "sobe pra prod" de três dias atrás, de uma aba fechada antes
+ *   do recibo, não pode virar turno sozinho ao abrir o card — ela volta marcada e a pessoa decide.
+ * PURE.
  */
 export function outboxToQueue(
   missing: readonly OutboxMessage[],
   viewer: string | undefined,
+  now: number,
 ): { queued: QueuedMessage[]; kept: OutboxMessage[] } {
   const queued: QueuedMessage[] = [];
   const kept: OutboxMessage[] = [];
   for (const m of missing) {
-    if (originRole(m.from, viewer) === "self" && !m.undelivered && !m.unsent && m.original === undefined) {
+    const own = viewer === undefined || originRole(m.from, viewer) === "self";
+    const fresh = now - m.at < REQUEUE_MAX_AGE_MS;
+    if (own && fresh && !m.undelivered && !m.unsent && m.original === undefined) {
       queued.push({ id: m.cid, cid: m.cid, text: m.text, at: m.at, ...(m.from ? { from: m.from } : {}) });
     } else {
       kept.push(m);

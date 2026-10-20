@@ -9,6 +9,7 @@ import {
   readQueue,
   foreignToOutbox,
   outboxToQueue,
+  REQUEUE_MAX_AGE_MS,
   releaseEditing,
   updateQueued,
   writeQueue,
@@ -170,33 +171,43 @@ describe("sdkQueue — o caminho de volta (outboxToQueue)", () => {
   const other = { kind: "user" as const, name: "mussa" };
 
   it("a que se perdeu sem veredito volta pra fila, com o texto, a hora e o autor", () => {
-    const { queued, kept } = outboxToQueue([{ cid: "c1", text: "oi", at: 5, from: me }], "cesar");
+    const { queued, kept } = outboxToQueue([{ cid: "c1", text: "oi", at: 5, from: me }], "cesar", 10);
     expect(queued).toEqual([{ id: "c1", cid: "c1", text: "oi", at: 5, from: me }]);
     expect(kept).toEqual([]);
   });
 
   it("sem autor (gravada antes do campo) é de quem está na aba", () => {
-    expect(outboxToQueue([{ cid: "c1", text: "oi", at: 5 }], "cesar").queued).toEqual([{ id: "c1", cid: "c1", text: "oi", at: 5 }]);
-    expect(outboxToQueue([{ cid: "c1", text: "oi", at: 5 }], undefined).queued).toHaveLength(1);
+    expect(outboxToQueue([{ cid: "c1", text: "oi", at: 5 }], "cesar", 10).queued).toEqual([{ id: "c1", cid: "c1", text: "oi", at: 5 }]);
+    expect(outboxToQueue([{ cid: "c1", text: "oi", at: 5 }], undefined, 10).queued).toHaveLength(1);
   });
 
-  it("fica no outbox: veredito dado, nunca enviada, de outra conta, correção, ou leitor desconhecido", () => {
+  it("fica no outbox: veredito dado, nunca enviada, de outra conta ou correção", () => {
     const cases = [
       { cid: "a", text: "x", at: 1, undelivered: true },
       { cid: "b", text: "x", at: 1, unsent: true },
       { cid: "c", text: "x", at: 1, from: other },
       { cid: "d", text: "novo", at: 1, original: "velho" },
     ];
-    const { queued, kept } = outboxToQueue(cases, "cesar");
+    const { queued, kept } = outboxToQueue(cases, "cesar", 10);
     expect(queued).toEqual([]);
     expect(kept.map((m) => m.cid)).toEqual(["a", "b", "c", "d"]);
-    expect(outboxToQueue([{ cid: "e", text: "x", at: 1, from: me }], undefined).kept).toHaveLength(1);
+  });
+
+  it("leitor ainda desconhecido: vai pra fila (é ela que separa a de outra conta depois)", () => {
+    expect(outboxToQueue([{ cid: "e", text: "x", at: 1, from: me }], undefined, 10).queued).toHaveLength(1);
+  });
+
+  it("a VELHA não vira turno sozinha: passou do teto, fica marcada para a pessoa decidir", () => {
+    const old = { cid: "v", text: "sobe pra prod", at: 0 };
+    expect(outboxToQueue([old], "cesar", REQUEUE_MAX_AGE_MS).kept).toEqual([old]);
+    expect(outboxToQueue([old], "cesar", REQUEUE_MAX_AGE_MS - 1).queued).toHaveLength(1);
   });
 
   it("mantém a ordem do outbox", () => {
     const { queued } = outboxToQueue(
       [{ cid: "1", text: "a", at: 1 }, { cid: "2", text: "b", at: 2, undelivered: true }, { cid: "3", text: "c", at: 3 }],
       "cesar",
+      10,
     );
     expect(queued.map((m) => m.id)).toEqual(["1", "3"]);
   });

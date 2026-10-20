@@ -3255,6 +3255,22 @@ describe("SdkChatView — quem escreve e quem está digitando", () => {
     await act(async () => { await Promise.resolve(); });
   }
 
+  it("mensagem de OUTRA conta no outbox não sai por esta conexão: fica marcada", async () => {
+    localStorage.setItem(
+      "vibehub.sdkOutbox.c1",
+      JSON.stringify([{ cid: "c-alheio", text: "de outra pessoa", at: Date.now(), from: { kind: "user", name: "mussa" } }]),
+    );
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    await signedIn();
+    ws.deliver({ type: "ready" });
+
+    expect(await screen.findByTestId("sdk-user-undelivered")).toBeInTheDocument();
+    expect(screen.getByTestId("sdk-user")).toHaveTextContent("de outra pessoa");
+    expect(ws.sent).toHaveLength(0);
+  });
+
   it("abrir a tela não reconecta à toa quando o /auth/me chega (só UMA conexão)", async () => {
     renderSdkChat();
     const ws = await socket();
@@ -4315,10 +4331,10 @@ describe("SdkChatView — mensagem enviada durante o carregamento sobrevive ao F
     expect(screen.getByTestId("sdk-queued")).toHaveTextContent("segunda");
   });
 
-  it("mensagem de OUTRA conta no outbox não sai por esta conexão: fica marcada", async () => {
+  it("mensagem VELHA sem recibo (aba fechada há dias) não vira turno sozinha: volta marcada", async () => {
     localStorage.setItem(
       "vibehub.sdkOutbox.c1",
-      JSON.stringify([{ cid: "c-alheio", text: "de outra pessoa", at: Date.now(), from: { kind: "user", name: "outra" } }]),
+      JSON.stringify([{ cid: "c-velho", text: "sobe pra prod", at: Date.now() - 3 * 24 * 3_600_000 }]),
     );
     renderSdkChat();
     const ws = await socket();
@@ -4326,7 +4342,6 @@ describe("SdkChatView — mensagem enviada durante o carregamento sobrevive ao F
     ws.deliver({ type: "ready" });
 
     expect(await screen.findByTestId("sdk-user-undelivered")).toBeInTheDocument();
-    expect(screen.getByTestId("sdk-user")).toHaveTextContent("de outra pessoa");
     expect(ws.sent).toHaveLength(0);
   });
 });

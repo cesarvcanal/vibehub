@@ -585,7 +585,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
     const { delivered, missing: lost } = reconcileOutbox(deliveredUserTexts(state.rows, viewer), pending);
     // A que se perdeu sem veredito volta pra FILA e sai sozinha quando o chat estiver pronto — na
     // frente do que foi escrito depois dela (ver `outboxToQueue`).
-    const { queued, kept: missing } = outboxToQueue(lost, viewer);
+    const { queued, kept: missing } = outboxToQueue(lost, viewer, Date.now());
     if (queued.length > 0) {
       // O ref já na hora: o despacho roda neste MESMO commit (também acordado pelo `ready`) e, lendo
       // a fila de antes, mandaria na frente o que foi escrito depois.
