@@ -440,6 +440,23 @@ describe("planOrphanPurge (the whole safety of the sweep lives here)", () => {
     ]);
   });
 
+  it("the git include of a card that is gone is swept too — it names who worked it", () => {
+    const mine = "aaaaaaaa-0000-0000-0000-000000000000";
+    const gone = "bbbbbbbb-0000-0000-0000-000000000000";
+    const plan = purge.planOrphanPurge(
+      [
+        entry("git", `/root/.vibehub/git/${mine}.gitconfig`),
+        entry("git", `/root/.vibehub/git/${gone}.gitconfig`),
+        entry("git", `/root/.vibehub/git/${mine}.gitconfig.Ab12Cd`),
+        entry("git", "/root/.vibehub/git/notes.gitconfig"),
+      ],
+      live({ ids: new Set([mine]) }),
+      { now: NOW },
+    );
+    expect(plan.purge.map((e) => e.path)).toEqual([`/root/.vibehub/git/${gone}.gitconfig`]);
+    expect(purge.buildOrphanListScript("vibehub-runner")).toContain("/root/.vibehub/git");
+  });
+
   it("a conversation started in a SUBDIRECTORY of a live card's worktree is the live card's too", () => {
     // `cd back && claude` in the card's shell: Claude names the transcript after that cwd.
     const plan = purge.planOrphanPurge(
