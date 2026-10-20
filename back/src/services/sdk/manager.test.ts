@@ -21,6 +21,7 @@ import {
   onPeerTurn,
   injectSystemTurn,
   RESUME_REENGAGE_TEXT,
+  setReengageGraceForTesting,
   NOTE_RESUME_STALLED,
   resetSdkSessionsForTesting,
   setDriverSpawnerForTesting,
@@ -1132,6 +1133,7 @@ describe("inflight markers — trabalho que nenhuma mensagem abriu (segundo plan
    * uma vez, dizendo com todas as letras que não é notificação automática.
    */
   it("retomada que fecha sem avançar (só o filler) é reenviada UMA vez, com o texto de reengate", async () => {
+    setReengageGraceForTesting(10);
     const session = ensure();
     injectSystemTurn(session, "continue de onde parou", { kind: "system", name: "vibehub" }, 1);
     emit({ type: "assistant_text", text: "No response requested." });
@@ -1150,6 +1152,25 @@ describe("inflight markers — trabalho que nenhuma mensagem abriu (segundo plan
       expect(history.some((e) => e.type === "system_note" && e.text === NOTE_RESUME_STALLED)).toBe(true);
     });
     expect(spawned[0]!.stdin.written.filter((w) => w.includes('"type":"user"')).length).toBe(2);
+  });
+
+  /**
+   * O FALSO POSITIVO (produção, 2026-10-20, logo depois do fix): ao retomar, o CLI primeiro FECHA o
+   * turno velho com o filler ("No response requested.") — um `result` que chega antes de a
+   * continuação ser lida. Reenviar ali mandava a ordem duas vezes. O reenvio agora espera um
+   * instante e só vai se nada andou nesse meio-tempo.
+   */
+  it("o result do turno velho chega antes da continuação andar: NÃO reenvia", async () => {
+    setReengageGraceForTesting(80);
+    const session = ensure();
+    injectSystemTurn(session, "continue de onde parou", { kind: "system", name: "vibehub" }, 1);
+    emit({ type: "assistant_text", text: "No response requested." });
+    emit({ type: "result", isError: false });
+    // A continuação começa a andar dentro da janela.
+    emit({ type: "tool_use", id: "t1", name: "Bash", input: {} });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(spawned[0]!.stdin.written.filter((w) => w.includes('"type":"user"')).length).toBe(1);
+    expect(session.activeTurns).toBe(0);
   });
 
   it("retomada que avança fecha normalmente — nada é reenviado", async () => {
