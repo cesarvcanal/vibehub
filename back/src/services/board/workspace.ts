@@ -253,8 +253,14 @@ export function buildIdentityScript(opts: {
     // switch, and a plain `--add` appended one more copy of the helper each time (seen in
     // production with three identical entries). Unset-all makes the whole block idempotent.
     `${git} --unset-all ${CARD_CREDENTIAL_KEY} || true`,
-    `${git} --add ${CARD_CREDENTIAL_KEY} '' || true`,
-    `${git} --add ${CARD_CREDENTIAL_KEY} ${shQuote(cardCredentialHelper(cardId))} || true`,
+    // No token = no reset either: a reset plus a helper with no file to read left the push with no
+    // credential at all, instead of the login the install already has.
+    ...(token
+      ? [
+          `${git} --add ${CARD_CREDENTIAL_KEY} '' || true`,
+          `${git} --add ${CARD_CREDENTIAL_KEY} ${shQuote(cardCredentialHelper(cardId))} || true`,
+        ]
+      : []),
     ...writeCardGitConfigLines(cardId, identity, !!token),
     // LAST and never fatal: everything above already holds without it.
     ...installGhWrapperLines(),
