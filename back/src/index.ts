@@ -35,6 +35,7 @@ import { startOutboxFlusher } from "./services/board/outbox.js";
 import { startRunnerReaper } from "./services/reaper/reaper.js";
 import { pruneStaleInflightOwners, startInflightOwnerHeartbeat } from "./services/sdk/inflight.js";
 import { handOffSdkOnShutdown, resumeInterruptedTurns } from "./services/sdk/resume.js";
+import { restartSessionsIfSpecChanged } from "./services/board/sessionSpec.js";
 
 /**
  * The vibehub server: one process serving the API, the websocket terminals, and (in production) the
@@ -238,6 +239,9 @@ async function main(): Promise<void> {
   startRunnerReaper();
   // O batimento deste processo: enquanto ele bate, os marcadores que este processo assina são turnos
   // VIVOS — o sweep do container novo de um deploy blue/green espera em vez de retomá-los.
+  // A deploy that changed what a session is born with (env, flags) restarts the board's sessions,
+  // staggered: idle now, working when they go idle. Fire-and-forget, after listen. See sessionSpec.ts.
+  void restartSessionsIfSpecChanged();
   startInflightOwnerHeartbeat();
   void pruneStaleInflightOwners();
   // Turnos do chat nativo interrompidos pelo ÚLTIMO deploy (o back morre, os drivers — filhos dele —
