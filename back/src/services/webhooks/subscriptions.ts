@@ -66,13 +66,15 @@ export const WEBHOOKS = {
   maxAttempts: 5,
   /** First retry at most this long after; doubles per attempt (≤10s, 20s, 40s, 80s), each with jitter down to half. */
   retryBaseMs: 10_000,
-  /** Deliveries in flight at once, across every subscription. */
+  /** Deliveries in flight at once, across every subscription… */
   concurrency: 4,
+  /** …and per account (so one account's stuck callbacks leave the others room). */
+  maxInFlightPerPrincipal: 2,
   /** After a secret rotation, deliveries carry both signatures this long. */
   rotationGraceMs: 5 * 60_000,
   /** The whole body, bytes (OpenAI: 256 KiB). */
   maxBodyBytes: 256 * 1024,
-  /** Challenges per destination host per minute. */
+  /** Challenges per account and destination host per minute. */
   verificationsPerHostPerMinute: 10,
   /** The dispatcher's backstop tick (retries come due, subscriptions lapse). */
   tickMs: 5_000,
@@ -218,17 +220,23 @@ function headers(msgId: string, subId: string, secrets: string[], body: string):
   };
 }
 
-const challengesByHost = new Map<string, number[]>();
+/**
+ * Challenges sent in the last minute, per (principal, host): one account cannot spend the budget of a
+ * callback host every account shares (ChatGPT's), nor make vibehub flood a host it does not own.
+ */
+const recentChallenges = new Map<string, number[]>();
 
 /** The consent handshake: a signed single-use challenge the endpoint must echo in a 2xx. */
-async function verifyCallback(subId: string, url: string, secret: string): Promise<void> {
+async function verifyCallback(principalKey: string, subId: string, url: string, secret: string): Promise<void> {
   const host = new URL(url).host;
   const now = Date.now();
-  const recent = (challengesByHost.get(host) ?? []).filter((t) => now - t < 60_000);
+  for (const [k, times] of recentChallenges) if (times.every((t) => now - t >= 60_000)) recentChallenges.delete(k);
+  const budget = `${principalKey}\n${host}`;
+  const recent = recentChallenges.get(budget) ?? [];
   if (recent.length >= WEBHOOKS.verificationsPerHostPerMinute) {
     throw new EventsError(ERR.RESOURCE_EXHAUSTED, "too many verifications for this host", { limit: "verifications", max: WEBHOOKS.verificationsPerHostPerMinute });
   }
-  challengesByHost.set(host, [...recent, now]);
+  recentChallenges.set(budget, [...recent.filter((t) => now - t < 60_000), now]);
   const challenge = randomBytes(32).toString("base64url");
   const body = JSON.stringify({ type: "verification", challenge });
   let reply: { status: number; body: string };
@@ -311,12 +319,12 @@ export async function subscribeWebhook(principal: WebhookPrincipal | null, raw: 
   }
   const vKey = verifiedKey(principal.key, target.url);
   const verifiedAt = before.verified[vKey];
-  if (verifiedAt === undefined || now - verifiedAt > WEBHOOKS.verificationTtlMs) await verifyCallback(id, target.url, secret);
+  if (verifiedAt === undefined || now - verifiedAt > WEBHOOKS.verificationTtlMs) await verifyCallback(principal.key, id, target.url, secret);
 
   // Where a NEW (or lapsed) subscription starts: now, or replay from the client's cursor — bounded
   // by maxAgeMs and by what retention still has (`truncated` when either skipped something).
   let start = cursor ?? log.head;
-  let truncated = cursor !== null && log.truncated && cursor < log.head && (await eventsAfter(cursor)).truncated;
+  let truncated = cursor !== null && (await eventsAfter(cursor)).truncated;
   if (cursor !== null && maxAgeMs) {
     const old = (await eventsAfter(cursor)).events.filter((e) => e.at < now - maxAgeMs);
     if (old.length) {
@@ -325,10 +333,17 @@ export async function subscribeWebhook(principal: WebhookPrincipal | null, raw: 
     }
   }
   const sealed = await sealSecret(secret);
+  // The sealed form differs on every call (random IV): a rotation is a different PLAINTEXT.
+  const kept = existing ? Buffer.from(await openSecret(existing.secret)) : null;
+  const rotated = kept !== null && !(kept.length === Buffer.byteLength(secret) && timingSafeEqual(kept, Buffer.from(secret)));
   return await store.mutate((doc) => {
-    doc.verified[vKey] = verifiedAt !== undefined && now - verifiedAt <= WEBHOOKS.verificationTtlMs ? verifiedAt : now;
     let sub = doc.subscriptions.find((s) => s.id === id);
     const live = sub !== undefined && sub.expiresAt > now;
+    // The cap again, inside the queue: parallel subscribes all passed the early check before verifying.
+    if (!live && doc.subscriptions.filter((s) => s.key === principal.key && s.expiresAt > now && s.id !== id).length >= WEBHOOKS.maxPerPrincipal) {
+      throw new EventsError(ERR.RESOURCE_EXHAUSTED, "too many webhook subscriptions", { limit: "subscriptions", max: WEBHOOKS.maxPerPrincipal });
+    }
+    doc.verified[vKey] = verifiedAt !== undefined && now - verifiedAt <= WEBHOOKS.verificationTtlMs ? verifiedAt : now;
     if (!sub || !live) {
       doc.subscriptions = doc.subscriptions.filter((s) => s.id !== id);
       doc.pending = doc.pending.filter((p) => p.subId !== id);
@@ -342,7 +357,7 @@ export async function subscribeWebhook(principal: WebhookPrincipal | null, raw: 
     // A refresh: same identity; the TTL is re-granted, the credential and the secret are the latest.
     sub.expiresAt = now + ttl;
     sub.credential = principal.credential;
-    if (sub.secret !== sealed) {
+    if (rotated) {
       sub.oldSecret = sub.secret;
       sub.oldSecretUntil = now + WEBHOOKS.rotationGraceMs;
       sub.secret = sealed;
@@ -432,7 +447,12 @@ async function enqueue(now: number): Promise<void> {
       doc.subscriptions = doc.subscriptions.filter((s) => !lapsed.has(s.id));
       doc.pending = doc.pending.filter((p) => !lapsed.has(p.subId));
     }
+    for (const [k, at] of Object.entries(doc.verified)) if (now - at > WEBHOOKS.verificationTtlMs) delete doc.verified[k];
     for (const sub of doc.subscriptions) {
+      if (sub.oldSecret && (sub.oldSecretUntil ?? 0) <= now) {
+        delete sub.oldSecret;
+        delete sub.oldSecretUntil;
+      }
       if (sub.checkedSeq >= log.head) continue;
       for (const e of log.events) {
         if (e.seq <= sub.checkedSeq || e.seq > log.head || !matches(sub.arguments, e)) continue;
@@ -445,41 +465,68 @@ async function enqueue(now: number): Promise<void> {
   });
 }
 
+/** Records how one attempt went: acked, dropped, rescheduled with backoff, or the subscription gone. */
+function settle(p: PendingDelivery, outcome: Outcome, now: number): Promise<void> {
+  return store.mutate((doc) => {
+    const same = (q: PendingDelivery) => q.subId === p.subId && q.eventId === p.eventId;
+    const sub = doc.subscriptions.find((s) => s.id === p.subId);
+    if (outcome.kind === "revoked") {
+      logger.info({ subscription: p.subId }, "MCP events: the subscription's credential no longer holds — subscription dropped");
+      doc.subscriptions = doc.subscriptions.filter((s) => s.id !== p.subId);
+      doc.pending = doc.pending.filter((q) => q.subId !== p.subId);
+      return;
+    }
+    const pending = doc.pending.find(same);
+    if (outcome.kind === "done") {
+      doc.pending = doc.pending.filter((q) => !same(q));
+      if (sub) Object.assign(sub, { lastDeliveryAt: now, lastError: undefined, failedSince: undefined });
+      return;
+    }
+    if (sub && outcome.error) Object.assign(sub, { lastError: outcome.error, failedSince: sub.failedSince ?? now });
+    if (outcome.kind === "drop" || !pending || pending.attempts + 1 >= WEBHOOKS.maxAttempts) {
+      doc.pending = doc.pending.filter((q) => !same(q));
+      return;
+    }
+    pending.attempts += 1;
+    pending.nextAt = now + Math.round(WEBHOOKS.retryBaseMs * 2 ** (pending.attempts - 1) * (0.5 + Math.random() / 2));
+  });
+}
+
+/**
+ * Delivers what is due through a pool of `concurrency` slots: the next delivery starts as soon as one
+ * ends, and no account holds more than `maxInFlightPerPrincipal` of them — a callback that hangs costs
+ * its own account a slot, not everybody's deliveries.
+ */
 async function pumpOnce(now: number): Promise<void> {
   await enqueue(now);
-  const due = (await store.load()).pending.filter((p) => p.nextAt <= now).sort((a, b) => a.seq - b.seq).map((p) => ({ ...p }));
-  for (let i = 0; i < due.length; i += WEBHOOKS.concurrency) {
-    const batch = due.slice(i, i + WEBHOOKS.concurrency);
-    const outcomes = await Promise.all(batch.map((p) => attempt(p, now).catch((err: unknown): Outcome => {
-      logger.warn({ subscription: p.subId, detail: (err as Error).message }, "MCP events: delivery attempt failed");
-      return { kind: "retry", error: "connection_refused" };
-    })));
-    await store.mutate((doc) => {
-      batch.forEach((p, j) => {
-        const outcome = outcomes[j]!;
-        const same = (q: PendingDelivery) => q.subId === p.subId && q.eventId === p.eventId;
-        const sub = doc.subscriptions.find((s) => s.id === p.subId);
-        if (outcome.kind === "revoked") {
-          logger.info({ subscription: p.subId }, "MCP events: the subscription's credential no longer holds — subscription dropped");
-          doc.subscriptions = doc.subscriptions.filter((s) => s.id !== p.subId);
-          doc.pending = doc.pending.filter((q) => q.subId !== p.subId);
-          return;
-        }
-        const pending = doc.pending.find(same);
-        if (outcome.kind === "done") {
-          doc.pending = doc.pending.filter((q) => !same(q));
-          if (sub) Object.assign(sub, { lastDeliveryAt: now, lastError: undefined, failedSince: undefined });
-          return;
-        }
-        if (sub && outcome.error) Object.assign(sub, { lastError: outcome.error, failedSince: sub.failedSince ?? now });
-        if (outcome.kind === "drop" || !pending || pending.attempts + 1 >= WEBHOOKS.maxAttempts) {
-          doc.pending = doc.pending.filter((q) => !same(q));
-          return;
-        }
-        pending.attempts += 1;
-        pending.nextAt = now + Math.round(WEBHOOKS.retryBaseMs * 2 ** (pending.attempts - 1) * (0.5 + Math.random() / 2));
+  const doc = await store.load();
+  const owner = new Map(doc.subscriptions.map((s) => [s.id, s.key]));
+  const queue = doc.pending.filter((p) => p.nextAt <= now).sort((a, b) => a.seq - b.seq).map((p) => ({ ...p }));
+  const busy = new Map<string, number>();
+  const running = new Set<Promise<void>>();
+  while (queue.length || running.size) {
+    const next = running.size < WEBHOOKS.concurrency
+      ? queue.findIndex((p) => (busy.get(owner.get(p.subId) ?? "") ?? 0) < WEBHOOKS.maxInFlightPerPrincipal)
+      : -1;
+    if (next < 0) {
+      await Promise.race(running);
+      continue;
+    }
+    const [p] = queue.splice(next, 1) as [PendingDelivery];
+    const key = owner.get(p.subId) ?? "";
+    busy.set(key, (busy.get(key) ?? 0) + 1);
+    const job: Promise<void> = attempt(p, now)
+      .catch((err: unknown): Outcome => {
+        logger.warn({ subscription: p.subId, detail: (err as Error).message }, "MCP events: delivery attempt failed");
+        return { kind: "retry", error: "connection_refused" };
+      })
+      .then((outcome) => settle(p, outcome, now))
+      .catch((err: unknown) => logger.warn({ subscription: p.subId, detail: (err as Error).message }, "MCP events: could not record a delivery"))
+      .finally(() => {
+        busy.set(key, (busy.get(key) ?? 1) - 1);
+        running.delete(job);
       });
-    });
+    running.add(job);
   }
 }
 
@@ -519,6 +566,10 @@ export function startWebhookDispatcher(): () => void {
 
 export async function listSubscriptionsForTesting(): Promise<StoredSubscription[]> {
   return (await store.load()).subscriptions;
+}
+
+export async function verifiedForTesting(): Promise<Record<string, number>> {
+  return (await store.load()).verified;
 }
 
 export async function pendingForTesting(): Promise<PendingDelivery[]> {

@@ -12,6 +12,8 @@ import { join } from "node:path";
  */
 
 export interface Received {
+  /** The request path (and query) the POST went to. */
+  path: string;
   headers: IncomingHttpHeaders;
   body: string;
   /** The TLS server name the client asked for (SNI): proves the hostname survived an IP-pinned connect. */
@@ -66,7 +68,7 @@ export async function startTestReceiver(respond: Respond = echoChallenge): Promi
     req.on("data", (c: Buffer) => chunks.push(c));
     req.on("end", () => {
       const got: Received = {
-        headers: req.headers, body: Buffer.concat(chunks).toString("utf8"),
+        path: req.url ?? "", headers: req.headers, body: Buffer.concat(chunks).toString("utf8"),
         servername: (req.socket as unknown as { servername?: string }).servername,
       };
       receiver.received.push(got);

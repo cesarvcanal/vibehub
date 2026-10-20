@@ -71,6 +71,13 @@ describe("postWebhook — the hardened POST", () => {
     expect(receiver.received[0]!.headers.host).toBe(`receiver.test:${receiver.port}`);
   });
 
+  it("falls back to the next VALIDATED address when one refuses the connection (dual-stack hosts)", async () => {
+    Object.assign(WEBHOOK_NET, { allowPrivate: true, ca: receiver.cert, resolve: async () => ["127.0.0.2", "127.0.0.1"] });
+    const res = await postWebhook(receiver.url("receiver.test"), {}, "{}");
+    expect(res.status).toBe(200);
+    expect(receiver.received).toHaveLength(1);
+  });
+
   it("refuses a hostname that resolves to a private address (checked at connect, not only at subscribe)", async () => {
     Object.assign(WEBHOOK_NET, { allowPrivate: false, resolve: toLoopback, ca: receiver.cert });
     await expect(postWebhook(receiver.url("receiver.test"), {}, "{}")).rejects.toMatchObject({ reason: "blocked_address" });

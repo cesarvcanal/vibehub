@@ -225,6 +225,54 @@ describe("callback verification (challenge)", () => {
   });
 });
 
+describe("limits that one account cannot use against another", () => {
+  it("the challenge rate limit is per account: one member flooding a host does not lock the owner out", async () => {
+    env.webhooks.WEBHOOKS.verificationsPerHostPerMinute = 2;
+    receiver.respond = () => ({ status: 200, body: "{}" }); // every challenge fails: the member keeps retrying
+    for (let i = 0; i < 4; i++) {
+      await env.webhooks.subscribeWebhook(asMember(), params({}, { url: receiver.url("receiver.test", `/spam/${i}`) })).catch(() => undefined);
+    }
+    expect((await code(env.webhooks.subscribeWebhook(asMember(), params({}, { url: receiver.url("receiver.test", "/spam/x") })))).code)
+      .toBe(env.webhooks.ERR.RESOURCE_EXHAUSTED);
+    receiver.respond = echoChallenge;
+    await expect(env.webhooks.subscribeWebhook(asOwner(), params())).resolves.toMatchObject({ id: expect.any(String) });
+  });
+
+  it("one account's slow callbacks cannot hold up another account's deliveries", async () => {
+    env.webhooks.WEBHOOKS.concurrency = 3;
+    for (let i = 0; i < 3; i++) await env.webhooks.subscribeWebhook(asMember(), params({}, { url: receiver.url("receiver.test", `/slow/${i}`) }));
+    await env.webhooks.subscribeWebhook(asOwner(), params({}, { url: receiver.url("receiver.test", "/fast") }));
+    const at: Record<string, number> = {};
+    receiver.respond = async (got) => {
+      if (JSON.parse(got.body).type === "verification") return echoChallenge(got);
+      at[got.path] = Date.now();
+      if (got.path.startsWith("/slow")) await new Promise((r) => setTimeout(r, 1_000));
+      return { status: 200, body: "{}" };
+    };
+    const start = Date.now();
+    await env.events.recordMessage({ cardId: card.id, type: "info", text: "for everyone" });
+    await env.webhooks.pumpWebhooks();
+    expect(at["/fast"]! - start).toBeLessThan(600);
+    expect(Object.keys(at)).toHaveLength(4);
+  });
+
+  it("the per-account subscription cap holds under parallel subscribes", async () => {
+    env.webhooks.WEBHOOKS.maxPerPrincipal = 2;
+    const results = await Promise.allSettled([0, 1, 2, 3].map((i) =>
+      env.webhooks.subscribeWebhook(asOwner(), params({}, { url: receiver.url("receiver.test", `/p/${i}`) }))));
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(2);
+    expect(await env.webhooks.listSubscriptionsForTesting()).toHaveLength(2);
+  });
+
+  it("verification records past their lifetime are pruned", async () => {
+    const t0 = Date.now();
+    await env.webhooks.subscribeWebhook(asOwner(), params({ ttlMs: env.webhooks.WEBHOOKS.minTtlMs }), t0);
+    expect(Object.keys(await env.webhooks.verifiedForTesting())).toHaveLength(1);
+    await env.webhooks.pumpWebhooks(t0 + env.webhooks.WEBHOOKS.verificationTtlMs + 1);
+    expect(Object.keys(await env.webhooks.verifiedForTesting())).toHaveLength(0);
+  });
+});
+
 describe("subscription identity, TTL and unsubscribe", () => {
   it("returns a deterministic id over (principal, url, name, canonical arguments) — key order does not matter", async () => {
     const a = await env.webhooks.subscribeWebhook(asOwner(), params({ arguments: { projectId: project.id, cardId: card.id } }));
@@ -517,12 +565,40 @@ describe("cursor and replay", () => {
     expect(deliveries().map((r) => verify(r).data.text)).toEqual([expect.stringContaining("missed while lapsed")]);
   });
 
+  it("a cursor older than what retention still holds → truncated: true (events were skipped)", async () => {
+    const t0 = Date.now();
+    const first = await env.webhooks.subscribeWebhook(asOwner(), params({ ttlMs: env.webhooks.WEBHOOKS.minTtlMs }), t0);
+    await env.webhooks.pumpWebhooks(t0 + env.webhooks.WEBHOOKS.minTtlMs + 1); // lapsed
+    for (let i = 0; i <= env.events.MAX_EVENTS; i++) await env.events.recordMessage({ cardId: hidden.id, type: "info", text: `filler ${i}` });
+    const again = await env.webhooks.subscribeWebhook(asOwner(), params({ cursor: first.cursor }), t0 + env.webhooks.WEBHOOKS.minTtlMs + 2);
+    expect(again.truncated).toBe(true);
+  }, 60_000);
+
   it("a cursor this server never minted → InvalidParams", async () => {
     expect((await code(env.webhooks.subscribeWebhook(asOwner(), params({ cursor: "abc" })))).code).toBe(-32602);
   });
 });
 
 describe("secret rotation", () => {
+  it("a refresh with the SAME secret is not a rotation: one signature, no old secret kept", async () => {
+    const t0 = Date.now();
+    await env.webhooks.subscribeWebhook(asOwner(), params(), t0);
+    await env.webhooks.subscribeWebhook(asOwner(), params(), t0 + 1);
+    await env.events.recordMessage({ cardId: card.id, type: "info", text: "same secret" });
+    await env.webhooks.pumpWebhooks(t0 + 2);
+    expect(String(deliveries()[0]!.headers["webhook-signature"]).split(" ")).toHaveLength(1);
+    expect((await env.webhooks.listSubscriptionsForTesting())[0]!.oldSecret).toBeUndefined();
+  });
+
+  it("the old secret is forgotten once the grace window is over", async () => {
+    const t0 = Date.now();
+    await env.webhooks.subscribeWebhook(asOwner(), params(), t0);
+    await env.webhooks.subscribeWebhook(asOwner(), params({}, { secret: secret() }), t0 + 1);
+    expect((await env.webhooks.listSubscriptionsForTesting())[0]!.oldSecret).toBeDefined();
+    await env.webhooks.pumpWebhooks(t0 + env.webhooks.WEBHOOKS.rotationGraceMs + 10);
+    expect((await env.webhooks.listSubscriptionsForTesting())[0]!.oldSecret).toBeUndefined();
+  });
+
   it("a refresh with a new secret signs with BOTH keys during the grace window, then only the new", async () => {
     const t0 = Date.now();
     const old = SECRET;

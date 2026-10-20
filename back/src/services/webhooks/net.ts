@@ -116,8 +116,8 @@ function reasonOf(err: NodeJS.ErrnoException): CallbackReason {
   return /CERT|TLS|SSL|SELF_SIGNED|HOSTNAME|ALTNAME/.test(code) ? "tls_error" : "connection_refused";
 }
 
-/** The address to connect to: resolved now, every answer public (or the POST does not happen). */
-async function pinnedAddress(host: string): Promise<string> {
+/** The addresses to connect to: resolved now, every answer public (or the POST does not happen). */
+async function pinnedAddresses(host: string): Promise<string[]> {
   let addresses: string[];
   try {
     addresses = isIP(host) ? [host] : await WEBHOOK_NET.resolve(host);
@@ -128,8 +128,13 @@ async function pinnedAddress(host: string): Promise<string> {
   if (!WEBHOOK_NET.allowPrivate && addresses.some((a) => !isPublicAddress(a))) {
     throw new CallbackError("blocked_address", "the callback host resolves to a non-public address");
   }
-  return addresses[0]!;
+  return addresses;
 }
+
+/** Connect-level failures: nothing was sent, so the next validated address may be tried. */
+const UNREACHED = new Set(["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "EADDRNOTAVAIL"]);
+
+class Unreached extends CallbackError {}
 
 /**
  * POSTs `body` (sent byte for byte as given) to `url` over the hardened path above. Resolves with
@@ -139,10 +144,22 @@ async function pinnedAddress(host: string): Promise<string> {
 export async function postWebhook(url: string, headers: Record<string, string>, body: string): Promise<{ status: number; body: string }> {
   const target = assertCallbackUrl(url);
   const host = target.hostname.replace(/^\[|\]$/g, "");
-  const address = await pinnedAddress(host);
+  const addresses = await pinnedAddresses(host);
+  const deadline = Date.now() + WEBHOOK_NET.timeoutMs;
+  for (let i = 0; ; i++) {
+    try {
+      return await postTo(target, host, addresses[i]!, headers, Buffer.from(body, "utf8"), deadline - Date.now());
+    } catch (err) {
+      // A dual-stack host whose first address is unreachable from here: the next one was validated too.
+      if (!(err instanceof Unreached) || i + 1 >= addresses.length || Date.now() >= deadline) throw err;
+    }
+  }
+}
+
+/** One POST to one already-validated address, within `budgetMs`. */
+function postTo(target: URL, host: string, address: string, headers: Record<string, string>, payload: Buffer, budgetMs: number): Promise<{ status: number; body: string }> {
   const family = isIP(address);
-  const payload = Buffer.from(body, "utf8");
-  return await new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     let settled = false;
     const done = (fn: () => void) => {
       if (settled) return;
@@ -178,8 +195,10 @@ export async function postWebhook(url: string, headers: Record<string, string>, 
     const deadline = setTimeout(() => {
       done(() => reject(new CallbackError("timeout", "the callback did not answer in time")));
       req.destroy();
-    }, WEBHOOK_NET.timeoutMs);
-    req.on("error", (err: NodeJS.ErrnoException) => done(() => reject(new CallbackError(reasonOf(err), "could not reach the callback"))));
+    }, Math.max(budgetMs, 0));
+    req.on("error", (err: NodeJS.ErrnoException) => done(() => reject(UNREACHED.has(String(err.code))
+      ? new Unreached("connection_refused", "could not reach the callback")
+      : new CallbackError(reasonOf(err), "could not reach the callback"))));
     req.end(payload);
   });
 }
