@@ -10,7 +10,7 @@ import {
 } from "../services/maestro/maestro.js";
 import { readCardChanges } from "../services/maestro/changes.js";
 import { deliver } from "../services/maestro/deliver.js";
-import { inboxFor, takeUndelivered, type CardEvent } from "../services/events/cardEvents.js";
+import { inboxFor, markDelivered, takeUndelivered, type CardEvent } from "../services/events/cardEvents.js";
 import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX, type CardMoveOutcome } from "./cardMove.js";
 import { logger } from "../utils/logger.js";
 
@@ -452,8 +452,11 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
     async (a) => {
       try {
-        await takeUndelivered(user); // listed here = heard: the next answers do not repeat it
         const inbox = await inboxFor(user, { since: a.since });
+        // Listed here = heard: the next answers do not repeat it (only what was listed — an event
+        // landing meanwhile still rides on the next answer).
+        const last = inbox.events[inbox.events.length - 1];
+        if (last) await markDelivered(user, last.seq);
         return ok({ events: inbox.events.map(forAssistant), cursor: inbox.cursor });
       } catch (e) {
         return fail(e);

@@ -154,6 +154,22 @@ describe("takeUndelivered — each event is handed to a person once", () => {
     expect(await env.events.takeUndelivered(env.member)).toHaveLength(1);
   });
 
+  it("two calls at the same time hand an event over once, not twice", async () => {
+    const env = await load();
+    await env.events.recordCardEvent({ id: "a", cardId: env.card.id, kind: "turn_finished" });
+    const [x, y] = await Promise.all([env.events.takeUndelivered(env.owner), env.events.takeUndelivered(env.owner)]);
+    expect(x.length + y.length).toBe(1);
+  });
+
+  it("markDelivered counts what the person was shown up to a position as heard", async () => {
+    const env = await load();
+    await env.events.recordCardEvent({ id: "a", cardId: env.card.id, kind: "turn_finished" });
+    const { events } = await env.events.inboxFor(env.owner);
+    await env.events.recordCardEvent({ id: "b", cardId: env.card.id, kind: "permission", refId: "p1" });
+    await env.events.markDelivered(env.owner, events[0]!.seq);
+    expect((await env.events.takeUndelivered(env.owner)).map((e) => e.id)).toEqual(["b"]);
+  });
+
   it("the inbox still lists what was already handed over (delivered is not resolved)", async () => {
     const env = await load();
     await env.events.recordCardEvent({ id: "a", cardId: env.card.id, kind: "turn_finished" });

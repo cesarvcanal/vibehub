@@ -150,11 +150,19 @@ export async function takeUndelivered(user: PublicUser): Promise<CardEvent[]> {
   const doc = await store.load();
   const fresh = await openFor(user, doc.events, doc.delivered[user.id] ?? 0);
   if (fresh.length === 0) return [];
-  const upTo = fresh[fresh.length - 1]!.seq;
-  await store.mutate((d) => {
-    d.delivered[user.id] = Math.max(d.delivered[user.id] ?? 0, upTo);
+  // Two answers at the same time read the same cursor: the one that advances it first keeps the
+  // events, the other drops what it no longer owns — inside the queued mutation, where it is exact.
+  const before = await markDelivered(user, fresh[fresh.length - 1]!.seq);
+  return fresh.filter((e) => e.seq > before);
+}
+
+/** Counts everything up to `upTo` as heard by this person. Returns the position it had before. */
+export async function markDelivered(user: PublicUser, upTo: number): Promise<number> {
+  return store.mutate((d) => {
+    const before = d.delivered[user.id] ?? 0;
+    d.delivered[user.id] = Math.max(before, upTo);
+    return before;
   });
-  return fresh;
 }
 
 /* ------------------------------------------------------------------ observers */

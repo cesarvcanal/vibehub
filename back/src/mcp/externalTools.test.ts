@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -55,6 +55,14 @@ async function load() {
   }
   return { registry, users, history, manager, owner, member, project, card, connect };
 }
+
+// The first `load()` transforms the whole module graph (registry, maestro, manager, events) — more
+// than a per-test budget under load. Pay it once, out of band.
+beforeAll(async () => {
+  dir = await mkdtemp(join(tmpdir(), "vibehub-external-warmup-"));
+  await load();
+  await rm(dir, { recursive: true, force: true });
+}, 60_000);
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "vibehub-external-"));
