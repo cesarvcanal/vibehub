@@ -1019,14 +1019,17 @@ describe("inflight markers — trabalho que nenhuma mensagem abriu (segundo plan
     emit({ type: "background_tasks", tasks: [] });
     emit({ type: "assistant_text", text: "Front verde. Entregando." });
     emit({ type: "tool_use", id: "t2", name: "mcp__vibehub__vibehub_deliver", input: { branch: "main" } });
-    await settle();
-    const marker = await readInflightMarker(CARD);
-    expect(marker).not.toBeNull();
-    expect(marker!.background).toBeUndefined();
+    // ESPERA a gravação, não um relógio: o marcador vai a disco por uma fila assíncrona, e os 20 ms
+    // fixos que estavam aqui não bastam numa máquina ocupada (falhava rodando o arquivo sozinho).
+    await vi.waitFor(async () => {
+      const marker = await readInflightMarker(CARD);
+      expect(marker).not.toBeNull();
+      expect(marker!.background).toBeUndefined();
+    });
     // o deploy: SIGTERM no back
     shutdownAllDrivers();
     await settle();
-    expect(await readInflightMarker(CARD)).not.toBeNull();
+    await vi.waitFor(async () => expect(await readInflightMarker(CARD)).not.toBeNull());
   });
 
   it("turno aberto pelo CLI sem segundo plano anunciado: marcador enquanto roda, some no result dele", async () => {
