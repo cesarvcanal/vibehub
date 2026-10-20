@@ -284,6 +284,12 @@ export interface SendOpts {
    * process — the chat forks, and a question card waiting in the driver is never answered.
    */
   viaNativeChat?: boolean;
+  /**
+   * Runs once every refusal is past, right before the text is delivered — where a send makes its
+   * sender the card's author (the order's identity must land first, and a REFUSED send must leave
+   * the authorship alone). A throw here fails the send.
+   */
+  beforeDeliver?: () => Promise<void>;
 }
 
 /**
@@ -307,7 +313,10 @@ export async function agentOriginFor(fromCardId?: string): Promise<MessageOrigin
 }
 
 export async function sendToTerminal(cardId: string, text: string, opts: SendOpts = {}): Promise<SendResult> {
-  const { by, respectHumanActive = false, guardInteractiveMenu = false, requireAgent = false, origin, viaNativeChat = false } = opts;
+  const {
+    by, respectHumanActive = false, guardInteractiveMenu = false, requireAgent = false, origin, viaNativeChat = false,
+    beforeDeliver,
+  } = opts;
   const instruction = String(text ?? "").trim();
   if (!instruction) throw new Error("empty text: there is nothing to send to the terminal");
   const card = await getCard(cardId);
@@ -331,6 +340,7 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
   if (driver && origin) {
     const project = await getProject(card.projectId);
     if (!project) throw new Error("project for this card not found");
+    await beforeDeliver?.();
     if (!sendAgentTurn(driver, instruction, origin)) {
       throw new Error(
         `the native chat driver of card "${card.title}" exited before it could take the instruction — send it again`,
@@ -366,6 +376,7 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
   }
   const project = await getProject(card.projectId);
   if (!project) throw new Error("project for this card not found");
+  await beforeDeliver?.();
 
   try {
     await hostExecutor().runScript(
