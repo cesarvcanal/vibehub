@@ -20,7 +20,8 @@ import { firstRunSeedCommand } from "../accounts/firstRun.js";
 import { carryTranscriptsCommand } from "../accounts/carryTranscripts.js";
 import { resolveAccountToken, writeTokenLines, writeGhTokenLines, removeGhTokenLines } from "../accounts/token.js";
 import {
-  CARD_CREDENTIAL_KEY, cardCredentialHelper, cardGitEnv, installGhWrapperLines, writeCardGitConfigLines,
+  CARD_CREDENTIAL_KEY, cardCredentialHelper, cardGitConfigPath, cardGitEnv, installGhWrapperLines,
+  writeCardGitConfigLines,
 } from "../github/runnerIdentity.js";
 import { cardBrowserPorts, cardCdpEndpoint } from "../browser/ports.js";
 import { claudeProjectsDirName } from "../import/import.js";
@@ -1926,7 +1927,8 @@ export function ownBranch(card: Pick<Card, "branch" | "worktreeSlug">): string |
  * What it erases, and why each one is part of the card:
  *  - the git worktree, its directory and the card's branch — the code the card wrote;
  *  - `/work/.uploads/<cardId>` — the images the user attached to the conversation;
- *  - `/root/.vibehub/gh/<cardId>.token` — the card's GitHub token (a live credential);
+ *  - `/root/.vibehub/gh/<cardId>.token` — the card's GitHub token (a live credential), and its git
+ *    include `/root/.vibehub/git/<cardId>.gitconfig` (who worked it);
  *  - the Chromium user-data-dir — cookies and logged-in sessions of the card's browser;
  *  - `<profile>/projects/<cwd-sanitized>` in EVERY account profile — the Claude Code TRANSCRIPTS:
  *    the whole conversation, message by message, tool call by tool call. This is the leak that made
@@ -1974,6 +1976,8 @@ export function buildCardPurgeScript(o: CardPurgeScriptOpts): string {
     // The card's GitHub token file (a LIVE credential): the shared builder's `rm -f` is already
     // tolerant, but every line in this script carries the same guard — the invariant is checked.
     ...removeGhTokenLines(o.cardId).map((l) => `${l} 2>/dev/null || true`),
+    // The card's git include — the name and e-mail of whoever worked it — and any temp a write left.
+    `rm -f ${shQuote(cardGitConfigPath(o.cardId))} ${shQuote(cardGitConfigPath(o.cardId))}.* 2>/dev/null || true`,
     `rm -rf ${shQuote(o.browserDataDir)} 2>/dev/null || true`,
     // EVERY profile: a card can be moved between Claude accounts during its life, and each account
     // that ran it wrote a transcript of its own under that account's profile.
