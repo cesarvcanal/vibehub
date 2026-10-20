@@ -136,6 +136,19 @@ function mutate<R>(fn: (doc: VaultDoc) => R): Promise<R> {
   return next;
 }
 
+/**
+ * Encrypts one value with the vault's master key, for a secret that lives in ANOTHER file (one per
+ * record, like a webhook signing secret) rather than under a vault key.
+ */
+export async function sealSecret(plaintext: string): Promise<string> {
+  return encrypt(await masterKey(), plaintext);
+}
+
+/** Opens what {@link sealSecret} sealed. Throws when the master key changed. */
+export async function openSecret(sealed: string): Promise<string> {
+  return decrypt(await masterKey(), sealed);
+}
+
 /** Reads a secret. Missing key = undefined (callers decide whether that is fatal). */
 export async function secretGet(key: string): Promise<string | undefined> {
   const doc = await load();

@@ -320,7 +320,14 @@ export function looksLikeAccessToken(token: string | undefined): boolean {
  */
 export async function userForAccessToken(token: string | undefined, now: number = Date.now()): Promise<PublicUser | null> {
   if (!looksLikeAccessToken(token)) return null;
-  const hash = hashToken(token as string);
+  return await userForAccessTokenHash(hashToken(token as string), now);
+}
+
+/** The hash a token is stored under — what a long-lived grant (a webhook subscription) keeps instead of the token. */
+export const accessTokenHash = (token: string): string => hashToken(token);
+
+/** {@link userForAccessToken}, from the stored hash: the same checks, re-run whenever the grant is used. */
+export async function userForAccessTokenHash(hash: string, now: number = Date.now()): Promise<PublicUser | null> {
   const record = (await store.load()).tokens.find((t) => t.hash === hash);
   if (!record || record.expiresAt <= now) return null;
   return await sessionUser(record.userId, record.issuedAt);

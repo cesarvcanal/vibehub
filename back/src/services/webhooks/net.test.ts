@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import { createServer } from "node:http";
 import { CallbackError, WEBHOOK_NET, assertCallbackUrl, isPublicAddress, postWebhook } from "./net.js";
-import { startTestReceiver, type TestReceiver } from "./testReceiver.js";
+import { startTestReceiver, type TestReceiver } from "../../testkit/webhookReceiver.js";
 
 /**
  * The outbound side of MCP Events webhooks: the server POSTs to a URL a CLIENT chose. Without these
