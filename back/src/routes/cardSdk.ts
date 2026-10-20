@@ -4,18 +4,16 @@ import { requireCardWork } from "../auth/access.js";
 import { requestUser } from "../auth/session.js";
 import { findUser } from "../auth/users.js";
 import * as registry from "../services/board/registry.js";
-import { recordCardActor, authorsTheTurn } from "../services/board/actor.js";
+import { recordCardActor, authorsTheTurn, isCardActor } from "../services/board/actor.js";
 import { getSettings } from "../services/settings/settings.js";
 import { installCardSdkDriver, sdkDriverCommand } from "../services/sdk/driver.js";
-import { restoreMissingWorkspace } from "../services/board/workspace.js";
+import { reapplyCardIdentity, restoreMissingWorkspace } from "../services/board/workspace.js";
 import {
   attachSocket,
   ensureDriverSession,
-  handleClientFrame,
   hasDriverSession,
   missedDuringSetup,
   onPeerTurn,
-  replyFrameOutcome,
 } from "../services/sdk/manager.js";
 import { readCardCatalog } from "../services/sdk/catalog.js";
 import { onExternalMessage, readHistory, type HistoryEvent } from "../services/sdk/history.js";
@@ -105,8 +103,9 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       socket.on("close", stopHearing);
       // Quem está deste lado do socket. Resolvido UMA vez: a sessão do cookie não muda no meio da
       // conexão, então cada mensagem que chegar por aqui é desta pessoa, sem nova consulta.
+      // Conectar NÃO carimba: abrir o card para olhar não é uma ordem, e tomaria a autoria do
+      // trabalho que outra pessoa pediu e ainda está rodando. Só a mensagem carimba (abaixo).
       const author = await requestUser(req);
-      await recordCardActor(author, req.params.id);
       const settings = await getSettings();
       if (!settings.sdkDriver) {
         try { socket.send(JSON.stringify({ type: "error", message: "the SDK driver is off (enable the sdkDriver setting)" })); } catch { /* ignore */ }
@@ -137,6 +136,10 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
         // The driver is about to be spawned IN the worktree: if the folder is gone (the card's own
         // agent removed it after a merge), rebuild it first — otherwise the CLI cannot start at all.
         await restoreMissingWorkspace(card.id);
+        // ...and its identity in place BEFORE the agent exists: the git include it is born with must
+        // point at a file that says who the author is, and the gh wrapper must be there (a runner
+        // provisioned before it gets it here). Never throws; costs one docker exec per spawn.
+        await reapplyCardIdentity(card.id);
       }
       // ONE read-only probe: the newest transcript in the card's worktree. It answers two things —
       // which session the driver must RESUME (the card's one conversation, whichever mode wrote it
@@ -257,14 +260,13 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
        * último — quem mandou o pedido é que manda. Só mensagem conta (`authorsTheTurn`): responder
        * permissão ou interromper não transfere autoria.
        *
-       * Barato de propósito: a pessoa já está resolvida, `recordCardActor` sai na hora quando ela
-       * já é a autora (sem escrita, sem docker exec), e nada aqui volta para o chat — não há laço.
+       * A mensagem de quem ASSUME o card espera a identidade dessa pessoa aterrissar no runner antes
+       * de chegar ao agente (`beforeTurn`) — senão o primeiro commit do pedido sairia como o autor
+       * anterior. A mesma pessoa de novo (o caso comum) não espera nada: `isCardActor` é síncrono.
        */
-      const noteAuthor = (raw: string): void => {
-        if (author && authorsTheTurn(raw)) void recordCardActor(author, card.id);
-      };
-      socket.on("message", (raw: Buffer) => noteAuthor(raw.toString()));
-      attachSocket(session, socket, wsOrigin);
+      const beforeTurn = (raw: string): Promise<void> | undefined =>
+        author && authorsTheTurn(raw) && !isCardActor(author, card.id) ? recordCardActor(author, card.id) : undefined;
+      const feed = attachSocket(session, socket, wsOrigin, { beforeTurn });
       // Attached: from now on the relay reaches this socket itself. What it missed in between goes
       // out now, in order, minus what the replay already drew.
       stopHearing();
@@ -278,8 +280,7 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
         // A "digitando" from before the attach is stale by now: dropped on purpose (the front
         // renews it every few seconds while the person keeps typing).
         if (parseTypingFrame(raw) !== null) continue;
-        noteAuthor(raw);
-        replyFrameOutcome(socket, handleClientFrame(session, raw, wsOrigin, socket));
+        feed(raw);
       }
       logger.info({ card: card.worktreeSlug, reattached: driverAlive, buffered: pendingFrames.length }, "sdk chat attached");
     },
