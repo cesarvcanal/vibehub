@@ -2,6 +2,7 @@ import * as React from "react";
 import { Bot, Brain, ChevronLeft, ChevronRight, CircleCheck, CircleX, Copy, FileDiff, GitBranch, Loader2, Maximize2, MessageSquare, Wrench } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { useNow, usePageVisible } from "@/lib/useNow";
 import { useT } from "@/i18n";
 import { Markdown } from "@/features/board/components/ChatView";
 import { toolHeadline, type AgentTask, type SdkRow, type ToolResultSummary } from "@/features/board/lib/sdkChat";
@@ -226,8 +227,8 @@ export function SdkFleetView({ rows, tasks, children }: FleetProps) {
   const statuses = agents.map((row) => agentStatus(row, tasks[row.id]));
   const done = statuses.filter((s) => s === "ok" || s === "error").length;
   const running = statuses.filter((s) => s === "running").length;
-  const ticking = agents.some((row, i) => statuses[i] === "running" && tasks[row.id]?.startedAt !== undefined);
-  const now = useSecondTick(ticking);
+  const visible = usePageVisible();
+  const now = useNow(running > 0 && visible);
   return (
     <div data-testid="sdk-fleet" data-count={agents.length} className="rounded-md border border-border/70 bg-muted/40 px-2.5 py-2 text-xs">
       <div className="flex items-center gap-1.5">
@@ -275,18 +276,6 @@ export function SdkFleetView({ rows, tasks, children }: FleetProps) {
       </div>
     </div>
   );
-}
-
-/** O relógio da frota: um tique por segundo enquanto há subagente rodando; parado, não agenda nada. */
-function useSecondTick(active: boolean): number {
-  const [now, setNow] = React.useState(() => Date.now());
-  React.useEffect(() => {
-    if (!active) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [active]);
-  return now;
 }
 
 /* --------------------------------------------------------------- os modais */
@@ -543,6 +532,9 @@ function AgentView({
   const task = tasks[id];
   const status = row ? agentStatus(row, task) : task ? (task.status === "running" ? "running" : task.status === "completed" ? "ok" : "error") : "unknown";
   const running = status === "running";
+  const visible = usePageVisible();
+  const now = useNow(running && visible);
+  const elapsed = agentElapsedMs(status, task, row?.result?.agent, now);
   const [tab, setTab] = React.useState<"timeline" | "task" | "report">("timeline");
   const { data, loading, error } = useDetail<AgentTimelineData>("agent", { id }, id, running ? AGENT_POLL_MS : undefined);
   const timeline = data && data.found ? data : null;
@@ -571,7 +563,7 @@ function AgentView({
         <DialogDescription asChild>
           <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
             {timeline?.startedAt ? <span>{t("sdk.detail.started", { at: formatTime(timeline.startedAt) })}</span> : null}
-            {task?.durationMs ? <span>{formatDuration(task.durationMs)}</span> : null}
+            {elapsed ? <span data-testid="sdk-agent-elapsed">{formatDuration(elapsed)}</span> : null}
             {typeof toolUses === "number" ? <span>{t("sdk.result.actions", { n: toolUses })}</span> : null}
             {task?.tokens ? <span>{t("sdk.detail.tokens", { n: formatTokens(task.tokens) })}</span> : null}
           </div>

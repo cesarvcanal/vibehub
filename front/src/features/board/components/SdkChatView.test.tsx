@@ -2157,10 +2157,17 @@ describe("SdkChatView — subagentes", () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
       expect(agent).toHaveTextContent("4m 06s");
 
+      // o modal do subagente conta junto com a linha da frota
+      fireEvent.click(agent);
+      expect(await screen.findByTestId("sdk-agent-elapsed")).toHaveTextContent("4m 06s");
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      expect(screen.getByTestId("sdk-agent-elapsed")).toHaveTextContent("4m 08s");
+
       // terminado, o relógio para na duração final
       ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "completed", toolUses: 20, durationMs: 250_000, startedAt });
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
       expect(agent).toHaveTextContent("4m 10s");
+      expect(screen.getByTestId("sdk-agent-elapsed")).toHaveTextContent("4m 10s");
     } finally {
       vi.useRealTimers();
     }

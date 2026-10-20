@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Check, CheckCircle2, ChevronRight, Circle, CircleDot, Loader2, Waypoints } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useNow, usePageVisible } from "@/lib/useNow";
 import { useT } from "@/i18n";
 import { formatAgentResult, type SdkRow, type WorkflowAgentFrame } from "@/features/board/lib/sdkChat";
 import { WorkflowFeedContext, type WorkflowFeedResponse } from "@/features/board/lib/workflowFeed";
@@ -431,27 +432,4 @@ function FeedLineView({ line, t }: { line: FeedLine; t: Translate }) {
     case "thinking":
       return <em className="text-muted-foreground/70">{t("sdk.workflowThinkingFor", { elapsed: formatDuration(line.ms) })}</em>;
   }
-}
-
-/** `Date.now()` que se refaz a cada segundo enquanto `active` — e nenhum timer quando não. */
-function useNow(active: boolean): number {
-  const [, setTick] = React.useState(0);
-  React.useEffect(() => {
-    if (!active) return;
-    const timer = setInterval(() => setTick((n) => n + 1), 1_000);
-    return () => clearInterval(timer);
-  }, [active]);
-  return Date.now();
-}
-
-/** A aba está à vista? Escondida, o relógio do painel não precisa andar. */
-function usePageVisible(): boolean {
-  const read = (): boolean => typeof document === "undefined" || document.visibilityState !== "hidden";
-  const [visible, setVisible] = React.useState(read);
-  React.useEffect(() => {
-    const onChange = (): void => setVisible(read());
-    document.addEventListener("visibilitychange", onChange);
-    return () => document.removeEventListener("visibilitychange", onChange);
-  }, []);
-  return visible;
 }
