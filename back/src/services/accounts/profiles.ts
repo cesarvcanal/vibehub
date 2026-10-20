@@ -18,6 +18,13 @@ export const CLAUDE_PROFILES_DIR = "/root/.claude-profiles";
 export const DEFAULT_CLAUDE_DIR = "/root/.claude";
 
 /**
+ * The DEFAULT account's `.claude.json`. Its sessions carry no CLAUDE_CONFIG_DIR, so Claude keeps this
+ * file in $HOME — beside the profile directory, not inside it (a named account keeps it at
+ * `<profile>/.claude.json`). Anything that cleans per-cwd state there has to visit both.
+ */
+export const DEFAULT_CLAUDE_JSON = "/root/.claude.json";
+
+/**
  * The slug the token routes accept to address the DEFAULT account. The board holds no account
  * record called "default" (the default account is the ABSENCE of a slug), so this string exists
  * only at the edge — routes and vault keys — and is mapped to a path right here.

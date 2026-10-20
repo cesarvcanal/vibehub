@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, mkdir, readdir, rm, writeFile, utimes } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile, utimes } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -44,6 +45,7 @@ let history: typeof import("../sdk/history.js");
 let provenance: typeof import("../chat/provenance.js");
 let inflight: typeof import("../sdk/inflight.js");
 let outbox: typeof import("./outbox.js");
+let catalog: typeof import("../sdk/catalog.js");
 
 async function fresh() {
   vi.resetModules();
@@ -68,6 +70,7 @@ async function fresh() {
   provenance = await import("../chat/provenance.js");
   inflight = await import("../sdk/inflight.js");
   outbox = await import("./outbox.js");
+  catalog = await import("../sdk/catalog.js");
 }
 
 beforeEach(async () => {
@@ -99,6 +102,7 @@ async function fillCard(cardId: string): Promise<void> {
   await provenance.recordOrigin(cardId, "segredo do chat", { kind: "owner", name: "cesar" }, 1);
   await inflight.writeInflightMarker(cardId, { startedAt: 1, preview: "segredo do chat", attempts: 0 });
   await outbox.queueMessage(cardId, "mensagem que nunca foi entregue");
+  await catalog.writeCardCatalog(cardId, { type: "catalog", commands: [{ name: "deploy-interno" }] } as never);
 }
 
 const dataFiles = async (sub: string): Promise<string[]> => {
@@ -122,6 +126,7 @@ describe("purgeCard — the card and everything that belonged to it", () => {
     expect(await history.readHistory(card.id)).toHaveLength(2);
     expect(await inflight.readInflightMarker(card.id)).not.toBeNull();
     expect(await outbox.pendingMessages(card.id)).toHaveLength(1);
+    expect(await catalog.readCardCatalog(card.id)).not.toBeNull();
 
     const report = await purge.purgeCard(card.id, "cesar");
 
@@ -134,6 +139,8 @@ describe("purgeCard — the card and everything that belonged to it", () => {
     expect(await dataFiles(history.SDK_HISTORY_DIR)).toEqual([]);
     expect(await dataFiles(provenance.PROVENANCE_DIR)).toEqual([]);
     expect(await dataFiles(inflight.SDK_INFLIGHT_DIR)).toEqual([]);
+    // The "/" menu the card's driver announced: its skills and commands, keyed by the card id.
+    expect(await dataFiles(catalog.SDK_CATALOG_DIR)).toEqual([]);
   });
 
   it("kills every process of the card and erases its files in the runner", async () => {
@@ -393,6 +400,7 @@ describe("planOrphanPurge (the whole safety of the sweep lives here)", () => {
     browserDirs: new Set<string>(),
     slugs: new Set<string>(),
     transcriptDirs: new Set<string>(),
+    cwds: new Set<string>(),
     ...over,
   });
   const OLD = 0; // epoch: as old as it gets
@@ -430,6 +438,19 @@ describe("planOrphanPurge (the whole safety of the sweep lives here)", () => {
       "/work/acme--erp-aux-worktrees/morto",
       "/root/.claude/projects/-work-acme--erp-aux-worktrees-morto",
     ]);
+  });
+
+  it("a conversation started in a SUBDIRECTORY of a live card's worktree is the live card's too", () => {
+    // `cd back && claude` in the card's shell: Claude names the transcript after that cwd.
+    const plan = purge.planOrphanPurge(
+      [
+        entry("transcript", "/root/.claude/projects/-work-acme--erp-aux-worktrees-vivo-back"),
+        entry("transcript", "/root/.claude/projects/-work-acme--erp-aux-worktrees-morto-back"),
+      ],
+      live({ transcriptDirs: new Set(["-work-acme--erp-aux-worktrees-vivo"]) }),
+      { now: NOW },
+    );
+    expect(plan.purge.map((e) => e.path)).toEqual(["/root/.claude/projects/-work-acme--erp-aux-worktrees-morto-back"]);
   });
 
   it("NEVER touches what is not recognisably a card artifact", () => {
@@ -473,6 +494,48 @@ describe("planOrphanPurge (the whole safety of the sweep lives here)", () => {
 });
 
 describe("the sweep's scripts", () => {
+  it("drops from .claude.json the prompt history of DEAD card cwds — and nothing else", async () => {
+    const f = join(dir, ".claude.json");
+    const live = "/work/acme--erp-aux-worktrees/vivo-1a2b";
+    const projects = {
+      "/work/acme--erp-aux-worktrees/morto-3c4d": { history: [{ display: "segredo do card morto" }] },
+      "/work/scratch/morto-5e6f": { history: [] },
+      [live]: { history: [{ display: "card vivo" }] },
+      // A worktree-looking path outside /work: never card-shaped, kept.
+      [join(dir, "x-worktrees", "existe")]: { history: [] },
+      // Not a card cwd at all: the login terminal, a hand-made directory.
+      "/work/acme--erp-aux": { history: [] },
+      "/root": { history: [] },
+      "/work/acme--erp-aux-worktrees/morto-3c4d/back": { history: [] },
+    };
+    await mkdir(join(dir, "x-worktrees", "existe"), { recursive: true });
+    await writeFile(f, JSON.stringify({ userID: "u", projects }), "utf8");
+
+    const out = execFileSync("node", ["-e", purge.CLAUDE_JSON_SWEEP_JS, f, JSON.stringify([live])], { encoding: "utf8" });
+
+    const after = JSON.parse(await readFile(f, "utf8"));
+    expect(out.trim()).toBe("2");
+    expect(after.userID).toBe("u");
+    expect(Object.keys(after.projects).sort()).toEqual(
+      [live, join(dir, "x-worktrees", "existe"), "/work/acme--erp-aux", "/root", "/work/acme--erp-aux-worktrees/morto-3c4d/back"].sort(),
+    );
+  });
+
+  it("the .claude.json sweep is a no-op on a missing or broken file — never throws, never rewrites", async () => {
+    const f = join(dir, ".claude.json");
+    expect(execFileSync("node", ["-e", purge.CLAUDE_JSON_SWEEP_JS, f, "[]"], { encoding: "utf8" }).trim()).toBe("0");
+    await writeFile(f, "{ torto", "utf8");
+    expect(execFileSync("node", ["-e", purge.CLAUDE_JSON_SWEEP_JS, f, "[]"], { encoding: "utf8" }).trim()).toBe("0");
+    expect(await readFile(f, "utf8")).toBe("{ torto");
+  });
+
+  it("the .claude.json sweep script runs in every profile and carries the live cwds quoted", () => {
+    const s = purge.buildClaudeJsonSweepScript(CONTAINER, ["/work/acme--erp-aux-worktrees/vivo-1a2b"]);
+    expect(s).toContain("/root/.claude.json");
+    expect(s).toContain("/root/.claude-profiles/*");
+    expect(s).toContain(`'["/work/acme--erp-aux-worktrees/vivo-1a2b"]'`);
+  });
+
   it("lists every candidate with its mtime and tolerates every missing root", () => {
     const s = purge.buildOrphanListScript(CONTAINER);
     expect(s).toContain("/work/.uploads");
@@ -557,13 +620,15 @@ describe("sweepOrphanCardData (the backstop: what earlier deletes left behind)",
     await stale(history.SDK_HISTORY_DIR, `${ghost}.ndjson`, '{"type":"user","text":"conversa de um card morto"}\n');
     await stale(provenance.PROVENANCE_DIR, `${ghost}.ndjson`, '{"at":1,"key":"x","origin":{"kind":"owner","name":"c"}}\n');
     await stale(inflight.SDK_INFLIGHT_DIR, `${ghost}.json`, '{"startedAt":1,"attempts":0}');
+    await stale(catalog.SDK_CATALOG_DIR, `${ghost}.json`, '{"type":"catalog","commands":[]}');
 
     const summary = await purge.sweepOrphanCardData();
 
-    expect(summary.dataFiles).toBe(3);
+    expect(summary.dataFiles).toBe(4);
     expect(await dataFiles(history.SDK_HISTORY_DIR)).toEqual([`${card.id}.ndjson`]);
     expect(await dataFiles(provenance.PROVENANCE_DIR)).toEqual([`${card.id}.ndjson`]);
     expect(await dataFiles(inflight.SDK_INFLIGHT_DIR)).toEqual([`${card.id}.json`]);
+    expect(await dataFiles(catalog.SDK_CATALOG_DIR)).toEqual([`${card.id}.json`]);
     // The live card's conversation is untouched.
     expect(await history.readHistory(card.id)).toHaveLength(2);
   });
@@ -621,6 +686,8 @@ describe("sweepOrphanCardData (the backstop: what earlier deletes left behind)",
     expect(summary.dataFiles).toBe(1);
     expect(summary.runnerArtifacts).toBe(1);
     expect(scripts()[1]).toContain(`rm -rf '/work/.uploads/${ghost}'`);
+    // And the prompt history of dead card cwds in every profile's .claude.json.
+    expect(scripts()[2]).toContain(".claude.json");
 
     // And now with the runner down.
     await stale(history.SDK_HISTORY_DIR, "eeeeeeee-0000-0000-0000-000000000000.ndjson", "{}\n");

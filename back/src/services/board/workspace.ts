@@ -15,7 +15,7 @@ import {
   type Card, type CardStatus, type Project, type RestartReason,
 } from "./registry.js";
 import { getSettings } from "../settings/settings.js";
-import { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir, profileDirFor, oauthTokenGuard } from "../accounts/profiles.js";
+import { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, DEFAULT_CLAUDE_JSON, accountConfigDir, profileDirFor, oauthTokenGuard } from "../accounts/profiles.js";
 import { firstRunSeedCommand } from "../accounts/firstRun.js";
 import { carryTranscriptsCommand } from "../accounts/carryTranscripts.js";
 import { resolveAccountToken, writeTokenLines, ghTokenPath, writeGhTokenLines, removeGhTokenLines } from "../accounts/token.js";
@@ -1926,7 +1926,8 @@ export function ownBranch(card: Pick<Card, "branch" | "worktreeSlug">): string |
  *    "deleted" a lie: the card vanished from the board and its transcript stayed on disk, readable,
  *    and resumable by any new session opened on the same path;
  *  - `<profile>/todos/<sessionId>*` — the task lists Claude Code keeps per session of that cwd;
- *  - the `projects[<cwd>]` entry of each profile's `.claude.json` — the prompt history.
+ *  - the `projects[<cwd>]` entry of each profile's `.claude.json` — the prompt history — and of
+ *    the default account's, which lives in $HOME ({@link DEFAULT_CLAUDE_JSON}).
  *
  * Every path is DERIVED (board values, validated and shell-quoted) — nothing from a request reaches
  * a shell. PURE/testable.
@@ -1984,6 +1985,10 @@ export function buildCardPurgeScript(o: CardPurgeScriptOpts): string {
     `    node -e ${shQuote(CLAUDE_JSON_PURGE_JS)} "$P/.claude.json" ${shQuote(o.cwd)} >/dev/null 2>&1 || true`,
     "  fi",
     "done",
+    // The DEFAULT account's .claude.json lives in $HOME, outside every profile directory above.
+    `if [ -f "${DEFAULT_CLAUDE_JSON}" ]; then`,
+    `  node -e ${shQuote(CLAUDE_JSON_PURGE_JS)} "${DEFAULT_CLAUDE_JSON}" ${shQuote(o.cwd)} >/dev/null 2>&1 || true`,
+    "fi",
     "true",
   );
   return [
