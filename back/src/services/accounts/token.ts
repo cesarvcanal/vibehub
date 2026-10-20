@@ -43,9 +43,9 @@ export function assertOauthToken(token: string): string {
  * GITHUB token per card — lets the card's own `git push` / `gh pr` act as the PROJECT's GitHub
  * connection (the account the project connected) instead of the runner's ambient `gh` login (the org). Same rules as the
  * Claude token: the value is written to a per-card file inside the runner over STDIN (mode 600,
- * never argv, never logged), and the session exports `GH_TOKEN` by reading that file. The runner's
- * git credential helper is already `gh auth git-credential`, so a set `GH_TOKEN` steers BOTH `git`
- * and `gh` to the connection identity — while cards without a connection keep the ambient login.
+ * never argv, never logged). Nothing exports it into a session: the card's git credential helper and
+ * the `gh` wrapper read that file on EVERY call (github/runnerIdentity.ts), so a change of author
+ * reaches processes already running — while cards without a connection keep the ambient login.
  */
 export const GH_TOKEN_DIR = "/root/.vibehub/gh";
 /** A card id is a uuid; keep the charset tight so it can name a file safely. PURE. */
