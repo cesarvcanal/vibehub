@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { config } from "../../config/env.js";
+import { onCardStatusSink } from "../board/agentState.js";
 import {
   driverTurnRunning,
   ensureDriverSession,
@@ -28,13 +29,15 @@ vi.mock("../board/registry.js", async (importOriginal) => {
     markCardHumanActive: () => Promise.resolve(undefined),
     updateCard: () => Promise.resolve(undefined),
     getCard: (id: string) => Promise.resolve(cards.get(id)),
-    applyCardStatus: (cardId: string, status: string) => {
-      applied.push({ cardId, status });
-      const card = cards.get(cardId);
-      if (card) card.status = status;
-      return Promise.resolve(card);
-    },
   };
+});
+
+/** O caminho dos hooks (services/board/status.ts), observado: o que o driver reporta chega aqui. */
+onCardStatusSink((cardId, status) => {
+  applied.push({ cardId, status });
+  const card = cards.get(cardId);
+  if (card) card.status = status;
+  return Promise.resolve(card);
 });
 
 const CARD = "eeee498d-98dd-44b6-97ee-c06a181c3769";
@@ -143,19 +146,14 @@ describe("sdk manager — a bolinha do card segue o driver", () => {
     expect(applied).toEqual([]);
   });
 
-  it("pausa ou restart pendente ficam com os hooks: o waiting deles executa o efeito", async () => {
+  it("pausa pendente: o fim do turno é reportado pelo caminho dos hooks, que executa a pausa", async () => {
     cards.get(CARD)!.column = "paused";
     const session = ensure();
     handleClientFrame(session, `{"type":"user","text":"oi"}`);
+    await flush();
     spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
     await flush();
-    expect(applied).toEqual([]);
-
-    cards.get(CARD)!.column = "working";
-    cards.get(CARD)!.restartPendingAt = Date.now();
-    handleClientFrame(session, `{"type":"user","text":"de novo"}`);
-    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
-    await flush();
-    expect(applied).toEqual([]);
+    expect(applied.map((a) => a.status)).toEqual(["working", "waiting"]);
   });
+
 });

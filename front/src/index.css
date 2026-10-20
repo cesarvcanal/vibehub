@@ -63,6 +63,17 @@
     --glow-a: 205 90% 55% / 0.09;
     --glow-b: 265 70% 60% / 0.06;
 
+    /* Diff no padrão das IDEs (Dark+ do VS Code): o fundo diz o tipo da linha, o código mantém a
+       cor da sintaxe; o trecho que mudou dentro da linha ganha o fundo mais forte. */
+    --diff-add-bg: rgba(155, 185, 85, 0.2);
+    --diff-add-gutter: rgba(155, 185, 85, 0.32);
+    --diff-add-word: rgba(156, 204, 44, 0.4);
+    --diff-del-bg: rgba(255, 0, 0, 0.2);
+    --diff-del-gutter: rgba(255, 0, 0, 0.3);
+    --diff-del-word: rgba(255, 0, 0, 0.4);
+    --diff-add-sign: #34d399;
+    --diff-del-sign: #f87171;
+
     color-scheme: dark;
   }
 
@@ -92,6 +103,15 @@
     --grid-line: 220 16% 82% / 0.55;
     --glow-a: 205 88% 45% / 0.07;
     --glow-b: 265 60% 55% / 0.05;
+
+    --diff-add-bg: #e6ffec;
+    --diff-add-gutter: #ccffd8;
+    --diff-add-word: #abf2bc;
+    --diff-del-bg: #ffebe9;
+    --diff-del-gutter: #ffd7d5;
+    --diff-del-word: #ffcecb;
+    --diff-add-sign: #059669;
+    --diff-del-sign: #dc2626;
 
     color-scheme: light;
   }
@@ -418,4 +438,12 @@ html.card-view-locked body {
   animation-name: vh-ultra-glimmer;
   animation-timing-function: linear;
   animation-iteration-count: infinite;
+}
+
+/* Token de sintaxe dos diffs (ver lib/syntax.ts): cada um traz a cor dos dois temas. */
+.syn {
+  color: var(--syn-dark);
+}
+:root[data-theme="light"] .syn {
+  color: var(--syn-light);
 }

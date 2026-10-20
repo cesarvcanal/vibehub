@@ -8,6 +8,12 @@
 
 export type DiffLine = { kind: "add" | "del" | "ctx"; text: string };
 
+/**
+ * Uma linha desenhável de diff: as do arquivo e o separador de trecho (`hunk`), que traz onde o
+ * trecho começa em cada lado quando o diff diz (`@@ -a,b +c,d @@`).
+ */
+export type DiffRow = DiffLine | { kind: "hunk"; text: string; oldStart?: number; newStart?: number };
+
 export type LineDiff = {
   /** Trechos alterados, cada um com suas linhas de contexto. Vazio quando nada mudou. */
   hunks: DiffLine[][];
@@ -265,4 +271,43 @@ export function toolDiff(name: string, input: unknown): ToolDiff | null {
   }
   const replaceAll = call.edits.some((edit) => edit.replace_all === true);
   return { file: call.file, ...editsDiff(call.edits), ...(replaceAll ? { replaceAll: true } : {}) };
+}
+
+/** Os trechos de um `ToolDiff` como linhas desenháveis, com `⋯` entre um trecho e outro. PURE. */
+export function hunksToRows(hunks: readonly DiffLine[][]): DiffRow[] {
+  return hunks.flatMap((hunk, i): DiffRow[] => (i > 0 ? [{ kind: "hunk", text: "⋯" }, ...hunk] : [...hunk]));
+}
+
+/** O que a calha e o destaque precisam de cada linha: número (null = desconhecido) e trecho alterado. */
+export type DiffRowView = { num: number | null; mark: InlineMark | null };
+
+/**
+ * Para cada linha: o número no arquivo (o antigo nas removidas, o novo nas demais), contado a partir
+ * do começo do trecho, e o trecho que mudou dentro dela (`inlineMarks` por trecho). PURE.
+ */
+export function diffRowsView(rows: readonly DiffRow[]): DiffRowView[] {
+  const marks: (InlineMark | null)[] = [];
+  let hunk: DiffLine[] = [];
+  const flush = () => {
+    marks.push(...inlineMarks(hunk));
+    hunk = [];
+  };
+  let oldLine: number | null = null;
+  let newLine: number | null = null;
+  const nums = rows.map((row): number | null => {
+    if (row.kind === "hunk") {
+      flush();
+      marks.push(null);
+      oldLine = row.oldStart ?? null;
+      newLine = row.newStart ?? null;
+      return null;
+    }
+    hunk.push(row);
+    const num = row.kind === "del" ? oldLine : newLine;
+    if (row.kind !== "add" && oldLine !== null) oldLine++;
+    if (row.kind !== "del" && newLine !== null) newLine++;
+    return num;
+  });
+  flush();
+  return nums.map((num, i) => ({ num, mark: marks[i] ?? null }));
 }

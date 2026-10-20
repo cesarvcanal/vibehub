@@ -3,12 +3,11 @@ import { requireSession, requireOwner, requestUser, tokenMatches } from "../auth
 import { requireCardAccess, requireCardWork, visibleCards, visibleProjects } from "../auth/access.js";
 import * as registry from "../services/board/registry.js";
 import {
-  applySessionChange, killCardSession, pauseCard, prepareCard, restartCard, resumeCard,
+  applySessionChange, pauseCard, prepareCard, resumeCard,
 } from "../services/board/workspace.js";
-import * as outbox from "../services/board/outbox.js";
+import { reportCardStatus } from "../services/board/status.js";
 import { purgeRemovedCards } from "../services/board/purge.js";
 import { runnerToken } from "../runtime/runner.js";
-import { driverTurnRunning } from "../services/sdk/manager.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -280,62 +279,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
     if (status !== "working" && status !== "waiting") {
       return await reply.code(400).send({ error: "status must be 'working' or 'waiting'" });
     }
-    // State BEFORE the status is applied: it is what decides whether this is the moment to carry out
-    // a PENDING RESTART (a card flagged while the brain/MCPs changed under a working Claude).
-    // SNAPSHOT the primitives — `getCard` hands back the LIVE cached card, so applyCardStatus mutates
-    // that very object and reading these fields afterwards would always show the post-status state.
-    const before = await registry.getCard(String(body.card ?? ""));
-    // Um `waiting` com o turno do chat nativo ainda rodando é hook atrasado (o SessionStart de uma
-    // sessão retomada chegando depois do turno começar): aplicado, deixava o card cinza com o chat
-    // trabalhando. Pausa/restart pendente passam — é o `waiting` deles que executa o efeito.
-    if (
-      status === "waiting" && before && driverTurnRunning(before.id)
-      && before.column !== "paused" && !before.restartPendingAt
-    ) {
-      return await reply.send({ ok: true, applied: false });
-    }
-    const wasPending = Boolean(before?.restartPendingAt);
-    const wasLive = before ? registry.hasLiveSession(before) : false;
-    const wasColumn = before?.column;
-    const pendingReason = before?.restartReason;
-    const card = await registry.applyCardStatus(String(body.card ?? ""), status);
-    // A PAUSE BEATS the pending restart: a card whose PENDING PAUSE is due now is going to sleep, so
-    // restarting it would be wasted work — applyCardStatus already dropped the flag in that case.
-    const pausing = wasColumn ? registry.shouldEndSessionOnStatus(status, wasColumn, wasLive) : false;
-    if (card && pausing) {
-      // The PENDING PAUSE is due: the card was dragged into Paused while Claude was working, and
-      // Claude has just finished. applyCardStatus stamped `pausedAt` — which is the board saying
-      // "this session is dead" — so it has to actually die, here. Without this the card looked
-      // parked while its tmux session (and the shell beside it) stayed resident in the runner.
-      // Best-effort: killCardSession never throws, and a hook must not fail over the runner.
-      await killCardSession(card, { includeShell: true });
-      logger.info(
-        { audit: true, action: "card.pause.due", card: card.worktreeSlug, session: card.tmuxSession },
-        "pending pause carried out — Claude finished and the tmux sessions were ended",
-      );
-    }
-    if (card && !pausing && registry.shouldRestartOnStatus(status, wasPending, wasLive)) {
-      // PENDING RESTART (brain/MCP): the card was `working` when the brain/MCPs changed; now Claude has
-      // finished (status != working), so restart the session to re-read them at startup (`claude -c`
-      // resumes the SAME conversation). applyCardStatus has already cleared the flag.
-      try {
-        await restartCard(card.id);
-        logger.info(
-          { audit: true, action: "card.restart.pending", card: card.worktreeSlug, reason: pendingReason },
-          "pending restart carried out — Claude finished and the session was restarted to re-read the brain/MCPs",
-        );
-      } catch (err) {
-        // The hook is fire-and-forget: a restart that fails must never turn into an error for it.
-        logger.warn(
-          { card: card.worktreeSlug, detail: (err as Error).message },
-          "pending restart failed (best-effort) — the card keeps running with the old brain/MCPs",
-        );
-      }
-    }
-    // The agent just told us where it is. `waiting` means it reached its prompt — the best possible
-    // moment for anything queued for this card, and the reason a message typed while Claude was
-    // down lands the instant it comes back. Fire-and-forget: the hook has a 3s timeout.
-    if (card && status === "waiting") void outbox.flushCard(card.id);
+    const card = await reportCardStatus(String(body.card ?? ""), status);
     return await reply.send({ ok: true, applied: Boolean(card) });
   });
 }

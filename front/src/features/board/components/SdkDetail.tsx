@@ -5,7 +5,8 @@ import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
 import { Markdown } from "@/features/board/components/ChatView";
 import { toolHeadline, type AgentTask, type SdkRow, type ToolResultSummary } from "@/features/board/lib/sdkChat";
-import { toolDiff } from "@/features/board/lib/toolDiff";
+import { hunksToRows, toolDiff } from "@/features/board/lib/toolDiff";
+import { DiffView, SyntaxText, useCodeTokens } from "@/features/board/components/DiffView";
 import {
   agentName,
   agentStatus,
@@ -86,8 +87,10 @@ function StatusPill({ status }: { status: ToolStatus }) {
   );
 }
 
-function CodeBlock({ text, start = 1, numbered = true, tone }: { text: string; start?: number; numbered?: boolean; tone?: "error" }) {
-  const lines = text.replace(/\n$/, "").split("\n");
+function CodeBlock({ text, start = 1, numbered = true, tone, path }: { text: string; start?: number; numbered?: boolean; tone?: "error"; path?: string }) {
+  const code = text.replace(/\n$/, "");
+  const lines = code.split("\n");
+  const tokens = useCodeTokens(code, path);
   return (
     <div
       className={cn(
@@ -99,7 +102,7 @@ function CodeBlock({ text, start = 1, numbered = true, tone }: { text: string; s
         {lines.map((line, i) => (
           <div key={i} className={cn("grid", numbered ? "grid-cols-[3rem_1fr]" : "grid-cols-1 pl-3")}>
             {numbered ? <span className="select-none pr-3 text-right text-muted-foreground/50">{start + i}</span> : null}
-            <span className="whitespace-pre pr-4">{line || " "}</span>
+            <span className="whitespace-pre pr-4">{line ? <SyntaxText text={line} tokens={tokens?.[i]} /> : " "}</span>
           </div>
         ))}
       </div>
@@ -107,32 +110,8 @@ function CodeBlock({ text, start = 1, numbered = true, tone }: { text: string; s
   );
 }
 
-function DiffBlock({ rows }: { rows: DiffRow[] }) {
-  return (
-    <div className="max-h-[56vh] overflow-auto rounded-md border border-border/70 bg-background/70 font-mono text-xs leading-relaxed">
-      <div className="min-w-max py-0.5">
-        {rows.map((row, i) => (
-          <div
-            key={i}
-            data-testid="sdk-detail-diff-line"
-            data-kind={row.kind}
-            className={cn(
-              "whitespace-pre border-l-2 pl-1.5 pr-3",
-              row.kind === "add" && "border-emerald-500/70 bg-emerald-500/10 text-foreground",
-              row.kind === "del" && "border-red-500/70 bg-red-500/10 text-foreground/80",
-              row.kind === "ctx" && "border-transparent text-muted-foreground",
-              row.kind === "hunk" && "border-transparent bg-muted/40 text-muted-foreground/70",
-            )}
-          >
-            <span aria-hidden className={cn("inline-block w-4 select-none font-semibold", row.kind === "add" && "text-emerald-500", row.kind === "del" && "text-red-500")}>
-              {row.kind === "add" ? "+" : row.kind === "del" ? "−" : " "}
-            </span>
-            {row.text}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+function DiffBlock({ rows, path }: { rows: readonly DiffRow[]; path?: string | null }) {
+  return <DiffView rows={rows} path={path} className="max-h-[56vh] rounded-md border-border/70" lineTestId="sdk-detail-diff-line" hunkTestId="sdk-detail-diff-line" />;
 }
 
 function Section({ label, aside, children }: { label: React.ReactNode; aside?: React.ReactNode; children: React.ReactNode }) {
@@ -443,18 +422,18 @@ function ActionBody({ name, input, detail, row, onOpenAgent }: { name: string; i
   if (name === "Read") {
     if (!detail || detail.isError) return <>{file ? <FileLabel path={file} /> : null}{detail?.isError ? <ErrorBox text={detail.text ?? ""} /> : null}</>;
     const { content, startLine } = readContent(detail);
-    return <Section label={<FileLabel path={file} />}><CodeBlock text={content} start={startLine} /></Section>;
+    return <Section label={<FileLabel path={file} />}><CodeBlock text={content} start={startLine} path={file} /></Section>;
   }
   if (name === "Edit" || name === "Write" || name === "MultiEdit" || name === "NotebookEdit") {
     const fromResult = detail ? patchRows(detail.structured) : null;
     const fromInput = toolDiff(name, input);
-    const rows: DiffRow[] | null = fromResult ?? (fromInput ? fromInput.hunks.flatMap((h, i) => [...(i > 0 ? [{ kind: "hunk" as const, text: "⋯" }] : []), ...h.map((l) => ({ kind: l.kind, text: l.text }))]) : null);
+    const rows: DiffRow[] | null = fromResult ?? (fromInput ? hunksToRows(fromInput.hunks) : null);
     const created = name === "Write" && (fromInput?.created ?? false);
     return (
       <>
         {detail?.isError ? <ErrorBox text={detail.text ?? ""} label={t("sdk.detail.notApplied")} /> : null}
         <Section label={<FileLabel path={file} />} aside={<span>{created ? t("sdk.detail.newFile") : detail?.isError ? "" : t("sdk.detail.applied")}</span>}>
-          {rows && rows.length ? <DiffBlock rows={rows} /> : name === "Write" ? <CodeBlock text={field(input, "content")} /> : null}
+          {rows && rows.length ? <DiffBlock rows={rows} path={file} /> : name === "Write" ? <CodeBlock text={field(input, "content")} path={file} /> : null}
         </Section>
       </>
     );
@@ -705,7 +684,7 @@ function ChangesView({ rows, onOpenAction }: { rows: readonly SdkRow[]; onOpenAc
                       <span className="flex-1" />
                       <button type="button" onClick={() => onOpenAction(row.id)} className="flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground"><Maximize2 className="h-3 w-3" />{t("sdk.changes.openAction")}</button>
                     </div>
-                    {d ? <DiffBlock rows={d.hunks.flatMap((h, i) => [...(i > 0 ? [{ kind: "hunk" as const, text: "⋯" }] : []), ...h.map((l) => ({ kind: l.kind, text: l.text }))])} /> : null}
+                    {d ? <DiffBlock rows={hunksToRows(d.hunks)} path={current.path} /> : null}
                   </section>
                 );
               })}
@@ -731,7 +710,7 @@ function ChangesView({ rows, onOpenAction }: { rows: readonly SdkRow[]; onOpenAc
           </div>
           <div className="min-h-0 overflow-auto px-4 py-3">
             {!gitFile ? <p className="text-xs italic text-muted-foreground">{t("sdk.changes.pickFile")}</p>
-              : diff.data ? (diff.data.diff.trim() ? <DiffBlock rows={parseUnifiedDiff(diff.data.diff)} /> : <p className="text-xs italic text-muted-foreground">{t("sdk.changes.noDiff")}</p>)
+              : diff.data ? (diff.data.diff.trim() ? <DiffBlock rows={parseUnifiedDiff(diff.data.diff)} path={gitFile} /> : <p className="text-xs italic text-muted-foreground">{t("sdk.changes.noDiff")}</p>)
               : diff.loading ? <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />{t("sdk.detail.loading")}</div>
               : <p className="text-xs italic text-muted-foreground">{t("sdk.detail.failedToLoad")}</p>}
           </div>
