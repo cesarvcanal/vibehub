@@ -994,6 +994,11 @@ async function runStream() {
         // principal a um ponto que não é dela. Só o principal move o ponto de volta.
         const parent = typeof msg.parent_tool_use_id === "string" && msg.parent_tool_use_id !== "" ? msg.parent_tool_use_id : null;
         if (msg.uuid && parent === null) lastAssistantUuid = msg.uuid;
+        // Fala do principal SEM turno aberto = o CLI abriu um turno sozinho (uma tarefa em segundo
+        // plano terminou, um ScheduleWakeup venceu). Ele passa a ser o turno em voo: uma mensagem
+        // agora é absorvida nele (`turn_absorbed`), e se o stream cair antes do `result` o finally
+        // fecha com o aborted que ele deve — senão o manager via o card trabalhando para sempre.
+        if (parent === null && !turnActive) turnActive = true;
         const origin = parent === null ? {} : { parentToolUseId: parent };
         for (const block of msg.message.content) {
           if (block.type === "text") emit({ type: "assistant_text", text: block.text, ...origin });

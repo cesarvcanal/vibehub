@@ -319,8 +319,18 @@ export function isCardChatInUse(cardId: string): boolean {
  * dispara a tarefa fecha na hora, e um driver "ocioso" sem ninguém na aba era desligado — matando o
  * trabalho que o Claude tinha acabado de dizer que estava esperando.
  */
-function isDriverBusy(session: Pick<DriverSession, "activeTurns" | "backgroundTasks" | "backgroundSince">): boolean {
-  return session.activeTurns > 0 || backgroundHoldLeft(session) > 0;
+function isDriverBusy(session: Pick<DriverSession, "activeTurns" | "autonomousTurn" | "backgroundTasks" | "backgroundSince">): boolean {
+  return isTurnInFlight(session) || backgroundHoldLeft(session) > 0;
+}
+
+/**
+ * HÁ UM TURNO RODANDO: o de alguém (contado) ou o que o PRÓPRIO CLI abriu (tarefa em segundo plano
+ * terminou, retorno agendado venceu, a retomada pós-deploy seguindo sozinha). Uma regra só para
+ * todo lugar que pergunta isso — o `ready` de quem conecta, o idle stop, o status do board. Contar só
+ * `activeTurns` fazia o chat reaberto nascer "parado" com a IA trabalhando (produção, 2026-10-20).
+ */
+function isTurnInFlight(session: Pick<DriverSession, "activeTurns" | "autonomousTurn">): boolean {
+  return session.activeTurns > 0 || session.autonomousTurn;
 }
 
 /**
@@ -446,7 +456,7 @@ function clearIdleTimer(session: DriverSession): void {
  * check runs again when the timer fires — a turn or a socket that showed up in between wins.
  */
 function maybeScheduleIdleStop(session: DriverSession): void {
-  if (session.closed || session.sockets.size > 0 || session.activeTurns > 0) return;
+  if (session.closed || session.sockets.size > 0 || isTurnInFlight(session)) return;
   if (session.idleTimer) return;
   // Uma tarefa em segundo plano viva adia o relógio até o fim do teto dela (ver
   // BACKGROUND_HOLD_MAX_MS) — e só então começam os 15 min de ociosidade.
@@ -484,7 +494,7 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     session.ready = true;
     // Stamp the manager's live turn count on the frame: a message may already be queued on the
     // fresh driver's stdin (sent before it booted) — the front's spinner must know it.
-    event = { ...event, turnActive: session.activeTurns > 0 };
+    event = { ...event, turnActive: isTurnInFlight(session) };
   }
   if ((event.type === "session" || event.type === "result") && event.sessionId && event.sessionId !== session.lastSessionId) {
     session.lastSessionId = event.sessionId;
@@ -562,6 +572,14 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     // última termina sem turno em voo e sem ninguém olhando, AGORA começam os 15 min — o mesmo
     // ponto em que um `result` o arma.
     clearIdleTimer(session);
+    maybeScheduleIdleStop(session);
+  }
+  if (event.type === "error" && session.autonomousTurn && session.activeTurns === 0) {
+    // O stream caiu no meio de um turno que ninguém mandou: o driver fecha esse turno com um
+    // `result` aborted, mas um erro sem ele (driver antigo, stream que morreu calado) não pode
+    // deixar o card "trabalhando" para sempre — sem idle stop e com o marcador de deploy preso.
+    session.autonomousTurn = false;
+    syncInflightMarker(session);
     maybeScheduleIdleStop(session);
   }
   if (event.type === "rate_limit") {
@@ -1402,7 +1420,7 @@ export function attachSocket(session: DriverSession, socket: WebSocket, origin?:
   // reset its own turn flag and nothing re-lit the "Trabalhando…" spinner until much later.
   if (session.ready) {
     try {
-      socket.send(JSON.stringify({ type: "ready", resume: session.lastSessionId, turnActive: session.activeTurns > 0 }));
+      socket.send(JSON.stringify({ type: "ready", resume: session.lastSessionId, turnActive: isTurnInFlight(session) }));
     } catch { /* going away */ }
   }
 
