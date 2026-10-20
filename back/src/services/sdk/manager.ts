@@ -94,6 +94,9 @@ export const TASKS_MAX = 200;
  */
 export const RESUME_CONFIRM_MS = 45_000;
 
+/** Quem assina as falas que o painel injeta (retomada, reengate): o painel, nunca uma pessoa. */
+export const SYSTEM_ORIGIN: MessageOrigin = { kind: "system", name: "vibehub" };
+
 export interface DriverSession {
   cardId: string;
   /** Log label (the card's worktree slug). */
@@ -413,7 +416,7 @@ export function driverActivity(cardId: string): DriverActivity {
  * "aguardando" ali soltaria o aviso de turno terminado no meio da retomada.
  */
 function turnRunning(session: Pick<DriverSession, "activeTurns" | "autonomousTurn" | "resumeWatch">): boolean {
-  return session.activeTurns > 0 || session.autonomousTurn || session.resumeWatch !== undefined;
+  return isTurnInFlight(session) || session.resumeWatch !== undefined;
 }
 
 /**
@@ -470,6 +473,13 @@ function emitSystemNote(session: DriverSession, text: string): void {
   void appendHistory(session.cardId, { type: "system_note", text, at });
 }
 
+/** Todo relógio da sessão, numa saída só (close, stop, shutdown): nenhum sobrevive ao driver. */
+function clearSessionTimers(session: DriverSession): void {
+  clearIdleTimer(session);
+  clearTimeout(session.backgroundSettleTimer);
+  clearTimeout(session.resumeWatch?.timer);
+}
+
 function clearIdleTimer(session: DriverSession): void {
   if (session.idleTimer) {
     clearTimeout(session.idleTimer);
@@ -512,12 +522,13 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   if (event.type === "assistant_text" || event.type === "tool_use" || event.type === "thinking") {
     noteAgentWork(session, event);
   }
-  const fromMain = !(event as { parentToolUseId?: unknown }).parentToolUseId;
-  if (fromMain && AGENT_SIGNALS.has(event.type)) session.agentSignals += 1;
   // Só o PRINCIPAL prova que a retomada pegou — um subagente falando não é o agente continuando.
-  if (session.resumeWatch && fromMain && (event.type === "assistant_text" || event.type === "tool_use")) {
-    putMarker(session, { ...(session.marker ?? session.resumeWatch.marker), progressed: true });
-    endResumeWatch(session);
+  if (session.resumeWatch && !(event as { parentToolUseId?: unknown }).parentToolUseId) {
+    if (AGENT_SIGNALS.has(event.type)) session.agentSignals += 1;
+    if (event.type === "assistant_text" || event.type === "tool_use") {
+      putMarker(session, { ...(session.marker ?? session.resumeWatch.marker), progressed: true });
+      endResumeWatch(session);
+    }
   }
   if (event.type === "ready") {
     session.ready = true;
@@ -929,8 +940,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     // The driver died (idle stop, killCardSession, a crash): tell whoever is watching and close
     // their sockets — the front's reconnect loop spawns the successor on its next connect.
     const deliberate = session.closed; // stopCardDriver stamped it BEFORE killing
-    clearIdleTimer(session);
-    clearTimeout(session.resumeWatch?.timer);
+    clearSessionTimers(session);
     session.closed = true;
     if (sessions.get(opts.cardId) === session) sessions.delete(opts.cardId);
     // O estado POR CARD só é deste driver enquanto nenhum sucessor assumiu o card. Um `close` pode
@@ -953,7 +963,10 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     if (!deliberate && !succeeded && session.marker) {
       const marker = session.marker;
       for (const listener of crashListeners) {
-        try { listener(opts.cardId, marker); } catch { /* um ouvinte não derruba o close */ }
+        try { listener(opts.cardId, marker); } catch (err) {
+          // Um ouvinte não derruba o close — mas não some calado.
+          logger.warn({ card: opts.label, detail: (err as Error).message }, "driver crash listener failed (continuing)");
+        }
       }
     }
     // Parada PEDIDA (troca de conta/modelo, pausa, restart, ocioso) não é falha: o kill chega como
@@ -1175,10 +1188,7 @@ export function handleClientFrame(
     session.activeTurns = Math.min(session.activeTurns, 1);
     // A pessoa mandou PARAR: a retomada que o vigia esperava acaba aqui — reenviar a ordem depois
     // seria o painel desfazendo o clique dela.
-    if (session.resumeWatch) {
-      endResumeWatch(session);
-      syncInflightMarker(session);
-    }
+    if (session.resumeWatch) abandonResumeWatch(session);
     // Only a stop that actually CUT something gets narrated — a stop click with nothing running
     // would otherwise write a note claiming a turn was interrupted when none was.
     if (session.activeTurns > 0) session.pendingInterruptNote = interruptNote(control);
@@ -1346,6 +1356,12 @@ function endResumeWatch(session: DriverSession): void {
   session.resumeWatch = undefined;
 }
 
+/** A retomada acabou sem pegar (Parar, desistência): o marcador e a bolinha deixam de contar com ela. */
+function abandonResumeWatch(session: DriverSession): void {
+  endResumeWatch(session);
+  syncInflightMarker(session);
+}
+
 /** Arma (ou rearma) o prazo da retomada a partir de agora. */
 function armResumeWatch(session: DriverSession): void {
   const watch = session.resumeWatch;
@@ -1370,16 +1386,14 @@ function checkResumeWatch(session: DriverSession, signalsAtArm: number): void {
   // Um turno aberto ou um sinal de vida: espera mais. Rearmar (e não esperar o `result` daquele
   // turno) é o que impede um vigia preso — o turno pode acabar num erro de stream, sem `result`.
   if (isTurnInFlight(session) || session.agentSignals !== signalsAtArm) { armResumeWatch(session); return; }
-  if (!watch.reengaged && canAcceptTurn(session) && writeToDriver(session, { type: "user", text: RESUME_REENGAGE_TEXT })) {
+  if (!watch.reengaged && writeInjectedTurn(session, RESUME_REENGAGE_TEXT, SYSTEM_ORIGIN)) {
     watch.reengaged = true;
-    recordInjectedTurn(session, RESUME_REENGAGE_TEXT, { kind: "system", name: "vibehub" });
     syncInflightMarker(session);
     logger.info({ audit: true, action: "sdk.resume.reengage", card: session.label }, "the resumed turn closed without progress — sending the order again");
     return;
   }
-  endResumeWatch(session);
+  abandonResumeWatch(session);
   emitSystemNote(session, NOTE_RESUME_STALLED);
-  syncInflightMarker(session);
   maybeScheduleIdleStop(session);
   logger.warn({ audit: true, action: "sdk.resume.stalled", card: session.label }, "the resumed turn did not continue, twice — noted");
 }
@@ -1505,10 +1519,16 @@ function noteAgentWork(session: DriverSession, event: DriverEvent): void {
  * Returns false (nothing recorded) when the driver can no longer take a turn.
  */
 export function sendAgentTurn(session: DriverSession, text: string, origin: MessageOrigin): boolean {
-  if (!canAcceptTurn(session) || !writeToDriver(session, { type: "user", text })) return false;
-  recordInjectedTurn(session, text, origin);
+  if (!writeInjectedTurn(session, text, origin)) return false;
   // A conversa seguiu por outro lado: o que vier daqui é deste turno, não da retomada.
   endResumeWatch(session);
+  return true;
+}
+
+/** Um turno que o back escreve por conta própria: no stdin E no histórico, ou em nenhum. */
+function writeInjectedTurn(session: DriverSession, text: string, origin: MessageOrigin): boolean {
+  if (!canAcceptTurn(session) || !writeToDriver(session, { type: "user", text })) return false;
+  recordInjectedTurn(session, text, origin);
   return true;
 }
 
@@ -1729,9 +1749,7 @@ export function stopCardDriver(cardId: string): void {
   const session = sessions.get(cardId);
   if (!session) return;
   sessions.delete(cardId);
-  clearIdleTimer(session);
-  clearTimeout(session.backgroundSettleTimer);
-  clearTimeout(session.resumeWatch?.timer);
+  clearSessionTimers(session);
   session.closed = true;
   try { session.child.stdin.end(); } catch { /* already gone */ }
   try { session.child.kill(); } catch { /* already gone */ }
@@ -1753,8 +1771,7 @@ export function stopCardDriver(cardId: string): void {
  */
 export function shutdownAllDrivers(): void {
   for (const session of sessions.values()) {
-    clearIdleTimer(session);
-    clearTimeout(session.resumeWatch?.timer);
+    clearSessionTimers(session);
     session.closed = true;
     try { session.child.stdin.end(); } catch { /* already gone */ }
     try { session.child.kill(); } catch { /* already gone */ }

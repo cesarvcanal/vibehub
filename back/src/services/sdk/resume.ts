@@ -1,6 +1,5 @@
 import * as registry from "../board/registry.js";
 import { getSettings } from "../settings/settings.js";
-import type { MessageOrigin } from "../chat/provenance.js";
 import { appendHistory } from "./history.js";
 import {
   INFLIGHT_OWNER,
@@ -13,7 +12,7 @@ import {
 } from "./inflight.js";
 import { installCardSdkDriver, sdkDriverCommand } from "./driver.js";
 import { restoreMissingWorkspace } from "../board/workspace.js";
-import { BACKGROUND_HOLD_MAX_MS, driverTurnRunning, ensureDriverSession, injectSystemTurn, shutdownAllDrivers } from "./manager.js";
+import { BACKGROUND_HOLD_MAX_MS, SYSTEM_ORIGIN, driverTurnRunning, ensureDriverSession, injectSystemTurn, shutdownAllDrivers } from "./manager.js";
 import { stopAllMirrors } from "./mirror.js";
 import { transcriptDirFor } from "../maestro/cardSession.js";
 import { effectiveAccountSlug } from "../board/registry.js";
@@ -83,8 +82,8 @@ export function isStaleBackgroundOnly(marker: InflightMarker, now: number): bool
   return !!bg && bg.idle && now - bg.since > BACKGROUND_HOLD_MAX_MS;
 }
 
-/** Quem assina a linha e o turno injetado: o painel, nunca uma pessoa. */
-export const SYSTEM_ORIGIN: MessageOrigin = { kind: "system", name: "vibehub" };
+/** Quem assina a linha e o turno injetado: o painel, nunca uma pessoa (definido no manager). */
+export { SYSTEM_ORIGIN };
 
 /** Retomadas automáticas seguidas, no máximo, sem uma mensagem de pessoa no meio. */
 export const MAX_AUTO_RESUMES = 5;
@@ -279,7 +278,7 @@ async function resumeCard(
   deps: ResumeDeps,
   installOnce: () => Promise<void>,
   texts: ResumeTexts,
-): Promise<"resumed" | "noted" | "gone" | "superseded"> {
+): Promise<"resumed" | "noted" | "skipped"> {
   let announced = false;
   try {
     const card = await deps.getCard(cardId);
@@ -287,7 +286,7 @@ async function resumeCard(
     if (!card || !project) {
       // The card is gone (deleted between the marker and this boot): nothing to tell, no one to tell it to.
       await deps.clearMarker(cardId);
-      return "gone";
+      return "skipped";
     }
     if (!settings.sdkDriver || !settings.sdkAutoResume) {
       await deps.appendNote(cardId, texts.autoOff);
@@ -321,10 +320,9 @@ async function resumeCard(
     // A preparação leva segundos (install, workspace, comando): se nesse meio-tempo a conversa
     // SEGUIU — a pessoa escreveu num driver que o reconnect subiu, e o marcador já é o turno dela —
     // a continuação cairia em cima do turno de alguém. Conferido aqui, logo antes de injetar.
-    const now = await deps.readMarker(cardId);
-    if (!now || now.startedAt !== marker.startedAt || deps.turnRunning(cardId)) {
+    if (await conversationMovedOn(cardId, marker, deps)) {
       logger.info({ audit: true, action: "sdk.resume.superseded", card: card.worktreeSlug }, "the conversation moved on while the resume was being prepared — not injected");
-      return "superseded";
+      return "skipped";
     }
     const session = deps.ensureSession({
       cardId: card.id,
@@ -355,6 +353,12 @@ async function resumeCard(
   }
 }
 
+/** A conversa andou desde este marcador: outro turno no disco, ou um turno rodando num driver vivo. */
+async function conversationMovedOn(cardId: string, marker: InflightMarker, deps: ResumeDeps): Promise<boolean> {
+  const now = await deps.readMarker(cardId);
+  return !now || now.startedAt !== marker.startedAt || deps.turnRunning(cardId);
+}
+
 /**
  * O DRIVER CAIU com o back de pé (OOM, kill, o docker exec que morreu) e havia trabalho em voo. O
  * marcador é deste processo, vivo — o sweep de boot nunca o veria como órfão, e o turno só voltaria
@@ -369,11 +373,9 @@ export async function resumeAfterDriverCrash(
 ): Promise<"resumed" | "noted" | "skipped"> {
   try {
     await deps.wait(CRASH_RESUME_DELAY_MS);
-    const marker = await deps.readMarker(cardId);
-    if (!marker || marker.startedAt !== crashed.startedAt || deps.turnRunning(cardId)) return "skipped";
-    const settings = await deps.settings();
-    const outcome = await resumeCard(cardId, marker, settings, deps, () => deps.installDriver(), CRASH_TEXTS);
-    return outcome === "gone" || outcome === "superseded" ? "skipped" : outcome;
+    // Conferido já aqui também: uma queda superada não ganha nem a linha "retomando…".
+    if (await conversationMovedOn(cardId, crashed, deps)) return "skipped";
+    return await resumeCard(cardId, crashed, await deps.settings(), deps, () => deps.installDriver(), CRASH_TEXTS);
   } catch (err) {
     logger.warn({ card: cardId, detail: (err as Error).message }, "could not resume after an sdk driver crash");
     return "skipped";
