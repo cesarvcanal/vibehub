@@ -210,10 +210,10 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     async (a) => {
       try {
         await requireLevel(user, a.cardId, "work");
-        await recordCardActor(user, a.cardId);
         const sentAt = Date.now();
         const sent = await sendToTerminal(a.cardId, a.text, {
           by: user.id,
+          beforeDeliver: () => recordCardActor(user, a.cardId),
           guardInteractiveMenu: true,
           requireAgent: true,
           viaNativeChat: true,

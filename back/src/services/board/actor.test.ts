@@ -20,7 +20,7 @@ const reapply = vi.fn(async (_cardId: string) => undefined);
  */
 let reapplyFailure: Error | null = null;
 /** When set, the runner "takes" this long to apply the identity: the reapply settles with it. */
-let reapplyGate: Promise<void> | null = null;
+let reapplyGate: Promise<boolean> | null = null;
 
 async function load() {
   vi.resetModules();
@@ -32,12 +32,12 @@ async function load() {
     const actual = await vi.importActual<typeof import("./workspace.js")>("./workspace.js");
     return {
       ...actual,
-      reapplyCardIdentity: (cardId: string): Promise<void> => {
+      reapplyCardIdentity: (cardId: string): Promise<boolean> => {
         void reapply(cardId);
         const failure = reapplyFailure;
         reapplyFailure = null;
         if (failure) return Promise.reject(failure);
-        return reapplyGate ?? Promise.resolve();
+        return reapplyGate ?? Promise.resolve(true);
       },
     };
   });
@@ -254,13 +254,13 @@ describe("a troca de autor aterrissa antes da mensagem que a causou", () => {
     await registry.shareWith({ kind: "card", targetId: card.id, userId: mussa.id, level: "work" });
     await recordCardActor(owner, card.id);
 
-    let landed!: () => void;
-    reapplyGate = new Promise<void>((r) => { landed = r; });
+    let landed!: (ok: boolean) => void;
+    reapplyGate = new Promise<boolean>((r) => { landed = r; });
     let done = false;
     const switching = recordCardActor(mussa, card.id).then(() => { done = true; });
     await new Promise((r) => setTimeout(r, 50));
     expect(done).toBe(false);
-    landed();
+    landed(true);
     await switching;
     expect(done).toBe(true);
   });
@@ -268,7 +268,7 @@ describe("a troca de autor aterrissa antes da mensagem que a causou", () => {
   it("um runner que não responde segura a mensagem só até o limite — nunca para sempre", async () => {
     const { registry, recordCardActor } = await load();
     const card = await seed(registry);
-    reapplyGate = new Promise<void>(() => undefined);
+    reapplyGate = new Promise<boolean>(() => undefined);
     const started = Date.now();
     await recordCardActor(owner, card.id, { waitMs: 100 });
     expect(Date.now() - started).toBeLessThan(5_000);
@@ -322,8 +322,51 @@ describe("relayCardActor — a ordem delegada por outro card leva o autor junto"
     await relayCardActor(maestro.id, alvo.id);
     await relayCardActor(undefined, alvo.id);
     await relayCardActor("card-que-nao-existe", alvo.id);
+    // Um card de OUTRO projeto não empresta o autor dele (o `from` é declarado pelo próprio agente).
+    const outro = await registry.createProject({ name: "outro" });
+    const deFora = await registry.createCard({ projectId: outro.id, title: "de fora" });
+    await registry.stampCardActor(deFora.id, (await users.createUser("cesar", "senha-forte-1", "owner")).id);
+    await relayCardActor(deFora.id, alvo.id);
     await registry.stampCardActor(maestro.id, semAcesso.id);
     await relayCardActor(maestro.id, alvo.id);
     expect((await registry.getCard(alvo.id))?.actorUserId).toBe("u-mussa");
+  });
+});
+
+/**
+ * UMA APLICAÇÃO QUE FALHOU NÃO PODE VIRAR "JÁ É O AUTOR". O cache dizia que o Mussa já era o autor
+ * antes de a identidade dele chegar ao runner; se o docker exec falhasse, nenhuma mensagem seguinte
+ * dele tentava de novo — e os commits seguiam saindo como o César, em silêncio.
+ */
+describe("a troca que não aterrissou é tentada de novo na próxima ordem", () => {
+  it("runner falhou: a próxima mensagem da mesma pessoa reaplica", async () => {
+    const { registry, recordCardActor, isCardActor } = await load();
+    const card = await seed(registry);
+    reapplyGate = Promise.resolve(false);
+    await recordCardActor(owner, card.id);
+    expect(isCardActor(owner, card.id)).toBe(false);
+
+    reapplyGate = null;
+    reapply.mockClear();
+    await recordCardActor(owner, card.id);
+    expect(reapply).toHaveBeenCalledTimes(1);
+    expect(isCardActor(owner, card.id)).toBe(true);
+  });
+
+  it("o board já diz quem é, mas ESTE processo nunca viu aterrissar (reinício): aplica uma vez", async () => {
+    const { registry, recordCardActor } = await load();
+    const card = await seed(registry);
+    await registry.stampCardActor(card.id, owner.id);
+    await recordCardActor(owner, card.id);
+    await recordCardActor(owner, card.id);
+    expect(reapply).toHaveBeenCalledTimes(1);
+  });
+
+  it("estourou o limite de espera: a mensagem segue, e a próxima confere de novo", async () => {
+    const { registry, recordCardActor, isCardActor } = await load();
+    const card = await seed(registry);
+    reapplyGate = new Promise<boolean>(() => undefined);
+    await recordCardActor(owner, card.id, { waitMs: 50 });
+    expect(isCardActor(owner, card.id)).toBe(false);
   });
 });

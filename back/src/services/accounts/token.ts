@@ -74,11 +74,15 @@ export function assertGhToken(token: string): string {
 /** Script lines that WRITE the card's GitHub token (mode 600) inside the runner. PURE. */
 export function writeGhTokenLines(cardId: string, token: string): string[] {
   const file = ghTokenPath(cardId);
+  // Temp file + rename: a gh or git push reading mid-write would see an EMPTY file, and the gh
+  // wrapper treats an empty file as "no token" — the runner's own login, the org account.
   return [
     `mkdir -p ${shQuote(GH_TOKEN_DIR)}`,
     "umask 077",
-    `printf '%s' ${shQuote(assertGhToken(token))} > ${shQuote(file)}`,
-    `chmod 600 ${shQuote(file)}`,
+    `T=$(mktemp ${shQuote(`${file}.XXXXXX`)})`,
+    `printf '%s' ${shQuote(assertGhToken(token))} > "$T"`,
+    `chmod 600 "$T"`,
+    `mv -f "$T" ${shQuote(file)}`,
   ];
 }
 

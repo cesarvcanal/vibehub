@@ -200,8 +200,11 @@ describe("GitHub token per card (pure)", () => {
     const { token } = await fresh();
     const lines = token.writeGhTokenLines("id-1", GH).join("\n");
     expect(lines).toContain("umask 077");
-    expect(lines).toContain(`printf '%s' '${GH}' > '/root/.vibehub/gh/id-1.token'`);
-    expect(lines).toContain("chmod 600 '/root/.vibehub/gh/id-1.token'");
+    expect(lines).toContain(`printf '%s' '${GH}' > "$T"`);
+    expect(lines).toContain(`chmod 600 "$T"`);
+    // Temp file + rename: a gh or a git push reading the file mid-write would find it EMPTY, and
+    // the gh wrapper falls back to the runner's own login (the org) on an empty file.
+    expect(lines).toContain(`mv -f "$T" '/root/.vibehub/gh/id-1.token'`);
     expect(lines.indexOf("mkdir -p '/root/.vibehub/gh'")).toBeLessThan(lines.indexOf("printf"));
   });
 

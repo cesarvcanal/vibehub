@@ -86,16 +86,9 @@ export const TASKS_MAX = 200;
  * primeiro um turno SÓ DELE — a notificação de que a tarefa morreu — e o fecha com um `result`
  * vazio; às vezes a continuação injetada some junto e nunca vira turno (produção, 2026-10-20, card
  * 4f4b: 16 min parado com "Retomando a sessão…" como última linha). Depois de um `result` sem nada
- * do agente, a retomada espera este tempo por um sinal de vida e reenvia a continuação.
+ * do agente, a retomada espera este tempo por um sinal de vida antes de reenviar a ordem.
  */
 export const RESUME_CONFIRM_MS = 20_000;
-
-/** Reenvios da continuação, no máximo, antes de desistir com uma linha no chat. */
-export const RESUME_RETRIES_MAX = 2;
-
-export const NOTE_RESUME_NOT_TAKEN =
-  "A retomada automática não pegou: o Claude não respondeu à continuação depois do reinício. " +
-  "Mande uma mensagem para continuar.";
 
 export interface DriverSession {
   cardId: string;
@@ -163,11 +156,17 @@ export interface DriverSession {
    */
   resumeAwaitingProgress?: InflightMarker;
   /**
-   * A continuação dessa retomada, para o reenvio (ver RESUME_CONFIRM_MS). Vive junto com
-   * `resumeAwaitingProgress`: sai no primeiro texto ou ferramenta, numa mensagem de pessoa, ao desistir.
+   * Background tasks that FINISHED and whose completion notice the CLI has not delivered yet — it
+   * opens a turn for it when the model is free. Until then the notice is work a deploy would erase.
    */
-  resumeWatch?: { text: string; origin: MessageOrigin; retries: number; timer?: NodeJS.Timeout };
-  /** Contador de sinais de vida do agente principal (delta, raciocínio, ferramenta) — o watchdog compara. */
+  pendingNotices: string[];
+  /**
+   * O vigia dessa retomada (ver RESUME_CONFIRM_MS). Vive junto com `resumeAwaitingProgress`: sai no
+   * primeiro texto ou ferramenta, numa mensagem de pessoa, ou ao desistir. `reengaged` = a ordem já
+   * foi reenviada uma vez — a próxima falta vira nota, nunca um terceiro envio.
+   */
+  resumeWatch?: { reengaged: boolean; timer?: NodeJS.Timeout };
+  /** Contador de sinais de vida do agente principal (delta, raciocínio, ferramenta) — o vigia compara. */
   agentSignals: number;
   /** O marcador de trabalho em voo que este manager gravou por último (null/ausente = nenhum). */
   marker?: InflightMarker;
@@ -586,6 +585,11 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
         })
       : [];
     event = { type: "background_tasks", tasks };
+    // A task that LEFT the list finished: its notice reaches the model only on a later turn.
+    const still = new Set(tasks.map((t) => t.id));
+    for (const gone of session.backgroundTasks) {
+      if (!still.has(gone.id)) session.pendingNotices.push(gone.description || gone.type || "tarefa em segundo plano");
+    }
     const hadTasks = session.backgroundTasks.length > 0;
     if (tasks.length === 0) session.backgroundSince = undefined;
     else if (!hadTasks) session.backgroundSince = Date.now();
@@ -861,6 +865,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     autonomousTurn: false,
     agentSignals: 0,
     backgroundTasks: [],
+    pendingNotices: [],
     tasks: new Map(),
     rateLimits: new Map(),
     rewinds: [],
@@ -1308,13 +1313,15 @@ export function injectSystemTurn(session: DriverSession, text: string, origin: M
   const marker: InflightMarker = { startedAt: Date.now(), preview: inflightPreview(text), attempts };
   endResumeWatch(session);
   session.resumeAwaitingProgress = marker;
-  session.resumeWatch = { text, origin, retries: 0 };
+  session.resumeWatch = { reengaged: false };
   putMarker(session, marker);
 }
 
 /** A PERSON's turn entered the driver: a fresh in-flight marker, and the resume chain starts over. */
 function markPersonTurn(session: DriverSession, marker: InflightMarker): void {
   endResumeWatch(session);
+  // A new turn starts: the CLI folds any pending notice into it.
+  session.pendingNotices = [];
   putMarker(session, marker);
 }
 
@@ -1341,8 +1348,10 @@ function armResumeWatch(session: DriverSession): void {
 
 /**
  * O prazo venceu: houve sinal de vida (ou um turno abriu) desde então — espera mais; nada — a
- * continuação se perdeu no CLI e vai de novo, até RESUME_RETRIES_MAX. Esgotado, uma linha no chat:
- * o card nunca fica parado calado.
+ * continuação se perdeu no CLI e a ordem vai de novo, UMA vez, em palavras que não passam por aviso
+ * automático (RESUME_REENGAGE_TEXT). Na segunda falta, uma linha no chat: o card nunca fica parado
+ * calado, e nunca vira loop. Disparar já no `result` mandava a ordem em dobro: no CLI real o
+ * `result` vazio do arranque chega segundos ANTES do turno de verdade (E2E, 2026-10-20).
  */
 function checkResumeWatch(session: DriverSession, signalsAtArm: number): void {
   const watch = session.resumeWatch;
@@ -1350,24 +1359,18 @@ function checkResumeWatch(session: DriverSession, signalsAtArm: number): void {
   watch.timer = undefined;
   if (isTurnInFlight(session)) return; // o result desse turno rearma
   if (session.agentSignals !== signalsAtArm) { armResumeWatch(session); return; }
-  if (watch.retries < RESUME_RETRIES_MAX && canAcceptTurn(session) && writeToDriver(session, { type: "user", text: watch.text })) {
-    watch.retries += 1;
-    recordInjectedTurn(session, watch.text, watch.origin);
+  if (!watch.reengaged && canAcceptTurn(session) && writeToDriver(session, { type: "user", text: RESUME_REENGAGE_TEXT })) {
+    watch.reengaged = true;
+    recordInjectedTurn(session, RESUME_REENGAGE_TEXT, { kind: "system", name: "vibehub" });
     syncInflightMarker(session);
-    logger.warn(
-      { audit: true, action: "sdk.resume.retry", card: session.label, retry: watch.retries },
-      "the automatic resume closed with nothing from the agent — continuation sent again",
-    );
+    logger.info({ audit: true, action: "sdk.resume.reengage", card: session.label }, "the resumed turn closed without progress — sending the order again");
     return;
   }
   endResumeWatch(session);
-  emitSystemNote(session, NOTE_RESUME_NOT_TAKEN);
+  emitSystemNote(session, NOTE_RESUME_STALLED);
   syncInflightMarker(session);
   maybeScheduleIdleStop(session);
-  logger.warn(
-    { audit: true, action: "sdk.resume.not_taken", card: session.label, retries: watch.retries },
-    "the automatic resume never took — the card says so and waits for a person",
-  );
+  logger.warn({ audit: true, action: "sdk.resume.stalled", card: session.label }, "the resumed turn did not continue, twice — noted");
 }
 
 type CrashListener = (cardId: string, marker: InflightMarker) => void;
@@ -1382,6 +1385,23 @@ export function onDriverCrashWithWork(listener: CrashListener): () => void {
   return () => { crashListeners.delete(listener); };
 }
 
+/**
+ * A segunda chance de uma retomada que fechou SEM AVANÇAR. Produção, 2026-10-20: depois de um
+ * deploy, o turno injetado voltou só com o filler do harness ("No response requested." — que o
+ * manager esconde), e o card ficou parado até alguém escrever. Junto com os avisos de tarefa que o
+ * CLI anexa ("NOT USER INPUT"), a continuação lia como mais um aviso automático. Este texto diz o
+ * contrário com todas as letras.
+ */
+export const RESUME_REENGAGE_TEXT =
+  "O painel retomou este card depois de um reinício e a sua última resposta não continuou o trabalho. " +
+  "Isto NÃO é uma notificação automática: é a ordem de continuar. Confira o estado atual (git status, " +
+  "testes, PRs, o que estava rodando) e siga a tarefa em andamento até o fim.";
+
+/** O reengate também não avançou: nada de terceiro envio — a pessoa fica sabendo. */
+export const NOTE_RESUME_STALLED =
+  "A retomada automática depois do reinício do painel não fez o agente continuar. " +
+  "Mande uma mensagem para ele seguir de onde parou.";
+
 /** O que o marcador diz de um turno que o próprio CLI abriu — ninguém escreveu nada. */
 export const AUTONOMOUS_TURN_PREVIEW = "(turno aberto pelo próprio Claude: retorno de tarefa em segundo plano ou agendada)";
 
@@ -1391,6 +1411,7 @@ export const AUTONOMOUS_TURN_PREVIEW = "(turno aberto pelo próprio Claude: reto
  */
 function backgroundWork(session: DriverSession): string[] {
   const tasks = session.backgroundTasks.map((t) => t.description || t.type || "tarefa em segundo plano");
+  for (const notice of session.pendingNotices) tasks.push(`aviso de término ainda não entregue: ${notice}`);
   if (session.pendingWakeup !== undefined) tasks.push(`retorno agendado (ScheduleWakeup): ${session.pendingWakeup}`);
   return tasks;
 }
@@ -1446,6 +1467,8 @@ function noteAgentWork(session: DriverSession, event: DriverEvent): void {
   let changed = false;
   if (session.activeTurns === 0 && !session.autonomousTurn) {
     session.autonomousTurn = true;
+    // The turn the CLI opens on its own is where the finished tasks' notices are delivered.
+    session.pendingNotices = [];
     // O retorno agendado que estava pendente é, quase sempre, o que acabou de abrir este turno.
     session.pendingWakeup = undefined;
     changed = true;
