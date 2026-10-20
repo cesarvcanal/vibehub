@@ -98,20 +98,63 @@ export function isSdkDriverProcess(args: string): boolean {
 }
 
 /**
- * The processes a sweep is allowed to kill: ORPHANED (ppid 1 — reparented, nothing owns them),
- * OLD ENOUGH (>= minAgeS) and RECOGNISED (a claude process or a transcript watcher). Everything
- * else — tmux, panes, live claudes under tmux, live watchers under their docker exec, the SDK
- * driver (see isSdkDriverProcess), PID 1 itself — never qualifies. PURE/testable.
+ * Age past which a TEST or TYPECHECK run is dead, whoever its parent is. Nothing legitimate in the
+ * runner runs one that long: the gate has a 10-minute deadline, an agent's command a few minutes.
+ * What does get that old is the run its caller abandoned — a gate whose client timed out, a suite an
+ * agent backgrounded and forgot — and an abandoned suite keeps its whole worker pool on the CPUs
+ * (2026-10-20: 15-28 min orphans under every slow delivery, load 50-100). The parent check does not
+ * help here: a process started by `docker exec` has ppid 0 alive or abandoned.
+ */
+export const REAP_TEST_RUN_AGE_S = 2 * 3600;
+
+/**
+ * Age past which an ORPHANED stray Chromium is collected. Generous on purpose: it is how an agent
+ * tests a UI by hand (`chrome --headless --remote-debugging-port …`), and it is fine for a
+ * working day — not for the 21 hours of constant CPU one of them was found at.
+ */
+export const REAP_STRAY_BROWSER_AGE_S = 6 * 3600;
+
+/** Where the card browsers live (the feature): their Chromiums are never this reaper's business. */
+export const CARD_BROWSER_DIR = "/work/.browser/";
+
+/**
+ * A test runner or typechecker: vitest (main process and its `node (vitest N)` workers), jest, tsc,
+ * or `npm test` / `npm run test`. A `tsc --watch` is spared: it can be part of a preview's dev
+ * server, which legitimately runs all day. Matched on words, so a path or argument that merely
+ * contains the letters does not. PURE.
+ */
+export function isTestRunProcess(args: string): boolean {
+  return (
+    /(^|[\s/(])vitest(\s|\)|$)/.test(args) ||
+    /(^|[\s/])jest(\s|$)/.test(args) ||
+    (/(^|[\s/])tsc(\s|$)/.test(args) && !/\s(--watch|-w)(\s|$)/.test(args)) ||
+    /(^|\s)npm (run )?test(\s|$)/.test(args)
+  );
+}
+
+/** A Chromium main process outside the card browsers' directory (a stray, hand-started one). PURE. */
+export function isStrayBrowserProcess(args: string): boolean {
+  if (!/(^|\/)(chrome|chromium)(\s|$)/.test(args)) return false;
+  if (/\s--type=/.test(args)) return false; // a renderer/gpu/zygote dies with its main process
+  return !args.includes(`--user-data-dir=${CARD_BROWSER_DIR}`);
+}
+
+/**
+ * The processes a sweep is allowed to kill. Three families, each with its own proof of death:
+ *  - claude and transcript watchers: ORPHANED (ppid 1 — reparented, nothing owns them) and older
+ *    than `minAgeS`. Live ones hang off a tmux pane or a live docker exec.
+ *  - test and typecheck runs: older than `REAP_TEST_RUN_AGE_S`, whatever the parent (see there).
+ *  - stray Chromiums: ORPHANED (ppid 0 or 1) and older than `REAP_STRAY_BROWSER_AGE_S`; the card
+ *    browsers under `CARD_BROWSER_DIR` never qualify.
+ * The SDK driver (see isSdkDriverProcess) and PID 1 never qualify. PURE/testable.
  */
 export function reapCandidates(procs: RunnerProc[], minAgeS: number = REAP_MIN_AGE_S): RunnerProc[] {
-  return procs.filter(
-    (p) =>
-      p.pid > 1 &&
-      p.ppid === 1 &&
-      p.etimes >= minAgeS &&
-      !isSdkDriverProcess(p.args) &&
-      (isClaudeProcess(p.args) || isTranscriptWatcher(p.args)),
-  );
+  return procs.filter((p) => {
+    if (p.pid <= 1 || isSdkDriverProcess(p.args)) return false;
+    if (p.ppid === 1 && p.etimes >= minAgeS && (isClaudeProcess(p.args) || isTranscriptWatcher(p.args))) return true;
+    if (p.etimes >= REAP_TEST_RUN_AGE_S && isTestRunProcess(p.args)) return true;
+    return p.ppid <= 1 && p.etimes >= REAP_STRAY_BROWSER_AGE_S && isStrayBrowserProcess(p.args);
+  });
 }
 
 /** Script that SIGKILLs the given pids inside the runner. Pids are validated integers. PURE. */
@@ -172,7 +215,7 @@ export async function reapRunnerProcesses(minAgeS: number = REAP_MIN_AGE_S): Pro
           processes: procs.length,
           victims: victims.map((v) => ({ pid: v.pid, ageS: v.etimes, args: v.args.slice(0, 160) })),
         },
-        "runner reaper killed orphaned processes (claude/transcript watchers with ppid 1, older than the floor)",
+        "runner reaper killed leaked processes (orphaned claude/watchers, abandoned test runs, stray browsers)",
       );
     } catch (e) {
       logger.warn({ detail: (e as Error).message, victims: victims.length }, "runner reaper failed to kill (will retry next sweep)");

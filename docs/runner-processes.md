@@ -24,7 +24,10 @@ abaixo existem pra essa classe de vazamento nunca voltar.
 
 3. **Reaper periódico** (`back/src/services/reaper/reaper.ts`): a cada 10 minutos o back lista os
    processos do runner e mata órfãos (ppid 1) com mais de 1h que sejam `claude` ou watcher de
-   transcript. Loga o que matou; runner fora do ar = só warn. A última contagem fica exposta no
+   transcript. Desde 2026-10-20 também coleta, sem olhar o pai (processo de `docker exec` tem
+   ppid 0 vivo ou abandonado): execuções de teste/typecheck (vitest, jest, tsc fora de watch,
+   `npm test`) com mais de 2h, e Chromium órfão com mais de 6h fora de `/work/.browser/` (os
+   navegadores dos cards nunca entram). Loga o que matou; runner fora do ar = só warn. A última contagem fica exposta no
    `GET /api/runner` (campo `processes`) — contagem subindo entre sweeps é sinal de vazamento novo.
 
 4. **Prazo dentro do container** (`back/src/runtime/host.ts`, `containerScriptCommand`): o timeout

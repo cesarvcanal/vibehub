@@ -182,4 +182,35 @@ describe("startRunnerReaper", () => {
       vi.useRealTimers();
     }
   });
+
+  it("abandoned test and typecheck runs die past REAP_TEST_RUN_AGE_S, whatever the parent", () => {
+    const proc = (pid: number, ppid: number, etimes: number, args: string) => ({ pid, ppid, etimes, args });
+    const old = reaper.REAP_TEST_RUN_AGE_S;
+    const procs = [
+      proc(300, 0, old, "npm test"), // a gate whose client gave up (docker exec: ppid 0) — DIES
+      proc(301, 300, old, "node (vitest)"), // its main vitest — DIES
+      proc(302, 301, old, "node (vitest 1)"), // a worker — DIES
+      proc(303, 77, old, "node /work/x/back/node_modules/.bin/tsc -b"), // forgotten typecheck — DIES
+      proc(304, 77, old - 1, "node (vitest)"), // younger than the floor — spared
+      proc(305, 77, old * 5, "node /work/x/node_modules/.bin/tsc --watch"), // a preview's watcher — spared
+      proc(306, 77, old * 5, "node /work/x/node_modules/.bin/vite --port 5173"), // a dev server — spared
+      proc(307, 77, old * 5, "node /work/x/scripts/latest-vitest-report.js"), // only the letters — spared
+    ];
+    expect(reaper.reapCandidates(procs).map((p) => p.pid)).toEqual([300, 301, 302, 303]);
+  });
+
+  it("an orphaned stray Chromium dies past REAP_STRAY_BROWSER_AGE_S; card browsers never do", () => {
+    const proc = (pid: number, ppid: number, etimes: number, args: string) => ({ pid, ppid, etimes, args });
+    const old = reaper.REAP_STRAY_BROWSER_AGE_S;
+    const bin = "/root/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome";
+    const procs = [
+      proc(400, 1, old, `${bin} --no-sandbox --headless=new --remote-debugging-port=9722 --user-data-dir=/tmp/vh-chr`), // DIES
+      proc(401, 400, old, `${bin} --type=renderer --user-data-dir=/tmp/vh-chr`), // goes with its main — not listed
+      proc(402, 0, old * 4, `${bin} --no-sandbox --user-data-dir=/work/.browser/card-8c417f8e`), // a card browser — spared
+      proc(403, 0, old * 4, `flock -n /tmp/vibehub-browser-207.lock env DISPLAY=:207 ${bin} --user-data-dir=/work/.browser/card-1`), // spared
+      proc(404, 1, old - 1, `${bin} --headless=new --user-data-dir=/tmp/x`), // too young — spared
+      proc(405, 999, old * 4, `${bin} --headless --user-data-dir=/tmp/playwright-mcp`), // owned by a live MCP — spared
+    ];
+    expect(reaper.reapCandidates(procs).map((p) => p.pid)).toEqual([400]);
+  });
 });
