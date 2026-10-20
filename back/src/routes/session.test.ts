@@ -495,6 +495,31 @@ describe("terminal websocket setup", () => {
     await closed(ws);
   });
 
+  /**
+   * A finished card hides its open events (services/events/cardEvents.ts); typing into it starts a
+   * new turn. Without clearing them there, the old "it finished" would resurface in the person's
+   * inbox the moment the card left `done` — announcing as news what they already dealt with.
+   */
+  it("reviving a finished card by typing clears the events it had open", async () => {
+    const term = fakeTerm();
+    ptySpawn.mockReturnValueOnce(term);
+    const id = await makeCard();
+    const events = await import("../services/events/cardEvents.js");
+    const users = await import("../auth/users.js");
+    const owner = (await users.listUsers()).find((u) => u.username === "owner")!;
+    await events.recordCardEvent({ id: "turn:old", cardId: id, kind: "turn_finished" });
+    await app.inject({ method: "PATCH", url: `/api/cards/${id}`, headers: { cookie }, payload: { column: "done" } });
+    expect((await events.inboxFor(owner)).events).toEqual([]); // hidden while done
+    const ws = await connect(`/api/cards/${id}/terminal`);
+    await vi.waitFor(() => expect(ptySpawn).toHaveBeenCalled());
+    ws.send("x");
+    await vi.waitFor(() => expect(appliedStatus).toHaveBeenCalledWith(id, "working"));
+    await settle();
+    expect((await events.inboxFor(owner)).events).toEqual([]);
+    ws.close();
+    await closed(ws);
+  });
+
   it("a board write that fails behind a keystroke never becomes an unhandled rejection", async () => {
     const { resetHumanStampThrottleForTesting } = await import("./session.js");
     resetHumanStampThrottleForTesting();

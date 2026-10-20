@@ -412,6 +412,12 @@ export interface Card {
    */
   doneAt?: number;
   /**
+   * When the card last ENTERED `done` or `paused` (epoch ms) — the moment it was parked. Kept when it
+   * leaves: whatever a person was to hear about it before that is over (services/events/cardEvents.ts
+   * hides it), whichever path brings the card back.
+   */
+  parkedAt?: number;
+  /**
    * The card's BROWSER SLOT (0..SLOT_SPACE-1): its display, VNC port and CDP port are this offset
    * from their bases. Allocated by {@link assignBrowserSlots} — never two cards on the same slot —
    * and stored, because deriving it from the id collided (see services/browser/ports.ts). Absent
@@ -1011,6 +1017,8 @@ function placeCard(cards: Card[], card: Card, column: BoardColumn, position?: nu
   } else if (card.doneAt !== undefined) {
     card.doneAt = undefined;
   }
+  const parked = (c: BoardColumn) => c === "done" || c === "paused";
+  if (parked(column) && !parked(from)) card.parkedAt = Date.now();
   card.column = column;
   const dest = cards
     .filter((c) => c.projectId === card.projectId && c.column === column && c.id !== card.id)

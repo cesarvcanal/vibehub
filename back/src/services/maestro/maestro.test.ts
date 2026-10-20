@@ -316,6 +316,19 @@ describe("reportState (declared state)", () => {
     const [row] = await maestro.listTerminals();
     expect(row).toMatchObject({ declaredState: "needs_me", declaredSummary: "which currency?", humanActive: false });
   });
+
+  it("a card that declares it needs the user lands in the card-event inbox", async () => {
+    const { maestro, registry } = await load();
+    const users = await import("../../auth/users.js");
+    const events = await import("../events/cardEvents.js");
+    const owner = users.publicUser(await users.createUser("cesar", "senha-forte-123", "owner"));
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "worker" });
+    await maestro.reportState(c.id, "needs_me", "which currency?");
+    await vi.waitFor(async () => expect((await events.inboxFor(owner)).events).toEqual([
+      expect.objectContaining({ kind: "needs_me", cardId: c.id, state: "needs_me", summary: "which currency?" }),
+    ]));
+  });
 });
 
 describe("message provenance on send", () => {

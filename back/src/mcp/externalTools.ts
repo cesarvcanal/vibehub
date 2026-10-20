@@ -10,6 +10,7 @@ import {
 } from "../services/maestro/maestro.js";
 import { readCardChanges } from "../services/maestro/changes.js";
 import { deliver } from "../services/maestro/deliver.js";
+import { inboxFor, markDelivered, takeUndelivered, type CardEvent } from "../services/events/cardEvents.js";
 import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX, type CardMoveOutcome } from "./cardMove.js";
 import { logger } from "../utils/logger.js";
 
@@ -84,8 +85,57 @@ async function openForUser(user: PublicUser, card: registry.Card) {
   };
 }
 
+/**
+ * A moment in the SERVER's zone with its offset ("2026-10-20T18:05:00-03:00"): the assistant reads
+ * times aloud, and a bare UTC "Z" is heard as local and comes out hours off.
+ */
+export function localIso(ms: number): string {
+  const d = new Date(ms);
+  const off = -d.getTimezoneOffset();
+  const pad = (n: number) => String(Math.trunc(Math.abs(n))).padStart(2, "0");
+  const local = new Date(ms + off * 60_000).toISOString().slice(0, 19);
+  return `${local}${off >= 0 ? "+" : "-"}${pad(off / 60)}:${pad(off % 60)}`;
+}
+
+/** A card event as the assistant gets it: the card by title (what is spoken), the time readable. */
+function forAssistant(e: CardEvent) {
+  // Absent fields are undefined, and JSON leaves them out.
+  return {
+    cardId: e.cardId, card: e.title, kind: e.kind, at: localIso(e.at),
+    questions: e.questions, tool: e.tool, reason: e.reason, state: e.state, summary: e.summary,
+  };
+}
+
+type ToolResult = ReturnType<typeof ok>;
+
+/**
+ * What happened on the board since this person last heard, as one more block of the answer. An MCP
+ * server cannot start a turn of the app, so this is how the news reaches the conversation: on the
+ * next tool call, whichever it is, once. A failure to read the log never costs the answer itself.
+ */
+async function withNews(user: PublicUser, result: ToolResult): Promise<ToolResult> {
+  let fresh: CardEvent[];
+  try {
+    fresh = await takeUndelivered(user);
+  } catch (err) {
+    logger.warn({ by: user.username, detail: (err as Error).message }, "could not read the card events for the external MCP");
+    return result;
+  }
+  if (fresh.length === 0) return result;
+  const news = ok({
+    notifications: fresh.map(forAssistant),
+    hint: "new on the board since the user last heard — tell them briefly before anything else",
+  });
+  return { ...result, content: [...result.content, ...news.content] };
+}
+
 export function registerExternalTools(server: McpServer, user: PublicUser): void {
-  server.registerTool(
+  // Every tool answer carries the news (see withNews) — except the inbox, which IS the news and
+  // registers on `server` directly. The casts only bridge the SDK's overloads; config passes as is.
+  const registerTool = ((name: string, config: unknown, cb: (...args: unknown[]) => Promise<ToolResult>) =>
+    server.registerTool(name, config as never, (async (...args: unknown[]) => await withNews(user, await cb(...args))) as never)) as McpServer["registerTool"];
+
+  registerTool(
     "vibehub_list_projects",
     {
       description:
@@ -108,7 +158,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
   );
 
-  server.registerTool(
+  registerTool(
     "vibehub_list_terminals",
     {
       description:
@@ -138,7 +188,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
   );
 
-  server.registerTool(
+  registerTool(
     "vibehub_create_card",
     {
       description:
@@ -170,7 +220,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
   );
 
-  server.registerTool(
+  registerTool(
     "vibehub_open_card",
     {
       description:
@@ -190,7 +240,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
   );
 
-  server.registerTool(
+  registerTool(
     "vibehub_send_to_terminal",
     {
       description:
@@ -226,7 +276,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
   );
 
-  server.registerTool(
+  registerTool(
     "vibehub_read_terminal",
     {
       description:
@@ -249,7 +299,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
   );
 
-  server.registerTool(
+  registerTool(
     "vibehub_wait_for_card",
     {
       description:
@@ -281,7 +331,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
   );
 
-  server.registerTool(
+  registerTool(
     "vibehub_card_activity",
     {
       description:
@@ -307,7 +357,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
   );
 
-  server.registerTool(
+  registerTool(
     "vibehub_card_changes",
     {
       description:
@@ -330,7 +380,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
   );
 
-  server.registerTool(
+  registerTool(
     "vibehub_move_cards",
     {
       description:
@@ -365,7 +415,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
   );
 
-  server.registerTool(
+  registerTool(
     "vibehub_deliver",
     {
       description:
@@ -387,6 +437,34 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         // Ordering the delivery IS an order: the push, the PR and the merge go out as this person.
         await recordCardActor(user, a.cardId);
         return ok(await deliver(a.cardId, { branch: a.branch, authorized: a.authorized === true, by: user.id }));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+  server.registerTool(
+    "vibehub_inbox",
+    {
+      description:
+        "What happened on the board that the user has not dealt with yet: cards that FINISHED a turn, " +
+        "asked a QUESTION (with its options), wait for a PERMISSION on the board, or declared they " +
+        "NEED the user. A turn_finished only says the card stopped — read it (vibehub_read_terminal): " +
+        "a terminal card waiting on a menu question stops the same way. Only open events — an answered question or a card that moved on leaves the " +
+        "list. Check it when the user asks for news or resumes the conversation. Other tool answers " +
+        "also carry new events once, as `notifications`. `since` (a previous `cursor`) returns only newer ones.",
+      inputSchema: {
+        since: z.number().int().optional().describe("a previous answer's `cursor`; only events after it"),
+      },
+      annotations: READ_ONLY,
+    },
+    async (a) => {
+      try {
+        const inbox = await inboxFor(user, { since: a.since });
+        // Listed here = heard: the next answers do not repeat it (only what was listed — an event
+        // landing meanwhile still rides on the next answer).
+        const last = inbox.events[inbox.events.length - 1];
+        if (last) await markDelivered(user, last.seq);
+        return ok({ events: inbox.events.map(forAssistant), cursor: inbox.cursor });
       } catch (e) {
         return fail(e);
       }
