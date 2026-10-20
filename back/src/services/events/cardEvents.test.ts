@@ -337,3 +337,95 @@ describe("observers — where the moments come from", () => {
     expect((await env.events.inboxFor(env.owner)).events[0]).toMatchObject({ kind: "needs_me", state: "blocked", summary: "sem acesso ao repo" });
   });
 });
+
+describe("the push feed — what sinks (MCP Events stream, webhooks) are fed from", () => {
+  it("a recorded event reaches every listener once, with the card's project; a duplicate reaches nobody", async () => {
+    const env = await load();
+    const heard: unknown[] = [];
+    const off = env.events.onCardEvent((e) => heard.push(e));
+    await env.events.recordCardEvent({ id: "question:q1", cardId: env.card.id, kind: "question", refId: "q1" });
+    await env.events.recordCardEvent({ id: "question:q1", cardId: env.card.id, kind: "question", refId: "q1" });
+    off();
+    await env.events.recordCardEvent({ id: "question:q2", cardId: env.card.id, kind: "question", refId: "q2" });
+    expect(heard).toEqual([expect.objectContaining({ id: "question:q1", projectId: env.project.id, seq: 1 })]);
+  });
+
+  it("a listener that throws costs nobody else the event", async () => {
+    const env = await load();
+    const heard: string[] = [];
+    env.events.onCardEvent(() => { throw new Error("sink down"); });
+    env.events.onCardEvent((e) => heard.push(e.id));
+    await env.events.recordCardEvent({ id: "question:q1", cardId: env.card.id, kind: "question", refId: "q1" });
+    expect(heard).toEqual(["question:q1"]);
+  });
+
+  it("a turn that ends in error is a failed, open until the next turn", async () => {
+    const env = await load();
+    await env.events.observeDriverEvent(env.card.id, { type: "result", isError: true, subtype: "error_max_turns", result: "limite" });
+    await env.events.observeDriverEvent(env.card.id, { type: "result", isError: false, subtype: "success" });
+    const inbox = await env.events.inboxFor(env.owner);
+    expect(inbox.events).toEqual([expect.objectContaining({ kind: "failed", reason: "error_max_turns: limite" })]);
+    await env.events.observeCardStatus(env.card.id, "waiting", "working");
+    expect((await env.events.inboxFor(env.owner)).events).toEqual([]);
+  });
+
+  it("a card concluded is announced as concluded (already resolved: there is nothing left to answer)", async () => {
+    const env = await load();
+    const heard: string[] = [];
+    env.events.onCardEvent((e) => heard.push(e.kind));
+    await env.events.observeCardConcluded(env.card.id);
+    await env.events.observeCardConcluded(env.card.id); // the same conclusion reported twice
+    expect(heard).toEqual(["concluded"]);
+    const { events } = await env.events.eventsAfter(0);
+    expect(events[0]).toMatchObject({ kind: "concluded", resolvedAt: expect.any(Number) });
+  });
+
+  it("moving a card to done, by any path, announces its conclusion", async () => {
+    const env = await load();
+    await env.registry.updateCard(env.card.id, { column: "done" });
+    await vi.waitFor(async () => {
+      expect((await env.events.eventsAfter(0)).events).toEqual([expect.objectContaining({ kind: "concluded", cardId: env.card.id })]);
+    });
+    await env.events.resolveCardEvents(env.card.id); // queued behind the record: its write is done
+  });
+
+  it("eventsAfter replays the log past a cursor and says when the cursor fell out of retention", async () => {
+    const env = await load();
+    for (const id of ["a", "b", "c"]) {
+      await env.events.recordCardEvent({ id: `question:${id}`, cardId: env.card.id, kind: "question", refId: id });
+    }
+    const after1 = await env.events.eventsAfter(1);
+    expect(after1).toMatchObject({ head: 3, truncated: false });
+    expect(after1.events.map((e) => e.refId)).toEqual(["b", "c"]);
+    expect((await env.events.eventsAfter(3)).events).toEqual([]);
+  });
+
+  it("a cursor older than what retention already dropped replays what is left, flagged truncated", async () => {
+    const env = await load();
+    await env.events.recordCardEvent({ id: "question:a", cardId: env.card.id, kind: "question", refId: "a" });
+    await env.events.resolveCardEvents(env.card.id, { refId: "a" });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.now() + env.events.RESOLVED_RETENTION_MS + 1000);
+      await env.events.recordCardEvent({ id: "question:b", cardId: env.card.id, kind: "question", refId: "b" });
+    } finally {
+      vi.useRealTimers();
+    }
+    const replay = await env.events.eventsAfter(0);
+    expect(replay).toMatchObject({ head: 2, truncated: true });
+    expect(replay.events.map((e) => e.refId)).toEqual(["b"]);
+    expect((await env.events.eventsAfter(1)).truncated).toBe(false);
+  });
+
+  it("canHear: the board (a card's token) hears everything; a person, what they may see and nobody else works", async () => {
+    const env = await load();
+    const event = await env.events.recordCardEvent({ id: "question:q1", cardId: env.card.id, kind: "question", refId: "q1" });
+    expect(await env.events.canHear(null, event!)).toBe(true);
+    expect(await env.events.canHear(env.owner, event!)).toBe(true);
+    expect(await env.events.canHear(env.member, event!)).toBe(false);
+    await env.registry.shareWith({ kind: "card", targetId: env.card.id, userId: env.member.id, level: "view" });
+    expect(await env.events.canHear(env.member, event!)).toBe(true);
+    await env.registry.stampCardActor(env.card.id, env.owner.id);
+    expect(await env.events.canHear(env.member, event!)).toBe(false);
+  });
+});

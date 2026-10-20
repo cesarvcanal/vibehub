@@ -3,7 +3,7 @@ import { JsonStore } from "../../store/jsonStore.js";
 import { dataPath } from "../../config/env.js";
 import { visibleCards } from "../../auth/access.js";
 import type { PublicUser } from "../../auth/users.js";
-import { getCard, listAllCards, type Card, type CardStatus, type DeclaredState } from "../board/registry.js";
+import { getCard, listAllCards, onCardConcluded, type Card, type CardStatus, type DeclaredState } from "../board/registry.js";
 import type { DriverEvent, UserQuestionItem } from "../sdk/protocol.js";
 import { logger } from "../../utils/logger.js";
 
@@ -14,8 +14,9 @@ import { logger } from "../../utils/logger.js";
  * The board shows all of that on screen; an assistant driving the cards from outside (ChatGPT, often
  * by voice) only learns it when a tool answers. So the moments are recorded here, once each, on disk,
  * and read back per person — the inbox (`inboxFor`) and the "what is new since you last heard"
- * handover (`takeUndelivered`). Nothing here PUSHES: an MCP server cannot start a turn of the app on
- * the other end. Sinks that do (webhooks, notifications) read from this same log.
+ * handover (`takeUndelivered`). Nothing here PUSHES by itself: an MCP server cannot start a turn of
+ * an app that is not connected. The sinks that do push (mcp/events.ts — a live MCP Events stream, a
+ * signed webhook) hear each new event through `onCardEvent` and replay the log with `eventsAfter`.
  *
  * Rules:
  *  - IDEMPOTENT by `id`: the caller derives it from the moment (the question's id, the permission's
@@ -27,13 +28,24 @@ import { logger } from "../../utils/logger.js";
  *    them; a concluded or paused card by nobody.
  */
 
-export type CardEventKind = "turn_finished" | "question" | "permission" | "needs_me";
+export type CardEventKind = "turn_finished" | "question" | "permission" | "needs_me" | "failed" | "concluded" | "message";
+
+/**
+ * What a MESSAGE is for. Only `question` and `approval` ask for an answer — set explicitly by the
+ * agent that sends it (vibehub_notify), never guessed from the text (a "?" in an info is not a question).
+ */
+export type MessageType = "info" | "question" | "approval" | "error" | "done";
+export const MESSAGE_TYPES: readonly MessageType[] = ["info", "question", "approval", "error", "done"];
+export type Severity = "info" | "warning" | "critical";
+export const SEVERITIES: readonly Severity[] = ["info", "warning", "critical"];
 
 export interface CardEvent {
   /** Monotonic position in the log — the cursor a reader passes back as `since`. */
   seq: number;
   id: string;
   cardId: string;
+  /** The card's project when it happened — what a subscription by project filters on. */
+  projectId: string;
   kind: CardEventKind;
   at: number;
   /** The card's title when it happened (what the person is told; ids are not for speaking). */
@@ -46,13 +58,26 @@ export interface CardEvent {
   /** needs_me: the declared state and its one-line summary (also on turn_finished, when declared). */
   state?: DeclaredState;
   summary?: string;
+  /** message: what it is for, how urgent, the readable text and what led to it. */
+  messageType?: MessageType;
+  severity?: Severity;
+  text?: string;
+  context?: string;
+  /** message: the option label the sender recommends (one of `questions[0].options`). */
+  recommended?: string;
   resolvedAt?: number;
 }
 
-export type CardEventInput = Omit<CardEvent, "seq" | "at" | "title" | "resolvedAt"> & { at?: number };
+export type CardEventInput = Omit<CardEvent, "seq" | "at" | "title" | "projectId" | "resolvedAt"> & {
+  at?: number;
+  /** Recorded already resolved: news to push, nothing left open to answer (a conclusion). */
+  resolved?: boolean;
+};
 
 interface EventsDoc {
   seq: number;
+  /** The highest `seq` retention ever dropped: a replay from before it may have lost events. */
+  prunedSeq: number;
   events: CardEvent[];
   /** Per user id: the highest `seq` already handed to them by `takeUndelivered`. */
   delivered: Record<string, number>;
@@ -65,11 +90,12 @@ export const RESOLVED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 const store = new JsonStore<EventsDoc>(
   dataPath("card-events.json"),
-  () => ({ seq: 0, events: [], delivered: {} }),
+  () => ({ seq: 0, prunedSeq: 0, events: [], delivered: {} }),
   (raw) => {
     const doc = (raw ?? {}) as Partial<EventsDoc>;
     return {
       seq: typeof doc.seq === "number" ? doc.seq : 0,
+      prunedSeq: typeof doc.prunedSeq === "number" ? doc.prunedSeq : 0,
       events: Array.isArray(doc.events) ? doc.events : [],
       delivered: doc.delivered && typeof doc.delivered === "object" ? doc.delivered : {},
     };
@@ -86,11 +112,65 @@ export function pruneCardEvents(events: readonly CardEvent[], now: number): Card
   return pruned.slice(-MAX_EVENTS);
 }
 
+/* ------------------------------------------------------------------ the push feed */
+
+export type CardEventListener = (event: CardEvent) => void;
+const listeners = new Set<CardEventListener>();
+
+/**
+ * Hears every NEW event, once, right after it is on disk — so a sink that replays from the log
+ * (`eventsAfter`) and then listens never misses one in between. Returns the unsubscribe. A listener
+ * must not throw (one that does is logged and costs nobody else the event) and must not block: it
+ * runs inside the recording path.
+ */
+export function onCardEvent(listener: CardEventListener): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+/** How many listeners are attached — what proves a closed stream left nothing behind. */
+export function cardEventListenerCount(): number {
+  return listeners.size;
+}
+
+function emit(event: CardEvent): void {
+  for (const listener of listeners) {
+    try {
+      listener(event);
+    } catch (err) {
+      logger.warn({ card: event.cardId, detail: (err as Error).message }, "a card event listener failed");
+    }
+  }
+}
+
+/**
+ * The log past `cursor`, oldest first, resolved events included (a replay tells what HAPPENED).
+ * `head` = the newest `seq`; `truncated` = retention already dropped something after `cursor`.
+ */
+export async function eventsAfter(cursor: number): Promise<{ events: CardEvent[]; head: number; truncated: boolean }> {
+  const doc = await store.load();
+  return { events: doc.events.filter((e) => e.seq > cursor), head: doc.seq, truncated: cursor < doc.prunedSeq };
+}
+
+/**
+ * Whether `user` hears about `event` — `null` is the board itself (a card's service token, which
+ * reaches every card). The board's own rules (auth/access.ts), decided NOW, so a share taken away
+ * also takes away what was not delivered yet; a card someone is working is heard only by them.
+ */
+export async function canHear(user: PublicUser | null, event: CardEvent): Promise<boolean> {
+  if (!user) return true;
+  const card = await getCard(event.cardId);
+  if (!card || (card.actorUserId && card.actorUserId !== user.id)) return false;
+  return (await visibleCards(user, [card])).length > 0;
+}
+
+/* ------------------------------------------------------------------ recording */
+
 /** Records one moment. `null` = already recorded (same id) or the card does not exist. */
 export async function recordCardEvent(input: CardEventInput): Promise<CardEvent | null> {
   const card = await getCard(input.cardId);
   if (!card) return null;
-  return store.mutate((doc) => {
+  const event = await store.mutate((doc) => {
     if (doc.events.some((e) => e.id === input.id)) return null;
     const now = Date.now();
     const open = (kind: CardEventKind) => doc.events.filter((e) => e.cardId === input.cardId && e.kind === kind && !e.resolvedAt);
@@ -102,15 +182,22 @@ export async function recordCardEvent(input: CardEventInput): Promise<CardEvent 
       if (standing.some((e) => e.state === input.state && e.summary === input.summary)) return null;
       for (const e of standing) e.resolvedAt = now;
     }
-    const event: CardEvent = { ...input, seq: ++doc.seq, at: input.at ?? now, title: card.title };
-    doc.events = pruneCardEvents([...doc.events, event], now);
+    const { resolved, ...fields } = input;
+    const event: CardEvent = { ...fields, seq: ++doc.seq, at: input.at ?? now, title: card.title, projectId: card.projectId };
+    if (resolved) event.resolvedAt = now;
+    const kept = pruneCardEvents([...doc.events, event], now);
+    const keptIds = new Set(kept.map((e) => e.seq));
+    for (const e of doc.events) if (!keptIds.has(e.seq)) doc.prunedSeq = Math.max(doc.prunedSeq, e.seq);
+    doc.events = kept;
     return event;
   });
+  if (event) emit(event);
+  return event;
 }
 
-/** Resolves a card's open events — only those answering `refId` / of `kind` when given. Returns how many. */
-export async function resolveCardEvents(cardId: string, opts: { refId?: string; kind?: CardEventKind } = {}): Promise<number> {
-  const matches = (e: CardEvent) => e.cardId === cardId && !e.resolvedAt
+/** Resolves a card's open events — only the one with `id`, answering `refId` / of `kind` when given. Returns how many. */
+export async function resolveCardEvents(cardId: string, opts: { id?: string; refId?: string; kind?: CardEventKind } = {}): Promise<number> {
+  const matches = (e: CardEvent) => e.cardId === cardId && !e.resolvedAt && (opts.id === undefined || e.id === opts.id)
     && (opts.refId === undefined || e.refId === opts.refId) && (opts.kind === undefined || e.kind === opts.kind);
   return store.mutate((doc) => {
     const now = Date.now();
@@ -216,6 +303,13 @@ export function observeDriverEvent(cardId: string, event: DriverEvent): Promise<
       return inOrder(cardId, () => recordCardEvent({
         id: `permission:${event.id}`, cardId, kind: "permission", refId: event.id, tool: event.tool, reason: event.reason,
       }));
+    case "result":
+      // A turn that ENDED in error (the driver already tells an abort apart: it is not one).
+      if (!event.isError) return Promise.resolve();
+      return inOrder(cardId, () => recordCardEvent({
+        id: `failed:${randomUUID()}`, cardId, kind: "failed",
+        reason: [event.subtype, event.result?.slice(0, 300)].filter(Boolean).join(": ") || "error",
+      }));
     case "question_result":
     case "permission": {
       const refId = event.id; // a permission with no id was never asked: nothing to resolve
@@ -235,4 +329,70 @@ export function observeDeclaredState(cardId: string, state: DeclaredState, summa
     return inOrder(cardId, () => resolveCardEvents(cardId, { kind: "needs_me" }));
   }
   return inOrder(cardId, () => recordCardEvent({ id: `state:${randomUUID()}`, cardId, kind: "needs_me", state, summary }));
+}
+
+onCardConcluded((cardId) => void observeCardConcluded(cardId));
+
+/** A card entered `done`: announced once per conclusion (a card revived and concluded again is news). */
+export function observeCardConcluded(cardId: string): Promise<void> {
+  return inOrder(cardId, async () => {
+    const card = await getCard(cardId);
+    if (!card) return;
+    await recordCardEvent({ id: `concluded:${cardId}:${card.parkedAt ?? card.doneAt ?? 0}`, cardId, kind: "concluded", resolved: true });
+  });
+}
+
+/* ------------------------------------------------------------------ messages */
+
+export interface MessageInput {
+  cardId: string;
+  type: MessageType;
+  text: string;
+  severity?: Severity;
+  context?: string;
+  /** Required for `question` and `approval`: what exactly is being asked. */
+  question?: string;
+  options?: { label: string; description?: string }[];
+  recommended?: string;
+  /** Same key from the same card = the same message (a retried call is announced once). */
+  idempotencyKey?: string;
+}
+
+/**
+ * A message the card's agent sends on purpose — the semantic counterpart of the moments above. A
+ * question/approval stays OPEN until answered (`inReplyTo`) or the card moves on; anything else is
+ * news only, recorded resolved. Throws on a malformed one. Returns the event (the existing one when
+ * the idempotency key was seen).
+ */
+export async function recordMessage(input: MessageInput): Promise<CardEvent> {
+  const asks = input.type === "question" || input.type === "approval";
+  const question = input.question?.trim();
+  if (asks && !question) throw new Error(`a ${input.type} needs the question itself (\`question\`)`);
+  if (input.type === "question" && (input.options?.length ?? 0) < 2) throw new Error("a question needs at least two options");
+  const labels = (input.options ?? []).map((o) => o.label);
+  if (input.recommended !== undefined && !labels.includes(input.recommended)) {
+    throw new Error(`recommended must be one of the options (${labels.join(", ") || "none given"})`);
+  }
+  const id = input.idempotencyKey ? `message:${input.cardId}:${input.idempotencyKey}` : `message:${randomUUID()}`;
+  const recorded = await recordCardEvent({
+    id, cardId: input.cardId, kind: "message", resolved: !asks,
+    messageType: input.type, severity: input.severity ?? (asks ? "warning" : "info"), text: input.text,
+    context: input.context, recommended: input.recommended,
+    questions: question ? [{ question, options: input.options ?? [] }] : undefined,
+  });
+  const event = recorded ?? (await store.load()).events.find((e) => e.id === id);
+  if (!event) throw new Error("card not found");
+  return event;
+}
+
+/** The kinds an `inReplyTo` may answer: what asked someone for something. */
+const ANSWERABLE = new Set<CardEventKind>(["question", "permission", "needs_me", "message"]);
+
+/** The open event of this card that `eventId` names and that waits for an answer — or throws. */
+export async function replyTarget(cardId: string, eventId: string): Promise<CardEvent> {
+  const event = (await store.load()).events.find((e) => e.id === eventId && e.cardId === cardId);
+  if (!event || event.resolvedAt || !ANSWERABLE.has(event.kind)) {
+    throw new Error(`event '${eventId}' of this card is not waiting on an answer`);
+  }
+  return event;
 }
