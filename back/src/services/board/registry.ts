@@ -290,6 +290,8 @@ export interface Card {
   modelAt?: number;
   /** Reasoning level for THIS card (one of CLAUDE_EFFORTS). Absent = the account's own (no flag). */
   effort?: string;
+  /** WHEN the effort pin last changed (set OR cleared), epoch ms — same contest as `modelAt`. */
+  effortAt?: number;
   /**
    * When the card's terminal was opened for the FIRST time (worktree and session already exist in
    * the runner). Present = the front-end may attach the websocket immediately (attach-or-create) and
@@ -1567,6 +1569,7 @@ export async function updateCard(id: string, patch: UpdateCardInput): Promise<Ca
     }
     if (patch.effort !== undefined) {
       next.effort = patch.effort === null || !String(patch.effort).trim() ? undefined : assertEffort(patch.effort);
+      if (next.effort !== card.effort) next.effortAt = Date.now();
     }
     // Imported session / own branch: validated here (uuid / assertBranchName) because both become
     // argv or script content in the runner and must never pass through raw. null clears.
