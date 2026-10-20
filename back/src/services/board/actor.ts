@@ -13,16 +13,24 @@ import { logger } from "../../utils/logger.js";
 const IDENTITY_WAIT_MS = 20_000;
 
 /**
- * The actor each card is known to have, as this process last saw or wrote it. Every stamp goes
- * through {@link recordCardActor}, so this is what lets a caller ask SYNCHRONOUSLY whether a message
- * needs to wait for a switch ({@link isCardActor}) — the common case, the same person again, must
- * not cost the chat an await per frame.
+ * The author whose identity THIS PROCESS SAW LAND in the runner, per card. It is what lets a caller
+ * ask SYNCHRONOUSLY whether a message must wait for a switch ({@link isCardActor}) — the common case,
+ * the same person again, must not cost the chat an await per frame.
+ *
+ * Set only AFTER a landing succeeded, never at the stamp: an application that failed (runner down,
+ * docker exec timeout) or a back that restarted mid-switch would otherwise read "already the author"
+ * forever, and the person's commits would keep going out as the previous one — silently.
  */
-const knownActors = new Map<string, string>();
+const landedActors = new Map<string, string>();
 
-/** Is this person already the card's author, as far as this process knows? PURE read, sync. */
+/** Has this person's identity landed on the card, as far as this process saw? Sync. */
 export function isCardActor(user: PublicUser | null, cardId: string): boolean {
-  return !!user && knownActors.get(cardId) === user.id;
+  return !!user && landedActors.get(cardId) === user.id;
+}
+
+/** Forgets a card (it was deleted): nothing landed is assumed for an id that may come back. */
+export function forgetCardActor(cardId: string): void {
+  landedActors.delete(cardId);
 }
 
 /**
@@ -49,28 +57,28 @@ export async function recordCardActor(
 ): Promise<void> {
   if (!user || !cardId) return;
   try {
-    // Already the author: nothing to decide, nothing to write, nobody to ask about access.
-    if ((await getCard(cardId))?.actorUserId === user.id) {
-      knownActors.set(cardId, user.id);
-      return;
+    // Already the author AND seen landing: nothing to decide, write, ask or apply.
+    if (isCardActor(user, cardId)) return;
+    const card = await getCard(cardId);
+    if (!card) return;
+    if (card.actorUserId !== user.id) {
+      if ((await cardLevel(user, cardId)) !== "work") return;
+      if (!(await stampCardActor(cardId, user.id))) return;
     }
-    if ((await cardLevel(user, cardId)) !== "work") return;
-    const stamped = await stampCardActor(cardId, user.id);
-    if (!stamped) return;
-    knownActors.set(cardId, user.id);
-    if (!stamped.changed) return;
+    // Stamped now, or stamped before this process could see it land (a restart, a failed apply):
+    // either way the identity is applied, and only a CONFIRMED landing is remembered.
+    landedActors.delete(cardId);
     let timer: NodeJS.Timeout | undefined;
-    const landed = reapplyCardIdentity(cardId).catch((err: unknown) => {
-      logger.warn({ card: cardId, detail: (err as Error).message }, "could not reapply the card's git identity");
-    });
-    const late = new Promise<void>((resolve) => {
+    const landed = reapplyCardIdentity(cardId);
+    const late = new Promise<boolean>((resolve) => {
       timer = setTimeout(() => {
         logger.warn({ card: cardId }, "the card's new identity is still landing — the order goes on");
-        resolve();
+        resolve(false);
       }, opts.waitMs ?? IDENTITY_WAIT_MS);
     });
-    await Promise.race([landed, late]);
+    const ok = await Promise.race([landed, late]);
     clearTimeout(timer);
+    if (ok !== false && (await getCard(cardId))?.actorUserId === user.id) landedActors.set(cardId, user.id);
   } catch (err) {
     logger.warn({ card: cardId, detail: (err as Error).message }, "could not record the card's actor");
   }

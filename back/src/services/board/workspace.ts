@@ -796,7 +796,7 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
     // out of the open script on purpose: the exact same call re-runs on every author switch, and one
     // code path for both is one behaviour for both. It RESOLVES AGAIN, inside the card's identity
     // queue: a first clone takes minutes, and a message sent meanwhile switched the author.
-    await syncCardIdentity(card.id, { opened: false });
+    await syncCardIdentity(card.id, { onlyIfOpened: false });
     return { card, project, accountSlug };
   });
 }
@@ -2053,22 +2053,27 @@ async function cardIdentity(card: Card, project: Project): Promise<EffectiveIden
   });
 }
 
-/** Runs the identity script in the runner. Never throws: a wedged runner must not fail a prompt. */
+/**
+ * Runs the identity script in the runner. Never throws — a wedged runner must not fail a prompt —
+ * but SAYS whether it landed, so a failed application is retried by the next order.
+ */
 async function applyIdentity(
   card: Card, cwd: string, identity: EffectiveIdentity, token?: string,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await hostExecutor().runScript(
       buildIdentityScript({ containerName: config.runner.container, cardId: card.id, cwd, identity, token }),
       { timeoutMs: 30_000 },
     );
+    return true;
   } catch (e) {
     logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "card identity not applied (runner unreachable)");
+    return false;
   }
 }
 
 /** The card's identity application in flight, per card — the tail of its queue. */
-const identityQueues = new Map<string, Promise<void>>();
+const identityQueues = new Map<string, Promise<boolean>>();
 
 /**
  * Applies the identity IN FORCE to a card, ONE APPLICATION AT A TIME PER CARD, each one resolving
@@ -2077,16 +2082,19 @@ const identityQueues = new Map<string, Promise<void>>();
  * Two people writing to the same card in quick succession trigger two applications. Run side by
  * side, whichever docker exec finished LAST decided the author — the order of the messages counted
  * for nothing. Queued, and resolving at run time, the last application always applies the author
- * of the last message. `opened: true` skips a card that was never opened (its open applies it).
+ * of the last message. `onlyIfOpened` skips a card that was never opened (its open applies it).
  *
- * Never rejects: a failed application is logged, and the next one in the queue still runs.
+ * Resolves whether it LANDED; never rejects: a failure is logged, and the next one in the queue
+ * still runs.
  */
-function syncCardIdentity(cardId: string, opts: { opened: boolean }): Promise<void> {
-  const apply = async (): Promise<void> => {
+function syncCardIdentity(cardId: string, opts: { onlyIfOpened: boolean }): Promise<boolean> {
+  const apply = async (): Promise<boolean> => {
     const card = await getCard(cardId);
-    if (!card || (opts.opened && !card.openedAt)) return;
+    if (!card) return false;
+    // Never opened: nothing in the runner to rewrite — its open applies the identity in force.
+    if (opts.onlyIfOpened && !card.openedAt) return true;
     const project = await getProject(card.projectId);
-    if (!project) return;
+    if (!project) return false;
     const { cwd } = cardWorkPaths(project, card);
     const identity = await cardIdentity(card, project);
     let token: string | undefined;
@@ -2095,10 +2103,11 @@ function syncCardIdentity(cardId: string, opts: { opened: boolean }): Promise<vo
     } catch {
       /* no usable connection -> the token file is removed and the card falls back to ambient gh */
     }
-    await applyIdentity(card, cwd, identity, token);
+    return await applyIdentity(card, cwd, identity, token);
   };
-  const run = (identityQueues.get(cardId) ?? Promise.resolve()).then(apply).catch((err: unknown) => {
+  const run = (identityQueues.get(cardId) ?? Promise.resolve(true)).then(apply).catch((err: unknown) => {
     logger.warn({ card: cardId, detail: (err as Error).message }, "card identity not applied");
+    return false;
   });
   identityQueues.set(cardId, run);
   void run.then(() => {
@@ -2136,6 +2145,6 @@ export async function reapplyIdentityForUser(userId: string): Promise<number> {
  *
  * Only for cards that HAVE been opened: one that never was gets its identity from the open itself.
  */
-export function reapplyCardIdentity(cardId: string): Promise<void> {
-  return syncCardIdentity(cardId, { opened: true });
+export function reapplyCardIdentity(cardId: string): Promise<boolean> {
+  return syncCardIdentity(cardId, { onlyIfOpened: true });
 }
