@@ -11,6 +11,7 @@ import { transcriptDirFor, sessionGoneError } from "./cardSession.js";
 import { recordOrigin, type MessageOrigin } from "../chat/provenance.js";
 import { publishExternalMessage, readHistory } from "../sdk/history.js";
 import { liveDriverSession, sendAgentTurn } from "../sdk/manager.js";
+import { observeDeclaredState } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
 import {
   activityFromTranscript, pendingPermissionFromHistory, pendingQuestionFromHistory, pendingQuestionFromTranscript,
@@ -423,6 +424,11 @@ export interface ReportResult {
 export async function reportState(cardId: string, state: string, summary?: string, by?: string): Promise<ReportResult> {
   const card = await reportCardState(cardId, state, summary); // validates the state; unknown card -> undefined
   if (!card) throw new Error("card not found");
+  // "I need you" is what a person away from the board must hear (services/events/cardEvents.ts).
+  // The report is already recorded: a log that fails must not turn it into an error.
+  await observeDeclaredState(card.id, card.declaredState as DeclaredState, card.declaredSummary).catch((err: unknown) => {
+    logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not record the card event");
+  });
   logger.info(
     {
       audit: true, action: "maestro.report", card: card.worktreeSlug,
