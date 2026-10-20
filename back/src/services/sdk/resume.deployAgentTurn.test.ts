@@ -149,9 +149,42 @@ describe("deploy no meio de uma ordem do maestro (card a28ffa23)", () => {
     await settle();
     expect((await b.registry.getCard(cardId))?.status).toBe("working");
 
-    // Um segundo boot (outro deploy logo depois, sem avanço) não injeta de novo pelo mesmo marcador:
-    const again = await sweep(b, { sdkDriver: true, sdkAutoResume: true });
-    expect(again.resumed).toEqual([]);
+    // A retomada trabalha e fecha: o marcador sai e a bolinha apaga.
+    b.emit(0, { type: "tool_use", id: "t2", name: "Bash", input: { command: "git status" } });
+    b.emit(0, { type: "result", isError: false });
+    await settle();
+    expect(await b.inflight.readInflightMarker(cardId)).toBeNull();
+    expect((await b.registry.getCard(cardId))?.status).toBe("waiting");
+
+    // O deploy seguinte (outro processo) não tem o que retomar: nada é injetado de novo.
+    const c = await bootProcess();
+    expect(await sweep(c, { sdkDriver: true, sdkAutoResume: true })).toEqual({ resumed: [], noted: [] });
+    expect(c.children).toHaveLength(0);
+  });
+
+  it("card pausado depois da queda não é revivido, e a bolinha não reacende", async () => {
+    const { a, cardId } = await oldProcessRunsAMaestroOrder();
+    await a.registry.pauseCard(cardId, { effective: true });
+    const b = await bootProcess();
+    expect(await sweep(b, { sdkDriver: true, sdkAutoResume: true })).toEqual({ resumed: [], noted: [] });
+    expect(b.children).toHaveLength(0);
+    await settle();
+    const card = await b.registry.getCard(cardId);
+    expect(card?.status ?? null).toBeNull(); // a pausa apagou a bolinha com a sessão
+    expect(card?.pausedAt).toBeTruthy();
+    expect(await b.inflight.readInflightMarker(cardId)).toBeNull();
+  });
+
+  it("card hibernado com marcador órfão continua hibernado (nenhum relato o dá por vivo)", async () => {
+    const { a, cardId } = await oldProcessRunsAMaestroOrder();
+    a.emit(0, { type: "result", isError: false }); // ocioso: só assim o sweep de ociosidade hiberna
+    await settle();
+    await a.inflight.writeInflightMarker(cardId, { startedAt: Date.now(), preview: "turno morto", attempts: 0 });
+    expect(await a.registry.hibernateCard(cardId)).toBeTruthy();
+    const b = await bootProcess();
+    expect(await sweep(b, { sdkDriver: true, sdkAutoResume: true })).toEqual({ resumed: [], noted: [] });
+    await settle();
+    expect((await b.registry.getCard(cardId))?.hibernatedAt).toBeTruthy();
   });
 
   it("sem retomada (auto-resume desligado), a bolinha não fica 'working' do processo morto", async () => {

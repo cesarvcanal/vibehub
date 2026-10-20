@@ -270,10 +270,13 @@ export async function resumeInterruptedTurns(deps: ResumeDeps = realDeps): Promi
     if (!marker) return;
     const outcome = await resumeCard(cardId, marker, settings, deps, installOnce, DEPLOY_TEXTS);
     if (outcome === "resumed") summary.resumed.push(cardId);
-    else if (outcome === "noted") summary.noted.push(cardId);
-    // O `working` no board é do processo que morreu com o turno: nenhum hook nem driver daqui vai
-    // apagá-lo (produção, card a28ffa23, 2026-10-20).
-    settleUnresumed(cardId, outcome, deps);
+    else if (outcome === "noted") {
+      summary.noted.push(cardId);
+      // O `working` no board é do processo que morreu com o turno: nenhum hook nem driver daqui vai
+      // apagá-lo (produção, card a28ffa23, 2026-10-20). Só no "noted": o "skipped" é card parado de
+      // propósito (um relato o desibernaria) ou conversa que seguiu num turno vivo, dono da bolinha.
+      settleUnresumed(cardId, outcome, deps);
+    }
   }));
   return summary;
 }
