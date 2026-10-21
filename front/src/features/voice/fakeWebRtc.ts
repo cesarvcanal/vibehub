@@ -6,11 +6,14 @@ import type { LiveVoiceDeps } from "./liveVoice";
  * tests reach every exit path without a real network or a real microphone.
  */
 
-export class FakeTrack {
+export class FakeTrack extends EventTarget {
+  kind = "audio";
   enabled = true;
   stopped = false;
+  readyState: MediaStreamTrackState = "live";
   stop(): void {
     this.stopped = true;
+    this.readyState = "ended";
   }
 }
 
@@ -41,6 +44,7 @@ export class FakeChannel extends EventTarget {
   /** The server side: the channel opened. */
   open(): void {
     this.readyState = "open";
+    this.dispatchEvent(new Event("open"));
   }
   /** The server side: an event arrives. */
   emit(event: Record<string, unknown>): void {
@@ -51,6 +55,22 @@ export class FakeChannel extends EventTarget {
 export class FakePeer extends EventTarget {
   iceGatheringState: RTCIceGatheringState = "complete";
   connectionState: RTCPeerConnectionState = "new";
+  iceConnectionState: RTCIceConnectionState = "new";
+  /** What getStats reports — set by the test. */
+  stats: Record<string, unknown>[] = [];
+  async getStats(): Promise<{ forEach: (fn: (s: Record<string, unknown>) => void) => void }> {
+    return { forEach: (fn) => this.stats.forEach(fn) };
+  }
+  connect(): void {
+    this.iceConnectionState = "connected";
+    this.dispatchEvent(new Event("iceconnectionstatechange"));
+    this.connectionState = "connected";
+    this.dispatchEvent(new Event("connectionstatechange"));
+  }
+  /** The model's audio track arrives. */
+  remoteTrack(): void {
+    this.dispatchEvent(Object.assign(new Event("track"), { track: { kind: "audio" }, streams: [{}] }));
+  }
   localDescription: { type: string; sdp: string } | null = null;
   remoteDescription: { type: string; sdp: string } | null = null;
   channel: FakeChannel | null = null;

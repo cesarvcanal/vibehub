@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CLOSE_TIMEOUT_MS, LiveVoiceSession, START_TIMEOUT_MS, errorMessage } from "./liveVoice";
+import { ACTIVITY_WINDOW_MS, CLOSE_TIMEOUT_MS, LiveVoiceSession, START_TIMEOUT_MS, STATS_INTERVAL_MS, aiActivity, errorMessage } from "./liveVoice";
 import { fakeRig, FakeStream } from "./fakeWebRtc";
 
 afterEach(() => {
@@ -23,7 +23,10 @@ describe("LiveVoiceSession — start", () => {
     const rig = fakeRig();
     const session = new LiveVoiceSession(rig.deps);
     const states: string[] = [];
-    session.subscribe(() => states.push(session.snapshot().state));
+    session.subscribe(() => {
+      const state = session.snapshot().state;
+      if (states[states.length - 1] !== state) states.push(state);
+    });
 
     await session.start();
     expect(session.snapshot().state).toBe("connecting");
@@ -228,6 +231,77 @@ describe("LiveVoiceSession — while live", () => {
     const { session, rig } = await liveSession();
     rig.peer().channel!.dispatchEvent(Object.assign(new Event("message"), { data: "{not json" }));
     expect(session.snapshot().state).toBe("live");
+  });
+});
+
+describe("LiveVoiceSession — diagnostics", () => {
+  it("tracks peer, ICE, channel and mic track states", async () => {
+    const { session, rig } = await liveSession();
+    rig.peer().connect();
+    expect(session.snapshot().diag).toMatchObject({ peer: "connected", ice: "connected", channel: "open", micTrack: "live" });
+    expect(session.micStream()).toBe(rig.mic());
+  });
+
+  it("counts model events by type, keeping no text", async () => {
+    const { session, rig } = await liveSession();
+    rig.peer().channel!.emit({ type: "session.input_transcript.delta", delta: "segredo" });
+    rig.peer().channel!.emit({ type: "session.input_transcript.delta", delta: "particular" });
+    rig.peer().channel!.emit({ type: "error", error: { code: "invalid_audio", message: "x" } });
+    const { diag } = session.snapshot();
+    expect(diag.events).toMatchObject({ "session.started": 1, "session.input_transcript.delta": 2, error: 1 });
+    expect(diag.lastErrorCode).toBe("invalid_audio");
+    expect(JSON.stringify(diag)).not.toContain("segredo");
+  });
+
+  it("reads sent/received audio bytes and the model's level from getStats", async () => {
+    vi.useFakeTimers();
+    const rig = fakeRig();
+    const session = new LiveVoiceSession(rig.deps);
+    await session.start();
+    rig.peer().stats = [
+      { type: "outbound-rtp", kind: "audio", bytesSent: 4096 },
+      { type: "inbound-rtp", kind: "audio", bytesReceived: 2048, audioLevel: 0.2 },
+      { type: "outbound-rtp", kind: "video", bytesSent: 999999 },
+    ];
+    await vi.advanceTimersByTimeAsync(STATS_INTERVAL_MS);
+    expect(session.snapshot().diag).toMatchObject({ sentBytes: 4096, receivedBytes: 2048, remoteLevel: 0.2 });
+    session.dispose();
+  });
+
+  it("the model's track playing, or blocked by autoplay with a way to resume", async () => {
+    const { session, rig } = await liveSession();
+    rig.peer().remoteTrack();
+    await vi.waitFor(() => expect(session.snapshot().diag.playback).toBe("playing"));
+    expect(session.snapshot().diag.remoteAudio).toBe(true);
+
+    const blocked = fakeRig();
+    blocked.audio.play = () => Promise.reject(new Error("NotAllowedError"));
+    const s2 = (await liveSession(blocked)).session;
+    blocked.peer().remoteTrack();
+    await vi.waitFor(() => expect(s2.snapshot().diag.playback).toBe("blocked"));
+    blocked.audio.play = async () => undefined;
+    s2.resumePlayback();
+    await vi.waitFor(() => expect(s2.snapshot().diag.playback).toBe("playing"));
+  });
+
+  it("stops polling on teardown", async () => {
+    vi.useFakeTimers();
+    const { session, rig } = await liveSession();
+    const spy = vi.spyOn(rig.peer(), "getStats");
+    session.dispose();
+    await vi.advanceTimersByTimeAsync(STATS_INTERVAL_MS * 3);
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe("aiActivity", () => {
+  const base = { ...LiveVoiceSession.idleSnapshot.diag };
+  it("waiting, hearing (input transcript), speaking (output transcript or remote level)", () => {
+    expect(aiActivity(base, 10_000)).toBe("waiting");
+    expect(aiActivity({ ...base, lastInputAt: 9_500 }, 10_000)).toBe("hearing");
+    expect(aiActivity({ ...base, lastInputAt: 9_500, lastOutputAt: 9_800 }, 10_000)).toBe("speaking");
+    expect(aiActivity({ ...base, remoteLevel: 0.3 }, 10_000)).toBe("speaking");
+    expect(aiActivity({ ...base, lastInputAt: 10_000 - ACTIVITY_WINDOW_MS - 1 }, 10_000)).toBe("waiting");
   });
 });
 

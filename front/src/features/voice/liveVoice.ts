@@ -29,7 +29,58 @@ export interface LiveVoiceSnapshot {
   error: string | null;
   /** A non-fatal notice (moderation cut the reply, the close was not confirmed…), same shape. */
   notice: string | null;
+  diag: LiveVoiceDiag;
 }
+
+/**
+ * What the connection is doing, for the diagnostics panel. Counts and states only — never audio,
+ * never transcript text, never the SDP.
+ */
+export interface LiveVoiceDiag {
+  peer: RTCPeerConnectionState | null;
+  ice: RTCIceConnectionState | null;
+  channel: RTCDataChannelState | null;
+  /** The mic track as the browser sees it: live/ended, and whether it is enabled (not muted). */
+  micTrack: "live" | "ended" | null;
+  /** The assistant's audio track arrived. */
+  remoteAudio: boolean;
+  /** The <audio> element: playing, or blocked by the browser's autoplay policy. */
+  playback: "none" | "playing" | "blocked";
+  /** RTP audio bytes that LEFT this browser (getStats outbound-rtp) — what the model can receive. */
+  sentBytes: number | null;
+  /** RTP audio bytes that ARRIVED from the model (inbound-rtp), and its last audio level 0..1. */
+  receivedBytes: number | null;
+  remoteLevel: number | null;
+  /** Data-channel events received, by type. */
+  events: Record<string, number>;
+  /** When the model last transcribed the person (it HEARD them) / last spoke, epoch ms. */
+  lastInputAt: number | null;
+  lastOutputAt: number | null;
+  /** The last `error` event's code or type (not its message). */
+  lastErrorCode: string | null;
+}
+
+/** What the assistant is doing, as far as the session can tell. */
+export type AiActivity = "waiting" | "hearing" | "speaking";
+
+/** A transcript delta or remote audio this recent counts as "now". */
+export const ACTIVITY_WINDOW_MS = 1_500;
+
+/** The assistant's activity at `now`, from the diagnostics. PURE. */
+export function aiActivity(diag: LiveVoiceDiag, now: number): AiActivity {
+  const recent = (at: number | null) => at !== null && now - at < ACTIVITY_WINDOW_MS;
+  if (recent(diag.lastOutputAt) || (diag.remoteLevel ?? 0) > 0.02) return "speaking";
+  if (recent(diag.lastInputAt)) return "hearing";
+  return "waiting";
+}
+
+export const STATS_INTERVAL_MS = 1_000;
+
+const EMPTY_DIAG: LiveVoiceDiag = {
+  peer: null, ice: null, channel: null, micTrack: null, remoteAudio: false, playback: "none",
+  sentBytes: null, receivedBytes: null, remoteLevel: null, events: {}, lastInputAt: null,
+  lastOutputAt: null, lastErrorCode: null,
+};
 
 export interface LiveVoiceDeps {
   getUserMedia: (constraints: MediaStreamConstraints) => Promise<MediaStream>;
@@ -51,9 +102,12 @@ const TRANSCRIPT_MAX = 200;
 
 class Cancelled extends Error {}
 
-const INITIAL: LiveVoiceSnapshot = { state: "idle", muted: false, transcript: [], error: null, notice: null };
+const INITIAL: LiveVoiceSnapshot = {
+  state: "idle", muted: false, transcript: [], error: null, notice: null, diag: EMPTY_DIAG,
+};
 
 export class LiveVoiceSession {
+  static readonly idleSnapshot: LiveVoiceSnapshot = INITIAL;
   private snap: LiveVoiceSnapshot = INITIAL;
   private readonly listeners = new Set<() => void>();
   private peer: RTCPeerConnection | null = null;
@@ -62,6 +116,7 @@ export class LiveVoiceSession {
   private abort: AbortController | null = null;
   private startTimer: ReturnType<typeof setTimeout> | null = null;
   private closeTimer: ReturnType<typeof setTimeout> | null = null;
+  private statsTimer: ReturnType<typeof setInterval> | null = null;
   /** Bumped on every start and teardown: callbacks from an older attempt are ignored. */
   private attempt = 0;
 
@@ -74,6 +129,23 @@ export class LiveVoiceSession {
     return () => this.listeners.delete(listener);
   };
 
+  /** The microphone stream while a conversation holds it — what the level meter listens to. */
+  micStream(): MediaStream | null {
+    return this.mic;
+  }
+
+  /** The person pressed "play" after the browser blocked autoplay. */
+  resumePlayback(): void {
+    void this.deps.audio.play().then(
+      () => this.setDiag({ playback: "playing" }),
+      () => this.setDiag({ playback: "blocked" }),
+    );
+  }
+
+  private setDiag(patch: Partial<LiveVoiceDiag>): void {
+    this.set({ diag: { ...this.snap.diag, ...patch } });
+  }
+
   private set(patch: Partial<LiveVoiceSnapshot>): void {
     this.snap = { ...this.snap, ...patch };
     for (const listener of this.listeners) listener();
@@ -84,7 +156,7 @@ export class LiveVoiceSession {
     const attempt = ++this.attempt;
     const abort = new AbortController();
     this.abort = abort;
-    this.set({ state: "connecting", muted: false, transcript: [], error: null, notice: null });
+    this.set({ state: "connecting", muted: false, transcript: [], error: null, notice: null, diag: EMPTY_DIAG });
     this.startTimer = setTimeout(() => this.fail(attempt, "voice.err.startTimeout"), START_TIMEOUT_MS);
 
     const alive = (): void => {
@@ -101,26 +173,51 @@ export class LiveVoiceSession {
         throw new Cancelled();
       }
       this.mic = mic;
+      const micTrack = mic.getAudioTracks()[0];
+      this.setDiag({ micTrack: micTrack ? micTrack.readyState : null });
+      micTrack?.addEventListener?.("ended", () => {
+        if (attempt === this.attempt) this.setDiag({ micTrack: "ended" });
+      });
 
       const peer = this.deps.createPeer();
       this.peer = peer;
       peer.addEventListener("track", (event) => {
         if (attempt !== this.attempt) return;
+        if (event.track.kind !== "audio") return;
         this.deps.audio.srcObject = event.streams[0] ?? new MediaStream([event.track]);
-        void this.deps.audio.play().catch(() => {
-          this.set({ notice: "voice.notice.autoplay" });
-        });
+        this.setDiag({ remoteAudio: true });
+        void this.deps.audio.play().then(
+          () => {
+            if (attempt === this.attempt) this.setDiag({ playback: "playing" });
+          },
+          () => {
+            if (attempt !== this.attempt) return;
+            this.setDiag({ playback: "blocked" });
+            this.set({ notice: "voice.notice.autoplay" });
+          },
+        );
       });
       peer.addEventListener("connectionstatechange", () => {
+        if (attempt !== this.attempt) return;
+        this.setDiag({ peer: peer.connectionState });
         if (peer.connectionState === "failed") this.fail(attempt, "voice.err.connectionLost");
       });
+      peer.addEventListener("iceconnectionstatechange", () => {
+        if (attempt === this.attempt) this.setDiag({ ice: peer.iceConnectionState });
+      });
+      this.setDiag({ peer: peer.connectionState ?? null, ice: peer.iceConnectionState ?? null });
       for (const track of mic.getAudioTracks()) peer.addTrack(track, mic);
 
       // The channel must exist before the offer, or it is not negotiated.
       const channel = peer.createDataChannel("oai-events");
       this.channel = channel;
       channel.addEventListener("message", (event) => this.onEvent(attempt, event.data));
+      channel.addEventListener("open", () => {
+        if (attempt === this.attempt) this.setDiag({ channel: "open" });
+      });
       channel.addEventListener("close", () => this.onChannelClosed(attempt));
+      this.setDiag({ channel: channel.readyState ?? null });
+      this.statsTimer = setInterval(() => void this.pollStats(attempt), STATS_INTERVAL_MS);
 
       await peer.setLocalDescription(await peer.createOffer());
       alive();
@@ -194,11 +291,15 @@ export class LiveVoiceSession {
 
   private onEvent(attempt: number, raw: unknown): void {
     if (attempt !== this.attempt) return;
-    let event: { type?: unknown; delta?: unknown; error?: { message?: unknown }; reason?: unknown };
+    let event: { type?: unknown; delta?: unknown; error?: { message?: unknown; code?: unknown; type?: unknown }; reason?: unknown };
     try {
       event = JSON.parse(String(raw));
     } catch {
       return;
+    }
+    if (typeof event.type === "string") {
+      const type = event.type.slice(0, 60);
+      this.setDiag({ events: { ...this.snap.diag.events, [type]: (this.snap.diag.events[type] ?? 0) + 1 } });
     }
     switch (event.type) {
       case "session.started":
@@ -210,9 +311,11 @@ export class LiveVoiceSession {
         this.set({ state: "idle", notice: closedNotice(event.reason) });
         break;
       case "session.input_transcript.delta":
+        this.setDiag({ lastInputAt: Date.now() });
         this.appendTranscript("user", event.delta);
         break;
       case "session.output_transcript.delta":
+        this.setDiag({ lastOutputAt: Date.now() });
         this.appendTranscript("assistant", event.delta);
         break;
       case "session.input_audio.muted":
@@ -223,6 +326,8 @@ export class LiveVoiceSession {
         break;
       case "error": {
         const message = typeof event.error?.message === "string" ? event.error.message : "voice.err.generic";
+        const code = event.error?.code ?? event.error?.type;
+        this.setDiag({ lastErrorCode: typeof code === "string" ? code.slice(0, 80) : "error" });
         // A startup error means `session.started` never comes; after that, an error (a refused
         // command, moderation cutting a reply) does not end the session.
         if (this.snap.state === "connecting") this.fail(attempt, message);
@@ -232,6 +337,33 @@ export class LiveVoiceSession {
       default:
         break;
     }
+  }
+
+  /** Audio RTP counters from getStats: did audio leave, did audio arrive, how loud is the model. */
+  private async pollStats(attempt: number): Promise<void> {
+    const peer = this.peer;
+    if (!peer?.getStats || attempt !== this.attempt) return;
+    let report: RTCStatsReport;
+    try {
+      report = await peer.getStats();
+    } catch {
+      return;
+    }
+    if (attempt !== this.attempt) return;
+    const patch: Partial<LiveVoiceDiag> = {};
+    report.forEach((stat: Record<string, unknown>) => {
+      if (stat.kind !== "audio") return;
+      if (stat.type === "outbound-rtp" && typeof stat.bytesSent === "number") patch.sentBytes = stat.bytesSent;
+      if (stat.type === "inbound-rtp") {
+        if (typeof stat.bytesReceived === "number") patch.receivedBytes = stat.bytesReceived;
+        if (typeof stat.audioLevel === "number") patch.remoteLevel = stat.audioLevel;
+      }
+    });
+    if (this.mic) {
+      const track = this.mic.getAudioTracks()[0];
+      if (track) patch.micTrack = track.readyState;
+    }
+    this.setDiag(patch);
   }
 
   private onChannelClosed(attempt: number): void {
@@ -272,6 +404,8 @@ export class LiveVoiceSession {
     this.clearStartTimer();
     if (this.closeTimer) clearTimeout(this.closeTimer);
     this.closeTimer = null;
+    if (this.statsTimer) clearInterval(this.statsTimer);
+    this.statsTimer = null;
     this.abort?.abort();
     this.abort = null;
     if (this.mic) stopTracks(this.mic);

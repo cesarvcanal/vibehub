@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Mic, MicOff, PhoneOff } from "lucide-react";
+import { Loader2, Mic, MicOff, PhoneOff, Volume2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { SecretInput } from "@/components/ui/secret-input";
@@ -9,7 +9,8 @@ import { get, post } from "@/lib/api";
 import { Paths } from "@/lib/paths";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
-import { LiveVoiceSession, type LiveVoiceDeps, type LiveVoiceSnapshot } from "./liveVoice";
+import { LiveVoiceSession, aiActivity, type LiveVoiceDeps, type LiveVoiceDiag, type LiveVoiceSnapshot } from "./liveVoice";
+import { SIGNAL_THRESHOLD, displayLevel, useMicLevel, type MakeAudioContext } from "./micLevel";
 
 /**
  * VOICE MODE (POC) — `/voice`. A spoken conversation with GPT-Live, like ChatGPT's voice mode:
@@ -38,9 +39,11 @@ function defaultDeps(audio: HTMLAudioElement): LiveVoiceDeps {
 export interface VoiceModePageProps {
   /** Tests swap the browser's media stack; the app never passes this. */
   makeDeps?: (audio: HTMLAudioElement) => LiveVoiceDeps;
+  /** Tests swap Web Audio for the level meter; the app never passes this. */
+  makeAudioContext?: MakeAudioContext;
 }
 
-export function VoiceModePage({ makeDeps = defaultDeps }: VoiceModePageProps) {
+export function VoiceModePage({ makeDeps = defaultDeps, makeAudioContext }: VoiceModePageProps) {
   const t = useT();
   const status = useQuery({ queryKey: VOICE_STATUS_KEY, queryFn: () => get<VoiceLiveStatus>("/voice/live") });
   const audioRef = React.useRef<HTMLAudioElement>(null);
@@ -62,6 +65,9 @@ export function VoiceModePage({ makeDeps = defaultDeps }: VoiceModePageProps) {
   const supported = typeof window !== "undefined" && "RTCPeerConnection" in window && Boolean(navigator.mediaDevices);
   const ready = status.data?.enabled && status.data.available;
   const active = snap.state === "connecting" || snap.state === "live" || snap.state === "closing";
+  // The stream exists from the mic grant until teardown; `diag.micTrack` changing re-reads it.
+  const micStream = React.useMemo(() => (active ? session?.micStream() ?? null : null), [active, session, snap.diag.micTrack]);
+  const rms = useMicLevel(micStream, makeAudioContext);
 
   return (
     <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col gap-6 px-4 py-8">
@@ -103,8 +109,9 @@ export function VoiceModePage({ makeDeps = defaultDeps }: VoiceModePageProps) {
               className={cn(
                 "flex size-28 items-center justify-center rounded-full border-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60",
                 active ? "border-destructive bg-destructive/10 text-destructive" : "border-primary bg-primary/10 text-primary",
-                snap.state === "live" && !snap.muted && "animate-pulse",
               )}
+              // The ring around the button follows the LOCAL microphone level.
+              style={rms !== null && !snap.muted ? { boxShadow: `0 0 0 ${Math.round(displayLevel(rms) * 18)}px hsl(var(--primary) / 0.25)` } : undefined}
             >
               {snap.state === "connecting" || snap.state === "closing" ? (
                 <Loader2 className="size-10 animate-spin" />
@@ -117,11 +124,21 @@ export function VoiceModePage({ makeDeps = defaultDeps }: VoiceModePageProps) {
             <p role="status" aria-live="polite" className="text-sm text-muted-foreground">
               {t(`voice.state.${snap.state}`)}
             </p>
+            {active && <MicMeter rms={rms} muted={snap.muted} />}
+            {snap.state === "live" && <AiStatus diag={snap.diag} />}
             {snap.state === "live" && (
-              <Button variant="outline" size="sm" onClick={() => session?.setMuted(!snap.muted)} aria-pressed={snap.muted}>
-                {snap.muted ? <MicOff /> : <Mic />}
-                {snap.muted ? t("voice.unmute") : t("voice.mute")}
-              </Button>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => session?.setMuted(!snap.muted)} aria-pressed={snap.muted}>
+                  {snap.muted ? <MicOff /> : <Mic />}
+                  {snap.muted ? t("voice.unmute") : t("voice.mute")}
+                </Button>
+                {snap.diag.playback === "blocked" && (
+                  <Button variant="outline" size="sm" onClick={() => session?.resumePlayback()}>
+                    <Volume2 />
+                    {t("voice.playAudio")}
+                  </Button>
+                )}
+              </div>
             )}
           </div>
 
@@ -131,6 +148,8 @@ export function VoiceModePage({ makeDeps = defaultDeps }: VoiceModePageProps) {
             </p>
           )}
           {snap.notice && <p className="text-center text-xs text-muted-foreground">{t(snap.notice)}</p>}
+
+          {snap.state !== "idle" && <DiagPanel diag={snap.diag} />}
 
           {snap.transcript.length > 0 && (
             <ol className="flex flex-col gap-2" aria-label={t("voice.transcript")}>
@@ -202,4 +221,94 @@ function OwnerKeyForm() {
   );
 }
 
-const IDLE: LiveVoiceSnapshot = { state: "idle", muted: false, transcript: [], error: null, notice: null };
+const IDLE: LiveVoiceSnapshot = LiveVoiceSession.idleSnapshot;
+
+const BAR_WEIGHTS = [0.35, 0.6, 0.85, 1, 0.85, 0.6, 0.35];
+
+/**
+ * The LOCAL microphone: bars from the Web Audio analyser, and in words whether it picks up sound.
+ * Says nothing about the model having received it — that is the AI line and the diagnostics.
+ */
+function MicMeter({ rms, muted }: { rms: number | null; muted: boolean }) {
+  const t = useT();
+  const level = muted || rms === null ? 0 : displayLevel(rms);
+  const label = muted
+    ? t("voice.mic.muted")
+    : rms === null
+      ? t("voice.mic.noMeter")
+      : rms >= SIGNAL_THRESHOLD
+        ? t("voice.mic.signal")
+        : t("voice.mic.silent");
+  return (
+    <div className="flex flex-col items-center gap-1" data-testid="mic-meter" data-level={level.toFixed(2)}>
+      <div className="flex h-8 items-end gap-1" aria-hidden="true">
+        {BAR_WEIGHTS.map((w, i) => (
+          <span
+            key={i}
+            className={cn("w-1.5 rounded-full transition-[height] duration-75", muted ? "bg-muted-foreground/30" : "bg-primary")}
+            style={{ height: `${Math.max(8, Math.round(level * w * 100))}%` }}
+          />
+        ))}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {muted ? <MicOff className="mr-1 inline size-3" /> : <Mic className="mr-1 inline size-3" />}
+        {label}
+      </p>
+    </div>
+  );
+}
+
+/** What the model is doing — from the session's own events and RTP, not from the local meter. */
+function AiStatus({ diag }: { diag: LiveVoiceDiag }) {
+  const t = useT();
+  const activity = aiActivity(diag, Date.now());
+  return (
+    <p className="text-sm font-medium" data-testid="ai-status" data-activity={activity}>
+      {t(`voice.ai.${activity}`)}
+    </p>
+  );
+}
+
+function fmtBytes(n: number | null): string {
+  if (n === null) return "—";
+  return n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`;
+}
+
+/**
+ * The connection, for the person debugging "it says listening but nothing happens". States and
+ * counters only: no audio, no transcript text, no SDP, no key.
+ */
+function DiagPanel({ diag }: { diag: LiveVoiceDiag }) {
+  const t = useT();
+  const rows: [string, string][] = [
+    [t("voice.diag.peer"), diag.peer ?? "—"],
+    [t("voice.diag.ice"), diag.ice ?? "—"],
+    [t("voice.diag.channel"), diag.channel ?? "—"],
+    [t("voice.diag.micTrack"), diag.micTrack ?? "—"],
+    [t("voice.diag.sent"), fmtBytes(diag.sentBytes)],
+    [t("voice.diag.remoteAudio"), diag.remoteAudio ? t("voice.diag.yes") : t("voice.diag.no")],
+    [t("voice.diag.received"), fmtBytes(diag.receivedBytes)],
+    [t("voice.diag.remoteLevel"), diag.remoteLevel === null ? "—" : diag.remoteLevel.toFixed(3)],
+    [t("voice.diag.playback"), t(`voice.diag.playback.${diag.playback}`)],
+    [t("voice.diag.lastError"), diag.lastErrorCode ?? "—"],
+  ];
+  const events = Object.entries(diag.events).sort(([a], [b]) => a.localeCompare(b));
+  return (
+    <details open className="rounded-md border border-border p-3 text-xs" data-testid="voice-diag">
+      <summary className="cursor-pointer font-medium">{t("voice.diag.title")}</summary>
+      <p className="mt-2 text-muted-foreground">{t("voice.diag.hint")}</p>
+      <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+        {rows.map(([k, v]) => (
+          <React.Fragment key={k}>
+            <dt className="text-muted-foreground">{k}</dt>
+            <dd className="font-mono">{v}</dd>
+          </React.Fragment>
+        ))}
+        <dt className="text-muted-foreground">{t("voice.diag.events")}</dt>
+        <dd className="font-mono">
+          {events.length === 0 ? "—" : events.map(([type, n]) => `${type} ×${n}`).join(", ")}
+        </dd>
+      </dl>
+    </details>
+  );
+}

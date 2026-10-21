@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { renderApp } from "@/test/render";
 import { VoiceModePage } from "./VoiceModePage";
 import { fakeRig, type FakeRig } from "./fakeWebRtc";
+import { fakeAudioContext, sine } from "./micLevel.test";
 
 const get = vi.fn();
 const post = vi.fn();
@@ -121,5 +122,33 @@ describe("VoiceModePage", () => {
     unmount();
     expect(rig.mic().tracks[0]!.stopped).toBe(true);
     expect(rig.peer().closed).toBe(true);
+  });
+
+  it("live: the local mic meter moves with a synthetic tone, and the diagnostics show the connection", async () => {
+    status({ enabled: true, available: true });
+    const samples: { current: Uint8Array } = { current: new Uint8Array(1024).fill(128) };
+    const ctx = fakeAudioContext(samples);
+    const user = userEvent.setup();
+    renderApp(<VoiceModePage makeDeps={makeDeps} makeAudioContext={ctx.make} />);
+    await user.click(await screen.findByRole("button", { name: "Start conversation" }));
+    act(() => rig.peer().channel!.emit({ type: "session.started", session: { id: "live_1" } }));
+    act(() => rig.peer().connect());
+
+    expect(await screen.findByText("Microphone on — no sound picked up")).toBeInTheDocument();
+    samples.current = sine(0.4);
+    expect(await screen.findByText("Your microphone is picking up sound")).toBeInTheDocument();
+    expect(Number(screen.getByTestId("mic-meter").dataset.level)).toBeGreaterThan(0.3);
+
+    // The meter is local; the AI line only moves on the model's own events.
+    expect(screen.getByTestId("ai-status")).toHaveTextContent("AI: waiting for you to speak");
+    act(() => rig.peer().channel!.emit({ type: "session.input_transcript.delta", delta: "oi" }));
+    expect(screen.getByTestId("ai-status")).toHaveTextContent("AI: heard you");
+
+    const diag = screen.getByTestId("voice-diag");
+    expect(diag).toHaveTextContent("connected");
+    expect(diag).toHaveTextContent("session.started ×1");
+
+    await user.click(screen.getByRole("button", { name: "Mute microphone" }));
+    expect(await screen.findByText("Microphone muted")).toBeInTheDocument();
   });
 });
