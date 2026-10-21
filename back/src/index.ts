@@ -32,6 +32,7 @@ import { startPauseReconciler, sweepCardUploads, sweepIdleCards } from "./servic
 import { sweepOrphanCardData } from "./services/board/purge.js";
 import { sweepDoneCards, DONE_SWEEP_INTERVAL_MS } from "./services/board/retention.js";
 import { startOutboxFlusher } from "./services/board/outbox.js";
+import { startWebhookDispatcher } from "./services/webhooks/subscriptions.js";
 import { startRunnerReaper } from "./services/reaper/reaper.js";
 import { pruneStaleInflightOwners, startInflightOwnerHeartbeat } from "./services/sdk/inflight.js";
 import { handOffSdkOnShutdown, resumeAfterDriverCrash, resumeInterruptedTurns } from "./services/sdk/resume.js";
@@ -213,6 +214,8 @@ async function main(): Promise<void> {
   // The outbox backstop. Started HERE and not in buildServer(): tests build servers by the dozen
   // and none of them wants a timer poking at a runner.
   startOutboxFlusher();
+  // MCP Events webhook deliveries (services/webhooks): same reasoning — a test drives its own passes.
+  startWebhookDispatcher();
   await app.listen({ port: config.port, host: config.host });
   const trustWarning = trustProxyBootWarning(config.trustProxy);
   if (trustWarning) logger.warn(trustWarning);

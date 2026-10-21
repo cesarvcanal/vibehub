@@ -1,9 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { createMcpServer } from "../mcp/server.js";
+import { createHash } from "node:crypto";
+import { EXTERNAL_INSTRUCTIONS, INSTRUCTIONS, createMcpServer } from "../mcp/server.js";
+import { handleModern, isModernRequest } from "../mcp/modern.js";
+import type { WebhookPrincipal } from "../services/webhooks/subscriptions.js";
 import { runnerToken } from "../runtime/runner.js";
 import { currentUser, tokenMatches } from "../auth/session.js";
-import { originOf, userForAccessToken } from "../auth/oauth.js";
+import { accessTokenHash, originOf, userForAccessToken } from "../auth/oauth.js";
 import type { PublicUser } from "../auth/users.js";
 import { logger } from "../utils/logger.js";
 
@@ -22,6 +25,10 @@ import { logger } from "../utils/logger.js";
  *
  * Stateless on purpose: one server and one transport per request, both closed when the response
  * ends. There is no session to leak between cards.
+ *
+ * Two protocol eras on the one endpoint, behind the same credential check: a 2026-07-28 request
+ * (version in `MCP-Protocol-Version` and `_meta`, no initialize) is answered by mcp/modern.ts —
+ * which is where MCP Events webhooks live — and everything else by the SDK, as before.
  */
 
 /** Pulls the bearer value out of an Authorization header. */
@@ -55,9 +62,27 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
       if (actor === "external") return (await userForAccessToken(bearer)) ?? false;
       return (await currentUser(request))?.role === "owner" ? null : false;
     };
-    const server = actor === "external" && user
+    const make = () => (actor === "external" && user
       ? createMcpServer("external", user, principal)
-      : createMcpServer(actor, undefined, principal);
+      : createMcpServer(actor!, undefined, principal));
+
+    if (isModernRequest(request.headers, request.body)) {
+      // A webhook subscription outlives the request: it keeps the account (or the board) and the
+      // HASH of the credential, re-checked at every delivery. A browser session holds no such grant.
+      const holder: WebhookPrincipal | null = actor === "external" && user && bearer
+        ? { key: `user:${user.id}`, user, credential: accessTokenHash(bearer) }
+        : actor === "card" && bearer
+          ? { key: "board", user: null, credential: createHash("sha256").update(bearer).digest("hex") }
+          : null;
+      const reply_ = await handleModern({
+        headers: request.headers, body: request.body, server: make, principal: holder,
+        instructions: actor === "external" ? EXTERNAL_INSTRUCTIONS : INSTRUCTIONS,
+      });
+      reply.code(reply_.status);
+      return reply_.body === undefined ? await reply.send() : await reply.type("application/json").send(reply_.body);
+    }
+
+    const server = make();
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     reply.raw.on("close", () => {
       void transport.close();

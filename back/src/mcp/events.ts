@@ -49,14 +49,18 @@ const KIND_TYPE: Record<Exclude<CardEventKind, "message">, MessageType> = {
   turn_finished: "info", question: "question", permission: "approval", needs_me: "question", failed: "error", concluded: "done",
 };
 
-const filterSchema = z.object({
+/** Where an event came from — what `kinds` filters on (`types` filters on what it is FOR). */
+export const KINDS: readonly CardEventKind[] = ["message", "turn_finished", "question", "permission", "needs_me", "failed", "concluded"];
+
+export const filterSchema = z.object({
   projectId: z.string().optional(),
   cardId: z.string().optional(),
   types: z.array(z.enum(MESSAGE_TYPES as unknown as [MessageType, ...MessageType[]])).min(1).optional(),
+  kinds: z.array(z.enum(KINDS as unknown as [CardEventKind, ...CardEventKind[]])).min(1).optional(),
 }).strict();
-type Filter = z.infer<typeof filterSchema>;
+export type Filter = z.infer<typeof filterSchema>;
 
-const DEFINITION = {
+export const DEFINITION = {
   name: CARD_EVENT,
   description:
     "Something happened on a vibehub card: a message its agent sent on purpose (info, question, approval, " +
@@ -70,6 +74,7 @@ const DEFINITION = {
       projectId: { type: "string", description: "only this project's cards" },
       cardId: { type: "string", description: "only this card" },
       types: { type: "array", items: { enum: MESSAGE_TYPES }, description: "only these types" },
+      kinds: { type: "array", items: { enum: KINDS }, description: "only events from these sources (e.g. question, permission, needs_me)" },
     },
     additionalProperties: false,
   },
@@ -87,6 +92,8 @@ const DEFINITION = {
       context: { type: "string" }, question: { type: "string" },
       options: { type: "array", items: { type: "object", properties: { label: { type: "string" }, description: { type: "string" } } } },
       recommended: { type: "string" },
+      state: { type: "string" }, summary: { type: "string" }, tool: { type: "string" }, reason: { type: "string" },
+      truncated: { type: "boolean", description: "long text fields were cut so the event fits one webhook delivery (256 KiB)" },
     },
     required: ["contractVersion", "type", "kind", "severity", "needsAnswer", "text", "cardId", "projectId", "cardTitle", "correlationId", "at"],
   },
@@ -94,9 +101,9 @@ const DEFINITION = {
 
 const typeOf = (e: CardEvent): MessageType => (e.kind === "message" ? e.messageType ?? "info" : KIND_TYPE[e.kind]);
 
-function matches(filter: Filter, e: CardEvent): boolean {
+export function matches(filter: Filter, e: CardEvent): boolean {
   return (!filter.projectId || e.projectId === filter.projectId) && (!filter.cardId || e.cardId === filter.cardId)
-    && (!filter.types || filter.types.includes(typeOf(e)));
+    && (!filter.types || filter.types.includes(typeOf(e))) && (!filter.kinds || filter.kinds.includes(e.kind));
 }
 
 /** What a person reads (or hears): one line or two, the card by title. */
@@ -120,8 +127,11 @@ function readable(e: CardEvent, question?: string, options?: { label: string; de
   }
 }
 
-/** The event as the MCP Events `EventOccurrence`: stable contract, structured `data` + readable `text`. */
-async function occurrenceOf(e: CardEvent) {
+/**
+ * The event as the MCP Events `EventOccurrence`: stable contract, structured `data` + readable `text`.
+ * `cursor` = the position to hand the client (push: the event's own; webhook: the safe watermark).
+ */
+export async function occurrenceOf(e: CardEvent, cursor: string = String(e.seq)) {
   const type = typeOf(e);
   const first = e.questions?.[0];
   const options = first?.options.map((o) => ({ label: o.label, ...(o.description ? { description: o.description } : {}) }));
@@ -130,7 +140,7 @@ async function occurrenceOf(e: CardEvent) {
     eventId: e.id,
     name: CARD_EVENT,
     timestamp: new Date(e.at).toISOString(),
-    cursor: String(e.seq),
+    cursor,
     data: {
       contractVersion: CONTRACT_VERSION, type, kind: e.kind,
       severity: e.severity ?? (type === "question" || type === "approval" || type === "error" ? "warning" : "info"),
