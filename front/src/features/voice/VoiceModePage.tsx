@@ -124,7 +124,7 @@ export function VoiceModePage({ makeDeps = defaultDeps, makeAudioContext }: Voic
       ) : (
         <>
           <div className="flex flex-col items-center gap-5">
-            <VoiceOrb level={orbLevel} mode={mode} size={240} className="mt-2" />
+            <VoiceOrb level={orbLevel} mode={mode} size={280} className="mt-2" />
             <p role="status" aria-live="polite" className="text-sm text-muted-foreground">
               {t(`voice.state.${snap.state}`)}
             </p>
