@@ -259,9 +259,11 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         "exactly as if you had typed it on the board. The card's agent does not hear this " +
         "conversation, so send a SELF-CONTAINED instruction (what to do, where, what done looks " +
         "like), not a fragment. Also how you ANSWER a card's pending question (say the chosen option). " +
-        "Returns `sentAt`: pass it to vibehub_wait_for_card as `since`. A card still starting is waited " +
-        "for (up to 30s). Fails clearly when the card has no live session (open it first), when no " +
-        "Claude is running there, or when its terminal is waiting on a menu choice. Answering an event that asked for something (a pushed card.event " +
+        "Returns `sentAt`: pass it to vibehub_wait_for_card as `since`. A card that is asleep " +
+        "(hibernated, never opened, or restarted) is woken on its own — no need to open it first — and " +
+        "a card still starting is waited for. A card PAUSED on purpose is refused (`paused:`), and so " +
+        "is a finished one asleep in Done (`done:`): ask the user before moving it. Also fails clearly " +
+        "when no Claude can run there or a menu waits in its terminal. Answering an event that asked for something (a pushed card.event " +
         "with needsAnswer, or an inbox entry)? Pass its eventId as `inReplyTo`: the card is told which " +
         "question this answers, and the event closes.",
       inputSchema: {
@@ -281,6 +283,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
           guardInteractiveMenu: true,
           requireAgent: true,
           readyWaitMs: SEND_READY_WAIT_MS,
+          wake: true,
           viaNativeChat: true,
           origin: { kind: user.role === "owner" ? "owner" : "user", name: user.username },
         }));

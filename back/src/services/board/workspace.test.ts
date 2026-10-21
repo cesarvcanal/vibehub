@@ -69,6 +69,13 @@ let failMarkPendingFor = "";
 
 let dir = "";
 let runScript: ReturnType<typeof vi.fn>;
+
+/** The runner's answer to the session probe (has-session + "esc to interrupt"): every session `state`. */
+function probeAnswer(script: string, state: "idle" | "busy" | "gone" = "idle"): { stdout: string; stderr: string } | null {
+  if (!String(script).includes("esc to interrupt")) return null;
+  const names = [...String(script).matchAll(/'(card-[0-9a-f]+)'/g)].map((m) => m[1]);
+  return { stdout: names.map((n) => `${n} ${state}`).join("\n"), stderr: "" };
+}
 let ptyCommand: ReturnType<typeof vi.fn>;
 let reg: typeof import("./registry.js");
 let ws: typeof import("./workspace.js");
@@ -900,6 +907,7 @@ describe("restart (single and all) — a working card is protected", () => {
 
     // Four hours later, the idle one goes cold and the working one does not.
     runScript.mockClear();
+    runScript.mockImplementation(async (script: string) => probeAnswer(script) ?? { stdout: "", stderr: "" });
     const later = Date.now() + 4 * 60 * 60_000;
     expect(await ws.sweepIdleCards(later)).toBe(1);
     expect((await reg.getCard(cold.id))?.hibernatedAt).toBeGreaterThan(0);
@@ -1081,6 +1089,59 @@ describe("restart (single and all) — a working card is protected", () => {
     expect(runScript).toHaveBeenCalledTimes(1);
   });
 
+  it("sweepIdleCards: ASKS THE RUNNER first — a card generating with silent hooks is spared, a runner that cannot answer too", async () => {
+    // Produção, 21/10/2026 (card de voz 7d49): the TUI's status hooks pointed at a dead blue/green
+    // port, so the board never saw `working`; the sweep hibernated the card 5 s after a Write, mid-task.
+    const p = await reg.createProject({ name: "voz" });
+    const busy = await reg.createCard({ projectId: p.id, title: "redesenhando a esfera" });
+    const cold = await reg.createCard({ projectId: p.id, title: "parado" });
+    await ws.openCard(busy.id);
+    await ws.openCard(cold.id);
+    const settings = await import("../settings/settings.js");
+    await settings.updateSettings({ idleHibernateMinutes: 180 });
+    const later = Date.now() + 4 * 60 * 60_000;
+    runScript.mockImplementation(async (script: string) => {
+      if (String(script).includes("esc to interrupt")) {
+        return { stdout: `${busy.tmuxSession} busy\n${cold.tmuxSession} idle`, stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+    expect(await ws.sweepIdleCards(later)).toBe(1);
+    expect((await reg.getCard(busy.id))?.hibernatedAt ?? null).toBeNull();
+    expect((await reg.getCard(busy.id))?.activityAt).toBeGreaterThan(0); // spared AND stamped
+    expect((await reg.getCard(cold.id))?.hibernatedAt).toBeGreaterThan(0);
+
+    // A runner that does not answer the probe: nobody is killed on a guess.
+    const other = await reg.createCard({ projectId: p.id, title: "sem resposta" });
+    await ws.openCard(other.id);
+    runScript.mockImplementation(async () => ({ stdout: "", stderr: "" }));
+    expect(await ws.sweepIdleCards(later + 4 * 60 * 60_000)).toBe(0);
+    expect((await reg.getCard(other.id))?.hibernatedAt ?? null).toBeNull();
+  });
+
+  it("sweepIdleCards: a card REOPENED (or instructed) just now is not put back to sleep by the next tick", async () => {
+    // openedAt is stamped once: before `activityAt`, a card first opened hours ago measured as idle
+    // the moment ChatGPT reopened it, and the next tick (≤ 5 min) hibernated it again.
+    const p = await reg.createProject({ name: "reabre" });
+    const c = await reg.createCard({ projectId: p.id, title: "antigo" });
+    await ws.openCard(c.id);
+    const settings = await import("../settings/settings.js");
+    await settings.updateSettings({ idleHibernateMinutes: 180 });
+    runScript.mockImplementation(async (script: string) => probeAnswer(script) ?? { stdout: "", stderr: "" });
+    const later = Date.now() + 4 * 60 * 60_000;
+    expect(await ws.sweepIdleCards(later)).toBe(1); // genuinely idle for 4 h: sleeps
+    vi.useFakeTimers({ now: later + 60_000, toFake: ["Date"] });
+    try {
+      await ws.openCard(c.id); // reopened by the external MCP, four hours after the first open
+      expect(await ws.sweepIdleCards(later + 5 * 60_000)).toBe(0);
+      expect((await reg.getCard(c.id))?.hibernatedAt ?? null).toBeNull();
+      await reg.markCardActivity(c.id); // an order delivered: the clock restarts again
+      expect(ws.lastActivityAt((await reg.getCard(c.id))!)).toBe(later + 60_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("sweepIdleCards: hibernates one card at a time — never a burst of docker execs at the runner", async () => {
     const p = await reg.createProject({ name: "w" });
     for (const title of ["a", "b", "c"]) {
@@ -1092,12 +1153,12 @@ describe("restart (single and all) — a working card is protected", () => {
     await settings.updateSettings({ idleHibernateMinutes: 180 });
     let inFlight = 0;
     let peak = 0;
-    runScript.mockImplementation(async () => {
+    runScript.mockImplementation(async (script: string) => {
       inFlight += 1;
       peak = Math.max(peak, inFlight);
       await new Promise((resolve) => setTimeout(resolve, 5));
       inFlight -= 1;
-      return { stdout: "", stderr: "" };
+      return probeAnswer(script) ?? { stdout: "", stderr: "" };
     });
     expect(await ws.sweepIdleCards(Date.now() + 4 * 60 * 60_000)).toBe(3);
     expect(peak).toBe(1);
@@ -1119,13 +1180,13 @@ describe("restart (single and all) — a working card is protected", () => {
     const firstExec = new Promise<void>((resolve) => { entered = resolve; });
     let inFlight = 0;
     let peak = 0;
-    runScript.mockImplementation(async () => {
+    runScript.mockImplementation(async (script: string) => {
       inFlight += 1;
       peak = Math.max(peak, inFlight);
       entered();
       await gate;
       inFlight -= 1;
-      return { stdout: "", stderr: "" };
+      return probeAnswer(script) ?? { stdout: "", stderr: "" };
     });
     const later = Date.now() + 4 * 60 * 60_000;
     const first = ws.sweepIdleCards(later);

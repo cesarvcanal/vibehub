@@ -26,7 +26,7 @@ async function load() {
   env.config.runner.container = "vibehub-runner";
   vi.doMock("../runtime/host.js", async () => {
     const actual = await vi.importActual<typeof import("../runtime/host.js")>("../runtime/host.js");
-    return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, writeFile: vi.fn(), ptyCommand: vi.fn(), pipeCommand: vi.fn() }) };
+    return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, writeFile: vi.fn(), ptyCommand: vi.fn(), pipeCommand: vi.fn((line: string) => ({ file: "sh", args: ["-c", line] })) }) };
   });
   vi.doMock("../services/github/client.js", () => ({ tokenFor: vi.fn(async () => "ghp_" + "C".repeat(36)), gitAuthHeaderFor: vi.fn() }));
   const registry = await import("../services/board/registry.js");
@@ -312,6 +312,9 @@ describe("external MCP — open/send right after creating a card", () => {
 
   it("send_to_terminal waits for a card still booting, then delivers — no 'awaiting choice'", async () => {
     const env = await load();
+    // The TUI route (native chat off): the one where Claude's boot is the race.
+    const settings = await import("../services/settings/settings.js");
+    await settings.updateSettings({ sdkDriver: false });
     const run = bootingRunner(1);
     const { call, close } = await env.connect(env.owner);
     const out = await call("vibehub_send_to_terminal", { cardId: env.card.id, text: "gera o relatorio" });
@@ -320,6 +323,135 @@ describe("external MCP — open/send right after creating a card", () => {
     expect(run.sent).toHaveLength(1);
     expect(run.sent[0]).toContain("gera o relatorio");
     await close();
+  }, 20_000);
+});
+
+/**
+ * Produção, 21/10/2026 (card de voz 7d49): ChatGPT's orders reached a card only after someone opened
+ * it — a hibernated card answered "no live session", and one woken by vibehub_open_card had its order
+ * typed into a TUI whose status hooks could not reach the back (so the next idle sweep killed it
+ * mid-task). An order from outside the board now WAKES an eligible card and lands as a turn of a
+ * native-chat driver started for it, with no browser involved — and never wakes a paused card.
+ */
+describe("external MCP — an order to a card that is asleep", () => {
+  /** The runner: every session idle (or `busy`), Claude up, prompt drawn. Records what was typed. */
+  function quietRunner(state: "idle" | "busy" = "idle") {
+    const typed: string[] = [];
+    runScript.mockImplementation((async (script: string) => {
+      if (script.includes("tmux send-keys")) { typed.push(script); return { stdout: "", stderr: "" }; }
+      if (script.includes("esc to interrupt")) {
+        const names = [...script.matchAll(/'(card-[0-9a-f]+)'/g)].map((m) => m[1]);
+        return { stdout: names.map((n) => `${n} ${state}`).join("\n"), stderr: "" };
+      }
+      if (script.includes("list-panes")) return { stdout: "bash\nclaude\n", stderr: "" };
+      if (script.includes("capture-pane")) return { stdout: "│ > │\n  ⏵⏵ bypass permissions on", stderr: "" };
+      return { stdout: "", stderr: "" };
+    }) as never);
+    return typed;
+  }
+
+  /** A fake driver spawner that counts spawns and collects every frame written to any driver. */
+  function countingSpawner(env: Awaited<ReturnType<typeof load>>) {
+    const written: string[] = [];
+    let spawns = 0;
+    env.manager.setDriverSpawnerForTesting(() => { spawns += 1; return fakeDriver(written); });
+    const turns = () => written.map((l) => JSON.parse(l) as { type: string; text?: string }).filter((f) => f.type === "user").map((f) => f.text);
+    return { turns, spawns: () => spawns };
+  }
+
+  it("a HIBERNATED card is woken and the order becomes a turn of a driver started headless", async () => {
+    const env = await load();
+    const typed = quietRunner();
+    const driver = countingSpawner(env);
+    await env.registry.hibernateCard(env.card.id);
+    const { call, close } = await env.connect(env.owner);
+    const out = await call("vibehub_send_to_terminal", { cardId: env.card.id, text: "retome o redesenho da esfera" });
+    await close();
+    env.manager.resetSdkSessionsForTesting();
+    expect(out.error).toBeUndefined();
+    expect(out).toMatchObject({ sent: true, route: "sdk-driver", woke: true });
+    expect(driver.spawns()).toBe(1);
+    expect(driver.turns()).toEqual(["retome o redesenho da esfera"]);
+    expect(typed).toHaveLength(0); // nothing typed into the TUI
+    const card = await env.registry.getCard(env.card.id);
+    expect(card?.hibernatedAt ?? null).toBeNull();
+    expect(card?.activityAt).toBeGreaterThan(0); // the idle sweep sees the order
+  }, 20_000);
+
+  it("a card NEVER opened is opened and takes the order the same way", async () => {
+    const env = await load();
+    quietRunner();
+    const driver = countingSpawner(env);
+    const fresh = await env.registry.createCard({ projectId: env.project.id, title: "novo" });
+    const { call, close } = await env.connect(env.owner);
+    const out = await call("vibehub_send_to_terminal", { cardId: fresh.id, text: "comece pelo README" });
+    await close();
+    env.manager.resetSdkSessionsForTesting();
+    expect(out).toMatchObject({ sent: true, route: "sdk-driver", woke: true });
+    expect(driver.turns()).toEqual(["comece pelo README"]);
+    expect((await env.registry.getCard(fresh.id))?.openedAt).toBeGreaterThan(0);
+  }, 20_000);
+
+  it("a PAUSED card is never woken by a message — clear refusal, nothing opened, nothing sent", async () => {
+    const env = await load();
+    const typed = quietRunner();
+    const driver = countingSpawner(env);
+    await env.registry.pauseCard(env.card.id, { effective: true });
+    const { call, close } = await env.connect(env.owner);
+    const out = await call("vibehub_send_to_terminal", { cardId: env.card.id, text: "continua" });
+    await close();
+    env.manager.resetSdkSessionsForTesting();
+    expect(String(out.error)).toMatch(/^paused: .*paused on purpose/);
+    expect(driver.spawns()).toBe(0);
+    expect(typed).toHaveLength(0);
+    expect((await env.registry.getCard(env.card.id))?.pausedAt).toBeGreaterThan(0);
+  }, 20_000);
+
+  it("two orders at once to a sleeping card: one wake, ONE driver, both turns delivered in order", async () => {
+    const env = await load();
+    quietRunner();
+    const driver = countingSpawner(env);
+    await env.registry.hibernateCard(env.card.id);
+    const { call, close } = await env.connect(env.owner);
+    const [a, b] = await Promise.all([
+      call("vibehub_send_to_terminal", { cardId: env.card.id, text: "primeiro" }),
+      call("vibehub_send_to_terminal", { cardId: env.card.id, text: "segundo" }),
+    ]);
+    await close();
+    env.manager.resetSdkSessionsForTesting();
+    expect(a).toMatchObject({ sent: true, route: "sdk-driver" });
+    expect(b).toMatchObject({ sent: true, route: "sdk-driver" });
+    expect(driver.spawns()).toBe(1);
+    expect([...driver.turns()].sort()).toEqual(["primeiro", "segundo"]);
+  }, 20_000);
+
+  it("a TUI generating right now keeps the order (typed, queued by Claude) — never a second Claude", async () => {
+    const env = await load();
+    const typed = quietRunner("busy");
+    const driver = countingSpawner(env);
+    const { call, close } = await env.connect(env.owner);
+    const out = await call("vibehub_send_to_terminal", { cardId: env.card.id, text: "e depois rode os testes" });
+    await close();
+    env.manager.resetSdkSessionsForTesting();
+    expect(out).toMatchObject({ sent: true, route: "terminal", woke: false });
+    expect(driver.spawns()).toBe(0);
+    expect(typed).toHaveLength(1);
+  }, 20_000);
+
+  it("native chat off: the woken card takes the order in its TUI once Claude is up", async () => {
+    const env = await load();
+    const settings = await import("../services/settings/settings.js");
+    await settings.updateSettings({ sdkDriver: false });
+    const typed = quietRunner();
+    const driver = countingSpawner(env);
+    await env.registry.hibernateCard(env.card.id);
+    const { call, close } = await env.connect(env.owner);
+    const out = await call("vibehub_send_to_terminal", { cardId: env.card.id, text: "segue" });
+    await close();
+    env.manager.resetSdkSessionsForTesting();
+    expect(out).toMatchObject({ sent: true, route: "terminal", woke: true });
+    expect(driver.spawns()).toBe(0);
+    expect(typed).toHaveLength(1);
   }, 20_000);
 });
 
