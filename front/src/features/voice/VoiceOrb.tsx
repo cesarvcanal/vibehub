@@ -112,7 +112,8 @@ void main() {
   float body = smoothstep(1.0, 0.9, d);
   float core = exp(-d * d * (4.2 - 1.8 * uLevel));
   float rim = pow(1.0 - z, 2.5) * body;
-  float halo = exp(-max(r - R, 0.0) * (8.0 - 3.5 * uLevel)) * (1.0 - body);
+  // The halo fades out well before the canvas edge, so no square ever shows.
+  float halo = exp(-max(r - R, 0.0) * (8.0 - 3.5 * uLevel)) * (1.0 - body) * smoothstep(1.0, 0.7, r);
 
   // Sparks: one candidate per cell of a slowly rising grid, twinkling, inside the body only.
   vec2 g = s * 11.0 + vec2(0.3 * t, 0.8 * t);
@@ -126,13 +127,14 @@ void main() {
            + uGlow * body * mist * mist * 0.9
            + uGlow * filament * body
            + uGlow * rim * 0.75
-           + vec3(1.0) * core * (0.75 + 0.5 * uLevel)
+           + vec3(1.0) * core * (0.7 + 0.3 * uLevel)
            + uGlow * halo * (0.28 + 0.45 * uLevel)
            + vec3(1.0) * spark;
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
   col = mix(col, vec3(lum), uDim) * (1.0 - 0.35 * uDim);
 
-  float a = body * (0.45 + 0.35 * mist + 0.2 * core) + halo * 0.55;
+  // The halo is pure light (its opacity is its brightness), so it never greys a light page.
+  float a = body * (0.45 + 0.35 * mist + 0.2 * core);
   a = clamp(max(a, max(col.r, max(col.g, col.b))), 0.0, 1.0);
   gl_FragColor = vec4(min(col, vec3(a)), a);
 }
