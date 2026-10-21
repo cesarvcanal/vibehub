@@ -74,7 +74,7 @@ e sem chave, o owner cola a chave ali mesmo (mesmo slot do cofre do microfone).
 
 ## Testar pelo Preview de um card (vibehub dentro do vibehub)
 
-O proxy do Preview serve a instância de teste em `/preview/<porta>/`. Três detalhes fazem isso
+O proxy do Preview serve a instância de teste em `/preview/<porta>/`. Quatro detalhes fazem isso
 funcionar sem tocar no painel de fora:
 
 - **Base do front:** `vite build --base /preview/<porta>/`. API, redirect de 401 e websockets
@@ -82,6 +82,16 @@ funcionar sem tocar no painel de fora:
   bateria no painel de fora.
 - **Cookie de sessão próprio:** `VIBEHUB_SESSION_COOKIE=<outro nome>`. O proxy remove
   `vibehub_session` na ida, e o `Set-Cookie` da instância de dentro deslogaria o owner do painel.
+- **Sem setup nem login:** `VIBEHUB_PREVIEW_PROXY_AUTH=1` (só sobe com `VIBEHUB_HOST` em loopback).
+  O proxy do painel já autenticou a pessoa (sessão de owner, ou acesso ao card dono da porta), mas
+  remove o cookie e não repassa identidade; a instância de dentro tem `users.json` vazio e cairia no
+  assistente de setup. Com a flag, ela cria no boot um owner local `preview-owner` com senha
+  aleatória descartada (ninguém a conhece) e trata como esse owner toda requisição com
+  `x-forwarded-prefix: /preview/<porta>`. O painel descarta esse cabeçalho vindo do cliente e o
+  recria (`DROP_HEADERS` em `services/preview/preview.ts`), então pelo painel ele só existe em
+  requisição que passou pela autenticação do proxy. Nenhuma conta, senha ou banco do painel é lido.
+  A fronteira de confiança é o runner: processos dentro dele alcançam a porta — e já leem o data
+  dir da instância de qualquer jeito.
 - **HTTPS:** o microfone só abre em contexto seguro. Abra o painel por
   `https://vibehub.multiversoatacado.com` (certificado válido); por `http://dev.multi` o
   navegador esconde o `getUserMedia`.
@@ -91,14 +101,18 @@ Receita (porta 4317, front já buildado com esse base em `$DIR/public`):
 ```bash
 umask 077; cd back
 VIBEHUB_SECRET_KEY="$(openssl rand -hex 32)" VIBEHUB_SESSION_SECRET="$(openssl rand -hex 32)" \
-VIBEHUB_VOICE_LIVE=1 VIBEHUB_SESSION_COOKIE=vibehub_voice_preview \
+VIBEHUB_VOICE_LIVE=1 VIBEHUB_SESSION_COOKIE=vibehub_voice_preview VIBEHUB_PREVIEW_PROXY_AUTH=1 \
 VIBEHUB_PORT=4317 VIBEHUB_HOST=127.0.0.1 VIBEHUB_DATA_DIR=$DIR/data VIBEHUB_STATIC_DIR=$DIR/public \
 npx tsx src/index.ts
 ```
 
-A chave mestra aleatória por execução faz o cofre de teste morrer com o processo: reiniciar começa
-do zero (setup e chave de novo). Nenhuma chave da OpenAI vai para env, arquivo ou log — o owner a
-cola na página.
+A chave mestra aleatória por execução faz o cofre de teste morrer com o processo: reiniciar sem a
+mesma `VIBEHUB_SECRET_KEY` perde a chave da OpenAI colada (o owner local é recriado sozinho).
+Nenhuma chave da OpenAI vai para env, arquivo ou log — o owner a cola na página `/voice`.
+
+Para entrar pelo painel com SSO de verdade (a instância de dentro saber QUEM é a pessoa, não só
+"alguém que passou pelo proxy") o painel precisaria assinar a identidade num cabeçalho, e isso é
+mudança no painel de produção — fora do escopo da POC.
 
 ## Testes
 

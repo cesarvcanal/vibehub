@@ -29,6 +29,7 @@ import { previewRoutes, installPreviewUpgrade } from "./routes/preview.js";
 import { trackSessionSockets } from "./auth/sessionSockets.js";
 import { cardSdkRoutes } from "./routes/cardSdk.js";
 import { voiceRoutes } from "./routes/voice.js";
+import { ensurePreviewOwner } from "./auth/previewProxyAuth.js";
 import { startPauseReconciler, sweepCardUploads, sweepIdleCards } from "./services/board/workspace.js";
 import { sweepOrphanCardData } from "./services/board/purge.js";
 import { sweepDoneCards, DONE_SWEEP_INTERVAL_MS } from "./services/board/retention.js";
@@ -75,6 +76,8 @@ export async function buildServer() {
   });
 
   app.get("/api/health", async () => ({ ok: true, version: "0.1.0" }));
+  // Dev only: a preview-proxied instance must not be a fresh install that funnels into the wizard.
+  if (config.previewProxyAuth) await ensurePreviewOwner();
 
   await app.register(authRoutes);
   await app.register(usersRoutes);

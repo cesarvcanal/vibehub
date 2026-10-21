@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { config, dataPath } from "../config/env.js";
 import { sessionUser, type PublicUser } from "./users.js";
+import { previewProxyUser } from "./previewProxyAuth.js";
 
 /**
  * SESSIONS — a signed cookie holding "<userId>.<issuedAt>.<hmac>". Stateless on purpose: the server
@@ -215,7 +216,9 @@ export function sessionTokenFromCookieHeader(header: string | undefined): string
  */
 export async function currentUser(req: FastifyRequest): Promise<PublicUser | null> {
   const raw = req.cookies?.[SESSION_COOKIE];
-  return raw ? await verifySessionUser(raw) : null;
+  const user = raw ? await verifySessionUser(raw) : null;
+  // Dev only, off by default: a vibehub previewed by another vibehub is signed in by that proxy.
+  return user ?? (await previewProxyUser(req));
 }
 
 /** The id of {@link requestUser}, or null — same rules, for the handlers that only need who. */
