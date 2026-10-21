@@ -525,7 +525,7 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
         `the native chat driver of card "${card.title}" exited before it could take the instruction — send it again`,
       );
     }
-    void markCardActivity(card.id).catch(() => undefined);
+    await markCardActivity(card.id).catch(() => undefined);
     logger.info(
       { audit: true, action: "maestro.send", card: card.worktreeSlug, route: "sdk-driver", woke, bytes: Buffer.byteLength(instruction), by },
       "instruction delivered to a card's native chat",
@@ -566,7 +566,7 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
     }
   }
   // A delivered order is a sign of life the idle sweep must see even when the hooks cannot report it.
-  void markCardActivity(card.id).catch(() => undefined);
+  await markCardActivity(card.id).catch(() => undefined);
   logger.info(
     {
       audit: true, action: "maestro.send", card: card.worktreeSlug, session: card.tmuxSession, route: "terminal", woke,

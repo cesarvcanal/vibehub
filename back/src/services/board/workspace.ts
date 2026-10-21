@@ -1666,7 +1666,7 @@ async function sweepIdleCardsOnce(now: number): Promise<number> {
       { card: c.worktreeSlug, session: c.tmuxSession, state: states.get(c.tmuxSession) ?? "unknown", status: c.status ?? null },
       "idle sweep spared a card the board saw as silent: the runner says it is busy (or could not tell) — status hooks may not be reaching the back",
     );
-    void markCardActivity(c.id).catch(() => undefined);
+    await markCardActivity(c.id).catch(() => undefined);
   }
   const target = candidates.filter((c) => !spared.includes(c));
   if (target.length === 0) return 0;
