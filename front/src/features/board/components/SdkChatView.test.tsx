@@ -457,6 +457,36 @@ describe("SdkChatView", () => {
     expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("Seguimos assim…");
     expect(screen.queryByTestId("sdk-chat-working")).toBeNull();
   });
+
+  /**
+   * O TURNO QUE RODA NO TERMINAL. Depois de um deploy o card pode seguir no `claude` da aba Terminal
+   * (card "POC modo de voz", 2026-10-21): o chat só espelha, nenhum evento do driver acende o
+   * indicador, e a tela parecia parada com a IA trabalhando. Quem sabe que ela trabalha é o status do
+   * card (hooks): com ele em "working", o espelho acende o indicador e diz a ferramenta.
+   */
+  it("turno no terminal com o card trabalhando acende o indicador com a ferramenta; apaga quando o card para", async () => {
+    const view = renderSdkChat({ terminalWorking: true });
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "segue", source: "terminal" });
+    ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test", description: "Rodando os testes" }, source: "terminal" });
+
+    expect(screen.getByTestId("sdk-chat-working")).toHaveTextContent("Rodando os testes");
+
+    view.rerender(<SdkChatView cardId="c1" terminalWorking={false} />);
+    expect(screen.queryByTestId("sdk-chat-working")).toBeNull();
+  });
+
+  it("card trabalhando sem atividade do terminal não acende nada — o driver ocioso não está trabalhando", async () => {
+    renderSdkChat({ terminalWorking: true });
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "user", text: "manda" });
+    ws.deliver({ type: "assistant_text", text: "Feito." });
+    ws.deliver({ type: "ready" });
+    expect(screen.queryByTestId("sdk-chat-working")).toBeNull();
+  });
 });
 
 describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {

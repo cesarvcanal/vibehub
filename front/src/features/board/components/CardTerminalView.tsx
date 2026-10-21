@@ -1155,6 +1155,7 @@ export function CardTerminalView({
                 active={active}
                 onUploadImage={uploadImage}
                 onStatus={setConnection}
+                terminalWorking={working}
                 ariaLabel={t("chat.ariaFor", { title: card?.title ?? t("cardView.cardFallback") })}
               />
             ) : mode === "chat" ? (
