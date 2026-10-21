@@ -113,6 +113,7 @@ export class LiveVoiceSession {
   private peer: RTCPeerConnection | null = null;
   private channel: RTCDataChannel | null = null;
   private mic: MediaStream | null = null;
+  private remote: MediaStream | null = null;
   private abort: AbortController | null = null;
   private startTimer: ReturnType<typeof setTimeout> | null = null;
   private closeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -132,6 +133,11 @@ export class LiveVoiceSession {
   /** The microphone stream while a conversation holds it — what the level meter listens to. */
   micStream(): MediaStream | null {
     return this.mic;
+  }
+
+  /** The assistant's audio stream once its track arrived — what the orb follows while it speaks. */
+  remoteStream(): MediaStream | null {
+    return this.remote;
   }
 
   /** The person pressed "play" after the browser blocked autoplay. */
@@ -184,7 +190,8 @@ export class LiveVoiceSession {
       peer.addEventListener("track", (event) => {
         if (attempt !== this.attempt) return;
         if (event.track.kind !== "audio") return;
-        this.deps.audio.srcObject = event.streams[0] ?? new MediaStream([event.track]);
+        this.remote = event.streams[0] ?? new MediaStream([event.track]);
+        this.deps.audio.srcObject = this.remote;
         this.setDiag({ remoteAudio: true });
         void this.deps.audio.play().then(
           () => {
@@ -410,6 +417,7 @@ export class LiveVoiceSession {
     this.abort = null;
     if (this.mic) stopTracks(this.mic);
     this.mic = null;
+    this.remote = null;
     try {
       this.channel?.close();
     } catch {

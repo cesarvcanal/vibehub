@@ -31,6 +31,8 @@ function status(body: { enabled: boolean; available: boolean }, role: "owner" | 
 
 beforeEach(() => {
   rig = fakeRig();
+  // jsdom has no 2D canvas: the orb draws its CSS fallback (and jsdom stays quiet about it).
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
   // jsdom has no WebRTC: the page checks for it before offering the button.
   vi.stubGlobal("RTCPeerConnection", class {});
   Object.defineProperty(navigator, "mediaDevices", { value: {}, configurable: true });
@@ -150,5 +152,18 @@ describe("VoiceModePage", () => {
 
     await user.click(screen.getByRole("button", { name: "Mute microphone" }));
     expect(await screen.findByText("Microphone muted")).toBeInTheDocument();
+  });
+
+  it("shows the orb, and leads back to the card it was opened from", async () => {
+    status({ enabled: true, available: true });
+    renderApp(<VoiceModePage makeDeps={makeDeps} />, { route: { pathname: "/voice", state: { from: "/?project=p1&card=c1" } } as never });
+    expect(await screen.findByTestId("voice-orb")).toHaveAttribute("data-mode", "idle");
+    expect(screen.getByRole("link", { name: /back to the card/i })).toHaveAttribute("href", "/?project=p1&card=c1");
+  });
+
+  it("opened directly, the way back is the board", async () => {
+    status({ enabled: true, available: true });
+    renderApp(<VoiceModePage makeDeps={makeDeps} />);
+    expect(await screen.findByRole("link", { name: /back to the board/i })).toHaveAttribute("href", "/");
   });
 });

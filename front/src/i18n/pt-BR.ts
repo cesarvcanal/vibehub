@@ -1328,4 +1328,6 @@ export const ptBR: Record<string, string> = {
   "voice.diag.events": "Eventos do modelo",
   "voice.diag.yes": "sim",
   "voice.diag.no": "não",
+  "voice.backToCard": "Voltar ao card",
+  "composer.voiceChat": "Conversar por voz (GPT-Live)",
 };

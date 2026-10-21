@@ -1,31 +1,28 @@
 import * as React from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Mic, MicOff, PhoneOff, Volume2 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, Loader2, Mic, MicOff, Phone, Volume2, X } from "lucide-react";
+import { Link, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { SecretInput } from "@/components/ui/secret-input";
 import { useAuth } from "@/providers/auth";
-import { get, post } from "@/lib/api";
+import { post } from "@/lib/api";
 import { Paths } from "@/lib/paths";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { LiveVoiceSession, aiActivity, type LiveVoiceDeps, type LiveVoiceDiag, type LiveVoiceSnapshot } from "./liveVoice";
 import { SIGNAL_THRESHOLD, displayLevel, useMicLevel, type MakeAudioContext } from "./micLevel";
+import { VoiceOrb, type OrbMode } from "./VoiceOrb";
+import { VOICE_STATUS_KEY, useVoiceStatus, type VoiceReturnState } from "./status";
 
 /**
  * VOICE MODE (POC) — `/voice`. A spoken conversation with GPT-Live, like ChatGPT's voice mode:
- * one button starts and ends it, the mic stays open, and you can talk over the assistant to
- * interrupt it. Not connected to Claude Code or to any card. Hidden unless the server has
- * `VIBEHUB_VOICE_LIVE=1` and an OpenAI key.
+ * the orb in the middle, one button starts and ends it, the mic stays open, and you can talk over
+ * the assistant to interrupt it. Not connected to Claude Code or to any card — opened from a card's
+ * composer, it only remembers the way back. Hidden unless the server has `VIBEHUB_VOICE_LIVE=1`
+ * and an OpenAI key.
  */
 
-interface VoiceLiveStatus {
-  enabled: boolean;
-  available: boolean;
-  model: string;
-}
-
-export const VOICE_STATUS_KEY = ["voice", "live"] as const;
+export { VOICE_STATUS_KEY };
 
 function defaultDeps(audio: HTMLAudioElement): LiveVoiceDeps {
   return {
@@ -43,9 +40,20 @@ export interface VoiceModePageProps {
   makeAudioContext?: MakeAudioContext;
 }
 
+/** What the orb shows, from the session and who is making sound. PURE. */
+export function orbMode(snap: LiveVoiceSnapshot, now: number): OrbMode {
+  if (snap.state === "error") return "error";
+  if (snap.state === "connecting" || snap.state === "closing") return "connecting";
+  if (snap.state !== "live") return "idle";
+  if (snap.muted) return aiActivity(snap.diag, now) === "speaking" ? "speaking" : "muted";
+  return aiActivity(snap.diag, now) === "speaking" ? "speaking" : "listening";
+}
+
 export function VoiceModePage({ makeDeps = defaultDeps, makeAudioContext }: VoiceModePageProps) {
   const t = useT();
-  const status = useQuery({ queryKey: VOICE_STATUS_KEY, queryFn: () => get<VoiceLiveStatus>("/voice/live") });
+  const status = useVoiceStatus();
+  const location = useLocation();
+  const from = (location.state as VoiceReturnState | null)?.from;
   const audioRef = React.useRef<HTMLAudioElement>(null);
   const [session, setSession] = React.useState<LiveVoiceSession | null>(null);
 
@@ -68,17 +76,33 @@ export function VoiceModePage({ makeDeps = defaultDeps, makeAudioContext }: Voic
   // The stream exists from the mic grant until teardown; `diag.micTrack` changing re-reads it.
   const micStream = React.useMemo(() => (active ? session?.micStream() ?? null : null), [active, session, snap.diag.micTrack]);
   const rms = useMicLevel(micStream, makeAudioContext);
+  // The assistant's own audio, measured the same way, once its track arrived.
+  const remoteStream = React.useMemo(
+    () => (snap.state === "live" && snap.diag.remoteAudio ? session?.remoteStream() ?? null : null),
+    [snap.state, snap.diag.remoteAudio, session],
+  );
+  const remoteRms = useMicLevel(remoteStream, makeAudioContext);
+  const mode = orbMode(snap, Date.now());
+  const orbLevel =
+    mode === "speaking"
+      ? displayLevel(remoteRms ?? snap.diag.remoteLevel ?? 0.15)
+      : mode === "listening"
+        ? displayLevel(rms ?? 0)
+        : 0;
 
   return (
-    <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col gap-6 px-4 py-8">
+    <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col gap-6 px-4 py-6">
       <div className="flex items-center justify-between gap-2">
-        <div>
-          <h1 className="text-lg font-semibold">{t("voice.title")}</h1>
-          <p className="text-sm text-muted-foreground">{t("voice.subtitle")}</p>
-        </div>
-        <Button asChild variant="ghost" size="sm">
-          <Link to={Paths.BOARD}>{t("voice.back")}</Link>
+        <Button asChild variant="ghost" size="sm" className="-ml-2">
+          <Link to={from ?? Paths.BOARD}>
+            <ArrowLeft />
+            {from ? t("voice.backToCard") : t("voice.back")}
+          </Link>
         </Button>
+        <div className="text-right">
+          <h1 className="text-sm font-semibold">{t("voice.title")}</h1>
+          <p className="text-xs text-muted-foreground">{t("voice.subtitle")}</p>
+        </div>
       </div>
 
       {/* Hidden player: the assistant's voice arrives on a WebRTC track. */}
@@ -99,47 +123,58 @@ export function VoiceModePage({ makeDeps = defaultDeps, makeAudioContext }: Voic
         </p>
       ) : (
         <>
-          <div className="flex flex-col items-center gap-4">
-            <button
-              type="button"
-              onClick={() => (active ? session?.stop() : void session?.start())}
-              disabled={snap.state === "closing"}
-              aria-pressed={active}
-              aria-label={active ? t("voice.stop") : t("voice.start")}
-              className={cn(
-                "flex size-28 items-center justify-center rounded-full border-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60",
-                active ? "border-destructive bg-destructive/10 text-destructive" : "border-primary bg-primary/10 text-primary",
-              )}
-              // The ring around the button follows the LOCAL microphone level.
-              style={rms !== null && !snap.muted ? { boxShadow: `0 0 0 ${Math.round(displayLevel(rms) * 18)}px hsl(var(--primary) / 0.25)` } : undefined}
-            >
-              {snap.state === "connecting" || snap.state === "closing" ? (
-                <Loader2 className="size-10 animate-spin" />
-              ) : active ? (
-                <PhoneOff className="size-10" />
-              ) : (
-                <Mic className="size-10" />
-              )}
-            </button>
+          <div className="flex flex-col items-center gap-5">
+            <VoiceOrb level={orbLevel} mode={mode} size={240} className="mt-2" />
             <p role="status" aria-live="polite" className="text-sm text-muted-foreground">
               {t(`voice.state.${snap.state}`)}
             </p>
-            {active && <MicMeter rms={rms} muted={snap.muted} />}
             {snap.state === "live" && <AiStatus diag={snap.diag} />}
-            {snap.state === "live" && (
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={() => session?.setMuted(!snap.muted)} aria-pressed={snap.muted}>
-                  {snap.muted ? <MicOff /> : <Mic />}
-                  {snap.muted ? t("voice.unmute") : t("voice.mute")}
-                </Button>
-                {snap.diag.playback === "blocked" && (
-                  <Button variant="outline" size="sm" onClick={() => session?.resumePlayback()}>
-                    <Volume2 />
-                    {t("voice.playAudio")}
-                  </Button>
+            {active && <MicMeter rms={rms} muted={snap.muted} />}
+
+            {/* The call bar: mute on the left, start/end on the right — like a phone call. */}
+            <div className="flex items-center gap-4">
+              {snap.state === "live" && (
+                <button
+                  type="button"
+                  onClick={() => session?.setMuted(!snap.muted)}
+                  aria-pressed={snap.muted}
+                  aria-label={snap.muted ? t("voice.unmute") : t("voice.mute")}
+                  title={snap.muted ? t("voice.unmute") : t("voice.mute")}
+                  className={cn(
+                    "flex size-14 items-center justify-center rounded-full border border-border bg-card transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    snap.muted && "border-destructive/50 bg-destructive/10 text-destructive",
+                  )}
+                >
+                  {snap.muted ? <MicOff className="size-6" /> : <Mic className="size-6" />}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => (active ? session?.stop() : void session?.start())}
+                disabled={snap.state === "closing"}
+                aria-pressed={active}
+                aria-label={active ? t("voice.stop") : t("voice.start")}
+                title={active ? t("voice.stop") : t("voice.start")}
+                className={cn(
+                  "flex size-14 items-center justify-center rounded-full text-white shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60",
+                  active ? "bg-destructive hover:bg-destructive/90" : "bg-sky-500 hover:bg-sky-600",
                 )}
-              </div>
-            )}
+              >
+                {snap.state === "connecting" || snap.state === "closing" ? (
+                  <Loader2 className="size-6 animate-spin" />
+                ) : active ? (
+                  <X className="size-6" />
+                ) : (
+                  <Phone className="size-6" />
+                )}
+              </button>
+              {snap.state === "live" && snap.diag.playback === "blocked" && (
+                <Button variant="outline" size="sm" onClick={() => session?.resumePlayback()}>
+                  <Volume2 />
+                  {t("voice.playAudio")}
+                </Button>
+              )}
+            </div>
           </div>
 
           {snap.error && (

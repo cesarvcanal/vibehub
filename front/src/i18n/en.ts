@@ -1316,4 +1316,6 @@ export const en: Record<string, string> = {
   "voice.diag.events": "Model events",
   "voice.diag.yes": "yes",
   "voice.diag.no": "no",
+  "voice.backToCard": "Back to the card",
+  "composer.voiceChat": "Talk by voice (GPT-Live)",
 };
