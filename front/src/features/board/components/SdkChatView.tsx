@@ -172,11 +172,14 @@ export interface SdkChatViewProps {
   /** Uploads an image and resolves with its path inside the runner (appended to the message). */
   onUploadImage?: (file: File) => Promise<string | null>;
   onStatus?: (state: ConnectionState) => void;
+  /** O card está trabalhando pelos hooks. Só vale para um turno que roda na aba Terminal (o chat
+   *  espelha e o driver não diz nada): é a única fonte de que aquele turno ainda está de pé. */
+  terminalWorking?: boolean;
   ariaLabel?: string;
   className?: string;
 }
 
-export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ariaLabel, className }: SdkChatViewProps) {
+export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, terminalWorking = false, ariaLabel, className }: SdkChatViewProps) {
   const t = useT();
   // Whose screen this is — the edit affordance belongs only to one's own messages.
   const me = useAuth().user;
@@ -1184,7 +1187,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, ar
 
   // The activity bar's three facts: WHAT (the newest tool/reasoning/answer of this turn), for HOW
   // LONG, and whether the turn was escalated by a reserved word.
-  const working = connected && (state.awaiting || state.turnActive);
+  // O turno que roda na aba Terminal (o `claude` interativo; o chat só espelha) não acende
+  // `turnActive` — quem garante que ele segue de pé são os hooks do card. Sem isso a tela parecia
+  // parada com a IA trabalhando (card "POC modo de voz", 2026-10-21).
+  const working = connected && (state.awaiting || state.turnActive || (state.terminalBurst && terminalWorking));
   const activity = React.useMemo(() => (working ? currentActivity(state) : null), [working, state]);
   /*
    * QUANDO o trabalho começou — e só isso mora aqui. O relógio que anda a cada segundo vive nos dois
