@@ -6,7 +6,9 @@ import { cardBrowserPorts } from "../browser/ports.js";
 import { markBrowserBusy } from "../browser/activity.js";
 import { logger } from "../../utils/logger.js";
 import { buildCdpHostScript, type FillResult } from "./fill.js";
-import { createCredential, suggestCredentialName, type Credential } from "./credentials.js";
+import {
+  authorizeAgentWrite, createCredential, suggestCredentialName, type Credential, type CredentialOrigin,
+} from "./credentials.js";
 
 /**
  * CHROME-STYLE CAPTURE — watches a card's live Chromium for a login being submitted (by the person
@@ -105,15 +107,32 @@ export function dismissCapture(id: string): boolean {
  * record — it was never sent to the front. A capture with a username becomes a userpass credential;
  * one without becomes a token.
  */
-export async function saveCapture(id: string, name: string | undefined, by?: string): Promise<Credential> {
+export async function saveCapture(
+  id: string,
+  name: string | undefined,
+  by?: string,
+  origin?: CredentialOrigin,
+): Promise<Credential> {
   const c = pending.get(id);
   if (!c) throw new Error("this capture is no longer available");
   const finalName = (name?.trim() || c.suggestedName);
   const credential = c.username
-    ? await createCredential({ name: finalName, type: "userpass", username: c.username, password: c.password }, by)
-    : await createCredential({ name: finalName, type: "token", value: c.password }, by);
+    ? await createCredential({ name: finalName, type: "userpass", username: c.username, password: c.password }, by, origin)
+    : await createCredential({ name: finalName, type: "token", value: c.password }, by, origin);
   pending.delete(id);
   return credential;
+}
+
+/**
+ * The agent's path to save a capture: only one seen by ITS OWN card's browser, and only when the
+ * card's project is opted in to agent writes. The value goes from the server-held capture to the
+ * vault — the agent passes an id and a name, never a password.
+ */
+export async function saveCaptureForCard(cardId: string, id: string, name: string | undefined, by?: string): Promise<Credential> {
+  const origin = await authorizeAgentWrite(cardId, "capture");
+  const c = pending.get(id);
+  if (!c || c.cardId !== cardId) throw new Error("this capture is no longer available");
+  return await saveCapture(id, name, by, origin);
 }
 
 /** Parses NDJSON lines from the capture program's stdout, feeding each capture into the store. */

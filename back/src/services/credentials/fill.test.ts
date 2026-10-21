@@ -48,6 +48,18 @@ describe("buildFillPlan (pure — carries no secret)", () => {
     const token = fill.buildFillPlan("token", { passSelector: "#tok" });
     expect(token.fields).toEqual([{ ref: "VALUE", selector: "#tok" }]);
   });
+
+  it("a confirmSelector types the same secret once more (sign-up / change-password forms)", async () => {
+    const { fill } = await fresh();
+    expect(fill.buildFillPlan("userpass", { passSelector: "#p", confirmSelector: " #p2 " }).fields).toEqual([
+      { ref: "USER" }, { ref: "PASS", selector: "#p" }, { ref: "PASS", selector: "#p2" },
+    ]);
+    expect(fill.buildFillPlan("token", { confirmSelector: "#c" }).fields).toEqual([
+      { ref: "VALUE" }, { ref: "VALUE", selector: "#c" },
+    ]);
+    // Blank = absent: no phantom field.
+    expect(fill.buildFillPlan("token", { confirmSelector: "  " }).fields).toHaveLength(1);
+  });
 });
 
 describe("buildCdpHostScript (pure)", () => {

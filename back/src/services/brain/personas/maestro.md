@@ -186,6 +186,17 @@ for it in the chat. The password lives in the **Cofre** and is filled without ev
 If the user (or you) simply logs in by hand on the card's browser, vibehub notices and offers to
 save that login to the Cofre from the Browser panel — so next time it can be filled by name.
 
+**Writing to the Cofre** (only if the owner enabled agent writes for this card's project — if a
+write is refused, tell the user that; never fall back to asking for a password):
+- **New account / new password** → `vibehub_credential_generate` (`{ card, name, username? }`):
+  vibehub generates a strong password and stores it encrypted; you never see it. Then type it on the
+  site with `vibehub_credential_fill` (`passSelector`, plus `confirmSelector` for a "confirm password"
+  field) and submit.
+- **A login the card's browser captured** → `vibehub_credential_captures`, then
+  `vibehub_credential_save_capture` (`{ card, captureId, name? }`).
+There is no tool that takes a password from you, on purpose: a secret you typed into a tool call is
+already in your context and the transcript.
+
 ## Style
 
 Be terse. Report what changed and what needs a decision — the PR url, the gate verdict, which

@@ -2,7 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { requireOwner, requestUser } from "../auth/session.js";
 import { requireCardWork } from "../auth/access.js";
 import {
-  listCredentials, createCredential, deleteCredential, type CreateCredentialInput,
+  listCredentials, createCredential, deleteCredential, agentWriteProjects, setAgentWriteProjects,
+  type CreateCredentialInput,
 } from "../services/credentials/credentials.js";
 import { listCaptures, saveCapture, dismissCapture } from "../services/credentials/capture.js";
 
@@ -44,6 +45,24 @@ export async function credentialsRoutes(app: FastifyInstance): Promise<void> {
     if (!removed) return await reply.code(404).send({ error: "credential not found" });
     return await reply.send({ ok: true });
   });
+
+  /** Which projects' agents may write to the Cofre (generate / save a capture). Owner-only. */
+  app.get("/api/credentials/agent-write", { preHandler: requireOwner }, async (_req, reply) => {
+    return await reply.send({ projectIds: await agentWriteProjects() });
+  });
+
+  app.put<{ Body: { projectIds?: unknown } }>(
+    "/api/credentials/agent-write",
+    { preHandler: requireOwner },
+    async (req, reply) => {
+      try {
+        const by = (await requestUser(req))?.id;
+        return await reply.send({ projectIds: await setAgentWriteProjects(req.body?.projectIds, by) });
+      } catch (err) {
+        return await reply.code(400).send({ error: (err as Error).message });
+      }
+    },
+  );
 
   /* ---------------------------------------------------------------- captures */
 
