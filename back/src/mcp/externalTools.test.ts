@@ -279,3 +279,47 @@ describe("the inbox — what happened on the board while the user was not asking
     await close();
   });
 });
+
+/**
+ * Produção, 21/10/2026: create_card(open) and then send_to_terminal answered "awaiting choice" until
+ * someone opened the card by hand. The open now reports whether Claude can take a message, and the
+ * send WAITS for a card that is still booting instead of failing (or typing into an undrawn pane).
+ */
+describe("external MCP — open/send right after creating a card", () => {
+  const READY = "╭───╮\n│ > │\n╰───╯\n  ⏵⏵ bypass permissions on · ? for shortcuts";
+  /** The runner by WHAT each script is: the pane is blank for the first `blank` captures. */
+  function bootingRunner(blank: number) {
+    let captures = 0;
+    const sent: string[] = [];
+    runScript.mockImplementation((async (script: string) => {
+      if (script.includes("tmux send-keys")) { sent.push(script); return { stdout: "", stderr: "" }; }
+      if (script.includes("list-panes")) return { stdout: "bash\nclaude\n", stderr: "" };
+      if (script.includes("capture-pane")) { captures += 1; return { stdout: captures > blank ? READY : "", stderr: "" }; }
+      return { stdout: "", stderr: "" };
+    }) as never);
+    return { sent, captures: () => captures };
+  }
+
+  it("create_card(open) answers ready once Claude has drawn its prompt", async () => {
+    const env = await load();
+    const run = bootingRunner(1);
+    const { call, close } = await env.connect(env.owner);
+    const out = await call("vibehub_create_card", { projectId: env.project.id, title: "relatorio top 100" });
+    expect(out).toMatchObject({ opened: true, ready: true });
+    expect(run.captures()).toBeGreaterThanOrEqual(2);
+    await close();
+  }, 20_000);
+
+  it("send_to_terminal waits for a card still booting, then delivers — no 'awaiting choice'", async () => {
+    const env = await load();
+    const run = bootingRunner(1);
+    const { call, close } = await env.connect(env.owner);
+    const out = await call("vibehub_send_to_terminal", { cardId: env.card.id, text: "gera o relatorio" });
+    expect(out.error).toBeUndefined();
+    expect(out).toMatchObject({ sent: true });
+    expect(run.sent).toHaveLength(1);
+    expect(run.sent[0]).toContain("gera o relatorio");
+    await close();
+  }, 20_000);
+});
+

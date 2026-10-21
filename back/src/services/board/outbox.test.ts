@@ -26,9 +26,11 @@ async function load() {
 }
 
 /** The probe answers first, then the delivery. One helper so the intent reads in every test. */
-function agentIs(state: "running" | "shell" | "none"): void {
+function agentIs(state: "running" | "shell" | "none", pane = "> \n? for shortcuts"): void {
   const stdout = state === "running" ? "node\n" : state === "shell" ? "bash\n" : "";
   runScript.mockResolvedValueOnce({ stdout, stderr: "" });
+  // A running agent is followed by the pane capture: the queue only lands on Claude's PROMPT.
+  if (state === "running") runScript.mockResolvedValueOnce({ stdout: pane, stderr: "" });
 }
 
 // The first `load()` pays for transforming registry + maestro + config, which is far more than a
@@ -95,6 +97,21 @@ describe("buildAgentProbeScript", () => {
   });
 });
 
+describe("interactiveMenuKind / paneReadiness", () => {
+  it("names the menu, and tells a pane not drawn yet from a ready prompt", async () => {
+    const agentState = await import("./agentState.js");
+    const trust = " Quick safety check: Is this a project you created or one you trust?\n ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel";
+    expect(agentState.interactiveMenuKind(trust)).toBe("trust");
+    expect(agentState.interactiveMenuKind("❯ 1. Resume from summary (recommended)\n  2. Resume full")).toBe("resume");
+    expect(agentState.interactiveMenuKind("Do you want to proceed?\n❯ 1. Yes\n  2. No")).toBe("permission");
+    expect(agentState.interactiveMenuKind("  5. Chat about this\nEnter to select · ↑/↓ to navigate · Esc to cancel")).toBe("other");
+    expect(agentState.interactiveMenuKind("> \n? for shortcuts")).toBeNull();
+    expect(agentState.paneReadiness(trust)).toEqual({ state: "menu", menu: "trust" });
+    expect(agentState.paneReadiness("  \n\n ")).toEqual({ state: "booting" });
+    expect(agentState.paneReadiness("> \n? for shortcuts")).toEqual({ state: "ready" });
+  });
+});
+
 describe("looksLikeInteractiveMenu", () => {
   it("catches the session-resume menu, the permission prompt and the confirm/cancel footer", async () => {
     const { outbox } = await load();
@@ -135,9 +152,9 @@ describe("queueMessage", () => {
 
     expect(out.delivered).toBe(true);
     expect(out.pending).toEqual([]);
-    // probe, then send-keys
-    expect(runScript).toHaveBeenCalledTimes(2);
-    expect((runScript.mock.calls[1] as unknown as string[])[0]).toContain("run the tests");
+    // probe, pane capture, then send-keys
+    expect(runScript).toHaveBeenCalledTimes(3);
+    expect((runScript.mock.calls[2] as unknown as string[])[0]).toContain("run the tests");
     expect(await outbox.pendingMessages(c.id)).toEqual([]);
   });
 
@@ -153,6 +170,25 @@ describe("queueMessage", () => {
     expect(out.delivered).toBe(false);
     expect(out.pending.map((m) => m.text)).toEqual(["deploy it"]);
     expect(runScript).toHaveBeenCalledOnce(); // the probe only: nothing was sent anywhere
+  });
+
+  it("HOLDS the message while Claude sits on a menu or has not drawn its prompt — never answers it", async () => {
+    const { outbox, registry } = await load();
+    const p = await registry.createProject({ name: "api-space" });
+    const c = await registry.createCard({ projectId: p.id, title: "on the trust dialog" });
+    await registry.applyOpenTerminal(c.id);
+
+    agentIs("running", " ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel");
+    const onMenu = await outbox.queueMessage(c.id, "gera o relatorio");
+    expect(onMenu.delivered).toBe(false);
+    expect(runScript).toHaveBeenCalledTimes(2); // probe + capture: no send-keys
+
+    agentIs("running", "");
+    expect((await outbox.flushCard(c.id)).delivered).toBe(0); // booting: still held
+
+    agentIs("running");
+    expect((await outbox.flushCard(c.id)).delivered).toBe(1);
+    expect(await outbox.pendingMessages(c.id)).toEqual([]);
   });
 
   it("queues without touching the runner when the card has no session at all", async () => {
@@ -190,7 +226,7 @@ describe("flushCard", () => {
     runScript.mockClear();
     agentIs("running");
     expect((await outbox.flushCard(c.id)).delivered).toBe(2);
-    const sent = runScript.mock.calls.slice(1).map((call) => (call as unknown as string[])[0]);
+    const sent = runScript.mock.calls.slice(2).map((call) => (call as unknown as string[])[0]);
     expect(sent[0]).toContain("first");
     expect(sent[1]).toContain("second");
     expect(await outbox.pendingMessages(c.id)).toEqual([]);

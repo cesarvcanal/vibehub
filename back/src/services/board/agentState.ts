@@ -106,6 +106,38 @@ export function looksLikeInteractiveMenu(paneText: string): boolean {
   return false;
 }
 
+/** Which menu a pane is sitting on — what the person (or the log) needs to know to answer it. */
+export type MenuKind = "trust" | "resume" | "permission" | "other";
+
+/**
+ * Names the menu {@link looksLikeInteractiveMenu} caught; null = no menu. `trust` is the folder-trust
+ * dialog the first-run seed exists to prevent (seeing it means the seed missed), `resume` the
+ * session-resume / compact recap, `permission` a tool asking to proceed. PURE.
+ */
+export function interactiveMenuKind(paneText: string): MenuKind | null {
+  const t = String(paneText ?? "");
+  if (!looksLikeInteractiveMenu(t)) return null;
+  if (/trust this folder|one you trust/i.test(t)) return "trust";
+  if (/resume from summary|resume full|resume (the |this )?(session|conversation)/i.test(t)) return "resume";
+  if (/\bdo you want to\b/i.test(t)) return "permission";
+  return "other";
+}
+
+/**
+ * What the pane says about taking a message: `ready` (Claude's prompt is drawn), `menu` (a choice is
+ * open — typing would answer it), `booting` (nothing drawn yet: the session was just created and
+ * Claude has not painted its first frame — keys typed now are lost). PURE.
+ */
+export type PaneReadiness = { state: "ready" } | { state: "booting" } | { state: "menu"; menu: MenuKind };
+
+export function paneReadiness(paneText: string): PaneReadiness {
+  const t = String(paneText ?? "");
+  const menu = interactiveMenuKind(t);
+  if (menu) return { state: "menu", menu };
+  if (!t.trim()) return { state: "booting" };
+  return { state: "ready" };
+}
+
 /** Captures the pane's tail so looksLikeInteractiveMenu can read it. Read-only; `|| true` on purpose. */
 export function buildMenuProbeScript(containerName: string, tmuxSession: string): string {
   return (
@@ -131,6 +163,26 @@ export async function cardAwaitingChoice(
     return looksLikeInteractiveMenu(stdout);
   } catch {
     return false;
+  }
+}
+
+/**
+ * The pane's readiness right now (one capture). A card with no live session reads as `booting` —
+ * there is no frame to read — and so does a failed capture: unlike {@link cardAwaitingChoice}, the
+ * caller here WAITS on the answer, and "could not see the pane" is not "the prompt is up".
+ */
+export async function cardPaneReadiness(
+  card: Pick<Card, "openedAt" | "pausedAt" | "tmuxSession">,
+): Promise<PaneReadiness> {
+  if (!hasLiveSession(card)) return { state: "booting" };
+  try {
+    const { stdout } = await hostExecutor().runScript(
+      buildMenuProbeScript(config.runner.container, card.tmuxSession),
+      { timeoutMs: 15_000 },
+    );
+    return paneReadiness(stdout);
+  } catch {
+    return { state: "booting" };
   }
 }
 

@@ -5,7 +5,7 @@ import {
   listAccounts, getConfig, isHumanActive, reportCardState, CLAUDE_MODELS, isValidEffort,
   type Card, type Project, type BoardColumn, type CardStatus, type DeclaredState,
 } from "../board/registry.js";
-import { cardAgentState, cardAwaitingChoice, cardDriverActivity } from "../board/agentState.js";
+import { cardAgentState, cardDriverActivity, cardPaneReadiness, type MenuKind } from "../board/agentState.js";
 import { profileDirFor } from "../accounts/profiles.js";
 import { transcriptDirFor, sessionGoneError } from "./cardSession.js";
 import { recordOrigin, type MessageOrigin } from "../chat/provenance.js";
@@ -291,6 +291,116 @@ export interface SendOpts {
    * the authorship alone). A throw here fails the send.
    */
   beforeDeliver?: () => Promise<void>;
+  /**
+   * How long the send may WAIT for the terminal to become able to take it (Claude running, its
+   * prompt drawn, no menu open) before refusing. 0 = probe once and refuse at once (the chat
+   * composer: a person is looking and keeps the draft). An agent driving a card it just created or
+   * opened needs the wait: Claude takes seconds to boot, and a send in that window used to fail as
+   * "no agent running"/"awaiting choice" or be typed into a pane that was not drawn yet. The wait
+   * only OBSERVES — a menu is never answered for anyone; one still open at the deadline refuses.
+   */
+  readyWaitMs?: number;
+  /** Interval between looks while waiting (tests shorten it). */
+  readyPollMs?: number;
+}
+
+/** How often a waiting send looks at the pane again. */
+export const READY_POLL_MS = 1_000;
+
+/**
+ * How long a send from an AGENT/assistant (and an open, once its session exists) waits for Claude to
+ * be able to take a message. Claude boots in a few seconds; past this the answer names what is in
+ * the way (a menu, a Claude that exited) instead of a bare "awaiting choice".
+ */
+export const SEND_READY_WAIT_MS = 30_000;
+
+/** Why a terminal cannot take a message right now — the refusal a waiting send ends on. */
+type TerminalBlocker =
+  | { reason: "no agent"; agent: "shell" | "none" }
+  | { reason: "menu"; menu: MenuKind }
+  | { reason: "booting" };
+
+/**
+ * What stands between this card's terminal and a typed message, null = nothing. One agent probe and
+ * (when the menu guard is on) one pane capture. `booting` only counts for a WAITING send: a send
+ * with no wait keeps its old behaviour (an empty capture was never a refusal).
+ */
+async function terminalBlocker(
+  card: Card, checks: { agent: boolean; menu: boolean; booting: boolean },
+): Promise<TerminalBlocker | null> {
+  if (checks.agent) {
+    const agent = await cardAgentState(card);
+    if (agent !== "running") return { reason: "no agent", agent };
+  }
+  if (checks.menu) {
+    const pane = await cardPaneReadiness(card);
+    if (pane.state === "menu") return { reason: "menu", menu: pane.menu };
+    if (pane.state === "booting" && checks.booting) return { reason: "booting" };
+  }
+  return null;
+}
+
+/** A blocker as the error a caller can act on. The leading markers ("no agent running", "awaiting
+ * choice") are what the routes map to their status codes — keep them. */
+function blockerError(b: TerminalBlocker, title: string, waitedMs: number): Error {
+  const waited = waitedMs > 0 ? ` (waited ${Math.round(waitedMs / 1000)}s for it to become ready)` : "";
+  if (b.reason === "no agent") {
+    return new Error(
+      `no agent running: Claude is not running in card "${title}" (the terminal is ${
+        b.agent === "shell" ? "at a bare shell" : "gone"
+      })${waited} — restart the card, then send again`,
+    );
+  }
+  if (b.reason === "menu") {
+    const what: Record<MenuKind, string> = {
+      trust: "the folder-trust dialog",
+      resume: "the session-resume menu",
+      permission: "a permission prompt",
+      other: "a menu",
+    };
+    return new Error(
+      `awaiting choice (${b.menu}): card "${title}" is waiting on ${what[b.menu]} in the terminal${waited}. Open the Terminal tab, answer it, then send again.`,
+    );
+  }
+  return new Error(
+    `terminal not ready: Claude is still starting in card "${title}"${waited} — send again in a few seconds`,
+  );
+}
+
+/**
+ * Holds until the card's terminal can take a message, or throws the reason it cannot at the
+ * deadline. Every wait that ended blocked — and every one that had to wait at all — is logged with
+ * what it saw, so "the card did not start" is answerable from the logs instead of a screenshot.
+ */
+async function awaitTerminalReady(
+  card: Card, checks: { agent: boolean; menu: boolean }, waitMs: number, pollMs: number,
+): Promise<void> {
+  const started = Date.now();
+  const deadline = started + Math.max(0, waitMs);
+  const full = { ...checks, booting: waitMs > 0 };
+  let first: TerminalBlocker | null = null;
+  for (;;) {
+    const blocker = await terminalBlocker(card, full);
+    if (!blocker) {
+      if (first) {
+        logger.info(
+          { card: card.worktreeSlug, waitedMs: Date.now() - started, initially: first },
+          "card terminal became ready for a waiting send",
+        );
+      }
+      return;
+    }
+    first ??= blocker;
+    if (Date.now() >= deadline) {
+      const waitedMs = Date.now() - started;
+      logger.warn(
+        { card: card.worktreeSlug, session: card.tmuxSession, blocker, waitedMs },
+        "send refused: card terminal not ready",
+      );
+      throw blockerError(blocker, card.title, waitedMs);
+    }
+    await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
+  }
 }
 
 /**
@@ -313,10 +423,30 @@ export async function agentOriginFor(fromCardId?: string): Promise<MessageOrigin
   return { kind: "agent", name: "" };
 }
 
+/** What an open reports about the terminal it started: able to take a message, or why not yet. */
+export type TerminalReadiness = { ready: true } | { ready: false; detail: string };
+
+/**
+ * Waits up to `waitMs` for an OPENED card's terminal to take a message (Claude running, prompt
+ * drawn, no menu) — what `liveSession` alone cannot say: the session exists the moment tmux does,
+ * seconds before Claude can read a keystroke. Never throws; the answer says why it is not ready.
+ */
+export async function waitTerminalReady(cardId: string, waitMs: number, pollMs = READY_POLL_MS): Promise<TerminalReadiness> {
+  const card = await getCard(cardId);
+  if (!card) return { ready: false, detail: "card not found" };
+  if (!hasLiveSession(card)) return { ready: false, detail: "no live session" };
+  try {
+    await awaitTerminalReady(card, { agent: true, menu: true }, waitMs, pollMs);
+    return { ready: true };
+  } catch (err) {
+    return { ready: false, detail: (err as Error).message };
+  }
+}
+
 export async function sendToTerminal(cardId: string, text: string, opts: SendOpts = {}): Promise<SendResult> {
   const {
     by, respectHumanActive = false, guardInteractiveMenu = false, requireAgent = false, origin, viaNativeChat = false,
-    beforeDeliver,
+    beforeDeliver, readyWaitMs = 0, readyPollMs = READY_POLL_MS,
   } = opts;
   const instruction = String(text ?? "").trim();
   if (!instruction) throw new Error("empty text: there is nothing to send to the terminal");
@@ -360,20 +490,8 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
   // Claude EXITED under this session (the pane is a bare shell) or the session evaporated: typing
   // here would hand the message to bash, answer 200, and echo NOTHING back — the chat's forever-
   // pending bubble. Refuse with the action that fixes it instead.
-  if (requireAgent || fromAgent) {
-    const agent = await cardAgentState(card);
-    if (agent !== "running") {
-      throw new Error(
-        `no agent running: Claude is not running in card "${card.title}" (the terminal is ${
-          agent === "shell" ? "at a bare shell" : "gone"
-        }) — restart the card, then send again`,
-      );
-    }
-  }
-  if (guardInteractiveMenu && (await cardAwaitingChoice(card))) {
-    throw new Error(
-      `awaiting choice: card "${card.title}" is waiting on a menu in the terminal (session resume, /compact or a permission prompt). Open the Terminal tab, answer it, then send again.`,
-    );
+  if (requireAgent || fromAgent || guardInteractiveMenu) {
+    await awaitTerminalReady(card, { agent: requireAgent || fromAgent, menu: guardInteractiveMenu }, readyWaitMs, readyPollMs);
   }
   const project = await getProject(card.projectId);
   if (!project) throw new Error("project for this card not found");

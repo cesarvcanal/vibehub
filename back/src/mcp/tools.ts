@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { listTerminals, sendToTerminal, readTerminal, reportState, agentOriginFor } from "../services/maestro/maestro.js";
+import { listTerminals, sendToTerminal, readTerminal, reportState, agentOriginFor, SEND_READY_WAIT_MS } from "../services/maestro/maestro.js";
 import { DECLARED_STATES } from "../services/board/registry.js";
 import { recordMessage, MESSAGE_TYPES, SEVERITIES, type MessageType, type Severity } from "../services/events/cardEvents.js";
 import { sendAnswer } from "./events.js";
@@ -78,6 +78,10 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
           // once the send is certain to go (a refused send leaves the authorship alone).
           beforeDeliver: () => relayCardActor(a.from, a.cardId),
           respectHumanActive: true,
+          // Never type into a menu (Enter would pick its highlighted option — on the trust dialog,
+          // "No, exit"), and give a card that is still booting the time to draw its prompt.
+          guardInteractiveMenu: true,
+          readyWaitMs: SEND_READY_WAIT_MS,
           origin: await agentOriginFor(a.from),
         })));
       } catch (e) {
