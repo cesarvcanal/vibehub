@@ -8,7 +8,9 @@ import axios, { type AxiosRequestConfig } from "axios";
  * talks to its own origin and the cookie behaves exactly as it will in production.
  */
 export const api = axios.create({
-  baseURL: "/api",
+  // Under Vite's base, which is "/" in production. Served under a prefix (vibehub previewing itself
+  // at `/preview/<port>/`) an absolute "/api" would reach the panel AROUND the preview, not this app.
+  baseURL: `${import.meta.env.BASE_URL}api`,
   withCredentials: true,
   headers: { "Content-Type": "application/json" },
 });
@@ -45,8 +47,8 @@ api.interceptors.response.use(
     if (status === 401 && !isSilent(error?.config?.url)) {
       if (unauthorizedHandler) {
         unauthorizedHandler();
-      } else if (typeof window !== "undefined" && window.location.pathname !== "/login") {
-        window.location.replace("/login");
+      } else if (typeof window !== "undefined" && window.location.pathname !== `${import.meta.env.BASE_URL}login`) {
+        window.location.replace(`${import.meta.env.BASE_URL}login`);
       }
     }
     return Promise.reject(error);

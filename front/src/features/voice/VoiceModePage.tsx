@@ -1,8 +1,10 @@
 import * as React from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Mic, MicOff, PhoneOff } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { SecretInput } from "@/components/ui/secret-input";
+import { useAuth } from "@/providers/auth";
 import { get, post } from "@/lib/api";
 import { Paths } from "@/lib/paths";
 import { useT } from "@/i18n";
@@ -79,9 +81,12 @@ export function VoiceModePage({ makeDeps = defaultDeps }: VoiceModePageProps) {
       {status.isLoading ? (
         <Loader2 className="mx-auto size-6 animate-spin text-muted-foreground" aria-label={t("common.loading")} />
       ) : !ready ? (
-        <p role="status" className="rounded-md border border-border p-4 text-sm text-muted-foreground">
-          {status.data?.enabled ? t("voice.unavailable.noKey") : t("voice.unavailable.disabled")}
-        </p>
+        <div className="flex flex-col gap-3">
+          <p role="status" className="rounded-md border border-border p-4 text-sm text-muted-foreground">
+            {status.data?.enabled ? t("voice.unavailable.noKey") : t("voice.unavailable.disabled")}
+          </p>
+          {status.data?.enabled && <OwnerKeyForm />}
+        </div>
       ) : !supported ? (
         <p role="status" className="rounded-md border border-border p-4 text-sm text-muted-foreground">
           {t("voice.unavailable.browser")}
@@ -145,6 +150,55 @@ export function VoiceModePage({ makeDeps = defaultDeps }: VoiceModePageProps) {
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * The owner stores the install's OpenAI key right here — the same vault entry the composer's
+ * microphone uses (`POST /api/transcribe/keys`, owner-only), which the voice mode falls back to.
+ * The value goes from the field to the server and is never shown again; only "is there one" is.
+ */
+function OwnerKeyForm() {
+  const t = useT();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const [key, setKey] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+  const [failed, setFailed] = React.useState(false);
+  if (user?.role !== "owner") return null;
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!key.trim()) return;
+    setSaving(true);
+    setFailed(false);
+    try {
+      await post("/transcribe/keys", { openaiKey: key.trim() });
+      setKey("");
+      await queryClient.invalidateQueries({ queryKey: VOICE_STATUS_KEY });
+    } catch {
+      setFailed(true);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={save} className="flex flex-col gap-2">
+      <label htmlFor="voice-openai-key" className="text-sm font-medium">{t("voice.key.label")}</label>
+      <div className="flex gap-2">
+        <SecretInput
+          id="voice-openai-key"
+          name="voice-openai-key"
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          placeholder="sk-…"
+        />
+        <Button type="submit" disabled={saving || !key.trim()}>{t("common.save")}</Button>
+      </div>
+      <p className="text-xs text-muted-foreground">{t("voice.key.hint")}</p>
+      {failed && <p role="alert" className="text-sm text-destructive">{t("voice.key.failed")}</p>}
+    </form>
   );
 }
 

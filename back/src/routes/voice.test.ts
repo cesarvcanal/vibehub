@@ -171,6 +171,16 @@ describe("POST /api/voice/live/sessions", () => {
   });
 });
 
+describe("sessionCookieName (vibehub previewed by vibehub)", () => {
+  it("defaults to vibehub_session, takes a safe override, refuses a header-breaking one", async () => {
+    const { sessionCookieName } = await import("../auth/session.js");
+    expect(sessionCookieName(undefined)).toBe("vibehub_session");
+    expect(sessionCookieName("")).toBe("vibehub_session");
+    expect(sessionCookieName("vibehub_voice_preview")).toBe("vibehub_voice_preview");
+    expect(() => sessionCookieName("a; Path=/")).toThrow(/VIBEHUB_SESSION_COOKIE/);
+  });
+});
+
 describe("takeCreateSlot", () => {
   it("frees a slot once the minute has passed", () => {
     live.resetCreateSlots();

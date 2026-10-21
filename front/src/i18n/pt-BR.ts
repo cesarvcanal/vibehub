@@ -1299,4 +1299,7 @@ export const ptBR: Record<string, string> = {
   "voice.notice.expired": "A sessão chegou ao limite de tempo.",
   "voice.notice.moderation": "A sessão foi encerrada pela moderação de conteúdo.",
   "voice.notice.remoteEnded": "A sessão foi encerrada pelo servidor.",
+  "voice.key.label": "Chave da API da OpenAI (owner)",
+  "voice.key.hint": "Fica criptografada neste servidor, no mesmo lugar da chave do microfone. Nunca volta para o navegador.",
+  "voice.key.failed": "Não deu para salvar a chave.",
 };

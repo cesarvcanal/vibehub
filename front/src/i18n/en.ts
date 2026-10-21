@@ -1287,4 +1287,7 @@ export const en: Record<string, string> = {
   "voice.notice.expired": "The session reached its time limit.",
   "voice.notice.moderation": "The session was ended by content moderation.",
   "voice.notice.remoteEnded": "The session was ended by the server.",
+  "voice.key.label": "OpenAI API key (owner)",
+  "voice.key.hint": "Stored encrypted on this server, in the same slot as the microphone's key. It never comes back to the browser.",
+  "voice.key.failed": "Could not save the key.",
 };

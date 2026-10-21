@@ -19,10 +19,11 @@ vi.mock("@/lib/api", () => ({
 let rig: FakeRig;
 const makeDeps = () => rig.deps;
 
-function status(body: { enabled: boolean; available: boolean }) {
+function status(body: { enabled: boolean; available: boolean }, role: "owner" | "member" = "owner") {
   get.mockImplementation(async (url: string) => {
     if (url === "/voice/live") return { ...body, model: "gpt-live-1" };
-    if (url === "/auth/me") return { id: "u", username: "owner", role: "owner" };
+    if (url === "/auth/me") return { user: { id: "u", username: "someone", role } };
+    if (url === "/setup/state") return { fresh: false };
     return {};
   });
 }
@@ -51,6 +52,30 @@ describe("VoiceModePage", () => {
     status({ enabled: true, available: false });
     renderApp(<VoiceModePage makeDeps={makeDeps} />);
     expect(await screen.findByText(/VIBEHUB_VOICE_OPENAI_API_KEY/)).toBeInTheDocument();
+  });
+
+  it("the owner stores the key from the page, and it is never shown back", async () => {
+    status({ enabled: true, available: false });
+    post.mockImplementation(async () => {
+      status({ enabled: true, available: true });
+      return {};
+    });
+    const user = userEvent.setup();
+    renderApp(<VoiceModePage makeDeps={makeDeps} />);
+    const field = await screen.findByLabelText("OpenAI API key (owner)");
+    expect(field).toHaveAttribute("type", "password");
+    await user.type(field, "sk-real-secret");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(post).toHaveBeenCalledWith("/transcribe/keys", { openaiKey: "sk-real-secret" });
+    expect(await screen.findByRole("button", { name: "Start conversation" })).toBeInTheDocument();
+    expect(document.body.innerHTML).not.toContain("sk-real-secret");
+  });
+
+  it("a member gets no key form", async () => {
+    status({ enabled: true, available: false }, "member");
+    renderApp(<VoiceModePage makeDeps={makeDeps} />);
+    expect(await screen.findByText(/VIBEHUB_VOICE_OPENAI_API_KEY/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("OpenAI API key (owner)")).not.toBeInTheDocument();
   });
 
   it("start → live → transcript → stop, one button", async () => {
