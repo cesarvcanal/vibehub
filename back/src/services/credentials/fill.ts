@@ -20,6 +20,8 @@ import { CDP_RUNNER_SOURCE } from "./cdpRunner.js";
 export interface FillOptions {
   userSelector?: string;
   passSelector?: string;
+  /** A "confirm password" field: the password is typed here too (userpass and token alike). */
+  confirmSelector?: string;
   /** Navigate the card's browser here before filling (optional). */
   url?: string;
 }
@@ -39,21 +41,29 @@ export interface FillPlan {
  * The ordered fields to fill for a credential, WITHOUT any value — pure, and the unit under test:
  * a plan proves what will be typed and where, and that nothing secret rides along in it. A userpass
  * fills USER then PASS; a token fills a single VALUE (into the password field, or the given
- * selector). PURE.
+ * selector). A `confirmSelector` types the same secret once more there (sign-up / change-password
+ * forms). PURE.
  */
 export function buildFillPlan(type: CredentialType, opts: FillOptions = {}): FillPlan {
   const userSelector = opts.userSelector?.trim() || undefined;
   const passSelector = opts.passSelector?.trim() || undefined;
+  const confirmSelector = opts.confirmSelector?.trim() || undefined;
   if (type === "userpass") {
     return {
       fields: [
         { ref: "USER", ...(userSelector ? { selector: userSelector } : {}) },
         { ref: "PASS", ...(passSelector ? { selector: passSelector } : {}) },
+        ...(confirmSelector ? [{ ref: "PASS" as const, selector: confirmSelector }] : []),
       ],
     };
   }
   const selector = passSelector || userSelector;
-  return { fields: [{ ref: "VALUE", ...(selector ? { selector } : {}) }] };
+  return {
+    fields: [
+      { ref: "VALUE", ...(selector ? { selector } : {}) },
+      ...(confirmSelector ? [{ ref: "VALUE" as const, selector: confirmSelector }] : []),
+    ],
+  };
 }
 
 /** Heredoc delimiters — reserved words, never derived from input. */

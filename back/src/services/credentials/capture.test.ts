@@ -105,3 +105,36 @@ describe("dropPendingCaptures (the card is being deleted)", () => {
     expect(capture.dropPendingCaptures("c1")).toBe(0);
   });
 });
+
+describe("capture: an agent saving its own card's capture", () => {
+  it("is refused unless the card's project is opted in", async () => {
+    const { capture, creds } = await fresh();
+    capture.recordCapture("c1", { url: "https://erp.multi/login", username: "ada", password: "s3cr3t" });
+    const [cap] = capture.listCaptures("c1");
+    await expect(capture.saveCaptureForCard("c1", cap!.id, "erp")).rejects.toThrow(/Settings . Cofre/);
+    expect(await creds.listCredentials()).toHaveLength(0);
+    // Refused means untouched: the capture is still there for the owner to save.
+    expect(capture.listCaptures("c1")).toHaveLength(1);
+  });
+
+  it("saves it with the agent origin once opted in, and the capture is consumed", async () => {
+    const { capture, creds } = await fresh();
+    await creds.setAgentWriteProjects(["p1"]);
+    capture.recordCapture("c1", { url: "https://erp.multi/login", username: "ada", password: "s3cr3t" });
+    const [cap] = capture.listCaptures("c1");
+    const saved = await capture.saveCaptureForCard("c1", cap!.id, undefined, "card");
+    expect(saved).toMatchObject({ name: "erp.multi", type: "userpass", origin: { cardId: "c1", projectId: "p1", via: "capture" } });
+    expect(JSON.stringify(saved)).not.toContain("s3cr3t");
+    expect((await creds.resolveCredential("erp.multi")).secret).toBe("s3cr3t");
+    expect(capture.listCaptures("c1")).toHaveLength(0);
+  });
+
+  it("cannot save another card's capture", async () => {
+    const { capture, creds } = await fresh();
+    await creds.setAgentWriteProjects(["p1"]);
+    capture.recordCapture("other-card", { url: "https://erp.multi/login", username: "ada", password: "s3cr3t" });
+    const [cap] = capture.listCaptures("other-card");
+    await expect(capture.saveCaptureForCard("c1", cap!.id, "erp")).rejects.toThrow(/no longer available/);
+    expect(await creds.listCredentials()).toHaveLength(0);
+  });
+});
