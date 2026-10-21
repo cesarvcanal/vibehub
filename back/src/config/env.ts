@@ -147,6 +147,12 @@ export interface VibehubConfig {
    */
   trustProxy: string | number | false;
   logLevel: string;
+  /**
+   * POC of the GPT-Live voice mode (services/voice/live.ts). OFF unless VIBEHUB_VOICE_LIVE=1, so an
+   * install that never asked for it exposes nothing. The key is the server's: it never reaches the
+   * browser. Empty = fall back to the voice-input key already stored in the vault.
+   */
+  voiceLive: { enabled: boolean; apiKey: string };
 }
 
 export const config: VibehubConfig = {
@@ -169,6 +175,10 @@ export const config: VibehubConfig = {
   insecureCookies: str("VIBEHUB_INSECURE_COOKIES", "") === "1",
   trustProxy: trustProxy("VIBEHUB_TRUST_PROXY"),
   logLevel: str("VIBEHUB_LOG_LEVEL", "info"),
+  voiceLive: {
+    enabled: str("VIBEHUB_VOICE_LIVE", "") === "1",
+    apiKey: str("VIBEHUB_VOICE_OPENAI_API_KEY", ""),
+  },
 };
 
 /** Absolute path inside the data directory. */

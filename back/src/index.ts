@@ -28,6 +28,7 @@ import { accountLoginRoutes } from "./routes/accountLogin.js";
 import { previewRoutes, installPreviewUpgrade } from "./routes/preview.js";
 import { trackSessionSockets } from "./auth/sessionSockets.js";
 import { cardSdkRoutes } from "./routes/cardSdk.js";
+import { voiceRoutes } from "./routes/voice.js";
 import { startPauseReconciler, sweepCardUploads, sweepIdleCards } from "./services/board/workspace.js";
 import { sweepOrphanCardData } from "./services/board/purge.js";
 import { sweepDoneCards, DONE_SWEEP_INTERVAL_MS } from "./services/board/retention.js";
@@ -91,6 +92,7 @@ export async function buildServer() {
   await app.register(chatRoutes);
   await app.register(accountLoginRoutes);
   await app.register(previewRoutes);
+  await app.register(voiceRoutes);
 
   // Preview websockets (vite HMR) ride the same `upgrade` event @fastify/websocket owns; the
   // interceptor wraps its listener once everything is registered. The open-socket registry comes
