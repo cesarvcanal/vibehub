@@ -1135,7 +1135,7 @@ describe("interrupt button", () => {
     const button = screen.getByTestId("composer-interrupt");
     const mic = await screen.findByTestId("composer-mic");
     // Same column, stop first: directly ABOVE the microphone.
-    expect(slot.parentElement).toBe(mic.parentElement);
+    expect(slot.parentElement).toContainElement(mic);
     expect(slot.compareDocumentPosition(mic) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(slot.contains(button)).toBe(true);
   });

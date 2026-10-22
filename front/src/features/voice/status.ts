@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { get } from "@/lib/api";
+import { Paths } from "@/lib/paths";
 
 /** `GET /api/voice/live` — booleans only, never a key. */
 export interface VoiceLiveStatus {
@@ -24,7 +25,22 @@ export function useVoiceStatus(enabled = true) {
   });
 }
 
-/** Where /voice sends the person back to, carried in the navigation state by the composer. */
-export interface VoiceReturnState {
-  from?: string;
+/** `/voice` opened from a card: the card and its project ride in the URL. PURE. */
+export function voicePath(cardId: string, project: string | null): string {
+  const params = new URLSearchParams();
+  if (project) params.set("project", project);
+  params.set("card", cardId);
+  return `${Paths.VOICE}?${params.toString()}`;
+}
+
+/** The card /voice was opened from, read back from its URL; the board when there is none. PURE. */
+export function voiceReturn(search: string): { to: string; card: string | null } {
+  const query = new URLSearchParams(search);
+  const card = query.get("card");
+  if (!card) return { to: Paths.BOARD, card: null };
+  const params = new URLSearchParams();
+  const project = query.get("project");
+  if (project) params.set("project", project);
+  params.set("card", card);
+  return { to: `${Paths.BOARD}?${params.toString()}`, card };
 }

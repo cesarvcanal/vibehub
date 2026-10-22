@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ArrowUp, Camera, Check, ImageIcon, Loader2, Mic, Paperclip, Pencil, Plus, RotateCw, Square, X } from "lucide-react";
 import { useInRouterContext } from "react-router-dom";
-import { ComposerVoiceButton } from "@/features/voice/ComposerVoiceButton";
+import { ComposerVoiceButton, VoiceChatButton } from "@/features/voice/ComposerVoiceButton";
 import { useVoiceStatus } from "@/features/voice/status";
 import { Button } from "@/components/ui/button";
 import {
@@ -1105,14 +1105,14 @@ export function TerminalComposer({
   }, [text]);
 
   const recordingNow = recording === "recording";
-  // The voice conversation (the GPT-Live POC) has a seat in the field's corner only on a card's
-  // composer, inside the app's router, and only when the server has the mode on with a key. Off —
-  // the default — and the composer is exactly what it was: the phone's send arrow, nothing on a
-  // desktop.
+  // The voice conversation (the GPT-Live POC) exists only on a card's composer, inside the app's
+  // router, and only when the server has the mode on with a key. On a desktop it sits OUTSIDE the
+  // field, beside the dictation mic; on a phone it shares the field's corner with the send arrow.
+  // Off — the default — and the composer is exactly what it was.
   const inRouter = useInRouterContext();
   const voiceStatus = useVoiceStatus(inRouter && Boolean(cardId));
   const voiceReady = inRouter && Boolean(cardId) && Boolean(voiceStatus.data?.enabled && voiceStatus.data.available);
-  const cornerButton = isMobile || voiceReady;
+  const cornerButton = isMobile;
 
   return (
     <div
@@ -1280,13 +1280,13 @@ export function TerminalComposer({
         {/* The phone's send. IN the field's bottom-right corner rather than a fourth circle in the
             row, because a 390px screen has no width left after the "+", the microphone and
             something worth reading — and that corner is where a thumb already goes to send. */}
-        {voiceReady ? (
+        {isMobile && voiceReady && cardId ? (
           <ComposerVoiceButton
+            cardId={cardId}
             empty={isEmptyDraft(text, attachments)}
             sending={sending}
             busy={recording !== "idle"}
             voice={!editing}
-            mobile={isMobile}
             onSend={send}
           />
         ) : isMobile ? (
@@ -1309,7 +1309,7 @@ export function TerminalComposer({
         /* The right column: stop above microphone, always in the same two seats. The stop slot is
            reserved even while empty so the mic never moves and the button never lands on top of
            anything — it simply lights up in its place when the agent starts working. */
-        <div className="flex shrink-0 flex-col items-center gap-1.5">
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
           {interrupt ? (
             <div
               data-testid="composer-interrupt-slot"
@@ -1333,16 +1333,24 @@ export function TerminalComposer({
             </div>
           ) : null}
           {cardId ? (
-            <VoiceControl
-              state={recording}
-              available={canRecord}
-              levels={levels}
-              mobile={isMobile}
-              elapsed={formatElapsed(elapsedMs)}
-              onStart={() => void startRecording()}
-              onFinish={finishRecording}
-              onCancel={cancelRecording}
-            />
+            <div className="flex items-end gap-1.5">
+              {/* The desktop's voice conversation: to the mic's left, drawn like it, so the column
+                  keeps its height and the field its corner. Gone while the mic is taken (its
+                  recording pill needs the room) or a sent message is being edited. */}
+              {!isMobile && voiceReady && !editing && recording === "idle" ? (
+                <VoiceChatButton cardId={cardId} disabled={sending} placement="column" />
+              ) : null}
+              <VoiceControl
+                state={recording}
+                available={canRecord}
+                levels={levels}
+                mobile={isMobile}
+                elapsed={formatElapsed(elapsedMs)}
+                onStart={() => void startRecording()}
+                onFinish={finishRecording}
+                onCancel={cancelRecording}
+              />
+            </div>
           ) : null}
         </div>
       ) : null}

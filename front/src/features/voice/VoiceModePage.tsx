@@ -6,20 +6,19 @@ import { Button } from "@/components/ui/button";
 import { SecretInput } from "@/components/ui/secret-input";
 import { useAuth } from "@/providers/auth";
 import { post } from "@/lib/api";
-import { Paths } from "@/lib/paths";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { LiveVoiceSession, aiActivity, type LiveVoiceDeps, type LiveVoiceDiag, type LiveVoiceSnapshot } from "./liveVoice";
 import { SIGNAL_THRESHOLD, displayLevel, useMicLevel, type MakeAudioContext } from "./micLevel";
 import { VoiceOrb, type OrbMode } from "./VoiceOrb";
-import { VOICE_STATUS_KEY, useVoiceStatus, type VoiceReturnState } from "./status";
+import { VOICE_STATUS_KEY, useVoiceStatus, voiceReturn } from "./status";
 
 /**
  * VOICE MODE (POC) — `/voice`. A spoken conversation with GPT-Live, like ChatGPT's voice mode:
  * the orb in the middle, one button starts and ends it, the mic stays open, and you can talk over
  * the assistant to interrupt it. Not connected to Claude Code or to any card — opened from a card's
- * composer, it only remembers the way back. Hidden unless the server has `VIBEHUB_VOICE_LIVE=1`
- * and an OpenAI key.
+ * composer, the card rides in the URL (`?project=…&card=…`) only to lead back to it. Hidden unless
+ * the server has `VIBEHUB_VOICE_LIVE=1` and an OpenAI key.
  */
 
 export { VOICE_STATUS_KEY };
@@ -53,7 +52,8 @@ export function VoiceModePage({ makeDeps = defaultDeps, makeAudioContext }: Voic
   const t = useT();
   const status = useVoiceStatus();
   const location = useLocation();
-  const from = (location.state as VoiceReturnState | null)?.from;
+  // The card it was opened from lives in the URL, so a reload or a shared link still leads back.
+  const back = voiceReturn(location.search);
   const audioRef = React.useRef<HTMLAudioElement>(null);
   const [session, setSession] = React.useState<LiveVoiceSession | null>(null);
 
@@ -94,9 +94,9 @@ export function VoiceModePage({ makeDeps = defaultDeps, makeAudioContext }: Voic
     <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col gap-6 px-4 py-6">
       <div className="flex items-center justify-between gap-2">
         <Button asChild variant="ghost" size="sm" className="-ml-2">
-          <Link to={from ?? Paths.BOARD}>
+          <Link to={back.to}>
             <ArrowLeft />
-            {from ? t("voice.backToCard") : t("voice.back")}
+            {back.card ? t("voice.backToCard") : t("voice.back")}
           </Link>
         </Button>
         <div className="text-right">
