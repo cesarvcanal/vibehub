@@ -116,11 +116,13 @@ export async function reconcileStaleWorking(now: number = Date.now()): Promise<n
     // Re-checked at the moment of writing: a hook (or the driver) may have spoken during the probe.
     const fresh = await registry.getCard(c.id);
     if (fresh?.status !== "working" || (fresh.statusAt ?? 0) !== (c.statusAt ?? 0) || cardHoldsBackgroundWork(c.id)) continue;
+    // Read now: `c` is the live cached card, and the report below overwrites its `statusAt`.
+    const silentMs = now - (c.statusAt ?? 0);
     try {
       await reportCardStatus(c.id, "waiting");
       corrected += 1;
       logger.warn(
-        { audit: true, action: "card.status.reconciled", card: c.worktreeSlug, session: c.tmuxSession, state, silentMs: now - (c.statusAt ?? 0) },
+        { audit: true, action: "card.status.reconciled", card: c.worktreeSlug, session: c.tmuxSession, state, silentMs },
         "a `working` card had been silent and its terminal is not working — the lost Stop hook was applied (status hooks may not be reaching the back)",
       );
     } catch (err) {
