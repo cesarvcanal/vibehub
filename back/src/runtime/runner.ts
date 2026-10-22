@@ -38,8 +38,18 @@ export function buildStatusUrlProbeScript(containerName: string, url: string): s
 
 /** true = the probe got an HTTP answer back (any code but `000`). PURE. */
 export function statusUrlReachable(stdout: string): boolean {
+  return statusProbeVerdict(stdout) === "reachable";
+}
+
+/**
+ * What the probe proves. `000` is curl itself failing to connect from inside the runner: the URL is
+ * wrong. No code at all means curl never ran (runner down, no docker, no curl), which says nothing
+ * about the URL. PURE.
+ */
+export function statusProbeVerdict(stdout: string): "reachable" | "unreachable" | "unknown" {
   const code = String(stdout ?? "").trim();
-  return /^\d{3}$/.test(code) && code !== "000";
+  if (!/^\d{3}$/.test(code)) return "unknown";
+  return code === "000" ? "unreachable" : "reachable";
 }
 
 let lastReach: boolean | null = null;
@@ -49,17 +59,22 @@ let lastReach: boolean | null = null;
  * not. Produção, 21/10/2026: the public URL pointed at a blue/green port the app no longer listened
  * on; every hook failed in silence (`curl … || true`), the board never saw a TUI card working, and
  * the idle sweep hibernated cards mid-task. Logs an error on the first failure (and each failure
- * after a recovery), an info on recovery. Never throws. Returns the verdict.
+ * after a recovery), an info on recovery. A probe that never reached curl decides nothing. Never throws.
+ * Returns true only when the route answered.
  */
 export async function checkStatusHookReach(): Promise<boolean> {
   const url = statusUrl();
-  let reachable = false;
+  let verdict: ReturnType<typeof statusProbeVerdict> = "unknown";
   try {
     const { stdout } = await hostExecutor().runScript(buildStatusUrlProbeScript(config.runner.container, url), { timeoutMs: 20_000 });
-    reachable = statusUrlReachable(stdout);
+    verdict = statusProbeVerdict(stdout);
   } catch {
-    reachable = false;
+    verdict = "unknown";
   }
+  // A runner that is down (or a host without docker) never ran curl: blaming the public URL would send
+  // the operator to change a URL that is fine. Keep the last verdict; the runner's own health says why.
+  if (verdict === "unknown") return false;
+  const reachable = verdict === "reachable";
   if (!reachable && lastReach !== false) {
     logger.error(
       { audit: true, action: "runner.statusHook.unreachable", url },
