@@ -10,7 +10,7 @@ import {
   getCard, getProject, applyOpenTerminal, markPrepared, pauseCard as registryPauseCard,
   listGithubConnections,
   hibernateCard as registryHibernateCard,
-  listAllCards, assertBranchName, assertSessionId, effectiveAccountSlug, modelPin, isValidEffort, hasLiveSession,
+  listAllCards, markCardActivity, assertBranchName, assertSessionId, effectiveAccountSlug, modelPin, isValidEffort, hasLiveSession,
   markRestartPending,
   type Card, type CardStatus, type Project, type RestartReason,
 } from "./registry.js";
@@ -1580,8 +1580,8 @@ export function startPauseReconciler(intervalMs: number = PAUSE_RECONCILE_MS): (
  * the first open ever, and the native chat never moves the hook-reported `statusAt` — so a card
  * someone had been chatting with all afternoon measured as idle since the day it was created. PURE.
  */
-export function lastActivityAt(card: Pick<Card, "statusAt" | "openedAt" | "humanActiveAt">): number {
-  return Math.max(card.statusAt ?? 0, card.openedAt ?? 0, card.humanActiveAt ?? 0);
+export function lastActivityAt(card: Pick<Card, "statusAt" | "openedAt" | "humanActiveAt" | "activityAt">): number {
+  return Math.max(card.statusAt ?? 0, card.openedAt ?? 0, card.humanActiveAt ?? 0, card.activityAt ?? 0);
 }
 
 /**
@@ -1593,7 +1593,7 @@ export function lastActivityAt(card: Pick<Card, "statusAt" | "openedAt" | "human
  * follow `DONE_HIBERNATE_MS` instead. PURE/testable.
  */
 export function cardsToHibernate<
-  T extends Pick<Card, "id" | "openedAt" | "pausedAt" | "hibernatedAt" | "status" | "statusAt" | "humanActiveAt"> & { column?: Card["column"] },
+  T extends Pick<Card, "id" | "openedAt" | "pausedAt" | "hibernatedAt" | "status" | "statusAt" | "humanActiveAt" | "activityAt"> & { column?: Card["column"] },
 >(
   cards: T[],
   now: number,
@@ -1648,7 +1648,27 @@ async function sweepIdleCardsOnce(now: number): Promise<number> {
   // `isCardInUse` is the veto a LIVE native chat casts (the sdk manager registers it): hibernating
   // a card kills its driver, and killing the driver under someone who is mid-conversation is what
   // ate their message. The driver's own idle stop (DRIVER_IDLE_MS) releases the veto later.
-  const target = cardsToHibernate(await listAllCards(), now, idleMs, isCardInUse);
+  const candidates = cardsToHibernate(await listAllCards(), now, idleMs, isCardInUse);
+  if (candidates.length === 0) return 0;
+  // The board's clocks say "silent"; ASK THE RUNNER before killing anything. The status hooks are a
+  // network call from the runner back to us, and when they cannot reach the back (a public URL on a
+  // dead blue/green port — produção, 21/10/2026) a Claude in the middle of a task looks exactly like
+  // an abandoned one. A pane showing Claude generating (`busy`) or a runner that did not answer
+  // (`unknown`) is spared; only `idle`/`gone` go to sleep. One round trip for the whole list.
+  const states = await probeSessions(candidates.filter((c) => c.column !== "done").map((c) => c.tmuxSession));
+  const spared = candidates.filter((c) => {
+    if (c.column === "done") return false;
+    const state = states.get(c.tmuxSession) ?? "unknown";
+    return state === "busy" || state === "unknown";
+  });
+  for (const c of spared) {
+    logger.warn(
+      { card: c.worktreeSlug, session: c.tmuxSession, state: states.get(c.tmuxSession) ?? "unknown", status: c.status ?? null },
+      "idle sweep spared a card the board saw as silent: the runner says it is busy (or could not tell) — status hooks may not be reaching the back",
+    );
+    await markCardActivity(c.id).catch(() => undefined);
+  }
+  const target = candidates.filter((c) => !spared.includes(c));
   if (target.length === 0) return 0;
   // ONE CARD AT A TIME, like the purge: a background timer has no one waiting on it, and firing a
   // docker exec per cold card at the runner at once is a burst for nothing. Best-effort per card.
@@ -1661,7 +1681,7 @@ async function sweepIdleCardsOnce(now: number): Promise<number> {
     }
   }
   logger.info(
-    { audit: true, action: "card.sweepIdle", idleMinutes: idleHibernateMinutes, candidates: target.length, hibernated },
+    { audit: true, action: "card.sweepIdle", idleMinutes: idleHibernateMinutes, candidates: candidates.length, spared: spared.length, hibernated },
     "idle sweep — terminals with no sign of life were hibernated (columns untouched)",
   );
   return hibernated;

@@ -1,4 +1,5 @@
 import { shQuote, assertSafeRemotePath } from "../../runtime/host.js";
+import { DEFAULT_CLAUDE_DIR, DEFAULT_CLAUDE_JSON } from "./profiles.js";
 
 /**
  * FIRST-RUN WALLS of Claude Code, taken down before the session starts.
@@ -23,8 +24,14 @@ import { shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 /** The per-profile state file Claude Code reads at startup. */
 export const CLAUDE_JSON = ".claude.json";
 
-/** Path of a profile's `.claude.json`. PURE. */
+/**
+ * Path of the `.claude.json` a profile's sessions READ. A named account's lives inside its profile
+ * (CLAUDE_CONFIG_DIR); the DEFAULT account's sessions carry no CLAUDE_CONFIG_DIR, so Claude reads
+ * it from $HOME ({@link DEFAULT_CLAUDE_JSON}) — seeding `/root/.claude/.claude.json` instead left
+ * every default-account card of a repo nobody had trusted by hand on the trust dialog. PURE.
+ */
 export function claudeJsonPath(profileDir: string): string {
+  if (profileDir.replace(/\/+$/, "") === DEFAULT_CLAUDE_DIR) return DEFAULT_CLAUDE_JSON;
   return `${profileDir}/${CLAUDE_JSON}`;
 }
 

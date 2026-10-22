@@ -150,7 +150,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         // "no live session" is not a server fault and not a missing card: it is a card that has to
         // be opened first, and the UI says exactly that.
         const code = /not found/i.test(message) ? 404
-          : /no live session|empty text|awaiting choice|no agent running/i.test(message) ? 409 : 502;
+          : /no live session|empty text|awaiting choice|no agent running|terminal not ready/i.test(message) ? 409 : 502;
         return await reply.code(code).send({ error: message });
       }
     },

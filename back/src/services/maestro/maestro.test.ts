@@ -628,6 +628,122 @@ describe("interactive-menu guard", () => {
   });
 });
 
+/**
+ * Produção, 21/10/2026 (card a8f0 do api-space): create_card(open) answered "opened", and every
+ * vibehub_send_to_terminal after it failed with "awaiting choice" — the new card's Claude sat on the
+ * folder-trust dialog, and a send right after an open also races Claude's boot. A waiting send
+ * (readyWaitMs) holds while Claude boots, delivers once the prompt is drawn, and still NEVER types
+ * into a menu: one open at the deadline refuses, naming which.
+ */
+describe("a waiting send (readyWaitMs) — boot race and menus", () => {
+  /** The pane the runner showed for card a8f0, captured from production. */
+  const TRUST_PANE = [
+    " Accessing workspace:",
+    " /work/multiversoatacado--api-space-worktrees/relatorio-top-100-clientes-b2b-space-a8f0",
+    " Quick safety check: Is this a project you created or one you trust? (Like your",
+    " own code, a well-known open source project, or work from your team).",
+    " ❯ No, exit",
+    "   Yes, I trust this folder",
+    " Enter to confirm · Esc to cancel",
+  ].join("\n");
+  const READY_PANE = "╭────╮\n│ > │\n╰────╯\n  ⏵⏵ bypass permissions on · ? for shortcuts";
+
+  const sentAfter: number[] = [];
+
+  /** Answers the host by WHAT the script is: agent probe, pane capture or the send itself. */
+  function runner(states: { agent: string; pane: string }[]) {
+    let i = 0;
+    const sent: string[] = [];
+    sentAfter.length = 0;
+    runScript.mockImplementation((async (script: string) => {
+      const st = states[Math.min(i, states.length - 1)];
+      // `sentAfter` = how many pane captures ran before the keys went: proof the send WAITED.
+      if (script.includes("tmux send-keys")) { sent.push(script); sentAfter.push(i); return { stdout: "", stderr: "" }; }
+      if (script.includes("list-panes")) return { stdout: st.agent, stderr: "" };
+      if (script.includes("capture-pane")) { i += 1; return { stdout: st.pane, stderr: "" }; }
+      return { stdout: "", stderr: "" };
+    }) as never);
+    return sent;
+  }
+
+  async function openedCard(title: string) {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "api-space" });
+    const c = await registry.createCard({ projectId: p.id, title });
+    await registry.applyOpenTerminal(c.id);
+    return { maestro, c };
+  }
+
+  const waiting = { guardInteractiveMenu: true, requireAgent: true, readyWaitMs: 400, readyPollMs: 5 };
+
+  it("holds while Claude boots (pane not drawn, then a shell-only tree) and delivers once the prompt is up", async () => {
+    const { maestro, c } = await openedCard("booting");
+    const sent = runner([
+      { agent: "bash\nnode\n", pane: "" }, // the seed's node is running, nothing painted yet
+      { agent: "bash\nclaude\n", pane: "" },
+      { agent: "bash\nclaude\n", pane: READY_PANE },
+    ]);
+    const out = await maestro.sendToTerminal(c.id, "gera o relatorio", waiting);
+    expect(out).toMatchObject({ sent: true });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("gera o relatorio");
+    expect(sentAfter).toEqual([3]); // only after the third look, the one that saw the prompt
+  });
+
+  it("without a wait, the same boot keeps the old answer (one look, an empty pane is not a refusal)", async () => {
+    const { maestro, c } = await openedCard("no wait");
+    const sent = runner([{ agent: "bash\nclaude\n", pane: "" }]);
+    await maestro.sendToTerminal(c.id, "oi", { guardInteractiveMenu: true, requireAgent: true });
+    expect(sent).toHaveLength(1);
+  });
+
+  it("a menu that clears during the wait (e.g. answered on the board) lets the send through", async () => {
+    const { maestro, c } = await openedCard("menu clears");
+    const sent = runner([
+      { agent: "bash\nclaude\n", pane: TRUST_PANE },
+      { agent: "bash\nclaude\n", pane: READY_PANE },
+    ]);
+    await maestro.sendToTerminal(c.id, "segue", waiting);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("never types into a menu still open at the deadline — refuses naming the trust dialog", async () => {
+    const { maestro, c } = await openedCard("stuck on trust");
+    const sent = runner([{ agent: "bash\nclaude\n", pane: TRUST_PANE }]);
+    await expect(maestro.sendToTerminal(c.id, "segue", waiting)).rejects.toThrow(
+      /awaiting choice \(trust\).*folder-trust dialog.*waited/i,
+    );
+    expect(sent).toHaveLength(0); // Enter would have picked "No, exit" and killed Claude
+  });
+
+  it("names the resume menu and the permission prompt too", async () => {
+    const { maestro, c } = await openedCard("resume");
+    runner([{ agent: "claude\n", pane: "❯ 1. Resume from summary\n  2. Resume full\nEnter to confirm · Esc to cancel" }]);
+    await expect(maestro.sendToTerminal(c.id, "x", waiting)).rejects.toThrow(/awaiting choice \(resume\)/);
+    runner([{ agent: "claude\n", pane: "Do you want to proceed?\n❯ 1. Yes\n  2. No" }]);
+    await expect(maestro.sendToTerminal(c.id, "x", waiting)).rejects.toThrow(/awaiting choice \(permission\)/);
+  });
+
+  it("a Claude that never comes up refuses as 'no agent running', and one never drawn as 'terminal not ready'", async () => {
+    const { maestro, c } = await openedCard("dead");
+    runner([{ agent: "bash\n", pane: "$ " }]);
+    await expect(maestro.sendToTerminal(c.id, "x", waiting)).rejects.toThrow(/no agent running.*bare shell/);
+    runner([{ agent: "claude\n", pane: "" }]);
+    await expect(maestro.sendToTerminal(c.id, "x", waiting)).rejects.toThrow(/terminal not ready/);
+  });
+
+  it("waitTerminalReady (the open's readiness) says ready, or why not — never throws", async () => {
+    const { maestro, c } = await openedCard("open readiness");
+    runner([{ agent: "claude\n", pane: "" }, { agent: "claude\n", pane: READY_PANE }]);
+    expect(await maestro.waitTerminalReady(c.id, 400, 5)).toEqual({ ready: true });
+    runner([{ agent: "claude\n", pane: TRUST_PANE }]);
+    const stuck = await maestro.waitTerminalReady(c.id, 30, 5);
+    expect(stuck).toMatchObject({ ready: false });
+    expect((stuck as { detail: string }).detail).toMatch(/awaiting choice \(trust\)/);
+    expect(await maestro.waitTerminalReady("nope", 30, 5)).toEqual({ ready: false, detail: "card not found" });
+  });
+});
+
 describe("session introspection", () => {
   const line = (obj: unknown) => JSON.stringify(obj);
 

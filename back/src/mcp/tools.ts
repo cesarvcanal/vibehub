@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { listTerminals, sendToTerminal, readTerminal, reportState, agentOriginFor } from "../services/maestro/maestro.js";
+import { listTerminals, sendToTerminal, readTerminal, reportState, agentOriginFor, SEND_READY_WAIT_MS } from "../services/maestro/maestro.js";
 import { DECLARED_STATES } from "../services/board/registry.js";
 import { recordMessage, MESSAGE_TYPES, SEVERITIES, type MessageType, type Severity } from "../services/events/cardEvents.js";
 import { sendAnswer } from "./events.js";
@@ -54,8 +54,8 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
       description:
         "Delegate an instruction to another card: `text` arrives as a message in that card's " +
         "conversation (its native chat when that is on, else typed at its terminal's prompt), exactly " +
-        "as if a person had sent it. Fails clearly when the card has no live session — open or resume " +
-        "the card first — or when no Claude is running there. The receiving card keeps its own context, so " +
+        "as if a person had sent it. A card that is asleep (hibernated, never opened) is woken on its " +
+        "own; a card PAUSED on purpose is refused — ask the user. Fails clearly when no Claude can run there. The receiving card keeps its own context, so " +
         "send a self-contained instruction, not a fragment of your conversation.",
       inputSchema: {
         cardId: z.string().describe("id of the destination card (from vibehub_list_terminals)"),
@@ -78,6 +78,11 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
           // once the send is certain to go (a refused send leaves the authorship alone).
           beforeDeliver: () => relayCardActor(a.from, a.cardId),
           respectHumanActive: true,
+          // Never type into a menu (Enter would pick its highlighted option — on the trust dialog,
+          // "No, exit"), and give a card that is still booting the time to draw its prompt.
+          guardInteractiveMenu: true,
+          readyWaitMs: SEND_READY_WAIT_MS,
+          wake: true,
           origin: await agentOriginFor(a.from),
         })));
       } catch (e) {

@@ -1,16 +1,19 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import {
-  listProjects, listAllCards, getCard, getProject, hasLiveSession, effectiveAccountSlug,
+  listProjects, listAllCards, getCard, getProject, hasLiveSession, effectiveAccountSlug, markCardActivity,
   listAccounts, getConfig, isHumanActive, reportCardState, CLAUDE_MODELS, isValidEffort,
   type Card, type Project, type BoardColumn, type CardStatus, type DeclaredState,
 } from "../board/registry.js";
-import { cardAgentState, cardAwaitingChoice, cardDriverActivity } from "../board/agentState.js";
+import { cardAgentState, cardDriverActivity, cardPaneReadiness, type MenuKind } from "../board/agentState.js";
 import { profileDirFor } from "../accounts/profiles.js";
 import { transcriptDirFor, sessionGoneError } from "./cardSession.js";
 import { recordOrigin, type MessageOrigin } from "../chat/provenance.js";
 import { publishExternalMessage, readHistory } from "../sdk/history.js";
 import { liveDriverSession, sendAgentTurn } from "../sdk/manager.js";
+import { startCardDriver } from "../sdk/headless.js";
+import { openCard, probeCardSession } from "../board/workspace.js";
+import { getSettings } from "../settings/settings.js";
 import { observeDeclaredState } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
 import {
@@ -237,6 +240,10 @@ export interface SendResult {
   cardId: string;
   title: string;
   project: string;
+  /** Where the instruction landed: a turn of the native-chat driver, or typed at the tmux prompt. */
+  route?: "sdk-driver" | "terminal";
+  /** true = the card was asleep (hibernated / never opened / restarted) and this send woke it. */
+  woke?: boolean;
 }
 
 /**
@@ -291,6 +298,124 @@ export interface SendOpts {
    * the authorship alone). A throw here fails the send.
    */
   beforeDeliver?: () => Promise<void>;
+  /**
+   * How long the send may WAIT for the terminal to become able to take it (Claude running, its
+   * prompt drawn, no menu open) before refusing. 0 = probe once and refuse at once (the chat
+   * composer: a person is looking and keeps the draft). An agent driving a card it just created or
+   * opened needs the wait: Claude takes seconds to boot, and a send in that window used to fail as
+   * "no agent running"/"awaiting choice" or be typed into a pane that was not drawn yet. The wait
+   * only OBSERVES — a menu is never answered for anyone; one still open at the deadline refuses.
+   */
+  readyWaitMs?: number;
+  /** Interval between looks while waiting (tests shorten it). */
+  readyPollMs?: number;
+  /**
+   * WAKE the card when it is asleep — hibernated by the idle sweep, never opened, or with no session
+   * after a runner restart — instead of refusing with "no live session"; and, when the native chat is
+   * on and nobody is mid-turn in the TUI, deliver as a turn of a driver started for it (no browser
+   * needed). For orders from OUTSIDE the board (the external MCP, another card's agent): before this,
+   * such an order only arrived once a person opened the card. A card PAUSED on purpose is never woken.
+   */
+  wake?: boolean;
+}
+
+/** How often a waiting send looks at the pane again. */
+export const READY_POLL_MS = 1_000;
+
+/**
+ * How long a send from an AGENT/assistant (and an open, once its session exists) waits for Claude to
+ * be able to take a message. Claude boots in a few seconds; past this the answer names what is in
+ * the way (a menu, a Claude that exited) instead of a bare "awaiting choice".
+ */
+export const SEND_READY_WAIT_MS = 30_000;
+
+/** Why a terminal cannot take a message right now — the refusal a waiting send ends on. */
+type TerminalBlocker =
+  | { reason: "no agent"; agent: "shell" | "none" }
+  | { reason: "menu"; menu: MenuKind }
+  | { reason: "booting" };
+
+/**
+ * What stands between this card's terminal and a typed message, null = nothing. One agent probe and
+ * (when the menu guard is on) one pane capture. `booting` only counts for a WAITING send: a send
+ * with no wait keeps its old behaviour (an empty capture was never a refusal).
+ */
+async function terminalBlocker(
+  card: Card, checks: { agent: boolean; menu: boolean; booting: boolean },
+): Promise<TerminalBlocker | null> {
+  if (checks.agent) {
+    const agent = await cardAgentState(card);
+    if (agent !== "running") return { reason: "no agent", agent };
+  }
+  if (checks.menu) {
+    const pane = await cardPaneReadiness(card);
+    if (pane.state === "menu") return { reason: "menu", menu: pane.menu };
+    if (pane.state === "booting" && checks.booting) return { reason: "booting" };
+  }
+  return null;
+}
+
+/** A blocker as the error a caller can act on. The leading markers ("no agent running", "awaiting
+ * choice") are what the routes map to their status codes — keep them. */
+function blockerError(b: TerminalBlocker, title: string, waitedMs: number): Error {
+  const waited = waitedMs > 0 ? ` (waited ${Math.round(waitedMs / 1000)}s for it to become ready)` : "";
+  if (b.reason === "no agent") {
+    return new Error(
+      `no agent running: Claude is not running in card "${title}" (the terminal is ${
+        b.agent === "shell" ? "at a bare shell" : "gone"
+      })${waited} — restart the card, then send again`,
+    );
+  }
+  if (b.reason === "menu") {
+    const what: Record<MenuKind, string> = {
+      trust: "the folder-trust dialog",
+      resume: "the session-resume menu",
+      permission: "a permission prompt",
+      other: "a menu",
+    };
+    return new Error(
+      `awaiting choice (${b.menu}): card "${title}" is waiting on ${what[b.menu]} in the terminal${waited}. Open the Terminal tab, answer it, then send again.`,
+    );
+  }
+  return new Error(
+    `terminal not ready: Claude is still starting in card "${title}"${waited} — send again in a few seconds`,
+  );
+}
+
+/**
+ * Holds until the card's terminal can take a message, or throws the reason it cannot at the
+ * deadline. Every wait that ended blocked — and every one that had to wait at all — is logged with
+ * what it saw, so "the card did not start" is answerable from the logs instead of a screenshot.
+ */
+async function awaitTerminalReady(
+  card: Card, checks: { agent: boolean; menu: boolean }, waitMs: number, pollMs: number,
+): Promise<void> {
+  const started = Date.now();
+  const deadline = started + Math.max(0, waitMs);
+  const full = { ...checks, booting: waitMs > 0 };
+  let first: TerminalBlocker | null = null;
+  for (;;) {
+    const blocker = await terminalBlocker(card, full);
+    if (!blocker) {
+      if (first) {
+        logger.info(
+          { card: card.worktreeSlug, waitedMs: Date.now() - started, initially: first },
+          "card terminal became ready for a waiting send",
+        );
+      }
+      return;
+    }
+    first ??= blocker;
+    if (Date.now() >= deadline) {
+      const waitedMs = Date.now() - started;
+      logger.warn(
+        { card: card.worktreeSlug, session: card.tmuxSession, blocker, waitedMs },
+        "send refused: card terminal not ready",
+      );
+      throw blockerError(blocker, card.title, waitedMs);
+    }
+    await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
+  }
 }
 
 /**
@@ -313,14 +438,34 @@ export async function agentOriginFor(fromCardId?: string): Promise<MessageOrigin
   return { kind: "agent", name: "" };
 }
 
+/** What an open reports about the terminal it started: able to take a message, or why not yet. */
+export type TerminalReadiness = { ready: true } | { ready: false; detail: string };
+
+/**
+ * Waits up to `waitMs` for an OPENED card's terminal to take a message (Claude running, prompt
+ * drawn, no menu) — what `liveSession` alone cannot say: the session exists the moment tmux does,
+ * seconds before Claude can read a keystroke. Never throws; the answer says why it is not ready.
+ */
+export async function waitTerminalReady(cardId: string, waitMs: number, pollMs = READY_POLL_MS): Promise<TerminalReadiness> {
+  const card = await getCard(cardId);
+  if (!card) return { ready: false, detail: "card not found" };
+  if (!hasLiveSession(card)) return { ready: false, detail: "no live session" };
+  try {
+    await awaitTerminalReady(card, { agent: true, menu: true }, waitMs, pollMs);
+    return { ready: true };
+  } catch (err) {
+    return { ready: false, detail: (err as Error).message };
+  }
+}
+
 export async function sendToTerminal(cardId: string, text: string, opts: SendOpts = {}): Promise<SendResult> {
   const {
     by, respectHumanActive = false, guardInteractiveMenu = false, requireAgent = false, origin, viaNativeChat = false,
-    beforeDeliver,
+    beforeDeliver, readyWaitMs = 0, readyPollMs = READY_POLL_MS, wake = false,
   } = opts;
   const instruction = String(text ?? "").trim();
   if (!instruction) throw new Error("empty text: there is nothing to send to the terminal");
-  const card = await getCard(cardId);
+  let card = await getCard(cardId);
   if (!card) throw new Error("card not found");
   // A maestro must not type into a card a person is using right now — but the person's own send is
   // never blocked (respectHumanActive is off unless the caller is a maestro driving another card).
@@ -329,15 +474,48 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
       `card "${card.title}" is human-active — someone is typing in it right now, so it will not accept a sent instruction; read it and wait, or ask the user`,
     );
   }
+  let woke = false;
+  if (wake) {
+    // A pause is a person's decision; a message does not overrule it (neither does the deploy resume).
+    if (card.pausedAt || card.column === "paused") {
+      throw new Error(
+        `paused: card "${card.title}" was paused on purpose and is not woken by a message — move it out of Paused (or ask the user), then send again`,
+      );
+    }
+    if (!hasLiveSession(card)) {
+      if (card.column === "done") {
+        throw new Error(
+          `done: card "${card.title}" is finished and asleep — move it back to Waiting/Working first, then send again`,
+        );
+      }
+      const before = card.hibernatedAt ? "hibernated" : card.openedAt ? "no session" : "never opened";
+      card = await openCard(card.id, by);
+      woke = true;
+      logger.info({ audit: true, action: "maestro.wake", card: card.worktreeSlug, was: before, by }, "asleep card woken by an order from outside the board");
+    }
+  }
   if (!hasLiveSession(card)) {
     throw new Error(
       `the terminal for card "${card.title}" has no live session — open or resume the card before sending it an instruction`,
     );
   }
   const fromAgent = origin?.kind === "agent";
-  // The native chat takes the turn only while it is in use (a live driver). Without one, the
-  // terminal is where the card is being worked, so the instruction is typed there.
-  const driver = fromAgent || viaNativeChat ? liveDriverSession(card.id) : null;
+  // The native chat takes the turn while it is in use (a live driver). For an order from outside the
+  // board (`wake`) it also takes it when NO ONE is mid-turn in the TUI: the driver is started here,
+  // headless — the TUI is the route that depends on status hooks reaching the back and on no menu
+  // sitting in the pane. A TUI that is generating right now keeps the order (typed, queued by Claude),
+  // so two Claudes never work the same worktree at once.
+  let driver = fromAgent || viaNativeChat ? liveDriverSession(card.id) : null;
+  if (!driver && wake && origin && (fromAgent || viaNativeChat) && (await getSettings()).sdkDriver) {
+    if ((await probeCardSession(card)) !== "busy") driver = await startCardDriver(card.id);
+  }
+  // The TUI route for an order from outside: a card the board calls live whose tmux session is GONE
+  // (the runner restarted under it) is recreated — the same idempotent open — instead of refused.
+  if (!driver && wake && (await probeCardSession(card)) === "gone") {
+    card = await openCard(card.id, by);
+    woke = true;
+    logger.info({ audit: true, action: "maestro.wake", card: card.worktreeSlug, was: "session gone", by }, "card whose terminal was gone recreated for an order from outside the board");
+  }
   if (driver && origin) {
     const project = await getProject(card.projectId);
     if (!project) throw new Error("project for this card not found");
@@ -347,11 +525,12 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
         `the native chat driver of card "${card.title}" exited before it could take the instruction — send it again`,
       );
     }
+    await markCardActivity(card.id).catch(() => undefined);
     logger.info(
-      { audit: true, action: "maestro.send", card: card.worktreeSlug, route: "sdk-driver", bytes: Buffer.byteLength(instruction), by },
+      { audit: true, action: "maestro.send", card: card.worktreeSlug, route: "sdk-driver", woke, bytes: Buffer.byteLength(instruction), by },
       "instruction delivered to a card's native chat",
     );
-    return { sent: true, cardId: card.id, title: card.title, project: project.name };
+    return { sent: true, cardId: card.id, title: card.title, project: project.name, route: "sdk-driver", woke };
   }
   // A menu is open in the terminal (session-resume, /compact, a permission prompt): typing a message
   // now would press Enter on the highlighted option and be swallowed. Refuse — the caller keeps the
@@ -360,20 +539,8 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
   // Claude EXITED under this session (the pane is a bare shell) or the session evaporated: typing
   // here would hand the message to bash, answer 200, and echo NOTHING back — the chat's forever-
   // pending bubble. Refuse with the action that fixes it instead.
-  if (requireAgent || fromAgent) {
-    const agent = await cardAgentState(card);
-    if (agent !== "running") {
-      throw new Error(
-        `no agent running: Claude is not running in card "${card.title}" (the terminal is ${
-          agent === "shell" ? "at a bare shell" : "gone"
-        }) — restart the card, then send again`,
-      );
-    }
-  }
-  if (guardInteractiveMenu && (await cardAwaitingChoice(card))) {
-    throw new Error(
-      `awaiting choice: card "${card.title}" is waiting on a menu in the terminal (session resume, /compact or a permission prompt). Open the Terminal tab, answer it, then send again.`,
-    );
+  if (requireAgent || fromAgent || guardInteractiveMenu) {
+    await awaitTerminalReady(card, { agent: requireAgent || fromAgent, menu: guardInteractiveMenu }, readyWaitMs, readyPollMs);
   }
   const project = await getProject(card.projectId);
   if (!project) throw new Error("project for this card not found");
@@ -398,14 +565,16 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
       void publishExternalMessage(card.id, { type: "user", text: instruction, at: Date.now(), from: origin });
     }
   }
+  // A delivered order is a sign of life the idle sweep must see even when the hooks cannot report it.
+  await markCardActivity(card.id).catch(() => undefined);
   logger.info(
     {
-      audit: true, action: "maestro.send", card: card.worktreeSlug, session: card.tmuxSession,
+      audit: true, action: "maestro.send", card: card.worktreeSlug, session: card.tmuxSession, route: "terminal", woke,
       bytes: Buffer.byteLength(instruction), by,
     },
     "instruction delivered to a card terminal",
   );
-  return { sent: true, cardId: card.id, title: card.title, project: project.name };
+  return { sent: true, cardId: card.id, title: card.title, project: project.name, route: "terminal", woke };
 }
 
 export interface ReportResult {

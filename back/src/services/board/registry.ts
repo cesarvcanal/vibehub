@@ -404,6 +404,15 @@ export interface Card {
    */
   humanActiveAt?: number;
   /**
+   * Last sign of life the BACK itself produced for this card (epoch ms): an open/wake, an instruction
+   * delivered to it. The idle sweep counts it ({@link lastActivityAt}) because the other clocks can
+   * all be silent while a card works: `openedAt` is stamped once, `humanActiveAt` needs a person,
+   * and `statusAt` needs the status hooks to reach the back — produção, 21/10/2026: with the hooks
+   * pointing at a dead blue/green port, a card opened and instructed by ChatGPT was hibernated by
+   * the next sweep tick, mid-task. Absent = nothing since the field existed.
+   */
+  activityAt?: number;
+  /**
    * WHEN THE CARD WAS FINISHED — the moment it ENTERED `done` (epoch ms), cleared the moment it
    * leaves. It exists because `updatedAt` cannot answer "done since when": a rename, an account
    * switch or a model pin moves it, and the RETENTION SWEEP (services/board/retention.ts) deletes
@@ -1883,6 +1892,16 @@ export async function markCardHumanActive(cardId: string, at: number = Date.now(
   });
 }
 
+/** Stamps `activityAt` (see the field): the back just did something that means "this card is in use". */
+export async function markCardActivity(cardId: string, at: number = Date.now()): Promise<Card | undefined> {
+  return store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    if (!card) return undefined;
+    card.activityAt = at;
+    return card; // not an edit of the card: updatedAt stays (same rule as markCardHumanActive)
+  });
+}
+
 /**
  * Applies the OPEN rule: `backlog`/`paused` -> `waiting`; every other column stays put (`done` never
  * leaves `done` just because a terminal was opened). It does not touch the status (the dot belongs to
@@ -1914,6 +1933,9 @@ export async function applyOpenTerminal(cardId: string): Promise<Card | undefine
       changed = true;
     }
     if (changed) card.updatedAt = Date.now();
+    // An open is a sign of life even for a card first opened days ago (openedAt never moves): without
+    // it the next idle sweep put a just-reopened card straight back to sleep.
+    card.activityAt = Date.now();
     return card;
   });
 }

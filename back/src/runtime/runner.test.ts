@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { config } from "../config/env.js";
 import {
+  buildStatusUrlProbeScript, statusUrlReachable,
   buildRunScript, buildSetupScript, runnerSettingsJson, hookCommand, statusUrl,
 } from "./runner.js";
 
@@ -202,5 +203,22 @@ describe("buildSetupScript", () => {
     const script = buildSetupScript(base);
     expect(script).toContain("window-size latest");
     expect(script).toContain("aggressive-resize on");
+  });
+});
+
+describe("status hook reach (the runner → back route the hooks use)", () => {
+  it("probes the status URL from INSIDE the runner, read-only, never throwing", () => {
+    const script = buildStatusUrlProbeScript("vibehub-runner", "http://10.8.0.25:20003/api/runner/status");
+    expect(script).toBe(
+      "docker exec 'vibehub-runner' curl -s -m 5 -o /dev/null -w '%{http_code}' -X POST 'http://10.8.0.25:20003/api/runner/status' 2>/dev/null || true",
+    );
+  });
+
+  it("any HTTP answer is reachable (401 without a token is the route alive); 000/empty is not", () => {
+    expect(statusUrlReachable("401")).toBe(true);
+    expect(statusUrlReachable("400\n")).toBe(true);
+    expect(statusUrlReachable("000")).toBe(false); // produção, 21/10/2026: the dead blue/green port
+    expect(statusUrlReachable("")).toBe(false);
+    expect(statusUrlReachable("curl: (7) refused")).toBe(false);
   });
 });

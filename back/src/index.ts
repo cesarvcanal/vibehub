@@ -31,6 +31,7 @@ import { cardSdkRoutes } from "./routes/cardSdk.js";
 import { startPauseReconciler, sweepCardUploads, sweepIdleCards } from "./services/board/workspace.js";
 import { sweepOrphanCardData } from "./services/board/purge.js";
 import { sweepDoneCards, DONE_SWEEP_INTERVAL_MS } from "./services/board/retention.js";
+import { checkStatusHookReach } from "./runtime/runner.js";
 import { startOutboxFlusher } from "./services/board/outbox.js";
 import { startWebhookDispatcher } from "./services/webhooks/subscriptions.js";
 import { startRunnerReaper } from "./services/reaper/reaper.js";
@@ -147,7 +148,12 @@ export async function buildServer() {
 const IDLE_SWEEP_MS = 5 * 60_000;
 
 function startIdleSweep(): NodeJS.Timeout {
+  // The status hooks are the board's only window into a card working in the terminal; check at boot
+  // (and on every sweep) that the runner can reach them, so a broken public URL is a loud log line
+  // instead of cards silently hibernated mid-task.
+  void checkStatusHookReach();
   const timer = setInterval(() => {
+    void checkStatusHookReach();
     void sweepIdleCards().catch((err: unknown) => {
       // Best-effort by design: a runner that is down means the sweep waits five more minutes.
       logger.warn({ err }, "idle sweep failed — no card was hibernated this pass");

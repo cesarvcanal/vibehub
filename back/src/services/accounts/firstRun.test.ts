@@ -56,6 +56,14 @@ describe("the command (pure)", () => {
     expect(cmd.endsWith(">/dev/null 2>&1 || true")).toBe(true);
   });
 
+  it("the DEFAULT profile seeds $HOME/.claude.json, the file its sessions read (no CLAUDE_CONFIG_DIR)", () => {
+    // Produção, 21/10/2026: cards of the default account whose repo was never trusted by hand
+    // (api-space) opened on the trust dialog — the seed wrote /root/.claude/.claude.json, which
+    // nothing reads, and every send answered "awaiting choice".
+    expect(claudeJsonPath("/root/.claude")).toBe("/root/.claude.json");
+    expect(firstRunSeedCommand("/root/.claude", '"$PWD"')).toContain("'/root/.claude.json'");
+  });
+
   it("no cwd = a profile-only seed (the login terminal has no project to trust)", () => {
     expect(firstRunSeedCommand("/root/.claude")).not.toContain("$PWD");
   });

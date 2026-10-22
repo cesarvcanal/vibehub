@@ -6,7 +6,7 @@ import { getCard, type Card } from "./registry.js";
 import { findUser } from "../../auth/users.js";
 import { recordOrigin } from "../chat/provenance.js";
 import { buildSendKeysScript } from "../maestro/maestro.js";
-import { cardAgentState, type AgentState } from "./agentState.js";
+import { cardAgentState, cardPaneReadiness, type AgentState } from "./agentState.js";
 import { logger } from "../../utils/logger.js";
 
 // The agent probe used to live here; it moved to ./agentState.js so the session view can consult it
@@ -197,6 +197,18 @@ async function flushOnce(cardId: string): Promise<FlushResult> {
     }
     agent = await cardAgentState(card);
     if (agent !== "running") return { delivered, agent };
+    // Claude is up, but a queued message can still only land on its PROMPT: on a menu (trust,
+    // resume, a permission prompt) the Enter picks the highlighted option, and on a pane not drawn
+    // yet (a session just born) the keys are lost. Both clear on their own or by the person's hand —
+    // the queue waits for the next trigger, it never answers a menu.
+    const pane = await cardPaneReadiness(card);
+    if (pane.state !== "ready") {
+      logger.info(
+        { card: card.worktreeSlug, pane: pane.state, menu: pane.state === "menu" ? pane.menu : undefined, queued: queued.length },
+        "outbox holding: the card's Claude is not at its prompt",
+      );
+      return { delivered, agent };
+    }
 
     for (const message of queued) {
       try {

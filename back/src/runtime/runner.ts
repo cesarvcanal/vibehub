@@ -28,6 +28,56 @@ export function statusUrl(): string {
 }
 
 /**
+ * Read-only probe, run INSIDE the runner: can a card's status hook reach the back? A bare POST with no
+ * token — any HTTP answer (401/400) proves the route is reachable; `000` means the connection itself
+ * failed. `|| true`: a downed runner reads as unreachable, never as a thrown error. PURE.
+ */
+export function buildStatusUrlProbeScript(containerName: string, url: string): string {
+  return `docker exec ${shQuote(containerName)} curl -s -m 5 -o /dev/null -w '%{http_code}' -X POST ${shQuote(url)} 2>/dev/null || true`;
+}
+
+/** true = the probe got an HTTP answer back (any code but `000`). PURE. */
+export function statusUrlReachable(stdout: string): boolean {
+  const code = String(stdout ?? "").trim();
+  return /^\d{3}$/.test(code) && code !== "000";
+}
+
+let lastReach: boolean | null = null;
+
+/**
+ * Checks that the runner reaches the status URL every card's hooks POST to, and SAYS SO when it does
+ * not. Produção, 21/10/2026: the public URL pointed at a blue/green port the app no longer listened
+ * on; every hook failed in silence (`curl … || true`), the board never saw a TUI card working, and
+ * the idle sweep hibernated cards mid-task. Logs an error on the first failure (and each failure
+ * after a recovery), an info on recovery. Never throws. Returns the verdict.
+ */
+export async function checkStatusHookReach(): Promise<boolean> {
+  const url = statusUrl();
+  let reachable = false;
+  try {
+    const { stdout } = await hostExecutor().runScript(buildStatusUrlProbeScript(config.runner.container, url), { timeoutMs: 20_000 });
+    reachable = statusUrlReachable(stdout);
+  } catch {
+    reachable = false;
+  }
+  if (!reachable && lastReach !== false) {
+    logger.error(
+      { audit: true, action: "runner.statusHook.unreachable", url },
+      "the runner cannot reach the status URL: cards working in the terminal will not report `working`/`waiting` to the board — set VIBEHUB_PUBLIC_URL to an address the runner reaches (a stable name, not a blue/green port) and reopen the cards",
+    );
+  } else if (reachable && lastReach === false) {
+    logger.info({ audit: true, action: "runner.statusHook.reachable", url }, "the runner reaches the status URL again");
+  }
+  lastReach = reachable;
+  return reachable;
+}
+
+/** The last verdict of {@link checkStatusHookReach}; null = not checked yet. */
+export function statusHookReach(): boolean | null {
+  return lastReach;
+}
+
+/**
  * The hook command: report card status over HTTP. `$VIBEHUB_STATUS_URL` and `$VIBEHUB_CARD_ID` come
  * from the tmux session environment (set when the card is opened); the token is READ FROM THE FILE
  * at call time so it never gets baked into settings.json. PURE.
