@@ -154,9 +154,9 @@ describe("VoiceModePage", () => {
     expect(await screen.findByText("Microphone muted")).toBeInTheDocument();
   });
 
-  it("shows the orb, and leads back to the card it was opened from", async () => {
+  it("shows the orb, and leads back to the card in its URL — a reload keeps the way back", async () => {
     status({ enabled: true, available: true });
-    renderApp(<VoiceModePage makeDeps={makeDeps} />, { route: { pathname: "/voice", state: { from: "/?project=p1&card=c1" } } as never });
+    renderApp(<VoiceModePage makeDeps={makeDeps} />, { route: "/voice?project=p1&card=c1" });
     expect(await screen.findByTestId("voice-orb")).toHaveAttribute("data-mode", "idle");
     expect(screen.getByRole("link", { name: /back to the card/i })).toHaveAttribute("href", "/?project=p1&card=c1");
   });

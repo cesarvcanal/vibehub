@@ -10,8 +10,9 @@ import { MOBILE_QUERY } from "@/lib/useIsMobile";
 import { get } from "@/lib/api";
 
 /**
- * The card composer's corner button while the voice mode is on: EMPTY draft → blue "talk by
- * voice" that opens /voice; TEXT → the send arrow. Off, the composer is what it always was.
+ * The card composer's voice button while the voice mode is on. Desktop: outside the field, beside
+ * the dictation mic. Phone: the field's corner — EMPTY draft → blue "talk by voice", TEXT → the send
+ * arrow. Either way /voice opens with the card in its URL. Off, the composer is what it always was.
  */
 
 vi.mock("@/lib/api", () => ({
@@ -47,7 +48,7 @@ function setViewport(mobile: boolean): void {
 
 function VoiceRoute() {
   const location = useLocation();
-  return <div data-testid="voice-page">{JSON.stringify(location.state)}</div>;
+  return <div data-testid="voice-page">{`${location.pathname}${location.search}`}</div>;
 }
 
 function renderInApp(ui: ReactElement) {
@@ -87,19 +88,47 @@ describe("composer voice button — voice mode on", () => {
     expect(screen.queryByTestId("composer-send")).not.toBeInTheDocument();
     // The dictation microphone is still there, a different button.
     expect(screen.getByRole("button", { name: "Record a message" })).not.toBe(voice);
+  });
+
+  it("desktop: OUTSIDE the field, beside the mic — the field keeps no corner padding", async () => {
+    server({ voice: true });
+    renderInApp(<TerminalComposer onSend={vi.fn()} cardId="card-1" />);
+    const voice = await screen.findByRole("button", { name: /talk by voice/i });
+    expect(screen.getByRole("textbox").parentElement).not.toContainElement(voice);
+    expect(voice.parentElement).toContainElement(screen.getByRole("button", { name: "Record a message" }));
+    expect(screen.getByRole("textbox").className).not.toContain("pr-14");
+  });
+
+  it("desktop: typing keeps the voice button and adds no send arrow (Enter sends)", async () => {
+    server({ voice: true });
+    renderInApp(<TerminalComposer onSend={vi.fn()} cardId="card-1" />);
+    await screen.findByRole("button", { name: /talk by voice/i });
+    await userEvent.type(screen.getByRole("textbox"), "roda os testes");
+    expect(screen.getByRole("button", { name: /talk by voice/i })).toBeEnabled();
+    expect(screen.queryByTestId("composer-send")).not.toBeInTheDocument();
+  });
+
+  it("phone: IN the field's corner, which gets room for it", async () => {
+    setViewport(true);
+    server({ voice: true });
+    renderInApp(<TerminalComposer onSend={vi.fn()} cardId="card-1" />);
+    const voice = await screen.findByRole("button", { name: /talk by voice/i });
+    expect(screen.getByRole("textbox").parentElement).toContainElement(voice);
     expect(screen.getByRole("textbox").className).toContain("pr-14");
   });
 
-  it("opens /voice carrying the way back to the card, and sends nothing", async () => {
+  it.each([false, true])("opens /voice with the card and project in the URL, and sends nothing (mobile=%s)", async (mobile) => {
+    setViewport(mobile);
     server({ voice: true });
     const onSend = vi.fn();
     renderInApp(<TerminalComposer onSend={onSend} cardId="card-1" />);
     await userEvent.click(await screen.findByRole("button", { name: /talk by voice/i }));
-    expect(screen.getByTestId("voice-page")).toHaveTextContent('"from":"/?project=p1&card=card-1"');
+    expect(screen.getByTestId("voice-page")).toHaveTextContent("/voice?project=p1&card=card-1");
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("typing turns it into the send arrow, which sends normally; clearing turns it back", async () => {
+  it("phone: typing turns it into the send arrow, which sends normally; clearing turns it back", async () => {
+    setViewport(true);
     server({ voice: true });
     const onSend = vi.fn();
     const user = userEvent.setup();
@@ -137,7 +166,18 @@ describe("composer voice button — voice mode on", () => {
     expect(screen.getByTestId("voice-page")).toBeInTheDocument();
   });
 
-  it("while editing a sent message there is no voice button — only the arrow", async () => {
+  it("desktop: no voice button while editing a sent message", async () => {
+    server({ voice: true });
+    renderInApp(
+      <TerminalComposer onSend={vi.fn()} cardId="card-1" editing={{ text: "" }} onCancelEdit={vi.fn()} />,
+    );
+    await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/voice/live"));
+    await screen.findByRole("button", { name: "Record a message" });
+    expect(screen.queryByRole("button", { name: /talk by voice/i })).not.toBeInTheDocument();
+  });
+
+  it("phone: while editing a sent message there is no voice button — only the arrow", async () => {
+    setViewport(true);
     server({ voice: true });
     renderInApp(
       <TerminalComposer onSend={vi.fn()} cardId="card-1" editing={{ text: "" }} onCancelEdit={vi.fn()} />,
@@ -179,7 +219,7 @@ describe("ComposerVoiceButton states", () => {
     const onSend = vi.fn();
     render(
       <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-        <ComposerVoiceButton empty sending={false} busy={false} voice mobile={false} onSend={onSend} {...props} />
+        <ComposerVoiceButton cardId="card-1" empty sending={false} busy={false} voice onSend={onSend} {...props} />
       </MemoryRouter>,
     );
     return onSend;

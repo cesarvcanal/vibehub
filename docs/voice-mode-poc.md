@@ -65,7 +65,10 @@ VIBEHUB_BACKEND=http://127.0.0.1:3011 npx vite --port 5184
 ```
 
 1. Abra `http://localhost:5184`, crie o owner no assistente de setup (instalação vazia) e entre.
-2. Vá em `http://localhost:5184/voice` (não há link no board — é POC).
+2. Abra um card e clique na onda azul: no desktop fica ao lado do microfone, fora do campo; no
+   celular, no canto do campo enquanto ele está vazio. Abre `/voice?project=<id>&card=<id>` — o card
+   vai na URL só para o "Voltar ao card" sobreviver a reload e aba nova; a conversa não age nele.
+   `/voice` direto também funciona e volta para o board.
 3. Toque no botão, permita o microfone, espere "Ouvindo — é só falar" e converse. Fale por cima da
    resposta para interromper. "Encerrar conversa" fecha tudo.
 
