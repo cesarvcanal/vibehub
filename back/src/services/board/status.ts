@@ -1,5 +1,5 @@
 import * as registry from "./registry.js";
-import { killCardSession, restartCard } from "./workspace.js";
+import { killCardSession, probeSessions, restartCard } from "./workspace.js";
 import * as outbox from "./outbox.js";
 import { cardHoldsBackgroundWork, onCardStatusSink } from "./agentState.js";
 import { observeCardStatus } from "../events/cardEvents.js";
@@ -77,6 +77,57 @@ export async function reportCardStatus(cardId: string, reported: registry.CardSt
   if (card && status === "waiting") void outbox.flushCard(card.id);
   await observed;
   return card;
+}
+
+/**
+ * How long a `working` card may go without ANY hook before the sweep asks the runner whether it is
+ * really working. A running turn fires PreToolUse on every tool call, so ten silent minutes is either
+ * one long thought (the pane shows it: `busy`, left alone) or a Stop that never arrived.
+ */
+export const STALE_WORKING_MS = 10 * 60_000;
+
+/**
+ * THE `working` THE HOOKS NEVER CLOSED (produção, 22/10/2026): the status hooks post to the address
+ * baked into the card's environment when it opened; a deploy moved the app to another blue/green
+ * port, the Stop that ended the turn died in a `curl … || true`, and the board kept the loader on a
+ * Claude idle at its prompt for a day — while the restart that deploy left pending waited for that
+ * very `waiting` and never ran.
+ *
+ * Run by the idle sweep: every `working` card silent for {@link STALE_WORKING_MS}, whose native-chat
+ * driver holds no turn nor background task, is checked against its terminal in ONE runner round
+ * trip. `idle`/`gone` = the Stop was lost: the report it would have made is made here, through
+ * {@link reportCardStatus}, so the pending pause/restart and the outbox follow as usual. `busy` and a
+ * runner that did not answer change nothing. Returns how many cards were corrected. Never throws.
+ */
+export async function reconcileStaleWorking(now: number = Date.now()): Promise<number> {
+  const stale = (await registry.listAllCards()).filter(
+    (c) =>
+      c.status === "working" &&
+      registry.hasLiveSession(c) &&
+      now - (c.statusAt ?? 0) >= STALE_WORKING_MS &&
+      !cardHoldsBackgroundWork(c.id),
+  );
+  if (stale.length === 0) return 0;
+  const states = await probeSessions(stale.map((c) => c.tmuxSession));
+  let corrected = 0;
+  for (const c of stale) {
+    const state = states.get(c.tmuxSession);
+    if (state !== "idle" && state !== "gone") continue;
+    // Re-checked at the moment of writing: a hook (or the driver) may have spoken during the probe.
+    const fresh = await registry.getCard(c.id);
+    if (fresh?.status !== "working" || (fresh.statusAt ?? 0) !== (c.statusAt ?? 0) || cardHoldsBackgroundWork(c.id)) continue;
+    try {
+      await reportCardStatus(c.id, "waiting");
+      corrected += 1;
+      logger.warn(
+        { audit: true, action: "card.status.reconciled", card: c.worktreeSlug, session: c.tmuxSession, state, silentMs: now - (c.statusAt ?? 0) },
+        "a `working` card had been silent and its terminal is not working — the lost Stop hook was applied (status hooks may not be reaching the back)",
+      );
+    } catch (err) {
+      logger.warn({ card: c.worktreeSlug, detail: (err as Error).message }, "stale `working` could not be corrected (continuing)");
+    }
+  }
+  return corrected;
 }
 
 onCardStatusSink(reportCardStatus);

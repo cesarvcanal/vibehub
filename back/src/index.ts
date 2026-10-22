@@ -29,6 +29,7 @@ import { previewRoutes, installPreviewUpgrade } from "./routes/preview.js";
 import { trackSessionSockets } from "./auth/sessionSockets.js";
 import { cardSdkRoutes } from "./routes/cardSdk.js";
 import { startPauseReconciler, sweepCardUploads, sweepIdleCards } from "./services/board/workspace.js";
+import { reconcileStaleWorking } from "./services/board/status.js";
 import { sweepOrphanCardData } from "./services/board/purge.js";
 import { sweepDoneCards, DONE_SWEEP_INTERVAL_MS } from "./services/board/retention.js";
 import { checkStatusHookReach } from "./runtime/runner.js";
@@ -154,6 +155,10 @@ function startIdleSweep(): NodeJS.Timeout {
   void checkStatusHookReach();
   const timer = setInterval(() => {
     void checkStatusHookReach();
+    // A lost Stop hook leaves the loader on an idle card forever; the runner settles it.
+    void reconcileStaleWorking().catch((err: unknown) => {
+      logger.warn({ err }, "stale `working` reconciliation failed — retried on the next sweep");
+    });
     void sweepIdleCards().catch((err: unknown) => {
       // Best-effort by design: a runner that is down means the sweep waits five more minutes.
       logger.warn({ err }, "idle sweep failed — no card was hibernated this pass");
