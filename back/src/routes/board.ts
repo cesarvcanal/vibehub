@@ -140,11 +140,9 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const { projectId, title, ...patch } = req.body ?? ({} as registry.CreateCardInput & registry.UpdateCardInput);
       try {
-        const card = await registry.createCard({ projectId, title });
-        // Optional fields (account, model, branch, imported session) are applied through the same
-        // validation path an edit uses — one place where those values are checked, not two.
-        const hasPatch = Object.values(patch).some((v) => v !== undefined);
-        const created = hasPatch ? await registry.updateCard(card.id, patch) : card;
+        // Optional fields (account, model, branch, imported session) are checked by the same
+        // validation an edit uses, inside the creation itself: a refused one creates nothing.
+        const created = await registry.createCard({ projectId, title }, patch);
         // PRE-PROVISIONING, in the background and AFTER the patch (the account, the model and the
         // branch are what the script is built from): the clone, the worktree and the tmux session
         // start being built the moment the card exists, while the user is still reading the board.
