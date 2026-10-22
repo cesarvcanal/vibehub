@@ -28,6 +28,8 @@ import { accountLoginRoutes } from "./routes/accountLogin.js";
 import { previewRoutes, installPreviewUpgrade } from "./routes/preview.js";
 import { trackSessionSockets } from "./auth/sessionSockets.js";
 import { cardSdkRoutes } from "./routes/cardSdk.js";
+import { voiceRoutes } from "./routes/voice.js";
+import { ensurePreviewOwner } from "./auth/previewProxyAuth.js";
 import { startPauseReconciler, sweepCardUploads, sweepIdleCards } from "./services/board/workspace.js";
 import { reconcileStaleWorking } from "./services/board/status.js";
 import { sweepOrphanCardData } from "./services/board/purge.js";
@@ -76,6 +78,8 @@ export async function buildServer() {
   });
 
   app.get("/api/health", async () => ({ ok: true, version: "0.1.0" }));
+  // Dev only: a preview-proxied instance must not be a fresh install that funnels into the wizard.
+  if (config.previewProxyAuth) await ensurePreviewOwner();
 
   await app.register(authRoutes);
   await app.register(usersRoutes);
@@ -93,6 +97,7 @@ export async function buildServer() {
   await app.register(chatRoutes);
   await app.register(accountLoginRoutes);
   await app.register(previewRoutes);
+  await app.register(voiceRoutes);
 
   // Preview websockets (vite HMR) ride the same `upgrade` event @fastify/websocket owns; the
   // interceptor wraps its listener once everything is registered. The open-socket registry comes

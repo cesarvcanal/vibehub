@@ -2,6 +2,9 @@ import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ArrowUp, Camera, Check, ImageIcon, Loader2, Mic, Paperclip, Pencil, Plus, RotateCw, Square, X } from "lucide-react";
+import { useInRouterContext } from "react-router-dom";
+import { ComposerVoiceButton } from "@/features/voice/ComposerVoiceButton";
+import { useVoiceStatus } from "@/features/voice/status";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -1102,6 +1105,14 @@ export function TerminalComposer({
   }, [text]);
 
   const recordingNow = recording === "recording";
+  // The voice conversation (the GPT-Live POC) has a seat in the field's corner only on a card's
+  // composer, inside the app's router, and only when the server has the mode on with a key. Off —
+  // the default — and the composer is exactly what it was: the phone's send arrow, nothing on a
+  // desktop.
+  const inRouter = useInRouterContext();
+  const voiceStatus = useVoiceStatus(inRouter && Boolean(cardId));
+  const voiceReady = inRouter && Boolean(cardId) && Boolean(voiceStatus.data?.enabled && voiceStatus.data.available);
+  const cornerButton = isMobile || voiceReady;
 
   return (
     <div
@@ -1239,7 +1250,7 @@ export function TerminalComposer({
           className={cn(
             "max-h-48 min-h-24 w-full resize-none overflow-y-auto rounded-md border border-border bg-card px-3 py-2 text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 md:text-sm",
             // Room for the send button that sits in the corner, so no line ever runs under it.
-            isMobile && "pr-14",
+            cornerButton && "pr-14",
           )}
         />
         {/* `ultrathink` / `ultracode` in colour, over the grey letters the field already drew.
@@ -1247,7 +1258,7 @@ export function TerminalComposer({
             happened inside the terminal — you typed a reserved word up here and nothing said it
             had been read. The padding override matches the field's, or the mirror wraps somewhere
             the field does not. */}
-        <UltraFieldOverlay target={ref} text={text} className={cn(isMobile && "pr-14")} />
+        <UltraFieldOverlay target={ref} text={text} className={cn(cornerButton && "pr-14")} />
         {/* While recording with nothing typed, the empty field is where the voice goes: the bars
             live there rather than crowding the microphone. They vanish the moment there is text. */}
         {recordingNow && !text ? (
@@ -1269,7 +1280,16 @@ export function TerminalComposer({
         {/* The phone's send. IN the field's bottom-right corner rather than a fourth circle in the
             row, because a 390px screen has no width left after the "+", the microphone and
             something worth reading — and that corner is where a thumb already goes to send. */}
-        {isMobile ? (
+        {voiceReady ? (
+          <ComposerVoiceButton
+            empty={isEmptyDraft(text, attachments)}
+            sending={sending}
+            busy={recording !== "idle"}
+            voice={!editing}
+            mobile={isMobile}
+            onSend={send}
+          />
+        ) : isMobile ? (
           <Button
             type="button"
             size="icon"

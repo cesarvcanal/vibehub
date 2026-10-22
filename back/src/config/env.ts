@@ -101,6 +101,18 @@ export function trustProxyBootWarning(value: string | number | false): string | 
   );
 }
 
+/**
+ * VIBEHUB_PREVIEW_PROXY_AUTH: on only as `1`, and only on a loopback host. Listening anywhere else,
+ * whoever reaches the port and sends one header would be the owner — so the boot stops instead.
+ */
+export function previewProxyAuth(name: string, host: string): boolean {
+  if (str(name, "") !== "1") return false;
+  if (!["127.0.0.1", "::1", "localhost"].includes(host)) {
+    throw new Error(`${name}=1 requires VIBEHUB_HOST on loopback (127.0.0.1), not '${host}'`);
+  }
+  return true;
+}
+
 /** Where the runner containers live: this machine's Docker, or a remote host over SSH. */
 export type RunnerHostKind = "local" | "ssh";
 
@@ -147,6 +159,17 @@ export interface VibehubConfig {
    */
   trustProxy: string | number | false;
   logLevel: string;
+  /**
+   * POC of the GPT-Live voice mode (services/voice/live.ts). OFF unless VIBEHUB_VOICE_LIVE=1, so an
+   * install that never asked for it exposes nothing. The key is the server's: it never reaches the
+   * browser. Empty = fall back to the voice-input key already stored in the vault.
+   */
+  voiceLive: { enabled: boolean; apiKey: string };
+  /**
+   * DEV ONLY (auth/previewProxyAuth.ts): requests relayed by another vibehub's preview proxy act as
+   * a local owner — no setup, no login. Refused unless `host` is loopback.
+   */
+  previewProxyAuth: boolean;
 }
 
 export const config: VibehubConfig = {
@@ -169,6 +192,11 @@ export const config: VibehubConfig = {
   insecureCookies: str("VIBEHUB_INSECURE_COOKIES", "") === "1",
   trustProxy: trustProxy("VIBEHUB_TRUST_PROXY"),
   logLevel: str("VIBEHUB_LOG_LEVEL", "info"),
+  voiceLive: {
+    enabled: str("VIBEHUB_VOICE_LIVE", "") === "1",
+    apiKey: str("VIBEHUB_VOICE_OPENAI_API_KEY", ""),
+  },
+  previewProxyAuth: previewProxyAuth("VIBEHUB_PREVIEW_PROXY_AUTH", str("VIBEHUB_HOST", "0.0.0.0")),
 };
 
 /** Absolute path inside the data directory. */

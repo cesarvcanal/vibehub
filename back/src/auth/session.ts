@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { config, dataPath } from "../config/env.js";
 import { sessionUser, type PublicUser } from "./users.js";
+import { previewProxyUser } from "./previewProxyAuth.js";
 
 /**
  * SESSIONS — a signed cookie holding "<userId>.<issuedAt>.<hmac>". Stateless on purpose: the server
@@ -13,7 +14,19 @@ import { sessionUser, type PublicUser } from "./users.js";
  * invalidates every session, which is exactly what you want after a leak.
  */
 
-export const SESSION_COOKIE = "vibehub_session";
+/**
+ * Overridable for ONE case: a second vibehub served through the first one's preview proxy (testing
+ * vibehub with vibehub). The proxy strips `vibehub_session` on the way in, and the inner instance's
+ * Set-Cookie would land on the outer panel's origin — same name, and it logs the owner out of it.
+ */
+export const SESSION_COOKIE = sessionCookieName(process.env.VIBEHUB_SESSION_COOKIE);
+
+/** The cookie name, or the default when unset. A name a cookie header cannot carry stops the boot. */
+export function sessionCookieName(raw: string | undefined): string {
+  if (!raw) return "vibehub_session";
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(raw)) throw new Error(`VIBEHUB_SESSION_COOKIE is not a valid cookie name: '${raw}'`);
+  return raw;
+}
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 let keyPromise: Promise<Buffer> | null = null;
@@ -203,7 +216,9 @@ export function sessionTokenFromCookieHeader(header: string | undefined): string
  */
 export async function currentUser(req: FastifyRequest): Promise<PublicUser | null> {
   const raw = req.cookies?.[SESSION_COOKIE];
-  return raw ? await verifySessionUser(raw) : null;
+  const user = raw ? await verifySessionUser(raw) : null;
+  // Dev only, off by default: a vibehub previewed by another vibehub is signed in by that proxy.
+  return user ?? (await previewProxyUser(req));
 }
 
 /** The id of {@link requestUser}, or null — same rules, for the handlers that only need who. */
