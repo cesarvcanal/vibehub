@@ -1475,7 +1475,7 @@ export interface CreateCardInput {
  * look for, so it must be the first thing in the column rather than buried under everything jotted
  * down before it. Base inherited from the project, session/slug DERIVED.
  */
-export async function createCard(input: CreateCardInput): Promise<Card> {
+export async function createCard(input: CreateCardInput, fields: UpdateCardInput = {}): Promise<Card> {
   const title = String(input.title ?? "").trim();
   if (!title) throw new Error("title is required");
   return store.mutate((doc) => {
@@ -1501,10 +1501,15 @@ export async function createCard(input: CreateCardInput): Promise<Card> {
       createdAt: now,
       updatedAt: now,
     };
+    // Optional fields (account, model, branch, imported session) go through the edit's validation,
+    // in THIS mutation: one that is refused leaves no bare card behind.
+    const { next, move } = validateCardPatch(doc, card, fields);
+    Object.assign(card, next);
     doc.cards.push(card);
     rememberBrowserSlot(id, browserSlot);
     // Renumbers the backlog with the new card spliced in at 0, so positions stay 0..n-1.
     placeCard(doc.cards, card, "backlog", 0);
+    if (move) placeCard(doc.cards, card, move.column, move.position);
     return card;
   });
 }
@@ -1556,6 +1561,75 @@ export async function stampCardActor(
 }
 
 /**
+ * Validates a card patch against the document WITHOUT touching the card: returns the fields to
+ * assign and the move to make, or throws on the first invalid field. Shared by the edit and by the
+ * creation with optional fields, so both refuse exactly the same values.
+ */
+function validateCardPatch(
+  doc: BoardDoc,
+  card: Card,
+  patch: UpdateCardInput,
+): { next: Partial<Card>; move?: { column: BoardColumn; position?: number } } {
+  const next: Partial<Card> = {};
+  if (patch.title !== undefined) {
+    const title = String(patch.title).trim();
+    if (!title) throw new Error("title cannot be empty");
+    next.title = title;
+  }
+  let move: { column: BoardColumn; position?: number } | undefined;
+  if (patch.column !== undefined || patch.position !== undefined) {
+    const column = patch.column ?? card.column;
+    if (!BOARD_COLUMNS.includes(column)) throw new Error(`invalid column: ${String(patch.column)}`);
+    if (patch.position !== undefined && (!Number.isInteger(patch.position) || patch.position < 0)) {
+      throw new Error("invalid position (expected an integer >= 0)");
+    }
+    move = { column, position: patch.position };
+  }
+  // accountSlug: null = CLEAR (inherit from the project); a string must be an account that EXISTS.
+  // Switching accounts on a live session is handled by the caller (kill-session) — this is the record only.
+  if (patch.accountSlug !== undefined) {
+    next.accountSlug = patch.accountSlug === null ? undefined : requireAccountSlug(doc, patch.accountSlug);
+  }
+  // model: null/"" = CLEAR (back to the account default); a string must be whitelisted. A change
+  // stamps `modelAt`: from that instant the pin is newer than any turn already in the transcript,
+  // which is what makes the pill show the model the session is being restarted onto.
+  if (patch.model !== undefined) {
+    next.model = patch.model === null || !String(patch.model).trim() ? undefined : assertModel(patch.model);
+    if (next.model !== card.model) next.modelAt = Date.now();
+  }
+  if (patch.effort !== undefined) {
+    next.effort = patch.effort === null || !String(patch.effort).trim() ? undefined : assertEffort(patch.effort);
+    if (next.effort !== card.effort) next.effortAt = Date.now();
+  }
+  // Imported session / own branch: validated here (uuid / assertBranchName) because both become
+  // argv or script content in the runner and must never pass through raw. null clears.
+  if (patch.resumeSessionId !== undefined) {
+    next.resumeSessionId = patch.resumeSessionId === null ? undefined : assertSessionId(patch.resumeSessionId);
+  }
+  // sdkChat: strictly boolean (or null to clear). Stored as `true` or ABSENT — a board.json full
+  // of `sdkChat: false` would just be noise for the default behaviour.
+  if (patch.sdkChat !== undefined) {
+    if (patch.sdkChat !== null && typeof patch.sdkChat !== "boolean") throw new Error("sdkChat must be a boolean");
+    next.sdkChat = patch.sdkChat === true ? true : undefined;
+  }
+  if (patch.branch !== undefined) {
+    next.branch = patch.branch === null || !String(patch.branch).trim() ? undefined : assertBranchName(patch.branch);
+  }
+  // base: the label of the base branch the NEXT open/worktree uses (it does not touch an existing
+  // worktree or tmux session). Validated here — it becomes argv/script in the runner. There is no
+  // `null`: the base is always required (inherited from the project at creation), so fixing it is
+  // always a string.
+  if (patch.base !== undefined) next.base = assertBranchName(patch.base);
+  // locked: strictly boolean (or null to clear). Same storage rule as `sdkChat` — `true` or
+  // ABSENT, so an unlocked card reads exactly like every card written before the lock existed.
+  if (patch.locked !== undefined) {
+    if (patch.locked !== null && typeof patch.locked !== "boolean") throw new Error("locked must be a boolean");
+    next.locked = patch.locked === true ? true : undefined;
+  }
+  return { next, move };
+}
+
+/**
  * MANUAL edit/move of a card. A manual move is NEVER blocked (any column, including finishing in
  * `done`). Positions are renumbered in both the source and the destination column. The title may
  * change, but `worktreeSlug`/`tmuxSession` do NOT — the worktree and session already exist in the
@@ -1569,62 +1643,7 @@ export async function updateCard(id: string, patch: UpdateCardInput): Promise<Ca
     // VALIDATE EVERYTHING FIRST, then apply. A patch is all-or-nothing: the document lives in a
     // cache shared with the next mutation, so a half-applied patch whose last field throws would
     // survive in memory and get persisted by whatever writes next.
-    const next: Partial<Card> = {};
-    if (patch.title !== undefined) {
-      const title = String(patch.title).trim();
-      if (!title) throw new Error("title cannot be empty");
-      next.title = title;
-    }
-    let move: { column: BoardColumn; position?: number } | undefined;
-    if (patch.column !== undefined || patch.position !== undefined) {
-      const column = patch.column ?? card.column;
-      if (!BOARD_COLUMNS.includes(column)) throw new Error(`invalid column: ${String(patch.column)}`);
-      if (patch.position !== undefined && (!Number.isInteger(patch.position) || patch.position < 0)) {
-        throw new Error("invalid position (expected an integer >= 0)");
-      }
-      move = { column, position: patch.position };
-    }
-    // accountSlug: null = CLEAR (inherit from the project); a string must be an account that EXISTS.
-    // Switching accounts on a live session is handled by the caller (kill-session) — this is the record only.
-    if (patch.accountSlug !== undefined) {
-      next.accountSlug = patch.accountSlug === null ? undefined : requireAccountSlug(doc, patch.accountSlug);
-    }
-    // model: null/"" = CLEAR (back to the account default); a string must be whitelisted. A change
-    // stamps `modelAt`: from that instant the pin is newer than any turn already in the transcript,
-    // which is what makes the pill show the model the session is being restarted onto.
-    if (patch.model !== undefined) {
-      next.model = patch.model === null || !String(patch.model).trim() ? undefined : assertModel(patch.model);
-      if (next.model !== card.model) next.modelAt = Date.now();
-    }
-    if (patch.effort !== undefined) {
-      next.effort = patch.effort === null || !String(patch.effort).trim() ? undefined : assertEffort(patch.effort);
-      if (next.effort !== card.effort) next.effortAt = Date.now();
-    }
-    // Imported session / own branch: validated here (uuid / assertBranchName) because both become
-    // argv or script content in the runner and must never pass through raw. null clears.
-    if (patch.resumeSessionId !== undefined) {
-      next.resumeSessionId = patch.resumeSessionId === null ? undefined : assertSessionId(patch.resumeSessionId);
-    }
-    // sdkChat: strictly boolean (or null to clear). Stored as `true` or ABSENT — a board.json full
-    // of `sdkChat: false` would just be noise for the default behaviour.
-    if (patch.sdkChat !== undefined) {
-      if (patch.sdkChat !== null && typeof patch.sdkChat !== "boolean") throw new Error("sdkChat must be a boolean");
-      next.sdkChat = patch.sdkChat === true ? true : undefined;
-    }
-    if (patch.branch !== undefined) {
-      next.branch = patch.branch === null || !String(patch.branch).trim() ? undefined : assertBranchName(patch.branch);
-    }
-    // base: the label of the base branch the NEXT open/worktree uses (it does not touch an existing
-    // worktree or tmux session). Validated here — it becomes argv/script in the runner. There is no
-    // `null`: the base is always required (inherited from the project at creation), so fixing it is
-    // always a string.
-    if (patch.base !== undefined) next.base = assertBranchName(patch.base);
-    // locked: strictly boolean (or null to clear). Same storage rule as `sdkChat` — `true` or
-    // ABSENT, so an unlocked card reads exactly like every card written before the lock existed.
-    if (patch.locked !== undefined) {
-      if (patch.locked !== null && typeof patch.locked !== "boolean") throw new Error("locked must be a boolean");
-      next.locked = patch.locked === true ? true : undefined;
-    }
+    const { next, move } = validateCardPatch(doc, card, patch);
 
     // Nothing below this line can throw. (Object.assign copies keys explicitly set to `undefined`
     // too, which is exactly how a field gets cleared.)

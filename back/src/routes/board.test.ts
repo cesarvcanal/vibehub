@@ -170,6 +170,9 @@ describe("cards", () => {
       payload: { projectId, title: "bad model", model: "gpt-9" },
     });
     expect(bad.statusCode).toBe(400);
+    // All-or-nothing: a refused optional field must not leave the bare card behind on the board.
+    const cards = (await app.inject({ method: "GET", url: "/api/cards", headers: { cookie } })).json().cards;
+    expect(cards.map((c: { title: string }) => c.title)).not.toContain("bad model");
   });
 
   it("404s an unknown card and 400s an unknown project", async () => {

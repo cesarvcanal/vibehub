@@ -6,6 +6,7 @@ import { cardBrowserPorts } from "../browser/ports.js";
 import { markBrowserBusy } from "../browser/activity.js";
 import { logger } from "../../utils/logger.js";
 import { buildCdpHostScript, type FillResult } from "./fill.js";
+import { createLineReader } from "../../utils/lineReader.js";
 import {
   authorizeAgentWrite, createCredential, suggestCredentialName, type Credential, type CredentialOrigin,
 } from "./credentials.js";
@@ -35,8 +36,12 @@ interface PendingCapture {
 
 interface Listener {
   child: ChildProcessWithoutNullStreams;
-  buffer: string;
+  /** Whole lines out of the raw stdout, multibyte characters kept whole across chunks. */
+  readLines: (chunk: Buffer) => string[];
 }
+
+/** A capture line is a small JSON object; anything this long without a newline is garbage. */
+const MAX_LINE_CHARS = 64 * 1024;
 
 /** At most this many un-actioned captures per card (newest win); keeps memory bounded. */
 const MAX_PENDING_PER_CARD = 5;
@@ -136,12 +141,9 @@ export async function saveCaptureForCard(cardId: string, id: string, name: strin
 }
 
 /** Parses NDJSON lines from the capture program's stdout, feeding each capture into the store. */
-function consumeLines(cardId: string, listener: Listener, chunk: string): void {
-  listener.buffer += chunk;
-  let nl: number;
-  while ((nl = listener.buffer.indexOf("\n")) >= 0) {
-    const line = listener.buffer.slice(0, nl).trim();
-    listener.buffer = listener.buffer.slice(nl + 1);
+function consumeLines(cardId: string, listener: Listener, chunk: Buffer): void {
+  for (const raw of listener.readLines(chunk)) {
+    const line = raw.trim();
     if (!line) continue;
     let msg: { type?: string; url?: string; username?: string; password?: string; error?: string };
     try {
@@ -176,12 +178,12 @@ export function startCapture(cardId: string): void {
     const script = buildCdpHostScript(config.runner.container, tag, payloadB64, { background: true });
     const { file, args } = hostExecutor().scriptCommand();
     const child = spawn(file, args, { stdio: ["pipe", "pipe", "pipe"] });
-    const listener: Listener = { child, buffer: "" };
+    const listener: Listener = { child, readLines: createLineReader(MAX_LINE_CHARS) };
     listeners.set(cardId, listener);
     child.stdin.on("error", () => { /* torn down below */ });
     child.stdin.write(script);
     child.stdin.end();
-    child.stdout.on("data", (d: Buffer) => consumeLines(cardId, listener, d.toString()));
+    child.stdout.on("data", (d: Buffer) => consumeLines(cardId, listener, d));
     child.on("error", (err) => logger.warn({ card: cardId, err: err.message }, "capture listener failed to spawn"));
     child.on("close", () => { if (listeners.get(cardId) === listener) listeners.delete(cardId); });
     logger.info({ audit: true, action: "capture.start", card: cardId }, "credential capture listening on a card browser");

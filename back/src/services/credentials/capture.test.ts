@@ -138,3 +138,29 @@ describe("capture: an agent saving its own card's capture", () => {
     expect(await creds.listCredentials()).toHaveLength(0);
   });
 });
+
+describe("capture listener stdout", () => {
+  it("keeps a multibyte character whole when the pipe splits it between chunks", async () => {
+    const { PassThrough } = await import("node:stream");
+    const { EventEmitter } = await import("node:events");
+    const child = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: vi.fn(),
+    });
+    vi.doMock("node:child_process", async (orig) => ({
+      ...(await orig<typeof import("node:child_process")>()),
+      spawn: vi.fn(() => child),
+    }));
+    const { capture } = await fresh();
+    capture.startCapture("c1");
+
+    const line = Buffer.from(`${JSON.stringify({ type: "capture", url: "https://erp.multi/login", username: "joão", password: "senhaé" })}\n`, "utf8");
+    const cut = line.indexOf(Buffer.from("ã", "utf8")) + 1; // inside the two bytes of "ã"
+    child.stdout.write(line.subarray(0, cut));
+    child.stdout.write(line.subarray(cut));
+    await new Promise((r) => setImmediate(r));
+
+    expect(capture.listCaptures("c1").map((c) => c.username)).toEqual(["joão"]);
+    capture.stopCapture("c1");
+    vi.doUnmock("node:child_process");
+  });
+});

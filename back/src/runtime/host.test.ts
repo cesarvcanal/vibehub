@@ -83,6 +83,12 @@ describe("local executor", () => {
     expect(stdout.trim()).toBe("hello-vibehub");
   });
 
+  it("keeps a multibyte character whole when the pipe splits it between chunks", async () => {
+    // "ã" is C3 A3: the sleep makes the two bytes arrive as two separate reads.
+    const { stdout } = await hostExecutor().runScript("printf 'jo\\303'; sleep 0.2; printf '\\243o'");
+    expect(stdout).toBe("joão");
+  });
+
   it("streams chunks while running", async () => {
     const chunks: string[] = [];
     await hostExecutor().runScript("echo one; echo two", { onChunk: (c) => chunks.push(c) });

@@ -5,7 +5,8 @@ import { onCardBackgroundProbe, onCardDriverProbe, reportCardStatusFromDriver, t
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
 import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, clearHistoryBeforeLastClear, readHistory, replayableHistoryEvent, rewindHistory, unwrapEditedMessage, type HistoryEvent } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker, type InflightBackground, type InflightMarker } from "./inflight.js";
-import { createLineReader, forgetDriverKeys, noteDriverEventFor, onOutsideTurn } from "./mirror.js";
+import { forgetDriverKeys, noteDriverEventFor, onOutsideTurn } from "./mirror.js";
+import { createLineReader } from "../../utils/lineReader.js";
 import { writeCardCatalog } from "./catalog.js";
 import { normalizeRateLimit, type RateLimitInfo } from "./rateLimit.js";
 import { forgetCardWorkflows, lastWorkflowRuns, readAgentFeed, watchCardWorkflows } from "./workflow.js";

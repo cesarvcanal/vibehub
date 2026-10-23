@@ -136,8 +136,11 @@ function runProcess(file: string, args: string[], stdin: string, opts: ExecOpts)
       // A bad consumer must not take the command down with it.
       try { opts.onChunk?.(s); } catch { /* ignore */ }
     };
-    child.stdout.on("data", (d: Buffer) => { const s = d.toString(); stdout += s; emit(s); });
-    child.stderr.on("data", (d: Buffer) => { const s = d.toString(); stderr += s; emit(s); });
+    // Decoded per stream, not per chunk: a pipe read can end inside a multibyte character ("ç", "ã").
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (s: string) => { stdout += s; emit(s); });
+    child.stderr.on("data", (s: string) => { stderr += s; emit(s); });
     child.on("error", (e) => {
       if (settled) return;
       settled = true;

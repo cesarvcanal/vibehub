@@ -6,7 +6,7 @@ import { findUser } from "../auth/users.js";
 import { sendToTerminal } from "../services/maestro/maestro.js";
 import { chatSource, sendChatKey, parseChatEvents, CHAT_KEYS } from "../services/chat/chat.js";
 import { matchOrigin, primeProvenance, type MessageOrigin } from "../services/chat/provenance.js";
-import { createLineReader } from "../services/sdk/mirror.js";
+import { createLineReader } from "../utils/lineReader.js";
 import { logger } from "../utils/logger.js";
 
 /**
