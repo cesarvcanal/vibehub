@@ -343,6 +343,14 @@ export interface Card {
   actorUserId?: string;
   /** When the actor above was recorded (epoch ms). */
   actorAt?: number;
+  /**
+   * EVERYONE who ever gave this card an order, in the order they first did — the actors it had.
+   * It is what lets the agent act as one of them again on request (board/actor.ts actAsParticipant):
+   * Albert asks for the work, Mussa says "push it as Albert", and the push goes out as Albert without
+   * Albert having to come back. Somebody who never ordered anything here is not on it, so their
+   * account can never be borrowed. Absent = only the current actor (cards before this field).
+   */
+  participantUserIds?: string[];
   /** Where the pending restart came from — a label for the badge only: "brain" | "mcp" | "config". */
   restartReason?: RestartReason;
   /**
@@ -1563,6 +1571,10 @@ export async function stampCardActor(
     const card = doc.cards.find((c) => c.id === id);
     if (!card) return null;
     if (card.actorUserId === user) return { changed: false, card: { ...card } };
+    // The actor being REPLACED gave this card an order too (a card from before the list existed has
+    // only its actor to show for it).
+    const known = card.participantUserIds ?? (card.actorUserId ? [card.actorUserId] : []);
+    card.participantUserIds = known.includes(user) ? known : [...known, user];
     card.actorUserId = user;
     card.actorAt = Date.now();
     return { changed: true, card: { ...card } };

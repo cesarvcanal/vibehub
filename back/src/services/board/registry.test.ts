@@ -1395,6 +1395,17 @@ describe("board registry (persisted)", () => {
     expect((await reg.getCard(card.id))!.actorUserId).toBe("u-mussa");
     });
 
+  it("stampCardActor: guarda quem já deu ordem no card, sem repetir e na ordem em que chegaram", async () => {
+    const p = await seedProject();
+    const card = await reg.createCard({ projectId: p.id, title: "um card" });
+    expect(card.participantUserIds).toBeUndefined();
+
+    await reg.stampCardActor(card.id, "u-albert");
+    await reg.stampCardActor(card.id, "u-mussa");
+    await reg.stampCardActor(card.id, "u-albert");
+    expect((await reg.getCard(card.id))!.participantUserIds).toEqual(["u-albert", "u-mussa"]);
+  });
+
   it("stampCardActor: card inexistente ou usuário vazio devolve null, nunca estoura", async () => {
     const p = await seedProject();
     const card = await reg.createCard({ projectId: p.id, title: "um card" });
