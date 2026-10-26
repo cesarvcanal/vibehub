@@ -218,7 +218,7 @@ describe("LiveVoiceSession — while live", () => {
     const closed: string[] = [];
     session.onFinalTurn((turn) => closed.push(turn.text));
     rig.peer().channel!.emit({ type: "session.output_transcript.delta", delta: "ok" });
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(3_000);
     expect(closed).toEqual(["ok"]);
   });
 

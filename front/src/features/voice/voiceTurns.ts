@@ -27,7 +27,7 @@ export interface VoiceTurn {
 }
 
 export const TURN_GAP_MS = 1_500;
-export const TURN_IDLE_MS = 1_400;
+export const TURN_IDLE_MS = 2_500;
 
 interface Open {
   turn: VoiceTurn;

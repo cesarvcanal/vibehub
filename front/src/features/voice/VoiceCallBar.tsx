@@ -77,7 +77,7 @@ export function VoiceCallBar({
           levels={call.orbLevels}
           stage="badge"
           fps={40}
-          className="size-14 md:size-16"
+          className="size-14 md:size-[76px]"
         />
       </div>
 
