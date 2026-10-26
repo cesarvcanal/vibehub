@@ -140,7 +140,19 @@ export interface QuestionResultEvent {
    * chave que impede o transcript de republicá-la como fala do terminal num replay.
    */
   sent?: string;
+  /**
+   * CANCELADA POR ALGUÉM (produção, 2026-10-26): sem resposta, sem prazo vencido e sem mensagem que
+   * a substituísse, a pergunta só cai porque o turno foi PARADO — o botão de parar, o "enviar agora"
+   * da fila ou uma edição. Com duas pessoas no card, o cartão sumia da tela da outra como "sem
+   * resposta", que parece prazo vencido. O manager carimba quem parou (`cancelledBy`, ausente quando
+   * a aba não tem autor) e como (`cancelledHow`).
+   */
+  cancelledBy?: string;
+  cancelledHow?: StopHow;
 }
+
+/** Como um turno foi parado: o botão de parar, o "enviar agora" da fila ou a edição de uma mensagem. */
+export type StopHow = "stop" | "send_now" | "edit";
 
 /**
  * A user send arrived while a turn was ALREADY running: with streaming input the driver pushed it

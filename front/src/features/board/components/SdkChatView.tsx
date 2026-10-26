@@ -9,6 +9,7 @@ import {
   Brain,
   ChevronRight,
   CircleHelp,
+  TriangleAlert,
   Clock3,
   CornerDownLeft,
   ListTodo,
@@ -115,6 +116,7 @@ import {
   turnHasRoomForMore,
   type SdkActivity,
   type SdkChatState,
+  type QuestionCancel,
   type SdkQuestionAnswer,
   type BackgroundTask,
   type SdkEvent,
@@ -2477,11 +2479,21 @@ function SdkQuestionCard({
             ? t("sdk.questionAnswered", { answers: chosen.join(" · ") })
             : row.outcome === "superseded"
               ? t("sdk.questionSuperseded")
-              : t("sdk.questionUnanswered")}
+              : row.outcome === "cancelled"
+                ? cancelledText(row.cancel, t)
+                : t("sdk.questionUnanswered")}
         </div>
       </div>
     );
   }
+
+  /** Copia para o MEU cartão o que a outra pessoa marcou e escreveu nesta pergunta ("Usar esta"). */
+  const adopt = (qi: number, draft: QuestionDraft): void => {
+    if (!single) setPicked((prev) => prev.map((sel, i) => (i === qi ? [...(draft.picked[qi] ?? [])] : sel)));
+    setOther((prev) => prev.map((v, i) => (i === qi ? draft.other[qi] ?? "" : v)));
+  };
+  const mine = !isEmptyDraft({ picked, other });
+  const peerNames = peers.map((p) => peerDisplayName(p.name)).join(", ");
 
   return (
     <div
@@ -2492,12 +2504,26 @@ function SdkQuestionCard({
       <div className="flex items-center gap-1.5 font-medium text-sky-500">
         <CircleHelp className="h-3.5 w-3.5 shrink-0" />
         {t("sdk.questionTitle")}
+        {peers.length > 0 ? (
+          // QUEM MAIS está respondendo, no canto do cabeçalho: avatar na cor da pessoa e os mesmos
+          // pontinhos do "está digitando" — presença, não alarme.
+          <span data-testid="sdk-question-peer-presence" className="ml-auto flex min-w-0 items-center gap-1.5 font-normal">
+            <span className="flex -space-x-1">
+              {peers.map((p) => <PeerAvatar key={p.name} name={p.name} />)}
+            </span>
+            <span className={cn("truncate", peers.length === 1 ? peerTone(peers[0]!.name).text : "text-muted-foreground")}>{t("sdk.questionPeerAnswering", { names: peerNames })}</span>
+            <span className="flex items-end gap-[2px]" aria-hidden="true">
+              {[0, 200, 400].map((delay) => (
+                <span
+                  key={delay}
+                  className={cn("h-1 w-1 animate-typing-dot rounded-full motion-reduce:animate-none", peers.length === 1 ? peerTone(peers[0]!.name).dot : "bg-muted-foreground")}
+                  style={{ animationDelay: `${delay}ms` }}
+                />
+              ))}
+            </span>
+          </span>
+        ) : null}
       </div>
-      {peers.length > 0 ? (
-        <div data-testid="sdk-question-peer-banner" role="status" className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-amber-600 dark:text-amber-300">
-          {t("sdk.questionPeerAnswering", { names: peers.map((p) => peerDisplayName(p.name)).join(", ") })}
-        </div>
-      ) : null}
       {row.questions.map((q, qi) => (
         <div key={qi} className="flex flex-col gap-1.5">
           {q.header ? <div className="text-[10px] font-semibold uppercase tracking-wide text-sky-500/80">{q.header}</div> : null}
@@ -2505,23 +2531,28 @@ function SdkQuestionCard({
           <div className="flex flex-wrap gap-1.5">
             {q.options.map((opt) => {
               const selected = (picked[qi] ?? []).includes(opt.label);
-              // Marcado por OUTRA pessoa: um contorno âmbar e o nome dela no título.
-              const peerPicked = peers.filter((p) => (p.draft.picked[qi] ?? []).includes(opt.label)).map((p) => peerDisplayName(p.name));
+              // Marcado por OUTRA pessoa: a bolinha dela no canto da opção, na cor dela.
+              const pickedBy = peers.filter((p) => (p.draft.picked[qi] ?? []).includes(opt.label));
               return (
                 <Button
                   key={opt.label}
                   size="sm"
                   variant={selected ? "default" : "outline"}
-                  className={cn("h-7 max-w-full text-xs", peerPicked.length > 0 && "ring-2 ring-amber-400/80")}
+                  className={cn("relative h-7 max-w-full overflow-visible text-xs", pickedBy.length > 0 && !selected && peerTone(pickedBy[0]!.name).border)}
                   data-testid="sdk-question-option"
-                  data-peer-picked={peerPicked.length > 0 || undefined}
+                  data-peer-picked={pickedBy.length > 0 || undefined}
                   aria-pressed={selected}
-                  title={peerPicked.length > 0
-                    ? [opt.description, t("sdk.questionPeerPicked", { names: peerPicked.join(", ") })].filter(Boolean).join(" — ")
+                  title={pickedBy.length > 0
+                    ? [opt.description, t("sdk.questionPeerPicked", { names: pickedBy.map((p) => peerDisplayName(p.name)).join(", ") })].filter(Boolean).join(" — ")
                     : opt.description}
                   onClick={() => toggle(qi, opt.label)}
                 >
                   <span className="truncate">{opt.label}</span>
+                  {pickedBy.length > 0 ? (
+                    <span className="absolute -right-1.5 -top-1.5 flex -space-x-1">
+                      {pickedBy.map((p) => <PeerAvatar key={p.name} name={p.name} small />)}
+                    </span>
+                  ) : null}
                 </Button>
               );
             })}
@@ -2542,18 +2573,40 @@ function SdkQuestionCard({
             className="h-7 rounded-md border border-border/70 bg-background/80 px-2 text-xs outline-none placeholder:text-muted-foreground/60 focus:border-sky-500/60"
           />
           {peers.map(({ name, draft }) => {
-            const marks = draft.picked[qi] ?? [];
             const text = (draft.other[qi] ?? "").trim();
-            if (marks.length === 0 && text === "") return null;
+            if (text === "") return null;
+            const tone = peerTone(name);
+            // O CAMPO DA OUTRA PESSOA, logo abaixo do meu: tracejado na cor dela, com o que ela
+            // está escrevendo ao vivo — e um clique para adotar a resposta dela no meu cartão.
             return (
-              <div key={name} data-testid="sdk-question-peer-draft" className="min-w-0 break-words text-amber-600 dark:text-amber-300">
-                <span className="font-medium">{t("sdk.questionPeerDraft", { name: peerDisplayName(name) })}</span>{" "}
-                {[...marks, ...(text !== "" ? [`“${text}”`] : [])].join(" · ")}
+              <div
+                key={name}
+                data-testid="sdk-question-peer-draft"
+                className={cn("flex min-h-7 items-center gap-2 rounded-md border border-dashed px-2 py-1", tone.border, tone.bg)}
+              >
+                <PeerAvatar name={name} />
+                <span className={cn("shrink-0 font-medium", tone.text)}>{peerDisplayName(name)}</span>
+                <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-foreground">{text}</span>
+                <button
+                  type="button"
+                  data-testid="sdk-question-peer-use"
+                  onClick={() => adopt(qi, draft)}
+                  className={cn("shrink-0 rounded border px-2 py-0.5 text-[11px] font-medium hover:bg-background/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1", tone.border, tone.text)}
+                >
+                  {t("sdk.questionPeerUse")}
+                </button>
               </div>
             );
           })}
         </div>
       ))}
+      {peers.length > 0 && mine ? (
+        // Só no CONFLITO: as duas pessoas com algo escrito. Antes a faixa ficava de pé sempre.
+        <div data-testid="sdk-question-peer-clash" role="status" className="flex items-center gap-1.5 text-amber-500">
+          <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          {t("sdk.questionPeerClash", { names: peerNames })}
+        </div>
+      ) : null}
       {single ? (
         (other[0] ?? "").trim() !== "" ? (
           <Button size="sm" className="h-7 self-start text-xs" data-testid="sdk-question-send" onClick={() => submit(answersFrom(picked, other))}>
@@ -2574,6 +2627,46 @@ function SdkQuestionCard({
       <span className="text-muted-foreground/70">{t("sdk.questionTimeoutHint")}</span>
     </div>
   );
+}
+
+/**
+ * A COR DE CADA PESSOA no cartão de pergunta — como cursor em documento compartilhado: fixa por nome,
+ * nunca o âmbar de alerta nem o azul do próprio cartão. Classes inteiras (o Tailwind só gera o que lê).
+ */
+const PEER_TONES = [
+  { text: "text-violet-400", border: "border-violet-400/60", bg: "bg-violet-400/10", dot: "bg-violet-400", solid: "bg-violet-400 text-violet-950" },
+  { text: "text-emerald-400", border: "border-emerald-400/60", bg: "bg-emerald-400/10", dot: "bg-emerald-400", solid: "bg-emerald-400 text-emerald-950" },
+  { text: "text-pink-400", border: "border-pink-400/60", bg: "bg-pink-400/10", dot: "bg-pink-400", solid: "bg-pink-400 text-pink-950" },
+  { text: "text-orange-400", border: "border-orange-400/60", bg: "bg-orange-400/10", dot: "bg-orange-400", solid: "bg-orange-400 text-orange-950" },
+] as const;
+
+function peerTone(name: string): (typeof PEER_TONES)[number] {
+  let hash = 0;
+  for (const ch of name) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  return PEER_TONES[hash % PEER_TONES.length]!;
+}
+
+/** A bolinha com a inicial da pessoa, na cor dela. */
+function PeerAvatar({ name, small = false }: { name: string; small?: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "inline-grid shrink-0 place-items-center rounded-full font-bold ring-2 ring-background",
+        small ? "h-4 w-4 text-[9px]" : "h-[18px] w-[18px] text-[10px]",
+        peerTone(name).solid,
+      )}
+    >
+      {peerDisplayName(name).charAt(0)}
+    </span>
+  );
+}
+
+/** Por que a pergunta caiu sem resposta, com o nome de quem parou o turno. */
+function cancelledText(cancel: QuestionCancel | undefined, t: ReturnType<typeof useT>): string {
+  const how = cancel?.how ?? "stop";
+  if (!cancel?.by) return t(`sdk.questionCancelled.${how}.anon`);
+  return t(`sdk.questionCancelled.${how}`, { name: peerDisplayName(cancel.by) });
 }
 
 /**

@@ -162,6 +162,13 @@ export interface SdkEvent {
    */
   superseded?: boolean;
   /**
+   * On `question_result`: a pergunta caiu porque alguém PAROU o turno (o botão de parar, o "enviar
+   * agora", uma edição) — quem (`cancelledBy`) e como (`cancelledHow`). Sem isso ela parecia ter
+   * vencido o prazo.
+   */
+  cancelledBy?: string;
+  cancelledHow?: QuestionCancel["how"];
+  /**
    * On `message_edited`: the superseded message's text — the row it greys out. On `rewound`: the
    * text of the message the rewind cut back to, so the cut starts at THAT row.
    */
@@ -335,7 +342,13 @@ export type PermissionOutcome = "pending" | "allowed" | "denied" | "timeout";
  * SUBSTITUÍDO: a pessoa não clicou em opção nenhuma, escreveu no chat, e o que ela escreveu passou
  * a valer. "unanswered" seria mentira nesse caso: ela respondeu, só não pelo cartão.
  */
-export type QuestionOutcome = "pending" | "answered" | "unanswered" | "superseded";
+export type QuestionOutcome = "pending" | "answered" | "unanswered" | "superseded" | "cancelled";
+
+/** Quem parou o turno e derrubou a pergunta junto (o back carimba no `question_result`). */
+export interface QuestionCancel {
+  by?: string;
+  how?: "stop" | "send_now" | "edit";
+}
 
 export type SdkRow =
   /** A message the person sent. `sent` = it reached the driver's stdin (the socket was open).
@@ -398,7 +411,7 @@ export type SdkRow =
   /** The "Permitir / Negar" card — a sensitive call waiting on the human (or how it ended). */
   | { kind: "permission"; id: string; tool: string; summary: string; reason?: string; outcome: PermissionOutcome }
   /** The agent's question with clickable options — waiting on the human, or how it was answered. */
-  | { kind: "question"; id: string; questions: SdkQuestion[]; outcome: QuestionOutcome; answers?: SdkQuestionAnswer[] }
+  | { kind: "question"; id: string; questions: SdkQuestion[]; outcome: QuestionOutcome; answers?: SdkQuestionAnswer[]; cancel?: QuestionCancel }
   /** Something went wrong and saying so beats swallowing it. `count` > 1 = the SAME error again
       (a reconnect loop against a refused socket) — one banner that counts, not a stack of copies. */
   | { kind: "error"; id: string; text: string; count?: number }
@@ -1618,7 +1631,10 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
     }
     case "question_result": {
       if (!event.id) return state;
-      return answerQuestion(state, event.id, event.answers, event.superseded === true);
+      const cancel = event.cancelledHow || event.cancelledBy
+        ? { ...(event.cancelledBy ? { by: event.cancelledBy } : {}), ...(event.cancelledHow ? { how: event.cancelledHow } : {}) }
+        : undefined;
+      return answerQuestion(state, event.id, event.answers, event.superseded === true, cancel);
     }
     case "turn_absorbed": {
       // The driver's confirmation that the LAST send folded into the turn already running
@@ -1929,17 +1945,18 @@ export function answerQuestion(
   id: string,
   answers?: SdkQuestionAnswer[],
   superseded: boolean = false,
+  cancel?: QuestionCancel,
 ): SdkChatState {
   const outcome: QuestionOutcome = answers && answers.length > 0
     ? "answered"
-    : superseded ? "superseded" : "unanswered";
+    : superseded ? "superseded" : cancel ? "cancelled" : "unanswered";
   let changed = false;
   const rows = state.rows.map((row) => {
     if (row.kind !== "question" || row.id !== id) return row;
     // The first settlement wins on screen: an echo may confirm it, never flip it back to pending.
     if (row.outcome !== "pending") return row;
     changed = true;
-    return { ...row, outcome, answers };
+    return { ...row, outcome, answers, ...(outcome === "cancelled" ? { cancel } : {}) };
   });
   return changed ? { ...state, rows } : state;
 }
