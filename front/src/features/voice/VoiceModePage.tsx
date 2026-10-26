@@ -10,7 +10,9 @@ import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { LiveVoiceSession, aiActivity, type LiveVoiceDeps, type LiveVoiceDiag, type LiveVoiceSnapshot } from "./liveVoice";
 import { SIGNAL_THRESHOLD, displayLevel, useMicLevel, type MakeAudioContext } from "./micLevel";
-import { VoiceOrb, type OrbMode } from "./VoiceOrb";
+import { LivingOrb } from "./living/LivingOrb";
+import type { LivingMode } from "./living/engine";
+import { aiVoice, micVoice } from "./living/levels";
 import { VOICE_STATUS_KEY, useVoiceStatus, voiceReturn } from "./status";
 
 /**
@@ -39,6 +41,8 @@ export interface VoiceModePageProps {
   makeAudioContext?: MakeAudioContext;
 }
 
+export type OrbMode = "idle" | "connecting" | "listening" | "speaking" | "muted" | "error";
+
 /** What the orb shows, from the session and who is making sound. PURE. */
 export function orbMode(snap: LiveVoiceSnapshot, now: number): OrbMode {
   if (snap.state === "error") return "error";
@@ -46,6 +50,33 @@ export function orbMode(snap: LiveVoiceSnapshot, now: number): OrbMode {
   if (snap.state !== "live") return "idle";
   if (snap.muted) return aiActivity(snap.diag, now) === "speaking" ? "speaking" : "muted";
   return aiActivity(snap.diag, now) === "speaking" ? "speaking" : "listening";
+}
+
+/**
+ * The living orb's state for an orb mode. PURE. Outside a live conversation (idle, connecting,
+ * error) it is the Multiverso mark; muted keeps the listening sphere, just without sound.
+ */
+export function livingMode(mode: OrbMode): LivingMode {
+  if (mode === "listening" || mode === "muted") return "listen";
+  if (mode === "speaking") return "talk";
+  return "logo";
+}
+
+/**
+ * The two sounds the orb follows. PURE. Never mixed: the person's microphone drives the listening
+ * sphere (and only while listening — muted is silent), the assistant's own audio the replying one,
+ * measured on its track, else the RTP level, else null (the orb's soft fallback). The assistant's
+ * level is never taken from the microphone.
+ */
+export function orbLevels(
+  mode: OrbMode,
+  micRms: number | null,
+  remoteRms: number | null,
+  remoteLevel: number | null,
+): { listenLevel: number; talkLevel: number | null } {
+  const listenLevel = mode === "listening" ? micVoice(micRms ?? 0) : 0;
+  const ai = remoteRms ?? remoteLevel;
+  return { listenLevel, talkLevel: ai === null ? null : aiVoice(ai) };
 }
 
 export function VoiceModePage({ makeDeps = defaultDeps, makeAudioContext }: VoiceModePageProps) {
@@ -83,12 +114,7 @@ export function VoiceModePage({ makeDeps = defaultDeps, makeAudioContext }: Voic
   );
   const remoteRms = useMicLevel(remoteStream, makeAudioContext);
   const mode = orbMode(snap, Date.now());
-  const orbLevel =
-    mode === "speaking"
-      ? displayLevel(remoteRms ?? snap.diag.remoteLevel ?? 0.15)
-      : mode === "listening"
-        ? displayLevel(rms ?? 0)
-        : 0;
+  const { listenLevel, talkLevel } = orbLevels(mode, rms, remoteRms, snap.diag.remoteLevel);
 
   return (
     <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col gap-6 px-4 py-6">
@@ -124,7 +150,12 @@ export function VoiceModePage({ makeDeps = defaultDeps, makeAudioContext }: Voic
       ) : (
         <>
           <div className="flex flex-col items-center gap-5">
-            <VoiceOrb level={orbLevel} mode={mode} size={280} className="mt-2" />
+            <LivingOrb
+              mode={livingMode(mode)}
+              listenLevel={listenLevel}
+              talkLevel={talkLevel}
+              className="mt-2 w-[min(88vw,440px)]"
+            />
             <p role="status" aria-live="polite" className="text-sm text-muted-foreground">
               {t(`voice.state.${snap.state}`)}
             </p>
@@ -158,7 +189,11 @@ export function VoiceModePage({ makeDeps = defaultDeps, makeAudioContext }: Voic
                 className={cn(
                   "flex size-14 items-center justify-center rounded-full text-white shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60",
                   active ? "bg-destructive hover:bg-destructive/90" : "bg-sky-500 hover:bg-sky-600",
+                  // The end button wears the orb's colour: lilac while it listens, blue while it replies.
+                  mode === "listening" && "ring-2 ring-fuchsia-400/70 ring-offset-2 ring-offset-background",
+                  mode === "speaking" && "ring-2 ring-sky-400/70 ring-offset-2 ring-offset-background",
                 )}
+                data-orb={mode}
               >
                 {snap.state === "connecting" || snap.state === "closing" ? (
                   <Loader2 className="size-6 animate-spin" />

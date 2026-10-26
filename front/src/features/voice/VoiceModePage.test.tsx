@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderApp } from "@/test/render";
-import { VoiceModePage } from "./VoiceModePage";
+import { VoiceModePage, livingMode, orbLevels, orbMode } from "./VoiceModePage";
+import { LiveVoiceSession } from "./liveVoice";
+import { aiVoice, micVoice } from "./living/levels";
 import { fakeRig, type FakeRig } from "./fakeWebRtc";
 import { fakeAudioContext, sine } from "./micLevel.test";
 
@@ -157,7 +159,8 @@ describe("VoiceModePage", () => {
   it("shows the orb, and leads back to the card in its URL — a reload keeps the way back", async () => {
     status({ enabled: true, available: true });
     renderApp(<VoiceModePage makeDeps={makeDeps} />, { route: "/voice?project=p1&card=c1" });
-    expect(await screen.findByTestId("voice-orb")).toHaveAttribute("data-mode", "idle");
+    // Outside a conversation the orb is the living Multiverso mark.
+    expect(await screen.findByTestId("voice-orb")).toHaveAttribute("data-mode", "logo");
     expect(screen.getByRole("link", { name: /back to the card/i })).toHaveAttribute("href", "/?project=p1&card=c1");
   });
 
@@ -165,5 +168,36 @@ describe("VoiceModePage", () => {
     status({ enabled: true, available: true });
     renderApp(<VoiceModePage makeDeps={makeDeps} />);
     expect(await screen.findByRole("link", { name: /back to the board/i })).toHaveAttribute("href", "/");
+  });
+});
+
+describe("orb state and sound", () => {
+  const idle = LiveVoiceSession.idleSnapshot;
+
+  it("orbMode follows the session: idle, connecting, listening, muted, speaking, error", () => {
+    expect(orbMode(idle, 0)).toBe("idle");
+    expect(orbMode({ ...idle, state: "connecting" }, 0)).toBe("connecting");
+    expect(orbMode({ ...idle, state: "live" }, 0)).toBe("listening");
+    expect(orbMode({ ...idle, state: "live", muted: true }, 0)).toBe("muted");
+    expect(orbMode({ ...idle, state: "live", diag: { ...idle.diag, lastOutputAt: 900 } }, 1000)).toBe("speaking");
+    expect(orbMode({ ...idle, state: "error" }, 0)).toBe("error");
+  });
+
+  it("the mark outside a conversation, lilac while listening (muted too), blue while replying", () => {
+    for (const m of ["idle", "connecting", "error"] as const) expect(livingMode(m)).toBe("logo");
+    expect(livingMode("listening")).toBe("listen");
+    expect(livingMode("muted")).toBe("listen");
+    expect(livingMode("speaking")).toBe("talk");
+  });
+
+  it("never takes the assistant's level from the microphone", () => {
+    // Listening: the mic drives it.
+    expect(orbLevels("listening", 0.1, null, null)).toEqual({ listenLevel: micVoice(0.1), talkLevel: null });
+    // Muted: silent, whatever the mic reads.
+    expect(orbLevels("muted", 0.3, null, null).listenLevel).toBe(0);
+    // Replying: the assistant's own track first, then the RTP level, else nothing (soft fallback).
+    expect(orbLevels("speaking", 0.9, 0.05, 0.4)).toEqual({ listenLevel: 0, talkLevel: aiVoice(0.05) });
+    expect(orbLevels("speaking", 0.9, null, 0.4).talkLevel).toBe(aiVoice(0.4));
+    expect(orbLevels("speaking", 0.9, null, null).talkLevel).toBeNull();
   });
 });
