@@ -299,7 +299,7 @@ export function NewCardDialog({
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
                 >
-                  <option value="">{t("newCard.accountDefault")}</option>
+                  <option value="">{t("newCard.modelDefault")}</option>
                   {CLAUDE_MODELS.map((m) => (
                     <option key={m.id} value={m.id}>
                       {m.label}

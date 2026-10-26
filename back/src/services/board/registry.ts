@@ -176,6 +176,13 @@ export type RestartReason = "brain" | "mcp" | "plugin" | "config" | "deploy";
  */
 export const CLAUDE_MODELS = ["fable", "opus", "sonnet", "haiku"] as const;
 export type ClaudeModelId = (typeof CLAUDE_MODELS)[number];
+
+/**
+ * The model a NEW card is pinned to when its creator names none. Without a pin the session starts
+ * with no `--model` and the CLI boots on its own default (Fable), while the operator expects Opus.
+ * Creation only: an existing unpinned card, or `model: null` sent on purpose, keeps the account default.
+ */
+export const DEFAULT_CARD_MODEL: ClaudeModelId = "opus";
 const CLAUDE_MODEL_IDS: ReadonlySet<string> = new Set(CLAUDE_MODELS);
 
 /** A versioned id an older vibehub pinned (`claude-opus-5`, `claude-haiku-4-5`): family + digits only. */
@@ -1519,8 +1526,9 @@ export async function createCard(input: CreateCardInput, fields: UpdateCardInput
       updatedAt: now,
     };
     // Optional fields (account, model, branch, imported session) go through the edit's validation,
-    // in THIS mutation: one that is refused leaves no bare card behind.
-    const { next, move } = validateCardPatch(doc, card, fields);
+    // in THIS mutation: one that is refused leaves no bare card behind. No model named = Opus.
+    const withModel = fields.model === undefined ? { ...fields, model: DEFAULT_CARD_MODEL } : fields;
+    const { next, move } = validateCardPatch(doc, card, withModel);
     Object.assign(card, next);
     doc.cards.push(card);
     rememberBrowserSlot(id, browserSlot);

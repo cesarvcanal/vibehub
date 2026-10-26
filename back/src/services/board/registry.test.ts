@@ -16,6 +16,7 @@ import {
   effectiveAccountSlug,
   assertModel,
   modelPin,
+  DEFAULT_CARD_MODEL,
   CLAUDE_MODELS,
   CLAUDE_EFFORTS,
   isValidEffort,
@@ -547,6 +548,24 @@ describe("board registry (persisted)", () => {
     expect(a.status).toBeNull();
     await expect(reg.createCard({ projectId: p.id, title: " " })).rejects.toThrow(/title is required/);
     await expect(reg.createCard({ projectId: "nope", title: "x" })).rejects.toThrow(/project not found/);
+  });
+
+  it("createCard: a card that names no model is born pinned to Opus, never the CLI's own default", async () => {
+    // Unpinned, the session started with no --model and the CLI booted on Fable; the pill guessed
+    // Fable too and only flipped to Opus after the first reply.
+    const p = await seedProject({ baseBranch: "main" });
+    const card = await reg.createCard({ projectId: p.id, title: "plain" });
+    expect(card.model).toBe(DEFAULT_CARD_MODEL);
+    expect(DEFAULT_CARD_MODEL).toBe("opus");
+    expect(card.modelAt).toEqual(expect.any(Number));
+    expect((await reg.getCard(card.id))?.model).toBe("opus");
+  });
+
+  it("createCard: an explicit model wins over the default, and null still means the account default", async () => {
+    const p = await seedProject({ baseBranch: "main" });
+    expect((await reg.createCard({ projectId: p.id, title: "s" }, { model: "sonnet" })).model).toBe("sonnet");
+    expect((await reg.createCard({ projectId: p.id, title: "n" }, { model: null })).model).toBeUndefined();
+    await expect(reg.createCard({ projectId: p.id, title: "bad" }, { model: "gpt-4" })).rejects.toThrow(/invalid model/);
   });
 
   it("removing a project also removes its cards, and renumbers the sidebar", async () => {

@@ -776,7 +776,7 @@ describe("session introspection", () => {
     const { maestro, registry } = await load();
     const acct = await registry.createAccount({ name: "Tech" });
     const p = await registry.createProject({ name: "billing", defaultAccountSlug: acct.slug });
-    const c = await registry.createCard({ projectId: p.id, title: "x" });
+    const c = await registry.createCard({ projectId: p.id, title: "x" }, { model: null });
     runScript.mockResolvedValueOnce({ stdout: line({ type: "assistant", effort: "xhigh", message: { model: "claude-opus-5", content: [] } }), stderr: "" });
     const info = await maestro.sessionInfo(c.id);
     expect(info).toEqual({

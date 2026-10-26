@@ -122,7 +122,7 @@ describe("modelInUse", () => {
       label: IMPLICIT_MODEL.label,
       title: implicitModelTitle(),
     });
-    expect(IMPLICIT_MODEL.label).toBe("Fable");
+    expect(IMPLICIT_MODEL.label).toBe("Opus");
   });
 
   it("treats an empty pin as no pin at all", () => {

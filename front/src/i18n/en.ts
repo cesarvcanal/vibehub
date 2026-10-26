@@ -750,7 +750,7 @@ export const en: Record<string, string> = {
   "cardView.closeShell": "Close shell",
   "cardView.shellAria": "Shell",
   "cardView.terminalState": "Terminal {state}",
-  "cardView.implicitModelTitle": "Claude Code's default until the first reply",
+  "cardView.implicitModelTitle": "The card's default until the first reply",
 
   "conn.connected": "connected",
   "conn.reconnecting": "reconnecting",
@@ -893,7 +893,7 @@ export const en: Record<string, string> = {
   "newCard.account": "Claude account",
   "newCard.inherit": "Inherit ({name})",
   "newCard.model": "Model",
-  "newCard.accountDefault": "Account default",
+  "newCard.modelDefault": "Default (Opus)",
   "newCard.branch": "Branch",
   "newCard.branchPlaceholderBase": "derived from the title (base {branch})",
   "newCard.branchPlaceholder": "derived from the title",

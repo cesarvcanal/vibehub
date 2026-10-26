@@ -797,10 +797,11 @@ export function effortInUse(
 export const DEFAULT_ACCOUNT_SLUG = "default";
 
 /**
- * What Claude Code starts on when nothing has pinned a model and nothing has answered yet. It is
- * the first entry of the whitelist rather than a second constant, so the two cannot drift apart.
+ * What a card runs on when nothing has pinned a model and nothing has answered yet: Opus, the model
+ * the server pins every new card to (DEFAULT_CARD_MODEL) and the one the account answers with. It was
+ * the first entry of the whitelist (Fable), so the pill read "Fable" until the first reply flipped it.
  */
-export const IMPLICIT_MODEL = CLAUDE_MODELS[0] as { id: string; label: string };
+export const IMPLICIT_MODEL = CLAUDE_MODELS.find((m) => m.id === "opus") as { id: string; label: string };
 
 /**
  * Title on the model pill for the one case where the answer is an assumption, not a reading. A

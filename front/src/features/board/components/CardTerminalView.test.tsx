@@ -736,12 +736,13 @@ describe("CardTerminalView — the card bar", () => {
     await waitFor(() => expect(screen.getByLabelText("Model")).toHaveTextContent("Experimental"));
   });
 
-  it("assumes Claude Code's own default until the first reply, and says so in the title", async () => {
+  it("assumes Opus, the card default, until the first reply, and says so in the title", async () => {
+    // It used to assume Fable and flip to Opus only once the first reply landed.
     renderWithCache([card({ openedAt: 10 })]);
 
     const pill = await screen.findByLabelText("Model");
-    expect(pill).toHaveTextContent("Fable");
-    expect(pill).toHaveAttribute("title", "Claude Code's default until the first reply");
+    expect(pill).toHaveTextContent("Opus");
+    expect(pill).toHaveAttribute("title", "The card's default until the first reply");
   });
 
   it("the SESSION wins over the card's pin — the bar is about the conversation on screen", async () => {

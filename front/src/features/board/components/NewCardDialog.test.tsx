@@ -147,6 +147,17 @@ describe("NewCardDialog", () => {
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ title: "padded" }));
   });
 
+  it("says the untouched model is Opus — the server pins it — instead of an 'account default'", async () => {
+    const { user, onSubmit } = setup();
+    await user.type(screen.getByLabelText("Title"), "plain");
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    const select = screen.getByLabelText("Model") as HTMLSelectElement;
+    expect(select.value).toBe("");
+    expect(select.selectedOptions[0]?.textContent).toBe("Default (Opus)");
+    await user.click(screen.getByRole("button", { name: "Create card" }));
+    expect(onSubmit).toHaveBeenCalledWith({ projectId: "p1", title: "plain" });
+  });
+
   it("keeps the richer options — account, model and branch still ride along", async () => {
     const { user, onSubmit } = setup();
     await user.type(screen.getByLabelText("Title"), "with options");
