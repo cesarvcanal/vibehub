@@ -10,9 +10,9 @@ import {
 } from "@/components/ui/dialog";
 import { get, patch, post, del } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
-import { rotateSession, useAuth } from "@/providers/auth";
+import { ME_KEY, rotateSession, useAuth } from "@/providers/auth";
 import { sharesKey } from "@/features/board/components/ShareDialog";
-import { GITHUB_KEY, PROJECTS_KEY, boardApi } from "@/features/board/api";
+import { ACCOUNTS_KEY, GITHUB_KEY, PROJECTS_KEY, accountLabel, boardApi } from "@/features/board/api";
 import type { Role, Share, ShareLevel, SharesResponse, User, UserGit, UsersResponse } from "@/api/types";
 import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
 import { t as translate, useT } from "@/i18n";
@@ -41,6 +41,7 @@ interface NullableGit {
   githubConnectionId: string | null;
   gitName: string | null;
   gitEmail: string | null;
+  claudeAccountSlug: string | null;
 }
 
 export function AccessDialog({ open, onOpenChange }: AccessDialogProps) {
@@ -71,6 +72,12 @@ export function AccessDialog({ open, onOpenChange }: AccessDialogProps) {
     enabled: open && isOwner,
   });
   const connections = github.data?.connections ?? [];
+  // The Claude accounts a person's new cards can be born on.
+  const claudeAccounts = useQuery({
+    queryKey: ACCOUNTS_KEY,
+    queryFn: boardApi.listAccounts,
+    enabled: open && isOwner,
+  });
 
   const create = useMutation({
     mutationFn: (body: { username: string; password: string; role: Role }) =>
@@ -88,11 +95,13 @@ export function AccessDialog({ open, onOpenChange }: AccessDialogProps) {
   const update = useMutation({
     mutationFn: ({ id, ...body }: { id: string; password?: string; role?: Role } & Partial<NullableGit>) =>
       patch<{ user: User }>(`/users/${encodeURIComponent(id)}`, body),
-    onSuccess: () => {
+    onSuccess: (_result, { id }) => {
       setResetting(null);
       setResetPassword("");
       setEditingGit(null);
       void qc.invalidateQueries({ queryKey: USERS_KEY });
+      // My own Claude account rides on /auth/me — the new-card dialog's warning reads it from there.
+      if (id === me?.id) void qc.invalidateQueries({ queryKey: ME_KEY });
       toast.success(translate("access.updated"));
     },
     onError: (e) => toast.error(apiErrorMessage(e)),
@@ -206,6 +215,7 @@ export function AccessDialog({ open, onOpenChange }: AccessDialogProps) {
                               githubConnectionId: gitDraft.githubConnectionId || null,
                               gitName: gitDraft.gitName?.trim() || null,
                               gitEmail: gitDraft.gitEmail?.trim() || null,
+                              claudeAccountSlug: gitDraft.claudeAccountSlug || null,
                             });
                           }}
                         >
@@ -221,6 +231,20 @@ export function AccessDialog({ open, onOpenChange }: AccessDialogProps) {
                             {connections.map((c) => (
                               <option key={c.id} value={c.id}>
                                 {c.label}{c.login ? ` (${c.login})` : ""}
+                              </option>
+                            ))}
+                          </select>
+                          <select
+                            aria-label={t("access.claudeAccount")}
+                            data-testid={`user-claude-account-${u.id}`}
+                            className={`${SELECT_CLASS} w-full`}
+                            value={gitDraft.claudeAccountSlug ?? ""}
+                            onChange={(e) => setGitDraft((d) => ({ ...d, claudeAccountSlug: e.target.value }))}
+                          >
+                            <option value="">{t("access.claudeAccountInherit")}</option>
+                            {(claudeAccounts.data?.accounts ?? []).map((a) => (
+                              <option key={a.slug} value={a.slug}>
+                                {accountLabel(a)}
                               </option>
                             ))}
                           </select>

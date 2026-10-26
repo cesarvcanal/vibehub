@@ -6,7 +6,7 @@ import { endRevokedSessionSockets } from "../auth/sessionSockets.js";
 import {
   getUserGit, setUserGit, removeUserGit, assertGitName, assertGitEmail, type UserGitIdentity,
 } from "../auth/userGit.js";
-import { listGithubConnections } from "../services/board/registry.js";
+import { listGithubConnections, listAccounts } from "../services/board/registry.js";
 import { reapplyIdentityForUser } from "../services/board/workspace.js";
 import {
   createUser, listUsers, findUser, changePassword, removeUser, setRole, assertRole, assertPassword,
@@ -32,12 +32,14 @@ interface UserPatchBody {
   githubConnectionId?: string | null;
   gitName?: string | null;
   gitEmail?: string | null;
+  /** Owner's PATCH only — the self-service door never reads it. */
+  claudeAccountSlug?: string | null;
 }
 
 /** The identity as it leaves the server: no secret in it (the token lives in the vault). PURE. */
 function publicGit(git: UserGitIdentity): Omit<UserGitIdentity, "userId"> {
-  const { githubConnectionId, gitName, gitEmail } = git;
-  return { githubConnectionId, gitName, gitEmail };
+  const { githubConnectionId, gitName, gitEmail, claudeAccountSlug } = git;
+  return { githubConnectionId, gitName, gitEmail, claudeAccountSlug };
 }
 
 /**
@@ -56,6 +58,15 @@ async function assertGitPatch(body: UserPatchBody): Promise<void> {
       throw new Error(`GitHub connection '${githubConnectionId}' does not exist`);
     }
   }
+}
+
+/**
+ * The Claude account the owner ties a person to. A DANGLING slug would make every card that person
+ * creates fail its creation (the card patch checks the account exists). THROWS.
+ */
+async function assertClaudeAccountPatch(slug: string | null | undefined): Promise<void> {
+  if (slug === undefined || slug === null) return;
+  if (!(await listAccounts()).some((a) => a.slug === slug)) throw new Error(`Claude account '${slug}' does not exist`);
 }
 
 /**
@@ -116,6 +127,7 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
         const nextRole = role !== undefined ? assertRole(role) : undefined;
         if (password !== undefined) assertPassword(password);
         await assertGitPatch(body);
+        await assertClaudeAccountPatch(body.claudeAccountSlug);
 
         if (nextRole !== undefined) await setRole(req.params.id, nextRole);
         if (password !== undefined) {
@@ -126,13 +138,18 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
           // ...and what the revoked sessions already have open (terminals, tunnels) ends now too.
           await endRevokedSessionSockets(req.params.id);
         }
-        const git = await applyGitPatch(req.params.id, body);
+        let git = await applyGitPatch(req.params.id, body);
+        if (body.claudeAccountSlug !== undefined) {
+          // No re-application to live cards: the account is read when a card is CREATED, so the
+          // cards this person already has keep the account they were born with.
+          git = { touched: true, identity: await setUserGit(req.params.id, { claudeAccountSlug: body.claudeAccountSlug }) };
+        }
         const user = await findUser(req.params.id);
         if (!user) return await reply.code(404).send({ error: "user not found" });
         logger.info(
           {
             audit: true, action: "user.update", user: user.username, role: user.role,
-            password: password !== undefined, git: git.touched,
+            password: password !== undefined, git: git.touched, claudeAccount: body.claudeAccountSlug,
           },
           "user updated",
         );

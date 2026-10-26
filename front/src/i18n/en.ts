@@ -88,6 +88,8 @@ export const en: Record<string, string> = {
     "Which account this person pushes as, and who signs their commits. Empty = inherit the project's account and the install's author.",
   "access.gitConnection": "GitHub account",
   "access.gitConnectionInherit": "Inherit the project's account",
+  "access.claudeAccount": "Claude account",
+  "access.claudeAccountInherit": "No own account (cards fall back to the project's or the default)",
   "access.gitName": "Commit name",
   "access.gitEmail": "Commit e-mail",
   "access.role": "Role",
@@ -880,6 +882,9 @@ export const en: Record<string, string> = {
   "newCard.titlePlaceholder": "e.g. fix the totals on the closing screen",
   "newCard.hideOptions": "Hide options",
   "newCard.options": "Options",
+  "newCard.ownAccount": "Your account ({name})",
+  "newCard.noOwnAccount":
+    "You have no Claude account of your own: this card will run on the default account ({name}), with its memory and quota. Ask the owner to assign you one under Access.",
   "newCard.account": "Claude account",
   "newCard.inherit": "Inherit ({name})",
   "newCard.model": "Model",

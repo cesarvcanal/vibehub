@@ -1,5 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { requireSession, requireOwner, requestUser, tokenMatches } from "../auth/session.js";
+import { creatorAccountSlug, usersOnClaudeAccount } from "../auth/userGit.js";
+import { findUser } from "../auth/users.js";
 import { requireCardAccess, requireCardWork, visibleCards, visibleProjects } from "../auth/access.js";
 import * as registry from "../services/board/registry.js";
 import {
@@ -142,6 +144,11 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
       try {
         // Optional fields (account, model, branch, imported session) are checked by the same
         // validation an edit uses, inside the creation itself: a refused one creates nothing.
+        // No account picked = the CREATOR's, so a card does not land on somebody else's profile.
+        if (patch.accountSlug === undefined) {
+          const mine = await creatorAccountSlug((await requestUser(req))?.id);
+          if (mine) patch.accountSlug = mine;
+        }
         const created = await registry.createCard({ projectId, title }, patch);
         // PRE-PROVISIONING, in the background and AFTER the patch (the account, the model and the
         // branch are what the script is built from): the clone, the worktree and the tmux session
@@ -248,6 +255,12 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete<{ Params: { slug: string } }>("/api/accounts/:slug", { preHandler: requireOwner }, async (req, reply) => {
     try {
+      // A person tied to the account would have their next card born on a profile that is gone.
+      const holders = await usersOnClaudeAccount(req.params.slug);
+      if (holders.length > 0) {
+        const names = (await Promise.all(holders.map((id) => findUser(id)))).map((u, i) => u?.username ?? holders[i]);
+        throw new Error(`account '${req.params.slug}' is the Claude account of ${names.join(", ")} — unassign it first`);
+      }
       return await reply.send({ account: await registry.removeAccount(req.params.slug) });
     } catch (err) {
       const { code, body } = badRequest(err);

@@ -307,4 +307,39 @@ describe("NewCardDialog", () => {
     // Not `accountSlug: ""` — an empty string would pin the card to a nameless account.
     expect(onSubmit).toHaveBeenCalledWith({ projectId: "p1", title: "bare" });
   });
+
+  describe("conta Claude de quem cria", () => {
+    it("sem conta própria e sem conta no projeto, avisa que o card cai na conta padrão", () => {
+      setup();
+      expect(screen.getByTestId("new-card-no-own-account")).toHaveTextContent("the runner default");
+    });
+
+    it("com conta própria não avisa, e 'herdar' mostra que é a conta da pessoa", async () => {
+      const { user, onSubmit } = setup({ ownAccountSlug: "personal" });
+      expect(screen.queryByTestId("new-card-no-own-account")).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Options" }));
+      expect(screen.getByRole("option", { name: /^Your account \(Personal\)/ })).toBeInTheDocument();
+      // Nada de conta no corpo: quem carimba a conta do criador é o servidor.
+      await user.type(screen.getByLabelText("Title"), "x");
+      await user.click(screen.getByRole("button", { name: "Create card" }));
+      expect(onSubmit).toHaveBeenCalledWith({ projectId: "p1", title: "x" });
+    });
+
+    it("projeto com conta padrão própria não avisa — o card não cai no perfil do runner", () => {
+      setup({
+        projects: [{
+          id: "p1", name: "P1", repoFullName: "acme/p1", baseBranch: "dev", position: 0, createdAt: 1,
+          defaultAccountSlug: "personal",
+        }],
+      });
+      expect(screen.queryByTestId("new-card-no-own-account")).toBeNull();
+    });
+
+    it("escolher uma conta no card some com o aviso", async () => {
+      const { user } = setup();
+      await user.click(screen.getByRole("button", { name: "Options" }));
+      await user.selectOptions(screen.getByLabelText("Claude account"), "personal");
+      expect(screen.queryByTestId("new-card-no-own-account")).toBeNull();
+    });
+  });
 });
