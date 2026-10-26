@@ -1,6 +1,7 @@
 import { JsonStore } from "../store/jsonStore.js";
 import { dataPath } from "../config/env.js";
 import { assertAccountSlug, listAccounts } from "../services/board/registry.js";
+import { DEFAULT_ACCOUNT_SLUG } from "../services/accounts/profiles.js";
 
 /**
  * GIT IDENTITY PER USER — who a card's commits are authored by, and which GitHub connection its
@@ -34,6 +35,9 @@ export interface UserGitIdentity {
    * runs on. Absent = the card inherits the project's, then the runner's default (`~/.claude`).
    * Only the owner writes it: a member pointing themselves at someone else's account would be
    * running on that person's credentials, memory and quota.
+   *
+   * `"default"` ties the person to the runner's built-in account ON PURPOSE (the install owner's):
+   * their cards land where an unassigned person's would, but they are not "without an account".
    */
   claudeAccountSlug?: string;
 }
@@ -87,6 +91,7 @@ export async function setUserGit(
   const name = patch.gitName === undefined || patch.gitName === null ? patch.gitName : assertGitName(patch.gitName);
   const email = patch.gitEmail === undefined || patch.gitEmail === null ? patch.gitEmail : assertGitEmail(patch.gitEmail);
   const account = patch.claudeAccountSlug === undefined || patch.claudeAccountSlug === null
+      || patch.claudeAccountSlug === DEFAULT_ACCOUNT_SLUG
     ? patch.claudeAccountSlug
     : assertAccountSlug(patch.claudeAccountSlug);
   return await store.mutate((doc) => {
@@ -132,7 +137,8 @@ export async function removeUserGit(userId: string): Promise<void> {
  */
 export async function creatorAccountSlug(userId: string | undefined): Promise<string | undefined> {
   const slug = userId ? (await getUserGit(userId))?.claudeAccountSlug : undefined;
-  if (!slug) return undefined;
+  // The built-in account is the absence of a slug on the card.
+  if (!slug || slug === DEFAULT_ACCOUNT_SLUG) return undefined;
   return (await listAccounts()).some((a) => a.slug === slug) ? slug : undefined;
 }
 

@@ -7,6 +7,7 @@ import {
   getUserGit, setUserGit, removeUserGit, assertGitName, assertGitEmail, type UserGitIdentity,
 } from "../auth/userGit.js";
 import { listGithubConnections, listAccounts } from "../services/board/registry.js";
+import { DEFAULT_ACCOUNT_SLUG } from "../services/accounts/profiles.js";
 import { reapplyIdentityForUser } from "../services/board/workspace.js";
 import {
   createUser, listUsers, findUser, changePassword, removeUser, setRole, assertRole, assertPassword,
@@ -65,7 +66,7 @@ async function assertGitPatch(body: UserPatchBody): Promise<void> {
  * creates fail its creation (the card patch checks the account exists). THROWS.
  */
 async function assertClaudeAccountPatch(slug: string | null | undefined): Promise<void> {
-  if (slug === undefined || slug === null) return;
+  if (slug === undefined || slug === null || slug === DEFAULT_ACCOUNT_SLUG) return;
   if (!(await listAccounts()).some((a) => a.slug === slug)) throw new Error(`Claude account '${slug}' does not exist`);
 }
 

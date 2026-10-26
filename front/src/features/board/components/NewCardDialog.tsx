@@ -89,8 +89,14 @@ export function NewCardDialog({
   const [projectId, setProjectId] = React.useState(initialProjectId ?? projects[0]?.id ?? "");
   const selectedProject = projects.find((p) => p.id === projectId);
   // What "no account picked" resolves to: the creator's own, else the project's, else the default.
-  const inheritedAccount = ownAccountSlug ?? projectAccountSlug(selectedProject);
-  const ownAccount = ownAccountSlug ? accounts.find((a) => a.slug === ownAccountSlug) : undefined;
+  // Tied to the runner's default account ("default") is having one, but the server stamps nothing
+  // for it — the card then inherits like before, so only a real slug wins over the project's.
+  const personalAccount = ownAccountSlug === DEFAULT_ACCOUNT_SLUG ? undefined : ownAccountSlug;
+  const inheritedAccount = personalAccount ?? projectAccountSlug(selectedProject);
+  const ownAccount = personalAccount ? accounts.find((a) => a.slug === personalAccount) : undefined;
+  // "Your account" whenever the card lands on the person's: their own slug, or the default one
+  // when the project does not point elsewhere.
+  const landsOnOwn = Boolean(personalAccount) || (Boolean(ownAccountSlug) && !inheritedAccount);
   const defaultBranch = projectBaseBranch(selectedProject);
   const [account, setAccount] = React.useState("");
   const [model, setModel] = React.useState("");
@@ -248,17 +254,6 @@ export function NewCardDialog({
             />
           </div>
 
-          {/* Outside the folded options on purpose: landing on someone else's account is the thing
-              the person has to see BEFORE creating, not after unfolding a section. */}
-          {!account && !inheritedAccount ? (
-            <p
-              data-testid="new-card-no-own-account"
-              className="text-[11px] text-amber-600 dark:text-amber-400"
-            >
-              {t("newCard.noOwnAccount", { name: defaultAccountLabel })}
-            </p>
-          ) : null}
-
           <button
             type="button"
             onClick={() => setShowOptions((v) => !v)}
@@ -280,8 +275,10 @@ export function NewCardDialog({
                 >
                   <option value="">
                     {withPercent(
-                      ownAccountSlug
-                        ? t("newCard.ownAccount", { name: ownAccount ? accountLabel(ownAccount) : ownAccountSlug })
+                      landsOnOwn
+                        ? t("newCard.ownAccount", {
+                            name: ownAccount ? accountLabel(ownAccount) : personalAccount ?? defaultAccountLabel,
+                          })
                         : t("newCard.inherit", { name: inheritedAccount ?? defaultAccountLabel }),
                       inheritedAccount ?? DEFAULT_ACCOUNT_SLUG,
                     )}

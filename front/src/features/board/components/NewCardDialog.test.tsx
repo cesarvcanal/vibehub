@@ -309,14 +309,13 @@ describe("NewCardDialog", () => {
   });
 
   describe("conta Claude de quem cria", () => {
-    it("sem conta própria e sem conta no projeto, avisa que o card cai na conta padrão", () => {
+    it("sem conta vinculada não avisa nada — funciona como antes", () => {
       setup();
-      expect(screen.getByTestId("new-card-no-own-account")).toHaveTextContent("the runner default");
+      expect(screen.queryByTestId("new-card-no-own-account")).toBeNull();
     });
 
-    it("com conta própria não avisa, e 'herdar' mostra que é a conta da pessoa", async () => {
+    it("com conta própria, 'herdar' mostra que é a conta da pessoa", async () => {
       const { user, onSubmit } = setup({ ownAccountSlug: "personal" });
-      expect(screen.queryByTestId("new-card-no-own-account")).toBeNull();
       await user.click(screen.getByRole("button", { name: "Options" }));
       expect(screen.getByRole("option", { name: /^Your account \(Personal\)/ })).toBeInTheDocument();
       // Nada de conta no corpo: quem carimba a conta do criador é o servidor.
@@ -325,21 +324,23 @@ describe("NewCardDialog", () => {
       expect(onSubmit).toHaveBeenCalledWith({ projectId: "p1", title: "x" });
     });
 
-    it("projeto com conta padrão própria não avisa — o card não cai no perfil do runner", () => {
-      setup({
+    it("ligado à conta embutida do runner (o César), 'herdar' mostra ela como dele", async () => {
+      const { user } = setup({ ownAccountSlug: "default" });
+      await user.click(screen.getByRole("button", { name: "Options" }));
+      expect(screen.getByRole("option", { name: /^Your account \(the runner default\)/ })).toBeInTheDocument();
+    });
+
+    it("ligado à padrão num projeto com conta própria, 'herdar' mostra a do projeto (é onde o card cai)", async () => {
+      const { user } = setup({
+        ownAccountSlug: "default",
         projects: [{
           id: "p1", name: "P1", repoFullName: "acme/p1", baseBranch: "dev", position: 0, createdAt: 1,
           defaultAccountSlug: "personal",
         }],
       });
-      expect(screen.queryByTestId("new-card-no-own-account")).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Options" }));
+      expect(screen.getByRole("option", { name: /^Inherit \(personal\)/ })).toBeInTheDocument();
     });
 
-    it("escolher uma conta no card some com o aviso", async () => {
-      const { user } = setup();
-      await user.click(screen.getByRole("button", { name: "Options" }));
-      await user.selectOptions(screen.getByLabelText("Claude account"), "personal");
-      expect(screen.queryByTestId("new-card-no-own-account")).toBeNull();
-    });
   });
 });
