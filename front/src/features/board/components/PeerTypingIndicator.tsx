@@ -1,10 +1,6 @@
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
-
-/** "cesar" → "Cesar": usernames are lowercase handles; the sentence reads as a name. PURE. */
-function displayName(name: string): string {
-  return name.charAt(0).toLocaleUpperCase() + name.slice(1);
-}
+import { peerDisplayName } from "@/features/board/lib/peerTyping";
 
 /**
  * "Cesar está digitando…" — another person writing in THIS card right now, drawn right above the
@@ -16,7 +12,7 @@ function displayName(name: string): string {
  */
 export function PeerTypingIndicator({ names, className }: { names: readonly string[]; className?: string }) {
   const t = useT();
-  const shown = names.map(displayName);
+  const shown = names.map(peerDisplayName);
   const label =
     shown.length === 0
       ? ""

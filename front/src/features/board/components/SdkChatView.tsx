@@ -35,10 +35,20 @@ import {
   applyPeerTyping,
   createTypingSignal,
   nextPeerExpiry,
+  peerDisplayName,
   typingNames,
   type PeerTyping,
   type TypingSignal,
 } from "@/features/board/lib/peerTyping";
+import {
+  applyPeerQuestionDraft,
+  createDraftSender,
+  isEmptyDraft,
+  peerDraftsOf,
+  readPeerQuestionDraft,
+  type PeerQuestionDrafts,
+  type QuestionDraft,
+} from "@/features/board/lib/peerQuestionDraft";
 import { nextIdentity, type ViewerIdentity } from "@/features/board/lib/viewerIdentity";
 import { PeerTypingIndicator } from "@/features/board/components/PeerTypingIndicator";
 import { SdkAgentCard } from "@/features/board/components/SdkAgentCard";
@@ -207,6 +217,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   /** "Cesar está digitando…" — who else is writing in this card (see lib/peerTyping.ts). */
   const [peers, setPeers] = React.useState<PeerTyping>({});
   const [peersNow, setPeersNow] = React.useState(() => Date.now());
+  /** O que as outras pessoas do card estão respondendo nos cartões de pergunta (lib/peerQuestionDraft.ts). */
+  const [peerDrafts, setPeerDrafts] = React.useState<PeerQuestionDrafts>({});
   /** This tab's own outbound typing signal (created below, once `sendFrame` exists). */
   const typingRef = React.useRef<TypingSignal | null>(null);
   /** `commitState` é do socket (o único que conhece a ordem do stream); todo o resto usa `setState`. */
@@ -372,6 +384,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
         // history.ts), so the slate is wiped here — otherwise a reconnect would draw the whole
         // conversation twice. What was on screen comes right back, from disk instead of memory.
         commitState(INITIAL_SDK_STATE);
+        // Os rascunhos dos outros também: o back reenvia os que ainda valem logo no attach.
+        setPeerDrafts({});
         // The replay tells the story again from disk (the interrupt note included) — a stale
         // "continuar?" offer from before the drop would be guessing about a turn we no longer see.
       };
@@ -388,6 +402,11 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
             setPeersNow(now);
             setPeers((prev) => applyPeerTyping(prev, name, parsed.active === true, now));
           }
+          return;
+        }
+        if (parsed.type === "peer_question_draft") {
+          const peer = readPeerQuestionDraft(parsed);
+          if (peer) setPeerDrafts((prev) => applyPeerQuestionDraft(prev, peer.id, peer.name, peer.draft));
           return;
         }
         // O feed de um subagente que ESTA aba pediu: vai ao painel, nunca ao reducer nem às linhas.
@@ -517,6 +536,17 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   typingRef.current = typingSignal;
   // Leaving the card (or unmounting) is stopping.
   React.useEffect(() => () => typingSignal.stop(), [cardId, typingSignal]);
+
+  /**
+   * O RASCUNHO DESTA ABA num cartão de pergunta, para as outras: o que a pessoa marca e escreve
+   * aparece na tela de quem mais estiver no card, em tempo real (ver lib/peerQuestionDraft.ts).
+   */
+  const draftSender = React.useMemo(
+    () => createDraftSender((id, draft) => sendFrame({ type: "question_draft", id, picked: draft.picked, other: draft.other })),
+    [sendFrame],
+  );
+  React.useEffect(() => () => draftSender.dispose(), [cardId, draftSender]);
+  const sendQuestionDraft = React.useCallback((id: string, draft: QuestionDraft) => draftSender.push(id, draft), [draftSender]);
 
   /** The soonest typing indicator to expire re-renders the view, so a lost "parou" clears itself. */
   React.useEffect(() => {
@@ -1287,6 +1317,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
                 aiming={replyTo?.rowId === entry.id}
                 onPermission={answerPermission}
                 onAnswer={answerUserQuestion}
+                peerDrafts={peerDrafts[entry.id]}
+                onDraft={sendQuestionDraft}
                 onReply={pendingIds.has(entry.id) ? jumpToDecision : undefined}
                 onEdit={beginEdit}
                 onResend={resendUndelivered}
@@ -2016,6 +2048,8 @@ const SdkChatRow = React.memo(function SdkChatRow({
   aiming = false,
   onPermission,
   onAnswer,
+  peerDrafts,
+  onDraft,
   onReply,
   onEdit,
   onResend,
@@ -2028,6 +2062,10 @@ const SdkChatRow = React.memo(function SdkChatRow({
   aiming?: boolean;
   onPermission?: (id: string, allow: boolean) => void;
   onAnswer?: (id: string, answers: SdkQuestionAnswer[]) => void;
+  /** On a question card: what OTHER people of this card have marked and typed on it so far. */
+  peerDrafts?: Readonly<Record<string, QuestionDraft>>;
+  /** On a question card: tells the other tabs what this person has marked and typed so far. */
+  onDraft?: (id: string, draft: QuestionDraft) => void;
   /** Arms the composer on this row's question ("Responder"). */
   onReply?: (decision: PendingDecision) => void;
   /** Offered only on one's OWN messages: the pencil that starts editing (a supersede). */
@@ -2044,7 +2082,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
   const diff = React.useMemo(() => (row.kind === "tool" ? toolDiff(row.name, row.input) : null), [row]);
 
   if (row.kind === "question") {
-    return <SdkQuestionCard row={row} onAnswer={onAnswer} />;
+    return <SdkQuestionCard row={row} onAnswer={onAnswer} peers={peerDraftsOf(peerDrafts, viewer)} onDraft={onDraft} />;
   }
 
   if (row.kind === "tool") {
@@ -2357,9 +2395,15 @@ export function resetQuestionDraftsForTesting(): void {
 function SdkQuestionCard({
   row,
   onAnswer,
+  peers = [],
+  onDraft,
 }: {
   row: Extract<SdkRow, { kind: "question" }>;
   onAnswer?: (id: string, answers: SdkQuestionAnswer[]) => void;
+  /** Quem MAIS está respondendo este cartão agora, e o quê (lib/peerQuestionDraft.ts). */
+  peers?: Array<{ name: string; draft: QuestionDraft }>;
+  /** Conta às outras abas o que esta pessoa já marcou e escreveu. */
+  onDraft?: (id: string, draft: QuestionDraft) => void;
 }) {
   const t = useT();
   const [picked, setPicked] = React.useState<string[][]>(() => questionDrafts.get(row.id)?.picked ?? row.questions.map(() => []));
@@ -2370,6 +2414,20 @@ function SdkQuestionCard({
   React.useEffect(() => {
     questionDrafts.set(row.id, { picked, other });
   }, [row.id, picked, other]);
+  // O MESMO rascunho, para quem mais está no card — duas pessoas respondendo a mesma pergunta cada
+  // uma de um jeito era o problema: só a primeira resposta vale. Ao montar, só sai se já houver
+  // algo (o cartão que volta depois de um reconnect reanuncia o que tinha); vazio de nascença, não.
+  const pending = row.outcome === "pending";
+  const announced = React.useRef(false);
+  React.useEffect(() => {
+    if (!pending) return;
+    const draft = { picked, other };
+    if (!announced.current) {
+      announced.current = true;
+      if (isEmptyDraft(draft)) return;
+    }
+    onDraft?.(row.id, draft);
+  }, [pending, row.id, picked, other, onDraft]);
 
   const single = row.questions.length === 1 && row.questions[0]?.multiSelect !== true;
 
@@ -2435,6 +2493,11 @@ function SdkQuestionCard({
         <CircleHelp className="h-3.5 w-3.5 shrink-0" />
         {t("sdk.questionTitle")}
       </div>
+      {peers.length > 0 ? (
+        <div data-testid="sdk-question-peer-banner" role="status" className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-amber-600 dark:text-amber-300">
+          {t("sdk.questionPeerAnswering", { names: peers.map((p) => peerDisplayName(p.name)).join(", ") })}
+        </div>
+      ) : null}
       {row.questions.map((q, qi) => (
         <div key={qi} className="flex flex-col gap-1.5">
           {q.header ? <div className="text-[10px] font-semibold uppercase tracking-wide text-sky-500/80">{q.header}</div> : null}
@@ -2442,15 +2505,20 @@ function SdkQuestionCard({
           <div className="flex flex-wrap gap-1.5">
             {q.options.map((opt) => {
               const selected = (picked[qi] ?? []).includes(opt.label);
+              // Marcado por OUTRA pessoa: um contorno âmbar e o nome dela no título.
+              const peerPicked = peers.filter((p) => (p.draft.picked[qi] ?? []).includes(opt.label)).map((p) => peerDisplayName(p.name));
               return (
                 <Button
                   key={opt.label}
                   size="sm"
                   variant={selected ? "default" : "outline"}
-                  className="h-7 max-w-full text-xs"
+                  className={cn("h-7 max-w-full text-xs", peerPicked.length > 0 && "ring-2 ring-amber-400/80")}
                   data-testid="sdk-question-option"
+                  data-peer-picked={peerPicked.length > 0 || undefined}
                   aria-pressed={selected}
-                  title={opt.description}
+                  title={peerPicked.length > 0
+                    ? [opt.description, t("sdk.questionPeerPicked", { names: peerPicked.join(", ") })].filter(Boolean).join(" — ")
+                    : opt.description}
                   onClick={() => toggle(qi, opt.label)}
                 >
                   <span className="truncate">{opt.label}</span>
@@ -2473,6 +2541,17 @@ function SdkQuestionCard({
             }}
             className="h-7 rounded-md border border-border/70 bg-background/80 px-2 text-xs outline-none placeholder:text-muted-foreground/60 focus:border-sky-500/60"
           />
+          {peers.map(({ name, draft }) => {
+            const marks = draft.picked[qi] ?? [];
+            const text = (draft.other[qi] ?? "").trim();
+            if (marks.length === 0 && text === "") return null;
+            return (
+              <div key={name} data-testid="sdk-question-peer-draft" className="min-w-0 break-words text-amber-600 dark:text-amber-300">
+                <span className="font-medium">{t("sdk.questionPeerDraft", { name: peerDisplayName(name) })}</span>{" "}
+                {[...marks, ...(text !== "" ? [`“${text}”`] : [])].join(" · ")}
+              </div>
+            );
+          })}
         </div>
       ))}
       {single ? (

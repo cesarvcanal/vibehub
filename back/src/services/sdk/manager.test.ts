@@ -2105,6 +2105,110 @@ describe("attachSocket — \"está digitando\" entre as abas do card", () => {
 });
 
 /**
+ * DUAS PESSOAS, UMA PERGUNTA: só a primeira resposta vale. O rascunho do cartão vai às outras abas
+ * enquanto a pessoa marca e escreve, para ninguém mandar uma resposta diferente sem saber.
+ */
+describe("attachSocket — rascunho do cartão de pergunta em tempo real", () => {
+  const CESAR = { kind: "user" as const, name: "cesar" };
+  const ALBERT = { kind: "user" as const, name: "albert" };
+  const emit = (event: object) => spawned[0]!.stdout.emit("data", line(event as never));
+  const draft = (id: string, picked: string[][], other: string[]): Buffer =>
+    Buffer.from(JSON.stringify({ type: "question_draft", id, picked, other }));
+  type PeerDraft = { type: string; id?: string; name?: string; picked?: string[][]; other?: string[] };
+  const draftFrames = (socket: FakeSocket): PeerDraft[] =>
+    socket.sent.map((s) => JSON.parse(s) as PeerDraft).filter((e) => e.type === "peer_question_draft");
+
+  it("repassa o que foi marcado e escrito às OUTRAS abas, com o nome — nunca de volta", () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    const albert = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    attachSocket(session, albert as never, ALBERT);
+    cesar.emit("message", draft("q1", [["No item"]], ["72h pulando"]));
+    expect(draftFrames(albert)).toEqual([
+      { type: "peer_question_draft", id: "q1", name: "cesar", picked: [["No item"]], other: ["72h pulando"] },
+    ]);
+    expect(draftFrames(cesar)).toEqual([]);
+  });
+
+  it("é efêmero: não vira turno no driver nem linha no histórico", async () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    attachSocket(session, fakeSocket() as never, ALBERT);
+    cesar.emit("message", draft("q1", [[]], ["oi"]));
+    expect(spawned[0]!.stdin.written.join("")).not.toContain("question_draft");
+    expect(session.activeTurns).toBe(0);
+    expect(await readHistory(CARD)).toEqual([]);
+  });
+
+  it("quem abre o card DEPOIS vê o rascunho de quem já está respondendo", () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    cesar.emit("message", draft("q1", [[]], ["primeiro"]));
+    cesar.emit("message", draft("q1", [[]], ["primeiro, segundo"]));
+    const albert = fakeSocket();
+    attachSocket(session, albert as never, ALBERT);
+    expect(draftFrames(albert)).toEqual([
+      { type: "peer_question_draft", id: "q1", name: "cesar", picked: [[]], other: ["primeiro, segundo"] },
+    ]);
+  });
+
+  it("apagar tudo apaga nos outros e não fica guardado", () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    const albert = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    attachSocket(session, albert as never, ALBERT);
+    cesar.emit("message", draft("q1", [[]], ["x"]));
+    cesar.emit("message", draft("q1", [[]], [""]));
+    expect(draftFrames(albert).at(-1)).toEqual({ type: "peer_question_draft", id: "q1", name: "cesar", picked: [[]], other: [""] });
+    const late = fakeSocket();
+    attachSocket(session, late as never, ALBERT);
+    expect(draftFrames(late)).toEqual([]);
+  });
+
+  it("a pergunta respondida esquece os rascunhos dela", () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    emit({ type: "user_question", id: "q1", questions: [{ question: "Como?", options: [{ label: "A" }] }] });
+    cesar.emit("message", draft("q1", [["A"]], [""]));
+    emit({ type: "question_result", id: "q1", answers: [{ selected: ["A"] }] });
+    const albert = fakeSocket();
+    attachSocket(session, albert as never, ALBERT);
+    expect(draftFrames(albert)).toEqual([]);
+  });
+
+  it("a aba que fecha tira o rascunho dela da tela dos outros", () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    const albert = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    attachSocket(session, albert as never, ALBERT);
+    cesar.emit("message", draft("q1", [[]], ["meio"]));
+    cesar.emit("close");
+    expect(draftFrames(albert).at(-1)).toEqual({ type: "peer_question_draft", id: "q1", name: "cesar", picked: [], other: [] });
+    expect(session.questionDrafts.size).toBe(0);
+  });
+
+  it("socket sem autor e frame malformado não anunciam nada (e não viram mensagem)", () => {
+    const session = ensure();
+    const anon = fakeSocket();
+    const cesar = fakeSocket();
+    const albert = fakeSocket();
+    attachSocket(session, anon as never);
+    attachSocket(session, cesar as never, CESAR);
+    attachSocket(session, albert as never, ALBERT);
+    anon.emit("message", draft("q1", [[]], ["x"]));
+    cesar.emit("message", Buffer.from(`{"type":"question_draft","id":42}`));
+    expect(draftFrames(albert)).toEqual([]);
+    expect(session.activeTurns).toBe(0);
+  });
+});
+
+/**
  * A MENSAGEM DE UMA PESSOA NA TELA DAS OUTRAS (produção, 2026-10-08): o Albert digitou — o
  * "está digitando…" apareceu para os outros —, deu Enter, e a mensagem não apareceu para ninguém
  * além dele até um F5. O turno ia para o driver e para o disco, mas o envio nunca era repassado às
