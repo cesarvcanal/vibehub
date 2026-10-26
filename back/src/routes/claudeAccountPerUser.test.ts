@@ -117,6 +117,17 @@ describe("o owner liga cada pessoa a uma conta Claude", () => {
     expect(res.json().git?.claudeAccountSlug).toBeUndefined();
   });
 
+  it("aceita a conta padrão do runner como a conta da pessoa (o César fica ligado à dele)", async () => {
+    const owner = await signUpOwner();
+    const me = await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: owner } });
+    const res = await assignAccount(owner, me.json().user.id, "default");
+    expect(res.statusCode).toBe(200);
+    expect(res.json().git.claudeAccountSlug).toBe("default");
+    // /auth/me diz que ele TEM conta: o diálogo de novo card não avisa mais
+    const after = await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: owner } });
+    expect(after.json().user.claudeAccountSlug).toBe("default");
+  });
+
   it("o membro NÃO escolhe a própria conta Claude pela porta de autoatendimento", async () => {
     const owner = await signUpOwner();
     const mussa = await addUser(owner, "mussa", "member");
@@ -212,6 +223,19 @@ describe("o card nasce na conta Claude de quem o criou", () => {
 
     const res = await app.inject({
       method: "POST", url: "/api/cards", headers: { cookie: albert.cookie }, payload: { projectId, title: "x" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().card.accountSlug).toBeUndefined();
+  });
+
+  it("pessoa ligada à conta padrão cria card sem conta gravada (roda no perfil embutido)", async () => {
+    const owner = await signUpOwner();
+    const me = await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: owner } });
+    await assignAccount(owner, me.json().user.id, "default");
+    const projectId = await makeProject(owner);
+
+    const res = await app.inject({
+      method: "POST", url: "/api/cards", headers: { cookie: owner }, payload: { projectId, title: "do César" },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().card.accountSlug).toBeUndefined();

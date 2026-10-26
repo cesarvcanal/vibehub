@@ -90,6 +90,7 @@ export const ptBR: Record<string, string> = {
   "access.gitConnectionInherit": "Herdar a conta do projeto",
   "access.claudeAccount": "Conta Claude",
   "access.claudeAccountInherit": "Sem conta própria (cards caem na conta do projeto ou na padrão)",
+  "access.claudeAccountDefault": "{name} (conta padrão do runner)",
   "access.gitName": "Nome no commit",
   "access.gitEmail": "E-mail no commit",
   "access.role": "Papel",

@@ -90,6 +90,7 @@ export const en: Record<string, string> = {
   "access.gitConnectionInherit": "Inherit the project's account",
   "access.claudeAccount": "Claude account",
   "access.claudeAccountInherit": "No own account (cards fall back to the project's or the default)",
+  "access.claudeAccountDefault": "{name} (the runner's default account)",
   "access.gitName": "Commit name",
   "access.gitEmail": "Commit e-mail",
   "access.role": "Role",

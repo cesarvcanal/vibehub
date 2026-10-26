@@ -12,7 +12,7 @@ import { get, patch, post, del } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
 import { ME_KEY, rotateSession, useAuth } from "@/providers/auth";
 import { sharesKey } from "@/features/board/components/ShareDialog";
-import { ACCOUNTS_KEY, GITHUB_KEY, PROJECTS_KEY, accountLabel, boardApi } from "@/features/board/api";
+import { ACCOUNTS_KEY, DEFAULT_ACCOUNT_SLUG, GITHUB_KEY, PROJECTS_KEY, accountLabel, boardApi } from "@/features/board/api";
 import type { Role, Share, ShareLevel, SharesResponse, User, UserGit, UsersResponse } from "@/api/types";
 import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
 import { t as translate, useT } from "@/i18n";
@@ -242,6 +242,12 @@ export function AccessDialog({ open, onOpenChange }: AccessDialogProps) {
                             onChange={(e) => setGitDraft((d) => ({ ...d, claudeAccountSlug: e.target.value }))}
                           >
                             <option value="">{t("access.claudeAccountInherit")}</option>
+                            {/* The runner's built-in profile, chosen ON PURPOSE (the install owner's). */}
+                            <option value={DEFAULT_ACCOUNT_SLUG}>
+                              {t("access.claudeAccountDefault", {
+                                name: claudeAccounts.data?.defaultLabel || t("board.defaultAccountFallback"),
+                              })}
+                            </option>
                             {(claudeAccounts.data?.accounts ?? []).map((a) => (
                               <option key={a.slug} value={a.slug}>
                                 {accountLabel(a)}

@@ -325,6 +325,25 @@ describe("NewCardDialog", () => {
       expect(onSubmit).toHaveBeenCalledWith({ projectId: "p1", title: "x" });
     });
 
+    it("ligado à conta padrão do runner (o César) não avisa, e 'herdar' mostra a padrão como dele", async () => {
+      const { user } = setup({ ownAccountSlug: "default" });
+      expect(screen.queryByTestId("new-card-no-own-account")).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Options" }));
+      expect(screen.getByRole("option", { name: /^Your account \(the runner default\)/ })).toBeInTheDocument();
+    });
+
+    it("ligado à padrão num projeto com conta própria, 'herdar' mostra a do projeto (é onde o card cai)", async () => {
+      const { user } = setup({
+        ownAccountSlug: "default",
+        projects: [{
+          id: "p1", name: "P1", repoFullName: "acme/p1", baseBranch: "dev", position: 0, createdAt: 1,
+          defaultAccountSlug: "personal",
+        }],
+      });
+      await user.click(screen.getByRole("button", { name: "Options" }));
+      expect(screen.getByRole("option", { name: /^Inherit \(personal\)/ })).toBeInTheDocument();
+    });
+
     it("projeto com conta padrão própria não avisa — o card não cai no perfil do runner", () => {
       setup({
         projects: [{
