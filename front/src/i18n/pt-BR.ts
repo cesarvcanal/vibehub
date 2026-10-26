@@ -88,6 +88,8 @@ export const ptBR: Record<string, string> = {
     "Com que conta esta pessoa empurra e quem assina os commits dela. Em branco = herda a conta do projeto e o autor da instalação.",
   "access.gitConnection": "Conta do GitHub",
   "access.gitConnectionInherit": "Herdar a conta do projeto",
+  "access.claudeAccount": "Conta Claude",
+  "access.claudeAccountInherit": "Sem conta própria (cards caem na conta do projeto ou na padrão)",
   "access.gitName": "Nome no commit",
   "access.gitEmail": "E-mail no commit",
   "access.role": "Papel",
@@ -883,6 +885,9 @@ export const ptBR: Record<string, string> = {
   "newCard.titlePlaceholder": "ex.: corrigir os totais na tela de fechamento",
   "newCard.hideOptions": "Ocultar opções",
   "newCard.options": "Opções",
+  "newCard.ownAccount": "Sua conta ({name})",
+  "newCard.noOwnAccount":
+    "Você não tem conta Claude própria: este card vai rodar na conta padrão ({name}), com a memória e a cota dela. Peça ao owner para ligar uma conta a você em Acesso.",
   "newCard.account": "Conta Claude",
   "newCard.inherit": "Herdar ({name})",
   "newCard.model": "Modelo",

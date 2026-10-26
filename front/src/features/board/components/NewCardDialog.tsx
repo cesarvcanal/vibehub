@@ -61,6 +61,7 @@ export function NewCardDialog({
   initialProjectId,
   accounts,
   defaultAccountLabel,
+  ownAccountSlug,
   onSubmit,
 }: {
   open: boolean;
@@ -72,6 +73,11 @@ export function NewCardDialog({
   accounts: BoardAccount[];
   /** Display name of the runner's built-in profile. */
   defaultAccountLabel: string;
+  /**
+   * The signed-in person's own Claude account. The server creates the card ON it when no account is
+   * picked, so "inherit" means THEIRS — and without one, the card lands on the default account.
+   */
+  ownAccountSlug?: string;
   /** Fired and forgotten — the dialog does not wait for it. */
   onSubmit: (input: NewCard) => void;
 }) {
@@ -82,7 +88,9 @@ export function NewCardDialog({
   const askProject = initialProjectId === null;
   const [projectId, setProjectId] = React.useState(initialProjectId ?? projects[0]?.id ?? "");
   const selectedProject = projects.find((p) => p.id === projectId);
-  const inheritedAccount = projectAccountSlug(selectedProject);
+  // What "no account picked" resolves to: the creator's own, else the project's, else the default.
+  const inheritedAccount = ownAccountSlug ?? projectAccountSlug(selectedProject);
+  const ownAccount = ownAccountSlug ? accounts.find((a) => a.slug === ownAccountSlug) : undefined;
   const defaultBranch = projectBaseBranch(selectedProject);
   const [account, setAccount] = React.useState("");
   const [model, setModel] = React.useState("");
@@ -240,6 +248,17 @@ export function NewCardDialog({
             />
           </div>
 
+          {/* Outside the folded options on purpose: landing on someone else's account is the thing
+              the person has to see BEFORE creating, not after unfolding a section. */}
+          {!account && !inheritedAccount ? (
+            <p
+              data-testid="new-card-no-own-account"
+              className="text-[11px] text-amber-600 dark:text-amber-400"
+            >
+              {t("newCard.noOwnAccount", { name: defaultAccountLabel })}
+            </p>
+          ) : null}
+
           <button
             type="button"
             onClick={() => setShowOptions((v) => !v)}
@@ -261,7 +280,9 @@ export function NewCardDialog({
                 >
                   <option value="">
                     {withPercent(
-                      t("newCard.inherit", { name: inheritedAccount ?? defaultAccountLabel }),
+                      ownAccountSlug
+                        ? t("newCard.ownAccount", { name: ownAccount ? accountLabel(ownAccount) : ownAccountSlug })
+                        : t("newCard.inherit", { name: inheritedAccount ?? defaultAccountLabel }),
                       inheritedAccount ?? DEFAULT_ACCOUNT_SLUG,
                     )}
                   </option>

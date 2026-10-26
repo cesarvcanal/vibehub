@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { PublicUser } from "../auth/users.js";
 import { cardLevel, visibleProjects } from "../auth/access.js";
+import { creatorAccountSlug } from "../auth/userGit.js";
 import * as registry from "../services/board/registry.js";
 import * as workspace from "../services/board/workspace.js";
 import { recordCardActor } from "../services/board/actor.js";
@@ -216,7 +217,9 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     async (a) => {
       try {
         if (user.role !== "owner") throw new Error("only the owner can create cards — ask them to create or share one");
-        const card = await registry.createCard({ projectId: a.projectId, title: a.title });
+        // Born on the CREATOR's Claude account, the same as a card made on the board.
+        const accountSlug = await creatorAccountSlug(user.id);
+        const card = await registry.createCard({ projectId: a.projectId, title: a.title }, accountSlug ? { accountSlug } : {});
         logger.info({ card: card.worktreeSlug, by: user.username }, "card created from the external MCP");
         if (a.open === false) {
           void workspace.prepareCard(card.id, "card.create").catch((err: unknown) => {

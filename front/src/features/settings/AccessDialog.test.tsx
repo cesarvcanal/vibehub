@@ -188,6 +188,7 @@ describe("AccessDialog — a identidade no GitHub de uma pessoa", () => {
       if (url === "/users") return { users: users.map((u) => (u.id === "u2" && git ? { ...u, git } : u)) };
       if (url === "/projects") return { projects: [] };
       if (url === "/github") return { connections: CONNECTIONS };
+      if (url === "/accounts") return { accounts: [{ slug: "mussa", name: "Mussa" }], defaultLabel: null };
       if (/^\/projects\/[^/]+\/shares$/.test(url)) return { shares: [] };
       throw new Error(`unexpected ${url}`);
     });
@@ -208,6 +209,7 @@ describe("AccessDialog — a identidade no GitHub de uma pessoa", () => {
       githubConnectionId: "c-mussa",
       gitName: "wellesley-mussolini",
       gitEmail: "xerif.off@gmail.com",
+      claudeAccountSlug: null,
     }));
   });
 
@@ -225,7 +227,7 @@ describe("AccessDialog — a identidade no GitHub de uma pessoa", () => {
     await userEvent.click(screen.getByTestId("user-git-save-u2"));
 
     await waitFor(() => expect(patch).toHaveBeenCalledWith("/users/u2", {
-      githubConnectionId: null, gitName: null, gitEmail: null,
+      githubConnectionId: null, gitName: null, gitEmail: null, claudeAccountSlug: null,
     }));
   });
 
@@ -235,6 +237,28 @@ describe("AccessDialog — a identidade no GitHub de uma pessoa", () => {
     await userEvent.click(await screen.findByTestId("user-git-open-u2"));
     expect(screen.getByTestId<HTMLSelectElement>("user-git-connection-u2").value).toBe("c-mussa");
     expect(screen.getByTestId<HTMLInputElement>("user-git-name-u2").value).toBe("wellesley-mussolini");
+  });
+
+  it("o owner liga a pessoa a uma conta Claude — os cards dela nascem nessa conta", async () => {
+    serveWithGithub(OWNER);
+    patch.mockResolvedValue({ user: MEMBER });
+    renderApp(<AccessDialog open onOpenChange={() => {}} />);
+
+    await userEvent.click(await screen.findByTestId("user-git-open-u2"));
+    await waitFor(() => expect(screen.getByRole("option", { name: "Mussa" })).toBeInTheDocument());
+    await userEvent.selectOptions(screen.getByTestId("user-claude-account-u2"), "mussa");
+    await userEvent.click(screen.getByTestId("user-git-save-u2"));
+
+    await waitFor(() => expect(patch).toHaveBeenCalledWith("/users/u2", expect.objectContaining({
+      claudeAccountSlug: "mussa",
+    })));
+  });
+
+  it("o bloco abre com a conta Claude que a pessoa já tem", async () => {
+    serveWithGithub(OWNER, [OWNER, MEMBER], { claudeAccountSlug: "mussa" });
+    renderApp(<AccessDialog open onOpenChange={() => {}} />);
+    await userEvent.click(await screen.findByTestId("user-git-open-u2"));
+    await waitFor(() => expect(screen.getByTestId<HTMLSelectElement>("user-claude-account-u2").value).toBe("mussa"));
   });
 
   it("o membro não vê o bloco de ninguém — a lista inteira é do owner", async () => {

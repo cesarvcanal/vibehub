@@ -1,5 +1,6 @@
 import { JsonStore } from "../store/jsonStore.js";
 import { dataPath } from "../config/env.js";
+import { assertAccountSlug, listAccounts } from "../services/board/registry.js";
 
 /**
  * GIT IDENTITY PER USER — who a card's commits are authored by, and which GitHub connection its
@@ -28,6 +29,13 @@ export interface UserGitIdentity {
   /** Commit author. Absent = `settings.git`. */
   gitName?: string;
   gitEmail?: string;
+  /**
+   * This person's CLAUDE ACCOUNT (a slug in the board's accounts) — the profile a card they create
+   * runs on. Absent = the card inherits the project's, then the runner's default (`~/.claude`).
+   * Only the owner writes it: a member pointing themselves at someone else's account would be
+   * running on that person's credentials, memory and quota.
+   */
+  claudeAccountSlug?: string;
 }
 
 interface UserGitDoc { identities: UserGitIdentity[] }
@@ -68,7 +76,9 @@ export async function getUserGit(userId: string): Promise<UserGitIdentity | null
  */
 export async function setUserGit(
   userId: string,
-  patch: { githubConnectionId?: string | null; gitName?: string | null; gitEmail?: string | null },
+  patch: {
+    githubConnectionId?: string | null; gitName?: string | null; gitEmail?: string | null; claudeAccountSlug?: string | null;
+  },
 ): Promise<UserGitIdentity> {
   const id = String(userId ?? "");
   if (!id) throw new Error("user id is required");
@@ -76,6 +86,9 @@ export async function setUserGit(
   // half-applied patch whose last field throws would survive in memory and get persisted later.
   const name = patch.gitName === undefined || patch.gitName === null ? patch.gitName : assertGitName(patch.gitName);
   const email = patch.gitEmail === undefined || patch.gitEmail === null ? patch.gitEmail : assertGitEmail(patch.gitEmail);
+  const account = patch.claudeAccountSlug === undefined || patch.claudeAccountSlug === null
+    ? patch.claudeAccountSlug
+    : assertAccountSlug(patch.claudeAccountSlug);
   return await store.mutate((doc) => {
     let entry = doc.identities.find((i) => i.userId === id);
     if (!entry) {
@@ -94,6 +107,10 @@ export async function setUserGit(
       if (email === null) delete entry.gitEmail;
       else entry.gitEmail = email;
     }
+    if (account !== undefined) {
+      if (account === null) delete entry.claudeAccountSlug;
+      else entry.claudeAccountSlug = account;
+    }
     return { ...entry };
   });
 }
@@ -106,6 +123,22 @@ export async function removeUserGit(userId: string): Promise<void> {
     const index = doc.identities.findIndex((i) => i.userId === id);
     if (index >= 0) doc.identities.splice(index, 1);
   });
+}
+
+/**
+ * The account a card created by this person is BORN on: theirs, when it still exists. A slug whose
+ * account is gone (removal refuses while a person holds it, but a hand-edited file does not) falls
+ * back to inheriting instead of failing the creation.
+ */
+export async function creatorAccountSlug(userId: string | undefined): Promise<string | undefined> {
+  const slug = userId ? (await getUserGit(userId))?.claudeAccountSlug : undefined;
+  if (!slug) return undefined;
+  return (await listAccounts()).some((a) => a.slug === slug) ? slug : undefined;
+}
+
+/** Who is tied to a Claude account — what removing that account would leave dangling. */
+export async function usersOnClaudeAccount(slug: string): Promise<string[]> {
+  return (await store.load()).identities.filter((i) => i.claudeAccountSlug === slug).map((i) => i.userId);
 }
 
 export function resetUserGitForTesting(): void {
