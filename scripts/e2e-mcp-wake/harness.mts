@@ -200,8 +200,139 @@ async function deployB() {
   log("final status", card?.status);
 }
 
+async function extra() {
+  const readHist = (cardId: string) => {
+    const f = `${env.config.dataDir}/sdk-history/${cardId}.ndjson`;
+    return existsSync(f) ? readFileSync(f, "utf8").split("\n").flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } }) : [];
+  };
+  // X1: a REAL idle period — the turn ends, the idle sweep (4 h "later") puts the card to sleep by
+  // itself, and an order afterwards wakes it with the conversation intact.
+  const c = await newCard("e2e inativo", true);
+  let since = Date.now();
+  await send(c, "Memorize a palavra-chave KIWI-77 para depois. Responda apenas OK.");
+  let done = await waitDone(c, since);
+  check("X1 first turn finished", done.outcome === "finished", `outcome=${done.outcome}`);
+  for (let i = 0; i < 20 && manager.driverTurnRunning(c); i++) await sleep(500);
+  const swept = await workspace.sweepIdleCards(Date.now() + 4 * 60 * 60_000);
+  const slept = await registry.getCard(c);
+  check("X1 idle sweep hibernates the card that really went quiet", !!slept?.hibernatedAt && !manager.liveDriverSession(c), `swept=${swept} hibernatedAt=${slept?.hibernatedAt}`);
+  since = Date.now();
+  let out = await send(c, "Qual era a palavra-chave que pedi para memorizar? Responda apenas a palavra.");
+  done = await waitDone(c, since);
+  check("X1 order after the idle period wakes it and the context survives",
+    out.woke === true && done.outcome === "finished" && JSON.stringify(done.answers ?? []).includes("KIWI-77"),
+    `woke=${out.woke} outcome=${done.outcome} answers=${JSON.stringify(done.answers ?? []).slice(0, 120)}`);
+
+  // X2: the driver stopped on its own idle clock (DRIVER_IDLE_MS) while the card stays "live".
+  for (let i = 0; i < 20 && manager.driverTurnRunning(c); i++) await sleep(500);
+  manager.stopCardDriver(c);
+  since = Date.now();
+  out = await send(c, "Repita a palavra-chave de antes, só ela.");
+  done = await waitDone(c, since);
+  check("X2 order after the driver's idle stop restarts it with the context",
+    out.sent === true && out.route === "sdk-driver" && JSON.stringify(done.answers ?? []).includes("KIWI-77"),
+    `route=${out.route} outcome=${done.outcome} answers=${JSON.stringify(done.answers ?? []).slice(0, 120)}`);
+
+  // X3: a SECOND order arrives while the first is mid-tool — both must be carried out.
+  since = Date.now();
+  out = await send(c, "Execute com a ferramenta Bash, em primeiro plano: python3 -c 'import time; time.sleep(25)' && echo 1 > x3-a.txt . Depois responda apenas A-FEITO.");
+  for (let i = 0; i < 60 && !readHist(c).some((e) => e.at >= since && e.type === "tool_use"); i++) await sleep(1000);
+  const out2 = await send(c, "Também crie com Bash o arquivo x3-b.txt contendo 2. Responda apenas B-FEITO.");
+  const cwd = await cwdOf(c);
+  for (let i = 0; i < 36 && !(existsSync(`${cwd}/x3-a.txt`) && existsSync(`${cwd}/x3-b.txt`)); i++) await sleep(5000);
+  done = await waitDone(c, since);
+  check("X3 an order sent mid-tool is queued and both are executed",
+    out2.sent === true && existsSync(`${cwd}/x3-a.txt`) && existsSync(`${cwd}/x3-b.txt`),
+    `second=${JSON.stringify(out2).slice(0, 100)} a=${existsSync(`${cwd}/x3-a.txt`)} b=${existsSync(`${cwd}/x3-b.txt`)}`);
+
+  // X4: a tool that TIMES OUT mid-turn — the turn goes on and finishes by itself.
+  since = Date.now();
+  await send(c, "Rode com a ferramenta Bash, usando o parâmetro timeout de 5000 ms, o comando python3 -c 'import time; time.sleep(60)'. Quando ele estourar o tempo, crie com Bash o arquivo x4.txt contendo timeout-ok e responda apenas FEITO.");
+  done = await waitDone(c, since);
+  check("X4 tool timeout mid-turn: the turn still completes", existsSync(`${cwd}/x4.txt`) && done.outcome === "finished",
+    `outcome=${done.outcome} file=${existsSync(`${cwd}/x4.txt`)}`);
+
+  // X5: Done. A finished card whose session is still up takes an order; asleep, it is refused clearly.
+  const mv = await call("vibehub_move_cards", { cards: [c], column: "done" });
+  since = Date.now();
+  out = await send(c, "Crie com Bash o arquivo x5.txt contendo done-ok. Responda apenas FEITO.");
+  done = await waitDone(c, since);
+  check("X5 a Done card with a live session still carries out an order", out.sent === true && existsSync(`${cwd}/x5.txt`),
+    `move=${JSON.stringify(mv).slice(0, 80)} out=${JSON.stringify(out).slice(0, 100)} file=${existsSync(`${cwd}/x5.txt`)}`);
+  // that order was a NEW turn, which brings a Done card back to the active columns (by design) —
+  // conclude it again before putting it to sleep
+  const backFromDone = (await registry.getCard(c))?.column;
+  for (let i = 0; i < 20 && manager.driverTurnRunning(c); i++) await sleep(500);
+  await call("vibehub_move_cards", { cards: [c], column: "done" });
+  await workspace.hibernateCard(c, "e2e");
+  log("X5 column after the order to the Done card:", backFromDone);
+  out = await send(c, "x");
+  check("X5 a Done card asleep is refused with `done:` (no silent loss)", String(out.error ?? "").includes("done:"), String(out.error ?? JSON.stringify(out)).slice(0, 140));
+
+  // X6: what was said is persisted with its sender, and the end of each turn is observable.
+  const hist = readHist(c);
+  const users2 = hist.filter((e) => e.type === "user");
+  const card = await registry.getCard(c);
+  check("X6 every order persisted with its sender, and the card ends idle (not stuck working)",
+    users2.length >= 7 && users2.every((u) => u.from?.name === "e2e") && card?.status !== "working",
+    `userLines=${users2.length} senders=${[...new Set(users2.map((u) => u.from?.name))]} status=${card?.status}`);
+  state.cleanup = JSON.stringify([...(state.cleanup ? JSON.parse(state.cleanup) : []), c]);
+  save();
+}
+
+async function apiRetry() {
+  // R: the API is unreachable when the turn starts (a proxy in front of it drops every connection for
+  // the first seconds) and the CLI is told not to retry on its own: the turn ENDS in "API Error".
+  // The card must come back by itself once the network is back — nobody types "continua".
+  const http = await import("node:http");
+  const https = await import("node:https");
+  let firstAt = 0;
+  let dropped = 0;
+  let forwarded = 0;
+  const OUTAGE_MS = 20_000;
+  const proxy = http.createServer((req, res) => {
+    if (!firstAt) firstAt = Date.now();
+    if (Date.now() - firstAt < OUTAGE_MS) { dropped += 1; req.socket.destroy(); return; }
+    forwarded += 1;
+    const up = https.request({ host: "api.anthropic.com", port: 443, path: req.url, method: req.method, headers: { ...req.headers, host: "api.anthropic.com" } }, (r) => {
+      res.writeHead(r.statusCode ?? 502, r.headers);
+      r.pipe(res);
+    });
+    up.on("error", () => res.destroy());
+    req.pipe(up);
+  });
+  await new Promise<void>((r) => proxy.listen(0, "127.0.0.1", () => r()));
+  const port = (proxy.address() as import("node:net").AddressInfo).port;
+  process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${port}`;
+  process.env.CLAUDE_CODE_MAX_RETRIES = "0";
+  const c = await newCard("e2e api fora", true);
+  const since = Date.now();
+  const out = await send(c, "Crie com a ferramenta Bash o arquivo r.txt contendo api-ok no diretório atual. Depois responda apenas FEITO.");
+  check("R order accepted", out.sent === true, JSON.stringify(out).slice(0, 160));
+  const cwd = await cwdOf(c);
+  // what ChatGPT does: wait for the turn. The FIRST "finished" it gets must be the real end, not the
+  // error the panel is already retrying (that answer is what made it send "continua").
+  const first = await waitDone(c, since, 240_000);
+  const fileAtFirstFinish = existsSync(`${cwd}/r.txt`);
+  check("R the first 'finished' ChatGPT sees is the real end (the retry wait counts as the turn)",
+    first.outcome === "finished" && fileAtFirstFinish && JSON.stringify(first.answers ?? []).includes("FEITO"),
+    `outcome=${first.outcome} file=${fileAtFirstFinish} answers=${JSON.stringify(first.answers ?? []).slice(0, 160)}`);
+  for (let i = 0; i < 60 && !existsSync(`${cwd}/r.txt`); i++) await sleep(5000);
+  const hist = readFileSync(`${env.config.dataDir}/sdk-history/${c}.ndjson`, "utf8").split("\n").flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } });
+  const notes = hist.filter((e) => e.type === "system_note").map((e) => e.text);
+  const retries = hist.filter((e) => e.type === "user" && e.from?.kind === "system").length;
+  check("R a turn killed by the API outage came back by itself and the task COMPLETED",
+    existsSync(`${cwd}/r.txt`) && retries >= 1 && dropped > 0,
+    `file=${existsSync(`${cwd}/r.txt`)} dropped=${dropped} forwarded=${forwarded} retries=${retries} notes=${JSON.stringify(notes).slice(0, 200)}`);
+  state.cleanup = JSON.stringify([...(state.cleanup ? JSON.parse(state.cleanup) : []), c]);
+  save();
+  proxy.close();
+}
+
 try {
-  if (PHASE === "main") await main();
+  if (PHASE === "apiretry") await apiRetry();
+  else if (PHASE === "extra") await extra();
+  else if (PHASE === "main") await main();
   else if (PHASE === "deploy-a") await deployA();
   else if (PHASE === "deploy-b") await deployB();
 } catch (err) {
