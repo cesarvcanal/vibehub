@@ -30,6 +30,21 @@ describe("voice_turn", () => {
     expect(once.rows[0]!.kind).toBe("voice");
   });
 
+  it("a spoken turn saved while the agent streams never splits or doubles the agent's answer", () => {
+    const state = apply([
+      { type: "user", text: "roda os testes" },
+      { type: "thinking_delta", text: "vou rodar" },
+      { type: "assistant_delta", text: "Rodando " },
+      { type: "voice_turn", vid: "vc1-u9", role: "user", text: "e o deploy?" },
+      { type: "assistant_delta", text: "os testes…" },
+      { type: "assistant_text", text: "Rodando os testes… 12 verdes." },
+    ]);
+    const assistants = state.rows.filter((r) => r.kind === "assistant");
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]).toMatchObject({ text: "Rodando os testes… 12 verdes.", streaming: false });
+    expect(state.rows.filter((r) => r.kind === "voice")).toHaveLength(1);
+  });
+
   it("ignores a malformed turn and does not start a turn spinner", () => {
     const state = apply([
       { type: "voice_turn", vid: "vc1-x1", role: "system", text: "x" },

@@ -1162,7 +1162,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
    */
   const [sentDuringCall, setSentDuringCall] = React.useState(false);
   const callWorking = connected && (state.awaiting || state.turnActive);
-  const call = useVoiceCall({ cardId, agentBusy: sentDuringCall && callWorking });
+  /** The agent is working on something typed during the call — the call shows it as "thinking". */
+  const agentBusyForCall = sentDuringCall && callWorking;
+  const call = useVoiceCall({ cardId, agentBusy: agentBusyForCall });
   const callLive = call.snap.state === "live";
   if (!callWorking && sentDuringCall) setSentDuringCall(false);
   const [callBarDismissed, setCallBarDismissed] = React.useState(false);
@@ -1186,12 +1188,12 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   const sendFromComposer = React.useCallback(
     async (raw: string): Promise<void> => {
       await send(raw);
-      if (call.snap.state !== "live") return;
+      if (!callLive) return;
       const note = typedContext(raw);
       if (note && call.appendContext(note)) setSentDuringCall(true);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [send, call.snap.state, call.appendContext],
+    [send, callLive, call.appendContext],
   );
   // The agent's answers that land during the call reach the voice too. Keyed by TEXT: a reconnect
   // replays the thread with new row ids, and must not re-tell the voice what it already knows.
@@ -1482,7 +1484,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
 
       {showCallBar ? (
         <div className="mt-1.5">
-          <VoiceCallBar call={call} agentBusy={sentDuringCall && callWorking} onClose={() => setCallBarDismissed(true)} />
+          <VoiceCallBar call={call} agentBusy={agentBusyForCall} onClose={() => setCallBarDismissed(true)} />
         </div>
       ) : null}
 

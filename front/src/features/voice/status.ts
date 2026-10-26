@@ -26,13 +26,13 @@ export function useVoiceStatus(enabled = true) {
 }
 
 /** Where an old `/voice?project=…&card=…` link leads: that card on the board, or the board. PURE. */
-export function voiceReturn(search: string): { to: string; card: string | null } {
+export function voiceReturn(search: string): string {
   const query = new URLSearchParams(search);
   const card = query.get("card");
-  if (!card) return { to: Paths.BOARD, card: null };
+  if (!card) return Paths.BOARD;
   const params = new URLSearchParams();
   const project = query.get("project");
   if (project) params.set("project", project);
   params.set("card", card);
-  return { to: `${Paths.BOARD}?${params.toString()}`, card };
+  return `${Paths.BOARD}?${params.toString()}`;
 }

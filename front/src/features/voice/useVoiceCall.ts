@@ -3,7 +3,7 @@ import { api, post } from "@/lib/api";
 import { LiveVoiceSession, type LiveVoiceDeps, type LiveVoiceSnapshot } from "./liveVoice";
 import { AI_TUNING, LevelMeter, MIC_TUNING, createCallAudioContext, visualLevel } from "./audioLevel";
 import { INITIAL_PHASE, nextPhase, type PhaseMemory, type VoicePhase } from "./voicePhase";
-import type { VoiceTurn } from "./voiceTurns";
+import { TURN_TEXT_MAX, type LocalVoiceTurn, type TurnSave, type VoiceTurn } from "./voiceTurns";
 
 /**
  * A VOICE CALL INSIDE A CARD'S CHAT — the glue between the GPT-Live session (./liveVoice.ts), the
@@ -22,11 +22,6 @@ import type { VoiceTurn } from "./voiceTurns";
  */
 
 export type TalkSource = "analyser" | "rtp" | "events" | "none";
-export type TurnSave = "saving" | "saved" | "failed";
-
-export interface LocalVoiceTurn extends VoiceTurn {
-  save?: TurnSave;
-}
 
 /** The numbers behind the orb, for diagnostics and tests: REAL volume vs VISUAL intensity. */
 export interface CallMeter {
@@ -40,6 +35,13 @@ export interface CallMeter {
 /** After this long of exact digital zeros while the model speaks, the analyser is not hearing it. */
 export const DEAD_ANALYSER_MS = 700;
 export const SAVE_RETRY_MS = [1_000, 3_000, 8_000, 20_000];
+/** Turns per save request — the server's `TURNS_MAX` (back/src/services/voice/turns.ts). */
+const SAVE_BATCH_MAX = 40;
+
+/** A turn as the server takes it — a monologue past its cap is clipped here, not refused there. */
+function wireTurn({ vid, role, text, at }: VoiceTurn) {
+  return { vid, role, text: text.length > TURN_TEXT_MAX ? text.slice(0, TURN_TEXT_MAX) : text, at };
+}
 const PHASE_INTERVAL_MS = 80;
 
 /** The session holding the one call the app may have at a time. */
@@ -123,12 +125,10 @@ export function useVoiceCall({
   const flush = React.useCallback(async (): Promise<void> => {
     if (inFlight.current || queue.current.size === 0) return;
     inFlight.current = true;
-    const batch = [...queue.current.values()].slice(0, 40);
+    const batch = [...queue.current.values()].slice(0, SAVE_BATCH_MAX);
     setSaves((prev) => ({ ...prev, ...Object.fromEntries(batch.map((t) => [t.vid, "saving" as const])) }));
     try {
-      await post(`/cards/${encodeURIComponent(cardId)}/voice/turns`, {
-        turns: batch.map(({ vid, role, text, at }) => ({ vid, role, text, at })),
-      });
+      await post(`/cards/${encodeURIComponent(cardId)}/voice/turns`, { turns: batch.map(wireTurn) });
       for (const t of batch) queue.current.delete(t.vid);
       attempt.current = 0;
       setSaves((prev) => ({ ...prev, ...Object.fromEntries(batch.map((t) => [t.vid, "saved" as const])) }));
@@ -159,11 +159,16 @@ export function useVoiceCall({
     });
   }, [session, flush]);
 
-  // Leaving with turns unsaved (tab closed mid-retry): one last best-effort send that outlives the page.
+  // The tab closing mid-call: the call ends (closing what was being said into a turn) and the turns
+  // not yet saved go in one last best-effort send that outlives the page. Idempotent on the server,
+  // so racing an in-flight save is harmless.
+  const sessionRef = React.useRef<LiveVoiceSession | null>(null);
+  sessionRef.current = session;
   React.useEffect(() => {
     const last = (): void => {
+      sessionRef.current?.dispose();
       if (queue.current.size === 0) return;
-      const body = JSON.stringify({ turns: [...queue.current.values()].map(({ vid, role, text, at }) => ({ vid, role, text, at })) });
+      const body = JSON.stringify({ turns: [...queue.current.values()].slice(0, SAVE_BATCH_MAX).map(wireTurn) });
       try {
         void fetch(`${api.defaults.baseURL ?? "/api"}/cards/${encodeURIComponent(cardId)}/voice/turns`, {
           method: "POST", body, keepalive: true, credentials: "include", headers: { "content-type": "application/json" },

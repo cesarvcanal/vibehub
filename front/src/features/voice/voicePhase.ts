@@ -119,8 +119,3 @@ export function phaseOrb(phase: VoicePhase): LivingMode {
       return "logo";
   }
 }
-
-/** Phases in which the call is up (the bar shows mute/hang-up). PURE. */
-export function callActive(phase: VoicePhase): boolean {
-  return phase !== "idle" && phase !== "error";
-}

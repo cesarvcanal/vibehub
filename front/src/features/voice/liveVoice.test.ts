@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ACTIVITY_WINDOW_MS, CLOSE_TIMEOUT_MS, CONTEXT_MAX_CHARS, LiveVoiceSession, START_TIMEOUT_MS, STATS_INTERVAL_MS, aiActivity, errorMessage } from "./liveVoice";
+import { CLOSE_TIMEOUT_MS, CONTEXT_MAX_CHARS, LiveVoiceSession, START_TIMEOUT_MS, STATS_INTERVAL_MS, errorMessage } from "./liveVoice";
 import { fakeRig, FakeStream } from "./fakeWebRtc";
 
 afterEach(() => {
@@ -89,6 +89,20 @@ describe("LiveVoiceSession — start", () => {
     vi.advanceTimersByTime(START_TIMEOUT_MS);
     expect(session.snapshot()).toMatchObject({ state: "error", error: "voice.err.startTimeout" });
     expect(released(rig)).toBe(true);
+  });
+
+  it("the browser's permission prompt does not count against the startup timeout", async () => {
+    vi.useFakeTimers();
+    let grant!: () => void;
+    const rig = fakeRig({ getUserMedia: () => new Promise((resolve) => { grant = () => resolve(new FakeStream()); }) });
+    const session = new LiveVoiceSession(rig.deps);
+    const starting = session.start();
+    await vi.advanceTimersByTimeAsync(START_TIMEOUT_MS + 5_000);
+    expect(session.snapshot().state).toBe("connecting");
+    grant();
+    await starting;
+    rig.peer().channel!.emit({ type: "session.started", session: { id: "live_1" } });
+    expect(session.snapshot().state).toBe("live");
   });
 
   it("can start again after an error", async () => {
@@ -355,17 +369,6 @@ describe("LiveVoiceSession — diagnostics", () => {
     session.dispose();
     await vi.advanceTimersByTimeAsync(STATS_INTERVAL_MS * 3);
     expect(spy).not.toHaveBeenCalled();
-  });
-});
-
-describe("aiActivity", () => {
-  const base = { ...LiveVoiceSession.idleSnapshot.diag };
-  it("waiting, hearing (input transcript), speaking (output transcript or remote level)", () => {
-    expect(aiActivity(base, 10_000)).toBe("waiting");
-    expect(aiActivity({ ...base, lastInputAt: 9_500 }, 10_000)).toBe("hearing");
-    expect(aiActivity({ ...base, lastInputAt: 9_500, lastOutputAt: 9_800 }, 10_000)).toBe("speaking");
-    expect(aiActivity({ ...base, remoteLevel: 0.3 }, 10_000)).toBe("speaking");
-    expect(aiActivity({ ...base, lastInputAt: 10_000 - ACTIVITY_WINDOW_MS - 1 }, 10_000)).toBe("waiting");
   });
 });
 

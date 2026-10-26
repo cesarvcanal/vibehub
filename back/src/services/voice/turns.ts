@@ -57,7 +57,9 @@ async function knownVids(cardId: string): Promise<Set<string>> {
   if (cached) return cached;
   let pending = loading.get(cardId);
   if (!pending) {
-    pending = readHistory(cardId).then((events) => {
+    // The WHOLE log, not the replay window: a retry arriving after a long conversation must still
+    // find its turn (and a limit this high never triggers the read's compaction).
+    pending = readHistory(cardId, Number.MAX_SAFE_INTEGER).then((events) => {
       const set = new Set<string>();
       for (const e of events) if (e.type === "voice_turn") set.add(e.vid);
       known.set(cardId, set);

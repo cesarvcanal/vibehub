@@ -27,45 +27,33 @@ export function VoiceTurnBubble({
   save?: "saving" | "saved" | "failed";
 }) {
   const t = useT();
-  const mark = (
-    <span className="mb-0.5 flex items-center gap-1 text-[11px] font-medium text-sky-600 dark:text-sky-400">
-      <AudioLines className="h-3 w-3" aria-hidden="true" />
-      {role === "assistant"
-        ? t("voice.turn.assistant")
-        : from && viewer && from.name && from.name !== viewer
-          ? t("voice.turn.by", { name: from.name })
-          : t("voice.turn.you")}
-    </span>
-  );
-  const status =
-    save === "failed" ? (
-      <span className="mt-1 block text-[11px] text-amber-600 dark:text-amber-400">{t("voice.turn.unsaved")}</span>
-    ) : null;
-  const caret = live ? <span aria-hidden="true" className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-foreground/50 align-middle" /> : null;
-
-  if (role === "user") {
-    return (
-      <div className="flex flex-col items-end" data-testid="sdk-voice" data-role="user" data-live={live || undefined} data-save={save}>
-        <div className="max-w-[85%] select-text whitespace-pre-wrap break-words rounded-lg border border-fuchsia-400/30 bg-primary/10 px-3 py-2 text-sm">
-          {mark}
-          {text}
-          {caret}
-          {status}
-        </div>
-      </div>
-    );
-  }
+  let who = t("voice.turn.you");
+  if (role === "assistant") who = t("voice.turn.assistant");
+  else if (from?.name && viewer && from.name !== viewer) who = t("voice.turn.by", { name: from.name });
+  const mine = role === "user";
   return (
-    <div className="flex flex-col items-start" data-testid="sdk-voice" data-role="assistant" data-live={live || undefined} data-save={save}>
+    <div
+      className={cn("flex flex-col", mine ? "items-end" : "items-start")}
+      data-testid="sdk-voice"
+      data-role={role}
+      data-live={live || undefined}
+      data-save={save}
+    >
       <div
         className={cn(
-          "max-w-[85%] select-text whitespace-pre-wrap break-words rounded-lg border border-sky-500/30 bg-sky-500/[0.06] px-3 py-2 text-sm",
+          "max-w-[85%] select-text whitespace-pre-wrap break-words rounded-lg border px-3 py-2 text-sm",
+          mine ? "border-fuchsia-400/30 bg-primary/10" : "border-sky-500/30 bg-sky-500/[0.06]",
         )}
       >
-        {mark}
+        <span className="mb-0.5 flex items-center gap-1 text-[11px] font-medium text-sky-600 dark:text-sky-400">
+          <AudioLines className="h-3 w-3" aria-hidden="true" />
+          {who}
+        </span>
         {text}
-        {caret}
-        {status}
+        {live && <span aria-hidden="true" className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-foreground/50 align-middle" />}
+        {save === "failed" && (
+          <span className="mt-1 block text-[11px] text-amber-600 dark:text-amber-400">{t("voice.turn.unsaved")}</span>
+        )}
       </div>
     </div>
   );

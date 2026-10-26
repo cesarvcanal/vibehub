@@ -15,6 +15,7 @@ import type { ServerText } from "@/features/board/lib/sdkOutbox";
 import { hasToolDiff } from "@/features/board/lib/toolDiff";
 import type { RateLimitInfo } from "@/features/board/lib/planUsage";
 import { t as translate } from "@/i18n";
+import type { LocalVoiceTurn } from "@/features/voice/voiceTurns";
 
 /* ----------------------------------------------------------------- events */
 
@@ -1384,7 +1385,16 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         rows[at] = row;
         return { ...state, rows };
       }
-      return { ...state, rows: [...state.rows, row] };
+      // The agent may be mid-answer (someone typed during the call): its streaming row must stay
+      // LAST — deltas and the consolidated text only ever write to the last row. The spoken turn
+      // goes in right above what is still being written.
+      let insertAt = state.rows.length;
+      while (insertAt > 0) {
+        const prev = state.rows[insertAt - 1]!;
+        if ((prev.kind === "assistant" || prev.kind === "thinking") && prev.streaming) insertAt--;
+        else break;
+      }
+      return { ...state, rows: [...state.rows.slice(0, insertAt), row, ...state.rows.slice(insertAt)] };
     }
     case "system_note": {
       // The PANEL talking (a deploy interrupted a turn, the boot resumed it): one muted centered
@@ -2067,7 +2077,7 @@ export function groupSdkRows(rows: readonly SdkRow[], min: number = SDK_TOOL_FOL
  */
 export function mergeLiveVoiceTurns(
   rows: SdkRow[],
-  turns: ReadonlyArray<{ vid: string; role: "user" | "assistant"; text: string; at: number; final: boolean; save?: "saving" | "saved" | "failed" }>,
+  turns: ReadonlyArray<LocalVoiceTurn>,
   self?: MessageOrigin,
 ): SdkRow[] {
   if (turns.length === 0) return rows;

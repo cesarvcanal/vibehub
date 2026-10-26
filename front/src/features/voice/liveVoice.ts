@@ -66,20 +66,6 @@ export interface LiveVoiceDiag {
   contextAcked: number;
 }
 
-/** What the assistant is doing, as far as the session can tell. */
-export type AiActivity = "waiting" | "hearing" | "speaking";
-
-/** A transcript delta or remote audio this recent counts as "now". */
-export const ACTIVITY_WINDOW_MS = 1_500;
-
-/** The assistant's activity at `now`, from the diagnostics. PURE. */
-export function aiActivity(diag: LiveVoiceDiag, now: number): AiActivity {
-  const recent = (at: number | null) => at !== null && now - at < ACTIVITY_WINDOW_MS;
-  if (recent(diag.lastOutputAt) || (diag.remoteLevel ?? 0) > 0.02) return "speaking";
-  if (recent(diag.lastInputAt)) return "hearing";
-  return "waiting";
-}
-
 /**
  * getStats cadence. Fine enough that the RTP audio level can stand in for the orb when the remote
  * track cannot be analysed (and closes idle turns on time); cheap — one local call, no network.
@@ -199,7 +185,6 @@ export class LiveVoiceSession {
     this.segmenter = new TurnSegmenter(newCallId());
     this.speech.reset();
     this.set({ state: "connecting", muted: false, turns: [], error: null, notice: null, diag: EMPTY_DIAG });
-    this.startTimer = setTimeout(() => this.fail(attempt, "voice.err.startTimeout"), START_TIMEOUT_MS);
 
     const alive = (): void => {
       if (attempt !== this.attempt || abort.signal.aborted) throw new Cancelled();
@@ -215,6 +200,9 @@ export class LiveVoiceSession {
         throw new Cancelled();
       }
       this.mic = mic;
+      // Bounded from the grant on: the time a person spends on the browser's permission prompt is
+      // theirs (and "end call" still cancels it), the network handshake after it is not.
+      this.startTimer = setTimeout(() => this.fail(attempt, "voice.err.startTimeout"), START_TIMEOUT_MS);
       const micTrack = mic.getAudioTracks()[0];
       this.setDiag({ micTrack: micTrack ? micTrack.readyState : null });
       micTrack?.addEventListener?.("ended", () => {
@@ -467,13 +455,9 @@ export class LiveVoiceSession {
   private teardown(): void {
     this.attempt++;
     // Whatever was being said when the call ended is a turn too — closed before anything else goes.
-    const segmenter = this.segmenter;
+    const closed = this.segmenter?.flush() ?? [];
+    if (closed.length > 0) this.publishTurns(closed);
     this.segmenter = null;
-    const closed = segmenter?.flush() ?? [];
-    if (segmenter && closed.length > 0) {
-      this.set({ turns: segmenter.turns.slice() });
-      for (const turn of closed) for (const listener of this.finalListeners) listener(turn);
-    }
     this.speech.reset();
     this.clearStartTimer();
     if (this.closeTimer) clearTimeout(this.closeTimer);

@@ -25,6 +25,8 @@ const PHASE_TONE: Partial<Record<VoicePhase, string>> = {
   error: "text-destructive",
 };
 
+const PHASE_BORDER: Partial<Record<VoicePhase, string>> = { ai_speaking: "border-sky-500/40", error: "border-destructive/40" };
+
 export function VoiceCallBar({
   call,
   agentBusy,
@@ -50,6 +52,7 @@ export function VoiceCallBar({
       const m = call.meterRef.current;
       el.dataset.aiSource = m.aiSource;
       el.dataset.aiRms = m.aiRms === null ? "" : m.aiRms.toFixed(4);
+      el.dataset.aiDb = m.aiDb === null ? "" : m.aiDb.toFixed(1);
       el.dataset.aiVisual = m.aiVisual.toFixed(3);
       el.dataset.micVisual = m.micVisual.toFixed(3);
     }, 100);
@@ -68,7 +71,7 @@ export function VoiceCallBar({
       data-phase={phase}
       className={cn(
         "flex items-center gap-3 rounded-lg border bg-card/60 px-2.5 py-2 transition-colors",
-        phase === "ai_speaking" ? "border-sky-500/40" : phase === "error" ? "border-destructive/40" : "border-border/70",
+        PHASE_BORDER[phase] ?? "border-border/70",
       )}
     >
       <div ref={orbRef} data-testid="voice-call-orb" data-orb={phaseOrb(phase)} className="shrink-0">

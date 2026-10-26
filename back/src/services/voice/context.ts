@@ -24,7 +24,7 @@ function clip(text: string, max: number): string {
 function line(event: HistoryEvent): string | null {
   switch (event.type) {
     case "user": {
-      const who = event.from?.kind === "agent" ? `Outro card (${event.from.name || "agente"})` : "Pessoa (digitou)";
+      const who = event.from?.kind === "agent" ? `Outro card (${clip(event.from.name || "agente", 60)})` : "Pessoa (digitou)";
       return `${who}: ${clip(event.text, CONTEXT_ITEM_MAX_CHARS)}`;
     }
     case "assistant_text":

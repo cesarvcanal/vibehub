@@ -124,6 +124,18 @@ describe("POST /api/cards/:id/voice/turns", () => {
     expect((await saveTurns(id, [turn])).json()).toEqual({ saved: [], duplicate: ["turn-user-3"] });
   });
 
+  it("a retry after a long conversation (past the replay window) still finds its turn", async () => {
+    const id = await makeCard();
+    const turn = { vid: "turn-early-1", role: "user", text: "lá atrás", at: Date.now() };
+    await saveTurns(id, [turn]);
+    const { appendHistoryReported } = await import("../services/sdk/history.js");
+    for (let i = 0; i < 600; i++) await appendHistoryReported(id, { type: "user", text: `msg ${i}` });
+    await app.close();
+    app = await boot();
+    owner = cookieOf(await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "owner", password: "supersecret" } }));
+    expect((await saveTurns(id, [turn])).json()).toEqual({ saved: [], duplicate: ["turn-early-1"] });
+  });
+
   it("drops blank turns and clamps a skewed clock to the server's", async () => {
     const id = await makeCard();
     const res = await saveTurns(id, [

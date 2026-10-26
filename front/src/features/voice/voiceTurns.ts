@@ -26,6 +26,17 @@ export interface VoiceTurn {
   final: boolean;
 }
 
+/** This tab's save of a closed turn (useVoiceCall). */
+export type TurnSave = "saving" | "saved" | "failed";
+
+/** A turn as the chat draws it while the call holds it: with this tab's save state. */
+export interface LocalVoiceTurn extends VoiceTurn {
+  save?: TurnSave;
+}
+
+/** The server refuses a turn longer than this (back/src/services/voice/turns.ts `TURN_TEXT_MAX`). */
+export const TURN_TEXT_MAX = 8_000;
+
 export const TURN_GAP_MS = 1_500;
 export const TURN_IDLE_MS = 2_500;
 

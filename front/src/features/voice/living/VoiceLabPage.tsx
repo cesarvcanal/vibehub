@@ -179,9 +179,9 @@ export function VoiceLabPage() {
         <section className="flex min-w-0 flex-1 flex-col items-center gap-3" aria-label="Prévia ao vivo">
           <div className="flex w-full items-center justify-between gap-2">
             <Button asChild variant="ghost" size="sm" className="-ml-2 text-[#94b5c7] hover:bg-white/5 hover:text-white">
-              <Link to={Paths.VOICE}>
+              <Link to={Paths.BOARD}>
                 <ArrowLeft />
-                /voice
+                Board
               </Link>
             </Button>
             <p className="text-[11px] uppercase tracking-[0.27em] text-[#77a9c8]">Living Intelligence · V37 · laboratório</p>

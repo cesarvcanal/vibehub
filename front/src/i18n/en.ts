@@ -1270,7 +1270,7 @@ export const en: Record<string, string> = {
   /* --------------------------------------------------------------- confirms */
   "confirm.restartWorking": "Claude is working — restarting will interrupt it. Continue?",
   "confirm.restartWorkingAgent": "The agent is working — restarting interrupts it. Continue?",
-  /* voice mode (POC) */
+  /* voice call in the card chat */
   "voice.mute": "Mute microphone",
   "voice.unmute": "Unmute microphone",
   "voice.err.startTimeout": "The voice session took too long to start.",
