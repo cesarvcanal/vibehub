@@ -58,6 +58,12 @@ export type HistoryEvent = (
   /** The user edited a sent message: the row whose text matches `originalText` is drawn "editada". */
   | { type: "message_edited"; originalText: string; /** The FIRST copy was edited, not the newest. */ first?: boolean }
   | { type: "system_note"; text: string }
+  /**
+   * One turn of a VOICE call held inside this chat (see services/voice/turns.ts): what the person
+   * said, or what the voice assistant answered, already settled into a whole turn by the browser.
+   * `vid` is the browser's id for the turn — the idempotency key (a retried save never doubles it).
+   */
+  | { type: "voice_turn"; vid: string; role: "user" | "assistant"; text: string }
   | ToolResultEvent
   | AgentTaskEvent
 ) & {
@@ -93,6 +99,8 @@ export function replayableHistoryEvent(event: HistoryEvent): boolean {
     case "question_result":
     // The edit marker: without it a replay would draw the superseded message as if it still stood.
     case "message_edited":
+    // A spoken turn of a voice call held in this chat: the call ends, the conversation stays.
+    case "voice_turn":
       return true;
     // O /btw: a resposta carrega a pergunta — é a ÚNICA linha dele no log (a pergunta não entra
     // como `user`, nem aqui nem no contexto do modelo). Só a que RESPONDEU: uma falha passageira
@@ -369,6 +377,16 @@ export function publishExternalMessage(cardId: string, event: HistoryEvent): Pro
   const done = appendHistory(cardId, event);
   externalBus.emit(cardId, event);
   return done;
+}
+
+/**
+ * The same, reporting whether the line reached the disk — for a caller that answers "saved" to the
+ * browser (the voice turns). Announced only once written: a chat must not draw what a reload loses.
+ */
+export async function publishExternalMessageReported(cardId: string, event: HistoryEvent): Promise<boolean> {
+  const written = await appendHistoryReported(cardId, event);
+  if (written) externalBus.emit(cardId, event);
+  return written;
 }
 
 /** Subscribe to a card's external messages. Returns the unsubscribe. */

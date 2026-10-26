@@ -12,7 +12,10 @@ import { logger } from "../../utils/logger.js";
  * happens HERE. After that, audio flows browser ↔ OpenAI directly; this server never sees it.
  * Turn-taking and barge-in are the model's (GPT-Live is full duplex): there is nothing to configure.
  *
- * Off unless `VIBEHUB_VOICE_LIVE=1`. Not wired to Claude Code: it is a plain conversation.
+ * Off unless `VIBEHUB_VOICE_LIVE=1`. Held from a card's chat (`/api/cards/:id/voice/sessions`) it
+ * knows that chat's recent thread and its turns are saved there (./context.ts, ./turns.ts); it
+ * still never acts on the card. The bare `/api/voice/live/sessions` is the plain conversation the
+ * calibration lab uses.
  * Never logged: the key, the SDP (it carries the client's network candidates) and any audio.
  */
 
@@ -34,6 +37,26 @@ export const CREATES_PER_MINUTE = 6;
 const INSTRUCTIONS =
   "Você é o assistente de voz do vibehub. Converse em português do Brasil, de forma natural e breve: " +
   "respostas curtas, faladas, sem listas nem markdown. Se não souber, diga que não sabe.";
+
+/**
+ * A call held INSIDE a card's chat. The chat's own assistant is the card's Claude Code agent; the
+ * voice is a separate model that talks ABOUT that conversation and cannot act on the card. What the
+ * person types or attaches during the call goes to the agent through the chat, and reaches the
+ * voice only as quiet context (`session.thinking.append`, see the browser's liveVoice.ts).
+ */
+const CARD_INSTRUCTIONS =
+  "Você é a voz do chat de um card do vibehub. Converse em português do Brasil, de forma natural e breve: " +
+  "respostas curtas, faladas, sem listas nem markdown. O assistente principal deste chat é o agente do card " +
+  "(Claude Code), que trabalha no código; você NÃO executa ações, não roda comandos e não vê arquivos nem " +
+  "imagens. Se a pessoa pedir uma ação no projeto, diga que ela pode digitar o pedido no chat (o campo " +
+  "continua disponível durante a chamada) para o agente fazer. Você recebe, como contexto silencioso, o que " +
+  "for escrito ou respondido no chat durante a chamada. Se não souber, diga que não sabe.";
+
+/** The instructions for a call in a card's chat: the base text plus the recent thread. PURE. */
+export function cardInstructions(context: string): string {
+  if (!context.trim()) return CARD_INSTRUCTIONS;
+  return `${CARD_INSTRUCTIONS}\n\nConversa recente deste chat (mais antiga primeiro):\n${context}`;
+}
 
 export class VoiceLiveError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -113,6 +136,10 @@ export interface CreateLiveSessionOptions {
   user: string;
   /** Aborted when the browser gives up (cancel, tab closed): the upstream call goes with it. */
   signal?: AbortSignal;
+  /** The card whose chat holds the call — the audit line only. */
+  cardId?: string;
+  /** Instead of the plain conversation's: the call belongs to a card's chat (see {@link cardInstructions}). */
+  instructions?: string;
   fetchImpl?: typeof fetch;
 }
 
@@ -135,7 +162,7 @@ export async function createLiveSession(offer: unknown, opts: CreateLiveSessionO
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        session: { model: LIVE_MODEL, instructions: INSTRUCTIONS },
+        session: { model: LIVE_MODEL, instructions: opts.instructions ?? INSTRUCTIONS },
         transport: { type: "webrtc", sdp },
       }),
       signal: AbortSignal.any(signals),
@@ -160,6 +187,6 @@ export async function createLiveSession(offer: unknown, opts: CreateLiveSessionO
     logger.warn("voice: GPT-Live answered without a session id or SDP answer");
     throw new VoiceLiveError(502, "OpenAI returned an unexpected answer");
   }
-  logger.info({ audit: true, action: "voice.live.session", session: sessionId, by: opts.user }, "voice session created");
+  logger.info({ audit: true, action: "voice.live.session", session: sessionId, by: opts.user, card: opts.cardId }, "voice session created");
   return { sessionId, sdp: answer };
 }
