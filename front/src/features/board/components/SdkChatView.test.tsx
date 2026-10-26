@@ -607,21 +607,35 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
       ws.accept();
       ws.deliver({ type: "ready" });
       ws.deliver(MULTI);
-      expect(screen.queryByTestId("sdk-question-peer-banner")).toBeNull();
+      expect(screen.queryByTestId("sdk-question-peer-presence")).toBeNull();
 
       ws.deliver({ type: "peer_question_draft", id: "q_peer", name: "albert", picked: [["Albert"], []], other: ["", "mussa faz review"] });
-      expect(screen.getByTestId("sdk-question-peer-banner")).toHaveTextContent("Albert");
+      expect(screen.getByTestId("sdk-question-peer-presence")).toHaveTextContent("Albert");
+      // só a pergunta em que ele ESCREVEU ganha o campo dele; a marcação fica na bolinha da opção
       const lines = screen.getAllByTestId("sdk-question-peer-draft");
-      expect(lines).toHaveLength(2);
-      expect(lines[0]).toHaveTextContent("Albert");
-      expect(lines[1]).toHaveTextContent("mussa faz review");
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toHaveTextContent("mussa faz review");
+      // sem nada escrito por mim, nada de aviso de conflito
+      expect(screen.queryByTestId("sdk-question-peer-clash")).toBeNull();
       const [albertOption] = screen.getAllByRole("button", { name: "Albert" });
       expect(albertOption).toHaveAttribute("data-peer-picked", "true");
       expect(albertOption).toHaveAttribute("aria-pressed", "false"); // marcado por ELE, não por mim
 
       ws.deliver({ type: "peer_question_draft", id: "q_peer", name: "albert", picked: [[], []], other: ["", ""] });
-      expect(screen.queryByTestId("sdk-question-peer-banner")).toBeNull();
+      expect(screen.queryByTestId("sdk-question-peer-presence")).toBeNull();
       expect(screen.queryAllByTestId("sdk-question-peer-draft")).toHaveLength(0);
+    });
+
+    it("\"Usar esta\" copia a resposta da outra pessoa para o meu cartão — e aí sim aparece o aviso de conflito", async () => {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready" });
+      ws.deliver(MULTI);
+      ws.deliver({ type: "peer_question_draft", id: "q_peer", name: "albert", picked: [["Albert"], []], other: ["", "mussa faz review"] });
+      await userEvent.click(screen.getByTestId("sdk-question-peer-use"));
+      expect(screen.getAllByTestId("sdk-question-other")[1]).toHaveValue("mussa faz review");
+      expect(screen.getByTestId("sdk-question-peer-clash")).toHaveTextContent("Albert");
     });
 
     it("o que EU marco e escrevo vai para as outras abas, com o último estado", async () => {
@@ -651,7 +665,20 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
       ws.deliver({ type: "peer_question_draft", id: "q_peer", name: "albert", picked: [["Albert"], ["Mussa"]], other: ["", ""] });
       ws.deliver({ type: "question_result", id: "q_peer", answers: [{ selected: ["Albert"] }, { selected: ["Mussa"] }] });
       expect(screen.getByTestId("sdk-question")).toHaveAttribute("data-outcome", "answered");
-      expect(screen.queryByTestId("sdk-question-peer-banner")).toBeNull();
+      expect(screen.queryByTestId("sdk-question-peer-presence")).toBeNull();
+    });
+
+    it("cancelada porque alguém parou o turno: o cartão diz quem, não \"sem resposta\"", async () => {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready" });
+      ws.deliver(MULTI);
+      ws.deliver({ type: "question_result", id: "q_peer", timedOut: false, superseded: false, cancelledBy: "albert", cancelledHow: "edit" });
+      const card = screen.getByTestId("sdk-question");
+      expect(card).toHaveAttribute("data-outcome", "cancelled");
+      expect(card).toHaveTextContent("Albert");
+      expect(card).not.toHaveTextContent(/no answer/i);
     });
 
     it("rascunho de outra pergunta não aparece neste cartão", async () => {
@@ -661,7 +688,7 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
       ws.deliver({ type: "ready" });
       ws.deliver(MULTI);
       ws.deliver({ type: "peer_question_draft", id: "q_outra", name: "albert", picked: [["Albert"]], other: [""] });
-      expect(screen.queryByTestId("sdk-question-peer-banner")).toBeNull();
+      expect(screen.queryByTestId("sdk-question-peer-presence")).toBeNull();
     });
   });
 

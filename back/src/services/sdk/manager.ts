@@ -17,7 +17,7 @@ import { mergeTaskEvent, taskSnapshot, toolResultEvent, type AgentTaskEvent, typ
 import { isHarnessFiller } from "../chat/chat.js";
 import {
   NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseQuestionDraftFrame, isEmptyQuestionDraft, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
-  type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type QuestionDraft, type UserQuestionItem,
+  type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type QuestionDraft, type StopHow, type UserQuestionItem,
   type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest,
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
@@ -158,6 +158,11 @@ export interface DriverSession {
    * still emits, right under the sentence that stops mid-way instead of on top of it.
    */
   pendingInterruptNote?: string;
+  /**
+   * QUEM PAROU o turno em andamento e como — guardado até o turno fechar. Uma pergunta que o driver
+   * encerra sem resposta nesse meio-tempo foi cancelada por essa pessoa, e o cartão diz isso.
+   */
+  stopCause?: { by?: string; how: StopHow };
   /**
    * Background tasks that FINISHED and whose completion notice the CLI has not delivered yet — it
    * opens a turn for it when the model is free. Until then the notice is work a deploy would erase.
@@ -708,6 +713,7 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     // turno deixou). Um turno ainda em voo (envio na fila) segue com os seus.
     if (!isTurnInFlight(session)) {
       session.openAsks.clear();
+      session.stopCause = undefined;
       syncAwaitingDecision(session);
     }
     // Uma retomada que fechou sem o agente produzir nada ainda não pegou: o vigia decide (ver
@@ -776,7 +782,14 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     // ficava cobrando na bandeja — só uma mensagem a varria.
     void settleOrphanQuestions(session);
   }
-  if (event.type === "question_result") forgetQuestionDrafts(session, event.id);
+  if (event.type === "question_result") {
+    forgetQuestionDrafts(session, event.id);
+    const unanswered = !event.answers?.length && !event.timedOut && !event.superseded;
+    if (unanswered && session.stopCause) {
+      event.cancelledHow = session.stopCause.how;
+      if (session.stopCause.by) event.cancelledBy = session.stopCause.by;
+    }
+  }
   if (event.type === "user_question" || event.type === "permission_request") {
     session.openAsks.add(event.id);
     syncAwaitingDecision(session);
@@ -1244,6 +1257,9 @@ export function handleClientFrame(
     return { kind: "accepted", cid: control.cid, persisted };
   }
   if (control.type === "user") {
+    // O "enviar agora" com uma ferramenta rodando PARA o turno (ver `sendUserNow` no driver) — e com
+    // ele a pergunta que estiver aberta.
+    if (control.now && session.openAsks.size > 0) noteStop(session, origin, "send_now");
     if (!writeToDriver(session, control)) return { kind: "refused", cid: control.cid, reason: "driver-gone" };
     session.activeTurns += 1;
     syncBoardStatus(session);
@@ -1284,6 +1300,7 @@ export function handleClientFrame(
     void answerOrphanQuestion(session, control);
     return { kind: "ignored" };
   }
+  if (control.type === "interrupt") noteStop(session, origin, control.reason === "edit" ? "edit" : "stop");
   writeToDriver(session, control);
   if (control.type === "interrupt") {
     // Streaming input: every send is already in the CLI, and the interrupt aborts the running
@@ -1299,6 +1316,19 @@ export function handleClientFrame(
     if (session.activeTurns > 0) session.pendingInterruptNote = interruptNote(control);
   }
   return { kind: "ignored" };
+}
+
+/**
+ * QUEM PAROU O TURNO fica registrado — no log de auditoria e na sessão, para o cartão de pergunta que
+ * cair junto dizer quem o cancelou. Antes nada disso ficava: a pergunta sumia "sem resposta" e não
+ * havia como saber se tinha sido o prazo, um clique ou outra pessoa no mesmo card.
+ */
+function noteStop(session: DriverSession, origin: MessageOrigin | undefined, how: StopHow): void {
+  session.stopCause = { ...(origin?.name ? { by: origin.name } : {}), how };
+  logger.info(
+    { audit: true, action: "sdk.stop", card: session.label, by: origin?.name ?? null, how, openAsks: session.openAsks.size },
+    "turn stopped from the chat",
+  );
 }
 
 /**
