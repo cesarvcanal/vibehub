@@ -195,7 +195,9 @@ export function buildGateRunScript(
   const parts: string[] = [
     "exec 2>&1",
     `cd "$1" || { echo "${RESULT_MARKER} error"; exit 0; }`,
-    testWorkerExports().trim(),
+    // Each part is joined with "; ", so the exports lose their own trailing ";" — `;;` is a sh
+    // syntax error that killed every gate before its first check.
+    testWorkerExports().trim().replace(/;$/, ""),
   ];
   // The branch the card's work is compared against, for checks that test only what changed
   // (`vitest run --changed "$VIBEHUB_BASE_REF"`). Validated, then quoted: it is data, not a command.
@@ -225,6 +227,7 @@ export function parseGateRun(stdout: string): { passed: boolean; output: string;
   const errIdx = stdout.lastIndexOf(`${RESULT_MARKER} error`);
   const timeout = new RegExp(`${RESULT_MARKER} timeout (\\d+)`).exec(stdout);
   const passed = passIdx >= 0 && failIdx < 0 && errIdx < 0 && !timeout;
+  const reached = passIdx >= 0 || failIdx >= 0 || errIdx >= 0 || !!timeout;
   // Strip the marker lines from what we show — they are protocol, not output.
   let output = stdout.replace(new RegExp(`${RESULT_MARKER} (pass|fail|error|timeout \\d+)\\r?\\n?`, "g"), "").trimEnd();
   if (timeout) {
@@ -233,7 +236,12 @@ export function parseGateRun(stdout: string): { passed: boolean; output: string;
       `no runner). Rodar de novo na mesma hora tende a estourar igual: veja se a suíte travou ou se o runner ` +
       `está sobrecarregado antes de repetir.`;
   }
-  return { passed, output, timedOut: !!timeout };
+  if (!reached) {
+    output +=
+      `\n\n[vibehub] o gate não chegou a rodar os checks: o script morreu antes (erro de shell, container ` +
+      `fora do ar). Isso é falha do gate, não do código do card.`;
+  }
+  return { passed, output: output.trimStart(), timedOut: !!timeout };
 }
 
 /**
@@ -338,7 +346,7 @@ async function runGateNow(cardId: string): Promise<GateResult> {
   const queuedAt = Date.now();
   await acquireSlot();
   const startedAt = Date.now();
-  let runOut: { stdout: string };
+  let runOut: { stdout: string; stderr?: string };
   try {
     runOut = await hostExecutor().runScript(buildGateRunScript(container, cwd, plan.checks, { baseBranch: card.base || project.baseBranch }),
       { timeoutMs: GATE_RUN_TIMEOUT_MS },
@@ -352,7 +360,8 @@ async function runGateNow(cardId: string): Promise<GateResult> {
   } finally {
     releaseSlot();
   }
-  const { passed, output, timedOut } = parseGateRun(runOut.stdout);
+  // stderr only matters when the script died before `exec 2>&1` folded it into stdout.
+  const { passed, output, timedOut } = parseGateRun(`${runOut.stderr ?? ""}${runOut.stdout}`);
   const cleaned = cleanOutput(output);
   if (passed && reuseKey) greenVerdicts.set(card.id, { key: reuseKey, at: probedAt, output: cleaned });
   else greenVerdicts.delete(card.id);

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -134,6 +135,37 @@ describe("run script + parse", () => {
     // the checks run with the test-worker cap, set before the first one
     expect(s.indexOf("export VITEST_MAX_THREADS=2;")).toBeGreaterThan(-1);
     expect(s.indexOf("export VITEST_MAX_THREADS=2;")).toBeLessThan(s.indexOf("if npm test"));
+  });
+
+  it("the generated script is valid sh and actually runs the checks", async () => {
+    // Asserting on substrings let `export …;; printf` through: every gate died on a sh syntax error
+    // in ~100 ms, red with no output. So run it, with a `docker` that just executes in place.
+    const { gate } = await load();
+    const bin = await mkdtemp(join(tmpdir(), "vibehub-gate-bin-"));
+    const work = await mkdtemp(join(tmpdir(), "vibehub-gate-work-"));
+    try {
+      await writeFile(join(bin, "docker"), '#!/bin/sh\nshift 2\nexec "$@"\n', { mode: 0o755 });
+      const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+      const run = (checks: string[]) =>
+        execFileSync("sh", ["-c", gate.buildGateRunScript("c", work, checks, { baseBranch: "main" })], { env, encoding: "utf8" });
+      const green = run(['echo "base=$VIBEHUB_BASE_REF cap=$VITEST_MAX_THREADS"']);
+      expect(green).toContain("base=origin/main cap=2");
+      expect(gate.parseGateRun(green).passed).toBe(true);
+      const red = run(["echo boom >&2; false", "echo never"]);
+      expect(gate.parseGateRun(red)).toMatchObject({ passed: false });
+      expect(red).toContain("boom");
+      expect(red).not.toContain("never");
+    } finally {
+      await rm(bin, { recursive: true, force: true });
+      await rm(work, { recursive: true, force: true });
+    }
+  });
+
+  it("a run that never reached the checks says so instead of coming back empty", async () => {
+    const { gate } = await load();
+    const r = gate.parseGateRun("");
+    expect(r.passed).toBe(false);
+    expect(r.output).toContain("não chegou a rodar");
   });
 
   it("passed only when the pass marker is there and nothing failed", async () => {
@@ -296,6 +328,19 @@ describe("runGate", () => {
     const r = await gate.runGate(c.id);
     expect(r).toMatchObject({ ran: true, passed: false });
     expect(r.output).toContain("1 failing");
+  });
+
+  it("a run that died before the checks brings its stderr back", async () => {
+    const { gate, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "x" });
+    runScript.mockImplementation(async (script: string) =>
+      script.includes("__VIBEHUB_GATE_JSON__")
+        ? { stdout: '__VIBEHUB_GATE_JSON__\n{"checks":["npm test"]}', stderr: "" }
+        : { stdout: "", stderr: 'sh: 1: Syntax error: ";;" unexpected\n' });
+    const r = await gate.runGate(c.id);
+    expect(r).toMatchObject({ ran: true, passed: false });
+    expect(r.output).toContain("Syntax error");
   });
 });
 
