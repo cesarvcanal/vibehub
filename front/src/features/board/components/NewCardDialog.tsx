@@ -254,17 +254,6 @@ export function NewCardDialog({
             />
           </div>
 
-          {/* Outside the folded options on purpose: landing on someone else's account is the thing
-              the person has to see BEFORE creating, not after unfolding a section. */}
-          {!account && !inheritedAccount && !ownAccountSlug ? (
-            <p
-              data-testid="new-card-no-own-account"
-              className="text-[11px] text-amber-600 dark:text-amber-400"
-            >
-              {t("newCard.noOwnAccount", { name: defaultAccountLabel })}
-            </p>
-          ) : null}
-
           <button
             type="button"
             onClick={() => setShowOptions((v) => !v)}

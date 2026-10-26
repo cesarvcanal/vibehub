@@ -242,11 +242,9 @@ export function AccessDialog({ open, onOpenChange }: AccessDialogProps) {
                             onChange={(e) => setGitDraft((d) => ({ ...d, claudeAccountSlug: e.target.value }))}
                           >
                             <option value="">{t("access.claudeAccountInherit")}</option>
-                            {/* The runner's built-in profile, chosen ON PURPOSE (the install owner's). */}
+                            {/* The runner's built-in profile is an account like the others (the owner's). */}
                             <option value={DEFAULT_ACCOUNT_SLUG}>
-                              {t("access.claudeAccountDefault", {
-                                name: claudeAccounts.data?.defaultLabel || t("board.defaultAccountFallback"),
-                              })}
+                              {claudeAccounts.data?.defaultLabel || t("board.defaultAccountFallback")}
                             </option>
                             {(claudeAccounts.data?.accounts ?? []).map((a) => (
                               <option key={a.slug} value={a.slug}>
