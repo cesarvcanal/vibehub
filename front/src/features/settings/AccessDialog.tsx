@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { get, patch, post, del } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
-import { rotateSession, useAuth } from "@/providers/auth";
+import { ME_KEY, rotateSession, useAuth } from "@/providers/auth";
 import { sharesKey } from "@/features/board/components/ShareDialog";
 import { ACCOUNTS_KEY, GITHUB_KEY, PROJECTS_KEY, accountLabel, boardApi } from "@/features/board/api";
 import type { Role, Share, ShareLevel, SharesResponse, User, UserGit, UsersResponse } from "@/api/types";
@@ -95,11 +95,13 @@ export function AccessDialog({ open, onOpenChange }: AccessDialogProps) {
   const update = useMutation({
     mutationFn: ({ id, ...body }: { id: string; password?: string; role?: Role } & Partial<NullableGit>) =>
       patch<{ user: User }>(`/users/${encodeURIComponent(id)}`, body),
-    onSuccess: () => {
+    onSuccess: (_result, { id }) => {
       setResetting(null);
       setResetPassword("");
       setEditingGit(null);
       void qc.invalidateQueries({ queryKey: USERS_KEY });
+      // My own Claude account rides on /auth/me — the new-card dialog's warning reads it from there.
+      if (id === me?.id) void qc.invalidateQueries({ queryKey: ME_KEY });
       toast.success(translate("access.updated"));
     },
     onError: (e) => toast.error(apiErrorMessage(e)),

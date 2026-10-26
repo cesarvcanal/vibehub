@@ -310,6 +310,19 @@ describe("external MCP — open/send right after creating a card", () => {
     await close();
   }, 20_000);
 
+  it("create_card nasce na conta Claude de quem pediu, como no board", async () => {
+    const env = await load();
+    const account = await env.registry.createAccount({ name: "cesar" });
+    const userGit = await import("../auth/userGit.js");
+    await userGit.setUserGit(env.owner.id, { claudeAccountSlug: account.slug });
+    bootingRunner(0);
+    const { call, close } = await env.connect(env.owner);
+    const out = await call("vibehub_create_card", { projectId: env.project.id, title: "da conta certa" });
+    expect(out.error).toBeUndefined();
+    expect((await env.registry.getCard(out.cardId as string))?.accountSlug).toBe(account.slug);
+    await close();
+  }, 20_000);
+
   it("send_to_terminal waits for a card still booting, then delivers — no 'awaiting choice'", async () => {
     const env = await load();
     // The TUI route (native chat off): the one where Claude's boot is the race.

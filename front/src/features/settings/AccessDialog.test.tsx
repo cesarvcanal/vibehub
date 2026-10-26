@@ -261,6 +261,20 @@ describe("AccessDialog — a identidade no GitHub de uma pessoa", () => {
     await waitFor(() => expect(screen.getByTestId<HTMLSelectElement>("user-claude-account-u2").value).toBe("mussa"));
   });
 
+  it("o owner que liga uma conta a SI MESMO vê o aviso do novo card sumir sem recarregar", async () => {
+    serveWithGithub(OWNER);
+    patch.mockResolvedValue({ user: OWNER });
+    renderApp(<AccessDialog open onOpenChange={() => {}} />);
+    await userEvent.click(await screen.findByTestId(`user-git-open-${OWNER.id}`));
+    await waitFor(() => expect(screen.getByRole("option", { name: "Mussa" })).toBeInTheDocument());
+    const asked = () => get.mock.calls.filter(([url]) => url === "/auth/me").length;
+    const before = asked();
+    await userEvent.selectOptions(screen.getByTestId(`user-claude-account-${OWNER.id}`), "mussa");
+    await userEvent.click(screen.getByTestId(`user-git-save-${OWNER.id}`));
+    // /auth/me é de onde o diálogo de novo card lê a conta da pessoa.
+    await waitFor(() => expect(asked()).toBeGreaterThan(before));
+  });
+
   it("o membro não vê o bloco de ninguém — a lista inteira é do owner", async () => {
     serveWithGithub(MEMBER as unknown as typeof OWNER, [OWNER, MEMBER]);
     renderApp(<AccessDialog open onOpenChange={() => {}} />);
