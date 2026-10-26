@@ -90,6 +90,7 @@ export interface SdkEvent {
     | "user_ack"
     | "user_nack"
     | "peer_typing"
+    | "peer_question_draft"
     | "error"
     | "parse_error";
   text?: string;
@@ -217,6 +218,13 @@ export interface SdkEvent {
    * the person in `name` is typing. Handled by the view (see lib/peerTyping.ts), not the reducer.
    */
   active?: boolean;
+  /**
+   * On `peer_question_draft` (relayed like `peer_typing`): what `name` has marked (`picked`) and
+   * typed (`other`) so far on the open question card `id`. Handled by the view (see
+   * lib/peerQuestionDraft.ts), not the reducer.
+   */
+  picked?: unknown;
+  other?: unknown;
 }
 
 /** One live background task (mirror of `BackgroundTaskInfo` in the back's protocol). `toolUseId` =

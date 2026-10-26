@@ -16,8 +16,8 @@ import { readCardChanges, readCardFileDiff } from "../maestro/changes.js";
 import { mergeTaskEvent, taskSnapshot, toolResultEvent, type AgentTaskEvent, type RawTaskEvent, type RawToolResultEvent } from "./toolResult.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
-  NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
-  type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type UserQuestionItem,
+  NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseQuestionDraftFrame, isEmptyQuestionDraft, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
+  type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type QuestionDraft, type UserQuestionItem,
   type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest,
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
@@ -227,6 +227,13 @@ export interface DriverSession {
    * aqui, e uma leitura no meio desse caminho tomaria a pergunta dele por órfã (resultado duplicado).
    */
   ownQuestions: Set<string>;
+  /**
+   * O QUE CADA PESSOA JÁ MARCOU num cartão de pergunta ainda aberto, por id da pergunta → nome de
+   * quem escreve. Só memória (some com o driver, como a digitação): existe para que quem abre o card
+   * no meio da resposta de outra pessoa veja o rascunho dela no primeiro quadro, e não só no próximo
+   * toque. Sai quando a pergunta encerra (`forgetQuestionDrafts`).
+   */
+  questionDrafts: Map<string, Map<string, Pick<QuestionDraft, "picked" | "other">>>;
   /** Órfãs que este manager já ENCERROU: um clique tardio nelas recebe o erro, nunca silêncio. */
   settledOrphans: Set<string>;
   /** Órfãs com uma resposta A CAMINHO: o segundo clique (outra aba, duplo clique) vira nada. */
@@ -458,6 +465,19 @@ function syncBoardStatus(session: DriverSession, opts: { force?: boolean } = {})
 function disableNagle(socket: WebSocket): void {
   const raw = (socket as unknown as { _socket?: { setNoDelay?: (v: boolean) => void } })._socket;
   try { raw?.setNoDelay?.(true); } catch { /* the socket is already closing */ }
+}
+
+/** Cartões de pergunta com rascunho guardado, no máximo — o mais antigo sai primeiro. */
+const QUESTION_DRAFTS_MAX = 20;
+
+/** A pergunta encerrou: o rascunho de ninguém importa mais (a tela já desenha o cartão respondido). */
+function forgetQuestionDrafts(session: DriverSession, questionId: string): void {
+  session.questionDrafts.delete(questionId);
+}
+
+/** O frame que conta às outras abas o rascunho de `name` num cartão (rascunho vazio = apagou). */
+function peerQuestionDraftFrame(id: string, name: string, draft: Pick<QuestionDraft, "picked" | "other">): string {
+  return JSON.stringify({ type: "peer_question_draft", id, name, picked: draft.picked, other: draft.other });
 }
 
 function broadcast(session: DriverSession, event: object): void {
@@ -718,6 +738,7 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     // ficava cobrando na bandeja — só uma mensagem a varria.
     void settleOrphanQuestions(session);
   }
+  if (event.type === "question_result") forgetQuestionDrafts(session, event.id);
   if (!silenced) broadcast(session, event);
   if (event.type === "conversation_reset" && (event.trigger === undefined || event.trigger === "clear")) {
     // O /clear limpou o CONTEXTO do modelo; o log do card tem de ir junto, senão o F5 devolvia a
@@ -899,6 +920,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     closed: false,
     acceptedCids: new Map(),
     ownQuestions: new Set(),
+    questionDrafts: new Map(),
     settledOrphans: new Set(),
     answeringOrphans: new Set(),
     orphansSwept: false,
@@ -1244,6 +1266,7 @@ async function orphanQuestions(session: DriverSession): Promise<Map<string, User
 
 /** Encerra um cartão em todas as abas e no histórico (o F5 lê a mesma coisa). */
 function settleQuestionCard(session: DriverSession, result: Extract<DriverEvent, { type: "question_result" }>): void {
+  forgetQuestionDrafts(session, result.id);
   broadcast(session, result);
   void appendHistory(session.cardId, { ...result, at: Date.now() });
   void observeDriverEvent(session.cardId, result);
@@ -1681,6 +1704,14 @@ export function attachSocket(
     try { socket.send(JSON.stringify({ type: "workflow_progress", ...run })); } catch { /* going away */ }
   }
 
+  // OS RASCUNHOS dos cartões abertos: quem chega no meio da resposta de outra pessoa vê, de cara, o
+  // que ela já marcou e escreveu — senão só no próximo toque dela.
+  for (const [id, byName] of session.questionDrafts) {
+    for (const [name, draft] of byName) {
+      try { socket.send(peerQuestionDraftFrame(id, name, draft)); } catch { /* going away */ }
+    }
+  }
+
   const keepalive = setInterval(() => {
     try { socket.ping?.(); } catch { /* the close handler cleans up */ }
   }, KEEPALIVE_MS);
@@ -1714,6 +1745,54 @@ export function attachSocket(
     relayTyping(false);
   };
 
+  // O RASCUNHO DO CARTÃO DE PERGUNTA: como a digitação, vai às OUTRAS abas — mas com o conteúdo,
+  // para que duas pessoas no mesmo card vejam uma o que a outra está respondendo antes de alguém
+  // mandar (só a primeira resposta vale). Fica guardado enquanto a pergunta está aberta, para quem
+  // abrir o card depois; nunca vai ao driver nem ao histórico.
+  const draftedHere = new Set<string>();
+  const relayDraft = (id: string, name: string, draft: Pick<QuestionDraft, "picked" | "other">): void => {
+    const frame = peerQuestionDraftFrame(id, name, draft);
+    for (const other of session.sockets) {
+      if (other === socket) continue;
+      try { other.send(frame); } catch { /* that socket is going away */ }
+    }
+  };
+  const noteDraft = (draft: QuestionDraft): void => {
+    if (!origin || draft.id === "") return;
+    const empty = isEmptyQuestionDraft(draft);
+    let byName = session.questionDrafts.get(draft.id);
+    if (empty) {
+      if (!byName?.has(origin.name)) return;
+      byName.delete(origin.name);
+      if (byName.size === 0) session.questionDrafts.delete(draft.id);
+      draftedHere.delete(draft.id);
+    } else {
+      if (!byName) {
+        // Teto de memória: um cartão esquecido aberto não acumula para sempre.
+        if (session.questionDrafts.size >= QUESTION_DRAFTS_MAX) {
+          const oldest = session.questionDrafts.keys().next().value;
+          if (oldest !== undefined) session.questionDrafts.delete(oldest);
+        }
+        byName = new Map();
+        session.questionDrafts.set(draft.id, byName);
+      }
+      byName.set(origin.name, { picked: draft.picked, other: draft.other });
+      draftedHere.add(draft.id);
+    }
+    relayDraft(draft.id, origin.name, { picked: draft.picked, other: draft.other });
+  };
+  /** A aba fechou: o rascunho dela sai das outras telas, como o "digitando". */
+  const dropDraftsOfThisSocket = (): void => {
+    if (!origin) return;
+    for (const id of draftedHere) {
+      const byName = session.questionDrafts.get(id);
+      if (!byName?.delete(origin.name)) continue;
+      if (byName.size === 0) session.questionDrafts.delete(id);
+      relayDraft(id, origin.name, { picked: [], other: [] });
+    }
+    draftedHere.clear();
+  };
+
   const answerFeed = createFeedResponder(session, socket);
   const answerDetail = createDetailResponder(session, socket);
 
@@ -1730,6 +1809,11 @@ export function attachSocket(
     const typing = parseTypingFrame(text);
     if (typing !== null) {
       noteTyping(typing);
+      return;
+    }
+    const draft = parseQuestionDraftFrame(text);
+    if (draft !== null) {
+      noteDraft(draft);
       return;
     }
     // O feed de um subagente do workflow: sob demanda, só para esta aba — nem driver, nem histórico.
@@ -1767,6 +1851,7 @@ export function attachSocket(
     session.sockets.delete(socket);
     // A tab closed mid-sentence must not leave "Cesar está digitando…" on everyone else's screen.
     noteTyping(false);
+    dropDraftsOfThisSocket();
     if (session.sockets.size === 0) maybeScheduleIdleStop(session);
   };
   socket.on("close", detach);

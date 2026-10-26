@@ -15,6 +15,9 @@ import {
   parseQuestionAnswers,
   parseSdkClientFrame,
   parseTypingFrame,
+  parseQuestionDraftFrame,
+  isEmptyQuestionDraft,
+  QUESTION_DRAFT_MAX_TEXT,
   parseWorkflowFeedFrame,
   buildSupersedeText,
   buildOrphanAnswerText,
@@ -674,5 +677,34 @@ describe("/btw — pergunta lateral, sem interromper o turno", () => {
     expect(once.map((c) => c.name)).toEqual(["code-review", "btw"]);
     expect(once[1]).toEqual(BTW_COMMAND);
     expect(withBtwCommand(once).filter((c) => c.name === "btw").length).toBe(1);
+  });
+});
+
+describe("parseQuestionDraftFrame — o rascunho efêmero do cartão de pergunta", () => {
+  it("lê id, marcações e texto", () => {
+    expect(parseQuestionDraftFrame(`{"type":"question_draft","id":"q1","picked":[["A","B"],[]],"other":["","oi"]}`)).toEqual({
+      id: "q1", picked: [["A", "B"], []], other: ["", "oi"],
+    });
+  });
+
+  it("não é rascunho: outro tipo, texto solto, JSON quebrado", () => {
+    expect(parseQuestionDraftFrame(`{"type":"typing","active":true}`)).toBeNull();
+    expect(parseQuestionDraftFrame("question_draft")).toBeNull();
+    expect(parseQuestionDraftFrame(`{"type":"question_draft"`)).toBeNull();
+  });
+
+  it("malformado ainda é rascunho (id vazio, o manager ignora) — nunca vira mensagem", () => {
+    expect(parseQuestionDraftFrame(`{"type":"question_draft","id":7,"picked":"x","other":[1]}`)).toEqual({ id: "", picked: [], other: [""] });
+  });
+
+  it("corta o texto comprido", () => {
+    const long = "a".repeat(QUESTION_DRAFT_MAX_TEXT + 50);
+    expect(parseQuestionDraftFrame(JSON.stringify({ type: "question_draft", id: "q", picked: [], other: [long] }))!.other[0]).toHaveLength(QUESTION_DRAFT_MAX_TEXT);
+  });
+
+  it("vazio = nada marcado e nada escrito (espaço não conta)", () => {
+    expect(isEmptyQuestionDraft({ picked: [[], []], other: ["  ", ""] })).toBe(true);
+    expect(isEmptyQuestionDraft({ picked: [["A"]], other: [""] })).toBe(false);
+    expect(isEmptyQuestionDraft({ picked: [[]], other: ["x"] })).toBe(false);
   });
 });
