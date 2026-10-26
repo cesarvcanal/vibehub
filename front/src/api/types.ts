@@ -396,6 +396,12 @@ export interface Card {
   declaredState?: DeclaredState;
   /** One-line summary the agent reported with `declaredState`. */
   declaredSummary?: string;
+  /**
+   * Since when the card's running turn is BLOCKED on a person (epoch ms): a question or permission
+   * card of the native chat is open. Set and cleared by the server as the cards open and close;
+   * null/absent = nothing pending. Only meaningful while `status` is `working`.
+   */
+  awaitingDecisionAt?: number | null;
   /** Last time a human typed into this card's terminal (epoch ms). */
   humanActiveAt?: number;
   /**
