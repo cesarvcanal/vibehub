@@ -136,7 +136,9 @@ async function seed(withRepo = true) {
     name: "erp-aux",
     ...(withRepo ? { repoFullName: "acme/erp-aux", cloneUrl: "https://github.com/acme/erp-aux.git" } : {}),
   });
-  const card = await reg.createCard({ projectId: project.id, title: "Inventory intake" });
+  // No pin (`model: null`): the command-line assertions below are about plain `claude`; a new card's
+  // default pin (Opus) has its own test in registry.test.ts.
+  const card = await reg.createCard({ projectId: project.id, title: "Inventory intake" }, { model: null });
   return { project, card };
 }
 
@@ -1513,7 +1515,7 @@ describe("long-lived token seeded on open (from the vault) and the session guard
     expect(script).not.toContain("/root/.claude/.oauth-token");
 
     // another card on the default account with NO token: no printf, but the (harmless) guard stays
-    const b = await reg.createCard({ projectId: card.projectId, title: "B" });
+    const b = await reg.createCard({ projectId: card.projectId, title: "B" }, { model: null });
     await ws.openCard(b.id);
     expect(scriptAt(1)).not.toContain("printf '%s' 'sk-ant");
     expect(scriptAt(1)).toContain(sq(CLAUDE));

@@ -751,7 +751,7 @@ export const ptBR: Record<string, string> = {
   "cardView.closeShell": "Fechar o shell",
   "cardView.shellAria": "Shell",
   "cardView.terminalState": "Terminal {state}",
-  "cardView.implicitModelTitle": "O padrão do Claude Code até a primeira resposta",
+  "cardView.implicitModelTitle": "O padrão do card até a primeira resposta",
 
   "conn.connected": "conectado",
   "conn.reconnecting": "reconectando",
@@ -899,7 +899,7 @@ export const ptBR: Record<string, string> = {
   "newCard.account": "Conta Claude",
   "newCard.inherit": "Herdar ({name})",
   "newCard.model": "Modelo",
-  "newCard.accountDefault": "Padrão da conta",
+  "newCard.modelDefault": "Padrão (Opus)",
   "newCard.branch": "Branch",
   "newCard.branchPlaceholderBase": "derivada do título (base {branch})",
   "newCard.branchPlaceholder": "derivada do título",
