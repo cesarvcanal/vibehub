@@ -544,6 +544,26 @@ no meio do turno** — 2x em produção o card ficou mudo. A resposta:
   enquanto o connect ainda faz o probe/replay (antes eram descartados sem listener) e os entrega
   ao driver na ordem, como turnos normais.
 
+## Falha passageira da API — o turno volta sozinho (2026-10-26)
+
+O CLI tenta de novo por conta própria quando a API falha, mas desiste depois de alguns minutos e
+fecha o turno com `result` de erro (`"API Error: Can't reach the API server … (EAI_AGAIN)"`,
+`"API Error: Connection dropped (ECONNRESET)"`, 5xx, `overloaded_error`). Antes, o card ficava em
+"falhou" até alguém escrever "continua" (produção, card 8f2a, 23/10/2026). Agora
+(`noteApiOutcome` em `manager.ts`):
+
+- `isTransientApiFailure` separa o que passa com o tempo (rede, DNS, timeout, sobrecarga, 5xx) do
+  que não passa (401, 400, 429/limite do plano) — esses continuam com a pessoa.
+- Falha passageira: nota no chat ("Nova tentativa automática em 30 s") e, depois de
+  `API_RETRY_DELAYS_MS` (30 s, 2 min, 5 min), um turno de sistema com `API_RETRY_TEXT`. Acabou a
+  lista: `NOTE_API_RETRY_EXHAUSTED` e o evento "falhou" sai normalmente.
+- A espera conta como turno em voo (`turnRunning`): a bolinha segue "trabalhando", o
+  `vibehub_wait_for_card` do ChatGPT não devolve o erro como fim, o sweep e o idle stop não derrubam o
+  driver, e o marcador em voo fica — um deploy no meio da espera é retomado pelo sweep de boot.
+- Mensagem da pessoa cancela a nova tentativa (ela vira o turno); turno que fecha sem erro zera a conta.
+- E2E real: `scripts/e2e-mcp-wake/run.sh apiretry` (um proxy na frente da API derruba as conexões nos
+  primeiros 20 s, com `CLAUDE_CODE_MAX_RETRIES=0`).
+
 ## Turning it on — ONE switch, on by default (2026-08-31)
 
 **Global only:** the `sdkDriver` setting — "Chat nativo (padrão da instalação)" in
