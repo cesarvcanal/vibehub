@@ -6,7 +6,7 @@ import { recordMessage, MESSAGE_TYPES, SEVERITIES, type MessageType, type Severi
 import { sendAnswer } from "./events.js";
 import { runGate } from "../services/maestro/gate.js";
 import { deliver } from "../services/maestro/deliver.js";
-import { relayCardActor } from "../services/board/actor.js";
+import { relayCardActor, actAsParticipant } from "../services/board/actor.js";
 import { announcePreview } from "../services/preview/announce.js";
 import { recordLearning } from "../services/brain/learn.js";
 import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX } from "./cardMove.js";
@@ -289,6 +289,33 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     async (a) => {
       try {
         return ok(await deliver(a.card, { branch: a.branch, authorized: a.authorized === true, by: actor }));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_act_as",
+    {
+      description:
+        "Make this card's git and gh act as ANOTHER PERSON who already gave this card an order — " +
+        "when the one talking to you asks for it ('commit and push as Albert', 'open the PR in " +
+        "Albert's name, I review it'). From the next command on, commits are authored by that person " +
+        "and every push, PR, review and merge (vibehub_deliver included) uses their GitHub account. " +
+        "The person must be on the card's participant list (they sent it a message before) and still " +
+        "have work access; anybody else is refused. Without `user` it changes nothing and returns the " +
+        "current actor and the participants. The next message a person sends switches the card to " +
+        "them again, so switch right before the step that must carry the other account. Returns " +
+        "{ actor, participants } or { error }.",
+      inputSchema: {
+        card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this terminal"),
+        user: z.string().optional().describe("vibehub username to act as (e.g. 'albert'). Absent = only report."),
+      },
+    },
+    async (a) => {
+      try {
+        return ok(await actAsParticipant(a.card, a.user));
       } catch (e) {
         return fail(e);
       }

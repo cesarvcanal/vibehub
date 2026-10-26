@@ -81,6 +81,19 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(INSTRUCTIONS.toLowerCase()).toContain("secret");
   });
 
+  it("register vibehub_act_as and tell the agent to use it instead of waiting for the other person", () => {
+    const server = createMcpServer("test") as unknown as {
+      _registeredTools?: Record<string, { description?: string }>;
+    };
+    const description = (server._registeredTools ?? {})["vibehub_act_as"]?.description ?? "";
+    // The consent limit is part of the contract the agent reads.
+    expect(description).toContain("already gave this card an order");
+    expect(description).toContain("refused");
+    // The persona sends the agent to the tool, never to "ask the other person to come back".
+    expect(INSTRUCTIONS).toContain("vibehub_act_as");
+    expect(INSTRUCTIONS).toMatch(/Never stop to\s+ask the other person/);
+  });
+
   it("register vibehub_move_cards and keep its contract explicit (bulk, done/backlog only, own project)", () => {
     const server = createMcpServer("test") as unknown as {
       _registeredTools?: Record<string, { description?: string }>;

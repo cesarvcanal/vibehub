@@ -43,8 +43,8 @@ async function load() {
   });
   const registry = await import("./registry.js");
   registry.resetForTesting();
-  const { recordCardActor, authorsTheTurn, isCardActor, relayCardActor } = await import("./actor.js");
-  return { registry, recordCardActor, authorsTheTurn, isCardActor, relayCardActor };
+  const { recordCardActor, authorsTheTurn, isCardActor, relayCardActor, actAsParticipant } = await import("./actor.js");
+  return { registry, recordCardActor, authorsTheTurn, isCardActor, relayCardActor, actAsParticipant };
 }
 
 const owner = { id: "u-cesar", username: "cesar", role: "owner" as const, createdAt: "" };
@@ -368,5 +368,92 @@ describe("a troca que não aterrissou é tentada de novo na próxima ordem", () 
     reapplyGate = new Promise<boolean>(() => undefined);
     await recordCardActor(owner, card.id, { waitMs: 50 });
     expect(isCardActor(owner, card.id)).toBe(false);
+  });
+});
+
+/**
+ * AGIR COMO QUEM JÁ DEU ORDEM NO CARD. O Albert pediu o trabalho; o Mussa entrou no card e disse
+ * "commita e push como Albert, eu sou coautor". A mensagem do Mussa trocou a conta do card para a
+ * dele, e o agente travou até o Albert voltar e mandar "faça o que o Mussa pediu". Agora o agente
+ * volta para a conta do Albert sozinho, porque o Albert já deu ordem ali. A conta de quem nunca
+ * falou no card continua fora de alcance.
+ */
+describe("actAsParticipant — agir como quem já deu ordem no card", () => {
+  async function cenario() {
+    const ctx = await load();
+    const users = await import("../../auth/users.js");
+    const albert = await users.createUser("albert", "senha-forte-1", "member");
+    const mussa = await users.createUser("mussa", "senha-forte-1", "member");
+    const card = await seed(ctx.registry);
+    for (const u of [albert, mussa]) {
+      await ctx.registry.shareWith({ kind: "card", targetId: card.id, userId: u.id, level: "work" });
+    }
+    await ctx.recordCardActor(albert, card.id);
+    await ctx.recordCardActor(mussa, card.id);
+    return { ...ctx, users, albert, mussa, card };
+  }
+
+  it("o Mussa manda sair como Albert: o card volta para a conta do Albert e a identidade é reaplicada", async () => {
+    const { registry, actAsParticipant, isCardActor, albert, card } = await cenario();
+    reapply.mockClear();
+
+    const r = await actAsParticipant(card.id, "Albert");
+
+    expect(r.actor).toBe("albert");
+    expect((await registry.getCard(card.id))?.actorUserId).toBe(albert.id);
+    expect(reapply).toHaveBeenCalledTimes(1);
+    expect(isCardActor(albert, card.id)).toBe(true);
+  });
+
+  it("a próxima mensagem do Mussa devolve a conta para ele (a ordem seguinte é dele)", async () => {
+    const { registry, actAsParticipant, recordCardActor, mussa, card } = await cenario();
+    await actAsParticipant(card.id, "albert");
+    await recordCardActor(mussa, card.id);
+    expect((await registry.getCard(card.id))?.actorUserId).toBe(mussa.id);
+  });
+
+  it("sem usuário: só diz quem é o ator e quem pode ser usado, sem trocar nada", async () => {
+    const { registry, actAsParticipant, mussa, card } = await cenario();
+    reapply.mockClear();
+    const r = await actAsParticipant(card.id);
+    expect(r).toEqual({ actor: "mussa", participants: ["albert", "mussa"] });
+    expect((await registry.getCard(card.id))?.actorUserId).toBe(mussa.id);
+    expect(reapply).not.toHaveBeenCalled();
+  });
+
+  it("quem nunca deu ordem no card é recusado, mesmo sendo owner", async () => {
+    const { registry, actAsParticipant, users, mussa, card } = await cenario();
+    await users.createUser("cesar", "senha-forte-1", "owner");
+    await expect(actAsParticipant(card.id, "cesar")).rejects.toThrow(/never gave this card an order.*albert, mussa/);
+    expect((await registry.getCard(card.id))?.actorUserId).toBe(mussa.id);
+  });
+
+  it("usuário inexistente ou card inexistente: erro claro, nada muda", async () => {
+    const { registry, actAsParticipant, mussa, card } = await cenario();
+    await expect(actAsParticipant(card.id, "fulano")).rejects.toThrow(/no user named 'fulano'/);
+    await expect(actAsParticipant("nao-existe", "albert")).rejects.toThrow(/card not found/);
+    expect((await registry.getCard(card.id))?.actorUserId).toBe(mussa.id);
+  });
+
+  it("participante que perdeu o acesso de trabalho ao card não pode mais ser usado", async () => {
+    const { registry, actAsParticipant, albert, mussa, card } = await cenario();
+    await registry.shareWith({ kind: "card", targetId: card.id, userId: albert.id, level: "view" });
+    await expect(actAsParticipant(card.id, "albert")).rejects.toThrow(/no longer has work access/);
+    expect((await registry.getCard(card.id))?.actorUserId).toBe(mussa.id);
+  });
+
+  it("a troca não aterrissou no runner: erro, para o push não sair com a conta errada", async () => {
+    const { actAsParticipant, card } = await cenario();
+    reapplyGate = Promise.resolve(false);
+    await expect(actAsParticipant(card.id, "albert")).rejects.toThrow(/did not land/);
+  });
+
+  it("card de antes da lista de participantes: o ator atual conta como participante", async () => {
+    const { registry, actAsParticipant } = await load();
+    const users = await import("../../auth/users.js");
+    const albert = await users.createUser("albert", "senha-forte-1", "owner");
+    const card = await seed(registry);
+    await registry.stampCardActor(card.id, albert.id);
+    expect((await actAsParticipant(card.id)).participants).toEqual(["albert"]);
   });
 });
