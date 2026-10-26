@@ -8,6 +8,7 @@ import { LoginPage } from "@/features/auth/LoginPage";
 import { SetupWizard } from "@/features/setup/SetupWizard";
 import { BoardPage } from "@/features/board/BoardPage";
 import { VoiceModePage } from "@/features/voice/VoiceModePage";
+import { VoiceLabPage } from "@/features/voice/living/VoiceLabPage";
 
 export function AppRoutes() {
   return (
@@ -33,6 +34,7 @@ export function AppRoutes() {
         >
           <Route path={Paths.BOARD} element={<BoardPage />} />
           <Route path={Paths.VOICE} element={<VoiceModePage />} />
+          <Route path={Paths.VOICE_LAB} element={<VoiceLabPage />} />
         </Route>
         <Route path="*" element={<Navigate to={Paths.BOARD} replace />} />
       </Routes>
