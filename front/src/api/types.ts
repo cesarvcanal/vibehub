@@ -21,6 +21,8 @@ export interface UserGit {
   /** Commit author. Absent = the install's `settings.git`. */
   gitName?: string;
   gitEmail?: string;
+  /** Claude account this person's new cards are born on (owner-set). Absent = the project's / default. */
+  claudeAccountSlug?: string;
 }
 
 export interface User {
@@ -30,6 +32,8 @@ export interface User {
   createdAt?: string;
   /** Absent = nothing configured, so this person inherits the project's and the install's. */
   git?: UserGit;
+  /** Only on `/auth/me`: the signed-in person's own Claude account. Absent = they have none. */
+  claudeAccountSlug?: string;
 }
 
 /** `GET /api/users` — owner only. */
@@ -392,6 +396,12 @@ export interface Card {
   declaredState?: DeclaredState;
   /** One-line summary the agent reported with `declaredState`. */
   declaredSummary?: string;
+  /**
+   * Since when the card's running turn is BLOCKED on a person (epoch ms): a question or permission
+   * card of the native chat is open. Set and cleared by the server as the cards open and close;
+   * null/absent = nothing pending. Only meaningful while `status` is `working`.
+   */
+  awaitingDecisionAt?: number | null;
   /** Last time a human typed into this card's terminal (epoch ms). */
   humanActiveAt?: number;
   /**

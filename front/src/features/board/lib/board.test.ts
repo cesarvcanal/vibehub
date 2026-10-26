@@ -210,6 +210,19 @@ describe("cardState", () => {
     expect(kind({ status: "working", openedAt: 1, column: "paused" })).toBe("working");
   });
 
+  it("is needs_me while the running turn waits on a decision (question or permission card open)", () => {
+    expect(cardState(card({ id: "a", status: "working", openedAt: 1, awaitingDecisionAt: 9 }))).toEqual({
+      kind: "needs_me",
+      label: "Needs you — the agent is waiting for a decision",
+    });
+    // Decided: the stamp comes off and the turn goes on — back to the spinner.
+    expect(kind({ status: "working", openedAt: 1, awaitingDecisionAt: null })).toBe("working");
+    // A stale stamp over a turn that already ended does not raise the alarm on its own.
+    expect(kind({ status: "waiting", openedAt: 1, awaitingDecisionAt: 9 })).toBe("your_turn");
+    // Nothing runs behind a hibernated card, whatever was pending.
+    expect(kind({ status: "working", openedAt: 1, hibernatedAt: 5, awaitingDecisionAt: 9 })).toBe("hibernated");
+  });
+
   it("puts the user's filing over the agent's report", () => {
     expect(kind({ column: "done", openedAt: 1, declaredState: "needs_me" })).toBe("done");
     expect(kind({ column: "paused", openedAt: 1, pausedAt: 2, declaredState: "ready" })).toBe("paused");

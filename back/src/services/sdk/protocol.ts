@@ -597,6 +597,49 @@ export function parseTypingFrame(raw: string): boolean | null {
 }
 
 /**
+ * O RASCUNHO de um cartão de pergunta — `{ "type": "question_draft", "id": string, "picked":
+ * string[][], "other": string[] }`: o que a pessoa já marcou e escreveu no cartão, antes de mandar.
+ * Efêmero como a digitação: o back repassa às OUTRAS abas do card (`peer_question_draft`) para que
+ * duas pessoas no mesmo card não respondam a mesma pergunta cada uma de um jeito sem saber.
+ *
+ * Os tamanhos são cortados aqui (é texto de pessoa repassado a outras telas, não conversa). Um
+ * frame do tipo certo mas malformado ainda é rascunho — sai com o id vazio e o manager o ignora,
+ * nunca vira mensagem para a IA. `null` = não é rascunho. PURE.
+ */
+export interface QuestionDraft { id: string; picked: string[][]; other: string[] }
+
+/** O AskUserQuestion manda até 4 perguntas por cartão; folga para o que vier depois. */
+const DRAFT_MAX_QUESTIONS = 8;
+const DRAFT_MAX_PICKS = 32;
+const DRAFT_MAX_LABEL = 500;
+export const QUESTION_DRAFT_MAX_TEXT = 4_000;
+
+export function parseQuestionDraftFrame(raw: string): QuestionDraft | null {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{")) return null;
+  let parsed: { type?: unknown; id?: unknown; picked?: unknown; other?: unknown };
+  try {
+    parsed = JSON.parse(trimmed) as typeof parsed;
+  } catch {
+    return null;
+  }
+  if (parsed.type !== "question_draft") return null;
+  const id = typeof parsed.id === "string" && parsed.id.length <= 200 ? parsed.id : "";
+  const strings = (value: unknown, max: number, len: number): string[] =>
+    Array.isArray(value) ? value.slice(0, max).map((v) => (typeof v === "string" ? v.slice(0, len) : "")) : [];
+  const picked = Array.isArray(parsed.picked)
+    ? parsed.picked.slice(0, DRAFT_MAX_QUESTIONS).map((sel) => strings(sel, DRAFT_MAX_PICKS, DRAFT_MAX_LABEL).filter((l) => l !== ""))
+    : [];
+  const other = strings(parsed.other, DRAFT_MAX_QUESTIONS, QUESTION_DRAFT_MAX_TEXT);
+  return { id, picked, other };
+}
+
+/** Nada marcado, nada escrito: o rascunho some (a pessoa desfez tudo). PURE. */
+export function isEmptyQuestionDraft(draft: Pick<QuestionDraft, "picked" | "other">): boolean {
+  return draft.picked.every((sel) => sel.length === 0) && draft.other.every((text) => text.trim() === "");
+}
+
+/**
  * O pedido do FEED de um subagente — `{ "type": "workflow_feed", "runId": string, "agentId": string }`.
  * Sob demanda: a aba pede quando a pessoa abre um agente no painel do workflow, e só ela recebe a
  * resposta (`WorkflowFeedEvent`). Como a digitação, vive fora de `parseSdkClientFrame`: não é turno,

@@ -69,7 +69,7 @@ export function BoardPage() {
   const t = useT();
   // What this person may do to the BOARD itself (create a project, create a card, reach the
   // install's managers). A member may only work inside the cards they were given.
-  const { isOwner } = useAuth();
+  const { isOwner, user } = useAuth();
   // Only used for the card view's height unit: `dvh` on a phone, `vh` everywhere else.
   const isMobile = useIsMobile();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -316,6 +316,7 @@ export function BoardPage() {
           initialProjectId={newCard.project?.id ?? null}
           accounts={accountsData?.accounts ?? []}
           defaultAccountLabel={accountsData?.defaultLabel || t("board.defaultAccountFallback")}
+          ownAccountSlug={user?.claudeAccountSlug}
           onSubmit={(input) => createCardMutation.mutate({ input, open: newCard.open })}
         />
       ) : null}

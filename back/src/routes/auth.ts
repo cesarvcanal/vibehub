@@ -8,6 +8,7 @@ import {
   deviceCookieName, SESSION_COOKIE, knownDeviceId, setDeviceCookie, verifyToken,
 } from "../auth/session.js";
 import { endRevokedSessionSockets } from "../auth/sessionSockets.js";
+import { getUserGit } from "../auth/userGit.js";
 import { config } from "../config/env.js";
 import { logger } from "../utils/logger.js";
 
@@ -175,7 +176,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       }
       return await reply.code(401).send({ error: "not authenticated" });
     }
-    return await reply.send({ user });
+    // The Claude account rides along so the new-card dialog can WARN a person who has none: their
+    // cards would run on the runner's default account — somebody else's memory and quota.
+    const claudeAccountSlug = (await getUserGit(user.id))?.claudeAccountSlug;
+    return await reply.send({ user: claudeAccountSlug ? { ...user, claudeAccountSlug } : user });
   });
 
   app.post<{ Body: { username?: string; password?: string } }>("/api/setup/owner", async (req, reply) => {

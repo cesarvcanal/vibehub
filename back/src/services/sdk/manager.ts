@@ -16,8 +16,8 @@ import { readCardChanges, readCardFileDiff } from "../maestro/changes.js";
 import { mergeTaskEvent, taskSnapshot, toolResultEvent, type AgentTaskEvent, type RawTaskEvent, type RawToolResultEvent } from "./toolResult.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
-  NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
-  type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type UserQuestionItem,
+  NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseQuestionDraftFrame, isEmptyQuestionDraft, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
+  type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type QuestionDraft, type UserQuestionItem,
   type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest,
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
@@ -227,6 +227,22 @@ export interface DriverSession {
    * aqui, e uma leitura no meio desse caminho tomaria a pergunta dele por órfã (resultado duplicado).
    */
   ownQuestions: Set<string>;
+  /**
+   * O QUE CADA PESSOA JÁ MARCOU num cartão de pergunta ainda aberto, por id da pergunta → nome de
+   * quem escreve. Só memória (some com o driver, como a digitação): existe para que quem abre o card
+   * no meio da resposta de outra pessoa veja o rascunho dela no primeiro quadro, e não só no próximo
+   * toque. Sai quando a pergunta encerra (`forgetQuestionDrafts`).
+   */
+  questionDrafts: Map<string, Map<string, Pick<QuestionDraft, "picked" | "other">>>;
+  /**
+   * AS DECISÕES QUE O TURNO ESPERA AGORA — os ids de `user_question` e `permission_request` que este
+   * driver abriu e que ainda não voltaram (`question_result` / `permission`). Não vazio = o turno
+   * está parado numa pessoa, e o card mostra "precisa de você" em vez do "trabalhando" (ver
+   * `syncAwaitingDecision`). Esvazia quando o turno fecha e quando o driver morre.
+   */
+  openAsks: Set<string>;
+  /** O que este driver gravou por último em `awaitingDecisionAt` do card (true = carimbado). */
+  awaitingDecision: boolean;
   /** Órfãs que este manager já ENCERROU: um clique tardio nelas recebe o erro, nunca silêncio. */
   settledOrphans: Set<string>;
   /** Órfãs com uma resposta A CAMINHO: o segundo clique (outra aba, duplo clique) vira nada. */
@@ -452,12 +468,48 @@ function syncBoardStatus(session: DriverSession, opts: { force?: boolean } = {})
   }).catch(() => { /* best-effort, like a hook */ });
 }
 
+/**
+ * O CARD ESPERA UMA DECISÃO: enquanto uma pergunta ou pedido de permissão deste driver estiver
+ * aberto, o card carrega `awaitingDecisionAt` e o ícone vira o "precisa de você" âmbar — o turno
+ * segue aberto (a bolinha continua `working` de propósito: o `waiting` entrega a fila e executa
+ * pausa/restart pendente, que atropelariam o cartão aberto), e o spinner fazia a pessoa achar que o
+ * Claude estava trabalhando. Grava só quando muda; `force` vale para um driver já fechado (a saída
+ * dele tem de apagar o carimbo).
+ */
+function syncAwaitingDecision(session: DriverSession, opts: { force?: boolean } = {}): void {
+  if (session.closed && !opts.force) return;
+  const awaiting = session.openAsks.size > 0 && !session.closed;
+  if (session.awaitingDecision === awaiting) return;
+  session.awaitingDecision = awaiting;
+  void registry.setCardAwaitingDecision(session.cardId, awaiting ? Date.now() : null)
+    .catch(() => { /* best-effort, como a bolinha */ });
+}
+
+/** O driver acabou: nenhuma decisão dele segue pendente — o carimbo do card sai junto. */
+function dropOpenAsks(session: DriverSession): void {
+  session.openAsks.clear();
+  syncAwaitingDecision(session, { force: true });
+}
+
 /* ---------------------------------------------------------------- helpers */
 
 /** ws sockets expose the raw TCP socket as `_socket`; flushing small frames beats batching them. */
 function disableNagle(socket: WebSocket): void {
   const raw = (socket as unknown as { _socket?: { setNoDelay?: (v: boolean) => void } })._socket;
   try { raw?.setNoDelay?.(true); } catch { /* the socket is already closing */ }
+}
+
+/** Cartões de pergunta com rascunho guardado, no máximo — o mais antigo sai primeiro. */
+const QUESTION_DRAFTS_MAX = 20;
+
+/** A pergunta encerrou: o rascunho de ninguém importa mais (a tela já desenha o cartão respondido). */
+function forgetQuestionDrafts(session: DriverSession, questionId: string): void {
+  session.questionDrafts.delete(questionId);
+}
+
+/** O frame que conta às outras abas o rascunho de `name` num cartão (rascunho vazio = apagou). */
+function peerQuestionDraftFrame(id: string, name: string, draft: Pick<QuestionDraft, "picked" | "other">): string {
+  return JSON.stringify({ type: "peer_question_draft", id, name, picked: draft.picked, other: draft.other });
 }
 
 function broadcast(session: DriverSession, event: object): void {
@@ -652,6 +704,12 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     interruptNoteToFlush = session.pendingInterruptNote;
     session.pendingInterruptNote = undefined;
     session.autonomousTurn = false;
+    // O turno fechou: nada mais espera resposta dentro dele (o driver encerra os cartões que o
+    // turno deixou). Um turno ainda em voo (envio na fila) segue com os seus.
+    if (!isTurnInFlight(session)) {
+      session.openAsks.clear();
+      syncAwaitingDecision(session);
+    }
     // Uma retomada que fechou sem o agente produzir nada ainda não pegou: o vigia decide (ver
     // RESUME_CONFIRM_MS) — e o marcador fica, para o próximo deploy saber dela.
     if (session.resumeWatch && !isTurnInFlight(session)) armResumeWatch(session);
@@ -717,6 +775,15 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     // espera (em geral é a mesma, refeita pela retomada). Respondida a nova pelo clique, a velha
     // ficava cobrando na bandeja — só uma mensagem a varria.
     void settleOrphanQuestions(session);
+  }
+  if (event.type === "question_result") forgetQuestionDrafts(session, event.id);
+  if (event.type === "user_question" || event.type === "permission_request") {
+    session.openAsks.add(event.id);
+    syncAwaitingDecision(session);
+  }
+  if ((event.type === "question_result" || event.type === "permission") && event.id) {
+    session.openAsks.delete(event.id);
+    syncAwaitingDecision(session);
   }
   if (!silenced) broadcast(session, event);
   if (event.type === "conversation_reset" && (event.trigger === undefined || event.trigger === "clear")) {
@@ -899,12 +966,18 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     closed: false,
     acceptedCids: new Map(),
     ownQuestions: new Set(),
+    openAsks: new Set(),
+    awaitingDecision: false,
+    questionDrafts: new Map(),
     settledOrphans: new Set(),
     answeringOrphans: new Set(),
     orphansSwept: false,
     ...(opts.transcriptDir ? { transcriptDir: opts.transcriptDir } : {}),
   };
   sessions.set(opts.cardId, session);
+  // Um carimbo de "espera decisão" que sobrou de um driver que não pôde apagá-lo (o back caiu no
+  // meio de uma pergunta): este driver nasce sem nenhuma pendente.
+  void registry.setCardAwaitingDecision(opts.cardId, null).catch(() => { /* best-effort */ });
   // Conversa que entrou pela aba Terminal: a corrente aberta do driver está num ponto que já não é o
   // fim do arquivo. Seguir dela órfã o turno do terminal, e turno órfão não tem ponto de volta — era
   // por isso que editar aquela mensagem não rebobinava. O driver só MARCA; religa no próximo envio.
@@ -964,6 +1037,9 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     // a bolinha se não retomar (resume.ts).
     const crashWithWork = !deliberate && !succeeded && session.marker !== undefined && crashListeners.size > 0;
     if (!succeeded && session.boardStatus === "working" && !crashWithWork) syncBoardStatus(session, { force: true });
+    // Com o driver morreu quem esperava as respostas: o card não espera mais decisão nenhuma dele.
+    if (!succeeded) dropOpenAsks(session);
+    else session.openAsks.clear();
     // A inscrição no espelho também: deixada de pé, ela escreveria no stdin de um driver morto.
     session.offOutside?.();
     delete session.offOutside;
@@ -1244,6 +1320,7 @@ async function orphanQuestions(session: DriverSession): Promise<Map<string, User
 
 /** Encerra um cartão em todas as abas e no histórico (o F5 lê a mesma coisa). */
 function settleQuestionCard(session: DriverSession, result: Extract<DriverEvent, { type: "question_result" }>): void {
+  forgetQuestionDrafts(session, result.id);
   broadcast(session, result);
   void appendHistory(session.cardId, { ...result, at: Date.now() });
   void observeDriverEvent(session.cardId, result);
@@ -1681,6 +1758,14 @@ export function attachSocket(
     try { socket.send(JSON.stringify({ type: "workflow_progress", ...run })); } catch { /* going away */ }
   }
 
+  // OS RASCUNHOS dos cartões abertos: quem chega no meio da resposta de outra pessoa vê, de cara, o
+  // que ela já marcou e escreveu — senão só no próximo toque dela.
+  for (const [id, byName] of session.questionDrafts) {
+    for (const [name, draft] of byName) {
+      try { socket.send(peerQuestionDraftFrame(id, name, draft)); } catch { /* going away */ }
+    }
+  }
+
   const keepalive = setInterval(() => {
     try { socket.ping?.(); } catch { /* the close handler cleans up */ }
   }, KEEPALIVE_MS);
@@ -1714,6 +1799,54 @@ export function attachSocket(
     relayTyping(false);
   };
 
+  // O RASCUNHO DO CARTÃO DE PERGUNTA: como a digitação, vai às OUTRAS abas — mas com o conteúdo,
+  // para que duas pessoas no mesmo card vejam uma o que a outra está respondendo antes de alguém
+  // mandar (só a primeira resposta vale). Fica guardado enquanto a pergunta está aberta, para quem
+  // abrir o card depois; nunca vai ao driver nem ao histórico.
+  const draftedHere = new Set<string>();
+  const relayDraft = (id: string, name: string, draft: Pick<QuestionDraft, "picked" | "other">): void => {
+    const frame = peerQuestionDraftFrame(id, name, draft);
+    for (const other of session.sockets) {
+      if (other === socket) continue;
+      try { other.send(frame); } catch { /* that socket is going away */ }
+    }
+  };
+  const noteDraft = (draft: QuestionDraft): void => {
+    if (!origin || draft.id === "") return;
+    const empty = isEmptyQuestionDraft(draft);
+    let byName = session.questionDrafts.get(draft.id);
+    if (empty) {
+      if (!byName?.has(origin.name)) return;
+      byName.delete(origin.name);
+      if (byName.size === 0) session.questionDrafts.delete(draft.id);
+      draftedHere.delete(draft.id);
+    } else {
+      if (!byName) {
+        // Teto de memória: um cartão esquecido aberto não acumula para sempre.
+        if (session.questionDrafts.size >= QUESTION_DRAFTS_MAX) {
+          const oldest = session.questionDrafts.keys().next().value;
+          if (oldest !== undefined) session.questionDrafts.delete(oldest);
+        }
+        byName = new Map();
+        session.questionDrafts.set(draft.id, byName);
+      }
+      byName.set(origin.name, { picked: draft.picked, other: draft.other });
+      draftedHere.add(draft.id);
+    }
+    relayDraft(draft.id, origin.name, { picked: draft.picked, other: draft.other });
+  };
+  /** A aba fechou: o rascunho dela sai das outras telas, como o "digitando". */
+  const dropDraftsOfThisSocket = (): void => {
+    if (!origin) return;
+    for (const id of draftedHere) {
+      const byName = session.questionDrafts.get(id);
+      if (!byName?.delete(origin.name)) continue;
+      if (byName.size === 0) session.questionDrafts.delete(id);
+      relayDraft(id, origin.name, { picked: [], other: [] });
+    }
+    draftedHere.clear();
+  };
+
   const answerFeed = createFeedResponder(session, socket);
   const answerDetail = createDetailResponder(session, socket);
 
@@ -1730,6 +1863,11 @@ export function attachSocket(
     const typing = parseTypingFrame(text);
     if (typing !== null) {
       noteTyping(typing);
+      return;
+    }
+    const draft = parseQuestionDraftFrame(text);
+    if (draft !== null) {
+      noteDraft(draft);
       return;
     }
     // O feed de um subagente do workflow: sob demanda, só para esta aba — nem driver, nem histórico.
@@ -1767,6 +1905,7 @@ export function attachSocket(
     session.sockets.delete(socket);
     // A tab closed mid-sentence must not leave "Cesar está digitando…" on everyone else's screen.
     noteTyping(false);
+    dropDraftsOfThisSocket();
     if (session.sockets.size === 0) maybeScheduleIdleStop(session);
   };
   socket.on("close", detach);
@@ -1791,6 +1930,7 @@ export function stopCardDriver(cardId: string): void {
   // purpose — the marker comes off so the next boot does not "resume" something a person ended.
   session.marker = undefined;
   void clearInflightMarker(cardId);
+  dropOpenAsks(session);
   // A sondagem da frota é filha deste driver: sem ele não há a quem publicar nem sessão para ler.
   forgetCardWorkflows(cardId);
   logger.debug({ card: session.label }, "sdk driver stopped");

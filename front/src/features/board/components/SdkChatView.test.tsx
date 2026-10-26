@@ -588,6 +588,84 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
   });
 
   /**
+   * DUAS PESSOAS, UMA PERGUNTA: só a primeira resposta vale, e quem respondia não sabia que havia
+   * outra pessoa escrevendo outra coisa. O cartão mostra, em tempo real, o que a outra está fazendo.
+   */
+  describe("rascunho de outra pessoa em tempo real", () => {
+    const MULTI = {
+      type: "user_question" as const,
+      id: "q_peer",
+      questions: [
+        { question: "Quem abre o PR?", options: [{ label: "Albert" }, { label: "Mussa" }] },
+        { question: "E o review?", options: [{ label: "Mussa" }] },
+      ],
+    };
+
+    it("mostra o que a outra pessoa marca e escreve, e apaga quando ela apaga", async () => {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready" });
+      ws.deliver(MULTI);
+      expect(screen.queryByTestId("sdk-question-peer-banner")).toBeNull();
+
+      ws.deliver({ type: "peer_question_draft", id: "q_peer", name: "albert", picked: [["Albert"], []], other: ["", "mussa faz review"] });
+      expect(screen.getByTestId("sdk-question-peer-banner")).toHaveTextContent("Albert");
+      const lines = screen.getAllByTestId("sdk-question-peer-draft");
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toHaveTextContent("Albert");
+      expect(lines[1]).toHaveTextContent("mussa faz review");
+      const [albertOption] = screen.getAllByRole("button", { name: "Albert" });
+      expect(albertOption).toHaveAttribute("data-peer-picked", "true");
+      expect(albertOption).toHaveAttribute("aria-pressed", "false"); // marcado por ELE, não por mim
+
+      ws.deliver({ type: "peer_question_draft", id: "q_peer", name: "albert", picked: [[], []], other: ["", ""] });
+      expect(screen.queryByTestId("sdk-question-peer-banner")).toBeNull();
+      expect(screen.queryAllByTestId("sdk-question-peer-draft")).toHaveLength(0);
+    });
+
+    it("o que EU marco e escrevo vai para as outras abas, com o último estado", async () => {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready" });
+      ws.deliver(MULTI);
+      const drafts = () => ws.sent.map((x) => JSON.parse(x)).filter((f) => f.type === "question_draft");
+      expect(drafts()).toEqual([]); // cartão vazio não anuncia nada ao nascer
+
+      await userEvent.click(screen.getAllByRole("button", { name: "Mussa" })[0]!);
+      await userEvent.type(screen.getAllByTestId("sdk-question-other")[1]!, "albert revisa");
+      await waitFor(() =>
+        expect(drafts().at(-1)).toEqual({ type: "question_draft", id: "q_peer", picked: [["Mussa"], []], other: ["", "albert revisa"] }),
+      );
+      expect(drafts().length).toBeLessThan("albert revisa".length + 1); // não é um frame por tecla
+      expect(ws.sent.map((x) => JSON.parse(x)).some((f) => f.type === "question_answer")).toBe(false);
+    });
+
+    it("a pergunta respondida (por quem for) tira o aviso", async () => {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready" });
+      ws.deliver(MULTI);
+      ws.deliver({ type: "peer_question_draft", id: "q_peer", name: "albert", picked: [["Albert"], ["Mussa"]], other: ["", ""] });
+      ws.deliver({ type: "question_result", id: "q_peer", answers: [{ selected: ["Albert"] }, { selected: ["Mussa"] }] });
+      expect(screen.getByTestId("sdk-question")).toHaveAttribute("data-outcome", "answered");
+      expect(screen.queryByTestId("sdk-question-peer-banner")).toBeNull();
+    });
+
+    it("rascunho de outra pergunta não aparece neste cartão", async () => {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready" });
+      ws.deliver(MULTI);
+      ws.deliver({ type: "peer_question_draft", id: "q_outra", name: "albert", picked: [["Albert"]], other: [""] });
+      expect(screen.queryByTestId("sdk-question-peer-banner")).toBeNull();
+    });
+  });
+
+  /**
    * O RECONNECT APAGAVA O CARTÃO (produção, 2026-10-07). Todo connect limpa a tela e o replay a
    * redesenha do disco — o cartão desmonta e remonta, e o que a pessoa já tinha marcado e escrito
    * vivia no estado local dele. Um deploy no meio de três perguntas = tudo de novo, do zero.

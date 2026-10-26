@@ -12,6 +12,11 @@
  * person goes quiet, clears the field, or sends. Never one frame per key.
  */
 
+/** "cesar" → "Cesar": usernames are lowercase handles; the sentence reads as a name. PURE. */
+export function peerDisplayName(name: string): string {
+  return name.charAt(0).toLocaleUpperCase() + name.slice(1);
+}
+
 /** While typing continues, a fresh "digitando" goes out at most this often (it renews the TTL). */
 export const TYPING_SEND_EVERY_MS = 2_500;
 /** No keystroke for this long ⇒ the person stopped typing. */

@@ -1540,3 +1540,19 @@ describe("doneAt — the stamp of entering (and leaving) Done", () => {
     expect((await reloaded.getCard(card.id))!.doneAt).toBe(at);
   });
 });
+
+describe("setCardAwaitingDecision", () => {
+  it("stamps once (keeps the first open ask), clears, and never bumps updatedAt", async () => {
+    const reg = await freshRegistry();
+    const project = await reg.createProject({ name: "Shop" });
+    const id = (await reg.createCard({ projectId: project.id, title: "Checkout" })).id;
+    const updatedAt = (await reg.getCard(id))!.updatedAt;
+    await reg.setCardAwaitingDecision(id, 100);
+    await reg.setCardAwaitingDecision(id, 200);
+    expect((await reg.getCard(id))!.awaitingDecisionAt).toBe(100);
+    await reg.setCardAwaitingDecision(id, null);
+    expect((await reg.getCard(id))!.awaitingDecisionAt ?? null).toBeNull();
+    expect((await reg.getCard(id))!.updatedAt).toBe(updatedAt);
+    await expect(reg.setCardAwaitingDecision("nope", 1)).resolves.toBeUndefined();
+  });
+});

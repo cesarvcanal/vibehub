@@ -61,6 +61,7 @@ import { logger } from "../utils/logger.js";
  *   { "type": "error", "message": string }
  *   { "type": "parse_error", "raw": string }              // synthesised by the back for a bad line
  *   { "type": "peer_typing", "name": string, "active": boolean } // another socket of this card is typing (ephemeral)
+ *   { "type": "peer_question_draft", "id": string, "name": string, "picked": string[][], "other": string[] } // what another socket has marked/typed on an open question card (ephemeral; empty = cleared)
  *   { "type": "user", "text": string, "at": number, "from"?: MessageOrigin } // a message sent from ANOTHER socket of this card
  *   { "type": "message_edited", "originalText": string, "at": number } // …and an edit made there (the new text follows as `user`)
  *
@@ -72,6 +73,10 @@ import { logger } from "../utils/logger.js";
  * signal: relayed to the card's OTHER sockets as `peer_typing` with this socket's author, and
  * nothing else — never the driver, never the history (see `attachSocket` in services/sdk/manager.ts);
  * one buffered during the setup below is stale by the attach and is dropped.
+ * `{ "type": "question_draft", "id": string, "picked": string[][], "other": string[] }` is the same
+ * kind of signal for a question card: what this person has marked and typed so far, relayed to the
+ * OTHER sockets as `peer_question_draft` and kept in memory while the question is open (a socket
+ * attaching later gets it at once) — never the driver, never the history.
  * `{ "type": "workflow_feed", "runId": string, "agentId": string }` asks for ONE workflow subagent's
  * recent steps (the panel opened that agent): the manager runs the feed probe in the runner and
  * answers ONLY this socket with `{ "type": "workflow_feed", "runId", "agentId", "items": [...],
