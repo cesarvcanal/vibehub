@@ -392,6 +392,15 @@ export interface Card {
   /** One-line summary the agent reported alongside `declaredState`. Trimmed and capped. */
   declaredSummary?: string;
   /**
+   * Since when the card's running turn is BLOCKED ON A PERSON (epoch ms): the native chat's driver
+   * opened a question card (AskUserQuestion) or a permission request that nobody answered yet. The
+   * turn is still open — `status` stays `working`, on purpose: the `waiting` transition delivers the
+   * queue and carries out pending pauses/restarts, which would run over the open card — so without
+   * this the board drew a spinner and nobody noticed the agent was waiting for them. Written by the
+   * sdk manager only (see `setCardAwaitingDecision`); null/absent = nothing pending.
+   */
+  awaitingDecisionAt?: number | null;
+  /**
    * PREVIEWS the agent registered on this card (`vibehub_preview`): ports the user can open through
    * the proxy, deduped by port. Ports that stop listening are pruned when the runner is scanned
    * (GET /api/preview/ports) — no daemon watches them. Absent = the agent registered none.
@@ -1908,6 +1917,22 @@ export async function markCardHumanActive(cardId: string, at: number = Date.now(
     // Deliberately NOT bumping updatedAt: a keystroke is not an edit of the card, and it would churn
     // the board's ordering (updatedAt is a tie-breaker) on every few seconds of typing.
     return card;
+  });
+}
+
+/**
+ * Sets (`at`) or clears (null) `awaitingDecisionAt`. Writes ONLY on change — a card already stamped
+ * keeps the stamp of the FIRST open ask, and clearing a clear card touches nothing. Like
+ * `markCardHumanActive` it never bumps updatedAt: an open question is not an edit of the card.
+ */
+export async function setCardAwaitingDecision(cardId: string, at: number | null): Promise<void> {
+  // A conferência mora SÓ dentro do mutate (que não regrava quando nada muda): lida antes, fora da
+  // fila, um "abre" e um "fecha" seguidos (permissão respondida na hora) liam os dois o card ainda
+  // limpo — o "fecha" desistia e o card ficava âmbar para sempre.
+  await store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    if (!card || Boolean(card.awaitingDecisionAt) === (at !== null)) return;
+    card.awaitingDecisionAt = at;
   });
 }
 

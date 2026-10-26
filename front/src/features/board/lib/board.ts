@@ -214,6 +214,8 @@ export function moveProjectLocal(projects: BoardProject[], id: string, toIndex: 
  * (`declaredState`), the column the user filed it under, and whether a session is behind it at all.
  *
  *  - `working`    — the hook says Claude is in a turn right now. The only state that moves.
+ *                   Except when that turn is STOPPED on the person (`awaitingDecisionAt`: a question
+ *                   or permission card of the native chat is open) — then it is `needs_me`.
  *  - `done`       — filed under Done by the user.
  *  - `paused`     — parked by the user; the session is gone.
  *  - `hibernated` — the session went cold on its own.
@@ -258,7 +260,14 @@ const DECLARED_KIND: Partial<Record<DeclaredState, CardStateKind>> = {
 export function cardState(
   card: Pick<
     BoardCard,
-    "status" | "hibernatedAt" | "pausedAt" | "column" | "openedAt" | "declaredState" | "declaredSummary"
+    | "status"
+    | "hibernatedAt"
+    | "pausedAt"
+    | "column"
+    | "openedAt"
+    | "declaredState"
+    | "declaredSummary"
+    | "awaitingDecisionAt"
   >,
 ): CardState | null {
   const make = (kind: CardStateKind, summary?: string): CardState => ({
@@ -268,7 +277,9 @@ export function cardState(
   });
   // No process behind it: a spinner over a dead session would be a lie, whatever the last hook said.
   if (card.hibernatedAt) return make("hibernated");
-  if (card.status === "working") return make("working");
+  // The turn is technically open, but it is blocked on the person (a question/permission card of
+  // the native chat): a spinner here read as "Claude is on it" and nobody went to decide.
+  if (card.status === "working") return make(card.awaitingDecisionAt ? "needs_me" : "working");
   if (card.column === "done") return make("done");
   if (card.pausedAt) return make("paused");
   const declared = card.declaredState ? DECLARED_KIND[card.declaredState] : undefined;

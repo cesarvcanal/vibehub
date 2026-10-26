@@ -234,6 +234,15 @@ export interface DriverSession {
    * toque. Sai quando a pergunta encerra (`forgetQuestionDrafts`).
    */
   questionDrafts: Map<string, Map<string, Pick<QuestionDraft, "picked" | "other">>>;
+  /**
+   * AS DECISÕES QUE O TURNO ESPERA AGORA — os ids de `user_question` e `permission_request` que este
+   * driver abriu e que ainda não voltaram (`question_result` / `permission`). Não vazio = o turno
+   * está parado numa pessoa, e o card mostra "precisa de você" em vez do "trabalhando" (ver
+   * `syncAwaitingDecision`). Esvazia quando o turno fecha e quando o driver morre.
+   */
+  openAsks: Set<string>;
+  /** O que este driver gravou por último em `awaitingDecisionAt` do card (true = carimbado). */
+  awaitingDecision: boolean;
   /** Órfãs que este manager já ENCERROU: um clique tardio nelas recebe o erro, nunca silêncio. */
   settledOrphans: Set<string>;
   /** Órfãs com uma resposta A CAMINHO: o segundo clique (outra aba, duplo clique) vira nada. */
@@ -459,6 +468,29 @@ function syncBoardStatus(session: DriverSession, opts: { force?: boolean } = {})
   }).catch(() => { /* best-effort, like a hook */ });
 }
 
+/**
+ * O CARD ESPERA UMA DECISÃO: enquanto uma pergunta ou pedido de permissão deste driver estiver
+ * aberto, o card carrega `awaitingDecisionAt` e o ícone vira o "precisa de você" âmbar — o turno
+ * segue aberto (a bolinha continua `working` de propósito: o `waiting` entrega a fila e executa
+ * pausa/restart pendente, que atropelariam o cartão aberto), e o spinner fazia a pessoa achar que o
+ * Claude estava trabalhando. Grava só quando muda; `force` vale para um driver já fechado (a saída
+ * dele tem de apagar o carimbo).
+ */
+function syncAwaitingDecision(session: DriverSession, opts: { force?: boolean } = {}): void {
+  if (session.closed && !opts.force) return;
+  const awaiting = session.openAsks.size > 0 && !session.closed;
+  if (session.awaitingDecision === awaiting) return;
+  session.awaitingDecision = awaiting;
+  void registry.setCardAwaitingDecision(session.cardId, awaiting ? Date.now() : null)
+    .catch(() => { /* best-effort, como a bolinha */ });
+}
+
+/** O driver acabou: nenhuma decisão dele segue pendente — o carimbo do card sai junto. */
+function dropOpenAsks(session: DriverSession): void {
+  session.openAsks.clear();
+  syncAwaitingDecision(session, { force: true });
+}
+
 /* ---------------------------------------------------------------- helpers */
 
 /** ws sockets expose the raw TCP socket as `_socket`; flushing small frames beats batching them. */
@@ -672,6 +704,12 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     interruptNoteToFlush = session.pendingInterruptNote;
     session.pendingInterruptNote = undefined;
     session.autonomousTurn = false;
+    // O turno fechou: nada mais espera resposta dentro dele (o driver encerra os cartões que o
+    // turno deixou). Um turno ainda em voo (envio na fila) segue com os seus.
+    if (!isTurnInFlight(session)) {
+      session.openAsks.clear();
+      syncAwaitingDecision(session);
+    }
     // Uma retomada que fechou sem o agente produzir nada ainda não pegou: o vigia decide (ver
     // RESUME_CONFIRM_MS) — e o marcador fica, para o próximo deploy saber dela.
     if (session.resumeWatch && !isTurnInFlight(session)) armResumeWatch(session);
@@ -739,6 +777,14 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     void settleOrphanQuestions(session);
   }
   if (event.type === "question_result") forgetQuestionDrafts(session, event.id);
+  if (event.type === "user_question" || event.type === "permission_request") {
+    session.openAsks.add(event.id);
+    syncAwaitingDecision(session);
+  }
+  if ((event.type === "question_result" || event.type === "permission") && event.id) {
+    session.openAsks.delete(event.id);
+    syncAwaitingDecision(session);
+  }
   if (!silenced) broadcast(session, event);
   if (event.type === "conversation_reset" && (event.trigger === undefined || event.trigger === "clear")) {
     // O /clear limpou o CONTEXTO do modelo; o log do card tem de ir junto, senão o F5 devolvia a
@@ -920,6 +966,8 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     closed: false,
     acceptedCids: new Map(),
     ownQuestions: new Set(),
+    openAsks: new Set(),
+    awaitingDecision: false,
     questionDrafts: new Map(),
     settledOrphans: new Set(),
     answeringOrphans: new Set(),
@@ -927,6 +975,9 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     ...(opts.transcriptDir ? { transcriptDir: opts.transcriptDir } : {}),
   };
   sessions.set(opts.cardId, session);
+  // Um carimbo de "espera decisão" que sobrou de um driver que não pôde apagá-lo (o back caiu no
+  // meio de uma pergunta): este driver nasce sem nenhuma pendente.
+  void registry.setCardAwaitingDecision(opts.cardId, null).catch(() => { /* best-effort */ });
   // Conversa que entrou pela aba Terminal: a corrente aberta do driver está num ponto que já não é o
   // fim do arquivo. Seguir dela órfã o turno do terminal, e turno órfão não tem ponto de volta — era
   // por isso que editar aquela mensagem não rebobinava. O driver só MARCA; religa no próximo envio.
@@ -986,6 +1037,9 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     // a bolinha se não retomar (resume.ts).
     const crashWithWork = !deliberate && !succeeded && session.marker !== undefined && crashListeners.size > 0;
     if (!succeeded && session.boardStatus === "working" && !crashWithWork) syncBoardStatus(session, { force: true });
+    // Com o driver morreu quem esperava as respostas: o card não espera mais decisão nenhuma dele.
+    if (!succeeded) dropOpenAsks(session);
+    else session.openAsks.clear();
     // A inscrição no espelho também: deixada de pé, ela escreveria no stdin de um driver morto.
     session.offOutside?.();
     delete session.offOutside;
@@ -1876,6 +1930,7 @@ export function stopCardDriver(cardId: string): void {
   // purpose — the marker comes off so the next boot does not "resume" something a person ended.
   session.marker = undefined;
   void clearInflightMarker(cardId);
+  dropOpenAsks(session);
   // A sondagem da frota é filha deste driver: sem ele não há a quem publicar nem sessão para ler.
   forgetCardWorkflows(cardId);
   logger.debug({ card: session.label }, "sdk driver stopped");
