@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ACTIVITY_WINDOW_MS, CLOSE_TIMEOUT_MS, LiveVoiceSession, START_TIMEOUT_MS, STATS_INTERVAL_MS, aiActivity, errorMessage } from "./liveVoice";
+import { ACTIVITY_WINDOW_MS, CLOSE_TIMEOUT_MS, CONTEXT_MAX_CHARS, LiveVoiceSession, START_TIMEOUT_MS, STATS_INTERVAL_MS, aiActivity, errorMessage } from "./liveVoice";
 import { fakeRig, FakeStream } from "./fakeWebRtc";
 
 afterEach(() => {
@@ -183,11 +183,75 @@ describe("LiveVoiceSession — while live", () => {
     ch.emit({ type: "session.output_transcript.delta", delta: "ótimo.", start_ms: 40, end_ms: 50 });
     // Barge-in: the person talks over the assistant, a new turn starts.
     ch.emit({ type: "session.input_transcript.delta", delta: "Espera", start_ms: 45, end_ms: 55 });
-    expect(session.snapshot().transcript).toEqual([
-      { role: "user", text: "Oi, tudo bem?" },
-      { role: "assistant", text: "Tudo ótimo." },
-      { role: "user", text: "Espera" },
+    const turns = session.snapshot().turns;
+    expect(turns.map(({ role, text, final }) => ({ role, text, final }))).toEqual([
+      // The reply closed the question; the person talking over the reply closed the reply.
+      { role: "user", text: "Oi, tudo bem?", final: true },
+      { role: "assistant", text: "Tudo ótimo.", final: true },
+      { role: "user", text: "Espera", final: false },
     ]);
+    // Stable, distinct ids the server saves idempotently.
+    expect(new Set(turns.map((t) => t.vid)).size).toBe(3);
+    for (const t of turns) expect(t.vid).toMatch(/^[A-Za-z0-9_-]{6,80}$/);
+  });
+
+  it("hands every closed turn to the listeners — by pause, and all open ones when the call ends", async () => {
+    const { session, rig } = await liveSession();
+    const closed: string[] = [];
+    session.onFinalTurn((turn) => closed.push(`${turn.role}:${turn.text}`));
+    const ch = rig.peer().channel!;
+    ch.emit({ type: "session.input_transcript.delta", delta: "primeira", start_ms: 0, end_ms: 300 });
+    // A long pause on the model's timeline: the next words are a new turn.
+    ch.emit({ type: "session.input_transcript.delta", delta: "segunda", start_ms: 5_000, end_ms: 5_300 });
+    expect(closed).toEqual(["user:primeira"]);
+    ch.emit({ type: "session.output_transcript.delta", delta: "resposta", start_ms: 5_500, end_ms: 5_900 });
+    expect(closed).toEqual(["user:primeira", "user:segunda"]);
+    session.stop();
+    rig.peer().channel!.emit({ type: "session.closed", reason: "close_requested" });
+    expect(closed).toEqual(["user:primeira", "user:segunda", "assistant:resposta"]);
+    expect(session.snapshot().turns.every((t) => t.final)).toBe(true);
+  });
+
+  it("closes a turn left idle even without a pause on the timeline (the stats tick)", async () => {
+    vi.useFakeTimers();
+    const { session, rig } = await liveSession();
+    const closed: string[] = [];
+    session.onFinalTurn((turn) => closed.push(turn.text));
+    rig.peer().channel!.emit({ type: "session.output_transcript.delta", delta: "ok" });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(closed).toEqual(["ok"]);
+  });
+
+  it("a failure mid-sentence still saves what was said", async () => {
+    const { session, rig } = await liveSession();
+    const closed: string[] = [];
+    session.onFinalTurn((turn) => closed.push(turn.text));
+    rig.peer().channel!.emit({ type: "session.input_transcript.delta", delta: "estava falando" });
+    rig.peer().fail();
+    expect(session.snapshot().state).toBe("error");
+    expect(closed).toEqual(["estava falando"]);
+  });
+
+  it("tells the model quiet context with session.thinking.append — clipped, never while not live", async () => {
+    const { session, rig } = await liveSession();
+    const ch = rig.peer().channel!;
+    expect(session.appendContext("  A pessoa   escreveu: oi ")).toBe(true);
+    expect(ch.sent).toContainEqual({ type: "session.thinking.append", delegation_id: null, content: "A pessoa escreveu: oi" });
+    session.appendContext("x".repeat(5_000));
+    const long = ch.sent[ch.sent.length - 1] as { content: string };
+    expect(long.content.length).toBe(CONTEXT_MAX_CHARS);
+    expect(session.appendContext("   ")).toBe(false);
+    ch.emit({ type: "session.thinking.appended", client_event_id: "e1" });
+    expect(session.snapshot().diag).toMatchObject({ contextSent: 2, contextAcked: 1 });
+    session.dispose();
+    expect(session.appendContext("depois")).toBe(false);
+  });
+
+  it("each spoken fragment pulses the fallback envelope (the orb's last resort)", async () => {
+    const { session, rig } = await liveSession();
+    expect(session.speech.read(0)).toBe(0);
+    rig.peer().channel!.emit({ type: "session.output_transcript.delta", delta: "uma frase" });
+    expect(session.speech.read(16)).toBeGreaterThan(0.3);
   });
 
   it("mute silences the track locally and tells the model", async () => {

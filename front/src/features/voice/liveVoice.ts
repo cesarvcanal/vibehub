@@ -1,5 +1,8 @@
+import { EventEnvelope } from "./audioLevel";
+import { TurnSegmenter, newCallId, type VoiceTurn } from "./voiceTurns";
+
 /**
- * VOICE MODE (POC) — the browser half of a GPT-Live conversation.
+ * VOICE MODE — the browser half of a GPT-Live conversation, held inside a card's chat.
  *
  * The microphone goes out on a WebRTC media track and the assistant's voice comes back on another;
  * JSON events ride the `oai-events` data channel. The back-end only trades the SDP offer for the
@@ -9,19 +12,19 @@
  * Every exit path (stop, cancel while connecting, startup error, dropped connection, unmount) runs
  * the same {@link LiveVoiceSession.teardown}: microphone released, channel and peer closed.
  * Nothing here logs audio or events.
+ *
+ * The transcript is settled into TURNS here (./voiceTurns.ts): the snapshot carries them as they
+ * grow, and every turn that closes is handed to {@link LiveVoiceSession.onFinalTurn} listeners —
+ * the chat saves those. The call ending, by any path, closes the open ones first.
  */
 
 export type LiveVoiceState = "idle" | "connecting" | "live" | "closing" | "error";
 
-export interface TranscriptEntry {
-  role: "user" | "assistant";
-  text: string;
-}
-
 export interface LiveVoiceSnapshot {
   state: LiveVoiceState;
   muted: boolean;
-  transcript: TranscriptEntry[];
+  /** The call's turns, oldest first — open ones still growing. */
+  turns: VoiceTurn[];
   /**
    * The last failure, cleared on the next start: an i18n key (`voice.err.*`) for what the browser
    * knows, or the server's message verbatim — `t()` passes an unknown key straight through.
@@ -58,6 +61,9 @@ export interface LiveVoiceDiag {
   lastOutputAt: number | null;
   /** The last `error` event's code or type (not its message). */
   lastErrorCode: string | null;
+  /** Quiet context appended to the model (`session.thinking.append`): sent / acknowledged. */
+  contextSent: number;
+  contextAcked: number;
 }
 
 /** What the assistant is doing, as far as the session can tell. */
@@ -74,12 +80,18 @@ export function aiActivity(diag: LiveVoiceDiag, now: number): AiActivity {
   return "waiting";
 }
 
-export const STATS_INTERVAL_MS = 1_000;
+/**
+ * getStats cadence. Fine enough that the RTP audio level can stand in for the orb when the remote
+ * track cannot be analysed (and closes idle turns on time); cheap — one local call, no network.
+ */
+export const STATS_INTERVAL_MS = 250;
+/** `session.thinking.append` takes up to 500 tokens; this many characters stays well inside. */
+export const CONTEXT_MAX_CHARS = 1_200;
 
 const EMPTY_DIAG: LiveVoiceDiag = {
   peer: null, ice: null, channel: null, micTrack: null, remoteAudio: false, playback: "none",
   sentBytes: null, receivedBytes: null, remoteLevel: null, events: {}, lastInputAt: null,
-  lastOutputAt: null, lastErrorCode: null,
+  lastOutputAt: null, lastErrorCode: null, contextSent: 0, contextAcked: 0,
 };
 
 export interface LiveVoiceDeps {
@@ -97,13 +109,10 @@ export const START_TIMEOUT_MS = 20_000;
 /** How long `stop` waits for `session.closed` (pending work drains) before tearing down anyway. */
 export const CLOSE_TIMEOUT_MS = 15_000;
 
-/** Cap on the transcript kept on screen — a long conversation must not grow the page forever. */
-const TRANSCRIPT_MAX = 200;
-
 class Cancelled extends Error {}
 
 const INITIAL: LiveVoiceSnapshot = {
-  state: "idle", muted: false, transcript: [], error: null, notice: null, diag: EMPTY_DIAG,
+  state: "idle", muted: false, turns: [], error: null, notice: null, diag: EMPTY_DIAG,
 };
 
 export class LiveVoiceSession {
@@ -120,6 +129,10 @@ export class LiveVoiceSession {
   private statsTimer: ReturnType<typeof setInterval> | null = null;
   /** Bumped on every start and teardown: callbacks from an older attempt are ignored. */
   private attempt = 0;
+  private segmenter: TurnSegmenter | null = null;
+  private readonly finalListeners = new Set<(turn: VoiceTurn) => void>();
+  /** The assistant "speaking" by its transcript — the orb's last resort when no audio is measurable. */
+  readonly speech = new EventEnvelope();
 
   constructor(private readonly deps: LiveVoiceDeps) {}
 
@@ -138,6 +151,27 @@ export class LiveVoiceSession {
   /** The assistant's audio stream once its track arrived — what the orb follows while it speaks. */
   remoteStream(): MediaStream | null {
     return this.remote;
+  }
+
+  /** Called with every turn that closes (a pause, the call ending). */
+  onFinalTurn(listener: (turn: VoiceTurn) => void): () => void {
+    this.finalListeners.add(listener);
+    return () => this.finalListeners.delete(listener);
+  }
+
+  /**
+   * Quiet context for the model — what was typed or answered in the chat during the call. GPT-Live
+   * has no text input: `session.thinking.append` is the documented way to tell it something without
+   * making it speak. Clipped to {@link CONTEXT_MAX_CHARS}. False when the call is not up.
+   */
+  appendContext(text: string): boolean {
+    if (this.snap.state !== "live") return false;
+    const flat = text.replace(/\s+/g, " ").trim();
+    if (!flat) return false;
+    const content = flat.length > CONTEXT_MAX_CHARS ? `${flat.slice(0, CONTEXT_MAX_CHARS - 1)}…` : flat;
+    const ok = this.send({ type: "session.thinking.append", delegation_id: null, content });
+    if (ok) this.setDiag({ contextSent: this.snap.diag.contextSent + 1 });
+    return ok;
   }
 
   /** The person pressed "play" after the browser blocked autoplay. */
@@ -162,7 +196,9 @@ export class LiveVoiceSession {
     const attempt = ++this.attempt;
     const abort = new AbortController();
     this.abort = abort;
-    this.set({ state: "connecting", muted: false, transcript: [], error: null, notice: null, diag: EMPTY_DIAG });
+    this.segmenter = new TurnSegmenter(newCallId());
+    this.speech.reset();
+    this.set({ state: "connecting", muted: false, turns: [], error: null, notice: null, diag: EMPTY_DIAG });
     this.startTimer = setTimeout(() => this.fail(attempt, "voice.err.startTimeout"), START_TIMEOUT_MS);
 
     const alive = (): void => {
@@ -284,6 +320,7 @@ export class LiveVoiceSession {
     if (this.snap.state === "live") this.send({ type: "session.close" });
     this.teardown();
     this.listeners.clear();
+    this.finalListeners.clear();
   }
 
   private send(event: Record<string, unknown>): boolean {
@@ -298,7 +335,14 @@ export class LiveVoiceSession {
 
   private onEvent(attempt: number, raw: unknown): void {
     if (attempt !== this.attempt) return;
-    let event: { type?: unknown; delta?: unknown; error?: { message?: unknown; code?: unknown; type?: unknown }; reason?: unknown };
+    let event: {
+      type?: unknown;
+      delta?: unknown;
+      start_ms?: unknown;
+      end_ms?: unknown;
+      error?: { message?: unknown; code?: unknown; type?: unknown };
+      reason?: unknown;
+    };
     try {
       event = JSON.parse(String(raw));
     } catch {
@@ -319,11 +363,15 @@ export class LiveVoiceSession {
         break;
       case "session.input_transcript.delta":
         this.setDiag({ lastInputAt: Date.now() });
-        this.appendTranscript("user", event.delta);
+        this.appendTranscript("user", event);
         break;
       case "session.output_transcript.delta":
         this.setDiag({ lastOutputAt: Date.now() });
-        this.appendTranscript("assistant", event.delta);
+        if (typeof event.delta === "string") this.speech.pulse(event.delta.length);
+        this.appendTranscript("assistant", event);
+        break;
+      case "session.thinking.appended":
+        this.setDiag({ contextAcked: this.snap.diag.contextAcked + 1 });
         break;
       case "session.input_audio.muted":
         this.set({ muted: true });
@@ -371,6 +419,18 @@ export class LiveVoiceSession {
       if (track) patch.micTrack = track.readyState;
     }
     this.setDiag(patch);
+    this.closeIdleTurns();
+  }
+
+  private closeIdleTurns(): void {
+    const closed = this.segmenter?.tick(Date.now()) ?? [];
+    if (closed.length > 0) this.publishTurns(closed);
+  }
+
+  /** New snapshot of the turns, then the closed ones to the listeners. */
+  private publishTurns(closed: VoiceTurn[]): void {
+    if (this.segmenter) this.set({ turns: this.segmenter.turns.slice() });
+    for (const turn of closed) for (const listener of this.finalListeners) listener(turn);
   }
 
   private onChannelClosed(attempt: number): void {
@@ -385,14 +445,12 @@ export class LiveVoiceSession {
     }
   }
 
-  /** Transcript deltas carry no turn id: consecutive fragments of one speaker form one bubble. */
-  private appendTranscript(role: TranscriptEntry["role"], delta: unknown): void {
-    if (typeof delta !== "string" || !delta) return;
-    const transcript = this.snap.transcript.slice();
-    const last = transcript[transcript.length - 1];
-    if (last && last.role === role) transcript[transcript.length - 1] = { role, text: last.text + delta };
-    else transcript.push({ role, text: delta });
-    this.set({ transcript: transcript.slice(-TRANSCRIPT_MAX) });
+  /** Fragments carry no turn id: the segmenter settles them into turns (./voiceTurns.ts). */
+  private appendTranscript(role: VoiceTurn["role"], event: { delta?: unknown; start_ms?: unknown; end_ms?: unknown }): void {
+    if (typeof event.delta !== "string" || !event.delta || !this.segmenter) return;
+    const ms = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+    const closed = this.segmenter.push(role, event.delta, Date.now(), ms(event.start_ms), ms(event.end_ms));
+    this.publishTurns(closed);
   }
 
   private fail(attempt: number, message: string): void {
@@ -408,6 +466,15 @@ export class LiveVoiceSession {
 
   private teardown(): void {
     this.attempt++;
+    // Whatever was being said when the call ended is a turn too — closed before anything else goes.
+    const segmenter = this.segmenter;
+    this.segmenter = null;
+    const closed = segmenter?.flush() ?? [];
+    if (segmenter && closed.length > 0) {
+      this.set({ turns: segmenter.turns.slice() });
+      for (const turn of closed) for (const listener of this.finalListeners) listener(turn);
+    }
+    this.speech.reset();
     this.clearStartTimer();
     if (this.closeTimer) clearTimeout(this.closeTimer);
     this.closeTimer = null;

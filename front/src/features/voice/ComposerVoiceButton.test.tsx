@@ -3,16 +3,17 @@ import type { ReactElement, ReactNode } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { TerminalComposer, resetDraftsForTesting } from "@/features/board/components/TerminalComposer";
-import { ComposerVoiceButton } from "./ComposerVoiceButton";
+import { ComposerVoiceButton, VoiceCallContext, type VoiceCallControl } from "./ComposerVoiceButton";
 import { MOBILE_QUERY } from "@/lib/useIsMobile";
 import { get } from "@/lib/api";
 
 /**
  * The card composer's voice button while the voice mode is on. Desktop: outside the field, beside
  * the dictation mic. Phone: the field's corner — EMPTY draft → blue "talk by voice", TEXT → the send
- * arrow. Either way /voice opens with the card in its URL. Off, the composer is what it always was.
+ * arrow. Either way the call starts RIGHT HERE (the chat hosting the composer provides the control)
+ * — no page change. Off, or in a composer no chat hosts a call in, the composer is what it was.
  */
 
 vi.mock("@/lib/api", () => ({
@@ -46,20 +47,20 @@ function setViewport(mobile: boolean): void {
   })) as unknown as typeof window.matchMedia;
 }
 
-function VoiceRoute() {
-  const location = useLocation();
-  return <div data-testid="voice-page">{`${location.pathname}${location.search}`}</div>;
+function control(inCall = false): VoiceCallControl {
+  return { inCall, start: vi.fn(), stop: vi.fn() };
 }
 
-function renderInApp(ui: ReactElement) {
+let call: VoiceCallControl = control();
+
+function renderInApp(ui: ReactElement, host: VoiceCallControl | null = call) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   function Wrapper({ children }: { children: ReactNode }) {
     return (
       <QueryClientProvider client={client}>
         <MemoryRouter initialEntries={["/?project=p1&card=card-1"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
           <Routes>
-            <Route path="/" element={children} />
-            <Route path="/voice" element={<VoiceRoute />} />
+            <Route path="/" element={<VoiceCallContext.Provider value={host}>{children}</VoiceCallContext.Provider>} />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>
@@ -72,6 +73,7 @@ const realMatchMedia = window.matchMedia;
 beforeEach(() => {
   resetDraftsForTesting();
   mockGet.mockReset();
+  call = control();
   setViewport(false);
 });
 afterEach(() => {
@@ -117,14 +119,46 @@ describe("composer voice button — voice mode on", () => {
     expect(screen.getByRole("textbox").className).toContain("pr-14");
   });
 
-  it.each([false, true])("opens /voice with the card and project in the URL, and sends nothing (mobile=%s)", async (mobile) => {
+  it.each([false, true])("starts the call in this chat — no navigation — and sends nothing (mobile=%s)", async (mobile) => {
     setViewport(mobile);
     server({ voice: true });
     const onSend = vi.fn();
     renderInApp(<TerminalComposer onSend={onSend} cardId="card-1" />);
     await userEvent.click(await screen.findByRole("button", { name: /talk by voice/i }));
-    expect(screen.getByTestId("voice-page")).toHaveTextContent("/voice?project=p1&card=card-1");
+    expect(call.start).toHaveBeenCalledTimes(1);
     expect(onSend).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox")).toBeInTheDocument();
+  });
+
+  it("desktop, during a call: the same seat ends it, and the field keeps working", async () => {
+    server({ voice: true });
+    call = control(true);
+    const onSend = vi.fn();
+    const user = userEvent.setup();
+    renderInApp(<TerminalComposer onSend={onSend} cardId="card-1" />);
+    const end = await screen.findByRole("button", { name: /end voice call/i });
+    expect(end).toHaveAttribute("aria-pressed", "true");
+    await user.type(screen.getByRole("textbox"), "manda o log{Enter}");
+    expect(onSend).toHaveBeenCalledWith("manda o log");
+    await user.click(end);
+    expect(call.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("during a call the dictation mic is off — the call holds the microphone", async () => {
+    server({ voice: true });
+    call = control(true);
+    renderInApp(<TerminalComposer onSend={vi.fn()} cardId="card-1" />);
+    await screen.findByRole("button", { name: /end voice call/i });
+    expect(screen.getByRole("button", { name: "Record a message" })).toBeDisabled();
+  });
+
+  it("phone, during a call: the corner is the send arrow (the call's controls are in its strip)", async () => {
+    setViewport(true);
+    server({ voice: true });
+    call = control(true);
+    renderInApp(<TerminalComposer onSend={vi.fn()} cardId="card-1" />);
+    expect(await screen.findByTestId("composer-send")).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /talk by voice/i })).not.toBeInTheDocument();
   });
 
   it("phone: typing turns it into the send arrow, which sends normally; clearing turns it back", async () => {
@@ -153,17 +187,17 @@ describe("composer voice button — voice mode on", () => {
     await screen.findByRole("button", { name: /talk by voice/i });
     await userEvent.type(screen.getByRole("textbox"), "{Enter}");
     expect(onSend).not.toHaveBeenCalled();
-    expect(screen.queryByTestId("voice-page")).not.toBeInTheDocument();
+    expect(call.start).not.toHaveBeenCalled();
   });
 
-  it("is keyboard reachable: Tab to it, Enter opens the conversation", async () => {
+  it("is keyboard reachable: Tab to it, Enter starts the call", async () => {
     server({ voice: true });
     const user = userEvent.setup();
     renderInApp(<TerminalComposer onSend={vi.fn()} cardId="card-1" />);
     const voice = await screen.findByRole("button", { name: /talk by voice/i });
     voice.focus();
     await user.keyboard("{Enter}");
-    expect(screen.getByTestId("voice-page")).toBeInTheDocument();
+    expect(call.start).toHaveBeenCalledTimes(1);
   });
 
   it("desktop: no voice button while editing a sent message", async () => {
@@ -212,6 +246,14 @@ describe("composer voice button — voice mode off (regression)", () => {
     renderInApp(<TerminalComposer onSend={vi.fn()} />);
     expect(mockGet).not.toHaveBeenCalledWith("/voice/live");
   });
+
+  it("a composer in a chat that hosts no call (the older transcript chat) offers no voice", async () => {
+    server({ voice: true });
+    renderInApp(<TerminalComposer onSend={vi.fn()} cardId="card-1" />, null);
+    await screen.findByRole("button", { name: "Record a message" });
+    expect(mockGet).not.toHaveBeenCalledWith("/voice/live");
+    expect(screen.queryByTestId("composer-voice")).not.toBeInTheDocument();
+  });
 });
 
 describe("ComposerVoiceButton states", () => {
@@ -219,7 +261,7 @@ describe("ComposerVoiceButton states", () => {
     const onSend = vi.fn();
     render(
       <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-        <ComposerVoiceButton cardId="card-1" empty sending={false} busy={false} voice onSend={onSend} {...props} />
+        <ComposerVoiceButton control={control()} empty sending={false} busy={false} voice onSend={onSend} {...props} />
       </MemoryRouter>,
     );
     return onSend;
