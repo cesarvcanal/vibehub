@@ -804,6 +804,32 @@ describe("CardTerminalView — the card bar", () => {
     expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/Max/));
   });
 
+  it("a level the native chat took LIVE says so, keeps the terminal attached, and the pill shows it at once", async () => {
+    // Produção, 2026-10-27: Médio → Alto with the turn running read "vale assim que o Claude terminar"
+    // and the pill went on saying Médio. Now the driver applies it in place, and the bar follows the click.
+    serveSession({ model: "claude-opus-5-5", modelLabel: "Opus 5.5", effort: "medium" });
+    mockPatch.mockResolvedValue({ card: card({ openedAt: 10, effort: "high" }), session: "live" });
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10, effort: "medium" })]);
+
+    await waitFor(() => expect(screen.getByLabelText("Model")).toHaveTextContent("Opus 5.5 · Medium"));
+    const before = screen.getByTestId("xterm").getAttribute("data-reconnect");
+    await openMenu(user, "Model");
+    // The next reading has not landed yet (a slow runner): the pill must not wait for it.
+    const base = mockGet.getMockImplementation();
+    mockGet.mockImplementation((url: string, ...rest: unknown[]) =>
+      url === "/cards/c1/session" ? new Promise(() => {}) : (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest),
+    );
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "High" }));
+    await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/cards/c1", { effort: "high" }));
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/High — in effect now, Claude goes on from where it was/)),
+    );
+    expect(screen.getByLabelText("Model")).toHaveTextContent("Opus 5.5 · High");
+    // Nothing was restarted, so there is no restart nonce: only the pin itself is in the key.
+    expect(screen.getByTestId("xterm").getAttribute("data-reconnect")).toBe(before!.replace(":medium", ":high"));
+  });
+
   it("an UNPINNED card still ticks the level its session runs on — read from the transcript", async () => {
     serveSession({ model: "claude-opus-5-5", modelLabel: "Opus 5.5", effort: "medium" });
     const user = userEvent.setup();

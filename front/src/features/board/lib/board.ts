@@ -216,6 +216,8 @@ export function moveProjectLocal(projects: BoardProject[], id: string, toIndex: 
  *  - `working`    — the hook says Claude is in a turn right now. The only state that moves.
  *                   Except when that turn is STOPPED on the person (`awaitingDecisionAt`: a question
  *                   or permission card of the native chat is open) — then it is `needs_me`.
+ *                   The same once the turn is OVER and its last words are a question to the person
+ *                   (`pendingQuestionAt`, the chat's "Decisões pendentes" tray) — even on a cold session.
  *  - `done`       — filed under Done by the user.
  *  - `paused`     — parked by the user; the session is gone.
  *  - `hibernated` — the session went cold on its own.
@@ -268,6 +270,7 @@ export function cardState(
     | "declaredState"
     | "declaredSummary"
     | "awaitingDecisionAt"
+    | "pendingQuestionAt"
   >,
 ): CardState | null {
   const make = (kind: CardStateKind, summary?: string): CardState => ({
@@ -275,14 +278,21 @@ export function cardState(
     label: t(`status.${kind}`),
     ...(summary ? { summary } : {}),
   });
+  // The conversation STOPPED on a question to the person — what the chat's pending-decisions tray
+  // lists. It waits on them whether or not a process is still warm behind it; only their own filing
+  // (done, paused) outranks it. The neutral "your turn" circle there read as "nothing to decide"
+  // (produção, 2026-10-27).
+  const asks = !!card.pendingQuestionAt && card.status !== "working" && card.column !== "done" && !card.pausedAt;
   // No process behind it: a spinner over a dead session would be a lie, whatever the last hook said.
-  if (card.hibernatedAt) return make("hibernated");
+  if (card.hibernatedAt) return make(asks ? "needs_me" : "hibernated");
   // The turn is technically open, but it is blocked on the person (a question/permission card of
   // the native chat): a spinner here read as "Claude is on it" and nobody went to decide.
   if (card.status === "working") return make(card.awaitingDecisionAt ? "needs_me" : "working");
   if (card.column === "done") return make("done");
   if (card.pausedAt) return make("paused");
   const declared = card.declaredState ? DECLARED_KIND[card.declaredState] : undefined;
+  // The agent's own "blocked"/"needs me" says the same thing with its summary — that one stays.
+  if (asks && declared !== "blocked" && declared !== "needs_me") return make("needs_me");
   if (declared) return make(declared, card.declaredSummary?.trim() || undefined);
   if (card.status === "waiting") return make("your_turn");
   if (card.openedAt) return make("idle");

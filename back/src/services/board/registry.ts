@@ -416,6 +416,15 @@ export interface Card {
    */
   awaitingDecisionAt?: number | null;
   /**
+   * Since when the card's conversation is STOPPED ON A QUESTION to the person (epoch ms): the turn
+   * ended and the agent's last words close on a question directed at them, with no message since —
+   * the prose question the chat's "Decisões pendentes" tray shows. Unlike `awaitingDecisionAt` the
+   * turn is OVER (`waiting`): this is what makes the card's icon the "precisa de você" instead of the
+   * neutral "sua vez". Written by the sdk layer (see services/sdk/pendingQuestion.ts), cleared when
+   * the next turn starts; null/absent = nothing pending.
+   */
+  pendingQuestionAt?: number | null;
+  /**
    * PREVIEWS the agent registered on this card (`vibehub_preview`): ports the user can open through
    * the proxy, deduped by port. Ports that stop listening are pruned when the runner is scanned
    * (GET /api/preview/ports) — no daemon watches them. Absent = the agent registered none.
@@ -1757,6 +1766,9 @@ export async function applyCardStatus(cardId: string, status: CardStatus): Promi
     if (status === "working" && card.status !== "working") {
       card.declaredState = undefined;
       card.declaredSummary = undefined;
+      // Same for the question the last turn closed on: a new turn is the conversation moving on
+      // (an answer, or the agent going on by itself). Its end decides again.
+      card.pendingQuestionAt = null;
     }
     card.status = status;
     card.statusAt = Date.now();
@@ -1953,6 +1965,19 @@ export async function setCardAwaitingDecision(cardId: string, at: number | null)
     const card = doc.cards.find((c) => c.id === cardId);
     if (!card || Boolean(card.awaitingDecisionAt) === (at !== null)) return;
     card.awaitingDecisionAt = at;
+  });
+}
+
+/**
+ * Sets (`at`) or clears (null) `pendingQuestionAt`. Writes ONLY on change — a card already stamped
+ * keeps the stamp of the first question, and clearing a clear card touches nothing. Never bumps
+ * updatedAt: a question waiting is not an edit of the card (same rule as `setCardAwaitingDecision`).
+ */
+export async function setCardPendingQuestion(cardId: string, at: number | null): Promise<void> {
+  await store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    if (!card || Boolean(card.pendingQuestionAt) === (at !== null)) return;
+    card.pendingQuestionAt = at;
   });
 }
 

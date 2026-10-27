@@ -402,6 +402,12 @@ export interface Card {
    * null/absent = nothing pending. Only meaningful while `status` is `working`.
    */
   awaitingDecisionAt?: number | null;
+  /**
+   * Since when the card's conversation is STOPPED on a question to the person (epoch ms): the turn
+   * ended on one and nobody answered — the prose question of the chat's "Decisões pendentes" tray.
+   * Set by the server at the end of each turn, cleared when the next one starts.
+   */
+  pendingQuestionAt?: number | null;
   /** Last time a human typed into this card's terminal (epoch ms). */
   humanActiveAt?: number;
   /**

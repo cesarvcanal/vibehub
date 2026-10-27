@@ -1575,3 +1575,28 @@ describe("setCardAwaitingDecision", () => {
     await expect(reg.setCardAwaitingDecision("nope", 1)).resolves.toBeUndefined();
   });
 });
+
+describe("setCardPendingQuestion", () => {
+  it("stamps once, clears, never bumps updatedAt — and the next turn starting clears it", async () => {
+    const reg = await freshRegistry();
+    const project = await reg.createProject({ name: "Shop" });
+    const id = (await reg.createCard({ projectId: project.id, title: "Checkout" })).id;
+    await reg.applyCardStatus(id, "waiting");
+    const updatedAt = (await reg.getCard(id))!.updatedAt;
+    await reg.setCardPendingQuestion(id, 100);
+    await reg.setCardPendingQuestion(id, 200);
+    expect((await reg.getCard(id))!.pendingQuestionAt).toBe(100);
+    expect((await reg.getCard(id))!.updatedAt).toBe(updatedAt);
+    await reg.setCardPendingQuestion(id, null);
+    expect((await reg.getCard(id))!.pendingQuestionAt ?? null).toBeNull();
+    await expect(reg.setCardPendingQuestion("nope", 1)).resolves.toBeUndefined();
+
+    // The person answers (or the agent goes on by itself): the turn that starts is the conversation
+    // moving on — the question it closed on is no longer what the card waits for.
+    await reg.setCardPendingQuestion(id, 300);
+    await reg.applyCardStatus(id, "waiting"); // a repeated idle report changes nothing
+    expect((await reg.getCard(id))!.pendingQuestionAt).toBe(300);
+    await reg.applyCardStatus(id, "working");
+    expect((await reg.getCard(id))!.pendingQuestionAt ?? null).toBeNull();
+  });
+});

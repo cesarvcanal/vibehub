@@ -879,7 +879,7 @@ describe("model signals", () => {
       line({ type: "assistant", timestamp: "2026-08-22T03:00:00Z", message: { model: "claude-fable-5", content: [] } }),
       line({ type: "assistant", timestamp: "2026-08-22T03:05:00Z", message: { model: "<synthetic>", content: [] } }),
     ].join("\n");
-    expect(maestro.parseLastTurn(jsonl)).toEqual({ model: "claude-fable-5", at: Date.parse("2026-08-22T03:00:00Z"), effort: null });
+    expect(maestro.parseLastTurn(jsonl)).toEqual({ model: "claude-fable-5", at: Date.parse("2026-08-22T03:00:00Z"), effort: null, requestedAt: 0 });
   });
 
   it("a /model choice newer than the last reply wins; an older one loses", async () => {
@@ -948,6 +948,41 @@ describe("model signals", () => {
     expect(maestro.pickEffort({ effort: null, at: 0 }, { effort: "high" }, { effort: "low", at: 0 })).toBe("low");
     expect(maestro.pickEffort({ effort: null, at: 0 }, { effort: "high" })).toBe("high");
     expect(maestro.pickEffort({ effort: null, at: 0 }, { effort: null })).toBeNull();
+  });
+
+  it("dates each reply by the REQUEST that produced it: the last tool result or message before it", async () => {
+    const { maestro } = await load();
+    const line = (obj: unknown) => JSON.stringify(obj);
+    // The shape of a real transcript (SDK 0.3.300): every call to the model follows the user entry
+    // (a message or a tool result) that triggered it, and all blocks of one answer share it.
+    const jsonl = [
+      line({ type: "user", timestamp: "2026-10-27T19:45:41.670Z", message: { content: "faz" } }),
+      line({ type: "assistant", timestamp: "2026-10-27T19:45:46.836Z", effort: "low", message: { model: "claude-sonnet-5-5", content: [] } }),
+      line({ type: "user", timestamp: "2026-10-27T19:45:49.181Z", message: { content: [{ type: "tool_result" }] } }),
+      line({ type: "assistant", timestamp: "2026-10-27T19:45:51.565Z", effort: "high", message: { model: "claude-sonnet-5-5", content: [] } }),
+      line({ type: "assistant", timestamp: "2026-10-27T19:45:51.627Z", effort: "high", message: { model: "claude-sonnet-5-5", content: [] } }),
+    ].join("\n");
+    expect(maestro.parseLastTurn(jsonl)).toEqual({
+      model: "claude-sonnet-5-5",
+      at: Date.parse("2026-10-27T19:45:51.627Z"),
+      effort: "high",
+      requestedAt: Date.parse("2026-10-27T19:45:49.181Z"),
+    });
+  });
+
+  it("a reply REQUESTED before the switch does not take the pill back to the old level", async () => {
+    const { maestro } = await load();
+    // Produção, 2026-10-27: Médio → Alto with the turn running. The answer already on its way was
+    // asked for in `medium` and lands AFTER the switch, stamped `medium` — it said nothing about the
+    // session from the switch on, and the pill fell back to Médio.
+    const inFlight = { effort: "medium", at: 3000, requestedAt: 1000 };
+    expect(maestro.pickEffort(inFlight, { effort: null }, { effort: "high", at: 2000 })).toBe("high");
+    // The next request, made after the switch, is the truth — whatever it says. Applied live, it is
+    // the new level; a session that did not take it (a terminal waiting to restart) still says so.
+    expect(maestro.pickEffort({ effort: "high", at: 5000, requestedAt: 4000 }, { effort: null }, { effort: "high", at: 2000 })).toBe("high");
+    expect(maestro.pickEffort({ effort: "medium", at: 5000, requestedAt: 4000 }, { effort: null }, { effort: "high", at: 2000 })).toBe("medium");
+    // A transcript tail with no request entry left in it falls back to the reply's own date.
+    expect(maestro.pickEffort({ effort: "medium", at: 3000, requestedAt: 0 }, { effort: null }, { effort: "high", at: 2000 })).toBe("medium");
   });
 
   it("labels the aliases settings.json uses", async () => {

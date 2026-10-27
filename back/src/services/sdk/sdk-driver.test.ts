@@ -746,6 +746,66 @@ describe("sdk-driver.mjs — a inteligência do card sobrevive ao ultrathink", (
   }, 60_000);
 });
 
+/**
+ * A INTELIGÊNCIA TROCADA NO PILL COM O TURNO RODANDO (produção, 2026-10-27): ela esperava um
+ * reinício que só vinha no fim do turno, e o turno seguia no nível velho. O `set_effort` entra na
+ * sessão viva na hora — medido no CLI de verdade (SDK 0.3.300, 2026-10-27): `applyFlagSettings` no
+ * meio do turno e as chamadas seguintes do MESMO turno saíram carimbadas no nível novo.
+ */
+describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () => {
+  it("vai para a sessão viva NA HORA, sem esperar o turno acabar", async () => {
+    const driver = startDriver(["--effort", "medium"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "revisa slow" });
+    await driver.waitMark("slow:running");
+    driver.send({ type: "set_effort", effort: "high" });
+    await driver.waitMark('flags:{"effortLevel":"high"}');
+    // Aplicado com o turno ainda aberto: nenhum result até aqui, nenhum stream novo.
+    expect(driver.events.some((e) => e.type === "result")).toBe(false);
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+  }, 60_000);
+
+  it("sem stream de pé, o PRÓXIMO já nasce no nível novo", async () => {
+    const driver = startDriver(["--effort", "medium"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "set_effort", effort: "xhigh" });
+    driver.send({ type: "user", text: "oi" });
+    await driver.waitMark("effort:xhigh");
+    await driver.waitFor((e) => e.type === "result");
+    // (O `effort:medium` do boot é a consulta descartável do catálogo, que a primeira mensagem encerra.)
+    expect(driver.marks.filter((m) => m.startsWith("effort:")).at(-1)).toBe("effort:xhigh");
+  }, 60_000);
+
+  it("um turno ultrathink em voo segura o max; a devolução no fim dele já é o nível novo", async () => {
+    const driver = startDriver(["--effort", "low"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
+    await driver.waitMark('flags:{"effortLevel":"max"}');
+    await driver.waitMark("slow:running");
+    driver.send({ type: "set_effort", effort: "high" });
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+    await driver.waitMark('flags:{"effortLevel":"high"}');
+    // O max do ultrathink não foi cortado no meio do turno, e o nível velho não volta.
+    const flags = driver.marks.filter((m) => m.startsWith("flags:"));
+    expect(flags).toEqual(['flags:{"effortLevel":"max"}', 'flags:{"effortLevel":"high"}']);
+  }, 60_000);
+
+  it("um nível que não existe não chega ao CLI", async () => {
+    const driver = startDriver(["--effort", "medium"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "revisa slow" });
+    await driver.waitMark("slow:running");
+    driver.send({ type: "set_effort", effort: "turbo" });
+    driver.send({ type: "set_effort", effort: "low" });
+    await driver.waitMark('flags:{"effortLevel":"low"}');
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual(['flags:{"effortLevel":"low"}']);
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+  }, 60_000);
+});
+
 describe("sdk-driver.mjs — a pasta do card sumiu", () => {
   it("diz que a pasta de trabalho não existe mais, em vez do erro de libc do SDK", async () => {
     const gone = join(sandbox, "worktree-removida");

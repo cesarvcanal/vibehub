@@ -442,6 +442,7 @@ export const ptBR: Record<string, string> = {
   "cardView.effort.xhigh": "Extra alto",
   "cardView.effort.max": "Máximo",
   "cardView.effortSwitched": "Inteligência: {label} — a sessão reinicia nela, mesma conversa.",
+  "cardView.effortSwitchedLive": "Inteligência: {label} — já valendo, o Claude segue de onde estava.",
   "cardView.effortSwitchPending": "Inteligência: {label} — vale assim que o Claude terminar o que está fazendo.",
   "cardView.effortSwitchError": "Não deu pra trocar a inteligência",
   "cardView.claudeAccount": "Conta Claude",

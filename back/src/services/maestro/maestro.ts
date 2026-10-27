@@ -860,11 +860,23 @@ export function parseLastModel(jsonl: string): string | null {
   return parseLastTurn(jsonl).model;
 }
 
-/** The last assistant turn's model and WHEN it happened (epoch ms, 0 when unknown). PURE. */
-export function parseLastTurn(jsonl: string): { model: string | null; at: number; effort: string | null } {
+/** Epoch ms of a transcript entry's `timestamp`, 0 when it has none. PURE. */
+function entryTime(obj: object): number {
+  const ts = (obj as { timestamp?: unknown }).timestamp;
+  return typeof ts === "string" ? Date.parse(ts) || 0 : typeof ts === "number" ? ts : 0;
+}
+
+/**
+ * The last assistant turn's model and WHEN it happened (epoch ms, 0 when unknown) — and when it was
+ * ASKED FOR: `requestedAt` is the user entry (a message or a tool result) right before it, the one
+ * whose arrival made the CLI call the model; 0 when the tail does not reach back to it. PURE.
+ */
+export function parseLastTurn(jsonl: string): { model: string | null; at: number; effort: string | null; requestedAt: number } {
   let model: string | null = null;
   let at = 0;
   let effort: string | null = null;
+  let requestedAt = 0;
+  let lastUserAt = 0;
   for (const line of jsonl.split(/\r?\n/)) {
     const s = line.trim();
     if (!s) continue;
@@ -874,36 +886,46 @@ export function parseLastTurn(jsonl: string): { model: string | null; at: number
     } catch {
       continue;
     }
-    if (!obj || typeof obj !== "object" || (obj as { type?: unknown }).type !== "assistant") continue;
+    if (!obj || typeof obj !== "object") continue;
+    if ((obj as { type?: unknown }).type === "user") {
+      lastUserAt = entryTime(obj);
+      continue;
+    }
+    if ((obj as { type?: unknown }).type !== "assistant") continue;
     const m = (obj as { message?: { model?: unknown } }).message?.model;
     // Claude Code logs a "<synthetic>" assistant turn for its own notices (rate limit, errors) — it
     // is not a model the session is running, so it must not replace the real one.
     if (typeof m === "string" && m && !m.startsWith("<")) {
       model = m;
-      const ts = (obj as { timestamp?: unknown }).timestamp;
-      at = typeof ts === "string" ? Date.parse(ts) || 0 : typeof ts === "number" ? ts : 0;
+      at = entryTime(obj);
+      requestedAt = lastUserAt;
       // Claude Code stamps every assistant turn with the session's reasoning level (`effort`) — the
       // only place that says what an UNPINNED card is really running on.
       const e = (obj as { effort?: unknown }).effort;
       effort = isValidEffort(typeof e === "string" ? e : null) ? (e as string) : null;
     }
   }
-  return { model, at, effort };
+  return { model, at, effort, requestedAt };
 }
 
 /**
  * The reasoning level the session is on. Same contest as `pickModel`: a pin change (set OR cleared)
- * NEWER than the last reply restarted the session onto it, so it is the truth until the next reply —
- * and a cleared pin means "the account decides", unknown until that reply says so. Otherwise the
- * last reply's stamp wins (`/effort` typed in the terminal), then the pin, then settings.json's
- * `effortLevel`. PURE.
+ * NEWER than the last reply took the session onto it — applied live in the native chat, or by a
+ * restart — so it is the truth until the next reply — and a cleared pin means "the account
+ * decides", unknown until that reply says so. Otherwise the last reply's stamp wins (`/effort` typed
+ * in the terminal), then the pin, then settings.json's `effortLevel`. PURE.
+ *
+ * "Newer than the last reply" is counted from the REQUEST, not from the reply landing: an answer
+ * already on its way when the level changed was asked for in the old one, and arrives stamped with
+ * it. Dated by its arrival it beat the switch and the pill fell back to the old level with the
+ * session already on the new one (produção, 2026-10-27 — Médio → Alto mid-turn, back to Médio).
  */
 export function pickEffort(
-  lastTurn: { effort: string | null; at: number },
+  lastTurn: { effort: string | null; at: number; requestedAt?: number },
   settings: { effort: string | null },
   pin: { effort: string | null; at: number } = { effort: null, at: 0 },
 ): string | null {
-  if (pin.at && pin.at >= lastTurn.at) return pin.effort ?? settings.effort;
+  if (pin.at && pin.at >= (lastTurn.requestedAt || lastTurn.at)) return pin.effort ?? settings.effort;
   return lastTurn.effort ?? pin.effort ?? settings.effort;
 }
 

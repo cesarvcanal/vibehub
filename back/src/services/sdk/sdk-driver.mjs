@@ -64,7 +64,8 @@ const INITIAL_RESUME = argOf("--resume"); // a stored session_id to continue on 
 const MODEL = argOf("--model");
 // The card's reasoning level (whitelisted by the back before it reaches this argv). Kept, not just
 // forwarded: the end of an `ultrathink` turn gives the session back THIS level (see clearUltra).
-const EFFORT = argOf("--effort");
+// And it CHANGES: a switch in the pill arrives as `set_effort` and goes into the live session.
+let EFFORT = argOf("--effort");
 // Mirror of `parseGateMode` in protocol.ts: anything unrecognised falls back to the STRICTER mode.
 const GATE_MODE = argOf("--permission-gate") === "same-as-terminal" ? "same-as-terminal" : "ask-sensitive";
 /* ------------------------------------------------------------- output */
@@ -1349,6 +1350,46 @@ async function clearUltra() {
   } catch { /* the stream is gone, and a dead stream has no effort to give back */ }
 }
 
+/* ------------------------------------------- the card's reasoning level, switched live */
+
+const EFFORT_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
+
+/**
+ * The card's intelligence was switched in the pill with this driver up (`set_effort`). It used to
+ * wait for a restart that only came once the turn ended — and a turn with subagents in the
+ * background never ended in time: the session went on in the old level while the pill promised the
+ * new one (produção, 2026-10-27). Now the level goes into the live stream's flag layer right away,
+ * mid-turn included: the CLI reads the effort per request, so the next call to the model already
+ * uses it, and the conversation goes on from exactly where it was.
+ *
+ * From here on EFFORT is this level: a new stream starts on it, and an `ultrathink` turn gives it
+ * back at its end. That same `ultrathink` turn, while in flight, holds the flag at `max` — writing
+ * the new level now would cut it short, so it is left to the give-back (clearUltra).
+ */
+async function setCardEffort(level) {
+  if (!EFFORT_LEVELS.has(level)) return;
+  EFFORT = level;
+  if (ultraRaised && "effortLevel" in ultraRaised) return;
+  const handle = currentQuery;
+  // No stream yet: the next one starts with `effort: EFFORT` (sdkOptions).
+  if (!handle || typeof handle.applyFlagSettings !== "function") return;
+  if (typeof handle.initializationResult === "function") {
+    // A stream that has only just been created has no CLI behind it yet (see raiseUltra).
+    try {
+      await Promise.race([
+        handle.initializationResult(),
+        new Promise((resolve) => setTimeout(resolve, ULTRA_INIT_TIMEOUT_MS)),
+      ]);
+    } catch { /* boot failed on its own terms */ }
+  }
+  if (currentQuery !== handle) return; // the stream died while we waited; the next starts on EFFORT
+  try {
+    await handle.applyFlagSettings({ effortLevel: level });
+  } catch (err) {
+    trace(`could not apply effort ${level} to the live session: ${err && err.message ? err.message : String(err)}`);
+  }
+}
+
 function sendUser(text) {
   const ultra = ultraKeywords(text);
   const fresh = !channel;
@@ -1733,6 +1774,11 @@ rl.on("line", (line) => {
   if (control && control.type === "btw" && typeof control.id === "string" && typeof control.question === "string") {
     // FORA da fila `serialized`: a pergunta lateral não espera nada nem segura nada.
     queueBtw(control.id, control.question);
+    return;
+  }
+  if (control && control.type === "set_effort" && typeof control.effort === "string") {
+    // FORA da fila `serialized`: a troca vale para o turno que já está rodando, não espera por ele.
+    void setCardEffort(control.effort);
     return;
   }
   if (control && control.type === "reanchor") {

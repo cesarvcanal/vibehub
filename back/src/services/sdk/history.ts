@@ -155,6 +155,14 @@ export function appendHistoryReported(cardId: string, event: HistoryEvent): Prom
   return next.then(() => written);
 }
 
+/**
+ * Resolves once every append queued so far for this card has landed (or failed) — what a read that
+ * must SEE the latest lines waits on. Never rejects: the chain swallows its own failures.
+ */
+export function historySettled(cardId: string): Promise<void> {
+  return (chains.get(cardId) ?? Promise.resolve()).then(() => undefined);
+}
+
 /** Append one event to a card's log. Fire-and-forget safe: never throws, never blocks the stream. */
 export function appendHistory(cardId: string, event: HistoryEvent): Promise<void> {
   return appendHistoryReported(cardId, event).then(() => undefined);

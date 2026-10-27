@@ -231,6 +231,32 @@ export function cardDriverActivity(cardId: string): DriverActivity {
   return best;
 }
 
+/**
+ * Hands a card's new reasoning level to its native chat driver, LIVE: answers true when a running
+ * driver took it (the very next call to the model already uses it, mid-turn included), false when
+ * there is no driver to take it — the caller then restarts the session onto it, as before.
+ * REGISTERED, for the same cycle as above.
+ */
+type EffortApplier = (cardId: string, effort: string) => boolean;
+const effortAppliers = new Set<EffortApplier>();
+
+export function onCardEffortApplier(applier: EffortApplier): () => void {
+  effortAppliers.add(applier);
+  return () => effortAppliers.delete(applier);
+}
+
+export function applyLiveEffort(cardId: string, effort: string): boolean {
+  let applied = false;
+  for (const applier of effortAppliers) {
+    try {
+      if (applier(cardId, effort)) applied = true;
+    } catch {
+      /* a broken applier reads as "not applied": the session restarts onto the level instead */
+    }
+  }
+  return applied;
+}
+
 /* ------------------------------------- the native chat's BACKGROUND work (the status it implies) */
 
 /**
