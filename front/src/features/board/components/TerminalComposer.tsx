@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ArrowUp, Camera, Check, ImageIcon, Loader2, Mic, Paperclip, Pencil, Plus, RotateCw, Square, X } from "lucide-react";
 import { useInRouterContext } from "react-router-dom";
-import { ComposerVoiceButton, VoiceChatButton } from "@/features/voice/ComposerVoiceButton";
+import { ComposerVoiceButton, VoiceChatButton, useVoiceCallControl } from "@/features/voice/ComposerVoiceButton";
 import { useVoiceStatus } from "@/features/voice/status";
 import { Button } from "@/components/ui/button";
 import {
@@ -1105,13 +1105,16 @@ export function TerminalComposer({
   }, [text]);
 
   const recordingNow = recording === "recording";
-  // The voice conversation (the GPT-Live POC) exists only on a card's composer, inside the app's
-  // router, and only when the server has the mode on with a key. On a desktop it sits OUTSIDE the
-  // field, beside the dictation mic; on a phone it shares the field's corner with the send arrow.
-  // Off — the default — and the composer is exactly what it was.
+  // The voice call (GPT-Live) exists only on a card's composer inside a chat that HOSTS it (the
+  // native chat provides the control: the call happens right here, in this thread), and only when
+  // the server has the mode on with a key. On a desktop it sits OUTSIDE the field, beside the
+  // dictation mic; on a phone it shares the field's corner with the send arrow. Off — the default —
+  // and the composer is exactly what it was.
   const inRouter = useInRouterContext();
-  const voiceStatus = useVoiceStatus(inRouter && Boolean(cardId));
-  const voiceReady = inRouter && Boolean(cardId) && Boolean(voiceStatus.data?.enabled && voiceStatus.data.available);
+  const voiceCall = useVoiceCallControl();
+  const voiceStatus = useVoiceStatus(inRouter && Boolean(cardId) && voiceCall !== null);
+  const voiceReady =
+    voiceCall !== null && inRouter && Boolean(cardId) && Boolean(voiceStatus.data?.enabled && voiceStatus.data.available);
   const cornerButton = isMobile;
 
   return (
@@ -1280,9 +1283,9 @@ export function TerminalComposer({
         {/* The phone's send. IN the field's bottom-right corner rather than a fourth circle in the
             row, because a 390px screen has no width left after the "+", the microphone and
             something worth reading — and that corner is where a thumb already goes to send. */}
-        {isMobile && voiceReady && cardId ? (
+        {isMobile && voiceReady && voiceCall ? (
           <ComposerVoiceButton
-            cardId={cardId}
+            control={voiceCall}
             empty={isEmptyDraft(text, attachments)}
             sending={sending}
             busy={recording !== "idle"}
@@ -1337,12 +1340,13 @@ export function TerminalComposer({
               {/* The desktop's voice conversation: to the mic's left, drawn like it, so the column
                   keeps its height and the field its corner. Gone while the mic is taken (its
                   recording pill needs the room) or a sent message is being edited. */}
-              {!isMobile && voiceReady && !editing && recording === "idle" ? (
-                <VoiceChatButton cardId={cardId} disabled={sending} placement="column" />
+              {!isMobile && voiceReady && voiceCall && !editing && recording === "idle" ? (
+                <VoiceChatButton control={voiceCall} disabled={sending} placement="column" />
               ) : null}
               <VoiceControl
                 state={recording}
-                available={canRecord}
+                // A call holds the microphone: dictation waits (never two grants at once).
+                available={canRecord && !voiceCall?.inCall}
                 levels={levels}
                 mobile={isMobile}
                 elapsed={formatElapsed(elapsedMs)}

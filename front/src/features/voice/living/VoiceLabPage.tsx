@@ -43,6 +43,8 @@ const SCALARS: { id: ScalarSetting; label: string; min: number; max: number; ste
   { id: "colorMs", label: "Cor ao sair da marca", min: 60, max: 650, step: 10, unit: " ms" },
   { id: "spinColorMs", label: "Cor sincronizada ao giro", min: 250, max: 1600, step: 50, unit: " ms" },
   { id: "speechMorphMs", label: "Escutando ⇄ Respondendo", min: 80, max: 800, step: 10, unit: " ms" },
+  // Not in V37: how visibly the blue sphere answers the assistant's voice (0 = V37's original).
+  { id: "talkResponse", label: "Reação à voz da IA", min: 0, max: 200, step: 5, unit: "%" },
   { id: "returnRotation", label: "Giro extra na volta", min: -180, max: 180, step: 5, unit: "°" },
   { id: "returnSpread", label: "Dispersão na volta", min: 40, max: 160, step: 5, unit: "%" },
 ];
@@ -177,9 +179,9 @@ export function VoiceLabPage() {
         <section className="flex min-w-0 flex-1 flex-col items-center gap-3" aria-label="Prévia ao vivo">
           <div className="flex w-full items-center justify-between gap-2">
             <Button asChild variant="ghost" size="sm" className="-ml-2 text-[#94b5c7] hover:bg-white/5 hover:text-white">
-              <Link to={Paths.VOICE}>
+              <Link to={Paths.BOARD}>
                 <ArrowLeft />
-                /voice
+                Board
               </Link>
             </Button>
             <p className="text-[11px] uppercase tracking-[0.27em] text-[#77a9c8]">Living Intelligence · V37 · laboratório</p>

@@ -15,6 +15,7 @@ import type { ServerText } from "@/features/board/lib/sdkOutbox";
 import { hasToolDiff } from "@/features/board/lib/toolDiff";
 import type { RateLimitInfo } from "@/features/board/lib/planUsage";
 import { t as translate } from "@/i18n";
+import type { LocalVoiceTurn } from "@/features/voice/voiceTurns";
 
 /* ----------------------------------------------------------------- events */
 
@@ -91,6 +92,7 @@ export interface SdkEvent {
     | "user_nack"
     | "peer_typing"
     | "peer_question_draft"
+    | "voice_turn"
     | "error"
     | "parse_error";
   text?: string;
@@ -139,6 +141,9 @@ export interface SdkEvent {
   raw?: string;
   /** Message provenance on `user` events — who sent it (see lib/chat.ts `MessageOrigin`). */
   from?: MessageOrigin;
+  /** On `voice_turn`: the spoken turn's id (idempotency key) and who spoke — the person or the voice. */
+  vid?: string;
+  role?: string;
   /** "terminal" = the event was MIRRORED from the card's TUI transcript, not spoken by the driver. */
   source?: string;
   /** On `conversation_reset`: what reset the conversation ("clear" for a `/clear`). */
@@ -423,6 +428,24 @@ export type SdkRow =
    * reported it — and, like the terminal notes, it lives in the session only.
    */
   | { kind: "command_output"; id: string; text: string }
+  /**
+   * One SPOKEN turn of a voice call held in this chat — what the person said, or what the voice
+   * assistant answered (a different model from the card's agent: it talks, it does not act). Saved
+   * on the server and replayed like the typed messages; `vid` is its id there, the dedupe key.
+   * The view also draws the call's turns that are still being spoken or saved (see
+   * `mergeLiveVoiceTurns`): `live` = still being spoken, `save` = this tab's save state.
+   */
+  | {
+      kind: "voice";
+      id: string;
+      vid: string;
+      role: "user" | "assistant";
+      text: string;
+      at?: number;
+      from?: MessageOrigin;
+      live?: boolean;
+      save?: "saving" | "saved" | "failed";
+    }
   /**
    * A resposta de um `/btw`: a pergunta LATERAL feita com o turno rodando, respondida à parte (o
    * agente principal nunca a leu). Linha própria, nunca bolha do Claude — não é o turno falando.
@@ -1343,6 +1366,36 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       rows[at] = { ...(rows[at] as Extract<SdkRow, { kind: "btw" }>), ...outcome };
       return { ...state, rows };
     }
+    case "voice_turn": {
+      // A spoken turn, from the replay or announced live (this tab's own included, once the server
+      // saved it). Upserted by `vid`: the replay after a reconnect and the live echo never double it.
+      if (!event.vid || (event.role !== "user" && event.role !== "assistant") || !event.text) return state;
+      const at = state.rows.findIndex((row) => row.kind === "voice" && row.vid === event.vid);
+      const row: SdkRow = {
+        kind: "voice",
+        id: at >= 0 ? state.rows[at]!.id : `voice-${event.vid}`,
+        vid: event.vid,
+        role: event.role,
+        text: event.text,
+        at: typeof event.at === "number" ? event.at : undefined,
+        from: event.from,
+      };
+      if (at >= 0) {
+        const rows = [...state.rows];
+        rows[at] = row;
+        return { ...state, rows };
+      }
+      // The agent may be mid-answer (someone typed during the call): its streaming row must stay
+      // LAST — deltas and the consolidated text only ever write to the last row. The spoken turn
+      // goes in right above what is still being written.
+      let insertAt = state.rows.length;
+      while (insertAt > 0) {
+        const prev = state.rows[insertAt - 1]!;
+        if ((prev.kind === "assistant" || prev.kind === "thinking") && prev.streaming) insertAt--;
+        else break;
+      }
+      return { ...state, rows: [...state.rows.slice(0, insertAt), row, ...state.rows.slice(insertAt)] };
+    }
     case "system_note": {
       // The PANEL talking (a deploy interrupted a turn, the boot resumed it): one muted centered
       // line, never a bubble — it is about the conversation, not part of it.
@@ -2014,4 +2067,36 @@ export function groupSdkRows(rows: readonly SdkRow[], min: number = SDK_TOOL_FOL
   flush();
   flushFleet();
   return out;
+}
+
+/**
+ * The thread as drawn during (and right after) a voice call: the saved rows, plus the call's turns
+ * the server has not echoed back yet — the one being spoken, the one being saved — appended where
+ * they are happening, at the end. A turn leaves this overlay the moment its saved copy arrives (same
+ * `vid`), so it never shows twice. Returns `rows` itself when there is nothing to add. PURE.
+ */
+export function mergeLiveVoiceTurns(
+  rows: SdkRow[],
+  turns: ReadonlyArray<LocalVoiceTurn>,
+  self?: MessageOrigin,
+): SdkRow[] {
+  if (turns.length === 0) return rows;
+  const saved = new Set<string>();
+  for (const row of rows) if (row.kind === "voice") saved.add(row.vid);
+  const extra: SdkRow[] = [];
+  for (const turn of turns) {
+    if (saved.has(turn.vid) || !turn.text.trim()) continue;
+    extra.push({
+      kind: "voice",
+      id: `voice-${turn.vid}`,
+      vid: turn.vid,
+      role: turn.role,
+      text: turn.text,
+      at: turn.at,
+      from: self,
+      live: !turn.final,
+      save: turn.save,
+    });
+  }
+  return extra.length === 0 ? rows : [...rows, ...extra];
 }

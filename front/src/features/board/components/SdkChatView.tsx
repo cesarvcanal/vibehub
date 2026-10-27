@@ -28,6 +28,11 @@ import { wsUrl } from "@/lib/ws";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/providers/auth";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
+import { useVoiceCall } from "@/features/voice/useVoiceCall";
+import { VoiceCallBar } from "@/features/voice/VoiceCallBar";
+import { VoiceCallContext, type VoiceCallControl } from "@/features/voice/ComposerVoiceButton";
+import { VoiceTurnBubble } from "@/features/voice/VoiceTurnBubble";
+import { agentContext, typedContext } from "@/features/voice/voiceContext";
 import { PlanUsageAlert, cardRateLimitsKey, useCardPlanUsage } from "@/features/board/components/PlanUsage";
 import { planAlert, planWindows } from "@/features/board/lib/planUsage";
 import { LinkifiedText, Markdown, SenderTag } from "@/features/board/components/ChatView";
@@ -93,6 +98,7 @@ import {
   applySdkEvent,
   appendBtwRow,
   appendUserRow,
+  mergeLiveVoiceTurns,
   BTW_EXPIRE_MS,
   expireBtwRows,
   btwQuestion,
@@ -1146,9 +1152,77 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     }
   }, [readSettledState, viewer, beginEdit, beginQueueEdit]);
 
+  /* ------------------------------------------------------------ voice call */
+
+  /*
+   * A VOICE CALL IN THIS CHAT (features/voice/useVoiceCall.ts). Same thread, same composer: the
+   * spoken turns are drawn here as they are said and saved into this card's log; what is typed or
+   * attached during the call goes to the agent exactly as always, and the voice is told about it
+   * (and about the agent's answers) as quiet context — it cannot read files or images itself.
+   */
+  const [sentDuringCall, setSentDuringCall] = React.useState(false);
+  const callWorking = connected && (state.awaiting || state.turnActive);
+  /** The agent is working on something typed during the call — the call shows it as "thinking". */
+  const agentBusyForCall = sentDuringCall && callWorking;
+  const call = useVoiceCall({ cardId, agentBusy: agentBusyForCall });
+  const callLive = call.snap.state === "live";
+  if (!callWorking && sentDuringCall) setSentDuringCall(false);
+  const [callBarDismissed, setCallBarDismissed] = React.useState(false);
+  const voiceControl = React.useMemo<VoiceCallControl>(
+    () => ({
+      inCall: call.active,
+      start: () => {
+        setCallBarDismissed(false);
+        call.start();
+      },
+      stop: call.stop,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [call.active, call.start, call.stop],
+  );
+  // The chat stops being the one on screen (another card, the terminal tab): the call ends with it
+  // — a microphone left open in a conversation nobody is looking at is not a feature.
+  React.useEffect(() => {
+    if (!active && call.active) call.stop();
+  }, [active, call.active, call.stop]);
+  const sendFromComposer = React.useCallback(
+    async (raw: string): Promise<void> => {
+      await send(raw);
+      if (!callLive) return;
+      const note = typedContext(raw);
+      if (note && call.appendContext(note)) setSentDuringCall(true);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [send, callLive, call.appendContext],
+  );
+  // The agent's answers that land during the call reach the voice too. Keyed by TEXT: a reconnect
+  // replays the thread with new row ids, and must not re-tell the voice what it already knows.
+  const toldVoice = React.useRef<Set<string> | null>(null);
+  React.useEffect(() => {
+    if (!callLive) {
+      toldVoice.current = null;
+      return;
+    }
+    const answers = state.rows.filter(
+      (row): row is Extract<SdkRow, { kind: "assistant" }> => row.kind === "assistant" && !row.parent && !row.streaming && row.text.trim() !== "",
+    );
+    if (toldVoice.current === null) {
+      toldVoice.current = new Set(answers.map((row) => row.text));
+      return;
+    }
+    for (const row of answers) {
+      if (toldVoice.current.has(row.text)) continue;
+      toldVoice.current.add(row.text);
+      call.appendContext(agentContext(row.text));
+    }
+  }, [state.rows, callLive, call.appendContext]);
+  /** The thread as drawn: the saved rows plus the call's turns still being spoken or saved. */
+  const displayRows = React.useMemo(() => mergeLiveVoiceTurns(state.rows, call.turns, selfOrigin), [state.rows, call.turns, selfOrigin]);
+  const showCallBar = call.active || (call.phase === "error" && !callBarDismissed);
+
   /* ------------------------------------------------------------ scrolling */
 
-  const stick = useStickToBottom(state.rows);
+  const stick = useStickToBottom(displayRows);
 
   /* ----------------------------------------------------- pending decisions */
 
@@ -1202,10 +1276,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   // do principal não troca o valor do contexto nem redesenha os cards de subagente.
   const subagentRowsRef = React.useRef<SubagentSplit["children"] | undefined>(undefined);
   const split = React.useMemo(() => {
-    const next = splitSubagentRows(state.rows, subagentRowsRef.current);
+    const next = splitSubagentRows(displayRows, subagentRowsRef.current);
     subagentRowsRef.current = next.children;
     return next;
-  }, [state.rows]);
+  }, [displayRows]);
   const rendered = React.useMemo(() => groupSdkRows(split.main), [split.main]);
   const latestTodoId = React.useMemo(() => latestTodoRowId(split.main), [split.main]);
   const renderThreadRow = React.useCallback((row: SdkRow) => <SdkChatRow row={row} />, []);
@@ -1213,7 +1287,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     () => ({ subagentRows: split.children, latestTodoId, renderRow: renderThreadRow }),
     [split.children, latestTodoId, renderThreadRow],
   );
-  const empty = state.rows.length === 0;
+  const empty = displayRows.length === 0;
 
   /* -------------------------------------------------- what is running, right now */
 
@@ -1408,11 +1482,18 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
         <PlanUsageAlert alert={usageAlert} now={alertNow} className="max-w-[70%] shrink" />
       </div>
 
+      {showCallBar ? (
+        <div className="mt-1.5">
+          <VoiceCallBar call={call} agentBusy={agentBusyForCall} onClose={() => setCallBarDismissed(true)} />
+        </div>
+      ) : null}
+
+      <VoiceCallContext.Provider value={voiceControl}>
       <TerminalComposer
         className="mt-1.5"
         cardId={cardId}
         active={active}
-        onSend={send}
+        onSend={sendFromComposer}
         onUploadImage={onUploadImage}
         placeholder={replyTo ? t("sdk.replyPlaceholder") : undefined}
         commands={state.commands}
@@ -1428,6 +1509,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
         onEditLast={editLast}
         onDraftInput={typingSignal.input}
       />
+      </VoiceCallContext.Provider>
 
       {/* The footer says which conversation this IS (the resume key) and whether the wire is up. */}
       <div className="mt-1 flex items-center gap-2 px-1 text-[11px] text-muted-foreground/70" data-testid="sdk-chat-footer">
@@ -2169,6 +2251,10 @@ const SdkChatRow = React.memo(function SdkChatRow({
         {noteText(row.text, t)}
       </div>
     );
+  }
+
+  if (row.kind === "voice") {
+    return <VoiceTurnBubble role={row.role} text={row.text} from={row.from} viewer={viewer} live={row.live} save={row.save} />;
   }
 
   if (row.kind === "command_output") {

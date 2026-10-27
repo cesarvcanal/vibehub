@@ -13,7 +13,7 @@ import {
   type LivingInput,
   type LivingMode,
 } from "./engine";
-import { AI_GAIN, aiVoice, micVoice } from "./levels";
+import { micVoice } from "./levels";
 import { LIVING_PATHS } from "./paths";
 
 const SIZE = 620;
@@ -135,11 +135,60 @@ describe("sound", () => {
     for (let t = 0; t < 5; t += 0.01) expect(speechEnvelope(t)).toBeLessThanOrEqual(1);
   });
 
-  it("maps levels: the mic like V37, the assistant scaled down", () => {
+  it("maps the lab's microphone like V37", () => {
     expect(micVoice(0.1)).toBeCloseTo(0.5);
     expect(micVoice(1)).toBe(1);
     expect(micVoice(-1)).toBe(0);
-    expect(aiVoice(0.1)).toBeCloseTo(0.5 * AI_GAIN);
+  });
+
+  /** How far the particles sit from where they would with a silent assistant, px (mean). */
+  function talkDisplacement(level: number, talkResponse: number, reduce = false): number {
+    const silent = engine("talk");
+    const speaking = engine("talk");
+    silent.settings.talkResponse = talkResponse;
+    speaking.settings.talkResponse = talkResponse;
+    let sum = 0;
+    let frames = 0;
+    // Same field, same clock: the only difference is the assistant's level.
+    for (let i = 0; i < 90; i++) {
+      silent.step(DT, { listen: 0, talk: 0, reduce });
+      speaking.step(DT, { listen: 0, talk: level, reduce });
+      if (i < 30) continue;
+      const a = positions(silent);
+      const b = positions(speaking);
+      let d = 0;
+      for (let k = 0; k < PARTICLE_COUNT; k++) d += Math.hypot(a[k * 2]! - b[k * 2]!, a[k * 2 + 1]! - b[k * 2 + 1]!);
+      sum += d / PARTICLE_COUNT;
+      frames++;
+    }
+    return sum / frames;
+  }
+
+  it("REPLYING VISIBLY MOVES WITH THE ASSISTANT'S VOICE (the 'blue barely moves' bug)", () => {
+    // V37 as approved (talkResponse 0): a real voice moved the blue sphere about a pixel on a 620 px
+    // stage — read as a still sphere. Now a normal voice moves it several times more.
+    const v37 = talkDisplacement(0.7, 0);
+    const now = talkDisplacement(0.7, 100);
+    expect(v37).toBeLessThan(2.5);
+    expect(now).toBeGreaterThan(v37 * 3);
+    expect(now).toBeGreaterThan(6);
+    // Louder → more; silence → nothing extra.
+    expect(talkDisplacement(1, 100)).toBeGreaterThan(talkDisplacement(0.3, 100));
+    expect(talkDisplacement(0, 100)).toBeLessThan(0.01);
+  });
+
+  it("reduced motion keeps only a gentle breath while replying", () => {
+    const calm = talkDisplacement(0.7, 100, true);
+    expect(calm).toBeGreaterThan(0);
+    expect(calm).toBeLessThan(talkDisplacement(0.7, 100));
+  });
+
+  it("replying stays blue and different from listening: brighter and larger with the voice", () => {
+    const e = engine("talk");
+    run(e, 1, { listen: 0, talk: 0.8, reduce: false });
+    const [r, g, b] = e.meanColor();
+    expect(b).toBeGreaterThan(r);
+    expect(g).toBeGreaterThan(r);
   });
 
   it("louder mic opens the listening sphere further", () => {

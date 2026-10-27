@@ -69,6 +69,12 @@ export interface LivingSettings {
   speechMorphMs: number;
   logoEntrySpin: number;
   logoEntrySpinMs: number;
+  /**
+   * How visibly the BLUE sphere answers the assistant's voice, % (100 = default). Not a V37 control:
+   * V37 calibrated the reply on a synthetic envelope, and with a real voice its ~1 px waves read as
+   * a still sphere. 0 gives V37's original reply motion back exactly.
+   */
+  talkResponse: number;
   stages: Record<StageId, StageSetting>;
 }
 
@@ -81,7 +87,7 @@ export function defaultSettings(): LivingSettings {
   return {
     thickness: 100, flowSpeed: 112, accelSpeed: 112, tracking: 42, returnRotation: 0, returnSpread: 70,
     listenSpin: 13, talkSpin: 13, spinEase: 1200, switchTurn: 30, spinPeakMs: 150, returnBoost: 75,
-    colorMs: 180, spinColorMs: 400, speechMorphMs: 410, logoEntrySpin: 30, logoEntrySpinMs: 520, stages,
+    colorMs: 180, spinColorMs: 400, speechMorphMs: 410, logoEntrySpin: 30, logoEntrySpinMs: 520, talkResponse: 100, stages,
   };
 }
 
@@ -90,6 +96,7 @@ export function tuningText(settings: LivingSettings): string {
   const ids: ScalarSetting[] = [
     "thickness", "flowSpeed", "accelSpeed", "tracking", "returnRotation", "returnSpread", "logoEntrySpin", "logoEntrySpinMs",
     "listenSpin", "talkSpin", "spinEase", "switchTurn", "spinPeakMs", "returnBoost", "colorMs", "spinColorMs", "speechMorphMs",
+    "talkResponse",
   ];
   return (
     "Multiverso Living Intelligence V37 — Ida e volta alinhadas ao giro\n" +
@@ -255,6 +262,10 @@ export class LivingEngine {
   private _transition: Transition = "none";
   private transitionStartedAt = 0;
   private _voice = 0;
+  /** A slow follower of the voice: a syllable is the voice rising clearly above it. */
+  private voiceFloor = 0;
+  /** The last syllable onset — the ring that travels out of the blue sphere. */
+  private ring = { at: -10, amp: 0 };
   private readonly blend = { logo: 0, talk: 0 };
   private flowTempo = 1;
   private logoClock = 0;
@@ -493,6 +504,9 @@ export class LivingEngine {
     const desiredVoice = mode === "listen" ? listenAudio : mode === "talk" ? responseAudio : 0;
     this._voice = ease(this._voice, desiredVoice, 1 - Math.exp(-dt / 0.075));
     const voice = this._voice;
+    this.voiceFloor = ease(this.voiceFloor, voice, 1 - Math.exp(-dt / 0.3));
+    // A syllable onset while replying sends a ring outward (at most ~5 per second).
+    if (mode === "talk" && voice > this.voiceFloor + 0.08 && t - this.ring.at > 0.2) this.ring = { at: t, amp: Math.min(1, voice * 1.5) };
     // Timeline de efeitos sobrepostos e coreografia de entrada UNIFICADA.
     let bearingMix = 0, shapeMix = 0, visualBlend = 0, returnRelease = 0, returnReform = 0, returnSettle = 0;
     const elapsed = Math.max(0, t - this.transitionStartedAt);
@@ -580,6 +594,9 @@ export class LivingEngine {
       ? smoothstep(0, 1, Math.max(0, t - this.spinColorCycle.at) / Math.max(0.05, s.spinColorMs / 1000))
       : 0;
     const bandWidth = sz * 0.1 * (s.thickness / 100);
+    const talkResponse = Math.max(0, s.talkResponse) / 100;
+    const ringAge = (t - this.ring.at) / 0.7;
+    const ringOn = !reduce && talkResponse > 0 && ringAge >= 0 && ringAge < 1;
     const early = transition === "fwd" ? smoothstep(0, 1, Math.max(0, Math.min(1, elapsed / Math.max(0.08, s.logoEntrySpinMs / 1000)))) : 0;
 
     for (let i = 0; i < N; i++) {
@@ -620,9 +637,23 @@ export class LivingEngine {
         const distance = Math.hypot(e0, yr) || 1;
         const wave1 = Math.sin(t * 10.2 - distance * 10.5 + p.seed * 0.32);
         const wave2 = Math.sin(t * 6.4 - distance * 6.8 + p.phase * 0.3);
-        const speechWave = voice * talkingShape * sz * 0.009 * (0.62 * wave1 + 0.38 * wave2);
-        sx += (e0 / distance) * speechWave;
-        sy += (yr / distance) * speechWave;
+        // V37's travelling speech waves, at an amplitude a real voice can be SEEN at.
+        const waveGain = 0.009 + (reduce ? 0 : 0.02 * talkResponse);
+        let push = voice * talkingShape * sz * waveGain * (0.62 * wave1 + 0.38 * wave2);
+        // The whole sphere breathes with the voice's loudness — the reply's pulse.
+        push += voice * talkingShape * sz * 0.03 * talkResponse * distance;
+        if (!reduce && talkResponse > 0) {
+          // Particles on the silhouette are emitted outward in flickers: the voice "radiating".
+          const rim = smoothstep(0.72, 1, distance);
+          push += voice * rim * talkingShape * sz * 0.04 * talkResponse * (0.5 + 0.5 * Math.sin(t * 8.5 + p.seed * 3));
+        }
+        if (ringOn) {
+          // The syllable ring: a crest travelling from the core to the rim and fading.
+          const d = distance - ringAge * 1.15;
+          push += Math.exp(-(d * d) / 0.012) * this.ring.amp * (1 - ringAge) * talkingShape * sz * 0.035 * talkResponse;
+        }
+        sx += (e0 / distance) * push;
+        sy += (yr / distance) * push;
       }
       // Logo: 3 actual closed user-drawn paths. Each particle glides along ONE path with
       // bounded transverse displacement. It never rotates the overall icon.
@@ -702,6 +733,8 @@ export class LivingEngine {
       let alpha = 0.18 + 0.6 * (0.4 + (0.6 * (z + 1)) / 2) + blend.logo * 0.2;
       alpha *= 0.72 + 0.28 * Math.sin(t * 1.4 + p.seed) ** 2;
       alpha *= 1 + blend.logo * 0.13;
+      // Replying, the particles brighten with the voice.
+      alpha *= 1 + voice * 0.35 * talkResponse * blend.talk;
       // A COR SEGUE O DESTINO, NÃO A ETAPA GEOMÉTRICA: vai direto ao destino, sem passar por
       // outro estado. A cor de cada partícula é guardada para transições interrompidas.
       let paletteR: number, paletteG: number, paletteB: number;
@@ -735,7 +768,7 @@ export class LivingEngine {
         p.colorG = ease(p.colorG!, paletteG, colorAlpha);
         p.colorB = ease(p.colorB!, paletteB, colorAlpha);
       }
-      const size = p.size * (0.55 + (z + 1) * 0.42) * (1 + energy * 0.18 + 0.08 * (1 - blend.talk));
+      const size = p.size * (0.55 + (z + 1) * 0.42) * (1 + energy * 0.18 + 0.08 * (1 - blend.talk) + voice * 0.3 * talkResponse * blend.talk);
       const o = i * 7;
       frame[o] = x;
       frame[o + 1] = y;

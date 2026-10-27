@@ -61,6 +61,14 @@ describe("LivingOrb", () => {
     expect(engine).toBeNull();
   });
 
+  it("has NO plate: no background, no backing pseudo-element, no clipping — the page shows through", () => {
+    render(<LivingOrb mode="logo" listenLevel={0} talkLevel={null} className="size-32" />);
+    const box = screen.getByTestId("voice-orb");
+    expect(box.className).not.toMatch(/(^|\s)(bg-|before:|ring-|overflow-hidden|rounded)/);
+    expect(box.className).toContain("pointer-events-none");
+    expect(box.querySelector("canvas")!.className).not.toMatch(/bg-/);
+  });
+
   it("without a 2D canvas it renders the stage and never starts a loop", () => {
     vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValue(null);
     render(<LivingOrb mode="talk" listenLevel={0} talkLevel={null} />);
