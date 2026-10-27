@@ -447,3 +447,10 @@ html.card-view-locked body {
 :root[data-theme="light"] .syn {
   color: var(--syn-light);
 }
+
+/* The living orb draws additive light on a TRANSPARENT canvas: on the dark theme that is the V37
+   look as approved; on the light page the same light washes out, so the particles are deepened —
+   a filter on the particles themselves, never a backing behind them. */
+:root[data-theme="light"] [data-living-orb] canvas {
+  filter: brightness(0.78) saturate(1.35);
+}

@@ -1291,7 +1291,7 @@ export const en: Record<string, string> = {
   "voice.call.end": "End voice call",
   "voice.call.retry": "Try again",
   "voice.call.dismiss": "Close",
-  "voice.call.hint": "You can type and attach here: it goes to the card's agent. The voice only gets the context and does not see attachments.",
+  "voice.call.hint": "Text and attachments go to the card's agent; the voice only gets the context.",
   "voice.phase.idle": "Call ended",
   "voice.phase.connecting": "Connecting voice…",
   "voice.phase.listening": "Listening — just talk",

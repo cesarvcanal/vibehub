@@ -1303,7 +1303,7 @@ export const ptBR: Record<string, string> = {
   "voice.call.end": "Encerrar chamada de voz",
   "voice.call.retry": "Tentar de novo",
   "voice.call.dismiss": "Fechar",
-  "voice.call.hint": "Pode digitar e anexar aqui: vai para o agente do card. A voz recebe só o contexto e não vê anexos.",
+  "voice.call.hint": "Texto e anexos seguem para o agente do card; a voz só recebe o contexto.",
   "voice.phase.idle": "Chamada encerrada",
   "voice.phase.connecting": "Conectando a voz…",
   "voice.phase.listening": "Ouvindo — é só falar",

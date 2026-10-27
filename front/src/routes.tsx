@@ -44,6 +44,6 @@ export function AppRoutes() {
 }
 
 /** `/voice?project=…&card=…` (links from before the call moved into the chat) → that card's chat. */
-function VoiceRedirect() {
+export function VoiceRedirect() {
   return <Navigate to={voiceReturn(useLocation().search)} replace />;
 }

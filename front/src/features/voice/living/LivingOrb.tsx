@@ -31,7 +31,6 @@ export function LivingOrb({
   settings,
   onEngine,
   fps,
-  stage = "panel",
   className,
 }: {
   mode: LivingMode;
@@ -43,8 +42,6 @@ export function LivingOrb({
   levels?: () => OrbLevels;
   /** Cap on frames per second (a small orb in the chat needs fewer). Default: the display's rate. */
   fps?: number;
-  /** `panel`: V37's navy rounded stage. `badge`: a round navy disc, for the orb inside the chat. */
-  stage?: "panel" | "badge";
   /** Shared, mutable settings (the lab tunes them live); the approved defaults otherwise. */
   settings?: LivingSettings;
   /** The lab drives forced transitions and reads the engine's state. */
@@ -120,19 +117,14 @@ export function LivingOrb({
       ref={boxRef}
       data-testid="voice-orb"
       data-mode={mode}
+      data-living-orb=""
       aria-hidden="true"
-      data-stage={stage}
-      className={cn(
-        "relative aspect-square overflow-hidden",
-        stage === "panel" ? "rounded-[2rem]" : "rounded-full ring-1 ring-sky-300/15",
-        // V37's stage: deep navy with a soft cyan bloom behind the particles.
-        "bg-[radial-gradient(ellipse_at_50%_40%,#0b2740_0%,#051423_45%,#020913_78%)]",
-        "before:absolute before:inset-[10%] before:rounded-full before:bg-[radial-gradient(circle,#0b47602a_0%,#1b6c920c_55%,transparent_72%)] before:content-['']",
-        stage === "panel" ? "before:blur-[30px]" : "before:blur-md",
-        className,
-      )}
+      // NO STAGE: no background, no backing glow, no clipping. Outside the particles every pixel is
+      // transparent, so whatever the page is made of — the app's grid and constellations — shows
+      // behind the orb and through the gaps of the mark. The orb is part of the page, not a panel.
+      className={cn("pointer-events-none relative aspect-square", className)}
     >
-      <canvas ref={canvasRef} className="relative block h-full w-full" />
+      <canvas ref={canvasRef} className="block h-full w-full" />
     </div>
   );
 }

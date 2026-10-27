@@ -206,6 +206,23 @@ const connecting = await page.evaluate(() => {
 });
 check("connecting shows the living mark", connecting.phase !== "connecting" || connecting.orb === "logo", JSON.stringify(connecting));
 await page.screenshot({ path: join(OUT, "02-conectando-marca-viva.png") });
+// NO PLATE behind the mark: the canvas is transparent outside the particles and nothing between it
+// and the chat paints a background — the app's grid and constellations show through.
+const plate = await page.evaluate(() => {
+  const c = document.querySelector("[data-testid=voice-orb] canvas");
+  const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+  const corners = [0, c.width - 1, (c.height - 1) * c.width, c.height * c.width - 1].map((i) => d[i * 4 + 3]);
+  const painted = [];
+  for (let el = c; el && !el.matches("[data-testid=voice-call-bar]"); el = el.parentElement) {
+    const cs = getComputedStyle(el);
+    const before = getComputedStyle(el, "::before");
+    if (cs.backgroundColor !== "rgba(0, 0, 0, 0)" || cs.backgroundImage !== "none" || (before.content !== "none" && before.backgroundImage !== "none")) painted.push(el.tagName);
+  }
+  const bar = getComputedStyle(document.querySelector("[data-testid=voice-call-bar]"));
+  if (bar.backgroundColor !== "rgba(0, 0, 0, 0)" || bar.borderTopWidth !== "0px") painted.push("bar");
+  return { corners, painted };
+});
+check("no plate behind the orb: transparent canvas, no painted background or box", plate.corners.every((a) => a === 0) && plate.painted.length === 0, JSON.stringify(plate));
 await page.waitForFunction(() => document.querySelector("[data-testid=voice-call-bar]")?.dataset.phase === "listening");
 check("live: listening, lilac", (await page.getByTestId("voice-call-orb").getAttribute("data-orb")) === "listen");
 
@@ -248,15 +265,18 @@ const aiMs = await page.evaluate(() => window.__e2e.say("ai", 16, 0.7));
 const aiWords = ["Sim, ", "os ", "testes ", "do ", "recorte ", "passaram ", "todos."];
 await page.evaluate((words) => window.__e2e.stream("session.output_transcript.delta", words, 300, 3000), aiWords);
 // Sampled from the page every 60 ms, independent of this script's own pace.
-const sampling = page.evaluate(async () => {
+const sampling = page.evaluate(async (windowMs) => {
   const out = [];
-  for (let i = 0; i < 40; i++) {
+  const t0 = performance.now();
+  // Only while the assistant's audio is scheduled to sound: a busy page stretches timers, and a
+  // sample taken after the voice ended says nothing about how the orb follows it.
+  while (performance.now() - t0 < windowMs) {
     await new Promise((r) => setTimeout(r, 60));
     const o = document.querySelector("[data-testid=voice-call-orb]");
-    out.push({ source: o.dataset.aiSource, rms: Number(o.dataset.aiRms), visual: Number(o.dataset.aiVisual), orb: o.dataset.orb });
+    out.push({ at: Math.round(performance.now() - t0), source: o.dataset.aiSource, rms: Number(o.dataset.aiRms), visual: Number(o.dataset.aiVisual), orb: o.dataset.orb });
   }
   return out;
-});
+}, aiMs - 200);
 await page.waitForTimeout(900);
 await page.screenshot({ path: join(OUT, "05-respondendo-azul.png") });
 await page.getByTestId("voice-call-orb").screenshot({ path: join(OUT, "05b-esfera-azul-zoom.png") });
@@ -266,12 +286,12 @@ const speaking = samples.filter((s) => s.orb === "talk");
 const visuals = speaking.map((s) => s.visual);
 const rmsValues = speaking.map((s) => s.rms).filter((v) => !Number.isNaN(v));
 const spread = Math.max(...visuals) - Math.min(...visuals);
-check("replying turns the sphere blue", speaking.length > samples.length / 2, `${speaking.length}/${samples.length} samples in talk`);
+check("replying turns the sphere blue", speaking.length > samples.length * 0.7, `${speaking.length}/${samples.length} samples in talk over ${samples.at(-1)?.at} ms`);
 const audible = speaking.filter((s) => s.rms > 0.01);
 check("while the assistant's audio flows, the level is MEASURED on its stream (analyser)", audible.length > 0 && audible.every((s) => s.source === "analyser"), [...new Set(speaking.map((s) => s.source))].join(","));
 check("the real RMS of the assistant's audio is non-trivial", Math.max(...rmsValues) > 0.05, `max rms=${Math.max(...rmsValues).toFixed(3)}`);
 check("the visual intensity follows the syllables (varies, not a constant)", spread > 0.25, `visual ${Math.min(...visuals).toFixed(2)}…${Math.max(...visuals).toFixed(2)}`);
-await page.waitForTimeout(Math.max(0, aiMs - 40 * 60) + 300);
+await page.waitForTimeout(400);
 await page.evaluate(() => window.__e2e.silence("ai"));
 const motionSilent = await canvasMotion();
 await page.waitForTimeout(1_800);

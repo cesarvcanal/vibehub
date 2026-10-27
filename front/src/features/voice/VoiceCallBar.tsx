@@ -8,13 +8,16 @@ import { phaseOrb, type VoicePhase } from "./voicePhase";
 import type { VoiceCall } from "./useVoiceCall";
 
 /**
- * THE CALL, INSIDE THE CHAT — a compact strip docked right above the composer, never over the
- * thread: the living orb as the call's face, one line saying what is happening, and the two call
- * controls (mute, hang up). The thread keeps scrolling above it and the composer keeps working
- * below it — typing, attaching, sending all go on during the call.
+ * THE CALL, INSIDE THE CHAT — no box of its own. Between the thread and the composer the living orb
+ * floats on the app's own background (grid and constellations show through it: the canvas is
+ * transparent), centred like the conversation's pulse, with one quiet line on its left saying what
+ * is happening and the two call controls (mute, hang up) on its right. The thread keeps scrolling
+ * above and the composer keeps working below — typing, attaching, sending all go on.
  *
- * The orb is the approved V37 at miniature scale (see LivingOrb's reference stage): the living
- * mark while it connects or thinks, lilac while it listens, blue while it replies.
+ * The orb is the approved V37 (see LivingOrb's reference stage): the living mark while it connects
+ * or thinks, lilac while it listens, blue while it replies. Its canvas is larger than its slot and
+ * spills over the empty margins around it (never catching a click), so the mark reads at full
+ * presence without the strip taking the height of a panel.
  */
 
 const PHASE_TONE: Partial<Record<VoicePhase, string>> = {
@@ -25,7 +28,6 @@ const PHASE_TONE: Partial<Record<VoicePhase, string>> = {
   error: "text-destructive",
 };
 
-const PHASE_BORDER: Partial<Record<VoicePhase, string>> = { ai_speaking: "border-sky-500/40", error: "border-destructive/40" };
 
 export function VoiceCallBar({
   call,
@@ -62,6 +64,7 @@ export function VoiceCallBar({
   const busy = snap.state === "connecting" || snap.state === "closing";
   const label =
     phase === "thinking" && agentBusy ? t("voice.phase.thinkingAgent") : t(`voice.phase.${phase}`);
+  const detail = snap.error ? t(snap.error) : snap.notice ? t(snap.notice) : null;
 
   return (
     <div
@@ -69,56 +72,53 @@ export function VoiceCallBar({
       aria-label={t("voice.call.label")}
       data-testid="voice-call-bar"
       data-phase={phase}
-      className={cn(
-        "flex items-center gap-3 rounded-lg border bg-card/60 px-2.5 py-2 transition-colors",
-        PHASE_BORDER[phase] ?? "border-border/70",
-      )}
+      className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 md:gap-5"
     >
-      <div ref={orbRef} data-testid="voice-call-orb" data-orb={phaseOrb(phase)} className="shrink-0">
-        <LivingOrb
-          mode={phaseOrb(phase)}
-          levels={call.orbLevels}
-          stage="badge"
-          fps={40}
-          className="size-14 md:size-[76px]"
-        />
-      </div>
-
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 text-right">
         <p
           role="status"
           aria-live="polite"
-          className={cn("flex items-center gap-1.5 truncate text-sm font-medium", PHASE_TONE[phase])}
+          className={cn(
+            "flex items-center justify-end gap-1.5 text-sm font-medium text-muted-foreground transition-colors",
+            PHASE_TONE[phase],
+          )}
         >
           {busy && <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />}
           <span className="truncate">{label}</span>
         </p>
-        {snap.error ? (
-          <p role="alert" className="truncate text-xs text-destructive" title={t(snap.error)}>
-            {t(snap.error)}
+        {detail ? (
+          <p role={snap.error ? "alert" : undefined} className={cn("line-clamp-2 text-xs", snap.error ? "text-destructive" : "text-muted-foreground")} title={detail}>
+            {detail}
           </p>
-        ) : snap.notice ? (
-          <p className="truncate text-xs text-muted-foreground" title={t(snap.notice)}>{t(snap.notice)}</p>
         ) : (
-          <p className="hidden truncate text-xs text-muted-foreground sm:block" title={t("voice.call.hint")}>
+          <p className="hidden text-xs leading-snug text-muted-foreground/80 md:line-clamp-2" title={t("voice.call.hint")}>
             {t("voice.call.hint")}
           </p>
         )}
       </div>
 
-      <div className="flex shrink-0 items-center gap-1.5">
+      <div ref={orbRef} data-testid="voice-call-orb" data-orb={phaseOrb(phase)} className="relative mx-2 size-24 md:mx-3 md:size-[120px]">
+        <LivingOrb
+          mode={phaseOrb(phase)}
+          levels={call.orbLevels}
+          fps={30}
+          className="absolute left-1/2 top-1/2 size-[116px] -translate-x-1/2 -translate-y-1/2 md:size-[148px]"
+        />
+      </div>
+
+      <div className="flex min-w-0 items-center gap-1.5">
         {snap.state === "live" && snap.diag.playback === "blocked" && (
-          <Button type="button" variant="outline" size="icon" className="h-9 w-9" onClick={call.resumePlayback} aria-label={t("voice.playAudio")} title={t("voice.playAudio")}>
+          <Button type="button" variant="ghost" size="icon" className="h-9 w-9 rounded-full" onClick={call.resumePlayback} aria-label={t("voice.playAudio")} title={t("voice.playAudio")}>
             <Volume2 className="size-4" />
           </Button>
         )}
         {phase === "error" ? (
           <>
-            <Button type="button" variant="outline" size="sm" onClick={call.start} data-testid="voice-call-retry">
+            <Button type="button" variant="ghost" size="sm" onClick={call.start} data-testid="voice-call-retry">
               <RotateCcw className="size-4" />
               {t("voice.call.retry")}
             </Button>
-            <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={onClose} aria-label={t("voice.call.dismiss")} title={t("voice.call.dismiss")}>
+            <Button type="button" variant="ghost" size="icon" className="h-9 w-9 rounded-full" onClick={onClose} aria-label={t("voice.call.dismiss")} title={t("voice.call.dismiss")}>
               <X className="size-4" />
             </Button>
           </>
@@ -126,7 +126,7 @@ export function VoiceCallBar({
           <>
             <Button
               type="button"
-              variant="outline"
+              variant="ghost"
               size="icon"
               disabled={snap.state !== "live"}
               onClick={() => call.setMuted(!snap.muted)}
@@ -134,20 +134,23 @@ export function VoiceCallBar({
               aria-label={snap.muted ? t("voice.unmute") : t("voice.mute")}
               title={snap.muted ? t("voice.unmute") : t("voice.mute")}
               data-testid="voice-call-mute"
-              className={cn("h-9 w-9 rounded-full", snap.muted && "border-destructive/50 bg-destructive/10 text-destructive hover:bg-destructive/15")}
+              className={cn(
+                "h-9 w-9 rounded-full text-muted-foreground hover:text-foreground",
+                snap.muted && "bg-destructive/10 text-destructive hover:bg-destructive/15 hover:text-destructive",
+              )}
             >
               {snap.muted ? <MicOff className="size-4" /> : <Mic className="size-4" />}
             </Button>
             <Button
               type="button"
-              variant="destructive"
+              variant="ghost"
               size="icon"
               disabled={snap.state === "closing"}
               onClick={call.stop}
               aria-label={t("voice.call.end")}
               title={t("voice.call.end")}
               data-testid="voice-call-end"
-              className="h-9 w-9 rounded-full"
+              className="h-9 w-9 rounded-full text-destructive hover:bg-destructive/10 hover:text-destructive"
             >
               <PhoneOff className="size-4" />
             </Button>

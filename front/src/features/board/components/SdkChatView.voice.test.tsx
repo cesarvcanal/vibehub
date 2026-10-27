@@ -133,7 +133,7 @@ describe("a voice call inside the card's chat", () => {
     // The bar sits OUTSIDE the scrolling thread: it never covers a message.
     expect(screen.getByTestId("sdk-chat-scroller")).not.toContainElement(bar);
     // Attachments and typing are explicitly bridged through the chat.
-    expect(bar).toHaveTextContent(/does not see attachments/);
+    expect(bar).toHaveTextContent(/attachments go to the card.s agent; the voice only gets the context/);
   });
 
   it("the spoken turns appear in THIS thread as they are said, are saved, and the echo never doubles them", async () => {
