@@ -75,7 +75,7 @@ function installFakes() {
       const at = t0 + i * 0.22;
       const level = peak * (0.55 + 0.45 * Math.abs(Math.sin(i * 1.7)));
       g.linearRampToValueAtTime(level, at + 0.05);
-      g.linearRampToValueAtTime(level * 0.15, at + 0.18);
+      g.linearRampToValueAtTime(level * 0.02, at + 0.16);
     }
     g.linearRampToValueAtTime(0, t0 + syllables * 0.22 + 0.05);
     return syllables * 220;
@@ -234,7 +234,17 @@ for (const [i, w] of userWords.entries()) {
   await page.evaluate(([delta, i]) => window.__e2e.channel.emit({ type: "session.input_transcript.delta", delta, start_ms: i * 220, end_ms: i * 220 + 200 }), [w, i]);
 }
 await page.waitForFunction(() => document.querySelector("[data-testid=voice-call-bar]")?.dataset.phase === "user_speaking");
-const micVisual = Number(await page.getByTestId("voice-call-orb").getAttribute("data-mic-visual"));
+// The peak over a fresh phrase, measured in the page (a busy runner stretches this script's timers).
+const micVisual = await page.evaluate(async () => {
+  const ms = window.__e2e.say("mic", 6, 0.6);
+  let peak = 0;
+  const t0 = performance.now();
+  while (performance.now() - t0 < ms) {
+    await new Promise((r) => setTimeout(r, 40));
+    peak = Math.max(peak, Number(document.querySelector("[data-testid=voice-call-orb]").dataset.micVisual));
+  }
+  return peak;
+});
 check("listening reacts to the real mic level", micVisual > 0.2, `micVisual=${micVisual}`);
 check("the person's words appear live in the SAME thread", await scroller.getByText("Quero saber se os testes passaram.").isVisible());
 await page.screenshot({ path: join(OUT, "03-ouvindo-voce-lilas.png") });
@@ -261,7 +271,7 @@ async function canvasMotion(ms = 160) {
 }
 
 // The assistant replies: REAL audio on the remote stream + output transcript fragments.
-const aiMs = await page.evaluate(() => window.__e2e.say("ai", 16, 0.7));
+const aiMs = await page.evaluate(() => window.__e2e.say("ai", 16, 0.12));
 const aiWords = ["Sim, ", "os ", "testes ", "do ", "recorte ", "passaram ", "todos."];
 await page.evaluate((words) => window.__e2e.stream("session.output_transcript.delta", words, 300, 3000), aiWords);
 // Sampled from the page every 60 ms, independent of this script's own pace.
