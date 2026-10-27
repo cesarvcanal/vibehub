@@ -40,6 +40,7 @@ import { startWebhookDispatcher } from "./services/webhooks/subscriptions.js";
 import { startRunnerReaper } from "./services/reaper/reaper.js";
 import { pruneStaleInflightOwners, startInflightOwnerHeartbeat } from "./services/sdk/inflight.js";
 import { handOffSdkOnShutdown, resumeAfterDriverCrash, resumeInterruptedTurns } from "./services/sdk/resume.js";
+import { backfillPendingQuestions } from "./services/sdk/pendingQuestion.js";
 import { onDriverCrashWithWork } from "./services/sdk/manager.js";
 import { restartSessionsIfSpecChanged } from "./services/board/sessionSpec.js";
 
@@ -272,6 +273,11 @@ async function main(): Promise<void> {
     if (summary.resumed.length > 0 || summary.noted.length > 0) {
       logger.info({ resumed: summary.resumed.length, noted: summary.noted.length }, "sdk boot resume done");
     }
+  });
+  // Os cards cujo último turno acabou numa pergunta para a pessoa ANTES deste servidor saber ler
+  // uma: o carimbo vem agora, não no próximo turno (ver services/sdk/pendingQuestion.ts).
+  void backfillPendingQuestions().then((stamped) => {
+    if (stamped > 0) logger.info({ stamped }, "cards waiting on a question to the person marked");
   });
   // …e o driver que CAI sozinho com o back de pé (OOM, kill, o docker exec que morreu): a mesma
   // retomada, na hora — sem isto o turno esperava um deploy para voltar. Ver resumeAfterDriverCrash.

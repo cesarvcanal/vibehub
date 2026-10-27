@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
+import { syncPendingQuestion } from "./pendingQuestion.js";
 import { onCardBackgroundProbe, onCardDriverProbe, onCardEffortApplier, reportCardStatusFromDriver, type DriverActivity } from "../board/agentState.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
 import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, clearHistoryBeforeLastClear, readHistory, replayableHistoryEvent, rewindHistory, unwrapEditedMessage, type HistoryEvent } from "./history.js";
@@ -724,6 +725,9 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
       session.openAsks.clear();
       session.stopCause = undefined;
       syncAwaitingDecision(session);
+      // A conversa parou: se a última fala do agente é uma pergunta para a pessoa, o card diz isso
+      // (o "precisa de você" da bandeja de decisões, no ícone do board).
+      void syncPendingQuestion(session.cardId);
     }
     // Uma retomada que fechou sem o agente produzir nada ainda não pegou: o vigia decide (ver
     // RESUME_CONFIRM_MS) — e o marcador fica, para o próximo deploy saber dela.

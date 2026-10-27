@@ -223,6 +223,30 @@ describe("cardState", () => {
     expect(kind({ status: "working", openedAt: 1, hibernatedAt: 5, awaitingDecisionAt: 9 })).toBe("hibernated");
   });
 
+  it("is needs_me once the turn ENDED on a question to the person — the chat's pending-decisions tray", () => {
+    // Produção, 2026-10-27 (card 37fa689a): "Quer que eu abra um PR pequeno…?" in the tray, and the
+    // sidebar drew the neutral your-turn circle.
+    expect(cardState(card({ id: "a", status: "waiting", openedAt: 1, pendingQuestionAt: 9 }))).toEqual({
+      kind: "needs_me",
+      label: "Needs you — the agent is waiting for a decision",
+    });
+    // A cold session still has the question waiting on the person.
+    expect(kind({ status: "waiting", openedAt: 1, hibernatedAt: 5, pendingQuestionAt: 9 })).toBe("needs_me");
+    // The agent saying "ready" and then asking is still asking.
+    expect(kind({ status: "waiting", openedAt: 1, declaredState: "ready", pendingQuestionAt: 9 })).toBe("needs_me");
+    // Its own needs-me/blocked carries a summary, so that one stays.
+    expect(cardState(card({ id: "a", status: "waiting", openedAt: 1, declaredState: "needs_me", declaredSummary: "aprovar o PR", pendingQuestionAt: 9 })))
+      .toMatchObject({ kind: "needs_me", summary: "aprovar o PR" });
+    expect(kind({ status: "waiting", openedAt: 1, declaredState: "blocked", pendingQuestionAt: 9 })).toBe("blocked");
+    // A new turn running is not waiting on anyone; the person's own filing wins.
+    expect(kind({ status: "working", openedAt: 1, pendingQuestionAt: 9 })).toBe("working");
+    expect(kind({ column: "done", openedAt: 1, pendingQuestionAt: 9 })).toBe("done");
+    expect(kind({ column: "paused", openedAt: 1, pausedAt: 2, pendingQuestionAt: 9 })).toBe("paused");
+    expect(kind({ column: "paused", openedAt: 1, pausedAt: 2, hibernatedAt: 5, pendingQuestionAt: 9 })).toBe("hibernated");
+    // Answered: back to the neutral circle.
+    expect(kind({ status: "waiting", openedAt: 1, pendingQuestionAt: null })).toBe("your_turn");
+  });
+
   it("puts the user's filing over the agent's report", () => {
     expect(kind({ column: "done", openedAt: 1, declaredState: "needs_me" })).toBe("done");
     expect(kind({ column: "paused", openedAt: 1, pausedAt: 2, declaredState: "ready" })).toBe("paused");
