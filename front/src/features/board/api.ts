@@ -308,10 +308,11 @@ export interface CardSessionInfo {
 /**
  * What a model/account switch did to the LIVE session, straight from the server: `restarted` = the
  * session was ended and the reattach starts Claude with the new one, in the same conversation;
- * `pending` = Claude was working, so it applies the moment the card goes idle; `none` = there was no
- * live session to change (the pin is simply what the next start uses).
+ * `pending` = Claude was working, so it applies the moment the card goes idle; `live` = the native
+ * chat took the new intelligence in place — nothing restarted, the turn in flight goes on already on
+ * it; `none` = there was no live session to change (the pin is simply what the next start uses).
  */
-export type SessionChange = "none" | "restarted" | "pending";
+export type SessionChange = "none" | "restarted" | "pending" | "live";
 
 /**
  * A terminal's current situation, as the server words it. `stopped` = the session is still there but

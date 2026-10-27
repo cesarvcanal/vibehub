@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
-import { onCardBackgroundProbe, onCardDriverProbe, reportCardStatusFromDriver, type DriverActivity } from "../board/agentState.js";
+import { onCardBackgroundProbe, onCardDriverProbe, onCardEffortApplier, reportCardStatusFromDriver, type DriverActivity } from "../board/agentState.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
 import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, clearHistoryBeforeLastClear, readHistory, replayableHistoryEvent, rewindHistory, unwrapEditedMessage, type HistoryEvent } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker, type InflightBackground, type InflightMarker } from "./inflight.js";
@@ -2074,6 +2074,18 @@ export function stopCardDriver(cardId: string): void {
 }
 
 /**
+ * A NOVA INTELIGÊNCIA DO CARD, na sessão viva: o driver a aplica com `applyFlagSettings` — no meio
+ * do turno inclusive, a próxima chamada ao modelo já sai nela — e passa a usá-la em tudo o que vier
+ * (um stream novo, a devolução do `ultrathink`). True = havia um driver para recebê-la; false = não
+ * há, e quem trocou reinicia a sessão nela (`applySessionChange`).
+ */
+export function applyDriverEffort(cardId: string, effort: string): boolean {
+  const session = sessions.get(cardId);
+  if (!session || !canAcceptTurn(session)) return false;
+  return writeToDriver(session, { type: "set_effort", effort });
+}
+
+/**
  * Best-effort goodbye on the BACK's own shutdown (SIGTERM from a deploy): end every driver's stdin
  * (EOF is the driver's exit signal, it reaches across the docker exec) and kill the local clients —
  * but KEEP the in-flight markers: they are exactly what tells the next boot which turns this
@@ -2110,6 +2122,10 @@ onCardInUseProbe((cardId) => isCardChatInUse(cardId));
 // do back, não do painel do tmux), então sem isto a visão de sessão lia o card como "Claude saiu" —
 // o banner "Claude parou" por cima de uma conversa que estava respondendo.
 onCardDriverProbe((cardId) => driverActivity(cardId));
+
+// …a inteligência trocada no pill vai ao driver vivo, que a aplica na sessão sem reiniciar (ver
+// `applyDriverEffort`). Sem driver, quem troca reinicia a sessão nela, como sempre.
+onCardEffortApplier((cardId, effort) => applyDriverEffort(cardId, effort));
 
 // …e a quarta: uma tarefa em segundo plano viva é trabalho — o `Stop` do turno que a disparou não
 // pode pôr o card em "aguardando" (ver services/board/status.ts).

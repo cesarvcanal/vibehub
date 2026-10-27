@@ -70,6 +70,7 @@ import {
   whitelistModel,
   type BoardCard,
   type BoardProject,
+  type CardSessionInfo,
 } from "@/features/board/api";
 import { AccountUsageBars, useMinuteTick } from "@/features/board/components/AccountUsageBars";
 import { PlanUsageMeter } from "@/features/board/components/PlanUsage";
@@ -311,13 +312,14 @@ export function CardTerminalView({
    */
   function applySessionSwitch(
     { card: updated, session: change }: Awaited<ReturnType<typeof boardApi.patchCardSession>>,
-    toastKey: { switched: string; pending: string },
+    toastKey: { switched: string; pending: string; live?: string },
     vars?: { label: string },
   ) {
     mirror(updated);
     void queryClient.invalidateQueries({ queryKey: cardSessionKey(updated.id) });
     if (change === "restarted") setReconnectNonce((n) => n + 1);
-    toast.success(translate(change === "pending" ? toastKey.pending : toastKey.switched, vars));
+    const key = change === "pending" ? toastKey.pending : change === "live" && toastKey.live ? toastKey.live : toastKey.switched;
+    toast.success(translate(key, vars));
   }
 
   const accountMutation = useMutation({
@@ -342,7 +344,19 @@ export function CardTerminalView({
     onSuccess: (result) => {
       const level = pinnedEffort(result.card);
       const label = level ? effortLabel(level) : translate("cardView.accountDefault");
-      applySessionSwitch(result, { switched: "cardView.effortSwitched", pending: "cardView.effortSwitchPending" }, { label });
+      // The pill reads the SESSION first, and its last reading is the old level until the refetch
+      // lands. A switch to a level is what the server answers from now on (the pin is newer than any
+      // reply), so the pill says it at once — the layout follows the click, not the next poll.
+      if (level) {
+        queryClient.setQueryData<CardSessionInfo>(cardSessionKey(result.card.id), (info) =>
+          info ? { ...info, effort: level } : info,
+        );
+      }
+      applySessionSwitch(
+        result,
+        { switched: "cardView.effortSwitched", pending: "cardView.effortSwitchPending", live: "cardView.effortSwitchedLive" },
+        { label },
+      );
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("cardView.effortSwitchError"))),
   });

@@ -34,6 +34,7 @@ import {
 import { logger } from "../../utils/logger.js";
 import { testWorkerTmuxArgs } from "../../runtime/testWorkers.js";
 import { CARD_ID_RE } from "./cardId.js";
+import { applyLiveEffort } from "./agentState.js";
 
 export { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir };
 
@@ -1737,9 +1738,10 @@ async function restartCardSessions(cards: readonly Card[], by?: string): Promise
 
 /**
  * What a model/account switch did to the LIVE session, so the screen can say the truth instead of
- * promising a switch that never reached Claude.
+ * promising a switch that never reached Claude. `live` = the native chat's driver took the new
+ * reasoning level in place: nothing restarted, and the turn in flight goes on already on it.
  */
-export type SessionChange = "none" | "restarted" | "pending";
+export type SessionChange = "none" | "restarted" | "pending" | "live";
 
 /**
  * Carries a card's model/account switch INTO the running session.
@@ -1762,6 +1764,23 @@ export async function applySessionChange(before: Card | undefined, after: Card, 
     (before?.effort ?? null) !== (after.effort ?? null) ||
     (before?.accountSlug ?? null) !== (after.accountSlug ?? null);
   if (!before || !changed || !hasLiveSession(after)) return "none";
+  // ONLY THE INTELLIGENCE changed, on a card whose conversation runs in the native chat: the driver
+  // applies it to the live session (`applyFlagSettings`) — no restart, no waiting for the turn to
+  // end. The pending restart was the bug (produção, 2026-10-27, card review-prs-albert-ee7c): Alto
+  // picked mid-turn, the toast said it would apply when Claude finished, and with subagents running
+  // in the background the turn never "finished" — the session went on in `medium` and the pill fell
+  // back to Médio. A level cleared back to the account default still restarts: the live flag layer
+  // cannot say "whatever settings.json says", only a level.
+  const effortOnly =
+    (before.model ?? null) === (after.model ?? null) &&
+    (before.accountSlug ?? null) === (after.accountSlug ?? null);
+  if (effortOnly && isValidEffort(after.effort) && applyLiveEffort(after.id, after.effort)) {
+    logger.info(
+      { audit: true, action: "card.config.live", card: after.worktreeSlug, effort: after.effort, by },
+      "intelligence switched — applied to the live native chat session, no restart",
+    );
+    return "live";
+  }
   if (after.status === "working") {
     await markRestartPending(after.id, "config");
     logger.info(

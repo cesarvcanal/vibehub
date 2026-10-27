@@ -437,9 +437,16 @@ export interface ReanchorControl { type: "reanchor" }
  * próprio (nunca um `user`). `id` é do navegador e casa a resposta (`btw_answer`) com a linha dele.
  */
 export interface BtwControl { type: "btw"; id: string; question: string }
+/**
+ * A INTELIGÊNCIA DO CARD TROCOU com o driver de pé: o driver aplica o nível na sessão viva
+ * (`applyFlagSettings`), no meio do turno inclusive — a próxima chamada ao modelo já sai nele, sem
+ * reiniciar nada. Nasce no back (troca no pill), nunca no navegador.
+ */
+export interface SetEffortControl { type: "set_effort"; effort: string }
 export type DriverControl =
   | UserControl
   | BtwControl
+  | SetEffortControl
   | InterruptControl
   | PermissionDecisionControl
   | QuestionAnswerControl

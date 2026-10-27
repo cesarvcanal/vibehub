@@ -441,6 +441,7 @@ export const en: Record<string, string> = {
   "cardView.effort.xhigh": "Extra high",
   "cardView.effort.max": "Max",
   "cardView.effortSwitched": "Intelligence: {label} — the session restarts on it, same conversation.",
+  "cardView.effortSwitchedLive": "Intelligence: {label} — in effect now, Claude goes on from where it was.",
   "cardView.effortSwitchPending": "Intelligence: {label} — it takes effect the moment Claude finishes.",
   "cardView.effortSwitchError": "Could not change the intelligence",
   "cardView.claudeAccount": "Claude account",
