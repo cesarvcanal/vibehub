@@ -18,7 +18,7 @@ import { isHarnessFiller } from "../chat/chat.js";
 import {
   NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseQuestionDraftFrame, isEmptyQuestionDraft, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
   type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type QuestionDraft, type StopHow, type UserQuestionItem,
-  type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest,
+  type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest, type ResultEvent,
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { observeDriverEvent } from "../events/cardEvents.js";
@@ -176,6 +176,12 @@ export interface DriverSession {
    * stall is a note, never a third send. A person's turn clears it.
    */
   resumeWatch?: { marker: InflightMarker; reengaged: boolean; timer?: NodeJS.Timeout };
+  /**
+   * Turnos seguidos que a API derrubou com falha passageira (rede, DNS, sobrecarga, 5xx) e a nova
+   * tentativa agendada (ver API_RETRY_DELAYS_MS). Um turno que fecha sem erro, ou uma mensagem da
+   * pessoa, zera a conta.
+   */
+  apiRetry?: { failures: number; timer?: NodeJS.Timeout };
   /** Contador de sinais de vida do agente principal (delta, raciocínio, ferramenta) — o vigia compara. */
   agentSignals: number;
   /** O marcador de trabalho em voo que este manager gravou por último (null/ausente = nenhum). */
@@ -441,8 +447,10 @@ export function driverActivity(cardId: string): DriverActivity {
  * ainda espera conta: o `result` vazio do arranque não é o fim dela, e uma bolinha que piscasse
  * "aguardando" ali soltaria o aviso de turno terminado no meio da retomada.
  */
-function turnRunning(session: Pick<DriverSession, "activeTurns" | "autonomousTurn" | "resumeWatch">): boolean {
-  return isTurnInFlight(session) || session.resumeWatch !== undefined;
+function turnRunning(session: Pick<DriverSession, "activeTurns" | "autonomousTurn" | "resumeWatch" | "apiRetry">): boolean {
+  // A nova tentativa agendada depois de uma falha passageira da API também: o turno não acabou, a
+  // rede é que caiu no meio dele (ver API_RETRY_DELAYS_MS).
+  return isTurnInFlight(session) || session.resumeWatch !== undefined || session.apiRetry?.timer !== undefined;
 }
 
 /**
@@ -540,6 +548,7 @@ function clearSessionTimers(session: DriverSession): void {
   clearIdleTimer(session);
   clearTimeout(session.backgroundSettleTimer);
   clearTimeout(session.resumeWatch?.timer);
+  clearTimeout(session.apiRetry?.timer);
 }
 
 function clearIdleTimer(session: DriverSession): void {
@@ -719,6 +728,8 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     // Uma retomada que fechou sem o agente produzir nada ainda não pegou: o vigia decide (ver
     // RESUME_CONFIRM_MS) — e o marcador fica, para o próximo deploy saber dela.
     if (session.resumeWatch && !isTurnInFlight(session)) armResumeWatch(session);
+    // Antes do marcador e da bolinha: a nova tentativa agendada mantém os dois como turno em voo.
+    noteApiOutcome(session, event);
     // The last turn in flight CLOSED: the durable marker comes off — unless work goes on in the
     // background (a task, a scheduled wake-up), which a deploy would kill just the same: then it
     // stays, now saying what is running (see `syncInflightMarker`).
@@ -816,8 +827,9 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   noteDriverEventFor(session.cardId, event);
   if (replayableHistoryEvent(event)) void appendHistory(session.cardId, { ...event, at: Date.now() });
   // What a person away from the board hears (services/events/cardEvents.ts): questions,
-  // permissions and their outcome.
-  void observeDriverEvent(session.cardId, event);
+  // permissions and their outcome. A failure the panel is already retrying is not news yet — only
+  // the one it gave up on is.
+  if (!(event.type === "result" && session.apiRetry?.timer)) void observeDriverEvent(session.cardId, event);
 }
 
 /**
@@ -1311,6 +1323,8 @@ export function handleClientFrame(
     // A pessoa mandou PARAR: a retomada que o vigia esperava acaba aqui — reenviar a ordem depois
     // seria o painel desfazendo o clique dela.
     if (session.resumeWatch) abandonResumeWatch(session);
+    // O mesmo para a nova tentativa depois de uma falha da API: parar é parar.
+    if (session.apiRetry?.timer) cancelApiRetry(session);
     // Only a stop that actually CUT something gets narrated — a stop click with nothing running
     // would otherwise write a note claiming a turn was interrupted when none was.
     if (session.activeTurns > 0) session.pendingInterruptNote = interruptNote(control);
@@ -1478,6 +1492,8 @@ export function injectSystemTurn(session: DriverSession, text: string, origin: M
 /** A PERSON's turn entered the driver: a fresh in-flight marker, and the resume chain starts over. */
 function markPersonTurn(session: DriverSession, marker: InflightMarker): void {
   endResumeWatch(session);
+  clearTimeout(session.apiRetry?.timer);
+  session.apiRetry = undefined;
   // A new turn starts: the CLI folds any pending notice into it.
   session.pendingNotices = [];
   putMarker(session, marker);
@@ -1545,6 +1561,97 @@ const crashListeners = new Set<CrashListener>();
 export function onDriverCrashWithWork(listener: CrashListener): () => void {
   crashListeners.add(listener);
   return () => { crashListeners.delete(listener); };
+}
+
+/**
+ * A espera antes de cada nova tentativa de um turno que a API derrubou com falha PASSAGEIRA — o CLI
+ * já tentou por conta própria antes de desistir, então a rede costuma precisar de minutos, não de
+ * segundos. Uma posição por tentativa: acabou a lista, acabou a insistência (NOTE_API_RETRY_EXHAUSTED).
+ */
+export const API_RETRY_DELAYS_MS: readonly number[] = [30_000, 120_000, 300_000];
+
+/** A ordem que a nova tentativa manda: o turno anterior morreu no meio, não terminou. */
+export const API_RETRY_TEXT =
+  "O turno anterior foi encerrado no meio por uma falha temporária da API da Anthropic (rede ou servidor). " +
+  "Isto NÃO é uma notificação automática: é a ordem de continuar. Confira o estado atual e siga a tarefa " +
+  "em andamento até o fim.";
+
+/** As tentativas acabaram (ou a última não pôde ir): a pessoa fica sabendo, o card não fica calado. */
+export const NOTE_API_RETRY_EXHAUSTED =
+  "A API da Anthropic falhou e as novas tentativas automáticas não fizeram o agente continuar. " +
+  "Mande uma mensagem para ele seguir de onde parou.";
+
+/**
+ * O turno terminou numa falha PASSAGEIRA da API? É o texto com que o CLI fecha o turno depois de
+ * esgotar as próprias tentativas ("API Error: Can't reach the API server … (EAI_AGAIN)", "API Error:
+ * 529 … overloaded_error", "API Error: Connection error."). Credencial, pedido inválido e limite do
+ * plano (4xx) não passam com o tempo — esses ficam para a pessoa. PURE.
+ */
+export function isTransientApiFailure(result: string | undefined): boolean {
+  const text = String(result ?? "").trim();
+  if (!/^API Error\b/i.test(text)) return false;
+  if (/^API Error:\s*5\d\d\b/i.test(text)) return true;
+  return /can't reach the API|connection error|timed out|overloaded|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|socket hang up|fetch failed/i
+    .test(text);
+}
+
+/** Desiste da nova tentativa agendada: a bolinha e o marcador deixam de contar com ela. */
+function cancelApiRetry(session: DriverSession): void {
+  clearTimeout(session.apiRetry?.timer);
+  session.apiRetry = undefined;
+  syncInflightMarker(session);
+  maybeScheduleIdleStop(session);
+}
+
+/**
+ * O FIM DE UM TURNO, visto pela conta das falhas da API (produção, card 8f2a, 23/10/2026: o turno
+ * fechou em EAI_AGAIN e o card ficou parado em "falhou" até alguém escrever "continua"). Falha
+ * passageira: nota no chat agora e, passada a espera da vez, a ordem de continuar — a menos que
+ * outro turno já esteja rodando (uma mensagem chegou) ou o driver tenha sido parado. Qualquer outro
+ * fim sem erro zera a conta.
+ */
+function noteApiOutcome(session: DriverSession, event: ResultEvent): void {
+  if (!event.isError || !isTransientApiFailure(event.result)) {
+    if (!event.isError) {
+      clearTimeout(session.apiRetry?.timer);
+      session.apiRetry = undefined;
+    }
+    return;
+  }
+  clearTimeout(session.apiRetry?.timer);
+  const failures = (session.apiRetry?.failures ?? 0) + 1;
+  const delay = API_RETRY_DELAYS_MS[failures - 1];
+  if (delay === undefined) {
+    session.apiRetry = undefined;
+    emitSystemNote(session, NOTE_API_RETRY_EXHAUSTED);
+    logger.warn({ audit: true, action: "sdk.apiRetry.exhausted", card: session.label, failures, detail: event.result?.slice(0, 200) },
+      "the API kept failing after the automatic retries — noted");
+    return;
+  }
+  session.apiRetry = { failures };
+  // Uma mensagem já na fila é o próximo turno: ele mesmo segue o trabalho.
+  if (isTurnInFlight(session)) return;
+  emitSystemNote(session, `A API da Anthropic falhou por um erro temporário. Nova tentativa automática em ${Math.round(delay / 1000)} s.`);
+  const timer = setTimeout(() => {
+    const retry = session.apiRetry;
+    if (!retry || retry.timer !== timer) return;
+    retry.timer = undefined;
+    if (session.closed || isTurnInFlight(session)) return;
+    if (!writeInjectedTurn(session, API_RETRY_TEXT, SYSTEM_ORIGIN)) {
+      // O driver já não aceita turno: a falha que ficou calada esperando esta tentativa vai a público.
+      cancelApiRetry(session);
+      emitSystemNote(session, NOTE_API_RETRY_EXHAUSTED);
+      void observeDriverEvent(session.cardId, event);
+      return;
+    }
+    putMarker(session, { startedAt: Date.now(), preview: inflightPreview(API_RETRY_TEXT), attempts: 0 });
+    logger.info({ audit: true, action: "sdk.apiRetry", card: session.label, attempt: failures, delayMs: delay },
+      "turn ended by a transient API failure — sent the order to continue");
+  }, delay);
+  timer.unref?.();
+  session.apiRetry.timer = timer;
+  logger.info({ audit: true, action: "sdk.apiRetry.scheduled", card: session.label, attempt: failures, delayMs: delay, detail: event.result?.slice(0, 200) },
+    "turn ended by a transient API failure — retry scheduled");
 }
 
 /**
