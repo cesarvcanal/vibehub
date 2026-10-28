@@ -61,7 +61,7 @@ afterEach(async () => {
 describe("GET /api/voice/live", () => {
   it("reports on/off and whether a key exists — never the key", async () => {
     const res = await app.inject({ method: "GET", url: "/api/voice/live", headers: { cookie } });
-    expect(res.json()).toEqual({ enabled: true, available: true, model: "gpt-live-1" });
+    expect(res.json()).toEqual({ enabled: true, available: true, model: "gpt-live-1", speech: true });
     expect(res.body).not.toContain(KEY);
   });
 

@@ -7,6 +7,8 @@ export interface VoiceLiveStatus {
   enabled: boolean;
   available: boolean;
   model: string;
+  /** Finished answers can be read aloud (an OpenAI key is reachable; independent of `enabled`). */
+  speech?: boolean;
 }
 
 export const VOICE_STATUS_KEY = ["voice", "live"] as const;
