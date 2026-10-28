@@ -486,6 +486,7 @@ export const ptBR: Record<string, string> = {
 
   /* ------------------------------------------------------ chat nativo (SDK) */
   "sdk.undelivered": "não entregue ao servidor",
+  "sdk.undeliveredRetrying": "— tentando de novo sozinho",
   "sdk.queueTitle.one": "1 mensagem esperando",
   "sdk.queueTitle.other": "{n} mensagens esperando",
   "sdk.queueHint": "vai no primeiro respiro do Claude",

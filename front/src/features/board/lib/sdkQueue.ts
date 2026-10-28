@@ -199,16 +199,18 @@ export const REQUEUE_MAX_AGE_MS = 10 * 60_000;
  * meio do setup e o back o descartou ("closed during setup — nothing attached"). No reload ela
  * voltava "não entregue ao servidor", pedindo um Reenviar para algo que só precisava ESPERAR.
  *
- * Fica de fora, com reenviar/descartar como antes:
+ * Fica de fora, como bolha "não entregue" com reenviar/descartar:
  * - a que já levou veredito (`undelivered`: recusa do back ou prazo vencido numa conexão que podia
- *   responder) — o servidor falhou com ela, e reenviar sozinho em laço é pior que perguntar;
+ *   responder) — o servidor falhou com ela, e quem a manda de novo é o reenvio automático, espaçado
+ *   e com fim (`planAutoResend` em ./sdkOutbox.ts), nunca a fila em laço;
  * - a que nunca saiu deste navegador (`unsent`) ou é de OUTRA conta — sair por esta conexão a
  *   gravaria no nome errado. Sem leitor conhecido ainda (`/auth/me` em voo) ela VAI pra fila: é a
  *   fila que separa as de outra conta quando ele chega (`foreignToOutbox`), e a reconciliação roda
  *   uma vez só — decidir "não é minha" no escuro a condenava para sempre;
  * - a correção de mensagem já enviada (`original`): ela não é um texto solto, é um supersede;
- * - a VELHA (`REQUEUE_MAX_AGE_MS`): um "sobe pra prod" de três dias atrás, de uma aba fechada antes
- *   do recibo, não pode virar turno sozinho ao abrir o card — ela volta marcada e a pessoa decide.
+ * - a VELHA (`REQUEUE_MAX_AGE_MS`): ela volta marcada, e o que a manda é o reenvio automático, só
+ *   dentro do teto de idade dele (`AUTO_RESEND_MAX_AGE_MS`) — um "sobe pra prod" de três dias atrás,
+ *   de uma aba fechada antes do recibo, não vira turno sozinho ao abrir o card: a pessoa decide.
  * PURE.
  */
 export function outboxToQueue(

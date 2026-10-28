@@ -135,6 +135,7 @@ import {
   markUndelivered,
   newCid,
   overdueMessages,
+  planAutoResend,
   readOutbox,
   reconcileOutbox,
   retryOutbox,
@@ -195,6 +196,14 @@ export interface SdkChatViewProps {
   terminalWorking?: boolean;
   ariaLabel?: string;
   className?: string;
+}
+
+/**
+ * As mensagens guardadas que ESTA conta pode mandar de novo: as dela, e as sem autor (gravadas
+ * antes do campo existir). Uma de outra conta, saindo por esta conexão, ficaria no nome errado. PURE.
+ */
+function ownSends(outbox: readonly OutboxMessage[], viewer: string | undefined): OutboxMessage[] {
+  return outbox.filter((m) => !m.from || m.from.name === viewer);
 }
 
 export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, terminalWorking = false, ariaLabel, className }: SdkChatViewProps) {
@@ -613,6 +622,28 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   );
 
   /**
+   * MANDAR DE NOVO uma mensagem não entregue: as mesmas palavras, o mesmo recibo — o back nunca a
+   * teve, ou teve e perdeu o recibo (aí o cid repetido é só a cobrança dele, nunca um segundo turno).
+   *
+   * `auto` é o reenvio que a tela faz sozinha (ver `planAutoResend`): gasta uma tentativa do plano
+   * e não grita — uma falha dele só reagenda. O da pessoa (o botão) zera o plano e avisa o erro.
+   */
+  const resendEntry = React.useCallback((entry: OutboxMessage, auto: boolean): void => {
+    const { cid } = entry;
+    setState((prev) => settleUserRow(prev, cid, "sending"));
+    setOutbox((prev) => retryOutbox(prev, entry, Date.now(), sendMark(deliveredUserTexts(rowsRef.current), entry.text), auto));
+    try {
+      sendFrame(entry.original !== undefined
+        ? { type: "edit_user", original: entry.original, text: entry.text, cid, ...(entry.first ? { first: true } : {}) }
+        : { type: "user", text: entry.text, cid });
+    } catch (err) {
+      if (!auto) toast.error((err as Error).message);
+      setOutbox((prev) => markUndelivered(prev, [cid]));
+      setState((prev) => settleUserRow(prev, cid, "undelivered"));
+    }
+  }, [sendFrame]);
+
+  /**
    * RECONCILE on reconnect: the server's replay is the truth about what was recorded. An outbox
    * entry whose text is in the replay was delivered (only its receipt got lost); one that is not
    * there never arrived, and comes back as a bubble marked "não entregue" with its text intact —
@@ -642,7 +673,13 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
       // veredito dado — o outbox é a cópia recuperável dela, e uma entrada vencida que ninguém
       // marca é o que fazia o watchdog derrubar o socket em todo tique.
       const gone = new Set([...delivered.map((m) => m.cid), ...queued.map((q) => q.cid)]);
-      setOutbox((prev) => markUndelivered(prev.filter((m) => !gone.has(m.cid)), missing.map((m) => m.cid)));
+      const settle = (prev: OutboxMessage[]): OutboxMessage[] =>
+        markUndelivered(prev.filter((m) => !gone.has(m.cid)), missing.map((m) => m.cid));
+      // O ref já na hora, pelo mesmo motivo da fila: o reenvio automático sai do despacho deste
+      // MESMO commit, e lendo o outbox de antes reenviaria uma mensagem que o replay acabou de dar
+      // por entregue — num driver novo, que não conhece o cid, isso é um segundo turno.
+      outboxRef.current = settle(outboxRef.current);
+      setOutbox(settle);
     }
     if (missing.length > 0) {
       setState((prev) => missing.reduce(
@@ -701,6 +738,19 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     }, OUTBOX_TICK_MS);
     return () => clearInterval(timer);
   }, [outbox.length]);
+
+  /**
+   * O RELÓGIO DO REENVIO AUTOMÁTICO — um timer só, armado para o próximo instante em que o plano
+   * muda (um intervalo vence, uma mensagem passa do teto de idade), nunca um tique fixo. Ele não
+   * envia nada: só acorda o despacho, que é quem sabe se dá para enviar agora (ver abaixo).
+   */
+  const [resendClock, setResendClock] = React.useState(0);
+  const resendPlan = planAutoResend(ownSends(outbox, viewer), Date.now());
+  React.useEffect(() => {
+    if (resendPlan.wakeAt === null) return;
+    const timer = setTimeout(() => setResendClock((n) => n + 1), Math.max(0, resendPlan.wakeAt - Date.now()));
+    return () => clearTimeout(timer);
+  }, [resendPlan.wakeAt, resendClock]);
 
   /* -------------------------------------------------------------- editing */
 
@@ -931,6 +981,17 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     // streaming input: o CLI a enfileira e o modelo a lê no passo seguinte.
     if (!turnHasRoomForMore(state)) return;
     if (editing || pendingEdit) return;
+    // O REENVIO AUTOMÁTICO passa na frente da fila: a mensagem que falhou foi escrita antes de tudo
+    // que está esperando ali, e a conversa não pode chegar ao Claude embaralhada. Ele sai pelo mesmo
+    // portão da fila — fio de pé, servidor pronto (a reconciliação já disse o que ele tem), turno
+    // com espaço —, então nunca dispara contra uma conexão que não pode responder, e o fio caído
+    // não gasta tentativa. Uma correção (`original`) é um supersede: só com o turno parado.
+    const retry = planAutoResend(ownSends(outboxRef.current, viewer), Date.now()).due
+      .find((m) => m.original === undefined || !state.turnActive);
+    if (retry) {
+      resendEntry(retry, true);
+      return;
+    }
     // Só o que é DESTA conta sai por esta conexão (o servidor carimba o autor pela conexão).
     const head = headOfQueue(foreignToOutbox(queueRef.current, viewer).own);
     if (!head) return;
@@ -943,7 +1004,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
       // conversa, recuperável. Ela não volta pra fila — duas cópias da mesma mensagem é pior.
       toast.error((err as Error).message);
     }
-  }, [queue, connected, state, editing, pendingEdit, dispatchTurn, viewer]);
+  }, [queue, connected, state, editing, pendingEdit, dispatchTurn, viewer, outbox, resendClock, resendEntry]);
 
   const send = async (raw: string): Promise<void> => {
     const text = raw.replace(/\r$/, "").trim();
@@ -1073,22 +1134,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
 
   /** "Reenviar": the same words, the same receipt id — the back never had them, so this is not a copy. */
   const resendUndelivered = React.useCallback((cid: string): void => {
-    const entry = outboxRef.current.find((m) => m.cid === cid);
-    if (!entry) return;
     // Reenviar a mensagem de OUTRA conta a gravaria no nome de quem está na aba agora.
-    if (entry.from && entry.from.name !== viewer) return;
-    setState((prev) => settleUserRow(prev, cid, "sending"));
-    setOutbox((prev) => retryOutbox(prev, entry, Date.now(), sendMark(deliveredUserTexts(rowsRef.current), entry.text)));
-    try {
-      sendFrame(entry.original !== undefined
-        ? { type: "edit_user", original: entry.original, text: entry.text, cid, ...(entry.first ? { first: true } : {}) }
-        : { type: "user", text: entry.text, cid });
-    } catch (err) {
-      toast.error((err as Error).message);
-      setOutbox((prev) => markUndelivered(prev, [cid]));
-      setState((prev) => settleUserRow(prev, cid, "undelivered"));
-    }
-  }, [sendFrame, viewer]);
+    const entry = ownSends(outboxRef.current, viewer).find((m) => m.cid === cid);
+    if (entry) resendEntry(entry, false);
+  }, [resendEntry, viewer]);
 
   /** "Descartar": the person gave up on this send — the bubble and the stored copy both go. */
   const discardUndelivered = React.useCallback((cid: string): void => {
@@ -1399,6 +1448,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
                 onEdit={beginEdit}
                 onResend={resendUndelivered}
                 onDiscard={discardUndelivered}
+                retrying={entry.row.kind === "user" && entry.row.cid !== undefined && resendPlan.pending.has(entry.row.cid)}
               />
             )}
           </div>
@@ -2138,6 +2188,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
   onEdit,
   onResend,
   onDiscard,
+  retrying = false,
 }: {
   row: SdkRow;
   /** The explicit reply this row's question already received — what it shows it got. */
@@ -2158,6 +2209,8 @@ const SdkChatRow = React.memo(function SdkChatRow({
   onResend?: (cid: string) => void;
   /** On a message the server never took: give up on it (bubble and stored copy both go). */
   onDiscard?: (cid: string) => void;
+  /** On a message the server never took: the screen will resend it by itself (see `planAutoResend`). */
+  retrying?: boolean;
 }) {
   const t = useT();
   // Whose screen this is — their own messages render unlabelled, everyone else's carry the sender.
@@ -2331,6 +2384,13 @@ const SdkChatRow = React.memo(function SdkChatRow({
       >
         <AlertTriangle className="h-3 w-3 shrink-0" />
         <span className="min-w-0 text-right italic">{t("sdk.undelivered")}</span>
+        {/* Ninguém precisa ficar olhando: a tela tenta de novo sozinha. O botão segue lá para quem
+            não quer esperar o intervalo. */}
+        {retrying ? (
+          <span data-testid="sdk-user-retrying" className="min-w-0 text-right italic">
+            {t("sdk.undeliveredRetrying")}
+          </span>
+        ) : null}
         {/* Só quem escreveu reenvia: daqui a mensagem sairia no nome de quem está na aba. */}
         {role === "self" ? (
           <button
