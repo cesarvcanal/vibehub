@@ -33,6 +33,8 @@ import { VoiceCallBar } from "@/features/voice/VoiceCallBar";
 import { VoiceCallContext, type VoiceCallControl } from "@/features/voice/ComposerVoiceButton";
 import { VoiceTurnBubble } from "@/features/voice/VoiceTurnBubble";
 import { agentContext, typedContext } from "@/features/voice/voiceContext";
+import { AnswerActions } from "@/features/voice/AnswerActions";
+import { readAloud, readAloudError, setReadAloudErrorHandler } from "@/features/voice/readAloud";
 import { PlanUsageAlert, cardRateLimitsKey, useCardPlanUsage } from "@/features/board/components/PlanUsage";
 import { planAlert, planWindows } from "@/features/board/lib/planUsage";
 import { LinkifiedText, Markdown, SenderTag } from "@/features/board/components/ChatView";
@@ -107,6 +109,7 @@ import {
   deliveredUserTexts,
   dropUserRow,
   currentActivity,
+  finishedAnswerIds,
   groupSdkRows,
   isSdkDelta,
   liveActivityDetail,
@@ -1347,6 +1350,21 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   // parada com a IA trabalhando (card "POC modo de voz", 2026-10-21).
   const working = connected && (state.awaiting || state.turnActive || (state.terminalBurst && terminalWorking));
   const activity = React.useMemo(() => (working ? currentActivity(state) : null), [working, state]);
+  // "Copiar" e "ouvir" só embaixo de resposta TERMINADA: a da rodada atual espera tudo parar —
+  // turno, e também as tarefas em segundo plano, que ainda podem mudar o que a IA vai dizer.
+  const settled = connected && !working && state.backgroundTasks.length === 0;
+  const finishedAnswers = React.useMemo(() => finishedAnswerIds(state.rows, settled), [state.rows, settled]);
+  // Uma leitura em voz alta deste card não sobrevive ao card fechado nem a uma chamada de voz.
+  React.useEffect(() => {
+    setReadAloudErrorHandler((err) => toast.error(translate(readAloudError(err))));
+    return () => {
+      setReadAloudErrorHandler(undefined);
+      if (readAloud.getState()?.cardId === cardId) readAloud.stop();
+    };
+  }, [cardId]);
+  React.useEffect(() => {
+    if (callLive) readAloud.stop();
+  }, [callLive]);
   /*
    * QUANDO o trabalho começou — e só isso mora aqui. O relógio que anda a cada segundo vive nos dois
    * mostradores (`useTurnClock`): aqui em cima ele redesenhava a conversa INTEIRA uma vez por
@@ -1449,6 +1467,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
                 onResend={resendUndelivered}
                 onDiscard={discardUndelivered}
                 retrying={entry.row.kind === "user" && entry.row.cid !== undefined && resendPlan.pending.has(entry.row.cid)}
+                answerOf={finishedAnswers.has(entry.id) ? cardId : undefined}
               />
             )}
           </div>
@@ -2189,6 +2208,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
   onResend,
   onDiscard,
   retrying = false,
+  answerOf,
 }: {
   row: SdkRow;
   /** The explicit reply this row's question already received — what it shows it got. */
@@ -2211,6 +2231,8 @@ const SdkChatRow = React.memo(function SdkChatRow({
   onDiscard?: (cid: string) => void;
   /** On a message the server never took: the screen will resend it by itself (see `planAutoResend`). */
   retrying?: boolean;
+  /** A FINISHED answer (`finishedAnswerIds`): the card it belongs to — it gets "copiar" and "ouvir". */
+  answerOf?: string;
 }) {
   const t = useT();
   // Whose screen this is — their own messages render unlabelled, everyone else's carry the sender.
@@ -2465,6 +2487,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
   // Best-effort highlight: when the message CLOSES on a question directed at the user, that final
   // paragraph gets a subtle amber frame so it never drowns in the text above it.
   const prose = row.kind === "assistant" && !row.streaming ? splitProseQuestion(row.text) : null;
+  const actions = row.kind === "assistant" && answerOf ? <AnswerActions id={row.id} cardId={answerOf} text={row.text} /> : null;
   if (prose) {
     // What this question RECEIVED (`answered`), anchored to it — the third question the screen owes
     // the person ("pronto, respondi"). Survives a reload: the answer is read back out of the sent message.
@@ -2507,6 +2530,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
             </Button>
           ) : null}
         </div>
+        {actions}
       </div>
     );
   }
@@ -2514,6 +2538,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
     <div data-testid="sdk-assistant" className="max-w-full select-text text-sm leading-relaxed">
       {row.streaming ? <StreamingMarkdown text={row.text} /> : <Markdown text={row.text} />}
       {row.streaming ? <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-foreground/60 align-baseline" /> : null}
+      {actions}
     </div>
   );
 });

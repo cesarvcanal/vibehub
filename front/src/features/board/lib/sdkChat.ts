@@ -1005,6 +1005,28 @@ export function btwQuestion(text: string): string | null {
 }
 
 /**
+ * AS RESPOSTAS TERMINADAS — as que ganham "copiar" e "ouvir" embaixo, como no ChatGPT.
+ *
+ * Uma por rodada: a última fala do agente principal (subagente não conta) antes da próxima mensagem
+ * da pessoa. As rodadas de trás já acabaram; a última só conta quando `settled` — nada rodando, nem
+ * turno, nem tarefa em segundo plano. Enquanto a IA trabalha, a resposta ainda pode mudar. PURE.
+ */
+export function finishedAnswerIds(rows: readonly SdkRow[], settled: boolean): Set<string> {
+  const out = new Set<string>();
+  let last: string | null = null;
+  for (const row of rows) {
+    if (row.kind === "user") {
+      if (last) out.add(last);
+      last = null;
+    } else if (row.kind === "assistant" && !row.parent && !row.streaming && row.text.trim() !== "") {
+      last = row.id;
+    }
+  }
+  if (settled && last) out.add(last);
+  return out;
+}
+
+/**
  * O turno tem ESPAÇO para mais uma mensagem — o RESPIRO em que a fila anda.
  *
  * A fila esperava o turno FECHAR, e um turno de quinze minutos segurava por quinze minutos um
