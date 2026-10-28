@@ -485,6 +485,7 @@ export const en: Record<string, string> = {
 
   /* ------------------------------------------------------ native chat (SDK) */
   "sdk.undelivered": "not delivered to the server",
+  "sdk.undeliveredRetrying": "— retrying on its own",
   "sdk.queueTitle.one": "1 message waiting",
   "sdk.queueTitle.other": "{n} messages waiting",
   "sdk.queueHint": "goes at Claude's next pause",
