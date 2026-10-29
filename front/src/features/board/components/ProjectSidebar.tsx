@@ -30,6 +30,8 @@ import {
   splitSidebarCards,
 } from "@/features/board/lib/board";
 import { CardStateIcon } from "@/features/board/components/CardStateIcon";
+import { reviewPill } from "@/features/board/lib/review";
+import type { BadgeTone } from "@/components/ui/badge";
 import { useExpandedProjects } from "@/features/board/lib/sidebarExpanded";
 import { RecentCards } from "@/features/board/components/RecentCards";
 import { ShareDialog } from "@/features/board/components/ShareDialog";
@@ -91,6 +93,7 @@ export function ProjectSidebar({
   onCloseMobile,
   onSelectProject,
   onOpenCard,
+  onOpenReview,
   onReorder,
   onNewProject,
   onNewCard,
@@ -112,6 +115,11 @@ export function ProjectSidebar({
   onSelectProject: (id: string) => void;
   /** Opens the card — or closes it, when it is the one already open. */
   onOpenCard: (projectId: string, cardId: string) => void;
+  /**
+   * Opens the card WITH the PR review's panel — the PR line under a card. Unlike `onOpenCard` it
+   * never closes the card it lands on. Absent = the line just opens the card.
+   */
+  onOpenReview?: (projectId: string, cardId: string) => void;
   /** Drops project `id` at `position` — the index AFTER it has been removed, as the server wants. */
   onReorder: (id: string, position: number) => void;
   onNewProject: () => void;
@@ -299,6 +307,7 @@ export function ProjectSidebar({
               dropLine={null}
               onSelect={() => onSelectProject(focusedProject.id)}
               onOpenCard={(cardId) => onOpenCard(focusedProject.id, cardId)}
+              onOpenReview={(cardId) => (onOpenReview ?? onOpenCard)(focusedProject.id, cardId)}
               onNewCard={() => onNewCard(focusedProject)}
               onDelete={() => onDeleteProject(focusedProject)}
               canManage={canManage}
@@ -336,6 +345,7 @@ export function ProjectSidebar({
                     }
                     onSelect={() => onSelectProject(project.id)}
                     onOpenCard={(cardId) => onOpenCard(project.id, cardId)}
+                    onOpenReview={(cardId) => (onOpenReview ?? onOpenCard)(project.id, cardId)}
                     onNewCard={() => onNewCard(project)}
                     onDelete={() => onDeleteProject(project)}
                     canManage={canManage}
@@ -523,6 +533,7 @@ function ProjectRow({
   dropLine,
   onSelect,
   onOpenCard,
+  onOpenReview,
   onNewCard,
   onDelete,
   onStep,
@@ -552,6 +563,8 @@ function ProjectRow({
   dropLine: "top" | "bottom" | null;
   onSelect: () => void;
   onOpenCard: (cardId: string) => void;
+  /** The card's PR line: open it with the review panel (never toggles it closed). */
+  onOpenReview: (cardId: string) => void;
   onNewCard: () => void;
   /** false = a member: the row lists the cards and offers nothing that would 403. */
   canManage?: boolean;
@@ -745,6 +758,7 @@ function ProjectRow({
         card={card}
         active={card.id === activeCardId}
         onOpen={() => onOpenCard(card.id)}
+        onOpenReview={() => onOpenReview(card.id)}
         onRename={() => {
           setDraft(card.title);
           setEditingId(card.id);
@@ -925,6 +939,7 @@ function SidebarCard({
   card,
   active,
   onOpen,
+  onOpenReview,
   onRename,
   onPause,
   onRestart,
@@ -934,6 +949,8 @@ function SidebarCard({
   card: BoardCard;
   active: boolean;
   onOpen: () => void;
+  /** The PR line under the card was clicked. */
+  onOpenReview: () => void;
   onRename: () => void;
   onPause: (card: BoardCard) => void;
   onRestart: (card: BoardCard) => void;
@@ -963,41 +980,80 @@ function SidebarCard({
   const { point, openAt, openAtPoint, close } = useContextMenuPoint();
   const longPress = useLongPress(openAtPoint);
 
+  // The PR line: the review's state under the card. A cancelled review is NO review (the server
+  // never sends one on a card, and a stale cache must not bring the line back).
+  const review = card.review && card.review.phase !== "cancelled" ? card.review : null;
+  const pill = reviewPill(review ?? undefined);
+
   return (
     <>
-      <a
-        href={cardHref(card.projectId, card.id)}
-        // Name first, then where it lives in the runner — the worktree, the base branch and the
-        // tmux session used to be a footer line under the terminal, which is height this app does
-        // not have to spare for something you look at once a day.
-        title={`${card.title}\n${cardRunnerHint(card)}`}
-        aria-current={active ? "true" : undefined}
-        onClick={(e) => {
-          if (isNewTabClick(e)) return;
-          e.preventDefault();
-          // A long-press opened the menu over this row; the click it ends with is not a choice.
-          if (longPress.swallowClick()) return;
-          // A stray double-click would otherwise open and immediately close the card again.
-          if (e.detail > 1) return;
-          onOpen();
-        }}
+      {/* ONE row, however many lines it has: the highlight, the hover, the right-click menu and the
+          long-press belong to the whole row, so the PR line under a card is the same card to the
+          eye and to the finger. */}
+      <div
         onContextMenu={openAt}
         {...longPress.handlers}
-        className={cn(
-          // `touch-callout` off: on iOS a long press on a link raises the browser's own preview,
-          // which would cover the menu that same press is here to open.
-          "flex w-full items-center gap-2 py-1.5 pl-9 pr-3 text-left text-sm transition-colors [-webkit-touch-callout:none]",
-          active
-            ? `${SELECTED_ROW} text-foreground`
-            : "text-muted-foreground hover:bg-card/60 hover:text-foreground",
-        )}
+        className={cn("flex flex-col transition-colors", active ? SELECTED_ROW : "hover:bg-card/60")}
       >
-        {/* Always the same 12px slot, so titles stay aligned whether or not there is a state. */}
-        <span className="inline-flex h-3 w-3 shrink-0 items-center justify-center">
-          {state ? <CardStateIcon state={state} /> : null}
-        </span>
-        <span className="truncate">{card.title}</span>
-      </a>
+        <a
+          href={cardHref(card.projectId, card.id)}
+          // Name first, then where it lives in the runner — the worktree, the base branch and the
+          // tmux session used to be a footer line under the terminal, which is height this app does
+          // not have to spare for something you look at once a day.
+          title={`${card.title}\n${cardRunnerHint(card)}`}
+          aria-current={active ? "true" : undefined}
+          onClick={(e) => {
+            if (isNewTabClick(e)) return;
+            e.preventDefault();
+            // A long-press opened the menu over this row; the click it ends with is not a choice.
+            if (longPress.swallowClick()) return;
+            // A stray double-click would otherwise open and immediately close the card again.
+            if (e.detail > 1) return;
+            onOpen();
+          }}
+          className={cn(
+            // `touch-callout` off: on iOS a long press on a link raises the browser's own preview,
+            // which would cover the menu that same press is here to open.
+            "flex w-full items-center gap-2 py-1.5 pl-9 pr-3 text-left text-sm transition-colors [-webkit-touch-callout:none]",
+            active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+            // Close to the line below it, so the two read as one thing.
+            review && "pb-0.5",
+          )}
+        >
+          {/* Always the same 12px slot, so titles stay aligned whether or not there is a state. */}
+          <span className="inline-flex h-3 w-3 shrink-0 items-center justify-center">
+            {state ? <CardStateIcon state={state} /> : null}
+          </span>
+          <span className="truncate">{card.title}</span>
+        </a>
+        {review ? (
+          // A link of its own into the same card, but WITH the review panel open (`?review=1`). A
+          // plain click is handled in-app and only ever opens; Cmd/Ctrl/Shift/middle-click keep the
+          // browser's new tab.
+          <a
+            href={cardHref(card.projectId, card.id, { review: true })}
+            title={t("review.sidebar.hint", { num: review.prNumber })}
+            onClick={(e) => {
+              if (isNewTabClick(e)) return;
+              e.preventDefault();
+              if (longPress.swallowClick()) return;
+              onOpenReview();
+            }}
+            className={cn(
+              "flex w-full items-center gap-2 pb-1.5 pl-9 pr-3 text-left text-[11px] [-webkit-touch-callout:none] hover:underline",
+              PR_LINE_TONE[pill.tone],
+            )}
+          >
+            {/* The arrow takes the card's state-icon slot, so the line starts under the title. */}
+            <span aria-hidden className="inline-flex w-3 shrink-0 justify-center">
+              ↳
+            </span>
+            <span className="truncate">
+              PR #{review.prNumber} · {t(pill.key, pill.vars)}
+            </span>
+          </a>
+        ) : null}
+      </div>
       <ContextMenu
         point={point}
         items={items}
@@ -1007,6 +1063,15 @@ function SidebarCard({
     </>
   );
 }
+
+/** The PR line takes the colour of the review's pill: ready green, working orange, impasse blue, merged quiet. */
+const PR_LINE_TONE: Record<BadgeTone, string> = {
+  ok: "text-emerald-400",
+  warn: "text-amber-400",
+  info: "text-sky-400",
+  critical: "text-destructive",
+  muted: "text-muted-foreground",
+};
 
 /* ------------------------------------------------------------- drag maths */
 
