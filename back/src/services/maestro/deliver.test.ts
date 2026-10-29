@@ -346,3 +346,88 @@ describe("deliver sobe na conta de QUEM trabalhou o card", () => {
     expect(tokenFor).toHaveBeenCalledWith(cesar.id);
   });
 });
+
+describe("deliver grava o PR no card (revisão de PR)", () => {
+  const prUrl = (n: number) => `https://github.com/acme/repo/pull/${n}`;
+  const pushOut = (n: number) => `pushed\n__VIBEHUB_DELIVER__ pr ${prUrl(n)}`;
+
+  it("deliver grava o PR no card, um por base", async () => {
+    const { deliver, registry, card } = await makeCard();
+
+    wire({ push: pushOut(7) });
+    await deliver.deliver(card.id, { branch: "dev" });
+    wire({ push: pushOut(8) });
+    await deliver.deliver(card.id, { branch: "prod" });
+
+    const prs = (await registry.getCard(card.id))?.prs;
+    expect(prs).toHaveLength(2);
+    // a head é a branch do card; a base é o alvo da entrega; o número sai da URL do PR
+    expect(prs?.find((p) => p.base === "dev")).toMatchObject({ number: 7, url: prUrl(7), branch: card.branch ?? `card/${card.worktreeSlug}` });
+    expect(prs?.find((p) => p.base === "prod")).toMatchObject({ number: 8, url: prUrl(8) });
+
+    // repetir `dev` (o PR foi fechado e outro aberto) atualiza o item em vez de empilhar
+    const firstOpenedAt = prs!.find((p) => p.base === "dev")!.openedAt;
+    wire({ push: pushOut(9) });
+    await deliver.deliver(card.id, { branch: "dev" });
+    const again = (await registry.getCard(card.id))?.prs;
+    expect(again).toHaveLength(2);
+    expect(again?.find((p) => p.base === "dev")).toMatchObject({ number: 9, url: prUrl(9), openedAt: firstOpenedAt });
+  });
+
+  it("o PR fica gravado mesmo com o gate vermelho e mesmo sem autorização", async () => {
+    const { deliver, registry, card } = await makeCard();
+    wire({ push: pushOut(7), run: "1 failing test\n__VIBEHUB_GATE__ fail\n" });
+    expect(await deliver.deliver(card.id, { branch: "dev", authorized: true })).toMatchObject({ reason: "gate" });
+    expect((await registry.getCard(card.id))?.prs).toMatchObject([{ number: 7, base: "dev" }]);
+
+    wire({ push: pushOut(8) });
+    expect(await deliver.deliver(card.id, { branch: "prod" })).toMatchObject({ reason: "unauthorized" });
+    expect((await registry.getCard(card.id))?.prs).toHaveLength(2);
+  });
+
+  it("push que falha não grava PR nenhum", async () => {
+    const { deliver, registry, card } = await makeCard();
+    wire({ push: "boom\n__VIBEHUB_DELIVER__ error push" });
+    await deliver.deliver(card.id, { branch: "dev" });
+    expect((await registry.getCard(card.id))?.prs).toBeUndefined();
+  });
+
+  it("card trancado grava o PR contra a própria base, não a pedida", async () => {
+    const { deliver, registry, card } = await makeCard();
+    await registry.updateCard(card.id, { base: "dev", locked: true });
+    wire({ push: pushOut(7) });
+    await deliver.deliver(card.id, { branch: "prod" });
+    expect((await registry.getCard(card.id))?.prs).toMatchObject([{ number: 7, base: "dev" }]);
+  });
+
+  it("uma URL de PR sem número não derruba a entrega: segue sem gravar", async () => {
+    const { deliver, registry, card } = await makeCard();
+    wire({ push: "pushed\n__VIBEHUB_DELIVER__ pr https://example.test/sem-numero" });
+    const out = await deliver.deliver(card.id, { branch: "dev" });
+    expect(out).toMatchObject({ reason: "unauthorized", prUrl: "https://example.test/sem-numero" });
+    expect((await registry.getCard(card.id))?.prs).toBeUndefined();
+  });
+
+  it("o card do revisor NUNCA empurra: devolve locked antes de qualquer script", async () => {
+    const { deliver, registry, project, card } = await makeCard();
+    await registry.createAccount({ name: "Mussa" });
+    const reviewer = await registry.createReviewerCard({
+      authorCard: card, reviewerAccountSlug: "mussa", prBranch: "card/the-fix-ab12", title: "Revisão: the fix",
+    });
+    wire({ push: pushOut(7) });
+    // nem a autorização do agente nem o alvo pedido mudam nada: o revisor não tem saída
+    const out = await deliver.deliver(reviewer.id, { branch: "prod", authorized: true });
+    expect(out).toMatchObject({
+      merged: false,
+      reason: "locked",
+      locked: true,
+      branch: "card/the-fix-ab12",
+      cardBranch: `review/${reviewer.worktreeSlug}`,
+    });
+    expect(out.prUrl).toBeUndefined();
+    expect(runScript).not.toHaveBeenCalled();
+    expect(tokenFor).not.toHaveBeenCalled();
+    expect((await registry.getCard(reviewer.id))?.prs).toBeUndefined();
+    expect(project.id).toBe(reviewer.projectId);
+  });
+});

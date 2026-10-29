@@ -568,6 +568,112 @@ describe("board registry (persisted)", () => {
     await expect(reg.createCard({ projectId: p.id, title: "bad" }, { model: "gpt-4" })).rejects.toThrow(/invalid model/);
   });
 
+  describe("revisão de PR: o PR no card e o card do revisor", () => {
+    const AUTHOR_PR = { number: 7, url: "https://github.com/acme/widgets/pull/7", base: "dev", branch: "card/login-ab12" };
+
+    async function seedAuthor() {
+      const p = await seedProject({ baseBranch: "main" });
+      const author = await reg.createCard({ projectId: p.id, title: "Login" });
+      await reg.createAccount({ name: "Mussa" });
+      return { p, author };
+    }
+
+    it("card do revisor nasce da branch do PR, na conta do revisor, ligado ao autor", async () => {
+      const { p, author } = await seedAuthor();
+      const reviewer = await reg.createReviewerCard({
+        authorCard: author, reviewerAccountSlug: "mussa", prBranch: "card/login-ab12", title: "Revisão: Login",
+      });
+      expect(reviewer).toMatchObject({
+        projectId: p.id,
+        title: "Revisão: Login",
+        base: "card/login-ab12",
+        accountSlug: "mussa",
+        reviewOf: author.id,
+        column: "waiting",
+      });
+      // a branch do revisor é DELE (nunca a do PR: ele não empurra nada), derivada do slug do card novo
+      expect(reviewer.branch).toBe(`review/${reviewer.worktreeSlug}`);
+      expect(reviewer.worktreeSlug).toBe(`revisao-login-${reviewer.id.slice(0, 4)}`);
+      expect(reviewer.id).not.toBe(author.id);
+      // gravado de verdade: é o que a hidratação seguinte lê
+      expect(await reg.getCard(reviewer.id)).toMatchObject({ reviewOf: author.id, branch: reviewer.branch, column: "waiting" });
+      // o autor não é tocado
+      expect((await reg.getCard(author.id))?.reviewOf).toBeUndefined();
+    });
+
+    it("card do revisor: conta inexistente, branch inválida, autor sumido ou autor que é revisor não deixam card pra trás", async () => {
+      const { p, author } = await seedAuthor();
+      const before = (await reg.listAllCards()).length;
+      const input = { authorCard: author, reviewerAccountSlug: "mussa", prBranch: "card/login-ab12", title: "Revisão" };
+      await expect(reg.createReviewerCard({ ...input, reviewerAccountSlug: "fantasma" })).rejects.toThrow(/does not exist/);
+      await expect(reg.createReviewerCard({ ...input, prBranch: "a;rm -rf" })).rejects.toThrow(/invalid branch/);
+      await expect(reg.createReviewerCard({ ...input, title: "  " })).rejects.toThrow(/title is required/);
+      await expect(reg.createReviewerCard({ ...input, authorCard: { ...author, id: "sumiu" } })).rejects.toThrow(/author card not found/);
+      const reviewer = await reg.createReviewerCard(input);
+      // revisar o card de um revisor não faz sentido (e abriria uma cadeia sem fim)
+      await expect(reg.createReviewerCard({ ...input, authorCard: reviewer })).rejects.toThrow(/reviewer card/);
+      expect((await reg.listAllCards()).filter((c) => c.projectId === p.id)).toHaveLength(before + 1);
+    });
+
+    it("reviewOf e prs não entram pelas portas do HTTP (createCard e updateCard ignoram)", async () => {
+      const { p, author } = await seedAuthor();
+      const smuggled = { reviewOf: author.id, prs: [{ number: 1, url: "x", base: "dev", branch: "b", openedAt: 1 }] };
+      const created = await reg.createCard({ projectId: p.id, title: "intruso" }, smuggled as never);
+      expect(created.reviewOf).toBeUndefined();
+      expect(created.prs).toBeUndefined();
+      const patched = await reg.updateCard(created.id, smuggled as never);
+      expect(patched.reviewOf).toBeUndefined();
+      expect(patched.prs).toBeUndefined();
+    });
+
+    it("recordCardPr: grava um PR por base; repetir a base atualiza e mantém o openedAt do primeiro registro", async () => {
+      const { author } = await seedAuthor();
+      expect((await reg.getCard(author.id))?.prs).toBeUndefined();
+
+      const now = vi.spyOn(Date, "now");
+      now.mockReturnValue(1_000);
+      await reg.recordCardPr(author.id, AUTHOR_PR);
+      now.mockReturnValue(2_000);
+      await reg.recordCardPr(author.id, { ...AUTHOR_PR, number: 8, base: "prod", url: "https://github.com/acme/widgets/pull/8" });
+      now.mockReturnValue(3_000);
+      // o mesmo `dev` de novo, agora outro PR (o anterior foi fechado): atualiza o item, não empilha
+      await reg.recordCardPr(author.id, { number: 9, url: "https://github.com/acme/widgets/pull/9", base: "dev", branch: "card/login-v2" });
+      now.mockRestore();
+
+      const prs = (await reg.getCard(author.id))?.prs;
+      expect(prs).toHaveLength(2);
+      expect(prs?.find((x) => x.base === "dev")).toEqual({
+        number: 9, url: "https://github.com/acme/widgets/pull/9", base: "dev", branch: "card/login-v2", openedAt: 1_000,
+      });
+      expect(prs?.find((x) => x.base === "prod")).toMatchObject({ number: 8, openedAt: 2_000 });
+    });
+
+    it("recordCardPr: card que sumiu no meio da entrega é no-op, não erro", async () => {
+      await seedAuthor();
+      await expect(reg.recordCardPr("nao-existe", AUTHOR_PR)).resolves.toBeUndefined();
+    });
+
+    it("board.json antigo, sem prs nem reviewOf, hidrata e aceita o primeiro PR", async () => {
+      const { p, author } = await seedAuthor();
+      // o documento como uma versão anterior o gravou: nenhum dos dois campos existe
+      const raw = JSON.parse(await readFile(join(dir, "board.json"), "utf8")) as { cards: Record<string, unknown>[] };
+      for (const c of raw.cards) {
+        delete c.prs;
+        delete c.reviewOf;
+      }
+      await writeFile(join(dir, "board.json"), JSON.stringify(raw));
+
+      const old = await freshRegistry();
+      const card = await old.getCard(author.id);
+      expect(card).toBeDefined();
+      expect(card?.projectId).toBe(p.id);
+      expect(card?.prs).toBeUndefined();
+      expect(card?.reviewOf).toBeUndefined();
+      await old.recordCardPr(author.id, AUTHOR_PR);
+      expect((await old.getCard(author.id))?.prs).toHaveLength(1);
+    });
+  });
+
   it("removing a project also removes its cards, and renumbers the sidebar", async () => {
     const keep = await seedProject({ name: "keep" });
     const doomed = await seedProject({ name: "doomed" });

@@ -1,7 +1,7 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import {
-  getCard, getProject, assertBranchName, listGithubConnections, type Card, type Project,
+  getCard, getProject, assertBranchName, listGithubConnections, recordCardPr, type Card, type Project,
 } from "../board/registry.js";
 import { cardWorkPaths, cardBranch } from "../board/workspace.js";
 import { tokenFor } from "../github/client.js";
@@ -38,6 +38,10 @@ import { logger } from "../../utils/logger.js";
  * whatever was asked for, and step (d) never runs — the delivery ENDS at the open pull request,
  * with the gate already run, for a reviewer to merge. That is the hotfix shape turned into the only
  * shape that card has.
+ *
+ * Two things around the flow for the PR review: once the PR exists it is recorded on the card, one
+ * per base (`Card.prs`), and a REVIEWER card (`Card.reviewOf`) is refused up front — it reviews a
+ * branch it must never push to.
  */
 
 export type DeliverReason =
@@ -266,6 +270,30 @@ async function ciGate(container: string, cardId: string, token: string, cwd: str
   return { ran: true, passed: ci.verdict === "pass", output: ci.output };
 }
 
+/** The PR number out of its URL (`.../pull/123`); null when the URL is not a pull request's. PURE. */
+function prNumberFromUrl(prUrl: string): number | null {
+  const m = /\/pull\/(\d+)(?:[/?#]|$)/.exec(prUrl);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Writes the PR on the card (one per base) so the review can start from it. Best-effort: the PR is
+ * already open, and a delivery must not come back as a failure because a note about it could not be
+ * written — the next delivery of the same base writes it again.
+ */
+async function rememberPr(card: Card, prUrl: string, base: string, branch: string): Promise<void> {
+  const number = prNumberFromUrl(prUrl);
+  if (number === null) {
+    logger.warn({ card: card.worktreeSlug }, "the PR url has no number — not recorded on the card");
+    return;
+  }
+  try {
+    await recordCardPr(card.id, { number, url: prUrl, base, branch });
+  } catch (err) {
+    logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not record the PR on the card");
+  }
+}
+
 /**
  * Delivers a card: push → PR → gate → (authorized) merge. The gate always runs before the merge, so
  * an unauthorized call still comes back with the truth ("green, ready — say the word"). Merging
@@ -274,6 +302,16 @@ async function ciGate(container: string, cardId: string, token: string, cwd: str
 export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<DeliverResult> {
   const card = await getCard(cardId);
   if (!card) throw new Error("card not found");
+  // A REVIEWER card (`Card.reviewOf`) never delivers: it was cut from the PR's own branch to read and
+  // test it, and a push from here would land on the very branch under review. Refused before the
+  // project is looked up, the token fetched or any script run — nothing of this card leaves the runner.
+  if (card.reviewOf) {
+    logger.info(
+      { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "locked", reviewOf: card.reviewOf, by: opts.by },
+      "deliver refused: this card reviews a PR and never pushes",
+    );
+    return { merged: false, reason: "locked", branch: card.base, cardBranch: cardBranch(card), locked: true };
+  }
   const project = await getProject(card.projectId);
   if (!project) throw new Error("project for this card not found");
 
@@ -304,6 +342,7 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     return { merged: false, reason: reasonForStage(pr.stage), branch: target, cardBranch: source, ...lock, output: cleanOutput(pr.output) };
   }
   const prUrl = pr.prUrl;
+  await rememberPr(card, prUrl, target, source);
 
   // (c) the gate — the PR's CI when it has one, the local gate otherwise. A gate that errors
   // (runner blip) blocks the merge — deploying past an unknown state is worse than trying again.
