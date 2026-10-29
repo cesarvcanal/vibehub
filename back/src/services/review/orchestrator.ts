@@ -19,8 +19,8 @@ import {
   activeReviewFor, getReview, insertReview, listReviewsForCards, mutateReview, reviewByReviewerCard,
 } from "./store.js";
 import {
-  actionableForAuthor, approvePendingText, authorFixPrompt, impasseText, nudgePrefix, oneLine, phaseNoticeText,
-  reviewerApprovePrompt, reviewerDeltaPrompt, reviewerRoundPrompt,
+  actionableForAuthor, approvePendingText, authorFixPrompt, headMovedPrefix, impasseText, nudgePrefix, oneLine,
+  phaseNoticeText, reviewerApprovePrompt, reviewerDeltaPrompt, reviewerRoundPrompt,
 } from "./prompts.js";
 
 /**
@@ -32,6 +32,7 @@ import {
  *   vibehub_review_respond ──► rodada N+1: o revisor confere só o diff
  *   turn_finished sem a ferramenta ──► um lembrete; no segundo, impasse "IA não respondeu"
  *   humano ──► decideQuestion | retryReview (impasse por falha, Approve pendente) | cancelReview
+ *   botão de merge (rota) ──► markReviewMerged | head do PR andou: reopenAfterHeadMoved
  *
  * As regras do jogo (prova, lista fechada, teto de rodadas) moram no modelo puro; aqui ficam a
  * persistência, quem pode chamar o quê e os relays. Três garantias atravessam o arquivo:
@@ -46,7 +47,8 @@ import {
  *    `impasse` com o erro como motivo, aviso nos cards do autor e do revisor e warn no log; e todo
  *    impasse que não é de rodadas tem saída (`retryReview`), além do `cancelReview`.
  *
- * E uma ausência deliberada: nada aqui mergeia. O merge é a rota humana da Task 4.
+ * E uma ausência deliberada: nada aqui mergeia. O merge é a rota humana (`routes/reviews.ts`), que só
+ * conta para cá o que aconteceu.
  */
 
 /** Quem assina as falas que o orquestrador digita nos cards. */
@@ -62,6 +64,8 @@ const REVIEWER_VERDICTS: ReadonlySet<FindingStatus> = new Set(["fixed", "open", 
 export const HEAD_SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 
 const NO_ANSWER = "IA não respondeu";
+/** Motivo do impasse quando o PR andou depois do `ready` e não sobra rodada para conferir o que entrou. */
+export const HEAD_MOVED = "push depois do pronto";
 const CLOSED: ReadonlySet<ReviewPhase> = new Set(["merged", "cancelled"]);
 
 type Side = "reviewer" | "author";
@@ -538,7 +542,9 @@ export async function retryReview(reviewId: string, by: string): Promise<Review>
   const after = await mutateReview(reviewId, (r) => {
     if (r.phase === "ready" && r.approvePending) {
       side = "approve";
-    } else if (r.phase === "impasse" && r.impasseReason !== "rodadas") {
+    } else if (r.phase === "impasse" && r.impasseReason !== "rodadas" && r.impasseReason !== HEAD_MOVED) {
+      // "rodadas" e "push depois do pronto" não têm vez a devolver (a última rodada já foi): o revisor
+      // humano decide os itens, ou cancela e pede uma revisão nova.
       r.phase = r.lastSubmitRound !== r.round ? "reviewing" : "fixing";
       side = r.phase === "reviewing" ? "reviewer" : "author";
     } else {
@@ -570,6 +576,64 @@ export async function cancelReview(reviewId: string, by: string): Promise<Review
     note(r, "human", "Revisão cancelada.");
   });
   logger.info({ audit: true, action: "review.cancel", review: reviewId, by }, "PR review cancelled");
+  return after;
+}
+
+/* ------------------------------------------------------------------ merge humano */
+
+/**
+ * O botão de merge achou o PR num commit que não é o revisado (push depois do `ready`). Numa mutação
+ * só: com rodada sobrando, a revisão volta a `reviewing` na rodada seguinte e o revisor recebe o delta
+ * (desde o `reviewedSha` aprovado) pelo mesmo relay das outras rodadas; na última, vira impasse
+ * "push depois do pronto". Só age em `ready`: o merge leva minutos (o CI), e uma revisão que andou ou
+ * foi cancelada nesse meio fica como está.
+ */
+export async function reopenAfterHeadMoved(reviewId: string, by: string): Promise<Review> {
+  let outcome = null as "reopen" | "impasse" | null;
+  const after = await mutateReview(reviewId, (r) => {
+    if (r.phase !== "ready") return;
+    const approved = r.reviewedSha ? ` (${r.reviewedSha.slice(0, 7)})` : "";
+    r.approvePending = undefined;
+    r.nudges = 0;
+    if (r.round < MAX_ROUNDS) {
+      r.round += 1;
+      r.phase = "reviewing";
+      note(r, "system", `Merge recusado: ${HEAD_MOVED}; o PR não está mais no commit aprovado${approved}. ` +
+        `Rodada ${r.round} de ${MAX_ROUNDS}: o revisor confere o que entrou.`);
+      outcome = "reopen";
+    } else {
+      r.phase = "impasse";
+      r.impasseReason = HEAD_MOVED;
+      note(r, "system", `Impasse: ${HEAD_MOVED} na última rodada${approved}; cancele e peça uma revisão nova.`);
+      outcome = "impasse";
+    }
+  });
+  logger.info({ audit: true, action: "review.head_moved", review: reviewId, outcome, by }, "PR review: head moved after ready");
+  if (outcome === "reopen") await relayReview(after, "reviewer", headMovedPrefix(after) + reviewerDeltaPrompt(after));
+  else if (outcome === "impasse") await announcePhase(after);
+  return (await getReview(reviewId)) ?? after;
+}
+
+/**
+ * O merge humano saiu: a revisão fecha em `merged` (deixa de ser ativa) e os dois cards recebem o
+ * aviso. Grava mesmo se a revisão foi cancelada durante o merge — o PR foi mergeado, e é isso que o
+ * painel tem de dizer. Repetir não grava nada nem avisa de novo.
+ */
+export async function markReviewMerged(reviewId: string, by: string): Promise<Review> {
+  let landed = false as boolean;
+  const after = await mutateReview(reviewId, (r) => {
+    if (r.phase === "merged") return;
+    r.phase = "merged";
+    r.approvePending = undefined;
+    r.impasseReason = undefined;
+    const head = r.reviewedSha ? ` (head ${r.reviewedSha.slice(0, 7)})` : "";
+    note(r, "human", `Mergeado em ${r.base} por ${by}${head}.`);
+    landed = true;
+  });
+  if (landed) {
+    logger.info({ audit: true, action: "review.merged", review: reviewId, by }, "PR review merged");
+    await announcePhase(after);
+  }
   return after;
 }
 

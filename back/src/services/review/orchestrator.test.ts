@@ -670,6 +670,77 @@ describe("tentar de novo e cancelar", () => {
   });
 });
 
+describe("merge humano: push depois do pronto e mergeado", () => {
+  /** Uma revisão em `ready` na rodada `round`, com SHA1 revisado; envios zerados. */
+  async function readyAt(o: Loaded, round: 1 | 3) {
+    const { author, review } = await started(o);
+    if (round === 3) {
+      await o.store.mutateReview(review.id, (r) => {
+        r.round = 3;
+      });
+    }
+    const ready = await o.orch.submitReviewerRound(review.reviewerCardId, { round, findings: [], headSha: SHA1, summary: "ok" });
+    expect(ready.phase).toBe("ready");
+    send.mockClear();
+    calls.length = 0;
+    return { author, review: ready };
+  }
+
+  it("push depois do pronto reabre a rodada seguinte e manda o diff ao revisor", async () => {
+    const o = await load();
+    const { review } = await readyAt(o, 1);
+    const after = await o.orch.reopenAfterHeadMoved(review.id, "u-merger");
+    expect(after).toMatchObject({ phase: "reviewing", round: 2, nudges: 0, reviewedSha: SHA1 });
+    expect(after.approvePending).toBeUndefined();
+    // a vez é do revisor de novo: o fim de turno sem submit volta a ser cobrado
+    expect(after.lastSubmitRound).toBe(1);
+    // pelo mesmo caminho do relay: revisor como ator, depois o texto do delta da rodada 2
+    expect(calls).toEqual([`actor:u-revisor:${review.reviewerCardId}`, `send:${review.reviewerCardId}`]);
+    const text = lastText();
+    for (const piece of ["rodada 2 de 3", `git diff ${SHA1}..HEAD`, "vibehub_review_submit", "push depois do pronto"]) {
+      expect(text).toContain(piece);
+    }
+    expect(after.log.some((e) => e.who === "system" && /push depois do pronto/i.test(e.text))).toBe(true);
+    expect(deliverSpy).not.toHaveBeenCalled();
+  });
+
+  it("push depois do pronto na rodada 3 vira impasse, sem relay e sem retry", async () => {
+    const o = await load();
+    const { author, review } = await readyAt(o, 3);
+    const after = await o.orch.reopenAfterHeadMoved(review.id, "u-merger");
+    expect(after).toMatchObject({ phase: "impasse", impasseReason: "push depois do pronto", round: 3 });
+    expect(send).not.toHaveBeenCalled();
+    const notices = await messagesOn(o, author.id);
+    expect(notices.at(-1)?.text).toMatch(/PR #7.*impasse.*push depois do pronto/i);
+    // não sobra rodada: "tentar de novo" não tem para onde devolver a vez (cancelar e pedir outra revisão)
+    await expect(o.orch.retryReview(review.id, "u-merger")).rejects.toThrow(/nada_a_tentar/);
+  });
+
+  it("reabrir só vale em ready: revisão que andou ou fechou no meio do merge fica como está", async () => {
+    const o = await load();
+    const { review } = await readyAt(o, 1);
+    await o.orch.cancelReview(review.id, "u-autor");
+    const after = await o.orch.reopenAfterHeadMoved(review.id, "u-merger");
+    expect(after).toMatchObject({ phase: "cancelled", round: 1 });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("mergeado grava a fase, avisa os dois cards e é idempotente", async () => {
+    const o = await load();
+    const { author, review } = await readyAt(o, 1);
+    const merged = await o.orch.markReviewMerged(review.id, "merger");
+    expect(merged.phase).toBe("merged");
+    expect(merged.log.at(-1)).toMatchObject({ who: "human" });
+    expect((await messagesOn(o, author.id)).at(-1)?.text).toMatch(/PR #7: mergeado em dev/);
+    expect((await messagesOn(o, review.reviewerCardId)).at(-1)?.text).toMatch(/PR #7: mergeado em dev/);
+    // merged não é ativa: o card volta a poder pedir revisão desse PR
+    expect(await o.store.activeReviewFor(author.id, 7)).toBeUndefined();
+    const again = await o.orch.markReviewMerged(review.id, "merger");
+    expect(again.log).toHaveLength(merged.log.length);
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
 describe("falha de entrega e fim de turno sem ferramenta", () => {
   it("envio que falha vira impasse com o motivo, sem lançar", async () => {
     const o = await load();

@@ -249,6 +249,19 @@ export function nudgePrefix(tool: typeof TOOL_SUBMIT | typeof TOOL_RESPOND): str
   );
 }
 
+/**
+ * A linha que vai na frente do delta quando o merge humano foi recusado porque o PR andou depois do
+ * `ready`: o revisor precisa saber que a rodada nova não veio de uma resposta do autor à lista.
+ */
+export function headMovedPrefix(r: Review): string {
+  const approved = r.reviewedSha ? ` (${r.reviewedSha.slice(0, 7)})` : "";
+  return (
+    `Merge recusado pelo vibehub: push depois do pronto. O head do PR #${r.prNumber} não é mais o commit que você ` +
+    `aprovou${approved}, então a revisão voltou para a rodada ${r.round}. Confira o que entrou desde então como uma ` +
+    "rodada nova, pelos passos abaixo.\n\n"
+  );
+}
+
 /** O aviso de mudança de fase, gravado no card do autor: PR, fase e o motivo numa linha. */
 export function phaseNoticeText(r: Review): string {
   const at = `rodada ${r.round} de ${MAX_ROUNDS}`;
