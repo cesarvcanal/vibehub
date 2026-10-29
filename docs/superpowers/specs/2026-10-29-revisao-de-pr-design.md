@@ -168,9 +168,11 @@ rotas → orquestração → MCP → front).
   O botão de merge só funciona se o head ainda for esse; qualquer push depois do `ready` volta a
   revisão para uma rodada nova (se sobrar rodada) ou `impasse`. `deliver` ganha modo "só mergear"
   (sem push) para o botão — senão o push do merge carregaria commit não revisado.
-- **Branch no card do revisor:** worktree destacado em `origin/<branch do PR>` (o branch já está
-  checado no worktree do autor e `git worktree add` recusaria). A cada rodada, `git fetch` +
-  checkout do head novo. `base` do card do revisor continua sendo a base do PR, não o branch.
+- **Branch no card do revisor:** branch própria `review/<slug>` nascida de `origin/<branch do PR>`
+  (`base` do card do revisor = branch do PR). O branch do PR já está checado no worktree do autor,
+  então não dá pra reusá-lo; com `base` = branch do PR o `worktree add -b` que já existe
+  (`workspace.ts:388`) resolve sem mudança no provisionamento. A cada rodada o revisor faz
+  `git fetch` + `git reset --hard origin/<branch do PR>`. Ele nunca dá push.
 - **Vários PRs por card:** `Card.prs[]` chaveado por `base` (dev, depois prod geram PRs diferentes).
   O bloco no chat e a linha da barra lateral mostram o PR ativo mais recente; cada bloco no chat
   pede revisão do próprio PR.
