@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient } from "@tanstack/react-query";
+import { useLocation } from "react-router-dom";
 import { CardTerminalView } from "@/features/board/components/CardTerminalView";
 import { renderApp, testQueryClient } from "@/test/render";
 import { get, patch, post } from "@/lib/api";
@@ -57,6 +58,15 @@ vi.mock("@/features/board/components/ChatView", async () => {
 
 vi.mock("@/features/board/components/VncPanel", () => ({
   VncPanel: ({ cardId }: { cardId: string }) => <div data-testid="vnc">{cardId}</div>,
+}));
+
+// The review panel has its own test file; here the only question is WHEN the card view mounts it.
+vi.mock("@/features/board/components/ReviewPanel", () => ({
+  ReviewPanel: ({ cardId, onClose }: { cardId: string; onClose: () => void }) => (
+    <div data-testid="review-panel" data-card={cardId}>
+      <button type="button" onClick={onClose}>close-review</button>
+    </div>
+  ),
 }));
 
 // The native (SDK) chat also owns a websocket and has its own test file; here the only question is
@@ -1503,15 +1513,99 @@ describe("CardTerminalView — the PR blocks above the composer", () => {
     expect(screen.queryByTestId("pr-review-block")).toBeNull();
   });
 
-  it("clicking the block of a PR under review asks for its panel", async () => {
+  it("clicking the block of a PR under review opens its panel as a column of the work area", async () => {
     renderWithCache([
       card({ openedAt: 10, prs: [PR], review: { id: "r1", prNumber: 553, phase: "fixing", round: 2 } }),
     ]);
     const work = await screen.findByTestId("card-workarea");
-    expect(work).not.toHaveAttribute("data-review-open");
+    expect(screen.queryByTestId("review-panel")).toBeNull();
 
     await userEvent.click(within(await screen.findByTestId("pr-review-block")).getByRole("button", { name: /PR #553/ }));
 
-    expect(work).toHaveAttribute("data-review-open");
+    const panel = await screen.findByTestId("review-panel");
+    expect(panel).toHaveAttribute("data-card", "c1");
+    expect(work).toContainElement(panel);
+    // The test hook of the stub is gone: the panel itself is the proof now.
+    expect(work).not.toHaveAttribute("data-review-open");
+  });
+
+  it("the panel's close brings the work area back to the terminal alone", async () => {
+    renderWithCache([
+      card({ openedAt: 10, prs: [PR], review: { id: "r1", prNumber: 553, phase: "fixing", round: 2 } }),
+    ]);
+    await userEvent.click(within(await screen.findByTestId("pr-review-block")).getByRole("button", { name: /PR #553/ }));
+    await screen.findByTestId("review-panel");
+
+    await userEvent.click(screen.getByRole("button", { name: "close-review" }));
+
+    expect(screen.queryByTestId("review-panel")).toBeNull();
+    expect(screen.getByTestId("xterm")).toBeInTheDocument();
+  });
+});
+
+describe("CardTerminalView — ?review=1 opens the panel", () => {
+  const PR = { number: 553, url: "https://github.com/acme/billing/pull/553", base: "dev", branch: "card/fix-the-totals", openedAt: 5 };
+  const withReview = card({ openedAt: 10, prs: [PR], review: { id: "r1", prNumber: 553, phase: "fixing", round: 2 } });
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    serve();
+    mockPost.mockResolvedValue({ card: card({ openedAt: 10 }) });
+  });
+  afterEach(() => localStorage.clear());
+
+  /** The URL the router holds, so a test can see what the card view did to it. */
+  function Url() {
+    const { search } = useLocation();
+    return <output data-testid="url">{search}</output>;
+  }
+
+  function renderAt(route: string) {
+    const client = testQueryClient();
+    client.setQueryData(cardsKey(project.id), [withReview]);
+    writeCardMode("c1", "terminal");
+    return renderApp(
+      <>
+        <Url />
+        <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />
+      </>,
+      { queryClient: client, route },
+    );
+  }
+
+  it("opens the panel of the card the URL names, and takes the flag off the URL", async () => {
+    renderAt("/?project=p1&card=c1&review=1");
+
+    expect(await screen.findByTestId("review-panel")).toBeInTheDocument();
+    // Read ONCE: the flag is consumed, the rest of the location stays.
+    await waitFor(() => expect(screen.getByTestId("url")).toHaveTextContent(/^\?project=p1&card=c1$/));
+  });
+
+  it("does not bring the panel back after it was closed by hand", async () => {
+    renderAt("/?project=p1&card=c1&review=1");
+    await screen.findByTestId("review-panel");
+    await waitFor(() => expect(screen.getByTestId("url")).not.toHaveTextContent("review=1"));
+
+    await userEvent.click(screen.getByRole("button", { name: "close-review" }));
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByTestId("review-panel")).toBeNull();
+  });
+
+  it("ignores the flag when the URL is about another card", async () => {
+    renderAt("/?project=p1&card=c2&review=1");
+    await screen.findByTestId("xterm");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(screen.queryByTestId("review-panel")).toBeNull();
+    // Not ours to consume: the card it is for still has to find it.
+    expect(screen.getByTestId("url")).toHaveTextContent("review=1");
+  });
+
+  it("without the flag the panel stays closed", async () => {
+    renderAt("/?project=p1&card=c1");
+    await screen.findByTestId("xterm");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByTestId("review-panel")).toBeNull();
   });
 });

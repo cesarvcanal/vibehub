@@ -20,6 +20,8 @@ import {
   locationHref,
   recentCards,
   splitSidebarCards,
+  wantsReviewPanel,
+  withoutReviewFlag,
   writeLocation,
 } from "@/features/board/lib/board";
 import type { BoardCard, BoardProject } from "@/features/board/api";
@@ -443,6 +445,33 @@ describe("locationHref", () => {
 
   it("escapes an id rather than pasting it in raw", () => {
     expect(cardHref("a b", "c/d")).toBe("?project=a+b&card=c%2Fd");
+  });
+});
+
+describe("the review flag of a card link", () => {
+  it("cardHref carries ?review=1 only when asked, after the card", () => {
+    expect(cardHref("p1", "c2", { review: true })).toBe("?project=p1&card=c2&review=1");
+    expect(cardHref("p1", "c2", { review: false })).toBe("?project=p1&card=c2");
+  });
+
+  it("the flag is not part of the location: the board still reads the same project and card", () => {
+    const params = new URLSearchParams("project=p1&card=c2&review=1");
+    expect(readLocation(params)).toEqual({ projectId: "p1", cardId: "c2" });
+  });
+
+  it("wantsReviewPanel is true only for the card the URL names", () => {
+    const params = new URLSearchParams("project=p1&card=c2&review=1");
+    expect(wantsReviewPanel(params, "c2")).toBe(true);
+    expect(wantsReviewPanel(params, "c3")).toBe(false);
+    expect(wantsReviewPanel(new URLSearchParams("project=p1&card=c2"), "c2")).toBe(false);
+    expect(wantsReviewPanel(new URLSearchParams("project=p1&card=c2&review=0"), "c2")).toBe(false);
+    // A card without a project is not addressable (see readLocation): no flag either.
+    expect(wantsReviewPanel(new URLSearchParams("card=c2&review=1"), "c2")).toBe(false);
+  });
+
+  it("withoutReviewFlag drops the flag and keeps everything else", () => {
+    const next = withoutReviewFlag(new URLSearchParams("project=p1&card=c2&review=1&x=y"));
+    expect(next.toString()).toBe("project=p1&card=c2&x=y");
   });
 });
 
