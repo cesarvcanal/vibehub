@@ -13,6 +13,7 @@ import { logUnownedRejections } from "./utils/processGuards.js";
 import { authRoutes } from "./routes/auth.js";
 import { usersRoutes } from "./routes/users.js";
 import { sharesRoutes } from "./routes/shares.js";
+import { reviewRoutes } from "./routes/reviews.js";
 import { settingsRoutes } from "./routes/settings.js";
 import { githubRoutes } from "./routes/github.js";
 import { runnerRoutes } from "./routes/runner.js";
@@ -90,6 +91,7 @@ export async function buildServer() {
   await app.register(githubRoutes);
   await app.register(runnerRoutes);
   await app.register(boardRoutes);
+  await app.register(reviewRoutes);
   await app.register(sessionRoutes);
   await app.register(agentRoutes);
   await app.register(mcpRoutes);
