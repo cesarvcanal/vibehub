@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vibehub — onde ficam os PRs (v2)</title>
+<style>
+  :root{--bg:#0b0d12;--side:#10131a;--panel:#131722;--panel2:#181d29;--line:#252b38;--txt:#e7e9ee;--mut:#8a91a0;
+        --acc:#4f8cff;--ok:#36c27a;--warn:#e3a33b;--bad:#e5534b;--vio:#a78bfa;--hl:rgba(79,140,255,.13)}
+  *{box-sizing:border-box}
+  body{margin:0;background:#07080b;color:var(--txt);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:1500px;margin:0 auto;padding:22px 20px 70px}
+  h1{font-size:20px;margin:0 0 4px} .sub{color:var(--mut);margin:0 0 14px}
+  .tabs{display:flex;gap:6px;border-bottom:1px solid var(--line);margin-bottom:14px}
+  .tabs button{background:none;border:0;color:var(--mut);padding:9px 14px;cursor:pointer;font:inherit;border-bottom:2px solid transparent}
+  .tabs button.on{color:var(--txt);border-color:var(--acc)}
+  .view{display:none}.view.on{display:block}
+  .expl{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:0 0 14px}
+  .ex{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-size:13px;color:#c8ccd5}
+  .ex b{color:var(--txt)} .ex .n{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--warn);color:#1a1205;font-weight:700;font-size:11px;margin-right:6px}
+
+  /* app shell igual ao print */
+  .app{display:grid;grid-template-columns:300px 1fr;height:760px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--bg)}
+  .side{background:var(--side);border-right:1px solid var(--line);display:flex;flex-direction:column}
+  .logo{display:flex;align-items:center;gap:10px;padding:16px;font-weight:700;font-size:18px}
+  .logo i{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#4f8cff,#7b5cff);display:inline-block}
+  .proj{display:flex;align-items:center;gap:8px;padding:8px 16px;font-weight:600;color:#d8dbe2}
+  .proj .g{flex:1}
+  .item{display:flex;align-items:center;gap:8px;padding:8px 16px 8px 30px;color:#cfd3dc;border-left:3px solid transparent;font-size:14px}
+  .item.sel{background:var(--hl);border-left-color:var(--acc)}
+  .circ{width:11px;height:11px;border-radius:50%;border:1.5px solid var(--mut);flex:none}
+  .circ.w{border-color:var(--ok);background:var(--ok)}
+  .sub-item{display:flex;align-items:center;gap:7px;padding:4px 16px 6px 52px;font-size:12px;color:var(--mut)}
+  .pill{font-size:11px;padding:1px 7px;border-radius:99px;border:1px solid var(--line);white-space:nowrap}
+  .pill.rev{color:var(--warn);border-color:#5b4520;background:rgba(227,163,59,.08)}
+  .pill.ok{color:var(--ok);border-color:#1f4a33;background:rgba(54,194,122,.08)}
+  .pill.acc{color:var(--acc);border-color:#27406e;background:rgba(79,140,255,.08)}
+  .sec{padding:14px 16px 6px;font-size:11px;letter-spacing:.08em;color:var(--mut);text-transform:uppercase;display:flex;align-items:center;gap:8px}
+  .sec .cnt{background:var(--warn);color:#1a1205;border-radius:99px;padding:0 7px;font-weight:700;letter-spacing:0}
+  .ritem{margin:3px 10px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);font-size:13px}
+  .ritem .t{display:flex;gap:6px;align-items:center}
+  .ritem .m{font-size:11.5px;color:var(--mut);margin-top:2px}
+  .side .foot{margin-top:auto;padding:14px 16px;color:var(--mut);display:flex;justify-content:space-between}
+
+  .main{display:flex;flex-direction:column;min-width:0}
+  .bar{display:flex;align-items:center;gap:6px;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden}
+  .bar .tt{font-weight:700;margin-right:4px}
+  .b{border:1px solid var(--line);border-radius:7px;padding:5px 9px;font-size:12.5px;color:#cfd3dc;background:var(--panel)}
+  .b.green{color:var(--ok);border-color:#1f4a33}
+  .b.prb{color:var(--warn);border-color:#6b5124;background:rgba(227,163,59,.1);font-weight:600}
+  .b.prb.on{outline:2px solid var(--warn)}
+  .grow{flex:1}
+  .body{flex:1;display:grid;min-height:0}
+  .body.split{grid-template-columns:1fr 470px}
+  .chat{padding:16px 18px;overflow:hidden;color:#cfd3dc;font-size:13.5px;position:relative}
+  .msg{margin-bottom:12px}
+  .msg.u{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:8px 11px;display:inline-block}
+  .event{border:1px solid #6b5124;background:rgba(227,163,59,.07);border-radius:10px;padding:10px 12px;margin:10px 0}
+  .event .row{display:flex;align-items:center;gap:8px}
+  .btn{border-radius:7px;padding:5px 11px;font-size:12.5px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)}
+  .btn.pri{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+  .btn.okb{background:var(--ok);border-color:var(--ok);color:#04150b;font-weight:600}
+  .composer{margin:0 16px 10px;border:1px solid var(--line);border-radius:10px;height:70px;background:var(--panel);color:var(--mut);padding:10px 12px;font-size:13px}
+  .bottom{display:flex;justify-content:space-between;align-items:center;padding:0 16px 10px;font-size:12px;color:var(--mut)}
+  .bottom .chips{display:flex;gap:6px}
+
+  .pane{border-left:1px solid var(--line);background:var(--side);padding:12px;overflow:hidden;display:flex;flex-direction:column;gap:10px}
+  .box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 11px}
+  .box h4{margin:0 0 6px;font-size:13px}
+  .stepper{display:flex;gap:4px;margin:6px 0 2px}.stepper div{flex:1;height:5px;border-radius:3px;background:var(--line)}
+  .stepper .d{background:var(--ok)}.stepper .c{background:var(--acc)}
+  .roles{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}
+  .role{font-size:11px;color:var(--mut)} .role div{color:var(--txt);font-size:12.5px;border:1px solid var(--line);border-radius:6px;padding:3px 7px;margin-top:2px;background:var(--bg)}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  td{padding:5px 4px;border-bottom:1px solid var(--line);vertical-align:top}
+  .bl{color:var(--bad);font-size:10.5px;font-weight:700}.sg{color:var(--mut);font-size:10.5px}
+  .st{font-size:10.5px;padding:0 6px;border-radius:99px;border:1px solid;white-space:nowrap}
+  .st.f{color:var(--ok);border-color:#1f4a33}.st.c{color:var(--vio);border-color:#3d3366}.st.o{color:var(--warn);border-color:#5c4520}.st.x{color:var(--mut);border-color:var(--line);text-decoration:line-through}
+  .feed{font-size:12px;color:#c8ccd5}.feed p{margin:0 0 5px}.feed b{color:var(--mut);font-weight:500}
+
+  /* dialog */
+  .overlay{position:absolute;inset:0;background:rgba(0,0,0,.55);display:grid;place-items:center}
+  .dlg{width:470px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px}
+  .dlg h3{margin:0 0 2px;font-size:16px}
+  .field{margin-top:12px}.field label{font-size:12px;color:var(--mut)}
+  .selx{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;padding:7px 9px;margin-top:3px;background:var(--bg)}
+  .av{width:20px;height:20px;border-radius:50%;display:inline-grid;place-items:center;font-size:10px;font-weight:700;color:#0b0d10}
+  .err{font-size:12px;color:var(--bad);margin-top:4px}
+  .hint{font-size:12px;color:var(--mut);margin-top:12px}
+  .mark{outline:2px dashed var(--warn);outline-offset:2px;border-radius:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Onde ficam os PRs no vibehub de hoje</h1>
+  <p class="sub">Mesmo layout do seu print. As partes novas estão com contorno laranja tracejado. São 3 telas: abrir o PR, o board do revisor e o card com a revisão aberta.</p>
+  <div class="tabs">
+    <button class="on" data-v="t1">1 · Dev abre o PR</button>
+    <button data-v="t2">2 · Mussa vê o que tem pra revisar</button>
+    <button data-v="t3">3 · Acompanhando a revisão</button>
+  </div>
+
+  <!-- ===== TELA 1 ===== -->
+  <section class="view on" id="t1">
+    <div class="expl">
+      <div class="ex"><span class="n">1</span><b>No chat do card do Albert</b>, quando o deliver abre o PR, aparece um bloco “PR #553 aberto” com o botão <b>Pedir revisão</b>.</div>
+      <div class="ex"><span class="n">2</span><b>A janela de papéis</b> segue o padrão da janela de compartilhar que já existe. O vibehub não deixa o revisor ser o autor.</div>
+      <div class="ex"><span class="n">3</span>Confirmou: o vibehub cria por trás a sessão do revisor <b>na conta Claude do Mussa</b>. Ninguém precisa criar card na mão.</div>
+    </div>
+    <div class="app">
+      <aside class="side">
+        <div class="logo"><i></i>vibehub</div>
+        <div class="proj">▣ <span class="g">erp-aux</span> ⌄ ＋</div>
+        <div class="item sel"><span class="circ w"></span>pedidos-acompanhamento</div>
+        <div class="item"><span class="circ"></span>realtime-acompanhamento</div>
+        <div class="item"><span class="circ"></span>estoque-permissao-filial</div>
+        <div class="foot"><span>⚙</span><span>albert</span></div>
+      </aside>
+      <div class="main">
+        <div class="bar"><span>←</span><span class="tt">pedidos-acompanhamento</span><span style="color:var(--mut)">· erp-aux</span>
+          <span class="b">Pausar</span><span class="b">Reiniciar</span><span class="b">Concluir</span><span class="grow"></span>
+          <span class="b">Preview</span><span class="b">Navegador</span><span class="b">Shell</span><span class="b">Opus 5.5 · Médio</span><span class="b">albert</span></div>
+        <div class="body"><div class="chat">
+          <div class="msg u">terminei, abre o PR pra dev</div>
+          <div class="msg">Push feito e PR aberto pra <code>dev</code>. Gate verde: 164/165 testes, e a única falha já existe na dev.</div>
+          <div class="event mark"><div class="row"><b style="color:var(--warn)">PR #553</b><span>card/pedidos-acompanhamento → dev</span><span class="grow"></span><span class="pill">sem revisão</span><span class="btn pri">Pedir revisão</span></div></div>
+          <div class="overlay"><div class="dlg mark">
+            <h3>Pedir revisão do PR #553</h3><div style="font-size:12px;color:var(--mut)">As IAs revisam e corrigem sozinhas. Ninguém mergeia sem você.</div>
+            <div class="field"><label>Revisor (a IA roda na conta Claude dele)</label><div class="selx"><span class="av" style="background:#4f8cff">M</span>mussa<span class="grow"></span>⌄</div></div>
+            <div class="field"><label>Quem corrige (autor)</label><div class="selx"><span class="av" style="background:#f0b46b">A</span>albert<span class="grow"></span>⌄</div></div>
+            <div class="field"><label>Co-autor (opcional)</label><div class="selx" style="color:var(--mut)">ninguém<span class="grow"></span>⌄</div></div>
+            <div class="field"><label>Responsável pelo merge</label><div class="selx"><span class="av" style="background:#4f8cff">M</span>mussa<span class="grow"></span>⌄</div></div>
+            <div class="hint">Se escolher “albert” como revisor: <span class="err">O autor do PR não pode revisar o próprio PR.</span></div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px"><span class="btn">Cancelar</span><span class="btn pri">Iniciar revisão</span></div>
+          </div></div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== TELA 2 ===== -->
+  <section class="view" id="t2">
+    <div class="expl">
+      <div class="ex"><span class="n">1</span><b>Na barra lateral</b>, uma seção nova no topo: <b>“Revisões”</b>, com os PRs em que você tem papel (revisor ou responsável pelo merge). O número laranja mostra quantos esperam você.</div>
+      <div class="ex"><span class="n">2</span><b>Embaixo de cada card</b> que tem PR aparece uma linha pequena com o número e o estado da revisão. Bate o olho e já sabe em que pé está.</div>
+      <div class="ex"><span class="n">3</span>Clicar num PR <b>abre o card do autor</b> já com a revisão aberta à direita (tela 3). <b>A sessão do revisor não vira card na lista</b>: ela roda por trás, na sua conta.</div>
+    </div>
+    <div class="app">
+      <aside class="side">
+        <div class="logo"><i></i>vibehub</div>
+        <div class="sec mark" style="margin:4px 8px 0;padding:10px 8px 6px">Revisões <span class="cnt">1</span></div>
+        <div class="ritem mark" style="border-color:#6b5124"><div class="t"><b>PR #553</b><span class="grow" style="flex:1"></span><span class="pill ok">pronto pra merge</span></div><div class="m">pedidos-acompanhamento · albert · esperando você</div></div>
+        <div class="ritem"><div class="t"><b>PR #552</b><span style="flex:1"></span><span class="pill rev">rodada 2/3</span></div><div class="m">realtime-acompanhamento · albert · IAs trabalhando</div></div>
+        <div class="ritem"><div class="t"><b>PR #551</b><span style="flex:1"></span><span class="pill acc">impasse</span></div><div class="m">estoque-permissao-filial · 1 item travado · decidir</div></div>
+
+        <div class="proj" style="margin-top:12px">▣ <span class="g">erp-aux</span> ⌄ ＋</div>
+        <div class="item"><span class="circ w"></span>correções-layout/estoque-erp</div>
+        <div class="item"><span class="circ"></span>pedidos-acompanhamento</div>
+        <div class="sub-item mark">↳ <span class="pill ok">PR #553 · pronto pra merge</span></div>
+        <div class="item"><span class="circ"></span>realtime-acompanhamento</div>
+        <div class="sub-item mark">↳ <span class="pill rev">PR #552 · revisão 2/3</span></div>
+        <div class="item"><span class="circ"></span>fix-dp-dev</div>
+        <div class="foot"><span>⚙</span><span>mussa</span></div>
+      </aside>
+      <div class="main"><div class="body" style="display:grid;place-items:center;color:var(--mut)">(área do card: escolha algo na lista)</div></div>
+    </div>
+  </section>
+
+  <!-- ===== TELA 3 ===== -->
+  <section class="view" id="t3">
+    <div class="expl">
+      <div class="ex"><span class="n">1</span><b>Na barra de cima do card</b> entra um botão novo, <b>“PR #552 · 2/3”</b>, do lado de Navegador e Shell. Ele abre e fecha um painel à direita, igual o Navegador faz hoje.</div>
+      <div class="ex"><span class="n">2</span><b>No painel</b>: papéis, rodadas, a lista fechada com prova e status, a conversa das IAs resumida e o veredito. O merge só aparece pra quem é responsável por ele.</div>
+      <div class="ex"><span class="n">3</span><b>O chat do card continua à esquerda</b>, mostrando a IA do Albert corrigindo. Você pode escrever nele normalmente, por exemplo pra desempatar.</div>
+    </div>
+    <div class="app">
+      <aside class="side">
+        <div class="logo"><i></i>vibehub</div>
+        <div class="sec" style="margin:4px 8px 0;padding:10px 8px 6px">Revisões <span class="cnt">1</span></div>
+        <div class="ritem" style="border-color:#27406e;background:var(--hl)"><div class="t"><b>PR #552</b><span style="flex:1"></span><span class="pill rev">rodada 2/3</span></div><div class="m">realtime-acompanhamento · albert</div></div>
+        <div class="proj" style="margin-top:12px">▣ <span class="g">erp-aux</span> ⌄ ＋</div>
+        <div class="item sel"><span class="circ w"></span>realtime-acompanhamento</div>
+        <div class="sub-item">↳ <span class="pill rev">PR #552 · revisão 2/3</span></div>
+        <div class="foot"><span>⚙</span><span>mussa</span></div>
+      </aside>
+      <div class="main">
+        <div class="bar"><span>←</span><span class="tt">realtime-acompanhamento</span><span style="color:var(--mut)">· erp-aux</span>
+          <span class="b">Pausar</span><span class="b">Reiniciar</span><span class="b">Concluir</span><span class="grow"></span>
+          <span class="b prb on mark">PR #552 · 2/3</span><span class="b">Preview</span><span class="b">Navegador</span><span class="b">Shell</span><span class="b">Opus 5.5 · Médio</span></div>
+        <div class="body split">
+          <div class="chat" style="display:flex;flex-direction:column">
+            <div style="flex:1">
+              <div class="msg"><span class="pill rev">revisão · rodada 1</span> Recebi a lista fechada do revisor (mussa): 3 bloqueantes e 1 sugestão. Conferindo cada um antes de aplicar.</div>
+              <div class="msg">Item 1, busca duplicada: confirmei com o teste novo, que falhava (2 buscas) e agora passa. Commit <code>16235d5</code>.</div>
+              <div class="msg">Item 2, <code>clear()</code> no cleanup: removido junto. Item 3, renome pra <code>entregarEventosDaAbaOculta</code>: feito.</div>
+              <div class="msg">Suíte do hook 99/99, eslint e tsc limpos. Push na branch do PR. Devolvi pro revisor.</div>
+            </div>
+            <div class="composer" style="margin:0">Escreva pro card…</div>
+            <div class="bottom" style="padding:8px 0 0"><span>● Chat nativo</span><div class="chips"><span class="pill">Mudanças 3 +41 −18</span></div></div>
+          </div>
+          <div class="pane mark">
+            <div class="box">
+              <div style="display:flex;align-items:center;gap:6px"><b>PR #552</b><span style="font-size:12px;color:var(--mut)">→ dev</span><span style="flex:1"></span><span class="pill acc">rodada 2 de 3</span></div>
+              <div class="stepper"><div class="d"></div><div class="c"></div><div></div></div>
+              <div style="font-size:12px;color:var(--mut)">Revisor conferindo só o que mudou desde a rodada 1</div>
+              <div class="roles">
+                <div class="role">Revisor<div>mussa</div></div><div class="role">Corrige<div>albert</div></div>
+                <div class="role">Co-autor<div style="color:var(--mut)">—</div></div><div class="role">Merge<div>mussa</div></div>
+              </div>
+            </div>
+            <div class="box">
+              <h4>Lista fechada <span style="font-weight:400;color:var(--mut)">· 3 bloqueiam · 1 sugestão · 1 derrubado</span></h4>
+              <table>
+                <tr><td><span class="bl">BLOQUEIA</span><br>Aba volta e busca 2×</td><td style="font-size:11px;color:var(--mut)">teste falha<br>useInvalidacao…:96</td><td><span class="st f">corrigido</span></td></tr>
+                <tr><td><span class="bl">BLOQUEIA</span><br>clear() perde eventos</td><td style="font-size:11px;color:var(--mut)">simplicidade.md §5</td><td><span class="st f">corrigido</span></td></tr>
+                <tr><td><span class="bl">BLOQUEIA</span><br>Nome da função</td><td style="font-size:11px;color:var(--mut)">nomenclatura.md 1,4</td><td><span class="st c">contestado</span></td></tr>
+                <tr><td><span class="sg">sugestão</span><br>Título do teste 704</td><td style="font-size:11px;color:var(--mut)">—</td><td><span class="st o">aberto</span></td></tr>
+                <tr><td><span class="sg">derrubado</span><br>Link “abrir entrada”</td><td style="font-size:11px;color:var(--mut)">verificação refutou</td><td><span class="st x">descartado</span></td></tr>
+              </table>
+            </div>
+            <div class="box feed">
+              <h4>Conversa das IAs <span style="font-weight:400;color:var(--mut)">· ver inteira ▸</span></h4>
+              <p><b>revisor</b> Rodada 1: 3 bloqueantes com prova.</p>
+              <p><b>autor</b> 1 e 2 corrigidos (16235d5). Contesto o 3: o nome já está no padrão do módulo.</p>
+              <p><b>revisor</b> Conferindo o 3 contra nomenclatura.md…</p>
+            </div>
+            <div class="box" style="border-color:#1f4a33;background:rgba(54,194,122,.06)">
+              <div style="font-size:12px;color:var(--mut)">Quando fechar, aparece aqui:</div>
+              <div style="font-size:12.5px;margin:4px 0 8px">“Analisado. 3/3 bloqueantes resolvidos, 1 sugestão em aberto que não bloqueia.”</div>
+              <div style="display:flex;gap:6px"><span class="btn okb">Mergear na dev</span><span class="btn">Ver diff</span><span class="btn">Abrir no GitHub</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+<script>
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on',x===b));
+  document.querySelectorAll('.view').forEach(v=>v.classList.toggle('on',v.id===b.dataset.v));
+});
+</script>
+</body>
+</html>
