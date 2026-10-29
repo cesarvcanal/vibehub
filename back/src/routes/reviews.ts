@@ -222,6 +222,13 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     if (merging.has(review.id)) return await reply.code(409).send({ error: "merge já em andamento", reason: "merging" });
     merging.add(review.id);
     try {
+      // Relida com a trava na mão: um clique anterior pode ter acabado (merged) entre a leitura e aqui.
+      const now = await getReview(review.id);
+      if (now?.phase !== "ready" || now.reviewedSha !== review.reviewedSha) {
+        return await reply.code(409).send({
+          error: `a revisão está em ${now?.phase ?? "?"}: o merge só sai em ready`, reason: "not_ready", phase: now?.phase,
+        });
+      }
       await recordCardActor(user, review.cardId);
       if ((await registry.getCard(review.cardId))?.actorUserId !== user.id) {
         return await reply.code(500).send({ error: "não consegui pôr o responsável pelo merge como ator do card" });

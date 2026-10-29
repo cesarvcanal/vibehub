@@ -313,6 +313,15 @@ describe("merge", () => {
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 
+  it("dois cliques no merge ao mesmo tempo mergeiam uma vez só", async () => {
+    const w = await world();
+    const review = await readyReview(w);
+    const [a, b] = await Promise.all([merge(review.id, w.merger), merge(review.id, w.merger)]);
+    expect([a.statusCode, b.statusCode].sort()).toEqual([200, 409]);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect((await (await store()).getReview(review.id))?.phase).toBe("merged");
+  });
+
   it("merge com head diferente do revisado é recusado e reabre a revisão", async () => {
     const w = await world();
     const review = await readyReview(w);
