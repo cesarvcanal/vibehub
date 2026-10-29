@@ -552,21 +552,46 @@ describe("decisão humana", () => {
   it("veredito da IA não passa por cima de decisão humana", async () => {
     const o = await load();
     const { author, review } = await started(o);
-    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER, QUESTION], headSha: SHA1, summary: "r1" });
+    const RISK: SubmittedFinding = { severity: "question", title: "cache sem limite de memória?" };
+    await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 1, findings: [BLOCKER, QUESTION, RISK], headSha: SHA1, summary: "r1",
+    });
     await o.orch.decideQuestion(review.id, "f2", "block", "u-revisor");
+    await o.orch.decideQuestion(review.id, "f3", "accept_risk", "u-revisor");
     await o.orch.submitAuthorResponse(author.id, {
       round: 1,
-      items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }, { id: "f2", status: "contested", reply: "não expira: ttl 24h" }],
+      items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }, { id: "f2", status: "fixed", commit: "c2", reply: "ttl novo" }],
       headSha: SHA2,
     });
-    const after = await o.orch.submitReviewerRound(review.reviewerCardId, {
-      round: 2, findings: [], verdicts: [{ id: "f1", status: "fixed" }, { id: "f2", status: "dropped" }], headSha: SHA2, summary: "r2",
+
+    // rodada 2: o revisor recusa o "corrigido" do autor num item que um humano bloqueou -> vale
+    const r2 = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 2, findings: [],
+      verdicts: [
+        { id: "f1", status: "fixed" },
+        { id: "f2", status: "open", reviewerReply: "o ttl novo não cobre o refresh" },
+        { id: "f3", status: "open" },
+      ],
+      headSha: SHA2, summary: "r2",
     });
-    // a IA aceitou a contestação de f2, mas f2 foi um humano que mandou bloquear: o status fica
-    expect(after.findings.find((f) => f.id === "f2")).toMatchObject({ status: "contested", humanDecision: "block" });
-    expect(after.findings.find((f) => f.id === "f1")).toMatchObject({ status: "fixed" });
-    expect(after.phase).toBe("fixing");
-    expect(after.log.some((e) => e.who === "system" && e.text.includes("f2") && /decisão humana/.test(e.text))).toBe(true);
+    expect(r2.findings.find((f) => f.id === "f2")).toMatchObject({ status: "open", humanDecision: "block", reviewerReply: "o ttl novo não cobre o refresh" });
+    // risco aceito por humano é final: o open da IA é ignorado
+    expect(r2.findings.find((f) => f.id === "f3")).toMatchObject({ status: "accepted_risk", humanDecision: "accept_risk" });
+    expect(r2.phase).toBe("fixing");
+    expect(r2.log.some((e) => e.who === "system" && e.text.includes("f3 (open)") && /decisão humana/.test(e.text))).toBe(true);
+    // o delta mostrou ao revisor que f2 só aceita fixed ou open
+    await o.orch.submitAuthorResponse(author.id, {
+      round: 2, items: [{ id: "f2", status: "contested", reply: "o refresh usa o mesmo ttl (src/session.ts:40)" }], headSha: SHA3,
+    });
+    expect(lastText()).toMatch(/f2: um humano mandou bloquear\. Só fixed ou open/);
+
+    // rodada 3: a IA aceita a contestação (dropped) de um item que um humano bloqueou -> ignorado
+    const r3 = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 3, findings: [], verdicts: [{ id: "f2", status: "dropped" }], headSha: SHA3, summary: "r3",
+    });
+    expect(r3.findings.find((f) => f.id === "f2")).toMatchObject({ status: "contested", humanDecision: "block" });
+    expect(r3).toMatchObject({ phase: "impasse", impasseReason: "rodadas" });
+    expect(r3.log.some((e) => e.who === "system" && e.text.includes("f2 (dropped)"))).toBe(true);
   });
 
   it("sugestão não espera decisão e keep não vale para dúvida", async () => {

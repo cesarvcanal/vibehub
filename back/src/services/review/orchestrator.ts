@@ -372,21 +372,25 @@ export async function submitReviewerRound(
   const after = await mutateReview(review.id, (r) => {
     // De novo, dentro da fila: outro submit da mesma rodada pode ter pousado entre a leitura e aqui.
     if (!fresh(r)) return;
-    // O veredito da IA nunca passa por cima de um humano: item com decisão humana (ou risco aceito)
-    // mantém o status, e o veredito sobre ele é ignorado com nota.
-    const humanOwned = (id: string) => {
-      const f = r.findings.find((x) => x.id === id);
-      return !!f && (!!f.humanDecision || f.status === "accepted_risk");
+    // O veredito da IA nunca desfaz um humano. Risco aceito e retirada humana são finais: qualquer
+    // veredito sobre eles é ignorado. Bloqueio humano (block/keep) só é protegido do `dropped` (a IA
+    // não retira o que um humano mandou bloquear); `open` e `fixed` valem, porque o revisor tem de
+    // poder recusar o "corrigido" do autor num item que um humano bloqueou.
+    const overridesHuman = (v: { id: string; status: FindingStatus }) => {
+      const f = r.findings.find((x) => x.id === v.id);
+      if (!f) return false;
+      if (f.status === "accepted_risk" || f.humanDecision === "accept_risk" || f.humanDecision === "drop") return true;
+      return (f.humanDecision === "block" || f.humanDecision === "keep") && v.status === "dropped";
     };
-    const skipped = verdicts.filter((v) => humanOwned(v.id)).map((v) => v.id);
-    const judged = applyReviewerVerdicts(r, verdicts.filter((v) => !humanOwned(v.id)));
+    const skipped = verdicts.filter(overridesHuman).map((v) => `${v.id} (${v.status})`);
+    const judged = applyReviewerVerdicts(r, verdicts.filter((v) => !overridesHuman(v)));
     const added = normalizeSubmittedFindings(payload.findings, r.round, r.findings);
     r.findings = [...judged, ...added];
     r.reviewedSha = headSha;
     r.lastSubmitRound = r.round;
     r.nudges = 0;
     note(r, "reviewer", payload.summary || `Rodada ${r.round}: ${added.length} achado(s) novo(s), ${verdicts.length} veredito(s).`);
-    if (skipped.length) note(r, "system", `Vereditos ignorados (o item tem decisão humana): ${skipped.join(", ")}.`);
+    if (skipped.length) note(r, "system", `Vereditos ignorados (desfariam uma decisão humana): ${skipped.join(", ")}.`);
     const next = phaseAfterReviewerRound(r);
     r.phase = next.phase;
     if (next.impasseReason) r.impasseReason = next.impasseReason;

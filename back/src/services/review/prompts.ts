@@ -80,16 +80,14 @@ export function actionableForAuthor(f: Finding): boolean {
 }
 
 /**
- * O que o revisor julga numa rodada de delta: o que bloqueia, não foi retirado nem aceito como risco, e
- * não tem decisão humana (o veredito da IA nunca passa por cima de um humano; o servidor o ignora).
+ * O que o revisor julga numa rodada de delta: o que bloqueia e não foi retirado nem aceito como risco
+ * (por humano ou não). Item que um humano mandou bloquear entra: o revisor confere o "corrigido" dele.
  */
 function underReview(f: Finding): boolean {
   const blocks = f.severity === "blocking" || (f.severity === "question" && f.humanDecision === "block");
-  return blocks && f.status !== "accepted_risk" && f.status !== "dropped" && !f.humanDecision;
+  const humanClosed = f.humanDecision === "accept_risk" || f.humanDecision === "drop";
+  return blocks && f.status !== "accepted_risk" && f.status !== "dropped" && !humanClosed;
 }
-
-/** Itens que um humano decidiu: aparecem para o revisor conferir no diff, sem veredito. */
-const humanDecided = (f: Finding): boolean => !!f.humanDecision && f.severity !== "suggestion" && f.severity !== "refuted";
 
 const FINDING_FIELDS =
   "findings: [{ severity: \"blocking\" | \"suggestion\" | \"question\" | \"refuted\", title, file?, line?, " +
@@ -146,7 +144,7 @@ export function reviewerRoundPrompt(r: Review): string {
 /** Rodada 2+: só o diff desde a rodada anterior, contra a lista fechada. */
 export function reviewerDeltaPrompt(r: Review): string {
   const judged = r.findings.filter(underReview);
-  const decided = r.findings.filter(humanDecided);
+  const humanBlocked = judged.filter((f) => f.humanDecision === "block" || f.humanDecision === "keep");
   const waiting = pendingQuestions(r.findings);
   const since = r.reviewedSha
     ? `git diff ${r.reviewedSha}..HEAD`
@@ -164,11 +162,10 @@ export function reviewerDeltaPrompt(r: Review): string {
     "   Confira cada item da lista fechada contra esse diff e contra a resposta do autor.",
     "3. Lista fechada (dê um veredito para cada item):",
     lines(judged, "nenhum item em aberto"),
-    ...(decided.length
+    ...(humanBlocked.length
       ? [
-        "   Decididos pelo revisor humano (não dê veredito: o servidor ignora; se a correção deles criou bug, abra achado " +
-          "novo com introducedInRound):",
-        lines(decided, ""),
+        `   ${humanBlocked.map((f) => f.id).join(", ")}: um humano mandou bloquear. Só fixed ou open; dropped é ignorado ` +
+          "pelo servidor (a IA não retira o que um humano bloqueou).",
       ]
       : []),
     ...(waiting.length
