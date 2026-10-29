@@ -43,9 +43,12 @@ import { logger } from "../../utils/logger.js";
  * Around the flow for the PR review: once the PR exists it is recorded on the card, one per base
  * (`Card.prs`), and a REVIEWER card (`Card.reviewOf`) is refused up front — it reviews a branch it
  * must never push to. While the card has a review in progress, an `authorized` merge is refused
- * (`review_active`): the only merge of a reviewed PR is the merger's button, which calls this in
- * MERGE-ONLY mode (`mergeOnly`): no push, the PR read as it is, and the merge pinned to the commit the
- * reviewer approved (`expectedHeadSha`) — a PR whose head moved comes back as `head_moved`.
+ * (`review_active`, checked up front and again right before the merge): the only merge of a reviewed
+ * PR is the merger's button, which calls this in MERGE-ONLY mode (`mergeOnly`): no push, the PR read
+ * as it is, the merge pinned to the commit the reviewer approved (`expectedHeadSha`) — a PR whose head
+ * moved comes back as `head_moved` — and run with the MERGER's own connection (`connectionId`), never
+ * the card actor's. Merge-only is also a LOCKED card's way out ("the merge belongs to whoever
+ * reviews it"), as long as the PR is the one to the card's own base.
  */
 
 export type DeliverReason =
@@ -91,6 +94,12 @@ export interface DeliverOpts {
   mergeOnly?: boolean;
   /** Merge-only: the full sha the review approved (`Review.reviewedSha`). Required with `mergeOnly`. */
   expectedHeadSha?: string;
+  /**
+   * The GitHub connection every git/gh step runs as, INSTEAD of the card actor's. The review's merge
+   * button passes the merger's own: the merge goes out on their account and their permissions, and a
+   * message to the card in the meantime cannot swap the identity under it.
+   */
+  connectionId?: string;
 }
 
 const MARKER = "__VIBEHUB_DELIVER__";
@@ -390,7 +399,18 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
   const locked = card.locked === true;
   /** Spread into every result so the caller can SAY why the target was not the one it asked for. */
   const lock = (locked ? { locked: true } : {}) as { locked?: true };
-  const target = assertBranchName(locked ? (card.base || project.baseBranch) : (opts.branch ?? project.baseBranch));
+  const requested = opts.branch ?? project.baseBranch;
+  const target = assertBranchName(locked ? (card.base || project.baseBranch) : requested);
+  // A LOCKED card's PR is merged by whoever reviews it: the review's merge button (merge-only) is that
+  // exit — but only for the PR back to the card's own base. Any other base is still the lock's "no",
+  // said before a single script runs (there is no PR of this card to read there).
+  if (locked && mergeOnly && requested !== target) {
+    logger.info(
+      { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "locked", requested, by: opts.by },
+      "merge-only refused on a locked card: the PR is not to the card's own base",
+    );
+    return { merged: false, reason: "locked", branch: target, cardBranch: source, locked: true };
+  }
   // A PR under review merges only through the merger's button (merge-only). Any other authorized
   // merge — an agent passing on a "sobe pra dev", the author's own card — is refused before a single
   // script runs. Without `authorized` the delivery goes on: the author pushing fixes IS the review.
@@ -407,7 +427,7 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
   const { cwd } = cardWorkPaths(project, card);
   const container = config.runner.container;
 
-  const token = await cardConnectionToken(card, project);
+  const token = opts.connectionId ? await tokenFor(opts.connectionId) : await cardConnectionToken(card, project);
 
   let prUrl: string;
   if (mergeOnly) {
@@ -475,8 +495,9 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
   // (d) merge. A LOCKED card never gets here on purpose: its delivery IS the open pull request, and
   // the merge belongs to whoever reviews it. Said before the `authorized` check so that an
   // `authorized: true` (an agent that read the user's "sobe pra dev" and passed it along) changes
-  // nothing — on this card the word is not the card's to give.
-  if (locked) {
+  // nothing — on this card the word is not the card's to give. The one exception is the reviewer's
+  // own merge: merge-only, already held to the card's base above.
+  if (locked && !mergeOnly) {
     logger.info(
       { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "locked", by: opts.by },
       "deliver opened a PR on a locked card — merging is the reviewer's",
@@ -489,6 +510,17 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
       "deliver prepared a PR but was not authorized to merge",
     );
     return { prUrl, merged: false, reason: "unauthorized", branch: target, cardBranch: source };
+  }
+  // The CI wait can take minutes: a review asked for in the meantime still takes the merge away.
+  if (!mergeOnly && (await activeReviewFor(card.id))) {
+    logger.info(
+      { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "review_active", by: opts.by },
+      "deliver refused to merge: a PR review started while the gate ran",
+    );
+    return {
+      prUrl, merged: false, reason: "review_active", branch: target, cardBranch: source, ...lock,
+      output: "uma revisão de PR começou enquanto o gate rodava: o merge é o botão do responsável no painel da revisão",
+    };
   }
 
   const mergeOut = await hostExecutor().runScript(
@@ -506,6 +538,7 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     reason: merged ? "merged" : "merge_failed",
     branch: target,
     cardBranch: source,
+    ...lock,
     output: merged ? undefined : cleanOutput(output),
   };
 }

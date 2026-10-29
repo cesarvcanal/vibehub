@@ -500,6 +500,41 @@ describe("deliver no modo só-merge (botão de merge da revisão de PR)", () => 
     expect(runScript).toHaveBeenCalledOnce();
   });
 
+  it("card locked mergeia pelo botão do responsável quando a base é a do card", async () => {
+    const { deliver, registry, card } = await makeCard();
+    await registry.updateCard(card.id, { base: "dev", locked: true });
+    wireMergeOnly(REVIEWED);
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED });
+    // o merge de um card trancado é de quem revisa: o botão do responsável é essa saída
+    expect(out).toMatchObject({ merged: true, reason: "merged", branch: "dev", locked: true });
+    expect(mergeRan()).toBe(true);
+  });
+
+  it("card locked: PR de outra base que não a do card continua locked, sem script nenhum", async () => {
+    const { deliver, registry, card } = await makeCard();
+    await registry.updateCard(card.id, { base: "dev", locked: true });
+    wireMergeOnly(REVIEWED);
+    const out = await deliver.deliver(card.id, { branch: "prod", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED });
+    expect(out).toMatchObject({ merged: false, reason: "locked", locked: true, branch: "dev" });
+    expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("connectionId: o só-merge sai com o token dessa conexão, não com o do ator do card", async () => {
+    const { deliver, registry, card } = await makeCard();
+    const ator = await registry.addGithubConnection({ label: "autor", login: "autor-gh" });
+    const merger = await registry.addGithubConnection({ label: "merger", login: "merger-gh" });
+    const { setUserGit } = await import("../../auth/userGit.js");
+    await setUserGit("u-autor", { githubConnectionId: ator.id });
+    await registry.stampCardActor(card.id, "u-autor");
+    wireMergeOnly(REVIEWED);
+    const out = await deliver.deliver(card.id, {
+      branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED, connectionId: merger.id,
+    });
+    expect(out.merged).toBe(true);
+    expect(tokenFor).toHaveBeenCalledWith(merger.id);
+    expect(tokenFor).not.toHaveBeenCalledWith(ator.id);
+  });
+
   it("mergeOnly exige o sha completo do commit revisado", async () => {
     const { deliver, card } = await makeCard();
     wireMergeOnly(REVIEWED);
@@ -529,6 +564,29 @@ describe("deliver com revisão de PR ativa no card", () => {
     expect(out).toMatchObject({ merged: false, reason: "review_active", branch: "dev" });
     // recusado antes de qualquer script: nem push, nem gate, nem merge
     expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("revisão iniciada durante a espera do CI barra o merge autorizado", async () => {
+    const { deliver, project, card } = await makeCard();
+    const store = await import("../review/store.js");
+    runScript.mockImplementation(async (script: string) => {
+      if (script.includes("gh pr merge")) return { stdout: "__VIBEHUB_DELIVER__ merged\n", stderr: "" };
+      if (script.includes("gh pr checks")) {
+        // alguém pede revisão enquanto o deliver espera o CI
+        const now = Date.now();
+        await store.insertReview({
+          id: "rev-late", cardId: card.id, projectId: project.id, prNumber: 7, prUrl: PR, prBranch: "card/x", base: "dev",
+          reviewerUserId: "u-r", authorUserId: "u-a", mergerUserId: "u-m", reviewerCardId: "card-r",
+          round: 1, phase: "reviewing", findings: [], log: [], nudges: 0, createdAt: now, updatedAt: now,
+        });
+        return { stdout: '[{"name":"back","bucket":"pass"}]\n__VIBEHUB_CI__ done\n', stderr: "" };
+      }
+      if (script.includes("git push --force-with-lease")) return { stdout: `__VIBEHUB_DELIVER__ pr ${PR}`, stderr: "" };
+      return { stdout: "", stderr: "" };
+    });
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true });
+    expect(out).toMatchObject({ merged: false, reason: "review_active", prUrl: PR });
+    expect(mergeRan()).toBe(false);
   });
 
   it("sem autorização o autor segue empurrando e atualizando o PR durante a revisão", async () => {
