@@ -10,6 +10,8 @@ import {
 import { reportCardStatus } from "../services/board/status.js";
 import { purgeRemovedCards } from "../services/board/purge.js";
 import { runnerToken } from "../runtime/runner.js";
+import { listReviewsForCards } from "../services/review/store.js";
+import type { Review } from "../services/review/model.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -25,6 +27,29 @@ function badRequest(err: unknown): { code: number; body: { error: string } } {
   // "not found" from the registry is a 404, everything else is the caller's fault.
   const code = /not found/i.test(message) ? 404 : 400;
   return { code, body: { error: message } };
+}
+
+/** The PR review summary a board card carries: what the sidebar's "↳ PR #N · estado" line reads. */
+type BoardCard = registry.Card & { review?: Pick<Review, "id" | "prNumber" | "phase" | "round"> };
+
+/**
+ * A card listing as the board shows it. REVIEWER cards (`reviewOf`) are left out — a review shows up
+ * as a line under the author's card, not as a card of its own — and each author card carries the
+ * summary of its most recent review that was not cancelled (a merged one stays: the line reads
+ * "mergeado"). ONE read of the review store for the whole list, never one per card.
+ */
+async function boardCards(cards: registry.Card[]): Promise<BoardCard[]> {
+  const shown = cards.filter((c) => !c.reviewOf);
+  const latest = new Map<string, Review>();
+  for (const r of await listReviewsForCards(shown.map((c) => c.id))) {
+    if (r.phase === "cancelled") continue;
+    const seen = latest.get(r.cardId);
+    if (!seen || r.createdAt >= seen.createdAt) latest.set(r.cardId, r);
+  }
+  return shown.map((c) => {
+    const r = latest.get(c.id);
+    return r ? { ...c, review: { id: r.id, prNumber: r.prNumber, phase: r.phase, round: r.round } } : c;
+  });
 }
 
 /**
@@ -127,14 +152,14 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
 
   app.get<{ Params: { id: string } }>("/api/projects/:id/cards", { preHandler: requireSession }, async (req, reply) => {
     const cards = await visibleCards(await requestUser(req), await registry.listCards(req.params.id));
-    return await reply.send({ cards });
+    return await reply.send({ cards: await boardCards(cards) });
   });
 
   /* ------------------------------------------------------------------- cards */
 
   app.get("/api/cards", { preHandler: requireSession }, async (req, reply) => {
     const cards = await visibleCards(await requestUser(req), await registry.listAllCards());
-    return await reply.send({ cards });
+    return await reply.send({ cards: await boardCards(cards) });
   });
 
   app.post<{ Body: registry.CreateCardInput & registry.UpdateCardInput }>(
