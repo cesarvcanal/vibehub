@@ -42,7 +42,7 @@ function header(r: Review): string {
 function rules(): string {
   return [
     "Regras desta revisão:",
-    "- NUNCA mergeie o PR: nada de `gh pr merge`, nada de vibehub_deliver com authorized. O merge é um botão humano no vibehub.",
+    "- NUNCA mergeie o PR: nada de `gh pr merge`, nada de vibehub_deliver. O merge é um botão humano no vibehub.",
     "- Só bloqueia com prova: teste que falha, regra escrita do repo citada (arquivo e trecho), ou risco concreto de quebrar " +
       "funcionalidade existente (cenário com arquivo:linha). O resto é sugestão: aparece, não bloqueia, não abre rodada.",
   ].join("\n");
@@ -79,11 +79,17 @@ export function actionableForAuthor(f: Finding): boolean {
   return blocks && (f.status === "open" || f.status === "contested");
 }
 
-/** O que o revisor julga numa rodada de delta: o que bloqueia e ainda não foi fechado por humano ou retirado. */
+/**
+ * O que o revisor julga numa rodada de delta: o que bloqueia, não foi retirado nem aceito como risco, e
+ * não tem decisão humana (o veredito da IA nunca passa por cima de um humano; o servidor o ignora).
+ */
 function underReview(f: Finding): boolean {
   const blocks = f.severity === "blocking" || (f.severity === "question" && f.humanDecision === "block");
-  return blocks && f.status !== "accepted_risk" && f.status !== "dropped";
+  return blocks && f.status !== "accepted_risk" && f.status !== "dropped" && !f.humanDecision;
 }
+
+/** Itens que um humano decidiu: aparecem para o revisor conferir no diff, sem veredito. */
+const humanDecided = (f: Finding): boolean => !!f.humanDecision && f.severity !== "suggestion" && f.severity !== "refuted";
 
 const FINDING_FIELDS =
   "findings: [{ severity: \"blocking\" | \"suggestion\" | \"question\" | \"refuted\", title, file?, line?, " +
@@ -140,6 +146,7 @@ export function reviewerRoundPrompt(r: Review): string {
 /** Rodada 2+: só o diff desde a rodada anterior, contra a lista fechada. */
 export function reviewerDeltaPrompt(r: Review): string {
   const judged = r.findings.filter(underReview);
+  const decided = r.findings.filter(humanDecided);
   const waiting = pendingQuestions(r.findings);
   const since = r.reviewedSha
     ? `git diff ${r.reviewedSha}..HEAD`
@@ -157,6 +164,13 @@ export function reviewerDeltaPrompt(r: Review): string {
     "   Confira cada item da lista fechada contra esse diff e contra a resposta do autor.",
     "3. Lista fechada (dê um veredito para cada item):",
     lines(judged, "nenhum item em aberto"),
+    ...(decided.length
+      ? [
+        "   Decididos pelo revisor humano (não dê veredito: o servidor ignora; se a correção deles criou bug, abra achado " +
+          "novo com introducedInRound):",
+        lines(decided, ""),
+      ]
+      : []),
     ...(waiting.length
       ? ["   Esperando o revisor humano (não dê veredito):", lines(waiting, "")]
       : []),
@@ -199,7 +213,8 @@ export function authorFixPrompt(r: Review): string {
     "Depois de corrigir:",
     "1. Rode os testes do que você mexeu.",
     `2. Faça push na branch do PR: git push origin HEAD:${r.prBranch}`,
-    `   (se o push direto for recusado, use vibehub_deliver com branch: "${r.base}" e SEM authorized: ele só empurra e reaproveita o PR).`,
+    "   Não use vibehub_deliver nesta revisão: o push é o git push acima, e o PR já existe. Se o push for recusado, " +
+      `responda com o erro no reply e chame ${TOOL_RESPOND} mesmo assim.`,
     `3. Responda cada achado no PR: gh pr comment ${r.prNumber} --body "<id>: corrigido em <commit> / contestado porque <prova>"`,
     "4. Guarde o sha: git rev-parse HEAD",
     `5. No fim, chame a ferramenta MCP ${TOOL_RESPOND} com:`,
@@ -250,6 +265,11 @@ export function phaseNoticeText(r: Review): string {
     default:
       return `PR #${r.prNumber}: revisão em ${r.phase} (${at}).`;
   }
+}
+
+/** O aviso de que o Approve não foi publicado: o PR está pronto, mas o GitHub ainda mostra o pedido de mudanças. */
+export function approvePendingText(r: Review): string {
+  return `PR #${r.prNumber}: Approve não publicado no GitHub — tente de novo pelo painel.`;
 }
 
 /** O motivo do impasse em palavras: "rodadas" é o código do modelo, o resto já vem escrito. */

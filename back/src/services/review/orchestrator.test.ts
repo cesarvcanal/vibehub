@@ -23,8 +23,19 @@ let dir = "";
 /** A ordem do que aconteceu na fronteira: `actor:<user>:<card>`, `resume:<card>`, `send:<card>`. */
 const calls: string[] = [];
 let sendFailure: Error | null = null;
+/** Roda uma vez antes do próximo envio (a corrida "a revisão andou enquanto o texto saía"). */
+let sendHook: (() => Promise<void>) | null = null;
+/** O board real, para o mock recusar card pausado como o `sendToTerminal` de verdade (`wake` não despausa). */
+let boardRef: { getCard: (id: string) => Promise<{ title: string; column: string; pausedAt?: number | null } | undefined> } | null = null;
 const send = vi.fn(async (cardId: string, _text: string, opts: SendOpts = {}): Promise<SendResult> => {
+  const hook = sendHook;
+  sendHook = null;
+  if (hook) await hook();
   if (sendFailure) throw sendFailure;
+  const card = await boardRef?.getCard(cardId);
+  if (opts.wake && card && (card.pausedAt || card.column === "paused")) {
+    throw new Error(`paused: card "${card.title}" was paused on purpose and is not woken by a message`);
+  }
   await opts.beforeDeliver?.();
   calls.push(`send:${cardId}`);
   return { sent: true, cardId, title: "", project: "" };
@@ -77,6 +88,7 @@ async function load() {
   const registry = await import("../board/registry.js");
   registry.resetForTesting();
   reopen = (cardId) => registry.applyOpenTerminal(cardId);
+  boardRef = registry;
   const events = await import("../events/cardEvents.js");
   const store = await import("./store.js");
   const orch = await import("./orchestrator.js");
@@ -104,6 +116,7 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "vibehub-review-orch-"));
   calls.length = 0;
   sendFailure = null;
+  sendHook = null;
   accountOf = { "u-revisor": "mussa" };
   send.mockClear();
   actor.mockClear();
@@ -231,6 +244,10 @@ describe("rodada do revisor", () => {
       "vibehub_review_respond", `card: "${author.id}"`, review.id, "rodada 1 de 3", "NUNCA", PR.branch,
     ]) expect(text).toContain(piece);
     expect(lastOpts()).toMatchObject({ wake: true, requireAgent: true, origin: { kind: "system", name: "revisão de PR" } });
+    // o push é git push na branch do PR; vibehub_deliver não é caminho nesta revisão
+    expect(text).toContain(`git push origin HEAD:${PR.branch}`);
+    expect(text.toLowerCase()).toContain("não use vibehub_deliver nesta revisão");
+    expect(text).not.toMatch(/SEM authorized|vibehub_deliver com branch/);
     // a conversa das IAs ganhou a fala do revisor
     expect(after.log.some((e) => e.who === "reviewer" && e.text.includes("o token vaza no log"))).toBe(true);
   });
@@ -335,12 +352,16 @@ describe("rodada do revisor", () => {
     expect(after.phase).toBe("ready");
     const notices = await messagesOn(o, author.id);
     expect(notices).toHaveLength(1);
-    expect(notices[0]).toMatchObject({ messageType: "info", cardId: author.id });
+    expect(notices[0]).toMatchObject({ messageType: "info", cardId: author.id, id: `message:${author.id}:review:${review.id}:ready:1:author` });
     expect(notices[0]!.text).toMatch(/PR #7/);
     expect(notices[0]!.text).toMatch(/pront/i);
+    // o card do revisor recebe o mesmo aviso, com a chave dele
+    const theirs = await messagesOn(o, review.reviewerCardId);
+    expect(theirs.map((e) => e.id)).toEqual([`message:${review.reviewerCardId}:review:${review.id}:ready:1:reviewer`]);
     // anunciar de novo (replay) não duplica
     await o.orch.announcePhase(after);
     expect(await messagesOn(o, author.id)).toHaveLength(1);
+    expect(await messagesOn(o, review.reviewerCardId)).toHaveLength(1);
   });
 
   it("veredito do revisor fora de fixed|open|dropped é recusado sem mexer na revisão", async () => {
@@ -422,6 +443,21 @@ describe("resposta do autor", () => {
     expect(after.log.some((e) => e.text.includes("f2"))).toBe(true);
   });
 
+  it("resposta a id desconhecido é ignorada com nota, sem derrubar o resto", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    const after = await o.orch.submitAuthorResponse(author.id, {
+      round: 1,
+      items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }, { id: "f99", status: "fixed", reply: "?" }],
+      headSha: SHA2,
+    });
+    expect(after).toMatchObject({ round: 2, phase: "reviewing" });
+    expect(after.findings).toHaveLength(1);
+    expect(after.findings[0]).toMatchObject({ id: "f1", status: "fixed" });
+    expect(after.log.some((e) => e.who === "system" && e.text.includes("f99"))).toBe(true);
+  });
+
   it("só o card do revisor submete e só o card do autor responde", async () => {
     const o = await load();
     const { author, review } = await started(o);
@@ -493,6 +529,46 @@ describe("decisão humana", () => {
     expect(lastText()).toContain("--approve");
   });
 
+  it("decidir item em impasse recalcula a fase (mesmo sem a rodada do revisor entregue)", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    // a resposta do autor abre a rodada 2, mas o delta não chega ao revisor: impasse sem o submit da rodada 2
+    sendFailure = new Error("no agent running");
+    const stuck = await o.orch.submitAuthorResponse(author.id, {
+      round: 1, items: [{ id: "f1", status: "contested", reply: "o logger redige (src/log.ts:5)" }], headSha: SHA2,
+    });
+    expect(stuck).toMatchObject({ phase: "impasse", round: 2, lastSubmitRound: 1 });
+    sendFailure = null;
+    send.mockClear();
+
+    const after = await o.orch.decideQuestion(review.id, "f1", "accept_risk", "u-revisor");
+    expect(after.phase).toBe("ready");
+    expect(after.impasseReason).toBeUndefined();
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(lastText()).toContain("--approve");
+  });
+
+  it("veredito da IA não passa por cima de decisão humana", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER, QUESTION], headSha: SHA1, summary: "r1" });
+    await o.orch.decideQuestion(review.id, "f2", "block", "u-revisor");
+    await o.orch.submitAuthorResponse(author.id, {
+      round: 1,
+      items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }, { id: "f2", status: "contested", reply: "não expira: ttl 24h" }],
+      headSha: SHA2,
+    });
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 2, findings: [], verdicts: [{ id: "f1", status: "fixed" }, { id: "f2", status: "dropped" }], headSha: SHA2, summary: "r2",
+    });
+    // a IA aceitou a contestação de f2, mas f2 foi um humano que mandou bloquear: o status fica
+    expect(after.findings.find((f) => f.id === "f2")).toMatchObject({ status: "contested", humanDecision: "block" });
+    expect(after.findings.find((f) => f.id === "f1")).toMatchObject({ status: "fixed" });
+    expect(after.phase).toBe("fixing");
+    expect(after.log.some((e) => e.who === "system" && e.text.includes("f2") && /decisão humana/.test(e.text))).toBe(true);
+  });
+
   it("sugestão não espera decisão e keep não vale para dúvida", async () => {
     const o = await load();
     const { review } = await started(o);
@@ -501,6 +577,71 @@ describe("decisão humana", () => {
     await expect(o.orch.decideQuestion(review.id, "f1", "keep", "u-revisor")).rejects.toThrow(/keep/);
     await expect(o.orch.decideQuestion(review.id, "f9", "block", "u-revisor")).rejects.toThrow(/f9/);
     expect((await o.store.getReview(review.id))?.findings[0]?.humanDecision).toBeUndefined();
+  });
+});
+
+describe("tentar de novo e cancelar", () => {
+  it("impasse por falha de relay sai com retry", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    sendFailure = new Error("terminal not ready: Claude is still starting");
+    const stuck = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    expect(stuck).toMatchObject({ phase: "impasse", impasseReason: expect.stringContaining("terminal not ready") });
+    sendFailure = null;
+    send.mockClear();
+    calls.length = 0;
+
+    const after = await o.orch.retryReview(review.id, "u-autor");
+    // a rodada do revisor já tinha sido entregue: a vez volta ao autor, com a lista
+    expect(after).toMatchObject({ phase: "fixing", round: 1, nudges: 0 });
+    expect(after.impasseReason).toBeUndefined();
+    expect(calls).toEqual([`actor:u-autor:${author.id}`, `send:${author.id}`]);
+    expect(lastText()).toContain("token vaza no log");
+    expect(after.log.some((e) => e.who === "human")).toBe(true);
+    // em fixing não há o que tentar
+    await expect(o.orch.retryReview(review.id, "u-autor")).rejects.toThrow(/nada_a_tentar/);
+  });
+
+  it("retry de um impasse sem a rodada do revisor devolve a vez ao revisor; impasse de rodadas não tem retry", async () => {
+    const o = await load();
+    const { author } = await seed(o);
+    sendFailure = new Error("no agent running");
+    const review = await o.orch.startReview({
+      cardId: author.id, prNumber: 7, reviewerUserId: "u-revisor", authorUserId: "u-autor", mergerUserId: "u-merger", by: "u-autor",
+    });
+    expect(review.phase).toBe("impasse");
+    sendFailure = null;
+    send.mockClear();
+    const after = await o.orch.retryReview(review.id, "u-revisor");
+    expect(after).toMatchObject({ phase: "reviewing", round: 1 });
+    expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+    expect(lastText()).toContain("/code-review high");
+
+    await o.store.mutateReview(review.id, (r) => {
+      r.phase = "impasse";
+      r.impasseReason = "rodadas";
+    });
+    await expect(o.orch.retryReview(review.id, "u-revisor")).rejects.toThrow(/nada_a_tentar/);
+  });
+
+  it("cancelar libera nova revisão do mesmo PR", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    const cancelled = await o.orch.cancelReview(review.id, "u-autor");
+    expect(cancelled.phase).toBe("cancelled");
+    expect(cancelled.log.at(-1)).toMatchObject({ who: "human" });
+    expect(await o.store.activeReviewFor(author.id, 7)).toBeUndefined();
+    await expect(o.orch.cancelReview(review.id, "u-autor")).rejects.toThrow(/revisao_encerrada/);
+    // um submit atrasado da revisão cancelada não faz nada
+    const late = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "x" });
+    expect(late.phase).toBe("cancelled");
+
+    const again = await o.orch.startReview({
+      cardId: author.id, prNumber: 7, reviewerUserId: "u-revisor", authorUserId: "u-autor", mergerUserId: "u-merger", by: "u-autor",
+    });
+    expect(again.id).not.toBe(review.id);
+    expect(again.phase).toBe("reviewing");
+    expect((await o.store.activeReviewFor(author.id, 7))?.id).toBe(again.id);
   });
 });
 
@@ -514,13 +655,45 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
     expect((await messagesOn(o, author.id)).map((e) => e.text)).toEqual([expect.stringMatching(/impasse/i)]);
   });
 
-  it("aprovação que não chega ao revisor mantém o ready (o merge humano não fica preso)", async () => {
+  it("aprovação que não chega ao revisor mantém o ready com approvePending, avisa e o retry reenvia", async () => {
     const o = await load();
-    const { review } = await started(o);
+    const { author, review } = await started(o);
     sendFailure = new Error("no agent running");
     const after = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "x" });
-    expect(after.phase).toBe("ready");
+    expect(after).toMatchObject({ phase: "ready", approvePending: true });
     expect(after.log.some((e) => e.text.includes("no agent running"))).toBe(true);
+    for (const cardId of [author.id, review.reviewerCardId]) {
+      expect((await messagesOn(o, cardId)).map((e) => e.text)).toContain(
+        "PR #7: Approve não publicado no GitHub — tente de novo pelo painel.");
+    }
+
+    sendFailure = null;
+    send.mockClear();
+    const retried = await o.orch.retryReview(review.id, "u-revisor");
+    expect(retried.phase).toBe("ready");
+    expect(retried.approvePending).toBeFalsy();
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+    expect(lastText()).toContain("--approve");
+    // sem pendência, não há o que tentar
+    await expect(o.orch.retryReview(review.id, "u-revisor")).rejects.toThrow(/nada_a_tentar/);
+  });
+
+  it("envio que falha depois que a revisão andou não vira impasse", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    // enquanto a lista sai para o autor, a resposta dele pousa (rodada 2); o envio então falha
+    sendHook = async () => {
+      await o.store.mutateReview(review.id, (r) => {
+        r.lastRespondRound = 1;
+        r.round = 2;
+        r.phase = "reviewing";
+      });
+    };
+    sendFailure = new Error("terminal not ready");
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "x" });
+    expect(after).toMatchObject({ phase: "reviewing", round: 2 });
+    expect(after.impasseReason).toBeUndefined();
   });
 
   it("turno sem submit: lembra uma vez, depois impasse", async () => {
@@ -589,6 +762,107 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
       await turn(other.id);
       await new Promise((r) => setTimeout(r, 20));
       expect(send).toHaveBeenCalledTimes(3);
+    } finally {
+      off();
+    }
+  });
+
+  /** Autor em fixing (a lista já chegou), com o listener ligado. */
+  async function fixing(o: Loaded) {
+    const s = await started(o);
+    await o.orch.submitReviewerRound(s.review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    send.mockClear();
+    calls.length = 0;
+    resume.mockClear();
+    return { ...s, off: o.orch.startReviewOrchestrator({ graceMs: 0 }) };
+  }
+  const endTurn = async (o: Loaded, cardId: string, declared?: { state?: "needs_me" | "blocked" }) => {
+    await o.events.observeCardStatus(cardId, "waiting", "working");
+    await o.events.observeCardStatus(cardId, "working", "waiting", declared);
+  };
+  /**
+   * O turno com a condição de pular não conta: o turno seguinte, já sem ela, é o PRIMEIRO lembrete
+   * (se o primeiro tivesse contado, o segundo seria impasse).
+   */
+  async function expectOnlyTheSecondCounts(o: Loaded, reviewId: string) {
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    const r = await o.store.getReview(reviewId);
+    expect(r).toMatchObject({ phase: "fixing", nudges: 1 });
+    expect(lastText()).toMatch(/sem chamar/);
+  }
+
+  it("turno com pessoa usando o card não conta", async () => {
+    const o = await load();
+    const { author, review, off } = await fixing(o);
+    try {
+      await o.registry.markCardHumanActive(author.id);
+      await endTurn(o, author.id);
+      await new Promise((r) => setTimeout(r, 30));
+      expect(send).not.toHaveBeenCalled();
+      await o.registry.markCardHumanActive(author.id, 0);
+      await endTurn(o, author.id);
+      await expectOnlyTheSecondCounts(o, review.id);
+    } finally {
+      off();
+    }
+  });
+
+  it("turno em que o agente declarou needs_me ou blocked não conta", async () => {
+    const o = await load();
+    const { author, review, off } = await fixing(o);
+    try {
+      await endTurn(o, author.id, { state: "needs_me" });
+      await endTurn(o, author.id, { state: "blocked" });
+      await new Promise((r) => setTimeout(r, 30));
+      expect(send).not.toHaveBeenCalled();
+      await endTurn(o, author.id);
+      await expectOnlyTheSecondCounts(o, review.id);
+    } finally {
+      off();
+    }
+  });
+
+  it("turno com pergunta ou permissão em aberto não conta", async () => {
+    const o = await load();
+    const { author, review, off } = await fixing(o);
+    try {
+      // pergunta em prosa no fim do turno (o carimbo do chat nativo)
+      await o.registry.setCardPendingQuestion(author.id, Date.now());
+      await endTurn(o, author.id);
+      await new Promise((r) => setTimeout(r, 30));
+      await o.registry.setCardPendingQuestion(author.id, null);
+      // permissão aberta no log de eventos
+      await o.events.observeCardStatus(author.id, "waiting", "working");
+      await o.events.recordCardEvent({ id: "permission:p1", cardId: author.id, kind: "permission", refId: "p1", tool: "Bash" });
+      await o.events.observeCardStatus(author.id, "working", "waiting");
+      await new Promise((r) => setTimeout(r, 30));
+      expect(send).not.toHaveBeenCalled();
+      await o.events.resolveCardEvents(author.id, { refId: "p1" });
+      await endTurn(o, author.id);
+      await expectOnlyTheSecondCounts(o, review.id);
+    } finally {
+      off();
+    }
+  });
+
+  it("nudge não tira de Paused", async () => {
+    const o = await load();
+    const { author, review, off } = await fixing(o);
+    try {
+      // a pessoa pausou o card no meio da correção
+      await o.registry.applyOpenTerminal(author.id);
+      await o.registry.pauseCard(author.id, { effective: true });
+      await endTurn(o, author.id);
+      // o lembrete tenta, o envio recusa o card pausado, e a revisão vai a impasse com o motivo
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("impasse"));
+      expect((await o.store.getReview(review.id))?.impasseReason).toMatch(/paused/);
+      expect(resume).not.toHaveBeenCalled();
+      expect(await o.registry.getCard(author.id)).toMatchObject({ column: "paused" });
+      expect((await o.registry.getCard(author.id))?.pausedAt).toBeTruthy();
+      // "tentar de novo" também não despausa
+      await o.orch.retryReview(review.id, "u-autor");
+      expect(resume).not.toHaveBeenCalled();
+      expect((await o.registry.getCard(author.id))?.column).toBe("paused");
     } finally {
       off();
     }

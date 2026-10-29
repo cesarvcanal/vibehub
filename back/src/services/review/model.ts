@@ -58,6 +58,12 @@ export interface Review {
   log: ReviewEvent[];
   reviewedSha?: string;
   impasseReason?: string;
+  /**
+   * `ready`, mas o pedido de Approve não chegou ao card do revisor: o PR segue com o
+   * `--request-changes` da rodada 1 no GitHub. O merge humano não fica preso; o painel oferece
+   * "tentar de novo" (retryReview), e o relay que dá certo limpa a marca.
+   */
+  approvePending?: boolean;
   lastSubmitRound?: number;
   lastRespondRound?: number;
   nudges: number;

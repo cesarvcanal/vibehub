@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
-  getCard, createReviewerCard, removeCard, updateCard, cardMoveEffect,
+  getCard, createReviewerCard, removeCard, updateCard, cardMoveEffect, isHumanActive,
 } from "../board/registry.js";
 import { resumeCard } from "../board/workspace.js";
 import { recordCardActor } from "../board/actor.js";
@@ -8,7 +8,7 @@ import { findUser } from "../../auth/users.js";
 import { creatorAccountSlug } from "../../auth/userGit.js";
 import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
 import type { MessageOrigin } from "../chat/provenance.js";
-import { onCardEvent, recordMessage, type CardEvent } from "../events/cardEvents.js";
+import { eventsAfter, onCardEvent, recordMessage, type CardEvent, type Severity } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
 import {
   MAX_ROUNDS, applyAuthorResponses, applyReviewerVerdicts, blockingOpen, normalizeSubmittedFindings, pendingQuestions,
@@ -19,8 +19,8 @@ import {
   activeReviewFor, getReview, insertReview, listReviewsForCards, mutateReview, reviewByReviewerCard,
 } from "./store.js";
 import {
-  actionableForAuthor, authorFixPrompt, impasseText, nudgePrefix, oneLine, phaseNoticeText, reviewerApprovePrompt,
-  reviewerDeltaPrompt, reviewerRoundPrompt,
+  actionableForAuthor, approvePendingText, authorFixPrompt, impasseText, nudgePrefix, oneLine, phaseNoticeText,
+  reviewerApprovePrompt, reviewerDeltaPrompt, reviewerRoundPrompt,
 } from "./prompts.js";
 
 /**
@@ -31,6 +31,7 @@ import {
  *   vibehub_review_submit ──► fixing: lista fechada ao autor | ready: Approve no GitHub | impasse
  *   vibehub_review_respond ──► rodada N+1: o revisor confere só o diff
  *   turn_finished sem a ferramenta ──► um lembrete; no segundo, impasse "IA não respondeu"
+ *   humano ──► decideQuestion | retryReview (impasse por falha, Approve pendente) | cancelReview
  *
  * As regras do jogo (prova, lista fechada, teto de rodadas) moram no modelo puro; aqui ficam a
  * persistência, quem pode chamar o quê e os relays. Três garantias atravessam o arquivo:
@@ -42,7 +43,8 @@ import {
  *    do autor, revisor no do revisor), no `beforeDeliver` do envio: um envio recusado não mexe na
  *    autoria, e o commit/push/review que o texto provocar sai na conta certa.
  *  - NUNCA PARADO EM SILÊNCIO: um envio que falha (card concluído, Claude que não sobe) vira
- *    `impasse` com o erro como motivo, aviso no card do autor e warn no log.
+ *    `impasse` com o erro como motivo, aviso nos cards do autor e do revisor e warn no log; e todo
+ *    impasse que não é de rodadas tem saída (`retryReview`), além do `cancelReview`.
  *
  * E uma ausência deliberada: nada aqui mergeia. O merge é a rota humana da Task 4.
  */
@@ -98,23 +100,26 @@ function promptFor(r: Review, side: Side): string {
 /* ------------------------------------------------------------------ avisos */
 
 /**
- * Mudança de fase pra `ready`, `impasse` ou `merged` vira um aviso no card do autor (a bandeja de
- * avisos que já existe). A chave fixa fase+rodada: um replay (relay refeito, boot) não duplica.
- * Nunca lança: um aviso que não grava custa o aviso, não a revisão.
+ * Um aviso nos DOIS cards da revisão (autor e revisor), cada um com a sua chave: um replay não
+ * duplica. Nunca lança: um aviso que não grava custa o aviso, não a revisão.
+ */
+async function notifyBoth(r: Review, key: string, text: string, severity: Severity): Promise<void> {
+  for (const [cardId, who] of [[r.cardId, "author"], [r.reviewerCardId, "reviewer"]] as const) {
+    try {
+      await recordMessage({ cardId, type: "info", severity, text, idempotencyKey: `${key}:${who}` });
+    } catch (err) {
+      logger.warn({ review: r.id, card: cardId, detail: (err as Error).message }, "could not record the review notice");
+    }
+  }
+}
+
+/**
+ * Mudança de fase pra `ready`, `impasse` ou `merged` vira um aviso nos cards do autor e do revisor (a
+ * bandeja de avisos que já existe), com a chave `review:<id>:<fase>:<rodada>:<lado>`.
  */
 export async function announcePhase(r: Review): Promise<void> {
   if (r.phase !== "ready" && r.phase !== "impasse" && r.phase !== "merged") return;
-  try {
-    await recordMessage({
-      cardId: r.cardId,
-      type: "info",
-      severity: r.phase === "impasse" ? "warning" : "info",
-      text: phaseNoticeText(r),
-      idempotencyKey: `review:${r.id}:${r.phase}:${r.round}`,
-    });
-  } catch (err) {
-    logger.warn({ review: r.id, card: r.cardId, detail: (err as Error).message }, "could not record the review phase notice");
-  }
+  await notifyBoth(r, `review:${r.id}:${r.phase}:${r.round}`, phaseNoticeText(r), r.phase === "impasse" ? "warning" : "info");
 }
 
 /* ------------------------------------------------------------------ relays */
@@ -143,16 +148,22 @@ async function unpauseAuthor(r: Review): Promise<void> {
 
 /**
  * Entrega `text` ao card de um dos lados. O ator vira a pessoa daquele lado no `beforeDeliver`.
- * Falha → `impasse` com o erro (ou, com `keepPhase`, só uma linha no log: o Approve que não chegou
- * não pode prender o merge humano). Nunca lança. Devolve se entregou.
+ *  - `unpause`: só o PRIMEIRO relay da rodada ao autor tira o card dele de Paused. Lembrete e
+ *    "tentar de novo" não: uma pausa no meio da correção é decisão da pessoa, e o envio recusado
+ *    vira impasse com o motivo (que o "tentar de novo" resolve depois que ela despausar).
+ *  - `approve`: é o pedido de Approve. Falha mantém `ready` com `approvePending` e um aviso (o merge
+ *    humano não fica preso por causa do GitHub); sucesso limpa a marca.
+ * Qualquer outra falha vira `impasse` com o erro, mas só se a revisão ainda está na fase e na rodada
+ * para as quais o texto saiu (uma resposta que pousou no meio ganha). Nunca lança. Devolve se entregou.
  */
 export async function relayReview(
-  r: Review, side: Side, text: string, opts: { keepPhase?: boolean } = {},
+  r: Review, side: Side, text: string, opts: { unpause?: boolean; approve?: boolean } = {},
 ): Promise<boolean> {
   const cardId = side === "author" ? r.cardId : r.reviewerCardId;
   const userId = side === "author" ? r.authorUserId : r.reviewerUserId;
+  const samePlace = (x: Review) => x.phase === r.phase && x.round === r.round;
   try {
-    if (side === "author") await unpauseAuthor(r);
+    if (side === "author" && opts.unpause) await unpauseAuthor(r);
     await sendToTerminal(cardId, text, {
       by: `review:${r.id}`,
       origin: REVIEW_ORIGIN,
@@ -169,25 +180,40 @@ export async function relayReview(
       viaNativeChat: true,
       beforeDeliver: async () => recordCardActor(await findUser(userId), cardId),
     });
+    if (opts.approve && r.approvePending) {
+      await mutateReview(r.id, (x) => {
+        if (x.phase === "ready") x.approvePending = undefined;
+      }).catch((e: unknown) => logger.warn({ review: r.id, detail: (e as Error).message }, "could not clear approvePending"));
+    }
     return true;
   } catch (err) {
     const reason = (err as Error).message;
     logger.warn({ review: r.id, card: cardId, side, detail: reason }, "PR review relay failed");
     const who = side === "author" ? "autor" : "revisor";
-    if (opts.keepPhase) {
-      await mutateReview(r.id, (x) => note(x, "system", `Não consegui entregar ao ${who}: ${reason}`)).catch(() => undefined);
-      return false;
-    }
     try {
+      if (opts.approve) {
+        const after = await mutateReview(r.id, (x) => {
+          if (x.phase !== "ready") return;
+          x.approvePending = true;
+          note(x, "system", `Approve não publicado: não consegui entregar ao revisor (${reason}).`);
+        });
+        if (after.approvePending) await notifyBoth(after, `review:${r.id}:approve_pending:${r.round}`, approvePendingText(after), "warning");
+        return false;
+      }
+      let impasse = false as boolean;
       const after = await mutateReview(r.id, (x) => {
-        if (CLOSED.has(x.phase)) return;
+        if (CLOSED.has(x.phase) || !samePlace(x)) {
+          note(x, "system", `Envio ao ${who} falhou depois que a revisão andou (${reason}); nada muda.`);
+          return;
+        }
         x.phase = "impasse";
         x.impasseReason = reason;
         note(x, "system", `Impasse: não consegui entregar ao ${who} (${reason}).`);
+        impasse = true;
       });
-      await announcePhase(after);
+      if (impasse) await announcePhase(after);
     } catch (e) {
-      logger.warn({ review: r.id, detail: (e as Error).message }, "could not record the PR review impasse");
+      logger.warn({ review: r.id, detail: (e as Error).message }, "could not record the PR review relay failure");
     }
     return false;
   }
@@ -196,10 +222,11 @@ export async function relayReview(
 /** O que a fase nova pede: a lista ao autor, o Approve ao revisor, ou só o aviso. Devolve a revisão atual. */
 async function dispatch(r: Review): Promise<Review> {
   if (r.phase === "fixing") {
-    await relayReview(r, "author", authorFixPrompt(r));
+    // O primeiro relay da rodada: o único que tira o card do autor de Paused.
+    await relayReview(r, "author", authorFixPrompt(r), { unpause: true });
   } else if (r.phase === "ready") {
     await announcePhase(r);
-    await relayReview(r, "reviewer", reviewerApprovePrompt(r), { keepPhase: true });
+    await relayReview(r, "reviewer", reviewerApprovePrompt(r), { approve: true });
   } else if (r.phase === "impasse") {
     await announcePhase(r);
   }
@@ -345,20 +372,21 @@ export async function submitReviewerRound(
   const after = await mutateReview(review.id, (r) => {
     // De novo, dentro da fila: outro submit da mesma rodada pode ter pousado entre a leitura e aqui.
     if (!fresh(r)) return;
-    // O que um humano fechou (risco aceito, retirado por decisão) não é reaberto pela IA.
-    const humanClosed = (id: string) => {
+    // O veredito da IA nunca passa por cima de um humano: item com decisão humana (ou risco aceito)
+    // mantém o status, e o veredito sobre ele é ignorado com nota.
+    const humanOwned = (id: string) => {
       const f = r.findings.find((x) => x.id === id);
-      return !!f && (f.status === "accepted_risk" || f.humanDecision === "accept_risk" || f.humanDecision === "drop");
+      return !!f && (!!f.humanDecision || f.status === "accepted_risk");
     };
-    const skipped = verdicts.filter((v) => humanClosed(v.id)).map((v) => v.id);
-    const judged = applyReviewerVerdicts(r, verdicts.filter((v) => !humanClosed(v.id)));
+    const skipped = verdicts.filter((v) => humanOwned(v.id)).map((v) => v.id);
+    const judged = applyReviewerVerdicts(r, verdicts.filter((v) => !humanOwned(v.id)));
     const added = normalizeSubmittedFindings(payload.findings, r.round, r.findings);
     r.findings = [...judged, ...added];
     r.reviewedSha = headSha;
     r.lastSubmitRound = r.round;
     r.nudges = 0;
     note(r, "reviewer", payload.summary || `Rodada ${r.round}: ${added.length} achado(s) novo(s), ${verdicts.length} veredito(s).`);
-    if (skipped.length) note(r, "system", `Vereditos ignorados (decisão humana já fechou): ${skipped.join(", ")}.`);
+    if (skipped.length) note(r, "system", `Vereditos ignorados (o item tem decisão humana): ${skipped.join(", ")}.`);
     const next = phaseAfterReviewerRound(r);
     r.phase = next.phase;
     if (next.impasseReason) r.impasseReason = next.impasseReason;
@@ -412,18 +440,23 @@ export async function submitAuthorResponse(
   let landed = false as boolean;
   const after = await mutateReview(review.id, (r) => {
     if (!fresh(r)) return;
+    // Resposta a id que não existe, a sugestão ou a item fechado não derruba o resto: vai ao log.
     const known = new Map(r.findings.map((f) => [f.id, f]));
-    const unknown = payload.items.filter((it) => !known.has(it.id)).map((it) => it.id);
-    if (unknown.length) throw new Error(`achado desconhecido: ${unknown.join(", ")}`);
-    const allowed = payload.items.filter((it) => actionableForAuthor(known.get(it.id)!));
-    const ignored = payload.items.filter((it) => !actionableForAuthor(known.get(it.id)!)).map((it) => it.id);
+    const counts = (it: { id: string }) => {
+      const f = known.get(it.id);
+      return !!f && actionableForAuthor(f);
+    };
+    const allowed = payload.items.filter(counts);
+    const ignored = payload.items.filter((it) => !counts(it)).map((it) => it.id);
     r.findings = applyAuthorResponses(r, allowed);
     r.lastRespondRound = r.round;
     r.nudges = 0;
     const fixed = allowed.filter((it) => it.status === "fixed").length;
     const contested = allowed.length - fixed;
     note(r, "author", `${fixed} corrigido(s), ${contested} contestado(s); head ${headSha.slice(0, 7)}.`);
-    if (ignored.length) note(r, "system", `Respostas ignoradas (não esperam resposta do autor): ${ignored.join(", ")}.`);
+    if (ignored.length) {
+      note(r, "system", `Respostas ignoradas (id desconhecido ou item que não espera resposta do autor): ${ignored.join(", ")}.`);
+    }
     r.round += 1;
     r.phase = "reviewing";
     note(r, "system", `Rodada ${r.round} de ${MAX_ROUNDS}: o revisor confere só o diff.`);
@@ -440,8 +473,9 @@ export async function submitAuthorResponse(
  * A decisão do revisor HUMANO sobre um item: uma dúvida (`question`) ou um bloqueante travado.
  *  - dúvida: `block` (passa a bloquear), `drop` (retirada) ou `accept_risk`; `keep` não vale aqui.
  *  - bloqueante: `keep`/`block` (segue bloqueando; o dev resolve), `accept_risk` ou `drop`.
- * Com a rodada do revisor já entregue, a fase é recalculada: pode ir ao autor, ao Approve, ou sair
- * do impasse para `ready` quando o último item travado é liberado. Fora disso, só grava.
+ * Em `reviewing` com a rodada do revisor já entregue, a fase é recalculada (autor, Approve ou impasse).
+ * Em `impasse`, de qualquer motivo, sai para `ready` quando o último item travado é liberado. Fora
+ * disso, só grava.
  */
 export async function decideQuestion(reviewId: string, findingId: string, decision: Decision, by: string): Promise<Review> {
   if (!["block", "drop", "keep", "accept_risk"].includes(decision)) throw new Error(`decisão inválida: ${String(decision)}`);
@@ -465,15 +499,16 @@ export async function decideQuestion(reviewId: string, findingId: string, decisi
     const said: Record<Decision, string> = { block: "bloqueia", keep: "mantém o bloqueio", drop: "retira", accept_risk: "aceita o risco" };
     note(r, "human", `Decisão humana em ${findingId}: ${said[decision]}.`);
 
-    // Só a rodada do revisor já entregue tem fase a recalcular; no meio de uma, quem fecha é o submit.
-    if (r.lastSubmitRound !== r.round) return;
     if (r.phase === "reviewing") {
+      // No meio da rodada do revisor, quem fecha a fase é o submit dele.
+      if (r.lastSubmitRound !== r.round) return;
       const next = phaseAfterReviewerRound(r);
       if (next.phase === r.phase) return;
       r.phase = next.phase;
       if (next.impasseReason) r.impasseReason = next.impasseReason;
     } else if (r.phase === "impasse") {
-      // Impasse só sai pelo último item liberado; "manter" segura (o dev resolve na mão).
+      // Impasse (de qualquer motivo, com ou sem a rodada do revisor entregue) sai pelo último item
+      // liberado; "manter" segura (o dev resolve na mão; o resto sai pelo retryReview).
       if (phaseAfterReviewerRound(r).phase !== "ready") return;
       r.phase = "ready";
       r.impasseReason = undefined;
@@ -487,20 +522,94 @@ export async function decideQuestion(reviewId: string, findingId: string, decisi
   return recompute ? await dispatch(after) : after;
 }
 
+/**
+ * "Tentar de novo" do painel: a saída de um impasse que não é de rodadas (envio que falhou, IA que
+ * não respondeu) e do Approve que não chegou. Zera os lembretes, limpa o motivo e devolve a vez a quem
+ * deve: `reviewing` se a rodada do revisor não foi entregue, senão `fixing`; em `ready` reenvia o
+ * pedido de Approve. Não tira ninguém de Paused (quem pausou despausa e tenta de novo). Qualquer
+ * outro estado lança `nada_a_tentar`. Quem pode é decisão da rota (Task 4).
+ */
+export async function retryReview(reviewId: string, by: string): Promise<Review> {
+  let side = null as Side | "approve" | null;
+  const after = await mutateReview(reviewId, (r) => {
+    if (r.phase === "ready" && r.approvePending) {
+      side = "approve";
+    } else if (r.phase === "impasse" && r.impasseReason !== "rodadas") {
+      r.phase = r.lastSubmitRound !== r.round ? "reviewing" : "fixing";
+      side = r.phase === "reviewing" ? "reviewer" : "author";
+    } else {
+      throw new Error(
+        `nada_a_tentar: a revisão está em ${r.phase}${r.impasseReason ? ` (${r.impasseReason})` : ""}; ` +
+          "só impasse por falha/IA sem resposta ou Approve pendente têm o que tentar de novo",
+      );
+    }
+    r.nudges = 0;
+    r.impasseReason = undefined;
+    note(r, "human", side === "approve" ? "Tentar de novo: o pedido de Approve volta ao revisor." :
+      `Tentar de novo: a vez volta ao ${side === "reviewer" ? "revisor" : "autor"} (rodada ${r.round} de ${MAX_ROUNDS}).`);
+  });
+  logger.info({ audit: true, action: "review.retry", review: reviewId, side, by }, "PR review retried");
+  if (side === "approve") await relayReview(after, "reviewer", reviewerApprovePrompt(after), { approve: true });
+  else if (side) await relayReview(after, side, promptFor(after, side));
+  return (await getReview(reviewId)) ?? after;
+}
+
+/**
+ * Cancela a revisão, de qualquer fase ativa. `cancelled` não é ativa (`activeReviewFor`), então o
+ * mesmo PR pode ser revisado de novo. O card do revisor fica como está (o histórico não some).
+ */
+export async function cancelReview(reviewId: string, by: string): Promise<Review> {
+  const after = await mutateReview(reviewId, (r) => {
+    if (CLOSED.has(r.phase)) throw new Error(`revisao_encerrada: a revisão já está em ${r.phase}`);
+    r.phase = "cancelled";
+    r.approvePending = undefined;
+    note(r, "human", "Revisão cancelada.");
+  });
+  logger.info({ audit: true, action: "review.cancel", review: reviewId, by }, "PR review cancelled");
+  return after;
+}
+
 /* ------------------------------------------------------------------ fim de turno */
 
 /**
+ * Por que este fim de turno NÃO conta como "terminou sem a ferramenta", ou null se conta. O fallback
+ * só cobra turnos que o relay abriu; sem origem no evento, estes sinais dizem que o turno era de outra
+ * coisa: uma pessoa usando o card agora, o agente que declarou precisar dela, ou uma pergunta/
+ * permissão aberta esperando alguém.
+ */
+async function notJudged(event: CardEvent): Promise<string | null> {
+  const card = await getCard(event.cardId);
+  if (!card) return "card sumiu";
+  if (isHumanActive(card)) return "pessoa usando o card";
+  const declared = event.state ?? card.declaredState;
+  if (declared === "needs_me" || declared === "blocked") return `agente declarou ${declared}`;
+  if (card.awaitingDecisionAt || card.pendingQuestionAt) return "pergunta ou permissão em aberto";
+  const open = (await eventsAfter(0)).events.some(
+    (e) => e.cardId === card.id && !e.resolvedAt && (e.kind === "question" || e.kind === "permission"),
+  );
+  return open ? "pergunta ou permissão em aberto" : null;
+}
+
+/**
  * Um card terminou o turno. Se for um lado que a revisão esperava (revisor em `reviewing` sem o submit
- * da rodada, autor em `fixing` sem a resposta), é "terminou sem chamar a ferramenta": a primeira vez
- * reenvia o texto da vez com o lembrete na frente; a segunda vira impasse "IA não respondeu".
+ * da rodada, autor em `fixing` sem a resposta) e o turno não é de outra coisa (`notJudged`), é
+ * "terminou sem chamar a ferramenta": a primeira vez reenvia o texto da vez com o lembrete na frente
+ * (sem tirar ninguém de Paused); a segunda vira impasse "IA não respondeu".
  * A decisão é tomada dentro da mutação, então dois fins de turno juntos não lembram duas vezes.
  */
-async function onTurnFinished(cardId: string): Promise<void> {
+async function onTurnFinished(event: CardEvent): Promise<void> {
+  const cardId = event.cardId;
   const waiting: { id: string; side: Side }[] = [];
   const asReviewer = await reviewByReviewerCard(cardId);
   if (asReviewer && awaitingTool(asReviewer, "reviewer")) waiting.push({ id: asReviewer.id, side: "reviewer" });
   for (const r of await listReviewsForCards([cardId])) {
     if (awaitingTool(r, "author")) waiting.push({ id: r.id, side: "author" });
+  }
+  if (waiting.length === 0) return;
+  const skip = await notJudged(event);
+  if (skip) {
+    logger.info({ card: cardId, reviews: waiting.map((w) => w.id), reason: skip }, "PR review: finished turn not judged");
+    return;
   }
   for (const { id, side } of waiting) {
     let action = null as "nudge" | "impasse" | null;
@@ -537,7 +646,7 @@ export function startReviewOrchestrator(opts: { graceMs?: number } = {}): () => 
     const timer = setTimeout(() => {
       timers.delete(timer);
       if (stopped) return;
-      void onTurnFinished(event.cardId).catch((err: unknown) => {
+      void onTurnFinished(event).catch((err: unknown) => {
         logger.warn({ card: event.cardId, detail: (err as Error).message }, "PR review could not judge a finished turn");
       });
     }, graceMs);
