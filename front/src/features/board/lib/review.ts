@@ -1,5 +1,5 @@
 import type { BadgeTone } from "@/components/ui/badge";
-import type { Card, CardPr, ReviewSummary } from "@/api/types";
+import type { Card, CardPr, Finding, Review, ReviewPhase, ReviewSummary } from "@/api/types";
 
 /**
  * PR review — the rules the block in the chat, its dialog and (next) the panel and the sidebar line
@@ -8,6 +8,13 @@ import type { Card, CardPr, ReviewSummary } from "@/api/types";
 
 /** The server's ceiling (`MAX_ROUNDS`): the pill reads "rodada 2/3" against it. */
 export const REVIEW_MAX_ROUNDS = 3;
+
+/** How often the panel re-reads a review the AIs are still working on (or a merge is running on). */
+export const REVIEW_POLL_MS = 3_000;
+
+/** The two `impasseReason` values the server writes as codes/fixed texts: neither has a turn to hand back. */
+export const IMPASSE_ROUNDS = "rodadas";
+export const IMPASSE_HEAD_MOVED = "push depois do pronto";
 
 /** The people who can take a role in a review of this card. */
 export const cardPeopleKey = (cardId: string) => ["card-people", cardId] as const;
@@ -94,4 +101,112 @@ export function startErrorCode(err: unknown): string | null {
 export function startErrorRoles(err: unknown): ReviewRole[] {
   const named = failureMessage(err).match(/\b(?:reviewer|author|coauthor|merger)UserId\b/g) ?? [];
   return named.map((field) => ROLE_FIELDS[field]);
+}
+
+/* ------------------------------------------------------------------ the panel */
+
+/** The AIs are on it: the panel keeps reading. Every other phase waits for a person, or is over. */
+export const reviewIsWorking = (phase: ReviewPhase | undefined): boolean => phase === "reviewing" || phase === "fixing";
+
+/** Still going: it can be cancelled (`merged` and `cancelled` are closed — the server answers 409). */
+const isActive = (phase: ReviewPhase): boolean => phase !== "merged" && phase !== "cancelled";
+
+/** How many findings of each severity, whatever their status: the header of the closed list. PURE. */
+export interface FindingCounts {
+  blocking: number;
+  suggestion: number;
+  question: number;
+  refuted: number;
+}
+export function findingCounts(findings: Finding[]): FindingCounts {
+  const counts: FindingCounts = { blocking: 0, suggestion: 0, question: 0, refuted: 0 };
+  for (const f of findings) counts[f.severity] += 1;
+  return counts;
+}
+
+const isOpen = (f: Finding): boolean => f.status === "open" || f.status === "contested";
+
+/** Doubts that wait for the human reviewer: they hold the `ready` without spending a round. PURE. */
+export function pendingQuestions(findings: Finding[]): Finding[] {
+  return findings.filter((f) => f.severity === "question" && !f.humanDecision);
+}
+
+/**
+ * What an impasse is stuck ON: blocking findings still open or contested. A doubt the human turned
+ * into a block weighs the same on the server (`phaseAfterReviewerRound`), so it is stuck too — the
+ * panel offers it only "aceitar risco", because the server refuses `keep` on a doubt. PURE.
+ */
+export function stuckItems(findings: Finding[]): Finding[] {
+  return findings.filter(
+    (f) => isOpen(f) && (f.severity === "blocking" || (f.severity === "question" && f.humanDecision === "block")),
+  );
+}
+
+/** What the signed-in person may do to a review right now: their role AND the state it is in. */
+export interface ReviewActions {
+  decide: boolean;
+  retry: boolean;
+  cancel: boolean;
+  merge: boolean;
+}
+
+/**
+ * Who sees which button — the server's rules (`routes/reviews.ts`), so the panel never offers one
+ * that would answer 403/409:
+ *  - **merge**: the merger and nobody else (the owner's click is not the merger's), only in `ready`;
+ *  - **decide** (questions, stuck items): the reviewer or an owner, while the review is open to it;
+ *  - **retry**: the reviewer, the merger or an owner, for an impasse that is a FAILURE (not "rodadas",
+ *    not a push after ready: those have no turn to hand back) or a `ready` whose Approve never got out;
+ *  - **cancel**: the reviewer, the author, the merger or an owner, while the review is active.
+ * PURE.
+ */
+export function reviewActions(
+  review: Pick<Review, "phase" | "reviewerUserId" | "authorUserId" | "mergerUserId" | "impasseReason" | "approvePending">,
+  me: { id: string; isOwner: boolean } | null,
+): ReviewActions {
+  if (!me) return { decide: false, retry: false, cancel: false, merge: false };
+  const isReviewer = me.id === review.reviewerUserId;
+  const isMerger = me.id === review.mergerUserId;
+  const { phase } = review;
+  const failedImpasse =
+    phase === "impasse" && review.impasseReason !== IMPASSE_ROUNDS && review.impasseReason !== IMPASSE_HEAD_MOVED;
+  const approveStuck = phase === "ready" && review.approvePending === true;
+  return {
+    merge: isMerger && phase === "ready",
+    decide: (isReviewer || me.isOwner) && (reviewIsWorking(phase) || phase === "impasse"),
+    retry: (isReviewer || isMerger || me.isOwner) && (failedImpasse || approveStuck),
+    cancel: (isReviewer || me.id === review.authorUserId || isMerger || me.isOwner) && isActive(phase),
+  };
+}
+
+/** What the merge request came back with, in the three ways the panel treats differently. */
+export type MergeFailure =
+  | { kind: "head_moved"; review?: Review }
+  /** No answer, or a proxy gave up on a request that can run for minutes: the merge may still happen. */
+  | { kind: "lost" }
+  | { kind: "refused"; reason?: string; message: string; review?: Review };
+
+/** Proxies that cut a long request answer with these; the server never does. */
+const PROXY_GAVE_UP: ReadonlySet<number> = new Set([502, 503, 504, 524]);
+
+interface MergeErrorBody {
+  error?: string;
+  reason?: string;
+  review?: Review;
+}
+
+/**
+ * Sorts a failed `POST /api/reviews/:id/merge`. The request waits for CI (up to ~15 min), so "no
+ * answer" is not "refused": the panel keeps reading the review and calls it a success if it turns
+ * `merged`. `head_moved` is the 409 the server answers when the PR moved after the approval — and
+ * it has already put the review back, which the body carries. PURE.
+ */
+export function mergeFailure(err: unknown): MergeFailure {
+  const response = (err as { response?: { status?: number; data?: MergeErrorBody | string } })?.response;
+  const status = response?.status;
+  if (status === undefined || PROXY_GAVE_UP.has(status)) return { kind: "lost" };
+  const body = typeof response?.data === "object" && response.data ? response.data : {};
+  if (status === 409 && body.reason === "head_moved") return { kind: "head_moved", review: body.review };
+  const message = (typeof response?.data === "string" ? response.data : body.error ?? "").trim();
+  return { kind: "refused", reason: body.reason, message, review: body.review };
 }

@@ -1,14 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  IMPASSE_HEAD_MOVED,
   REVIEW_MAX_ROUNDS,
   cardReviewKey,
   cardPeopleKey,
+  findingCounts,
+  mergeFailure,
+  pendingQuestions,
+  reviewActions,
   reviewPill,
   startErrorCode,
   startErrorRoles,
+  stuckItems,
   visiblePrs,
 } from "@/features/board/lib/review";
-import type { CardPr, ReviewSummary } from "@/api/types";
+import type { CardPr, Finding, Review, ReviewSummary } from "@/api/types";
 
 function pr(number: number, openedAt: number, base = "dev"): CardPr {
   return { number, url: `https://github.com/acme/x/pull/${number}`, base, branch: "card/x", openedAt };
@@ -125,5 +131,148 @@ describe("query keys", () => {
   it("are the ones the panel (next task) reads", () => {
     expect(cardPeopleKey("c1")).toEqual(["card-people", "c1"]);
     expect(cardReviewKey("c1")).toEqual(["card-review", "c1"]);
+  });
+});
+
+function finding(overrides: Partial<Finding> = {}): Finding {
+  return { id: "f1", severity: "blocking", title: "x", status: "open", introducedInRound: 1, ...overrides };
+}
+
+describe("findingCounts", () => {
+  it("counts each severity from the data, whatever the status", () => {
+    const list = [
+      finding({ id: "a" }),
+      finding({ id: "b", status: "fixed" }),
+      finding({ id: "c", status: "contested" }),
+      finding({ id: "d", severity: "suggestion" }),
+      finding({ id: "e", severity: "refuted", status: "dropped" }),
+      finding({ id: "f", severity: "question" }),
+    ];
+    expect(findingCounts(list)).toEqual({ blocking: 3, suggestion: 1, question: 1, refuted: 1 });
+  });
+
+  it("is all zeros for an empty list", () => {
+    expect(findingCounts([])).toEqual({ blocking: 0, suggestion: 0, question: 0, refuted: 0 });
+  });
+});
+
+describe("pendingQuestions", () => {
+  it("is the questions nobody decided yet", () => {
+    const list = [
+      finding({ id: "q1", severity: "question" }),
+      finding({ id: "q2", severity: "question", humanDecision: "drop", status: "dropped" }),
+      finding({ id: "b1" }),
+    ];
+    expect(pendingQuestions(list).map((f) => f.id)).toEqual(["q1"]);
+  });
+});
+
+describe("stuckItems", () => {
+  it("is the blocking findings still open or contested", () => {
+    const list = [
+      finding({ id: "a", status: "open" }),
+      finding({ id: "b", status: "contested" }),
+      finding({ id: "c", status: "fixed" }),
+      finding({ id: "d", status: "accepted_risk" }),
+      finding({ id: "e", severity: "suggestion" }),
+    ];
+    expect(stuckItems(list).map((f) => f.id)).toEqual(["a", "b"]);
+  });
+
+  it("includes a question the human turned into a block, which weighs like one", () => {
+    const list = [finding({ id: "q", severity: "question", humanDecision: "block" })];
+    expect(stuckItems(list).map((f) => f.id)).toEqual(["q"]);
+    expect(stuckItems([finding({ id: "q", severity: "question" })])).toEqual([]);
+  });
+});
+
+function full(overrides: Partial<Review> = {}): Review {
+  return {
+    id: "r1", prNumber: 553, phase: "fixing", round: 2, cardId: "c1", projectId: "p1",
+    prUrl: "https://github.com/acme/x/pull/553", prBranch: "card/x", base: "dev",
+    reviewerUserId: "rev", authorUserId: "aut", mergerUserId: "mer", reviewerCardId: "rc1",
+    findings: [], log: [], createdAt: 1, updatedAt: 2, ...overrides,
+  };
+}
+const as = (id: string, isOwner = false) => ({ id, isOwner });
+
+describe("reviewActions", () => {
+  it("merge is the merger's alone, and only in ready — not even an owner", () => {
+    const ready = full({ phase: "ready" });
+    expect(reviewActions(ready, as("mer")).merge).toBe(true);
+    expect(reviewActions(ready, as("rev")).merge).toBe(false);
+    expect(reviewActions(ready, as("own", true)).merge).toBe(false);
+    expect(reviewActions(full({ phase: "fixing" }), as("mer")).merge).toBe(false);
+    expect(reviewActions(full({ phase: "merged" }), as("mer")).merge).toBe(false);
+  });
+
+  it("deciding is the reviewer's or an owner's, while the review is open to decisions", () => {
+    expect(reviewActions(full(), as("rev")).decide).toBe(true);
+    expect(reviewActions(full(), as("own", true)).decide).toBe(true);
+    expect(reviewActions(full(), as("aut")).decide).toBe(false);
+    expect(reviewActions(full(), as("mer")).decide).toBe(false);
+    expect(reviewActions(full({ phase: "ready" }), as("rev")).decide).toBe(false);
+    expect(reviewActions(full({ phase: "merged" }), as("rev")).decide).toBe(false);
+  });
+
+  it("trying again needs a failure impasse or a pending approve, and the reviewer, merger or an owner", () => {
+    const failed = full({ phase: "impasse", impasseReason: "IA não respondeu" });
+    expect(reviewActions(failed, as("rev")).retry).toBe(true);
+    expect(reviewActions(failed, as("mer")).retry).toBe(true);
+    expect(reviewActions(failed, as("own", true)).retry).toBe(true);
+    expect(reviewActions(failed, as("aut")).retry).toBe(false);
+    // An impasse with no reason at all is still a failure to try again (the server only refuses "rodadas" and the push).
+    expect(reviewActions(full({ phase: "impasse" }), as("rev")).retry).toBe(true);
+    expect(reviewActions(full({ phase: "impasse", impasseReason: "rodadas" }), as("rev")).retry).toBe(false);
+    expect(reviewActions(full({ phase: "impasse", impasseReason: IMPASSE_HEAD_MOVED }), as("rev")).retry).toBe(false);
+    expect(reviewActions(full({ phase: "ready", approvePending: true }), as("rev")).retry).toBe(true);
+    expect(reviewActions(full({ phase: "ready" }), as("rev")).retry).toBe(false);
+    expect(reviewActions(full({ phase: "fixing", approvePending: true }), as("rev")).retry).toBe(false);
+  });
+
+  it("cancelling is for the reviewer, author, merger or an owner, while the review is active", () => {
+    for (const phase of ["reviewing", "fixing", "ready", "impasse"] as const) {
+      expect(reviewActions(full({ phase }), as("aut")).cancel).toBe(true);
+    }
+    expect(reviewActions(full(), as("rev")).cancel).toBe(true);
+    expect(reviewActions(full(), as("mer")).cancel).toBe(true);
+    expect(reviewActions(full(), as("own", true)).cancel).toBe(true);
+    expect(reviewActions(full(), as("co")).cancel).toBe(false);
+    expect(reviewActions(full({ coauthorUserId: "co" }), as("co")).cancel).toBe(false);
+    expect(reviewActions(full({ phase: "merged" }), as("aut")).cancel).toBe(false);
+    expect(reviewActions(full({ phase: "cancelled" }), as("aut")).cancel).toBe(false);
+  });
+
+  it("nobody signed in can do anything", () => {
+    expect(reviewActions(full({ phase: "ready" }), null)).toEqual({ decide: false, retry: false, cancel: false, merge: false });
+  });
+});
+
+describe("mergeFailure", () => {
+  const fail = (status: number | undefined, data?: unknown) =>
+    Object.assign(new Error("x"), status === undefined ? {} : { response: { status, data } });
+
+  it("head_moved is the 409 with that reason, carrying the review the server put back", () => {
+    const back = full({ phase: "reviewing" });
+    expect(mergeFailure(fail(409, { error: "o PR andou", reason: "head_moved", review: back }))).toEqual({
+      kind: "head_moved", review: back,
+    });
+  });
+
+  it("no answer at all (network) or a proxy giving up is a lost connection, not a refusal", () => {
+    expect(mergeFailure(new Error("Network Error")).kind).toBe("lost");
+    expect(mergeFailure(fail(502, "bad gateway")).kind).toBe("lost");
+    expect(mergeFailure(fail(504, "")).kind).toBe("lost");
+    expect(mergeFailure(fail(524, "")).kind).toBe("lost");
+  });
+
+  it("anything else the server answered is a refusal, with its reason and message", () => {
+    expect(mergeFailure(fail(400, { error: "merger_sem_github: sem conexão", reason: "merger_sem_github" }))).toEqual({
+      kind: "refused", reason: "merger_sem_github", message: "merger_sem_github: sem conexão", review: undefined,
+    });
+    const failed = mergeFailure(fail(409, { error: "gate vermelho", reason: "gate" }));
+    expect(failed).toMatchObject({ kind: "refused", reason: "gate", message: "gate vermelho" });
+    expect(mergeFailure(fail(500, { error: "boom" }))).toMatchObject({ kind: "refused", message: "boom" });
+    expect(mergeFailure(fail(403, { error: "você não tem esse papel nesta revisão" }))).toMatchObject({ kind: "refused" });
   });
 });
