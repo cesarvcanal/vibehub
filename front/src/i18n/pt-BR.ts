@@ -1371,6 +1371,7 @@ export const ptBR: Record<string, string> = {
 
   /* painel de acompanhamento da revisão */
   "review.pill.cancelled": "cancelada",
+  "review.panel.title": "Revisão de PR",
   "review.panel.aria": "Revisão do PR #{n}",
   "review.panel.loading": "Carregando a revisão…",
   "review.panel.loadError": "Não deu pra carregar a revisão",

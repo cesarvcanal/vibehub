@@ -1359,6 +1359,7 @@ export const en: Record<string, string> = {
 
   /* review follow-up panel */
   "review.pill.cancelled": "cancelled",
+  "review.panel.title": "PR review",
   "review.panel.aria": "Review of PR #{n}",
   "review.panel.loading": "Loading the review…",
   "review.panel.loadError": "Could not load the review",

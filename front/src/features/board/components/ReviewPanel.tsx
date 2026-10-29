@@ -143,14 +143,16 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
         toast.success(translate("review.merge.done", { num: prNumber, base }));
       }
     } else if (phase !== undefined && phase !== "ready") {
-      // The lost answer is settled by the phase moving on (a push sent it back, it was cancelled).
+      // The lost answer is settled by the phase moving on (a push sent it back, it was cancelled):
+      // that merge did not happen, so a later `merged` is not its success.
+      mergeAsked.current = false;
       setMergeNote((note) => (note?.kind === "lost" ? null : note));
     }
   }, [phase, prNumber, base]);
 
   if (!review) {
     return (
-      <PanelFrame label={t("review.panel.none")} onClose={onClose}>
+      <PanelFrame label={t("review.panel.title")} onClose={onClose}>
         {reviewQuery.isError ? (
           <p role="alert" className="text-xs text-destructive">{t("review.panel.loadError")}</p>
         ) : reviewQuery.isPending ? (
@@ -180,7 +182,70 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
   const pill = review.phase === "cancelled" ? { key: "review.pill.cancelled", tone: "muted" as const } : reviewPill(review);
 
   return (
-    <PanelFrame label={t("review.panel.aria", { n: review.prNumber })} onClose={onClose}>
+    <PanelFrame
+      label={t("review.panel.aria", { n: review.prNumber })}
+      onClose={onClose}
+      // Pinned under the scrolling list: the merge button is what the whole review is FOR, and it
+      // must not end up below the fold of a long list.
+      footer={
+        <>
+          {mergeNote?.kind === "head_moved" ? (
+            <p role="status" className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-300">
+              {t("review.merge.headMoved")}
+            </p>
+          ) : null}
+          {mergeNote?.kind === "lost" ? (
+            <p role="status" className="rounded-md border border-border/60 bg-card/40 px-2.5 py-1.5 text-xs text-muted-foreground">
+              {t("review.merge.lost")}
+            </p>
+          ) : null}
+          {mergeNote?.kind === "refused" ? (
+            <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive">
+              {mergeNote.message}
+            </p>
+          ) : null}
+
+          <div className="flex flex-wrap items-center gap-2">
+            {actions.merge ? (
+              <Button
+                type="button"
+                size="sm"
+                className="h-8 bg-emerald-600 px-3 text-xs text-white hover:bg-emerald-500"
+                disabled={mergeWait}
+                onClick={() => merge.mutate()}
+              >
+                {mergeWait ? (
+                  <>
+                    <Loader2 className="animate-spin" /> {t("review.merge.pending")}
+                  </>
+                ) : (
+                  t("review.merge", { base: review.base })
+                )}
+              </Button>
+            ) : null}
+            {actions.retry ? (
+              <Button type="button" variant="outline" size="sm" className="h-8 px-3 text-xs" disabled={busy} onClick={() => act.mutate({ path: "retry" })}>
+                {t("review.retry")}
+              </Button>
+            ) : null}
+            {actions.cancel ? (
+              <Button type="button" variant="ghost" size="sm" className="h-8 px-3 text-xs text-muted-foreground" disabled={busy} onClick={cancel}>
+                {t("review.cancel")}
+              </Button>
+            ) : null}
+            <a
+              href={review.prUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              {t("review.panel.github")}
+            </a>
+          </div>
+        </>
+      }
+    >
       <section className="space-y-2 rounded-md border border-border/60 bg-card/40 p-2.5">
         <div className="flex items-center gap-2">
           <span className="font-semibold text-amber-400">PR #{review.prNumber}</span>
@@ -243,75 +308,27 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
       <Feed log={review.log} />
 
       <Verdict review={review} />
-
-      {mergeNote?.kind === "head_moved" ? (
-        <p role="status" className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-300">
-          {t("review.merge.headMoved")}
-        </p>
-      ) : null}
-      {mergeNote?.kind === "lost" ? (
-        <p role="status" className="rounded-md border border-border/60 bg-card/40 px-2.5 py-1.5 text-xs text-muted-foreground">
-          {t("review.merge.lost")}
-        </p>
-      ) : null}
-      {mergeNote?.kind === "refused" ? (
-        <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive">
-          {mergeNote.message}
-        </p>
-      ) : null}
-
-      <div className="flex flex-wrap items-center gap-2">
-        {actions.merge ? (
-          <Button
-            type="button"
-            size="sm"
-            className="h-8 bg-emerald-600 px-3 text-xs text-white hover:bg-emerald-500"
-            disabled={mergeWait}
-            onClick={() => merge.mutate()}
-          >
-            {mergeWait ? (
-              <>
-                <Loader2 className="animate-spin" /> {t("review.merge.pending")}
-              </>
-            ) : (
-              t("review.merge", { base: review.base })
-            )}
-          </Button>
-        ) : null}
-        {actions.retry ? (
-          <Button type="button" variant="outline" size="sm" className="h-8 px-3 text-xs" disabled={busy} onClick={() => act.mutate({ path: "retry" })}>
-            {t("review.retry")}
-          </Button>
-        ) : null}
-        {actions.cancel ? (
-          <Button type="button" variant="ghost" size="sm" className="h-8 px-3 text-xs text-muted-foreground" disabled={busy} onClick={cancel}>
-            {t("review.cancel")}
-          </Button>
-        ) : null}
-        <a
-          href={review.prUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-          {t("review.panel.github")}
-        </a>
-      </div>
     </PanelFrame>
   );
 }
 
-/** The column: a title line with the way out, and the scrollable body. */
-function PanelFrame({ label, onClose, children }: { label: string; onClose: () => void; children: React.ReactNode }) {
+/** The column: the way out on top, the scrollable body, and the pinned footer (the human moves). */
+function PanelFrame({
+  label, onClose, footer, children,
+}: {
+  label: string;
+  onClose: () => void;
+  footer?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   const t = useT();
   return (
     <section
       aria-label={label}
       data-testid="review-panel"
-      className="flex min-h-[220px] min-w-0 flex-1 flex-col gap-2 overflow-y-auto rounded-md border border-border/60 bg-card/30 p-2.5 text-sm"
+      className="flex min-h-[220px] min-w-0 flex-1 flex-col gap-2 rounded-md border border-border/60 bg-card/30 p-2.5 text-sm"
     >
-      <div className="flex items-center justify-end">
+      <div className="flex shrink-0 items-center justify-end">
         <Button
           variant="ghost"
           size="icon"
@@ -323,7 +340,8 @@ function PanelFrame({ label, onClose, children }: { label: string; onClose: () =
           <X className="h-3.5 w-3.5" />
         </Button>
       </div>
-      {children}
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">{children}</div>
+      {footer ? <div className="flex shrink-0 flex-col gap-2 border-t border-border/50 pt-2">{footer}</div> : null}
     </section>
   );
 }
