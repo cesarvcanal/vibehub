@@ -8,11 +8,11 @@ import { get, post } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
 import { cn } from "@/lib/utils";
 import type {
-  Finding, FindingSeverity, PeopleResponse, Person, Review, ReviewEvent, ReviewResponse,
+  Finding, FindingSeverity, PeopleResponse, Person, Review, ReviewEvent, ReviewPhase, ReviewResponse,
 } from "@/api/types";
 import { CARDS_PREFIX_KEY } from "@/features/board/api";
 import {
-  IMPASSE_ROUNDS, REVIEW_MAX_ROUNDS, REVIEW_POLL_MS, cardPeopleKey, cardReviewKey, findingCounts, mergeFailure,
+  IMPASSE_ROUNDS, MERGE_CONFIRM_MS, REVIEW_MAX_ROUNDS, REVIEW_POLL_MS, cardPeopleKey, cardReviewKey, findingCounts, mergeFailure,
   pendingQuestions, reviewActions, reviewIsWorking, reviewPill, stuckItems,
 } from "@/features/board/lib/review";
 import { useAuth } from "@/providers/auth";
@@ -38,7 +38,21 @@ import { t as translate, useT } from "@/i18n";
 /** The feed shows this many of the latest entries until "ver inteira" is pressed. */
 const FEED_TAIL = 5;
 
-type MergeNote = { kind: "head_moved" } | { kind: "lost" } | { kind: "refused"; message: string };
+/** Where the review stood when a banner was raised: the banner is about THAT state and goes with it. */
+type Stamp = { phase: ReviewPhase; round: number };
+
+/**
+ *  - `unconfirmed`: the merge's answer is not known (lost on the way, or another click found one already
+ *    running) — the panel keeps reading, with the merge button held, until `merged` or the time cap;
+ *  - `expired`: the cap passed with no `merged`: reading stops, the button is back, and the person is
+ *    sent to GitHub;
+ *  - `head_moved` / `refused`: answers of the server, pinned to the `at` state they were raised in.
+ */
+type MergeNote =
+  | { kind: "unconfirmed"; cause: "lost" | "running" }
+  | { kind: "expired"; at: Stamp | null }
+  | { kind: "head_moved"; at: Stamp | null }
+  | { kind: "refused"; message: string; at: Stamp | null };
 
 type Decision = "block" | "drop" | "keep" | "accept_risk";
 
@@ -63,18 +77,25 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
   const { user, isOwner } = useAuth();
   const key = cardReviewKey(cardId);
 
-  // A merge request is open (the button reads "Mergeando…"), or its answer got lost on the way and
-  // the panel is checking whether it went through. Either way the review is re-read.
+  // A merge request is open (the button reads "Mergeando…"), or its answer is unconfirmed and the
+  // panel is checking whether it went through. Either way the review is re-read.
   const [mergeWait, setMergeWait] = React.useState(false);
   const [mergeNote, setMergeNote] = React.useState<MergeNote | null>(null);
   /** A merge was asked from THIS panel: the `merged` that follows is its success, and says so once. */
   const mergeAsked = React.useRef(false);
+  /** When that click happened: the unconfirmed wait is counted from it, not from when the answer got lost. */
+  const mergeStartedAt = React.useRef(0);
+  /** The review's state as of the latest render, for the banners raised from callbacks. */
+  const stamp = React.useRef<Stamp | null>(null);
+  const unconfirmed = mergeNote?.kind === "unconfirmed";
+  /** The merge button is held: a request is open, or its result is unknown. Cancel and retry wait too. */
+  const mergeBusy = mergeWait || unconfirmed;
 
   const reviewQuery = useQuery({
     queryKey: key,
     queryFn: () => get<ReviewResponse>(`/cards/${encodeURIComponent(cardId)}/review`).then((r) => r.review),
     refetchInterval: (query) =>
-      reviewIsWorking(query.state.data?.phase) || mergeWait || mergeNote?.kind === "lost" ? REVIEW_POLL_MS : false,
+      reviewIsWorking(query.state.data?.phase) || mergeBusy ? REVIEW_POLL_MS : false,
   });
   const review = reviewQuery.data ?? null;
 
@@ -111,21 +132,25 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
       setMergeNote(null);
       setMergeWait(true);
       mergeAsked.current = true;
+      mergeStartedAt.current = Date.now();
     },
     onSuccess: (answer) => apply(answer.review),
     onError: (error) => {
       const failed = mergeFailure(error);
-      if (failed.kind === "lost") {
-        // Not a refusal: the merge may well be running (or done). Read now, and keep reading.
-        setMergeNote({ kind: "lost" });
+      if (failed.kind === "lost" || failed.kind === "running") {
+        // Not a refusal: the merge may well be running (or done). Read now, keep reading, and keep
+        // `mergeAsked`, so the `merged` that follows is announced as this click's success.
+        setMergeNote({ kind: "unconfirmed", cause: failed.kind });
         reread();
         return;
       }
       mergeAsked.current = false;
       if (failed.review) apply(failed.review);
       else reread();
-      if (failed.kind === "head_moved") setMergeNote({ kind: "head_moved" });
-      else setMergeNote({ kind: "refused", message: refusalText(failed.reason, failed.message, error) });
+      // The banner belongs to the state the answer left the review in.
+      const at = failed.review ? { phase: failed.review.phase, round: failed.review.round } : stamp.current;
+      if (failed.kind === "head_moved") setMergeNote({ kind: "head_moved", at });
+      else setMergeNote({ kind: "refused", message: refusalText(failed.reason, failed.message, error), at });
     },
     onSettled: () => setMergeWait(false),
   });
@@ -133,8 +158,10 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
   // The merge went through: said once, from here, whichever way the answer arrived (the response, or
   // the next read after the request was cut). A review merged by somebody else is not announced.
   const phase = review?.phase;
+  const round = review?.round;
   const prNumber = review?.prNumber;
   const base = review?.base;
+  stamp.current = phase !== undefined && round !== undefined ? { phase, round } : null;
   React.useEffect(() => {
     if (phase === "merged") {
       setMergeNote(null);
@@ -142,13 +169,33 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
         mergeAsked.current = false;
         toast.success(translate("review.merge.done", { num: prNumber, base }));
       }
-    } else if (phase !== undefined && phase !== "ready") {
-      // The lost answer is settled by the phase moving on (a push sent it back, it was cancelled):
-      // that merge did not happen, so a later `merged` is not its success.
-      mergeAsked.current = false;
-      setMergeNote((note) => (note?.kind === "lost" ? null : note));
+      return;
     }
-  }, [phase, prNumber, base]);
+    if (phase === undefined) return;
+    if (phase !== "ready") {
+      // An unconfirmed answer is settled by the phase moving on (a push sent it back, it was
+      // cancelled): that merge did not happen, so a later `merged` is not its success.
+      mergeAsked.current = false;
+    }
+    // A banner is about the state it was raised in: when the phase or the round moves, it goes.
+    setMergeNote((note) => {
+      if (!note) return note;
+      if (note.kind === "unconfirmed") return phase !== "ready" ? null : note;
+      return note.at && (note.at.phase !== phase || note.at.round !== round) ? null : note;
+    });
+  }, [phase, round, prNumber, base]);
+
+  // The wait for an unconfirmed merge has a cap (the server's own merge limit, plus a margin): past it
+  // the panel stops reading and says it could not confirm, instead of polling for ever.
+  React.useEffect(() => {
+    if (!unconfirmed) return;
+    const left = Math.max(0, mergeStartedAt.current + MERGE_CONFIRM_MS - Date.now());
+    const timer = window.setTimeout(() => {
+      mergeAsked.current = false;
+      setMergeNote({ kind: "expired", at: stamp.current });
+    }, left);
+    return () => window.clearTimeout(timer);
+  }, [unconfirmed]);
 
   if (!review) {
     return (
@@ -194,9 +241,14 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
               {t("review.merge.headMoved")}
             </p>
           ) : null}
-          {mergeNote?.kind === "lost" ? (
+          {mergeNote?.kind === "unconfirmed" ? (
             <p role="status" className="rounded-md border border-border/60 bg-card/40 px-2.5 py-1.5 text-xs text-muted-foreground">
-              {t("review.merge.lost")}
+              {t(mergeNote.cause === "lost" ? "review.merge.lost" : "review.merge.running")}
+            </p>
+          ) : null}
+          {mergeNote?.kind === "expired" ? (
+            <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive">
+              {t("review.merge.expired")}
             </p>
           ) : null}
           {mergeNote?.kind === "refused" ? (
@@ -211,10 +263,10 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
                 type="button"
                 size="sm"
                 className="h-8 bg-emerald-600 px-3 text-xs text-white hover:bg-emerald-500"
-                disabled={mergeWait}
+                disabled={mergeBusy}
                 onClick={() => merge.mutate()}
               >
-                {mergeWait ? (
+                {mergeBusy ? (
                   <>
                     <Loader2 className="animate-spin" /> {t("review.merge.pending")}
                   </>
@@ -224,12 +276,12 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
               </Button>
             ) : null}
             {actions.retry ? (
-              <Button type="button" variant="outline" size="sm" className="h-8 px-3 text-xs" disabled={busy} onClick={() => act.mutate({ path: "retry" })}>
+              <Button type="button" variant="outline" size="sm" className="h-8 px-3 text-xs" disabled={busy || mergeBusy} onClick={() => act.mutate({ path: "retry" })}>
                 {t("review.retry")}
               </Button>
             ) : null}
             {actions.cancel ? (
-              <Button type="button" variant="ghost" size="sm" className="h-8 px-3 text-xs text-muted-foreground" disabled={busy} onClick={cancel}>
+              <Button type="button" variant="ghost" size="sm" className="h-8 px-3 text-xs text-muted-foreground" disabled={busy || mergeBusy} onClick={cancel}>
                 {t("review.cancel")}
               </Button>
             ) : null}
@@ -568,7 +620,6 @@ function countsText(counts: ReturnType<typeof findingCounts>, t: typeof translat
 /** The words for a merge the server refused: its own text for the codes with one, the server's otherwise. */
 function refusalText(reason: string | undefined, message: string, error: unknown): string {
   if (reason === "merger_sem_github") return translate("review.merge.error.merger_sem_github");
-  if (reason === "merging") return translate("review.merge.error.merging");
   if (reason === "not_ready") return translate("review.merge.error.not_ready");
   return message ? apiErrorMessage(error) : translate("error.generic");
 }

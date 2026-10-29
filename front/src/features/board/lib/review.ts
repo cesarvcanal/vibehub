@@ -9,6 +9,12 @@ import type { Card, CardPr, Finding, Review, ReviewPhase, ReviewSummary } from "
 /** The server's ceiling (`MAX_ROUNDS`): the pill reads "rodada 2/3" against it. */
 export const REVIEW_MAX_ROUNDS = 3;
 
+/**
+ * How long the panel waits for a merge it cannot confirm (the answer got lost, or another click found
+ * one already running) before giving up: the server's own merge limit is ~15 min, plus a margin.
+ */
+export const MERGE_CONFIRM_MS = 16 * 60_000;
+
 /** How often the panel re-reads a review the AIs are still working on (or a merge is running on). */
 export const REVIEW_POLL_MS = 3_000;
 
@@ -184,6 +190,8 @@ export type MergeFailure =
   | { kind: "head_moved"; review?: Review }
   /** No answer, or a proxy gave up on a request that can run for minutes: the merge may still happen. */
   | { kind: "lost" }
+  /** 409 `merging`: a merge is already running on the server (this click, lost earlier, or another's). */
+  | { kind: "running" }
   | { kind: "refused"; reason?: string; message: string; review?: Review };
 
 /** Proxies that cut a long request answer with these; the server never does. */
@@ -198,8 +206,9 @@ interface MergeErrorBody {
 /**
  * Sorts a failed `POST /api/reviews/:id/merge`. The request waits for CI (up to ~15 min), so "no
  * answer" is not "refused": the panel keeps reading the review and calls it a success if it turns
- * `merged`. `head_moved` is the 409 the server answers when the PR moved after the approval — and
- * it has already put the review back, which the body carries. PURE.
+ * `merged`; so is the 409 `merging` (a merge is already running). `head_moved` is the 409 the server
+ * answers when the PR moved after the approval — and it has already put the review back, which the
+ * body carries. PURE.
  */
 export function mergeFailure(err: unknown): MergeFailure {
   const response = (err as { response?: { status?: number; data?: MergeErrorBody | string } })?.response;
@@ -207,6 +216,7 @@ export function mergeFailure(err: unknown): MergeFailure {
   if (status === undefined || PROXY_GAVE_UP.has(status)) return { kind: "lost" };
   const body = typeof response?.data === "object" && response.data ? response.data : {};
   if (status === 409 && body.reason === "head_moved") return { kind: "head_moved", review: body.review };
+  if (status === 409 && body.reason === "merging") return { kind: "running" };
   const message = (typeof response?.data === "string" ? response.data : body.error ?? "").trim();
   return { kind: "refused", reason: body.reason, message, review: body.review };
 }

@@ -413,6 +413,162 @@ describe("ReviewPanel — merge", () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
+  it("409 merging continua conferindo e mostra sucesso quando o merge termina", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    post.mockRejectedValue(failure(409, { error: "merge já em andamento", reason: "merging" }));
+    open("mer", review({ phase: "ready" }));
+    await loaded();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByRole("button", { name: "Mergear na dev" }));
+
+    // Um merge já corre no servidor: nem erro, nem botão livre. Fica conferindo.
+    expect(await screen.findByText(/O merge já está em andamento/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mergeando…" })).toBeDisabled();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(toast.error).not.toHaveBeenCalled();
+
+    // Segue lendo: a fase ainda é ready, e o merge termina no servidor.
+    const before = reviewGets;
+    await tick(3_100);
+    expect(reviewGets).toBeGreaterThan(before);
+    current = review({ phase: "merged" });
+    await tick(3_100);
+
+    expect(await screen.findByText("Mergeado na dev")).toBeInTheDocument();
+    expect(toast.success).toHaveBeenCalledTimes(1);
+    expect(toast.success).toHaveBeenCalledWith("PR #553 mergeado na dev");
+    expect(screen.queryByText(/O merge já está em andamento/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Mergear na|Mergeando/ })).toBeNull();
+  });
+
+  it.each([
+    ["conexão perdida (504)", () => failure(504, "Gateway Time-out")],
+    ["409 merging", () => failure(409, { error: "merge já em andamento", reason: "merging" })],
+  ])("espera sem confirmação (%s): o botão fica desabilitado até a fase mudar", async (_name, error) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    post.mockRejectedValue(error());
+    open("mer", review({ phase: "ready" }));
+    await loaded();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByRole("button", { name: "Mergear na dev" }));
+
+    const waiting = await screen.findByRole("button", { name: "Mergeando…" });
+    expect(waiting).toBeDisabled();
+    await tick(3_100);
+    expect(screen.getByRole("button", { name: "Mergeando…" })).toBeDisabled();
+  });
+
+  it.each([
+    ["conexão perdida (504)", () => failure(504, "Gateway Time-out")],
+    ["409 merging", () => failure(409, { error: "merge já em andamento", reason: "merging" })],
+  ])("depois de 16 min sem merged (%s) a espera acaba: leitura para, botão volta e o painel manda conferir no GitHub", async (_name, error) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    post.mockRejectedValue(error());
+    open("mer", review({ phase: "ready" }));
+    await loaded();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByRole("button", { name: "Mergear na dev" }));
+    await screen.findByRole("button", { name: "Mergeando…" });
+
+    // Antes do limite continua esperando.
+    await tick(15 * 60_000);
+    expect(screen.getByRole("button", { name: "Mergeando…" })).toBeDisabled();
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    await tick(2 * 60_000);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não deu pra confirmar o merge — confira no GitHub");
+    expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeEnabled();
+    // E a leitura parou: nada de GET a cada 3 s pra sempre.
+    const seen = reviewGets;
+    await tick(30_000);
+    expect(reviewGets).toBe(seen);
+    // Sem sucesso falso se um merged aparecer depois (ninguém está mais conferindo).
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it("cancelar e tentar de novo ficam desabilitados com o merge pendente e sem confirmação", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // Responsável pelo merge: vê Mergear, Tentar de novo (Approve pendente) e Cancelar.
+    let lose: (e: unknown) => void = () => {};
+    post.mockImplementation(() => new Promise((_, reject) => { lose = reject; }));
+    open("mer", review({ phase: "ready", approvePending: true }));
+    await loaded();
+    expect(screen.getByRole("button", { name: "Tentar de novo" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancelar revisão" })).toBeEnabled();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    await user.click(screen.getByRole("button", { name: "Mergear na dev" }));
+
+    // Pendente.
+    await screen.findByRole("button", { name: "Mergeando…" });
+    expect(screen.getByRole("button", { name: "Tentar de novo" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancelar revisão" })).toBeDisabled();
+
+    // Resposta perdida: continua sem confirmação, ainda desabilitados.
+    await act(async () => { lose(failure(undefined)); });
+    await screen.findByText(/A conexão caiu antes da resposta do merge/);
+    expect(screen.getByRole("button", { name: "Tentar de novo" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancelar revisão" })).toBeDisabled();
+  });
+
+  it("o aviso de head_moved some quando a fase ou a rodada mudam, e fica enquanto nada muda", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    post.mockRejectedValue(failure(409, {
+      error: "o PR andou", reason: "head_moved", review: review({ phase: "reviewing", round: 2 }),
+    }));
+    open("mer", review({ phase: "ready" }));
+    await loaded();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByRole("button", { name: "Mergear na dev" }));
+    const notice = "Houve push depois da revisão — a revisão voltou pra conferir o que mudou.";
+    expect(await screen.findByText(notice)).toBeInTheDocument();
+
+    // Nada mudou na leitura seguinte (reviewing, rodada 2): o aviso fica.
+    current = review({ phase: "reviewing", round: 2 });
+    await tick(3_100);
+    expect(screen.getByText(notice)).toBeInTheDocument();
+
+    // A fase muda (o autor corrige): o aviso sai.
+    current = review({ phase: "fixing", round: 2 });
+    await tick(3_100);
+    await waitFor(() => expect(screen.queryByText(notice)).toBeNull());
+  });
+
+  it("o aviso de head_moved também sai quando só a rodada muda", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    post.mockRejectedValue(failure(409, {
+      error: "o PR andou", reason: "head_moved", review: review({ phase: "reviewing", round: 2 }),
+    }));
+    open("mer", review({ phase: "ready" }));
+    await loaded();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByRole("button", { name: "Mergear na dev" }));
+    const notice = "Houve push depois da revisão — a revisão voltou pra conferir o que mudou.";
+    await screen.findByText(notice);
+
+    current = review({ phase: "reviewing", round: 3 });
+    await tick(3_100);
+
+    await waitFor(() => expect(screen.queryByText(notice)).toBeNull());
+  });
+
+  it("a recusa do merge some quando a fase da revisão muda", async () => {
+    post.mockRejectedValueOnce(failure(409, { error: "gate vermelho: 2 testes falharam", reason: "gate" }));
+    open("mer", review({ phase: "ready" }));
+    await loaded();
+    await userEvent.click(screen.getByRole("button", { name: "Mergear na dev" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("gate vermelho");
+
+    // Nada mudou ainda: continua. Depois o responsável cancela e a fase muda.
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    post.mockResolvedValueOnce({ review: review({ phase: "cancelled" }) });
+    await userEvent.click(screen.getByRole("button", { name: "Cancelar revisão" }));
+
+    expect(await screen.findByText("Revisão cancelada")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("recusa do servidor aparece como erro e o botão volta", async () => {
     post.mockRejectedValue(failure(400, { error: "merger_sem_github: sem conexão", reason: "merger_sem_github" }));
     open("mer", review({ phase: "ready" }));

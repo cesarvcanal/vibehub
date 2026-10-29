@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   IMPASSE_HEAD_MOVED,
+  MERGE_CONFIRM_MS,
   REVIEW_MAX_ROUNDS,
   cardReviewKey,
   cardPeopleKey,
@@ -264,6 +265,14 @@ describe("mergeFailure", () => {
     expect(mergeFailure(fail(502, "bad gateway")).kind).toBe("lost");
     expect(mergeFailure(fail(504, "")).kind).toBe("lost");
     expect(mergeFailure(fail(524, "")).kind).toBe("lost");
+  });
+
+  it("409 merging is a merge still running: not a refusal, the result is yet to be confirmed", () => {
+    expect(mergeFailure(fail(409, { error: "merge já em andamento", reason: "merging" }))).toEqual({ kind: "running" });
+  });
+
+  it("the unconfirmed wait is capped at the server's own merge limit (~15 min) plus a margin", () => {
+    expect(MERGE_CONFIRM_MS).toBe(16 * 60_000);
   });
 
   it("anything else the server answered is a refusal, with its reason and message", () => {
