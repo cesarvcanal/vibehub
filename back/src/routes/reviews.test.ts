@@ -10,8 +10,8 @@ import type { DeliverOpts, DeliverResult } from "../services/maestro/deliver.js"
  * ROTAS DA REVISÃO DE PR — quem pode iniciar, decidir, tentar de novo, cancelar e, sobretudo,
  * mergear. O servidor, o board, os shares e o store das revisões são REAIS; o que sai para o runner
  * é mock na fronteira: `sendToTerminal` (digitar num card), `deliver` (git/gh) e a aplicação da
- * identidade no runner (`reapplyCardIdentity`). O `recordCardActor` é o de verdade: é ele que decide
- * se o responsável pelo merge vira o ator do card antes do merge.
+ * identidade no runner (`reapplyCardIdentity`). O `recordCardActor` é o de verdade: é ele que diz se
+ * o revisor vira o ator do card dele no relay. O merge não mexe no ator: leva a conexão do merger.
  *
  * Cada teste sobe um servidor e faz scrypt de várias senhas: o orçamento é largo de propósito.
  */
@@ -95,12 +95,15 @@ interface World {
   outro: Person;
   projectId: string;
   cardId: string;
+  /** Conexões GitHub: a do projeto e a própria do merger. */
+  gh: { project: string; merger: string };
 }
 
 /**
  * O dono, um projeto com o card do autor (com o PR #7 gravado) e cinco membros:
  *  - autor: `work` no card; revisor e merger: `work` no projeto; leitor: `view` no card; outro: nada.
  *  - o revisor tem conta Claude própria (`mussa`); os outros não.
+ *  - o projeto tem a conexão GitHub da org; o merger tem a dele; ninguém mais tem conexão própria.
  */
 async function world(): Promise<World> {
   const ownerRes = await app.inject({
@@ -137,10 +140,15 @@ async function world(): Promise<World> {
   await share("projects", projectId, people.revisor!, "work");
   await share("projects", projectId, people.merger!, "work");
   await share("cards", cardId, people.leitor!, "view");
-  await (await registry()).recordCardPr(cardId, PR);
+  const reg = await registry();
+  await reg.recordCardPr(cardId, PR);
+  const org = await reg.addGithubConnection({ label: "org", login: "acme-bot" });
+  const mine = await reg.addGithubConnection({ label: "merger", login: "merger-gh" });
+  await reg.updateProject(projectId, { githubConnectionId: org.id });
+  await (await import("../auth/userGit.js")).setUserGit(people.merger!.id, { githubConnectionId: mine.id });
   return {
     owner, autor: people.autor!, revisor: people.revisor!, merger: people.merger!, leitor: people.leitor!, outro: people.outro!,
-    projectId, cardId,
+    projectId, cardId, gh: { project: org.id, merger: mine.id },
   };
 }
 
@@ -245,6 +253,42 @@ describe("iniciar a revisão", () => {
     expect(await (await store()).activeReviewFor(w.cardId)).toBeUndefined();
   });
 
+  it("autor ou merger só com view é recusado", async () => {
+    const w = await world();
+    for (const over of [{ authorUserId: w.leitor.id }, { mergerUserId: w.leitor.id }]) {
+      const res = await startReview(w, w.autor, over);
+      expect({ over, status: res.statusCode }).toEqual({ over, status: 400 });
+      expect(res.json().error).toMatch(/papel_sem_work/);
+    }
+    expect(send).not.toHaveBeenCalled();
+    expect(await (await store()).activeReviewFor(w.cardId)).toBeUndefined();
+  });
+
+  it("revisor com share só no card do autor ganha work no card do revisor e vira ator dele", async () => {
+    const w = await world();
+    // "outro" passa a alcançar só o card do autor (view), com conta Claude própria
+    const share = await app.inject({
+      method: "POST", url: `/api/cards/${w.cardId}/shares`, headers: { cookie: w.owner.cookie }, payload: { userId: w.outro.id, level: "view" },
+    });
+    expect(share.statusCode).toBe(200);
+    await app.inject({
+      method: "PATCH", url: `/api/users/${w.outro.id}`, headers: { cookie: w.owner.cookie }, payload: { claudeAccountSlug: "mussa" },
+    });
+    const res = await startReview(w, w.autor, { reviewerUserId: w.outro.id });
+    expect(res.statusCode).toBe(200);
+    const reviewerCardId = res.json().review.reviewerCardId as string;
+    const reg = await registry();
+    expect(await reg.sharesForTarget("card", reviewerCardId)).toEqual([
+      expect.objectContaining({ userId: w.outro.id, level: "work" }),
+    ]);
+    // a rodada 1 saiu com o revisor como ator do card dele (o gh pr review vai na conta dele)
+    expect(send).toHaveBeenCalledTimes(1);
+    expect((await reg.getCard(reviewerCardId))?.actorUserId).toBe(w.outro.id);
+    // e ele enxerga o card do revisor (abrir a sessão dele pelo painel)
+    expect((await app.inject({ method: "GET", url: `/api/cards/${reviewerCardId}`, headers: { cookie: w.outro.cookie } })).statusCode)
+      .toBe(200);
+  });
+
   it("papel faltando, PR inválido ou pessoa sem acesso ao card é 400", async () => {
     const w = await world();
     for (const over of [
@@ -305,8 +349,9 @@ describe("merge", () => {
     // só-merge, preso ao sha revisado, na base do PR, com o merger como ator do card do autor
     expect(deliver).toHaveBeenCalledTimes(1);
     expect(deliver.mock.calls[0]![0]).toBe(w.cardId);
-    expect(deliver.mock.calls[0]![1]).toMatchObject({ authorized: true, mergeOnly: true, expectedHeadSha: SHA1, branch: "dev" });
-    expect(actorAtDeliver).toBe(w.merger.id);
+    expect(deliver.mock.calls[0]![1]).toMatchObject({
+      authorized: true, mergeOnly: true, expectedHeadSha: SHA1, branch: "dev", connectionId: w.gh.merger,
+    });
     expect((await (await store()).getReview(review.id))?.phase).toBe("merged");
     // mergeada não é ativa, e não mergeia de novo
     expect((await merge(review.id, w.merger)).statusCode).toBe(409);
@@ -369,15 +414,61 @@ describe("merge", () => {
     expect((await (await store()).getReview(review.id))?.phase).toBe("ready");
   });
 
-  it("responsável pelo merge sem work no card é recusado antes do deliver (o token não seria o dele)", async () => {
+  it("responsável pelo merge que perdeu o work no card é recusado antes do deliver", async () => {
     const w = await world();
-    const started = await startReview(w, w.autor, { mergerUserId: w.leitor.id });
+    const review = await readyReview(w);
+    // o share do projeto cai para view depois que a revisão começou
+    await app.inject({
+      method: "POST", url: `/api/projects/${w.projectId}/shares`, headers: { cookie: w.owner.cookie },
+      payload: { userId: w.merger.id, level: "view" },
+    });
+    const res = await merge(review.id, w.merger);
+    expect(res.statusCode).toBe(403);
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("merger sem conexão própria é recusado e o deliver nunca é chamado", async () => {
+    const w = await world();
+    const review = await readyReview(w);
+    const userGit = await import("../auth/userGit.js");
+    await userGit.setUserGit(w.merger.id, { githubConnectionId: null });
+    const res = await merge(review.id, w.merger);
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/merger_sem_github/);
+    // uma conexão que o owner removeu também não vale: não cai para a do projeto
+    const gone = await (await registry()).addGithubConnection({ label: "velha", login: "merger-velho" });
+    await userGit.setUserGit(w.merger.id, { githubConnectionId: gone.id });
+    await (await registry()).removeGithubConnection(gone.id);
+    expect((await merge(review.id, w.merger)).json().error).toMatch(/merger_sem_github/);
+    expect(deliver).not.toHaveBeenCalled();
+    expect((await (await store()).getReview(review.id))?.phase).toBe("ready");
+  });
+
+  it("owner sem conexão própria usa a do projeto", async () => {
+    const w = await world();
+    const started = await startReview(w, w.autor, { mergerUserId: w.owner.id });
     expect(started.statusCode).toBe(200);
     const review = started.json().review as { id: string; reviewerCardId: string };
     await (await orchestrator()).submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "ok" });
-    const res = await merge(review.id, w.leitor);
-    expect(res.statusCode).toBe(403);
-    expect(deliver).not.toHaveBeenCalled();
+    const res = await merge(review.id, w.owner);
+    expect(res.statusCode).toBe(200);
+    expect(deliver.mock.calls[0]![1]).toMatchObject({ mergeOnly: true, connectionId: w.gh.project });
+  });
+
+  it("merge sai com a conexão do merger, não a do ator do card", async () => {
+    const w = await world();
+    const reg = await registry();
+    const autorGh = await reg.addGithubConnection({ label: "autor", login: "autor-gh" });
+    await (await import("../auth/userGit.js")).setUserGit(w.autor.id, { githubConnectionId: autorGh.id });
+    const review = await readyReview(w);
+    await reg.stampCardActor(w.cardId, w.autor.id);
+
+    const res = await merge(review.id, w.merger);
+    expect(res.statusCode).toBe(200);
+    expect(deliver.mock.calls[0]![1]).toMatchObject({ connectionId: w.gh.merger });
+    // o ator do card do autor não muda: nem durante o deliver, nem depois
+    expect(actorAtDeliver).toBe(w.autor.id);
+    expect((await reg.getCard(w.cardId))?.actorUserId).toBe(w.autor.id);
   });
 });
 
