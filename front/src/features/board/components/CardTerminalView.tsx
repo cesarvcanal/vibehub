@@ -36,6 +36,7 @@ import { VncPanel } from "@/features/board/components/VncPanel";
 import { PreviewChip, PreviewMenu } from "@/features/board/components/PreviewMenu";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
 import { CardOutbox } from "@/features/board/components/CardOutbox";
+import { PrReviewBlocks } from "@/features/board/components/PrReviewBlock";
 import { cardState, nextPosition } from "@/features/board/lib/board";
 import { CardStateIcon } from "@/features/board/components/CardStateIcon";
 import { boardTitle, useDocumentTitle } from "@/features/board/lib/documentTitle";
@@ -428,6 +429,12 @@ export function CardTerminalView({
   const [editingTitle, setEditingTitle] = React.useState<string | null>(null);
   const [shellOpen, setShellOpen] = React.useState(false);
   const [browserOpen, setBrowserOpen] = React.useState(false);
+  /**
+   * The PR review's panel, asked for by clicking the block of a PR that is under review. The panel
+   * itself is the next piece: until it lands, this only records the ask (`data-review-open` on the
+   * work area), so the block already does what it will do.
+   */
+  const [reviewOpen, setReviewOpen] = React.useState(false);
   const [connection, setConnection] = React.useState<ConnectionState>("connecting");
 
   /**
@@ -1146,9 +1153,14 @@ export function CardTerminalView({
         // a terminal wastes the width; on a narrow screen the two stack instead.
         <div
           data-testid="card-workarea"
+          data-review-open={reviewOpen ? "" : undefined}
           className={cn("flex min-h-0 flex-1 flex-col", browserOpen && "lg:flex-row lg:gap-2")}
         >
+          {/* PANEL OF THE PR REVIEW: rendered here, beside the terminal/chat column, when `reviewOpen`. */}
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            {/* The PRs the card delivered. Where the composer is this file's own (terminal mode), they sit
+                right above it; in chat the composer belongs to the chat view, so they pin above it. */}
+            {mode === "chat" && card ? <PrReviewBlocks card={card} onOpenPanel={() => setReviewOpen(true)} /> : null}
             {mode === "chat" && features.data === undefined ? (
               /* The install flag is not here yet (cold cache). WHICH chat this install uses is that
                  flag, so guessing would mount the WRONG view: the legacy chat flashed in, took the
@@ -1210,6 +1222,7 @@ export function CardTerminalView({
                   autoFocus={false}
                   ariaLabel={t("cardView.terminalFor", { title: card?.title ?? t("cardView.cardFallback") })}
                 />
+                {card ? <PrReviewBlocks card={card} onOpenPanel={() => setReviewOpen(true)} /> : null}
                 {/* Anything composed that has not reached the agent yet — usually nothing at all. */}
                 <CardOutbox cardId={cardId} />
                 {/* Compose here, send when ready — the field accumulates until Enter. */}

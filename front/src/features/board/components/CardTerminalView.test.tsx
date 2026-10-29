@@ -1450,3 +1450,47 @@ describe("CardTerminalView — the card's browser", () => {
     expect(screen.queryByTestId("vnc")).not.toBeInTheDocument();
   });
 });
+
+describe("CardTerminalView — the PR blocks above the composer", () => {
+  const PR = { number: 553, url: "https://github.com/acme/billing/pull/553", base: "dev", branch: "card/fix-the-totals", openedAt: 5 };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    serve();
+    mockPost.mockResolvedValue({ card: card({ openedAt: 10 }) });
+  });
+  afterEach(() => localStorage.clear());
+
+  it("terminal: the block sits right above the composer, with the way to ask for a review", async () => {
+    renderWithCache([card({ openedAt: 10, prs: [PR] })]);
+
+    const block = await screen.findByTestId("pr-review-block");
+    expect(within(block).getByText("PR #553")).toBeInTheDocument();
+    expect(within(block).getByRole("button", { name: "Request review" })).toBeInTheDocument();
+    const composer = screen.getByTestId("terminal-composer");
+    expect(block.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("chat: the block shows there too", async () => {
+    renderWithCache([card({ openedAt: 10, prs: [PR] })], testQueryClient(), "chat");
+    expect(await screen.findByTestId("pr-review-block")).toBeInTheDocument();
+  });
+
+  it("a card that never opened a PR has no block", async () => {
+    renderWithCache([card({ openedAt: 10 })]);
+    await screen.findByTestId("xterm");
+    expect(screen.queryByTestId("pr-review-block")).toBeNull();
+  });
+
+  it("clicking the block of a PR under review asks for its panel", async () => {
+    renderWithCache([
+      card({ openedAt: 10, prs: [PR], review: { id: "r1", prNumber: 553, phase: "fixing", round: 2 } }),
+    ]);
+    const work = await screen.findByTestId("card-workarea");
+    expect(work).not.toHaveAttribute("data-review-open");
+
+    await userEvent.click(within(await screen.findByTestId("pr-review-block")).getByRole("button", { name: /PR #553/ }));
+
+    expect(work).toHaveAttribute("data-review-open");
+  });
+});
