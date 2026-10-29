@@ -648,6 +648,54 @@ describe("board registry (persisted)", () => {
       expect(prs?.find((x) => x.base === "prod")).toMatchObject({ number: 8, openedAt: 2_000 });
     });
 
+    it("markCardPrMerged: marca o PR da base; um PR novo na mesma base zera a marca", async () => {
+      const { author } = await seedAuthor();
+      await reg.recordCardPr(author.id, AUTHOR_PR);
+      await reg.recordCardPr(author.id, { ...AUTHOR_PR, number: 8, base: "prod", url: "https://github.com/acme/widgets/pull/8" });
+
+      await reg.markCardPrMerged(author.id, "dev", AUTHOR_PR.number, 5_000);
+      const prs = (await reg.getCard(author.id))?.prs;
+      expect(prs?.find((x) => x.base === "dev")?.mergedAt).toBe(5_000);
+      // só o PR da base mergeada: o outro segue aberto
+      expect(prs?.find((x) => x.base === "prod")?.mergedAt).toBeUndefined();
+
+      // o mesmo PR re-gravado (nova entrega no mesmo número) não perde a marca
+      await reg.recordCardPr(author.id, AUTHOR_PR);
+      expect((await reg.getCard(author.id))?.prs?.find((x) => x.base === "dev")?.mergedAt).toBe(5_000);
+
+      // outro PR na mesma base (o anterior foi mergeado, este é novo): a marca era do PR velho
+      await reg.recordCardPr(author.id, { number: 9, url: "https://github.com/acme/widgets/pull/9", base: "dev", branch: "card/login-v2" });
+      expect((await reg.getCard(author.id))?.prs?.find((x) => x.base === "dev")).toMatchObject({ number: 9 });
+      expect((await reg.getCard(author.id))?.prs?.find((x) => x.base === "dev")?.mergedAt).toBeUndefined();
+    });
+
+    it("markCardPrMerged: número que não é o da base, base sem PR e card que sumiu são no-op", async () => {
+      const { author } = await seedAuthor();
+      // card sem nenhum PR: não inventa um
+      await reg.markCardPrMerged(author.id, "dev", AUTHOR_PR.number, 5_000);
+      expect((await reg.getCard(author.id))?.prs).toBeUndefined();
+
+      await reg.recordCardPr(author.id, AUTHOR_PR);
+      await reg.markCardPrMerged(author.id, "dev", 999, 5_000);
+      await reg.markCardPrMerged(author.id, "prod", AUTHOR_PR.number, 5_000);
+      expect((await reg.getCard(author.id))?.prs?.[0]?.mergedAt).toBeUndefined();
+
+      await expect(reg.markCardPrMerged("nao-existe", "dev", 1, 5_000)).resolves.toBeUndefined();
+    });
+
+    it("mergedAt que não é número (board.json editado à mão) é descartado na leitura, o PR fica", async () => {
+      const { author } = await seedAuthor();
+      await reg.recordCardPr(author.id, AUTHOR_PR);
+      const raw = JSON.parse(await readFile(join(dir, "board.json"), "utf8")) as { cards: { id: string; prs?: Record<string, unknown>[] }[] };
+      raw.cards.find((c) => c.id === author.id)!.prs![0]!.mergedAt = "ontem";
+      await writeFile(join(dir, "board.json"), JSON.stringify(raw));
+
+      const reread = await freshRegistry();
+      const pr = (await reread.getCard(author.id))?.prs?.[0];
+      expect(pr).toMatchObject({ number: AUTHOR_PR.number });
+      expect(pr?.mergedAt).toBeUndefined();
+    });
+
     it("recordCardPr: card que sumiu no meio da entrega é no-op, não erro", async () => {
       await seedAuthor();
       await expect(reg.recordCardPr("nao-existe", AUTHOR_PR)).resolves.toBeUndefined();

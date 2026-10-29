@@ -32,7 +32,7 @@ type Decision = "block" | "drop" | "keep" | "accept_risk";
 const DECISIONS: ReadonlySet<string> = new Set<Decision>(["block", "drop", "keep", "accept_risk"]);
 
 /** Os códigos que `startReview` põe na mensagem: recusa do pedido, não falha do servidor. */
-const START_REFUSALS = /^(revisor_igual_autor|sem_pr|revisao_ativa|revisor_sem_conta)\b/;
+const START_REFUSALS = /^(revisor_igual_autor|sem_pr|pr_mergeado|revisao_ativa|revisor_sem_conta)\b/;
 
 interface StartBody {
   prNumber?: unknown;

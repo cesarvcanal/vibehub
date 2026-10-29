@@ -268,7 +268,7 @@ function serialStart<T>(work: () => Promise<T>): Promise<T> {
 /**
  * Abre a revisão do PR `prNumber` do card: cria o card do revisor (conta Claude do revisor, branch
  * do PR, escondido do board) e manda a rodada 1. Recusas com o código na mensagem, que a rota
- * traduz em 400: `revisor_igual_autor`, `sem_pr`, `revisao_ativa`, `revisor_sem_conta`.
+ * traduz em 400: `revisor_igual_autor`, `sem_pr`, `pr_mergeado`, `revisao_ativa`, `revisor_sem_conta`.
  */
 export async function startReview(input: {
   cardId: string;
@@ -287,6 +287,8 @@ export async function startReview(input: {
     if (!card) throw new Error("card not found");
     const pr = card.prs?.find((p) => p.number === input.prNumber);
     if (!pr) throw new Error(`sem_pr: o card não tem o PR #${input.prNumber}`);
+    // Um PR já mergeado não tem o que revisar: revisar seria gastar duas IAs num diff que já está na base.
+    if (pr.mergedAt !== undefined) throw new Error(`pr_mergeado: o PR #${pr.number} já foi mergeado`);
     if (await activeReviewFor(card.id, pr.number)) {
       throw new Error(`revisao_ativa: já existe uma revisão em andamento do PR #${pr.number} neste card`);
     }

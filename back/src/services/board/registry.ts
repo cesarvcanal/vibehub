@@ -282,6 +282,12 @@ export interface CardPr {
   branch: string;
   /** When this base first got a PR from the card (epoch ms); a repeated delivery keeps it. */
   openedAt: number;
+  /**
+   * When the PR was MERGED (epoch ms), set by `deliver` through {@link markCardPrMerged} on either
+   * merge path. Absent = not known to be merged (open, or closed without a merge — which is not
+   * tracked). It belongs to THIS PR: a new number in the same base slot starts without it.
+   */
+  mergedAt?: number;
 }
 
 export interface Card {
@@ -742,6 +748,8 @@ function readReviewFields(cards: Card[]): Card[] {
   for (const card of cards) {
     if (card.prs !== undefined) {
       const valid = Array.isArray(card.prs) ? card.prs.filter(isCardPr) : [];
+      // A merge mark that is not a time (a hand edit) is dropped; the PR itself stays.
+      for (const pr of valid) if (pr.mergedAt !== undefined && typeof pr.mergedAt !== "number") delete pr.mergedAt;
       card.prs = valid.length > 0 ? valid : undefined;
     }
     if (card.reviewOf !== undefined && (typeof card.reviewOf !== "string" || !card.reviewOf)) card.reviewOf = undefined;
@@ -1636,6 +1644,8 @@ export async function recordCardPr(cardId: string, pr: Omit<CardPr, "openedAt">)
     const prs = card.prs ?? [];
     const known = prs.find((p) => p.base === base);
     if (known) {
+      // A new number in the slot is a new PR: the merge mark was the old one's.
+      if (known.number !== pr.number) delete known.mergedAt;
       known.number = pr.number;
       known.url = url;
       known.branch = branch;
@@ -1643,6 +1653,19 @@ export async function recordCardPr(cardId: string, pr: Omit<CardPr, "openedAt">)
       prs.push({ number: pr.number, url, base, branch, openedAt: Date.now() });
     }
     card.prs = prs;
+  });
+}
+
+/**
+ * Marks the card's PR of `base` as merged at `at`. Only the PR the slot holds (`number`): a slot that
+ * moved on to another PR, a base without one, a card with no PRs at all or a card deleted meanwhile
+ * is a no-op — never an invented PR, never the wrong one marked. Best-effort by contract: `deliver`
+ * calls it after the merge, which already happened.
+ */
+export async function markCardPrMerged(cardId: string, base: string, number: number, at: number): Promise<void> {
+  await store.mutate((doc) => {
+    const pr = doc.cards.find((c) => c.id === cardId)?.prs?.find((p) => p.base === base && p.number === number);
+    if (pr) pr.mergedAt = at;
   });
 }
 

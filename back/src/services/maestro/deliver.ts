@@ -1,7 +1,7 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import {
-  getCard, getProject, assertBranchName, listGithubConnections, recordCardPr, type Card, type Project,
+  getCard, getProject, assertBranchName, listGithubConnections, recordCardPr, markCardPrMerged, type Card, type Project,
 } from "../board/registry.js";
 import { cardWorkPaths, cardBranch } from "../board/workspace.js";
 import { tokenFor } from "../github/client.js";
@@ -364,6 +364,21 @@ async function rememberPr(card: Card, prUrl: string, base: string, branch: strin
 }
 
 /**
+ * Marks the card's PR as merged, so the chat stops offering a review of it and the review refuses
+ * to start one. Best-effort like {@link rememberPr}: the merge is DONE, and a note about it that
+ * could not be written must not turn it into a failure.
+ */
+async function rememberMerged(card: Card, prUrl: string, base: string): Promise<void> {
+  const number = prNumberFromUrl(prUrl);
+  if (number === null) return;
+  try {
+    await markCardPrMerged(card.id, base, number, Date.now());
+  } catch (err) {
+    logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not mark the PR as merged on the card");
+  }
+}
+
+/**
  * Delivers a card: push → PR → gate → (authorized) merge. The gate always runs before the merge, so
  * an unauthorized call still comes back with the truth ("green, ready — say the word"). Merging
  * happens only when `authorized === true` and the gate is green. In merge-only mode the push and the
@@ -532,6 +547,7 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged, target, mergeOnly, by: opts.by },
     merged ? "deliver merged the PR" : "deliver could not merge the PR",
   );
+  if (merged) await rememberMerged(card, prUrl, target);
   return {
     prUrl,
     merged,

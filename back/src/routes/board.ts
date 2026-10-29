@@ -33,23 +33,30 @@ function badRequest(err: unknown): { code: number; body: { error: string } } {
 type BoardCard = registry.Card & { review?: Pick<Review, "id" | "prNumber" | "phase" | "round"> };
 
 /**
- * A card listing as the board shows it. REVIEWER cards (`reviewOf`) are left out — a review shows up
- * as a line under the author's card, not as a card of its own — and each author card carries the
- * summary of its most recent review that was not cancelled (a merged one stays: the line reads
- * "mergeado"). ONE read of the review store for the whole list, never one per card.
+ * Each card with the summary of its most recent review that was not cancelled (a merged one stays:
+ * the line reads "mergeado"). ONE read of the review store for the whole batch, never one per card —
+ * and the same rule for a listing and for a single card (`GET /api/cards/:id`), so a deep link does
+ * not show "sem revisão" for a PR the list already shows under review.
  */
-async function boardCards(cards: registry.Card[]): Promise<BoardCard[]> {
-  const shown = cards.filter((c) => !c.reviewOf);
+async function withReviewSummary(cards: registry.Card[]): Promise<BoardCard[]> {
   const latest = new Map<string, Review>();
-  for (const r of await listReviewsForCards(shown.map((c) => c.id))) {
+  for (const r of await listReviewsForCards(cards.map((c) => c.id))) {
     if (r.phase === "cancelled") continue;
     const seen = latest.get(r.cardId);
     if (!seen || r.createdAt >= seen.createdAt) latest.set(r.cardId, r);
   }
-  return shown.map((c) => {
+  return cards.map((c) => {
     const r = latest.get(c.id);
     return r ? { ...c, review: { id: r.id, prNumber: r.prNumber, phase: r.phase, round: r.round } } : c;
   });
+}
+
+/**
+ * A card listing as the board shows it. REVIEWER cards (`reviewOf`) are left out — a review shows up
+ * as a line under the author's card, not as a card of its own.
+ */
+async function boardCards(cards: registry.Card[]): Promise<BoardCard[]> {
+  return await withReviewSummary(cards.filter((c) => !c.reviewOf));
 }
 
 /**
@@ -202,7 +209,8 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>("/api/cards/:id", { preHandler: requireCardAccess }, async (req, reply) => {
     const card = await registry.getCard(req.params.id);
     if (!card) return await reply.code(404).send({ error: "card not found" });
-    return await reply.send({ card });
+    // Not through `boardCards`: a reviewer card is still reachable by its id (the panel opens its session).
+    return await reply.send({ card: (await withReviewSummary([card]))[0] });
   });
 
   /**

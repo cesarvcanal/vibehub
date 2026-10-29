@@ -408,6 +408,40 @@ describe("deliver grava o PR no card (revisão de PR)", () => {
     expect((await registry.getCard(card.id))?.prs).toBeUndefined();
   });
 
+  it("merge grava mergedAt no PR do card", async () => {
+    const { deliver, registry, card } = await makeCard();
+    wire({ push: pushOut(7) });
+    const before = Date.now();
+    expect(await deliver.deliver(card.id, { branch: "dev", authorized: true })).toMatchObject({ merged: true, reason: "merged" });
+
+    const dev = (await registry.getCard(card.id))?.prs?.find((p) => p.base === "dev");
+    expect(dev).toMatchObject({ number: 7 });
+    expect(dev?.mergedAt).toBeGreaterThanOrEqual(before);
+
+    // o próximo PR da mesma base é outro PR: nasce sem a marca do anterior
+    wire({ push: pushOut(8) });
+    await deliver.deliver(card.id, { branch: "dev" });
+    expect((await registry.getCard(card.id))?.prs?.find((p) => p.base === "dev")).toMatchObject({ number: 8 });
+    expect((await registry.getCard(card.id))?.prs?.find((p) => p.base === "dev")?.mergedAt).toBeUndefined();
+  });
+
+  it("só marca o PR que foi mergeado: sem autorização, gate vermelho e merge que falha não gravam mergedAt", async () => {
+    const { deliver, registry, card } = await makeCard();
+    const merged = async () => (await registry.getCard(card.id))?.prs?.[0]?.mergedAt;
+
+    wire({ push: pushOut(7) });
+    await deliver.deliver(card.id, { branch: "dev" });
+    expect(await merged()).toBeUndefined();
+
+    wire({ push: pushOut(7), run: "1 failing test\n__VIBEHUB_GATE__ fail\n" });
+    await deliver.deliver(card.id, { branch: "dev", authorized: true });
+    expect(await merged()).toBeUndefined();
+
+    wire({ push: pushOut(7), merge: "boom\n__VIBEHUB_DELIVER__ error merge\n" });
+    expect(await deliver.deliver(card.id, { branch: "dev", authorized: true })).toMatchObject({ merged: false, reason: "merge_failed" });
+    expect(await merged()).toBeUndefined();
+  });
+
   it("o card do revisor NUNCA empurra: devolve locked antes de qualquer script", async () => {
     const { deliver, registry, project, card } = await makeCard();
     await registry.createAccount({ name: "Mussa" });
@@ -482,6 +516,25 @@ describe("deliver no modo só-merge (botão de merge da revisão de PR)", () => 
     for (const s of scripts()) {
       for (const line of s.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
     }
+  });
+
+  it("mergeOnly: o merge grava mergedAt no PR do card (o PR #7 gravado pela entrega); head movido não grava", async () => {
+    const { deliver, registry, card } = await makeCard();
+    // a entrega que abriu o PR gravou o slot da base
+    wire({ push: `pushed\n__VIBEHUB_DELIVER__ pr ${PR}` });
+    await deliver.deliver(card.id, { branch: "dev" });
+    const mergedAt = async () => (await registry.getCard(card.id))?.prs?.[0]?.mergedAt;
+    expect(await mergedAt()).toBeUndefined();
+
+    wireMergeOnly(MOVED);
+    await deliver.deliver(card.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED });
+    expect(await mergedAt()).toBeUndefined();
+
+    wireMergeOnly(REVIEWED);
+    const before = Date.now();
+    expect(await deliver.deliver(card.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED }))
+      .toMatchObject({ merged: true });
+    expect(await mergedAt()).toBeGreaterThanOrEqual(before);
   });
 
   it("mergeOnly: gate vermelho continua barrando", async () => {

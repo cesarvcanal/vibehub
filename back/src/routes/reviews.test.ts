@@ -228,6 +228,15 @@ describe("iniciar a revisão", () => {
     expect(res.json().error).toMatch(/sem_pr/);
   });
 
+  it("PR mergeado não pode ser revisado", async () => {
+    const w = await world();
+    await (await registry()).markCardPrMerged(w.cardId, "dev", 7, Date.now());
+    const res = await startReview(w);
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/^pr_mergeado/);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("segunda revisão ativa no mesmo PR é recusada", async () => {
     const w = await world();
     expect((await startReview(w)).statusCode).toBe(200);

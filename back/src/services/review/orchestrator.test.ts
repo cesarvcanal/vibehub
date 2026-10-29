@@ -217,6 +217,23 @@ describe("iniciar a revisão", () => {
     expect(await o.registry.sharesForTarget("card", byOwner.reviewerCardId)).toEqual([]);
   });
 
+  it("PR mergeado não pode ser revisado", async () => {
+    const o = await load();
+    const { author } = await seed(o);
+    const base = { cardId: author.id, prNumber: 7, reviewerUserId: "u-revisor", authorUserId: "u-autor", mergerUserId: "u-merger", by: "u-autor" };
+    await o.registry.markCardPrMerged(author.id, PR.base, 7, Date.now());
+
+    await expect(o.orch.startReview(base)).rejects.toThrow(/pr_mergeado/);
+    // recusado antes de criar o card do revisor, de escrever a revisão e de falar com qualquer IA
+    expect((await o.registry.listAllCards()).filter((c) => c.reviewOf)).toEqual([]);
+    expect(await o.store.activeReviewFor(author.id)).toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
+
+    // um PR novo no mesmo slot da base é outro PR: a marca de mergeado era do velho
+    await o.registry.recordCardPr(author.id, { ...PR, number: 8, url: "https://github.com/acme/widgets/pull/8" });
+    await expect(o.orch.startReview({ ...base, prNumber: 8 })).resolves.toMatchObject({ prNumber: 8 });
+  });
+
   it("iniciar recusa revisor igual ao autor, card sem o PR, revisão já ativa e revisor sem conta", async () => {
     const o = await load();
     const { author } = await seed(o);

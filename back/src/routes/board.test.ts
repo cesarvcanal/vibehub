@@ -334,6 +334,29 @@ describe("revisão de PR no board", () => {
     expect(cards.find((c) => c.id === only)!.review).toBeUndefined();
   });
 
+  it("GET /api/cards/:id traz o mesmo resumo da revisão que a lista (o deep link não pisca 'sem revisão')", async () => {
+    const projectId = await makeProject();
+    const authorId = await makeCard(projectId, "login");
+    await review(authorId, projectId, { id: "r-old", phase: "merged", createdAt: 1_000, prNumber: 6 });
+    await review(authorId, projectId, { id: "r-new", phase: "fixing", createdAt: 2_000, round: 2 });
+    await review(authorId, projectId, { id: "r-cancel", phase: "cancelled", createdAt: 3_000 });
+
+    listReviewsForCards.mockClear();
+    const one = (await app.inject({ method: "GET", url: `/api/cards/${authorId}`, headers: { cookie } })).json().card;
+    // a mesma regra da lista: a mais recente que não foi cancelada, só o resumo
+    expect(one.review).toEqual({ id: "r-new", prNumber: 7, phase: "fixing", round: 2 });
+    expect(one.id).toBe(authorId);
+    const listed = (await app.inject({ method: "GET", url: "/api/cards", headers: { cookie } })).json().cards
+      .find((c: { id: string }) => c.id === authorId);
+    expect(one.review).toEqual(listed.review);
+
+    // sem revisão (ou só cancelada): o campo não existe
+    const bare = await makeCard(projectId, "sem revisão");
+    expect((await app.inject({ method: "GET", url: `/api/cards/${bare}`, headers: { cookie } })).json().card.review).toBeUndefined();
+    await review(bare, projectId, { id: "r-only", phase: "cancelled", createdAt: 4_000 });
+    expect((await app.inject({ method: "GET", url: `/api/cards/${bare}`, headers: { cookie } })).json().card.review).toBeUndefined();
+  });
+
   it("reviewOf e prs no corpo do POST e do PATCH são ignorados", async () => {
     const projectId = await makeProject();
     const authorId = await makeCard(projectId, "login");
