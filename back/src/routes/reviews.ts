@@ -42,20 +42,21 @@ interface StartBody {
 
 interface Person { id: string; username: string; canReview: boolean }
 
-/**
- * Quem alcança o card: os owners (veem tudo) e quem tem share no card ou no projeto dele. `canReview`
- * = tem conta Claude própria resolvível — a sessão do revisor roda nela.
- */
-async function cardPeople(card: registry.Card): Promise<Person[]> {
+/** Quem alcança o card: os owners (veem tudo) e quem tem share no card ou no projeto dele. */
+async function reachingCard(card: registry.Card): Promise<PublicUser[]> {
   const [users, onCard, onProject] = await Promise.all([
     listUsers(),
     registry.sharesForTarget("card", card.id),
     registry.sharesForTarget("project", card.projectId),
   ]);
   const shared = new Set([...onCard, ...onProject].map((s) => s.userId));
-  const reach = users.filter((u) => u.role === "owner" || shared.has(u.id));
+  return users.filter((u) => u.role === "owner" || shared.has(u.id));
+}
+
+/** As pessoas do card para a janela de papéis. `canReview` = tem conta Claude própria (a sessão do revisor roda nela). */
+async function cardPeople(card: registry.Card): Promise<Person[]> {
   return await Promise.all(
-    reach.map(async (u) => ({ id: u.id, username: u.username, canReview: !!(await creatorAccountSlug(u.id)) })),
+    (await reachingCard(card)).map(async (u) => ({ id: u.id, username: u.username, canReview: !!(await creatorAccountSlug(u.id)) })),
   );
 }
 
@@ -112,7 +113,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
       if (card.reviewOf) return await reply.code(400).send({ error: "o card de um revisor não é revisado" });
       // Cada papel é alguém que alcança o card: o autor e o merger viram ator dele (commit/push, merge),
       // e quem não está na lista de pessoas não teria por onde acompanhar.
-      const reachable = new Set((await cardPeople(card)).map((p) => p.id));
+      const reachable = new Set((await reachingCard(card)).map((u) => u.id));
       const outside = Object.entries({ ...roles, ...(coauthorUserId ? { coauthorUserId } : {}) })
         .filter(([, id]) => !reachable.has(id))
         .map(([k]) => k);

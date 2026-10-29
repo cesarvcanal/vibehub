@@ -168,7 +168,7 @@ export function buildResolvePrScript(
     `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
     `if ! J=$(gh pr list --head ${shQuote(branch)} --base ${shQuote(target)} --state open --json url,headRefOid ` +
       `--jq '.[0] // empty | .url + " " + .headRefOid' 2>&1); then`,
-    `  printf '%s\n' "$J"; echo "${MARKER} error view"; exit 0;`,
+    `  printf '%s\\n' "$J"; echo "${MARKER} error view"; exit 0;`,
     `fi`,
     `if [ -z "$J" ]; then echo "${MARKER} error nopr"; exit 0; fi`,
     `echo "${MARKER} head $J"`,
