@@ -174,6 +174,14 @@ function renderSdkChat(props: Partial<React.ComponentProps<typeof SdkChatView>> 
 }
 
 describe("SdkChatView", () => {
+  it("o slot footer fica logo acima do composer (é onde o card põe o que é do card, não da conversa)", async () => {
+    renderSdkChat({ footer: <div data-testid="sdk-footer-slot">PR #553</div> });
+    await socket();
+
+    const footer = screen.getByTestId("sdk-footer-slot");
+    expect(footer.nextElementSibling).toBe(screen.getByTestId("terminal-composer"));
+  });
+
   it("opens the SDK socket for the card and reports its state", async () => {
     const onStatus = vi.fn();
     renderSdkChat({ onStatus });

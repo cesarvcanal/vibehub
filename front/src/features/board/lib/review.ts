@@ -44,13 +44,16 @@ export function reviewPill(review: ReviewSummary | undefined): ReviewPill {
 }
 
 /**
- * The PRs of a card the chat has a block for, newest first. A merged PR is done and leaves; the
- * front only learns a PR was merged from the card's review summary (the most recent one), so that is
- * the one it can hide. PURE — never reorders the card's own list.
+ * The PRs of a card the chat has a block for, newest first. A PR the server saw MERGED (`mergedAt`)
+ * is done and leaves — except the one the card's current review summary is about, once that review
+ * is merged: it stays as the "mergeado" line until a newer review takes the summary. A PR closed
+ * without a merge is not tracked and stays. PURE — never reorders the card's own list.
  */
 export function visiblePrs(card: Pick<Card, "prs" | "review">): CardPr[] {
-  const merged = card.review?.phase === "merged" ? card.review.prNumber : null;
-  return (card.prs ?? []).filter((pr) => pr.number !== merged).sort((a, b) => b.openedAt - a.openedAt);
+  const mergedReview = card.review?.phase === "merged" ? card.review.prNumber : null;
+  return (card.prs ?? [])
+    .filter((pr) => pr.mergedAt === undefined || pr.number === mergedReview)
+    .sort((a, b) => b.openedAt - a.openedAt);
 }
 
 /** Roles as the dialog names them, keyed by the field the server puts in its message. */
@@ -64,7 +67,7 @@ const ROLE_FIELDS: Record<string, ReviewRole> = {
 
 /** The codes `POST /api/cards/:id/review` answers with — each has its own sentence in i18n. */
 const START_CODES: ReadonlySet<string> = new Set([
-  "revisor_igual_autor", "sem_pr", "revisao_ativa", "revisor_sem_conta", "papel_sem_work", "pessoa_sem_acesso",
+  "revisor_igual_autor", "sem_pr", "pr_mergeado", "revisao_ativa", "revisor_sem_conta", "papel_sem_work", "pessoa_sem_acesso",
 ]);
 
 interface ApiFailure {

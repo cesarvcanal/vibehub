@@ -164,11 +164,25 @@ describe("PrReviewBlocks", () => {
   it("a merged PR leaves the chat — what is left is what still needs a decision", () => {
     renderApp(
       <PrReviewBlocks
-        card={{ id: "c1", prs, review: reviewOf({ prNumber: 10, phase: "merged" }) }}
+        card={{ id: "c1", prs: [{ ...prs[0], mergedAt: 400 }, prs[1]], review: reviewOf({ prNumber: 12 }) }}
         onOpenPanel={() => {}}
       />,
     );
     expect(screen.getAllByTestId("pr-review-block").map((b) => b.getAttribute("data-pr"))).toEqual(["12"]);
+  });
+
+  it("the PR of the current merged review stays, reading 'mergeado', with no way to ask again", () => {
+    renderApp(
+      <PrReviewBlocks
+        card={{ id: "c1", prs: [{ ...prs[0], mergedAt: 400 }, prs[1]], review: reviewOf({ prNumber: 10, phase: "merged" }) }}
+        onOpenPanel={() => {}}
+      />,
+    );
+    const [newer, older] = screen.getAllByTestId("pr-review-block");
+    expect(newer.getAttribute("data-pr")).toBe("12");
+    expect(older.getAttribute("data-pr")).toBe("10");
+    expect(within(older).getByText("mergeado")).toBeInTheDocument();
+    expect(within(older).queryByRole("button", { name: "Pedir revisão" })).toBeNull();
   });
 
   it("hands the card's actor to the dialog as the suggested author", async () => {

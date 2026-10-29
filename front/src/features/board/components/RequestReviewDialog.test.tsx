@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import { cleanup, configure, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, configure, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { apiReject, renderApp, setupState } from "@/test/render";
@@ -134,7 +135,7 @@ describe("RequestReviewDialog", () => {
     open({ actorUserId: "u2" });
     await loaded();
 
-    expect(screen.getAllByRole("option", { name: /kim/ })[0]).toBeDisabled();
+    expect(within(select(/^Revisor/)).getByRole("option", { name: /kim/ })).toBeDisabled();
     // ...but can still fix, co-author or merge: the account is only the reviewer's session.
     const authorOptions = Array.from(select(/^Quem corrige/).options);
     expect(authorOptions.find((o) => o.value === "u3")).not.toBeDisabled();
@@ -237,6 +238,7 @@ describe("RequestReviewDialog", () => {
     ["revisor_sem_conta: o revisor não tem uma conta Claude própria no vibehub", /não tem uma conta Claude própria/],
     ["revisao_ativa: já existe uma revisão em andamento do PR #553 neste card", /Já existe uma revisão em andamento/],
     ["sem_pr: o card não tem o PR #553", /O card não tem esse PR/],
+    ["pr_mergeado: o PR #553 já foi mergeado", /^Esse PR já foi mergeado/],
     ["revisor_igual_autor: quem revisa não pode ser quem corrige", /O autor do PR não pode revisar o próprio PR/],
   ])("server refusal %s shows inline and keeps the dialog open", async (message, expected) => {
     serve();
@@ -302,6 +304,69 @@ describe("RequestReviewDialog", () => {
     await userEvent.selectOptions(select(/^Responsável pelo merge/), "u2");
 
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  describe("reabrir a janela", () => {
+    /** A janela como o bloco a usa: aberta e fechada de fora, a mesma instância. */
+    function Harness({ onClose }: { onClose?: () => void }) {
+      const [open, setOpen] = useState(true);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>reabrir</button>
+          <RequestReviewDialog cardId="c1" pr={PR} actorUserId="u2" open={open} onClose={() => { setOpen(false); onClose?.(); }} />
+        </>
+      );
+    }
+
+    it("uma recusa antiga nunca aparece na reabertura", async () => {
+      serve();
+      post.mockRejectedValue(apiReject(400, "revisor_sem_conta: o revisor não tem uma conta Claude própria no vibehub"));
+      renderApp(<Harness />);
+      await loaded();
+      await userEvent.click(startButton());
+      await screen.findByRole("alert");
+
+      await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+      await userEvent.click(screen.getByRole("button", { name: "reabrir" }));
+
+      await loaded();
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(startButton()).toBeEnabled();
+    });
+
+    it("a recusa que chega com a janela fechada (POST em voo) também não aparece na reabertura", async () => {
+      serve();
+      let refuse: (e: unknown) => void = () => {};
+      post.mockReturnValue(new Promise((_resolve, reject) => { refuse = reject; }));
+      renderApp(<Harness />);
+      await loaded();
+      await userEvent.click(startButton());
+      await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+
+      // o servidor responde DEPOIS de a janela fechar
+      await act(async () => {
+        refuse(apiReject(400, "revisor_sem_conta: o revisor não tem uma conta Claude própria no vibehub"));
+      });
+      await userEvent.click(screen.getByRole("button", { name: "reabrir" }));
+
+      await loaded();
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(startButton()).toBeEnabled();
+    });
+
+    it("o que foi escolhido na vez anterior não volta: cada abertura parte dos padrões", async () => {
+      serve();
+      renderApp(<Harness />);
+      await loaded();
+      await userEvent.selectOptions(select(/^Co-autor/), "u3");
+      expect(select(/^Co-autor/).value).toBe("u3");
+
+      await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+      await userEvent.click(screen.getByRole("button", { name: "reabrir" }));
+
+      await loaded();
+      expect(select(/^Co-autor/).value).toBe("");
+    });
   });
 
   it("Cancelar closes without sending anything", async () => {

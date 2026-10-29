@@ -197,6 +197,11 @@ export interface SdkChatViewProps {
   /** O card está trabalhando pelos hooks. Só vale para um turno que roda na aba Terminal (o chat
    *  espelha e o driver não diz nada): é a única fonte de que aquele turno ainda está de pé. */
   terminalWorking?: boolean;
+  /**
+   * Rendered right above the composer: what belongs to the CARD and not to the conversation (the
+   * PR blocks). The composer lives in here, so this is the only way to sit next to it from outside.
+   */
+  footer?: React.ReactNode;
   ariaLabel?: string;
   className?: string;
 }
@@ -209,7 +214,7 @@ function ownSends(outbox: readonly OutboxMessage[], viewer: string | undefined):
   return outbox.filter((m) => !m.from || m.from.name === viewer);
 }
 
-export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, terminalWorking = false, ariaLabel, className }: SdkChatViewProps) {
+export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, terminalWorking = false, footer, ariaLabel, className }: SdkChatViewProps) {
   const t = useT();
   // Whose screen this is — the edit affordance belongs only to one's own messages.
   const me = useAuth().user;
@@ -1556,6 +1561,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
           <VoiceCallBar call={call} agentBusy={agentBusyForCall} onClose={() => setCallBarDismissed(true)} />
         </div>
       ) : null}
+
+      {footer}
 
       <VoiceCallContext.Provider value={voiceControl}>
       <TerminalComposer

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -45,8 +46,9 @@ vi.mock("@/features/board/components/XTerminal", () => ({
 vi.mock("@/features/board/components/ChatView", async () => {
   const { TerminalComposer } = await import("@/features/board/components/TerminalComposer");
   return {
-    ChatView: ({ cardId, working, active }: { cardId: string; working: boolean; active?: boolean }) => (
+    ChatView: ({ cardId, working, active, footer }: { cardId: string; working: boolean; active?: boolean; footer?: ReactNode }) => (
       <div data-testid="chat" data-card={cardId} data-working={String(working)}>
+        {footer}
         <TerminalComposer cardId={cardId} active={active} onSend={() => undefined} />
       </div>
     ),
@@ -60,7 +62,12 @@ vi.mock("@/features/board/components/VncPanel", () => ({
 // The native (SDK) chat also owns a websocket and has its own test file; here the only question is
 // WHICH of the two chats got mounted — the bug was the legacy one flashing in on a beta card.
 vi.mock("@/features/board/components/SdkChatView", () => ({
-  SdkChatView: ({ cardId }: { cardId: string }) => <div data-testid="sdk-chat" data-card={cardId} />,
+  SdkChatView: ({ cardId, footer }: { cardId: string; footer?: ReactNode }) => (
+    <div data-testid="sdk-chat" data-card={cardId}>
+      {footer}
+      <div data-testid="sdk-composer-stub" />
+    </div>
+  ),
 }));
 
 const mockGet = vi.mocked(get);
@@ -1471,9 +1478,23 @@ describe("CardTerminalView — the PR blocks above the composer", () => {
     expect(block.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("chat: the block shows there too", async () => {
+  it("no modo chat o bloco do PR fica logo acima do composer", async () => {
+    // O composer do chat mora dentro da view do chat: o bloco chega a ela pelo slot `footer`.
     renderWithCache([card({ openedAt: 10, prs: [PR] })], testQueryClient(), "chat");
-    expect(await screen.findByTestId("pr-review-block")).toBeInTheDocument();
+    const block = await screen.findByTestId("pr-review-block");
+    expect(block.nextElementSibling).toBe(screen.getByTestId("terminal-composer"));
+    expect(block.closest("[data-testid=chat]")).not.toBeNull();
+  });
+
+  it("no chat NATIVO também: o bloco é o irmão logo acima do composer da view", async () => {
+    const base = mockGet.getMockImplementation();
+    mockGet.mockImplementation((url: string, ...rest: unknown[]) =>
+      url === "/features" ? Promise.resolve({ sdkChat: true }) : (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest),
+    );
+    renderWithCache([card({ openedAt: 10, prs: [PR] })], testQueryClient(), "chat");
+    const block = await screen.findByTestId("pr-review-block");
+    expect(block.nextElementSibling).toBe(screen.getByTestId("sdk-composer-stub"));
+    expect(block.closest("[data-testid=sdk-chat]")).not.toBeNull();
   });
 
   it("a card that never opened a PR has no block", async () => {

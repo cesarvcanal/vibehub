@@ -1344,6 +1344,7 @@ export const en: Record<string, string> = {
   "review.started": "Review of PR #{n} started",
   "review.error.revisor_igual_autor": "The PR's author cannot review their own PR.",
   "review.error.sem_pr": "The card does not have that PR. Refresh the screen and try again.",
+  "review.error.pr_mergeado": "That PR is already merged: there is nothing to review.",
   "review.error.revisao_ativa": "A review of this PR is already in progress.",
   "review.error.revisor_sem_conta": "The reviewer has no Claude account of their own in vibehub. Pick somebody else.",
   "review.error.papel_sem_work": "Read-only on this card: {who}. Whoever fixes and whoever merges must be able to work on it. Share it with work access and try again.",

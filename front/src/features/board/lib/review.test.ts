@@ -53,9 +53,27 @@ describe("visiblePrs", () => {
     expect(visiblePrs({ prs: [] })).toEqual([]);
   });
 
-  it("hides the PR whose review was merged, and keeps the one under review", () => {
+  it("PR mergeado some da lista", () => {
+    const merged = { ...pr(12, 300, "prod"), mergedAt: 999 };
+    expect(visiblePrs({ prs: [pr(10, 100), merged] }).map((p) => p.number)).toEqual([10]);
+    // nenhum PR aberto sobrando: nada a mostrar
+    expect(visiblePrs({ prs: [merged] })).toEqual([]);
+  });
+
+  it("...exceto o PR da revisão mergeada atual, que fica com a pill 'mergeado'", () => {
+    const old = { ...pr(10, 100), mergedAt: 500 };
+    const current = { ...pr(12, 300, "prod"), mergedAt: 999 };
+    const summary = review({ prNumber: 12, phase: "merged" });
+    expect(visiblePrs({ prs: [old, current], review: summary }).map((p) => p.number)).toEqual([12]);
+    // a revisão mergeada de OUTRO PR não segura este
+    expect(visiblePrs({ prs: [old, current], review: review({ prNumber: 10, phase: "merged" }) }).map((p) => p.number)).toEqual([10]);
+    // uma revisão em andamento não devolve um PR já mergeado à lista
+    expect(visiblePrs({ prs: [current], review: review({ prNumber: 12, phase: "fixing" }) })).toEqual([]);
+  });
+
+  it("um PR sem a marca de mergeado fica, mesmo com a revisão dele mergeada (dado de antes do mergedAt)", () => {
     const prs = [pr(552, 100), pr(553, 200, "prod")];
-    expect(visiblePrs({ prs, review: review({ prNumber: 552, phase: "merged" }) }).map((p) => p.number)).toEqual([553]);
+    expect(visiblePrs({ prs, review: review({ prNumber: 552, phase: "merged" }) }).map((p) => p.number)).toEqual([553, 552]);
     expect(visiblePrs({ prs, review: review({ prNumber: 553, phase: "fixing" }) }).map((p) => p.number)).toEqual([553, 552]);
   });
 
@@ -72,6 +90,10 @@ describe("startErrorCode", () => {
       .toBe("revisor_sem_conta");
     expect(startErrorCode({ response: { status: 400, data: { error: "papel_sem_work: authorUserId só tem leitura" } } }))
       .toBe("papel_sem_work");
+  });
+
+  it("pr_mergeado is one of the codes", () => {
+    expect(startErrorCode({ response: { status: 400, data: { error: "pr_mergeado: o PR #7 já foi mergeado" } } })).toBe("pr_mergeado");
   });
 
   it("a 403 is its own code, whatever the body says", () => {

@@ -451,6 +451,11 @@ export interface CardPr {
   branch: string;
   /** When this base first got a PR from the card (epoch ms). */
   openedAt: number;
+  /**
+   * When the server saw the PR MERGED (epoch ms): `deliver` writes it on a successful merge. Absent =
+   * open, or closed without a merge (not tracked). A merged PR leaves the chat and cannot be reviewed.
+   */
+  mergedAt?: number;
 }
 
 /** One preview the agent announced on a card — see `Card.previews`. */

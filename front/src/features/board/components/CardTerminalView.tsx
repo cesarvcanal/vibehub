@@ -435,6 +435,12 @@ export function CardTerminalView({
    * work area), so the block already does what it will do.
    */
   const [reviewOpen, setReviewOpen] = React.useState(false);
+  /**
+   * The PRs the card delivered, one line each, ALWAYS right above the composer: in the terminal that
+   * is this file's own composer; in the chat the composer lives inside the chat view, which takes
+   * these as its `footer`. Null for a card that never opened a PR.
+   */
+  const prBlocks = card ? <PrReviewBlocks card={card} onOpenPanel={() => setReviewOpen(true)} /> : null;
   const [connection, setConnection] = React.useState<ConnectionState>("connecting");
 
   /**
@@ -1158,9 +1164,6 @@ export function CardTerminalView({
         >
           {/* PANEL OF THE PR REVIEW: rendered here, beside the terminal/chat column, when `reviewOpen`. */}
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {/* The PRs the card delivered. Where the composer is this file's own (terminal mode), they sit
-                right above it; in chat the composer belongs to the chat view, so they pin above it. */}
-            {mode === "chat" && card ? <PrReviewBlocks card={card} onOpenPanel={() => setReviewOpen(true)} /> : null}
             {mode === "chat" && features.data === undefined ? (
               /* The install flag is not here yet (cold cache). WHICH chat this install uses is that
                  flag, so guessing would mount the WRONG view: the legacy chat flashed in, took the
@@ -1182,6 +1185,7 @@ export function CardTerminalView({
                 onUploadImage={uploadImage}
                 onStatus={setConnection}
                 terminalWorking={working}
+                footer={prBlocks}
                 ariaLabel={t("chat.ariaFor", { title: card?.title ?? t("cardView.cardFallback") })}
               />
             ) : mode === "chat" ? (
@@ -1193,6 +1197,7 @@ export function CardTerminalView({
                 onUploadImage={uploadImage}
                 onStatus={setConnection}
                 onOpenTerminal={() => switchMode("terminal")}
+                footer={prBlocks}
                 ariaLabel={t("chat.ariaFor", { title: card?.title ?? t("cardView.cardFallback") })}
               />
             ) : (
@@ -1222,7 +1227,7 @@ export function CardTerminalView({
                   autoFocus={false}
                   ariaLabel={t("cardView.terminalFor", { title: card?.title ?? t("cardView.cardFallback") })}
                 />
-                {card ? <PrReviewBlocks card={card} onOpenPanel={() => setReviewOpen(true)} /> : null}
+                {prBlocks}
                 {/* Anything composed that has not reached the agent yet — usually nothing at all. */}
                 <CardOutbox cardId={cardId} />
                 {/* Compose here, send when ready — the field accumulates until Enter. */}

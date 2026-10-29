@@ -99,12 +99,15 @@ export function RequestReviewDialog({ cardId, pr, actorUserId, open, onClose }: 
     onError: (error) => setFailure({ error }),
   });
 
-  // A dialog that closes forgets what was typed and what the server said: the next one starts clean.
+  // A dialog forgets what was typed and what the server said when it closes, and again when it opens:
+  // an answer that arrives while it is CLOSED (a request still in flight) lands after the first reset,
+  // and must not greet the next opening as if it were that one's.
+  const { reset } = start;
   React.useEffect(() => {
-    if (open) return;
-    setPicked((current) => (Object.keys(current).length ? {} : current));
+    if (!open) setPicked((current) => (Object.keys(current).length ? {} : current));
     setFailure(null);
-  }, [open]);
+    reset();
+  }, [open, reset]);
 
   const pick = (role: keyof Roles) => (e: React.ChangeEvent<HTMLSelectElement>) => {
     setPicked((current) => ({ ...current, [role]: e.target.value }));

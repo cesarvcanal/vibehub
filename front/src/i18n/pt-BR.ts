@@ -1356,6 +1356,7 @@ export const ptBR: Record<string, string> = {
   "review.started": "Revisão do PR #{n} iniciada",
   "review.error.revisor_igual_autor": "O autor do PR não pode revisar o próprio PR.",
   "review.error.sem_pr": "O card não tem esse PR. Atualize a tela e tente de novo.",
+  "review.error.pr_mergeado": "Esse PR já foi mergeado: não há o que revisar.",
   "review.error.revisao_ativa": "Já existe uma revisão em andamento deste PR.",
   "review.error.revisor_sem_conta": "O revisor não tem uma conta Claude própria no vibehub. Escolha outra pessoa.",
   "review.error.papel_sem_work": "Só tem leitura neste card: {who}. Quem corrige e quem faz o merge precisam poder trabalhar nele. Compartilhe com acesso de trabalho e tente de novo.",
