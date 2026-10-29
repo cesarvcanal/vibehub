@@ -194,6 +194,29 @@ describe("iniciar a revisão", () => {
     expect(review.log.length).toBeGreaterThan(0);
   });
 
+  it("revisor member sem work no card do revisor ganha um share work nele antes da rodada 1; owner não", async () => {
+    const o = await load();
+    const { author } = await seed(o);
+    const review = await o.orch.startReview({
+      cardId: author.id, prNumber: 7, reviewerUserId: "u-revisor", authorUserId: "u-autor", mergerUserId: "u-merger", by: "u-autor",
+    });
+    // o share existe antes do envio: o recordCardActor do relay precisa de work para pousar
+    expect(await o.registry.sharesForTarget("card", review.reviewerCardId)).toEqual([
+      expect.objectContaining({ kind: "card", targetId: review.reviewerCardId, userId: "u-revisor", level: "work" }),
+    ]);
+    // e nada além do card do revisor: o card do autor não ganhou share nenhum
+    expect(await o.registry.sharesForTarget("card", author.id)).toEqual([]);
+
+    // um owner já tem work em tudo: nenhum share é escrito
+    accountOf = { "u-merger": "mussa" };
+    const other = await o.registry.createCard({ projectId: author.projectId, title: "Outro" });
+    await o.registry.recordCardPr(other.id, { ...PR, number: 8, url: "https://github.com/acme/widgets/pull/8" });
+    const byOwner = await o.orch.startReview({
+      cardId: other.id, prNumber: 8, reviewerUserId: "u-merger", authorUserId: "u-autor", mergerUserId: "u-merger", by: "u-autor",
+    });
+    expect(await o.registry.sharesForTarget("card", byOwner.reviewerCardId)).toEqual([]);
+  });
+
   it("iniciar recusa revisor igual ao autor, card sem o PR, revisão já ativa e revisor sem conta", async () => {
     const o = await load();
     const { author } = await seed(o);

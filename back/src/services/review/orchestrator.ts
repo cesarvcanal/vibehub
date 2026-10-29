@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
-  getCard, createReviewerCard, removeCard, updateCard, cardMoveEffect, isHumanActive,
+  getCard, createReviewerCard, removeCard, updateCard, cardMoveEffect, isHumanActive, shareWith,
 } from "../board/registry.js";
 import { resumeCard } from "../board/workspace.js";
 import { recordCardActor } from "../board/actor.js";
 import { findUser } from "../../auth/users.js";
+import { cardLevel } from "../../auth/access.js";
 import { creatorAccountSlug } from "../../auth/userGit.js";
 import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
 import type { MessageOrigin } from "../chat/provenance.js";
@@ -319,6 +320,13 @@ export async function startReview(input: {
     };
     note(fresh, "system", `Revisão iniciada: o revisor confere o PR #${pr.number} (rodada 1 de ${MAX_ROUNDS}).`);
     try {
+      // O revisor age no card dele pelo `recordCardActor` do relay, que só pousa com `work`. Owner e
+      // share de projeto já dão isso; quem só alcança o card do autor ganha um share `work` no card do
+      // revisor — senão o `gh pr review` sairia na conta de outra pessoa.
+      const reviewer = await findUser(input.reviewerUserId);
+      if (reviewer && (await cardLevel(reviewer, reviewerCard.id)) !== "work") {
+        await shareWith({ kind: "card", targetId: reviewerCard.id, userId: reviewer.id, level: "work" });
+      }
       await insertReview(fresh);
     } catch (err) {
       // Sem revisão, o card do revisor é lixo: nunca foi aberto, então sai sem sessão pra matar.
