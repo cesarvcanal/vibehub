@@ -792,6 +792,34 @@ describe("session introspection", () => {
     expect((await maestro.sessionInfo(c.id)).model).toBeNull();
   });
 
+  it("a NEW card with no level pinned says its level BEFORE the first reply — the account default the driver announced", async () => {
+    // 29/10: card novo, o pill dizia só "Opus" até a primeira resposta carimbar o transcript — um
+    // `claude` aberto em qualquer terminal já mostra o nível ao subir.
+    const { maestro, registry, agentState } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "novo" }, { model: "opus" });
+    const off = agentState.onCardDefaultEffortProbe((cardId) => (cardId === c.id ? "medium" : null));
+    try {
+      runScript.mockResolvedValueOnce({ stdout: "", stderr: "" }); // no transcript, no settings
+      expect((await maestro.sessionInfo(c.id)).effort).toBe("medium");
+      // Runner unreachable: the driver still knows.
+      runScript.mockRejectedValueOnce(new Error("runner down"));
+      expect((await maestro.sessionInfo(c.id)).effort).toBe("medium");
+
+      // Whatever says more wins over the default: the first reply's stamp…
+      runScript.mockResolvedValueOnce({ stdout: line({ type: "assistant", effort: "high", message: { model: "claude-opus-5", content: [] } }), stderr: "" });
+      expect((await maestro.sessionInfo(c.id)).effort).toBe("high");
+      // …and a pin.
+      await registry.updateCard(c.id, { effort: "xhigh" });
+      runScript.mockResolvedValueOnce({ stdout: "", stderr: "" });
+      expect((await maestro.sessionInfo(c.id)).effort).toBe("xhigh");
+      runScript.mockRejectedValueOnce(new Error("runner down"));
+      expect((await maestro.sessionInfo(c.id)).effort).toBe("xhigh");
+    } finally {
+      off();
+    }
+  });
+
   it("falls back to the default account label when nothing is set", async () => {
     const { maestro, registry } = await load();
     await registry.setDefaultAccountLabel("principal");

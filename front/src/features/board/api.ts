@@ -784,8 +784,9 @@ export function pinnedEffort(card: { effort?: string | null } | null | undefined
 
 /**
  * The level the session is REALLY on: the server's reading first (it already weighs a fresh pin
- * against the transcript), the card's pin while there is no reading. Undefined = nobody knows yet —
- * an unpinned card before its first reply. PURE.
+ * against the transcript, and before the first reply answers the account's level as the native
+ * chat's driver announced it), the card's pin while there is no reading. Undefined = nobody knows
+ * yet — an unpinned terminal card before its first reply. PURE.
  */
 export function effortInUse(
   card: { effort?: string | null } | null | undefined,

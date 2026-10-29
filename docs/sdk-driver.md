@@ -416,7 +416,7 @@ escalada pode engoli-la; e a primeira mensagem de uma corrente nova espera o
 `initializationResult()` (com timeout) antes de mandar a configuração, porque um control request
 escrito num CLI que ainda não existe se perde.
 
-## A inteligência do card — troca a quente
+## A inteligência do card — troca a quente e o nível antes da primeira resposta
 
 Trocar a inteligência no pill com o driver de pé **nunca reinicia a sessão** (`applySessionChange`
 responde `live`): o back escreve `set_effort` no stdin e o driver aplica com `applyFlagSettings`,
@@ -431,6 +431,13 @@ turno. Medido no CLI real (SDK 0.3.300): as chamadas seguintes do mesmo turno sa
 - Sem driver (card de terminal) a troca segue como antes: reinicia já se o card está livre, ou
   fica pendente até ele ficar livre (`restartPendingAt`) — nunca corta um turno.
 
+**O nível antes da primeira resposta.** Num card sem nível fixado, nada dizia o nível até a primeira
+resposta carimbar o transcript. A consulta descartável do catálogo (`warmCatalog`, no boot do
+driver) sobe **sem** o `--effort` do card e pergunta `getSettings().applied.effort` — o nível que
+uma sessão sem pin usa (settings da conta, senão o padrão do modelo). O driver anuncia
+`effort_default`, o manager guarda na sessão (não vai para histórico nem navegador) e o
+`GET /api/cards/:id/session` usa como último recurso, depois do pin, do carimbo da última resposta
+e do `effortLevel` dos settings.
 
 ## Auth — OAuth token ONLY (regra do projeto)
 

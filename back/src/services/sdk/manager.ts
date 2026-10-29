@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
 import { syncPendingQuestion } from "./pendingQuestion.js";
-import { onCardBackgroundProbe, onCardDriverProbe, onCardEffortApplier, reportCardStatusFromDriver, type DriverActivity } from "../board/agentState.js";
+import { onCardBackgroundProbe, onCardDefaultEffortProbe, onCardDriverProbe, onCardEffortApplier, reportCardStatusFromDriver, type DriverActivity } from "../board/agentState.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
 import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, clearHistoryBeforeLastClear, readHistory, replayableHistoryEvent, rewindHistory, unwrapEditedMessage, type HistoryEvent } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker, type InflightBackground, type InflightMarker } from "./inflight.js";
@@ -147,6 +147,8 @@ export interface DriverSession {
    * instead of waiting for the next `init` (which only comes with the next turn).
    */
   catalog?: CatalogEvent;
+  /** The account's reasoning level, as the driver announced it at boot (`effort_default`). */
+  defaultEffort?: string;
   idleTimer: NodeJS.Timeout | null;
   /** Rolling tail of the driver's stderr — what a post-mortem has to say (see STDERR_TAIL_MAX). */
   stderrTail: string;
@@ -615,6 +617,12 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     void registry.updateCard(session.cardId, { resumeSessionId: event.sessionId }).catch((err: unknown) => {
       logger.warn({ card: session.label, detail: (err as Error).message }, "could not persist the sdk session id");
     });
+  }
+  if (event.type === "effort_default") {
+    // Estado do pill, não conversa: fica na sessão e não segue para histórico nem navegador.
+    const level = (event as { effort?: unknown }).effort;
+    if (typeof level === "string" && registry.isValidEffort(level)) session.defaultEffort = level;
+    return;
   }
   if (event.type === "catalog") {
     // Normalised HERE, on the side that talks to the browser: the driver forwards what the CLI
@@ -2090,6 +2098,16 @@ export function applyDriverEffort(cardId: string, effort: string | null): boolea
 }
 
 /**
+ * O nível que uma sessão SEM nível fixado usa (o padrão da conta), como o driver vivo o anunciou ao
+ * subir (`effort_default`). Null sem driver ou antes do anúncio.
+ */
+export function driverDefaultEffort(cardId: string): string | null {
+  const session = sessions.get(cardId);
+  if (!session || session.closed) return null;
+  return session.defaultEffort ?? null;
+}
+
+/**
  * Best-effort goodbye on the BACK's own shutdown (SIGTERM from a deploy): end every driver's stdin
  * (EOF is the driver's exit signal, it reaches across the docker exec) and kill the local clients —
  * but KEEP the in-flight markers: they are exactly what tells the next boot which turns this
@@ -2130,6 +2148,9 @@ onCardDriverProbe((cardId) => driverActivity(cardId));
 // …a inteligência trocada no pill vai ao driver vivo, que a aplica na sessão sem reiniciar (ver
 // `applyDriverEffort`). Sem driver, quem troca reinicia a sessão nela, como sempre.
 onCardEffortApplier((cardId, effort) => applyDriverEffort(cardId, effort));
+
+// …e o nível padrão da conta, que o driver anuncia no boot, chega ao pill antes da primeira resposta.
+onCardDefaultEffortProbe((cardId) => driverDefaultEffort(cardId));
 
 // …e a quarta: uma tarefa em segundo plano viva é trabalho — o `Stop` do turno que a disparou não
 // pode pôr o card em "aguardando" (ver services/board/status.ts).

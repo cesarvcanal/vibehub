@@ -4,9 +4,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { config } from "../../config/env.js";
-import { applyLiveEffort, onCardStatusSink } from "../board/agentState.js";
+import { applyLiveEffort, cardDefaultEffort, onCardStatusSink } from "../board/agentState.js";
 import {
   applyDriverEffort,
+  driverDefaultEffort,
   ensureDriverSession,
   handleClientFrame,
   resetSdkSessionsForTesting,
@@ -159,3 +160,41 @@ describe("sdk manager — a inteligência trocada com o driver de pé", () => {
   });
 });
 
+/**
+ * O NÍVEL ANTES DA PRIMEIRA RESPOSTA: o driver anuncia no boot o padrão da conta (`effort_default`),
+ * e o board o lê para o pill de um card sem nível fixado — que antes só sabia dele quando a primeira
+ * resposta carimbava o transcript.
+ */
+describe("sdk manager — o nível padrão que o driver anuncia", () => {
+  it("guarda o anunciado e o entrega ao board; um nível desconhecido não entra", async () => {
+    ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
+    expect(driverDefaultEffort(CARD)).toBeNull();
+    spawned[0]!.stdout.emit("data", line({ type: "effort_default", effort: "medium" }));
+    await flush();
+    expect(driverDefaultEffort(CARD)).toBe("medium");
+    expect(cardDefaultEffort(CARD)).toBe("medium");
+
+    spawned[0]!.stdout.emit("data", line({ type: "effort_default", effort: "turbo" }));
+    await flush();
+    expect(driverDefaultEffort(CARD)).toBe("medium");
+  });
+
+  it("não vai para a conversa: nenhuma linha de histórico, nenhum frame no navegador", async () => {
+    const session = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
+    const sent: string[] = [];
+    session.sockets.add({ readyState: 1, send: (s: string) => sent.push(s) } as never);
+    spawned[0]!.stdout.emit("data", line({ type: "effort_default", effort: "high" }));
+    await flush();
+    expect(sent.some((s) => s.includes("effort_default"))).toBe(false);
+  });
+
+  it("sem driver, ninguém diz nada", async () => {
+    expect(driverDefaultEffort(CARD)).toBeNull();
+    ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
+    spawned[0]!.stdout.emit("data", line({ type: "effort_default", effort: "high" }));
+    await flush();
+    stopCardDriver(CARD);
+    expect(driverDefaultEffort(CARD)).toBeNull();
+    expect(cardDefaultEffort(CARD)).toBeNull();
+  });
+});

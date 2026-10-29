@@ -258,6 +258,31 @@ export function applyLiveEffort(cardId: string, effort: string | null): boolean 
   return applied;
 }
 
+/**
+ * The reasoning level a card with NO level pinned runs on, as its live native chat driver announced
+ * it at boot — what the pill shows before the first reply stamps the transcript. Null when no driver
+ * says. REGISTERED, for the same cycle as above.
+ */
+type DefaultEffortProbe = (cardId: string) => string | null;
+const defaultEffortProbes = new Set<DefaultEffortProbe>();
+
+export function onCardDefaultEffortProbe(probe: DefaultEffortProbe): () => void {
+  defaultEffortProbes.add(probe);
+  return () => defaultEffortProbes.delete(probe);
+}
+
+export function cardDefaultEffort(cardId: string): string | null {
+  for (const probe of defaultEffortProbes) {
+    try {
+      const level = probe(cardId);
+      if (level) return level;
+    } catch {
+      /* a broken probe says nothing; the pill waits for the first reply, as before */
+    }
+  }
+  return null;
+}
+
 /* ------------------------------------- the native chat's BACKGROUND work (the status it implies) */
 
 /**

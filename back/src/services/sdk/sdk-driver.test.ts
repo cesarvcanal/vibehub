@@ -797,7 +797,7 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     driver.send({ type: "user", text: "oi" });
     await driver.waitMark("effort:xhigh");
     await driver.waitFor((e) => e.type === "result");
-    // (O `effort:medium` do boot é a consulta descartável do catálogo, que a primeira mensagem encerra.)
+    // (O `effort:none` do boot é a consulta descartável do catálogo, que a primeira mensagem encerra.)
     expect(driver.marks.filter((m) => m.startsWith("effort:")).at(-1)).toBe("effort:xhigh");
   }, 60_000);
 
@@ -818,7 +818,7 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     await driver.waitFor((e) => e.type === "assistant_text" && e.text === "etapa 1 aprovada");
     await driver.waitFor((e) => e.type === "result");
     // Um stream só (o da conversa) além do descartável do catálogo: nada reiniciou.
-    expect(driver.marks.filter((m) => m.startsWith("effort:"))).toEqual(["effort:medium", "effort:medium"]);
+    expect(driver.marks.filter((m) => m.startsWith("effort:"))).toEqual(["effort:none", "effort:medium"]);
   }, 60_000);
 
   it("voltar ao padrão da CONTA no meio do turno: limpa o flag e reaplica o nível dos settings, sem reiniciar", async () => {
@@ -885,6 +885,30 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual(['flags:{"effortLevel":"low"}']);
     await releaseSlowTurn();
     await driver.waitFor((e) => e.type === "result");
+  }, 60_000);
+});
+
+/**
+ * O NÍVEL ANTES DA PRIMEIRA RESPOSTA (29/10): num card sem nível fixado, nada dizia em qual a sessão
+ * ia rodar até a primeira resposta carimbar o transcript — o pill mostrava só "Opus". O CLI responde
+ * isso sem turno nenhum (`getSettings().applied.effort`, medido no SDK 0.3.300), então a consulta
+ * descartável do catálogo já pergunta e o driver anuncia o padrão da conta.
+ */
+describe("sdk-driver.mjs — o nível padrão da conta, anunciado no boot", () => {
+  it("sai antes de qualquer mensagem, e é o da CONTA mesmo com o card fixado em outro", async () => {
+    const driver = startDriver(["--effort", "xhigh"]);
+    const def = await driver.waitFor((e) => e.type === "effort_default");
+    expect(def.effort).toBe("medium");
+    expect(driver.events.some((e) => e.type === "result")).toBe(false);
+    // A consulta descartável sobe sem o nível do card: é ela que diz o padrão.
+    expect(driver.marks.filter((m) => m.startsWith("effort:"))).toEqual(["effort:none"]);
+  }, 60_000);
+
+  it("o effortLevel dos settings da conta é o padrão", async () => {
+    await writeFile(join(sandbox, "account-effort"), "high");
+    const driver = startDriver();
+    const def = await driver.waitFor((e) => e.type === "effort_default");
+    expect(def.effort).toBe("high");
   }, 60_000);
 });
 
