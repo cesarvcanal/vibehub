@@ -237,7 +237,7 @@ export function cardDriverActivity(cardId: string): DriverActivity {
  * there is no driver to take it — the caller then restarts the session onto it, as before.
  * REGISTERED, for the same cycle as above.
  */
-type EffortApplier = (cardId: string, effort: string) => boolean;
+type EffortApplier = (cardId: string, effort: string | null) => boolean;
 const effortAppliers = new Set<EffortApplier>();
 
 export function onCardEffortApplier(applier: EffortApplier): () => void {
@@ -245,7 +245,8 @@ export function onCardEffortApplier(applier: EffortApplier): () => void {
   return () => effortAppliers.delete(applier);
 }
 
-export function applyLiveEffort(cardId: string, effort: string): boolean {
+/** `effort` null = back to the account's own level, live as well (see restoreAccountEffort in sdk-driver.mjs). */
+export function applyLiveEffort(cardId: string, effort: string | null): boolean {
   let applied = false;
   for (const applier of effortAppliers) {
     try {

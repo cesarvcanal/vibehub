@@ -1355,6 +1355,19 @@ async function clearUltra() {
 const EFFORT_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
 
 /**
+ * Back to the ACCOUNT's level in the live session. `effortLevel: null` alone is not it: the CLI
+ * takes it to the MODEL's default and skips the settings files (measured on the real CLI, SDK
+ * 0.3.300, 2026-10-29: settings `high` → flag `xhigh` → null = `medium`). So the settings' own
+ * level, when there is one, goes back on top — what a fresh start without `--effort` would read.
+ */
+async function restoreAccountEffort(handle) {
+  await handle.applyFlagSettings({ effortLevel: null });
+  if (typeof handle.getSettings !== "function") return;
+  const own = (await handle.getSettings())?.effective?.effortLevel;
+  if (EFFORT_LEVELS.has(own)) await handle.applyFlagSettings({ effortLevel: own });
+}
+
+/**
  * The card's intelligence was switched in the pill with this driver up (`set_effort`). It used to
  * wait for a restart that only came once the turn ended — and a turn with subagents in the
  * background never ended in time: the session went on in the old level while the pill promised the
@@ -1362,12 +1375,15 @@ const EFFORT_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
  * mid-turn included: the CLI reads the effort per request, so the next call to the model already
  * uses it, and the conversation goes on from exactly where it was.
  *
+ * `null` is "Usar a inteligência padrão da conta": the same live switch, onto the account's level
+ * (restoreAccountEffort). It used to restart the session — killing whatever the turn was doing.
+ *
  * From here on EFFORT is this level: a new stream starts on it, and an `ultrathink` turn gives it
  * back at its end. That same `ultrathink` turn, while in flight, holds the flag at `max` — writing
  * the new level now would cut it short, so it is left to the give-back (clearUltra).
  */
 async function setCardEffort(level) {
-  if (!EFFORT_LEVELS.has(level)) return;
+  if (level !== null && !EFFORT_LEVELS.has(level)) return;
   EFFORT = level;
   if (ultraRaised && "effortLevel" in ultraRaised) return;
   const handle = currentQuery;
@@ -1384,9 +1400,10 @@ async function setCardEffort(level) {
   }
   if (currentQuery !== handle) return; // the stream died while we waited; the next starts on EFFORT
   try {
-    await handle.applyFlagSettings({ effortLevel: level });
+    if (level === null) await restoreAccountEffort(handle);
+    else await handle.applyFlagSettings({ effortLevel: level });
   } catch (err) {
-    trace(`could not apply effort ${level} to the live session: ${err && err.message ? err.message : String(err)}`);
+    trace(`could not apply effort ${level ?? "default"} to the live session: ${err && err.message ? err.message : String(err)}`);
   }
 }
 
@@ -1776,7 +1793,7 @@ rl.on("line", (line) => {
     queueBtw(control.id, control.question);
     return;
   }
-  if (control && control.type === "set_effort" && typeof control.effort === "string") {
+  if (control && control.type === "set_effort" && (typeof control.effort === "string" || control.effort === null)) {
     // FORA da fila `serialized`: a troca vale para o turno que já está rodando, não espera por ele.
     void setCardEffort(control.effort);
     return;

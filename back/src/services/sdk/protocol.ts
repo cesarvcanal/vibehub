@@ -440,9 +440,10 @@ export interface BtwControl { type: "btw"; id: string; question: string }
 /**
  * A INTELIGÊNCIA DO CARD TROCOU com o driver de pé: o driver aplica o nível na sessão viva
  * (`applyFlagSettings`), no meio do turno inclusive — a próxima chamada ao modelo já sai nele, sem
- * reiniciar nada. Nasce no back (troca no pill), nunca no navegador.
+ * reiniciar nada. `null` = de volta ao padrão da conta, também ao vivo. Nasce no back (troca no
+ * pill), nunca no navegador.
  */
-export interface SetEffortControl { type: "set_effort"; effort: string }
+export interface SetEffortControl { type: "set_effort"; effort: string | null }
 export type DriverControl =
   | UserControl
   | BtwControl

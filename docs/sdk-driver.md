@@ -416,6 +416,22 @@ escalada pode engoli-la; e a primeira mensagem de uma corrente nova espera o
 `initializationResult()` (com timeout) antes de mandar a configuração, porque um control request
 escrito num CLI que ainda não existe se perde.
 
+## A inteligência do card — troca a quente
+
+Trocar a inteligência no pill com o driver de pé **nunca reinicia a sessão** (`applySessionChange`
+responde `live`): o back escreve `set_effort` no stdin e o driver aplica com `applyFlagSettings`,
+no meio do turno inclusive — subagente em primeiro plano rodando, a chamada dele volta no mesmo
+turno. Medido no CLI real (SDK 0.3.300): as chamadas seguintes do mesmo turno saem no nível novo.
+
+- `set_effort { effort: "<nível>" }` → `applyFlagSettings({ effortLevel })`.
+- `set_effort { effort: null }` ("Usar a inteligência padrão da conta") → também a quente:
+  `effortLevel: null` leva ao padrão do **modelo** e ignora o `effortLevel` dos settings (medido,
+  29/10: settings `high` → flag `xhigh` → null = `medium`), então o driver lê
+  `getSettings().effective.effortLevel` e, havendo nível nos settings, o reaplica por cima.
+- Sem driver (card de terminal) a troca segue como antes: reinicia já se o card está livre, ou
+  fica pendente até ele ficar livre (`restartPendingAt`) — nunca corta um turno.
+
+
 ## Auth — OAuth token ONLY (regra do projeto)
 
 The driver authenticates **exclusively** with `CLAUDE_CODE_OAUTH_TOKEN`, read from the card

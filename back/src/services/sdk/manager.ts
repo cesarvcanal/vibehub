@@ -2083,7 +2083,7 @@ export function stopCardDriver(cardId: string): void {
  * (um stream novo, a devolução do `ultrathink`). True = havia um driver para recebê-la; false = não
  * há, e quem trocou reinicia a sessão nela (`applySessionChange`).
  */
-export function applyDriverEffort(cardId: string, effort: string): boolean {
+export function applyDriverEffort(cardId: string, effort: string | null): boolean {
   const session = sessions.get(cardId);
   if (!session || !canAcceptTurn(session)) return false;
   return writeToDriver(session, { type: "set_effort", effort });
