@@ -236,6 +236,13 @@ export interface SlashCommandInfo {
  */
 export interface CatalogEvent { type: "catalog"; commands: SlashCommandInfo[] }
 /**
+ * The reasoning level a session with NO level pinned runs on — the account's (its settings), else
+ * the model's default — asked of the CLI at the driver's boot, before any turn. STATE for the card
+ * bar's pill, which otherwise knew nothing until the first reply stamped the transcript; consumed by
+ * the manager, never written to the history nor sent to a browser.
+ */
+export interface EffortDefaultEvent { type: "effort_default"; effort: string }
+/**
  * Output of a LOCAL slash command (`/cost`, `/usage`): the CLI answers it itself, without a model
  * turn. Without this the chat swallowed the answer and the command looked like it did nothing.
  */
@@ -310,6 +317,7 @@ export type DriverEvent =
   | TurnAbsorbedEvent
   | RewoundEvent
   | CatalogEvent
+  | EffortDefaultEvent
   | LocalOutputEvent
   | BtwAnswerEvent
   | BackgroundTasksEvent
@@ -343,6 +351,7 @@ const DRIVER_EVENT_TYPES = new Set([
   "turn_absorbed",
   "rewound",
   "catalog",
+  "effort_default",
   "local_output",
   "btw_answer",
   "background_tasks",
@@ -440,9 +449,10 @@ export interface BtwControl { type: "btw"; id: string; question: string }
 /**
  * A INTELIGÊNCIA DO CARD TROCOU com o driver de pé: o driver aplica o nível na sessão viva
  * (`applyFlagSettings`), no meio do turno inclusive — a próxima chamada ao modelo já sai nele, sem
- * reiniciar nada. Nasce no back (troca no pill), nunca no navegador.
+ * reiniciar nada. `null` = de volta ao padrão da conta, também ao vivo. Nasce no back (troca no
+ * pill), nunca no navegador.
  */
-export interface SetEffortControl { type: "set_effort"; effort: string }
+export interface SetEffortControl { type: "set_effort"; effort: string | null }
 export type DriverControl =
   | UserControl
   | BtwControl

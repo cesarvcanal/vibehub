@@ -5,7 +5,7 @@ import {
   listAccounts, getConfig, isHumanActive, reportCardState, CLAUDE_MODELS, isValidEffort,
   type Card, type Project, type BoardColumn, type CardStatus, type DeclaredState,
 } from "../board/registry.js";
-import { cardAgentState, cardDriverActivity, cardPaneReadiness, type MenuKind } from "../board/agentState.js";
+import { cardAgentState, cardDefaultEffort, cardDriverActivity, cardPaneReadiness, type MenuKind } from "../board/agentState.js";
 import { profileDirFor } from "../accounts/profiles.js";
 import { transcriptDirFor, sessionGoneError } from "./cardSession.js";
 import { recordOrigin, type MessageOrigin } from "../chat/provenance.js";
@@ -1035,6 +1035,10 @@ export async function sessionInfo(cardId: string): Promise<SessionInfo> {
   } catch {
     model = null; // runner unreachable or no transcript yet — the UI shows the default
   }
+  // Nothing above says (no pin, no reply yet, no level in the settings): the level the account runs
+  // on, as the card's native chat driver announced it at boot — so a new card shows its level before
+  // the first reply, like `claude` in any terminal does the moment it opens (29/10/2026).
+  effort ??= cardDefaultEffort(card.id);
   // The board mirror reads a card's situation from the registry (cheap, no probe). Here — on the ONE
   // card the person is actually looking at, polled every few seconds — we can afford a live probe:
   // the registry still calls a card "waiting" after Claude has EXITED to the bare shell underneath

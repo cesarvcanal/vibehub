@@ -1769,14 +1769,15 @@ export async function applySessionChange(before: Card | undefined, after: Card, 
   // end. The pending restart was the bug (produção, 2026-10-27, card review-prs-albert-ee7c): Alto
   // picked mid-turn, the toast said it would apply when Claude finished, and with subagents running
   // in the background the turn never "finished" — the session went on in `medium` and the pill fell
-  // back to Médio. A level cleared back to the account default still restarts: the live flag layer
-  // cannot say "whatever settings.json says", only a level.
+  // back to Médio. A level cleared back to the account default goes live as well (null): the driver
+  // clears its flag and puts the account's own level back (restoreAccountEffort in sdk-driver.mjs).
   const effortOnly =
     (before.model ?? null) === (after.model ?? null) &&
     (before.accountSlug ?? null) === (after.accountSlug ?? null);
-  if (effortOnly && isValidEffort(after.effort) && applyLiveEffort(after.id, after.effort)) {
+  const level = after.effort ?? null;
+  if (effortOnly && (level === null || isValidEffort(level)) && applyLiveEffort(after.id, level)) {
     logger.info(
-      { audit: true, action: "card.config.live", card: after.worktreeSlug, effort: after.effort, by },
+      { audit: true, action: "card.config.live", card: after.worktreeSlug, effort: level ?? "account-default", by },
       "intelligence switched — applied to the live native chat session, no restart",
     );
     return "live";

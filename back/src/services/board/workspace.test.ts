@@ -999,14 +999,14 @@ describe("restart (single and all) — a working card is protected", () => {
     expect(runScript).not.toHaveBeenCalled();
   });
 
-  it("applySessionChange: what the live driver cannot take still restarts — no driver, a model or account in the switch, a cleared level", async () => {
+  it("applySessionChange: what the live driver cannot take still restarts — no driver, a model or account in the switch", async () => {
     const { card } = await seed();
     await ws.openCard(card.id);
     await reg.applyCardStatus(card.id, "waiting");
     const agent = await import("./agentState.js");
     let driverUp = false;
-    const applied: string[] = [];
-    agent.onCardEffortApplier((_id, effort) => { applied.push(effort); return driverUp; });
+    const applied: Array<string | null> = [];
+    const off = agent.onCardEffortApplier((_id, effort) => { applied.push(effort); return driverUp; });
 
     // No driver (a terminal card, a driver that idled out): the old restart, onto the pin.
     const b1 = { ...(await reg.getCard(card.id))! };
@@ -1024,12 +1024,55 @@ describe("restart (single and all) — a working card is protected", () => {
     expect(await ws.applySessionChange(b2, a2)).toBe("restarted");
     expect(applied).toEqual([]);
 
-    // Back to the account default: the live layer only knows levels, not "whatever settings.json says".
+    // Back to the account default with NO driver (a terminal card): the restart, onto no `--effort`.
+    driverUp = false;
     const b3 = { ...(await reg.getCard(card.id))! };
     const a3 = await reg.updateCard(card.id, { effort: null });
     runScript.mockClear();
     expect(await ws.applySessionChange(b3, a3)).toBe("restarted");
-    expect(applied).toEqual([]);
+    off();
+  });
+
+  it("applySessionChange: BACK TO THE ACCOUNT DEFAULT mid-turn goes live too — the driver restores the account's level, nothing restarts", async () => {
+    // "Usar a inteligência padrão da conta" was the one effort switch that still ended the session:
+    // the live flag layer was thought to know only levels. It knows the way back (sdk-driver.mjs,
+    // restoreAccountEffort), so killing the turn in flight — a foreground subagent with it — was
+    // for nothing.
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.updateCard(card.id, { effort: "xhigh" });
+    await reg.applyCardStatus(card.id, "working");
+    const agent = await import("./agentState.js");
+    const applied: Array<[string, string | null]> = [];
+    const off = agent.onCardEffortApplier((id, effort) => { applied.push([id, effort]); return true; });
+    const before = { ...(await reg.getCard(card.id))! };
+    const after = await reg.updateCard(card.id, { effort: null });
+    runScript.mockClear();
+
+    expect(await ws.applySessionChange(before, after)).toBe("live");
+    expect(applied).toEqual([[card.id, null]]);
+    expect(runScript).not.toHaveBeenCalled();
+    const now = await reg.getCard(card.id);
+    expect(now?.restartPendingAt ?? null).toBeNull();
+    expect(now?.status).toBe("working");
+    off();
+  });
+
+  it("applySessionChange: a TERMINAL card (no driver) switching effort while Claude WORKS waits for idle — the task is never cut", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    const agent = await import("./agentState.js");
+    const off = agent.onCardEffortApplier(() => false);
+    for (const level of ["high", null] as const) {
+      const before = { ...(await reg.getCard(card.id))! };
+      const after = await reg.updateCard(card.id, { effort: level });
+      runScript.mockClear();
+      expect(await ws.applySessionChange(before, after)).toBe("pending");
+      expect(runScript).not.toHaveBeenCalled();
+      expect((await reg.getCard(card.id))?.restartReason).toBe("config");
+    }
+    off();
   });
 
   it("applySessionChange: switching while Claude WORKS flags the card instead of interrupting the task", async () => {
