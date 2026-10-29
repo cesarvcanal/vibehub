@@ -52,6 +52,35 @@ describe("normalizeSubmittedFindings", () => {
     expect(out[0]).toMatchObject({ id: "f2", introducedInRound: 2, severity: "blocking" });
   });
 
+  it("campos do servidor enviados pela IA não chegam ao resultado", () => {
+    const sujo = {
+      severity: "question", title: "q", humanDecision: "keep", commit: "abc",
+      authorReply: "x", reviewerReply: "y", status: "fixed", introducedInRound: 1,
+    } as unknown as Parameters<typeof normalizeSubmittedFindings>[0][number];
+    const [f] = normalizeSubmittedFindings([sujo], 1, []);
+    expect(f).toEqual({ id: "f1", severity: "question", title: "q", status: "open", introducedInRound: 1 });
+    expect(pendingQuestions([f]).map((x) => x.id)).toEqual(["f1"]);
+  });
+
+  it("copia file, line, proof e fix", () => {
+    const proof = { kind: "rule" as const, ref: "r", detail: "d" };
+    const [f] = normalizeSubmittedFindings(
+      [{ severity: "blocking", title: "t", file: "a.ts", line: 3, proof, fix: "troque" }], 1, []);
+    expect(f).toMatchObject({ file: "a.ts", line: 3, proof, fix: "troque", severity: "blocking" });
+  });
+
+  it("item com id já existente é pulado (é veredito, não achado novo)", () => {
+    const out = normalizeSubmittedFindings(
+      [{ id: "f1", severity: "suggestion", title: "de novo" }, { severity: "suggestion", title: "novo" }], 1, [finding()]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ id: "f2", title: "novo" });
+  });
+
+  it("id informado que não existe é regerado como f<n>", () => {
+    const out = normalizeSubmittedFindings([{ id: "zzz", severity: "suggestion", title: "n" }], 1, [finding()]);
+    expect(out[0].id).toBe("f2");
+  });
+
   it("introducedInRound de outra rodada não vale como marca", () => {
     expect(() => normalizeSubmittedFindings([{ severity: "suggestion", title: "n", introducedInRound: 1 }], 2, []))
       .toThrow(/lista fechada/);

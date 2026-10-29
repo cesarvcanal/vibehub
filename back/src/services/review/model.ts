@@ -94,15 +94,21 @@ export function normalizeSubmittedFindings(input: SubmittedFinding[], round: num
           `(só o que a correção do autor introduziu): "${item.title}"`,
       );
     }
-    const { id: _id, introducedInRound: _r, ...rest } = item;
     const severity = item.severity === "blocking" && !hasProof(item.proof) ? "suggestion" : item.severity;
-    out.push({
-      ...rest,
-      severity,
+    // Allowlist explícita: humanDecision, commit, authorReply e reviewerReply são do servidor/humano/autor
+    // e nunca podem vir da IA do revisor (uma dúvida já "decidida" liberaria o ready sem humano).
+    const finding: Finding = {
       id: `f${existing.length + out.length + 1}`,
+      severity,
+      title: item.title,
       status: "open",
       introducedInRound: round,
-    });
+    };
+    if (item.file !== undefined) finding.file = item.file;
+    if (item.line !== undefined) finding.line = item.line;
+    if (item.proof !== undefined) finding.proof = item.proof;
+    if (item.fix !== undefined) finding.fix = item.fix;
+    out.push(finding);
   }
   return out;
 }
