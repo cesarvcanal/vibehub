@@ -102,8 +102,11 @@ describe("forgetDeletedRemoteBranch — a branch the merge deleted on GitHub doe
   async function cardAfterMerge(remoteMoved: "deleted" | "moved", opts: { alsoOnRemote?: string } = {}) {
     const root = await mkdtemp(join(tmpdir(), "vibehub-lease-"));
     roots.push(root);
-    const sh = (cwd: string, script: string) =>
-      execFileSync("bash", ["-c", script], { cwd, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+    // Only a clean git: none of the runner's GIT_* (the card's GIT_CONFIG_* is set there, a GIT_DIR
+    // would point every command at another repository), and no global or system config.
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+    const gitEnv = { ...env, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+    const sh = (cwd: string, script: string) => execFileSync("bash", ["-c", script], { cwd, encoding: "utf8", env: gitEnv });
     const commit = (m: string) => `git -c user.name=t -c user.email=t@t commit -q --allow-empty -m ${m}`;
     sh(root, "git init -q --bare remote.git && git clone -q remote.git card 2>/dev/null");
     const card = join(root, "card");
@@ -134,6 +137,18 @@ describe("forgetDeletedRemoteBranch — a branch the merge deleted on GitHub doe
     const repo = await cardAfterMerge("deleted", { alsoOnRemote: "feature/card/x" });
     expect(repo.push(deliver.forgetDeletedRemoteBranch("card/x"))).toContain("pushed");
     expect(repo.remoteHead()).toBe(repo.cardHead());
+  });
+
+  it("the runner's GIT_* variables do not reach the temporary repositories", async () => {
+    // A runner with GIT_DIR (or GIT_CONFIG_*) set would point every git here at another repository.
+    vi.stubEnv("GIT_DIR", join(tmpdir(), "vibehub-lease-not-a-repo"));
+    try {
+      const { deliver } = await load();
+      const repo = await cardAfterMerge("deleted");
+      expect(repo.push(deliver.forgetDeletedRemoteBranch("card/x"))).toContain("pushed");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("a branch that still exists on the remote keeps its lease: someone else's push is not overwritten", async () => {
