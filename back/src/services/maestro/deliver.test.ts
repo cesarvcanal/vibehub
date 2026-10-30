@@ -597,6 +597,72 @@ describe("deliver no modo só-merge (botão de merge da revisão de PR)", () => 
   });
 });
 
+describe("a branch do card sai do GitHub depois do merge (o trabalho já está na base)", () => {
+  /** The delete-branch step answers with this; the rest of the wiring as usual. */
+  function wireDelete(answer: string) {
+    wire();
+    const merged = runScript.getMockImplementation()!;
+    runScript.mockImplementation(async (script: string) => {
+      if (script.includes("git/refs/heads/")) return { stdout: `${answer}\n`, stderr: "" };
+      return await merged(script);
+    });
+  }
+  const deleteScript = () => scripts().find((s) => s.includes("git/refs/heads/"));
+
+  it("merge apaga a branch do card quando não sobra PR aberto saindo dela", async () => {
+    const { deliver, card } = await makeCard();
+    wireDelete("__VIBEHUB_DELIVER__ branch deleted");
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true });
+    expect(out).toMatchObject({ merged: true, reason: "merged", headBranch: "deleted" });
+    const script = deleteScript()!;
+    expect(script).toContain(`git/refs/heads/${out.cardBranch}`);
+    expect(script).toContain("repos/acme/repo/");
+    // o token vai pelo stdin, nunca no argv do docker exec
+    for (const line of script.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
+  });
+
+  it("branch com outro PR aberto (o mesmo card com PR pra outra base) fica: apagar fecharia esse PR", async () => {
+    const { deliver, card } = await makeCard();
+    wireDelete("__VIBEHUB_DELIVER__ branch kept");
+    expect(await deliver.deliver(card.id, { branch: "dev", authorized: true })).toMatchObject({ merged: true, headBranch: "kept" });
+  });
+
+  it("falha ao apagar não desfaz o merge: volta merged, com a branch marcada como falha", async () => {
+    const { deliver, card } = await makeCard();
+    wireDelete("boom\n__VIBEHUB_DELIVER__ branch error delete");
+    expect(await deliver.deliver(card.id, { branch: "dev", authorized: true })).toMatchObject({ merged: true, reason: "merged", headBranch: "failed" });
+  });
+
+  it("sem merge, nada é apagado: sem autorização, gate vermelho ou merge que falha", async () => {
+    const { deliver, card } = await makeCard();
+    wireDelete("__VIBEHUB_DELIVER__ branch deleted");
+    expect((await deliver.deliver(card.id, { branch: "dev" })).headBranch).toBeUndefined();
+    wire({ merge: "nope\n__VIBEHUB_DELIVER__ error merge\n" });
+    expect(await deliver.deliver(card.id, { branch: "dev", authorized: true })).toMatchObject({ merged: false });
+    expect(deleteScript()).toBeUndefined();
+  });
+});
+
+describe("buildDeleteBranchScript / parseDeleteBranch", () => {
+  it("guarda a branch padrão e a que ainda tem PR aberto; apaga pela API com o token do stdin", async () => {
+    const { deliver } = await load();
+    const script = deliver.buildDeleteBranchScript("vibehub-runner", "c1", TOKEN, "/work/x", PR, "card/the-fix-ab12");
+    expect(script).toContain("defaultBranchRef");
+    expect(script).toContain("gh pr list --repo 'acme/repo' --head 'card/the-fix-ab12' --state open");
+    expect(script).toContain("gh api -X DELETE 'repos/acme/repo/git/refs/heads/card/the-fix-ab12'");
+    for (const line of script.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
+    expect(() => deliver.buildDeleteBranchScript("vibehub-runner", "c1", TOKEN, "/work/x", "https://example.com/x", "b")).toThrow(/PR/);
+  });
+
+  it("lê o resultado: apagada, mantida ou falha (uma branch que já não existe conta como apagada)", async () => {
+    const { deliver } = await load();
+    expect(deliver.parseDeleteBranch("__VIBEHUB_DELIVER__ branch deleted")).toBe("deleted");
+    expect(deliver.parseDeleteBranch("__VIBEHUB_DELIVER__ branch kept")).toBe("kept");
+    expect(deliver.parseDeleteBranch("x\n__VIBEHUB_DELIVER__ branch error delete")).toBe("failed");
+    expect(deliver.parseDeleteBranch("")).toBe("failed");
+  });
+});
+
 describe("deliver com revisão de PR ativa no card", () => {
   async function withActiveReview(phase: "reviewing" | "fixing" | "ready" | "merged" | "cancelled" = "reviewing") {
     const made = await makeCard();

@@ -78,6 +78,12 @@ export interface DeliverResult {
   locked?: true;
   /** Gate/git output when there is something to show (redacted, tail). */
   output?: string;
+  /**
+   * After a merge, what became of the card's branch on GitHub: `deleted` (the work is in the base
+   * now), `kept` (another open PR still comes from it, or it is the repo's default branch — deleting
+   * it would close that PR), or `failed` (the merge stands; the branch is just still there).
+   */
+  headBranch?: "deleted" | "kept" | "failed";
 }
 
 export interface DeliverOpts {
@@ -323,6 +329,12 @@ export async function cardConnectionToken(card: Card, project: Project): Promise
   return await tokenFor(identity.connectionId);
 }
 
+/** `owner/repo` out of a pull request's URL; null when it is not a GitHub PR URL. PURE. */
+function repoOfPr(prUrl: string): string | null {
+  const m = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/\d+(?:[/?#]|$)/.exec(prUrl);
+  return m ? m[1]! : null;
+}
+
 /**
  * The head of the card's OPEN PR from `branch` to `base`, as GitHub has it now: what the PR review
  * compares with the commit it approved when the author's turn ends. Read with the card's own
@@ -352,6 +364,69 @@ export async function readPrHead(
   } catch (err) {
     logger.warn({ card: cardId, detail: (err as Error).message }, "could not read the PR head");
     return null;
+  }
+}
+
+/**
+ * Deletes a MERGED PR's head branch on GitHub — the work is in the base now, and a branch left behind
+ * is clutter nobody cleans. Two guards, in the script, against the moment it runs: the repo's default
+ * branch is never deleted, and neither is a branch another OPEN PR still comes from (a card with a PR
+ * to `dev` and another to `prod`: deleting it would close the second one). Emits
+ * `__VIBEHUB_DELIVER__ branch deleted|kept`, or `__VIBEHUB_DELIVER__ error <stage>`. A branch that
+ * is already gone (GitHub's own auto-delete) counts as deleted. PURE.
+ */
+export function buildDeleteBranchScript(
+  containerName: string, cardId: string, token: string, cwd: string, prUrl: string, branch: string,
+): string {
+  assertSafeRemotePath(cwd);
+  const repo = repoOfPr(prUrl);
+  if (!repo) throw new Error(`not a GitHub PR url: ${prUrl}`);
+  const ref = shQuote(`repos/${repo}/git/refs/heads/${assertBranchName(branch)}`);
+  const body = [
+    ...ghTokenPreamble(token),
+    `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
+    `DEF=$(gh repo view ${shQuote(repo)} --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null)`,
+    `if [ "$DEF" = ${shQuote(branch)} ]; then echo "${MARKER} branch kept"; exit 0; fi`,
+    `if ! OPEN=$(gh pr list --repo ${shQuote(repo)} --head ${shQuote(branch)} --state open --json number --jq length 2>&1); then`,
+    `  printf '%s\\n' "$OPEN"; echo "${MARKER} error list"; exit 0;`,
+    `fi`,
+    `if [ "$OPEN" != "0" ]; then echo "${MARKER} branch kept"; exit 0; fi`,
+    `if OUT=$(gh api -X DELETE ${ref} 2>&1); then echo "${MARKER} branch deleted"; exit 0; fi`,
+    `case "$OUT" in *"Reference does not exist"*) echo "${MARKER} branch deleted"; exit 0;; esac`,
+    `printf '%s\\n' "$OUT"; echo "${MARKER} error delete"`,
+  ];
+  return dockerBashScript(containerName, body);
+}
+
+/** Parses the branch deletion. PURE. */
+export function parseDeleteBranch(stdout: string): "deleted" | "kept" | "failed" {
+  const m = new RegExp(`${MARKER} branch (deleted|kept)\\b`).exec(stdout);
+  return m ? (m[1] as "deleted" | "kept") : "failed";
+}
+
+/**
+ * Deletes a merged PR's head branch (see {@link buildDeleteBranchScript}), with the given connection
+ * or the card's. Never throws: a branch that could not be deleted costs a log line, not the merge.
+ */
+export async function deleteMergedBranch(
+  cardId: string, prUrl: string, branch: string, connectionId?: string,
+): Promise<"deleted" | "kept" | "failed"> {
+  try {
+    const card = await getCard(cardId);
+    const project = card ? await getProject(card.projectId) : undefined;
+    if (!card || !project) return "failed";
+    const { cwd } = cardWorkPaths(project, card);
+    const token = connectionId ? await tokenFor(connectionId) : await cardConnectionToken(card, project);
+    const out = await hostExecutor().runScript(
+      buildDeleteBranchScript(config.runner.container, card.id, token, cwd, prUrl, branch), { timeoutMs: 60_000 },
+    );
+    const result = parseDeleteBranch(out.stdout);
+    logger.info({ audit: true, action: "maestro.delete_branch", card: card.worktreeSlug, branch, result }, "merged PR's branch");
+    if (result === "failed") logger.warn({ card: card.worktreeSlug, branch, detail: cleanOutput(out.stdout) }, "could not delete the merged branch");
+    return result;
+  } catch (err) {
+    logger.warn({ card: cardId, branch, detail: (err as Error).message }, "could not delete the merged branch");
+    return "failed";
   }
 }
 
@@ -579,14 +654,11 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged, target, mergeOnly, by: opts.by },
     merged ? "deliver merged the PR" : "deliver could not merge the PR",
   );
-  if (merged) await rememberMerged(card, prUrl, target);
-  return {
-    prUrl,
-    merged,
-    reason: merged ? "merged" : "merge_failed",
-    branch: target,
-    cardBranch: source,
-    ...lock,
-    output: merged ? undefined : cleanOutput(output),
-  };
+  if (!merged) {
+    return { prUrl, merged, reason: "merge_failed", branch: target, cardBranch: source, ...lock, output: cleanOutput(output) };
+  }
+  await rememberMerged(card, prUrl, target);
+  // The work is in the base now: the card's branch leaves GitHub (unless another open PR comes from it).
+  const headBranch = await deleteMergedBranch(card.id, prUrl, source, opts.connectionId);
+  return { prUrl, merged, reason: "merged", branch: target, cardBranch: source, ...lock, headBranch };
 }
