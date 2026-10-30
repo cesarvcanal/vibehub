@@ -211,6 +211,32 @@ describe("PrReviewBlocks", () => {
     expect(screen.getByText("pronto pra merge")).toBeInTheDocument();
   });
 
+  it("a closed live review loses to a NEWER review on the board's summary, and is read again to follow it", async () => {
+    // r1 was merged on #10 and stopped being read.
+    live = { review: fullReview({ id: "r1", prNumber: 10, phase: "merged" }) };
+    const ui = (review: ReviewSummary) => <PrReviewBlocks card={{ id: "c1", prs: [prs[1]], review }} onOpenPanel={() => {}} />;
+    const view = renderApp(ui(reviewOf({ id: "r1", prNumber: 10, phase: "merged" })));
+    await waitFor(() => expect(reviewGets).toBe(1));
+    expect(await screen.findByText("sem revisão")).toBeInTheDocument();
+
+    // someone asked a review of #12 elsewhere: the board's summary now carries r2
+    live = { review: fullReview({ id: "r2", prNumber: 12, phase: "ready", round: 1 }) };
+    view.rerender(ui(reviewOf({ id: "r2", prNumber: 12, phase: "reviewing", round: 1 })));
+    // the summary speaks for #12 at once, not the stale merged r1...
+    expect(screen.getByText("rodada 1/3")).toBeInTheDocument();
+    // ...and the live read is taken again, so the block follows r2 without the board
+    await waitFor(() => expect(reviewGets).toBe(2));
+    expect(await screen.findByText("pronto pra merge")).toBeInTheDocument();
+  });
+
+  it("an OPEN live review still wins over an older summary (the live read lands before the board polls)", async () => {
+    live = { review: fullReview({ id: "r2", prNumber: 12, phase: "reviewing", round: 1 }) };
+    renderApp(
+      <PrReviewBlocks card={{ id: "c1", prs: [prs[1]], review: reviewOf({ id: "r1", prNumber: 12, phase: "ready", round: 3 }) }} onOpenPanel={() => {}} />,
+    );
+    expect(await screen.findByText("rodada 1/3")).toBeInTheDocument();
+  });
+
   it("renders nothing for a card with no PR", () => {
     const { container } = renderApp(<PrReviewBlocks card={{ id: "c1" }} onOpenPanel={() => {}} />);
     expect(container).toBeEmptyDOMElement();
