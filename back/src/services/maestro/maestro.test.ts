@@ -203,6 +203,19 @@ describe("listTerminals", () => {
     expect(list[0]?.situation).toBe("no session");
   });
 
+  it("leaves REVIEWER cards out: the PR review drives them, not other cards", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const author = await registry.createCard({ projectId: p.id, title: "login" });
+    await registry.createAccount({ name: "Mussa" });
+    const reviewer = await registry.createReviewerCard({
+      authorCard: author, reviewerAccountSlug: "mussa", prBranch: "card/login", title: "Revisão PR #7 · login",
+    });
+    const list = await maestro.listTerminals();
+    expect(list.map((t) => t.cardId)).toEqual([author.id]);
+    expect(list.some((t) => t.cardId === reviewer.id)).toBe(false);
+  });
+
   it("filters by project name", async () => {
     const { maestro, registry } = await load();
     const one = await registry.createProject({ name: "billing" });

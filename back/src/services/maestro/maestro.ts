@@ -214,7 +214,11 @@ export function buildReadTranscriptScript(containerName: string, transcriptDir: 
   return `docker exec ${shQuote(containerName)} sh -c ${shQuote(inner)} _ ${shQuote(transcriptDir)}`;
 }
 
-/** Lists the terminals with their current situation. `project` filters by id or part of the name. */
+/**
+ * Lists the terminals with their current situation. `project` filters by id or part of the name.
+ * REVIEWER cards (`reviewOf`) are left out, as on the board: the PR review drives them (only its
+ * orchestrator types there), so they are not terminals another card coordinates.
+ */
 export async function listTerminals(project?: string): Promise<TerminalSummary[]> {
   const [projects, cards] = await Promise.all([listProjects(), listAllCards()]);
   const byId = new Map(projects.map((p) => [p.id, p]));
@@ -224,6 +228,7 @@ export async function listTerminals(project?: string): Promise<TerminalSummary[]
   for (const card of cards) {
     const owner = byId.get(card.projectId);
     if (!owner) continue; // orphan card (project deleted) — not a terminal anyone can reach
+    if (card.reviewOf) continue; // a PR reviewer session — the review drives it
     if (filter && !matchesProject(owner, filter)) continue;
     out.push(terminalSummary(card, owner, now));
   }

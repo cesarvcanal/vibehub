@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { listTerminals, sendToTerminal, readTerminal, reportState, agentOriginFor, SEND_READY_WAIT_MS } from "../services/maestro/maestro.js";
-import { DECLARED_STATES } from "../services/board/registry.js";
+import { DECLARED_STATES, getCard } from "../services/board/registry.js";
 import { recordMessage, MESSAGE_TYPES, SEVERITIES, type MessageType, type Severity } from "../services/events/cardEvents.js";
 import { sendAnswer } from "./events.js";
 import { runGate } from "../services/maestro/gate.js";
@@ -84,7 +84,8 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "Delegate an instruction to another card: `text` arrives as a message in that card's " +
         "conversation (its native chat when that is on, else typed at its terminal's prompt), exactly " +
         "as if a person had sent it. A card that is asleep (hibernated, never opened) is woken on its " +
-        "own; a card PAUSED on purpose is refused — ask the user. Fails clearly when no Claude can run there. The receiving card keeps its own context, so " +
+        "own; a card PAUSED on purpose is refused — ask the user. A PR reviewer card is refused too (the review drives " +
+        "it). Fails clearly when no Claude can run there. The receiving card keeps its own context, so " +
         "send a self-contained instruction, not a fragment of your conversation.",
       inputSchema: {
         cardId: z.string().describe("id of the destination card (from vibehub_list_terminals)"),
@@ -101,6 +102,15 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     },
     async (a) => {
       try {
+        // A PR reviewer card answers only to the review: an author AI "helping" there would tell the
+        // reviewer AI what to mark fixed, and the next `gh pr review` would go out as the author (the
+        // send makes the sender's person the card's actor). The orchestrator calls the send directly.
+        if ((await getCard(a.cardId))?.reviewOf) {
+          throw new Error(
+            "this is a PR reviewer session; it is driven by the review, not by other cards — " +
+              "answer the review with vibehub_review_respond from your own card",
+          );
+        }
         return ok(await sendAnswer(a.cardId, a.inReplyTo, a.text, async (text) => sendToTerminal(a.cardId, text, {
           by: actor,
           // The order came from the PERSON behind the sending card: the destination works as them —

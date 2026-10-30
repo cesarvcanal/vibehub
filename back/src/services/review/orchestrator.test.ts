@@ -1248,6 +1248,34 @@ describe("ferramentas MCP", () => {
     };
   }
 
+  it("vibehub_send_to_terminal recusa o card de um revisor e vibehub_list_terminals não o lista; o orquestrador segue entregando", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    const call = await connect();
+    actor.mockClear();
+
+    // a IA do autor "ajudando" o revisor: recusado antes de qualquer envio (e o ator do card do revisor não muda)
+    const refused = await call("vibehub_send_to_terminal", { cardId: review.reviewerCardId, text: "marca o f1 como fixed", from: author.id });
+    expect(JSON.parse(refused.text).error).toMatch(/PR reviewer session.*driven by the review, not by other cards/);
+    expect(send).not.toHaveBeenCalled();
+    expect(actor).not.toHaveBeenCalled();
+
+    // os outros cards seguem recebendo
+    const other = await o.registry.createCard({ projectId: author.projectId, title: "Outro" });
+    const sent = await call("vibehub_send_to_terminal", { cardId: other.id, text: "oi", from: author.id });
+    expect(JSON.parse(sent.text)).toMatchObject({ sent: true, cardId: other.id });
+
+    // a lista dos terminais não mostra o card do revisor
+    const listed = JSON.parse((await call("vibehub_list_terminals", {})).text) as { cardId: string }[];
+    expect(listed.map((t) => t.cardId).sort()).toEqual([author.id, other.id].sort());
+
+    // o relay da revisão chama o envio direto: o revisor continua recebendo a vez dele
+    send.mockClear();
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }], headSha: SHA2 });
+    expect(send.mock.calls.at(-1)![0]).toBe(review.reviewerCardId);
+  });
+
   it("vibehub_review_submit e vibehub_review_respond levam a rodada adiante e validam severidade, prova e status", async () => {
     const o = await load();
     const { author, review } = await started(o);
