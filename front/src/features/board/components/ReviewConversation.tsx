@@ -183,6 +183,7 @@ const STATUS_CHIP: Record<ReviewEventItem["status"], string> = {
   contested: "border-sky-500/30 text-sky-400",
   accepted_risk: "border-border/60 text-muted-foreground",
   dropped: "border-border/60 text-muted-foreground",
+  wontfix: "border-border/60 text-muted-foreground",
 };
 
 /** The findings a line is about: what it is, where it stands after this line, and what was said of it. */

@@ -202,6 +202,24 @@ describe("ReviewPanel — o que mostra", () => {
     expect(within(third).getByText("cenário")).toBeInTheDocument();
   });
 
+  it("sugestão que o autor não vai aplicar aparece como tal, e o cabeçalho mostra o commit revisado e o atual quando o PR andou", async () => {
+    open("aut", review({
+      phase: "ready", reviewedSha: "a".repeat(40), prHeadSha: "b".repeat(40),
+      findings: [finding({ id: "s1", severity: "suggestion", status: "wontfix", title: "trocar a lib", authorReply: "fora do escopo" })],
+    }));
+    await loaded();
+    expect(within(screen.getByTestId("finding")).getByText("não vai aplicar")).toBeInTheDocument();
+    const commits = screen.getByTestId("review-commits");
+    expect(commits).toHaveTextContent("commit revisado aaaaaaa");
+    expect(commits).toHaveTextContent("o PR andou depois da revisão e está em bbbbbbb");
+  });
+
+  it("PR no mesmo commit da revisão: só o commit revisado, sem aviso", async () => {
+    open("aut", review({ phase: "ready", reviewedSha: "a".repeat(40), prHeadSha: "a".repeat(40) }));
+    await loaded();
+    expect(screen.getByTestId("review-commits")).not.toHaveTextContent("andou");
+  });
+
   it("os cinco status têm o seu texto", async () => {
     const statuses: [Finding["status"], string][] = [
       ["open", "aberto"], ["fixed", "corrigido"], ["contested", "contestado"],

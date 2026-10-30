@@ -195,6 +195,7 @@ function Header({
         <CloseButton onClose={onClose} />
       </div>
       <Steps round={review.round} phase={review.phase} />
+      <Commits reviewed={review.reviewedSha} head={review.prHeadSha} />
       <p data-testid="review-now" className="flex items-start gap-2 text-xs">
         <span
           aria-hidden
@@ -219,6 +220,28 @@ function Header({
         <Role label={t("review.roles.merger")} hint={t("review.roles.merger.hint")} name={nameOf(review.mergerUserId)} />
       </dl>
     </section>
+  );
+}
+
+/**
+ * Which commit the reviewer approved, and — when the PR moved after it — which one the PR is on now:
+ * the "is what I am about to merge what was reviewed?" question, answered before anybody presses merge.
+ */
+function Commits({ reviewed, head }: { reviewed?: string; head?: string }) {
+  const t = useT();
+  if (!reviewed) return null;
+  const moved = head !== undefined && head !== reviewed;
+  return (
+    <p data-testid="review-commits" className="flex flex-wrap items-baseline gap-x-2 text-[11px] text-muted-foreground">
+      <span>
+        {t("review.commits.reviewed")} <code className="font-mono text-foreground/80">{reviewed.slice(0, 7)}</code>
+      </span>
+      {moved ? (
+        <span className="text-amber-300">
+          {t("review.commits.moved")} <code className="font-mono">{head.slice(0, 7)}</code>
+        </span>
+      ) : null}
+    </p>
   );
 }
 
@@ -341,6 +364,7 @@ const STATUS_TONE: Record<Finding["status"], string> = {
   contested: "text-sky-400",
   accepted_risk: "text-muted-foreground",
   dropped: "text-muted-foreground",
+  wontfix: "text-muted-foreground",
 };
 
 /**
@@ -363,7 +387,7 @@ function FindingRow({
     f.reviewerReply ? { who: "reviewer" as const, text: f.reviewerReply } : null,
   ].filter((r): r is { who: "author" | "reviewer"; text: string } => r !== null);
   const refuted = f.severity === "refuted";
-  const closed = f.status === "fixed" || f.status === "dropped" || f.status === "accepted_risk";
+  const closed = f.status === "fixed" || f.status === "dropped" || f.status === "accepted_risk" || f.status === "wontfix";
 
   return (
     <li data-testid="finding" data-severity={f.severity} data-status={f.status} className="space-y-1 py-2 text-xs">

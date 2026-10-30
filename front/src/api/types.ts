@@ -530,7 +530,8 @@ export interface UploadResult {
 /** `cancelled` exists on the server but never reaches a card summary. */
 export type ReviewPhase = "reviewing" | "fixing" | "ready" | "impasse" | "merged" | "cancelled";
 export type FindingSeverity = "blocking" | "suggestion" | "question" | "refuted";
-export type FindingStatus = "open" | "fixed" | "contested" | "accepted_risk" | "dropped";
+/** `wontfix`: the author will not apply a SUGGESTION, and said why (suggestions only). */
+export type FindingStatus = "open" | "fixed" | "contested" | "accepted_risk" | "dropped" | "wontfix";
 
 /** What a board card carries about its review: the line of the block and of the sidebar. */
 export interface ReviewSummary {
@@ -604,6 +605,8 @@ export interface Review extends ReviewSummary {
   findings: Finding[];
   log: ReviewEvent[];
   reviewedSha?: string;
+  /** The PR's head the last time anybody saw it; not `reviewedSha` = the PR moved after the review. */
+  prHeadSha?: string;
   impasseReason?: string;
   approvePending?: boolean;
   /** The round the reviewer's AI last handed back: below `round`, the reviewer's turn is still open. */

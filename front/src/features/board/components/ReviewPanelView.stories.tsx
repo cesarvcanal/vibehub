@@ -176,7 +176,7 @@ const REOPENED_LOG = [
 export const PrContinuou: Story = {
   name: "7. O PR continuou: a revisão voltou pro revisor",
   args: {
-    review: { ...READY, phase: "reviewing", round: 3, lastSubmitRound: 2, log: REOPENED_LOG },
+    review: { ...READY, phase: "reviewing", round: 3, lastSubmitRound: 2, prHeadSha: "4f7d0b2".padEnd(40, "0"), log: REOPENED_LOG },
     working: { author: false, reviewer: true },
   },
 };
@@ -186,15 +186,23 @@ export const SugestoesAplicadas: Story = {
   args: {
     review: {
       ...READY, round: 3, lastSubmitRound: 3,
-      findings: fixed(["f1", "f2", "f3", "f4", "f5"], READY.findings),
+      findings: fixed(["f1", "f2", "f3", "f4"], READY.findings).map((x) =>
+        x.id === "f5" ? { ...x, status: "wontfix" as const, authorReply: "o nome segue o padrão do arquivo" } : x),
       log: [
         ...REOPENED_LOG,
         line({
-          min: 82, round: 3, who: "reviewer", text: "O push aplicou três das quatro sugestões; nada novo quebrou.",
+          min: 78, round: 3, who: "author", text: "Sugestões respondidas: 2 corrigido(s), 0 contestado(s), 1 não vai(ão) aplicar; head 4f7d0b2.",
+          items: [
+            { id: "f3", status: "fixed", commit: "4f7d0b2", reply: "Fallback pro nome do arquivo." },
+            { id: "f4", status: "fixed", commit: "4f7d0b2", reply: "Reaproveita o upload em voo." },
+            { id: "f5", status: "wontfix", reply: "O nome segue o padrão do arquivo." },
+          ],
+        }),
+        line({
+          min: 82, round: 3, who: "reviewer", text: "Conferi: duas sugestões aplicadas de verdade; a terceira fica como está.",
           items: [
             { id: "f3", status: "fixed", reply: "onError cai no nome do arquivo." },
             { id: "f4", status: "fixed", reply: "Upload em voo é reaproveitado no remount." },
-            { id: "f5", status: "fixed", reply: "Renomeado para drainUploadQueue." },
           ],
         }),
         line({ min: 82, round: 3, who: "system", text: "Sem bloqueante em aberto: pronto para o merge humano." }),
