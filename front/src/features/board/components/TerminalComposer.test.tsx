@@ -1,3 +1,4 @@
+import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import * as React from "react";
 import type { ReactElement, ReactNode } from "react";
@@ -7,7 +8,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   DRAFT_WRITE_DELAY_MS,
   TerminalComposer,
-  PENDING_UPLOADS_KEY,
   appendFragment,
   attachmentThumbUrl,
   barHeights,
@@ -21,14 +21,21 @@ import {
   loadDraft,
   pickAudioMimeType,
   resetDraftsForTesting,
+  restoreInterruptedUploads,
   saveDraft,
   simulateReloadForTesting,
+  stashUpload,
   textAfterSend,
 } from "./TerminalComposer";
 import { get, post } from "@/lib/api";
 import { MOBILE_QUERY } from "@/lib/useIsMobile";
 import { SLASH_MENU_LIMIT } from "@/features/board/lib/slashMenu";
 import { reloadHeld } from "@/lib/versionCheck";
+import {
+  listPendingUploads,
+  putPendingUpload,
+  resetPendingUploadsForTesting,
+} from "@/features/board/lib/pendingUploads";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -48,6 +55,21 @@ vi.mock("sonner", () => ({
     dismiss: vi.fn(),
   }),
 }));
+
+// fake-indexeddb clones what it stores with Node's structuredClone, which turns jsdom's Blob into
+// a plain object (a browser keeps it a Blob). Blobs pass through as themselves; the rest is cloned.
+const nodeStructuredClone = globalThis.structuredClone;
+globalThis.structuredClone = ((value: unknown) => {
+  const clone = (v: unknown): unknown => {
+    if (v instanceof Blob) return v;
+    if (Array.isArray(v)) return v.map(clone);
+    if (v && typeof v === "object" && Object.getPrototypeOf(v) === Object.prototype) {
+      return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, clone(x)]));
+    }
+    return nodeStructuredClone(v);
+  };
+  return clone(value);
+}) as typeof structuredClone;
 
 const mockGet = vi.mocked(get);
 const mockPost = vi.mocked(post);
@@ -216,12 +238,22 @@ describe("TerminalComposer — an F5 does not lose a pasted image", () => {
   const CARD = "240ce080-2d4e-41f2-985d-dbe44382e67d";
   const PATH = `/work/.uploads/${CARD}/1793365577802-image.png`;
 
+  beforeEach(async () => {
+    await resetPendingUploadsForTesting();
+  });
+
   function paste(file = new File(["png-bytes"], "image.png", { type: "image/png" })) {
     fireEvent.paste(screen.getByRole("textbox"), { clipboardData: { items: [], files: [file] } });
   }
 
-  function stash(): Record<string, { id: string; name: string; dataUrl: string }[]> {
-    return JSON.parse(sessionStorage.getItem(PENDING_UPLOADS_KEY) ?? "{}");
+  const never = () => vi.fn(() => new Promise<string>(() => {}));
+
+  function readText(blob: Blob): Promise<string> {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.readAsText(blob);
+    });
   }
 
   it("a finished upload comes back after the reload AS AN IMAGE, read from the runner", async () => {
@@ -239,72 +271,128 @@ describe("TerminalComposer — an F5 does not lose a pasted image", () => {
     expect(chip.querySelector("img")).toHaveAttribute("src", `/api/cards/${CARD}/uploads/1793365577802-image.png`);
   });
 
+  it("the runner failing to give the image back shows the file's name, not a broken icon", async () => {
+    saveDraft(CARD, "", [{ id: "a", name: "image.png", path: PATH, status: "ready" }]);
+    simulateReloadForTesting();
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId={CARD} onUploadImage={vi.fn()} />);
+    fireEvent.error(await screen.findByTestId("composer-attachment-thumb"));
+    expect(screen.queryByTestId("composer-attachment-thumb")).not.toBeInTheDocument();
+    expect(screen.getByTestId("composer-attachment")).toHaveTextContent("image.png");
+  });
+
   it("an F5 in the middle of the upload brings the picture back and sends it again", async () => {
     // First page: the upload never answers before the reload.
-    const { unmount } = renderComposer(
-      <TerminalComposer onSend={vi.fn()} cardId={CARD} onUploadImage={vi.fn(() => new Promise<string>(() => {}))} />,
-    );
+    const { unmount } = renderComposer(<TerminalComposer onSend={vi.fn()} cardId={CARD} onUploadImage={never()} />);
     await userEvent.type(screen.getByRole("textbox"), "olha o modal");
     paste();
-    await waitFor(() => expect(stash()[CARD]).toHaveLength(1));
+    await waitFor(async () => expect(await listPendingUploads(CARD)).toHaveLength(1));
     unmount();
     simulateReloadForTesting();
 
-    // Second page: the same chip, thumbnail already on screen, uploading again — this time it lands.
+    // Second page: the same chip, thumbnail on screen, uploading again — this time it lands.
     const onUploadImage = vi.fn(async (_file: File) => PATH);
     const onSend = vi.fn();
     renderComposer(<TerminalComposer onSend={onSend} cardId={CARD} onUploadImage={onUploadImage} />);
-    const chip = await screen.findByTestId("composer-attachment");
-    expect(chip.querySelector("img")?.getAttribute("src")).toMatch(/^data:image\/png;base64,/);
     expect(screen.getByRole("textbox")).toHaveValue("olha o modal");
+    await screen.findByTestId("composer-attachment");
     await waitFor(() => expect(onUploadImage).toHaveBeenCalledTimes(1));
     const resent = onUploadImage.mock.calls[0]?.[0] as File;
     expect(resent.name).toBe("image.png");
     expect(resent.type).toBe("image/png");
-    const bytes = await new Promise<string>((resolve) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result));
-      reader.readAsText(resent);
-    });
-    expect(bytes).toBe("png-bytes");
+    expect(await readText(resent)).toBe("png-bytes");
 
     await waitFor(() => expect(screen.getByTestId("composer-attachment").dataset.status).toBe("ready"));
     // Landed: the bytes leave the stash, the path is what the stored draft keeps now.
-    expect(stash()[CARD]).toBeUndefined();
+    await waitFor(async () => expect(await listPendingUploads(CARD)).toEqual([]));
     await userEvent.type(screen.getByRole("textbox"), "{Enter}");
     await waitFor(() => expect(onSend).toHaveBeenCalledWith(`olha o modal ${PATH}`));
   });
 
-  it("a picture removed before it landed does not come back on reload", async () => {
+  it("a FAILED upload comes back as an error with Retry — an F5 does not send it again by itself", async () => {
     const { unmount } = renderComposer(
-      <TerminalComposer onSend={vi.fn()} cardId={CARD} onUploadImage={vi.fn(() => new Promise<string>(() => {}))} />,
+      <TerminalComposer onSend={vi.fn()} cardId={CARD} onUploadImage={vi.fn(async () => null)} />,
     );
     paste();
-    await waitFor(() => expect(stash()[CARD]).toHaveLength(1));
+    await waitFor(() => expect(screen.getByTestId("composer-attachment").dataset.status).toBe("error"));
+    await waitFor(async () => expect((await listPendingUploads(CARD))[0]?.failed).toBe(true));
+    unmount();
+    simulateReloadForTesting();
+
+    const onUploadImage = vi.fn(async (_file: File) => PATH);
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId={CARD} onUploadImage={onUploadImage} />);
+    await waitFor(() => expect(screen.getByTestId("composer-attachment").dataset.status).toBe("error"));
+    expect(onUploadImage).not.toHaveBeenCalled();
+
+    // Retry still has the bytes.
+    await userEvent.click(screen.getByTestId("composer-attachment-retry"));
+    await waitFor(() => expect(screen.getByTestId("composer-attachment").dataset.status).toBe("ready"));
+    expect(onUploadImage).toHaveBeenCalledTimes(1);
+  });
+
+  it("a picture removed before it landed does not come back on reload", async () => {
+    const { unmount } = renderComposer(<TerminalComposer onSend={vi.fn()} cardId={CARD} onUploadImage={never()} />);
+    paste();
+    await waitFor(async () => expect(await listPendingUploads(CARD)).toHaveLength(1));
     await userEvent.click(screen.getByTestId("composer-attachment-remove"));
-    expect(stash()[CARD]).toBeUndefined();
+    await waitFor(async () => expect(await listPendingUploads(CARD)).toEqual([]));
     unmount();
     simulateReloadForTesting();
 
     const onUploadImage = vi.fn();
     renderComposer(<TerminalComposer onSend={vi.fn()} cardId={CARD} onUploadImage={onUploadImage} />);
+    await new Promise((r) => setTimeout(r, 30)); // the stash has answered by now
     expect(screen.queryByTestId("composer-attachment")).not.toBeInTheDocument();
     expect(onUploadImage).not.toHaveBeenCalled();
   });
 
-  it("an upload that lands before its bytes are even read is never stashed", async () => {
-    renderComposer(<TerminalComposer onSend={vi.fn()} cardId={CARD} onUploadImage={vi.fn(async () => PATH)} />);
+  it("a remount mid-upload WAITS for that upload instead of sending the file a second time", async () => {
+    let land: (path: string) => void = () => {};
+    const onUploadImage = vi.fn(() => new Promise<string>((resolve) => { land = resolve; }));
+    const { unmount } = renderComposer(
+      <TerminalComposer onSend={vi.fn()} cardId={CARD} onUploadImage={onUploadImage} />,
+    );
     paste();
+    await screen.findByTestId("composer-attachment");
+    unmount(); // "Preparando…" gives way to the terminal: the field is a new component
+
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId={CARD} onUploadImage={onUploadImage} />);
+    expect(screen.getByTestId("composer-attachment").dataset.status).toBe("uploading");
+    await act(async () => { land(PATH); });
     await waitFor(() => expect(screen.getByTestId("composer-attachment").dataset.status).toBe("ready"));
-    await new Promise((r) => setTimeout(r, 20)); // let the FileReader finish
-    expect(stash()[CARD]).toBeUndefined();
+    expect(onUploadImage).toHaveBeenCalledTimes(1);
   });
 
-  it("a corrupt stash is ignored, not an exception", () => {
-    sessionStorage.setItem(PENDING_UPLOADS_KEY, "{nope");
-    expect(loadDraft(CARD).attachments).toEqual([]);
-    sessionStorage.setItem(PENDING_UPLOADS_KEY, JSON.stringify({ [CARD]: [{ id: "x", name: "a.png", dataUrl: "not-a-data-url" }] }));
-    expect(loadDraft(CARD).attachments).toEqual([]);
+  it("a remount that finds a chip which never started its upload sends it, instead of spinning forever", async () => {
+    let land: (path: string | null) => void = () => {};
+    const onUploadImage = vi.fn(() => new Promise<string | null>((resolve) => { land = resolve; }));
+    const { unmount } = renderComposer(
+      <TerminalComposer onSend={vi.fn()} cardId={CARD} onUploadImage={onUploadImage} />,
+    );
+    const files = ["a.png", "b.png"].map((n) => new File(["x"], n, { type: "image/png" }));
+    fireEvent.change(screen.getByTestId("composer-input-gallery"), { target: { files } });
+    await waitFor(() => expect(screen.getAllByTestId("composer-attachment")).toHaveLength(2));
+    unmount(); // b.png was still waiting in line
+
+    const second = vi.fn(async (_file: File) => "/work/.uploads/c1/b.png");
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId={CARD} onUploadImage={second} />);
+    await act(async () => { land("/work/.uploads/c1/a.png"); });
+    await waitFor(() =>
+      expect(screen.getAllByTestId("composer-attachment").map((c) => c.dataset.status)).toEqual(["ready", "ready"]),
+    );
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(second.mock.calls[0]?.[0].name).toBe("b.png");
+  });
+
+  it("a save from before the paste does not throw the new picture out of the stash", async () => {
+    stashUpload(CARD, "att-1", "image.png", new File(["x"], "image.png", { type: "image/png" }));
+    saveDraft(CARD, "typed before the paste", []); // that render did not know the chip yet
+    await waitFor(async () => expect((await listPendingUploads(CARD)).map((r) => r.id)).toEqual(["att-1"]));
+  });
+
+  it("a malformed record in the stash is skipped, not an exception", async () => {
+    await putPendingUpload({ id: "bad", cardId: CARD } as unknown as Parameters<typeof putPendingUpload>[0]);
+    expect(await listPendingUploads(CARD)).toEqual([]);
+    expect(await restoreInterruptedUploads(CARD)).toEqual([]);
   });
 });
 
