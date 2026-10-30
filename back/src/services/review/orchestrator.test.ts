@@ -53,7 +53,7 @@ const deliverSpy = vi.fn(async () => ({ merged: true }));
 let prHeadNow: string | null = null;
 let prStateNow: "OPEN" | "MERGED" | "CLOSED" = "OPEN";
 const prHead = vi.fn(async (_cardId: string, _prUrl: string) => (prHeadNow ? { state: prStateNow, headSha: prHeadNow } : null));
-const deleteBranch = vi.fn(async (_cardId: string, _prUrl: string, _branch: string) => "deleted" as const);
+const afterMerged = vi.fn(async (_cardId: string, _prUrl: string, _base: string, _branch: string) => "deleted" as const);
 const prPeople = vi.fn(async (_cardId: string, _prUrl: string, people: { assignee?: string; reviewer?: string }) => ({
   ...(people.assignee ? { assignee: "ok" as const } : {}), ...(people.reviewer ? { reviewer: "ok" as const } : {}),
 }));
@@ -85,7 +85,7 @@ async function load() {
     ...(await vi.importActual<typeof import("../maestro/deliver.js")>("../maestro/deliver.js")),
     deliver: deliverSpy,
     readPrState: prHead,
-    deleteMergedBranch: deleteBranch,
+    afterPrMerged: afterMerged,
     setPrPeople: prPeople,
   }));
   vi.doMock("../../auth/users.js", async () => ({
@@ -136,7 +136,7 @@ beforeEach(async () => {
   prHead.mockClear();
   prHeadNow = null;
   prStateNow = "OPEN";
-  deleteBranch.mockClear();
+  afterMerged.mockClear();
   prPeople.mockClear();
 });
 afterEach(async () => {
@@ -1269,8 +1269,8 @@ describe("o PR mudou no GitHub fora do painel (merge à mão, PR fechado)", () =
       const after = (await o.store.getReview(review.id))!;
       expect(after.log.at(-1)).toMatchObject({ who: "system" });
       expect(after.log.at(-1)?.text).toMatch(/Mergeado em dev fora do painel/);
-      await vi.waitFor(() => expect(deleteBranch).toHaveBeenCalledWith(author.id, PR.url, PR.branch));
-      expect((await o.registry.getCard(author.id))?.prs?.find((p) => p.number === 7)?.mergedAt).toBeGreaterThan(0);
+      // o mesmo pós-merge do deliver: PR do card marcado e a branch fora do GitHub
+      await vi.waitFor(() => expect(afterMerged).toHaveBeenCalledWith(author.id, PR.url, "dev", PR.branch));
       // o card do revisor sai junto, como no botão
       await vi.waitFor(async () => expect((await o.registry.getCard(review.reviewerCardId))?.column).toBe("done"));
       expect(send).not.toHaveBeenCalled();
@@ -1288,7 +1288,7 @@ describe("o PR mudou no GitHub fora do painel (merge à mão, PR fechado)", () =
     prStateNow = "MERGED";
     const after = await o.orch.syncReviewWithGithub(review.id);
     expect(after?.phase).toBe("merged");
-    expect(deleteBranch).toHaveBeenCalledWith(author.id, PR.url, PR.branch);
+    expect(afterMerged).toHaveBeenCalledWith(author.id, PR.url, "dev", PR.branch);
   });
 
   it("o head atual do PR fica gravado (o painel mostra revisado x atual); em fixing isso não reabre nada", async () => {
@@ -1311,7 +1311,7 @@ describe("o PR mudou no GitHub fora do painel (merge à mão, PR fechado)", () =
     const after = await o.orch.syncReviewWithGithub(review.id);
     expect(after?.phase).toBe("cancelled");
     expect(after?.log.at(-1)?.text).toMatch(/fechado no GitHub sem merge/);
-    expect(deleteBranch).not.toHaveBeenCalled();
+    expect(afterMerged).not.toHaveBeenCalled();
     expect(await o.store.activeReviewFor(review.cardId, 7)).toBeUndefined();
   });
 

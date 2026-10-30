@@ -6,6 +6,7 @@ import { listUsers, type PublicUser } from "../auth/users.js";
 import * as registry from "../services/board/registry.js";
 import { cancelReview, decideQuestion, retryReview, startReview, syncReviewSoon } from "../services/review/orchestrator.js";
 import { mergeReviewedPr, ownGithubConnection } from "../services/review/merge.js";
+import { isBusy } from "../services/maestro/maestro.js";
 import { activeReviewFor, getReview, listReviewsForCards } from "../services/review/store.js";
 import type { Review } from "../services/review/model.js";
 
@@ -64,13 +65,14 @@ function newest(list: Review[]): Review | undefined {
 }
 
 /**
- * Se a IA de cada lado está num turno AGORA (o status que os hooks gravam no card). A fase só muda
- * quando uma ferramenta pousa; isto muda no instante em que a IA começa ou para de trabalhar, e é o
- * que deixa o painel dizer "IA mexendo no PR" com a revisão ainda em `ready`. Card que sumiu = parado.
+ * Se a IA de cada lado está num turno AGORA (`isBusy`: o status dos hooks, ou o turno do chat nativo).
+ * A fase só muda quando uma ferramenta pousa; isto muda no instante em que a IA começa ou para de
+ * trabalhar, e é o que deixa o painel dizer "IA mexendo" com a revisão ainda em `ready`. Card que
+ * sumiu = parado.
  */
 async function sidesWorking(r: Review): Promise<{ author: boolean; reviewer: boolean }> {
   const [author, reviewer] = await Promise.all([registry.getCard(r.cardId), registry.getCard(r.reviewerCardId)]);
-  return { author: author?.status === "working", reviewer: reviewer?.status === "working" };
+  return { author: !!author && isBusy(author), reviewer: !!reviewer && isBusy(reviewer) };
 }
 
 /** `not found` é 404, os códigos dados são 409, o resto é erro de quem pediu. */
@@ -239,9 +241,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     if (!found) return;
     const outcome = await mergeReviewedPr(found.review.id, found.user.id);
     if (outcome.kind === "merged") return await reply.send({ review: outcome.review, result: outcome.result });
-    const { status, error, reason, phase, review, result } = outcome;
-    return await reply.code(status).send({
-      error, ...(reason ? { reason } : {}), ...(phase ? { phase } : {}), ...(review ? { review } : {}), ...(result ? { result } : {}),
-    });
+    const { kind: _refused, status, ...body } = outcome;
+    return await reply.code(status).send(body);
   });
 }

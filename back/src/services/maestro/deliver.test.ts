@@ -4,10 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const runScript = vi.fn(async () => ({ stdout: "", stderr: "" }));
-/** The review's merge (the panel button's path), as the deliver of the merger calls it. */
-type MergeAnswer = Awaited<ReturnType<typeof import("../review/merge.js").mergeReviewedPr>>;
-let mergeAnswer: MergeAnswer | null = null;
-const mergeReviewedPr = vi.fn(async (_reviewId: string, _userId: string): Promise<MergeAnswer> => mergeAnswer!);
+
 const tokenFor = vi.fn(async () => TOKEN);
 
 /** A GitHub-token-shaped value (writeGhTokenLines validates it): safe charset, no spaces. */
@@ -25,7 +22,6 @@ async function load() {
     return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, writeFile: vi.fn(), ptyCommand: vi.fn() }) };
   });
   vi.doMock("../github/client.js", () => ({ tokenFor, gitAuthHeaderFor: vi.fn() }));
-  vi.doMock("../review/merge.js", () => ({ mergeReviewedPr }));
   return {
     deliver: await import("./deliver.js"),
     registry: await import("../board/registry.js"),
@@ -38,13 +34,8 @@ beforeEach(async () => {
   runScript.mockResolvedValue({ stdout: "", stderr: "" });
   tokenFor.mockClear();
   tokenFor.mockResolvedValue(TOKEN);
-  mergeReviewedPr.mockClear();
-  mergeAnswer = null;
 });
-afterEach(async () => {
-  vi.doUnmock("../review/merge.js");
-  await rm(dir, { recursive: true, force: true });
-});
+afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
 const PR = "https://github.com/acme/repo/pull/7";
 
@@ -723,64 +714,25 @@ describe("deliver com revisão de PR ativa no card", () => {
 
   const pushRan = () => scripts().some((s) => s.includes("git push --force-with-lease"));
 
-  it("ordem de quem NÃO é o responsável pelo merge: o push sai (o PR recebe a correção), o merge é recusado dizendo quem pode", async () => {
-    const { deliver, registry, card } = await withActiveReview("ready");
-    await registry.stampCardActor(card.id, "u-a");
+  it("deliver autorizado com revisão ativa empurra e roda o gate, mas o merge é recusado (o merge é da revisão)", async () => {
+    const { deliver, card } = await withActiveReview("ready");
     wire();
     const out = await deliver.deliver(card.id, { branch: "dev", authorized: true });
     expect(out).toMatchObject({ merged: false, reason: "review_active", branch: "dev", prUrl: PR });
-    expect(out.output).toMatch(/u-m/);
-    expect(out.output).toMatch(/Mergear na dev/);
-    expect(pushRan()).toBe(true);
-    expect(mergeRan()).toBe(false);
-    expect(mergeReviewedPr).not.toHaveBeenCalled();
-  });
-
-  it("ordem do responsável pelo merge com a revisão pronta: mergeia pelo caminho do botão e a revisão fecha", async () => {
-    const { deliver, registry, card } = await withActiveReview("ready");
-    await registry.stampCardActor(card.id, "u-m");
-    wire();
-    mergeAnswer = { kind: "merged", review: { phase: "merged" } as never, result: { prUrl: PR, merged: true, reason: "merged", branch: "dev", cardBranch: "card/x", headBranch: "deleted" } };
-    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true });
-    expect(mergeReviewedPr).toHaveBeenCalledWith("rev-1", "u-m");
-    expect(out).toMatchObject({ merged: true, reason: "merged", prUrl: PR, headBranch: "deleted" });
-    // o push veio antes (pode trazer commit novo), e o merge em si é o só-merge do botão, não um segundo
     expect(pushRan()).toBe(true);
     expect(mergeRan()).toBe(false);
   });
 
-  it("responsável pelo merge, mas o push trouxe commit que o revisor não viu: a revisão volta ao revisor e nada é mergeado", async () => {
-    const { deliver, registry, card } = await withActiveReview("ready");
-    await registry.stampCardActor(card.id, "u-m");
+  it("pushOnly: empurra e acha o PR, sem gate e sem merge, mesmo autorizado", async () => {
+    const { deliver, registry, card } = await makeCard();
     wire();
-    mergeAnswer = { kind: "refused", status: 409, reason: "head_moved", error: "o PR está em bbbbbbb, a revisão aprovou aaaaaaa", review: { phase: "reviewing", round: 2 } as never };
-    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true });
-    expect(out).toMatchObject({ merged: false, reason: "head_moved", prUrl: PR });
-    expect(out.output).toMatch(/rodada 2/);
-  });
-
-  it("responsável pelo merge com CI vermelho: não mergeia e diz o que falhou", async () => {
-    const { deliver, registry, card } = await withActiveReview("ready");
-    await registry.stampCardActor(card.id, "u-m");
-    wire();
-    mergeAnswer = { kind: "refused", status: 409, reason: "gate", error: "back: failing", review: { phase: "ready" } as never };
-    expect(await deliver.deliver(card.id, { branch: "dev", authorized: true })).toMatchObject({ merged: false, reason: "gate", output: "back: failing" });
-  });
-
-  it("responsável pelo merge com bloqueante aberto (fixing) ou dúvida pendente: push sim, merge não", async () => {
-    for (const phase of ["fixing", "reviewing", "impasse"] as const) {
-      const { deliver, registry, card } = await withActiveReview(phase);
-      await registry.stampCardActor(card.id, "u-m");
-      runScript.mockClear();
-      wire();
-      const out = await deliver.deliver(card.id, { branch: "dev", authorized: true });
-      expect(out).toMatchObject({ merged: false, reason: "review_active" });
-      expect(out.output).toMatch(new RegExp(phase === "fixing" ? "corrig" : "."));
-      expect(pushRan()).toBe(true);
-      expect(mergeReviewedPr).not.toHaveBeenCalled();
-      await rm(dir, { recursive: true, force: true });
-      dir = await mkdtemp(join(tmpdir(), "vibehub-deliver-"));
-    }
+    const out = await deliver.deliver(card.id, { branch: "dev", pushOnly: true, authorized: true });
+    expect(out).toMatchObject({ merged: false, reason: "pushed", prUrl: PR, branch: "dev" });
+    expect(pushRan()).toBe(true);
+    expect(scripts().some((s) => s.includes("gh pr checks") || s.includes("__VIBEHUB_GATE_JSON__"))).toBe(false);
+    expect(mergeRan()).toBe(false);
+    // o PR fica gravado no card, como em toda entrega
+    expect((await registry.getCard(card.id))?.prs?.[0]).toMatchObject({ number: 7, base: "dev" });
   });
 
   it("revisão iniciada durante a espera do CI barra o merge autorizado", async () => {

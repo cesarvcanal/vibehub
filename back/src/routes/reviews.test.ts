@@ -30,7 +30,7 @@ let deliverResult: DeliverResult = { merged: true, reason: "merged", branch: "de
 /** O PR no GitHub, como `readPrState` o leria (null = leitura que falhou). */
 let prState: { state: "OPEN" | "MERGED" | "CLOSED"; headSha: string } | null = null;
 const readPrState = vi.fn(async () => prState);
-const deleteMergedBranch = vi.fn(async () => "deleted" as const);
+const afterPrMerged = vi.fn(async () => "deleted" as const);
 const deliver = vi.fn(async (cardId: string, _opts: DeliverOpts = {}): Promise<DeliverResult> => {
   actorAtDeliver = (await (await import("../services/board/registry.js")).getCard(cardId))?.actorUserId;
   return deliverResult;
@@ -69,7 +69,7 @@ async function boot(): Promise<FastifyInstance> {
     ...(await vi.importActual<typeof import("../services/maestro/deliver.js")>("../services/maestro/deliver.js")),
     deliver,
     readPrState,
-    deleteMergedBranch,
+    afterPrMerged,
     setPrPeople: vi.fn(async () => ({})),
   }));
   const { buildServer } = await import("../index.js");
@@ -194,7 +194,7 @@ beforeEach(async () => {
   send.mockClear();
   deliver.mockClear();
   readPrState.mockClear();
-  deleteMergedBranch.mockClear();
+  afterPrMerged.mockClear();
   prState = null;
   actorAtDeliver = undefined;
   deliverResult = { prUrl: PR.url, merged: true, reason: "merged", branch: "dev", cardBranch: PR.branch };
@@ -402,7 +402,7 @@ describe("GET da revisão confere o PR no GitHub (merge feito fora do painel)", 
     expect((await read()).review.phase).toBe("ready");
     await vi.waitFor(async () => expect((await read()).review.phase).toBe("merged"));
     expect((await read()).review.log.at(-1).text).toMatch(/fora do painel/);
-    await vi.waitFor(() => expect(deleteMergedBranch).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(afterPrMerged).toHaveBeenCalledTimes(1));
     // Várias leituras em seguida: uma ida só ao GitHub.
     expect(readPrState).toHaveBeenCalledTimes(1);
     expect(ready.id).toBeTruthy();

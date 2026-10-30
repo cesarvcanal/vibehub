@@ -10,7 +10,7 @@ import {
   listTerminals, sendToTerminal, readTerminal, readCardActivity, waitForTurn, waitTerminalReady, SEND_READY_WAIT_MS, WAIT_MAX_MS, ACTIVITY_LIMIT_MAX,
 } from "../services/maestro/maestro.js";
 import { readCardChanges } from "../services/maestro/changes.js";
-import { deliver } from "../services/maestro/deliver.js";
+import { deliverCard } from "../services/review/deliverCard.js";
 import { inboxFor, markDelivered, takeUndelivered, type CardEvent } from "../services/events/cardEvents.js";
 import { sendAnswer } from "./events.js";
 import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX, type CardMoveOutcome } from "./cardMove.js";
@@ -459,7 +459,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         await requireLevel(user, a.cardId, "work");
         // Ordering the delivery IS an order: the push, the PR and the merge go out as this person.
         await recordCardActor(user, a.cardId);
-        return ok(await deliver(a.cardId, { branch: a.branch, authorized: a.authorized === true, by: user.id }));
+        return ok(await deliverCard(a.cardId, { branch: a.branch, authorized: a.authorized === true, by: user.id }));
       } catch (e) {
         return fail(e);
       }

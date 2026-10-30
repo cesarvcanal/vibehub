@@ -5,7 +5,7 @@ import { DECLARED_STATES, getCard } from "../services/board/registry.js";
 import { recordMessage, MESSAGE_TYPES, SEVERITIES, type MessageType, type Severity } from "../services/events/cardEvents.js";
 import { sendAnswer } from "./events.js";
 import { runGate } from "../services/maestro/gate.js";
-import { deliver } from "../services/maestro/deliver.js";
+import { deliverCard } from "../services/review/deliverCard.js";
 import { relayCardActor, actAsParticipant } from "../services/board/actor.js";
 import { announcePreview } from "../services/preview/announce.js";
 import { recordLearning } from "../services/brain/learn.js";
@@ -332,7 +332,7 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     },
     async (a) => {
       try {
-        return ok(await deliver(a.card, { branch: a.branch, authorized: a.authorized === true, by: actor }));
+        return ok(await deliverCard(a.card, { branch: a.branch, authorized: a.authorized === true, by: actor }));
       } catch (e) {
         return fail(e);
       }

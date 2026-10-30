@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
-  getCard, createReviewerCard, removeCard, updateCard, cardMoveEffect, isHumanActive, shareWith, markCardPrMerged,
-  listGithubConnections,
+  getCard, createReviewerCard, removeCard, updateCard, cardMoveEffect, isHumanActive, shareWith, getGithubConnection,
 } from "../board/registry.js";
 import { resumeCard } from "../board/workspace.js";
 import { recordCardActor } from "../board/actor.js";
@@ -9,7 +8,7 @@ import { findUser } from "../../auth/users.js";
 import { cardLevel } from "../../auth/access.js";
 import { creatorAccountSlug, getUserGit } from "../../auth/userGit.js";
 import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
-import { deleteMergedBranch, readPrState, setPrPeople } from "../maestro/deliver.js";
+import { afterPrMerged, readPrState, setPrPeople } from "../maestro/deliver.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { eventsAfter, onCardEvent, recordMessage, type CardEvent, type Severity } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
@@ -128,22 +127,19 @@ async function coauthorTrailer(r: Review): Promise<string | undefined> {
   return git?.gitName && git.gitEmail ? `Co-authored-by: ${git.gitName} <${git.gitEmail}>` : undefined;
 }
 
-/** A lista fechada ao autor, com a linha de crédito do co-autor quando há uma. */
-async function authorPrompt(r: Review): Promise<string> {
-  return authorFixPrompt(r, { coauthorTrailer: await coauthorTrailer(r) });
-}
-
-/** O texto que a vez deste lado pede: rodada 1 inteira, delta da 2 em diante, ou a lista do autor. */
+/**
+ * O texto que a vez deste lado pede: rodada 1 inteira, delta da 2 em diante, ou a lista do autor (com
+ * a linha de crédito do co-autor, quando há uma).
+ */
 async function promptFor(r: Review, side: Side): Promise<string> {
-  if (side === "author") return await authorPrompt(r);
+  if (side === "author") return authorFixPrompt(r, { coauthorTrailer: await coauthorTrailer(r) });
   return r.round <= 1 ? reviewerRoundPrompt(r) : reviewerDeltaPrompt(r);
 }
 
 /** O login GitHub da conexão PRÓPRIA de uma pessoa no vibehub; sem uma, undefined. */
 async function githubLogin(userId: string): Promise<string | undefined> {
   const own = (await getUserGit(userId))?.githubConnectionId;
-  if (!own) return undefined;
-  return (await listGithubConnections()).find((c) => c.id === own)?.login;
+  return own ? (await getGithubConnection(own))?.login : undefined;
 }
 
 /**
@@ -312,7 +308,7 @@ export async function relayReview(
 async function dispatch(r: Review): Promise<Review> {
   if (r.phase === "fixing") {
     // O primeiro relay da rodada: o único que tira o card do autor de Paused.
-    await relayReview(r, "author", await authorPrompt(r), { unpause: true });
+    await relayReview(r, "author", await promptFor(r, "author"), { unpause: true });
   } else if (r.phase === "ready") {
     await announcePhase(r);
     await relayReview(r, "reviewer", reviewerApprovePrompt(r), { approve: true });
@@ -425,8 +421,8 @@ export async function startReview(input: {
     );
     return fresh;
   });
-  await relayReview(review, "reviewer", reviewerRoundPrompt(review));
-  await namePeopleOnGithub(review);
+  // O GitHub não depende do relay (nem o relay dele): os dois saem juntos.
+  await Promise.all([relayReview(review, "reviewer", reviewerRoundPrompt(review)), namePeopleOnGithub(review)]);
   return (await getReview(review.id)) ?? review;
 }
 
@@ -570,64 +566,41 @@ export async function submitAuthorResponse(
   applyAuthorResponses(review, payload.items.filter((it) => review.findings.some((f) => f.id === it.id)));
 
   const fresh = (r: Review) => r.phase === "fixing" && payload.round === r.round && r.lastRespondRound !== payload.round;
-  if (fresh(review)) return await answerFixingRound(review, payload.items, headSha, fresh);
-
-  let landed = false as boolean;
+  let opened = false as boolean;
   const after = await mutateReview(review.id, (r) => {
     if (CLOSED.has(r.phase)) return;
+    const round = fresh(r);
     const known = new Map(r.findings.map((f) => [f.id, f]));
-    const changes = (it: AuthorAnswer) => {
+    // Na rodada vale o que bloqueia e as sugestões; fora dela, só as sugestões.
+    const answerable = (it: AuthorAnswer) => {
       const f = known.get(it.id);
-      if (!f || !answerableSuggestion(f)) return false;
+      return !!f && (answerableSuggestion(f) || (round && actionableForAuthor(f)));
+    };
+    // Fora da rodada, a mesma resposta de novo não grava outra fala.
+    const changed = (it: AuthorAnswer) => {
+      const f = known.get(it.id)!;
       return f.status !== it.status || f.authorReply !== it.reply || (it.commit !== undefined && f.commit !== it.commit);
     };
-    const allowed = payload.items.filter(changes);
-    if (allowed.length === 0) return;
+    const allowed = payload.items.filter((it) => answerable(it) && (round || changed(it)));
+    const ignored = payload.items.filter((it) => !answerable(it)).map((it) => it.id);
+    if (!round && allowed.length === 0) return;
     r.findings = applyAuthorResponses(r, allowed);
     r.prHeadSha = headSha;
-    note(r, "author", `Sugestões respondidas: ${answerCounts(allowed)}; head ${headSha.slice(0, 7)}.`, {
-      items: allowed.map((it) => ({ id: it.id, status: it.status, reply: it.reply, commit: it.commit })),
-    });
-    const outside = payload.items.filter((it) => !allowed.includes(it) && !(known.get(it.id) && answerableSuggestion(known.get(it.id)!)));
-    if (outside.length) {
-      note(r, "system", `Fora da rodada de correção só as respostas a sugestões valem; ignoradas: ${outside.map((it) => it.id).join(", ")}.`);
+    note(r, "author", `${round ? "" : "Sugestões respondidas: "}${answerCounts(allowed)}; head ${headSha.slice(0, 7)}.`, { items: allowed });
+    if (ignored.length) {
+      note(r, "system", round
+        ? `Respostas ignoradas (id desconhecido ou item que não espera resposta do autor): ${ignored.join(", ")}.`
+        : `Fora da rodada de correção só as respostas a sugestões valem; ignoradas: ${ignored.join(", ")}.`);
     }
-    landed = true;
-  });
-  return landed ? after : review;
-}
-
-/** A resposta da rodada de correção: o que bloqueia e as sugestões, e a rodada seguinte ao revisor. */
-async function answerFixingRound(
-  review: Review, items: AuthorAnswer[], headSha: string, fresh: (r: Review) => boolean,
-): Promise<Review> {
-  let landed = false as boolean;
-  const after = await mutateReview(review.id, (r) => {
-    if (!fresh(r)) return;
-    // Resposta a id que não existe ou a item fechado não derruba o resto: vai ao log.
-    const known = new Map(r.findings.map((f) => [f.id, f]));
-    const counts = (it: AuthorAnswer) => {
-      const f = known.get(it.id);
-      return !!f && (actionableForAuthor(f) || answerableSuggestion(f));
-    };
-    const allowed = items.filter(counts);
-    const ignored = items.filter((it) => !counts(it)).map((it) => it.id);
-    r.findings = applyAuthorResponses(r, allowed);
-    r.prHeadSha = headSha;
+    if (!round) return;
     r.lastRespondRound = r.round;
     r.nudges = 0;
-    note(r, "author", `${answerCounts(allowed)}; head ${headSha.slice(0, 7)}.`, {
-      items: allowed.map((it) => ({ id: it.id, status: it.status, reply: it.reply, commit: it.commit })),
-    });
-    if (ignored.length) {
-      note(r, "system", `Respostas ignoradas (id desconhecido ou item que não espera resposta do autor): ${ignored.join(", ")}.`);
-    }
     r.round += 1;
     r.phase = "reviewing";
     note(r, "system", `Rodada ${r.round} de ${MAX_ROUNDS}: o revisor confere só o diff.`);
-    landed = true;
+    opened = true;
   });
-  if (!landed) return after;
+  if (!opened) return after;
   await relayReview(after, "reviewer", reviewerDeltaPrompt(after));
   return (await getReview(after.id)) ?? after;
 }
@@ -770,6 +743,25 @@ export async function cancelReview(reviewId: string, by: string): Promise<Review
 }
 
 /**
+ * Cancela a revisão por um motivo do SISTEMA (o card de um lado foi excluído, o PR foi fechado no
+ * GitHub): a fala no log e a linha de auditoria. Idempotente — revisão já encerrada fica como está.
+ */
+async function cancelBySystem(
+  reviewId: string, text: string, audit: Record<string, unknown>,
+): Promise<{ review: Review; cancelled: boolean }> {
+  let cancelled = false as boolean;
+  const review = await mutateReview(reviewId, (x) => {
+    if (CLOSED.has(x.phase)) return;
+    x.phase = "cancelled";
+    x.approvePending = undefined;
+    note(x, "system", text);
+    cancelled = true;
+  });
+  if (cancelled) logger.info({ audit: true, action: "review.cancel", review: reviewId, ...audit }, "PR review cancelled");
+  return { review, cancelled };
+}
+
+/**
  * Um card saiu do board (o botão de excluir, a retenção de `done`, o projeto excluído). Toda revisão
  * ATIVA em que ele é o autor ou o revisor é cancelada: sem o card, nenhum relay chega e o "tentar de
  * novo" não teria para onde ir. Devolve os cards de revisor das revisões em que ele era o AUTOR, de
@@ -782,17 +774,7 @@ export async function closeReviewsOfRemovedCard(cardId: string, by?: string): Pr
   for (const r of [...asAuthor, ...(asReviewer ? [asReviewer] : [])]) {
     if (CLOSED.has(r.phase)) continue;
     const side = r.cardId === cardId ? "autor" : "revisor";
-    let cancelled = false as boolean;
-    await mutateReview(r.id, (x) => {
-      if (CLOSED.has(x.phase)) return;
-      x.phase = "cancelled";
-      x.approvePending = undefined;
-      note(x, "system", `Revisão cancelada: o card do ${side} foi excluído.`);
-      cancelled = true;
-    });
-    if (cancelled) {
-      logger.info({ audit: true, action: "review.cancel", review: r.id, reason: `${side} card removed`, card: cardId, by }, "PR review cancelled");
-    }
+    await cancelBySystem(r.id, `Revisão cancelada: o card do ${side} foi excluído.`, { reason: `${side} card removed`, card: cardId, by });
   }
   return [...new Set(asAuthor.map((r) => r.reviewerCardId))].filter((id) => id !== cardId);
 }
@@ -860,27 +842,14 @@ export async function syncReviewWithGithub(reviewId: string): Promise<Review | u
   if (!pr) return r;
   if (pr.state === "MERGED") {
     const after = await markReviewMerged(r.id, "GitHub", { outsidePanel: { headSha: pr.headSha } });
-    try {
-      await markCardPrMerged(r.cardId, r.base, r.prNumber, Date.now());
-    } catch (err) {
-      logger.warn({ review: r.id, detail: (err as Error).message }, "could not mark the card's PR as merged");
-    }
-    await deleteMergedBranch(r.cardId, r.prUrl, r.prBranch);
+    await afterPrMerged(r.cardId, r.prUrl, r.base, r.prBranch);
     return after;
   }
   if (pr.state === "CLOSED") {
-    let closed = false as boolean;
-    const after = await mutateReview(r.id, (x) => {
-      if (CLOSED.has(x.phase)) return;
-      x.phase = "cancelled";
-      x.approvePending = undefined;
-      note(x, "system", `PR #${x.prNumber} fechado no GitHub sem merge: revisão cancelada.`);
-      closed = true;
-    });
-    if (closed) {
-      logger.info({ audit: true, action: "review.cancel", review: r.id, reason: "PR closed on GitHub" }, "PR review cancelled");
-      await retireReviewerCard(after);
-    }
+    const { review: after, cancelled } = await cancelBySystem(
+      r.id, `PR #${r.prNumber} fechado no GitHub sem merge: revisão cancelada.`, { reason: "PR closed on GitHub" },
+    );
+    if (cancelled) await retireReviewerCard(after);
     return after;
   }
   const seen = r.prHeadSha === pr.headSha ? r : await mutateReview(r.id, (x) => {
@@ -902,20 +871,35 @@ const lastGithubSync = new Map<string, number>();
  * desperdício. É o que pega um merge feito direto no GitHub mesmo sem nenhum turno do autor.
  */
 export function syncReviewSoon(r: Review): void {
-  if (CLOSED.has(r.phase)) return;
-  const now = Date.now();
-  if (now - (lastGithubSync.get(r.id) ?? 0) < GITHUB_SYNC_MS) return;
-  lastGithubSync.set(r.id, now);
+  if (CLOSED.has(r.phase)) {
+    lastGithubSync.delete(r.id);
+    return;
+  }
+  if (!claimGithubSync(r.id)) return;
   void syncReviewWithGithub(r.id).catch((err: unknown) => {
     logger.warn({ review: r.id, detail: (err as Error).message }, "PR review could not sync with GitHub");
   });
 }
 
-/** O fim de turno do card do AUTOR: cada revisão aberta dele é conferida no GitHub. Nunca lança. */
+/** Marca a conferência de agora, se a última foi há mais de {@link GITHUB_SYNC_MS}. Devolve se pode ir. */
+function claimGithubSync(reviewId: string): boolean {
+  const now = Date.now();
+  if (now - (lastGithubSync.get(reviewId) ?? 0) < GITHUB_SYNC_MS) return false;
+  lastGithubSync.set(reviewId, now);
+  return true;
+}
+
+/**
+ * O fim de turno do card do AUTOR: cada revisão aberta dele é conferida no GitHub — em `ready` sempre
+ * (um push ali devolve a revisão ao revisor, e isso tem de aparecer já), nas outras fases no máximo
+ * uma vez por {@link GITHUB_SYNC_MS} (lá um push é a resposta à lista; o que importa é pegar um merge
+ * ou um fechamento feito por fora). Nunca lança.
+ */
 async function checkAuthorPush(cardId: string): Promise<void> {
   for (const r of await listReviewsForCards([cardId])) {
     if (CLOSED.has(r.phase)) continue;
-    lastGithubSync.set(r.id, Date.now());
+    if (r.phase === "ready") lastGithubSync.set(r.id, Date.now());
+    else if (!claimGithubSync(r.id)) continue;
     await syncReviewWithGithub(r.id);
   }
 }
