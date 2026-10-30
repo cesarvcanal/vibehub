@@ -390,6 +390,22 @@ describe("GET da revisão: quem está trabalhando agora", () => {
   });
 });
 
+describe("GET da revisão: o que o autor encontrou no trabalho", () => {
+  it("devolve os relatos do PR da revisão (vazio sem relato), e nada de outro PR do card", async () => {
+    const w = await world();
+    const review = (await startReview(w)).json().review as { id: string; prNumber: number };
+    const read = async () =>
+      (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review`, headers: { cookie: w.leitor.cookie } })).json();
+    expect((await read()).reported).toEqual([]);
+
+    const reg = await registry();
+    await reg.reportCardPrProblems(w.cardId, review.prNumber, [
+      { kind: "fixed", title: "push recusado depois do merge", detail: "lease com ref velho", commit: "046cd15" },
+    ]);
+    expect((await read()).reported).toMatchObject([{ id: "a1", kind: "fixed", commit: "046cd15" }]);
+  });
+});
+
 describe("GET da revisão confere o PR no GitHub (merge feito fora do painel)", () => {
   it("o PR mergeado direto no GitHub aparece mergeado na próxima leitura, e o freio segura o gh por um minuto", async () => {
     const w = await world();

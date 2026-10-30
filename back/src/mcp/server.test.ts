@@ -126,6 +126,23 @@ describe("MCP server instructions (the maestro persona)", () => {
     }
   });
 
+  it("the persona tells the agent to report what it found on the PR with vibehub_pr_report", () => {
+    const text = INSTRUCTIONS;
+    expect(text).toContain("vibehub_pr_report");
+    expect(text).toMatch(/never only in the chat/);
+  });
+
+  it("register vibehub_pr_report: the author's findings go to the review panel, never only to the chat", () => {
+    const server = createMcpServer("test") as unknown as {
+      _registeredTools?: Record<string, { description?: string }>;
+    };
+    const description = server._registeredTools?.["vibehub_pr_report"]?.description ?? "";
+    expect(description).toContain("$VIBEHUB_CARD_ID");
+    expect(description).toContain("review panel");
+    expect(description).toContain("out_of_scope");
+    expect(description).toContain("never merges");
+  });
+
   it("register the Cofre tools and instruct on using them for logins", () => {
     const server = createMcpServer("test") as unknown as {
       _registeredTools?: Record<string, unknown>;

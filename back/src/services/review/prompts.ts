@@ -1,4 +1,5 @@
 import { MAX_ROUNDS, pendingQuestions, type Finding, type FindingStatus, type Review } from "./model.js";
+import { reportedForReviewer, type ReportedProblem } from "./reported.js";
 
 /**
  * TEXTOS DA REVISÃO DE PR — o que o orquestrador digita no card do revisor e no do autor.
@@ -16,6 +17,16 @@ import { MAX_ROUNDS, pendingQuestions, type Finding, type FindingStatus, type Re
 
 const TOOL_SUBMIT = "vibehub_review_submit";
 const TOOL_RESPOND = "vibehub_review_respond";
+const TOOL_REPORT = "vibehub_pr_report";
+
+/**
+ * O que o autor encontra no caminho e o revisor não apontou vai ao painel, não só ao chat: sem isso o
+ * painel diz "tudo certo" enquanto o chat do card conta outra história.
+ */
+const REPORT_WHAT_YOU_FIND =
+  "Se no caminho você encontrar um problema que o revisor não apontou (e corrigir, ou deixar fora do escopo), relate " +
+  `com a ferramenta MCP ${TOOL_REPORT} (card: o seu; items: [{ kind: "fixed" com o commit | "out_of_scope", title, detail }]). ` +
+  "O relato aparece no painel da revisão e o revisor confere: não deixe só no chat.";
 
 /** Uma linha, sem quebras, com teto. O que a outra IA escreveu nunca vira um bloco solto no prompt. */
 export function oneLine(text: string | undefined, max = 300): string {
@@ -138,11 +149,12 @@ function reviewerIdentity(): string {
 }
 
 /** Rodada 1: revisão completa do PR com o /code-review, publicada no GitHub e entregue estruturada. */
-export function reviewerRoundPrompt(r: Review): string {
+export function reviewerRoundPrompt(r: Review, reported: ReportedProblem[] = []): string {
   return [
     header(r),
     reviewerIdentity(),
     rules(),
+    ...(reported.length ? [reportedForReviewer(reported)] : []),
     "",
     "1. Ponha o worktree na cabeça do PR:",
     `   git fetch origin && git reset --hard origin/${r.prBranch}`,
@@ -168,7 +180,7 @@ function answeredSinceReviewer(r: Review): Set<string> {
 }
 
 /** Rodada 2+: só o diff desde a rodada anterior, contra a lista fechada. */
-export function reviewerDeltaPrompt(r: Review): string {
+export function reviewerDeltaPrompt(r: Review, reported: ReportedProblem[] = []): string {
   const judged = r.findings.filter(underReview);
   const humanBlocked = judged.filter((f) => f.humanDecision === "block" || f.humanDecision === "keep");
   const waiting = pendingQuestions(r.findings);
@@ -186,6 +198,7 @@ export function reviewerDeltaPrompt(r: Review): string {
     reviewerIdentity(),
     "O autor respondeu à lista da rodada anterior e empurrou as correções.",
     rules(),
+    ...(reported.length ? [reportedForReviewer(reported)] : []),
     "",
     "1. Ponha o worktree na cabeça do PR:",
     `   git fetch origin && git reset --hard origin/${r.prBranch}`,
@@ -267,6 +280,8 @@ export function authorFixPrompt(r: Review, opts: { coauthorTrailer?: string } = 
       ]
       : []),
     "",
+    REPORT_WHAT_YOU_FIND,
+    "",
     "Depois de corrigir:",
     ...(opts.coauthorTrailer
       ? [`Em cada commit desta correção, termine a mensagem com esta linha (o crédito do co-autor no Git): ${opts.coauthorTrailer}`]
@@ -305,6 +320,7 @@ export function authorSuggestionsPrompt(r: Review, list: Finding[], opts: { by: 
     "Para cada uma:",
     "- Aplicou: commit, com teste do que mudou.",
     "- Não vai aplicar (fora do escopo, piora outra coisa, já resolvida): explique no reply.",
+    REPORT_WHAT_YOU_FIND,
     ...(opts.coauthorTrailer
       ? [`Em cada commit, termine a mensagem com esta linha (o crédito do co-autor no Git): ${opts.coauthorTrailer}`]
       : []),

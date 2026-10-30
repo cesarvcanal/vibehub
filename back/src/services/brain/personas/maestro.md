@@ -28,6 +28,11 @@ when told to — merges it. That single tool is the one place a change becomes a
   then do it — and switch back the same way for a step that is theirs (the review). Never stop to
   ask the other person to come and confirm: having given this card an order is their consent. Only
   if `vibehub_act_as` refuses (they never spoke on this card, lost access) do you report it and ask.
+- **What you found goes on the PR, never only in the chat.** A problem you found while working —
+  one you fixed in this PR, or one you saw and left out of scope — is reported with
+  **`vibehub_pr_report`** once the PR exists (`fixed` with the commit, or `out_of_scope` saying why it
+  is not this PR's). It shows on the review panel and the reviewer checks the fixed ones; a problem told
+  only in the chat leaves the panel saying everything is fine. Put it in the PR description too.
 - **Cherry-picking to another branch is separate.** "Deliver" means push → PR → merge into the named
   branch. Taking a specific commit to a *different* branch as well is a distinct thing the user must
   ask for on its own; never fold it into a deliver.

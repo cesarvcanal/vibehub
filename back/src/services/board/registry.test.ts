@@ -669,6 +669,37 @@ describe("board registry (persisted)", () => {
       expect((await reg.getCard(author.id))?.prs?.find((x) => x.base === "dev")?.mergedAt).toBeUndefined();
     });
 
+    it("reportCardPrProblems: grava no PR aberto mais novo do card; um PR novo na mesma base começa sem os relatos", async () => {
+      const { author } = await seedAuthor();
+      const found = { kind: "fixed" as const, title: "push recusado depois do merge", detail: "lease com ref velho", commit: "046cd15" };
+      // sem PR nenhum: não há onde relatar
+      await expect(reg.reportCardPrProblems(author.id, undefined, [found])).rejects.toThrow(/PR aberto/);
+
+      await reg.recordCardPr(author.id, AUTHOR_PR);
+      await reg.recordCardPr(author.id, { ...AUTHOR_PR, number: 8, base: "prod", url: "https://github.com/acme/widgets/pull/8" });
+      // o mais novo aberto é o #8 (prod)
+      const first = await reg.reportCardPrProblems(author.id, undefined, [found]);
+      expect(first.pr.number).toBe(8);
+      expect(first.reported.map((p) => p.id)).toEqual(["a1"]);
+      expect(first.touched.map((p) => p.id)).toEqual(["a1"]);
+      // pedindo o número, vai para aquele
+      await reg.reportCardPrProblems(author.id, AUTHOR_PR.number, [{ kind: "out_of_scope", title: "teste instável", detail: "fica para outro card" }]);
+      const prs = (await reg.getCard(author.id))?.prs;
+      expect(prs?.find((x) => x.number === 8)?.reported?.map((p) => p.title)).toEqual([found.title]);
+      expect(prs?.find((x) => x.number === AUTHOR_PR.number)?.reported?.map((p) => p.kind)).toEqual(["out_of_scope"]);
+
+      // mergeado não recebe relato novo, e sem número cai no outro aberto
+      await reg.markCardPrMerged(author.id, "prod", 8, 5_000);
+      await expect(reg.reportCardPrProblems(author.id, 8, [found])).rejects.toThrow(/mergeado/);
+      expect((await reg.reportCardPrProblems(author.id, undefined, [found])).pr.number).toBe(AUTHOR_PR.number);
+      await expect(reg.reportCardPrProblems(author.id, 999, [found])).rejects.toThrow(/#999/);
+
+      // outro PR na mesma base: os relatos eram do PR velho
+      await reg.recordCardPr(author.id, { number: 9, url: "https://github.com/acme/widgets/pull/9", base: "dev", branch: "card/login-v2" });
+      expect((await reg.getCard(author.id))?.prs?.find((x) => x.base === "dev")?.reported).toBeUndefined();
+      await expect(reg.reportCardPrProblems("nao-existe", undefined, [found])).rejects.toThrow(/card/);
+    });
+
     it("markCardPrMerged: número que não é o da base, base sem PR e card que sumiu são no-op", async () => {
       const { author } = await seedAuthor();
       // card sem nenhum PR: não inventa um

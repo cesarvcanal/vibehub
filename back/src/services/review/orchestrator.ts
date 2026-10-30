@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   getCard, createReviewerCard, removeCard, updateCard, cardMoveEffect, isHumanActive, shareWith, getGithubConnection,
+  reportCardPrProblems,
 } from "../board/registry.js";
 import { resumeCard } from "../board/workspace.js";
 import { recordCardActor } from "../board/actor.js";
@@ -26,6 +27,7 @@ import {
   impasseText, nudgePrefix, oneLine, phaseNoticeText, questionNoticeText, reviewerApprovePrompt, reviewerDeltaPrompt,
   reviewerRoundPrompt,
 } from "./prompts.js";
+import { reportedSummary, type ReportedProblem, type ReportedProblemInput } from "./reported.js";
 
 /**
  * ORQUESTRADOR DA REVISÃO DE PR — o servidor é o carteiro entre a IA do revisor (num card escondido,
@@ -134,7 +136,32 @@ async function coauthorTrailer(r: Review): Promise<string | undefined> {
  */
 async function promptFor(r: Review, side: Side): Promise<string> {
   if (side === "author") return authorFixPrompt(r, { coauthorTrailer: await coauthorTrailer(r) });
-  return r.round <= 1 ? reviewerRoundPrompt(r) : reviewerDeltaPrompt(r);
+  const reported = await reportedOf(r);
+  return r.round <= 1 ? reviewerRoundPrompt(r, reported) : reviewerDeltaPrompt(r, reported);
+}
+
+/** O que o autor relatou no PR da revisão (`vibehub_pr_report`), guardado no PR do card. */
+export async function reportedOf(r: Pick<Review, "cardId" | "prNumber">): Promise<ReportedProblem[]> {
+  return (await getCard(r.cardId))?.prs?.find((p) => p.number === r.prNumber)?.reported ?? [];
+}
+
+/**
+ * O autor relata o que encontrou no trabalho (`vibehub_pr_report`): grava no PR do card e, havendo
+ * revisão em andamento desse PR, leva à conversa uma fala dele com o que acabou de relatar. Não abre
+ * rodada nem chama ninguém: uma correção vem com push, e o push já devolve a revisão ao revisor.
+ */
+export async function reportAuthorProblems(
+  cardId: string, prNumber: number | undefined, items: ReportedProblemInput[],
+): Promise<{ prNumber: number; reported: ReportedProblem[]; touched: string[]; review?: string }> {
+  const { pr, reported, touched } = await reportCardPrProblems(cardId, prNumber, items);
+  const review = await activeReviewFor(cardId, pr.number);
+  if (review && touched.length) {
+    await mutateReview(review.id, (r) => {
+      if (!CLOSED.has(r.phase)) note(r, "author", reportedSummary(touched));
+    });
+  }
+  logger.info({ audit: true, action: "pr.report", card: cardId, pr: pr.number, items: touched.map((p) => p.id), review: review?.id }, "PR problems reported");
+  return { prNumber: pr.number, reported, touched: touched.map((p) => p.id), ...(review ? { review: review.id } : {}) };
 }
 
 /** O login GitHub da conexão PRÓPRIA de uma pessoa no vibehub; sem uma, undefined. */
@@ -431,7 +458,7 @@ export async function startReview(input: {
     return fresh;
   });
   // O GitHub não depende do relay (nem o relay dele): os dois saem juntos.
-  await Promise.all([relayReview(review, "reviewer", reviewerRoundPrompt(review)), namePeopleOnGithub(review)]);
+  await Promise.all([relayReview(review, "reviewer", reviewerRoundPrompt(review, await reportedOf(review))), namePeopleOnGithub(review)]);
   return (await getReview(review.id)) ?? review;
 }
 
@@ -633,7 +660,7 @@ export async function submitAuthorResponse(
     opened = true;
   });
   if (!opened) return after;
-  await relayReview(after, "reviewer", reviewerDeltaPrompt(after));
+  await relayReview(after, "reviewer", reviewerDeltaPrompt(after, await reportedOf(after)));
   return (await getReview(after.id)) ?? after;
 }
 
@@ -905,7 +932,7 @@ export async function reopenAfterHeadMoved(
     reopened = true;
   });
   logger.info({ audit: true, action: "review.head_moved", review: reviewId, cause, reopened, by }, "PR review: head moved after ready");
-  if (reopened) await relayReview(after, "reviewer", headMovedPrefix(after, cause) + reviewerDeltaPrompt(after));
+  if (reopened) await relayReview(after, "reviewer", headMovedPrefix(after, cause) + reviewerDeltaPrompt(after, await reportedOf(after)));
   return (await getReview(reviewId)) ?? after;
 }
 

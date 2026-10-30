@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { renderApp, setupState } from "@/test/render";
 import { ReviewPanel } from "./ReviewPanel";
 import { LANGUAGE_KEY, setLanguage } from "@/i18n";
-import type { Finding, Review } from "@/api/types";
+import type { Finding, ReportedProblem, Review } from "@/api/types";
 
 vi.setConfig({ testTimeout: 30_000 });
 configure({ asyncUtilTimeout: 8_000 });
@@ -46,6 +46,8 @@ function finding(overrides: Partial<Finding> = {}): Finding {
 let current: Review | null;
 /** Who the server says is working right now (the cards' status). */
 let working: { author: boolean; reviewer: boolean };
+/** What the author's AI reported having found on the PR (`vibehub_pr_report`); absent = a server that predates it. */
+let reported: ReportedProblem[] | undefined;
 let me: Who;
 let reviewGets = 0;
 
@@ -55,7 +57,7 @@ function serve() {
     if (url === "/setup/state") return setupState();
     if (url === "/cards/c1/review") {
       reviewGets += 1;
-      return current ? { review: current, working } : { review: null };
+      return current ? { review: current, working, ...(reported ? { reported } : {}) } : { review: null };
     }
     if (url === "/cards/c1/people") {
       return { people: Object.values(USERS).map((u) => ({ id: u.id, username: u.username, canReview: true })) };
@@ -366,6 +368,49 @@ describe("ReviewPanel — o que mostra", () => {
     await loaded();
     expect(screen.getByText("Mergeado na dev")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Mergear na|Cancelar revisão|Tentar de novo/ })).toBeNull();
+  });
+});
+
+describe("ReviewPanel — o que o autor encontrou no trabalho", () => {
+  afterEach(() => { reported = undefined; });
+
+  it("a aba Achados mostra os relatos do autor (corrigido neste PR, fora do escopo), contados no número da aba", async () => {
+    reported = [
+      { id: "a1", kind: "fixed", title: "push recusado depois do merge", detail: "o lease comparava com um ref velho", commit: "046cd151dd6f", at: 1 },
+      { id: "a2", kind: "out_of_scope", title: "teste instável no sdk-driver", detail: "falha também na main", file: "back/x.test.ts", line: 9, at: 2 },
+    ];
+    open("mer", review({ phase: "ready", round: 1, findings: [finding({ severity: "suggestion", status: "fixed" })] }));
+    await loaded();
+    const tab = screen.getByRole("tab", { name: /Achados/ });
+    expect(tab).toHaveTextContent("3");
+    await userEvent.click(tab);
+
+    const group = screen.getByTestId("reported-group");
+    expect(within(group).getByText("Encontrados pelo autor")).toBeInTheDocument();
+    const [fixedItem, laterItem] = within(group).getAllByTestId("reported");
+    expect(fixedItem).toHaveAttribute("data-kind", "fixed");
+    expect(within(fixedItem!).getByText("corrigido neste PR")).toBeInTheDocument();
+    expect(within(fixedItem!).getByText("push recusado depois do merge")).toBeInTheDocument();
+    expect(within(fixedItem!).getByText("o lease comparava com um ref velho")).toBeInTheDocument();
+    expect(within(fixedItem!).getByText("046cd15")).toBeInTheDocument();
+    expect(within(laterItem!).getByText("fora do escopo")).toBeInTheDocument();
+    expect(within(laterItem!).getByText("back/x.test.ts:9")).toBeInTheDocument();
+  });
+
+  it("sem achado do revisor, os relatos aparecem no lugar do 'nenhum achado'", async () => {
+    reported = [{ id: "a1", kind: "out_of_scope", title: "teste instável", detail: "fica para outro card", at: 1 }];
+    open("mer", review({ phase: "ready", round: 1 }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    expect(screen.getByTestId("reported-group")).toBeInTheDocument();
+    expect(screen.queryByText(/nenhum achado/i)).toBeNull();
+  });
+
+  it("servidor antigo (sem reported) e PR sem relato: nada de seção", async () => {
+    open("mer", review({ phase: "ready", round: 1, findings: [finding({ severity: "suggestion" })] }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    expect(screen.queryByTestId("reported-group")).toBeNull();
   });
 });
 

@@ -1601,6 +1601,74 @@ describe("conversa das IAs: cada fala leva os achados de que trata", () => {
   });
 });
 
+describe("o que o autor encontrou no trabalho (vibehub_pr_report)", () => {
+  const FOUND = { kind: "fixed" as const, title: "push recusado depois do merge", detail: "lease com ref velho", commit: "046cd15" };
+  const LATER = { kind: "out_of_scope" as const, title: "teste instável no sdk-driver", detail: "falha também na main" };
+
+  it("com revisão em andamento: grava no PR do card e a conversa ganha a fala do autor com o que ele relatou agora", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    const out = await o.orch.reportAuthorProblems(author.id, undefined, [FOUND, LATER]);
+    expect(out).toMatchObject({ prNumber: 7, review: review.id });
+    expect(out.reported.map((p) => p.id)).toEqual(["a1", "a2"]);
+
+    const log = (await o.store.getReview(review.id))!.log;
+    const said = log.filter((e) => e.who === "author");
+    expect(said).toHaveLength(1);
+    expect(said[0]!.text).toMatch(/^Relatei 2 problemas que encontrei no trabalho/);
+    expect(said[0]!.text).toContain("a1 corrigido neste PR (046cd15): push recusado depois do merge");
+
+    // atualizar um item só fala dele; ninguém é chamado (a correção vem com push, que já devolve a vez)
+    send.mockClear();
+    await o.orch.reportAuthorProblems(author.id, 7, [{ id: "a2", ...LATER, kind: "fixed", commit: "3873715" }]);
+    const last = (await o.store.getReview(review.id))!.log.filter((e) => e.who === "author").at(-1)!;
+    expect(last.text).toMatch(/^Relatei 1 problema/);
+    expect(last.text).toContain("a2 corrigido neste PR (3873715)");
+    expect(send).not.toHaveBeenCalled();
+    expect((await o.store.getReview(review.id))!.phase).toBe("reviewing");
+  });
+
+  it("sem revisão: grava no PR do card mesmo assim, e o revisor recebe os relatos quando a revisão começar", async () => {
+    const o = await load();
+    const { author } = await seed(o);
+    const out = await o.orch.reportAuthorProblems(author.id, undefined, [FOUND]);
+    expect(out.review).toBeUndefined();
+    expect((await o.registry.getCard(author.id))?.prs?.[0]?.reported?.map((p) => p.title)).toEqual([FOUND.title]);
+
+    send.mockClear();
+    const review = await o.orch.startReview({
+      cardId: author.id, prNumber: 7, reviewerUserId: "u-revisor", authorUserId: "u-autor", mergerUserId: "u-merger", by: "u-autor",
+    });
+    const toReviewer = send.mock.calls.find((c) => c[0] === review.reviewerCardId);
+    expect(String(toReviewer?.[1])).toContain("O autor relatou o que encontrou no trabalho");
+    expect(String(toReviewer?.[1])).toContain("a1 corrigido neste PR (046cd15)");
+  });
+
+  it("o delta do revisor também leva os relatos", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.reportAuthorProblems(author.id, undefined, [LATER]);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    send.mockClear();
+    await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }], headSha: SHA2 });
+    expect(send.mock.calls.at(-1)![0]).toBe(review.reviewerCardId);
+    expect(lastText()).toContain("a1 fora do escopo: teste instável no sdk-driver");
+  });
+
+  it("revisão encerrada não ganha fala; card sem PR aberto e relato inválido dão erro sem gravar", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.cancelReview(review.id, "u-merger");
+    const before = (await o.store.getReview(review.id))!.log.length;
+    await o.orch.reportAuthorProblems(author.id, undefined, [FOUND]);
+    expect((await o.store.getReview(review.id))!.log).toHaveLength(before);
+
+    await expect(o.orch.reportAuthorProblems(author.id, undefined, [{ ...FOUND, commit: undefined }])).rejects.toThrow(/commit/);
+    const lone = await o.registry.createCard({ projectId: author.projectId, title: "Sem PR" });
+    await expect(o.orch.reportAuthorProblems(lone.id, undefined, [FOUND])).rejects.toThrow(/PR aberto/);
+  });
+});
+
 describe("o card do revisor depois da revisão", () => {
   /** Entrar em `done` grava o "concluído" do card numa microtask: o teste espera por ele (e o disco fica quieto). */
   const concluded = async (o: Loaded, cardId: string) =>
@@ -1946,6 +2014,24 @@ describe("ferramentas MCP", () => {
     await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
     await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }], headSha: SHA2 });
     expect(send.mock.calls.at(-1)![0]).toBe(review.reviewerCardId);
+  });
+
+  it("vibehub_pr_report grava o relato no PR do card, fala na revisão em andamento e valida tipo e commit", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    const call = await connect();
+
+    const bad = await call("vibehub_pr_report", { card: author.id, items: [{ kind: "talvez", title: "t", detail: "d" }] });
+    expect(bad.isError).toBe(true);
+    const noCommit = await call("vibehub_pr_report", { card: author.id, items: [{ kind: "fixed", title: "t", detail: "d" }] });
+    expect(JSON.parse(noCommit.text).error).toMatch(/commit/);
+
+    const ok = await call("vibehub_pr_report", {
+      card: author.id, items: [{ kind: "out_of_scope", title: "teste instável", detail: "falha também na main", file: "x.test.ts", line: 3 }],
+    });
+    expect(ok.isError).toBe(false);
+    expect(JSON.parse(ok.text)).toMatchObject({ pr: 7, review: review.id, recorded: ["a1"], reported: [{ id: "a1", kind: "out_of_scope", line: 3 }] });
+    expect((await o.store.getReview(review.id))!.log.at(-1)).toMatchObject({ who: "author" });
   });
 
   it("vibehub_review_submit e vibehub_review_respond levam a rodada adiante e validam severidade, prova e status", async () => {
