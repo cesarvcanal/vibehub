@@ -29,7 +29,8 @@ import { cn } from "@/lib/utils";
  */
 
 export type Decision = "block" | "drop" | "keep" | "accept_risk";
-type Tab = "conversation" | "findings";
+export type ReviewTab = "conversation" | "findings";
+type Tab = ReviewTab;
 
 /** A banner over the footer's buttons: what the last merge click came to. */
 export interface PanelNotice {
@@ -55,11 +56,14 @@ export interface ReviewPanelViewProps {
   /** Ask the author's AI to apply these suggestions (ids of open suggestions). */
   onRequestSuggestions: (findingIds: string[]) => void;
   onClose: () => void;
+  /** The tab to open on, instead of the one the review calls for (the Storybook tour shows each). */
+  initialTab?: Tab;
 }
 
 export function ReviewPanelView(props: ReviewPanelViewProps) {
   const {
     review, working, nameOf, actions, busy, mergeBusy, notice, onMerge, onRetry, onCancel, onDecide, onRequestSuggestions, onClose,
+    initialTab,
   } = props;
   const t = useT();
   const stuck = new Set(review.phase === "impasse" ? stuckItems(review.findings).map((f) => f.id) : []);
@@ -70,7 +74,7 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
   // Until the person picks a tab, the panel shows where their attention is needed: the findings while
   // they have a decision to make there (it can appear later — a round landing with a doubt), the
   // conversation otherwise.
-  const [chosen, setTab] = React.useState<Tab | null>(null);
+  const [chosen, setTab] = React.useState<Tab | null>(initialTab ?? null);
   const tab: Tab = chosen ?? (decisionsHere > 0 ? "findings" : "conversation");
   // The author's AI is on a PR that was ready: what it pushes goes back to the reviewer, so the merge
   // waits for it to finish instead of racing it.
