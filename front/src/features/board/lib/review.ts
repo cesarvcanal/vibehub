@@ -90,7 +90,8 @@ export function reviewPill(
 
 /**
  * The PRs of a card the chat has a block for, newest first: only the ones still OPEN. A merged PR is
- * work done and leaves the screen (its review's history stays in the panel). Merged is either what
+ * work done and leaves the chat — the card's line in the sidebar still says "mergeado", and the panel
+ * keeps the review's history. Merged is either what
  * the server saw (`mergedAt`) or what the review says (`phase: "merged"`): the review can know first
  * — a live read lands before the board polls — and a PR recorded before `mergedAt` existed has only
  * the review's word. A PR closed without a merge is not tracked and stays. PURE — never reorders the
