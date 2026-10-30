@@ -20,7 +20,7 @@ import { ProjectFormDialog } from "@/features/board/components/ProjectFormDialog
 import { ProjectSidebar } from "@/features/board/components/ProjectSidebar";
 import { RunnerBanner } from "@/features/board/components/RunnerBanner";
 import { TerminalDeck } from "@/features/board/components/TerminalDeck";
-import { moveProjectLocal, readLocation, sortProjects, writeLocation } from "@/features/board/lib/board";
+import { REVIEW_PARAM, moveProjectLocal, readLocation, sortProjects, writeLocation } from "@/features/board/lib/board";
 import { deckLimit, dropFromDeck, pruneDeck, touchDeck, type DeckEntry } from "@/features/board/lib/deck";
 import { cardViewHeight } from "@/features/board/lib/focusMode";
 import { cn } from "@/lib/utils";
@@ -109,6 +109,16 @@ export function BoardPage() {
   // Clicking a card opens it; clicking the one already open closes it (back to that project's board).
   const openCard = (nextProjectId: string, nextCardId: string) =>
     go(nextProjectId, projectId === nextProjectId && cardId === nextCardId ? null : nextCardId);
+  // The PR line under a card: open it WITH the review's panel. It never toggles — landing on the card
+  // you are already in must not close it — and `?review=1` is only the ask: the card view takes it
+  // off the URL once the panel is up.
+  const openReview = (nextProjectId: string, nextCardId: string) => {
+    const params = writeLocation({ projectId: nextProjectId, cardId: nextCardId });
+    params.set(REVIEW_PARAM, "1");
+    setSearchParams(params);
+    // Landing on the card you are already in changes no id, so the drawer would stay over the panel.
+    setMenuOpen(false);
+  };
 
   /**
    * Keep the URL honest. A project id that no longer exists — deleted, or a stale bookmark — falls
@@ -265,6 +275,7 @@ export function BoardPage() {
       onCloseMobile={() => setMenuOpen(false)}
       onSelectProject={selectProject}
       onOpenCard={openCard}
+      onOpenReview={openReview}
       onReorder={(id, position) => reorderMutation.mutate({ id, position })}
       onNewProject={() => setNewProjectOpen(true)}
       // From the BOARD the sidebar's `+` jots work down without leaving the board (the card still

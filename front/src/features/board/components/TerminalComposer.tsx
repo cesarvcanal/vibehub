@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ArrowUp, Camera, Check, ImageIcon, Loader2, Mic, Paperclip, Pencil, Plus, RotateCw, Square, X } from "lucide-react";
 import { useInRouterContext } from "react-router-dom";
-import { ComposerVoiceButton, VoiceChatButton } from "@/features/voice/ComposerVoiceButton";
+import { ComposerVoiceButton, VoiceChatButton, useVoiceCallControl } from "@/features/voice/ComposerVoiceButton";
 import { useVoiceStatus } from "@/features/voice/status";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,6 +20,13 @@ import {
   applySlashPick, filterSlashCommands, slashQuery, type SlashCommandInfo,
 } from "@/features/board/lib/slashMenu";
 import { UltraFieldOverlay } from "@/features/board/components/UltraText";
+import { parseUploadPath, uploadImageUrl } from "@/features/board/lib/markdown";
+import {
+  deletePendingUpload,
+  listPendingUploads,
+  markPendingUploadFailed,
+  putPendingUpload,
+} from "@/features/board/lib/pendingUploads";
 import { t as translate, useT } from "@/i18n";
 import { useReloadHold } from "@/lib/versionCheck";
 
@@ -392,9 +399,136 @@ function scheduleStoredWrite(cardId: string, draft: StoredDraft | null): void {
   }
 }
 
+/* ------------------------------------------- uploads in flight, and the ones an F5 interrupted */
+
+/**
+ * The bytes behind every chip that has no path yet, by attachment id.
+ *
+ * Module-level, like the drafts, and for the same reason: the composer unmounts and remounts under
+ * a chip that is still going up (the card finishing "Preparando…", chat ↔ terminal, a card switch
+ * and back). Kept in the component, the bytes died with it and the chip came back as a spinner
+ * that never stopped — and blocked the send. Here a remount finds them, and Retry still works.
+ */
+const chipFiles = new Map<string, File>();
+
+/** Uploads on their way, by attachment id: a remount WAITS for this one instead of sending again. */
+const uploadsInFlight = new Map<string, Promise<string | null>>();
+
+/**
+ * What this page put in (or read from) the IndexedDB stash, by id — so keeping it in step costs no
+ * read. An entry that left the stash stays here as `gone`: a stash read that started before the
+ * delete still returns the record, and must not bring back a picture that has already landed.
+ */
+const stashed = new Map<string, { cardId: string; failed: boolean; seen: boolean; gone?: boolean }>();
+
+let stashSeq = 0;
+/** Bumped when the page's memory is thrown away (tests): a stash read started before is stale. */
+let stashGeneration = 0;
+
+/** A chip just started uploading: its bytes go to the stash until it has a path. */
+export function stashUpload(cardId: string, id: string, name: string, file: File): void {
+  stashed.set(id, { cardId, failed: false, seen: false });
+  stashSeq += 1;
+  void putPendingUpload({ id, cardId, name, blob: file, failed: false, order: Date.now() * 1000 + (stashSeq % 1000) });
+}
+
+/**
+ * Keeps the stash in step with a card's chips: one that got its path, was removed or was sent
+ * leaves it; one that failed is marked, so an F5 brings it back as an error with Retry instead of
+ * sending it again on every reload. Walks the in-memory map only — saveDraft runs per keystroke.
+ */
+function syncStash(cardId: string, attachments: readonly Attachment[]): void {
+  if (stashed.size === 0) return;
+  const byId = new Map(attachments.map((a) => [a.id, a]));
+  for (const [id, entry] of stashed) {
+    if (entry.cardId !== cardId || entry.gone) continue;
+    const chip = byId.get(id);
+    // A save from a render that came BEFORE the paste does not know the chip yet: that is not a
+    // removal. Only a chip the draft has held once can leave it.
+    if (chip) entry.seen = true;
+    if ((!chip && entry.seen) || chip?.status === "ready") {
+      entry.gone = true;
+      void deletePendingUpload(id);
+      continue;
+    }
+    if (!chip) continue; // not in the draft yet: the save that brings it will settle it
+    const failed = chip.status === "error";
+    if (failed !== entry.failed) {
+      entry.failed = failed;
+      void markPendingUploadFailed(id, failed);
+    }
+  }
+}
+
+/**
+ * The chips an F5 caught without a path, back from the stash with their bytes: a thumbnail at once,
+ * and `uploading` (to go up again) or `error` (Retry) as they were. They are merged into the card's
+ * draft right here, so they are not lost if the person has already moved to another card by the time
+ * the stash answers. Returns only the ones this page did not know yet — a second call is a no-op.
+ */
+export async function restoreInterruptedUploads(cardId: string): Promise<Attachment[]> {
+  const generation = stashGeneration;
+  const records = await listPendingUploads(cardId);
+  if (generation !== stashGeneration) return [];
+  const fresh: Attachment[] = [];
+  for (const rec of records) {
+    if (stashed.has(rec.id)) continue;
+    const file = rec.blob instanceof File ? rec.blob : new File([rec.blob], rec.name, { type: rec.blob.type });
+    stashed.set(rec.id, { cardId, failed: rec.failed, seen: false });
+    chipFiles.set(rec.id, file);
+    const previewUrl = typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : undefined;
+    fresh.push({ id: rec.id, name: rec.name, previewUrl, status: rec.failed ? "error" : "uploading" });
+  }
+  if (fresh.length > 0) {
+    const current = loadDraft(cardId);
+    const known = new Set(current.attachments.map((a) => a.id));
+    saveDraft(cardId, current.text, [...current.attachments, ...fresh.filter((a) => !known.has(a.id))]);
+  }
+  return fresh;
+}
+
+/** A chip's upload answered: the path, or an error with Retry. PURE. */
+export function withUploadResult(list: readonly Attachment[], id: string, path: string | null): Attachment[] {
+  return list.map((a) =>
+    a.id === id ? { ...a, path: path ?? undefined, status: path ? ("ready" as const) : ("error" as const) } : a,
+  );
+}
+
+/**
+ * Sends one chip's bytes and records the outcome in the card's draft too — the component that
+ * started it may be gone by the time it lands, and the one that replaces it reads the draft.
+ */
+function runUpload(
+  cardId: string,
+  id: string,
+  file: File,
+  handler: (file: File) => Promise<string | null>,
+): Promise<string | null> {
+  const already = uploadsInFlight.get(id);
+  if (already) return already;
+  const flight = (async () => {
+    let path: string | null = null;
+    try {
+      path = await handler(file);
+    } catch {
+      path = null;
+    }
+    uploadsInFlight.delete(id);
+    if (path) chipFiles.delete(id);
+    const live = cardId ? memoryDrafts.get(cardId) : undefined;
+    if (live && live.attachments.some((a) => a.id === id)) {
+      saveDraft(cardId, live.text, withUploadResult(live.attachments, id, path));
+    }
+    return path;
+  })();
+  uploadsInFlight.set(id, flight);
+  return flight;
+}
+
 /** Remembers a card's unsent field. Called on every change — cheap, and the point of the feature. */
 export function saveDraft(cardId: string, text: string, attachments: readonly Attachment[]): void {
   const list = [...attachments];
+  syncStash(cardId, list);
   if (!text.trim() && list.length === 0) {
     clearDraft(cardId);
     return;
@@ -418,18 +552,34 @@ export function loadDraft(cardId: string): { text: string; attachments: Attachme
   if (!stored) return { text: "", attachments: [] };
   return {
     text: typeof stored.text === "string" ? stored.text : "",
-    // No `previewUrl`: a blob from a previous page load points at nothing. The chip falls back to
-    // the file's name, which is still enough to know what is attached.
+    // No `previewUrl`: a blob from a previous page load points at nothing. The chip reads the file
+    // back from the runner instead (see `attachmentThumbUrl`). The ones still without a path come
+    // from the IndexedDB stash, asynchronously — see `restoreInterruptedUploads`.
     attachments: (Array.isArray(stored.attachments) ? stored.attachments : [])
       .filter((a) => a && typeof a.path === "string")
       .map((a) => ({ id: a.id, name: a.name, path: a.path, status: "ready" as const })),
   };
 }
 
+/**
+ * What the chip shows: the local preview while there is one, else the file itself, read back from
+ * the runner — a draft restored after a reload has a path and no blob, and its name alone read as
+ * "the image is gone". PURE, TOTAL.
+ */
+export function attachmentThumbUrl(a: Attachment): string | undefined {
+  if (a.previewUrl) return a.previewUrl;
+  const upload = a.path ? parseUploadPath(a.path) : null;
+  return upload ? uploadImageUrl(upload.cardId, upload.file) : undefined;
+}
+
 /** Tests only: forget every draft, in both layers. */
 export function resetDraftsForTesting(): void {
   memoryDrafts.clear();
   sendsInFlight.clear();
+  chipFiles.clear();
+  uploadsInFlight.clear();
+  stashed.clear();
+  stashGeneration += 1;
   pendingWrites.clear();
   if (flushTimer !== null) clearTimeout(flushTimer);
   flushTimer = null;
@@ -440,9 +590,21 @@ export function resetDraftsForTesting(): void {
   }
 }
 
+/** Tests only: what an F5 forgets — the memory layer — keeping what the browser stores. */
+export function simulateReloadForTesting(): void {
+  flushDrafts();
+  memoryDrafts.clear();
+  sendsInFlight.clear();
+  chipFiles.clear();
+  uploadsInFlight.clear();
+  stashed.clear();
+  stashGeneration += 1;
+}
+
 /** Forgets a card's draft — on send, and when the card itself is gone. */
 export function clearDraft(cardId: string): void {
   memoryDrafts.delete(cardId);
+  syncStash(cardId, []);
   scheduleStoredWrite(cardId, null);
 }
 
@@ -581,16 +743,6 @@ export function TerminalComposer({
   const ref = React.useRef<HTMLTextAreaElement | null>(null);
 
   /**
-   * The bytes behind each chip, kept only for as long as the chip is.
-   *
-   * An upload can fail for reasons that have nothing to do with the picture — the runner was
-   * restarting, the network blinked — and "paste it again" is a terrible answer when the clipboard
-   * has moved on. Holding the File is what makes RETRY possible; it is dropped as soon as the
-   * attachment is removed or the message goes.
-   */
-  const filesRef = React.useRef(new Map<string, File>());
-
-  /**
    * Files waiting their turn to go up, and whether the pump is already running.
    *
    * Picking a handful of photos out of a phone's library hands over every one of them at once, and
@@ -599,19 +751,40 @@ export function TerminalComposer({
    * easiest way to have the last few time out, so they queue: the chips still appear in the same
    * frame as the pick, the bytes just go in order behind them.
    */
-  const queueRef = React.useRef<{ id: string; file: File }[]>([]);
+  const queueRef = React.useRef<{ cardId: string; id: string; file: File }[]>([]);
   const pumpingRef = React.useRef(false);
+  /** The card on screen right now — what an answer arriving later checks before touching the field. */
+  const keyRef = React.useRef(draftKey);
+  keyRef.current = draftKey;
 
   // Switching cards swaps the whole field for that card's draft — including the one just restored
-  // on mount, which is why this runs on `draftKey` and not only on the state initialiser.
+  // on mount, which is why this runs on `draftKey` and not only on the state initialiser (a send can
+  // settle between the two). Cheap: the draft is a memory lookup, the images are not in it.
   React.useEffect(() => {
     const draft = draftKey ? loadDraft(draftKey) : { text: "", attachments: [] };
     setText(draft.text);
     setAttachments(draft.attachments);
     setSendWhenReady(false);
-    // The bytes belong to the chips that were on screen, not to the card that just arrived.
-    filesRef.current.clear();
+    // What was waiting in line belongs to the card that left, which gets it back when it returns.
     queueRef.current = [];
+    resumeChips(draftKey, draft.attachments);
+    if (!draftKey) return;
+    // After an F5, the chips that had no path yet are in the stash: back on screen, and up again.
+    void restoreInterruptedUploads(draftKey).then((fresh) => {
+      if (fresh.length === 0 || keyRef.current !== draftKey) return;
+      setAttachments((prev) => {
+        const known = new Set(prev.map((a) => a.id));
+        return [...prev, ...fresh.filter((a) => !known.has(a.id))];
+      });
+      resumeChips(draftKey, fresh);
+    });
+    // What was still waiting in line goes with this field: the next one (or this card, when it
+    // comes back) picks those chips up from the draft. Left here, a field already gone would keep
+    // sending them with a handler nobody is listening to.
+    return () => {
+      queueRef.current = [];
+    };
+    // `resumeChips` follows `draftKey`: the card switch is the one trigger here.
   }, [draftKey]);
 
   // Persisted on every change: what makes leaving the card safe. Uploads in flight are written too
@@ -715,7 +888,7 @@ export function TerminalComposer({
   uploadRef.current = onUploadImage;
 
   const removeAttachment = React.useCallback((id: string) => {
-    filesRef.current.delete(id);
+    chipFiles.delete(id);
     // A picture dropped before its turn came must not go up anyway.
     queueRef.current = queueRef.current.filter((job) => job.id !== id);
     setAttachments((prev) => {
@@ -756,7 +929,7 @@ export function TerminalComposer({
         await onSend(body);
         attached.forEach((a) => {
           if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
-          filesRef.current.delete(a.id);
+          chipFiles.delete(a.id);
         });
         accepted = { text: value, attachmentIds: new Set(attached.map((a) => a.id)) };
       } catch {
@@ -839,16 +1012,8 @@ export function TerminalComposer({
         const handler = uploadRef.current;
         if (!handler) break;
         setAttachments((prev) => prev.map((a) => (a.id === job.id ? { ...a, status: "uploading" } : a)));
-        try {
-          const path = await handler(job.file);
-          setAttachments((prev) =>
-            prev.map((a) =>
-              a.id === job.id ? { ...a, path: path ?? undefined, status: path ? "ready" : "error" } : a,
-            ),
-          );
-        } catch {
-          setAttachments((prev) => prev.map((a) => (a.id === job.id ? { ...a, status: "error" } : a)));
-        }
+        const path = await runUpload(job.cardId, job.id, job.file, handler);
+        if (keyRef.current === job.cardId) setAttachments((prev) => withUploadResult(prev, job.id, path));
       }
     } finally {
       pumpingRef.current = false;
@@ -859,22 +1024,45 @@ export function TerminalComposer({
   const startUpload = React.useCallback(
     (id: string, file: File) => {
       if (!uploadRef.current) return;
-      queueRef.current.push({ id, file });
+      if (uploadsInFlight.has(id) || queueRef.current.some((job) => job.id === id)) return;
+      queueRef.current.push({ cardId: keyRef.current, id, file });
       void pump();
     },
     [pump],
   );
+
+  /**
+   * Chips that came back still `uploading` (a remount, a card switch and back, an F5): one whose
+   * upload is still on its way is WAITED for — sending it again would put a second copy in the
+   * runner — and one whose upload never started (or died with the page) goes in line again. A chip
+   * with no bytes left anywhere cannot be sent; it turns into an error the person can remove.
+   */
+  const resumeChips = (cardKey: string, chips: readonly Attachment[]): void => {
+    for (const a of chips) {
+      if (a.status !== "uploading") continue;
+      const flight = uploadsInFlight.get(a.id);
+      if (flight) {
+        void flight.then((path) => {
+          if (keyRef.current === cardKey) setAttachments((prev) => withUploadResult(prev, a.id, path));
+        });
+        continue;
+      }
+      const file = chipFiles.get(a.id);
+      if (file) startUpload(a.id, file);
+      else setAttachments((prev) => withUploadResult(prev, a.id, null));
+    }
+  };
 
   const upload = (files: File[]): void => {
     if (!onUploadImage) return;
     for (const file of files) {
       const id = nextAttachmentId();
       const previewUrl = typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : undefined;
-      filesRef.current.set(id, file);
-      setAttachments((prev) => [
-        ...prev,
-        { id, name: file.name || t("composer.pastedImage"), previewUrl, status: "uploading" },
-      ]);
+      const name = file.name || t("composer.pastedImage");
+      chipFiles.set(id, file);
+      setAttachments((prev) => [...prev, { id, name, previewUrl, status: "uploading" }]);
+      // Until it lands, the picture only exists in this tab: an F5 must not take it along.
+      if (draftKey) stashUpload(draftKey, id, name, file);
       startUpload(id, file);
     }
   };
@@ -885,7 +1073,7 @@ export function TerminalComposer({
    */
   const retryAttachment = React.useCallback(
     (id: string) => {
-      const file = filesRef.current.get(id);
+      const file = chipFiles.get(id);
       if (!file) return;
       startUpload(id, file);
     },
@@ -1105,13 +1293,16 @@ export function TerminalComposer({
   }, [text]);
 
   const recordingNow = recording === "recording";
-  // The voice conversation (the GPT-Live POC) exists only on a card's composer, inside the app's
-  // router, and only when the server has the mode on with a key. On a desktop it sits OUTSIDE the
-  // field, beside the dictation mic; on a phone it shares the field's corner with the send arrow.
-  // Off — the default — and the composer is exactly what it was.
+  // The voice call (GPT-Live) exists only on a card's composer inside a chat that HOSTS it (the
+  // native chat provides the control: the call happens right here, in this thread), and only when
+  // the server has the mode on with a key. On a desktop it sits OUTSIDE the field, beside the
+  // dictation mic; on a phone it shares the field's corner with the send arrow. Off — the default —
+  // and the composer is exactly what it was.
   const inRouter = useInRouterContext();
-  const voiceStatus = useVoiceStatus(inRouter && Boolean(cardId));
-  const voiceReady = inRouter && Boolean(cardId) && Boolean(voiceStatus.data?.enabled && voiceStatus.data.available);
+  const voiceCall = useVoiceCallControl();
+  const voiceStatus = useVoiceStatus(inRouter && Boolean(cardId) && voiceCall !== null);
+  const voiceReady =
+    voiceCall !== null && inRouter && Boolean(cardId) && Boolean(voiceStatus.data?.enabled && voiceStatus.data.available);
   const cornerButton = isMobile;
 
   return (
@@ -1280,9 +1471,9 @@ export function TerminalComposer({
         {/* The phone's send. IN the field's bottom-right corner rather than a fourth circle in the
             row, because a 390px screen has no width left after the "+", the microphone and
             something worth reading — and that corner is where a thumb already goes to send. */}
-        {isMobile && voiceReady && cardId ? (
+        {isMobile && voiceReady && voiceCall ? (
           <ComposerVoiceButton
-            cardId={cardId}
+            control={voiceCall}
             empty={isEmptyDraft(text, attachments)}
             sending={sending}
             busy={recording !== "idle"}
@@ -1337,12 +1528,13 @@ export function TerminalComposer({
               {/* The desktop's voice conversation: to the mic's left, drawn like it, so the column
                   keeps its height and the field its corner. Gone while the mic is taken (its
                   recording pill needs the room) or a sent message is being edited. */}
-              {!isMobile && voiceReady && !editing && recording === "idle" ? (
-                <VoiceChatButton cardId={cardId} disabled={sending} placement="column" />
+              {!isMobile && voiceReady && voiceCall && !editing && recording === "idle" ? (
+                <VoiceChatButton control={voiceCall} disabled={sending} placement="column" />
               ) : null}
               <VoiceControl
                 state={recording}
-                available={canRecord}
+                // A call holds the microphone: dictation waits (never two grants at once).
+                available={canRecord && !voiceCall?.inCall}
                 levels={levels}
                 mobile={isMobile}
                 elapsed={formatElapsed(elapsedMs)}
@@ -1468,6 +1660,33 @@ function AttachControl({ mobile, onPick }: { mobile: boolean; onPick: (files: Fi
   );
 }
 
+
+/**
+ * The picture inside a chip: the local preview, or the file read back from the runner. If that read
+ * fails (the runner restarting, an upload swept away) the chip shows the file's name instead of a
+ * broken-image icon — the name still says what is attached.
+ */
+function AttachmentThumb({ attachment: a }: { attachment: Attachment }) {
+  const src = attachmentThumbUrl(a);
+  const [brokenSrc, setBrokenSrc] = React.useState<string | null>(null);
+  if (src && brokenSrc !== src) {
+    return (
+      <img
+        src={src}
+        alt={a.name}
+        data-testid="composer-attachment-thumb"
+        onError={() => setBrokenSrc(src)}
+        className="h-full w-full object-cover"
+      />
+    );
+  }
+  return (
+    <div className="flex h-full w-full items-center justify-center px-1 text-center text-[9px] leading-tight text-muted-foreground">
+      <span className="line-clamp-3 break-all">{a.name}</span>
+    </div>
+  );
+}
+
 /**
  * The row of pasted images.
  *
@@ -1507,14 +1726,7 @@ function AttachmentStrip({
             a.status === "error" ? "border-destructive/60" : "border-border/60",
           )}
         >
-          {a.previewUrl ? (
-            <img src={a.previewUrl} alt={a.name} className="h-full w-full object-cover" />
-          ) : (
-            // Restored after a reload: the blob is gone, the file is not. Its name is the picture.
-            <div className="flex h-full w-full items-center justify-center px-1 text-center text-[9px] leading-tight text-muted-foreground">
-              <span className="line-clamp-3 break-all">{a.name}</span>
-            </div>
-          )}
+          <AttachmentThumb attachment={a} />
 
           {a.status === "uploading" ? (
             <div className="absolute inset-0 flex items-center justify-center bg-background/60">

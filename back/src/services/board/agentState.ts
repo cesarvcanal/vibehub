@@ -231,6 +231,58 @@ export function cardDriverActivity(cardId: string): DriverActivity {
   return best;
 }
 
+/**
+ * Hands a card's new reasoning level to its native chat driver, LIVE: answers true when a running
+ * driver took it (the very next call to the model already uses it, mid-turn included), false when
+ * there is no driver to take it — the caller then restarts the session onto it, as before.
+ * REGISTERED, for the same cycle as above.
+ */
+type EffortApplier = (cardId: string, effort: string | null) => boolean;
+const effortAppliers = new Set<EffortApplier>();
+
+export function onCardEffortApplier(applier: EffortApplier): () => void {
+  effortAppliers.add(applier);
+  return () => effortAppliers.delete(applier);
+}
+
+/** `effort` null = back to the account's own level, live as well (see restoreAccountEffort in sdk-driver.mjs). */
+export function applyLiveEffort(cardId: string, effort: string | null): boolean {
+  let applied = false;
+  for (const applier of effortAppliers) {
+    try {
+      if (applier(cardId, effort)) applied = true;
+    } catch {
+      /* a broken applier reads as "not applied": the session restarts onto the level instead */
+    }
+  }
+  return applied;
+}
+
+/**
+ * The reasoning level a card with NO level pinned runs on, as its live native chat driver announced
+ * it at boot — what the pill shows before the first reply stamps the transcript. Null when no driver
+ * says. REGISTERED, for the same cycle as above.
+ */
+type DefaultEffortProbe = (cardId: string) => string | null;
+const defaultEffortProbes = new Set<DefaultEffortProbe>();
+
+export function onCardDefaultEffortProbe(probe: DefaultEffortProbe): () => void {
+  defaultEffortProbes.add(probe);
+  return () => defaultEffortProbes.delete(probe);
+}
+
+export function cardDefaultEffort(cardId: string): string | null {
+  for (const probe of defaultEffortProbes) {
+    try {
+      const level = probe(cardId);
+      if (level) return level;
+    } catch {
+      /* a broken probe says nothing; the pill waits for the first reply, as before */
+    }
+  }
+  return null;
+}
+
 /* ------------------------------------- the native chat's BACKGROUND work (the status it implies) */
 
 /**

@@ -216,6 +216,8 @@ export function moveProjectLocal(projects: BoardProject[], id: string, toIndex: 
  *  - `working`    — the hook says Claude is in a turn right now. The only state that moves.
  *                   Except when that turn is STOPPED on the person (`awaitingDecisionAt`: a question
  *                   or permission card of the native chat is open) — then it is `needs_me`.
+ *                   The same once the turn is OVER and its last words are a question to the person
+ *                   (`pendingQuestionAt`, the chat's "Decisões pendentes" tray) — even on a cold session.
  *  - `done`       — filed under Done by the user.
  *  - `paused`     — parked by the user; the session is gone.
  *  - `hibernated` — the session went cold on its own.
@@ -268,6 +270,7 @@ export function cardState(
     | "declaredState"
     | "declaredSummary"
     | "awaitingDecisionAt"
+    | "pendingQuestionAt"
   >,
 ): CardState | null {
   const make = (kind: CardStateKind, summary?: string): CardState => ({
@@ -275,14 +278,21 @@ export function cardState(
     label: t(`status.${kind}`),
     ...(summary ? { summary } : {}),
   });
+  // The conversation STOPPED on a question to the person — what the chat's pending-decisions tray
+  // lists. It waits on them whether or not a process is still warm behind it; only their own filing
+  // (done, paused) outranks it. The neutral "your turn" circle there read as "nothing to decide"
+  // (produção, 2026-10-27).
+  const asks = !!card.pendingQuestionAt && card.status !== "working" && card.column !== "done" && !card.pausedAt;
   // No process behind it: a spinner over a dead session would be a lie, whatever the last hook said.
-  if (card.hibernatedAt) return make("hibernated");
+  if (card.hibernatedAt) return make(asks ? "needs_me" : "hibernated");
   // The turn is technically open, but it is blocked on the person (a question/permission card of
   // the native chat): a spinner here read as "Claude is on it" and nobody went to decide.
   if (card.status === "working") return make(card.awaitingDecisionAt ? "needs_me" : "working");
   if (card.column === "done") return make("done");
   if (card.pausedAt) return make("paused");
   const declared = card.declaredState ? DECLARED_KIND[card.declaredState] : undefined;
+  // The agent's own "blocked"/"needs me" says the same thing with its summary — that one stays.
+  if (asks && declared !== "blocked" && declared !== "needs_me") return make("needs_me");
   if (declared) return make(declared, card.declaredSummary?.trim() || undefined);
   if (card.status === "waiting") return make("your_turn");
   if (card.openedAt) return make("idle");
@@ -396,6 +406,12 @@ export interface BoardLocation {
 
 export const PROJECT_PARAM = "project";
 export const CARD_PARAM = "card";
+/**
+ * `?review=1` rides along a card link to say "open it with the PR review's panel". It is a request,
+ * not part of the location: the card view reads it ONCE and takes it off the URL (see
+ * `wantsReviewPanel` / `withoutReviewFlag`), so the panel can still be closed afterwards.
+ */
+export const REVIEW_PARAM = "review";
 
 /**
  * Reads the location out of the URL's query string. It lives in the URL — not in component state —
@@ -436,9 +452,24 @@ export function locationHref(location: BoardLocation): string {
   return query ? `?${query}` : "?";
 }
 
-/** Shorthand for the two ids a card link always carries. */
-export function cardHref(projectId: string, cardId: string): string {
-  return locationHref({ projectId, cardId });
+/** Shorthand for the two ids a card link always carries; `review` also asks for the review's panel. */
+export function cardHref(projectId: string, cardId: string, options: { review?: boolean } = {}): string {
+  const query = writeLocation({ projectId, cardId });
+  if (options.review) query.set(REVIEW_PARAM, "1");
+  return `?${query.toString()}`;
+}
+
+/** Does the URL ask for the review panel of THIS card? (A card without a project is not addressable.) */
+export function wantsReviewPanel(params: URLSearchParams, cardId: string): boolean {
+  const { projectId, cardId: named } = readLocation(params);
+  return Boolean(projectId) && named === cardId && params.get(REVIEW_PARAM) === "1";
+}
+
+/** The same query with the review flag taken off — a copy, the router's own params are not touched. */
+export function withoutReviewFlag(params: URLSearchParams): URLSearchParams {
+  const next = new URLSearchParams(params);
+  next.delete(REVIEW_PARAM);
+  return next;
 }
 
 /**

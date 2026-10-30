@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
+  AUTO_RESEND_DELAYS_MS,
+  AUTO_RESEND_MAX_AGE_MS,
   OUTBOX_ACK_TIMEOUT_MS,
   addToOutbox,
+  planAutoResend,
   dropFromOutbox,
   newCid,
   markUndelivered,
@@ -164,6 +167,128 @@ describe("a fila em si", () => {
   it("newCid: ids distintos a cada envio", () => {
     expect(newCid(1, () => 0.1)).not.toBe(newCid(2, () => 0.1));
     expect(newCid(1, () => 0.1)).not.toBe(newCid(1, () => 0.9));
+  });
+});
+
+/**
+ * O BUG DO REENVIO NA MÃO (produção, 2026-10-27): a pessoa mandou a mensagem, a conexão falhou e a
+ * bolha ficou "não entregue" com o botão Reenviar. Ela tinha ido embora; no dia seguinte a mensagem
+ * estava lá, esperando um clique — horas de agente parado por uma mensagem que a primeira conexão
+ * boa teria entregado.
+ *
+ * Agora a própria tela reenvia, sozinha, com intervalos que crescem (`AUTO_RESEND_DELAYS_MS`) e um
+ * teto duplo: tentativas contadas (nunca um laço) e idade da mensagem (`AUTO_RESEND_MAX_AGE_MS` —
+ * uma ordem velha não vira turno sem a pessoa). Esgotado o plano, volta a ser o Reenviar de antes.
+ */
+describe("o reenvio automático — sozinho, espaçado e com fim", () => {
+  const T0 = 1_000_000;
+  /** Uma mensagem que já levou o veredito "não entregue", enviada em `at`. */
+  function failed(cid: string, at: number, extra: Partial<OutboxMessage> = {}): OutboxMessage {
+    return { cid, text: `texto ${cid}`, at, undelivered: true, ...extra };
+  }
+
+  it("a primeira tentativa vence logo depois do envio que falhou, não na hora", () => {
+    const list = [failed("c1", T0)];
+    const early = planAutoResend(list, T0 + 1_000);
+    expect(early.due).toEqual([]);
+    expect(early.pending.has("c1")).toBe(true);
+    expect(early.wakeAt).toBe(T0 + AUTO_RESEND_DELAYS_MS[0]!);
+
+    const late = planAutoResend(list, T0 + AUTO_RESEND_DELAYS_MS[0]!);
+    expect(late.due.map((m) => m.cid)).toEqual(["c1"]);
+  });
+
+  it("os intervalos CRESCEM a cada tentativa gasta — nunca várias por segundo", () => {
+    for (let spent = 0; spent < AUTO_RESEND_DELAYS_MS.length; spent += 1) {
+      const delay = AUTO_RESEND_DELAYS_MS[spent]!;
+      if (spent > 0) expect(delay).toBeGreaterThan(AUTO_RESEND_DELAYS_MS[spent - 1]!);
+      const list = [failed("c1", T0, { autoRetries: spent })];
+      expect(planAutoResend(list, T0 + delay - 1).due).toEqual([]);
+      expect(planAutoResend(list, T0 + delay).due.map((m) => m.cid)).toEqual(["c1"]);
+    }
+    // O menor intervalo já é de segundos: mesmo um servidor que recusa na hora não vira martelo.
+    expect(AUTO_RESEND_DELAYS_MS[0]).toBeGreaterThanOrEqual(5_000);
+  });
+
+  it("esgotadas as tentativas, ela sai do plano: fica o Reenviar de antes, e nenhum timer", () => {
+    const list = [failed("c1", T0, { autoRetries: AUTO_RESEND_DELAYS_MS.length })];
+    const plan = planAutoResend(list, T0 + 10 * 60 * 60_000);
+    expect(plan.due).toEqual([]);
+    expect(plan.pending.size).toBe(0);
+    expect(plan.wakeAt).toBeNull();
+  });
+
+  it("a mensagem VELHA não sai sozinha: passou do teto de idade, a pessoa decide", () => {
+    // Escrita há mais que o teto — mesmo com tentativas sobrando e o intervalo vencido há muito.
+    const list = [failed("c1", T0)];
+    const plan = planAutoResend(list, T0 + AUTO_RESEND_MAX_AGE_MS);
+    expect(plan.due).toEqual([]);
+    expect(plan.pending.size).toBe(0);
+    expect(plan.wakeAt).toBeNull();
+  });
+
+  it("a idade conta de quando foi ESCRITA (writtenAt), não do último reenvio", () => {
+    const written = T0;
+    const lastTry = T0 + AUTO_RESEND_MAX_AGE_MS - 1_000; // o reenvio anterior rearmou o `at`
+    const list = [failed("c1", lastTry, { writtenAt: written, autoRetries: 1 })];
+    expect(planAutoResend(list, written + AUTO_RESEND_MAX_AGE_MS).pending.size).toBe(0);
+  });
+
+  it("acorda no que vier primeiro: o próximo vencimento ou a mensagem envelhecer (a bolha muda)", () => {
+    // Intervalo longo (a última tentativa) que só venceria DEPOIS do teto de idade.
+    const spent = AUTO_RESEND_DELAYS_MS.length - 1;
+    const at = T0 + AUTO_RESEND_MAX_AGE_MS - 60_000;
+    const list = [failed("c1", at, { writtenAt: T0, autoRetries: spent })];
+    const plan = planAutoResend(list, at + 1_000);
+    expect(plan.wakeAt).toBe(T0 + AUTO_RESEND_MAX_AGE_MS);
+  });
+
+  it("só as não entregues: a que está 'enviando' tem o watchdog, e a que nunca saiu (unsent) é da pessoa", () => {
+    const list: OutboxMessage[] = [
+      { cid: "voando", text: "a", at: T0 },
+      failed("nunca-saiu", T0, { unsent: true }),
+      failed("falhou", T0),
+    ];
+    const plan = planAutoResend(list, T0 + 60_000);
+    expect(plan.due.map((m) => m.cid)).toEqual(["falhou"]);
+    expect([...plan.pending]).toEqual(["falhou"]);
+  });
+
+  it("vencidas saem na ordem em que foram escritas — a conversa não embaralha", () => {
+    const list = [failed("segunda", T0 + 2_000, { writtenAt: T0 + 2_000 }), failed("primeira", T0 + 1_000)];
+    const plan = planAutoResend(list, T0 + 60_000);
+    expect(plan.due.map((m) => m.cid)).toEqual(["primeira", "segunda"]);
+  });
+
+  it("o reenvio automático gasta UMA tentativa e guarda quando ela foi escrita", () => {
+    const entry = failed("c1", T0);
+    const once = retryOutbox([entry], entry, T0 + 5_000, {}, true);
+    expect(once[0]).toMatchObject({ cid: "c1", at: T0 + 5_000, undelivered: false, autoRetries: 1, writtenAt: T0 });
+    const twice = retryOutbox(once, { ...once[0]!, undelivered: true }, T0 + 30_000, {}, true);
+    expect(twice[0]).toMatchObject({ autoRetries: 2, writtenAt: T0 });
+  });
+
+  it("o Reenviar na MÃO é intenção renovada: zera as tentativas e a idade", () => {
+    const entry = failed("c1", T0, { autoRetries: AUTO_RESEND_DELAYS_MS.length, writtenAt: T0 - 5 * 60 * 60_000 });
+    const manual = retryOutbox([entry], entry, T0 + 1_000, {});
+    expect(manual[0]!.autoRetries).toBeUndefined();
+    expect(manual[0]!.writtenAt).toBe(T0 + 1_000);
+    // …e se esse envio também falhar, o plano recomeça do primeiro intervalo.
+    const again = planAutoResend([{ ...manual[0]!, undelivered: true }], T0 + 1_000 + AUTO_RESEND_DELAYS_MS[0]!);
+    expect(again.due.map((m) => m.cid)).toEqual(["c1"]);
+  });
+
+  it("o plano sobrevive ao F5: tentativas e idade vão pro disco e voltam saneadas", () => {
+    writeOutbox(CARD, [failed("c1", T0, { autoRetries: 3, writtenAt: T0 - 1_000 })]);
+    expect(readOutbox(CARD)[0]).toMatchObject({ autoRetries: 3, writtenAt: T0 - 1_000 });
+    // localStorage é entrada não confiável: lixo vira "sem informação", nunca um plano infinito.
+    localStorage.setItem(
+      "vibehub.sdkOutbox." + CARD,
+      JSON.stringify([{ cid: "c1", text: "a", at: T0, undelivered: true, autoRetries: -4, writtenAt: "ontem" }]),
+    );
+    const sane = readOutbox(CARD)[0]!;
+    expect(sane.autoRetries).toBeUndefined();
+    expect(sane.writtenAt).toBeUndefined();
   });
 });
 

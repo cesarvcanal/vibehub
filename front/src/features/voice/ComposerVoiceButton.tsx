@@ -1,47 +1,60 @@
+import * as React from "react";
 import { ArrowUp, AudioLines, Loader2 } from "lucide-react";
-import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
-import { voicePath } from "./status";
 
 /**
- * Opens the /voice conversation for this card. The conversation is the POC: it does not act on the
- * card, but the card (and its project) travel in the URL, so /voice says where it came from and
- * leads back there even after a reload or in a new tab. The draft survives on its own (saved per
- * card).
- *
- * `column` is the desktop seat: OUTSIDE the field, beside the dictation mic and drawn like it, so
- * the field keeps its corner free. `corner` is the phone's: inside the field, where the send arrow
- * lives (see {@link ComposerVoiceButton}).
+ * The composer's way into a voice call — IN this chat, never another page. The chat that hosts the
+ * call (SdkChatView) provides this context; a composer without it (the older transcript chat, a
+ * composer outside a card) shows no voice button at all.
+ */
+export interface VoiceCallControl {
+  /** A call is up (connecting, live or closing) in this chat. */
+  inCall: boolean;
+  start: () => void;
+  stop: () => void;
+}
+
+export const VoiceCallContext = React.createContext<VoiceCallControl | null>(null);
+
+export function useVoiceCallControl(): VoiceCallControl | null {
+  return React.useContext(VoiceCallContext);
+}
+
+/**
+ * Starts the call (or, pressed, ends it). `column` is the desktop seat: OUTSIDE the field, beside
+ * the dictation mic and drawn like it. `corner` is the phone's: inside the field, where the send
+ * arrow lives (see {@link ComposerVoiceButton}).
  */
 export function VoiceChatButton({
-  cardId,
+  control,
   disabled,
   placement,
 }: {
-  cardId: string;
+  control: VoiceCallControl;
   disabled: boolean;
   placement: "column" | "corner";
 }) {
   const t = useT();
-  const navigate = useNavigate();
-  const location = useLocation();
-  const project = new URLSearchParams(location.search).get("project");
+  const label = control.inCall ? t("voice.call.end") : t("composer.voiceChat");
   return (
     <Button
       type="button"
       size="icon"
-      variant={placement === "column" ? "outline" : "default"}
+      variant={placement === "column" && !control.inCall ? "outline" : "default"}
       data-testid="composer-voice"
-      aria-label={t("composer.voiceChat")}
-      title={t("composer.voiceChat")}
-      disabled={disabled}
-      onClick={() => navigate(voicePath(cardId, project))}
+      aria-label={label}
+      aria-pressed={control.inCall}
+      title={label}
+      disabled={disabled && !control.inCall}
+      onClick={() => (control.inCall ? control.stop() : control.start())}
       className={cn(
         "shrink-0",
         placement === "column"
-          ? "h-9 w-9 rounded-md text-sky-500 hover:border-sky-500/50 hover:bg-sky-500/10 hover:text-sky-600"
+          ? control.inCall
+            ? "h-9 w-9 rounded-md bg-sky-500 text-white hover:bg-sky-600"
+            : "h-9 w-9 rounded-md text-sky-500 hover:border-sky-500/50 hover:bg-sky-500/10 hover:text-sky-600"
           : "absolute bottom-1.5 right-1.5 h-11 w-11 rounded-full bg-sky-500 text-white shadow-sm shadow-sky-500/30 hover:bg-sky-600",
       )}
     >
@@ -51,20 +64,20 @@ export function VoiceChatButton({
 }
 
 /**
- * The phone's corner button while the voice mode is available: with an EMPTY draft it opens a
- * voice conversation (blue waveform); the moment there is something to send it becomes the send
- * arrow. Two jobs, one seat — but never both at once: what a click does is decided by the draft at
- * click time, so an empty field can never "send", and text can never start a call.
+ * The phone's corner button: with an EMPTY draft and no call it starts a voice call (blue
+ * waveform); the moment there is something to send — or a call is already up, whose controls live
+ * in the call strip — it is the send arrow. What a click does is decided by the state at click
+ * time, so an empty field can never "send", and text can never start a call.
  */
 export function ComposerVoiceButton({
-  cardId,
+  control,
   empty,
   sending,
   busy,
   voice,
   onSend,
 }: {
-  cardId: string;
+  control: VoiceCallControl;
   /** Nothing to send (no text, no attachment). */
   empty: boolean;
   sending: boolean;
@@ -76,8 +89,8 @@ export function ComposerVoiceButton({
 }) {
   const t = useT();
 
-  if (empty && voice) {
-    return <VoiceChatButton cardId={cardId} disabled={busy || sending} placement="corner" />;
+  if (empty && voice && !control.inCall) {
+    return <VoiceChatButton control={control} disabled={busy || sending} placement="corner" />;
   }
 
   return (

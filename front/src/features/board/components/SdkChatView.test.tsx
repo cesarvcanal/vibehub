@@ -3,7 +3,7 @@ import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/re
 import userEvent from "@testing-library/user-event";
 import { Profiler, act } from "react";
 import { OUTBOX_TICK_MS, SdkChatView, resetQuestionDraftsForTesting } from "@/features/board/components/SdkChatView";
-import { OUTBOX_ACK_TIMEOUT_MS } from "@/features/board/lib/sdkOutbox";
+import { AUTO_RESEND_DELAYS_MS, AUTO_RESEND_MAX_AGE_MS, OUTBOX_ACK_TIMEOUT_MS } from "@/features/board/lib/sdkOutbox";
 import { RECONNECT_MAX_MS } from "@/features/board/lib/reconnect";
 import { PEER_TYPING_TTL_MS } from "@/features/board/lib/peerTyping";
 import { renderApp } from "@/test/render";
@@ -14,7 +14,7 @@ import { get } from "@/lib/api";
 import { LinkifiedText, Markdown } from "@/features/board/components/ChatView";
 import { resetDraftsForTesting } from "@/features/board/components/TerminalComposer";
 import { ME_KEY } from "@/providers/auth";
-import { fleetPropsEqual } from "@/features/board/components/SdkDetail";
+import { ACTION_POLL_MS, fleetPropsEqual } from "@/features/board/components/SdkDetail";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -174,6 +174,14 @@ function renderSdkChat(props: Partial<React.ComponentProps<typeof SdkChatView>> 
 }
 
 describe("SdkChatView", () => {
+  it("o slot footer fica logo acima do composer (é onde o card põe o que é do card, não da conversa)", async () => {
+    renderSdkChat({ footer: <div data-testid="sdk-footer-slot">PR #553</div> });
+    await socket();
+
+    const footer = screen.getByTestId("sdk-footer-slot");
+    expect(footer.nextElementSibling).toBe(screen.getByTestId("terminal-composer"));
+  });
+
   it("opens the SDK socket for the card and reports its state", async () => {
     const onStatus = vi.fn();
     renderSdkChat({ onStatus });
@@ -607,21 +615,35 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
       ws.accept();
       ws.deliver({ type: "ready" });
       ws.deliver(MULTI);
-      expect(screen.queryByTestId("sdk-question-peer-banner")).toBeNull();
+      expect(screen.queryByTestId("sdk-question-peer-presence")).toBeNull();
 
       ws.deliver({ type: "peer_question_draft", id: "q_peer", name: "albert", picked: [["Albert"], []], other: ["", "mussa faz review"] });
-      expect(screen.getByTestId("sdk-question-peer-banner")).toHaveTextContent("Albert");
+      expect(screen.getByTestId("sdk-question-peer-presence")).toHaveTextContent("Albert");
+      // só a pergunta em que ele ESCREVEU ganha o campo dele; a marcação fica na bolinha da opção
       const lines = screen.getAllByTestId("sdk-question-peer-draft");
-      expect(lines).toHaveLength(2);
-      expect(lines[0]).toHaveTextContent("Albert");
-      expect(lines[1]).toHaveTextContent("mussa faz review");
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toHaveTextContent("mussa faz review");
+      // sem nada escrito por mim, nada de aviso de conflito
+      expect(screen.queryByTestId("sdk-question-peer-clash")).toBeNull();
       const [albertOption] = screen.getAllByRole("button", { name: "Albert" });
       expect(albertOption).toHaveAttribute("data-peer-picked", "true");
       expect(albertOption).toHaveAttribute("aria-pressed", "false"); // marcado por ELE, não por mim
 
       ws.deliver({ type: "peer_question_draft", id: "q_peer", name: "albert", picked: [[], []], other: ["", ""] });
-      expect(screen.queryByTestId("sdk-question-peer-banner")).toBeNull();
+      expect(screen.queryByTestId("sdk-question-peer-presence")).toBeNull();
       expect(screen.queryAllByTestId("sdk-question-peer-draft")).toHaveLength(0);
+    });
+
+    it("\"Usar esta\" copia a resposta da outra pessoa para o meu cartão — e aí sim aparece o aviso de conflito", async () => {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready" });
+      ws.deliver(MULTI);
+      ws.deliver({ type: "peer_question_draft", id: "q_peer", name: "albert", picked: [["Albert"], []], other: ["", "mussa faz review"] });
+      await userEvent.click(screen.getByTestId("sdk-question-peer-use"));
+      expect(screen.getAllByTestId("sdk-question-other")[1]).toHaveValue("mussa faz review");
+      expect(screen.getByTestId("sdk-question-peer-clash")).toHaveTextContent("Albert");
     });
 
     it("o que EU marco e escrevo vai para as outras abas, com o último estado", async () => {
@@ -651,7 +673,20 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
       ws.deliver({ type: "peer_question_draft", id: "q_peer", name: "albert", picked: [["Albert"], ["Mussa"]], other: ["", ""] });
       ws.deliver({ type: "question_result", id: "q_peer", answers: [{ selected: ["Albert"] }, { selected: ["Mussa"] }] });
       expect(screen.getByTestId("sdk-question")).toHaveAttribute("data-outcome", "answered");
-      expect(screen.queryByTestId("sdk-question-peer-banner")).toBeNull();
+      expect(screen.queryByTestId("sdk-question-peer-presence")).toBeNull();
+    });
+
+    it("cancelada porque alguém parou o turno: o cartão diz quem, não \"sem resposta\"", async () => {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready" });
+      ws.deliver(MULTI);
+      ws.deliver({ type: "question_result", id: "q_peer", timedOut: false, superseded: false, cancelledBy: "albert", cancelledHow: "edit" });
+      const card = screen.getByTestId("sdk-question");
+      expect(card).toHaveAttribute("data-outcome", "cancelled");
+      expect(card).toHaveTextContent("Albert");
+      expect(card).not.toHaveTextContent(/no answer/i);
     });
 
     it("rascunho de outra pergunta não aparece neste cartão", async () => {
@@ -661,7 +696,7 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
       ws.deliver({ type: "ready" });
       ws.deliver(MULTI);
       ws.deliver({ type: "peer_question_draft", id: "q_outra", name: "albert", picked: [["Albert"]], other: [""] });
-      expect(screen.queryByTestId("sdk-question-peer-banner")).toBeNull();
+      expect(screen.queryByTestId("sdk-question-peer-presence")).toBeNull();
     });
   });
 
@@ -1478,6 +1513,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     const bubble = await screen.findByTestId("sdk-user");
     expect(bubble).toHaveTextContent("a instrução recusada");
     expect(bubble).toHaveAttribute("data-state", "undelivered");
+    // Nada na hora: o reenvio automático espera o intervalo dele (ver "o reenvio automático").
     expect(ws.sent).toHaveLength(0);
   });
 
@@ -1643,11 +1679,18 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         ws.deliver({ type: "user_nack", cid, reason: "driver-gone" } as SdkEvent);
         await waitFor(() => expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered"));
 
-        await act(async () => { await vi.advanceTimersByTimeAsync(MANY_TICKS); });
+        // O reenvio automático tenta de novo (espaçado), e este servidor segue respondendo — recusando.
+        for (let elapsed = 0; elapsed < MANY_TICKS; elapsed += OUTBOX_TICK_MS) {
+          const before = ws.sent.length;
+          await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_TICK_MS); });
+          if (ws.sent.length > before) ws.deliver({ type: "user_nack", cid, reason: "driver-gone" } as SdkEvent);
+        }
 
         expect(ws.readyState).not.toBe(3); // o socket que acabou de responder não é suspeito
         expect(FakeSocket.instances).toHaveLength(1); // nenhuma reconexão: nada pisca
         expect(screen.getByTestId("sdk-user-undelivered")).toBeInTheDocument(); // e a bolha continua lá
+        // Os reenvios seguem o plano (intervalos de segundos a minutos), nunca o tique do watchdog.
+        expect(ws.sent.length - 1).toBeLessThanOrEqual(3);
       } finally {
         vi.useRealTimers();
       }
@@ -1673,10 +1716,20 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         const second = FakeSocket.instances[1] as FakeSocket;
         second.accept();
         second.deliver({ type: "ready" }); // o replay não traz a mensagem: o servidor nunca a teve
-        await waitFor(() => expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered"));
+        await waitFor(() => expect(screen.getAllByTestId("sdk-user")).toHaveLength(1));
+        const cid = (JSON.parse(first.sent[0]!) as { cid: string }).cid;
 
-        await act(async () => { await vi.advanceTimersByTimeAsync(MANY_TICKS); });
+        // A conexão nova responde (o reenvio automático leva um "não" — o driver ainda subindo).
+        let answered = 0;
+        for (let elapsed = 0; elapsed < MANY_TICKS; elapsed += OUTBOX_TICK_MS) {
+          if (second.sent.length > answered) {
+            answered = second.sent.length;
+            second.deliver({ type: "user_nack", cid, reason: "driver-gone" } as SdkEvent);
+          }
+          await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_TICK_MS); });
+        }
 
+        expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered");
         expect(second.readyState).not.toBe(3); // a conexão nova não é derrubada de novo
         expect(FakeSocket.instances).toHaveLength(2); // e nenhuma terceira nasce
       } finally {
@@ -1689,7 +1742,14 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
       try {
         localStorage.setItem(
           "vibehub.sdkOutbox.c1",
-          JSON.stringify([{ cid: "c-antigo", text: "a instrução longa que sumia", at: Date.now() - 60_000, undelivered: true }]),
+          // Com o plano de reenvio automático já esgotado: o que sobra é só o veredito antigo.
+          JSON.stringify([{
+            cid: "c-antigo",
+            text: "a instrução longa que sumia",
+            at: Date.now() - 60_000,
+            undelivered: true,
+            autoRetries: AUTO_RESEND_DELAYS_MS.length,
+          }]),
         );
         renderSdkChat();
         const ws = await socket();
@@ -1701,6 +1761,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
 
         expect(ws.readyState).not.toBe(3);
         expect(FakeSocket.instances).toHaveLength(1);
+        expect(ws.sent).toHaveLength(0);
       } finally {
         vi.useRealTimers();
       }
@@ -1728,6 +1789,239 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
 
         expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered");
         expect(ws.readyState).toBe(3); // desta vez ninguém respondeu: o socket é suspeito de novo
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  /**
+   * O BUG DO REENVIO NA MÃO (produção, 2026-10-27): a mensagem falhou, a bolha ficou "não entregue"
+   * com o Reenviar, e a pessoa — que já tinha ido embora — só a encontrou no dia seguinte, esperando
+   * um clique. A conexão boa tinha voltado em instantes.
+   *
+   * A tela agora reenvia sozinha, com as mesmas palavras e o mesmo recibo (o back trata o cid repetido
+   * como cobrança, nunca como segundo turno), em intervalos que crescem e com fim — tentativas
+   * contadas e teto de idade. O que estes testes fixam: sai sozinha, não vira laço, fio caído não
+   * gasta tentativa, mensagem velha não sai sem a pessoa, e a ordem da conversa não embaralha.
+   */
+  describe("o reenvio automático (a mensagem que esperou um clique a noite toda)", () => {
+    /** Um envio que o servidor recusou: a bolha está "não entregue" e o cid é devolvido. */
+    async function refusedSend(ws: FakeSocket, text: string, user: ReturnType<typeof userEvent.setup>): Promise<string> {
+      await user.type(screen.getByRole("textbox"), `${text}{Enter}`);
+      await waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+      const cid = (JSON.parse(ws.sent[ws.sent.length - 1]!) as { cid: string }).cid;
+      ws.deliver({ type: "user_nack", cid, reason: "driver-gone" } as SdkEvent);
+      await waitFor(() => expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered"));
+      return cid;
+    }
+
+    it("recusada: sem clique nenhum, sai de novo sozinha depois do intervalo — mesmas palavras, mesmo recibo", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderSdkChat();
+        const ws = await socket();
+        ws.accept();
+        ws.deliver({ type: "ready" });
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        const cid = await refusedSend(ws, "roda a migração", user);
+        // A bolha avisa que não precisa de ninguém: a tela vai tentar de novo.
+        expect(screen.getByTestId("sdk-user-retrying")).toBeInTheDocument();
+        expect(ws.sent).toHaveLength(1); // nada na hora: o primeiro intervalo é de segundos
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(AUTO_RESEND_DELAYS_MS[0]!); });
+
+        expect(ws.sent).toHaveLength(2);
+        expect(JSON.parse(ws.sent[1]!)).toEqual({ type: "user", text: "roda a migração", cid });
+        expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sending");
+        ws.deliver({ type: "user_ack", cid } as SdkEvent);
+        await waitFor(() => expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sent"));
+        expect(localStorage.getItem("vibehub.sdkOutbox.c1")).toBeNull();
+        expect(screen.getAllByTestId("sdk-user")).toHaveLength(1); // uma bolha só, nunca duas
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("o socket meio-aberto engoliu a mensagem: na conexão nova ela sai sozinha (sem ninguém na tela)", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderSdkChat();
+        const first = await socket();
+        first.accept();
+        first.deliver({ type: "ready" });
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
+        await waitFor(() => expect(first.sent.length).toBe(1));
+        const cid = (JSON.parse(first.sent[0]!) as { cid: string }).cid;
+
+        // Nenhum recibo: o watchdog dá o veredito e derruba o socket; o navegador reconecta.
+        await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS); });
+        expect(first.readyState).toBe(3);
+        act(() => first.onclose?.());
+        await act(async () => { await vi.advanceTimersByTimeAsync(RECONNECT_MAX_MS); });
+        await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
+        const second = FakeSocket.instances[1] as FakeSocket;
+        second.accept();
+        second.deliver({ type: "ready" }); // o replay não a traz: o servidor nunca a teve
+
+        await waitFor(() => expect(second.sent).toHaveLength(1));
+        expect(JSON.parse(second.sent[0]!)).toEqual({ type: "user", text: "instrução longa", cid });
+        second.deliver({ type: "user_ack", cid } as SdkEvent);
+        await waitFor(() => expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sent"));
+        expect(screen.getAllByTestId("sdk-user")).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("SEM LAÇO: um servidor que recusa sempre recebe só as tentativas do plano, espaçadas — depois, silêncio", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderSdkChat();
+        const ws = await socket();
+        ws.accept();
+        ws.deliver({ type: "ready" });
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        const cid = await refusedSend(ws, "instrução longa", user);
+        const sentAt: number[] = [Date.now()];
+
+        // O servidor recusa toda tentativa, na hora. A tela não pode martelar.
+        for (let step = 0; step < AUTO_RESEND_DELAYS_MS.length + 3; step += 1) {
+          const before = ws.sent.length;
+          await act(async () => { await vi.advanceTimersByTimeAsync(AUTO_RESEND_DELAYS_MS[step] ?? 30 * 60_000); });
+          if (ws.sent.length > before) {
+            sentAt.push(Date.now());
+            ws.deliver({ type: "user_nack", cid, reason: "driver-gone" } as SdkEvent);
+          }
+        }
+
+        // 1 envio da pessoa + 1 por intervalo do plano. Nenhum a mais, por mais tempo que passe.
+        expect(ws.sent).toHaveLength(1 + AUTO_RESEND_DELAYS_MS.length);
+        // …cada um esperando mais que o anterior (nunca várias por segundo).
+        const gaps = sentAt.slice(1).map((t, i) => t - sentAt[i]!);
+        gaps.forEach((gap, i) => expect(gap).toBeGreaterThanOrEqual(AUTO_RESEND_DELAYS_MS[i]!));
+        // Esgotado o plano: a bolha volta a ser só o Reenviar (a pessoa decide), e o socket fica quieto.
+        expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered");
+        expect(screen.queryByTestId("sdk-user-retrying")).not.toBeInTheDocument();
+        expect(screen.getByTestId("sdk-user-resend")).toBeInTheDocument();
+        expect(FakeSocket.instances).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("fio caído não gasta tentativa: a mensagem sai quando a conexão volta, mesmo depois de muito tempo", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderSdkChat();
+        const first = await socket();
+        first.accept();
+        first.deliver({ type: "ready" });
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        const cid = await refusedSend(first, "instrução longa", user);
+        act(() => { first.readyState = 3; first.onclose?.(); });
+
+        // A VPN caiu por mais tempo que o plano inteiro somado: as reconexões nunca completam.
+        const outage = AUTO_RESEND_DELAYS_MS.reduce((a, b) => a + b, 0) + 10 * 60_000;
+        await act(async () => { await vi.advanceTimersByTimeAsync(outage); });
+        const back = FakeSocket.instances[FakeSocket.instances.length - 1] as FakeSocket;
+        expect(back).not.toBe(first);
+        back.accept();
+        back.deliver({ type: "ready" });
+
+        await waitFor(() => expect(back.sent).toHaveLength(1));
+        expect(JSON.parse(back.sent[0]!)).toEqual({ type: "user", text: "instrução longa", cid });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a mensagem VELHA (acima do teto de idade) volta marcada e NÃO sai sozinha — a pessoa decide", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        localStorage.setItem(
+          "vibehub.sdkOutbox.c1",
+          JSON.stringify([{ cid: "c-ontem", text: "sobe pra prod", at: Date.now() - AUTO_RESEND_MAX_AGE_MS - 1, undelivered: true }]),
+        );
+        renderSdkChat();
+        const ws = await socket();
+        ws.accept();
+        ws.deliver({ type: "ready" });
+        await waitFor(() => expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered"));
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(60 * 60_000); });
+
+        expect(ws.sent).toHaveLength(0);
+        expect(screen.queryByTestId("sdk-user-retrying")).not.toBeInTheDocument();
+        expect(screen.getByTestId("sdk-user-resend")).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("F5 com a mensagem recusada há pouco: volta marcada e sai sozinha quando o intervalo vence", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        localStorage.setItem(
+          "vibehub.sdkOutbox.c1",
+          JSON.stringify([{ cid: "c-antigo", text: "a instrução recusada", at: Date.now() - 60_000, undelivered: true, autoRetries: 1 }]),
+        );
+        renderSdkChat();
+        const ws = await socket();
+        ws.accept();
+        ws.deliver({ type: "ready" });
+
+        await waitFor(() => expect(ws.sent).toHaveLength(1));
+        expect(JSON.parse(ws.sent[0]!)).toEqual({ type: "user", text: "a instrução recusada", cid: "c-antigo" });
+        // A tentativa gasta vai pro disco: um F5 agora não recomeça a conta.
+        await waitFor(() => expect(JSON.parse(localStorage.getItem("vibehub.sdkOutbox.c1")!)[0]).toMatchObject({ autoRetries: 2 }));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a ordem da conversa: a que falhou sai ANTES da que foi escrita depois (e esperou na fila)", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderSdkChat();
+        const first = await socket();
+        first.accept();
+        first.deliver({ type: "ready" });
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        const cid = await refusedSend(first, "primeiro isso", user);
+        // O driver tinha morrido: o back fecha o socket. Com o fio caído, a próxima espera na fila.
+        act(() => { first.readyState = 3; first.onclose?.(); });
+        await user.type(screen.getByRole("textbox"), "depois isso{Enter}");
+        await act(async () => { await vi.advanceTimersByTimeAsync(AUTO_RESEND_DELAYS_MS[0]! + RECONNECT_MAX_MS); });
+        const second = FakeSocket.instances[FakeSocket.instances.length - 1] as FakeSocket;
+        second.accept();
+        second.deliver({ type: "ready" });
+
+        await waitFor(() => expect(second.sent.length).toBeGreaterThanOrEqual(1));
+        expect(JSON.parse(second.sent[0]!)).toMatchObject({ type: "user", text: "primeiro isso", cid });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("o Reenviar na mão continua valendo na hora, sem esperar o intervalo", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderSdkChat();
+        const ws = await socket();
+        ws.accept();
+        ws.deliver({ type: "ready" });
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        const cid = await refusedSend(ws, "instrução longa", user);
+
+        await user.click(screen.getByTestId("sdk-user-resend"));
+
+        expect(ws.sent).toHaveLength(2);
+        expect(JSON.parse(ws.sent[1]!)).toMatchObject({ type: "user", text: "instrução longa", cid });
+        // …e o automático não manda uma terceira cópia em cima: essa está "enviando", com recibo armado.
+        await act(async () => { await vi.advanceTimersByTimeAsync(AUTO_RESEND_DELAYS_MS[0]!); });
+        expect(ws.sent).toHaveLength(2);
       } finally {
         vi.useRealTimers();
       }
@@ -3377,6 +3671,31 @@ describe("SdkChatView — quem escreve e quem está digitando", () => {
     expect(await screen.findByTestId("sdk-user-undelivered")).toBeInTheDocument();
     expect(screen.getByTestId("sdk-user")).toHaveTextContent("de outra pessoa");
     expect(ws.sent).toHaveLength(0);
+    // Nem o reenvio automático a manda: sairia no nome de quem está na aba.
+    expect(screen.queryByTestId("sdk-user-retrying")).not.toBeInTheDocument();
+  });
+
+  it("mensagem de OUTRA conta: o reenvio automático também não a manda, por mais tempo que passe", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      localStorage.setItem(
+        "vibehub.sdkOutbox.c1",
+        JSON.stringify([{ cid: "c-alheio", text: "de outra pessoa", at: Date.now(), undelivered: true, from: { kind: "user", name: "mussa" } }]),
+      );
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      await signedIn();
+      ws.deliver({ type: "ready" });
+      expect(await screen.findByTestId("sdk-user-undelivered")).toBeInTheDocument();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(AUTO_RESEND_DELAYS_MS.reduce((a, b) => a + b, 0)); });
+
+      expect(ws.sent).toHaveLength(0);
+      expect(screen.queryByTestId("sdk-user-retrying")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("abrir a tela não reconecta à toa quando o /auth/me chega (só UMA conexão)", async () => {
@@ -4328,6 +4647,77 @@ describe("SdkChatView — o detalhe de cada ação", () => {
     ws.deliver({ type: "detail", req: "tool", id: "n1", nonce: ask.nonce, data: { found: false } } as never);
     expect(await within(dialog).findByTestId("sdk-detail-pending")).toHaveTextContent("Still running");
     expect(within(dialog).queryByTestId("sdk-detail-missing")).toBeNull();
+  });
+
+  it("comando em segundo plano: mostra a saída real e acompanha ao vivo até a tarefa terminar", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready" });
+      ws.deliver({ type: "tool_use", id: "g1", name: "Bash", input: { command: "npm run dev", run_in_background: true } });
+      ws.deliver({ type: "tool_result", id: "g1", toolResult: { background: true } });
+      fireEvent.click(screen.getByTestId("sdk-tool"));
+      const dialog = await screen.findByTestId("sdk-detail");
+      await waitFor(() => expect(detailAsks(ws).some((f) => f.id === "g1")).toBe(true));
+      const base = { found: true, by: "main", name: "Bash", input: { command: "npm run dev", run_in_background: true }, text: "Command running in background with ID: bx1.", structured: { stdout: "", stderr: "", backgroundTaskId: "bx1" }, result: { lines: 1 } };
+      ws.deliver({ type: "detail", req: "tool", id: "g1", nonce: detailAsks(ws).at(-1)!.nonce, data: { ...base, background: { taskId: "bx1", status: "running", output: "subindo\n", outputLength: 8 } } } as never);
+      expect(await within(dialog).findByText("subindo")).toBeInTheDocument();
+      expect(within(dialog).getByTestId("sdk-detail-status")).toHaveAttribute("data-status", "running");
+      expect(within(dialog).getByTestId("sdk-detail-bg")).toHaveAttribute("data-bg-status", "running");
+      expect(within(dialog).queryByText("The command finished without printing anything.")).toBeNull();
+
+      // Rodando em segundo plano: pede de novo sozinho e a saída cresce na tela.
+      const asked = detailAsks(ws).filter((f) => f.id === "g1").length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(ACTION_POLL_MS + 100); });
+      await waitFor(() => expect(detailAsks(ws).filter((f) => f.id === "g1").length).toBeGreaterThan(asked));
+      ws.deliver({ type: "detail", req: "tool", id: "g1", nonce: detailAsks(ws).at(-1)!.nonce, data: { ...base, background: { taskId: "bx1", status: "completed", output: "subindo\npronto\n", outputLength: 15 } } } as never);
+      expect(await within(dialog).findByText("pronto")).toBeInTheDocument();
+      await waitFor(() => expect(within(dialog).getByTestId("sdk-detail-status")).toHaveAttribute("data-status", "ok"));
+
+      // Terminou: para de pedir.
+      const done = detailAsks(ws).filter((f) => f.id === "g1").length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(ACTION_POLL_MS * 3); });
+      expect(detailAsks(ws).filter((f) => f.id === "g1").length).toBe(done);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sondagem que falhou ou não achou ainda: continua carregando e pede de novo, nunca desiste", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready" });
+      ws.deliver({ type: "tool_use", id: "f1", name: "Bash", input: { command: "ls" } });
+      ws.deliver({ type: "tool_result", id: "f1", toolResult: { lines: 1 } });
+      fireEvent.click(screen.getByTestId("sdk-tool"));
+      const dialog = await screen.findByTestId("sdk-detail");
+      await waitFor(() => expect(detailAsks(ws).some((f) => f.id === "f1")).toBe(true));
+      ws.deliver({ type: "detail", req: "tool", id: "f1", nonce: detailAsks(ws).at(-1)!.nonce, error: "probe-failed" } as never);
+      expect(await within(dialog).findByTestId("sdk-detail-loading")).toBeInTheDocument();
+      expect(within(dialog).queryByTestId("sdk-detail-missing")).toBeNull();
+
+      let asked = detailAsks(ws).filter((f) => f.id === "f1").length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(ACTION_POLL_MS + 100); });
+      await waitFor(() => expect(detailAsks(ws).filter((f) => f.id === "f1").length).toBeGreaterThan(asked));
+      ws.deliver({ type: "detail", req: "tool", id: "f1", nonce: detailAsks(ws).at(-1)!.nonce, data: { found: false } } as never);
+      await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+      expect(within(dialog).queryByTestId("sdk-detail-missing")).toBeNull();
+      expect(within(dialog).getByTestId("sdk-detail-loading")).toBeInTheDocument();
+
+      asked = detailAsks(ws).filter((f) => f.id === "f1").length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(ACTION_POLL_MS + 100); });
+      await waitFor(() => expect(detailAsks(ws).filter((f) => f.id === "f1").length).toBeGreaterThan(asked));
+      ws.deliver({ type: "detail", req: "tool", id: "f1", nonce: detailAsks(ws).at(-1)!.nonce, data: { found: true, by: "main", name: "Bash", input: { command: "ls" }, structured: { stdout: "README.md\n", stderr: "" }, result: { lines: 1 } } } as never);
+      expect(await within(dialog).findByText("README.md")).toBeInTheDocument();
+      expect(within(dialog).queryByTestId("sdk-detail-loading")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reabrir o modal mostra na hora o detalhe que já veio, sem 'Carregando' de novo", async () => {

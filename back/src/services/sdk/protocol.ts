@@ -140,7 +140,19 @@ export interface QuestionResultEvent {
    * chave que impede o transcript de republicá-la como fala do terminal num replay.
    */
   sent?: string;
+  /**
+   * CANCELADA POR ALGUÉM (produção, 2026-10-26): sem resposta, sem prazo vencido e sem mensagem que
+   * a substituísse, a pergunta só cai porque o turno foi PARADO — o botão de parar, o "enviar agora"
+   * da fila ou uma edição. Com duas pessoas no card, o cartão sumia da tela da outra como "sem
+   * resposta", que parece prazo vencido. O manager carimba quem parou (`cancelledBy`, ausente quando
+   * a aba não tem autor) e como (`cancelledHow`).
+   */
+  cancelledBy?: string;
+  cancelledHow?: StopHow;
 }
+
+/** Como um turno foi parado: o botão de parar, o "enviar agora" da fila ou a edição de uma mensagem. */
+export type StopHow = "stop" | "send_now" | "edit";
 
 /**
  * A user send arrived while a turn was ALREADY running: with streaming input the driver pushed it
@@ -224,6 +236,13 @@ export interface SlashCommandInfo {
  */
 export interface CatalogEvent { type: "catalog"; commands: SlashCommandInfo[] }
 /**
+ * The reasoning level a session with NO level pinned runs on — the account's (its settings), else
+ * the model's default — asked of the CLI at the driver's boot, before any turn. STATE for the card
+ * bar's pill, which otherwise knew nothing until the first reply stamped the transcript; consumed by
+ * the manager, never written to the history nor sent to a browser.
+ */
+export interface EffortDefaultEvent { type: "effort_default"; effort: string }
+/**
  * Output of a LOCAL slash command (`/cost`, `/usage`): the CLI answers it itself, without a model
  * turn. Without this the chat swallowed the answer and the command looked like it did nothing.
  */
@@ -298,6 +317,7 @@ export type DriverEvent =
   | TurnAbsorbedEvent
   | RewoundEvent
   | CatalogEvent
+  | EffortDefaultEvent
   | LocalOutputEvent
   | BtwAnswerEvent
   | BackgroundTasksEvent
@@ -331,6 +351,7 @@ const DRIVER_EVENT_TYPES = new Set([
   "turn_absorbed",
   "rewound",
   "catalog",
+  "effort_default",
   "local_output",
   "btw_answer",
   "background_tasks",
@@ -425,9 +446,17 @@ export interface ReanchorControl { type: "reanchor" }
  * próprio (nunca um `user`). `id` é do navegador e casa a resposta (`btw_answer`) com a linha dele.
  */
 export interface BtwControl { type: "btw"; id: string; question: string }
+/**
+ * A INTELIGÊNCIA DO CARD TROCOU com o driver de pé: o driver aplica o nível na sessão viva
+ * (`applyFlagSettings`), no meio do turno inclusive — a próxima chamada ao modelo já sai nele, sem
+ * reiniciar nada. `null` = de volta ao padrão da conta, também ao vivo. Nasce no back (troca no
+ * pill), nunca no navegador.
+ */
+export interface SetEffortControl { type: "set_effort"; effort: string | null }
 export type DriverControl =
   | UserControl
   | BtwControl
+  | SetEffortControl
   | InterruptControl
   | PermissionDecisionControl
   | QuestionAnswerControl

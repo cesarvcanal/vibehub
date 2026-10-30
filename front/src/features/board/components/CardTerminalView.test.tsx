@@ -1,7 +1,9 @@
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient } from "@tanstack/react-query";
+import { useLocation } from "react-router-dom";
 import { CardTerminalView } from "@/features/board/components/CardTerminalView";
 import { renderApp, testQueryClient } from "@/test/render";
 import { get, patch, post } from "@/lib/api";
@@ -45,8 +47,9 @@ vi.mock("@/features/board/components/XTerminal", () => ({
 vi.mock("@/features/board/components/ChatView", async () => {
   const { TerminalComposer } = await import("@/features/board/components/TerminalComposer");
   return {
-    ChatView: ({ cardId, working, active }: { cardId: string; working: boolean; active?: boolean }) => (
+    ChatView: ({ cardId, working, active, footer }: { cardId: string; working: boolean; active?: boolean; footer?: ReactNode }) => (
       <div data-testid="chat" data-card={cardId} data-working={String(working)}>
+        {footer}
         <TerminalComposer cardId={cardId} active={active} onSend={() => undefined} />
       </div>
     ),
@@ -57,10 +60,24 @@ vi.mock("@/features/board/components/VncPanel", () => ({
   VncPanel: ({ cardId }: { cardId: string }) => <div data-testid="vnc">{cardId}</div>,
 }));
 
+// The review panel has its own test file; here the only question is WHEN the card view mounts it.
+vi.mock("@/features/board/components/ReviewPanel", () => ({
+  ReviewPanel: ({ cardId, onClose }: { cardId: string; onClose: () => void }) => (
+    <div data-testid="review-panel" data-card={cardId}>
+      <button type="button" onClick={onClose}>close-review</button>
+    </div>
+  ),
+}));
+
 // The native (SDK) chat also owns a websocket and has its own test file; here the only question is
 // WHICH of the two chats got mounted — the bug was the legacy one flashing in on a beta card.
 vi.mock("@/features/board/components/SdkChatView", () => ({
-  SdkChatView: ({ cardId }: { cardId: string }) => <div data-testid="sdk-chat" data-card={cardId} />,
+  SdkChatView: ({ cardId, footer }: { cardId: string; footer?: ReactNode }) => (
+    <div data-testid="sdk-chat" data-card={cardId}>
+      {footer}
+      <div data-testid="sdk-composer-stub" />
+    </div>
+  ),
 }));
 
 const mockGet = vi.mocked(get);
@@ -736,12 +753,13 @@ describe("CardTerminalView — the card bar", () => {
     await waitFor(() => expect(screen.getByLabelText("Model")).toHaveTextContent("Experimental"));
   });
 
-  it("assumes Claude Code's own default until the first reply, and says so in the title", async () => {
+  it("assumes Opus, the card default, until the first reply, and says so in the title", async () => {
+    // It used to assume Fable and flip to Opus only once the first reply landed.
     renderWithCache([card({ openedAt: 10 })]);
 
     const pill = await screen.findByLabelText("Model");
-    expect(pill).toHaveTextContent("Fable");
-    expect(pill).toHaveAttribute("title", "Claude Code's default until the first reply");
+    expect(pill).toHaveTextContent("Opus");
+    expect(pill).toHaveAttribute("title", "The card's default until the first reply");
   });
 
   it("the SESSION wins over the card's pin — the bar is about the conversation on screen", async () => {
@@ -801,6 +819,32 @@ describe("CardTerminalView — the card bar", () => {
     await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/cards/c1", { effort: "max" }));
     await waitFor(() => expect(screen.getByTestId("xterm").getAttribute("data-reconnect")).not.toBe(before));
     expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/Max/));
+  });
+
+  it("a level the native chat took LIVE says so, keeps the terminal attached, and the pill shows it at once", async () => {
+    // Produção, 2026-10-27: Médio → Alto with the turn running read "vale assim que o Claude terminar"
+    // and the pill went on saying Médio. Now the driver applies it in place, and the bar follows the click.
+    serveSession({ model: "claude-opus-5-5", modelLabel: "Opus 5.5", effort: "medium" });
+    mockPatch.mockResolvedValue({ card: card({ openedAt: 10, effort: "high" }), session: "live" });
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10, effort: "medium" })]);
+
+    await waitFor(() => expect(screen.getByLabelText("Model")).toHaveTextContent("Opus 5.5 · Medium"));
+    const before = screen.getByTestId("xterm").getAttribute("data-reconnect");
+    await openMenu(user, "Model");
+    // The next reading has not landed yet (a slow runner): the pill must not wait for it.
+    const base = mockGet.getMockImplementation();
+    mockGet.mockImplementation((url: string, ...rest: unknown[]) =>
+      url === "/cards/c1/session" ? new Promise(() => {}) : (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest),
+    );
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "High" }));
+    await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/cards/c1", { effort: "high" }));
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/High — in effect now, Claude goes on from where it was/)),
+    );
+    expect(screen.getByLabelText("Model")).toHaveTextContent("Opus 5.5 · High");
+    // Nothing was restarted, so there is no restart nonce: only the pin itself is in the key.
+    expect(screen.getByTestId("xterm").getAttribute("data-reconnect")).toBe(before!.replace(":medium", ":high"));
   });
 
   it("an UNPINNED card still ticks the level its session runs on — read from the transcript", async () => {
@@ -1421,5 +1465,147 @@ describe("CardTerminalView — the card's browser", () => {
     // The poll keeps answering "live" — an auto-open that argues with the person is worse than none.
     await new Promise((r) => setTimeout(r, 60));
     expect(screen.queryByTestId("vnc")).not.toBeInTheDocument();
+  });
+});
+
+describe("CardTerminalView — the PR blocks above the composer", () => {
+  const PR = { number: 553, url: "https://github.com/acme/billing/pull/553", base: "dev", branch: "card/fix-the-totals", openedAt: 5 };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    serve();
+    mockPost.mockResolvedValue({ card: card({ openedAt: 10 }) });
+  });
+  afterEach(() => localStorage.clear());
+
+  it("terminal: the block sits right above the composer, with the way to ask for a review", async () => {
+    renderWithCache([card({ openedAt: 10, prs: [PR] })]);
+
+    const block = await screen.findByTestId("pr-review-block");
+    expect(within(block).getByText("PR #553")).toBeInTheDocument();
+    expect(within(block).getByRole("button", { name: "Request review" })).toBeInTheDocument();
+    const composer = screen.getByTestId("terminal-composer");
+    expect(block.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("no modo chat o bloco do PR fica logo acima do composer", async () => {
+    // O composer do chat mora dentro da view do chat: o bloco chega a ela pelo slot `footer`.
+    renderWithCache([card({ openedAt: 10, prs: [PR] })], testQueryClient(), "chat");
+    const block = await screen.findByTestId("pr-review-block");
+    expect(block.nextElementSibling).toBe(screen.getByTestId("terminal-composer"));
+    expect(block.closest("[data-testid=chat]")).not.toBeNull();
+  });
+
+  it("no chat NATIVO também: o bloco é o irmão logo acima do composer da view", async () => {
+    const base = mockGet.getMockImplementation();
+    mockGet.mockImplementation((url: string, ...rest: unknown[]) =>
+      url === "/features" ? Promise.resolve({ sdkChat: true }) : (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest),
+    );
+    renderWithCache([card({ openedAt: 10, prs: [PR] })], testQueryClient(), "chat");
+    const block = await screen.findByTestId("pr-review-block");
+    expect(block.nextElementSibling).toBe(screen.getByTestId("sdk-composer-stub"));
+    expect(block.closest("[data-testid=sdk-chat]")).not.toBeNull();
+  });
+
+  it("a card that never opened a PR has no block", async () => {
+    renderWithCache([card({ openedAt: 10 })]);
+    await screen.findByTestId("xterm");
+    expect(screen.queryByTestId("pr-review-block")).toBeNull();
+  });
+
+  it("clicking the block of a PR under review opens its panel as a column of the work area", async () => {
+    renderWithCache([
+      card({ openedAt: 10, prs: [PR], review: { id: "r1", prNumber: 553, phase: "fixing", round: 2 } }),
+    ]);
+    const work = await screen.findByTestId("card-workarea");
+    expect(screen.queryByTestId("review-panel")).toBeNull();
+
+    await userEvent.click(within(await screen.findByTestId("pr-review-block")).getByRole("button", { name: /PR #553/ }));
+
+    const panel = await screen.findByTestId("review-panel");
+    expect(panel).toHaveAttribute("data-card", "c1");
+    expect(work).toContainElement(panel);
+    // The test hook of the stub is gone: the panel itself is the proof now.
+    expect(work).not.toHaveAttribute("data-review-open");
+  });
+
+  it("the panel's close brings the work area back to the terminal alone", async () => {
+    renderWithCache([
+      card({ openedAt: 10, prs: [PR], review: { id: "r1", prNumber: 553, phase: "fixing", round: 2 } }),
+    ]);
+    await userEvent.click(within(await screen.findByTestId("pr-review-block")).getByRole("button", { name: /PR #553/ }));
+    await screen.findByTestId("review-panel");
+
+    await userEvent.click(screen.getByRole("button", { name: "close-review" }));
+
+    expect(screen.queryByTestId("review-panel")).toBeNull();
+    expect(screen.getByTestId("xterm")).toBeInTheDocument();
+  });
+});
+
+describe("CardTerminalView — ?review=1 opens the panel", () => {
+  const PR = { number: 553, url: "https://github.com/acme/billing/pull/553", base: "dev", branch: "card/fix-the-totals", openedAt: 5 };
+  const withReview = card({ openedAt: 10, prs: [PR], review: { id: "r1", prNumber: 553, phase: "fixing", round: 2 } });
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    serve();
+    mockPost.mockResolvedValue({ card: card({ openedAt: 10 }) });
+  });
+  afterEach(() => localStorage.clear());
+
+  /** The URL the router holds, so a test can see what the card view did to it. */
+  function Url() {
+    const { search } = useLocation();
+    return <output data-testid="url">{search}</output>;
+  }
+
+  function renderAt(route: string) {
+    const client = testQueryClient();
+    client.setQueryData(cardsKey(project.id), [withReview]);
+    writeCardMode("c1", "terminal");
+    return renderApp(
+      <>
+        <Url />
+        <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />
+      </>,
+      { queryClient: client, route },
+    );
+  }
+
+  it("opens the panel of the card the URL names, and takes the flag off the URL", async () => {
+    renderAt("/?project=p1&card=c1&review=1");
+
+    expect(await screen.findByTestId("review-panel")).toBeInTheDocument();
+    // Read ONCE: the flag is consumed, the rest of the location stays.
+    await waitFor(() => expect(screen.getByTestId("url")).toHaveTextContent(/^\?project=p1&card=c1$/));
+  });
+
+  it("does not bring the panel back after it was closed by hand", async () => {
+    renderAt("/?project=p1&card=c1&review=1");
+    await screen.findByTestId("review-panel");
+    await waitFor(() => expect(screen.getByTestId("url")).not.toHaveTextContent("review=1"));
+
+    await userEvent.click(screen.getByRole("button", { name: "close-review" }));
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByTestId("review-panel")).toBeNull();
+  });
+
+  it("ignores the flag when the URL is about another card", async () => {
+    renderAt("/?project=p1&card=c2&review=1");
+    await screen.findByTestId("xterm");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(screen.queryByTestId("review-panel")).toBeNull();
+    // Not ours to consume: the card it is for still has to find it.
+    expect(screen.getByTestId("url")).toHaveTextContent("review=1");
+  });
+
+  it("without the flag the panel stays closed", async () => {
+    renderAt("/?project=p1&card=c1");
+    await screen.findByTestId("xterm");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByTestId("review-panel")).toBeNull();
   });
 });

@@ -2105,6 +2105,69 @@ describe("attachSocket — \"está digitando\" entre as abas do card", () => {
 });
 
 /**
+ * A PERGUNTA QUE SUMIU "SEM RESPOSTA" (produção, 2026-10-26): alguém parou o turno e o cartão caiu na
+ * tela da outra pessoa como se o prazo tivesse vencido. Agora o resultado diz quem parou e como.
+ */
+describe("handleClientFrame — quem parou o turno cancela a pergunta, e o cartão diz quem", () => {
+  const CESAR = { kind: "user" as const, name: "cesar" };
+  const MUSSA = { kind: "owner" as const, name: "mussa" };
+  const emit = (event: object) => spawned[0]!.stdout.emit("data", line(event as never));
+  const results = (socket: FakeSocket) =>
+    socket.sent.map((x) => JSON.parse(x) as Record<string, unknown>).filter((e) => e.type === "question_result");
+  const ask = () => emit({ type: "user_question", id: "q1", questions: [{ question: "Como?", options: [{ label: "A" }] }] });
+
+  it("o botão de parar: a pergunta cancelada carrega o nome de quem parou", async () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    const mussa = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    attachSocket(session, mussa as never, MUSSA);
+    mussa.emit("message", Buffer.from(`{"type":"user","text":"oi"}`));
+    ask();
+    mussa.emit("message", Buffer.from(`{"type":"interrupt"}`));
+    emit({ type: "question_result", id: "q1", timedOut: false, superseded: false });
+    expect(results(cesar)).toEqual([expect.objectContaining({ id: "q1", cancelledBy: "mussa", cancelledHow: "stop" })]);
+    for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 10)); // o histórico grava em segundo plano
+    expect((await readHistory(CARD)).find((e) => e.type === "question_result")).toMatchObject({ cancelledBy: "mussa" });
+  });
+
+  it("o \"enviar agora\" com a pergunta aberta também a cancela — e diz isso", () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    cesar.emit("message", Buffer.from(`{"type":"user","text":"oi"}`));
+    ask();
+    cesar.emit("message", Buffer.from(`{"type":"user","text":"faz assim","now":true}`));
+    emit({ type: "question_result", id: "q1", timedOut: false, superseded: false });
+    expect(results(cesar)[0]).toMatchObject({ cancelledBy: "cesar", cancelledHow: "send_now" });
+  });
+
+  it("prazo vencido e resposta por mensagem continuam sendo o que são", () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    cesar.emit("message", Buffer.from(`{"type":"user","text":"oi"}`));
+    ask();
+    cesar.emit("message", Buffer.from(`{"type":"interrupt"}`));
+    emit({ type: "question_result", id: "q1", timedOut: true });
+    expect(results(cesar)[0]).not.toHaveProperty("cancelledBy");
+  });
+
+  it("um stop de um turno que já fechou não marca a pergunta do turno seguinte", () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    cesar.emit("message", Buffer.from(`{"type":"user","text":"oi"}`));
+    cesar.emit("message", Buffer.from(`{"type":"interrupt"}`));
+    emit({ type: "result", subtype: "error_during_execution", isError: true });
+    cesar.emit("message", Buffer.from(`{"type":"user","text":"de novo"}`));
+    ask();
+    emit({ type: "question_result", id: "q1", timedOut: false, superseded: false });
+    expect(results(cesar)[0]).not.toHaveProperty("cancelledHow");
+  });
+});
+
+/**
  * DUAS PESSOAS, UMA PERGUNTA: só a primeira resposta vale. O rascunho do cartão vai às outras abas
  * enquanto a pessoa marca e escreve, para ninguém mandar uma resposta diferente sem saber.
  */

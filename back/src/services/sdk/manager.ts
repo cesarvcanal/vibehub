@@ -1,7 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
-import { onCardBackgroundProbe, onCardDriverProbe, reportCardStatusFromDriver, type DriverActivity } from "../board/agentState.js";
+import { syncPendingQuestion } from "./pendingQuestion.js";
+import { onCardBackgroundProbe, onCardDefaultEffortProbe, onCardDriverProbe, onCardEffortApplier, reportCardStatusFromDriver, type DriverActivity } from "../board/agentState.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
 import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, clearHistoryBeforeLastClear, readHistory, replayableHistoryEvent, rewindHistory, unwrapEditedMessage, type HistoryEvent } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker, type InflightBackground, type InflightMarker } from "./inflight.js";
@@ -17,8 +18,8 @@ import { mergeTaskEvent, taskSnapshot, toolResultEvent, type AgentTaskEvent, typ
 import { isHarnessFiller } from "../chat/chat.js";
 import {
   NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseQuestionDraftFrame, isEmptyQuestionDraft, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
-  type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type QuestionDraft, type UserQuestionItem,
-  type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest,
+  type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type QuestionDraft, type StopHow, type UserQuestionItem,
+  type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest, type ResultEvent,
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { observeDriverEvent } from "../events/cardEvents.js";
@@ -146,6 +147,8 @@ export interface DriverSession {
    * instead of waiting for the next `init` (which only comes with the next turn).
    */
   catalog?: CatalogEvent;
+  /** The account's reasoning level, as the driver announced it at boot (`effort_default`). */
+  defaultEffort?: string;
   idleTimer: NodeJS.Timeout | null;
   /** Rolling tail of the driver's stderr — what a post-mortem has to say (see STDERR_TAIL_MAX). */
   stderrTail: string;
@@ -159,6 +162,11 @@ export interface DriverSession {
    */
   pendingInterruptNote?: string;
   /**
+   * QUEM PAROU o turno em andamento e como — guardado até o turno fechar. Uma pergunta que o driver
+   * encerra sem resposta nesse meio-tempo foi cancelada por essa pessoa, e o cartão diz isso.
+   */
+  stopCause?: { by?: string; how: StopHow };
+  /**
    * Background tasks that FINISHED and whose completion notice the CLI has not delivered yet — it
    * opens a turn for it when the model is free. Until then the notice is work a deploy would erase.
    */
@@ -171,6 +179,12 @@ export interface DriverSession {
    * stall is a note, never a third send. A person's turn clears it.
    */
   resumeWatch?: { marker: InflightMarker; reengaged: boolean; timer?: NodeJS.Timeout };
+  /**
+   * Turnos seguidos que a API derrubou com falha passageira (rede, DNS, sobrecarga, 5xx) e a nova
+   * tentativa agendada (ver API_RETRY_DELAYS_MS). Um turno que fecha sem erro, ou uma mensagem da
+   * pessoa, zera a conta.
+   */
+  apiRetry?: { failures: number; timer?: NodeJS.Timeout };
   /** Contador de sinais de vida do agente principal (delta, raciocínio, ferramenta) — o vigia compara. */
   agentSignals: number;
   /** O marcador de trabalho em voo que este manager gravou por último (null/ausente = nenhum). */
@@ -436,8 +450,10 @@ export function driverActivity(cardId: string): DriverActivity {
  * ainda espera conta: o `result` vazio do arranque não é o fim dela, e uma bolinha que piscasse
  * "aguardando" ali soltaria o aviso de turno terminado no meio da retomada.
  */
-function turnRunning(session: Pick<DriverSession, "activeTurns" | "autonomousTurn" | "resumeWatch">): boolean {
-  return isTurnInFlight(session) || session.resumeWatch !== undefined;
+function turnRunning(session: Pick<DriverSession, "activeTurns" | "autonomousTurn" | "resumeWatch" | "apiRetry">): boolean {
+  // A nova tentativa agendada depois de uma falha passageira da API também: o turno não acabou, a
+  // rede é que caiu no meio dele (ver API_RETRY_DELAYS_MS).
+  return isTurnInFlight(session) || session.resumeWatch !== undefined || session.apiRetry?.timer !== undefined;
 }
 
 /**
@@ -535,6 +551,7 @@ function clearSessionTimers(session: DriverSession): void {
   clearIdleTimer(session);
   clearTimeout(session.backgroundSettleTimer);
   clearTimeout(session.resumeWatch?.timer);
+  clearTimeout(session.apiRetry?.timer);
 }
 
 function clearIdleTimer(session: DriverSession): void {
@@ -600,6 +617,12 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     void registry.updateCard(session.cardId, { resumeSessionId: event.sessionId }).catch((err: unknown) => {
       logger.warn({ card: session.label, detail: (err as Error).message }, "could not persist the sdk session id");
     });
+  }
+  if (event.type === "effort_default") {
+    // Estado do pill, não conversa: fica na sessão e não segue para histórico nem navegador.
+    const level = (event as { effort?: unknown }).effort;
+    if (typeof level === "string" && registry.isValidEffort(level)) session.defaultEffort = level;
+    return;
   }
   if (event.type === "catalog") {
     // Normalised HERE, on the side that talks to the browser: the driver forwards what the CLI
@@ -708,11 +731,17 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     // turno deixou). Um turno ainda em voo (envio na fila) segue com os seus.
     if (!isTurnInFlight(session)) {
       session.openAsks.clear();
+      session.stopCause = undefined;
       syncAwaitingDecision(session);
+      // A conversa parou: se a última fala do agente é uma pergunta para a pessoa, o card diz isso
+      // (o "precisa de você" da bandeja de decisões, no ícone do board).
+      void syncPendingQuestion(session.cardId);
     }
     // Uma retomada que fechou sem o agente produzir nada ainda não pegou: o vigia decide (ver
     // RESUME_CONFIRM_MS) — e o marcador fica, para o próximo deploy saber dela.
     if (session.resumeWatch && !isTurnInFlight(session)) armResumeWatch(session);
+    // Antes do marcador e da bolinha: a nova tentativa agendada mantém os dois como turno em voo.
+    noteApiOutcome(session, event);
     // The last turn in flight CLOSED: the durable marker comes off — unless work goes on in the
     // background (a task, a scheduled wake-up), which a deploy would kill just the same: then it
     // stays, now saying what is running (see `syncInflightMarker`).
@@ -776,7 +805,14 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     // ficava cobrando na bandeja — só uma mensagem a varria.
     void settleOrphanQuestions(session);
   }
-  if (event.type === "question_result") forgetQuestionDrafts(session, event.id);
+  if (event.type === "question_result") {
+    forgetQuestionDrafts(session, event.id);
+    const unanswered = !event.answers?.length && !event.timedOut && !event.superseded;
+    if (unanswered && session.stopCause) {
+      event.cancelledHow = session.stopCause.how;
+      if (session.stopCause.by) event.cancelledBy = session.stopCause.by;
+    }
+  }
   if (event.type === "user_question" || event.type === "permission_request") {
     session.openAsks.add(event.id);
     syncAwaitingDecision(session);
@@ -803,8 +839,9 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   noteDriverEventFor(session.cardId, event);
   if (replayableHistoryEvent(event)) void appendHistory(session.cardId, { ...event, at: Date.now() });
   // What a person away from the board hears (services/events/cardEvents.ts): questions,
-  // permissions and their outcome.
-  void observeDriverEvent(session.cardId, event);
+  // permissions and their outcome. A failure the panel is already retrying is not news yet — only
+  // the one it gave up on is.
+  if (!(event.type === "result" && session.apiRetry?.timer)) void observeDriverEvent(session.cardId, event);
 }
 
 /**
@@ -1244,6 +1281,9 @@ export function handleClientFrame(
     return { kind: "accepted", cid: control.cid, persisted };
   }
   if (control.type === "user") {
+    // O "enviar agora" com uma ferramenta rodando PARA o turno (ver `sendUserNow` no driver) — e com
+    // ele a pergunta que estiver aberta.
+    if (control.now && session.openAsks.size > 0) noteStop(session, origin, "send_now");
     if (!writeToDriver(session, control)) return { kind: "refused", cid: control.cid, reason: "driver-gone" };
     session.activeTurns += 1;
     syncBoardStatus(session);
@@ -1284,6 +1324,7 @@ export function handleClientFrame(
     void answerOrphanQuestion(session, control);
     return { kind: "ignored" };
   }
+  if (control.type === "interrupt") noteStop(session, origin, control.reason === "edit" ? "edit" : "stop");
   writeToDriver(session, control);
   if (control.type === "interrupt") {
     // Streaming input: every send is already in the CLI, and the interrupt aborts the running
@@ -1294,11 +1335,26 @@ export function handleClientFrame(
     // A pessoa mandou PARAR: a retomada que o vigia esperava acaba aqui — reenviar a ordem depois
     // seria o painel desfazendo o clique dela.
     if (session.resumeWatch) abandonResumeWatch(session);
+    // O mesmo para a nova tentativa depois de uma falha da API: parar é parar.
+    if (session.apiRetry?.timer) cancelApiRetry(session);
     // Only a stop that actually CUT something gets narrated — a stop click with nothing running
     // would otherwise write a note claiming a turn was interrupted when none was.
     if (session.activeTurns > 0) session.pendingInterruptNote = interruptNote(control);
   }
   return { kind: "ignored" };
+}
+
+/**
+ * QUEM PAROU O TURNO fica registrado — no log de auditoria e na sessão, para o cartão de pergunta que
+ * cair junto dizer quem o cancelou. Antes nada disso ficava: a pergunta sumia "sem resposta" e não
+ * havia como saber se tinha sido o prazo, um clique ou outra pessoa no mesmo card.
+ */
+function noteStop(session: DriverSession, origin: MessageOrigin | undefined, how: StopHow): void {
+  session.stopCause = { ...(origin?.name ? { by: origin.name } : {}), how };
+  logger.info(
+    { audit: true, action: "sdk.stop", card: session.label, by: origin?.name ?? null, how, openAsks: session.openAsks.size },
+    "turn stopped from the chat",
+  );
 }
 
 /**
@@ -1448,6 +1504,8 @@ export function injectSystemTurn(session: DriverSession, text: string, origin: M
 /** A PERSON's turn entered the driver: a fresh in-flight marker, and the resume chain starts over. */
 function markPersonTurn(session: DriverSession, marker: InflightMarker): void {
   endResumeWatch(session);
+  clearTimeout(session.apiRetry?.timer);
+  session.apiRetry = undefined;
   // A new turn starts: the CLI folds any pending notice into it.
   session.pendingNotices = [];
   putMarker(session, marker);
@@ -1515,6 +1573,97 @@ const crashListeners = new Set<CrashListener>();
 export function onDriverCrashWithWork(listener: CrashListener): () => void {
   crashListeners.add(listener);
   return () => { crashListeners.delete(listener); };
+}
+
+/**
+ * A espera antes de cada nova tentativa de um turno que a API derrubou com falha PASSAGEIRA — o CLI
+ * já tentou por conta própria antes de desistir, então a rede costuma precisar de minutos, não de
+ * segundos. Uma posição por tentativa: acabou a lista, acabou a insistência (NOTE_API_RETRY_EXHAUSTED).
+ */
+export const API_RETRY_DELAYS_MS: readonly number[] = [30_000, 120_000, 300_000];
+
+/** A ordem que a nova tentativa manda: o turno anterior morreu no meio, não terminou. */
+export const API_RETRY_TEXT =
+  "O turno anterior foi encerrado no meio por uma falha temporária da API da Anthropic (rede ou servidor). " +
+  "Isto NÃO é uma notificação automática: é a ordem de continuar. Confira o estado atual e siga a tarefa " +
+  "em andamento até o fim.";
+
+/** As tentativas acabaram (ou a última não pôde ir): a pessoa fica sabendo, o card não fica calado. */
+export const NOTE_API_RETRY_EXHAUSTED =
+  "A API da Anthropic falhou e as novas tentativas automáticas não fizeram o agente continuar. " +
+  "Mande uma mensagem para ele seguir de onde parou.";
+
+/**
+ * O turno terminou numa falha PASSAGEIRA da API? É o texto com que o CLI fecha o turno depois de
+ * esgotar as próprias tentativas ("API Error: Can't reach the API server … (EAI_AGAIN)", "API Error:
+ * 529 … overloaded_error", "API Error: Connection error."). Credencial, pedido inválido e limite do
+ * plano (4xx) não passam com o tempo — esses ficam para a pessoa. PURE.
+ */
+export function isTransientApiFailure(result: string | undefined): boolean {
+  const text = String(result ?? "").trim();
+  if (!/^API Error\b/i.test(text)) return false;
+  if (/^API Error:\s*5\d\d\b/i.test(text)) return true;
+  return /can't reach the API|connection error|timed out|overloaded|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|socket hang up|fetch failed/i
+    .test(text);
+}
+
+/** Desiste da nova tentativa agendada: a bolinha e o marcador deixam de contar com ela. */
+function cancelApiRetry(session: DriverSession): void {
+  clearTimeout(session.apiRetry?.timer);
+  session.apiRetry = undefined;
+  syncInflightMarker(session);
+  maybeScheduleIdleStop(session);
+}
+
+/**
+ * O FIM DE UM TURNO, visto pela conta das falhas da API (produção, card 8f2a, 23/10/2026: o turno
+ * fechou em EAI_AGAIN e o card ficou parado em "falhou" até alguém escrever "continua"). Falha
+ * passageira: nota no chat agora e, passada a espera da vez, a ordem de continuar — a menos que
+ * outro turno já esteja rodando (uma mensagem chegou) ou o driver tenha sido parado. Qualquer outro
+ * fim sem erro zera a conta.
+ */
+function noteApiOutcome(session: DriverSession, event: ResultEvent): void {
+  if (!event.isError || !isTransientApiFailure(event.result)) {
+    if (!event.isError) {
+      clearTimeout(session.apiRetry?.timer);
+      session.apiRetry = undefined;
+    }
+    return;
+  }
+  clearTimeout(session.apiRetry?.timer);
+  const failures = (session.apiRetry?.failures ?? 0) + 1;
+  const delay = API_RETRY_DELAYS_MS[failures - 1];
+  if (delay === undefined) {
+    session.apiRetry = undefined;
+    emitSystemNote(session, NOTE_API_RETRY_EXHAUSTED);
+    logger.warn({ audit: true, action: "sdk.apiRetry.exhausted", card: session.label, failures, detail: event.result?.slice(0, 200) },
+      "the API kept failing after the automatic retries — noted");
+    return;
+  }
+  session.apiRetry = { failures };
+  // Uma mensagem já na fila é o próximo turno: ele mesmo segue o trabalho.
+  if (isTurnInFlight(session)) return;
+  emitSystemNote(session, `A API da Anthropic falhou por um erro temporário. Nova tentativa automática em ${Math.round(delay / 1000)} s.`);
+  const timer = setTimeout(() => {
+    const retry = session.apiRetry;
+    if (!retry || retry.timer !== timer) return;
+    retry.timer = undefined;
+    if (session.closed || isTurnInFlight(session)) return;
+    if (!writeInjectedTurn(session, API_RETRY_TEXT, SYSTEM_ORIGIN)) {
+      // O driver já não aceita turno: a falha que ficou calada esperando esta tentativa vai a público.
+      cancelApiRetry(session);
+      emitSystemNote(session, NOTE_API_RETRY_EXHAUSTED);
+      void observeDriverEvent(session.cardId, event);
+      return;
+    }
+    putMarker(session, { startedAt: Date.now(), preview: inflightPreview(API_RETRY_TEXT), attempts: 0 });
+    logger.info({ audit: true, action: "sdk.apiRetry", card: session.label, attempt: failures, delayMs: delay },
+      "turn ended by a transient API failure — sent the order to continue");
+  }, delay);
+  timer.unref?.();
+  session.apiRetry.timer = timer;
+  logger.info({ audit: true, action: "sdk.apiRetry.scheduled", card: session.label, attempt: failures, delayMs: delay, detail: event.result?.slice(0, 200) },
+    "turn ended by a transient API failure — retry scheduled");
 }
 
 /**
@@ -1937,6 +2086,28 @@ export function stopCardDriver(cardId: string): void {
 }
 
 /**
+ * A NOVA INTELIGÊNCIA DO CARD, na sessão viva: o driver a aplica com `applyFlagSettings` — no meio
+ * do turno inclusive, a próxima chamada ao modelo já sai nela — e passa a usá-la em tudo o que vier
+ * (um stream novo, a devolução do `ultrathink`). True = havia um driver para recebê-la; false = não
+ * há, e quem trocou reinicia a sessão nela (`applySessionChange`).
+ */
+export function applyDriverEffort(cardId: string, effort: string | null): boolean {
+  const session = sessions.get(cardId);
+  if (!session || !canAcceptTurn(session)) return false;
+  return writeToDriver(session, { type: "set_effort", effort });
+}
+
+/**
+ * O nível que uma sessão SEM nível fixado usa (o padrão da conta), como o driver vivo o anunciou ao
+ * subir (`effort_default`). Null sem driver ou antes do anúncio.
+ */
+export function driverDefaultEffort(cardId: string): string | null {
+  const session = sessions.get(cardId);
+  if (!session || session.closed) return null;
+  return session.defaultEffort ?? null;
+}
+
+/**
  * Best-effort goodbye on the BACK's own shutdown (SIGTERM from a deploy): end every driver's stdin
  * (EOF is the driver's exit signal, it reaches across the docker exec) and kill the local clients —
  * but KEEP the in-flight markers: they are exactly what tells the next boot which turns this
@@ -1973,6 +2144,13 @@ onCardInUseProbe((cardId) => isCardChatInUse(cardId));
 // do back, não do painel do tmux), então sem isto a visão de sessão lia o card como "Claude saiu" —
 // o banner "Claude parou" por cima de uma conversa que estava respondendo.
 onCardDriverProbe((cardId) => driverActivity(cardId));
+
+// …a inteligência trocada no pill vai ao driver vivo, que a aplica na sessão sem reiniciar (ver
+// `applyDriverEffort`). Sem driver, quem troca reinicia a sessão nela, como sempre.
+onCardEffortApplier((cardId, effort) => applyDriverEffort(cardId, effort));
+
+// …e o nível padrão da conta, que o driver anuncia no boot, chega ao pill antes da primeira resposta.
+onCardDefaultEffortProbe((cardId) => driverDefaultEffort(cardId));
 
 // …e a quarta: uma tarefa em segundo plano viva é trabalho — o `Stop` do turno que a disparou não
 // pode pôr o card em "aguardando" (ver services/board/status.ts).

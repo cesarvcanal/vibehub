@@ -70,9 +70,12 @@ function main(dir,id){
     for(let i=0;i<lines.length;i++){
       if(lines[i].indexOf(id)<0)continue;
       const o=parse(lines[i]);if(!o)continue;
+      // Só a conversa: o CLI também grava cópias da requisição (api-request-blob), sem horário nem
+      // toolUseResult — se valessem, apagariam a saída estruturada e o "quando".
+      if(o.type!=='assistant'&&o.type!=='user')continue;
       for(const b of blocks(o)){
-        if(b&&b.type==='tool_use'&&b.id===id){use={o:o,b:b};useAt=i}
-        if(b&&b.type==='tool_result'&&b.tool_use_id===id)res={o:o,b:b};
+        if(b&&b.type==='tool_use'&&b.id===id&&!use){use={o:o,b:b};useAt=i}
+        if(b&&b.type==='tool_result'&&b.tool_use_id===id&&!res)res={o:o,b:b};
       }
     }
     if(!use&&!res)continue;
@@ -93,9 +96,31 @@ function main(dir,id){
       if(res.o.toolUseResult!==undefined)out.structured=prune(res.o.toolUseResult,${DETAIL_TEXT_MAX});
     }
     if(thinking)out.thinking=cap(thinking,${THINKING_MAX});
+    const bgId=res&&res.o.toolUseResult&&res.o.toolUseResult.backgroundTaskId;
+    if(typeof bgId==='string'&&/^[A-Za-z0-9_-]{1,64}$/.test(bgId))out.background=background(raw,bgId,textOf(res.b.content));
     return out;
   }
   return {found:false};
+}
+// Um Bash em segundo plano: o resultado só diz para onde a saída vai. A saída real (o FIM dela, se
+// for grande) vem do arquivo, e o estado da última notificação da tarefa; sem notificação, roda.
+function background(raw,taskId,text){
+  const bg={taskId:taskId,status:'running'};
+  const tag='<task-id>'+taskId+'</task-id>';
+  for(const l of raw.split('\n')){
+    if(l.indexOf(tag)<0||l.indexOf('task-notification')<0)continue;
+    const o=parse(l);if(!o||(o.type!=='user'&&o.type!=='queue-operation'))continue;
+    const c=typeof o.content==='string'?o.content:textOf(o.message&&o.message.content);
+    const m=/<status>([a-z_]+)<\/status>/.exec(c);
+    if(c.indexOf(tag)>=0&&m)bg.status=m[1];
+  }
+  const pm=/Output is being written to: (\/\S+\/tasks\/[A-Za-z0-9_-]+\.output)/.exec(text);
+  let size=-1;try{if(pm)size=fs.statSync(pm[1]).size}catch(e){}
+  if(size<0){bg.missing=true;return bg}
+  const n=Math.min(size,${DETAIL_TEXT_MAX});const buf=Buffer.alloc(n);
+  const fd=fs.openSync(pm[1],'r');try{fs.readSync(fd,buf,0,n,size-n)}finally{fs.closeSync(fd)}
+  bg.output=buf.toString('utf8');bg.outputLength=size;
+  return bg;
 }
 console.log(JSON.stringify(main(process.argv[1]||'',process.argv[2]||'')));
 `.trim();
@@ -206,6 +231,30 @@ export interface ToolDetail {
   startedAt?: number;
   endedAt?: number;
   result?: ToolResultSummary;
+  /** Bash com `run_in_background`: a saída real, lida do arquivo da tarefa a cada sondagem. */
+  background?: BackgroundOutput;
+}
+
+/** A saída de um comando em segundo plano. `status` vem da notificação da tarefa (sem ela: `running`). */
+export interface BackgroundOutput {
+  taskId: string;
+  status: string;
+  /** O FIM da saída (até `DETAIL_TEXT_MAX`). */
+  output?: string;
+  /** Tamanho real do arquivo, em bytes. */
+  outputLength?: number;
+  /** O arquivo de saída não existe mais no runner (o /tmp do container foi limpo). */
+  missing?: boolean;
+}
+
+function parseBackground(v: unknown): BackgroundOutput | undefined {
+  const o = asFields(v);
+  if (!o || !str(o.taskId)) return undefined;
+  const bg: BackgroundOutput = { taskId: str(o.taskId), status: str(o.status) || "running" };
+  if (typeof o.output === "string") bg.output = o.output;
+  if (typeof o.outputLength === "number") bg.outputLength = o.outputLength;
+  if (o.missing === true) bg.missing = true;
+  return bg;
 }
 
 /** Lê a saída da sondagem de uma ação. Lixo vira `{ found: false }`. PURE. */
@@ -226,6 +275,8 @@ export function parseToolDetail(stdout: string): ToolDetail {
     detail.result = summarizeToolResult({ type: "tool_result", id: "", isError: detail.isError, text: detail.text, structured: detail.structured });
   }
   if (str(o.thinking)) detail.thinking = str(o.thinking);
+  const background = parseBackground(o.background);
+  if (background) detail.background = background;
   const startedAt = instant(o.startedAt);
   const endedAt = instant(o.endedAt);
   if (startedAt) detail.startedAt = startedAt;
@@ -292,14 +343,18 @@ export function parseAgentTimeline(stdout: string): AgentTimeline {
   };
 }
 
+/** Teto de uma sondagem. Folgado: com o runner carregado, ler um transcript grande passa de 15s, e
+ *  quem abriu o detalhe prefere esperar a ver "não deu para ler" (o front pede de novo sozinho). */
+const DETAIL_PROBE_TIMEOUT_MS = 60_000;
+
 /** Lê uma ação do runner agora. Lança `InvalidDetailIdError` (id torto) ou o erro do executor. */
 export async function readToolDetail(transcriptDir: string, id: string): Promise<ToolDetail> {
-  const { stdout } = await hostExecutor().runScript(buildDetailProbeScript(config.runner.container, transcriptDir, id, "tool"), { timeoutMs: 15_000 });
+  const { stdout } = await hostExecutor().runScript(buildDetailProbeScript(config.runner.container, transcriptDir, id, "tool"), { timeoutMs: DETAIL_PROBE_TIMEOUT_MS });
   return parseToolDetail(stdout);
 }
 
 /** Lê a linha do tempo de um subagente do runner agora. */
 export async function readAgentTimeline(transcriptDir: string, toolUseId: string): Promise<AgentTimeline> {
-  const { stdout } = await hostExecutor().runScript(buildDetailProbeScript(config.runner.container, transcriptDir, toolUseId, "agent"), { timeoutMs: 15_000 });
+  const { stdout } = await hostExecutor().runScript(buildDetailProbeScript(config.runner.container, transcriptDir, toolUseId, "agent"), { timeoutMs: DETAIL_PROBE_TIMEOUT_MS });
   return parseAgentTimeline(stdout);
 }

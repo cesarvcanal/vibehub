@@ -275,6 +275,18 @@ describe("AccessDialog — a identidade no GitHub de uma pessoa", () => {
     await waitFor(() => expect(asked()).toBeGreaterThan(before));
   });
 
+  it("o owner pode ligar a SI MESMO à conta padrão do runner", async () => {
+    serveWithGithub(OWNER);
+    patch.mockResolvedValue({ user: OWNER });
+    renderApp(<AccessDialog open onOpenChange={() => {}} />);
+    await userEvent.click(await screen.findByTestId(`user-git-open-${OWNER.id}`));
+    await userEvent.selectOptions(screen.getByTestId(`user-claude-account-${OWNER.id}`), "default");
+    await userEvent.click(screen.getByTestId(`user-git-save-${OWNER.id}`));
+    await waitFor(() => expect(patch).toHaveBeenCalledWith(
+      `/users/${OWNER.id}`, expect.objectContaining({ claudeAccountSlug: "default" }),
+    ));
+  });
+
   it("o membro não vê o bloco de ninguém — a lista inteira é do owner", async () => {
     serveWithGithub(MEMBER as unknown as typeof OWNER, [OWNER, MEMBER]);
     renderApp(<AccessDialog open onOpenChange={() => {}} />);

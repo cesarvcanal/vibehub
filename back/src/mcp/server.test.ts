@@ -81,6 +81,19 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(INSTRUCTIONS.toLowerCase()).toContain("secret");
   });
 
+  it("register vibehub_act_as and tell the agent to use it instead of waiting for the other person", () => {
+    const server = createMcpServer("test") as unknown as {
+      _registeredTools?: Record<string, { description?: string }>;
+    };
+    const description = (server._registeredTools ?? {})["vibehub_act_as"]?.description ?? "";
+    // The consent limit is part of the contract the agent reads.
+    expect(description).toContain("already gave this card an order");
+    expect(description).toContain("refused");
+    // The persona sends the agent to the tool, never to "ask the other person to come back".
+    expect(INSTRUCTIONS).toContain("vibehub_act_as");
+    expect(INSTRUCTIONS).toMatch(/Never stop to\s+ask the other person/);
+  });
+
   it("register vibehub_move_cards and keep its contract explicit (bulk, done/backlog only, own project)", () => {
     const server = createMcpServer("test") as unknown as {
       _registeredTools?: Record<string, { description?: string }>;
@@ -98,6 +111,19 @@ describe("MCP server instructions (the maestro persona)", () => {
     // Authorization: the agent acts from its own card, inside its own project.
     expect(description).toContain("$VIBEHUB_CARD_ID");
     expect(description).toContain("your own project");
+  });
+
+  it("register the two PR-review tools, and neither one merges", () => {
+    const server = createMcpServer("test") as unknown as {
+      _registeredTools?: Record<string, { description?: string }>;
+    };
+    const tools = server._registeredTools ?? {};
+    for (const name of ["vibehub_review_submit", "vibehub_review_respond"]) {
+      const description = tools[name]?.description ?? "";
+      expect(description).toContain("never merges; the merge is a human button");
+      // Who may call it is part of the contract: the card says who it is.
+      expect(description).toContain("$VIBEHUB_CARD_ID");
+    }
   });
 
   it("register the Cofre tools and instruct on using them for logins", () => {

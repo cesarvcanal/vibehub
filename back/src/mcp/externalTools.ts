@@ -10,7 +10,7 @@ import {
   listTerminals, sendToTerminal, readTerminal, readCardActivity, waitForTurn, waitTerminalReady, SEND_READY_WAIT_MS, WAIT_MAX_MS, ACTIVITY_LIMIT_MAX,
 } from "../services/maestro/maestro.js";
 import { readCardChanges } from "../services/maestro/changes.js";
-import { deliver } from "../services/maestro/deliver.js";
+import { deliverCard } from "../services/review/deliverCard.js";
 import { inboxFor, markDelivered, takeUndelivered, type CardEvent } from "../services/events/cardEvents.js";
 import { sendAnswer } from "./events.js";
 import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX, type CardMoveOutcome } from "./cardMove.js";
@@ -445,7 +445,9 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         "Returns { prUrl, merged, reason } ('merged', 'gate' = checks red, 'unauthorized' = PR " +
         "prepared but not told to merge, 'locked' = merge belongs to the reviewer). Pass " +
         "`authorized:true` ONLY when the user explicitly named where to ship ('sobe pra dev'); a " +
-        "merge is a deploy, never a default.",
+        "merge is a deploy, never a default. A PR under review: the push always happens; the merge only " +
+        "when you are the review's merger and it is ready ('review_active' otherwise, naming who merges; " +
+        "'head_moved' = new commits went back to the reviewer).",
       inputSchema: {
         cardId: z.string().describe("id of the card to deliver (from vibehub_list_terminals)"),
         branch: z.string().optional().describe("target branch. Absent = the project's base branch."),
@@ -457,7 +459,8 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         await requireLevel(user, a.cardId, "work");
         // Ordering the delivery IS an order: the push, the PR and the merge go out as this person.
         await recordCardActor(user, a.cardId);
-        return ok(await deliver(a.cardId, { branch: a.branch, authorized: a.authorized === true, by: user.id }));
+        // The person IS the caller here (and was just made the card's actor): the order is theirs.
+        return ok(await deliverCard(a.cardId, { branch: a.branch, authorized: a.authorized === true, by: user.id, from: a.cardId }));
       } catch (e) {
         return fail(e);
       }

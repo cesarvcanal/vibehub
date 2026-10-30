@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
  * GATE the test opens — a file in the sandbox. Fixed sleeps here made the tests a bet on the CI's load.
  */
 const FAKE_SDK = String.raw`
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 let created = 0;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -130,6 +130,21 @@ export function query({ prompt, options }) {
         yield { type: "assistant", uuid: "a-wake", parent_tool_use_id: null, session_id: SESSION, message: { content: [{ type: "text", text: "acordei" }] } };
         throw new Error("CLI process exited with code 1");
       }
+      if (text === "subslow") {
+        // O CASO DO CARD e9146043 (29/10): um subagente em PRIMEIRO PLANO rodando — a chamada Agent
+        // aberta, o turno parado nela — quando a inteligência é trocada. O gate é o mesmo do "slow".
+        yield { type: "assistant", uuid: "a-subslow", parent_tool_use_id: null, session_id: SESSION, message: { content: [
+          { type: "tool_use", id: "task-fg", name: "Agent", input: { description: "Implement Task 1", subagent_type: "general-purpose" } },
+        ] } };
+        mark("subslow:running");
+        while (!existsSync(join(options.cwd, "release-slow"))) await sleep(20);
+        yield { type: "user", parent_tool_use_id: null, session_id: SESSION, message: { content: [
+          { type: "tool_result", tool_use_id: "task-fg", content: "Task 1 pronta" },
+        ] } };
+        yield { type: "assistant", uuid: "a-subslow-end", parent_tool_use_id: null, session_id: SESSION, message: { content: [{ type: "text", text: "etapa 1 aprovada" }] } };
+        yield { type: "result", subtype: "success", session_id: SESSION, result: "ok" };
+        continue;
+      }
       if (text === "sub") {
         // UM SUBAGENTE (Agent/Task) TRABALHANDO: o CLI repassa o stream e as mensagens dele com
         // parent_tool_use_id = o id da chamada que o disparou. A ÚLTIMA mensagem antes do result é
@@ -201,6 +216,14 @@ export function query({ prompt, options }) {
   handle.supportedCommands = async () => [];
   handle.initializationResult = async () => ({});
   handle.applyFlagSettings = async (settings) => { mark("flags:" + JSON.stringify(settings)); };
+  // O nível que a CONTA define (o effortLevel dos settings) vem de um arquivo no sandbox; sem ele, o
+  // padrão do modelo ("medium", como o CLI de verdade para o Opus). \`applied\` é o que o CLI de
+  // verdade diz que a próxima chamada vai usar: o --effort, senão os settings, senão o do modelo.
+  handle.getSettings = async () => {
+    const file = join(options.cwd, "account-effort");
+    const own = existsSync(file) ? readFileSync(file, "utf8").trim() : undefined;
+    return { applied: { effort: options.effort ?? own ?? "medium" }, effective: own ? { effortLevel: own } : {} };
+  };
   return handle;
 }
 `;
@@ -244,6 +267,7 @@ afterEach(async () => {
   await rm(join(sandbox, "release-slow"), { force: true });
   await rm(join(sandbox, "release-tool"), { force: true });
   await rm(join(sandbox, "release-btw"), { force: true });
+  await rm(join(sandbox, "account-effort"), { force: true });
 });
 
 afterAll(async () => {
@@ -743,6 +767,154 @@ describe("sdk-driver.mjs — a inteligência do card sobrevive ao ultrathink", (
     await driver.waitMark("effort:none");
     await driver.waitFor((e) => e.type === "result");
     await driver.waitMark('flags:{"effortLevel":null}');
+  }, 60_000);
+});
+
+/**
+ * A INTELIGÊNCIA TROCADA NO PILL COM O TURNO RODANDO (produção, 2026-10-27): ela esperava um
+ * reinício que só vinha no fim do turno, e o turno seguia no nível velho. O `set_effort` entra na
+ * sessão viva na hora — medido no CLI de verdade (SDK 0.3.300, 2026-10-27): `applyFlagSettings` no
+ * meio do turno e as chamadas seguintes do MESMO turno saíram carimbadas no nível novo.
+ */
+describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () => {
+  it("vai para a sessão viva NA HORA, sem esperar o turno acabar", async () => {
+    const driver = startDriver(["--effort", "medium"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "revisa slow" });
+    await driver.waitMark("slow:running");
+    driver.send({ type: "set_effort", effort: "high" });
+    await driver.waitMark('flags:{"effortLevel":"high"}');
+    // Aplicado com o turno ainda aberto: nenhum result até aqui, nenhum stream novo.
+    expect(driver.events.some((e) => e.type === "result")).toBe(false);
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+  }, 60_000);
+
+  it("sem stream de pé, o PRÓXIMO já nasce no nível novo", async () => {
+    const driver = startDriver(["--effort", "medium"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "set_effort", effort: "xhigh" });
+    driver.send({ type: "user", text: "oi" });
+    await driver.waitMark("effort:xhigh");
+    await driver.waitFor((e) => e.type === "result");
+    // (O `effort:none` do boot é a consulta descartável do catálogo, que a primeira mensagem encerra.)
+    expect(driver.marks.filter((m) => m.startsWith("effort:")).at(-1)).toBe("effort:xhigh");
+  }, 60_000);
+
+  it("um subagente em PRIMEIRO PLANO rodando: o nível entra na hora e a chamada dele volta no mesmo turno", async () => {
+    // O relato do card e9146043 (29/10): Extra alto escolhido com a ferramenta Agent aberta. O que
+    // não pode acontecer é a sessão cair e a chamada voltar como "session ended before this call's
+    // result was recorded".
+    const driver = startDriver(["--effort", "medium"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "subslow" });
+    await driver.waitMark("subslow:running");
+    driver.send({ type: "set_effort", effort: "xhigh" });
+    await driver.waitMark('flags:{"effortLevel":"xhigh"}');
+    expect(driver.events.some((e) => e.type === "result")).toBe(false);
+    await releaseSlowTurn();
+    const back = await driver.waitFor((e) => e.type === "tool_result" && e.id === "task-fg");
+    expect(back.isError ?? false).toBe(false);
+    await driver.waitFor((e) => e.type === "assistant_text" && e.text === "etapa 1 aprovada");
+    await driver.waitFor((e) => e.type === "result");
+    // Um stream só (o da conversa) além do descartável do catálogo: nada reiniciou.
+    expect(driver.marks.filter((m) => m.startsWith("effort:"))).toEqual(["effort:none", "effort:medium"]);
+  }, 60_000);
+
+  it("voltar ao padrão da CONTA no meio do turno: limpa o flag e reaplica o nível dos settings, sem reiniciar", async () => {
+    // O `null` do applyFlagSettings leva ao padrão do MODELO e ignora o effortLevel dos settings
+    // (medido no CLI de verdade, SDK 0.3.300, 29/10: settings high → flag xhigh → null = medium).
+    // O padrão da conta é o dos settings: ele volta por cima.
+    await writeFile(join(sandbox, "account-effort"), "high");
+    const driver = startDriver(["--effort", "xhigh"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "revisa slow" });
+    await driver.waitMark("slow:running");
+    driver.send({ type: "set_effort", effort: null });
+    await driver.waitMark('flags:{"effortLevel":"high"}');
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual(['flags:{"effortLevel":null}', 'flags:{"effortLevel":"high"}']);
+    expect(driver.events.some((e) => e.type === "result")).toBe(false);
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+  }, 60_000);
+
+  it("voltar ao padrão sem nível nos settings: fica no do modelo (só o null)", async () => {
+    const driver = startDriver(["--effort", "xhigh"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "revisa slow" });
+    await driver.waitMark("slow:running");
+    driver.send({ type: "set_effort", effort: null });
+    await driver.waitMark('flags:{"effortLevel":null}');
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual(['flags:{"effortLevel":null}']);
+  }, 60_000);
+
+  it("voltar ao padrão sem stream de pé: o próximo nasce sem --effort", async () => {
+    const driver = startDriver(["--effort", "xhigh"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "set_effort", effort: null });
+    driver.send({ type: "user", text: "oi" });
+    await driver.waitFor((e) => e.type === "result");
+    expect(driver.marks.filter((m) => m.startsWith("effort:")).at(-1)).toBe("effort:none");
+  }, 60_000);
+
+  it("um turno ultrathink em voo segura o max; a devolução no fim dele já é o nível novo", async () => {
+    const driver = startDriver(["--effort", "low"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
+    await driver.waitMark('flags:{"effortLevel":"max"}');
+    await driver.waitMark("slow:running");
+    driver.send({ type: "set_effort", effort: "high" });
+    // Com o max segurado, o set_effort não deixa rastro: soltar o turno logo em seguida corria com a
+    // leitura do stdin, e sob carga o turno acabava antes, devolvia o "low" (certo, para uma troca
+    // DEPOIS do turno) e o teste falhava. O driver lê o stdin em ordem e na hora: a resposta a uma
+    // linha seguinte prova que o set_effort já foi lido.
+    driver.send({ type: "permission_decision", id: "barreira-effort", allow: false });
+    await driver.waitFor((e) => e.type === "error" && String(e.message).includes("barreira-effort"));
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+    await driver.waitMark('flags:{"effortLevel":"high"}');
+    // O max do ultrathink não foi cortado no meio do turno, e o nível velho não volta.
+    const flags = driver.marks.filter((m) => m.startsWith("flags:"));
+    expect(flags).toEqual(['flags:{"effortLevel":"max"}', 'flags:{"effortLevel":"high"}']);
+  }, 60_000);
+
+  it("um nível que não existe não chega ao CLI", async () => {
+    const driver = startDriver(["--effort", "medium"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "revisa slow" });
+    await driver.waitMark("slow:running");
+    driver.send({ type: "set_effort", effort: "turbo" });
+    driver.send({ type: "set_effort", effort: "low" });
+    await driver.waitMark('flags:{"effortLevel":"low"}');
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual(['flags:{"effortLevel":"low"}']);
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+  }, 60_000);
+});
+
+/**
+ * O NÍVEL ANTES DA PRIMEIRA RESPOSTA (29/10): num card sem nível fixado, nada dizia em qual a sessão
+ * ia rodar até a primeira resposta carimbar o transcript — o pill mostrava só "Opus". O CLI responde
+ * isso sem turno nenhum (`getSettings().applied.effort`, medido no SDK 0.3.300), então a consulta
+ * descartável do catálogo já pergunta e o driver anuncia o padrão da conta.
+ */
+describe("sdk-driver.mjs — o nível padrão da conta, anunciado no boot", () => {
+  it("sai antes de qualquer mensagem, e é o da CONTA mesmo com o card fixado em outro", async () => {
+    const driver = startDriver(["--effort", "xhigh"]);
+    const def = await driver.waitFor((e) => e.type === "effort_default");
+    expect(def.effort).toBe("medium");
+    expect(driver.events.some((e) => e.type === "result")).toBe(false);
+    // A consulta descartável sobe sem o nível do card: é ela que diz o padrão.
+    expect(driver.marks.filter((m) => m.startsWith("effort:"))).toEqual(["effort:none"]);
+  }, 60_000);
+
+  it("o effortLevel dos settings da conta é o padrão", async () => {
+    await writeFile(join(sandbox, "account-effort"), "high");
+    const driver = startDriver();
+    const def = await driver.waitFor((e) => e.type === "effort_default");
+    expect(def.effort).toBe("high");
   }, 60_000);
 });
 

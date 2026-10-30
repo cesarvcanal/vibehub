@@ -9,6 +9,7 @@ import {
   Brain,
   ChevronRight,
   CircleHelp,
+  TriangleAlert,
   Clock3,
   CornerDownLeft,
   ListTodo,
@@ -27,6 +28,13 @@ import { wsUrl } from "@/lib/ws";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/providers/auth";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
+import { useVoiceCall } from "@/features/voice/useVoiceCall";
+import { VoiceCallBar } from "@/features/voice/VoiceCallBar";
+import { VoiceCallContext, type VoiceCallControl } from "@/features/voice/ComposerVoiceButton";
+import { VoiceTurnBubble } from "@/features/voice/VoiceTurnBubble";
+import { agentContext, typedContext } from "@/features/voice/voiceContext";
+import { AnswerActions } from "@/features/voice/AnswerActions";
+import { readAloud, readAloudError, setReadAloudErrorHandler } from "@/features/voice/readAloud";
 import { PlanUsageAlert, cardRateLimitsKey, useCardPlanUsage } from "@/features/board/components/PlanUsage";
 import { planAlert, planWindows } from "@/features/board/lib/planUsage";
 import { LinkifiedText, Markdown, SenderTag } from "@/features/board/components/ChatView";
@@ -92,6 +100,7 @@ import {
   applySdkEvent,
   appendBtwRow,
   appendUserRow,
+  mergeLiveVoiceTurns,
   BTW_EXPIRE_MS,
   expireBtwRows,
   btwQuestion,
@@ -100,6 +109,7 @@ import {
   deliveredUserTexts,
   dropUserRow,
   currentActivity,
+  finishedAnswerIds,
   groupSdkRows,
   isSdkDelta,
   liveActivityDetail,
@@ -115,6 +125,7 @@ import {
   turnHasRoomForMore,
   type SdkActivity,
   type SdkChatState,
+  type QuestionCancel,
   type SdkQuestionAnswer,
   type BackgroundTask,
   type SdkEvent,
@@ -127,6 +138,7 @@ import {
   markUndelivered,
   newCid,
   overdueMessages,
+  planAutoResend,
   readOutbox,
   reconcileOutbox,
   retryOutbox,
@@ -185,11 +197,24 @@ export interface SdkChatViewProps {
   /** O card está trabalhando pelos hooks. Só vale para um turno que roda na aba Terminal (o chat
    *  espelha e o driver não diz nada): é a única fonte de que aquele turno ainda está de pé. */
   terminalWorking?: boolean;
+  /**
+   * Rendered right above the composer: what belongs to the CARD and not to the conversation (the
+   * PR blocks). The composer lives in here, so this is the only way to sit next to it from outside.
+   */
+  footer?: React.ReactNode;
   ariaLabel?: string;
   className?: string;
 }
 
-export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, terminalWorking = false, ariaLabel, className }: SdkChatViewProps) {
+/**
+ * As mensagens guardadas que ESTA conta pode mandar de novo: as dela, e as sem autor (gravadas
+ * antes do campo existir). Uma de outra conta, saindo por esta conexão, ficaria no nome errado. PURE.
+ */
+function ownSends(outbox: readonly OutboxMessage[], viewer: string | undefined): OutboxMessage[] {
+  return outbox.filter((m) => !m.from || m.from.name === viewer);
+}
+
+export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, terminalWorking = false, footer, ariaLabel, className }: SdkChatViewProps) {
   const t = useT();
   // Whose screen this is — the edit affordance belongs only to one's own messages.
   const me = useAuth().user;
@@ -605,6 +630,28 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   );
 
   /**
+   * MANDAR DE NOVO uma mensagem não entregue: as mesmas palavras, o mesmo recibo — o back nunca a
+   * teve, ou teve e perdeu o recibo (aí o cid repetido é só a cobrança dele, nunca um segundo turno).
+   *
+   * `auto` é o reenvio que a tela faz sozinha (ver `planAutoResend`): gasta uma tentativa do plano
+   * e não grita — uma falha dele só reagenda. O da pessoa (o botão) zera o plano e avisa o erro.
+   */
+  const resendEntry = React.useCallback((entry: OutboxMessage, auto: boolean): void => {
+    const { cid } = entry;
+    setState((prev) => settleUserRow(prev, cid, "sending"));
+    setOutbox((prev) => retryOutbox(prev, entry, Date.now(), sendMark(deliveredUserTexts(rowsRef.current), entry.text), auto));
+    try {
+      sendFrame(entry.original !== undefined
+        ? { type: "edit_user", original: entry.original, text: entry.text, cid, ...(entry.first ? { first: true } : {}) }
+        : { type: "user", text: entry.text, cid });
+    } catch (err) {
+      if (!auto) toast.error((err as Error).message);
+      setOutbox((prev) => markUndelivered(prev, [cid]));
+      setState((prev) => settleUserRow(prev, cid, "undelivered"));
+    }
+  }, [sendFrame]);
+
+  /**
    * RECONCILE on reconnect: the server's replay is the truth about what was recorded. An outbox
    * entry whose text is in the replay was delivered (only its receipt got lost); one that is not
    * there never arrived, and comes back as a bubble marked "não entregue" with its text intact —
@@ -634,7 +681,13 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
       // veredito dado — o outbox é a cópia recuperável dela, e uma entrada vencida que ninguém
       // marca é o que fazia o watchdog derrubar o socket em todo tique.
       const gone = new Set([...delivered.map((m) => m.cid), ...queued.map((q) => q.cid)]);
-      setOutbox((prev) => markUndelivered(prev.filter((m) => !gone.has(m.cid)), missing.map((m) => m.cid)));
+      const settle = (prev: OutboxMessage[]): OutboxMessage[] =>
+        markUndelivered(prev.filter((m) => !gone.has(m.cid)), missing.map((m) => m.cid));
+      // O ref já na hora, pelo mesmo motivo da fila: o reenvio automático sai do despacho deste
+      // MESMO commit, e lendo o outbox de antes reenviaria uma mensagem que o replay acabou de dar
+      // por entregue — num driver novo, que não conhece o cid, isso é um segundo turno.
+      outboxRef.current = settle(outboxRef.current);
+      setOutbox(settle);
     }
     if (missing.length > 0) {
       setState((prev) => missing.reduce(
@@ -693,6 +746,19 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     }, OUTBOX_TICK_MS);
     return () => clearInterval(timer);
   }, [outbox.length]);
+
+  /**
+   * O RELÓGIO DO REENVIO AUTOMÁTICO — um timer só, armado para o próximo instante em que o plano
+   * muda (um intervalo vence, uma mensagem passa do teto de idade), nunca um tique fixo. Ele não
+   * envia nada: só acorda o despacho, que é quem sabe se dá para enviar agora (ver abaixo).
+   */
+  const [resendClock, setResendClock] = React.useState(0);
+  const resendPlan = planAutoResend(ownSends(outbox, viewer), Date.now());
+  React.useEffect(() => {
+    if (resendPlan.wakeAt === null) return;
+    const timer = setTimeout(() => setResendClock((n) => n + 1), Math.max(0, resendPlan.wakeAt - Date.now()));
+    return () => clearTimeout(timer);
+  }, [resendPlan.wakeAt, resendClock]);
 
   /* -------------------------------------------------------------- editing */
 
@@ -923,6 +989,17 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     // streaming input: o CLI a enfileira e o modelo a lê no passo seguinte.
     if (!turnHasRoomForMore(state)) return;
     if (editing || pendingEdit) return;
+    // O REENVIO AUTOMÁTICO passa na frente da fila: a mensagem que falhou foi escrita antes de tudo
+    // que está esperando ali, e a conversa não pode chegar ao Claude embaralhada. Ele sai pelo mesmo
+    // portão da fila — fio de pé, servidor pronto (a reconciliação já disse o que ele tem), turno
+    // com espaço —, então nunca dispara contra uma conexão que não pode responder, e o fio caído
+    // não gasta tentativa. Uma correção (`original`) é um supersede: só com o turno parado.
+    const retry = planAutoResend(ownSends(outboxRef.current, viewer), Date.now()).due
+      .find((m) => m.original === undefined || !state.turnActive);
+    if (retry) {
+      resendEntry(retry, true);
+      return;
+    }
     // Só o que é DESTA conta sai por esta conexão (o servidor carimba o autor pela conexão).
     const head = headOfQueue(foreignToOutbox(queueRef.current, viewer).own);
     if (!head) return;
@@ -935,7 +1012,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
       // conversa, recuperável. Ela não volta pra fila — duas cópias da mesma mensagem é pior.
       toast.error((err as Error).message);
     }
-  }, [queue, connected, state, editing, pendingEdit, dispatchTurn, viewer]);
+  }, [queue, connected, state, editing, pendingEdit, dispatchTurn, viewer, outbox, resendClock, resendEntry]);
 
   const send = async (raw: string): Promise<void> => {
     const text = raw.replace(/\r$/, "").trim();
@@ -1065,22 +1142,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
 
   /** "Reenviar": the same words, the same receipt id — the back never had them, so this is not a copy. */
   const resendUndelivered = React.useCallback((cid: string): void => {
-    const entry = outboxRef.current.find((m) => m.cid === cid);
-    if (!entry) return;
     // Reenviar a mensagem de OUTRA conta a gravaria no nome de quem está na aba agora.
-    if (entry.from && entry.from.name !== viewer) return;
-    setState((prev) => settleUserRow(prev, cid, "sending"));
-    setOutbox((prev) => retryOutbox(prev, entry, Date.now(), sendMark(deliveredUserTexts(rowsRef.current), entry.text)));
-    try {
-      sendFrame(entry.original !== undefined
-        ? { type: "edit_user", original: entry.original, text: entry.text, cid, ...(entry.first ? { first: true } : {}) }
-        : { type: "user", text: entry.text, cid });
-    } catch (err) {
-      toast.error((err as Error).message);
-      setOutbox((prev) => markUndelivered(prev, [cid]));
-      setState((prev) => settleUserRow(prev, cid, "undelivered"));
-    }
-  }, [sendFrame, viewer]);
+    const entry = ownSends(outboxRef.current, viewer).find((m) => m.cid === cid);
+    if (entry) resendEntry(entry, false);
+  }, [resendEntry, viewer]);
 
   /** "Descartar": the person gave up on this send — the bubble and the stored copy both go. */
   const discardUndelivered = React.useCallback((cid: string): void => {
@@ -1144,9 +1209,77 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     }
   }, [readSettledState, viewer, beginEdit, beginQueueEdit]);
 
+  /* ------------------------------------------------------------ voice call */
+
+  /*
+   * A VOICE CALL IN THIS CHAT (features/voice/useVoiceCall.ts). Same thread, same composer: the
+   * spoken turns are drawn here as they are said and saved into this card's log; what is typed or
+   * attached during the call goes to the agent exactly as always, and the voice is told about it
+   * (and about the agent's answers) as quiet context — it cannot read files or images itself.
+   */
+  const [sentDuringCall, setSentDuringCall] = React.useState(false);
+  const callWorking = connected && (state.awaiting || state.turnActive);
+  /** The agent is working on something typed during the call — the call shows it as "thinking". */
+  const agentBusyForCall = sentDuringCall && callWorking;
+  const call = useVoiceCall({ cardId, agentBusy: agentBusyForCall });
+  const callLive = call.snap.state === "live";
+  if (!callWorking && sentDuringCall) setSentDuringCall(false);
+  const [callBarDismissed, setCallBarDismissed] = React.useState(false);
+  const voiceControl = React.useMemo<VoiceCallControl>(
+    () => ({
+      inCall: call.active,
+      start: () => {
+        setCallBarDismissed(false);
+        call.start();
+      },
+      stop: call.stop,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [call.active, call.start, call.stop],
+  );
+  // The chat stops being the one on screen (another card, the terminal tab): the call ends with it
+  // — a microphone left open in a conversation nobody is looking at is not a feature.
+  React.useEffect(() => {
+    if (!active && call.active) call.stop();
+  }, [active, call.active, call.stop]);
+  const sendFromComposer = React.useCallback(
+    async (raw: string): Promise<void> => {
+      await send(raw);
+      if (!callLive) return;
+      const note = typedContext(raw);
+      if (note && call.appendContext(note)) setSentDuringCall(true);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [send, callLive, call.appendContext],
+  );
+  // The agent's answers that land during the call reach the voice too. Keyed by TEXT: a reconnect
+  // replays the thread with new row ids, and must not re-tell the voice what it already knows.
+  const toldVoice = React.useRef<Set<string> | null>(null);
+  React.useEffect(() => {
+    if (!callLive) {
+      toldVoice.current = null;
+      return;
+    }
+    const answers = state.rows.filter(
+      (row): row is Extract<SdkRow, { kind: "assistant" }> => row.kind === "assistant" && !row.parent && !row.streaming && row.text.trim() !== "",
+    );
+    if (toldVoice.current === null) {
+      toldVoice.current = new Set(answers.map((row) => row.text));
+      return;
+    }
+    for (const row of answers) {
+      if (toldVoice.current.has(row.text)) continue;
+      toldVoice.current.add(row.text);
+      call.appendContext(agentContext(row.text));
+    }
+  }, [state.rows, callLive, call.appendContext]);
+  /** The thread as drawn: the saved rows plus the call's turns still being spoken or saved. */
+  const displayRows = React.useMemo(() => mergeLiveVoiceTurns(state.rows, call.turns, selfOrigin), [state.rows, call.turns, selfOrigin]);
+  const showCallBar = call.active || (call.phase === "error" && !callBarDismissed);
+
   /* ------------------------------------------------------------ scrolling */
 
-  const stick = useStickToBottom(state.rows);
+  const stick = useStickToBottom(displayRows);
 
   /* ----------------------------------------------------- pending decisions */
 
@@ -1200,10 +1333,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   // do principal não troca o valor do contexto nem redesenha os cards de subagente.
   const subagentRowsRef = React.useRef<SubagentSplit["children"] | undefined>(undefined);
   const split = React.useMemo(() => {
-    const next = splitSubagentRows(state.rows, subagentRowsRef.current);
+    const next = splitSubagentRows(displayRows, subagentRowsRef.current);
     subagentRowsRef.current = next.children;
     return next;
-  }, [state.rows]);
+  }, [displayRows]);
   const rendered = React.useMemo(() => groupSdkRows(split.main), [split.main]);
   const latestTodoId = React.useMemo(() => latestTodoRowId(split.main), [split.main]);
   const renderThreadRow = React.useCallback((row: SdkRow) => <SdkChatRow row={row} />, []);
@@ -1211,7 +1344,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     () => ({ subagentRows: split.children, latestTodoId, renderRow: renderThreadRow }),
     [split.children, latestTodoId, renderThreadRow],
   );
-  const empty = state.rows.length === 0;
+  const empty = displayRows.length === 0;
 
   /* -------------------------------------------------- what is running, right now */
 
@@ -1222,6 +1355,21 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   // parada com a IA trabalhando (card "POC modo de voz", 2026-10-21).
   const working = connected && (state.awaiting || state.turnActive || (state.terminalBurst && terminalWorking));
   const activity = React.useMemo(() => (working ? currentActivity(state) : null), [working, state]);
+  // "Copiar" e "ouvir" só embaixo de resposta TERMINADA: a da rodada atual espera tudo parar —
+  // turno, e também as tarefas em segundo plano, que ainda podem mudar o que a IA vai dizer.
+  const settled = connected && !working && state.backgroundTasks.length === 0;
+  const finishedAnswers = React.useMemo(() => finishedAnswerIds(state.rows, settled), [state.rows, settled]);
+  // Uma leitura em voz alta deste card não sobrevive ao card fechado nem a uma chamada de voz.
+  React.useEffect(() => {
+    setReadAloudErrorHandler((err) => toast.error(translate(readAloudError(err))));
+    return () => {
+      setReadAloudErrorHandler(undefined);
+      if (readAloud.getState()?.cardId === cardId) readAloud.stop();
+    };
+  }, [cardId]);
+  React.useEffect(() => {
+    if (callLive) readAloud.stop();
+  }, [callLive]);
   /*
    * QUANDO o trabalho começou — e só isso mora aqui. O relógio que anda a cada segundo vive nos dois
    * mostradores (`useTurnClock`): aqui em cima ele redesenhava a conversa INTEIRA uma vez por
@@ -1323,6 +1471,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
                 onEdit={beginEdit}
                 onResend={resendUndelivered}
                 onDiscard={discardUndelivered}
+                retrying={entry.row.kind === "user" && entry.row.cid !== undefined && resendPlan.pending.has(entry.row.cid)}
+                answerOf={finishedAnswers.has(entry.id) ? cardId : undefined}
               />
             )}
           </div>
@@ -1406,11 +1556,20 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
         <PlanUsageAlert alert={usageAlert} now={alertNow} className="max-w-[70%] shrink" />
       </div>
 
+      {showCallBar ? (
+        <div className="mt-1.5">
+          <VoiceCallBar call={call} agentBusy={agentBusyForCall} onClose={() => setCallBarDismissed(true)} />
+        </div>
+      ) : null}
+
+      {footer}
+
+      <VoiceCallContext.Provider value={voiceControl}>
       <TerminalComposer
         className="mt-1.5"
         cardId={cardId}
         active={active}
-        onSend={send}
+        onSend={sendFromComposer}
         onUploadImage={onUploadImage}
         placeholder={replyTo ? t("sdk.replyPlaceholder") : undefined}
         commands={state.commands}
@@ -1426,6 +1585,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
         onEditLast={editLast}
         onDraftInput={typingSignal.input}
       />
+      </VoiceCallContext.Provider>
 
       {/* The footer says which conversation this IS (the resume key) and whether the wire is up. */}
       <div className="mt-1 flex items-center gap-2 px-1 text-[11px] text-muted-foreground/70" data-testid="sdk-chat-footer">
@@ -2054,6 +2214,8 @@ const SdkChatRow = React.memo(function SdkChatRow({
   onEdit,
   onResend,
   onDiscard,
+  retrying = false,
+  answerOf,
 }: {
   row: SdkRow;
   /** The explicit reply this row's question already received — what it shows it got. */
@@ -2074,6 +2236,10 @@ const SdkChatRow = React.memo(function SdkChatRow({
   onResend?: (cid: string) => void;
   /** On a message the server never took: give up on it (bubble and stored copy both go). */
   onDiscard?: (cid: string) => void;
+  /** On a message the server never took: the screen will resend it by itself (see `planAutoResend`). */
+  retrying?: boolean;
+  /** A FINISHED answer (`finishedAnswerIds`): the card it belongs to — it gets "copiar" and "ouvir". */
+  answerOf?: string;
 }) {
   const t = useT();
   // Whose screen this is — their own messages render unlabelled, everyone else's carry the sender.
@@ -2169,6 +2335,10 @@ const SdkChatRow = React.memo(function SdkChatRow({
     );
   }
 
+  if (row.kind === "voice") {
+    return <VoiceTurnBubble role={row.role} text={row.text} from={row.from} viewer={viewer} live={row.live} save={row.save} />;
+  }
+
   if (row.kind === "command_output") {
     // The CLI's own answer to a local command (/cost, /usage): monospaced and framed, so it reads
     // as what it is — the session reporting, not Claude speaking.
@@ -2243,6 +2413,13 @@ const SdkChatRow = React.memo(function SdkChatRow({
       >
         <AlertTriangle className="h-3 w-3 shrink-0" />
         <span className="min-w-0 text-right italic">{t("sdk.undelivered")}</span>
+        {/* Ninguém precisa ficar olhando: a tela tenta de novo sozinha. O botão segue lá para quem
+            não quer esperar o intervalo. */}
+        {retrying ? (
+          <span data-testid="sdk-user-retrying" className="min-w-0 text-right italic">
+            {t("sdk.undeliveredRetrying")}
+          </span>
+        ) : null}
         {/* Só quem escreveu reenvia: daqui a mensagem sairia no nome de quem está na aba. */}
         {role === "self" ? (
           <button
@@ -2317,6 +2494,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
   // Best-effort highlight: when the message CLOSES on a question directed at the user, that final
   // paragraph gets a subtle amber frame so it never drowns in the text above it.
   const prose = row.kind === "assistant" && !row.streaming ? splitProseQuestion(row.text) : null;
+  const actions = row.kind === "assistant" && answerOf ? <AnswerActions id={row.id} cardId={answerOf} text={row.text} /> : null;
   if (prose) {
     // What this question RECEIVED (`answered`), anchored to it — the third question the screen owes
     // the person ("pronto, respondi"). Survives a reload: the answer is read back out of the sent message.
@@ -2359,6 +2537,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
             </Button>
           ) : null}
         </div>
+        {actions}
       </div>
     );
   }
@@ -2366,6 +2545,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
     <div data-testid="sdk-assistant" className="max-w-full select-text text-sm leading-relaxed">
       {row.streaming ? <StreamingMarkdown text={row.text} /> : <Markdown text={row.text} />}
       {row.streaming ? <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-foreground/60 align-baseline" /> : null}
+      {actions}
     </div>
   );
 });
@@ -2477,11 +2657,21 @@ function SdkQuestionCard({
             ? t("sdk.questionAnswered", { answers: chosen.join(" · ") })
             : row.outcome === "superseded"
               ? t("sdk.questionSuperseded")
-              : t("sdk.questionUnanswered")}
+              : row.outcome === "cancelled"
+                ? cancelledText(row.cancel, t)
+                : t("sdk.questionUnanswered")}
         </div>
       </div>
     );
   }
+
+  /** Copia para o MEU cartão o que a outra pessoa marcou e escreveu nesta pergunta ("Usar esta"). */
+  const adopt = (qi: number, draft: QuestionDraft): void => {
+    if (!single) setPicked((prev) => prev.map((sel, i) => (i === qi ? [...(draft.picked[qi] ?? [])] : sel)));
+    setOther((prev) => prev.map((v, i) => (i === qi ? draft.other[qi] ?? "" : v)));
+  };
+  const mine = !isEmptyDraft({ picked, other });
+  const peerNames = peers.map((p) => peerDisplayName(p.name)).join(", ");
 
   return (
     <div
@@ -2492,12 +2682,26 @@ function SdkQuestionCard({
       <div className="flex items-center gap-1.5 font-medium text-sky-500">
         <CircleHelp className="h-3.5 w-3.5 shrink-0" />
         {t("sdk.questionTitle")}
+        {peers.length > 0 ? (
+          // QUEM MAIS está respondendo, no canto do cabeçalho: avatar na cor da pessoa e os mesmos
+          // pontinhos do "está digitando" — presença, não alarme.
+          <span data-testid="sdk-question-peer-presence" className="ml-auto flex min-w-0 items-center gap-1.5 font-normal">
+            <span className="flex -space-x-1">
+              {peers.map((p) => <PeerAvatar key={p.name} name={p.name} />)}
+            </span>
+            <span className={cn("truncate", peers.length === 1 ? peerTone(peers[0]!.name).text : "text-muted-foreground")}>{t("sdk.questionPeerAnswering", { names: peerNames })}</span>
+            <span className="flex items-end gap-[2px]" aria-hidden="true">
+              {[0, 200, 400].map((delay) => (
+                <span
+                  key={delay}
+                  className={cn("h-1 w-1 animate-typing-dot rounded-full motion-reduce:animate-none", peers.length === 1 ? peerTone(peers[0]!.name).dot : "bg-muted-foreground")}
+                  style={{ animationDelay: `${delay}ms` }}
+                />
+              ))}
+            </span>
+          </span>
+        ) : null}
       </div>
-      {peers.length > 0 ? (
-        <div data-testid="sdk-question-peer-banner" role="status" className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-amber-600 dark:text-amber-300">
-          {t("sdk.questionPeerAnswering", { names: peers.map((p) => peerDisplayName(p.name)).join(", ") })}
-        </div>
-      ) : null}
       {row.questions.map((q, qi) => (
         <div key={qi} className="flex flex-col gap-1.5">
           {q.header ? <div className="text-[10px] font-semibold uppercase tracking-wide text-sky-500/80">{q.header}</div> : null}
@@ -2505,23 +2709,28 @@ function SdkQuestionCard({
           <div className="flex flex-wrap gap-1.5">
             {q.options.map((opt) => {
               const selected = (picked[qi] ?? []).includes(opt.label);
-              // Marcado por OUTRA pessoa: um contorno âmbar e o nome dela no título.
-              const peerPicked = peers.filter((p) => (p.draft.picked[qi] ?? []).includes(opt.label)).map((p) => peerDisplayName(p.name));
+              // Marcado por OUTRA pessoa: a bolinha dela no canto da opção, na cor dela.
+              const pickedBy = peers.filter((p) => (p.draft.picked[qi] ?? []).includes(opt.label));
               return (
                 <Button
                   key={opt.label}
                   size="sm"
                   variant={selected ? "default" : "outline"}
-                  className={cn("h-7 max-w-full text-xs", peerPicked.length > 0 && "ring-2 ring-amber-400/80")}
+                  className={cn("relative h-7 max-w-full overflow-visible text-xs", pickedBy.length > 0 && !selected && peerTone(pickedBy[0]!.name).border)}
                   data-testid="sdk-question-option"
-                  data-peer-picked={peerPicked.length > 0 || undefined}
+                  data-peer-picked={pickedBy.length > 0 || undefined}
                   aria-pressed={selected}
-                  title={peerPicked.length > 0
-                    ? [opt.description, t("sdk.questionPeerPicked", { names: peerPicked.join(", ") })].filter(Boolean).join(" — ")
+                  title={pickedBy.length > 0
+                    ? [opt.description, t("sdk.questionPeerPicked", { names: pickedBy.map((p) => peerDisplayName(p.name)).join(", ") })].filter(Boolean).join(" — ")
                     : opt.description}
                   onClick={() => toggle(qi, opt.label)}
                 >
                   <span className="truncate">{opt.label}</span>
+                  {pickedBy.length > 0 ? (
+                    <span className="absolute -right-1.5 -top-1.5 flex -space-x-1">
+                      {pickedBy.map((p) => <PeerAvatar key={p.name} name={p.name} small />)}
+                    </span>
+                  ) : null}
                 </Button>
               );
             })}
@@ -2542,18 +2751,40 @@ function SdkQuestionCard({
             className="h-7 rounded-md border border-border/70 bg-background/80 px-2 text-xs outline-none placeholder:text-muted-foreground/60 focus:border-sky-500/60"
           />
           {peers.map(({ name, draft }) => {
-            const marks = draft.picked[qi] ?? [];
             const text = (draft.other[qi] ?? "").trim();
-            if (marks.length === 0 && text === "") return null;
+            if (text === "") return null;
+            const tone = peerTone(name);
+            // O CAMPO DA OUTRA PESSOA, logo abaixo do meu: tracejado na cor dela, com o que ela
+            // está escrevendo ao vivo — e um clique para adotar a resposta dela no meu cartão.
             return (
-              <div key={name} data-testid="sdk-question-peer-draft" className="min-w-0 break-words text-amber-600 dark:text-amber-300">
-                <span className="font-medium">{t("sdk.questionPeerDraft", { name: peerDisplayName(name) })}</span>{" "}
-                {[...marks, ...(text !== "" ? [`“${text}”`] : [])].join(" · ")}
+              <div
+                key={name}
+                data-testid="sdk-question-peer-draft"
+                className={cn("flex min-h-7 items-center gap-2 rounded-md border border-dashed px-2 py-1", tone.border, tone.bg)}
+              >
+                <PeerAvatar name={name} />
+                <span className={cn("shrink-0 font-medium", tone.text)}>{peerDisplayName(name)}</span>
+                <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-foreground">{text}</span>
+                <button
+                  type="button"
+                  data-testid="sdk-question-peer-use"
+                  onClick={() => adopt(qi, draft)}
+                  className={cn("shrink-0 rounded border px-2 py-0.5 text-[11px] font-medium hover:bg-background/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1", tone.border, tone.text)}
+                >
+                  {t("sdk.questionPeerUse")}
+                </button>
               </div>
             );
           })}
         </div>
       ))}
+      {peers.length > 0 && mine ? (
+        // Só no CONFLITO: as duas pessoas com algo escrito. Antes a faixa ficava de pé sempre.
+        <div data-testid="sdk-question-peer-clash" role="status" className="flex items-center gap-1.5 text-amber-500">
+          <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          {t("sdk.questionPeerClash", { names: peerNames })}
+        </div>
+      ) : null}
       {single ? (
         (other[0] ?? "").trim() !== "" ? (
           <Button size="sm" className="h-7 self-start text-xs" data-testid="sdk-question-send" onClick={() => submit(answersFrom(picked, other))}>
@@ -2574,6 +2805,46 @@ function SdkQuestionCard({
       <span className="text-muted-foreground/70">{t("sdk.questionTimeoutHint")}</span>
     </div>
   );
+}
+
+/**
+ * A COR DE CADA PESSOA no cartão de pergunta — como cursor em documento compartilhado: fixa por nome,
+ * nunca o âmbar de alerta nem o azul do próprio cartão. Classes inteiras (o Tailwind só gera o que lê).
+ */
+const PEER_TONES = [
+  { text: "text-violet-400", border: "border-violet-400/60", bg: "bg-violet-400/10", dot: "bg-violet-400", solid: "bg-violet-400 text-violet-950" },
+  { text: "text-emerald-400", border: "border-emerald-400/60", bg: "bg-emerald-400/10", dot: "bg-emerald-400", solid: "bg-emerald-400 text-emerald-950" },
+  { text: "text-pink-400", border: "border-pink-400/60", bg: "bg-pink-400/10", dot: "bg-pink-400", solid: "bg-pink-400 text-pink-950" },
+  { text: "text-orange-400", border: "border-orange-400/60", bg: "bg-orange-400/10", dot: "bg-orange-400", solid: "bg-orange-400 text-orange-950" },
+] as const;
+
+function peerTone(name: string): (typeof PEER_TONES)[number] {
+  let hash = 0;
+  for (const ch of name) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  return PEER_TONES[hash % PEER_TONES.length]!;
+}
+
+/** A bolinha com a inicial da pessoa, na cor dela. */
+function PeerAvatar({ name, small = false }: { name: string; small?: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "inline-grid shrink-0 place-items-center rounded-full font-bold ring-2 ring-background",
+        small ? "h-4 w-4 text-[9px]" : "h-[18px] w-[18px] text-[10px]",
+        peerTone(name).solid,
+      )}
+    >
+      {peerDisplayName(name).charAt(0)}
+    </span>
+  );
+}
+
+/** Por que a pergunta caiu sem resposta, com o nome de quem parou o turno. */
+function cancelledText(cancel: QuestionCancel | undefined, t: ReturnType<typeof useT>): string {
+  const how = cancel?.how ?? "stop";
+  if (!cancel?.by) return t(`sdk.questionCancelled.${how}.anon`);
+  return t(`sdk.questionCancelled.${how}`, { name: peerDisplayName(cancel.by) });
 }
 
 /**

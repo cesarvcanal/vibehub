@@ -1,15 +1,17 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { listTerminals, sendToTerminal, readTerminal, reportState, agentOriginFor, SEND_READY_WAIT_MS } from "../services/maestro/maestro.js";
-import { DECLARED_STATES } from "../services/board/registry.js";
+import { DECLARED_STATES, getCard } from "../services/board/registry.js";
 import { recordMessage, MESSAGE_TYPES, SEVERITIES, type MessageType, type Severity } from "../services/events/cardEvents.js";
 import { sendAnswer } from "./events.js";
 import { runGate } from "../services/maestro/gate.js";
-import { deliver } from "../services/maestro/deliver.js";
-import { relayCardActor } from "../services/board/actor.js";
+import { deliverCard } from "../services/review/deliverCard.js";
+import { relayCardActor, actAsParticipant } from "../services/board/actor.js";
 import { announcePreview } from "../services/preview/announce.js";
 import { recordLearning } from "../services/brain/learn.js";
 import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX } from "./cardMove.js";
+import { submitReviewerRound, submitAuthorResponse, reviewToolAnswer, HEAD_SHA_RE } from "../services/review/orchestrator.js";
+import { MAX_ROUNDS } from "../services/review/model.js";
 
 /**
  * MAESTRO TOOLS — what one card's agent can do to the OTHER cards.
@@ -24,6 +26,33 @@ import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX } from "./cardMove.js"
 
 const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] });
 const fail = (e: unknown) => ok({ error: (e as Error).message });
+
+/*
+ * PR REVIEW — the shapes the two review AIs hand back. The enums are the server's contract, checked
+ * here before anything reaches the orchestrator: a severity, proof kind or status outside the list is
+ * refused, never coerced (an unknown severity would read as "not blocking" and let a PR go ready).
+ * Server-owned fields (status, humanDecision, commit, replies) are not in the finding schema, so zod
+ * strips them if an AI sends them anyway.
+ */
+const reviewRound = z.number().int().min(1).max(MAX_ROUNDS).describe("the review round you were asked for (1-3)");
+const reviewHeadSha = z.string().regex(HEAD_SHA_RE, "the full sha of `git rev-parse HEAD`")
+  .describe("full sha of `git rev-parse HEAD` after you finished (40 hex chars)");
+const reviewFinding = z.object({
+  severity: z.enum(["blocking", "suggestion", "question", "refuted"])
+    .describe("blocking = only with proof | suggestion | question = a risk you are not sure about (a human decides) | refuted"),
+  title: z.string().min(1).max(300),
+  file: z.string().max(400).optional(),
+  line: z.number().int().positive().optional(),
+  proof: z.object({
+    kind: z.enum(["failing_test", "rule", "scenario"]),
+    // An empty ref is NOT refused here: the model downgrades that blocking to a suggestion (one rule, one place).
+    ref: z.string().max(400).describe("the failing test, the written repo rule, or file:line of the scenario"),
+    detail: z.string().max(2000).optional(),
+  }).optional().describe("required for blocking: without it the server downgrades the finding to a suggestion"),
+  fix: z.string().max(2000).optional().describe("the fix you propose"),
+  introducedInRound: z.number().int().min(1).max(MAX_ROUNDS).optional()
+    .describe("round 2+: the current round, ONLY for a bug the author's own fix created"),
+});
 
 export function registerMaestroTools(server: McpServer, actor: string): void {
   server.registerTool(
@@ -55,7 +84,8 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "Delegate an instruction to another card: `text` arrives as a message in that card's " +
         "conversation (its native chat when that is on, else typed at its terminal's prompt), exactly " +
         "as if a person had sent it. A card that is asleep (hibernated, never opened) is woken on its " +
-        "own; a card PAUSED on purpose is refused — ask the user. Fails clearly when no Claude can run there. The receiving card keeps its own context, so " +
+        "own; a card PAUSED on purpose is refused — ask the user. A PR reviewer card is refused too (the review drives " +
+        "it). Fails clearly when no Claude can run there. The receiving card keeps its own context, so " +
         "send a self-contained instruction, not a fragment of your conversation.",
       inputSchema: {
         cardId: z.string().describe("id of the destination card (from vibehub_list_terminals)"),
@@ -72,6 +102,15 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     },
     async (a) => {
       try {
+        // A PR reviewer card answers only to the review: an author AI "helping" there would tell the
+        // reviewer AI what to mark fixed, and the next `gh pr review` would go out as the author (the
+        // send makes the sender's person the card's actor). The orchestrator calls the send directly.
+        if ((await getCard(a.cardId))?.reviewOf) {
+          throw new Error(
+            "this is a PR reviewer session; it is driven by the review, not by other cards — " +
+              "answer the review with vibehub_review_respond from your own card",
+          );
+        }
         return ok(await sendAnswer(a.cardId, a.inReplyTo, a.text, async (text) => sendToTerminal(a.cardId, text, {
           by: actor,
           // The order came from the PERSON behind the sending card: the destination works as them —
@@ -279,16 +318,52 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "operation, not part of this. A LOCKED card answers { reason: 'locked', locked: true }: the " +
         "PR goes to that card's own base whatever `branch` said, and it is NEVER merged from here — " +
         "say so plainly ('o PR está aberto em <base>; o merge é de quem revisa') instead of " +
-        "retrying, and do not go around it with git or gh by hand.",
+        "retrying, and do not go around it with git or gh by hand. A card whose PR is under REVIEW: " +
+        "the push always happens (it is how the author delivers a fix), and the merge goes through only " +
+        "when the card delivers ITSELF (pass `from` = your own $VIBEHUB_CARD_ID), the order came from the " +
+        "review's merger and the review is ready — the same merge as the " +
+        "panel's button, which also closes the review. Otherwise 'review_active' says who merges and " +
+        "where the review stands; 'head_moved' = the push brought commits the reviewer has not seen and " +
+        "the review went back to them. Never merge a reviewed PR any other way (gh pr merge, the GitHub API).",
       inputSchema: {
         card: z.string().describe("id of the card to deliver (from vibehub_list_terminals)"),
         branch: z.string().optional().describe("target branch for the PR / merge. Absent = the project's base branch."),
         authorized: z.boolean().optional().describe("true = merge (deploy). Only when the user named the target. Never default true."),
+        from: z.string().optional().describe(
+          "YOUR OWN card id ($VIBEHUB_CARD_ID). A PR under review merges only when a card delivers ITSELF (from = card) by order of the review's merger.",
+        ),
       },
     },
     async (a) => {
       try {
-        return ok(await deliver(a.card, { branch: a.branch, authorized: a.authorized === true, by: actor }));
+        return ok(await deliverCard(a.card, { branch: a.branch, authorized: a.authorized === true, by: actor, from: a.from }));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_act_as",
+    {
+      description:
+        "Make this card's git and gh act as ANOTHER PERSON who already gave this card an order — " +
+        "when the one talking to you asks for it ('commit and push as Albert', 'open the PR in " +
+        "Albert's name, I review it'). From the next command on, commits are authored by that person " +
+        "and every push, PR, review and merge (vibehub_deliver included) uses their GitHub account. " +
+        "The person must be on the card's participant list (they sent it a message before) and still " +
+        "have work access; anybody else is refused. Without `user` it changes nothing and returns the " +
+        "current actor and the participants. The next message a person sends switches the card to " +
+        "them again, so switch right before the step that must carry the other account. Returns " +
+        "{ actor, participants } or { error }.",
+      inputSchema: {
+        card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this terminal"),
+        user: z.string().optional().describe("vibehub username to act as (e.g. 'albert'). Absent = only report."),
+      },
+    },
+    async (a) => {
+      try {
+        return ok(await actAsParticipant(a.card, a.user));
       } catch (e) {
         return fail(e);
       }
@@ -331,6 +406,85 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         // A CARD must say who it is (that is what scopes the batch to its project); the owner's own
         // browser session on the MCP endpoint is not a card and already sees the whole board.
         return ok(await moveCards(a.cards, a.column, { from: a.from, requireFrom: actor === "card", by: actor }));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_review_submit",
+    {
+      description:
+        "PR REVIEW, reviewer side: hand back the round you were asked to review, structured. Only the " +
+        "reviewer card of that review may call it (`card` = YOUR OWN $VIBEHUB_CARD_ID); the round prompt " +
+        "you received names the review, the round and this card. Round 1: `findings` from /code-review. " +
+        "Round 2+: `verdicts` on the closed list (fixed | open | dropped — accepting the author's " +
+        "contestation is dropped; accepting a risk is a human decision) and new findings ONLY for a bug the " +
+        "fix itself created (`introducedInRound` = the round). A blocking finding needs `proof` " +
+        "(failing_test, rule or scenario), or the server downgrades it to a suggestion. Calling twice for " +
+        "the same round is harmless. This never merges; the merge is a human button. Returns the review's " +
+        "phase and `next`, or { error }.",
+      inputSchema: {
+        card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this (reviewer) terminal"),
+        review: z.string().optional().describe("the review id from the prompt"),
+        round: reviewRound,
+        headSha: reviewHeadSha,
+        summary: z.string().min(1).max(1000).describe("one or two sentences: the outcome of this round"),
+        findings: z.array(reviewFinding).max(100).describe("new findings (round 2+: only the ones the fix introduced; [] otherwise)"),
+        verdicts: z.array(z.object({
+          id: z.string().min(1).describe("finding id from the list (f1, f2, ...)"),
+          status: z.enum(["fixed", "open", "dropped"]),
+          reviewerReply: z.string().max(2000).optional().describe("why it is still open, or why the contestation holds"),
+        })).max(100).optional().describe("round 2+: one verdict per item of the closed list"),
+      },
+    },
+    async (a) => {
+      try {
+        const { card, review, ...payload } = a;
+        const after = await submitReviewerRound(card, { ...payload, reviewId: review });
+        return ok(reviewToolAnswer(after, "reviewer", a.round));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_review_respond",
+    {
+      description:
+        "PR REVIEW, author side: answer the closed list the reviewer sent, after you fixed and pushed to " +
+        "the PR branch. Only the author card of that review may call it (`card` = YOUR OWN " +
+        "$VIBEHUB_CARD_ID). One item per blocking finding: `fixed` (with the `commit` and a short `reply`) " +
+        "or `contested` (the `reply` carries the proof: a test, a written repo rule, a file:line scenario). " +
+        "Suggestions may be answered too — `fixed` (commit), `contested` or `wontfix` (the `reply` says why; " +
+        "wontfix is for suggestions only) — in the fixing round AND later, also after the review is ready " +
+        "(e.g. you were asked to apply them): that closes them on the panel without opening a round. " +
+        "Answers to closed items are ignored. Calling twice is harmless. This never merges; the merge is a human button " +
+        "(the merger's). Returns the review's phase, `next` and `answered` (how many items this call " +
+        "recorded; a repeated answer records nothing), or { error }.",
+      inputSchema: {
+        card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this (author) terminal"),
+        review: z.string().optional().describe("the review id from the prompt"),
+        round: reviewRound,
+        headSha: reviewHeadSha,
+        items: z.array(z.object({
+          id: z.string().min(1).describe("finding id from the list (f1, f2, ...)"),
+          status: z.enum(["fixed", "contested", "wontfix"]),
+          commit: z.string().max(80).optional().describe("the commit that fixes it"),
+          reply: z.string().max(2000).describe("what you did, or the proof behind the contestation"),
+        })).max(100),
+      },
+    },
+    async (a) => {
+      try {
+        const { card, review, ...payload } = a;
+        const since = Date.now();
+        const after = await submitAuthorResponse(card, { ...payload, reviewId: review });
+        // O que ESTA chamada registrou: os itens da fala do autor gravada agora (repetida não grava).
+        const answered = after.log.filter((e) => e.who === "author" && e.at >= since).reduce((n, e) => n + (e.items?.length ?? 0), 0);
+        return ok({ ...reviewToolAnswer(after, "author", a.round), answered });
       } catch (e) {
         return fail(e);
       }

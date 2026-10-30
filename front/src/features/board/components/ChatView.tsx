@@ -74,6 +74,11 @@ export interface ChatViewProps {
   onStatus?: (state: ConnectionState) => void;
   /** Switches the card to the terminal — the way out of everything this view cannot do. */
   onOpenTerminal?: () => void;
+  /**
+   * Rendered right above the composer: what belongs to the CARD and not to the conversation (the
+   * PR blocks). The composer lives in here, so this is the only way to sit next to it from outside.
+   */
+  footer?: React.ReactNode;
   ariaLabel?: string;
   className?: string;
 }
@@ -85,6 +90,7 @@ export function ChatView({
   onUploadImage,
   onStatus,
   onOpenTerminal,
+  footer,
   ariaLabel,
   className,
 }: ChatViewProps) {
@@ -351,6 +357,8 @@ export function ChatView({
       </div>
       <JumpToLatest stick={stick} />
       </div>
+
+      {footer}
 
       {/* The stop button lives INSIDE the composer now — right column, above the microphone —
           instead of floating loose at the row's edge. The Escape round-trip is still this view's. */}

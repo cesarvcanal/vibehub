@@ -311,6 +311,66 @@ describe("purgeCard — the card and everything that belonged to it", () => {
 });
 
 /**
+ * REVISÃO DE PR — o card do revisor é escondido do board e só existe para a revisão de um card de
+ * autor. Excluir o autor (botão, retenção ou o projeto inteiro) não pode deixar para trás nem a
+ * revisão ativa (relays para um card que não existe) nem o card do revisor (worktree invisível).
+ */
+describe("purgeCard — a revisão de PR do card", () => {
+  async function withReview(phase: "reviewing" | "merged" = "reviewing") {
+    const { project, card } = await seed();
+    await reg.createAccount({ name: "Mussa" });
+    const reviewer = await reg.createReviewerCard({
+      authorCard: card, reviewerAccountSlug: "mussa", prBranch: "card/deletar", title: "Revisão PR #7",
+    });
+    const store = await import("../review/store.js");
+    await store.insertReview({
+      id: `r-${phase}`, cardId: card.id, projectId: project.id, prNumber: 7, prUrl: "https://github.com/acme/erp-aux/pull/7",
+      prBranch: "card/deletar", base: "dev", reviewerUserId: "u-r", authorUserId: "u-a", mergerUserId: "u-m",
+      reviewerCardId: reviewer.id, round: 1, phase, findings: [], log: [], nudges: 0, createdAt: 1, updatedAt: 1,
+    });
+    await fillCard(reviewer.id);
+    return { project, card, reviewer, store };
+  }
+
+  it("excluir o card do autor cancela a revisão ativa e apaga o card do revisor junto", async () => {
+    const { card, reviewer, store } = await withReview();
+
+    const report = await purge.purgeCard(card.id, "cesar");
+
+    expect(report?.incomplete).toEqual([]);
+    expect(await reg.getCard(card.id)).toBeUndefined();
+    expect(await reg.getCard(reviewer.id)).toBeUndefined();
+    expect(await store.getReview("r-reviewing")).toMatchObject({ phase: "cancelled" });
+    // o card do revisor passou pela mesma purga: sessão, arquivos do runner e conversa
+    expect(allScripts()).toContain(`tmux kill-session -t '${reviewer.tmuxSession}'`);
+    expect(allScripts()).toContain(`rm -rf '/work/.uploads/${reviewer.id}'`);
+    expect(await history.readHistory(reviewer.id)).toEqual([]);
+    expect(report?.steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "reviews", ok: true }),
+      expect.objectContaining({ name: "reviewer-cards", ok: true, detail: "1 reviewer card(s) purged" }),
+    ]));
+  });
+
+  it("revisão já mergeada fica como está; o card do revisor vai junto do autor", async () => {
+    const { card, reviewer, store } = await withReview("merged");
+    await purge.purgeCard(card.id, "cesar");
+    expect(await reg.getCard(reviewer.id)).toBeUndefined();
+    expect(await store.getReview("r-merged")).toMatchObject({ phase: "merged" });
+  });
+
+  it("excluir o PROJETO cancela as revisões ativas dos cards dele", async () => {
+    const { project, card, reviewer, store } = await withReview();
+    const removed = await reg.removeProject(project.id);
+    expect(removed.cards.map((c) => c.id).sort()).toEqual([card.id, reviewer.id].sort());
+
+    const reports = await purge.purgeRemovedCards(removed.cards, removed.project, "cesar");
+
+    expect(reports.every((r) => r.incomplete.length === 0)).toBe(true);
+    expect(await store.getReview("r-reviewing")).toMatchObject({ phase: "cancelled" });
+  });
+});
+
+/**
  * A DELETED CARD'S BROWSER SLOT IS NOT FREE UNTIL ITS BROWSER IS DOWN. The slot is what keeps one
  * card's agent off another card's Chromium (and its logged-in sessions). A card leaving the board
  * while its browser could not be stopped (runner down), or before it was (a project's cards leave

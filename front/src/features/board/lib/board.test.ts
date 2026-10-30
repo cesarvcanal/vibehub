@@ -20,6 +20,8 @@ import {
   locationHref,
   recentCards,
   splitSidebarCards,
+  wantsReviewPanel,
+  withoutReviewFlag,
   writeLocation,
 } from "@/features/board/lib/board";
 import type { BoardCard, BoardProject } from "@/features/board/api";
@@ -223,6 +225,30 @@ describe("cardState", () => {
     expect(kind({ status: "working", openedAt: 1, hibernatedAt: 5, awaitingDecisionAt: 9 })).toBe("hibernated");
   });
 
+  it("is needs_me once the turn ENDED on a question to the person — the chat's pending-decisions tray", () => {
+    // Produção, 2026-10-27 (card 37fa689a): "Quer que eu abra um PR pequeno…?" in the tray, and the
+    // sidebar drew the neutral your-turn circle.
+    expect(cardState(card({ id: "a", status: "waiting", openedAt: 1, pendingQuestionAt: 9 }))).toEqual({
+      kind: "needs_me",
+      label: "Needs you — the agent is waiting for a decision",
+    });
+    // A cold session still has the question waiting on the person.
+    expect(kind({ status: "waiting", openedAt: 1, hibernatedAt: 5, pendingQuestionAt: 9 })).toBe("needs_me");
+    // The agent saying "ready" and then asking is still asking.
+    expect(kind({ status: "waiting", openedAt: 1, declaredState: "ready", pendingQuestionAt: 9 })).toBe("needs_me");
+    // Its own needs-me/blocked carries a summary, so that one stays.
+    expect(cardState(card({ id: "a", status: "waiting", openedAt: 1, declaredState: "needs_me", declaredSummary: "aprovar o PR", pendingQuestionAt: 9 })))
+      .toMatchObject({ kind: "needs_me", summary: "aprovar o PR" });
+    expect(kind({ status: "waiting", openedAt: 1, declaredState: "blocked", pendingQuestionAt: 9 })).toBe("blocked");
+    // A new turn running is not waiting on anyone; the person's own filing wins.
+    expect(kind({ status: "working", openedAt: 1, pendingQuestionAt: 9 })).toBe("working");
+    expect(kind({ column: "done", openedAt: 1, pendingQuestionAt: 9 })).toBe("done");
+    expect(kind({ column: "paused", openedAt: 1, pausedAt: 2, pendingQuestionAt: 9 })).toBe("paused");
+    expect(kind({ column: "paused", openedAt: 1, pausedAt: 2, hibernatedAt: 5, pendingQuestionAt: 9 })).toBe("hibernated");
+    // Answered: back to the neutral circle.
+    expect(kind({ status: "waiting", openedAt: 1, pendingQuestionAt: null })).toBe("your_turn");
+  });
+
   it("puts the user's filing over the agent's report", () => {
     expect(kind({ column: "done", openedAt: 1, declaredState: "needs_me" })).toBe("done");
     expect(kind({ column: "paused", openedAt: 1, pausedAt: 2, declaredState: "ready" })).toBe("paused");
@@ -419,6 +445,33 @@ describe("locationHref", () => {
 
   it("escapes an id rather than pasting it in raw", () => {
     expect(cardHref("a b", "c/d")).toBe("?project=a+b&card=c%2Fd");
+  });
+});
+
+describe("the review flag of a card link", () => {
+  it("cardHref carries ?review=1 only when asked, after the card", () => {
+    expect(cardHref("p1", "c2", { review: true })).toBe("?project=p1&card=c2&review=1");
+    expect(cardHref("p1", "c2", { review: false })).toBe("?project=p1&card=c2");
+  });
+
+  it("the flag is not part of the location: the board still reads the same project and card", () => {
+    const params = new URLSearchParams("project=p1&card=c2&review=1");
+    expect(readLocation(params)).toEqual({ projectId: "p1", cardId: "c2" });
+  });
+
+  it("wantsReviewPanel is true only for the card the URL names", () => {
+    const params = new URLSearchParams("project=p1&card=c2&review=1");
+    expect(wantsReviewPanel(params, "c2")).toBe(true);
+    expect(wantsReviewPanel(params, "c3")).toBe(false);
+    expect(wantsReviewPanel(new URLSearchParams("project=p1&card=c2"), "c2")).toBe(false);
+    expect(wantsReviewPanel(new URLSearchParams("project=p1&card=c2&review=0"), "c2")).toBe(false);
+    // A card without a project is not addressable (see readLocation): no flag either.
+    expect(wantsReviewPanel(new URLSearchParams("card=c2&review=1"), "c2")).toBe(false);
+  });
+
+  it("withoutReviewFlag drops the flag and keeps everything else", () => {
+    const next = withoutReviewFlag(new URLSearchParams("project=p1&card=c2&review=1&x=y"));
+    expect(next.toString()).toBe("project=p1&card=c2&x=y");
   });
 });
 

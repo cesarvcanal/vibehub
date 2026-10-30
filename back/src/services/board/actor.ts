@@ -1,4 +1,4 @@
-import { findUser, type PublicUser } from "../../auth/users.js";
+import { findUser, listUsers, type PublicUser } from "../../auth/users.js";
 import { cardLevel } from "../../auth/access.js";
 import { stampCardActor, getCard } from "./registry.js";
 import { reapplyCardIdentity } from "./workspace.js";
@@ -103,6 +103,51 @@ export async function relayCardActor(fromCardId: string | undefined, toCardId: s
   } catch (err) {
     logger.warn({ card: toCardId, detail: (err as Error).message }, "could not relay the sender card's author");
   }
+}
+
+/**
+ * The agent ACTS AS somebody who already gave this card an order — on request of whoever is talking
+ * to it now. Albert asks for the work, Mussa joins and says "commit and push as Albert, I am the
+ * co-author": Mussa's message made Mussa the actor, and without this the agent could only wait for
+ * Albert to come back and say anything. Here it switches back to Albert by itself.
+ *
+ * The limit is the consent: only somebody on the card's participant list (they ordered something
+ * here) who STILL may work it. A user who never spoke on this card cannot be borrowed, owner or not.
+ * Nothing new is trusted either: it is the same switch a message from that person would make.
+ *
+ * No `username` = nothing changes; it reports the actor and who may be acted as. THROWS with a clear
+ * reason otherwise, and when the switch did not land in the runner — the push must not go out as the
+ * previous person under the impression it is the new one.
+ */
+export async function actAsParticipant(
+  cardId: string, username?: string,
+): Promise<{ actor: string | null; participants: string[] }> {
+  const card = await getCard(cardId);
+  if (!card) throw new Error(`card not found: ${cardId}`);
+  const users = await listUsers();
+  const nameOf = (id?: string) => users.find((u) => u.id === id)?.username ?? null;
+  const ids = card.participantUserIds ?? (card.actorUserId ? [card.actorUserId] : []);
+  const participants = ids.map(nameOf).filter((n): n is string => !!n);
+  const report = (actorId?: string) => ({ actor: nameOf(actorId), participants });
+  if (!username?.trim()) return report(card.actorUserId);
+
+  const wanted = username.trim().toLowerCase();
+  const user = users.find((u) => u.username.toLowerCase() === wanted);
+  if (!user) throw new Error(`no user named '${username}'. Participants of this card: ${participants.join(", ") || "none"}`);
+  if (!ids.includes(user.id)) {
+    throw new Error(
+      `'${user.username}' never gave this card an order, so their account cannot be used here. ` +
+      `Participants of this card: ${participants.join(", ") || "none"}`,
+    );
+  }
+  if ((await cardLevel(user, cardId)) !== "work") {
+    throw new Error(`'${user.username}' no longer has work access to this card`);
+  }
+  await recordCardActor(user, cardId);
+  if (!isCardActor(user, cardId)) {
+    throw new Error(`the switch to '${user.username}' did not land in the runner — do not push yet; try again`);
+  }
+  return report(user.id);
 }
 
 /**

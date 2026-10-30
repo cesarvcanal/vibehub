@@ -308,10 +308,11 @@ export interface CardSessionInfo {
 /**
  * What a model/account switch did to the LIVE session, straight from the server: `restarted` = the
  * session was ended and the reattach starts Claude with the new one, in the same conversation;
- * `pending` = Claude was working, so it applies the moment the card goes idle; `none` = there was no
- * live session to change (the pin is simply what the next start uses).
+ * `pending` = Claude was working, so it applies the moment the card goes idle; `live` = the native
+ * chat took the new intelligence in place — nothing restarted, the turn in flight goes on already on
+ * it; `none` = there was no live session to change (the pin is simply what the next start uses).
  */
-export type SessionChange = "none" | "restarted" | "pending";
+export type SessionChange = "none" | "restarted" | "pending" | "live";
 
 /**
  * A terminal's current situation, as the server words it. `stopped` = the session is still there but
@@ -783,8 +784,9 @@ export function pinnedEffort(card: { effort?: string | null } | null | undefined
 
 /**
  * The level the session is REALLY on: the server's reading first (it already weighs a fresh pin
- * against the transcript), the card's pin while there is no reading. Undefined = nobody knows yet —
- * an unpinned card before its first reply. PURE.
+ * against the transcript, and before the first reply answers the account's level as the native
+ * chat's driver announced it), the card's pin while there is no reading. Undefined = nobody knows
+ * yet — an unpinned terminal card before its first reply. PURE.
  */
 export function effortInUse(
   card: { effort?: string | null } | null | undefined,
@@ -797,10 +799,11 @@ export function effortInUse(
 export const DEFAULT_ACCOUNT_SLUG = "default";
 
 /**
- * What Claude Code starts on when nothing has pinned a model and nothing has answered yet. It is
- * the first entry of the whitelist rather than a second constant, so the two cannot drift apart.
+ * What a card runs on when nothing has pinned a model and nothing has answered yet: Opus, the model
+ * the server pins every new card to (DEFAULT_CARD_MODEL) and the one the account answers with. It was
+ * the first entry of the whitelist (Fable), so the pill read "Fable" until the first reply flipped it.
  */
-export const IMPLICIT_MODEL = CLAUDE_MODELS[0] as { id: string; label: string };
+export const IMPLICIT_MODEL = CLAUDE_MODELS.find((m) => m.id === "opus") as { id: string; label: string };
 
 /**
  * Title on the model pill for the one case where the answer is an assumption, not a reading. A

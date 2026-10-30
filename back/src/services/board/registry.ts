@@ -176,6 +176,13 @@ export type RestartReason = "brain" | "mcp" | "plugin" | "config" | "deploy";
  */
 export const CLAUDE_MODELS = ["fable", "opus", "sonnet", "haiku"] as const;
 export type ClaudeModelId = (typeof CLAUDE_MODELS)[number];
+
+/**
+ * The model a NEW card is pinned to when its creator names none. Without a pin the session starts
+ * with no `--model` and the CLI boots on its own default (Fable), while the operator expects Opus.
+ * Creation only: an existing unpinned card, or `model: null` sent on purpose, keeps the account default.
+ */
+export const DEFAULT_CARD_MODEL: ClaudeModelId = "opus";
 const CLAUDE_MODEL_IDS: ReadonlySet<string> = new Set(CLAUDE_MODELS);
 
 /** A versioned id an older vibehub pinned (`claude-opus-5`, `claude-haiku-4-5`): family + digits only. */
@@ -262,6 +269,27 @@ export interface Project {
   createdAt: number;
 }
 
+/**
+ * A pull request the card delivered, one per BASE branch: what the PR review starts from. Written by
+ * `deliver` through {@link recordCardPr}; never by an HTTP body.
+ */
+export interface CardPr {
+  number: number;
+  url: string;
+  /** The branch the PR targets (`dev`, `prod`, ...). The key: a card has at most one PR per base. */
+  base: string;
+  /** The PR's head: the card's own branch at the time of the delivery. */
+  branch: string;
+  /** When this base first got a PR from the card (epoch ms); a repeated delivery keeps it. */
+  openedAt: number;
+  /**
+   * When the PR was MERGED (epoch ms), set by `deliver` through {@link markCardPrMerged} on either
+   * merge path. Absent = not known to be merged (open, or closed without a merge — which is not
+   * tracked). It belongs to THIS PR: a new number in the same base slot starts without it.
+   */
+  mergedAt?: number;
+}
+
 export interface Card {
   id: string;
   projectId: string;
@@ -343,6 +371,14 @@ export interface Card {
   actorUserId?: string;
   /** When the actor above was recorded (epoch ms). */
   actorAt?: number;
+  /**
+   * EVERYONE who ever gave this card an order, in the order they first did — the actors it had.
+   * It is what lets the agent act as one of them again on request (board/actor.ts actAsParticipant):
+   * Albert asks for the work, Mussa says "push it as Albert", and the push goes out as Albert without
+   * Albert having to come back. Somebody who never ordered anything here is not on it, so their
+   * account can never be borrowed. Absent = only the current actor (cards before this field).
+   */
+  participantUserIds?: string[];
   /** Where the pending restart came from — a label for the badge only: "brain" | "mcp" | "config". */
   restartReason?: RestartReason;
   /**
@@ -384,6 +420,19 @@ export interface Card {
    */
   locked?: boolean;
   /**
+   * The pull requests this card delivered, one per base branch (see {@link CardPr}). Absent = the card
+   * never opened one (or predates the field). Written by `deliver`, never through the HTTP edit.
+   */
+  prs?: CardPr[];
+  /**
+   * REVIEWER CARD — the id of the author card whose PR this card reviews. Present = the card exists
+   * only to review: it is born from the PR's branch, on the reviewer's account, never pushes or
+   * delivers (`deliver` refuses it), and it is meant to stay off the board's listings. Set only by
+   * {@link createReviewerCard}, at creation; outside the HTTP edit and outside `UpdateCardInput` on
+   * purpose, so nobody can turn a card into one (or out of one) with a PATCH. Absent = a normal card.
+   */
+  reviewOf?: string;
+  /**
    * DECLARED STATE reported by the agent through `vibehub_report` — its own judgement of where the
    * task stands ({@link DeclaredState}). ORTHOGONAL to `status`/`column`: reporting it never moves
    * the card. Absent = the agent has said nothing yet.
@@ -400,6 +449,15 @@ export interface Card {
    * sdk manager only (see `setCardAwaitingDecision`); null/absent = nothing pending.
    */
   awaitingDecisionAt?: number | null;
+  /**
+   * Since when the card's conversation is STOPPED ON A QUESTION to the person (epoch ms): the turn
+   * ended and the agent's last words close on a question directed at them, with no message since —
+   * the prose question the chat's "Decisões pendentes" tray shows. Unlike `awaitingDecisionAt` the
+   * turn is OVER (`waiting`): this is what makes the card's icon the "precisa de você" instead of the
+   * neutral "sua vez". Written by the sdk layer (see services/sdk/pendingQuestion.ts), cleared when
+   * the next turn starts; null/absent = nothing pending.
+   */
+  pendingQuestionAt?: number | null;
   /**
    * PREVIEWS the agent registered on this card (`vibehub_preview`): ports the user can open through
    * the proxy, deduped by port. Ports that stop listening are pruned when the runner is scanned
@@ -655,7 +713,7 @@ const store = new JsonStore<BoardDoc>(
       config: doc?.config && typeof doc.config === "object" ? doc.config : {},
       accounts: Array.isArray(doc?.accounts) ? doc.accounts : [],
       projects: Array.isArray(doc?.projects) ? doc.projects : [],
-      cards: assignBrowserSlots(readModelPins(Array.isArray(doc?.cards) ? doc.cards : [])),
+      cards: assignBrowserSlots(readReviewFields(readModelPins(Array.isArray(doc?.cards) ? doc.cards : []))),
       mcps: Array.isArray(doc?.mcps) ? doc.mcps : [],
       mcpDrops: Array.isArray(doc?.mcpDrops)
         ? (doc.mcpDrops as unknown[]).map(parseMcpDrop).filter((d): d is McpDrop => d !== null)
@@ -679,6 +737,30 @@ function readModelPins(cards: Card[]): Card[] {
     if (pin) card.model = pin;
   }
   return cards;
+}
+
+/**
+ * The PR-review fields of a card read from disk: `prs` and `reviewOf` are optional (a board.json
+ * from before the review has neither), and one that is there but malformed — a hand edit — is
+ * dropped instead of reaching `card.prs.find`. Mutates and returns `cards`.
+ */
+function readReviewFields(cards: Card[]): Card[] {
+  for (const card of cards) {
+    if (card.prs !== undefined) {
+      const valid = Array.isArray(card.prs) ? card.prs.filter(isCardPr) : [];
+      // A merge mark that is not a time (a hand edit) is dropped; the PR itself stays.
+      for (const pr of valid) if (pr.mergedAt !== undefined && typeof pr.mergedAt !== "number") delete pr.mergedAt;
+      card.prs = valid.length > 0 ? valid : undefined;
+    }
+    if (card.reviewOf !== undefined && (typeof card.reviewOf !== "string" || !card.reviewOf)) card.reviewOf = undefined;
+  }
+  return cards;
+}
+
+function isCardPr(v: unknown): v is CardPr {
+  const pr = v as Partial<CardPr> | null;
+  return !!pr && typeof pr === "object" && Number.isInteger(pr.number) && typeof pr.url === "string"
+    && typeof pr.base === "string" && typeof pr.branch === "string" && typeof pr.openedAt === "number";
 }
 
 /**
@@ -1480,11 +1562,23 @@ export interface CreateCardInput {
 }
 
 /**
+ * What only the SERVER decides about a new card — the third argument of {@link createCard}, which no
+ * route fills from a request body (the second one, `fields`, is what the POST hands over). Kept apart
+ * from `UpdateCardInput` so `reviewOf` can never be set or cleared by an HTTP edit.
+ */
+interface ServerCardInit {
+  /** Makes this a REVIEWER card of that author card (see `Card.reviewOf`). The author must exist. */
+  reviewOf?: string;
+  /** The card's own branch, derived from its slug — which does not exist before the id is drawn. */
+  branchFor?: (worktreeSlug: string) => string;
+}
+
+/**
  * Creates a card at the TOP of the backlog — the card you just named is the one you are about to
  * look for, so it must be the first thing in the column rather than buried under everything jotted
  * down before it. Base inherited from the project, session/slug DERIVED.
  */
-export async function createCard(input: CreateCardInput, fields: UpdateCardInput = {}): Promise<Card> {
+export async function createCard(input: CreateCardInput, fields: UpdateCardInput = {}, server: ServerCardInit = {}): Promise<Card> {
   const title = String(input.title ?? "").trim();
   if (!title) throw new Error("title is required");
   return store.mutate((doc) => {
@@ -1511,8 +1605,18 @@ export async function createCard(input: CreateCardInput, fields: UpdateCardInput
       updatedAt: now,
     };
     // Optional fields (account, model, branch, imported session) go through the edit's validation,
-    // in THIS mutation: one that is refused leaves no bare card behind.
-    const { next, move } = validateCardPatch(doc, card, fields);
+    // in THIS mutation: one that is refused leaves no bare card behind. No model named = Opus.
+    let withModel = fields.model === undefined ? { ...fields, model: DEFAULT_CARD_MODEL } : fields;
+    if (server.branchFor) withModel = { ...withModel, branch: server.branchFor(card.worktreeSlug) };
+    if (server.reviewOf !== undefined) {
+      // Checked against the document, not against the card the caller holds: it may be gone by now
+      // (or be a reviewer itself, which would start a chain nobody asked for).
+      const author = doc.cards.find((c) => c.id === server.reviewOf);
+      if (!author) throw new Error("author card not found");
+      if (author.reviewOf) throw new Error("a reviewer card cannot be reviewed");
+      card.reviewOf = author.id;
+    }
+    const { next, move } = validateCardPatch(doc, card, withModel);
     Object.assign(card, next);
     doc.cards.push(card);
     rememberBrowserSlot(id, browserSlot);
@@ -1521,6 +1625,70 @@ export async function createCard(input: CreateCardInput, fields: UpdateCardInput
     if (move) placeCard(doc.cards, card, move.column, move.position);
     return card;
   });
+}
+
+/**
+ * Records the PR a delivery opened on the card, one per BASE: the same base again is the same slot,
+ * updated in place (a PR closed and reopened gets a new number) with the `openedAt` of the first
+ * record. A card deleted while its delivery ran is a no-op, not an error.
+ */
+export async function recordCardPr(cardId: string, pr: Omit<CardPr, "openedAt">): Promise<void> {
+  if (!Number.isInteger(pr.number) || pr.number <= 0) throw new Error("invalid PR number");
+  const url = String(pr.url ?? "").trim();
+  if (!url) throw new Error("PR url is required");
+  const base = assertBranchName(pr.base);
+  const branch = assertBranchName(pr.branch);
+  await store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    if (!card) return;
+    const prs = card.prs ?? [];
+    const known = prs.find((p) => p.base === base);
+    if (known) {
+      // A new number in the slot is a new PR: the merge mark was the old one's.
+      if (known.number !== pr.number) delete known.mergedAt;
+      known.number = pr.number;
+      known.url = url;
+      known.branch = branch;
+    } else {
+      prs.push({ number: pr.number, url, base, branch, openedAt: Date.now() });
+    }
+    card.prs = prs;
+  });
+}
+
+/**
+ * Marks the card's PR of `base` as merged at `at`. Only the PR the slot holds (`number`): a slot that
+ * moved on to another PR, a base without one, a card with no PRs at all or a card deleted meanwhile
+ * is a no-op — never an invented PR, never the wrong one marked. Best-effort by contract: `deliver`
+ * calls it after the merge, which already happened.
+ */
+export async function markCardPrMerged(cardId: string, base: string, number: number, at: number): Promise<void> {
+  await store.mutate((doc) => {
+    const pr = doc.cards.find((c) => c.id === cardId)?.prs?.find((p) => p.base === base && p.number === number);
+    if (pr) pr.mergedAt = at;
+  });
+}
+
+/**
+ * Creates the card that REVIEWS another card's PR. It reuses {@link createCard}, so every field goes
+ * through the same validation (an unknown account or a bad branch creates nothing):
+ *  - `base` = the PR's branch, so the worktree is cut from exactly what is being reviewed;
+ *  - `branch` = `review/<its own slug>`: a branch of its own, never the PR's (the reviewer pushes
+ *    nothing — `deliver` refuses a card with `reviewOf`);
+ *  - the reviewer's Claude account, the author's project, and `waiting` — it starts at once.
+ */
+export async function createReviewerCard(input: {
+  authorCard: Card;
+  reviewerAccountSlug: string;
+  prBranch: string;
+  title: string;
+}): Promise<Card> {
+  const { authorCard } = input;
+  return createCard(
+    { projectId: authorCard.projectId, title: input.title },
+    { base: input.prBranch, accountSlug: input.reviewerAccountSlug, column: "waiting" },
+    { reviewOf: authorCard.id, branchFor: (slug) => `review/${slug}` },
+  );
 }
 
 export interface UpdateCardInput {
@@ -1563,6 +1731,10 @@ export async function stampCardActor(
     const card = doc.cards.find((c) => c.id === id);
     if (!card) return null;
     if (card.actorUserId === user) return { changed: false, card: { ...card } };
+    // The actor being REPLACED gave this card an order too (a card from before the list existed has
+    // only its actor to show for it).
+    const known = card.participantUserIds ?? (card.actorUserId ? [card.actorUserId] : []);
+    card.participantUserIds = known.includes(user) ? known : [...known, user];
     card.actorUserId = user;
     card.actorAt = Date.now();
     return { changed: true, card: { ...card } };
@@ -1737,6 +1909,9 @@ export async function applyCardStatus(cardId: string, status: CardStatus): Promi
     if (status === "working" && card.status !== "working") {
       card.declaredState = undefined;
       card.declaredSummary = undefined;
+      // Same for the question the last turn closed on: a new turn is the conversation moving on
+      // (an answer, or the agent going on by itself). Its end decides again.
+      card.pendingQuestionAt = null;
     }
     card.status = status;
     card.statusAt = Date.now();
@@ -1933,6 +2108,19 @@ export async function setCardAwaitingDecision(cardId: string, at: number | null)
     const card = doc.cards.find((c) => c.id === cardId);
     if (!card || Boolean(card.awaitingDecisionAt) === (at !== null)) return;
     card.awaitingDecisionAt = at;
+  });
+}
+
+/**
+ * Sets (`at`) or clears (null) `pendingQuestionAt`. Writes ONLY on change — a card already stamped
+ * keeps the stamp of the first question, and clearing a clear card touches nothing. Never bumps
+ * updatedAt: a question waiting is not an edit of the card (same rule as `setCardAwaitingDecision`).
+ */
+export async function setCardPendingQuestion(cardId: string, at: number | null): Promise<void> {
+  await store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    if (!card || Boolean(card.pendingQuestionAt) === (at !== null)) return;
+    card.pendingQuestionAt = at;
   });
 }
 

@@ -5,7 +5,7 @@ import {
   listAccounts, getConfig, isHumanActive, reportCardState, CLAUDE_MODELS, isValidEffort,
   type Card, type Project, type BoardColumn, type CardStatus, type DeclaredState,
 } from "../board/registry.js";
-import { cardAgentState, cardDriverActivity, cardPaneReadiness, type MenuKind } from "../board/agentState.js";
+import { cardAgentState, cardDefaultEffort, cardDriverActivity, cardPaneReadiness, type MenuKind } from "../board/agentState.js";
 import { profileDirFor } from "../accounts/profiles.js";
 import { transcriptDirFor, sessionGoneError } from "./cardSession.js";
 import { recordOrigin, type MessageOrigin } from "../chat/provenance.js";
@@ -214,7 +214,11 @@ export function buildReadTranscriptScript(containerName: string, transcriptDir: 
   return `docker exec ${shQuote(containerName)} sh -c ${shQuote(inner)} _ ${shQuote(transcriptDir)}`;
 }
 
-/** Lists the terminals with their current situation. `project` filters by id or part of the name. */
+/**
+ * Lists the terminals with their current situation. `project` filters by id or part of the name.
+ * REVIEWER cards (`reviewOf`) are left out, as on the board: the PR review drives them (only its
+ * orchestrator types there), so they are not terminals another card coordinates.
+ */
 export async function listTerminals(project?: string): Promise<TerminalSummary[]> {
   const [projects, cards] = await Promise.all([listProjects(), listAllCards()]);
   const byId = new Map(projects.map((p) => [p.id, p]));
@@ -224,6 +228,7 @@ export async function listTerminals(project?: string): Promise<TerminalSummary[]
   for (const card of cards) {
     const owner = byId.get(card.projectId);
     if (!owner) continue; // orphan card (project deleted) — not a terminal anyone can reach
+    if (card.reviewOf) continue; // a PR reviewer session — the review drives it
     if (filter && !matchesProject(owner, filter)) continue;
     out.push(terminalSummary(card, owner, now));
   }
@@ -672,7 +677,7 @@ async function pendingFor(
 }
 
 /** Is a turn running: the hook's dot says working, or the native chat's driver is mid-turn. */
-function isBusy(card: Card): boolean {
+export function isBusy(card: Card): boolean {
   return card.status === "working" || cardDriverActivity(card.id) === "turn";
 }
 
@@ -860,11 +865,23 @@ export function parseLastModel(jsonl: string): string | null {
   return parseLastTurn(jsonl).model;
 }
 
-/** The last assistant turn's model and WHEN it happened (epoch ms, 0 when unknown). PURE. */
-export function parseLastTurn(jsonl: string): { model: string | null; at: number; effort: string | null } {
+/** Epoch ms of a transcript entry's `timestamp`, 0 when it has none. PURE. */
+function entryTime(obj: object): number {
+  const ts = (obj as { timestamp?: unknown }).timestamp;
+  return typeof ts === "string" ? Date.parse(ts) || 0 : typeof ts === "number" ? ts : 0;
+}
+
+/**
+ * The last assistant turn's model and WHEN it happened (epoch ms, 0 when unknown) — and when it was
+ * ASKED FOR: `requestedAt` is the user entry (a message or a tool result) right before it, the one
+ * whose arrival made the CLI call the model; 0 when the tail does not reach back to it. PURE.
+ */
+export function parseLastTurn(jsonl: string): { model: string | null; at: number; effort: string | null; requestedAt: number } {
   let model: string | null = null;
   let at = 0;
   let effort: string | null = null;
+  let requestedAt = 0;
+  let lastUserAt = 0;
   for (const line of jsonl.split(/\r?\n/)) {
     const s = line.trim();
     if (!s) continue;
@@ -874,36 +891,46 @@ export function parseLastTurn(jsonl: string): { model: string | null; at: number
     } catch {
       continue;
     }
-    if (!obj || typeof obj !== "object" || (obj as { type?: unknown }).type !== "assistant") continue;
+    if (!obj || typeof obj !== "object") continue;
+    if ((obj as { type?: unknown }).type === "user") {
+      lastUserAt = entryTime(obj);
+      continue;
+    }
+    if ((obj as { type?: unknown }).type !== "assistant") continue;
     const m = (obj as { message?: { model?: unknown } }).message?.model;
     // Claude Code logs a "<synthetic>" assistant turn for its own notices (rate limit, errors) — it
     // is not a model the session is running, so it must not replace the real one.
     if (typeof m === "string" && m && !m.startsWith("<")) {
       model = m;
-      const ts = (obj as { timestamp?: unknown }).timestamp;
-      at = typeof ts === "string" ? Date.parse(ts) || 0 : typeof ts === "number" ? ts : 0;
+      at = entryTime(obj);
+      requestedAt = lastUserAt;
       // Claude Code stamps every assistant turn with the session's reasoning level (`effort`) — the
       // only place that says what an UNPINNED card is really running on.
       const e = (obj as { effort?: unknown }).effort;
       effort = isValidEffort(typeof e === "string" ? e : null) ? (e as string) : null;
     }
   }
-  return { model, at, effort };
+  return { model, at, effort, requestedAt };
 }
 
 /**
  * The reasoning level the session is on. Same contest as `pickModel`: a pin change (set OR cleared)
- * NEWER than the last reply restarted the session onto it, so it is the truth until the next reply —
- * and a cleared pin means "the account decides", unknown until that reply says so. Otherwise the
- * last reply's stamp wins (`/effort` typed in the terminal), then the pin, then settings.json's
- * `effortLevel`. PURE.
+ * NEWER than the last reply took the session onto it — applied live in the native chat, or by a
+ * restart — so it is the truth until the next reply — and a cleared pin means "the account
+ * decides", unknown until that reply says so. Otherwise the last reply's stamp wins (`/effort` typed
+ * in the terminal), then the pin, then settings.json's `effortLevel`. PURE.
+ *
+ * "Newer than the last reply" is counted from the REQUEST, not from the reply landing: an answer
+ * already on its way when the level changed was asked for in the old one, and arrives stamped with
+ * it. Dated by its arrival it beat the switch and the pill fell back to the old level with the
+ * session already on the new one (produção, 2026-10-27 — Médio → Alto mid-turn, back to Médio).
  */
 export function pickEffort(
-  lastTurn: { effort: string | null; at: number },
+  lastTurn: { effort: string | null; at: number; requestedAt?: number },
   settings: { effort: string | null },
   pin: { effort: string | null; at: number } = { effort: null, at: 0 },
 ): string | null {
-  if (pin.at && pin.at >= lastTurn.at) return pin.effort ?? settings.effort;
+  if (pin.at && pin.at >= (lastTurn.requestedAt || lastTurn.at)) return pin.effort ?? settings.effort;
   return lastTurn.effort ?? pin.effort ?? settings.effort;
 }
 
@@ -1013,6 +1040,10 @@ export async function sessionInfo(cardId: string): Promise<SessionInfo> {
   } catch {
     model = null; // runner unreachable or no transcript yet — the UI shows the default
   }
+  // Nothing above says (no pin, no reply yet, no level in the settings): the level the account runs
+  // on, as the card's native chat driver announced it at boot — so a new card shows its level before
+  // the first reply, like `claude` in any terminal does the moment it opens (29/10/2026).
+  effort ??= cardDefaultEffort(card.id);
   // The board mirror reads a card's situation from the registry (cheap, no probe). Here — on the ONE
   // card the person is actually looking at, polled every few seconds — we can afford a live probe:
   // the registry still calls a card "waiting" after Claude has EXITED to the bare shell underneath

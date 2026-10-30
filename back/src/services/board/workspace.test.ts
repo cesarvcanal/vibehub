@@ -136,7 +136,9 @@ async function seed(withRepo = true) {
     name: "erp-aux",
     ...(withRepo ? { repoFullName: "acme/erp-aux", cloneUrl: "https://github.com/acme/erp-aux.git" } : {}),
   });
-  const card = await reg.createCard({ projectId: project.id, title: "Inventory intake" });
+  // No pin (`model: null`): the command-line assertions below are about plain `claude`; a new card's
+  // default pin (Opus) has its own test in registry.test.ts.
+  const card = await reg.createCard({ projectId: project.id, title: "Inventory intake" }, { model: null });
   return { project, card };
 }
 
@@ -966,6 +968,113 @@ describe("restart (single and all) — a working card is protected", () => {
     expect(scriptAt(0)).toContain(`tmux kill-session -t '${card.tmuxSession}'`);
   });
 
+  it("applySessionChange: an EFFORT switch MID-TURN goes into the native chat's live session — no restart, nothing pending", async () => {
+    // Produção, 2026-10-27 (card review-prs-albert-ee7c): Médio → Alto with the turn running became
+    // a pending restart, the turn went on with subagents in the background and never let it happen —
+    // the session stayed on `medium`. The driver takes the level in place now.
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    const applied: Array<[string, string]> = [];
+    const agent = await import("./agentState.js");
+    agent.onCardEffortApplier((id, effort) => { applied.push([id, effort]); return true; });
+    const before = { ...(await reg.getCard(card.id))! };
+    const after = await reg.updateCard(card.id, { effort: "high" });
+    runScript.mockClear();
+
+    expect(await ws.applySessionChange(before, after)).toBe("live");
+    expect(applied).toEqual([[card.id, "high"]]);
+    expect(runScript).not.toHaveBeenCalled(); // nothing killed: the turn goes on where it was
+    const now = await reg.getCard(card.id);
+    expect(now?.restartPendingAt ?? null).toBeNull();
+    expect(now?.status).toBe("working");
+
+    // Idle, same thing: the driver takes it, no restart of a conversation that is fine as it is.
+    await reg.applyCardStatus(card.id, "waiting");
+    const beforeIdle = { ...(await reg.getCard(card.id))! };
+    const afterIdle = await reg.updateCard(card.id, { effort: "xhigh" });
+    runScript.mockClear();
+    expect(await ws.applySessionChange(beforeIdle, afterIdle)).toBe("live");
+    expect(applied.at(-1)).toEqual([card.id, "xhigh"]);
+    expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("applySessionChange: what the live driver cannot take still restarts — no driver, a model or account in the switch", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "waiting");
+    const agent = await import("./agentState.js");
+    let driverUp = false;
+    const applied: Array<string | null> = [];
+    const off = agent.onCardEffortApplier((_id, effort) => { applied.push(effort); return driverUp; });
+
+    // No driver (a terminal card, a driver that idled out): the old restart, onto the pin.
+    const b1 = { ...(await reg.getCard(card.id))! };
+    const a1 = await reg.updateCard(card.id, { effort: "high" });
+    runScript.mockClear();
+    expect(await ws.applySessionChange(b1, a1)).toBe("restarted");
+    expect(scriptAt(0)).toContain(`tmux kill-session -t '${card.tmuxSession}'`);
+
+    driverUp = true;
+    applied.length = 0;
+    // Model and effort together: the model is read only at start, so the session restarts.
+    const b2 = { ...(await reg.getCard(card.id))! };
+    const a2 = await reg.updateCard(card.id, { model: "claude-opus-5", effort: "max" });
+    runScript.mockClear();
+    expect(await ws.applySessionChange(b2, a2)).toBe("restarted");
+    expect(applied).toEqual([]);
+
+    // Back to the account default with NO driver (a terminal card): the restart, onto no `--effort`.
+    driverUp = false;
+    const b3 = { ...(await reg.getCard(card.id))! };
+    const a3 = await reg.updateCard(card.id, { effort: null });
+    runScript.mockClear();
+    expect(await ws.applySessionChange(b3, a3)).toBe("restarted");
+    off();
+  });
+
+  it("applySessionChange: BACK TO THE ACCOUNT DEFAULT mid-turn goes live too — the driver restores the account's level, nothing restarts", async () => {
+    // "Usar a inteligência padrão da conta" was the one effort switch that still ended the session:
+    // the live flag layer was thought to know only levels. It knows the way back (sdk-driver.mjs,
+    // restoreAccountEffort), so killing the turn in flight — a foreground subagent with it — was
+    // for nothing.
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.updateCard(card.id, { effort: "xhigh" });
+    await reg.applyCardStatus(card.id, "working");
+    const agent = await import("./agentState.js");
+    const applied: Array<[string, string | null]> = [];
+    const off = agent.onCardEffortApplier((id, effort) => { applied.push([id, effort]); return true; });
+    const before = { ...(await reg.getCard(card.id))! };
+    const after = await reg.updateCard(card.id, { effort: null });
+    runScript.mockClear();
+
+    expect(await ws.applySessionChange(before, after)).toBe("live");
+    expect(applied).toEqual([[card.id, null]]);
+    expect(runScript).not.toHaveBeenCalled();
+    const now = await reg.getCard(card.id);
+    expect(now?.restartPendingAt ?? null).toBeNull();
+    expect(now?.status).toBe("working");
+    off();
+  });
+
+  it("applySessionChange: a TERMINAL card (no driver) switching effort while Claude WORKS waits for idle — the task is never cut", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    const agent = await import("./agentState.js");
+    const off = agent.onCardEffortApplier(() => false);
+    for (const level of ["high", null] as const) {
+      const before = { ...(await reg.getCard(card.id))! };
+      const after = await reg.updateCard(card.id, { effort: level });
+      runScript.mockClear();
+      expect(await ws.applySessionChange(before, after)).toBe("pending");
+      expect(runScript).not.toHaveBeenCalled();
+      expect((await reg.getCard(card.id))?.restartReason).toBe("config");
+    }
+    off();
+  });
+
   it("applySessionChange: switching while Claude WORKS flags the card instead of interrupting the task", async () => {
     const { card } = await seed();
     await ws.openCard(card.id);
@@ -1513,7 +1622,7 @@ describe("long-lived token seeded on open (from the vault) and the session guard
     expect(script).not.toContain("/root/.claude/.oauth-token");
 
     // another card on the default account with NO token: no printf, but the (harmless) guard stays
-    const b = await reg.createCard({ projectId: card.projectId, title: "B" });
+    const b = await reg.createCard({ projectId: card.projectId, title: "B" }, { model: null });
     await ws.openCard(b.id);
     expect(scriptAt(1)).not.toContain("printf '%s' 'sk-ant");
     expect(scriptAt(1)).toContain(sq(CLAUDE));

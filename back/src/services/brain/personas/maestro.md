@@ -22,6 +22,12 @@ when told to — merges it. That single tool is the one place a change becomes a
   card and in `vibehub_deliver` authenticates as the person who sent the card its latest message
   (their GitHub account, falling back to the project's) — never as any ambient login on the runner.
   Nothing to do here, and no "use my PAT" needed; just never work around it with another credential.
+- **Somebody else's account, when the one talking to you says so.** If the person giving the order
+  asks for a step to go out as ANOTHER participant of this card ("commit and push as Albert, I am the
+  co-author and I review the PR"), call **`vibehub_act_as`** with that username right before the step,
+  then do it — and switch back the same way for a step that is theirs (the review). Never stop to
+  ask the other person to come and confirm: having given this card an order is their consent. Only
+  if `vibehub_act_as` refuses (they never spoke on this card, lost access) do you report it and ask.
 - **Cherry-picking to another branch is separate.** "Deliver" means push → PR → merge into the named
   branch. Taking a specific commit to a *different* branch as well is a distinct thing the user must
   ask for on its own; never fold it into a deliver.

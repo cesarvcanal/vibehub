@@ -22,6 +22,8 @@ const resumeCard = vi.fn(async (id: string) => ({ id }));
 const killCardSession = vi.fn(async () => undefined);
 /** The card purge a deleted PROJECT cascades into (its own tests live next to the purge). */
 const purgeRemovedCards = vi.fn(async () => []);
+/** The PR-review store read the board listings use — the real one, counted (one read per request). */
+const listReviewsForCards = vi.fn();
 
 /** The registry the running app is using (same module instance — boot() resets the graph first). */
 async function registry(): Promise<typeof import("../services/board/registry.js")> {
@@ -51,6 +53,11 @@ async function boot(): Promise<FastifyInstance> {
   vi.doMock("../services/board/purge.js", async () => {
     const actual = await vi.importActual<typeof import("../services/board/purge.js")>("../services/board/purge.js");
     return { ...actual, purgeRemovedCards };
+  });
+  vi.doMock("../services/review/store.js", async () => {
+    const actual = await vi.importActual<typeof import("../services/review/store.js")>("../services/review/store.js");
+    listReviewsForCards.mockImplementation(actual.listReviewsForCards);
+    return { ...actual, listReviewsForCards };
   });
   const { buildServer } = await import("../index.js");
   const server = await buildServer();
@@ -270,6 +277,145 @@ describe("cards", () => {
     await makeCard(b, "b1");
     const res = await app.inject({ method: "GET", url: `/api/projects/${a}/cards`, headers: { cookie } });
     expect(res.json().cards.map((c: { title: string }) => c.title)).toEqual(["a1"]);
+  });
+});
+
+describe("revisão de PR no board", () => {
+  /** Uma revisão gravada direto no store (as rotas e o orquestrador têm os testes deles). */
+  async function review(cardId: string, projectId: string, over: { id: string; phase: string; createdAt: number; round?: number; prNumber?: number }) {
+    const store = await import("../services/review/store.js");
+    await store.insertReview({
+      cardId, projectId, prNumber: over.prNumber ?? 7, prUrl: "https://github.com/acme/w/pull/7", prBranch: "card/x", base: "dev",
+      reviewerUserId: "u-r", authorUserId: "u-a", mergerUserId: "u-m", reviewerCardId: "rc", round: over.round ?? 1,
+      findings: [], log: [], nudges: 0, updatedAt: over.createdAt, ...over,
+    } as never);
+  }
+
+  it("card do revisor não aparece na lista e o do autor traz o resumo da revisão", async () => {
+    const projectId = await makeProject();
+    const authorId = await makeCard(projectId, "login");
+    const otherId = await makeCard(projectId, "sem revisão");
+    const reg = await registry();
+    await reg.createAccount({ name: "Mussa" });
+    const reviewerCard = await reg.createReviewerCard({
+      authorCard: (await reg.getCard(authorId))!, reviewerAccountSlug: "mussa", prBranch: "card/login-ab12", title: "Revisão PR #7 · login",
+    });
+    await review(authorId, projectId, { id: "r-old", phase: "merged", createdAt: 1_000, prNumber: 6 });
+    await review(authorId, projectId, { id: "r-new", phase: "fixing", createdAt: 2_000, round: 2 });
+
+    for (const url of ["/api/cards", `/api/projects/${projectId}/cards`]) {
+      listReviewsForCards.mockClear();
+      const cards = (await app.inject({ method: "GET", url, headers: { cookie } })).json().cards as
+        { id: string; review?: unknown }[];
+      expect(cards.map((c) => c.id).sort()).toEqual([authorId, otherId].sort());
+      expect(cards.some((c) => c.id === reviewerCard.id)).toBe(false);
+      // a mais recente, só o resumo (a lista de achados e o log ficam no GET da revisão)
+      expect(cards.find((c) => c.id === authorId)!.review).toEqual({ id: "r-new", prNumber: 7, phase: "fixing", round: 2 });
+      expect(cards.find((c) => c.id === otherId)!.review).toBeUndefined();
+      // uma leitura do store por pedido, não uma por card
+      expect(listReviewsForCards).toHaveBeenCalledTimes(1);
+    }
+    // o card do revisor segue alcançável pelo id (o painel abre a sessão dele)
+    expect((await app.inject({ method: "GET", url: `/api/cards/${reviewerCard.id}`, headers: { cookie } })).statusCode).toBe(200);
+  });
+
+  it("o resumo conta as dúvidas sem decisão humana (a linha diz 'aguardando decisão')", async () => {
+    const projectId = await makeProject();
+    const authorId = await makeCard(projectId, "login");
+    await review(authorId, projectId, {
+      id: "r-q", phase: "reviewing", createdAt: 1_000,
+      findings: [
+        { id: "f1", severity: "question", title: "expira?", status: "open", introducedInRound: 1 },
+        { id: "f2", severity: "question", title: "cache?", status: "dropped", introducedInRound: 1, humanDecision: "drop" },
+        { id: "f3", severity: "blocking", title: "vaza", status: "open", introducedInRound: 1 },
+      ],
+    } as never);
+    const listed = (await app.inject({ method: "GET", url: "/api/cards", headers: { cookie } })).json().cards[0];
+    expect(listed.review).toEqual({ id: "r-q", prNumber: 7, phase: "reviewing", round: 1, pendingQuestions: 1 });
+    const one = (await app.inject({ method: "GET", url: `/api/cards/${authorId}`, headers: { cookie } })).json().card;
+    expect(one.review).toEqual(listed.review);
+  });
+
+  it("revisão pronta com a IA do autor num turno: o resumo leva authorWorking (a linha diz 'IA mexendo')", async () => {
+    const projectId = await makeProject();
+    const authorId = await makeCard(projectId, "login");
+    await review(authorId, projectId, { id: "r-ready", phase: "ready", createdAt: 1_000 });
+    const read = async () => (await app.inject({ method: "GET", url: "/api/cards", headers: { cookie } })).json().cards[0].review;
+    expect(await read()).toEqual({ id: "r-ready", prNumber: 7, phase: "ready", round: 1 });
+    await (await registry()).applyCardStatus(authorId, "working");
+    expect(await read()).toEqual({ id: "r-ready", prNumber: 7, phase: "ready", round: 1, authorWorking: true });
+  });
+
+  it("revisão cancelada some do resumo; mergeada continua (a linha diz mergeado)", async () => {
+    const projectId = await makeProject();
+    const authorId = await makeCard(projectId, "login");
+    await review(authorId, projectId, { id: "r-merged", phase: "merged", createdAt: 1_000, prNumber: 6 });
+    await review(authorId, projectId, { id: "r-cancel", phase: "cancelled", createdAt: 2_000 });
+    const card = (await app.inject({ method: "GET", url: "/api/cards", headers: { cookie } })).json().cards[0];
+    expect(card.review).toEqual({ id: "r-merged", prNumber: 6, phase: "merged", round: 1 });
+
+    const only = await makeCard(projectId, "só cancelada");
+    await review(only, projectId, { id: "r-only", phase: "cancelled", createdAt: 3_000 });
+    const cards = (await app.inject({ method: "GET", url: "/api/cards", headers: { cookie } })).json().cards as
+      { id: string; review?: unknown }[];
+    expect(cards.find((c) => c.id === only)!.review).toBeUndefined();
+  });
+
+  it("GET /api/cards/:id traz o mesmo resumo da revisão que a lista (o deep link não pisca 'sem revisão')", async () => {
+    const projectId = await makeProject();
+    const authorId = await makeCard(projectId, "login");
+    await review(authorId, projectId, { id: "r-old", phase: "merged", createdAt: 1_000, prNumber: 6 });
+    await review(authorId, projectId, { id: "r-new", phase: "fixing", createdAt: 2_000, round: 2 });
+    await review(authorId, projectId, { id: "r-cancel", phase: "cancelled", createdAt: 3_000 });
+
+    listReviewsForCards.mockClear();
+    const one = (await app.inject({ method: "GET", url: `/api/cards/${authorId}`, headers: { cookie } })).json().card;
+    // a mesma regra da lista: a mais recente que não foi cancelada, só o resumo
+    expect(one.review).toEqual({ id: "r-new", prNumber: 7, phase: "fixing", round: 2 });
+    expect(one.id).toBe(authorId);
+    const listed = (await app.inject({ method: "GET", url: "/api/cards", headers: { cookie } })).json().cards
+      .find((c: { id: string }) => c.id === authorId);
+    expect(one.review).toEqual(listed.review);
+
+    // sem revisão (ou só cancelada): o campo não existe
+    const bare = await makeCard(projectId, "sem revisão");
+    expect((await app.inject({ method: "GET", url: `/api/cards/${bare}`, headers: { cookie } })).json().card.review).toBeUndefined();
+    await review(bare, projectId, { id: "r-only", phase: "cancelled", createdAt: 4_000 });
+    expect((await app.inject({ method: "GET", url: `/api/cards/${bare}`, headers: { cookie } })).json().card.review).toBeUndefined();
+  });
+
+  it("reviewOf e prs no corpo do POST e do PATCH são ignorados", async () => {
+    const projectId = await makeProject();
+    const authorId = await makeCard(projectId, "login");
+    const smuggled = { reviewOf: authorId, prs: [{ number: 1, url: "https://github.com/acme/w/pull/1", base: "dev", branch: "b", openedAt: 1 }] };
+
+    const created = await app.inject({
+      method: "POST", url: "/api/cards", headers: { cookie }, payload: { projectId, title: "intruso", ...smuggled },
+    });
+    expect(created.statusCode).toBe(200);
+    expect(created.json().card.reviewOf).toBeUndefined();
+    expect(created.json().card.prs).toBeUndefined();
+    const id = created.json().card.id as string;
+    // continua na lista: não virou card de revisor
+    const listed = (await app.inject({ method: "GET", url: "/api/cards", headers: { cookie } })).json().cards as { id: string }[];
+    expect(listed.some((c) => c.id === id)).toBe(true);
+
+    const patched = await app.inject({ method: "PATCH", url: `/api/cards/${id}`, headers: { cookie }, payload: smuggled });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().card.reviewOf).toBeUndefined();
+    expect(patched.json().card.prs).toBeUndefined();
+
+    // e o PATCH não desfaz um card de revisor nem apaga o PR gravado de um autor
+    const reg = await registry();
+    await reg.createAccount({ name: "Mussa" });
+    await reg.recordCardPr(authorId, { number: 7, url: "https://github.com/acme/w/pull/7", base: "dev", branch: "card/login-ab12" });
+    const reviewer = await reg.createReviewerCard({
+      authorCard: (await reg.getCard(authorId))!, reviewerAccountSlug: "mussa", prBranch: "card/login-ab12", title: "Revisão",
+    });
+    await app.inject({ method: "PATCH", url: `/api/cards/${reviewer.id}`, headers: { cookie }, payload: { reviewOf: null } });
+    await app.inject({ method: "PATCH", url: `/api/cards/${authorId}`, headers: { cookie }, payload: { prs: [] } });
+    expect((await reg.getCard(reviewer.id))?.reviewOf).toBe(authorId);
+    expect((await reg.getCard(authorId))?.prs).toMatchObject([{ number: 7 }]);
   });
 });
 

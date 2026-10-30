@@ -3,6 +3,9 @@
 # ChatGPT faz — sem navegador. Roda DENTRO do runner (é ele que tem claude/tmux). Não é do CI.
 #
 #   scripts/e2e-mcp-wake/run.sh            # S1–S6 + crash do driver no meio de uma ferramenta
+#   scripts/e2e-mcp-wake/run.sh extra      # inatividade + sweep real, driver parado por ociosidade, ordem no
+#                                          # meio da ferramenta, timeout de ferramenta, card em Done, persistência
+#   scripts/e2e-mcp-wake/run.sh apiretry   # API fora do ar no meio do turno (proxy derruba conexões): volta sozinho
 #   scripts/e2e-mcp-wake/run.sh deploy     # SIGKILL do back inteiro no meio da ferramenta + boot novo
 #   scripts/e2e-mcp-wake/run.sh compare    # mesmo cenário na main (src-old) e nesta branch
 #
@@ -30,6 +33,8 @@ trap cleanup EXIT
 cd "$ROOT/back"
 case "${1:-main}" in
   main) VIBEHUB_DATA_DIR="$W/data" npx tsx "$ROOT/scripts/e2e-mcp-wake/harness.mts" main ;;
+  extra) VIBEHUB_DATA_DIR="$W/data-extra" npx tsx "$ROOT/scripts/e2e-mcp-wake/harness.mts" extra ;;
+  apiretry) VIBEHUB_DATA_DIR="$W/data-apiretry" npx tsx "$ROOT/scripts/e2e-mcp-wake/harness.mts" apiretry ;;
   deploy)
     export VIBEHUB_DATA_DIR="$W/data-deploy"
     setsid bash -c "echo \$\$ > '$W/a.pgid'; exec npx tsx '$ROOT/scripts/e2e-mcp-wake/harness.mts' deploy-a" > "$W/deploy-a.log" 2>&1 &

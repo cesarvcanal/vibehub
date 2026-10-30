@@ -416,6 +416,29 @@ escalada pode engoli-la; e a primeira mensagem de uma corrente nova espera o
 `initializationResult()` (com timeout) antes de mandar a configuração, porque um control request
 escrito num CLI que ainda não existe se perde.
 
+## A inteligência do card — troca a quente e o nível antes da primeira resposta
+
+Trocar a inteligência no pill com o driver de pé **nunca reinicia a sessão** (`applySessionChange`
+responde `live`): o back escreve `set_effort` no stdin e o driver aplica com `applyFlagSettings`,
+no meio do turno inclusive — subagente em primeiro plano rodando, a chamada dele volta no mesmo
+turno. Medido no CLI real (SDK 0.3.300): as chamadas seguintes do mesmo turno saem no nível novo.
+
+- `set_effort { effort: "<nível>" }` → `applyFlagSettings({ effortLevel })`.
+- `set_effort { effort: null }` ("Usar a inteligência padrão da conta") → também a quente:
+  `effortLevel: null` leva ao padrão do **modelo** e ignora o `effortLevel` dos settings (medido,
+  29/10: settings `high` → flag `xhigh` → null = `medium`), então o driver lê
+  `getSettings().effective.effortLevel` e, havendo nível nos settings, o reaplica por cima.
+- Sem driver (card de terminal) a troca segue como antes: reinicia já se o card está livre, ou
+  fica pendente até ele ficar livre (`restartPendingAt`) — nunca corta um turno.
+
+**O nível antes da primeira resposta.** Num card sem nível fixado, nada dizia o nível até a primeira
+resposta carimbar o transcript. A consulta descartável do catálogo (`warmCatalog`, no boot do
+driver) sobe **sem** o `--effort` do card e pergunta `getSettings().applied.effort` — o nível que
+uma sessão sem pin usa (settings da conta, senão o padrão do modelo). O driver anuncia
+`effort_default`, o manager guarda na sessão (não vai para histórico nem navegador) e o
+`GET /api/cards/:id/session` usa como último recurso, depois do pin, do carimbo da última resposta
+e do `effortLevel` dos settings.
+
 ## Auth — OAuth token ONLY (regra do projeto)
 
 The driver authenticates **exclusively** with `CLAUDE_CODE_OAUTH_TOKEN`, read from the card
@@ -543,6 +566,26 @@ no meio do turno** — 2x em produção o card ficou mudo. A resposta:
 - **Mensagem durante o setup da conexão:** a rota `/sdk` agora **bufferiza** frames que chegam
   enquanto o connect ainda faz o probe/replay (antes eram descartados sem listener) e os entrega
   ao driver na ordem, como turnos normais.
+
+## Falha passageira da API — o turno volta sozinho (2026-10-26)
+
+O CLI tenta de novo por conta própria quando a API falha, mas desiste depois de alguns minutos e
+fecha o turno com `result` de erro (`"API Error: Can't reach the API server … (EAI_AGAIN)"`,
+`"API Error: Connection dropped (ECONNRESET)"`, 5xx, `overloaded_error`). Antes, o card ficava em
+"falhou" até alguém escrever "continua" (produção, card 8f2a, 23/10/2026). Agora
+(`noteApiOutcome` em `manager.ts`):
+
+- `isTransientApiFailure` separa o que passa com o tempo (rede, DNS, timeout, sobrecarga, 5xx) do
+  que não passa (401, 400, 429/limite do plano) — esses continuam com a pessoa.
+- Falha passageira: nota no chat ("Nova tentativa automática em 30 s") e, depois de
+  `API_RETRY_DELAYS_MS` (30 s, 2 min, 5 min), um turno de sistema com `API_RETRY_TEXT`. Acabou a
+  lista: `NOTE_API_RETRY_EXHAUSTED` e o evento "falhou" sai normalmente.
+- A espera conta como turno em voo (`turnRunning`): a bolinha segue "trabalhando", o
+  `vibehub_wait_for_card` do ChatGPT não devolve o erro como fim, o sweep e o idle stop não derrubam o
+  driver, e o marcador em voo fica — um deploy no meio da espera é retomado pelo sweep de boot.
+- Mensagem da pessoa cancela a nova tentativa (ela vira o turno); turno que fecha sem erro zera a conta.
+- E2E real: `scripts/e2e-mcp-wake/run.sh apiretry` (um proxy na frente da API derruba as conexões nos
+  primeiros 20 s, com `CLAUDE_CODE_MAX_RETRIES=0`).
 
 ## Turning it on — ONE switch, on by default (2026-08-31)
 

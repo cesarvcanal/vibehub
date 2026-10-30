@@ -67,9 +67,11 @@ export class FakePeer extends EventTarget {
     this.connectionState = "connected";
     this.dispatchEvent(new Event("connectionstatechange"));
   }
+  /** The stream the model's audio arrives on — what the orb's analyser listens to. */
+  readonly remoteStream = { id: "remote-audio" };
   /** The model's audio track arrives. */
   remoteTrack(): void {
-    this.dispatchEvent(Object.assign(new Event("track"), { track: { kind: "audio" }, streams: [{}] }));
+    this.dispatchEvent(Object.assign(new Event("track"), { track: { kind: "audio" }, streams: [this.remoteStream] }));
   }
   localDescription: { type: string; sdp: string } | null = null;
   remoteDescription: { type: string; sdp: string } | null = null;
@@ -152,4 +154,67 @@ export function fakeRig(options: FakeRigOptions = {}): FakeRig {
     exchanges,
     audio,
   };
+}
+
+/**
+ * Web Audio, small enough to drive by hand: each stream the call measures plays whatever signal the
+ * test sets (a sine of some amplitude, exact zeros, nothing). Lets a test prove that the orb follows
+ * the ASSISTANT's track while it replies — and never the microphone.
+ */
+export class FakeAudioContext {
+  state: AudioContextState = "running";
+  closed = false;
+  resumed = 0;
+  readonly signals = new Map<unknown, number | "dead">();
+  readonly sources: { stream: unknown; connected: boolean }[] = [];
+
+  createMediaStreamSource(stream: unknown) {
+    const source = {
+      stream,
+      connected: false,
+      connect: (analyser: { stream?: unknown }) => {
+        analyser.stream = stream;
+        source.connected = true;
+      },
+      disconnect: () => {
+        source.connected = false;
+      },
+    };
+    this.sources.push(source);
+    return source;
+  }
+
+  createAnalyser() {
+    const analyser = {
+      fftSize: 2048,
+      smoothingTimeConstant: 0.8,
+      stream: undefined as unknown,
+      getFloatTimeDomainData: (buf: Float32Array) => {
+        const signal = this.signals.get(analyser.stream);
+        if (signal === undefined || signal === "dead") {
+          buf.fill(0);
+          return;
+        }
+        // A little noise under the tone: real audio is never exact zeros.
+        for (let i = 0; i < buf.length; i++) buf[i] = signal * Math.sin(i / 3) + (i % 2 ? 1e-5 : -1e-5);
+      },
+    };
+    return analyser;
+  }
+
+  /** The stream plays a tone of this amplitude (0..1), or exact digital zeros. */
+  play(stream: unknown, amplitude: number | "dead"): void {
+    this.signals.set(stream, amplitude);
+  }
+
+  resume(): Promise<void> {
+    this.resumed += 1;
+    return Promise.resolve();
+  }
+
+  close(): Promise<void> {
+    this.closed = true;
+    this.state = "closed";
+    return Promise.resolve();
+  }
 }

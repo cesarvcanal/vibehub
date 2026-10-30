@@ -16,7 +16,8 @@
  * dela, nunca um segundo turno) ou um silêncio longo demais (`OUTBOX_ACK_TIMEOUT_MS`) deixam a
  * bolha marcada como NÃO ENTREGUE, com reenviar/descartar — e o
  * texto continua na tela, recuperável, mesmo depois de recarregar a página ou trocar de máquina
- * (nesse caso, a máquina que enviou é quem guarda o rascunho).
+ * (nesse caso, a máquina que enviou é quem guarda o rascunho). E a tela não espera o clique: ela
+ * mesma reenvia, espaçado e com fim (`planAutoResend`).
  *
  * Tudo aqui é puro ou trivialmente falsificável: as regras são testes, não capturas de tela.
  */
@@ -72,6 +73,17 @@ export interface OutboxMessage {
    * Reenviar de verdade (`retryOutbox`) a torna um envio.
    */
   unsent?: boolean;
+  /**
+   * Quantos reenvios AUTOMÁTICOS esta mensagem já gastou (ver `planAutoResend`). Vai pro disco junto
+   * com ela: um F5 no meio do plano não devolve as tentativas, ou cada recarga recomeçaria a conta.
+   */
+  autoRetries?: number;
+  /**
+   * Quando a pessoa a escreveu (ou a reenviou na mão) — o relógio do teto de idade do reenvio
+   * automático. `at` não serve: cada reenvio o rearma. Sem o campo (gravada antes dele, ou ainda no
+   * primeiro envio), vale o `at`, que até o primeiro reenvio é a mesma hora.
+   */
+  writtenAt?: number;
 }
 
 /**
@@ -125,6 +137,8 @@ export function readOutbox(cardId: string): OutboxMessage[] {
       first: m.first === true ? true : undefined,
       since: typeof m.since === "number" && Number.isFinite(m.since) ? m.since : undefined,
       unsent: m.unsent === true ? true : undefined,
+      autoRetries: Number.isInteger(m.autoRetries) && (m.autoRetries as number) >= 0 ? m.autoRetries : undefined,
+      writtenAt: typeof m.writtenAt === "number" && Number.isFinite(m.writtenAt) ? m.writtenAt : undefined,
     }));
   } catch {
     return [];
@@ -196,16 +210,89 @@ export function markUndelivered(
  *
  * E a MARCA refeita contra a tela de agora (`mark`, ver `sendMark`): é este o envio que a próxima
  * reconciliação precisa reconhecer, e a conversa andou desde o primeiro — inclusive o caso de uma
- * espera de outra conta (`unsent`), que só agora sai de fato. PURE.
+ * espera de outra conta (`unsent`), que só agora sai de fato.
+ *
+ * `auto` diz QUEM reenviou. O automático gasta uma tentativa do plano e mantém a hora em que a
+ * mensagem foi escrita (o teto de idade continua contando dela). O clique é a pessoa dizendo de novo
+ * "quero isso": zera as tentativas e a idade, e se esse envio também falhar o plano recomeça. PURE.
  */
 export function retryOutbox(
   messages: readonly OutboxMessage[],
   entry: OutboxMessage,
   now: number,
   mark: SendMark,
+  auto = false,
 ): OutboxMessage[] {
-  const { unsent: _neverSent, ...sent } = entry;
-  return addToOutbox(messages, { ...sent, ...mark, at: now, undelivered: false });
+  const { unsent: _neverSent, autoRetries, writtenAt, ...sent } = entry;
+  const plan = auto
+    ? { autoRetries: (autoRetries ?? 0) + 1, writtenAt: writtenAt ?? entry.at }
+    : { writtenAt: now };
+  return addToOutbox(messages, { ...sent, ...mark, ...plan, at: now, undelivered: false });
+}
+
+/**
+ * Os intervalos do reenvio automático, um por tentativa: o N-ésimo reenvio sai `[N]` ms depois do
+ * envio anterior. Crescem de propósito — a primeira falha costuma ser um fio que voltou em segundos
+ * (deploy, VPN piscando, o driver reiniciando), e quem falha de novo e de novo é um problema que
+ * martelar não resolve. Somados dão ~23 minutos de tentativas sobre conexão de pé; acabou a lista,
+ * a bolha volta a ser só o Reenviar.
+ */
+export const AUTO_RESEND_DELAYS_MS: readonly number[] = [5_000, 15_000, 45_000, 2 * 60_000, 5 * 60_000, 15 * 60_000];
+
+/**
+ * A idade máxima de uma mensagem para ela sair SOZINHA (contada de quando foi escrita). Cobre a
+ * pessoa que mandou e foi embora com o fio fora do ar por um tempo; não cobre a aba fechada que é
+ * reaberta no dia seguinte — uma ordem de ontem ("sobe pra prod") não vira turno sem a pessoa ver.
+ */
+export const AUTO_RESEND_MAX_AGE_MS = 2 * 60 * 60_000;
+
+/** O que o reenvio automático tem a fazer agora, e quando olhar de novo. */
+export interface AutoResendPlan {
+  /** As que já venceram o intervalo — saem agora, na ordem em que foram escritas. */
+  due: OutboxMessage[];
+  /** As que ainda vão sair sozinhas (vencidas ou não): a bolha delas diz que vai tentar de novo. */
+  pending: Set<string>;
+  /** O próximo instante em que o plano muda (um intervalo vence, uma mensagem envelhece). */
+  wakeAt: number | null;
+}
+
+/**
+ * O PLANO DO REENVIO AUTOMÁTICO — o Reenviar que a pessoa não precisa estar ali para clicar.
+ *
+ * O bug que isto fecha (produção, 2026-10-27): a mensagem falhou, a bolha ficou "não entregue" com o
+ * Reenviar, e a pessoa — que já tinha ido embora — só a encontrou no dia seguinte. A conexão boa
+ * tinha voltado em instantes; faltou alguém clicar.
+ *
+ * Entra no plano a mensagem que já levou o veredito (`undelivered`) e que saiu deste navegador
+ * (`unsent` é espera de outra conta: só a pessoa decide). Cada uma tem duas cercas, e nenhuma
+ * depende de a conexão estar boa — é o que impede o laço que o veredito único (`markUndelivered`)
+ * existe para impedir:
+ * - TENTATIVAS contadas (`AUTO_RESEND_DELAYS_MS`), espaçadas cada vez mais;
+ * - IDADE (`AUTO_RESEND_MAX_AGE_MS`), de quando foi escrita.
+ * O intervalo conta do envio anterior (`at`). Quem decide se dá para enviar AGORA (fio de pé,
+ * servidor pronto, turno com espaço, mensagem de quem está na aba) é a tela; aqui só o quando. PURE.
+ */
+export function planAutoResend(messages: readonly OutboxMessage[], now: number): AutoResendPlan {
+  const due: OutboxMessage[] = [];
+  const pending = new Set<string>();
+  let wakeAt: number | null = null;
+  const wake = (t: number): void => {
+    if (t > now && (wakeAt === null || t < wakeAt)) wakeAt = t;
+  };
+  for (const m of messages) {
+    if (m.undelivered !== true || m.unsent === true) continue;
+    const delay = AUTO_RESEND_DELAYS_MS[m.autoRetries ?? 0];
+    if (delay === undefined) continue;
+    const expires = (m.writtenAt ?? m.at) + AUTO_RESEND_MAX_AGE_MS;
+    if (now >= expires) continue;
+    pending.add(m.cid);
+    const at = m.at + delay;
+    if (at <= now) due.push(m);
+    else wake(at);
+    wake(expires);
+  }
+  due.sort((a, b) => (a.writtenAt ?? a.at) - (b.writtenAt ?? b.at));
+  return { due, pending, wakeAt };
 }
 
 /**

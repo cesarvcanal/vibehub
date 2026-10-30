@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -36,7 +37,9 @@ import { VncPanel } from "@/features/board/components/VncPanel";
 import { PreviewChip, PreviewMenu } from "@/features/board/components/PreviewMenu";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
 import { CardOutbox } from "@/features/board/components/CardOutbox";
-import { cardState, nextPosition } from "@/features/board/lib/board";
+import { PrReviewBlocks } from "@/features/board/components/PrReviewBlock";
+import { ReviewPanel } from "@/features/board/components/ReviewPanel";
+import { cardState, nextPosition, wantsReviewPanel, withoutReviewFlag } from "@/features/board/lib/board";
 import { CardStateIcon } from "@/features/board/components/CardStateIcon";
 import { boardTitle, useDocumentTitle } from "@/features/board/lib/documentTitle";
 import type { ConnectionState } from "@/features/board/lib/reconnect";
@@ -70,6 +73,7 @@ import {
   whitelistModel,
   type BoardCard,
   type BoardProject,
+  type CardSessionInfo,
 } from "@/features/board/api";
 import { AccountUsageBars, useMinuteTick } from "@/features/board/components/AccountUsageBars";
 import { PlanUsageMeter } from "@/features/board/components/PlanUsage";
@@ -311,13 +315,14 @@ export function CardTerminalView({
    */
   function applySessionSwitch(
     { card: updated, session: change }: Awaited<ReturnType<typeof boardApi.patchCardSession>>,
-    toastKey: { switched: string; pending: string },
+    toastKey: { switched: string; pending: string; live?: string },
     vars?: { label: string },
   ) {
     mirror(updated);
     void queryClient.invalidateQueries({ queryKey: cardSessionKey(updated.id) });
     if (change === "restarted") setReconnectNonce((n) => n + 1);
-    toast.success(translate(change === "pending" ? toastKey.pending : toastKey.switched, vars));
+    const key = change === "pending" ? toastKey.pending : change === "live" && toastKey.live ? toastKey.live : toastKey.switched;
+    toast.success(translate(key, vars));
   }
 
   const accountMutation = useMutation({
@@ -342,7 +347,19 @@ export function CardTerminalView({
     onSuccess: (result) => {
       const level = pinnedEffort(result.card);
       const label = level ? effortLabel(level) : translate("cardView.accountDefault");
-      applySessionSwitch(result, { switched: "cardView.effortSwitched", pending: "cardView.effortSwitchPending" }, { label });
+      // The pill reads the SESSION first, and its last reading is the old level until the refetch
+      // lands. A switch to a level is what the server answers from now on (the pin is newer than any
+      // reply), so the pill says it at once — the layout follows the click, not the next poll.
+      if (level) {
+        queryClient.setQueryData<CardSessionInfo>(cardSessionKey(result.card.id), (info) =>
+          info ? { ...info, effort: level } : info,
+        );
+      }
+      applySessionSwitch(
+        result,
+        { switched: "cardView.effortSwitched", pending: "cardView.effortSwitchPending", live: "cardView.effortSwitchedLive" },
+        { label },
+      );
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("cardView.effortSwitchError"))),
   });
@@ -414,6 +431,26 @@ export function CardTerminalView({
   const [editingTitle, setEditingTitle] = React.useState<string | null>(null);
   const [shellOpen, setShellOpen] = React.useState(false);
   const [browserOpen, setBrowserOpen] = React.useState(false);
+  /**
+   * The PR review's panel — a column to the right, like the browser's. Asked for by clicking the
+   * block of a PR under review, or by a link carrying `?review=1` (the sidebar's PR line).
+   */
+  const [reviewOpen, setReviewOpen] = React.useState(false);
+  // The link's request is read ONCE: the panel opens and the flag leaves the URL, so closing it by
+  // hand sticks. Only the card the URL names answers — the deck keeps the others mounted behind.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const reviewRequested = wantsReviewPanel(searchParams, cardId);
+  React.useEffect(() => {
+    if (!reviewRequested) return;
+    setReviewOpen(true);
+    setSearchParams((current) => withoutReviewFlag(current), { replace: true });
+  }, [reviewRequested, setSearchParams]);
+  /**
+   * The PRs the card delivered, one line each, ALWAYS right above the composer: in the terminal that
+   * is this file's own composer; in the chat the composer lives inside the chat view, which takes
+   * these as its `footer`. Null for a card that never opened a PR.
+   */
+  const prBlocks = card ? <PrReviewBlocks card={card} onOpenPanel={() => setReviewOpen(true)} /> : null;
   const [connection, setConnection] = React.useState<ConnectionState>("connecting");
 
   /**
@@ -1132,7 +1169,7 @@ export function CardTerminalView({
         // a terminal wastes the width; on a narrow screen the two stack instead.
         <div
           data-testid="card-workarea"
-          className={cn("flex min-h-0 flex-1 flex-col", browserOpen && "lg:flex-row lg:gap-2")}
+          className={cn("flex min-h-0 flex-1 flex-col", (browserOpen || reviewOpen) && "lg:flex-row lg:gap-2")}
         >
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             {mode === "chat" && features.data === undefined ? (
@@ -1156,6 +1193,7 @@ export function CardTerminalView({
                 onUploadImage={uploadImage}
                 onStatus={setConnection}
                 terminalWorking={working}
+                footer={prBlocks}
                 ariaLabel={t("chat.ariaFor", { title: card?.title ?? t("cardView.cardFallback") })}
               />
             ) : mode === "chat" ? (
@@ -1167,6 +1205,7 @@ export function CardTerminalView({
                 onUploadImage={uploadImage}
                 onStatus={setConnection}
                 onOpenTerminal={() => switchMode("terminal")}
+                footer={prBlocks}
                 ariaLabel={t("chat.ariaFor", { title: card?.title ?? t("cardView.cardFallback") })}
               />
             ) : (
@@ -1196,6 +1235,7 @@ export function CardTerminalView({
                   autoFocus={false}
                   ariaLabel={t("cardView.terminalFor", { title: card?.title ?? t("cardView.cardFallback") })}
                 />
+                {prBlocks}
                 {/* Anything composed that has not reached the agent yet — usually nothing at all. */}
                 <CardOutbox cardId={cardId} />
                 {/* Compose here, send when ready — the field accumulates until Enter. */}
@@ -1241,6 +1281,13 @@ export function CardTerminalView({
           {browserOpen ? (
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
               <VncPanel cardId={cardId} onClose={closeBrowserPane} />
+            </div>
+          ) : null}
+          {/* The PR review: a column of its own at the right. The review is a list to read, not a
+              screen to share, so on a wide display it keeps a fixed width instead of taking half. */}
+          {reviewOpen ? (
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:w-[26rem] lg:flex-none">
+              <ReviewPanel cardId={cardId} onClose={() => setReviewOpen(false)} />
             </div>
           ) : null}
         </div>

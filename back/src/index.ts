@@ -13,6 +13,7 @@ import { logUnownedRejections } from "./utils/processGuards.js";
 import { authRoutes } from "./routes/auth.js";
 import { usersRoutes } from "./routes/users.js";
 import { sharesRoutes } from "./routes/shares.js";
+import { reviewRoutes } from "./routes/reviews.js";
 import { settingsRoutes } from "./routes/settings.js";
 import { githubRoutes } from "./routes/github.js";
 import { runnerRoutes } from "./routes/runner.js";
@@ -37,9 +38,11 @@ import { sweepDoneCards, DONE_SWEEP_INTERVAL_MS } from "./services/board/retenti
 import { checkStatusHookReach } from "./runtime/runner.js";
 import { startOutboxFlusher } from "./services/board/outbox.js";
 import { startWebhookDispatcher } from "./services/webhooks/subscriptions.js";
+import { startReviewOrchestrator } from "./services/review/orchestrator.js";
 import { startRunnerReaper } from "./services/reaper/reaper.js";
 import { pruneStaleInflightOwners, startInflightOwnerHeartbeat } from "./services/sdk/inflight.js";
 import { handOffSdkOnShutdown, resumeAfterDriverCrash, resumeInterruptedTurns } from "./services/sdk/resume.js";
+import { backfillPendingQuestions } from "./services/sdk/pendingQuestion.js";
 import { onDriverCrashWithWork } from "./services/sdk/manager.js";
 import { restartSessionsIfSpecChanged } from "./services/board/sessionSpec.js";
 
@@ -88,6 +91,7 @@ export async function buildServer() {
   await app.register(githubRoutes);
   await app.register(runnerRoutes);
   await app.register(boardRoutes);
+  await app.register(reviewRoutes);
   await app.register(sessionRoutes);
   await app.register(agentRoutes);
   await app.register(mcpRoutes);
@@ -232,6 +236,9 @@ async function main(): Promise<void> {
   startOutboxFlusher();
   // MCP Events webhook deliveries (services/webhooks): same reasoning — a test drives its own passes.
   startWebhookDispatcher();
+  // Revisão de PR: o fim de turno de um card de revisão (ou do autor) sem a ferramenta da rodada vira
+  // lembrete e, na segunda vez, impasse. Mesmo motivo dos outros: teste que sobe o app não herda o listener.
+  startReviewOrchestrator();
   await app.listen({ port: config.port, host: config.host });
   const trustWarning = trustProxyBootWarning(config.trustProxy);
   if (trustWarning) logger.warn(trustWarning);
@@ -272,6 +279,11 @@ async function main(): Promise<void> {
     if (summary.resumed.length > 0 || summary.noted.length > 0) {
       logger.info({ resumed: summary.resumed.length, noted: summary.noted.length }, "sdk boot resume done");
     }
+  });
+  // Os cards cujo último turno acabou numa pergunta para a pessoa ANTES deste servidor saber ler
+  // uma: o carimbo vem agora, não no próximo turno (ver services/sdk/pendingQuestion.ts).
+  void backfillPendingQuestions().then((stamped) => {
+    if (stamped > 0) logger.info({ stamped }, "cards waiting on a question to the person marked");
   });
   // …e o driver que CAI sozinho com o back de pé (OOM, kill, o docker exec que morreu): a mesma
   // retomada, na hora — sem isto o turno esperava um deploy para voltar. Ver resumeAfterDriverCrash.

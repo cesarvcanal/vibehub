@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { execFileSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const runScript = vi.fn(async () => ({ stdout: "", stderr: "" }));
+
 const tokenFor = vi.fn(async () => TOKEN);
 
 /** A GitHub-token-shaped value (writeGhTokenLines validates it): safe charset, no spaces. */
@@ -82,6 +84,89 @@ describe("buildPushAndPrScript", () => {
     // git push is force-with-lease, and the PR targets the given branch
     expect(s).toContain("git push --force-with-lease origin 'card/fix-1'");
     expect(s).toContain("gh pr create --base 'dev' --head 'card/fix-1' --fill");
+  });
+});
+
+describe("forgetDeletedRemoteBranch — a branch the merge deleted on GitHub does not break the next push", () => {
+  /**
+   * Real git, the exact line the push script runs. The card pushed its branch, the merge deleted it
+   * on the remote (afterPrMerged), the card committed again: the local `origin/<branch>` still points
+   * at the old head, and `--force-with-lease` (which leases against it) refused with "stale info".
+   */
+  // Cleaned after EACH test, passed or failed: a failed assertion must not leave repositories in /tmp.
+  const roots: string[] = [];
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  async function cardAfterMerge(remoteMoved: "deleted" | "moved", opts: { alsoOnRemote?: string } = {}) {
+    const root = await mkdtemp(join(tmpdir(), "vibehub-lease-"));
+    roots.push(root);
+    // Only a clean git: none of the runner's GIT_* (the card's GIT_CONFIG_* is set there, a GIT_DIR
+    // would point every command at another repository), and no global or system config.
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+    const gitEnv = { ...env, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+    const sh = (cwd: string, script: string) => execFileSync("bash", ["-c", script], { cwd, encoding: "utf8", env: gitEnv });
+    const commit = (m: string) => `git -c user.name=t -c user.email=t@t commit -q --allow-empty -m ${m}`;
+    sh(root, "git init -q --bare remote.git && git clone -q remote.git card 2>/dev/null");
+    const card = join(root, "card");
+    sh(card, `${commit("base")} && git push -q origin HEAD:main && git checkout -q -b card/x && ${commit("one")} && git push -q origin card/x`);
+    // another branch whose name ENDS in the card's (`feature/card/x`): it stays when card/x goes
+    if (opts.alsoOnRemote) sh(card, `git push -q origin HEAD:refs/heads/${opts.alsoOnRemote}`);
+    if (remoteMoved === "deleted") sh(root, "git --git-dir=remote.git update-ref -d refs/heads/card/x");
+    // someone else pushed to the branch: the lease must still protect it
+    else sh(root, `git clone -q -b card/x remote.git other 2>/dev/null && cd other && ${commit("theirs")} && git push -q origin card/x`);
+    sh(card, commit("two"));
+    const push = (guard: string) =>
+      sh(card, `${guard}\nif git push -q --force-with-lease origin 'card/x' 2>err.txt; then echo pushed; else cat err.txt; fi`);
+    return { push, remoteHead: () => sh(root, "git --git-dir=remote.git rev-parse --verify -q refs/heads/card/x || true").trim(), cardHead: () => sh(card, "git rev-parse HEAD").trim() };
+  }
+
+  it("without it the push is refused as stale (the bug), with it the branch goes up again", async () => {
+    const { deliver } = await load();
+    const bare = await cardAfterMerge("deleted");
+    expect(bare.push(":")).toMatch(/stale info/);
+
+    const fixed = await cardAfterMerge("deleted");
+    expect(fixed.push(deliver.forgetDeletedRemoteBranch("card/x"))).toContain("pushed");
+    expect(fixed.remoteHead()).toBe(fixed.cardHead());
+  });
+
+  it("asks for the EXACT branch: another one whose name ends in it (feature/card/x) does not keep the stale ref", async () => {
+    const { deliver } = await load();
+    const repo = await cardAfterMerge("deleted", { alsoOnRemote: "feature/card/x" });
+    expect(repo.push(deliver.forgetDeletedRemoteBranch("card/x"))).toContain("pushed");
+    expect(repo.remoteHead()).toBe(repo.cardHead());
+  });
+
+  it("the runner's GIT_* variables do not reach the temporary repositories", async () => {
+    // A runner with GIT_DIR (or GIT_CONFIG_*) set would point every git here at another repository.
+    vi.stubEnv("GIT_DIR", join(tmpdir(), "vibehub-lease-not-a-repo"));
+    try {
+      const { deliver } = await load();
+      const repo = await cardAfterMerge("deleted");
+      expect(repo.push(deliver.forgetDeletedRemoteBranch("card/x"))).toContain("pushed");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("a branch that still exists on the remote keeps its lease: someone else's push is not overwritten", async () => {
+    const { deliver } = await load();
+    const repo = await cardAfterMerge("moved");
+    const theirs = repo.remoteHead();
+    expect(repo.push(deliver.forgetDeletedRemoteBranch("card/x"))).toMatch(/stale info/);
+    expect(repo.remoteHead()).toBe(theirs);
+  });
+
+  it("runs before the push, on the quoted branch", async () => {
+    const { deliver } = await load();
+    const lines = deliver.buildPushAndPrScript("vibehub-runner", "card-1", TOKEN, "/work/scratch/x", "card/fix-1", "dev").split("\n");
+    const guard = lines.findIndex((l) => l.includes("git ls-remote --exit-code origin 'refs/heads/card/fix-1'"));
+    const push = lines.findIndex((l) => l.includes("git push --force-with-lease origin 'card/fix-1'"));
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(push);
+    expect(lines[guard]).toContain("git update-ref -d 'refs/remotes/origin/card/fix-1'");
   });
 });
 
@@ -344,5 +429,446 @@ describe("deliver sobe na conta de QUEM trabalhou o card", () => {
     wire();
     await deliver.deliver(card.id, { branch: "dev" });
     expect(tokenFor).toHaveBeenCalledWith(cesar.id);
+  });
+});
+
+describe("deliver grava o PR no card (revisão de PR)", () => {
+  const prUrl = (n: number) => `https://github.com/acme/repo/pull/${n}`;
+  const pushOut = (n: number) => `pushed\n__VIBEHUB_DELIVER__ pr ${prUrl(n)}`;
+
+  it("deliver grava o PR no card, um por base", async () => {
+    const { deliver, registry, card } = await makeCard();
+
+    wire({ push: pushOut(7) });
+    await deliver.deliver(card.id, { branch: "dev" });
+    wire({ push: pushOut(8) });
+    await deliver.deliver(card.id, { branch: "prod" });
+
+    const prs = (await registry.getCard(card.id))?.prs;
+    expect(prs).toHaveLength(2);
+    // a head é a branch do card; a base é o alvo da entrega; o número sai da URL do PR
+    expect(prs?.find((p) => p.base === "dev")).toMatchObject({ number: 7, url: prUrl(7), branch: card.branch ?? `card/${card.worktreeSlug}` });
+    expect(prs?.find((p) => p.base === "prod")).toMatchObject({ number: 8, url: prUrl(8) });
+
+    // repetir `dev` (o PR foi fechado e outro aberto) atualiza o item em vez de empilhar
+    const firstOpenedAt = prs!.find((p) => p.base === "dev")!.openedAt;
+    wire({ push: pushOut(9) });
+    await deliver.deliver(card.id, { branch: "dev" });
+    const again = (await registry.getCard(card.id))?.prs;
+    expect(again).toHaveLength(2);
+    expect(again?.find((p) => p.base === "dev")).toMatchObject({ number: 9, url: prUrl(9), openedAt: firstOpenedAt });
+  });
+
+  it("o PR fica gravado mesmo com o gate vermelho e mesmo sem autorização", async () => {
+    const { deliver, registry, card } = await makeCard();
+    wire({ push: pushOut(7), run: "1 failing test\n__VIBEHUB_GATE__ fail\n" });
+    expect(await deliver.deliver(card.id, { branch: "dev", authorized: true })).toMatchObject({ reason: "gate" });
+    expect((await registry.getCard(card.id))?.prs).toMatchObject([{ number: 7, base: "dev" }]);
+
+    wire({ push: pushOut(8) });
+    expect(await deliver.deliver(card.id, { branch: "prod" })).toMatchObject({ reason: "unauthorized" });
+    expect((await registry.getCard(card.id))?.prs).toHaveLength(2);
+  });
+
+  it("push que falha não grava PR nenhum", async () => {
+    const { deliver, registry, card } = await makeCard();
+    wire({ push: "boom\n__VIBEHUB_DELIVER__ error push" });
+    await deliver.deliver(card.id, { branch: "dev" });
+    expect((await registry.getCard(card.id))?.prs).toBeUndefined();
+  });
+
+  it("card trancado grava o PR contra a própria base, não a pedida", async () => {
+    const { deliver, registry, card } = await makeCard();
+    await registry.updateCard(card.id, { base: "dev", locked: true });
+    wire({ push: pushOut(7) });
+    await deliver.deliver(card.id, { branch: "prod" });
+    expect((await registry.getCard(card.id))?.prs).toMatchObject([{ number: 7, base: "dev" }]);
+  });
+
+  it("uma URL de PR sem número não derruba a entrega: segue sem gravar", async () => {
+    const { deliver, registry, card } = await makeCard();
+    wire({ push: "pushed\n__VIBEHUB_DELIVER__ pr https://example.test/sem-numero" });
+    const out = await deliver.deliver(card.id, { branch: "dev" });
+    expect(out).toMatchObject({ reason: "unauthorized", prUrl: "https://example.test/sem-numero" });
+    expect((await registry.getCard(card.id))?.prs).toBeUndefined();
+  });
+
+  it("merge grava mergedAt no PR do card", async () => {
+    const { deliver, registry, card } = await makeCard();
+    wire({ push: pushOut(7) });
+    const before = Date.now();
+    expect(await deliver.deliver(card.id, { branch: "dev", authorized: true })).toMatchObject({ merged: true, reason: "merged" });
+
+    const dev = (await registry.getCard(card.id))?.prs?.find((p) => p.base === "dev");
+    expect(dev).toMatchObject({ number: 7 });
+    expect(dev?.mergedAt).toBeGreaterThanOrEqual(before);
+
+    // o próximo PR da mesma base é outro PR: nasce sem a marca do anterior
+    wire({ push: pushOut(8) });
+    await deliver.deliver(card.id, { branch: "dev" });
+    expect((await registry.getCard(card.id))?.prs?.find((p) => p.base === "dev")).toMatchObject({ number: 8 });
+    expect((await registry.getCard(card.id))?.prs?.find((p) => p.base === "dev")?.mergedAt).toBeUndefined();
+  });
+
+  it("só marca o PR que foi mergeado: sem autorização, gate vermelho e merge que falha não gravam mergedAt", async () => {
+    const { deliver, registry, card } = await makeCard();
+    const merged = async () => (await registry.getCard(card.id))?.prs?.[0]?.mergedAt;
+
+    wire({ push: pushOut(7) });
+    await deliver.deliver(card.id, { branch: "dev" });
+    expect(await merged()).toBeUndefined();
+
+    wire({ push: pushOut(7), run: "1 failing test\n__VIBEHUB_GATE__ fail\n" });
+    await deliver.deliver(card.id, { branch: "dev", authorized: true });
+    expect(await merged()).toBeUndefined();
+
+    wire({ push: pushOut(7), merge: "boom\n__VIBEHUB_DELIVER__ error merge\n" });
+    expect(await deliver.deliver(card.id, { branch: "dev", authorized: true })).toMatchObject({ merged: false, reason: "merge_failed" });
+    expect(await merged()).toBeUndefined();
+  });
+
+  it("o card do revisor NUNCA empurra: devolve locked antes de qualquer script", async () => {
+    const { deliver, registry, project, card } = await makeCard();
+    await registry.createAccount({ name: "Mussa" });
+    const reviewer = await registry.createReviewerCard({
+      authorCard: card, reviewerAccountSlug: "mussa", prBranch: "card/the-fix-ab12", title: "Revisão: the fix",
+    });
+    wire({ push: pushOut(7) });
+    // nem a autorização do agente nem o alvo pedido mudam nada: o revisor não tem saída
+    const out = await deliver.deliver(reviewer.id, { branch: "prod", authorized: true });
+    expect(out).toMatchObject({
+      merged: false,
+      reason: "locked",
+      locked: true,
+      branch: "card/the-fix-ab12",
+      cardBranch: `review/${reviewer.worktreeSlug}`,
+    });
+    expect(out.prUrl).toBeUndefined();
+    expect(runScript).not.toHaveBeenCalled();
+    expect(tokenFor).not.toHaveBeenCalled();
+    expect((await registry.getCard(reviewer.id))?.prs).toBeUndefined();
+    expect(project.id).toBe(reviewer.projectId);
+  });
+});
+
+describe("deliver no modo só-merge (botão de merge da revisão de PR)", () => {
+  const REVIEWED = "a".repeat(40);
+  const MOVED = "b".repeat(40);
+  /** O runner do modo só-merge: resolver o PR (sem push), CI, merge. */
+  function wireMergeOnly(head: string, over: { ci?: string; merge?: string; resolve?: string } = {}) {
+    runScript.mockImplementation(async (script: string) => {
+      if (script.includes("gh pr merge")) return { stdout: over.merge ?? "Merged\n__VIBEHUB_DELIVER__ merged\n", stderr: "" };
+      if (script.includes("gh pr checks")) return { stdout: `${over.ci ?? '[{"name":"back","bucket":"pass"}]'}\n__VIBEHUB_CI__ done\n`, stderr: "" };
+      if (script.includes("gh pr list")) return { stdout: over.resolve ?? `__VIBEHUB_DELIVER__ head ${PR} ${head}\n`, stderr: "" };
+      return { stdout: "", stderr: "" };
+    });
+  }
+
+  it("mergeOnly não dá push e recusa head_moved", async () => {
+    const { deliver, card } = await makeCard();
+    wireMergeOnly(MOVED);
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED });
+    expect(out).toMatchObject({ merged: false, reason: "head_moved", prUrl: PR, branch: "dev" });
+    expect(out.output).toContain(MOVED.slice(0, 7));
+    // nenhum script empurra: o push carregaria um commit que ninguém revisou
+    expect(scripts().some((s) => s.includes("git push"))).toBe(false);
+    // o PR é achado pela branch do card E pela base pedida (dois PRs da mesma branch não se confundem)
+    const resolve = scripts().find((s) => s.includes("gh pr list"))!;
+    expect(resolve).toContain(`--head '${card.branch ?? `card/${card.worktreeSlug}`}'`);
+    expect(resolve).toContain("--base 'dev'");
+    expect(resolve).toContain("headRefOid");
+    expect(mergeRan()).toBe(false);
+    expect(localGateRan()).toBe(false);
+  });
+
+  it("mergeOnly com o head igual ao revisado: CI lido contra o sha revisado e merge preso a ele", async () => {
+    const { deliver, registry, card } = await makeCard();
+    wireMergeOnly(REVIEWED.toUpperCase());
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED });
+    expect(out).toMatchObject({ merged: true, reason: "merged", prUrl: PR, branch: "dev" });
+    expect(scripts().some((s) => s.includes("git push"))).toBe(false);
+    // o CI espera o PR apontar para o sha REVISADO (não para o HEAD do worktree do autor)
+    const ci = scripts().find((s) => s.includes("gh pr checks"))!;
+    expect(ci).toContain(`HEAD='${REVIEWED}'`);
+    expect(ci).not.toContain("git rev-parse HEAD");
+    // e o merge só passa se o GitHub ainda vir esse head (um push entre o gate e o merge é recusado lá)
+    const merge = scripts().find((s) => s.includes("gh pr merge"))!;
+    expect(merge).toContain(`--merge --match-head-commit '${REVIEWED}'`);
+    expect(merge).not.toContain("--squash");
+    // só-merge não regrava o PR do card (não abriu nem empurrou nada)
+    expect((await registry.getCard(card.id))?.prs).toBeUndefined();
+    // e o token segue fora do argv em todos os scripts, o de achar o PR inclusive
+    for (const s of scripts()) {
+      for (const line of s.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
+    }
+  });
+
+  it("mergeOnly: o merge grava mergedAt no PR do card (o PR #7 gravado pela entrega); head movido não grava", async () => {
+    const { deliver, registry, card } = await makeCard();
+    // a entrega que abriu o PR gravou o slot da base
+    wire({ push: `pushed\n__VIBEHUB_DELIVER__ pr ${PR}` });
+    await deliver.deliver(card.id, { branch: "dev" });
+    const mergedAt = async () => (await registry.getCard(card.id))?.prs?.[0]?.mergedAt;
+    expect(await mergedAt()).toBeUndefined();
+
+    wireMergeOnly(MOVED);
+    await deliver.deliver(card.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED });
+    expect(await mergedAt()).toBeUndefined();
+
+    wireMergeOnly(REVIEWED);
+    const before = Date.now();
+    expect(await deliver.deliver(card.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED }))
+      .toMatchObject({ merged: true });
+    expect(await mergedAt()).toBeGreaterThanOrEqual(before);
+  });
+
+  it("mergeOnly: gate vermelho continua barrando", async () => {
+    const { deliver, card } = await makeCard();
+    wireMergeOnly(REVIEWED, { ci: '[{"name":"back","bucket":"fail"}]' });
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED });
+    expect(out).toMatchObject({ merged: false, reason: "gate" });
+    expect(mergeRan()).toBe(false);
+  });
+
+  it("mergeOnly sem PR aberto para a base para em pr_failed, sem merge", async () => {
+    const { deliver, card } = await makeCard();
+    wireMergeOnly(REVIEWED, { resolve: "__VIBEHUB_DELIVER__ error nopr\n" });
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED });
+    expect(out).toMatchObject({ merged: false, reason: "pr_failed" });
+    expect(runScript).toHaveBeenCalledOnce();
+  });
+
+  it("card locked mergeia pelo botão do responsável quando a base é a do card", async () => {
+    const { deliver, registry, card } = await makeCard();
+    await registry.updateCard(card.id, { base: "dev", locked: true });
+    wireMergeOnly(REVIEWED);
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED });
+    // o merge de um card trancado é de quem revisa: o botão do responsável é essa saída
+    expect(out).toMatchObject({ merged: true, reason: "merged", branch: "dev", locked: true });
+    expect(mergeRan()).toBe(true);
+  });
+
+  it("card locked: PR de outra base que não a do card continua locked, sem script nenhum", async () => {
+    const { deliver, registry, card } = await makeCard();
+    await registry.updateCard(card.id, { base: "dev", locked: true });
+    wireMergeOnly(REVIEWED);
+    const out = await deliver.deliver(card.id, { branch: "prod", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED });
+    expect(out).toMatchObject({ merged: false, reason: "locked", locked: true, branch: "dev" });
+    expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("connectionId: o só-merge sai com o token dessa conexão, não com o do ator do card", async () => {
+    const { deliver, registry, card } = await makeCard();
+    const ator = await registry.addGithubConnection({ label: "autor", login: "autor-gh" });
+    const merger = await registry.addGithubConnection({ label: "merger", login: "merger-gh" });
+    const { setUserGit } = await import("../../auth/userGit.js");
+    await setUserGit("u-autor", { githubConnectionId: ator.id });
+    await registry.stampCardActor(card.id, "u-autor");
+    wireMergeOnly(REVIEWED);
+    const out = await deliver.deliver(card.id, {
+      branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED, connectionId: merger.id,
+    });
+    expect(out.merged).toBe(true);
+    expect(tokenFor).toHaveBeenCalledWith(merger.id);
+    expect(tokenFor).not.toHaveBeenCalledWith(ator.id);
+  });
+
+  it("mergeOnly exige o sha completo do commit revisado", async () => {
+    const { deliver, card } = await makeCard();
+    wireMergeOnly(REVIEWED);
+    await expect(deliver.deliver(card.id, { authorized: true, mergeOnly: true })).rejects.toThrow(/expectedHeadSha/);
+    await expect(deliver.deliver(card.id, { authorized: true, mergeOnly: true, expectedHeadSha: "abc1234" })).rejects.toThrow(/expectedHeadSha/);
+    expect(runScript).not.toHaveBeenCalled();
+  });
+});
+
+describe("a branch do card sai do GitHub depois do merge (o trabalho já está na base)", () => {
+  /** The delete-branch step answers with this; the rest of the wiring as usual. */
+  function wireDelete(answer: string) {
+    wire();
+    const merged = runScript.getMockImplementation()!;
+    runScript.mockImplementation(async (script: string) => {
+      if (script.includes("git/refs/heads/")) return { stdout: `${answer}\n`, stderr: "" };
+      return await merged(script);
+    });
+  }
+  const deleteScript = () => scripts().find((s) => s.includes("git/refs/heads/"));
+
+  it("merge apaga a branch do card quando não sobra PR aberto saindo dela", async () => {
+    const { deliver, card } = await makeCard();
+    wireDelete("__VIBEHUB_DELIVER__ branch deleted");
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true });
+    expect(out).toMatchObject({ merged: true, reason: "merged", headBranch: "deleted" });
+    const script = deleteScript()!;
+    expect(script).toContain(`git/refs/heads/${out.cardBranch}`);
+    expect(script).toContain("repos/acme/repo/");
+    // o token vai pelo stdin, nunca no argv do docker exec
+    for (const line of script.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
+  });
+
+  it("branch com outro PR aberto (o mesmo card com PR pra outra base) fica: apagar fecharia esse PR", async () => {
+    const { deliver, card } = await makeCard();
+    wireDelete("__VIBEHUB_DELIVER__ branch kept");
+    expect(await deliver.deliver(card.id, { branch: "dev", authorized: true })).toMatchObject({ merged: true, headBranch: "kept" });
+  });
+
+  it("branch que uma pessoa nomeou (não é a card/<slug> do vibehub, ex.: dev) nunca é apagada", async () => {
+    const { deliver, registry, card } = await makeCard();
+    await registry.updateCard(card.id, { branch: "dev" });
+    wireDelete("__VIBEHUB_DELIVER__ branch deleted");
+    const out = await deliver.deliver(card.id, { branch: "prod", authorized: true });
+    expect(out).toMatchObject({ merged: true, headBranch: "kept", cardBranch: "dev" });
+    expect(deleteScript()).toBeUndefined();
+  });
+
+  it("falha ao apagar não desfaz o merge: volta merged, com a branch marcada como falha", async () => {
+    const { deliver, card } = await makeCard();
+    wireDelete("boom\n__VIBEHUB_DELIVER__ branch error delete");
+    expect(await deliver.deliver(card.id, { branch: "dev", authorized: true })).toMatchObject({ merged: true, reason: "merged", headBranch: "failed" });
+  });
+
+  it("sem merge, nada é apagado: sem autorização, gate vermelho ou merge que falha", async () => {
+    const { deliver, card } = await makeCard();
+    wireDelete("__VIBEHUB_DELIVER__ branch deleted");
+    expect((await deliver.deliver(card.id, { branch: "dev" })).headBranch).toBeUndefined();
+    wire({ merge: "nope\n__VIBEHUB_DELIVER__ error merge\n" });
+    expect(await deliver.deliver(card.id, { branch: "dev", authorized: true })).toMatchObject({ merged: false });
+    expect(deleteScript()).toBeUndefined();
+  });
+});
+
+describe("buildDeleteBranchScript / parseDeleteBranch", () => {
+  it("guarda a branch padrão e a que ainda tem PR aberto; apaga pela API com o token do stdin", async () => {
+    const { deliver } = await load();
+    const script = deliver.buildDeleteBranchScript("vibehub-runner", "c1", TOKEN, "/work/x", PR, "card/the-fix-ab12");
+    expect(script).toContain("defaultBranchRef");
+    // sem conseguir ler a branch padrão, não apaga nada (a trava não pode falhar aberta)
+    expect(script).toContain('if [ -z "$DEF" ]; then');
+    expect(script).toContain("gh pr list --repo 'acme/repo' --head 'card/the-fix-ab12' --state open");
+    expect(script).toContain("gh api -X DELETE 'repos/acme/repo/git/refs/heads/card/the-fix-ab12'");
+    for (const line of script.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
+    expect(() => deliver.buildDeleteBranchScript("vibehub-runner", "c1", TOKEN, "/work/x", "https://example.com/x", "b")).toThrow(/PR/);
+  });
+
+  it("lê o resultado: apagada, mantida ou falha (uma branch que já não existe conta como apagada)", async () => {
+    const { deliver } = await load();
+    expect(deliver.parseDeleteBranch("__VIBEHUB_DELIVER__ branch deleted")).toBe("deleted");
+    expect(deliver.parseDeleteBranch("__VIBEHUB_DELIVER__ branch kept")).toBe("kept");
+    expect(deliver.parseDeleteBranch("x\n__VIBEHUB_DELIVER__ branch error delete")).toBe("failed");
+    expect(deliver.parseDeleteBranch("")).toBe("failed");
+  });
+});
+
+describe("buildPrStateScript / parsePrState", () => {
+  it("lê o estado e o head do PR pela URL, com o token do stdin", async () => {
+    const { deliver } = await load();
+    const script = deliver.buildPrStateScript("vibehub-runner", "c1", TOKEN, "/work/x", PR);
+    expect(script).toContain(`gh pr view '${PR}' --json state,headRefOid`);
+    for (const line of script.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
+    const sha = "b".repeat(40);
+    expect(deliver.parsePrState(`__VIBEHUB_DELIVER__ prstate MERGED ${sha}`)).toEqual({ ok: true, state: "MERGED", headSha: sha });
+    expect(deliver.parsePrState(`__VIBEHUB_DELIVER__ prstate OPEN ${sha.toUpperCase()}`)).toEqual({ ok: true, state: "OPEN", headSha: sha });
+    expect(deliver.parsePrState("denied\n__VIBEHUB_DELIVER__ error view")).toMatchObject({ ok: false, stage: "view" });
+  });
+});
+
+describe("buildPrPeopleScript / parsePrPeople (assignee e reviewer do PR)", () => {
+  it("marca o assignee e pede o reviewer em chamadas separadas, com o token do stdin", async () => {
+    const { deliver } = await load();
+    const script = deliver.buildPrPeopleScript("vibehub-runner", "c1", TOKEN, "/work/x", PR, { assignee: "wellesley-mussolini", reviewer: "albert-gh" });
+    expect(script).toContain(`gh pr edit '${PR}' --add-assignee 'wellesley-mussolini'`);
+    expect(script).toContain(`gh pr edit '${PR}' --add-reviewer 'albert-gh'`);
+    for (const line of script.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
+    // um só, quando só um é conhecido
+    const onlyReviewer = deliver.buildPrPeopleScript("vibehub-runner", "c1", TOKEN, "/work/x", PR, { reviewer: "albert-gh" });
+    expect(onlyReviewer).not.toContain("--add-assignee");
+    // login com caractere fora do padrão do GitHub é recusado antes de virar shell
+    expect(() => deliver.buildPrPeopleScript("vibehub-runner", "c1", TOKEN, "/work/x", PR, { reviewer: "a b;rm" })).toThrow(/login/);
+  });
+
+  it("lê o resultado de cada um", async () => {
+    const { deliver } = await load();
+    expect(deliver.parsePrPeople("__VIBEHUB_DELIVER__ people assignee ok\nnope\n__VIBEHUB_DELIVER__ people reviewer error"))
+      .toEqual({ assignee: "ok", reviewer: "failed" });
+    expect(deliver.parsePrPeople("")).toEqual({});
+  });
+});
+
+describe("deliver com revisão de PR ativa no card", () => {
+  async function withActiveReview(phase: "reviewing" | "fixing" | "ready" | "merged" | "cancelled" = "reviewing") {
+    const made = await makeCard();
+    const store = await import("../review/store.js");
+    const now = Date.now();
+    await store.insertReview({
+      id: "rev-1", cardId: made.card.id, projectId: made.project.id, prNumber: 7, prUrl: PR, prBranch: "card/x", base: "dev",
+      reviewerUserId: "u-r", authorUserId: "u-a", mergerUserId: "u-m", reviewerCardId: "card-r",
+      round: 1, phase, findings: [], log: [], nudges: 0, createdAt: now, updatedAt: now,
+    });
+    return made;
+  }
+
+  const pushRan = () => scripts().some((s) => s.includes("git push --force-with-lease"));
+
+  it("deliver autorizado com revisão ativa empurra e roda o gate, mas o merge é recusado (o merge é da revisão)", async () => {
+    const { deliver, card } = await withActiveReview("ready");
+    wire();
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true });
+    expect(out).toMatchObject({ merged: false, reason: "review_active", branch: "dev", prUrl: PR });
+    expect(pushRan()).toBe(true);
+    expect(mergeRan()).toBe(false);
+  });
+
+  it("pushOnly: empurra e acha o PR, sem gate e sem merge, mesmo autorizado", async () => {
+    const { deliver, registry, card } = await makeCard();
+    wire();
+    const out = await deliver.deliver(card.id, { branch: "dev", pushOnly: true, authorized: true });
+    expect(out).toMatchObject({ merged: false, reason: "pushed", prUrl: PR, branch: "dev" });
+    expect(pushRan()).toBe(true);
+    expect(scripts().some((s) => s.includes("gh pr checks") || s.includes("__VIBEHUB_GATE_JSON__"))).toBe(false);
+    expect(mergeRan()).toBe(false);
+    // o PR fica gravado no card, como em toda entrega
+    expect((await registry.getCard(card.id))?.prs?.[0]).toMatchObject({ number: 7, base: "dev" });
+  });
+
+  it("revisão iniciada durante a espera do CI barra o merge autorizado", async () => {
+    const { deliver, project, card } = await makeCard();
+    const store = await import("../review/store.js");
+    runScript.mockImplementation(async (script: string) => {
+      if (script.includes("gh pr merge")) return { stdout: "__VIBEHUB_DELIVER__ merged\n", stderr: "" };
+      if (script.includes("gh pr checks")) {
+        // alguém pede revisão enquanto o deliver espera o CI
+        const now = Date.now();
+        await store.insertReview({
+          id: "rev-late", cardId: card.id, projectId: project.id, prNumber: 7, prUrl: PR, prBranch: "card/x", base: "dev",
+          reviewerUserId: "u-r", authorUserId: "u-a", mergerUserId: "u-m", reviewerCardId: "card-r",
+          round: 1, phase: "reviewing", findings: [], log: [], nudges: 0, createdAt: now, updatedAt: now,
+        });
+        return { stdout: '[{"name":"back","bucket":"pass"}]\n__VIBEHUB_CI__ done\n', stderr: "" };
+      }
+      if (script.includes("git push --force-with-lease")) return { stdout: `__VIBEHUB_DELIVER__ pr ${PR}`, stderr: "" };
+      return { stdout: "", stderr: "" };
+    });
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true });
+    expect(out).toMatchObject({ merged: false, reason: "review_active", prUrl: PR });
+    expect(mergeRan()).toBe(false);
+  });
+
+  it("sem autorização o autor segue empurrando e atualizando o PR durante a revisão", async () => {
+    const { deliver, card } = await withActiveReview("fixing");
+    wire();
+    const out = await deliver.deliver(card.id, { branch: "dev" });
+    expect(out).toMatchObject({ merged: false, reason: "unauthorized", prUrl: PR });
+    expect(scripts().some((s) => s.includes("git push --force-with-lease"))).toBe(true);
+  });
+
+  it("revisão encerrada (mergeada ou cancelada) não segura o deliver autorizado", async () => {
+    for (const phase of ["merged", "cancelled"] as const) {
+      const { deliver, card } = await withActiveReview(phase);
+      runScript.mockClear();
+      wire();
+      expect(await deliver.deliver(card.id, { branch: "dev", authorized: true })).toMatchObject({ merged: true, reason: "merged" });
+      await rm(dir, { recursive: true, force: true });
+      dir = await mkdtemp(join(tmpdir(), "vibehub-deliver-"));
+    }
   });
 });

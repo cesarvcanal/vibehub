@@ -10,7 +10,10 @@ import {
 import { reportCardStatus } from "../services/board/status.js";
 import { purgeRemovedCards } from "../services/board/purge.js";
 import { runnerToken } from "../runtime/runner.js";
+import { listReviewsForCards } from "../services/review/store.js";
+import { pendingQuestions, type Review } from "../services/review/model.js";
 import { logger } from "../utils/logger.js";
+import { isBusy } from "../services/maestro/maestro.js";
 
 /**
  * BOARD — projects, cards, accounts, and the public status callback the runner's Claude hooks fire.
@@ -25,6 +28,47 @@ function badRequest(err: unknown): { code: number; body: { error: string } } {
   // "not found" from the registry is a 404, everything else is the caller's fault.
   const code = /not found/i.test(message) ? 404 : 400;
   return { code, body: { error: message } };
+}
+
+/**
+ * The PR review summary a board card carries: what the sidebar's "↳ PR #N · estado" line reads.
+ * `pendingQuestions` (only when there is one) counts the doubts no human decided yet — the line reads
+ * "aguardando decisão" instead of the orange "rodada N/3" that means the AIs are on it.
+ */
+type ReviewSummary = Pick<Review, "id" | "prNumber" | "phase" | "round"> & { pendingQuestions?: number; authorWorking?: boolean };
+type BoardCard = registry.Card & { review?: ReviewSummary };
+
+/**
+ * Each card with the summary of its most recent review that was not cancelled (a merged one stays:
+ * the line reads "mergeado"). ONE read of the review store for the whole batch, never one per card —
+ * and the same rule for a listing and for a single card (`GET /api/cards/:id`), so a deep link does
+ * not show "sem revisão" for a PR the list already shows under review.
+ */
+async function withReviewSummary(cards: registry.Card[]): Promise<BoardCard[]> {
+  const latest = new Map<string, Review>();
+  for (const r of await listReviewsForCards(cards.map((c) => c.id))) {
+    if (r.phase === "cancelled") continue;
+    const seen = latest.get(r.cardId);
+    if (!seen || r.createdAt >= seen.createdAt) latest.set(r.cardId, r);
+  }
+  return cards.map((c) => {
+    const r = latest.get(c.id);
+    if (!r) return c;
+    const waiting = pendingQuestions(r.findings).length;
+    const review: ReviewSummary = { id: r.id, prNumber: r.prNumber, phase: r.phase, round: r.round };
+    if (waiting > 0) review.pendingQuestions = waiting;
+    // Pronto, com a IA do autor num turno (hooks ou chat nativo): a linha diz "IA mexendo".
+    if (r.phase === "ready" && isBusy(c)) review.authorWorking = true;
+    return { ...c, review };
+  });
+}
+
+/**
+ * A card listing as the board shows it. REVIEWER cards (`reviewOf`) are left out — a review shows up
+ * as a line under the author's card, not as a card of its own.
+ */
+async function boardCards(cards: registry.Card[]): Promise<BoardCard[]> {
+  return await withReviewSummary(cards.filter((c) => !c.reviewOf));
 }
 
 /**
@@ -127,14 +171,14 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
 
   app.get<{ Params: { id: string } }>("/api/projects/:id/cards", { preHandler: requireSession }, async (req, reply) => {
     const cards = await visibleCards(await requestUser(req), await registry.listCards(req.params.id));
-    return await reply.send({ cards });
+    return await reply.send({ cards: await boardCards(cards) });
   });
 
   /* ------------------------------------------------------------------- cards */
 
   app.get("/api/cards", { preHandler: requireSession }, async (req, reply) => {
     const cards = await visibleCards(await requestUser(req), await registry.listAllCards());
-    return await reply.send({ cards });
+    return await reply.send({ cards: await boardCards(cards) });
   });
 
   app.post<{ Body: registry.CreateCardInput & registry.UpdateCardInput }>(
@@ -177,7 +221,8 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>("/api/cards/:id", { preHandler: requireCardAccess }, async (req, reply) => {
     const card = await registry.getCard(req.params.id);
     if (!card) return await reply.code(404).send({ error: "card not found" });
-    return await reply.send({ card });
+    // Not through `boardCards`: a reviewer card is still reachable by its id (the panel opens its session).
+    return await reply.send({ card: (await withReviewSummary([card]))[0] });
   });
 
   /**

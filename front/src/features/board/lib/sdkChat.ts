@@ -15,6 +15,7 @@ import type { ServerText } from "@/features/board/lib/sdkOutbox";
 import { hasToolDiff } from "@/features/board/lib/toolDiff";
 import type { RateLimitInfo } from "@/features/board/lib/planUsage";
 import { t as translate } from "@/i18n";
+import type { LocalVoiceTurn } from "@/features/voice/voiceTurns";
 
 /* ----------------------------------------------------------------- events */
 
@@ -91,6 +92,7 @@ export interface SdkEvent {
     | "user_nack"
     | "peer_typing"
     | "peer_question_draft"
+    | "voice_turn"
     | "error"
     | "parse_error";
   text?: string;
@@ -139,6 +141,9 @@ export interface SdkEvent {
   raw?: string;
   /** Message provenance on `user` events — who sent it (see lib/chat.ts `MessageOrigin`). */
   from?: MessageOrigin;
+  /** On `voice_turn`: the spoken turn's id (idempotency key) and who spoke — the person or the voice. */
+  vid?: string;
+  role?: string;
   /** "terminal" = the event was MIRRORED from the card's TUI transcript, not spoken by the driver. */
   source?: string;
   /** On `conversation_reset`: what reset the conversation ("clear" for a `/clear`). */
@@ -161,6 +166,13 @@ export interface SdkEvent {
    * mesmo que "sem resposta" — ela respondeu, só não pelo cartão —, e a linha precisa dizer isso.
    */
   superseded?: boolean;
+  /**
+   * On `question_result`: a pergunta caiu porque alguém PAROU o turno (o botão de parar, o "enviar
+   * agora", uma edição) — quem (`cancelledBy`) e como (`cancelledHow`). Sem isso ela parecia ter
+   * vencido o prazo.
+   */
+  cancelledBy?: string;
+  cancelledHow?: QuestionCancel["how"];
   /**
    * On `message_edited`: the superseded message's text — the row it greys out. On `rewound`: the
    * text of the message the rewind cut back to, so the cut starts at THAT row.
@@ -335,7 +347,13 @@ export type PermissionOutcome = "pending" | "allowed" | "denied" | "timeout";
  * SUBSTITUÍDO: a pessoa não clicou em opção nenhuma, escreveu no chat, e o que ela escreveu passou
  * a valer. "unanswered" seria mentira nesse caso: ela respondeu, só não pelo cartão.
  */
-export type QuestionOutcome = "pending" | "answered" | "unanswered" | "superseded";
+export type QuestionOutcome = "pending" | "answered" | "unanswered" | "superseded" | "cancelled";
+
+/** Quem parou o turno e derrubou a pergunta junto (o back carimba no `question_result`). */
+export interface QuestionCancel {
+  by?: string;
+  how?: "stop" | "send_now" | "edit";
+}
 
 export type SdkRow =
   /** A message the person sent. `sent` = it reached the driver's stdin (the socket was open).
@@ -398,7 +416,7 @@ export type SdkRow =
   /** The "Permitir / Negar" card — a sensitive call waiting on the human (or how it ended). */
   | { kind: "permission"; id: string; tool: string; summary: string; reason?: string; outcome: PermissionOutcome }
   /** The agent's question with clickable options — waiting on the human, or how it was answered. */
-  | { kind: "question"; id: string; questions: SdkQuestion[]; outcome: QuestionOutcome; answers?: SdkQuestionAnswer[] }
+  | { kind: "question"; id: string; questions: SdkQuestion[]; outcome: QuestionOutcome; answers?: SdkQuestionAnswer[]; cancel?: QuestionCancel }
   /** Something went wrong and saying so beats swallowing it. `count` > 1 = the SAME error again
       (a reconnect loop against a refused socket) — one banner that counts, not a stack of copies. */
   | { kind: "error"; id: string; text: string; count?: number }
@@ -410,6 +428,24 @@ export type SdkRow =
    * reported it — and, like the terminal notes, it lives in the session only.
    */
   | { kind: "command_output"; id: string; text: string }
+  /**
+   * One SPOKEN turn of a voice call held in this chat — what the person said, or what the voice
+   * assistant answered (a different model from the card's agent: it talks, it does not act). Saved
+   * on the server and replayed like the typed messages; `vid` is its id there, the dedupe key.
+   * The view also draws the call's turns that are still being spoken or saved (see
+   * `mergeLiveVoiceTurns`): `live` = still being spoken, `save` = this tab's save state.
+   */
+  | {
+      kind: "voice";
+      id: string;
+      vid: string;
+      role: "user" | "assistant";
+      text: string;
+      at?: number;
+      from?: MessageOrigin;
+      live?: boolean;
+      save?: "saving" | "saved" | "failed";
+    }
   /**
    * A resposta de um `/btw`: a pergunta LATERAL feita com o turno rodando, respondida à parte (o
    * agente principal nunca a leu). Linha própria, nunca bolha do Claude — não é o turno falando.
@@ -969,6 +1005,28 @@ export function btwQuestion(text: string): string | null {
 }
 
 /**
+ * AS RESPOSTAS TERMINADAS — as que ganham "copiar" e "ouvir" embaixo, como no ChatGPT.
+ *
+ * Uma por rodada: a última fala do agente principal (subagente não conta) antes da próxima mensagem
+ * da pessoa. As rodadas de trás já acabaram; a última só conta quando `settled` — nada rodando, nem
+ * turno, nem tarefa em segundo plano. Enquanto a IA trabalha, a resposta ainda pode mudar. PURE.
+ */
+export function finishedAnswerIds(rows: readonly SdkRow[], settled: boolean): Set<string> {
+  const out = new Set<string>();
+  let last: string | null = null;
+  for (const row of rows) {
+    if (row.kind === "user") {
+      if (last) out.add(last);
+      last = null;
+    } else if (row.kind === "assistant" && !row.parent && !row.streaming && row.text.trim() !== "") {
+      last = row.id;
+    }
+  }
+  if (settled && last) out.add(last);
+  return out;
+}
+
+/**
  * O turno tem ESPAÇO para mais uma mensagem — o RESPIRO em que a fila anda.
  *
  * A fila esperava o turno FECHAR, e um turno de quinze minutos segurava por quinze minutos um
@@ -1330,6 +1388,36 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       rows[at] = { ...(rows[at] as Extract<SdkRow, { kind: "btw" }>), ...outcome };
       return { ...state, rows };
     }
+    case "voice_turn": {
+      // A spoken turn, from the replay or announced live (this tab's own included, once the server
+      // saved it). Upserted by `vid`: the replay after a reconnect and the live echo never double it.
+      if (!event.vid || (event.role !== "user" && event.role !== "assistant") || !event.text) return state;
+      const at = state.rows.findIndex((row) => row.kind === "voice" && row.vid === event.vid);
+      const row: SdkRow = {
+        kind: "voice",
+        id: at >= 0 ? state.rows[at]!.id : `voice-${event.vid}`,
+        vid: event.vid,
+        role: event.role,
+        text: event.text,
+        at: typeof event.at === "number" ? event.at : undefined,
+        from: event.from,
+      };
+      if (at >= 0) {
+        const rows = [...state.rows];
+        rows[at] = row;
+        return { ...state, rows };
+      }
+      // The agent may be mid-answer (someone typed during the call): its streaming row must stay
+      // LAST — deltas and the consolidated text only ever write to the last row. The spoken turn
+      // goes in right above what is still being written.
+      let insertAt = state.rows.length;
+      while (insertAt > 0) {
+        const prev = state.rows[insertAt - 1]!;
+        if ((prev.kind === "assistant" || prev.kind === "thinking") && prev.streaming) insertAt--;
+        else break;
+      }
+      return { ...state, rows: [...state.rows.slice(0, insertAt), row, ...state.rows.slice(insertAt)] };
+    }
     case "system_note": {
       // The PANEL talking (a deploy interrupted a turn, the boot resumed it): one muted centered
       // line, never a bubble — it is about the conversation, not part of it.
@@ -1618,7 +1706,10 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
     }
     case "question_result": {
       if (!event.id) return state;
-      return answerQuestion(state, event.id, event.answers, event.superseded === true);
+      const cancel = event.cancelledHow || event.cancelledBy
+        ? { ...(event.cancelledBy ? { by: event.cancelledBy } : {}), ...(event.cancelledHow ? { how: event.cancelledHow } : {}) }
+        : undefined;
+      return answerQuestion(state, event.id, event.answers, event.superseded === true, cancel);
     }
     case "turn_absorbed": {
       // The driver's confirmation that the LAST send folded into the turn already running
@@ -1929,17 +2020,18 @@ export function answerQuestion(
   id: string,
   answers?: SdkQuestionAnswer[],
   superseded: boolean = false,
+  cancel?: QuestionCancel,
 ): SdkChatState {
   const outcome: QuestionOutcome = answers && answers.length > 0
     ? "answered"
-    : superseded ? "superseded" : "unanswered";
+    : superseded ? "superseded" : cancel ? "cancelled" : "unanswered";
   let changed = false;
   const rows = state.rows.map((row) => {
     if (row.kind !== "question" || row.id !== id) return row;
     // The first settlement wins on screen: an echo may confirm it, never flip it back to pending.
     if (row.outcome !== "pending") return row;
     changed = true;
-    return { ...row, outcome, answers };
+    return { ...row, outcome, answers, ...(outcome === "cancelled" ? { cancel } : {}) };
   });
   return changed ? { ...state, rows } : state;
 }
@@ -1997,4 +2089,36 @@ export function groupSdkRows(rows: readonly SdkRow[], min: number = SDK_TOOL_FOL
   flush();
   flushFleet();
   return out;
+}
+
+/**
+ * The thread as drawn during (and right after) a voice call: the saved rows, plus the call's turns
+ * the server has not echoed back yet — the one being spoken, the one being saved — appended where
+ * they are happening, at the end. A turn leaves this overlay the moment its saved copy arrives (same
+ * `vid`), so it never shows twice. Returns `rows` itself when there is nothing to add. PURE.
+ */
+export function mergeLiveVoiceTurns(
+  rows: SdkRow[],
+  turns: ReadonlyArray<LocalVoiceTurn>,
+  self?: MessageOrigin,
+): SdkRow[] {
+  if (turns.length === 0) return rows;
+  const saved = new Set<string>();
+  for (const row of rows) if (row.kind === "voice") saved.add(row.vid);
+  const extra: SdkRow[] = [];
+  for (const turn of turns) {
+    if (saved.has(turn.vid) || !turn.text.trim()) continue;
+    extra.push({
+      kind: "voice",
+      id: `voice-${turn.vid}`,
+      vid: turn.vid,
+      role: turn.role,
+      text: turn.text,
+      at: turn.at,
+      from: self,
+      live: !turn.final,
+      save: turn.save,
+    });
+  }
+  return extra.length === 0 ? rows : [...rows, ...extra];
 }

@@ -35,7 +35,8 @@ beforeEach(async () => {
   runScript.mockResolvedValue({ stdout: "", stderr: "" });
   pipeCommand.mockClear();
 });
-afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+// reportState grava o evento needs_me fora do await (o card-events.json pode chegar junto do rm).
+afterEach(async () => { await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); });
 
 const card = (over: Record<string, unknown> = {}) => ({
   column: "waiting", status: null, openedAt: 1, pausedAt: null, ...over,
@@ -201,6 +202,19 @@ describe("listTerminals", () => {
     const list = await maestro.listTerminals();
     expect(list.map((t) => t.title)).toEqual(["in the backlog", "being worked on"]);
     expect(list[0]?.situation).toBe("no session");
+  });
+
+  it("leaves REVIEWER cards out: the PR review drives them, not other cards", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const author = await registry.createCard({ projectId: p.id, title: "login" });
+    await registry.createAccount({ name: "Mussa" });
+    const reviewer = await registry.createReviewerCard({
+      authorCard: author, reviewerAccountSlug: "mussa", prBranch: "card/login", title: "Revisão PR #7 · login",
+    });
+    const list = await maestro.listTerminals();
+    expect(list.map((t) => t.cardId)).toEqual([author.id]);
+    expect(list.some((t) => t.cardId === reviewer.id)).toBe(false);
   });
 
   it("filters by project name", async () => {
@@ -776,7 +790,7 @@ describe("session introspection", () => {
     const { maestro, registry } = await load();
     const acct = await registry.createAccount({ name: "Tech" });
     const p = await registry.createProject({ name: "billing", defaultAccountSlug: acct.slug });
-    const c = await registry.createCard({ projectId: p.id, title: "x" });
+    const c = await registry.createCard({ projectId: p.id, title: "x" }, { model: null });
     runScript.mockResolvedValueOnce({ stdout: line({ type: "assistant", effort: "xhigh", message: { model: "claude-opus-5", content: [] } }), stderr: "" });
     const info = await maestro.sessionInfo(c.id);
     expect(info).toEqual({
@@ -790,6 +804,34 @@ describe("session introspection", () => {
     });
     runScript.mockRejectedValueOnce(new Error("runner down"));
     expect((await maestro.sessionInfo(c.id)).model).toBeNull();
+  });
+
+  it("a NEW card with no level pinned says its level BEFORE the first reply — the account default the driver announced", async () => {
+    // 29/10: card novo, o pill dizia só "Opus" até a primeira resposta carimbar o transcript — um
+    // `claude` aberto em qualquer terminal já mostra o nível ao subir.
+    const { maestro, registry, agentState } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "novo" }, { model: "opus" });
+    const off = agentState.onCardDefaultEffortProbe((cardId) => (cardId === c.id ? "medium" : null));
+    try {
+      runScript.mockResolvedValueOnce({ stdout: "", stderr: "" }); // no transcript, no settings
+      expect((await maestro.sessionInfo(c.id)).effort).toBe("medium");
+      // Runner unreachable: the driver still knows.
+      runScript.mockRejectedValueOnce(new Error("runner down"));
+      expect((await maestro.sessionInfo(c.id)).effort).toBe("medium");
+
+      // Whatever says more wins over the default: the first reply's stamp…
+      runScript.mockResolvedValueOnce({ stdout: line({ type: "assistant", effort: "high", message: { model: "claude-opus-5", content: [] } }), stderr: "" });
+      expect((await maestro.sessionInfo(c.id)).effort).toBe("high");
+      // …and a pin.
+      await registry.updateCard(c.id, { effort: "xhigh" });
+      runScript.mockResolvedValueOnce({ stdout: "", stderr: "" });
+      expect((await maestro.sessionInfo(c.id)).effort).toBe("xhigh");
+      runScript.mockRejectedValueOnce(new Error("runner down"));
+      expect((await maestro.sessionInfo(c.id)).effort).toBe("xhigh");
+    } finally {
+      off();
+    }
   });
 
   it("falls back to the default account label when nothing is set", async () => {
@@ -879,7 +921,7 @@ describe("model signals", () => {
       line({ type: "assistant", timestamp: "2026-08-22T03:00:00Z", message: { model: "claude-fable-5", content: [] } }),
       line({ type: "assistant", timestamp: "2026-08-22T03:05:00Z", message: { model: "<synthetic>", content: [] } }),
     ].join("\n");
-    expect(maestro.parseLastTurn(jsonl)).toEqual({ model: "claude-fable-5", at: Date.parse("2026-08-22T03:00:00Z"), effort: null });
+    expect(maestro.parseLastTurn(jsonl)).toEqual({ model: "claude-fable-5", at: Date.parse("2026-08-22T03:00:00Z"), effort: null, requestedAt: 0 });
   });
 
   it("a /model choice newer than the last reply wins; an older one loses", async () => {
@@ -948,6 +990,41 @@ describe("model signals", () => {
     expect(maestro.pickEffort({ effort: null, at: 0 }, { effort: "high" }, { effort: "low", at: 0 })).toBe("low");
     expect(maestro.pickEffort({ effort: null, at: 0 }, { effort: "high" })).toBe("high");
     expect(maestro.pickEffort({ effort: null, at: 0 }, { effort: null })).toBeNull();
+  });
+
+  it("dates each reply by the REQUEST that produced it: the last tool result or message before it", async () => {
+    const { maestro } = await load();
+    const line = (obj: unknown) => JSON.stringify(obj);
+    // The shape of a real transcript (SDK 0.3.300): every call to the model follows the user entry
+    // (a message or a tool result) that triggered it, and all blocks of one answer share it.
+    const jsonl = [
+      line({ type: "user", timestamp: "2026-10-27T19:45:41.670Z", message: { content: "faz" } }),
+      line({ type: "assistant", timestamp: "2026-10-27T19:45:46.836Z", effort: "low", message: { model: "claude-sonnet-5-5", content: [] } }),
+      line({ type: "user", timestamp: "2026-10-27T19:45:49.181Z", message: { content: [{ type: "tool_result" }] } }),
+      line({ type: "assistant", timestamp: "2026-10-27T19:45:51.565Z", effort: "high", message: { model: "claude-sonnet-5-5", content: [] } }),
+      line({ type: "assistant", timestamp: "2026-10-27T19:45:51.627Z", effort: "high", message: { model: "claude-sonnet-5-5", content: [] } }),
+    ].join("\n");
+    expect(maestro.parseLastTurn(jsonl)).toEqual({
+      model: "claude-sonnet-5-5",
+      at: Date.parse("2026-10-27T19:45:51.627Z"),
+      effort: "high",
+      requestedAt: Date.parse("2026-10-27T19:45:49.181Z"),
+    });
+  });
+
+  it("a reply REQUESTED before the switch does not take the pill back to the old level", async () => {
+    const { maestro } = await load();
+    // Produção, 2026-10-27: Médio → Alto with the turn running. The answer already on its way was
+    // asked for in `medium` and lands AFTER the switch, stamped `medium` — it said nothing about the
+    // session from the switch on, and the pill fell back to Médio.
+    const inFlight = { effort: "medium", at: 3000, requestedAt: 1000 };
+    expect(maestro.pickEffort(inFlight, { effort: null }, { effort: "high", at: 2000 })).toBe("high");
+    // The next request, made after the switch, is the truth — whatever it says. Applied live, it is
+    // the new level; a session that did not take it (a terminal waiting to restart) still says so.
+    expect(maestro.pickEffort({ effort: "high", at: 5000, requestedAt: 4000 }, { effort: null }, { effort: "high", at: 2000 })).toBe("high");
+    expect(maestro.pickEffort({ effort: "medium", at: 5000, requestedAt: 4000 }, { effort: null }, { effort: "high", at: 2000 })).toBe("medium");
+    // A transcript tail with no request entry left in it falls back to the reply's own date.
+    expect(maestro.pickEffort({ effort: "medium", at: 3000, requestedAt: 0 }, { effort: null }, { effort: "high", at: 2000 })).toBe("medium");
   });
 
   it("labels the aliases settings.json uses", async () => {
