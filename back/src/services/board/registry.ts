@@ -466,6 +466,14 @@ export interface Card {
    */
   pendingQuestionAt?: number | null;
   /**
+   * Since when a status report took the card OUT OF `done` (reactivatesOnActivity) without its agent
+   * being told yet. The next UserPromptSubmit hook consumes it (`takeReopenedNotice`) and hands the
+   * agent the notice, so it never claims "concluído" from a `vibehub_move_cards` turns ago. Stamped
+   * HERE and not deduced by the route: on a native-chat card the driver reports `working` before the
+   * CLI fires the hook, so by then the card is already out of `done`. Absent = nothing to tell.
+   */
+  reopenedNoticeAt?: number;
+  /**
    * PREVIEWS the agent registered on this card (`vibehub_preview`): ports the user can open through
    * the proxy, deduped by port. Ports that stop listening are pruned when the runner is scanned
    * (GET /api/preview/ports) — no daemon watches them. Absent = the agent registered none.
@@ -1960,6 +1968,7 @@ export async function applyCardStatus(cardId: string, status: CardStatus): Promi
     let target: BoardColumn;
     if (reactivate) {
       card.pausedAt = null;
+      card.reopenedNoticeAt = Date.now();
       target = "working";
     } else {
       target = columnAfterStatus(card.column, status);
@@ -2160,6 +2169,19 @@ export async function setCardPendingQuestion(cardId: string, at: number | null):
     const card = doc.cards.find((c) => c.id === cardId);
     if (!card || Boolean(card.pendingQuestionAt) === (at !== null)) return;
     card.pendingQuestionAt = at;
+  });
+}
+
+/**
+ * Consumes the card's pending reopened notice (`reopenedNoticeAt`): true exactly once per reopening.
+ * Never bumps updatedAt — telling the agent is not an edit of the card.
+ */
+export async function takeReopenedNotice(cardId: string): Promise<boolean> {
+  return store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    if (!card?.reopenedNoticeAt) return false;
+    delete card.reopenedNoticeAt;
+    return true;
   });
 }
 

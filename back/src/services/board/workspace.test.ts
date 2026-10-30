@@ -7,6 +7,7 @@ import { firstRunSeedCommand } from "../accounts/firstRun.js";
 import { carryTranscriptsCommand } from "../accounts/carryTranscripts.js";
 import { oauthTokenGuard } from "../accounts/profiles.js";
 import { shQuote } from "../../runtime/host.js";
+import { runnerSettingsJson } from "../../runtime/runner.js";
 
 /**
  * A card's workspace in the runner (open + terminal + pause + restart + drop). The INVARIANTS the
@@ -401,6 +402,32 @@ describe("the card's Claude account (CLAUDE_CONFIG_DIR per profile)", () => {
     expect(scriptAt(0)).not.toMatch(/\.claude-profiles\/[a-z0-9]/);
   });
 
+  it("conta padrão: o settings.json do runner ganha os hooks desta versão ao abrir o card, sem reprovisionar", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+
+    const padrao = await mkdtemp(join(tmpdir(), "vh-padrao-"));
+    try {
+      const { writeFile, readFile } = await import("node:fs/promises");
+      const hooksVelhos = { UserPromptSubmit: [{ hooks: [{ type: "command", command: "hook-velho" }] }] };
+      await writeFile(join(padrao, "settings.json"), JSON.stringify({ hooks: hooksVelhos, model: "opus" }));
+
+      const linhas = scriptAt(0).split("\n");
+      const inicio = linhas.findIndex((linha) => linha.startsWith("if [ -f /root/.claude/settings.json ]"));
+      const fim = linhas.findIndex((linha, indice) => indice > inicio && linha === "fi");
+      expect(inicio).toBeGreaterThanOrEqual(0);
+      const trecho = linhas.slice(inicio, fim + 1).join("\n").replaceAll("/root/.claude/settings.json", join(padrao, "settings.json"));
+      const { execFileSync } = await import("node:child_process");
+      execFileSync("bash", ["-c", `set -e\n${trecho}`]);
+
+      const depois = JSON.parse(await readFile(join(padrao, "settings.json"), "utf8"));
+      expect(depois.hooks).toEqual(JSON.parse(runnerSettingsJson()).hooks);
+      expect(depois.model).toBe("opus");
+    } finally {
+      await rm(padrao, { recursive: true, force: true });
+    }
+  });
+
   it("the PROJECT account: profile guaranteed BEFORE tmux, settings.json seeded (status hooks), -e CLAUDE_CONFIG_DIR", async () => {
     await reg.createAccount({ name: "Personal" });
     const { project, card } = await seed();
@@ -418,6 +445,40 @@ describe("the card's Claude account (CLAUDE_CONFIG_DIR per profile)", () => {
     expect(tmuxLine).toContain("-e CLAUDE_CONFIG_DIR='/root/.claude-profiles/personal'");
     // and the profile is ensured BEFORE tmux (otherwise claude would start with no settings/hooks)
     expect(script.indexOf(`mkdir -p "$CLAUDE_CFG"`)).toBeLessThan(script.indexOf("tmux has-session"));
+  });
+
+  it("perfil de conta que JÁ existe ganha os hooks desta versão ao abrir o card, sem perder login nem ajustes", async () => {
+    await reg.createAccount({ name: "Personal" });
+    const { project, card } = await seed();
+    await reg.updateProject(project.id, { defaultAccountSlug: "personal" });
+    await ws.openCard(card.id);
+
+    const perfil = await mkdtemp(join(tmpdir(), "vh-perfil-"));
+    try {
+      const { writeFile, readFile } = await import("node:fs/promises");
+      // perfil criado numa versão antiga: hook velho, e o padrão do runner também velho (ninguém reprovisionou)
+      const hooksVelhos = { UserPromptSubmit: [{ hooks: [{ type: "command", command: "hook-velho" }] }] };
+      await writeFile(join(perfil, "settings.json"), JSON.stringify({ hooks: hooksVelhos, model: "opus", env: { X: "1" } }));
+
+      // O trecho REAL do script de abertura que cuida do perfil, apontado para o diretório temporário.
+      const linhas = scriptAt(0).split("\n");
+      const inicio = linhas.findIndex((linha) => linha.startsWith("CLAUDE_CFG="));
+      const ultimaDoSettings = linhas.findLastIndex((linha) => linha.includes("settings.json"));
+      const fim = linhas.findIndex((linha, indice) => indice > ultimaDoSettings && linha === "fi");
+      const trechoDoPerfil = linhas
+        .slice(inicio, fim + 1)
+        .join("\n")
+        .replaceAll("'/root/.claude-profiles/personal'", shQuote(perfil));
+      const { execFileSync } = await import("node:child_process");
+      execFileSync("bash", ["-c", `set -e\n${trechoDoPerfil}`]);
+
+      const perfilDepois = JSON.parse(await readFile(join(perfil, "settings.json"), "utf8"));
+      expect(perfilDepois.hooks).toEqual(JSON.parse(runnerSettingsJson()).hooks);
+      expect(perfilDepois.model).toBe("opus");
+      expect(perfilDepois.env).toEqual({ X: "1" });
+    } finally {
+      await rm(perfil, { recursive: true, force: true });
+    }
   });
 
   it("the CARD account overrides the project default", async () => {
