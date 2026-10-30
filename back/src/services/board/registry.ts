@@ -3,6 +3,7 @@ import { JsonStore } from "../../store/jsonStore.js";
 import { dataPath } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
 import { allocateBrowserSlot, cardBrowserSlot, isBrowserSlotPort, rememberBrowserSlot, SLOT_SPACE } from "../browser/ports.js";
+import { applyReportedProblems, type ReportedProblem, type ReportedProblemInput } from "../review/reported.js";
 
 /**
  * BOARD REGISTRY — the projects and cards of the kanban of Claude Code terminals.
@@ -288,6 +289,12 @@ export interface CardPr {
    * tracked). It belongs to THIS PR: a new number in the same base slot starts without it.
    */
   mergedAt?: number;
+  /**
+   * What the card's AI found while working on THIS PR, beyond what a reviewer pointed out: problems
+   * it fixed here and problems it left out of scope (`vibehub_pr_report`). The review panel shows
+   * them. Like `mergedAt`, a new number in the same base slot starts without them.
+   */
+  reported?: ReportedProblem[];
 }
 
 export interface Card {
@@ -1644,8 +1651,11 @@ export async function recordCardPr(cardId: string, pr: Omit<CardPr, "openedAt">)
     const prs = card.prs ?? [];
     const known = prs.find((p) => p.base === base);
     if (known) {
-      // A new number in the slot is a new PR: the merge mark was the old one's.
-      if (known.number !== pr.number) delete known.mergedAt;
+      // A new number in the slot is a new PR: the merge mark and the reports were the old one's.
+      if (known.number !== pr.number) {
+        delete known.mergedAt;
+        delete known.reported;
+      }
       known.number = pr.number;
       known.url = url;
       known.branch = branch;
@@ -1666,6 +1676,33 @@ export async function markCardPrMerged(cardId: string, base: string, number: num
   await store.mutate((doc) => {
     const pr = doc.cards.find((c) => c.id === cardId)?.prs?.find((p) => p.base === base && p.number === number);
     if (pr) pr.mergedAt = at;
+  });
+}
+
+/**
+ * Records what the card's AI found while working on a PR ({@link CardPr.reported}, rules in
+ * `applyReportedProblems`). `prNumber` absent = the card's newest PR not known to be merged. A merged
+ * PR takes no new report (the work is done; a new problem belongs to a new PR), and a card with no
+ * open PR has nowhere to report — deliver first. Returns the PR and its whole list.
+ */
+export async function reportCardPrProblems(
+  cardId: string, prNumber: number | undefined, items: ReportedProblemInput[],
+): Promise<{ pr: CardPr; reported: ReportedProblem[] }> {
+  return store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    if (!card) throw new Error(`card not found: ${cardId}`);
+    const prs = card.prs ?? [];
+    const pr = prNumber !== undefined
+      ? prs.find((p) => p.number === prNumber)
+      : [...prs].filter((p) => p.mergedAt === undefined).sort((a, b) => b.openedAt - a.openedAt)[0];
+    if (!pr) {
+      throw new Error(prNumber !== undefined
+        ? `o card não tem o PR #${prNumber}`
+        : "o card não tem PR aberto: entregue com vibehub_deliver antes de relatar");
+    }
+    if (pr.mergedAt !== undefined) throw new Error(`o PR #${pr.number} já foi mergeado: relate no PR novo`);
+    pr.reported = applyReportedProblems(pr.reported ?? [], items, Date.now());
+    return { pr: { ...pr }, reported: pr.reported };
   });
 }
 
