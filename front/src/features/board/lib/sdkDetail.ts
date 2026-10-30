@@ -281,6 +281,17 @@ export interface ToolDetailData {
   startedAt?: number;
   endedAt?: number;
   result?: ToolResultSummary;
+  /** Bash com `run_in_background`: a saída real, lida do arquivo da tarefa a cada sondagem. */
+  background?: BackgroundOutputData;
+}
+
+/** Espelho de `BackgroundOutput` (back). `status`: running | completed | failed | killed | stopped. */
+export interface BackgroundOutputData {
+  taskId: string;
+  status: string;
+  output?: string;
+  outputLength?: number;
+  missing?: boolean;
 }
 
 export type TimelineItem =
