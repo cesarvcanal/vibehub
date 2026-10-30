@@ -81,11 +81,19 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
 
   /** Decide / retry / cancel: one POST each, the review that comes back is the new truth. */
   const act = useMutation({
-    mutationFn: ({ path, body }: { path: string; body?: { findingId: string; decision: Decision } }) => {
+    mutationFn: ({ path, body }: {
+      path: string;
+      body?: { findingId: string; decision: Decision } | { findingIds: string[] };
+    }) => {
       const url = `/reviews/${encodeURIComponent(review!.id)}/${path}`;
       return body === undefined ? post<{ review: Review }>(url) : post<{ review: Review }>(url, body);
     },
-    onSuccess: (answer) => apply(answer.review),
+    onSuccess: (answer, { path, body }) => {
+      apply(answer.review);
+      if (path === "suggestions" && body && "findingIds" in body) {
+        toast.success(translate("review.suggestions.sent", { n: body.findingIds.length }));
+      }
+    },
     onError: (error) => {
       toast.error(apiErrorMessage(error));
       // A refusal usually means the review moved under the click (someone else decided, it ended).
@@ -199,6 +207,7 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
       onRetry={() => act.mutate({ path: "retry" })}
       onCancel={cancel}
       onDecide={(finding, decision) => act.mutate({ path: "decide", body: { findingId: finding.id, decision } })}
+      onRequestSuggestions={(findingIds) => act.mutate({ path: "suggestions", body: { findingIds } })}
       onClose={onClose}
     />
   );

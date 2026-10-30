@@ -184,9 +184,13 @@ export const FINDING_STATUS_TONE: Record<FindingStatus, BadgeTone> = {
   wontfix: "muted",
 };
 
-/** Doubts that wait for the human reviewer: they hold the `ready` without spending a round. PURE. */
+/**
+ * Doubts that wait for a decision: they hold the `ready` without spending a round. One the author
+ * resolved and the reviewer checked (fixed), or the reviewer dropped, waits for nobody — the server's
+ * own rule. PURE.
+ */
 export function pendingQuestions(findings: Finding[]): Finding[] {
-  return findings.filter((f) => f.severity === "question" && !f.humanDecision);
+  return findings.filter((f) => f.severity === "question" && !f.humanDecision && findingIsOpen(f));
 }
 
 /**
@@ -206,6 +210,8 @@ export interface ReviewActions {
   retry: boolean;
   cancel: boolean;
   merge: boolean;
+  /** Choose open suggestions and ask the author's AI to apply them. */
+  request: boolean;
 }
 
 /**
@@ -217,7 +223,8 @@ export interface ReviewActions {
  *    not a push after ready: those have no turn to hand back), a `ready` whose Approve never got out,
  *    or a turn an AI may have dropped — `fixing`, or `reviewing` before the reviewer's round is in
  *    (after it, only doubts are left and the turn is the human's);
- *  - **cancel**: the reviewer, the author, the merger or an owner, while the review is active.
+ *  - **cancel**: the reviewer, the author, the merger or an owner, while the review is active;
+ *  - **request** (ask the author to apply chosen suggestions): the same people, while it is active.
  * PURE.
  */
 export function reviewActions(
@@ -227,7 +234,7 @@ export function reviewActions(
   >,
   me: { id: string; isOwner: boolean } | null,
 ): ReviewActions {
-  if (!me) return { decide: false, retry: false, cancel: false, merge: false };
+  if (!me) return { decide: false, retry: false, cancel: false, merge: false, request: false };
   const isReviewer = me.id === review.reviewerUserId;
   const isMerger = me.id === review.mergerUserId;
   const { phase } = review;
@@ -240,6 +247,7 @@ export function reviewActions(
     decide: (isReviewer || me.isOwner) && (reviewIsWorking(phase) || phase === "impasse"),
     retry: (isReviewer || isMerger || me.isOwner) && (failedImpasse || approveStuck || turnOpen),
     cancel: (isReviewer || me.id === review.authorUserId || isMerger || me.isOwner) && reviewIsOpen(phase),
+    request: (isReviewer || me.id === review.authorUserId || isMerger || me.isOwner) && reviewIsOpen(phase),
   };
 }
 

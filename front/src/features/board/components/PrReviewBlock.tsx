@@ -109,7 +109,7 @@ export function PrReviewBlocks({
   card,
   onOpenPanel,
 }: {
-  card: Pick<Card, "id" | "prs" | "review" | "actorUserId" | "status">;
+  card: Pick<Card, "id" | "prs" | "review" | "actorUserId">;
   onOpenPanel: () => void;
 }) {
   const reviewed = card.review !== undefined && card.review.phase !== "cancelled";
@@ -118,7 +118,8 @@ export function PrReviewBlocks({
   if (prs.length === 0) return null;
   // A cancelled review is no review: the board's summary (the latest that was not cancelled) speaks then.
   const current = live.review && live.review.phase !== "cancelled" ? live.review : card.review;
-  const authorWorking = live.query.data ? live.working.author : card.review?.authorWorking === true || card.status === "working";
+  // The server's rule either way: the live read's `working`, or the board summary's until it lands.
+  const authorWorking = live.query.data ? live.working.author : card.review?.authorWorking === true;
   return (
     <>
       {prs.map((pr) => (

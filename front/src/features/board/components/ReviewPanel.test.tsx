@@ -171,7 +171,7 @@ describe("ReviewPanel — o que mostra", () => {
       ],
     }));
     await loaded();
-    expect(screen.getByText(/1 bloqueia · 2 dúvidas · 2 sugestões/)).toBeInTheDocument();
+    expect(screen.getByText(/2 dúvidas · 1 bloqueia · 2 sugestões/)).toBeInTheDocument();
   });
 
   it("cada achado mostra severidade, título, arquivo:linha, prova, status e commit curto", async () => {
@@ -674,68 +674,96 @@ describe("ReviewPanel — merge", () => {
 describe("ReviewPanel — dúvidas e impasse", () => {
   const doubt = (overrides: Partial<Finding> = {}) =>
     finding({ id: "q1", severity: "question", title: "O cálculo está certo?", ...overrides });
+  /** The card of a finding, by its title. */
+  const cardOf = (title: string) => screen.getByText(title).closest("[data-testid=finding]") as HTMLElement;
+  /** Picks a decision in a finding's card and confirms it. */
+  async function decide(title: string, choice: RegExp) {
+    const card = cardOf(title);
+    await userEvent.click(within(card).getByRole("radio", { name: choice }));
+    await userEvent.click(within(card).getByRole("button", { name: "Confirmar decisão" }));
+  }
 
-  it("dúvida pendente mostra os botões só pro revisor", async () => {
+  it("dúvida pendente: o aviso no topo diz que precisa da decisão, e as três escolhas aparecem só pro revisor", async () => {
     open("rev", review({ phase: "reviewing", findings: [doubt()] }));
     await loaded();
-    expect(screen.getByRole("button", { name: "Bloquear" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Descartar" })).toBeInTheDocument();
+    expect(screen.getByTestId("decision-banner")).toHaveTextContent("Precisa da sua decisão: 1 dúvida do revisor");
+    const card = cardOf("O cálculo está certo?");
+    expect(within(card).getAllByRole("radio").map((r) => r.getAttribute("value"))).toEqual(["block", "accept_risk", "drop"]);
+    // cada escolha diz o que faz
+    expect(within(card).getByText("É problema: o autor corrige")).toBeInTheDocument();
+    expect(within(card).getByText(/Vira bloqueante/)).toBeInTheDocument();
+    // sem escolha, não confirma
+    expect(within(card).getByRole("button", { name: "Confirmar decisão" })).toBeDisabled();
     cleanup();
 
     // O owner também decide.
     open("own", review({ phase: "reviewing", findings: [doubt()] }));
     await loaded();
-    expect(screen.getByRole("button", { name: "Bloquear" })).toBeInTheDocument();
+    expect(within(cardOf("O cálculo está certo?")).getAllByRole("radio")).toHaveLength(3);
     cleanup();
 
-    // Autor, responsável pelo merge e co-autor veem a dúvida, sem os botões.
+    // Autor, responsável pelo merge e co-autor veem a dúvida e por quem ela espera, sem as escolhas.
     for (const who of ["aut", "mer", "co"] as const) {
       open(who, review({ phase: "reviewing", findings: [doubt()] }));
       await loaded();
+      expect(screen.getByTestId("decision-banner")).toHaveTextContent("Esperando mussa decidir 1 dúvida");
+      expect(screen.queryByRole("button", { name: "Decidir agora" })).toBeNull();
+      await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
       expect(screen.getByText("O cálculo está certo?")).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Bloquear" })).toBeNull();
-      expect(screen.queryByRole("button", { name: "Descartar" })).toBeNull();
+      expect(screen.queryByRole("radio")).toBeNull();
       cleanup();
     }
   });
 
-  it("os botões da dúvida mandam a decisão daquele achado", async () => {
+  it("escolher e confirmar manda a decisão daquele achado", async () => {
     open("rev", review({ phase: "reviewing", findings: [doubt({ id: "q1" }), doubt({ id: "q2", title: "Outra dúvida" })] }));
     await loaded();
-    const second = screen.getByText("Outra dúvida").closest("[data-testid=finding]") as HTMLElement;
-
-    await userEvent.click(within(second).getByRole("button", { name: "Bloquear" }));
+    await decide("Outra dúvida", /É problema/);
     expect(post).toHaveBeenLastCalledWith("/reviews/r1/decide", { findingId: "q2", decision: "block" });
-
-    const first = screen.getByText("O cálculo está certo?").closest("[data-testid=finding]") as HTMLElement;
-    await userEvent.click(within(first).getByRole("button", { name: "Descartar" }));
+    await decide("O cálculo está certo?", /Não é problema/);
     expect(post).toHaveBeenLastCalledWith("/reviews/r1/decide", { findingId: "q1", decision: "drop" });
+    await decide("O cálculo está certo?", /Aceitar o risco/);
+    expect(post).toHaveBeenLastCalledWith("/reviews/r1/decide", { findingId: "q1", decision: "accept_risk" });
   });
 
-  it("dúvida já decidida não pede decisão de novo", async () => {
+  it("'Decidir agora' leva à aba Achados", async () => {
+    open("rev", review({ phase: "reviewing", findings: [doubt()] }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Conversa/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Decidir agora" }));
+    expect(screen.getByRole("tab", { name: /Achados/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("dúvida já decidida não pede decisão de novo, e o aviso some", async () => {
     open("rev", review({ phase: "reviewing", findings: [doubt({ humanDecision: "block" })] }));
     await loaded();
-    expect(screen.queryByRole("button", { name: "Descartar" })).toBeNull();
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(screen.queryByTestId("decision-banner")).toBeNull();
   });
 
-  it("dúvida fora de fase aberta (ready, mergeado) não mostra botões", async () => {
+  it("dúvida que o autor resolveu (fixed) não espera ninguém", async () => {
+    open("rev", review({ phase: "reviewing", findings: [doubt({ status: "fixed", authorReply: "resolvido" })] }));
+    await loaded();
+    expect(screen.queryByTestId("decision-banner")).toBeNull();
+    expect(screen.queryByRole("radio")).toBeNull();
+  });
+
+  it("dúvida fora de fase aberta (mergeado) não mostra escolhas", async () => {
     open("rev", review({ phase: "merged", findings: [doubt()] }));
     await loaded();
-    expect(screen.queryByRole("button", { name: "Bloquear" })).toBeNull();
+    expect(screen.queryByRole("radio")).toBeNull();
   });
 
-  it("falha ao decidir avisa e libera os botões", async () => {
+  it("falha ao decidir avisa e a escolha continua lá pra confirmar de novo", async () => {
     post.mockRejectedValue(failure(409, { error: "a revisão está em ready: não há decisão pendente" }));
     open("rev", review({ phase: "reviewing", findings: [doubt()] }));
     await loaded();
-
-    await userEvent.click(screen.getByRole("button", { name: "Bloquear" }));
-
+    await decide("O cálculo está certo?", /É problema/);
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("a revisão está em ready: não há decisão pendente"));
-    expect(screen.getByRole("button", { name: "Bloquear" })).toBeEnabled();
+    expect(within(cardOf("O cálculo está certo?")).getByRole("button", { name: "Confirmar decisão" })).toBeEnabled();
   });
 
-  it("impasse mostra decisão por item travado", async () => {
+  it("impasse mostra a decisão por item travado: manter o bloqueio ou aceitar o risco", async () => {
     open("rev", review({
       phase: "impasse", round: 3, impasseReason: "rodadas",
       findings: [
@@ -746,33 +774,30 @@ describe("ReviewPanel — dúvidas e impasse", () => {
       ],
     }));
     await loaded();
+    expect(screen.getByTestId("decision-banner")).toHaveTextContent("O impasse precisa da sua decisão em 2 itens travados");
+    // Um par de escolhas por item travado (aberto ou contestado), nenhum nos outros.
+    expect(screen.getAllByRole("radio", { name: /Manter o bloqueio/ })).toHaveLength(2);
+    expect(screen.getAllByRole("radio", { name: /Aceitar o risco/ })).toHaveLength(2);
+    expect(within(cardOf("Já corrigido")).queryByRole("radio")).toBeNull();
+    expect(within(cardOf("Só sugestão")).queryByRole("radio")).toBeNull();
 
-    // Um par por item travado (aberto ou contestado), nenhum nos outros.
-    expect(screen.getAllByRole("button", { name: "Manter bloqueio" })).toHaveLength(2);
-    expect(screen.getAllByRole("button", { name: "Aceitar risco" })).toHaveLength(2);
-    const fixed = screen.getByText("Já corrigido").closest("[data-testid=finding]") as HTMLElement;
-    expect(within(fixed).queryByRole("button", { name: "Manter bloqueio" })).toBeNull();
-    const suggestion = screen.getByText("Só sugestão").closest("[data-testid=finding]") as HTMLElement;
-    expect(within(suggestion).queryByRole("button")).toBeNull();
-
-    const contested = screen.getByText("Travado contestado").closest("[data-testid=finding]") as HTMLElement;
-    await userEvent.click(within(contested).getByRole("button", { name: "Manter bloqueio" }));
+    await decide("Travado contestado", /Manter o bloqueio/);
     expect(post).toHaveBeenLastCalledWith("/reviews/r1/decide", { findingId: "b", decision: "keep" });
-    await userEvent.click(within(contested).getByRole("button", { name: "Aceitar risco" }));
+    await decide("Travado contestado", /Aceitar o risco/);
     expect(post).toHaveBeenLastCalledWith("/reviews/r1/decide", { findingId: "b", decision: "accept_risk" });
   });
 
-  it("impasse: quem não é revisor nem owner não vê a decisão", async () => {
+  it("impasse: quem não é revisor nem owner vê por quem espera, sem as escolhas", async () => {
     for (const who of ["aut", "mer", "co"] as const) {
       open(who, review({ phase: "impasse", round: 3, impasseReason: "rodadas", findings: [finding()] }));
       await loaded();
-      expect(screen.queryByRole("button", { name: "Manter bloqueio" })).toBeNull();
-      expect(screen.queryByRole("button", { name: "Aceitar risco" })).toBeNull();
+      expect(screen.getByTestId("decision-banner")).toHaveTextContent("Impasse: esperando mussa decidir 1 item travado");
+      expect(screen.queryByRole("radio")).toBeNull();
       cleanup();
     }
     open("own", review({ phase: "impasse", round: 3, impasseReason: "rodadas", findings: [finding()] }));
     await loaded();
-    expect(screen.getByRole("button", { name: "Manter bloqueio" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Manter o bloqueio/ })).toBeInTheDocument();
   });
 
   it("dúvida que o humano mandou bloquear e trava o impasse só aceita o risco (keep é recusado nela)", async () => {
@@ -781,15 +806,75 @@ describe("ReviewPanel — dúvidas e impasse", () => {
       findings: [doubt({ humanDecision: "block", title: "Dúvida bloqueada" })],
     }));
     await loaded();
-    const row = screen.getByText("Dúvida bloqueada").closest("[data-testid=finding]") as HTMLElement;
-    expect(within(row).getByRole("button", { name: "Aceitar risco" })).toBeInTheDocument();
-    expect(within(row).queryByRole("button", { name: "Manter bloqueio" })).toBeNull();
+    const card = cardOf("Dúvida bloqueada");
+    expect(within(card).getByRole("radio", { name: /Aceitar o risco/ })).toBeInTheDocument();
+    expect(within(card).queryByRole("radio", { name: /Manter o bloqueio/ })).toBeNull();
   });
 
   it("fora do impasse, bloqueante aberto não pede decisão", async () => {
     open("rev", review({ phase: "fixing", findings: [finding()] }));
     await loaded();
-    expect(screen.queryByRole("button", { name: "Manter bloqueio" })).toBeNull();
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(screen.queryByTestId("decision-banner")).toBeNull();
+  });
+
+  it("cada achado mostra onde, por quê e a proposta do revisor", async () => {
+    open("rev", review({
+      phase: "reviewing", findings: [doubt({
+        file: "src/a.ts", line: 9, fix: "trocar por Decimal",
+        proof: { kind: "scenario", ref: "src/a.ts:9", detail: "soma de centavos perde precisão" },
+      })],
+    }));
+    await loaded();
+    const card = cardOf("O cálculo está certo?");
+    expect(within(card).getByText("Onde").nextElementSibling).toHaveTextContent("src/a.ts:9");
+    expect(within(card).getByText("Por quê").nextElementSibling).toHaveTextContent("soma de centavos perde precisão");
+    expect(within(card).getByText("Proposta").nextElementSibling).toHaveTextContent("trocar por Decimal");
+  });
+});
+
+describe("ReviewPanel — escolher sugestões e pedir ao autor", () => {
+  const suggestions = [
+    finding({ id: "s1", severity: "suggestion", title: "Renomear pump" }),
+    finding({ id: "s2", severity: "suggestion", title: "Extrair helper" }),
+    finding({ id: "s3", severity: "suggestion", title: "Já feita", status: "fixed" }),
+  ];
+
+  it("marca as sugestões em aberto e pede ao autor só as marcadas", async () => {
+    post.mockImplementation(async () => ({ review: current }));
+    open("mer", review({ phase: "ready", findings: suggestions }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    const ask = screen.getByRole("button", { name: /Pedir ao autor aplicar/ });
+    expect(ask).toBeDisabled();
+    // só as em aberto podem ser escolhidas
+    expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+    await userEvent.click(screen.getByRole("checkbox", { name: "Escolher: Extrair helper" }));
+    expect(screen.getByRole("button", { name: "Pedir ao autor aplicar (1)" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Pedir ao autor aplicar (1)" }));
+    expect(post).toHaveBeenLastCalledWith("/reviews/r1/suggestions", { findingIds: ["s2"] });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Pedido enviado ao autor: 1 sugestão"));
+  });
+
+  it("'marcar todas' escolhe todas as em aberto", async () => {
+    open("aut", review({ phase: "ready", findings: suggestions }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    await userEvent.click(screen.getByRole("button", { name: "marcar todas" }));
+    await userEvent.click(screen.getByRole("button", { name: "Pedir ao autor aplicar (2)" }));
+    expect(post).toHaveBeenLastCalledWith("/reviews/r1/suggestions", { findingIds: ["s1", "s2"] });
+  });
+
+  it("quem não tem papel na revisão, ou revisão encerrada, não escolhe sugestão", async () => {
+    open("co", review({ phase: "ready", findings: suggestions }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    cleanup();
+    open("mer", review({ phase: "merged", findings: suggestions }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    expect(screen.queryByRole("checkbox")).toBeNull();
   });
 });
 

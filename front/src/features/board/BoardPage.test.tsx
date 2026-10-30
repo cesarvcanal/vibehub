@@ -1113,7 +1113,7 @@ describe("BoardPage — the PR line asks for the review panel", () => {
     renderApp(<BoardPage />, { route: "/?project=p1" });
     expect(await line()).toHaveTextContent("PR #552 · ready to merge");
 
-    at({ id: "r1", prNumber: 552, phase: "ready", round: 1 }, "working");
+    at({ id: "r1", prNumber: 552, phase: "ready", round: 1, authorWorking: true }, "working");
     await waitFor(async () => expect(await line()).toHaveTextContent("PR #552 · AI working on it"), { timeout: 6_000 });
 
     at({ id: "r1", prNumber: 552, phase: "reviewing", round: 2 }, "waiting");

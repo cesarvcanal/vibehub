@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { ExternalLink, FileDiff, Loader2, SquareTerminal, X } from "lucide-react";
-import { BADGE_TEXT, Badge } from "@/components/ui/badge";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Finding, FindingSeverity, Review, ReviewPhase, ReviewWorking } from "@/api/types";
 import { ReviewConversation } from "@/features/board/components/ReviewConversation";
@@ -52,15 +52,21 @@ export interface ReviewPanelViewProps {
   onRetry: () => void;
   onCancel: () => void;
   onDecide: (finding: Finding, decision: Decision) => void;
+  /** Ask the author's AI to apply these suggestions (ids of open suggestions). */
+  onRequestSuggestions: (findingIds: string[]) => void;
   onClose: () => void;
 }
 
 export function ReviewPanelView(props: ReviewPanelViewProps) {
-  const { review, working, nameOf, actions, busy, mergeBusy, notice, onMerge, onRetry, onCancel, onDecide, onClose } = props;
+  const {
+    review, working, nameOf, actions, busy, mergeBusy, notice, onMerge, onRetry, onCancel, onDecide, onRequestSuggestions, onClose,
+  } = props;
   const t = useT();
   const stuck = new Set(review.phase === "impasse" ? stuckItems(review.findings).map((f) => f.id) : []);
   const pending = new Set(pendingQuestions(review.findings).map((f) => f.id));
-  const decisionsHere = actions.decide ? review.findings.filter((f) => pending.has(f.id) || stuck.has(f.id)).length : 0;
+  // What the review waits on people for (anybody's), and how much of it this person can decide.
+  const waitingOnPeople = review.findings.filter((f) => pending.has(f.id) || stuck.has(f.id)).length;
+  const decisionsHere = actions.decide ? waitingOnPeople : 0;
   // Until the person picks a tab, the panel shows where their attention is needed: the findings while
   // they have a decision to make there (it can appear later — a round landing with a doubt), the
   // conversation otherwise.
@@ -73,7 +79,7 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
   const decisionsFor = (f: Finding): Decision[] => {
     if (!actions.decide) return [];
     // Doubts wait for the human reviewer; in an impasse the stuck items wait for the same person.
-    if (pending.has(f.id)) return ["block", "drop"];
+    if (pending.has(f.id)) return ["block", "accept_risk", "drop"];
     if (stuck.has(f.id)) return f.severity === "blocking" ? ["keep", "accept_risk"] : ["accept_risk"];
     return [];
   };
@@ -106,6 +112,17 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
           {t("review.approvePending")}
         </p>
       ) : null}
+      <DecisionBanner
+        review={review}
+        waiting={waitingOnPeople}
+        mine={decisionsHere > 0}
+        reviewer={nameOf(review.reviewerUserId)}
+        onGo={() => {
+          setTab("findings");
+          // Straight to the first choice waiting, once the tab is on screen.
+          requestAnimationFrame(() => document.querySelector("[data-deciding]")?.scrollIntoView?.({ block: "center", behavior: "smooth" }));
+        }}
+      />
       {authorOnReadyPr ? null : <Verdict review={review} />}
 
       <div role="tablist" aria-label={t("review.panel.aria", { n: review.prNumber })} className="flex shrink-0 gap-1 rounded-md border border-border/60 bg-background/40 p-0.5">
@@ -123,7 +140,14 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
         <ReviewConversation review={review} working={working} nameOf={nameOf} />
       </div>
       <div role="tabpanel" hidden={tab !== "findings"} className={cn("min-h-0 flex-1 overflow-y-auto", tab !== "findings" && "hidden")}>
-        <FindingsList review={review} busy={busy} decisionsFor={decisionsFor} onDecide={onDecide} />
+        <FindingsList
+          review={review}
+          busy={busy}
+          decisionsFor={decisionsFor}
+          canRequest={actions.request}
+          onDecide={onDecide}
+          onRequestSuggestions={onRequestSuggestions}
+        />
       </div>
     </PanelFrame>
   );
@@ -319,18 +343,33 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   );
 }
 
-/** The closed list in the order that matters: what blocks, what a person must decide, the suggestions, what fell. */
-const GROUPS: FindingSeverity[] = ["blocking", "question", "suggestion", "refuted"];
+/** The closed list in the order that matters: what a person must decide, what blocks, the suggestions, what fell. */
+const GROUPS: FindingSeverity[] = ["question", "blocking", "suggestion", "refuted"];
 
 function FindingsList({
-  review, busy, decisionsFor, onDecide,
+  review, busy, decisionsFor, canRequest, onDecide, onRequestSuggestions,
 }: {
   review: Review;
   busy: boolean;
   decisionsFor: (f: Finding) => Decision[];
+  canRequest: boolean;
   onDecide: (finding: Finding, decision: Decision) => void;
+  onRequestSuggestions: (findingIds: string[]) => void;
 }) {
   const t = useT();
+  // The suggestions a person picked to send to the author. Only open ones can be picked; one that
+  // stops being open (the author answered it) leaves the choice by itself.
+  const [picked, setPicked] = React.useState<Set<string>>(() => new Set());
+  const openSuggestions = review.findings.filter((f) => f.severity === "suggestion" && f.status === "open").map((f) => f.id);
+  const chosen = openSuggestions.filter((id) => picked.has(id));
+  const toggle = (id: string) =>
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
   if (review.findings.length === 0) {
     return <p className="py-6 text-center text-xs text-muted-foreground">{t("review.list.empty")}</p>;
   }
@@ -341,17 +380,51 @@ function FindingsList({
         const items = review.findings.filter((f) => f.severity === severity);
         if (items.length === 0) return null;
         const open = items.filter(findingIsOpen).length;
+        const picking = severity === "suggestion" && canRequest && openSuggestions.length > 0;
         return (
-          <section key={severity} data-testid="finding-group" data-severity={severity} className="space-y-1">
+          <section key={severity} data-testid="finding-group" data-severity={severity} className="space-y-1.5">
             <h4 className="flex items-baseline justify-between pr-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               {t(`review.group.${severity}`)}
               <span className="font-normal normal-case tracking-normal">
                 {t("review.group.state", { open, done: items.length - open })}
               </span>
             </h4>
-            <ul className="divide-y divide-border/50 rounded-md border border-border/60 bg-card/40 px-2.5">
+            {picking ? (
+              <div data-testid="suggestions-request" className="space-y-1.5 rounded-md border border-primary/30 bg-primary/5 p-2">
+                <p className="text-[11px] text-foreground/90">{t("review.suggestions.hint")}</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-7 px-2.5 text-xs"
+                    disabled={busy || chosen.length === 0}
+                    onClick={() => {
+                      onRequestSuggestions(chosen);
+                      setPicked(new Set());
+                    }}
+                  >
+                    {t("review.suggestions.request", { n: chosen.length })}
+                  </Button>
+                  <button
+                    type="button"
+                    className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                    onClick={() => setPicked(chosen.length === openSuggestions.length ? new Set() : new Set(openSuggestions))}
+                  >
+                    {chosen.length === openSuggestions.length ? t("review.suggestions.clear") : t("review.suggestions.selectAll")}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            <ul className="space-y-1.5">
               {items.map((f) => (
-                <FindingRow key={f.id} finding={f} busy={busy} decisions={decisionsFor(f)} onDecide={(d) => onDecide(f, d)} />
+                <FindingCard
+                  key={f.id}
+                  finding={f}
+                  busy={busy}
+                  decisions={decisionsFor(f)}
+                  onDecide={(d) => onDecide(f, d)}
+                  pick={picking && f.status === "open" ? { checked: picked.has(f.id), onToggle: () => toggle(f.id) } : undefined}
+                />
               ))}
             </ul>
           </section>
@@ -361,48 +434,89 @@ function FindingsList({
   );
 }
 
+/** What each decision means, said where it is chosen: the title, and the one line of what follows. */
+const CHOICES: Record<Decision, { title: string; desc: string }> = {
+  block: { title: "review.choice.block.title", desc: "review.choice.block.desc" },
+  keep: { title: "review.choice.keep.title", desc: "review.choice.keep.desc" },
+  accept_risk: { title: "review.choice.accept_risk.title", desc: "review.choice.accept_risk.desc" },
+  drop: { title: "review.choice.drop.title", desc: "review.choice.drop.desc" },
+};
+
 /**
- * One finding of the closed list. Struck through when the verification refuted it; the latest reply
- * of each AI sits folded under the row (the whole back-and-forth is in the conversation), and the
- * human's buttons, when they have any, under those.
+ * One finding, as a card that answers the questions a person has before deciding anything: WHAT it
+ * is (title, severity, where it stands), WHERE (file:line), WHY the reviewer raised it (the proof and
+ * its detail) and WHAT the reviewer proposes. The latest reply of each AI is folded under it (the
+ * whole back-and-forth is in the conversation). A suggestion still open can be picked for the
+ * author; a doubt or a stuck item waiting on this person shows the choices — pick one, then confirm.
  */
-function FindingRow({
-  finding: f, decisions, busy, onDecide,
+function FindingCard({
+  finding: f, decisions, busy, onDecide, pick,
 }: {
   finding: Finding;
   decisions: Decision[];
   busy: boolean;
   onDecide: (decision: Decision) => void;
+  pick?: { checked: boolean; onToggle: () => void };
 }) {
   const t = useT();
   const [open, setOpen] = React.useState(false);
+  const [choice, setChoice] = React.useState<Decision | null>(null);
   const replies = [
     f.authorReply ? { who: "author" as const, text: f.authorReply } : null,
     f.reviewerReply ? { who: "reviewer" as const, text: f.reviewerReply } : null,
   ].filter((r): r is { who: "author" | "reviewer"; text: string } => r !== null);
   const refuted = f.severity === "refuted";
   const closed = !findingIsOpen(f);
+  const deciding = decisions.length > 0;
 
   return (
-    <li data-testid="finding" data-severity={f.severity} data-status={f.status} className="space-y-1 py-2 text-xs">
+    <li
+      data-testid="finding"
+      data-severity={f.severity}
+      data-status={f.status}
+      data-deciding={deciding || undefined}
+      className={cn(
+        "space-y-1.5 rounded-md border px-2.5 py-2 text-xs",
+        deciding ? "border-sky-500/50 bg-sky-500/5" : pick?.checked ? "border-primary/50 bg-primary/5" : "border-border/60 bg-card/40",
+      )}
+    >
       <div className="flex items-start gap-2">
-        <Badge tone={FINDING_SEVERITY_TONE[f.severity]} className="shrink-0 px-1.5 text-[10px] font-semibold">
-          {t(`review.severity.${f.severity}`)}
-        </Badge>
-        <div className="min-w-0 flex-1 space-y-0.5">
-          <p className={cn("break-words font-medium", (refuted || closed) && "text-muted-foreground", refuted && "line-through")}>{f.title}</p>
-          {f.file ? (
-            <p className="break-all font-mono text-[11px] text-muted-foreground">{f.line !== undefined ? `${f.file}:${f.line}` : f.file}</p>
-          ) : null}
-          {f.proof ? (
-            <p className="text-[11px] text-muted-foreground">
-              <span>{t(`review.proof.${f.proof.kind}`)}</span> <span className="break-all font-mono">{f.proof.ref}</span>
-            </p>
-          ) : null}
-        </div>
-        <div className="flex shrink-0 flex-col items-end gap-0.5">
-          <span className={cn("text-[11px] font-medium", BADGE_TEXT[FINDING_STATUS_TONE[f.status]])}>{t(`review.status.${f.status}`)}</span>
-          {f.commit ? <code className="font-mono text-[10px] text-muted-foreground">{f.commit.slice(0, 7)}</code> : null}
+        {pick ? (
+          <input
+            type="checkbox"
+            aria-label={t("review.suggestions.pick", { title: f.title })}
+            checked={pick.checked}
+            onChange={pick.onToggle}
+            className="mt-0.5 h-3.5 w-3.5 shrink-0 cursor-pointer accent-primary"
+          />
+        ) : null}
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge tone={FINDING_SEVERITY_TONE[f.severity]} className="px-1.5 text-[10px] font-semibold">
+              {t(`review.severity.${f.severity}`)}
+            </Badge>
+            <Badge tone={FINDING_STATUS_TONE[f.status]} className="px-1.5 text-[10px]">
+              {t(`review.status.${f.status}`)}
+            </Badge>
+            {f.commit ? <code className="font-mono text-[10px] text-muted-foreground">{f.commit.slice(0, 7)}</code> : null}
+          </div>
+          <p className={cn("break-words text-[13px] font-medium leading-snug", (refuted || closed) && "text-muted-foreground", refuted && "line-through")}>
+            {f.title}
+          </p>
+          <dl className="space-y-0.5 text-[11px]">
+            {f.file ? (
+              <FindingFact label={t("review.finding.where")}>
+                <span className="break-all font-mono">{f.line !== undefined ? `${f.file}:${f.line}` : f.file}</span>
+              </FindingFact>
+            ) : null}
+            {f.proof ? (
+              <FindingFact label={t("review.finding.why")}>
+                {t(`review.proof.${f.proof.kind}`)} <span className="break-all font-mono">{f.proof.ref}</span>
+                {f.proof.detail ? <span className="block text-foreground/80">{f.proof.detail}</span> : null}
+              </FindingFact>
+            ) : null}
+            {f.fix ? <FindingFact label={t("review.finding.fix")}>{f.fix}</FindingFact> : null}
+          </dl>
         </div>
       </div>
 
@@ -428,19 +542,89 @@ function FindingRow({
         </div>
       ) : null}
 
-      {decisions.length > 0 ? (
-        <div className="space-y-1 rounded-md border border-sky-500/30 bg-sky-500/5 p-2">
-          <p className="text-[11px] text-sky-200">{t(decisions.includes("block") ? "review.decide.hint.question" : "review.decide.hint.stuck")}</p>
-          <div className="flex flex-wrap gap-1.5">
+      {deciding ? (
+        <fieldset className="space-y-1.5 rounded-md border border-sky-500/30 bg-background/40 p-2">
+          <legend className="px-1 text-[11px] font-semibold text-sky-300">{t("review.choice.legend")}</legend>
+          <div role="radiogroup" aria-label={t("review.choice.legend")} className="space-y-1">
             {decisions.map((d) => (
-              <Button key={d} type="button" variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={busy} onClick={() => onDecide(d)}>
-                {t(`review.decide.${d}`)}
-              </Button>
+              <label
+                key={d}
+                className={cn(
+                  "flex cursor-pointer items-start gap-2 rounded-md border px-2 py-1.5 transition-colors",
+                  choice === d ? "border-sky-400/70 bg-sky-500/10" : "border-border/60 hover:bg-card/60",
+                )}
+              >
+                <input
+                  type="radio"
+                  name={`decision-${f.id}`}
+                  value={d}
+                  checked={choice === d}
+                  onChange={() => setChoice(d)}
+                  className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-sky-400"
+                />
+                <span className="min-w-0">
+                  <span className="block text-xs font-medium">{t(CHOICES[d].title)}</span>
+                  <span className="block text-[11px] text-muted-foreground">{t(CHOICES[d].desc)}</span>
+                </span>
+              </label>
             ))}
           </div>
-        </div>
+          <Button
+            type="button"
+            size="sm"
+            className="h-7 w-full text-xs"
+            disabled={busy || choice === null}
+            onClick={() => choice && onDecide(choice)}
+          >
+            {t("review.choice.confirm")}
+          </Button>
+        </fieldset>
       ) : null}
     </li>
+  );
+}
+
+function FindingFact({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex gap-1.5">
+      <dt className="w-14 shrink-0 text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 break-words">{children}</dd>
+    </div>
+  );
+}
+
+/**
+ * The review waits on people: doubts no one decided, or items stuck in an impasse. Said at the top,
+ * in words, because a pill reading "aguardando decisão" was not enough — nobody knew. The person who
+ * can decide gets the way straight to the choices; everybody else learns who it waits for, and that
+ * the AIs can settle a doubt too (the author resolves it, the reviewer checks).
+ */
+function DecisionBanner({
+  review, waiting, mine, reviewer, onGo,
+}: {
+  review: Review;
+  waiting: number;
+  mine: boolean;
+  reviewer: string;
+  onGo: () => void;
+}) {
+  const t = useT();
+  if (waiting === 0) return null;
+  const impasse = review.phase === "impasse";
+  return (
+    <div data-testid="decision-banner" role="status" className="shrink-0 space-y-1.5 rounded-md border border-sky-500/50 bg-sky-500/10 px-2.5 py-2 text-xs">
+      <p className="font-semibold text-sky-200">
+        {mine
+          ? t(impasse ? "review.decision.stuck.mine" : "review.decision.mine", { n: waiting })
+          : t(impasse ? "review.decision.stuck.others" : "review.decision.others", { n: waiting, name: reviewer })}
+      </p>
+      {impasse ? null : <p className="text-sky-200/80">{t("review.decision.ai")}</p>}
+      {mine ? (
+        <Button type="button" size="sm" className="h-7 bg-sky-600 px-3 text-xs text-white hover:bg-sky-500" onClick={onGo}>
+          {t("review.decision.go")}
+        </Button>
+      ) : null}
+    </div>
   );
 }
 

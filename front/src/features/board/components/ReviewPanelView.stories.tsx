@@ -17,7 +17,7 @@ const PEOPLE: Record<string, string> = { "u-albert": "albert", "u-mussa": "mussa
 const nameOf = (id: string | undefined) => (id ? PEOPLE[id] ?? id : "—");
 
 const NOBODY: ReviewWorking = { author: false, reviewer: false };
-const NO_ACTIONS: ReviewActions = { decide: false, retry: false, cancel: false, merge: false };
+const NO_ACTIONS: ReviewActions = { decide: false, retry: false, cancel: false, merge: false, request: false };
 
 const f = (o: Partial<Finding> & Pick<Finding, "id" | "title">): Finding => ({
   severity: "suggestion", status: "open", introducedInRound: 1, ...o,
@@ -109,6 +109,7 @@ const base: ReviewPanelViewProps = {
   onRetry: () => {},
   onCancel: () => {},
   onDecide: () => {},
+  onRequestSuggestions: () => {},
   onClose: () => {},
 };
 
@@ -157,7 +158,7 @@ export const RevisorConferindoRodada2: Story = {
 
 export const ProntoPraMerge: Story = {
   name: "5. Pronto pra merge (visto por quem mergeia)",
-  args: { review: READY, actions: { ...NO_ACTIONS, merge: true, cancel: true } },
+  args: { review: READY, actions: { ...NO_ACTIONS, merge: true, cancel: true, request: true } },
 };
 
 export const IaMexendoDepoisDoPronto: Story = {
@@ -220,7 +221,7 @@ export const Impasse: Story = {
       findings: FINDINGS.map((x) => (x.id === "f2" ? { ...x, status: "contested" as const, authorReply: "o limite é do navegador, não do código" } : x)),
       log: ROUND1,
     }),
-    actions: { decide: true, retry: false, cancel: true, merge: false },
+    actions: { decide: true, retry: false, cancel: true, merge: false, request: true },
   },
 };
 

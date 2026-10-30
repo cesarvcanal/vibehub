@@ -287,7 +287,7 @@ describe("reviewActions", () => {
   });
 
   it("nobody signed in can do anything", () => {
-    expect(reviewActions(full({ phase: "ready" }), null)).toEqual({ decide: false, retry: false, cancel: false, merge: false });
+    expect(reviewActions(full({ phase: "ready" }), null)).toEqual({ decide: false, retry: false, cancel: false, merge: false, request: false });
   });
 });
 

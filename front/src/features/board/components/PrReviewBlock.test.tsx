@@ -181,10 +181,10 @@ describe("PrReviewBlocks", () => {
     expect(await screen.findByText("IA mexendo")).toBeInTheDocument();
   });
 
-  it("before the first read, a ready PR whose card is working already reads IA mexendo (the card's own status)", () => {
+  it("before the first read, a ready PR whose author's AI is working already reads IA mexendo (the board's summary)", () => {
     get.mockImplementation(() => new Promise(() => {})); // the live read never lands
     renderApp(
-      <PrReviewBlocks card={{ id: "c1", prs: [PR], review: reviewOf({ phase: "ready" }), status: "working" }} onOpenPanel={() => {}} />,
+      <PrReviewBlocks card={{ id: "c1", prs: [PR], review: reviewOf({ phase: "ready", authorWorking: true }) }} onOpenPanel={() => {}} />,
     );
     expect(screen.getByText("IA mexendo")).toBeInTheDocument();
   });
