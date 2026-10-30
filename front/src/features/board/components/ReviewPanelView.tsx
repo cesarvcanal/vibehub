@@ -1,14 +1,14 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { ExternalLink, FileDiff, Loader2, SquareTerminal, X } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { BADGE_TEXT, Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Finding, FindingSeverity, Review, ReviewPhase, ReviewWorking } from "@/api/types";
 import { ReviewConversation } from "@/features/board/components/ReviewConversation";
 import { cardHref } from "@/features/board/lib/board";
 import {
-  IMPASSE_ROUNDS, REVIEW_MAX_ROUNDS, awaitingDecision, findingCounts, pendingQuestions, reviewIsOpen, reviewPill, reviewTurn,
-  stuckItems, type ReviewActions,
+  FINDING_SEVERITY_TONE, FINDING_STATUS_TONE, IMPASSE_ROUNDS, REVIEW_MAX_ROUNDS, awaitingDecision, findingCounts, findingIsOpen,
+  pendingQuestions, reviewIsOpen, reviewPill, reviewTurn, stuckItems, type ReviewActions,
 } from "@/features/board/lib/review";
 import { t as translate, useT } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -340,7 +340,7 @@ function FindingsList({
       {GROUPS.map((severity) => {
         const items = review.findings.filter((f) => f.severity === severity);
         if (items.length === 0) return null;
-        const open = items.filter((f) => f.status === "open" || f.status === "contested").length;
+        const open = items.filter(findingIsOpen).length;
         return (
           <section key={severity} data-testid="finding-group" data-severity={severity} className="space-y-1">
             <h4 className="flex items-baseline justify-between pr-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -360,22 +360,6 @@ function FindingsList({
     </div>
   );
 }
-
-const SEVERITY_TONE: Record<FindingSeverity, string> = {
-  blocking: "border-destructive/40 bg-destructive/10 text-destructive",
-  suggestion: "border-border/60 bg-card/40 text-muted-foreground",
-  question: "border-sky-500/30 bg-sky-500/10 text-sky-400",
-  refuted: "border-border/60 bg-card/40 text-muted-foreground",
-};
-
-const STATUS_TONE: Record<Finding["status"], string> = {
-  open: "text-amber-400",
-  fixed: "text-emerald-400",
-  contested: "text-sky-400",
-  accepted_risk: "text-muted-foreground",
-  dropped: "text-muted-foreground",
-  wontfix: "text-muted-foreground",
-};
 
 /**
  * One finding of the closed list. Struck through when the verification refuted it; the latest reply
@@ -397,14 +381,14 @@ function FindingRow({
     f.reviewerReply ? { who: "reviewer" as const, text: f.reviewerReply } : null,
   ].filter((r): r is { who: "author" | "reviewer"; text: string } => r !== null);
   const refuted = f.severity === "refuted";
-  const closed = f.status === "fixed" || f.status === "dropped" || f.status === "accepted_risk" || f.status === "wontfix";
+  const closed = !findingIsOpen(f);
 
   return (
     <li data-testid="finding" data-severity={f.severity} data-status={f.status} className="space-y-1 py-2 text-xs">
       <div className="flex items-start gap-2">
-        <span className={cn("shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold", SEVERITY_TONE[f.severity])}>
+        <Badge tone={FINDING_SEVERITY_TONE[f.severity]} className="shrink-0 px-1.5 text-[10px] font-semibold">
           {t(`review.severity.${f.severity}`)}
-        </span>
+        </Badge>
         <div className="min-w-0 flex-1 space-y-0.5">
           <p className={cn("break-words font-medium", (refuted || closed) && "text-muted-foreground", refuted && "line-through")}>{f.title}</p>
           {f.file ? (
@@ -417,7 +401,7 @@ function FindingRow({
           ) : null}
         </div>
         <div className="flex shrink-0 flex-col items-end gap-0.5">
-          <span className={cn("text-[11px] font-medium", STATUS_TONE[f.status])}>{t(`review.status.${f.status}`)}</span>
+          <span className={cn("text-[11px] font-medium", BADGE_TEXT[FINDING_STATUS_TONE[f.status]])}>{t(`review.status.${f.status}`)}</span>
           {f.commit ? <code className="font-mono text-[10px] text-muted-foreground">{f.commit.slice(0, 7)}</code> : null}
         </div>
       </div>
@@ -468,7 +452,7 @@ function Verdict({ review }: { review: Review }) {
   if (review.phase !== "ready") return null;
 
   const blocking = review.findings.filter((f) => f.severity === "blocking");
-  const resolved = blocking.filter((f) => f.status !== "open" && f.status !== "contested").length;
+  const resolved = blocking.filter((f) => !findingIsOpen(f)).length;
   const suggestions = review.findings.filter((f) => f.severity === "suggestion" && f.status === "open").length;
   return (
     <VerdictBox tone="ok">

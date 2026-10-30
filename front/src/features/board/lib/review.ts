@@ -1,5 +1,7 @@
 import type { BadgeTone } from "@/components/ui/badge";
-import type { Card, CardPr, Finding, Review, ReviewEvent, ReviewPhase, ReviewSummary, ReviewWorking } from "@/api/types";
+import type {
+  Card, CardPr, Finding, FindingSeverity, FindingStatus, Review, ReviewEvent, ReviewPhase, ReviewSummary, ReviewWorking,
+} from "@/api/types";
 
 /**
  * PR review — the rules the block in the chat, its dialog and (next) the panel and the sidebar line
@@ -16,10 +18,15 @@ export const REVIEW_MAX_ROUNDS = 3;
 export const MERGE_CONFIRM_MS = 16 * 60_000;
 
 /**
- * How often an OPEN review is re-read (every phase but merged/cancelled): the AIs' turns, a push after
- * `ready` that sends it back to the reviewer, a merge running — the screen follows all of them.
+ * How often an OPEN review is re-read while something is moving — an AI in its turn (either side, or
+ * the reviewing/fixing phases), a merge running: the screen follows each step.
  */
 export const REVIEW_POLL_MS = 3_000;
+/**
+ * …and while it sits still (ready or impasse, nobody working): still read, because it moves on its own
+ * (a merge done on GitHub, another person's decision), but at a calmer pace.
+ */
+export const REVIEW_IDLE_POLL_MS = 10_000;
 
 /** The two `impasseReason` values the server writes as codes/fixed texts: neither has a turn to hand back. */
 export const IMPASSE_ROUNDS = "rodadas";
@@ -137,7 +144,7 @@ export function startErrorRoles(err: unknown): ReviewRole[] {
 
 /* ------------------------------------------------------------------ the panel */
 
-/** The AIs are on it: the panel keeps reading. Every other phase waits for a person, or is over. */
+/** The AIs hold the turn (reviewing, fixing): every other phase waits for a person, or is over. */
 export const reviewIsWorking = (phase: ReviewPhase | undefined): boolean => phase === "reviewing" || phase === "fixing";
 
 /** Still going: it can be cancelled (`merged` and `cancelled` are closed — the server answers 409). PURE. */
@@ -157,7 +164,25 @@ export function findingCounts(findings: Finding[]): FindingCounts {
   return counts;
 }
 
-const isOpen = (f: Finding): boolean => f.status === "open" || f.status === "contested";
+/** A finding still standing: open, or contested. Fixed, dropped, accepted risk and won't fix are closed. PURE. */
+export const findingIsOpen = (f: Pick<Finding, "status">): boolean => f.status === "open" || f.status === "contested";
+const isOpen = findingIsOpen;
+
+/** The tone of each finding's severity and status, wherever a finding is drawn (the list, the conversation). */
+export const FINDING_SEVERITY_TONE: Record<FindingSeverity, BadgeTone> = {
+  blocking: "critical",
+  question: "info",
+  suggestion: "muted",
+  refuted: "muted",
+};
+export const FINDING_STATUS_TONE: Record<FindingStatus, BadgeTone> = {
+  open: "warn",
+  fixed: "ok",
+  contested: "info",
+  accepted_risk: "muted",
+  dropped: "muted",
+  wontfix: "muted",
+};
 
 /** Doubts that wait for the human reviewer: they hold the `ready` without spending a round. PURE. */
 export function pendingQuestions(findings: Finding[]): Finding[] {

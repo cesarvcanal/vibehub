@@ -177,7 +177,7 @@ describe("PrReviewBlocks", () => {
 
     // The author's AI starts working on the ready PR: the block says so on the next read.
     live = { ...live, working: { author: true, reviewer: false } };
-    await tick(3_100);
+    await tick(10_100);
     expect(await screen.findByText("IA mexendo")).toBeInTheDocument();
   });
 

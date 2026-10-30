@@ -1,17 +1,21 @@
 import * as React from "react";
-import { ArrowDown, Info, UserRound } from "lucide-react";
-import type { Finding, FindingSeverity, Review, ReviewEvent, ReviewEventItem, ReviewWorking } from "@/api/types";
-import { conversationRows, reviewTurn, type ReviewTurn } from "@/features/board/lib/review";
-import { getLanguage, useT } from "@/i18n";
+import { Info, UserRound } from "lucide-react";
+import { Badge, BADGE_TEXT } from "@/components/ui/badge";
+import type { Finding, Review, ReviewEvent, ReviewEventItem, ReviewWorking } from "@/api/types";
+import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
+import { TypingDots } from "@/features/board/components/PeerTypingIndicator";
+import { formatResetAt } from "@/features/board/lib/planUsage";
+import { FINDING_SEVERITY_TONE, FINDING_STATUS_TONE, conversationRows, reviewTurn, type ReviewTurn } from "@/features/board/lib/review";
+import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 /**
  * The CONVERSATION of a PR review, drawn the way a chat app draws one: the reviewer's AI on the left,
  * the author's AI on the right, what the server and the people did in the middle, a "Rodada N"
  * divider where each round starts, and — at the bottom, while one of the AIs is in its turn — who is
- * "typing". It follows the review live: a new line scrolls into view when the reader is already at
- * the bottom; a reader who scrolled up to read the history is left there and gets a "novas
- * mensagens" button instead of being yanked down.
+ * "typing". It follows the review live with the app's own chat scroll ({@link useStickToBottom}): a
+ * new line scrolls into view when the reader is already at the bottom; a reader who scrolled up to
+ * read the history is left there and gets the "jump to latest" arrow instead of being yanked down.
  *
  * Each AI line carries the findings it is about (`ReviewEvent.items`), with the reply of THAT round,
  * so a finding's back-and-forth reads in order: the reviewer opens it, the author answers, the
@@ -20,8 +24,6 @@ import { cn } from "@/lib/utils";
 
 /** A bubble shows this many findings until "+N itens" is pressed: a round of 8 suggestions stays readable. */
 const ITEMS_SHOWN = 4;
-/** How close to the bottom (px) still counts as "reading the latest": new lines scroll into view. */
-const STICK_PX = 48;
 
 export interface ReviewConversationProps {
   review: Review;
@@ -37,41 +39,14 @@ export function ReviewConversation({ review, working, nameOf }: ReviewConversati
   const turn = reviewTurn(review, working);
   const names = { reviewer: nameOf(review.reviewerUserId), author: nameOf(review.authorUserId), merger: nameOf(review.mergerUserId) };
 
-  const scroller = React.useRef<HTMLDivElement>(null);
-  /** The reader is at the bottom: what arrives next is scrolled into view. */
-  const atBottom = React.useRef(true);
-  const [unseen, setUnseen] = React.useState(0);
-  const lines = review.log.length;
-  const linesBefore = React.useRef(lines);
   // What sits at the bottom besides the lines: the "typing" row changes with the turn.
-  const bottomKey = `${lines}:${turnKey(turn)}`;
-
-  const toBottom = React.useCallback(() => {
-    const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
-    atBottom.current = true;
-    setUnseen(0);
-  }, []);
-
-  React.useLayoutEffect(() => {
-    const arrived = lines - linesBefore.current;
-    linesBefore.current = lines;
-    if (atBottom.current) toBottom();
-    else if (arrived > 0) setUnseen((n) => n + arrived);
-  }, [bottomKey, lines, toBottom]);
-
-  const onScroll = () => {
-    const el = scroller.current;
-    if (!el) return;
-    atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_PX;
-    if (atBottom.current) setUnseen(0);
-  };
+  const stick = useStickToBottom(`${review.log.length}:${turnKey(turn)}`);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div
-        ref={scroller}
-        onScroll={onScroll}
+        ref={stick.scrollerRef}
+        onScroll={stick.onScroll}
         data-testid="review-conversation"
         role="log"
         aria-live="polite"
@@ -91,16 +66,7 @@ export function ReviewConversation({ review, working, nameOf }: ReviewConversati
         )}
         <TurnRow turn={turn} names={names} />
       </div>
-      {unseen > 0 ? (
-        <button
-          type="button"
-          onClick={toBottom}
-          className="absolute bottom-2 left-1/2 inline-flex -translate-x-1/2 items-center gap-1 rounded-full border border-border/70 bg-card px-3 py-1 text-[11px] font-medium shadow-md transition-colors hover:bg-muted"
-        >
-          <ArrowDown className="h-3 w-3" />
-          {t("review.conversation.unseen", { n: unseen })}
-        </button>
-      ) : null}
+      <JumpToLatest stick={stick} />
     </div>
   );
 }
@@ -170,22 +136,6 @@ function Line({ event, findings, names }: { event: ReviewEvent; findings: Map<st
   );
 }
 
-const SEVERITY_TEXT: Record<FindingSeverity, string> = {
-  blocking: "text-destructive",
-  question: "text-sky-400",
-  suggestion: "text-muted-foreground",
-  refuted: "text-muted-foreground line-through",
-};
-
-const STATUS_CHIP: Record<ReviewEventItem["status"], string> = {
-  open: "border-amber-500/30 text-amber-400",
-  fixed: "border-emerald-500/30 text-emerald-400",
-  contested: "border-sky-500/30 text-sky-400",
-  accepted_risk: "border-border/60 text-muted-foreground",
-  dropped: "border-border/60 text-muted-foreground",
-  wontfix: "border-border/60 text-muted-foreground",
-};
-
 /** The findings a line is about: what it is, where it stands after this line, and what was said of it. */
 function Items({ items, findings }: { items: ReviewEventItem[]; findings: Map<string, Finding> }) {
   const t = useT();
@@ -199,13 +149,19 @@ function Items({ items, findings }: { items: ReviewEventItem[]; findings: Map<st
           return (
             <li key={item.id} data-testid="review-line-item" data-status={item.status} className="space-y-0.5">
               <div className="flex items-start gap-1.5">
-                <span className={cn("shrink-0 text-[10px] font-semibold uppercase", finding ? SEVERITY_TEXT[finding.severity] : "text-muted-foreground")}>
+                <span
+                  className={cn(
+                    "shrink-0 text-[10px] font-semibold uppercase",
+                    finding ? BADGE_TEXT[FINDING_SEVERITY_TONE[finding.severity]] : "text-muted-foreground",
+                    finding?.severity === "refuted" && "line-through",
+                  )}
+                >
                   {finding ? t(`review.severity.${finding.severity}`) : item.id}
                 </span>
                 <span className="min-w-0 flex-1 break-words">{finding?.title ?? item.id}</span>
-                <span className={cn("shrink-0 rounded border px-1 text-[10px]", item.isNew ? "border-border/60 text-muted-foreground" : STATUS_CHIP[item.status])}>
+                <Badge tone={item.isNew ? "muted" : FINDING_STATUS_TONE[item.status]} className="shrink-0 px-1 py-0 text-[10px] font-normal">
                   {item.isNew ? t("review.conversation.newItem") : t(`review.status.${item.status}`)}
-                </span>
+                </Badge>
               </div>
               {item.reply ? <p className="break-words text-[11px] italic text-muted-foreground">“{item.reply}”</p> : null}
               {item.commit ? <code className="font-mono text-[10px] text-muted-foreground">{item.commit.slice(0, 7)}</code> : null}
@@ -268,21 +224,7 @@ function TurnRow({ turn, names }: { turn: ReviewTurn; names: Names }) {
   );
 }
 
-function TypingDots() {
-  return (
-    <span aria-hidden className="inline-flex items-center gap-0.5">
-      {[0, 150, 300].map((delay) => (
-        <span key={delay} className="h-1 w-1 animate-bounce rounded-full bg-current" style={{ animationDelay: `${delay}ms` }} />
-      ))}
-    </span>
-  );
-}
-
-/** "14:32" today, "29/10 14:32" on another day — in the reader's language. */
+/** "14:32" today, "qui., 29/10 14:32" on another day — in the reader's language. */
 function timeOf(at: number): string {
-  const date = new Date(at);
-  const locale = getLanguage() === "pt-BR" ? "pt-BR" : "en-US";
-  const time = date.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
-  if (date.toDateString() === new Date().toDateString()) return time;
-  return `${date.toLocaleDateString(locale, { day: "2-digit", month: "2-digit" })} ${time}`;
+  return formatResetAt(at, Date.now());
 }

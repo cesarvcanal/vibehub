@@ -31,7 +31,7 @@ import {
 } from "@/features/board/lib/board";
 import { CardStateIcon } from "@/features/board/components/CardStateIcon";
 import { reviewPill } from "@/features/board/lib/review";
-import type { BadgeTone } from "@/components/ui/badge";
+import { BADGE_TEXT } from "@/components/ui/badge";
 import { useExpandedProjects } from "@/features/board/lib/sidebarExpanded";
 import { RecentCards } from "@/features/board/components/RecentCards";
 import { ShareDialog } from "@/features/board/components/ShareDialog";
@@ -1042,7 +1042,8 @@ function SidebarCard({
             }}
             className={cn(
               "flex w-full items-center gap-2 pb-1.5 pl-9 pr-3 text-left text-[11px] [-webkit-touch-callout:none] hover:underline",
-              PR_LINE_TONE[pill.tone],
+              // The colour of the review's pill: ready green, working orange, impasse blue, merged quiet.
+              BADGE_TEXT[pill.tone],
             )}
           >
             {/* The arrow takes the card's state-icon slot, so the line starts under the title. */}
@@ -1065,14 +1066,7 @@ function SidebarCard({
   );
 }
 
-/** The PR line takes the colour of the review's pill: ready green, working orange, impasse blue, merged quiet. */
-const PR_LINE_TONE: Record<BadgeTone, string> = {
-  ok: "text-emerald-400",
-  warn: "text-amber-400",
-  info: "text-sky-400",
-  critical: "text-destructive",
-  muted: "text-muted-foreground",
-};
+
 
 /* ------------------------------------------------------------- drag maths */
 

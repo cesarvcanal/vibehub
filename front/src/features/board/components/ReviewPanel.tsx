@@ -27,8 +27,9 @@ import { t as translate, useT } from "@/i18n";
  *    stalled) and **cancel**.
  *
  * Who may do what is `reviewActions` (the server's own rules), so no button answers 403. While the
- * review is open it is re-read every 3 s ({@link useLiveReview}), whatever the phase: it moves on its
- * own (an AI's turn, a push after `ready`), and the panel follows. With the author's AI working on a
+ * review is open it is re-read ({@link useLiveReview}) whatever the phase — every 3 s while something
+ * moves, every 10 s while it sits still: it moves on its own (an AI's turn, a push after `ready`, a
+ * merge done on GitHub), and the panel follows. With the author's AI working on a
  * `ready` PR, the pill reads "IA mexendo" and the merge waits for it to finish.
  */
 
@@ -68,7 +69,7 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
   /** The merge button is held: a request is open, or its result is unknown. Cancel and retry wait too. */
   const mergeBusy = mergeWait || unconfirmed;
 
-  const { query: reviewQuery, review, working, apply } = useLiveReview(cardId);
+  const { query: reviewQuery, review, working, apply } = useLiveReview(cardId, { fast: mergeBusy });
 
   // The review carries user ids; the roles read better as names. Same key and shape as the request dialog's.
   const people = useQuery({

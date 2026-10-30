@@ -537,7 +537,7 @@ describe("ReviewPanel — merge", () => {
     expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeEnabled();
     // Sem sucesso falso se um merged aparecer depois (ninguém está mais conferindo).
     current = review({ phase: "merged" });
-    await tick(3_100);
+    await tick(10_100);
     expect(await screen.findByText("Mergeado na dev")).toBeInTheDocument();
     expect(toast.success).not.toHaveBeenCalled();
   });
@@ -962,17 +962,29 @@ describe("ReviewPanel — leitura periódica", () => {
     expect(await screen.findByText("pronto pra merge")).toBeInTheDocument();
   });
 
-  it("em ready e em impasse continua relendo a cada 3s: a revisão anda sozinha (push do autor, IA trabalhando)", async () => {
+  it("em ready e em impasse, parada, continua relendo, com calma (10s): a revisão anda sozinha (merge no GitHub, push)", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     for (const phase of ["ready", "impasse"] as const) {
       reviewGets = 0;
       open("rev", review({ phase }));
       await loaded();
       const seen = reviewGets;
-      await tick(9_100);
+      await tick(3_100);
+      expect(reviewGets).toBe(seen);
+      await tick(27_000);
       expect(reviewGets).toBeGreaterThanOrEqual(seen + 3);
       cleanup();
     }
+  });
+
+  it("com uma IA trabalhando, mesmo em ready, a leitura volta a cada 3s", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    working = { author: true, reviewer: false };
+    open("rev", review({ phase: "ready" }));
+    await loaded();
+    const seen = reviewGets;
+    await tick(3_100);
+    expect(reviewGets).toBeGreaterThan(seen);
   });
 
   it("mergeada ou cancelada não relê: acabou", async () => {
@@ -996,7 +1008,7 @@ describe("ReviewPanel — leitura periódica", () => {
     expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeEnabled();
 
     working = { author: true, reviewer: false };
-    await tick(3_100);
+    await tick(10_100);
     expect(await screen.findByText("IA mexendo")).toBeInTheDocument();
     expect(screen.queryByText("pronto pra merge")).toBeNull();
     expect(screen.getByText(/A IA do autor está mexendo no PR/)).toBeInTheDocument();
@@ -1021,7 +1033,7 @@ describe("ReviewPanel — leitura periódica", () => {
       phase: "reviewing", round: 2, lastSubmitRound: 1,
       log: [{ at: 3, round: 2, who: "system", text: "O autor empurrou depois do pronto (head bbbbbbb). Rodada 2 de 3: o revisor confere o que entrou." }],
     });
-    await tick(3_100);
+    await tick(10_100);
     expect(await screen.findByText("rodada 2/3")).toBeInTheDocument();
     expect(screen.getByText("O revisor confere só o que mudou desde a rodada 1.")).toBeInTheDocument();
     expect(screen.getByText(/O autor empurrou depois do pronto/)).toBeInTheDocument();
@@ -1046,11 +1058,11 @@ describe("ReviewPanel — leitura periódica", () => {
     const view = open("rev", review({ phase: "ready", round: 1 }));
     await loaded();
     const invalidate = vi.spyOn(view.queryClient, "invalidateQueries");
-    await tick(3_100);
+    await tick(10_100);
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["board", "cards"] });
 
     current = review({ phase: "reviewing", round: 2 });
-    await tick(3_100);
+    await tick(10_100);
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["board", "cards"] }));
   });
 });
