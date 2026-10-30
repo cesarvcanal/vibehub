@@ -362,6 +362,24 @@ describe("iniciar a revisão", () => {
   });
 });
 
+describe("GET da revisão: quem está trabalhando agora", () => {
+  it("diz se a IA do autor e a do revisor estão num turno, pelo status de cada card", async () => {
+    const w = await world();
+    const review = (await startReview(w)).json().review as { id: string; reviewerCardId: string };
+    const read = async () =>
+      (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review`, headers: { cookie: w.leitor.cookie } })).json();
+    expect((await read()).working).toEqual({ author: false, reviewer: false });
+
+    const reg = await registry();
+    await reg.applyCardStatus(w.cardId, "working");
+    expect((await read()).working).toEqual({ author: true, reviewer: false });
+
+    await reg.applyCardStatus(review.reviewerCardId, "working");
+    await reg.applyCardStatus(w.cardId, "waiting");
+    expect(await read()).toMatchObject({ review: { id: review.id }, working: { author: false, reviewer: true } });
+  });
+});
+
 describe("pessoas do card", () => {
   it("people lista owner e quem tem share, com canReview", async () => {
     const w = await world();

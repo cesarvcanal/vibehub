@@ -87,6 +87,16 @@ function newest(list: Review[]): Review | undefined {
   return list.reduce<Review | undefined>((latest, r) => (!latest || r.createdAt >= latest.createdAt ? r : latest), undefined);
 }
 
+/**
+ * Se a IA de cada lado está num turno AGORA (o status que os hooks gravam no card). A fase só muda
+ * quando uma ferramenta pousa; isto muda no instante em que a IA começa ou para de trabalhar, e é o
+ * que deixa o painel dizer "IA mexendo no PR" com a revisão ainda em `ready`. Card que sumiu = parado.
+ */
+async function sidesWorking(r: Review): Promise<{ author: boolean; reviewer: boolean }> {
+  const [author, reviewer] = await Promise.all([registry.getCard(r.cardId), registry.getCard(r.reviewerCardId)]);
+  return { author: author?.status === "working", reviewer: reviewer?.status === "working" };
+}
+
 /** `not found` é 404, os códigos dados são 409, o resto é erro de quem pediu. */
 async function fail(reply: FastifyReply, err: unknown, conflict: RegExp | null = null): Promise<FastifyReply> {
   const message = (err as Error).message ?? "invalid request";
@@ -106,10 +116,14 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     return await reply.send({ people: await cardPeople(card) });
   });
 
-  /** A revisão do card: a ativa, ou a última (de qualquer fase) — o painel mostra o histórico. */
+  /**
+   * A revisão do card: a ativa, ou a última (de qualquer fase) — o painel mostra o histórico. Junto,
+   * `working`: se a IA do autor e a do revisor estão trabalhando agora (ausente quando não há revisão).
+   */
   app.get<{ Params: { id: string } }>("/api/cards/:id/review", { preHandler: requireCardAccess }, async (req, reply) => {
     const review = (await activeReviewFor(req.params.id)) ?? newest(await listReviewsForCards([req.params.id]));
-    return await reply.send({ review: review ?? null });
+    if (!review) return await reply.send({ review: null });
+    return await reply.send({ review, working: await sidesWorking(review) });
   });
 
   app.post<{ Params: { id: string }; Body: StartBody }>(
