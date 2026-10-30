@@ -420,6 +420,26 @@ describe("GET da revisão confere o PR no GitHub (merge feito fora do painel)", 
   });
 });
 
+describe("pedir ao autor aplicar sugestões", () => {
+  it("revisor, autor, merger e owner pedem; quem não tem papel recebe 403; sugestão inválida é 400", async () => {
+    const w = await world();
+    const started = (await startReview(w)).json().review as { id: string; reviewerCardId: string };
+    await (await orchestrator()).submitReviewerRound(started.reviewerCardId, {
+      round: 1, findings: [{ severity: "suggestion", title: "renomear" }], headSha: SHA1, summary: "uma sugestão",
+    });
+    const ask = async (as: Person, findingIds: unknown) =>
+      await app.inject({ method: "POST", url: `/api/reviews/${started.id}/suggestions`, headers: { cookie: as.cookie }, payload: { findingIds } });
+    expect((await ask(w.leitor, ["f1"])).statusCode).toBe(403);
+    expect((await ask(w.autor, ["f9"])).statusCode).toBe(400);
+    expect((await ask(w.autor, "f1")).statusCode).toBe(400);
+    send.mockClear();
+    const ok = await ask(w.merger, ["f1"]);
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json().review.log.at(-1)).toMatchObject({ who: "human", by: "merger" });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("pessoas do card", () => {
   it("people lista owner e quem tem share, com canReview", async () => {
     const w = await world();

@@ -772,11 +772,14 @@ describe("decisão humana", () => {
         messageType: "info",
       }),
     ]);
-    // o aviso é do revisor humano: o card do autor não recebe
-    expect((await messagesOn(o, author.id)).some((e) => /dúvida/.test(e.text ?? ""))).toBe(false);
+    // o card do revisor fica escondido do board: o aviso vai também ao card do autor, onde as pessoas
+    // olham, dizendo quem decide
+    const onAuthor = (await messagesOn(o, author.id)).filter((e) => /dúvida/.test(e.text ?? ""));
+    expect(onAuthor).toEqual([expect.objectContaining({ text: "PR #7: 1 dúvida esperando a decisão de revisor no painel da revisão" })]);
     // o submit repetido (retry da IA) não duplica
     await o.orch.submitReviewerRound(review.reviewerCardId, payload);
     expect(await messagesOn(o, review.reviewerCardId)).toHaveLength(1);
+    expect((await messagesOn(o, author.id)).filter((e) => /dúvida/.test(e.text ?? ""))).toHaveLength(1);
   });
 
   it("submit sem dúvida pendente não avisa o revisor", async () => {
@@ -933,6 +936,92 @@ describe("decisão humana", () => {
     await expect(o.orch.decideQuestion(review.id, "f1", "keep", "u-revisor")).rejects.toThrow(/keep/);
     await expect(o.orch.decideQuestion(review.id, "f9", "block", "u-revisor")).rejects.toThrow(/f9/);
     expect((await o.store.getReview(review.id))?.findings[0]?.humanDecision).toBeUndefined();
+  });
+});
+
+describe("dúvidas resolvidas pelas IAs (o autor corrige ou explica, o revisor confere)", () => {
+  /** Rodada 1 só com uma dúvida: a revisão fica esperando decisão. */
+  async function waitingDoubt(o: Loaded) {
+    const { author, review } = await started(o);
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [QUESTION], headSha: SHA1, summary: "uma dúvida" });
+    expect(after).toMatchObject({ phase: "reviewing", lastSubmitRound: 1 });
+    send.mockClear();
+    calls.length = 0;
+    return { author, review: after };
+  }
+
+  it("o autor responde a dúvida: a revisão vai à rodada seguinte e o revisor recebe a dúvida pra conferir", async () => {
+    const o = await load();
+    const { author, review } = await waitingDoubt(o);
+    const after = await o.orch.submitAuthorResponse(author.id, {
+      round: 1, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "a sessão agora renova no checkout" }], headSha: SHA2,
+    });
+    expect(after).toMatchObject({ phase: "reviewing", round: 2 });
+    expect(after.findings[0]).toMatchObject({ status: "fixed", authorReply: "a sessão agora renova no checkout" });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+    expect(lastText()).toContain("a sessão expira no meio do checkout?");
+    expect(lastText()).toContain("a sessão agora renova no checkout");
+  });
+
+  it("o revisor confere e dá fixed: a dúvida deixa de esperar gente e a revisão fica pronta", async () => {
+    const o = await load();
+    const { author, review } = await waitingDoubt(o);
+    await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", reply: "resolvido" }], headSha: SHA2 });
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 2, findings: [], verdicts: [{ id: "f1", status: "fixed", reviewerReply: "conferido" }], headSha: SHA2, summary: "ok",
+    });
+    expect(after.phase).toBe("ready");
+  });
+
+  it("o revisor mantém a dúvida aberta: ela volta a esperar a decisão humana", async () => {
+    const o = await load();
+    const { author, review } = await waitingDoubt(o);
+    await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "contested", reply: "não expira" }], headSha: SHA2 });
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 2, findings: [], verdicts: [{ id: "f1", status: "open", reviewerReply: "ainda não sei" }], headSha: SHA2, summary: "ok",
+    });
+    expect(after).toMatchObject({ phase: "reviewing", lastSubmitRound: 2 });
+  });
+
+  it("dúvida que um humano já decidiu não aceita resposta do autor", async () => {
+    const o = await load();
+    const { author, review } = await waitingDoubt(o);
+    await o.orch.decideQuestion(review.id, "f1", "accept_risk", "mussa");
+    send.mockClear();
+    const after = await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", reply: "x" }], headSha: SHA2 });
+    expect(after.findings[0]).toMatchObject({ status: "accepted_risk" });
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe("pedir ao autor aplicar as sugestões escolhidas", () => {
+  it("manda ao card do autor só as sugestões escolhidas, com o que fazer e como responder, e a conversa conta", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 1, findings: [SUGGESTION, { severity: "suggestion", title: "extrair helper", fix: "mover pra lib" }, { severity: "suggestion", title: "trocar lib" }],
+      headSha: SHA1, summary: "só sugestões",
+    });
+    send.mockClear();
+    calls.length = 0;
+    const after = await o.orch.requestSuggestions(review.id, ["f1", "f2"], "mussa");
+    expect(calls).toEqual([`actor:u-autor:${author.id}`, `send:${author.id}`]);
+    for (const piece of ["nome de variável confuso", "extrair helper", "mover pra lib", "vibehub_review_respond", "wontfix", `git push origin HEAD:${PR.branch}`, "mussa"]) {
+      expect(lastText()).toContain(piece);
+    }
+    expect(lastText()).not.toContain("trocar lib");
+    expect(after.log.at(-1)).toMatchObject({ who: "human", by: "mussa", items: [{ id: "f1" }, { id: "f2" }] });
+  });
+
+  it("só sugestão em aberto pode ser pedida; nada escolhido ou revisão encerrada é recusado", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER, SUGGESTION], headSha: SHA1, summary: "r1" });
+    await expect(o.orch.requestSuggestions(review.id, ["f1"], "mussa")).rejects.toThrow(/sem_sugestao/);
+    await expect(o.orch.requestSuggestions(review.id, [], "mussa")).rejects.toThrow(/sem_sugestao/);
+    await o.orch.cancelReview(review.id, "mussa");
+    await expect(o.orch.requestSuggestions(review.id, ["f2"], "mussa")).rejects.toThrow(/revisao_encerrada/);
   });
 });
 

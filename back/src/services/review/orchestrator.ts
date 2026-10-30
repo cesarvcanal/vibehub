@@ -22,8 +22,9 @@ import {
   activeReviewFor, getReview, insertReview, listReviewsForCards, mutateReview, reviewByReviewerCard,
 } from "./store.js";
 import {
-  actionableForAuthor, approvePendingText, authorFixPrompt, headMovedPrefix, impasseText, nudgePrefix, oneLine,
-  phaseNoticeText, questionNoticeText, reviewerApprovePrompt, reviewerDeltaPrompt, reviewerRoundPrompt,
+  actionableForAuthor, approvePendingText, authorFixPrompt, authorQuestionNoticeText, authorSuggestionsPrompt, headMovedPrefix,
+  impasseText, nudgePrefix, oneLine, phaseNoticeText, questionNoticeText, reviewerApprovePrompt, reviewerDeltaPrompt,
+  reviewerRoundPrompt,
 } from "./prompts.js";
 
 /**
@@ -191,19 +192,24 @@ export async function announcePhase(r: Review): Promise<void> {
 }
 
 /**
- * A rodada do revisor deixou dúvida sem decisão: ela segura o `ready` até o revisor HUMANO decidir no
- * painel, e nada mais o chamaria. O aviso vai só ao card do revisor (o ator dele é o revisor), uma vez
- * por rodada (`review:<id>:question:<rodada>:reviewer`). Nunca lança.
+ * A rodada do revisor deixou dúvida sem decisão: ela segura o `ready` até alguém decidir — o revisor
+ * HUMANO no painel, ou as IAs (o autor resolve, o revisor confere). O aviso vai ao card do revisor e ao
+ * do autor, uma vez por rodada (`review:<id>:question:<rodada>:<lado>`). Nunca lança.
  */
 async function announceQuestions(r: Review): Promise<void> {
   if (pendingQuestions(r.findings).length === 0) return;
-  try {
-    await recordMessage({
-      cardId: r.reviewerCardId, type: "info", severity: "info", text: questionNoticeText(r),
-      idempotencyKey: `review:${r.id}:question:${r.round}:reviewer`,
-    });
-  } catch (err) {
-    logger.warn({ review: r.id, card: r.reviewerCardId, detail: (err as Error).message }, "could not record the review question notice");
+  // O card do revisor fica escondido do board: o aviso vai também ao do autor, onde as pessoas olham,
+  // dizendo quem decide.
+  const decider = (await findUser(r.reviewerUserId))?.username ?? "o revisor";
+  for (const [cardId, side, text] of [
+    [r.reviewerCardId, "reviewer", questionNoticeText(r)],
+    [r.cardId, "author", authorQuestionNoticeText(r, decider)],
+  ] as const) {
+    try {
+      await recordMessage({ cardId, type: "info", severity: "info", text, idempotencyKey: `review:${r.id}:question:${r.round}:${side}` });
+    } catch (err) {
+      logger.warn({ review: r.id, card: cardId, detail: (err as Error).message }, "could not record the review question notice");
+    }
   }
 }
 
@@ -238,11 +244,13 @@ async function unpauseAuthor(r: Review): Promise<void> {
  *    vira impasse com o motivo (que o "tentar de novo" resolve depois que ela despausar).
  *  - `approve`: é o pedido de Approve. Falha mantém `ready` com `approvePending` e um aviso (o merge
  *    humano não fica preso por causa do GitHub); sucesso limpa a marca.
+ *  - `optional`: um pedido que a revisão não espera (sugestões escolhidas por uma pessoa). Falha não
+ *    mexe na revisão: lança o motivo, para quem pediu saber.
  * Qualquer outra falha vira `impasse` com o erro, mas só se a revisão ainda está na fase e na rodada
  * para as quais o texto saiu (uma resposta que pousou no meio ganha). Nunca lança. Devolve se entregou.
  */
 export async function relayReview(
-  r: Review, side: Side, text: string, opts: { unpause?: boolean; approve?: boolean } = {},
+  r: Review, side: Side, text: string, opts: { unpause?: boolean; approve?: boolean; optional?: boolean } = {},
 ): Promise<boolean> {
   const cardId = side === "author" ? r.cardId : r.reviewerCardId;
   const userId = side === "author" ? r.authorUserId : r.reviewerUserId;
@@ -274,6 +282,7 @@ export async function relayReview(
   } catch (err) {
     const reason = (err as Error).message;
     logger.warn({ review: r.id, card: cardId, side, detail: reason }, "PR review relay failed");
+    if (opts.optional) throw new Error(`envio_falhou: não consegui entregar ao card do ${side === "author" ? "autor" : "revisor"} (${reason})`);
     const who = side === "author" ? "autor" : "revisor";
     try {
       if (opts.approve) {
@@ -531,6 +540,9 @@ const AUTHOR_ANSWERS: ReadonlySet<string> = new Set<AuthorAnswerStatus>(["fixed"
 const answerableSuggestion = (f: Finding): boolean =>
   f.severity === "suggestion" && f.status !== "dropped" && f.status !== "accepted_risk";
 
+/** Dúvida que o autor pode resolver ou explicar: nenhum humano decidiu, e ela segue em pé. */
+const answerableQuestion = (f: Finding): boolean => pendingQuestions([f]).length > 0;
+
 /** "2 corrigido(s), 1 contestado(s), 1 não vai(ão) aplicar" — só o que houve. */
 function answerCounts(items: AuthorAnswer[]): string {
   const n = (status: AuthorAnswerStatus) => items.filter((it) => it.status === status).length;
@@ -569,7 +581,7 @@ export async function submitAuthorResponse(
     const known = new Map(r.findings.map((f) => [f.id, f]));
     return (it: AuthorAnswer) => {
       const f = known.get(it.id);
-      return !!f && (answerableSuggestion(f) || (round && actionableForAuthor(f)));
+      return !!f && (answerableSuggestion(f) || answerableQuestion(f) || (round && actionableForAuthor(f)));
     };
   };
   // As recusas valem antes da mutação, e só sobre o que ela vai aceitar: uma resposta mal formada a
@@ -590,15 +602,27 @@ export async function submitAuthorResponse(
     const allowed = payload.items.filter((it) => answerable(it) && (round || changed(it)));
     const ignored = payload.items.filter((it) => !answerable(it)).map((it) => it.id);
     if (!round && allowed.length === 0 && ignored.length === 0) return;
+    // Fora da rodada, resposta a DÚVIDA com a revisão esperando decisão: o revisor confere (rodada
+    // seguinte, ou conferência extra da última) em vez de a dúvida ficar parada esperando gente.
+    const doubts = !round && r.phase === "reviewing" && r.lastSubmitRound === r.round &&
+      allowed.some((it) => known.get(it.id)!.severity === "question");
     if (allowed.length || round) {
       r.findings = applyAuthorResponses(r, allowed);
       r.prHeadSha = headSha;
-      note(r, "author", `${round ? "" : "Sugestões respondidas: "}${answerCounts(allowed)}; head ${headSha.slice(0, 7)}.`, { items: allowed });
+      const what = round ? "" : doubts ? "Dúvidas e sugestões respondidas: " : "Sugestões respondidas: ";
+      note(r, "author", `${what}${answerCounts(allowed)}; head ${headSha.slice(0, 7)}.`, { items: allowed });
     }
     if (ignored.length) {
       note(r, "system", round
         ? `Respostas ignoradas (id desconhecido ou item que não espera resposta do autor): ${ignored.join(", ")}.`
         : `Fora da rodada de correção só as respostas a sugestões valem; ignoradas: ${ignored.join(", ")}.`);
+    }
+    if (doubts) {
+      if (r.round < MAX_ROUNDS) r.round += 1;
+      else r.lastSubmitRound = r.round - 1;
+      note(r, "system", `O autor respondeu dúvida: rodada ${r.round} de ${MAX_ROUNDS}, o revisor confere.`);
+      opened = true;
+      return;
     }
     if (!round) return;
     r.lastRespondRound = r.round;
@@ -614,6 +638,33 @@ export async function submitAuthorResponse(
 }
 
 /* ------------------------------------------------------------------ humano */
+
+/**
+ * Uma pessoa escolheu, no painel, sugestões do revisor para o autor aplicar (`POST
+ * /api/reviews/:id/suggestions`; quem pode é a rota). Só sugestão em aberto; revisão encerrada recusa.
+ * A conversa conta quem pediu o quê, e a lista vai ao card do autor — que sai de Paused, porque uma
+ * pessoa pediu agora. O autor aplica, empurra e responde item a item (`fixed`/`wontfix`); o push depois
+ * do pronto volta a revisão ao revisor, que confere.
+ */
+export async function requestSuggestions(reviewId: string, findingIds: string[], by: string): Promise<Review> {
+  const review = await getReview(reviewId);
+  if (!review) throw new Error("review not found");
+  if (CLOSED.has(review.phase)) throw new Error(`revisao_encerrada: a revisão já está em ${review.phase}`);
+  const ids = [...new Set(findingIds)];
+  const chosen = review.findings.filter((f) => ids.includes(f.id) && f.severity === "suggestion" && f.status === "open");
+  if (ids.length === 0 || chosen.length !== ids.length) {
+    throw new Error("sem_sugestao: escolha uma ou mais sugestões em aberto da revisão");
+  }
+  // Primeiro a entrega: um pedido que não chegou não fica no log como feito (e não mexe na revisão).
+  const text = authorSuggestionsPrompt(review, chosen, { by, coauthorTrailer: await coauthorTrailer(review) });
+  await relayReview(review, "author", text, { unpause: true, optional: true });
+  logger.info({ audit: true, action: "review.suggestions", review: reviewId, findings: ids, by }, "PR review: suggestions sent to the author");
+  return await mutateReview(reviewId, (r) => {
+    note(r, "human", `Pediu ao autor aplicar ${chosen.length === 1 ? "a sugestão" : "as sugestões"} ${ids.join(", ")}.`, {
+      items: chosen.map((f) => ({ id: f.id, status: f.status })), by,
+    });
+  });
+}
 
 /**
  * A decisão do revisor HUMANO sobre um item: uma dúvida (`question`) ou um bloqueante travado.

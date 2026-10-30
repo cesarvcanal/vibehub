@@ -196,9 +196,12 @@ export function blockingOpen(findings: Finding[]): Finding[] {
   return findings.filter((f) => f.severity === "blocking" && isOpen(f));
 }
 
-/** Dúvidas que esperam decisão humana. */
+/**
+ * Dúvidas que esperam decisão: nenhum humano decidiu e ainda estão em pé. Uma dúvida que o autor
+ * resolveu e o revisor conferiu (`fixed`), ou que o revisor retirou (`dropped`), não espera ninguém.
+ */
 export function pendingQuestions(findings: Finding[]): Finding[] {
-  return findings.filter((f) => f.severity === "question" && !f.humanDecision);
+  return findings.filter((f) => f.severity === "question" && !f.humanDecision && isOpen(f));
 }
 
 /**

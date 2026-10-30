@@ -101,7 +101,8 @@ function classification(): string {
       "escrita do repo, ex. CLAUDE.md, com o trecho em detail) ou scenario (ref = arquivo:linha, detail = o cenário concreto " +
       "que quebra, inclusive funcionalidade que já existia). Bloqueante sem prova vira sugestão no servidor.",
     "- suggestion: melhoria que não bloqueia.",
-    "- question: risco que pode comprometer, mas você não tem certeza. Vai para o revisor humano decidir; o ciclo segue com o resto.",
+    "- question: risco que pode comprometer, mas você não tem certeza. Fica esperando decisão: o revisor humano decide no " +
+      "painel, ou o autor resolve/explica e você confere na rodada seguinte. O ciclo segue com o resto.",
     "- refuted: achado que a verificação derrubou (fica só no histórico).",
   ].join("\n");
 }
@@ -173,6 +174,9 @@ export function reviewerDeltaPrompt(r: Review): string {
   const waiting = pendingQuestions(r.findings);
   // As sugestões em aberto, e as que o autor respondeu depois da última fala do revisor (ele ainda não conferiu).
   const answered = answeredSinceReviewer(r);
+  // Dúvida que o autor respondeu (resolvida ou explicada) e nenhum humano decidiu: o revisor confere.
+  const answeredDoubts = r.findings.filter((f) => f.severity === "question" && !f.humanDecision && answered.has(f.id));
+  const stillWaiting = waiting.filter((f) => !answered.has(f.id));
   const suggestions = r.findings.filter((f) => f.severity === "suggestion" && (f.status === "open" || answered.has(f.id)));
   const since = r.reviewedSha
     ? `git diff ${r.reviewedSha}..HEAD`
@@ -196,8 +200,15 @@ export function reviewerDeltaPrompt(r: Review): string {
           "pelo servidor (a IA não retira o que um humano bloqueou).",
       ]
       : []),
-    ...(waiting.length
-      ? ["   Esperando o revisor humano (não dê veredito):", lines(waiting, "")]
+    ...(answeredDoubts.length
+      ? [
+        "   Dúvidas que o autor respondeu: fixed se ele resolveu de verdade, dropped se você aceita a explicação, open se " +
+          "continua dúvida (aí ela volta a esperar o revisor humano).",
+        lines(answeredDoubts, ""),
+      ]
+      : []),
+    ...(stillWaiting.length
+      ? ["   Esperando o revisor humano (não dê veredito):", lines(stillWaiting, "")]
       : []),
     ...(suggestions.length
       ? [
@@ -241,7 +252,13 @@ export function authorFixPrompt(r: Review, opts: { coauthorTrailer?: string } = 
     "",
     "Lista fechada (responda cada um):",
     lines(todo, "nenhum item"),
-    ...(waiting.length ? ["Dúvidas com o revisor humano (não mexa nelas agora):", lines(waiting, "")] : []),
+    ...(waiting.length
+      ? [
+        "Dúvidas (o revisor humano pode decidir no painel; se você resolver, responda fixed com o commit, ou contested com a " +
+          "explicação e a prova — o revisor confere):",
+        lines(waiting, ""),
+      ]
+      : []),
     ...(suggestions.length
       ? [
         "Sugestões (não bloqueiam; aplique as que valem no escopo e responda cada uma: fixed com o commit, " +
@@ -268,6 +285,48 @@ export function authorFixPrompt(r: Review, opts: { coauthorTrailer?: string } = 
     "   items: [{ id, status: \"fixed\" | \"contested\" | \"wontfix\" (wontfix só em sugestão), commit?, reply }]",
     "   Não termine o turno sem chamar essa ferramenta: é ela que devolve a vez ao revisor.",
   ].join("\n");
+}
+
+/**
+ * Uma pessoa escolheu, no painel, sugestões do revisor para o autor aplicar. Sugestão não bloqueia: o
+ * autor aplica as que fazem sentido no escopo e diz por que não aplica as outras (`wontfix`). O push
+ * depois do pronto volta a revisão ao revisor, que confere o que entrou.
+ */
+export function authorSuggestionsPrompt(r: Review, list: Finding[], opts: { by: string; coauthorTrailer?: string }): string {
+  return [
+    header(r),
+    `${opts.by} pediu, no painel da revisão, que você aplique estas sugestões do revisor neste PR. Sugestão não bloqueia: ` +
+      "aplique as que fazem sentido no escopo do PR; a que não fizer sentido, não aplique e diga por quê.",
+    rules(),
+    "",
+    "Sugestões pedidas:",
+    lines(list, ""),
+    "",
+    "Para cada uma:",
+    "- Aplicou: commit, com teste do que mudou.",
+    "- Não vai aplicar (fora do escopo, piora outra coisa, já resolvida): explique no reply.",
+    ...(opts.coauthorTrailer
+      ? [`Em cada commit, termine a mensagem com esta linha (o crédito do co-autor no Git): ${opts.coauthorTrailer}`]
+      : []),
+    "",
+    "Depois:",
+    "1. Rode os testes do que você mexeu.",
+    `2. Faça push na branch do PR: git push origin HEAD:${r.prBranch}`,
+    "3. Guarde o sha: git rev-parse HEAD",
+    `4. Chame a ferramenta MCP ${TOOL_RESPOND} com:`,
+    `   card: "${r.cardId}"   (o $VIBEHUB_CARD_ID deste terminal)`,
+    `   review: "${r.id}"`,
+    `   round: ${r.round}`,
+    "   headSha: o sha do passo 3 (40 caracteres)",
+    "   items: [{ id, status: \"fixed\" (com commit) | \"wontfix\" (reply com o motivo), commit?, reply }]",
+    "   O push faz a revisão voltar ao revisor, que confere o que entrou: é o esperado. Nunca mergeie.",
+  ].join("\n");
+}
+
+/** O aviso, no card do autor (o do revisor fica escondido do board), de dúvida esperando quem decide. */
+export function authorQuestionNoticeText(r: Review, decider: string): string {
+  const n = pendingQuestions(r.findings).length;
+  return `PR #${r.prNumber}: ${n} ${n === 1 ? "dúvida" : "dúvidas"} esperando a decisão de ${decider} no painel da revisão`;
 }
 
 /** Pronto: o revisor aprova no GitHub. Aprovar não é mergear. */
