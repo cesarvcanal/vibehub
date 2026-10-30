@@ -58,6 +58,20 @@ function Tour() {
       </header>
 
       <Section
+        n={0}
+        title="Ao vivo: a revisão inteira andando sozinha"
+        caption={
+          <p>
+            Um passo a cada 3 segundos, como o painel se move quando o servidor responde: o revisor “digitando”, a rodada
+            dele chegando, o autor corrigindo, a revisão pronta, a IA mexendo depois do pronto, o PR voltando ao revisor e as
+            sugestões conferidas. Nada é recarregado: é a mesma leitura ao vivo do app.
+          </p>
+        }
+      >
+        <Frame label="O painel, sozinho (repete em loop)">{Panel.AoVivo.render!(base, {} as never)}</Frame>
+      </Section>
+
+      <Section
         n={1}
         title="Dúvida esperando decisão — antes ninguém sabia"
         caption={
