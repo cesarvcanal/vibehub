@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { PrReviewBlock } from "@/features/board/components/PrReviewBlock";
 import type { CardPr } from "@/api/types";
 
-/** The PR line above the composer, in every state its review can be in. */
+/** The PR line above the composer, in every state its review can be in while the PR is open (a merged one leaves). */
 const PR: CardPr = {
   number: 211, url: "https://github.com/cesarvcanal/vibehub/pull/211", base: "main", branch: "card/ajuste-layout-240c", openedAt: 1,
 };
@@ -29,4 +29,3 @@ export const IaMexendo: Story = {
   args: { review: { id: "r1", prNumber: 211, phase: "ready", round: 1 }, authorWorking: true },
 };
 export const Impasse: Story = { name: "Impasse", args: { review: { id: "r1", prNumber: 211, phase: "impasse", round: 3 } } };
-export const Mergeado: Story = { name: "Mergeado", args: { review: { id: "r1", prNumber: 211, phase: "merged", round: 2 } } };

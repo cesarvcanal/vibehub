@@ -23,7 +23,8 @@ import { logger } from "../../utils/logger.js";
  * credential helper, which reads the card's token file — the same identity, already in place.
  *
  * Steps:
- *   a. push the card branch (`--force-with-lease` — the card owns its branch).
+ *   a. push the card branch (`--force-with-lease` — the card owns its branch; a branch the last merge
+ *      deleted on GitHub goes up again, see forgetDeletedRemoteBranch).
  *   b. open a PR to the target branch, or reuse the open one.
  *   c. the GATE. When the pull request has GitHub CI checks, THEY are the gate: wait for them (bounded)
  *      and read their verdict — the CI already runs the full suite on a clean machine, and running it
@@ -151,6 +152,23 @@ function dockerBashScript(containerName: string, body: string[]): string {
 }
 
 /**
+ * Bash line run right before the push: when `branch` no longer exists on the remote, drop the local
+ * `origin/<branch>`. A merge deletes the card's branch on GitHub ({@link afterPrMerged}), but the
+ * worktree keeps its remote-tracking ref at the old head; `--force-with-lease` leases against that
+ * ref, finds nothing on the remote and refuses with "stale info" — so a card that goes on working
+ * after its PR merged could never push again. `ls-remote --exit-code` answers 2 only for "no such
+ * ref": a branch that still exists (even moved by someone else) keeps its ref and its lease, and a
+ * network failure changes nothing (the push then fails as it would). PURE.
+ */
+export function forgetDeletedRemoteBranch(branch: string): string {
+  // The FULL ref: a bare name is a pattern matched against the END of every ref, so another branch
+  // like `feature/<branch>` would answer "exists" and keep the stale ref.
+  const remote = shQuote(`refs/heads/${branch}`);
+  const tracking = shQuote(`refs/remotes/origin/${branch}`);
+  return `git ls-remote --exit-code origin ${remote} >/dev/null 2>&1; if [ $? -eq 2 ]; then git update-ref -d ${tracking}; fi`;
+}
+
+/**
  * Script for steps (a)+(b): push the branch, then reuse an open PR or create one. Emits
  * `__VIBEHUB_DELIVER__ pr <url>` on success, or `__VIBEHUB_DELIVER__ error <stage>` with the
  * command output above it. Branch names are validated by the caller and shell-quoted here. PURE.
@@ -162,6 +180,7 @@ export function buildPushAndPrScript(
   const body = [
     ...ghTokenPreamble(token),
     `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
+    forgetDeletedRemoteBranch(branch),
     `if ! git push --force-with-lease origin ${shQuote(branch)}; then echo "${MARKER} error push"; exit 0; fi`,
     `URL=$(gh pr list --head ${shQuote(branch)} --base ${shQuote(target)} --state open --json url --jq '.[0].url' 2>/dev/null)`,
     `if [ -z "$URL" ]; then`,

@@ -96,21 +96,21 @@ describe("visiblePrs", () => {
     expect(visiblePrs({ prs: [merged] })).toEqual([]);
   });
 
-  it("...exceto o PR da revisão mergeada atual, que fica com a pill 'mergeado'", () => {
-    const old = { ...pr(10, 100), mergedAt: 500 };
+  it("o PR da revisão mergeada também sai: mergeado é trabalho feito, não fica na tela", () => {
     const current = { ...pr(12, 300, "prod"), mergedAt: 999 };
-    const summary = review({ prNumber: 12, phase: "merged" });
-    expect(visiblePrs({ prs: [old, current], review: summary }).map((p) => p.number)).toEqual([12]);
-    // a revisão mergeada de OUTRO PR não segura este
-    expect(visiblePrs({ prs: [old, current], review: review({ prNumber: 10, phase: "merged" }) }).map((p) => p.number)).toEqual([10]);
+    expect(visiblePrs({ prs: [pr(10, 100), current], review: review({ prNumber: 12, phase: "merged" }) }).map((p) => p.number)).toEqual([10]);
+    expect(visiblePrs({ prs: [current], review: review({ prNumber: 12, phase: "merged" }) })).toEqual([]);
     // uma revisão em andamento não devolve um PR já mergeado à lista
     expect(visiblePrs({ prs: [current], review: review({ prNumber: 12, phase: "fixing" }) })).toEqual([]);
   });
 
-  it("um PR sem a marca de mergeado fica, mesmo com a revisão dele mergeada (dado de antes do mergedAt)", () => {
+  it("a revisão mergeada tira o PR dela mesmo sem a marca mergedAt (dado antigo, ou o board ainda não leu)", () => {
     const prs = [pr(552, 100), pr(553, 200, "prod")];
-    expect(visiblePrs({ prs, review: review({ prNumber: 552, phase: "merged" }) }).map((p) => p.number)).toEqual([553, 552]);
+    expect(visiblePrs({ prs, review: review({ prNumber: 552, phase: "merged" }) }).map((p) => p.number)).toEqual([553]);
+    // só o PR daquela revisão: os outros, abertos, ficam
     expect(visiblePrs({ prs, review: review({ prNumber: 553, phase: "fixing" }) }).map((p) => p.number)).toEqual([553, 552]);
+    // revisão cancelada não diz nada sobre o PR: ele continua aberto
+    expect(visiblePrs({ prs, review: review({ prNumber: 552, phase: "cancelled" }) }).map((p) => p.number)).toEqual([553, 552]);
   });
 
   it("does not mutate the card's own list", () => {
