@@ -29,6 +29,7 @@ const STATUS_PT: Record<FindingStatus, string> = {
   contested: "contestado",
   accepted_risk: "risco aceito",
   dropped: "retirado",
+  wontfix: "não vai aplicar",
 };
 
 function header(r: Review): string {
@@ -160,7 +161,10 @@ export function reviewerDeltaPrompt(r: Review): string {
   const judged = r.findings.filter(underReview);
   const humanBlocked = judged.filter((f) => f.humanDecision === "block" || f.humanDecision === "keep");
   const waiting = pendingQuestions(r.findings);
-  const suggestions = r.findings.filter((f) => f.severity === "suggestion" && f.status === "open");
+  // As sugestões em aberto, e as que o autor respondeu e o revisor ainda não conferiu.
+  const suggestions = r.findings.filter(
+    (f) => f.severity === "suggestion" && (f.status === "open" || (f.authorReply !== undefined && f.reviewerReply === undefined)),
+  );
   const since = r.reviewedSha
     ? `git diff ${r.reviewedSha}..HEAD`
     : "o PR inteiro (não há sha da rodada anterior)";
@@ -188,7 +192,8 @@ export function reviewerDeltaPrompt(r: Review): string {
       : []),
     ...(suggestions.length
       ? [
-        "   Sugestões em aberto (não bloqueiam): dê fixed só às que o diff aplicou de verdade; as outras, deixe fora dos vereditos.",
+        "   Sugestões (não bloqueiam): dê fixed só às que o diff aplicou de verdade; open se o autor disse que aplicou e não " +
+          "aplicou; dropped se aceitar o motivo de um contestado/não vai aplicar; as demais, deixe fora dos vereditos.",
         lines(suggestions, ""),
       ]
       : []),
@@ -210,7 +215,7 @@ export function reviewerDeltaPrompt(r: Review): string {
 export function authorFixPrompt(r: Review): string {
   const todo = r.findings.filter(actionableForAuthor);
   const waiting = pendingQuestions(r.findings);
-  const suggestions = r.findings.filter((f) => f.severity === "suggestion" && f.introducedInRound === r.round);
+  const suggestions = r.findings.filter((f) => f.severity === "suggestion" && f.status === "open");
   return [
     header(r),
     "O revisor encontrou problemas no seu PR. Siga a skill superpowers:receiving-code-review: confira cada item com rigor " +
@@ -226,7 +231,11 @@ export function authorFixPrompt(r: Review): string {
     lines(todo, "nenhum item"),
     ...(waiting.length ? ["Dúvidas com o revisor humano (não mexa nelas agora):", lines(waiting, "")] : []),
     ...(suggestions.length
-      ? ["Sugestões (não bloqueiam; não precisa responder nem aplicar):", lines(suggestions, "")]
+      ? [
+        "Sugestões (não bloqueiam; aplique as que valem no escopo e responda cada uma: fixed com o commit, " +
+          "contested ou wontfix com o motivo no reply):",
+        lines(suggestions, ""),
+      ]
       : []),
     "",
     "Depois de corrigir:",
@@ -241,7 +250,7 @@ export function authorFixPrompt(r: Review): string {
     `   review: "${r.id}"`,
     `   round: ${r.round}`,
     "   headSha: o sha do passo 4 (40 caracteres)",
-    "   items: [{ id, status: \"fixed\" | \"contested\", commit?, reply }]",
+    "   items: [{ id, status: \"fixed\" | \"contested\" | \"wontfix\" (wontfix só em sugestão), commit?, reply }]",
     "   Não termine o turno sem chamar essa ferramenta: é ela que devolve a vez ao revisor.",
   ].join("\n");
 }

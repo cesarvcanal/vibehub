@@ -8,7 +8,11 @@ export const MAX_ROUNDS = 3;
 
 export type ReviewPhase = "reviewing" | "fixing" | "ready" | "impasse" | "merged" | "cancelled";
 export type FindingSeverity = "blocking" | "suggestion" | "question" | "refuted";
-export type FindingStatus = "open" | "fixed" | "contested" | "accepted_risk" | "dropped";
+/** `wontfix`: o autor decidiu não aplicar uma SUGESTÃO, com o motivo (sugestão não bloqueia; bloqueante não aceita). */
+export type FindingStatus = "open" | "fixed" | "contested" | "accepted_risk" | "dropped" | "wontfix";
+
+/** O que o autor responde de um achado: corrigido, contestado (com prova) ou, só em sugestão, não vai aplicar. */
+export type AuthorAnswerStatus = "fixed" | "contested" | "wontfix";
 
 export interface FindingProof {
   kind: "failing_test" | "rule" | "scenario";
@@ -156,16 +160,22 @@ export function applyReviewerVerdicts(
   return out;
 }
 
-/** Respostas do autor. Contestar exige justificativa: contestação muda não dá ao revisor o que julgar. */
+/**
+ * Respostas do autor. Contestar e não aplicar exigem justificativa: uma resposta muda não dá ao revisor
+ * o que julgar. `wontfix` só vale para sugestão — bloqueante se corrige ou se contesta com prova.
+ */
 export function applyAuthorResponses(
   review: Review,
-  items: { id: string; status: "fixed" | "contested"; commit?: string; reply: string }[],
+  items: { id: string; status: AuthorAnswerStatus; commit?: string; reply: string }[],
 ): Finding[] {
   const out = review.findings.map((f) => ({ ...f }));
   for (const it of items) {
     const f = mustFind(out, it.id);
-    if (it.status === "contested" && (it.reply ?? "").trim() === "") {
-      throw new Error(`contestar o achado ${it.id} exige uma resposta`);
+    if (it.status !== "fixed" && (it.reply ?? "").trim() === "") {
+      throw new Error(`${it.status === "wontfix" ? "não aplicar" : "contestar"} o achado ${it.id} exige uma resposta`);
+    }
+    if (it.status === "wontfix" && f.severity !== "suggestion") {
+      throw new Error(`wontfix vale só para sugestão: ${it.id} é ${f.severity} (corrija ou conteste com prova)`);
     }
     f.status = it.status;
     f.authorReply = it.reply;

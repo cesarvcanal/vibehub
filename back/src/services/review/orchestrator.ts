@@ -15,7 +15,8 @@ import { logger } from "../../utils/logger.js";
 import {
   MAX_ROUNDS, applyAuthorResponses, applyReviewerVerdicts, blockingOpen, normalizeSubmittedFindings, pendingQuestions,
   phaseAfterReviewerRound,
-  type Finding, type FindingStatus, type Review, type ReviewEvent, type ReviewEventItem, type ReviewPhase, type SubmittedFinding,
+  type AuthorAnswerStatus, type Finding, type FindingStatus, type Review, type ReviewEvent, type ReviewEventItem, type ReviewPhase,
+  type SubmittedFinding,
 } from "./model.js";
 import {
   activeReviewFor, getReview, insertReview, listReviewsForCards, mutateReview, reviewByReviewerCard,
@@ -479,44 +480,93 @@ async function authorReview(authorCardId: string, reviewId?: string): Promise<Re
   return fixing[0] ?? active.reduce((a, b) => (b.createdAt >= a.createdAt ? b : a));
 }
 
+type AuthorAnswer = { id: string; status: AuthorAnswerStatus; commit?: string; reply: string };
+const AUTHOR_ANSWERS: ReadonlySet<string> = new Set<AuthorAnswerStatus>(["fixed", "contested", "wontfix"]);
+
+/** Sugestão que ainda aceita resposta do autor: não foi retirada nem aceita como risco por ninguém. */
+const answerableSuggestion = (f: Finding): boolean =>
+  f.severity === "suggestion" && f.status !== "dropped" && f.status !== "accepted_risk";
+
+/** "2 corrigido(s), 1 contestado(s), 1 não vai(ão) aplicar" — só o que houve. */
+function answerCounts(items: AuthorAnswer[]): string {
+  const n = (status: AuthorAnswerStatus) => items.filter((it) => it.status === status).length;
+  const parts = [`${n("fixed")} corrigido(s)`, `${n("contested")} contestado(s)`];
+  if (n("wontfix")) parts.push(`${n("wontfix")} não vai(ão) aplicar`);
+  return parts.join(", ");
+}
+
 /**
- * A resposta do autor (`vibehub_review_respond`). Só o card do autor chama; idempotente pela rodada.
- * O autor só responde ao que bloqueia e está em pé: resposta a sugestão ou a item fechado é ignorada
- * com nota no log (a IA pode listar tudo; não é motivo para recusar o resto). Abre a rodada seguinte.
+ * A resposta do autor (`vibehub_review_respond`). Só o card do autor chama.
+ *  - Na rodada de correção (`fixing`), idempotente pela rodada: responde ao que bloqueia (corrigido ou
+ *    contestado) e, se quiser, às sugestões (corrigida, contestada ou `wontfix` com o motivo); abre a
+ *    rodada seguinte, com o delta ao revisor.
+ *  - Fora dela, com a revisão aberta (inclusive em `ready`, quando alguém mandou a IA aplicar as
+ *    sugestões): só as respostas a SUGESTÕES valem — fecham o item no painel, sem abrir rodada e sem
+ *    mandar nada a ninguém (um push que tenha vindo junto a conferência do GitHub pega). A mesma
+ *    resposta de novo não grava outra fala.
+ * Resposta a id desconhecido, a item fechado ou a bloqueante fora da rodada vai ao log, sem derrubar o
+ * resto. `wontfix` em bloqueante e contestar/não aplicar sem motivo são recusados antes de mexer em nada.
  */
 export async function submitAuthorResponse(
   authorCardId: string,
-  payload: {
-    round: number;
-    items: { id: string; status: "fixed" | "contested"; commit?: string; reply: string }[];
-    headSha: string;
-    reviewId?: string;
-  },
+  payload: { round: number; items: AuthorAnswer[]; headSha: string; reviewId?: string },
 ): Promise<Review> {
   const review = await authorReview(authorCardId, payload.reviewId);
-  const fresh = (r: Review) => r.phase === "fixing" && payload.round === r.round && r.lastRespondRound !== payload.round;
-  if (!fresh(review)) return review;
+  if (CLOSED.has(review.phase)) return review;
+  const bad = payload.items.filter((it) => !AUTHOR_ANSWERS.has(it.status));
+  if (bad.length) {
+    throw new Error(`status inválido (${bad.map((it) => it.id).join(", ")}): o autor responde fixed, contested ou wontfix`);
+  }
   const headSha = assertHeadSha(payload.headSha);
-  const bad = payload.items.filter((it) => it.status !== "fixed" && it.status !== "contested");
-  if (bad.length) throw new Error(`status inválido (${bad.map((it) => it.id).join(", ")}): o autor só responde fixed ou contested`);
+  // As recusas valem antes da mutação: uma resposta mal formada não muda nada.
+  applyAuthorResponses(review, payload.items.filter((it) => review.findings.some((f) => f.id === it.id)));
+
+  const fresh = (r: Review) => r.phase === "fixing" && payload.round === r.round && r.lastRespondRound !== payload.round;
+  if (fresh(review)) return await answerFixingRound(review, payload.items, headSha, fresh);
 
   let landed = false as boolean;
   const after = await mutateReview(review.id, (r) => {
-    if (!fresh(r)) return;
-    // Resposta a id que não existe, a sugestão ou a item fechado não derruba o resto: vai ao log.
+    if (CLOSED.has(r.phase)) return;
     const known = new Map(r.findings.map((f) => [f.id, f]));
-    const counts = (it: { id: string }) => {
+    const changes = (it: AuthorAnswer) => {
       const f = known.get(it.id);
-      return !!f && actionableForAuthor(f);
+      if (!f || !answerableSuggestion(f)) return false;
+      return f.status !== it.status || f.authorReply !== it.reply || (it.commit !== undefined && f.commit !== it.commit);
     };
-    const allowed = payload.items.filter(counts);
-    const ignored = payload.items.filter((it) => !counts(it)).map((it) => it.id);
+    const allowed = payload.items.filter(changes);
+    if (allowed.length === 0) return;
+    r.findings = applyAuthorResponses(r, allowed);
+    note(r, "author", `Sugestões respondidas: ${answerCounts(allowed)}; head ${headSha.slice(0, 7)}.`, {
+      items: allowed.map((it) => ({ id: it.id, status: it.status, reply: it.reply, commit: it.commit })),
+    });
+    const outside = payload.items.filter((it) => !allowed.includes(it) && !(known.get(it.id) && answerableSuggestion(known.get(it.id)!)));
+    if (outside.length) {
+      note(r, "system", `Fora da rodada de correção só as respostas a sugestões valem; ignoradas: ${outside.map((it) => it.id).join(", ")}.`);
+    }
+    landed = true;
+  });
+  return landed ? after : review;
+}
+
+/** A resposta da rodada de correção: o que bloqueia e as sugestões, e a rodada seguinte ao revisor. */
+async function answerFixingRound(
+  review: Review, items: AuthorAnswer[], headSha: string, fresh: (r: Review) => boolean,
+): Promise<Review> {
+  let landed = false as boolean;
+  const after = await mutateReview(review.id, (r) => {
+    if (!fresh(r)) return;
+    // Resposta a id que não existe ou a item fechado não derruba o resto: vai ao log.
+    const known = new Map(r.findings.map((f) => [f.id, f]));
+    const counts = (it: AuthorAnswer) => {
+      const f = known.get(it.id);
+      return !!f && (actionableForAuthor(f) || answerableSuggestion(f));
+    };
+    const allowed = items.filter(counts);
+    const ignored = items.filter((it) => !counts(it)).map((it) => it.id);
     r.findings = applyAuthorResponses(r, allowed);
     r.lastRespondRound = r.round;
     r.nudges = 0;
-    const fixed = allowed.filter((it) => it.status === "fixed").length;
-    const contested = allowed.length - fixed;
-    note(r, "author", `${fixed} corrigido(s), ${contested} contestado(s); head ${headSha.slice(0, 7)}.`, {
+    note(r, "author", `${answerCounts(allowed)}; head ${headSha.slice(0, 7)}.`, {
       items: allowed.map((it) => ({ id: it.id, status: it.status, reply: it.reply, commit: it.commit })),
     });
     if (ignored.length) {

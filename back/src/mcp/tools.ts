@@ -454,9 +454,12 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "the PR branch. Only the author card of that review may call it (`card` = YOUR OWN " +
         "$VIBEHUB_CARD_ID). One item per blocking finding: `fixed` (with the `commit` and a short `reply`) " +
         "or `contested` (the `reply` carries the proof: a test, a written repo rule, a file:line scenario). " +
-        "Answers to suggestions or to closed items are ignored. Calling twice for the same round is " +
-        "harmless. This never merges; the merge is a human button. Returns the review's phase and " +
-        "`next`, or { error }.",
+        "Suggestions may be answered too — `fixed` (commit), `contested` or `wontfix` (the `reply` says why; " +
+        "wontfix is for suggestions only) — in the fixing round AND later, also after the review is ready " +
+        "(e.g. you were asked to apply them): that closes them on the panel without opening a round. " +
+        "Answers to closed items are ignored. Calling twice is harmless. This never merges; the merge is a human button " +
+        "(the merger's). Returns the review's phase, `next` and `answered` (how many items now carry the " +
+        "status you sent), or { error }.",
       inputSchema: {
         card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this (author) terminal"),
         review: z.string().optional().describe("the review id from the prompt"),
@@ -464,7 +467,7 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         headSha: reviewHeadSha,
         items: z.array(z.object({
           id: z.string().min(1).describe("finding id from the list (f1, f2, ...)"),
-          status: z.enum(["fixed", "contested"]),
+          status: z.enum(["fixed", "contested", "wontfix"]),
           commit: z.string().max(80).optional().describe("the commit that fixes it"),
           reply: z.string().max(2000).describe("what you did, or the proof behind the contestation"),
         })).max(100),
@@ -474,7 +477,8 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
       try {
         const { card, review, ...payload } = a;
         const after = await submitAuthorResponse(card, { ...payload, reviewId: review });
-        return ok(reviewToolAnswer(after, "author", a.round));
+        const answered = a.items.filter((it) => after.findings.find((f) => f.id === it.id)?.status === it.status).length;
+        return ok({ ...reviewToolAnswer(after, "author", a.round), answered });
       } catch (e) {
         return fail(e);
       }
