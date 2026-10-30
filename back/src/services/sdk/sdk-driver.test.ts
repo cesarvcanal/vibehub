@@ -866,6 +866,12 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     await driver.waitMark('flags:{"effortLevel":"max"}');
     await driver.waitMark("slow:running");
     driver.send({ type: "set_effort", effort: "high" });
+    // Com o max segurado, o set_effort não deixa rastro: soltar o turno logo em seguida corria com a
+    // leitura do stdin, e sob carga o turno acabava antes, devolvia o "low" (certo, para uma troca
+    // DEPOIS do turno) e o teste falhava. O driver lê o stdin em ordem e na hora: a resposta a uma
+    // linha seguinte prova que o set_effort já foi lido.
+    driver.send({ type: "permission_decision", id: "barreira-effort", allow: false });
+    await driver.waitFor((e) => e.type === "error" && String(e.message).includes("barreira-effort"));
     await releaseSlowTurn();
     await driver.waitFor((e) => e.type === "result");
     await driver.waitMark('flags:{"effortLevel":"high"}');

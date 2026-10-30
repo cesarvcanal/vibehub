@@ -22,7 +22,19 @@ const NOBODY_WORKING: ReviewWorking = { author: false, reviewer: false };
  * When the phase or the round moves, the board's card lists are invalidated too, so the sidebar's
  * "PR #N · estado" line changes in the same second instead of on its own poll.
  */
-export function useLiveReview(cardId: string, opts: { enabled?: boolean; fast?: boolean } = {}) {
+export function useLiveReview(
+  cardId: string,
+  opts: {
+    enabled?: boolean;
+    fast?: boolean;
+    /**
+     * The id of the review the board's summary carries. When it is not the one read here and the one
+     * read here is closed, a NEWER review started where this screen did not see it (a closed review is
+     * no longer re-read): read again, so the newer one is followed live from now on.
+     */
+    summaryId?: string;
+  } = {},
+) {
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: cardReviewKey(cardId),
@@ -37,6 +49,11 @@ export function useLiveReview(cardId: string, opts: { enabled?: boolean; fast?: 
   });
   const review = query.data?.review ?? null;
   const working = query.data?.working ?? NOBODY_WORKING;
+  const outdated = review !== null && opts.summaryId !== undefined && opts.summaryId !== review.id && !reviewIsOpen(review.phase);
+  const { refetch } = query;
+  React.useEffect(() => {
+    if (outdated) void refetch();
+  }, [outdated, opts.summaryId, refetch]);
 
   // The sidebar line reads the card's summary, which the board list carries: refresh it when the
   // review moved. Not on the first read — that one only tells where the review already was.
@@ -58,5 +75,5 @@ export function useLiveReview(cardId: string, opts: { enabled?: boolean; fast?: 
     [queryClient, cardId],
   );
 
-  return { query, review, working, apply };
+  return { query, review, working, apply, outdated };
 }

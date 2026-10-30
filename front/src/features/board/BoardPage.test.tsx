@@ -1124,6 +1124,13 @@ describe("BoardPage — the PR line asks for the review panel", () => {
     await waitFor(async () => expect(await line()).toHaveTextContent("PR #552 · AI working on it"), { timeout: 6_000 });
   }, 30_000);
 
+  it("a merged review keeps its line under the card, reading merged — the chat's PR block is what leaves", async () => {
+    serve({ cards: [cards[0]!, { ...reviewed, review: { id: "r1", prNumber: 552, phase: "merged", round: 2 } }, cards[2]!] });
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    const nav = await screen.findByRole("navigation", { name: /projects/i });
+    expect(await within(nav).findByRole("link", { name: /PR #552/ })).toHaveTextContent("PR #552 · merged");
+  });
+
   it("clicking it with the card already open keeps the card open — the card's own row toggles, this does not", async () => {
     const user = userEvent.setup();
     renderApp(<><Url /><BoardPage /></>, { route: "/?project=p1&card=c2" });

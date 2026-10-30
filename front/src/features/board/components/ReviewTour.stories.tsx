@@ -137,7 +137,7 @@ function Tour() {
       <Section
         n={4}
         title="O bloco do PR acima do composer, em cada estado"
-        caption={<p>Lê a revisão ao vivo (a mesma leitura do painel): muda sozinho, sem recarregar a tela.</p>}
+        caption={<p>Lê a revisão ao vivo (a mesma leitura do painel): muda sozinho, sem recarregar a tela. Mergeado, o bloco sai do chat; a linha do card na barra lateral continua dizendo “mergeado”.</p>}
       >
         <div className="w-[760px] space-y-2">
           <PrReviewBlock cardId="c1" pr={PR} onOpenPanel={() => {}} />
@@ -145,7 +145,6 @@ function Tour() {
           <PrReviewBlock cardId="c1" pr={PR} review={{ id: "r1", prNumber: 211, phase: "reviewing", round: 1, pendingQuestions: 2 }} onOpenPanel={() => {}} />
           <PrReviewBlock cardId="c1" pr={PR} review={{ id: "r1", prNumber: 211, phase: "ready", round: 1 }} onOpenPanel={() => {}} />
           <PrReviewBlock cardId="c1" pr={PR} review={{ id: "r1", prNumber: 211, phase: "ready", round: 1 }} authorWorking onOpenPanel={() => {}} />
-          <PrReviewBlock cardId="c1" pr={PR} review={{ id: "r1", prNumber: 211, phase: "merged", round: 2 }} onOpenPanel={() => {}} />
         </div>
       </Section>
 
