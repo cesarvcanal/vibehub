@@ -569,16 +569,13 @@ describe("decisão humana", () => {
     expect(lastText()).toContain("--approve");
   });
 
-  it("decidir item em impasse recalcula a fase (mesmo sem a rodada do revisor entregue)", async () => {
+  it("decidir item em impasse por falha, com a rodada do revisor entregue, recalcula a fase", async () => {
     const o = await load();
-    const { author, review } = await started(o);
-    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
-    // a resposta do autor abre a rodada 2, mas o delta não chega ao revisor: impasse sem o submit da rodada 2
+    const { review } = await started(o);
+    // a rodada 1 do revisor pousou, mas a lista não chega ao autor: impasse com a conferência da rodada feita
     sendFailure = new Error("no agent running");
-    const stuck = await o.orch.submitAuthorResponse(author.id, {
-      round: 1, items: [{ id: "f1", status: "contested", reply: "o logger redige (src/log.ts:5)" }], headSha: SHA2,
-    });
-    expect(stuck).toMatchObject({ phase: "impasse", round: 2, lastSubmitRound: 1 });
+    const stuck = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    expect(stuck).toMatchObject({ phase: "impasse", round: 1, lastSubmitRound: 1 });
     sendFailure = null;
     send.mockClear();
 
@@ -587,6 +584,44 @@ describe("decisão humana", () => {
     expect(after.impasseReason).toBeUndefined();
     expect(send).toHaveBeenCalledTimes(1);
     expect(lastText()).toContain("--approve");
+  });
+
+  it("decidir em impasse sem a conferência da rodada não vai pra ready", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    const two = [BLOCKER, { ...BLOCKER, title: "sql sem bind", line: 80 }];
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: two, headSha: SHA1, summary: "r1" });
+    // o autor diz que corrigiu f1 e contesta f2; o delta não chega ao revisor: ninguém conferiu o "corrigido"
+    sendFailure = new Error("no agent running");
+    const stuck = await o.orch.submitAuthorResponse(author.id, {
+      round: 1,
+      items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }, { id: "f2", status: "contested", reply: "o bind é do ORM (src/db.ts:5)" }],
+      headSha: SHA2,
+    });
+    expect(stuck).toMatchObject({ phase: "impasse", round: 2, lastSubmitRound: 1 });
+    sendFailure = null;
+    send.mockClear();
+
+    // o humano libera o único item "travado": a decisão fica gravada, mas a fase não sai do impasse
+    const decided = await o.orch.decideQuestion(review.id, "f2", "accept_risk", "u-revisor");
+    expect(decided.phase).toBe("impasse");
+    expect(decided.impasseReason).toBe("no agent running");
+    expect(decided.findings[1]).toMatchObject({ status: "accepted_risk", humanDecision: "accept_risk" });
+    expect(send).not.toHaveBeenCalled();
+
+    // a saída é "tentar de novo": a vez volta ao revisor, que confere o f1 no diff
+    const retried = await o.orch.retryReview(review.id, "u-revisor");
+    expect(retried).toMatchObject({ phase: "reviewing", round: 2 });
+    expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+    expect(lastText()).toContain("rodada 2 de 3");
+    expect(lastText()).toContain("f1");
+
+    // o submit do revisor honra a decisão humana (o open da IA sobre f2 é ignorado)
+    const ready = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 2, findings: [], verdicts: [{ id: "f1", status: "fixed" }, { id: "f2", status: "open" }], headSha: SHA2, summary: "r2",
+    });
+    expect(ready.phase).toBe("ready");
+    expect(ready.findings[1]).toMatchObject({ status: "accepted_risk" });
   });
 
   it("veredito da IA não passa por cima de decisão humana", async () => {

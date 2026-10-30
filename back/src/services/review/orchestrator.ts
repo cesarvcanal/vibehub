@@ -492,8 +492,8 @@ export async function submitAuthorResponse(
  *  - dúvida: `block` (passa a bloquear), `drop` (retirada) ou `accept_risk`; `keep` não vale aqui.
  *  - bloqueante: `keep`/`block` (segue bloqueando; o dev resolve), `accept_risk` ou `drop`.
  * Em `reviewing` com a rodada do revisor já entregue, a fase é recalculada (autor, Approve ou impasse).
- * Em `impasse`, de qualquer motivo, sai para `ready` quando o último item travado é liberado. Fora
- * disso, só grava.
+ * Em `impasse` com a rodada do revisor entregue, de qualquer motivo, sai para `ready` quando o último
+ * item travado é liberado; sem ela, só grava (a saída é o `retryReview`). Fora disso, só grava.
  */
 export async function decideQuestion(reviewId: string, findingId: string, decision: Decision, by: string): Promise<Review> {
   if (!["block", "drop", "keep", "accept_risk"].includes(decision)) throw new Error(`decisão inválida: ${String(decision)}`);
@@ -525,8 +525,12 @@ export async function decideQuestion(reviewId: string, findingId: string, decisi
       r.phase = next.phase;
       if (next.impasseReason) r.impasseReason = next.impasseReason;
     } else if (r.phase === "impasse") {
-      // Impasse (de qualquer motivo, com ou sem a rodada do revisor entregue) sai pelo último item
-      // liberado; "manter" segura (o dev resolve na mão; o resto sai pelo retryReview).
+      // Sem a conferência do revisor nesta rodada, o "corrigido" do autor é palavra dele: ir a ready
+      // aqui pediria Approve de código que ninguém olhou (e um "fixed" sem commit mergearia o bug). A
+      // decisão fica gravada; a saída é o "tentar de novo", e o submit do revisor a honra.
+      if (r.lastSubmitRound !== r.round) return;
+      // Com a rodada conferida, o impasse (de qualquer motivo) sai pelo último item liberado;
+      // "manter" segura (o dev resolve na mão; o resto sai pelo retryReview).
       if (phaseAfterReviewerRound(r).phase !== "ready") return;
       r.phase = "ready";
       r.impasseReason = undefined;
