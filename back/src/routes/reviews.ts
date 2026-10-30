@@ -5,7 +5,7 @@ import { creatorAccountSlug } from "../auth/userGit.js";
 import { listUsers, type PublicUser } from "../auth/users.js";
 import * as registry from "../services/board/registry.js";
 import {
-  cancelReview, decideQuestion, requestSuggestions, retryReview, startReview, syncReviewSoon,
+  cancelReview, decideQuestion, decideSuggestions, retryReview, startReview, syncReviewSoon,
 } from "../services/review/orchestrator.js";
 import { mergeReviewedPr, ownGithubConnection } from "../services/review/merge.js";
 import { isBusy } from "../services/maestro/maestro.js";
@@ -216,8 +216,11 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  /** Sugestões escolhidas no painel, para o autor aplicar. Quem pode: revisor, autor, merger ou owner. */
-  app.post<{ Params: { id: string }; Body: { findingIds?: unknown } }>(
+  /**
+   * O que fazer com sugestões, escolhido no painel: `apply` (o autor aplica; `findingIds` é o nome
+   * antigo) e `skip` ("não fazer", sai da lista). Quem pode: revisor, autor, merger ou owner.
+   */
+  app.post<{ Params: { id: string }; Body: { findingIds?: unknown; apply?: unknown; skip?: unknown } }>(
     "/api/reviews/:id/suggestions", { preHandler: requireSession },
     async (req, reply) => {
       const found = await reviewFor(
@@ -225,12 +228,15 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
         (r, u) => [r.reviewerUserId, r.authorUserId, r.mergerUserId].includes(u.id) || isOwner(u), reply,
       );
       if (!found) return;
-      const ids = req.body?.findingIds;
-      if (!Array.isArray(ids) || !ids.every((id) => typeof id === "string")) {
-        return await reply.code(400).send({ error: "findingIds deve ser uma lista de ids de sugestões" });
+      const ids = (v: unknown): string[] | null =>
+        v === undefined ? [] : Array.isArray(v) && v.every((id) => typeof id === "string") ? (v as string[]) : null;
+      const apply = ids(req.body?.apply ?? req.body?.findingIds);
+      const skip = ids(req.body?.skip);
+      if (!apply || !skip) {
+        return await reply.code(400).send({ error: "apply e skip devem ser listas de ids de sugestões" });
       }
       try {
-        return await reply.send({ review: await requestSuggestions(found.review.id, ids as string[], found.user.username) });
+        return await reply.send({ review: await decideSuggestions(found.review.id, { apply, skip }, found.user.username) });
       } catch (err) {
         return await fail(reply, err, /revisao_encerrada|envio_falhou/);
       }

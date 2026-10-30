@@ -438,6 +438,23 @@ describe("pedir ao autor aplicar sugestões", () => {
     expect(ok.json().review.log.at(-1)).toMatchObject({ who: "human", by: "merger" });
     expect(send).toHaveBeenCalledTimes(1);
   });
+
+  it("'não fazer' (skip) também é desta rota, com as mesmas permissões", async () => {
+    const w = await world();
+    const started = (await startReview(w)).json().review as { id: string; reviewerCardId: string };
+    await (await orchestrator()).submitReviewerRound(started.reviewerCardId, {
+      round: 1, findings: [{ severity: "suggestion", title: "renomear" }], headSha: SHA1, summary: "uma sugestão",
+    });
+    const res = await app.inject({
+      method: "POST", url: `/api/reviews/${started.id}/suggestions`, headers: { cookie: w.autor.cookie }, payload: { skip: ["f1"] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().review.findings[0]).toMatchObject({ status: "dropped", humanDecision: "drop" });
+    const bad = await app.inject({
+      method: "POST", url: `/api/reviews/${started.id}/suggestions`, headers: { cookie: w.autor.cookie }, payload: { skip: "f1" },
+    });
+    expect(bad.statusCode).toBe(400);
+  });
 });
 
 describe("pessoas do card", () => {

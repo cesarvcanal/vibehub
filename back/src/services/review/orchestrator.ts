@@ -640,30 +640,54 @@ export async function submitAuthorResponse(
 /* ------------------------------------------------------------------ humano */
 
 /**
- * Uma pessoa escolheu, no painel, sugestões do revisor para o autor aplicar (`POST
- * /api/reviews/:id/suggestions`; quem pode é a rota). Só sugestão em aberto; revisão encerrada recusa.
- * A conversa conta quem pediu o quê, e a lista vai ao card do autor — que sai de Paused, porque uma
- * pessoa pediu agora. O autor aplica, empurra e responde item a item (`fixed`/`wontfix`); o push depois
- * do pronto volta a revisão ao revisor, que confere.
+ * Uma pessoa decidiu, no painel, o que fazer com sugestões do revisor (`POST
+ * /api/reviews/:id/suggestions`; quem pode é a rota): `apply` vai ao autor aplicar, `skip` sai da lista
+ * ("não fazer" — retirada por decisão humana, como o `drop` de uma dúvida). Só sugestão em aberto, e
+ * nenhuma nos dois lados; revisão encerrada recusa. A entrega ao autor vem antes de qualquer registro:
+ * se ela falhar, nada muda e o motivo volta. O autor aplica, empurra e responde item a item
+ * (`fixed`/`wontfix`); o push depois do pronto volta a revisão ao revisor, que confere.
  */
-export async function requestSuggestions(reviewId: string, findingIds: string[], by: string): Promise<Review> {
+export async function decideSuggestions(
+  reviewId: string, choice: { apply?: string[]; skip?: string[] }, by: string,
+): Promise<Review> {
   const review = await getReview(reviewId);
   if (!review) throw new Error("review not found");
   if (CLOSED.has(review.phase)) throw new Error(`revisao_encerrada: a revisão já está em ${review.phase}`);
-  const ids = [...new Set(findingIds)];
-  const chosen = review.findings.filter((f) => ids.includes(f.id) && f.severity === "suggestion" && f.status === "open");
-  if (ids.length === 0 || chosen.length !== ids.length) {
-    throw new Error("sem_sugestao: escolha uma ou mais sugestões em aberto da revisão");
+  const apply = [...new Set(choice.apply ?? [])];
+  const skip = [...new Set(choice.skip ?? [])];
+  const open = new Set(review.findings.filter((f) => f.severity === "suggestion" && f.status === "open").map((f) => f.id));
+  const all = [...apply, ...skip];
+  if (all.length === 0 || all.some((id) => !open.has(id)) || apply.some((id) => skip.includes(id))) {
+    throw new Error("sem_sugestao: escolha sugestões em aberto da revisão, cada uma para fazer ou para não fazer");
   }
-  // Primeiro a entrega: um pedido que não chegou não fica no log como feito (e não mexe na revisão).
-  const text = authorSuggestionsPrompt(review, chosen, { by, coauthorTrailer: await coauthorTrailer(review) });
-  await relayReview(review, "author", text, { unpause: true, optional: true });
-  logger.info({ audit: true, action: "review.suggestions", review: reviewId, findings: ids, by }, "PR review: suggestions sent to the author");
+  if (apply.length) {
+    const chosen = review.findings.filter((f) => apply.includes(f.id));
+    const text = authorSuggestionsPrompt(review, chosen, { by, coauthorTrailer: await coauthorTrailer(review) });
+    await relayReview(review, "author", text, { unpause: true, optional: true });
+  }
+  logger.info({ audit: true, action: "review.suggestions", review: reviewId, apply, skip, by }, "PR review: suggestions decided");
   return await mutateReview(reviewId, (r) => {
-    note(r, "human", `Pediu ao autor aplicar ${chosen.length === 1 ? "a sugestão" : "as sugestões"} ${ids.join(", ")}.`, {
-      items: chosen.map((f) => ({ id: f.id, status: f.status })), by,
-    });
+    if (skip.length) {
+      for (const f of r.findings) {
+        if (!skip.includes(f.id) || f.status !== "open") continue;
+        f.status = "dropped";
+        f.humanDecision = "drop";
+      }
+      note(r, "human", `Não fazer ${skip.length === 1 ? "a sugestão" : "as sugestões"} ${skip.join(", ")}.`, {
+        items: skip.map((id) => ({ id, status: "dropped" as const })), by,
+      });
+    }
+    if (apply.length) {
+      note(r, "human", `Pediu ao autor aplicar ${apply.length === 1 ? "a sugestão" : "as sugestões"} ${apply.join(", ")}.`, {
+        items: apply.map((id) => ({ id, status: "open" as const })), by,
+      });
+    }
   });
+}
+
+/** Só "fazer": as sugestões escolhidas vão ao autor ({@link decideSuggestions}). */
+export async function requestSuggestions(reviewId: string, findingIds: string[], by: string): Promise<Review> {
+  return await decideSuggestions(reviewId, { apply: findingIds }, by);
 }
 
 /**

@@ -1014,6 +1014,41 @@ describe("pedir ao autor aplicar as sugestões escolhidas", () => {
     expect(after.log.at(-1)).toMatchObject({ who: "human", by: "mussa", items: [{ id: "f1" }, { id: "f2" }] });
   });
 
+  it("'não fazer' tira a sugestão da lista por decisão de uma pessoa; 'fazer' vai ao autor, na mesma chamada", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 1, findings: [SUGGESTION, { severity: "suggestion", title: "extrair helper" }, { severity: "suggestion", title: "trocar lib" }],
+      headSha: SHA1, summary: "só sugestões",
+    });
+    send.mockClear();
+    const after = await o.orch.decideSuggestions(review.id, { apply: ["f2"], skip: ["f1", "f3"] }, "mussa");
+    expect(after.findings.map((f) => [f.id, f.status, f.humanDecision])).toEqual([
+      ["f1", "dropped", "drop"], ["f2", "open", undefined], ["f3", "dropped", "drop"],
+    ]);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![0]).toBe(author.id);
+    expect(lastText()).toContain("extrair helper");
+    expect(lastText()).not.toContain("trocar lib");
+    const human = after.log.filter((e) => e.who === "human");
+    expect(human.map((e) => e.text)).toEqual(["Não fazer as sugestões f1, f3.", "Pediu ao autor aplicar a sugestão f2."]);
+    // só 'não fazer': nada vai ao autor
+    send.mockClear();
+    const o2 = await o.orch.decideSuggestions(review.id, { skip: ["f2"] }, "mussa");
+    expect(o2.findings[1]).toMatchObject({ status: "dropped" });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("a mesma sugestão nos dois lados, ou envio ao autor que falha, não muda nada", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [SUGGESTION], headSha: SHA1, summary: "ok" });
+    await expect(o.orch.decideSuggestions(review.id, { apply: ["f1"], skip: ["f1"] }, "mussa")).rejects.toThrow(/sem_sugestao/);
+    sendFailure = new Error("card pausado");
+    await expect(o.orch.decideSuggestions(review.id, { apply: ["f1"] }, "mussa")).rejects.toThrow(/envio_falhou/);
+    expect((await o.store.getReview(review.id))?.findings[0]).toMatchObject({ status: "open" });
+  });
+
   it("só sugestão em aberto pode ser pedida; nada escolhido ou revisão encerrada é recusado", async () => {
     const o = await load();
     const { review } = await started(o);
