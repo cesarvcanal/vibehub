@@ -459,7 +459,8 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         await requireLevel(user, a.cardId, "work");
         // Ordering the delivery IS an order: the push, the PR and the merge go out as this person.
         await recordCardActor(user, a.cardId);
-        return ok(await deliverCard(a.cardId, { branch: a.branch, authorized: a.authorized === true, by: user.id }));
+        // The person IS the caller here (and was just made the card's actor): the order is theirs.
+        return ok(await deliverCard(a.cardId, { branch: a.branch, authorized: a.authorized === true, by: user.id, from: a.cardId }));
       } catch (e) {
         return fail(e);
       }

@@ -320,7 +320,8 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "say so plainly ('o PR está aberto em <base>; o merge é de quem revisa') instead of " +
         "retrying, and do not go around it with git or gh by hand. A card whose PR is under REVIEW: " +
         "the push always happens (it is how the author delivers a fix), and the merge goes through only " +
-        "when the order came from the review's merger and the review is ready — the same merge as the " +
+        "when the card delivers ITSELF (pass `from` = your own $VIBEHUB_CARD_ID), the order came from the " +
+        "review's merger and the review is ready — the same merge as the " +
         "panel's button, which also closes the review. Otherwise 'review_active' says who merges and " +
         "where the review stands; 'head_moved' = the push brought commits the reviewer has not seen and " +
         "the review went back to them. Never merge a reviewed PR any other way (gh pr merge, the GitHub API).",
@@ -328,11 +329,14 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         card: z.string().describe("id of the card to deliver (from vibehub_list_terminals)"),
         branch: z.string().optional().describe("target branch for the PR / merge. Absent = the project's base branch."),
         authorized: z.boolean().optional().describe("true = merge (deploy). Only when the user named the target. Never default true."),
+        from: z.string().optional().describe(
+          "YOUR OWN card id ($VIBEHUB_CARD_ID). A PR under review merges only when a card delivers ITSELF (from = card) by order of the review's merger.",
+        ),
       },
     },
     async (a) => {
       try {
-        return ok(await deliverCard(a.card, { branch: a.branch, authorized: a.authorized === true, by: actor }));
+        return ok(await deliverCard(a.card, { branch: a.branch, authorized: a.authorized === true, by: actor, from: a.from }));
       } catch (e) {
         return fail(e);
       }
