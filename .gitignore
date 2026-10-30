@@ -9,3 +9,9 @@ coverage/
 
 # Private to this install: migration tooling from the old panel (never published).
 back/scripts/migrate/
+
+# Storybook build output (npm run build-storybook in front/).
+storybook-static/
+
+# Snapshots and screenshots of the browser MCP.
+.playwright-mcp/

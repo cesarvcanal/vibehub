@@ -8,7 +8,11 @@ export const MAX_ROUNDS = 3;
 
 export type ReviewPhase = "reviewing" | "fixing" | "ready" | "impasse" | "merged" | "cancelled";
 export type FindingSeverity = "blocking" | "suggestion" | "question" | "refuted";
-export type FindingStatus = "open" | "fixed" | "contested" | "accepted_risk" | "dropped";
+/** `wontfix`: o autor decidiu não aplicar uma SUGESTÃO, com o motivo (sugestão não bloqueia; bloqueante não aceita). */
+export type FindingStatus = "open" | "fixed" | "contested" | "accepted_risk" | "dropped" | "wontfix";
+
+/** O que o autor responde de um achado: corrigido, contestado (com prova) ou, só em sugestão, não vai aplicar. */
+export type AuthorAnswerStatus = "fixed" | "contested" | "wontfix";
 
 export interface FindingProof {
   kind: "failing_test" | "rule" | "scenario";
@@ -32,11 +36,28 @@ export interface Finding {
   humanDecision?: "keep" | "accept_risk" | "block" | "drop";
 }
 
+/**
+ * Um achado citado numa fala, com o que aquele lado disse dele NAQUELE momento: o achado guarda só a
+ * última resposta de cada lado, e a conversa das IAs precisa da de cada rodada.
+ */
+export interface ReviewEventItem {
+  id: string;
+  status: FindingStatus;
+  reply?: string;
+  commit?: string;
+  /** O achado nasceu nesta fala (a rodada do revisor que o abriu). */
+  isNew?: boolean;
+}
+
 export interface ReviewEvent {
   at: number;
   round: number;
   who: "reviewer" | "author" | "system" | "human";
   text: string;
+  /** Os achados de que a fala trata. Ausente nas falas de sistema e nas gravadas antes deste campo. */
+  items?: ReviewEventItem[];
+  /** Quem fez, nas falas humanas (o username). */
+  by?: string;
 }
 
 export interface Review {
@@ -57,6 +78,11 @@ export interface Review {
   findings: Finding[];
   log: ReviewEvent[];
   reviewedSha?: string;
+  /**
+   * O head do PR na última vez que alguém o viu (o revisor ao submeter, o autor ao responder, a
+   * conferência do GitHub). Diferente de `reviewedSha` = o PR andou depois da revisão: o painel mostra.
+   */
+  prHeadSha?: string;
   impasseReason?: string;
   /**
    * `ready`, mas o pedido de Approve não chegou ao card do revisor: o PR segue com o
@@ -139,16 +165,22 @@ export function applyReviewerVerdicts(
   return out;
 }
 
-/** Respostas do autor. Contestar exige justificativa: contestação muda não dá ao revisor o que julgar. */
+/**
+ * Respostas do autor. Contestar e não aplicar exigem justificativa: uma resposta muda não dá ao revisor
+ * o que julgar. `wontfix` só vale para sugestão — bloqueante se corrige ou se contesta com prova.
+ */
 export function applyAuthorResponses(
   review: Review,
-  items: { id: string; status: "fixed" | "contested"; commit?: string; reply: string }[],
+  items: { id: string; status: AuthorAnswerStatus; commit?: string; reply: string }[],
 ): Finding[] {
   const out = review.findings.map((f) => ({ ...f }));
   for (const it of items) {
     const f = mustFind(out, it.id);
-    if (it.status === "contested" && (it.reply ?? "").trim() === "") {
-      throw new Error(`contestar o achado ${it.id} exige uma resposta`);
+    if (it.status !== "fixed" && (it.reply ?? "").trim() === "") {
+      throw new Error(`${it.status === "wontfix" ? "não aplicar" : "contestar"} o achado ${it.id} exige uma resposta`);
+    }
+    if (it.status === "wontfix" && f.severity !== "suggestion") {
+      throw new Error(`wontfix vale só para sugestão: ${it.id} é ${f.severity} (corrija ou conteste com prova)`);
     }
     f.status = it.status;
     f.authorReply = it.reply;
@@ -164,9 +196,12 @@ export function blockingOpen(findings: Finding[]): Finding[] {
   return findings.filter((f) => f.severity === "blocking" && isOpen(f));
 }
 
-/** Dúvidas que esperam decisão humana. */
+/**
+ * Dúvidas que esperam decisão: nenhum humano decidiu e ainda estão em pé. Uma dúvida que o autor
+ * resolveu e o revisor conferiu (`fixed`), ou que o revisor retirou (`dropped`), não espera ninguém.
+ */
 export function pendingQuestions(findings: Finding[]): Finding[] {
-  return findings.filter((f) => f.severity === "question" && !f.humanDecision);
+  return findings.filter((f) => f.severity === "question" && !f.humanDecision && isOpen(f));
 }
 
 /**

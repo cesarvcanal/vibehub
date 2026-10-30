@@ -677,7 +677,7 @@ async function pendingFor(
 }
 
 /** Is a turn running: the hook's dot says working, or the native chat's driver is mid-turn. */
-function isBusy(card: Card): boolean {
+export function isBusy(card: Card): boolean {
   return card.status === "working" || cardDriverActivity(card.id) === "turn";
 }
 

@@ -44,6 +44,8 @@ function finding(overrides: Partial<Finding> = {}): Finding {
 
 /** What the server will answer to `GET /cards/c1/review`; the test can change it between polls. */
 let current: Review | null;
+/** Who the server says is working right now (the cards' status). */
+let working: { author: boolean; reviewer: boolean };
 let me: Who;
 let reviewGets = 0;
 
@@ -53,7 +55,7 @@ function serve() {
     if (url === "/setup/state") return setupState();
     if (url === "/cards/c1/review") {
       reviewGets += 1;
-      return { review: current };
+      return current ? { review: current, working } : { review: null };
     }
     if (url === "/cards/c1/people") {
       return { people: Object.values(USERS).map((u) => ({ id: u.id, username: u.username, canReview: true })) };
@@ -83,6 +85,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   setLanguage("pt-BR");
   reviewGets = 0;
+  working = { author: false, reviewer: false };
   me = "rev";
   current = null;
   serve();
@@ -108,9 +111,14 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.getByText("rodada 2/3")).toBeInTheDocument();
     const roles = screen.getByTestId("review-roles");
     expect(within(roles).getByText("Revisor").parentElement).toHaveTextContent("mussa");
-    expect(within(roles).getByText("Corrige").parentElement).toHaveTextContent("albert");
+    expect(within(roles).getByText("Responsável").parentElement).toHaveTextContent("albert");
     expect(within(roles).getByText("Co-autor").parentElement).toHaveTextContent("bia");
-    expect(within(roles).getByText("Merge").parentElement).toHaveTextContent("kim");
+    expect(within(roles).getByText("Faz o merge").parentElement).toHaveTextContent("kim");
+    // Cada papel traz o nome que o GitHub dá a ele, e passar o mouse explica o que faz.
+    expect(within(roles).getByText("Responsável").parentElement).toHaveTextContent("assignee");
+    expect(within(roles).getByText("Responsável").parentElement).toHaveAttribute("title", expect.stringMatching(/committer e o pusher/));
+    expect(within(roles).getByText("Revisor").parentElement).toHaveTextContent("reviewer");
+    expect(within(roles).getByText("Co-autor").parentElement).toHaveAttribute("title", expect.stringMatching(/Co-authored-by/));
   });
 
   it("dúvida esperando o revisor humano: a pill diz aguardando decisão e a etapa diz de quem é a vez", async () => {
@@ -124,10 +132,10 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.getByText("Dúvida esperando a decisão do revisor humano.")).toBeInTheDocument();
   });
 
-  it("sem co-autor o papel mostra um traço", async () => {
+  it("sem co-autor o papel não aparece", async () => {
     open("rev", review());
     await loaded();
-    expect(within(screen.getByTestId("review-roles")).getByText("Co-autor").parentElement).toHaveTextContent("—");
+    expect(within(screen.getByTestId("review-roles")).queryByText("Co-autor")).toBeNull();
   });
 
   it("a barra tem 3 segmentos, os da rodada e antes preenchidos", async () => {
@@ -137,33 +145,26 @@ describe("ReviewPanel — o que mostra", () => {
     expect(steps.map((s) => s.getAttribute("data-state"))).toEqual(["done", "current", "todo"]);
   });
 
-  it("o cabeçalho da lista conta pelos dados: 3 bloqueiam · 1 sugestão · 1 derrubado", async () => {
-    open("rev", review({
-      findings: [
-        finding({ id: "a", status: "fixed" }),
-        finding({ id: "b", status: "fixed" }),
-        finding({ id: "c", status: "contested" }),
-        finding({ id: "d", severity: "suggestion" }),
-        finding({ id: "e", severity: "refuted", status: "dropped" }),
-      ],
-    }));
-    await loaded();
-    expect(screen.getByText(/3 bloqueiam · 1 sugestão · 1 derrubado/)).toBeInTheDocument();
-  });
-
-  it("os plurais do cabeçalho concordam (1 bloqueia, 2 dúvidas, 2 sugestões)", async () => {
+  it("cada grupo diz em palavras o que aquele tipo é, com quantos tem e quantos estão em aberto", async () => {
     open("rev", review({
       phase: "reviewing",
       findings: [
         finding({ id: "a" }),
-        finding({ id: "b", severity: "suggestion" }),
+        finding({ id: "b", status: "fixed" }),
         finding({ id: "c", severity: "suggestion" }),
-        finding({ id: "d", severity: "question", humanDecision: "drop", status: "dropped" }),
-        finding({ id: "e", severity: "question", humanDecision: "drop", status: "dropped" }),
+        finding({ id: "d", severity: "refuted" }),
       ],
     }));
     await loaded();
-    expect(screen.getByText(/1 bloqueia · 2 sugestões · 2 dúvidas/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    const blocking = screen.getAllByTestId("finding-group").find((g) => g.getAttribute("data-severity") === "blocking")!;
+    expect(within(blocking).getByRole("heading")).toHaveTextContent("Bloqueiam o merge (2)");
+    expect(within(blocking).getByRole("heading")).toHaveTextContent("1 em aberto, 1 resolvido(s)");
+    expect(within(blocking).getByText(/Impedem o merge até serem corrigidos/)).toBeInTheDocument();
+    const suggestions = screen.getAllByTestId("finding-group").find((g) => g.getAttribute("data-severity") === "suggestion")!;
+    expect(within(suggestions).getByText(/Melhorias que não impedem o merge/)).toBeInTheDocument();
+    // nada de linha de contagem com pontinhos nem rótulo em caixa alta
+    expect(screen.queryByText(/ · /)).toBeNull();
   });
 
   it("cada achado mostra severidade, título, arquivo:linha, prova, status e commit curto", async () => {
@@ -180,7 +181,7 @@ describe("ReviewPanel — o que mostra", () => {
     await loaded();
 
     const row = screen.getByText("Aba volta e busca 2x").closest("[data-testid=finding]") as HTMLElement;
-    expect(within(row).getByText("BLOQUEIA")).toBeInTheDocument();
+    expect(within(row).getByText("bloqueia")).toBeInTheDocument();
     expect(within(row).getByText("src/useInvalidacao.ts:96")).toBeInTheDocument();
     expect(within(row).getByText("teste falha")).toBeInTheDocument();
     expect(within(row).getByText("useInvalidacao.test.ts:96")).toBeInTheDocument();
@@ -194,6 +195,24 @@ describe("ReviewPanel — o que mostra", () => {
     const third = screen.getByText("Faz sentido?").closest("[data-testid=finding]") as HTMLElement;
     expect(within(third).getByText("dúvida")).toBeInTheDocument();
     expect(within(third).getByText("cenário")).toBeInTheDocument();
+  });
+
+  it("sugestão que o autor não vai aplicar aparece como tal, e o cabeçalho mostra o commit revisado e o atual quando o PR andou", async () => {
+    open("aut", review({
+      phase: "ready", reviewedSha: "a".repeat(40), prHeadSha: "b".repeat(40),
+      findings: [finding({ id: "s1", severity: "suggestion", status: "wontfix", title: "trocar a lib", authorReply: "fora do escopo" })],
+    }));
+    await loaded();
+    expect(within(screen.getByTestId("finding")).getByText("não vai aplicar")).toBeInTheDocument();
+    const commits = screen.getByTestId("review-commits");
+    expect(commits).toHaveTextContent("commit revisado aaaaaaa");
+    expect(commits).toHaveTextContent("o PR andou depois da revisão e está em bbbbbbb");
+  });
+
+  it("PR no mesmo commit da revisão: só o commit revisado, sem aviso", async () => {
+    open("aut", review({ phase: "ready", reviewedSha: "a".repeat(40), prHeadSha: "a".repeat(40) }));
+    await loaded();
+    expect(screen.getByTestId("review-commits")).not.toHaveTextContent("andou");
   });
 
   it("os cinco status têm o seu texto", async () => {
@@ -232,6 +251,7 @@ describe("ReviewPanel — o que mostra", () => {
       findings: [finding({ authorReply: "Contesto: já está no padrão.", reviewerReply: "Conferindo contra o guia." })],
     }));
     await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
     expect(screen.queryByText("Contesto: já está no padrão.")).toBeNull();
 
     await userEvent.click(screen.getByRole("button", { name: /respostas/ }));
@@ -246,32 +266,45 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.queryByRole("button", { name: /respostas/ })).toBeNull();
   });
 
-  it("Conversa das IAs mostra as 5 últimas e 'ver inteira' abre todas", async () => {
-    const log = Array.from({ length: 8 }, (_, i) => ({
-      at: i + 1, round: 1, who: (i % 2 ? "author" : "reviewer") as "author" | "reviewer", text: `fala ${i + 1}`,
+  it("abre na conversa; a aba Achados mostra a lista agrupada e as duas ficam montadas", async () => {
+    open("aut", review({
+      findings: [finding({ id: "f1", title: "Bloqueio A" }), finding({ id: "f2", severity: "suggestion", title: "Sugestão B" })],
+      log: [{ at: 1, round: 1, who: "reviewer", text: "achei duas coisas" }],
     }));
-    open("rev", review({ log }));
     await loaded();
+    expect(screen.getByRole("tab", { name: /Conversa/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("log")).toHaveTextContent("achei duas coisas");
 
-    const feed = screen.getByTestId("review-feed");
-    expect(within(feed).getByText("Conversa das IAs")).toBeInTheDocument();
-    expect(within(feed).queryByText("fala 3")).toBeNull();
-    for (const n of [4, 5, 6, 7, 8]) expect(within(feed).getByText(`fala ${n}`)).toBeInTheDocument();
-    expect(within(feed).getAllByText("revisor").length).toBeGreaterThan(0);
-    expect(within(feed).getAllByText("autor").length).toBeGreaterThan(0);
-
-    await userEvent.click(within(feed).getByRole("button", { name: "ver inteira" }));
-
-    for (const n of [1, 2, 3, 4, 5, 6, 7, 8]) expect(within(feed).getByText(`fala ${n}`)).toBeInTheDocument();
-    await userEvent.click(within(feed).getByRole("button", { name: "ver só as últimas" }));
-    expect(within(feed).queryByText("fala 3")).toBeNull();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    expect(screen.getByRole("tab", { name: /Achados/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getAllByTestId("finding-group").map((g) => g.getAttribute("data-severity"))).toEqual(["blocking", "suggestion"]);
+    // A conversa continua montada (escondida): voltar a ela não perde a rolagem.
+    expect(screen.getByTestId("review-conversation")).toBeInTheDocument();
   });
 
-  it("com 5 falas ou menos não há 'ver inteira'", async () => {
-    open("rev", review({ log: [{ at: 1, round: 1, who: "system", text: "Rodada 1 de 3" }] }));
+  it("fala que chega com o painel aberto entra animada; o histórico com que ele abriu fica parado", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const first = { at: 1, round: 1, who: "reviewer" as const, text: "primeira fala" };
+    open("aut", review({ phase: "fixing", log: [first] }));
     await loaded();
-    expect(within(screen.getByTestId("review-feed")).getByText("sistema")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "ver inteira" })).toBeNull();
+    const lines = () => screen.getAllByTestId("review-line");
+    expect(lines()[0]).not.toHaveAttribute("data-fresh");
+
+    current = review({ phase: "fixing", log: [first, { at: 2, round: 1, who: "author", text: "segunda fala" }] });
+    await tick(3_100);
+    await waitFor(() => expect(lines()).toHaveLength(2));
+    expect(lines()[0]).not.toHaveAttribute("data-fresh");
+    expect(lines()[1]).toHaveAttribute("data-fresh", "true");
+    expect(lines()[1].className).toContain("animate-in");
+    expect(lines()[1].className).toContain("motion-reduce:animate-none");
+  });
+
+  it("abre nos Achados quando quem olha tem uma decisão a tomar lá, e respeita a aba escolhida", async () => {
+    open("rev", review({ phase: "reviewing", lastSubmitRound: 2, findings: [finding({ id: "q1", severity: "question", title: "dúvida" })] }));
+    await loaded();
+    await waitFor(() => expect(screen.getByRole("tab", { name: /Achados/ })).toHaveAttribute("aria-selected", "true"));
+    await userEvent.click(screen.getByRole("tab", { name: /Conversa/ }));
+    expect(screen.getByRole("tab", { name: /Conversa/ })).toHaveAttribute("aria-selected", "true");
   });
 
   it("Abrir no GitHub leva ao PR e fechar chama onClose", async () => {
@@ -494,7 +527,7 @@ describe("ReviewPanel — merge", () => {
   it.each([
     ["conexão perdida (504)", () => failure(504, "Gateway Time-out")],
     ["409 merging", () => failure(409, { error: "merge já em andamento", reason: "merging" })],
-  ])("depois de 16 min sem merged (%s) a espera acaba: leitura para, botão volta e o painel manda conferir no GitHub", async (_name, error) => {
+  ])("depois de 16 min sem merged (%s) a espera acaba: botão volta e o painel manda conferir no GitHub", async (_name, error) => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     post.mockRejectedValue(error());
     open("mer", review({ phase: "ready" }));
@@ -512,11 +545,10 @@ describe("ReviewPanel — merge", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Não deu pra confirmar o merge — confira no GitHub");
     expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeEnabled();
-    // E a leitura parou: nada de GET a cada 3 s pra sempre.
-    const seen = reviewGets;
-    await tick(30_000);
-    expect(reviewGets).toBe(seen);
     // Sem sucesso falso se um merged aparecer depois (ninguém está mais conferindo).
+    current = review({ phase: "merged" });
+    await tick(10_100);
+    expect(await screen.findByText("Mergeado na dev")).toBeInTheDocument();
     expect(toast.success).not.toHaveBeenCalled();
   });
 
@@ -652,68 +684,96 @@ describe("ReviewPanel — merge", () => {
 describe("ReviewPanel — dúvidas e impasse", () => {
   const doubt = (overrides: Partial<Finding> = {}) =>
     finding({ id: "q1", severity: "question", title: "O cálculo está certo?", ...overrides });
+  /** The card of a finding, by its title. */
+  const cardOf = (title: string) => screen.getByText(title).closest("[data-testid=finding]") as HTMLElement;
+  /** Picks a decision in a finding's card and confirms it. */
+  async function decide(title: string, choice: RegExp) {
+    const card = cardOf(title);
+    await userEvent.click(within(card).getByRole("radio", { name: choice }));
+    await userEvent.click(within(card).getByRole("button", { name: "Confirmar decisão" }));
+  }
 
-  it("dúvida pendente mostra os botões só pro revisor", async () => {
+  it("dúvida pendente: o aviso no topo diz que precisa da decisão, e as três escolhas aparecem só pro revisor", async () => {
     open("rev", review({ phase: "reviewing", findings: [doubt()] }));
     await loaded();
-    expect(screen.getByRole("button", { name: "Bloquear" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Descartar" })).toBeInTheDocument();
+    expect(screen.getByTestId("decision-banner")).toHaveTextContent("Precisa da sua decisão: 1 dúvida do revisor");
+    const card = cardOf("O cálculo está certo?");
+    expect(within(card).getAllByRole("radio").map((r) => r.getAttribute("value"))).toEqual(["block", "accept_risk", "drop"]);
+    // cada escolha diz o que faz
+    expect(within(card).getByText("É problema: o autor corrige")).toBeInTheDocument();
+    expect(within(card).getByText(/Vira bloqueante/)).toBeInTheDocument();
+    // sem escolha, não confirma
+    expect(within(card).getByRole("button", { name: "Confirmar decisão" })).toBeDisabled();
     cleanup();
 
     // O owner também decide.
     open("own", review({ phase: "reviewing", findings: [doubt()] }));
     await loaded();
-    expect(screen.getByRole("button", { name: "Bloquear" })).toBeInTheDocument();
+    expect(within(cardOf("O cálculo está certo?")).getAllByRole("radio")).toHaveLength(3);
     cleanup();
 
-    // Autor, responsável pelo merge e co-autor veem a dúvida, sem os botões.
+    // Autor, responsável pelo merge e co-autor veem a dúvida e por quem ela espera, sem as escolhas.
     for (const who of ["aut", "mer", "co"] as const) {
       open(who, review({ phase: "reviewing", findings: [doubt()] }));
       await loaded();
+      expect(screen.getByTestId("decision-banner")).toHaveTextContent("Esperando mussa decidir 1 dúvida");
+      expect(screen.queryByRole("button", { name: "Decidir agora" })).toBeNull();
+      await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
       expect(screen.getByText("O cálculo está certo?")).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Bloquear" })).toBeNull();
-      expect(screen.queryByRole("button", { name: "Descartar" })).toBeNull();
+      expect(screen.queryByRole("radio")).toBeNull();
       cleanup();
     }
   });
 
-  it("os botões da dúvida mandam a decisão daquele achado", async () => {
+  it("escolher e confirmar manda a decisão daquele achado", async () => {
     open("rev", review({ phase: "reviewing", findings: [doubt({ id: "q1" }), doubt({ id: "q2", title: "Outra dúvida" })] }));
     await loaded();
-    const second = screen.getByText("Outra dúvida").closest("[data-testid=finding]") as HTMLElement;
-
-    await userEvent.click(within(second).getByRole("button", { name: "Bloquear" }));
+    await decide("Outra dúvida", /É problema/);
     expect(post).toHaveBeenLastCalledWith("/reviews/r1/decide", { findingId: "q2", decision: "block" });
-
-    const first = screen.getByText("O cálculo está certo?").closest("[data-testid=finding]") as HTMLElement;
-    await userEvent.click(within(first).getByRole("button", { name: "Descartar" }));
+    await decide("O cálculo está certo?", /Não é problema/);
     expect(post).toHaveBeenLastCalledWith("/reviews/r1/decide", { findingId: "q1", decision: "drop" });
+    await decide("O cálculo está certo?", /Aceitar o risco/);
+    expect(post).toHaveBeenLastCalledWith("/reviews/r1/decide", { findingId: "q1", decision: "accept_risk" });
   });
 
-  it("dúvida já decidida não pede decisão de novo", async () => {
+  it("'Decidir agora' leva à aba Achados", async () => {
+    open("rev", review({ phase: "reviewing", findings: [doubt()] }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Conversa/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Decidir agora" }));
+    expect(screen.getByRole("tab", { name: /Achados/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("dúvida já decidida não pede decisão de novo, e o aviso some", async () => {
     open("rev", review({ phase: "reviewing", findings: [doubt({ humanDecision: "block" })] }));
     await loaded();
-    expect(screen.queryByRole("button", { name: "Descartar" })).toBeNull();
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(screen.queryByTestId("decision-banner")).toBeNull();
   });
 
-  it("dúvida fora de fase aberta (ready, mergeado) não mostra botões", async () => {
+  it("dúvida que o autor resolveu (fixed) não espera ninguém", async () => {
+    open("rev", review({ phase: "reviewing", findings: [doubt({ status: "fixed", authorReply: "resolvido" })] }));
+    await loaded();
+    expect(screen.queryByTestId("decision-banner")).toBeNull();
+    expect(screen.queryByRole("radio")).toBeNull();
+  });
+
+  it("dúvida fora de fase aberta (mergeado) não mostra escolhas", async () => {
     open("rev", review({ phase: "merged", findings: [doubt()] }));
     await loaded();
-    expect(screen.queryByRole("button", { name: "Bloquear" })).toBeNull();
+    expect(screen.queryByRole("radio")).toBeNull();
   });
 
-  it("falha ao decidir avisa e libera os botões", async () => {
+  it("falha ao decidir avisa e a escolha continua lá pra confirmar de novo", async () => {
     post.mockRejectedValue(failure(409, { error: "a revisão está em ready: não há decisão pendente" }));
     open("rev", review({ phase: "reviewing", findings: [doubt()] }));
     await loaded();
-
-    await userEvent.click(screen.getByRole("button", { name: "Bloquear" }));
-
+    await decide("O cálculo está certo?", /É problema/);
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("a revisão está em ready: não há decisão pendente"));
-    expect(screen.getByRole("button", { name: "Bloquear" })).toBeEnabled();
+    expect(within(cardOf("O cálculo está certo?")).getByRole("button", { name: "Confirmar decisão" })).toBeEnabled();
   });
 
-  it("impasse mostra decisão por item travado", async () => {
+  it("impasse mostra a decisão por item travado: manter o bloqueio ou aceitar o risco", async () => {
     open("rev", review({
       phase: "impasse", round: 3, impasseReason: "rodadas",
       findings: [
@@ -724,33 +784,31 @@ describe("ReviewPanel — dúvidas e impasse", () => {
       ],
     }));
     await loaded();
+    expect(screen.getByTestId("decision-banner")).toHaveTextContent("O impasse precisa da sua decisão em 2 itens travados");
+    // Um par de escolhas por item travado (aberto ou contestado), nenhum nos outros.
+    expect(screen.getAllByRole("radio", { name: /Manter o bloqueio/ })).toHaveLength(2);
+    expect(screen.getAllByRole("radio", { name: /Aceitar o risco/ })).toHaveLength(2);
+    expect(within(cardOf("Já corrigido")).queryByRole("radio")).toBeNull();
+    // a sugestão não é item travado: só tem o "fazer / não fazer" dela
+    expect(within(cardOf("Só sugestão")).queryByRole("radio", { name: /Manter o bloqueio|Aceitar o risco/ })).toBeNull();
 
-    // Um par por item travado (aberto ou contestado), nenhum nos outros.
-    expect(screen.getAllByRole("button", { name: "Manter bloqueio" })).toHaveLength(2);
-    expect(screen.getAllByRole("button", { name: "Aceitar risco" })).toHaveLength(2);
-    const fixed = screen.getByText("Já corrigido").closest("[data-testid=finding]") as HTMLElement;
-    expect(within(fixed).queryByRole("button", { name: "Manter bloqueio" })).toBeNull();
-    const suggestion = screen.getByText("Só sugestão").closest("[data-testid=finding]") as HTMLElement;
-    expect(within(suggestion).queryByRole("button")).toBeNull();
-
-    const contested = screen.getByText("Travado contestado").closest("[data-testid=finding]") as HTMLElement;
-    await userEvent.click(within(contested).getByRole("button", { name: "Manter bloqueio" }));
+    await decide("Travado contestado", /Manter o bloqueio/);
     expect(post).toHaveBeenLastCalledWith("/reviews/r1/decide", { findingId: "b", decision: "keep" });
-    await userEvent.click(within(contested).getByRole("button", { name: "Aceitar risco" }));
+    await decide("Travado contestado", /Aceitar o risco/);
     expect(post).toHaveBeenLastCalledWith("/reviews/r1/decide", { findingId: "b", decision: "accept_risk" });
   });
 
-  it("impasse: quem não é revisor nem owner não vê a decisão", async () => {
+  it("impasse: quem não é revisor nem owner vê por quem espera, sem as escolhas", async () => {
     for (const who of ["aut", "mer", "co"] as const) {
       open(who, review({ phase: "impasse", round: 3, impasseReason: "rodadas", findings: [finding()] }));
       await loaded();
-      expect(screen.queryByRole("button", { name: "Manter bloqueio" })).toBeNull();
-      expect(screen.queryByRole("button", { name: "Aceitar risco" })).toBeNull();
+      expect(screen.getByTestId("decision-banner")).toHaveTextContent("Impasse: esperando mussa decidir 1 item travado");
+      expect(screen.queryByRole("radio")).toBeNull();
       cleanup();
     }
     open("own", review({ phase: "impasse", round: 3, impasseReason: "rodadas", findings: [finding()] }));
     await loaded();
-    expect(screen.getByRole("button", { name: "Manter bloqueio" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Manter o bloqueio/ })).toBeInTheDocument();
   });
 
   it("dúvida que o humano mandou bloquear e trava o impasse só aceita o risco (keep é recusado nela)", async () => {
@@ -759,17 +817,85 @@ describe("ReviewPanel — dúvidas e impasse", () => {
       findings: [doubt({ humanDecision: "block", title: "Dúvida bloqueada" })],
     }));
     await loaded();
-    const row = screen.getByText("Dúvida bloqueada").closest("[data-testid=finding]") as HTMLElement;
-    expect(within(row).getByRole("button", { name: "Aceitar risco" })).toBeInTheDocument();
-    expect(within(row).queryByRole("button", { name: "Manter bloqueio" })).toBeNull();
+    const card = cardOf("Dúvida bloqueada");
+    expect(within(card).getByRole("radio", { name: /Aceitar o risco/ })).toBeInTheDocument();
+    expect(within(card).queryByRole("radio", { name: /Manter o bloqueio/ })).toBeNull();
   });
 
   it("fora do impasse, bloqueante aberto não pede decisão", async () => {
     open("rev", review({ phase: "fixing", findings: [finding()] }));
     await loaded();
-    expect(screen.queryByRole("button", { name: "Manter bloqueio" })).toBeNull();
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(screen.queryByTestId("decision-banner")).toBeNull();
+  });
+
+  it("cada achado mostra onde, por quê e a proposta do revisor", async () => {
+    open("rev", review({
+      phase: "reviewing", findings: [doubt({
+        file: "src/a.ts", line: 9, fix: "trocar por Decimal",
+        proof: { kind: "scenario", ref: "src/a.ts:9", detail: "soma de centavos perde precisão" },
+      })],
+    }));
+    await loaded();
+    const card = cardOf("O cálculo está certo?");
+    expect(within(card).getByText("Onde").nextElementSibling).toHaveTextContent("src/a.ts:9");
+    expect(within(card).getByText("Por quê").nextElementSibling).toHaveTextContent("soma de centavos perde precisão");
+    expect(within(card).getByText("Proposta").nextElementSibling).toHaveTextContent("trocar por Decimal");
   });
 });
+
+describe("ReviewPanel — sugestões: fazer ou não fazer", () => {
+  const suggestions = [
+    finding({ id: "s1", severity: "suggestion", title: "Renomear pump" }),
+    finding({ id: "s2", severity: "suggestion", title: "Extrair helper" }),
+    finding({ id: "s3", severity: "suggestion", title: "Já feita", status: "fixed" }),
+  ];
+  const choices = (title: string) => screen.getByRole("radiogroup", { name: `O que fazer com: ${title}` });
+
+  it("cada sugestão em aberto tem 'Fazer' e 'Não fazer', explicados; um confirmar manda as duas listas", async () => {
+    open("mer", review({ phase: "ready", findings: suggestions }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    // só as em aberto têm escolha
+    expect(screen.getAllByRole("radiogroup", { name: /O que fazer com/ })).toHaveLength(2);
+    expect(within(choices("Renomear pump")).getByText("A IA do autor aplica e o revisor confere.")).toBeInTheDocument();
+    expect(within(choices("Renomear pump")).getByText("Sai da lista; o PR segue sem ela.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Escolha fazer ou não fazer" })).toBeDisabled();
+
+    await userEvent.click(within(choices("Renomear pump")).getByRole("radio", { name: /Não fazer/ }));
+    await userEvent.click(within(choices("Extrair helper")).getByRole("radio", { name: /^Fazer/ }));
+    expect(within(choices("Extrair helper")).getByRole("radio", { name: /^Fazer/ })).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(screen.getByRole("button", { name: "Confirmar: 1 pra fazer, 1 pra não fazer" }));
+    expect(post).toHaveBeenLastCalledWith("/reviews/r1/suggestions", { apply: ["s2"], skip: ["s1"] });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Enviado: 1 pro autor fazer, 1 fora da lista"));
+  });
+
+  it("clicar de novo na mesma escolha desfaz; 'marcar todas pra fazer' escolhe todas as em aberto", async () => {
+    open("aut", review({ phase: "ready", findings: suggestions }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    const skip = within(choices("Renomear pump")).getByRole("radio", { name: /Não fazer/ });
+    await userEvent.click(skip);
+    await userEvent.click(skip);
+    expect(skip).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(screen.getByRole("button", { name: "marcar todas pra fazer" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirmar: 2 pra fazer, 0 pra não fazer" }));
+    expect(post).toHaveBeenLastCalledWith("/reviews/r1/suggestions", { apply: ["s1", "s2"], skip: [] });
+  });
+
+  it("quem não tem papel na revisão, ou revisão encerrada, não escolhe", async () => {
+    open("co", review({ phase: "ready", findings: suggestions }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    expect(screen.queryByRole("radiogroup", { name: /O que fazer com/ })).toBeNull();
+    cleanup();
+    open("mer", review({ phase: "merged", findings: suggestions }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    expect(screen.queryByRole("radiogroup", { name: /O que fazer com/ })).toBeNull();
+  });
+});
+
 
 describe("ReviewPanel — avisos", () => {
   it("impasse por rodadas diz em palavras", async () => {
@@ -940,9 +1066,34 @@ describe("ReviewPanel — leitura periódica", () => {
     expect(await screen.findByText("pronto pra merge")).toBeInTheDocument();
   });
 
-  it("parada em ready, impasse ou mergeado não relê", async () => {
+  it("em ready e em impasse, parada, continua relendo, com calma (10s): a revisão anda sozinha (merge no GitHub, push)", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    for (const phase of ["ready", "impasse", "merged", "cancelled"] as const) {
+    for (const phase of ["ready", "impasse"] as const) {
+      reviewGets = 0;
+      open("rev", review({ phase }));
+      await loaded();
+      const seen = reviewGets;
+      await tick(3_100);
+      expect(reviewGets).toBe(seen);
+      await tick(27_000);
+      expect(reviewGets).toBeGreaterThanOrEqual(seen + 3);
+      cleanup();
+    }
+  });
+
+  it("com uma IA trabalhando, mesmo em ready, a leitura volta a cada 3s", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    working = { author: true, reviewer: false };
+    open("rev", review({ phase: "ready" }));
+    await loaded();
+    const seen = reviewGets;
+    await tick(3_100);
+    expect(reviewGets).toBeGreaterThan(seen);
+  });
+
+  it("mergeada ou cancelada não relê: acabou", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    for (const phase of ["merged", "cancelled"] as const) {
       reviewGets = 0;
       open("rev", review({ phase }));
       await loaded();
@@ -951,5 +1102,71 @@ describe("ReviewPanel — leitura periódica", () => {
       expect(reviewGets).toBe(seen);
       cleanup();
     }
+  });
+
+  it("pronto, e a IA do autor começa a mexer no PR: a pill vira IA mexendo e o merge espera ela terminar", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    open("mer", review({ phase: "ready", round: 1 }));
+    await loaded();
+    expect(screen.getByText("pronto pra merge")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeEnabled();
+
+    working = { author: true, reviewer: false };
+    await tick(10_100);
+    expect(await screen.findByText("IA mexendo")).toBeInTheDocument();
+    expect(screen.queryByText("pronto pra merge")).toBeNull();
+    expect(screen.getByText(/A IA do autor está mexendo no PR/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeDisabled();
+    expect(screen.getByText(/Espere a IA do autor terminar/)).toBeInTheDocument();
+
+    // Terminou sem empurrar nada: volta a pronto e o merge libera.
+    working = { author: false, reviewer: false };
+    await tick(3_100);
+    expect(await screen.findByText("pronto pra merge")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeEnabled();
+    expect(screen.queryByText(/Espere a IA do autor terminar/)).toBeNull();
+  });
+
+  it("a IA do autor empurrou depois do pronto: o painel mostra a rodada 2 com o revisor conferindo, sem recarregar", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    open("rev", review({ phase: "ready", round: 1, lastSubmitRound: 1 }));
+    await loaded();
+    expect(screen.getByText("pronto pra merge")).toBeInTheDocument();
+
+    current = review({
+      phase: "reviewing", round: 2, lastSubmitRound: 1,
+      log: [{ at: 3, round: 2, who: "system", text: "O autor empurrou depois do pronto (head bbbbbbb). Rodada 2 de 3: o revisor confere o que entrou." }],
+    });
+    await tick(10_100);
+    expect(await screen.findByText("rodada 2/3")).toBeInTheDocument();
+    expect(screen.getByText("O revisor confere só o que mudou desde a rodada 1.")).toBeInTheDocument();
+    expect(screen.getByText(/O autor empurrou depois do pronto/)).toBeInTheDocument();
+  });
+
+  it("sugestão aplicada e conferida pelo revisor aparece corrigida na próxima leitura", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const suggestion = finding({ id: "f1", severity: "suggestion", title: "nome de variável confuso" });
+    open("rev", review({ phase: "reviewing", round: 2, findings: [suggestion] }));
+    await loaded();
+    const row = () => screen.getAllByTestId("finding").find((li) => li.textContent?.includes("nome de variável confuso"))!;
+    expect(row()).toHaveAttribute("data-status", "open");
+
+    current = review({ phase: "ready", round: 2, findings: [{ ...suggestion, status: "fixed", reviewerReply: "renomeado" }] });
+    await tick(3_100);
+    await waitFor(() => expect(row()).toHaveAttribute("data-status", "fixed"));
+    expect(within(row()).getByText("corrigido")).toBeInTheDocument();
+  });
+
+  it("quando a fase ou a rodada mudam, a lista de cards do board é relida (a linha da barra lateral acompanha)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const view = open("rev", review({ phase: "ready", round: 1 }));
+    await loaded();
+    const invalidate = vi.spyOn(view.queryClient, "invalidateQueries");
+    await tick(10_100);
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["board", "cards"] });
+
+    current = review({ phase: "reviewing", round: 2 });
+    await tick(10_100);
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["board", "cards"] }));
   });
 });

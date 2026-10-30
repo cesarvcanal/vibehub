@@ -29,6 +29,7 @@ const STATUS_PT: Record<FindingStatus, string> = {
   contested: "contestado",
   accepted_risk: "risco aceito",
   dropped: "retirado",
+  wontfix: "não vai aplicar",
 };
 
 function header(r: Review): string {
@@ -100,7 +101,8 @@ function classification(): string {
       "escrita do repo, ex. CLAUDE.md, com o trecho em detail) ou scenario (ref = arquivo:linha, detail = o cenário concreto " +
       "que quebra, inclusive funcionalidade que já existia). Bloqueante sem prova vira sugestão no servidor.",
     "- suggestion: melhoria que não bloqueia.",
-    "- question: risco que pode comprometer, mas você não tem certeza. Vai para o revisor humano decidir; o ciclo segue com o resto.",
+    "- question: risco que pode comprometer, mas você não tem certeza. Fica esperando decisão: o revisor humano decide no " +
+      "painel, ou o autor resolve/explica e você confere na rodada seguinte. O ciclo segue com o resto.",
     "- refuted: achado que a verificação derrubou (fica só no histórico).",
   ].join("\n");
 }
@@ -155,11 +157,27 @@ export function reviewerRoundPrompt(r: Review): string {
   ].join("\n");
 }
 
+/** Os achados que o autor respondeu depois da última fala do revisor: o que o revisor ainda não conferiu. */
+function answeredSinceReviewer(r: Review): Set<string> {
+  const lastReviewer = r.log.map((e) => e.who).lastIndexOf("reviewer");
+  const ids = new Set<string>();
+  for (const e of r.log.slice(lastReviewer + 1)) {
+    if (e.who === "author") for (const it of e.items ?? []) ids.add(it.id);
+  }
+  return ids;
+}
+
 /** Rodada 2+: só o diff desde a rodada anterior, contra a lista fechada. */
 export function reviewerDeltaPrompt(r: Review): string {
   const judged = r.findings.filter(underReview);
   const humanBlocked = judged.filter((f) => f.humanDecision === "block" || f.humanDecision === "keep");
   const waiting = pendingQuestions(r.findings);
+  // As sugestões em aberto, e as que o autor respondeu depois da última fala do revisor (ele ainda não conferiu).
+  const answered = answeredSinceReviewer(r);
+  // Dúvida que o autor respondeu (resolvida ou explicada) e nenhum humano decidiu: o revisor confere.
+  const answeredDoubts = r.findings.filter((f) => f.severity === "question" && !f.humanDecision && answered.has(f.id));
+  const stillWaiting = waiting.filter((f) => !answered.has(f.id));
+  const suggestions = r.findings.filter((f) => f.severity === "suggestion" && (f.status === "open" || answered.has(f.id)));
   const since = r.reviewedSha
     ? `git diff ${r.reviewedSha}..HEAD`
     : "o PR inteiro (não há sha da rodada anterior)";
@@ -182,8 +200,22 @@ export function reviewerDeltaPrompt(r: Review): string {
           "pelo servidor (a IA não retira o que um humano bloqueou).",
       ]
       : []),
-    ...(waiting.length
-      ? ["   Esperando o revisor humano (não dê veredito):", lines(waiting, "")]
+    ...(answeredDoubts.length
+      ? [
+        "   Dúvidas que o autor respondeu: fixed se ele resolveu de verdade, dropped se você aceita a explicação, open se " +
+          "continua dúvida (aí ela volta a esperar o revisor humano).",
+        lines(answeredDoubts, ""),
+      ]
+      : []),
+    ...(stillWaiting.length
+      ? ["   Esperando o revisor humano (não dê veredito):", lines(stillWaiting, "")]
+      : []),
+    ...(suggestions.length
+      ? [
+        "   Sugestões (não bloqueiam): dê fixed só às que o diff aplicou de verdade; open se o autor disse que aplicou e não " +
+          "aplicou; dropped se aceitar o motivo de um contestado/não vai aplicar; as demais, deixe fora dos vereditos.",
+        lines(suggestions, ""),
+      ]
       : []),
     "   Vereditos possíveis, e só estes: fixed (corrigido de verdade, conferido no diff), open (continua; diga o porquê em " +
       "reviewerReply), dropped (você aceita a contestação do autor).",
@@ -199,11 +231,14 @@ export function reviewerDeltaPrompt(r: Review): string {
   ].join("\n");
 }
 
-/** A lista fechada para o autor: corrigir o que é bug no escopo, contestar só com prova. */
-export function authorFixPrompt(r: Review): string {
+/**
+ * A lista fechada para o autor: corrigir o que é bug no escopo, contestar só com prova. Com co-autor
+ * na revisão, `coauthorTrailer` é a linha `Co-authored-by: Nome <email>` que dá a ele o crédito no Git.
+ */
+export function authorFixPrompt(r: Review, opts: { coauthorTrailer?: string } = {}): string {
   const todo = r.findings.filter(actionableForAuthor);
   const waiting = pendingQuestions(r.findings);
-  const suggestions = r.findings.filter((f) => f.severity === "suggestion" && f.introducedInRound === r.round);
+  const suggestions = r.findings.filter((f) => f.severity === "suggestion" && f.status === "open");
   return [
     header(r),
     "O revisor encontrou problemas no seu PR. Siga a skill superpowers:receiving-code-review: confira cada item com rigor " +
@@ -217,12 +252,25 @@ export function authorFixPrompt(r: Review): string {
     "",
     "Lista fechada (responda cada um):",
     lines(todo, "nenhum item"),
-    ...(waiting.length ? ["Dúvidas com o revisor humano (não mexa nelas agora):", lines(waiting, "")] : []),
+    ...(waiting.length
+      ? [
+        "Dúvidas (o revisor humano pode decidir no painel; se você resolver, responda fixed com o commit, ou contested com a " +
+          "explicação e a prova — o revisor confere):",
+        lines(waiting, ""),
+      ]
+      : []),
     ...(suggestions.length
-      ? ["Sugestões (não bloqueiam; não precisa responder nem aplicar):", lines(suggestions, "")]
+      ? [
+        "Sugestões (não bloqueiam; aplique as que valem no escopo e responda cada uma: fixed com o commit, " +
+          "contested ou wontfix com o motivo no reply):",
+        lines(suggestions, ""),
+      ]
       : []),
     "",
     "Depois de corrigir:",
+    ...(opts.coauthorTrailer
+      ? [`Em cada commit desta correção, termine a mensagem com esta linha (o crédito do co-autor no Git): ${opts.coauthorTrailer}`]
+      : []),
     "1. Rode os testes do que você mexeu.",
     `2. Faça push na branch do PR: git push origin HEAD:${r.prBranch}`,
     "   Não use vibehub_deliver nesta revisão: o push é o git push acima, e o PR já existe. Se o push for recusado, " +
@@ -234,9 +282,51 @@ export function authorFixPrompt(r: Review): string {
     `   review: "${r.id}"`,
     `   round: ${r.round}`,
     "   headSha: o sha do passo 4 (40 caracteres)",
-    "   items: [{ id, status: \"fixed\" | \"contested\", commit?, reply }]",
+    "   items: [{ id, status: \"fixed\" | \"contested\" | \"wontfix\" (wontfix só em sugestão), commit?, reply }]",
     "   Não termine o turno sem chamar essa ferramenta: é ela que devolve a vez ao revisor.",
   ].join("\n");
+}
+
+/**
+ * Uma pessoa escolheu, no painel, sugestões do revisor para o autor aplicar. Sugestão não bloqueia: o
+ * autor aplica as que fazem sentido no escopo e diz por que não aplica as outras (`wontfix`). O push
+ * depois do pronto volta a revisão ao revisor, que confere o que entrou.
+ */
+export function authorSuggestionsPrompt(r: Review, list: Finding[], opts: { by: string; coauthorTrailer?: string }): string {
+  return [
+    header(r),
+    `${opts.by} pediu, no painel da revisão, que você aplique estas sugestões do revisor neste PR. Sugestão não bloqueia: ` +
+      "aplique as que fazem sentido no escopo do PR; a que não fizer sentido, não aplique e diga por quê.",
+    rules(),
+    "",
+    "Sugestões pedidas:",
+    lines(list, ""),
+    "",
+    "Para cada uma:",
+    "- Aplicou: commit, com teste do que mudou.",
+    "- Não vai aplicar (fora do escopo, piora outra coisa, já resolvida): explique no reply.",
+    ...(opts.coauthorTrailer
+      ? [`Em cada commit, termine a mensagem com esta linha (o crédito do co-autor no Git): ${opts.coauthorTrailer}`]
+      : []),
+    "",
+    "Depois:",
+    "1. Rode os testes do que você mexeu.",
+    `2. Faça push na branch do PR: git push origin HEAD:${r.prBranch}`,
+    "3. Guarde o sha: git rev-parse HEAD",
+    `4. Chame a ferramenta MCP ${TOOL_RESPOND} com:`,
+    `   card: "${r.cardId}"   (o $VIBEHUB_CARD_ID deste terminal)`,
+    `   review: "${r.id}"`,
+    `   round: ${r.round}`,
+    "   headSha: o sha do passo 3 (40 caracteres)",
+    "   items: [{ id, status: \"fixed\" (com commit) | \"wontfix\" (reply com o motivo), commit?, reply }]",
+    "   O push faz a revisão voltar ao revisor, que confere o que entrou: é o esperado. Nunca mergeie.",
+  ].join("\n");
+}
+
+/** O aviso, no card do autor (o do revisor fica escondido do board), de dúvida esperando quem decide. */
+export function authorQuestionNoticeText(r: Review, decider: string): string {
+  const n = pendingQuestions(r.findings).length;
+  return `PR #${r.prNumber}: ${n} ${n === 1 ? "dúvida" : "dúvidas"} esperando a decisão de ${decider} no painel da revisão`;
 }
 
 /** Pronto: o revisor aprova no GitHub. Aprovar não é mergear. */
@@ -266,15 +356,18 @@ export function nudgePrefix(tool: typeof TOOL_SUBMIT | typeof TOOL_RESPOND): str
 }
 
 /**
- * A linha que vai na frente do delta quando o merge humano foi recusado porque o PR andou depois do
- * `ready`: o revisor precisa saber que a rodada nova não veio de uma resposta do autor à lista.
+ * A linha que vai na frente do delta quando o PR andou depois do `ready`: o revisor precisa saber que a
+ * rodada nova não veio de uma resposta do autor à lista. `merge` = o merge humano foi recusado por
+ * isso; `push` = o turno do autor terminou com um push novo (alguém mandou a IA dele mexer no PR).
  */
-export function headMovedPrefix(r: Review): string {
+export function headMovedPrefix(r: Review, cause: "merge" | "push" = "merge"): string {
   const approved = r.reviewedSha ? ` (${r.reviewedSha.slice(0, 7)})` : "";
+  const what = cause === "push"
+    ? `O autor empurrou commits no PR #${r.prNumber} depois do pronto (push depois do pronto)`
+    : `Merge recusado pelo vibehub: push depois do pronto. O head do PR #${r.prNumber} mudou`;
   return (
-    `Merge recusado pelo vibehub: push depois do pronto. O head do PR #${r.prNumber} não é mais o commit que você ` +
-    `aprovou${approved}, então a revisão voltou para a rodada ${r.round}. Confira o que entrou desde então como uma ` +
-    "rodada nova, pelos passos abaixo.\n\n"
+    `${what}: o head não é mais o commit que você aprovou${approved}, então a revisão voltou para a rodada ` +
+    `${r.round}. Confira o que entrou desde então como uma rodada nova, pelos passos abaixo.\n\n`
   );
 }
 

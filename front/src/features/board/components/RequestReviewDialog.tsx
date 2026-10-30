@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Loader2 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -151,7 +152,7 @@ export function RequestReviewDialog({ cardId, pr, actorUserId, open, onClose }: 
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
-      <DialogContent className="sm:max-w-md" data-testid="request-review-dialog">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md" data-testid="request-review-dialog">
         <DialogHeader>
           <DialogTitle>{t("review.dialog.title", { n: pr.number })}</DialogTitle>
           <DialogDescription>{t("review.dialog.hint")}</DialogDescription>
@@ -190,7 +191,13 @@ export function RequestReviewDialog({ cardId, pr, actorUserId, open, onClose }: 
           </Button>
           {people.isSuccess ? (
             <Button type="button" disabled={!canStart} onClick={submit}>
-              {start.isPending ? t("review.dialog.starting") : t("review.dialog.start")}
+              {start.isPending ? (
+                <>
+                  <Loader2 className="animate-spin" aria-hidden /> {t("review.dialog.starting")}
+                </>
+              ) : (
+                t("review.dialog.start")
+              )}
             </Button>
           ) : null}
         </div>

@@ -190,6 +190,19 @@ describe("RequestReviewDialog", () => {
     );
   });
 
+  it("enquanto inicia, o botão mostra um carregamento girando e trava; a janela cabe na tela (90vh, rola por dentro)", async () => {
+    serve();
+    post.mockImplementation(() => new Promise(() => {})); // the start never answers
+    open({ actorUserId: "u2" });
+    await loaded();
+    await userEvent.click(startButton());
+    const busy = await screen.findByRole("button", { name: /Iniciando/ });
+    expect(busy).toBeDisabled();
+    expect(busy.querySelector("svg.animate-spin")).not.toBeNull();
+    expect(screen.getByTestId("request-review-dialog").className).toContain("max-h-[90vh]");
+    expect(screen.getByTestId("request-review-dialog").className).toContain("overflow-y-auto");
+  });
+
   it("leaves coauthorUserId out of the body when nobody is chosen — an empty string is refused", async () => {
     serve();
     post.mockResolvedValue({ review: { id: "r1" } });

@@ -1,27 +1,30 @@
 import { randomUUID } from "node:crypto";
 import {
-  getCard, createReviewerCard, removeCard, updateCard, cardMoveEffect, isHumanActive, shareWith,
+  getCard, createReviewerCard, removeCard, updateCard, cardMoveEffect, isHumanActive, shareWith, getGithubConnection,
 } from "../board/registry.js";
 import { resumeCard } from "../board/workspace.js";
 import { recordCardActor } from "../board/actor.js";
 import { findUser } from "../../auth/users.js";
 import { cardLevel } from "../../auth/access.js";
-import { creatorAccountSlug } from "../../auth/userGit.js";
+import { creatorAccountSlug, getUserGit } from "../../auth/userGit.js";
 import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
+import { afterPrMerged, readPrState, setPrPeople } from "../maestro/deliver.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { eventsAfter, onCardEvent, recordMessage, type CardEvent, type Severity } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
 import {
   MAX_ROUNDS, applyAuthorResponses, applyReviewerVerdicts, blockingOpen, normalizeSubmittedFindings, pendingQuestions,
   phaseAfterReviewerRound,
-  type Finding, type FindingStatus, type Review, type ReviewEvent, type ReviewPhase, type SubmittedFinding,
+  type AuthorAnswerStatus, type Finding, type FindingStatus, type Review, type ReviewEvent, type ReviewEventItem, type ReviewPhase,
+  type SubmittedFinding,
 } from "./model.js";
 import {
   activeReviewFor, getReview, insertReview, listReviewsForCards, mutateReview, reviewByReviewerCard,
 } from "./store.js";
 import {
-  actionableForAuthor, approvePendingText, authorFixPrompt, headMovedPrefix, impasseText, nudgePrefix, oneLine,
-  phaseNoticeText, questionNoticeText, reviewerApprovePrompt, reviewerDeltaPrompt, reviewerRoundPrompt,
+  actionableForAuthor, approvePendingText, authorFixPrompt, authorQuestionNoticeText, authorSuggestionsPrompt, headMovedPrefix,
+  impasseText, nudgePrefix, oneLine, phaseNoticeText, questionNoticeText, reviewerApprovePrompt, reviewerDeltaPrompt,
+  reviewerRoundPrompt,
 } from "./prompts.js";
 
 /**
@@ -34,6 +37,8 @@ import {
  *   turn_finished sem a ferramenta ──► um lembrete; no segundo, impasse "IA não respondeu"
  *   humano ──► decideQuestion | retryReview (impasse por falha, Approve pendente) | cancelReview
  *   botão de merge (rota) ──► markReviewMerged | head do PR andou: reopenAfterHeadMoved
+ *   o PR no GitHub (fim de turno do autor; painel aberto, com freio) ──► syncReviewWithGithub:
+ *     mergeado fora do painel → merged | fechado sem merge → cancelled | push depois do pronto → reopen
  *
  * As regras do jogo (prova, lista fechada, teto de rodadas) moram no modelo puro; aqui ficam a
  * persistência, quem pode chamar o quê e os relays. Três garantias atravessam o arquivo:
@@ -74,8 +79,25 @@ type Decision = "block" | "drop" | "keep" | "accept_risk";
 
 /* ------------------------------------------------------------------ helpers */
 
-function note(r: Review, who: ReviewEvent["who"], text: string): void {
-  r.log.push({ at: Date.now(), round: r.round, who, text: oneLine(text, 400) });
+/** Teto de cada resposta citada numa fala: o bastante pra ler o argumento, sem virar página. */
+const REPLY_MAX = 600;
+
+/**
+ * Uma fala no log da revisão. `items` são os achados de que ela trata, com a resposta de cada um
+ * naquele momento (é o que a conversa das IAs mostra rodada a rodada); `by`, quem fez, numa fala humana.
+ */
+function note(r: Review, who: ReviewEvent["who"], text: string, extra: { items?: ReviewEventItem[]; by?: string } = {}): void {
+  const event: ReviewEvent = { at: Date.now(), round: r.round, who, text: oneLine(text, 400) };
+  const items = (extra.items ?? []).map((it) => {
+    const item: ReviewEventItem = { id: it.id, status: it.status };
+    if (it.reply !== undefined && it.reply.trim() !== "") item.reply = oneLine(it.reply, REPLY_MAX);
+    if (it.commit !== undefined && it.commit.trim() !== "") item.commit = oneLine(it.commit, 64);
+    if (it.isNew) item.isNew = true;
+    return item;
+  });
+  if (items.length) event.items = items;
+  if (extra.by) event.by = extra.by;
+  r.log.push(event);
 }
 
 function assertHeadSha(sha: string): string {
@@ -96,10 +118,52 @@ function awaitingTool(r: Review, side: Side): boolean {
     : r.phase === "fixing" && r.lastRespondRound !== r.round;
 }
 
-/** O texto que a vez deste lado pede: rodada 1 inteira, delta da 2 em diante, ou a lista do autor. */
-function promptFor(r: Review, side: Side): string {
-  if (side === "author") return authorFixPrompt(r);
+/**
+ * A linha que dá ao CO-AUTOR o crédito no Git (`Co-authored-by: Nome <email>`), com a identidade git
+ * que ele tem no vibehub. Sem co-autor, co-autor igual ao autor ou sem nome/e-mail: nenhuma.
+ */
+async function coauthorTrailer(r: Review): Promise<string | undefined> {
+  if (!r.coauthorUserId || r.coauthorUserId === r.authorUserId) return undefined;
+  const git = await getUserGit(r.coauthorUserId);
+  return git?.gitName && git.gitEmail ? `Co-authored-by: ${git.gitName} <${git.gitEmail}>` : undefined;
+}
+
+/**
+ * O texto que a vez deste lado pede: rodada 1 inteira, delta da 2 em diante, ou a lista do autor (com
+ * a linha de crédito do co-autor, quando há uma).
+ */
+async function promptFor(r: Review, side: Side): Promise<string> {
+  if (side === "author") return authorFixPrompt(r, { coauthorTrailer: await coauthorTrailer(r) });
   return r.round <= 1 ? reviewerRoundPrompt(r) : reviewerDeltaPrompt(r);
+}
+
+/** O login GitHub da conexão PRÓPRIA de uma pessoa no vibehub; sem uma, undefined. */
+async function githubLogin(userId: string): Promise<string | undefined> {
+  const own = (await getUserGit(userId))?.githubConnectionId;
+  return own ? (await getGithubConnection(own))?.login : undefined;
+}
+
+/**
+ * Os papéis da revisão que o GitHub também tem, gravados no PR: o RESPONSÁVEL (quem corrige, commita
+ * e dá push) vira o assignee — o dono da entrega —, e o REVISOR vira o reviewer pedido. Co-autor e
+ * quem faz o merge não têm campo no PR (o co-autor ganha o crédito nos commits, pela linha
+ * Co-authored-by). A conversa conta o que saiu. Nunca lança: um PR sem os nomes não para a revisão.
+ */
+async function namePeopleOnGithub(r: Review): Promise<void> {
+  try {
+    const [assignee, reviewer] = await Promise.all([githubLogin(r.authorUserId), githubLogin(r.reviewerUserId)]);
+    const asked = { ...(assignee ? { assignee } : {}), ...(reviewer ? { reviewer } : {}) };
+    const done = await setPrPeople(r.cardId, r.prUrl, asked);
+    const parts: string[] = [];
+    if (assignee) parts.push(done.assignee === "ok" ? `assignee ${assignee} (o responsável)` : `assignee ${assignee} recusado pelo GitHub`);
+    if (reviewer) parts.push(done.reviewer === "ok" ? `reviewer ${reviewer} pedido` : `reviewer ${reviewer} recusado pelo GitHub`);
+    const missing = !assignee ? " O assignee não foi marcado: o responsável não tem conexão GitHub própria no vibehub." : "";
+    await mutateReview(r.id, (x) => {
+      note(x, "system", `No GitHub: ${parts.length ? parts.join(" e ") : "ninguém marcado"}.${missing}`);
+    });
+  } catch (err) {
+    logger.warn({ review: r.id, detail: (err as Error).message }, "could not name the review's people on GitHub");
+  }
 }
 
 /* ------------------------------------------------------------------ avisos */
@@ -128,19 +192,24 @@ export async function announcePhase(r: Review): Promise<void> {
 }
 
 /**
- * A rodada do revisor deixou dúvida sem decisão: ela segura o `ready` até o revisor HUMANO decidir no
- * painel, e nada mais o chamaria. O aviso vai só ao card do revisor (o ator dele é o revisor), uma vez
- * por rodada (`review:<id>:question:<rodada>:reviewer`). Nunca lança.
+ * A rodada do revisor deixou dúvida sem decisão: ela segura o `ready` até alguém decidir — o revisor
+ * HUMANO no painel, ou as IAs (o autor resolve, o revisor confere). O aviso vai ao card do revisor e ao
+ * do autor, uma vez por rodada (`review:<id>:question:<rodada>:<lado>`). Nunca lança.
  */
 async function announceQuestions(r: Review): Promise<void> {
   if (pendingQuestions(r.findings).length === 0) return;
-  try {
-    await recordMessage({
-      cardId: r.reviewerCardId, type: "info", severity: "info", text: questionNoticeText(r),
-      idempotencyKey: `review:${r.id}:question:${r.round}:reviewer`,
-    });
-  } catch (err) {
-    logger.warn({ review: r.id, card: r.reviewerCardId, detail: (err as Error).message }, "could not record the review question notice");
+  // O card do revisor fica escondido do board: o aviso vai também ao do autor, onde as pessoas olham,
+  // dizendo quem decide.
+  const decider = (await findUser(r.reviewerUserId))?.username ?? "o revisor";
+  for (const [cardId, side, text] of [
+    [r.reviewerCardId, "reviewer", questionNoticeText(r)],
+    [r.cardId, "author", authorQuestionNoticeText(r, decider)],
+  ] as const) {
+    try {
+      await recordMessage({ cardId, type: "info", severity: "info", text, idempotencyKey: `review:${r.id}:question:${r.round}:${side}` });
+    } catch (err) {
+      logger.warn({ review: r.id, card: cardId, detail: (err as Error).message }, "could not record the review question notice");
+    }
   }
 }
 
@@ -175,11 +244,13 @@ async function unpauseAuthor(r: Review): Promise<void> {
  *    vira impasse com o motivo (que o "tentar de novo" resolve depois que ela despausar).
  *  - `approve`: é o pedido de Approve. Falha mantém `ready` com `approvePending` e um aviso (o merge
  *    humano não fica preso por causa do GitHub); sucesso limpa a marca.
+ *  - `optional`: um pedido que a revisão não espera (sugestões escolhidas por uma pessoa). Falha não
+ *    mexe na revisão: lança o motivo, para quem pediu saber.
  * Qualquer outra falha vira `impasse` com o erro, mas só se a revisão ainda está na fase e na rodada
  * para as quais o texto saiu (uma resposta que pousou no meio ganha). Nunca lança. Devolve se entregou.
  */
 export async function relayReview(
-  r: Review, side: Side, text: string, opts: { unpause?: boolean; approve?: boolean } = {},
+  r: Review, side: Side, text: string, opts: { unpause?: boolean; approve?: boolean; optional?: boolean } = {},
 ): Promise<boolean> {
   const cardId = side === "author" ? r.cardId : r.reviewerCardId;
   const userId = side === "author" ? r.authorUserId : r.reviewerUserId;
@@ -211,6 +282,7 @@ export async function relayReview(
   } catch (err) {
     const reason = (err as Error).message;
     logger.warn({ review: r.id, card: cardId, side, detail: reason }, "PR review relay failed");
+    if (opts.optional) throw new Error(`envio_falhou: não consegui entregar ao card do ${side === "author" ? "autor" : "revisor"} (${reason})`);
     const who = side === "author" ? "autor" : "revisor";
     try {
       if (opts.approve) {
@@ -245,7 +317,7 @@ export async function relayReview(
 async function dispatch(r: Review): Promise<Review> {
   if (r.phase === "fixing") {
     // O primeiro relay da rodada: o único que tira o card do autor de Paused.
-    await relayReview(r, "author", authorFixPrompt(r), { unpause: true });
+    await relayReview(r, "author", await promptFor(r, "author"), { unpause: true });
   } else if (r.phase === "ready") {
     await announcePhase(r);
     await relayReview(r, "reviewer", reviewerApprovePrompt(r), { approve: true });
@@ -358,7 +430,8 @@ export async function startReview(input: {
     );
     return fresh;
   });
-  await relayReview(review, "reviewer", reviewerRoundPrompt(review));
+  // O GitHub não depende do relay (nem o relay dele): os dois saem juntos.
+  await Promise.all([relayReview(review, "reviewer", reviewerRoundPrompt(review)), namePeopleOnGithub(review)]);
   return (await getReview(review.id)) ?? review;
 }
 
@@ -414,13 +487,20 @@ export async function submitReviewerRound(
       return (f.humanDecision === "block" || f.humanDecision === "keep") && v.status === "dropped";
     };
     const skipped = verdicts.filter(overridesHuman).map((v) => `${v.id} (${v.status})`);
-    const judged = applyReviewerVerdicts(r, verdicts.filter((v) => !overridesHuman(v)));
+    const applied = verdicts.filter((v) => !overridesHuman(v));
+    const judged = applyReviewerVerdicts(r, applied);
     const added = normalizeSubmittedFindings(payload.findings, r.round, r.findings);
     r.findings = [...judged, ...added];
     r.reviewedSha = headSha;
+    r.prHeadSha = headSha;
     r.lastSubmitRound = r.round;
     r.nudges = 0;
-    note(r, "reviewer", payload.summary || `Rodada ${r.round}: ${added.length} achado(s) novo(s), ${verdicts.length} veredito(s).`);
+    note(r, "reviewer", payload.summary || `Rodada ${r.round}: ${added.length} achado(s) novo(s), ${verdicts.length} veredito(s).`, {
+      items: [
+        ...applied.map((v) => ({ id: v.id, status: v.status, reply: v.reviewerReply })),
+        ...added.map((f) => ({ id: f.id, status: f.status, isNew: true })),
+      ],
+    });
     if (skipped.length) note(r, "system", `Vereditos ignorados (desfariam uma decisão humana): ${skipped.join(", ")}.`);
     const next = phaseAfterReviewerRound(r);
     r.phase = next.phase;
@@ -453,58 +533,162 @@ async function authorReview(authorCardId: string, reviewId?: string): Promise<Re
   return fixing[0] ?? active.reduce((a, b) => (b.createdAt >= a.createdAt ? b : a));
 }
 
+type AuthorAnswer = { id: string; status: AuthorAnswerStatus; commit?: string; reply: string };
+const AUTHOR_ANSWERS: ReadonlySet<string> = new Set<AuthorAnswerStatus>(["fixed", "contested", "wontfix"]);
+
+/** Sugestão que ainda aceita resposta do autor: não foi retirada nem aceita como risco por ninguém. */
+const answerableSuggestion = (f: Finding): boolean =>
+  f.severity === "suggestion" && f.status !== "dropped" && f.status !== "accepted_risk";
+
+/** Dúvida que o autor pode resolver ou explicar: nenhum humano decidiu, e ela segue em pé. */
+const answerableQuestion = (f: Finding): boolean => pendingQuestions([f]).length > 0;
+
+/** "2 corrigido(s), 1 contestado(s), 1 não vai(ão) aplicar" — só o que houve. */
+function answerCounts(items: AuthorAnswer[]): string {
+  const n = (status: AuthorAnswerStatus) => items.filter((it) => it.status === status).length;
+  const parts = [`${n("fixed")} corrigido(s)`, `${n("contested")} contestado(s)`];
+  if (n("wontfix")) parts.push(`${n("wontfix")} não vai(ão) aplicar`);
+  return parts.join(", ");
+}
+
 /**
- * A resposta do autor (`vibehub_review_respond`). Só o card do autor chama; idempotente pela rodada.
- * O autor só responde ao que bloqueia e está em pé: resposta a sugestão ou a item fechado é ignorada
- * com nota no log (a IA pode listar tudo; não é motivo para recusar o resto). Abre a rodada seguinte.
+ * A resposta do autor (`vibehub_review_respond`). Só o card do autor chama.
+ *  - Na rodada de correção (`fixing`), idempotente pela rodada: responde ao que bloqueia (corrigido ou
+ *    contestado) e, se quiser, às sugestões (corrigida, contestada ou `wontfix` com o motivo); abre a
+ *    rodada seguinte, com o delta ao revisor.
+ *  - Fora dela, com a revisão aberta (inclusive em `ready`, quando alguém mandou a IA aplicar as
+ *    sugestões): só as respostas a SUGESTÕES valem — fecham o item no painel, sem abrir rodada e sem
+ *    mandar nada a ninguém (um push que tenha vindo junto a conferência do GitHub pega). A mesma
+ *    resposta de novo não grava outra fala.
+ * Resposta a id desconhecido, a item fechado ou a bloqueante fora da rodada vai ao log, sem derrubar o
+ * resto. `wontfix` em bloqueante e contestar/não aplicar sem motivo são recusados antes de mexer em nada.
  */
 export async function submitAuthorResponse(
   authorCardId: string,
-  payload: {
-    round: number;
-    items: { id: string; status: "fixed" | "contested"; commit?: string; reply: string }[];
-    headSha: string;
-    reviewId?: string;
-  },
+  payload: { round: number; items: AuthorAnswer[]; headSha: string; reviewId?: string },
 ): Promise<Review> {
   const review = await authorReview(authorCardId, payload.reviewId);
-  const fresh = (r: Review) => r.phase === "fixing" && payload.round === r.round && r.lastRespondRound !== payload.round;
-  if (!fresh(review)) return review;
+  if (CLOSED.has(review.phase)) return review;
+  const bad = payload.items.filter((it) => !AUTHOR_ANSWERS.has(it.status));
+  if (bad.length) {
+    throw new Error(`status inválido (${bad.map((it) => it.id).join(", ")}): o autor responde fixed, contested ou wontfix`);
+  }
   const headSha = assertHeadSha(payload.headSha);
-  const bad = payload.items.filter((it) => it.status !== "fixed" && it.status !== "contested");
-  if (bad.length) throw new Error(`status inválido (${bad.map((it) => it.id).join(", ")}): o autor só responde fixed ou contested`);
-
-  let landed = false as boolean;
-  const after = await mutateReview(review.id, (r) => {
-    if (!fresh(r)) return;
-    // Resposta a id que não existe, a sugestão ou a item fechado não derruba o resto: vai ao log.
+  const fresh = (r: Review) => r.phase === "fixing" && payload.round === r.round && r.lastRespondRound !== payload.round;
+  // Na rodada vale o que bloqueia e as sugestões; fora dela, só as sugestões. O resto vai ao log.
+  const answerableIn = (r: Review) => {
+    const round = fresh(r);
     const known = new Map(r.findings.map((f) => [f.id, f]));
-    const counts = (it: { id: string }) => {
+    return (it: AuthorAnswer) => {
       const f = known.get(it.id);
-      return !!f && actionableForAuthor(f);
+      return !!f && (answerableSuggestion(f) || answerableQuestion(f) || (round && actionableForAuthor(f)));
     };
-    const allowed = payload.items.filter(counts);
-    const ignored = payload.items.filter((it) => !counts(it)).map((it) => it.id);
-    r.findings = applyAuthorResponses(r, allowed);
+  };
+  // As recusas valem antes da mutação, e só sobre o que ela vai aceitar: uma resposta mal formada a
+  // um item que seria ignorado não derruba as outras.
+  applyAuthorResponses(review, payload.items.filter(answerableIn(review)));
+
+  let opened = false as boolean;
+  const after = await mutateReview(review.id, (r) => {
+    if (CLOSED.has(r.phase)) return;
+    const round = fresh(r);
+    const known = new Map(r.findings.map((f) => [f.id, f]));
+    const answerable = answerableIn(r);
+    // Fora da rodada, a mesma resposta de novo não grava outra fala.
+    const changed = (it: AuthorAnswer) => {
+      const f = known.get(it.id)!;
+      return f.status !== it.status || f.authorReply !== it.reply || (it.commit !== undefined && f.commit !== it.commit);
+    };
+    const allowed = payload.items.filter((it) => answerable(it) && (round || changed(it)));
+    const ignored = payload.items.filter((it) => !answerable(it)).map((it) => it.id);
+    if (!round && allowed.length === 0 && ignored.length === 0) return;
+    // Fora da rodada, resposta a DÚVIDA com a revisão esperando decisão: o revisor confere (rodada
+    // seguinte, ou conferência extra da última) em vez de a dúvida ficar parada esperando gente.
+    const doubts = !round && r.phase === "reviewing" && r.lastSubmitRound === r.round &&
+      allowed.some((it) => known.get(it.id)!.severity === "question");
+    if (allowed.length || round) {
+      r.findings = applyAuthorResponses(r, allowed);
+      r.prHeadSha = headSha;
+      const what = round ? "" : doubts ? "Dúvidas e sugestões respondidas: " : "Sugestões respondidas: ";
+      note(r, "author", `${what}${answerCounts(allowed)}; head ${headSha.slice(0, 7)}.`, { items: allowed });
+    }
+    if (ignored.length) {
+      note(r, "system", round
+        ? `Respostas ignoradas (id desconhecido ou item que não espera resposta do autor): ${ignored.join(", ")}.`
+        : `Fora da rodada de correção só as respostas a sugestões valem; ignoradas: ${ignored.join(", ")}.`);
+    }
+    if (doubts) {
+      if (r.round < MAX_ROUNDS) r.round += 1;
+      else r.lastSubmitRound = r.round - 1;
+      note(r, "system", `O autor respondeu dúvida: rodada ${r.round} de ${MAX_ROUNDS}, o revisor confere.`);
+      opened = true;
+      return;
+    }
+    if (!round) return;
     r.lastRespondRound = r.round;
     r.nudges = 0;
-    const fixed = allowed.filter((it) => it.status === "fixed").length;
-    const contested = allowed.length - fixed;
-    note(r, "author", `${fixed} corrigido(s), ${contested} contestado(s); head ${headSha.slice(0, 7)}.`);
-    if (ignored.length) {
-      note(r, "system", `Respostas ignoradas (id desconhecido ou item que não espera resposta do autor): ${ignored.join(", ")}.`);
-    }
     r.round += 1;
     r.phase = "reviewing";
     note(r, "system", `Rodada ${r.round} de ${MAX_ROUNDS}: o revisor confere só o diff.`);
-    landed = true;
+    opened = true;
   });
-  if (!landed) return after;
+  if (!opened) return after;
   await relayReview(after, "reviewer", reviewerDeltaPrompt(after));
   return (await getReview(after.id)) ?? after;
 }
 
 /* ------------------------------------------------------------------ humano */
+
+/**
+ * Uma pessoa decidiu, no painel, o que fazer com sugestões do revisor (`POST
+ * /api/reviews/:id/suggestions`; quem pode é a rota): `apply` vai ao autor aplicar, `skip` sai da lista
+ * ("não fazer" — retirada por decisão humana, como o `drop` de uma dúvida). Só sugestão em aberto, e
+ * nenhuma nos dois lados; revisão encerrada recusa. A entrega ao autor vem antes de qualquer registro:
+ * se ela falhar, nada muda e o motivo volta. O autor aplica, empurra e responde item a item
+ * (`fixed`/`wontfix`); o push depois do pronto volta a revisão ao revisor, que confere.
+ */
+export async function decideSuggestions(
+  reviewId: string, choice: { apply?: string[]; skip?: string[] }, by: string,
+): Promise<Review> {
+  const review = await getReview(reviewId);
+  if (!review) throw new Error("review not found");
+  if (CLOSED.has(review.phase)) throw new Error(`revisao_encerrada: a revisão já está em ${review.phase}`);
+  const apply = [...new Set(choice.apply ?? [])];
+  const skip = [...new Set(choice.skip ?? [])];
+  const open = new Set(review.findings.filter((f) => f.severity === "suggestion" && f.status === "open").map((f) => f.id));
+  const all = [...apply, ...skip];
+  if (all.length === 0 || all.some((id) => !open.has(id)) || apply.some((id) => skip.includes(id))) {
+    throw new Error("sem_sugestao: escolha sugestões em aberto da revisão, cada uma para fazer ou para não fazer");
+  }
+  if (apply.length) {
+    const chosen = review.findings.filter((f) => apply.includes(f.id));
+    const text = authorSuggestionsPrompt(review, chosen, { by, coauthorTrailer: await coauthorTrailer(review) });
+    await relayReview(review, "author", text, { unpause: true, optional: true });
+  }
+  logger.info({ audit: true, action: "review.suggestions", review: reviewId, apply, skip, by }, "PR review: suggestions decided");
+  return await mutateReview(reviewId, (r) => {
+    if (skip.length) {
+      for (const f of r.findings) {
+        if (!skip.includes(f.id) || f.status !== "open") continue;
+        f.status = "dropped";
+        f.humanDecision = "drop";
+      }
+      note(r, "human", `Não fazer ${skip.length === 1 ? "a sugestão" : "as sugestões"} ${skip.join(", ")}.`, {
+        items: skip.map((id) => ({ id, status: "dropped" as const })), by,
+      });
+    }
+    if (apply.length) {
+      note(r, "human", `Pediu ao autor aplicar ${apply.length === 1 ? "a sugestão" : "as sugestões"} ${apply.join(", ")}.`, {
+        items: apply.map((id) => ({ id, status: "open" as const })), by,
+      });
+    }
+  });
+}
+
+/** Só "fazer": as sugestões escolhidas vão ao autor ({@link decideSuggestions}). */
+export async function requestSuggestions(reviewId: string, findingIds: string[], by: string): Promise<Review> {
+  return await decideSuggestions(reviewId, { apply: findingIds }, by);
+}
 
 /**
  * A decisão do revisor HUMANO sobre um item: uma dúvida (`question`) ou um bloqueante travado.
@@ -534,7 +718,7 @@ export async function decideQuestion(reviewId: string, findingId: string, decisi
     else if (decision === "drop") f.status = "dropped";
     else if (f.status === "dropped" || f.status === "accepted_risk") f.status = "open";
     const said: Record<Decision, string> = { block: "bloqueia", keep: "mantém o bloqueio", drop: "retira", accept_risk: "aceita o risco" };
-    note(r, "human", `Decisão humana em ${findingId}: ${said[decision]}.`);
+    note(r, "human", `Decisão humana em ${findingId}: ${said[decision]}.`, { items: [{ id: f.id, status: f.status }], by });
 
     if (r.phase === "reviewing") {
       // No meio da rodada do revisor, quem fecha a fase é o submit dele.
@@ -597,11 +781,11 @@ export async function retryReview(reviewId: string, by: string): Promise<Review>
     r.nudges = 0;
     r.impasseReason = undefined;
     note(r, "human", side === "approve" ? "Tentar de novo: o pedido de Approve volta ao revisor." :
-      `Tentar de novo: a vez volta ao ${side === "reviewer" ? "revisor" : "autor"} (rodada ${r.round} de ${MAX_ROUNDS}).`);
+      `Tentar de novo: a vez volta ao ${side === "reviewer" ? "revisor" : "autor"} (rodada ${r.round} de ${MAX_ROUNDS}).`, { by });
   });
   logger.info({ audit: true, action: "review.retry", review: reviewId, side, by }, "PR review retried");
   if (side === "approve") await relayReview(after, "reviewer", reviewerApprovePrompt(after), { approve: true });
-  else if (side) await relayReview(after, side, promptFor(after, side));
+  else if (side) await relayReview(after, side, await promptFor(after, side));
   return (await getReview(reviewId)) ?? after;
 }
 
@@ -634,11 +818,32 @@ export async function cancelReview(reviewId: string, by: string): Promise<Review
     if (CLOSED.has(r.phase)) throw new Error(`revisao_encerrada: a revisão já está em ${r.phase}`);
     r.phase = "cancelled";
     r.approvePending = undefined;
-    note(r, "human", "Revisão cancelada.");
+    note(r, "human", "Revisão cancelada.", { by });
   });
+  lastGithubSync.delete(reviewId);
   logger.info({ audit: true, action: "review.cancel", review: reviewId, by }, "PR review cancelled");
   await retireReviewerCard(after);
   return after;
+}
+
+/**
+ * Cancela a revisão por um motivo do SISTEMA (o card de um lado foi excluído, o PR foi fechado no
+ * GitHub): a fala no log e a linha de auditoria. Idempotente — revisão já encerrada fica como está.
+ */
+async function cancelBySystem(
+  reviewId: string, text: string, audit: Record<string, unknown>,
+): Promise<{ review: Review; cancelled: boolean }> {
+  let cancelled = false as boolean;
+  const review = await mutateReview(reviewId, (x) => {
+    if (CLOSED.has(x.phase)) return;
+    x.phase = "cancelled";
+    x.approvePending = undefined;
+    note(x, "system", text);
+    cancelled = true;
+  });
+  if (cancelled) logger.info({ audit: true, action: "review.cancel", review: reviewId, ...audit }, "PR review cancelled");
+  lastGithubSync.delete(reviewId);
+  return { review, cancelled };
 }
 
 /**
@@ -654,17 +859,7 @@ export async function closeReviewsOfRemovedCard(cardId: string, by?: string): Pr
   for (const r of [...asAuthor, ...(asReviewer ? [asReviewer] : [])]) {
     if (CLOSED.has(r.phase)) continue;
     const side = r.cardId === cardId ? "autor" : "revisor";
-    let cancelled = false as boolean;
-    await mutateReview(r.id, (x) => {
-      if (CLOSED.has(x.phase)) return;
-      x.phase = "cancelled";
-      x.approvePending = undefined;
-      note(x, "system", `Revisão cancelada: o card do ${side} foi excluído.`);
-      cancelled = true;
-    });
-    if (cancelled) {
-      logger.info({ audit: true, action: "review.cancel", review: r.id, reason: `${side} card removed`, card: cardId, by }, "PR review cancelled");
-    }
+    await cancelBySystem(r.id, `Revisão cancelada: o card do ${side} foi excluído.`, { reason: `${side} card removed`, card: cardId, by });
   }
   return [...new Set(asAuthor.map((r) => r.reviewerCardId))].filter((id) => id !== cardId);
 }
@@ -672,36 +867,145 @@ export async function closeReviewsOfRemovedCard(cardId: string, by?: string): Pr
 /* ------------------------------------------------------------------ merge humano */
 
 /**
- * O botão de merge achou o PR num commit que não é o revisado (push depois do `ready`). Numa mutação
- * só: com rodada sobrando, a revisão volta a `reviewing` na rodada seguinte e o revisor recebe o delta
- * (desde o `reviewedSha` aprovado) pelo mesmo relay das outras rodadas; na última, vira impasse
- * "push depois do pronto". Só age em `ready`: o merge leva minutos (o CI), e uma revisão que andou ou
- * foi cancelada nesse meio fica como está.
+ * O PR andou depois do `ready`: o botão de merge achou o PR num commit que não é o revisado
+ * (`cause: "merge"`), ou o turno do autor terminou com um push novo no PR (`cause: "push"`,
+ * {@link checkAuthorPush}). Numa mutação só, a revisão volta a `reviewing` e o revisor recebe o delta
+ * (desde o `reviewedSha` aprovado) pelo mesmo relay das outras rodadas: na rodada seguinte, ou — sem
+ * rodada sobrando — numa conferência extra da última (um bloqueante achado ali vira impasse pelo teto
+ * de rodadas, como sempre). Só age em `ready`: o merge leva
+ * minutos (o CI), e uma revisão que andou ou foi cancelada nesse meio fica como está. `headSha` (o
+ * head lido) segura uma leitura velha: se a revisão já aprovou esse commit, não há o que reabrir.
  */
-export async function reopenAfterHeadMoved(reviewId: string, by: string): Promise<Review> {
-  let outcome = null as "reopen" | "impasse" | null;
+export async function reopenAfterHeadMoved(
+  reviewId: string, by: string, opts: { cause?: "merge" | "push"; headSha?: string } = {},
+): Promise<Review> {
+  const cause = opts.cause ?? "merge";
+  const head = opts.headSha?.toLowerCase();
+  let reopened = false as boolean;
   const after = await mutateReview(reviewId, (r) => {
     if (r.phase !== "ready") return;
+    if (head && r.reviewedSha === head) return;
     const approved = r.reviewedSha ? ` (${r.reviewedSha.slice(0, 7)})` : "";
+    const why = cause === "push"
+      ? `O autor empurrou depois do pronto${head ? ` (head ${head.slice(0, 7)})` : ""}: ${HEAD_MOVED}; o PR não está mais no commit aprovado${approved}.`
+      : `Merge recusado: ${HEAD_MOVED}; o PR não está mais no commit aprovado${approved}.`;
     r.approvePending = undefined;
     r.nudges = 0;
+    r.phase = "reviewing";
     if (r.round < MAX_ROUNDS) {
       r.round += 1;
-      r.phase = "reviewing";
-      note(r, "system", `Merge recusado: ${HEAD_MOVED}; o PR não está mais no commit aprovado${approved}. ` +
-        `Rodada ${r.round} de ${MAX_ROUNDS}: o revisor confere o que entrou.`);
-      outcome = "reopen";
+      note(r, "system", `${why} Rodada ${r.round} de ${MAX_ROUNDS}: o revisor confere o que entrou.`);
     } else {
-      r.phase = "impasse";
-      r.impasseReason = HEAD_MOVED;
-      note(r, "system", `Impasse: ${HEAD_MOVED} na última rodada${approved}; cancele e peça uma revisão nova.`);
-      outcome = "impasse";
+      // Sem rodada sobrando, o revisor ainda confere o que entrou (aplicar sugestões depois do pronto
+      // não pode travar o PR): a última rodada reabre para ele. Se achar bloqueante, o teto de rodadas
+      // vale como sempre — impasse.
+      r.lastSubmitRound = r.round - 1;
+      note(r, "system", `${why} Rodada ${r.round} de ${MAX_ROUNDS} (conferência extra): o revisor confere o que entrou.`);
     }
+    reopened = true;
   });
-  logger.info({ audit: true, action: "review.head_moved", review: reviewId, outcome, by }, "PR review: head moved after ready");
-  if (outcome === "reopen") await relayReview(after, "reviewer", headMovedPrefix(after) + reviewerDeltaPrompt(after));
-  else if (outcome === "impasse") await announcePhase(after);
+  logger.info({ audit: true, action: "review.head_moved", review: reviewId, cause, reopened, by }, "PR review: head moved after ready");
+  if (reopened) await relayReview(after, "reviewer", headMovedPrefix(after, cause) + reviewerDeltaPrompt(after));
   return (await getReview(reviewId)) ?? after;
+}
+
+/**
+ * O PR no GitHub, conferido contra a revisão: o que aconteceu lá FORA do painel, que nenhum clique
+ * contou para cá.
+ *  - MERGED: mergeado à mão, ou por uma IA pela API — a revisão fecha como mergeada (o mesmo
+ *    `markReviewMerged` do botão: aviso nos dois cards, card do revisor para `done`), o PR do card
+ *    ganha `mergedAt` e a branch dele sai do GitHub (o trabalho já está na base).
+ *  - CLOSED sem merge: a revisão é cancelada (não há mais o que revisar nem mergear).
+ *  - OPEN com o head diferente do aprovado, em `ready`: alguém mandou a IA do autor mexer no PR e
+ *    ela empurrou — a revisão volta ao revisor na hora ({@link reopenAfterHeadMoved}), sem esperar
+ *    o clique de merge para descobrir. Em `fixing`, push é a resposta à lista: nada muda.
+ * Só revisão aberta vai ao GitHub. Nunca lança: uma leitura que falha deixa a revisão como está.
+ */
+export async function syncReviewWithGithub(reviewId: string, by = "conferência do GitHub"): Promise<Review | undefined> {
+  const r = await getReview(reviewId);
+  // Com o merge do botão em andamento, o PR aparece MERGED antes de o botão fechar a revisão: é ele
+  // quem fecha (com o nome de quem mergeou), não esta conferência.
+  if (!r || CLOSED.has(r.phase) || merging.has(r.id)) return r;
+  const pr = await readPrState(r.cardId, r.prUrl);
+  if (!pr || merging.has(r.id)) return r;
+  if (pr.state === "MERGED") {
+    const after = await markReviewMerged(r.id, "GitHub", { outsidePanel: { headSha: pr.headSha } });
+    await afterPrMerged(r.cardId, r.prUrl, r.base, r.prBranch);
+    return after;
+  }
+  if (pr.state === "CLOSED") {
+    const { review: after, cancelled } = await cancelBySystem(
+      r.id, `PR #${r.prNumber} fechado no GitHub sem merge: revisão cancelada.`, { reason: "PR closed on GitHub" },
+    );
+    if (cancelled) await retireReviewerCard(after);
+    return after;
+  }
+  // O `gh pr view` leva segundos: se nesse meio alguém gravou um head (o autor ao responder), o dele é
+  // o mais novo — a leitura daqui não o sobrescreve.
+  const seen = r.prHeadSha === pr.headSha ? r : await mutateReview(r.id, (x) => {
+    if (!CLOSED.has(x.phase) && x.prHeadSha === r.prHeadSha) x.prHeadSha = pr.headSha;
+  });
+  if (seen.phase === "ready" && seen.reviewedSha && pr.headSha !== seen.reviewedSha) {
+    return await reopenAfterHeadMoved(r.id, by, { cause: "push", headSha: pr.headSha });
+  }
+  return seen;
+}
+
+/** Revisões com merge em andamento (o botão, ou o deliver do responsável): um por vez. */
+const merging = new Set<string>();
+
+/** Pega a vez do merge desta revisão; false = já há um em andamento. Devolva com {@link releaseMerge}. */
+export function claimMerge(reviewId: string): boolean {
+  if (merging.has(reviewId)) return false;
+  merging.add(reviewId);
+  return true;
+}
+
+export function releaseMerge(reviewId: string): void {
+  merging.delete(reviewId);
+}
+
+/** De quanto em quanto tempo, no máximo, o painel aberto faz o servidor conferir o PR no GitHub. */
+export const GITHUB_SYNC_MS = 60_000;
+const lastGithubSync = new Map<string, number>();
+
+/**
+ * O painel leu a revisão: confere o PR no GitHub em segundo plano, no máximo uma vez por
+ * {@link GITHUB_SYNC_MS} por revisão — o painel relê a cada 3 s e um `gh` por leitura seria
+ * desperdício. É o que pega um merge feito direto no GitHub mesmo sem nenhum turno do autor.
+ */
+export function syncReviewSoon(r: Review): void {
+  if (CLOSED.has(r.phase)) {
+    lastGithubSync.delete(r.id);
+    return;
+  }
+  if (!claimGithubSync(r.id)) return;
+  void syncReviewWithGithub(r.id, "painel aberto").catch((err: unknown) => {
+    logger.warn({ review: r.id, detail: (err as Error).message }, "PR review could not sync with GitHub");
+  });
+}
+
+/** Marca a conferência de agora, se a última foi há mais de {@link GITHUB_SYNC_MS}. Devolve se pode ir. */
+function claimGithubSync(reviewId: string): boolean {
+  const now = Date.now();
+  if (now - (lastGithubSync.get(reviewId) ?? 0) < GITHUB_SYNC_MS) return false;
+  lastGithubSync.set(reviewId, now);
+  return true;
+}
+
+/**
+ * O fim de turno do card do AUTOR: cada revisão aberta dele é conferida no GitHub — em `ready` sempre
+ * (um push ali devolve a revisão ao revisor, e isso tem de aparecer já), nas outras fases no máximo
+ * uma vez por {@link GITHUB_SYNC_MS} (lá um push é a resposta à lista; o que importa é pegar um merge
+ * ou um fechamento feito por fora). Nunca lança.
+ */
+async function checkAuthorPush(cardId: string): Promise<void> {
+  for (const r of await listReviewsForCards([cardId])) {
+    if (CLOSED.has(r.phase)) continue;
+    if (r.phase === "ready") lastGithubSync.set(r.id, Date.now());
+    else if (!claimGithubSync(r.id)) continue;
+    await syncReviewWithGithub(r.id, "fim do turno do autor");
+  }
 }
 
 /**
@@ -709,17 +1013,25 @@ export async function reopenAfterHeadMoved(reviewId: string, by: string): Promis
  * aviso e o card do revisor vai para `done`. Grava mesmo se a revisão foi cancelada durante o merge —
  * o PR foi mergeado, e é isso que o painel tem de dizer. Repetir não grava nada nem avisa de novo.
  */
-export async function markReviewMerged(reviewId: string, by: string): Promise<Review> {
+export async function markReviewMerged(
+  reviewId: string, by: string, opts: { outsidePanel?: { headSha: string } } = {},
+): Promise<Review> {
   let landed = false as boolean;
   const after = await mutateReview(reviewId, (r) => {
     if (r.phase === "merged") return;
     r.phase = "merged";
     r.approvePending = undefined;
     r.impasseReason = undefined;
-    const head = r.reviewedSha ? ` (head ${r.reviewedSha.slice(0, 7)})` : "";
-    note(r, "human", `Mergeado em ${r.base} por ${by}${head}.`);
+    if (opts.outsidePanel) {
+      // Ninguém clicou no botão: o PR apareceu mergeado no GitHub (à mão, ou por uma IA pela API).
+      note(r, "system", `Mergeado em ${r.base} fora do painel, direto no GitHub (head ${opts.outsidePanel.headSha.slice(0, 7)}).`);
+    } else {
+      const head = r.reviewedSha ? ` (head ${r.reviewedSha.slice(0, 7)})` : "";
+      note(r, "human", `Mergeado em ${r.base} por ${by}${head}.`, { by });
+    }
     landed = true;
   });
+  lastGithubSync.delete(reviewId);
   if (landed) {
     logger.info({ audit: true, action: "review.merged", review: reviewId, by }, "PR review merged");
     await announcePhase(after);
@@ -786,15 +1098,16 @@ async function onTurnFinished(event: CardEvent): Promise<void> {
         action = "nudge";
       }
     });
-    if (action === "nudge") await relayReview(after, side, nudgePrefix(tool) + promptFor(after, side));
+    if (action === "nudge") await relayReview(after, side, nudgePrefix(tool) + (await promptFor(after, side)));
     else if (action === "impasse") await announcePhase(after);
   }
 }
 
 /**
  * Liga o orquestrador ao feed de eventos dos cards (uma vez, no boot). O listener não lança e não
- * bloqueia: só agenda o julgamento para depois de uma folga curta — a chamada da ferramenta que
- * chegou no mesmo turno ganha — e engole qualquer erro com um warn. Devolve o unsubscribe.
+ * bloqueia: só agenda o julgamento (e a conferência do push do autor depois do pronto) para depois de
+ * uma folga curta — a chamada da ferramenta que chegou no mesmo turno ganha — e engole qualquer erro
+ * com um warn. Devolve o unsubscribe.
  */
 export function startReviewOrchestrator(opts: { graceMs?: number } = {}): () => void {
   const graceMs = opts.graceMs ?? TURN_GRACE_MS;
@@ -807,6 +1120,9 @@ export function startReviewOrchestrator(opts: { graceMs?: number } = {}): () => 
       if (stopped) return;
       void onTurnFinished(event).catch((err: unknown) => {
         logger.warn({ card: event.cardId, detail: (err as Error).message }, "PR review could not judge a finished turn");
+      });
+      void checkAuthorPush(event.cardId).catch((err: unknown) => {
+        logger.warn({ card: event.cardId, detail: (err as Error).message }, "PR review could not check the author's push");
       });
     }, graceMs);
     timer.unref?.();

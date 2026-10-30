@@ -2,9 +2,10 @@ import * as React from "react";
 import { ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { Card, CardPr, ReviewSummary } from "@/api/types";
+import type { Card, CardPr, Finding, ReviewSummary } from "@/api/types";
 import { RequestReviewDialog } from "@/features/board/components/RequestReviewDialog";
 import { reviewPill, visiblePrs } from "@/features/board/lib/review";
+import { useLiveReview } from "@/features/board/lib/useLiveReview";
 import { useT } from "@/i18n";
 
 /**
@@ -22,20 +23,22 @@ import { useT } from "@/i18n";
 export interface PrReviewBlockProps {
   cardId: string;
   pr: CardPr;
-  /** The card's review summary, when it is about THIS PR. Absent = this PR was never reviewed. */
-  review?: ReviewSummary;
+  /** The card's review, when it is about THIS PR: the live one, or the board's summary. Absent = never reviewed. */
+  review?: ReviewSummary & { findings?: Finding[] };
+  /** The author's AI is working right now: a `ready` PR reads "IA mexendo". */
+  authorWorking?: boolean;
   /** Who works the card now: the dialog suggests them as the author. */
   actorUserId?: string;
   /** Show the review's panel. */
   onOpenPanel: () => void;
 }
 
-export function PrReviewBlock({ cardId, pr, review: summary, actorUserId, onOpenPanel }: PrReviewBlockProps) {
+export function PrReviewBlock({ cardId, pr, review: summary, authorWorking = false, actorUserId, onOpenPanel }: PrReviewBlockProps) {
   const t = useT();
   const [asking, setAsking] = React.useState(false);
   // The server never puts a cancelled review on a card; a stale cache must not turn one into a panel to open.
   const review = summary?.phase === "cancelled" ? undefined : summary;
-  const pill = reviewPill(review);
+  const pill = reviewPill(review, { authorWorking });
 
   const line = (
     <>
@@ -43,7 +46,7 @@ export function PrReviewBlock({ cardId, pr, review: summary, actorUserId, onOpen
       <span className="min-w-0 truncate text-muted-foreground">
         {pr.branch} → {pr.base}
       </span>
-      <Badge tone={pill.tone} className="ml-auto shrink-0">
+      <Badge tone={pill.tone} className="ml-auto shrink-0 transition-colors duration-500">
         {t(pill.key, pill.vars)}
       </Badge>
     </>
@@ -96,6 +99,11 @@ export function PrReviewBlock({ cardId, pr, review: summary, actorUserId, onOpen
 /**
  * The blocks of a card: one per PR it has open, newest first (see {@link visiblePrs}). Renders
  * nothing for a card that never opened one — which is most of them.
+ *
+ * A card with a review reads it LIVE ({@link useLiveReview}, the same query the panel reads): the
+ * board's summary only moves when the sidebar polls, and the block must follow the review as it goes
+ * (the AIs' rounds, a push after `ready`, the author's AI working on it) without anyone reopening the
+ * card. The board's summary stands in until the first read lands.
  */
 export function PrReviewBlocks({
   card,
@@ -104,8 +112,14 @@ export function PrReviewBlocks({
   card: Pick<Card, "id" | "prs" | "review" | "actorUserId">;
   onOpenPanel: () => void;
 }) {
+  const reviewed = card.review !== undefined && card.review.phase !== "cancelled";
+  const live = useLiveReview(card.id, { enabled: reviewed });
   const prs = visiblePrs(card);
   if (prs.length === 0) return null;
+  // A cancelled review is no review: the board's summary (the latest that was not cancelled) speaks then.
+  const current = live.review && live.review.phase !== "cancelled" ? live.review : card.review;
+  // The server's rule either way: the live read's `working`, or the board summary's until it lands.
+  const authorWorking = live.query.data ? live.working.author : card.review?.authorWorking === true;
   return (
     <>
       {prs.map((pr) => (
@@ -113,8 +127,9 @@ export function PrReviewBlocks({
           key={pr.number}
           cardId={card.id}
           pr={pr}
-          // The summary is the card's MOST RECENT review: it belongs to one PR, not to all of them.
-          review={card.review?.prNumber === pr.number ? card.review : undefined}
+          // The review is the card's MOST RECENT one: it belongs to one PR, not to all of them.
+          review={current?.prNumber === pr.number ? current : undefined}
+          authorWorking={authorWorking}
           actorUserId={card.actorUserId}
           onOpenPanel={onOpenPanel}
         />

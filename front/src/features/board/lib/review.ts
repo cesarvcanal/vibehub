@@ -1,5 +1,7 @@
 import type { BadgeTone } from "@/components/ui/badge";
-import type { Card, CardPr, Finding, Review, ReviewPhase, ReviewSummary } from "@/api/types";
+import type {
+  Card, CardPr, Finding, FindingSeverity, FindingStatus, Review, ReviewEvent, ReviewPhase, ReviewSummary, ReviewWorking,
+} from "@/api/types";
 
 /**
  * PR review — the rules the block in the chat, its dialog and (next) the panel and the sidebar line
@@ -15,8 +17,16 @@ export const REVIEW_MAX_ROUNDS = 3;
  */
 export const MERGE_CONFIRM_MS = 16 * 60_000;
 
-/** How often the panel re-reads a review the AIs are still working on (or a merge is running on). */
+/**
+ * How often an OPEN review is re-read while something is moving — an AI in its turn (either side, or
+ * the reviewing/fixing phases), a merge running: the screen follows each step.
+ */
 export const REVIEW_POLL_MS = 3_000;
+/**
+ * …and while it sits still (ready or impasse, nobody working): still read, because it moves on its own
+ * (a merge done on GitHub, another person's decision), but at a calmer pace.
+ */
+export const REVIEW_IDLE_POLL_MS = 10_000;
 
 /** The two `impasseReason` values the server writes as codes/fixed texts: neither has a turn to hand back. */
 export const IMPASSE_ROUNDS = "rodadas";
@@ -50,16 +60,23 @@ export function awaitingDecision(review: ReviewSummary & { findings?: Finding[] 
  * The pill of a PR's review. `reviewing` and `fixing` read the same — both are "the AIs are on it,
  * round N of 3"; the difference (whose turn) belongs to the panel — except a `reviewing` that waits
  * on a doubt only a person can decide ({@link awaitingDecision}): that one reads "aguardando decisão",
- * in the blue of "needs a person", or it would look like the AIs working. A cancelled review is NO
- * review: the server never sends one on a card, and a stale cache must not resurrect it. PURE.
+ * in the blue of "needs a person", or it would look like the AIs working. A `ready` whose author's AI
+ * is working right now (`authorWorking`: someone sent it to touch the PR) reads "IA mexendo", in the
+ * orange of work: what it pushes sends the review back to the reviewer, so "pronto pra merge" would
+ * be a lie while it works. A cancelled review is NO review: the server never sends one on a card,
+ * and a stale cache must not resurrect it. PURE.
  */
-export function reviewPill(review: (ReviewSummary & { findings?: Finding[] }) | undefined): ReviewPill {
+export function reviewPill(
+  review: (ReviewSummary & { findings?: Finding[] }) | undefined,
+  live: { authorWorking?: boolean } = {},
+): ReviewPill {
   switch (review?.phase) {
     case "reviewing":
     case "fixing":
       if (awaitingDecision(review)) return { key: "review.pill.decision", tone: "info" };
       return { key: "review.pill.round", vars: { round: review.round, max: REVIEW_MAX_ROUNDS }, tone: "warn" };
     case "ready":
+      if (live.authorWorking) return { key: "review.pill.authorWorking", tone: "warn" };
       return { key: "review.pill.ready", tone: "ok" };
     // Blue = needs a person, the same colour the mockup gives it.
     case "impasse":
@@ -127,11 +144,12 @@ export function startErrorRoles(err: unknown): ReviewRole[] {
 
 /* ------------------------------------------------------------------ the panel */
 
-/** The AIs are on it: the panel keeps reading. Every other phase waits for a person, or is over. */
+/** The AIs hold the turn (reviewing, fixing): every other phase waits for a person, or is over. */
 export const reviewIsWorking = (phase: ReviewPhase | undefined): boolean => phase === "reviewing" || phase === "fixing";
 
-/** Still going: it can be cancelled (`merged` and `cancelled` are closed — the server answers 409). */
-const isActive = (phase: ReviewPhase): boolean => phase !== "merged" && phase !== "cancelled";
+/** Still going: it can be cancelled (`merged` and `cancelled` are closed — the server answers 409). PURE. */
+export const reviewIsOpen = (phase: ReviewPhase | undefined): boolean =>
+  phase !== undefined && phase !== "merged" && phase !== "cancelled";
 
 /** How many findings of each severity, whatever their status: the header of the closed list. PURE. */
 export interface FindingCounts {
@@ -146,11 +164,33 @@ export function findingCounts(findings: Finding[]): FindingCounts {
   return counts;
 }
 
-const isOpen = (f: Finding): boolean => f.status === "open" || f.status === "contested";
+/** A finding still standing: open, or contested. Fixed, dropped, accepted risk and won't fix are closed. PURE. */
+export const findingIsOpen = (f: Pick<Finding, "status">): boolean => f.status === "open" || f.status === "contested";
+const isOpen = findingIsOpen;
 
-/** Doubts that wait for the human reviewer: they hold the `ready` without spending a round. PURE. */
+/** The tone of each finding's severity and status, wherever a finding is drawn (the list, the conversation). */
+export const FINDING_SEVERITY_TONE: Record<FindingSeverity, BadgeTone> = {
+  blocking: "critical",
+  question: "info",
+  suggestion: "muted",
+  refuted: "muted",
+};
+export const FINDING_STATUS_TONE: Record<FindingStatus, BadgeTone> = {
+  open: "warn",
+  fixed: "ok",
+  contested: "info",
+  accepted_risk: "muted",
+  dropped: "muted",
+  wontfix: "muted",
+};
+
+/**
+ * Doubts that wait for a decision: they hold the `ready` without spending a round. One the author
+ * resolved and the reviewer checked (fixed), or the reviewer dropped, waits for nobody — the server's
+ * own rule. PURE.
+ */
 export function pendingQuestions(findings: Finding[]): Finding[] {
-  return findings.filter((f) => f.severity === "question" && !f.humanDecision);
+  return findings.filter((f) => f.severity === "question" && !f.humanDecision && findingIsOpen(f));
 }
 
 /**
@@ -170,6 +210,8 @@ export interface ReviewActions {
   retry: boolean;
   cancel: boolean;
   merge: boolean;
+  /** Choose open suggestions and ask the author's AI to apply them. */
+  request: boolean;
 }
 
 /**
@@ -181,7 +223,8 @@ export interface ReviewActions {
  *    not a push after ready: those have no turn to hand back), a `ready` whose Approve never got out,
  *    or a turn an AI may have dropped — `fixing`, or `reviewing` before the reviewer's round is in
  *    (after it, only doubts are left and the turn is the human's);
- *  - **cancel**: the reviewer, the author, the merger or an owner, while the review is active.
+ *  - **cancel**: the reviewer, the author, the merger or an owner, while the review is active;
+ *  - **request** (ask the author to apply chosen suggestions): the same people, while it is active.
  * PURE.
  */
 export function reviewActions(
@@ -191,7 +234,7 @@ export function reviewActions(
   >,
   me: { id: string; isOwner: boolean } | null,
 ): ReviewActions {
-  if (!me) return { decide: false, retry: false, cancel: false, merge: false };
+  if (!me) return { decide: false, retry: false, cancel: false, merge: false, request: false };
   const isReviewer = me.id === review.reviewerUserId;
   const isMerger = me.id === review.mergerUserId;
   const { phase } = review;
@@ -203,7 +246,8 @@ export function reviewActions(
     merge: isMerger && phase === "ready",
     decide: (isReviewer || me.isOwner) && (reviewIsWorking(phase) || phase === "impasse"),
     retry: (isReviewer || isMerger || me.isOwner) && (failedImpasse || approveStuck || turnOpen),
-    cancel: (isReviewer || me.id === review.authorUserId || isMerger || me.isOwner) && isActive(phase),
+    cancel: (isReviewer || me.id === review.authorUserId || isMerger || me.isOwner) && reviewIsOpen(phase),
+    request: (isReviewer || me.id === review.authorUserId || isMerger || me.isOwner) && reviewIsOpen(phase),
   };
 }
 
@@ -241,4 +285,67 @@ export function mergeFailure(err: unknown): MergeFailure {
   if (status === 409 && body.reason === "merging") return { kind: "running" };
   const message = (typeof response?.data === "string" ? response.data : body.error ?? "").trim();
   return { kind: "refused", reason: body.reason, message, review: body.review };
+}
+
+/* ------------------------------------------------------------------ the conversation */
+
+/**
+ * Whose move it is RIGHT NOW, and whether that side's AI is actually in a turn — the one sentence the
+ * panel leads with and the "digitando…" of the conversation:
+ *  - `reviewer`: `reviewing` before the reviewer's round is in (after it, only doubts are left);
+ *  - `author`: `fixing`, or a `ready` PR the author's AI is working on (`onReadyPr`: what it pushes
+ *    sends the review back to the reviewer);
+ *  - `person`: a doubt to decide, an impasse, or a ready PR waiting for its merge;
+ *  - `nobody`: merged or cancelled.
+ * PURE.
+ */
+export type ReviewTurn =
+  | { who: "reviewer"; working: boolean }
+  | { who: "author"; working: boolean; onReadyPr: boolean }
+  | { who: "person"; why: "decision" | "impasse" | "merge" }
+  | { who: "nobody" };
+
+export function reviewTurn(
+  review: Pick<Review, "phase" | "round" | "lastSubmitRound" | "findings">,
+  working: ReviewWorking,
+): ReviewTurn {
+  switch (review.phase) {
+    case "reviewing":
+      if (review.lastSubmitRound !== review.round) return { who: "reviewer", working: working.reviewer };
+      return { who: "person", why: "decision" };
+    case "fixing":
+      return { who: "author", working: working.author, onReadyPr: false };
+    case "ready":
+      return working.author ? { who: "author", working: true, onReadyPr: true } : { who: "person", why: "merge" };
+    case "impasse":
+      return { who: "person", why: "impasse" };
+    default:
+      return { who: "nobody" };
+  }
+}
+
+/**
+ * A row of the conversation: a "Rodada N" divider, or one line of the log — with a stable key and the
+ * position in the log (`index`; a divider carries its first line's), which tells a line that arrived
+ * while the panel was open from one that was already there.
+ */
+export type ConversationRow =
+  | { kind: "round"; round: number; key: string; index: number }
+  | { kind: "line"; event: ReviewEvent; key: string; index: number };
+
+/**
+ * The log as the conversation draws it: a "Rodada N" divider before the first line of each round —
+ * the way a chat app marks a new day — then the lines in the order they happened. PURE.
+ */
+export function conversationRows(log: ReviewEvent[]): ConversationRow[] {
+  const rows: ConversationRow[] = [];
+  let round: number | null = null;
+  log.forEach((event, i) => {
+    if (event.round !== round) {
+      round = event.round;
+      rows.push({ kind: "round", round, key: `round-${round}-${i}`, index: i });
+    }
+    rows.push({ kind: "line", event, key: `${event.at}-${i}`, index: i });
+  });
+  return rows;
 }

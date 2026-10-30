@@ -62,7 +62,9 @@ export type DeliverReason =
   /** Merge-only: the PR's head is not the commit the review approved (a push after `ready`). */
   | "head_moved"
   /** An authorized merge outside merge-only while the card has a PR review in progress. */
-  | "review_active";
+  | "review_active"
+  /** Push-only: the branch went to the PR; nothing else was asked. */
+  | "pushed";
 
 export interface DeliverResult {
   /** URL of the PR — present once (b) resolved one, whether or not it was later merged. */
@@ -78,6 +80,12 @@ export interface DeliverResult {
   locked?: true;
   /** Gate/git output when there is something to show (redacted, tail). */
   output?: string;
+  /**
+   * After a merge, what became of the card's branch on GitHub: `deleted` (the work is in the base
+   * now), `kept` (another open PR still comes from it, or it is the repo's default branch — deleting
+   * it would close that PR), or `failed` (the merge stands; the branch is just still there).
+   */
+  headBranch?: "deleted" | "kept" | "failed";
 }
 
 export interface DeliverOpts {
@@ -92,6 +100,11 @@ export interface DeliverOpts {
    * A push from here would carry commits nobody reviewed into the merge.
    */
   mergeOnly?: boolean;
+  /**
+   * PUSH-ONLY: push the branch and open (or reuse) the PR, then stop — no gate, no merge. How a card
+   * whose PR is under review delivers a fix (`deliverCard`, services/review/deliverCard.ts).
+   */
+  pushOnly?: boolean;
   /** Merge-only: the full sha the review approved (`Review.reviewedSha`). Required with `mergeOnly`. */
   expectedHeadSha?: string;
   /**
@@ -323,6 +336,197 @@ export async function cardConnectionToken(card: Card, project: Project): Promise
   return await tokenFor(identity.connectionId);
 }
 
+/** `owner/repo` and the number out of a GitHub pull request's URL; null when it is not one. PURE. */
+export function parsePrUrl(prUrl: string): { repo: string; number: number } | null {
+  const m = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)(?:[/?#]|$)/.exec(prUrl);
+  return m ? { repo: m[1]!, number: Number(m[2]) } : null;
+}
+
+/**
+ * Runs one `gh` script for a card, in its worktree, with a token — the connection given, or the
+ * card's own (the actor's). Null when the card or its project is gone, or the run itself failed
+ * (logged with `what`): the callers here are all best-effort, and none of them may throw.
+ */
+async function runCardGhScript(
+  cardId: string, what: string,
+  build: (ctx: { container: string; cardId: string; token: string; cwd: string }) => string,
+  connectionId?: string,
+): Promise<{ stdout: string; slug: string } | null> {
+  try {
+    const card = await getCard(cardId);
+    const project = card ? await getProject(card.projectId) : undefined;
+    if (!card || !project) return null;
+    const { cwd } = cardWorkPaths(project, card);
+    const token = connectionId ? await tokenFor(connectionId) : await cardConnectionToken(card, project);
+    const out = await hostExecutor().runScript(build({ container: config.runner.container, cardId: card.id, token, cwd }), { timeoutMs: 60_000 });
+    return { stdout: out.stdout, slug: card.worktreeSlug };
+  } catch (err) {
+    logger.warn({ card: cardId, detail: (err as Error).message }, `could not ${what}`);
+    return null;
+  }
+}
+
+/**
+ * Reads a PR's STATE and head, by its URL: `__VIBEHUB_DELIVER__ prstate <OPEN|MERGED|CLOSED> <sha>`,
+ * or `__VIBEHUB_DELIVER__ error view`. What the PR review checks to notice what happened on GitHub
+ * outside the panel (a merge by hand, a closed PR, a push after ready). PURE.
+ */
+export function buildPrStateScript(containerName: string, cardId: string, token: string, cwd: string, prUrl: string): string {
+  assertSafeRemotePath(cwd);
+  const body = [
+    ...ghTokenPreamble(token),
+    `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
+    `if ! J=$(gh pr view ${shQuote(prUrl)} --json state,headRefOid --jq '.state + " " + .headRefOid' 2>&1); then`,
+    `  printf '%s\\n' "$J"; echo "${MARKER} error view"; exit 0;`,
+    `fi`,
+    `echo "${MARKER} prstate $J"`,
+  ];
+  return dockerBashScript(containerName, body);
+}
+
+export type PrState = "OPEN" | "MERGED" | "CLOSED";
+
+/** Parses the PR state lookup. PURE. */
+export function parsePrState(
+  stdout: string,
+): { ok: true; state: PrState; headSha: string } | { ok: false; stage: string; output: string } {
+  const m = new RegExp(`${MARKER} prstate (OPEN|MERGED|CLOSED) ([0-9a-fA-F]{40,64})\\b`).exec(stdout);
+  if (m) return { ok: true, state: m[1] as PrState, headSha: m[2]!.toLowerCase() };
+  const err = new RegExp(`${MARKER} error (\\S+)`).exec(stdout);
+  const output = stdout.replace(new RegExp(`${MARKER} (prstate|error).*`, "g"), "").trimEnd();
+  return { ok: false, stage: err?.[1] ?? "unknown", output };
+}
+
+/**
+ * A PR as GitHub has it now — state and head — read with the card's own connection (the actor's).
+ * Null when the lookup failed (logged): the caller leaves things as they are.
+ */
+export async function readPrState(cardId: string, prUrl: string): Promise<{ state: PrState; headSha: string } | null> {
+  const out = await runCardGhScript(cardId, "read the PR state", (c) => buildPrStateScript(c.container, c.cardId, c.token, c.cwd, prUrl));
+  if (!out) return null;
+  const found = parsePrState(out.stdout);
+  if (found.ok) return { state: found.state, headSha: found.headSha };
+  logger.warn({ card: out.slug, stage: found.stage, detail: cleanOutput(found.output) }, "could not read the PR state");
+  return null;
+}
+
+/**
+ * Deletes a MERGED PR's head branch on GitHub — the work is in the base now, and a branch left behind
+ * is clutter nobody cleans. Two guards, in the script, against the moment it runs: the repo's default
+ * branch is never deleted, and neither is a branch another OPEN PR still comes from (a card with a PR
+ * to `dev` and another to `prod`: deleting it would close the second one). Emits
+ * `__VIBEHUB_DELIVER__ branch deleted|kept`, or `__VIBEHUB_DELIVER__ error <stage>`. A branch that
+ * is already gone (GitHub's own auto-delete) counts as deleted. PURE.
+ */
+export function buildDeleteBranchScript(
+  containerName: string, cardId: string, token: string, cwd: string, prUrl: string, branch: string,
+): string {
+  assertSafeRemotePath(cwd);
+  const repo = parsePrUrl(prUrl)?.repo;
+  if (!repo) throw new Error(`not a GitHub PR url: ${prUrl}`);
+  const ref = shQuote(`repos/${repo}/git/refs/heads/${assertBranchName(branch)}`);
+  const body = [
+    ...ghTokenPreamble(token),
+    `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
+    `DEF=$(gh repo view ${shQuote(repo)} --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null)`,
+    // Without the default branch in hand the guard cannot be checked: nothing is deleted.
+    `if [ -z "$DEF" ]; then echo "${MARKER} error repo"; exit 0; fi`,
+    `if [ "$DEF" = ${shQuote(branch)} ]; then echo "${MARKER} branch kept"; exit 0; fi`,
+    `if ! OPEN=$(gh pr list --repo ${shQuote(repo)} --head ${shQuote(branch)} --state open --json number --jq length 2>&1); then`,
+    `  printf '%s\\n' "$OPEN"; echo "${MARKER} error list"; exit 0;`,
+    `fi`,
+    `if [ "$OPEN" != "0" ]; then echo "${MARKER} branch kept"; exit 0; fi`,
+    `if OUT=$(gh api -X DELETE ${ref} 2>&1); then echo "${MARKER} branch deleted"; exit 0; fi`,
+    `case "$OUT" in *"Reference does not exist"*) echo "${MARKER} branch deleted"; exit 0;; esac`,
+    `printf '%s\\n' "$OUT"; echo "${MARKER} error delete"`,
+  ];
+  return dockerBashScript(containerName, body);
+}
+
+/** Parses the branch deletion. PURE. */
+export function parseDeleteBranch(stdout: string): "deleted" | "kept" | "failed" {
+  const m = new RegExp(`${MARKER} branch (deleted|kept)\\b`).exec(stdout);
+  return m ? (m[1] as "deleted" | "kept") : "failed";
+}
+
+/**
+ * Deletes a merged PR's head branch (see {@link buildDeleteBranchScript}), with the given connection
+ * or the card's. Never throws: a branch that could not be deleted costs a log line, not the merge.
+ */
+export async function deleteMergedBranch(
+  cardId: string, prUrl: string, branch: string, connectionId?: string,
+): Promise<"deleted" | "kept" | "failed"> {
+  const out = await runCardGhScript(
+    cardId, "delete the merged branch", (c) => buildDeleteBranchScript(c.container, c.cardId, c.token, c.cwd, prUrl, branch), connectionId,
+  );
+  if (!out) return "failed";
+  const result = parseDeleteBranch(out.stdout);
+  logger.info({ audit: true, action: "maestro.delete_branch", card: out.slug, branch, result }, "merged PR's branch");
+  if (result === "failed") logger.warn({ card: out.slug, branch, detail: cleanOutput(out.stdout) }, "could not delete the merged branch");
+  return result;
+}
+
+/** A GitHub login: letters, digits and single hyphens, up to 39 characters. */
+const GITHUB_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+
+/** Who the PR names on GitHub: the assignee (who delivers it) and the reviewer asked to review it. */
+export interface PrPeople {
+  assignee?: string;
+  reviewer?: string;
+}
+
+/** How each name asked for went on GitHub. */
+export type PrPeopleResult = Partial<Record<keyof PrPeople, "ok" | "failed">>;
+
+/**
+ * Marks the PR's ASSIGNEE and asks for its REVIEWER on GitHub — one `gh pr edit` each, so the one
+ * GitHub refuses (a reviewer who is the PR's own author, a login without access) does not take the
+ * other with it. Emits `__VIBEHUB_DELIVER__ people <assignee|reviewer> <ok|error>`. PURE.
+ */
+export function buildPrPeopleScript(
+  containerName: string, cardId: string, token: string, cwd: string, prUrl: string, people: PrPeople,
+): string {
+  assertSafeRemotePath(cwd);
+  const steps: string[] = [];
+  for (const [role, flag] of [["assignee", "--add-assignee"], ["reviewer", "--add-reviewer"]] as const) {
+    const login = people[role];
+    if (!login) continue;
+    if (!GITHUB_LOGIN_RE.test(login)) throw new Error(`invalid GitHub login for the ${role}: '${login}'`);
+    steps.push(
+      `if OUT=$(gh pr edit ${shQuote(prUrl)} ${flag} ${shQuote(login)} 2>&1); then echo "${MARKER} people ${role} ok";` +
+        ` else printf '%s\\n' "$OUT"; echo "${MARKER} people ${role} error"; fi`,
+    );
+  }
+  const body = [...ghTokenPreamble(token), `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`, ...steps];
+  return dockerBashScript(containerName, body);
+}
+
+/** Parses the people marking: what was asked and how it went. PURE. */
+export function parsePrPeople(stdout: string): PrPeopleResult {
+  const out: PrPeopleResult = {};
+  for (const m of stdout.matchAll(new RegExp(`${MARKER} people (assignee|reviewer) (ok|error)`, "g"))) {
+    out[m[1] as "assignee" | "reviewer"] = m[2] === "ok" ? "ok" : "failed";
+  }
+  return out;
+}
+
+/**
+ * Names the PR's assignee and reviewer on GitHub, with the card's connection (see
+ * {@link buildPrPeopleScript}). Never throws: a PR that could not be marked costs a log line.
+ */
+export async function setPrPeople(cardId: string, prUrl: string, people: PrPeople): Promise<PrPeopleResult> {
+  if (!people.assignee && !people.reviewer) return {};
+  const out = await runCardGhScript(
+    cardId, "name the PR's people on GitHub", (c) => buildPrPeopleScript(c.container, c.cardId, c.token, c.cwd, prUrl, people),
+  );
+  if (!out) return {};
+  const result = parsePrPeople(out.stdout);
+  if (Object.values(result).includes("failed")) {
+    logger.warn({ card: out.slug, result, detail: cleanOutput(out.stdout) }, "could not name all the PR's people on GitHub");
+  }
+  return result;
+}
+
 /**
  * The PR's CI as the gate: its verdict, or null when the PR has no CI checks (the local gate
  * decides). Checks still running past the wait are red — never merged on a guess.
@@ -341,8 +545,7 @@ async function ciGate(
 
 /** The PR number out of its URL (`.../pull/123`); null when the URL is not a pull request's. PURE. */
 function prNumberFromUrl(prUrl: string): number | null {
-  const m = /\/pull\/(\d+)(?:[/?#]|$)/.exec(prUrl);
-  return m ? Number(m[1]) : null;
+  return parsePrUrl(prUrl)?.number ?? null;
 }
 
 /**
@@ -364,18 +567,30 @@ async function rememberPr(card: Card, prUrl: string, base: string, branch: strin
 }
 
 /**
- * Marks the card's PR as merged, so the chat stops offering a review of it and the review refuses
- * to start one. Best-effort like {@link rememberPr}: the merge is DONE, and a note about it that
- * could not be written must not turn it into a failure.
+ * What follows ANY merge of a card's PR — the deliver's own, or one the PR review found on GitHub
+ * (made by hand, outside the panel):
+ *  - the card's PR is marked merged, so the chat stops offering a review of it and the review refuses
+ *    to start one;
+ *  - the PR's branch leaves GitHub ({@link deleteMergedBranch}: the work is in the base now) — but
+ *    ONLY the branch vibehub itself made for the card (`card/<slug>`). A branch a person named (a
+ *    card patched to work on `dev`, say) is somebody's long-lived branch, never deleted from here.
+ * Best-effort like {@link rememberPr}: the merge is DONE, and a note about it that could not be
+ * written must not turn it into a failure. Returns what became of the branch.
  */
-async function rememberMerged(card: Card, prUrl: string, base: string): Promise<void> {
+export async function afterPrMerged(
+  cardId: string, prUrl: string, base: string, branch: string, connectionId?: string,
+): Promise<"deleted" | "kept" | "failed"> {
   const number = prNumberFromUrl(prUrl);
-  if (number === null) return;
-  try {
-    await markCardPrMerged(card.id, base, number, Date.now());
-  } catch (err) {
-    logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not mark the PR as merged on the card");
+  if (number !== null) {
+    try {
+      await markCardPrMerged(cardId, base, number, Date.now());
+    } catch (err) {
+      logger.warn({ card: cardId, detail: (err as Error).message }, "could not mark the PR as merged on the card");
+    }
   }
+  const card = await getCard(cardId);
+  if (!card || branch !== `card/${card.worktreeSlug}`) return "kept";
+  return await deleteMergedBranch(cardId, prUrl, branch, connectionId);
 }
 
 /**
@@ -426,19 +641,6 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     );
     return { merged: false, reason: "locked", branch: target, cardBranch: source, locked: true };
   }
-  // A PR under review merges only through the merger's button (merge-only). Any other authorized
-  // merge — an agent passing on a "sobe pra dev", the author's own card — is refused before a single
-  // script runs. Without `authorized` the delivery goes on: the author pushing fixes IS the review.
-  if (opts.authorized === true && !mergeOnly && (await activeReviewFor(card.id))) {
-    logger.info(
-      { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "review_active", by: opts.by },
-      "deliver refused to merge: the card has a PR review in progress",
-    );
-    return {
-      merged: false, reason: "review_active", branch: target, cardBranch: source, ...lock,
-      output: "este card tem uma revisão de PR em andamento: o merge é o botão do responsável no painel da revisão",
-    };
-  }
   const { cwd } = cardWorkPaths(project, card);
   const container = config.runner.container;
 
@@ -487,6 +689,8 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     }
     prUrl = pr.prUrl;
     await rememberPr(card, prUrl, target, source);
+    // Push-only: the branch is on the PR, and that is all that was asked (no gate, no merge).
+    if (opts.pushOnly) return { prUrl, merged: false, reason: "pushed", branch: target, cardBranch: source, ...lock };
   }
 
   // (c) the gate — the PR's CI when it has one, the local gate otherwise. A gate that errors
@@ -547,14 +751,9 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged, target, mergeOnly, by: opts.by },
     merged ? "deliver merged the PR" : "deliver could not merge the PR",
   );
-  if (merged) await rememberMerged(card, prUrl, target);
-  return {
-    prUrl,
-    merged,
-    reason: merged ? "merged" : "merge_failed",
-    branch: target,
-    cardBranch: source,
-    ...lock,
-    output: merged ? undefined : cleanOutput(output),
-  };
+  if (!merged) {
+    return { prUrl, merged, reason: "merge_failed", branch: target, cardBranch: source, ...lock, output: cleanOutput(output) };
+  }
+  const headBranch = await afterPrMerged(card.id, prUrl, target, source, opts.connectionId);
+  return { prUrl, merged, reason: "merged", branch: target, cardBranch: source, ...lock, headBranch };
 }

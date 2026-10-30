@@ -12,6 +12,15 @@ const TONES: Record<BadgeTone, string> = {
   info: "border-sky-500/30 bg-sky-500/10 text-sky-400",
 };
 
+/** The text colour of each tone alone — for a word that carries the tone without the badge around it. */
+export const BADGE_TEXT: Record<BadgeTone, string> = {
+  ok: "text-emerald-400",
+  warn: "text-amber-400",
+  critical: "text-destructive",
+  muted: "text-muted-foreground",
+  info: "text-sky-400",
+};
+
 export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
   tone?: BadgeTone;
 }

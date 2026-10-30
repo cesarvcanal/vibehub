@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import { cleanup, configure, screen, within } from "@testing-library/react";
+import { act, cleanup, configure, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderApp, setupState } from "@/test/render";
 import { PrReviewBlock, PrReviewBlocks } from "./PrReviewBlock";
 import { LANGUAGE_KEY, setLanguage } from "@/i18n";
-import type { CardPr, ReviewSummary } from "@/api/types";
+import type { CardPr, Review, ReviewResponse, ReviewSummary } from "@/api/types";
 
 vi.setConfig({ testTimeout: 30_000 });
 configure({ asyncUtilTimeout: 8_000 });
@@ -26,17 +26,37 @@ function reviewOf(overrides: Partial<ReviewSummary> = {}): ReviewSummary {
   return { id: "r1", prNumber: 553, phase: "fixing", round: 2, ...overrides };
 }
 
+/** The whole review, as `GET /cards/c1/review` answers it. */
+function fullReview(overrides: Partial<Review> = {}): Review {
+  return {
+    id: "r1", prNumber: 553, phase: "fixing", round: 2, cardId: "c1", projectId: "p1",
+    prUrl: PR.url, prBranch: PR.branch, base: "dev", reviewerUserId: "u-rev", authorUserId: "u1", mergerUserId: "u1",
+    reviewerCardId: "rc1", findings: [], log: [], createdAt: 1, updatedAt: 2, ...overrides,
+  };
+}
+
+/** What the server answers to the live read of the card's review; tests change it between polls. */
+let live: ReviewResponse;
+let reviewGets = 0;
+
 beforeEach(() => {
   vi.clearAllMocks();
   setLanguage("pt-BR");
+  live = { review: null };
+  reviewGets = 0;
   get.mockImplementation(async (url: string) => {
     if (url === "/auth/me") return { user: { id: "u1", username: "mussa", role: "member" } };
     if (url === "/setup/state") return setupState();
     if (url === "/cards/c1/people") return { people: [{ id: "u1", username: "mussa", canReview: true }] };
+    if (url === "/cards/c1/review") {
+      reviewGets += 1;
+      return live;
+    }
     throw new Error(`unexpected ${url}`);
   });
 });
 afterEach(() => {
+  vi.useRealTimers();
   // Unmount BEFORE the language flips back: a mounted `useT()` would re-render outside act().
   cleanup();
   setLanguage("en");
@@ -140,6 +160,56 @@ describe("PrReviewBlocks", () => {
     { number: 10, url: "u10", base: "dev", branch: "card/a", openedAt: 100 },
     { number: 12, url: "u12", base: "prod", branch: "card/a", openedAt: 300 },
   ];
+
+  /** Moves the fake clock inside act(): the reads it triggers land as state updates. */
+  const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+
+  it("reads the review live: the board's summary says ready, the server is already on round 2 — and it keeps following", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    live = { review: fullReview({ phase: "reviewing", round: 2 }), working: { author: false, reviewer: true } };
+    renderApp(<PrReviewBlocks card={{ id: "c1", prs: [PR], review: reviewOf({ phase: "ready", round: 1 }) }} onOpenPanel={() => {}} />);
+    // Until the first read lands, the summary speaks; then the live review does.
+    expect(await screen.findByText("rodada 2/3")).toBeInTheDocument();
+
+    live = { review: fullReview({ phase: "ready", round: 2 }), working: { author: false, reviewer: false } };
+    await tick(3_100);
+    expect(await screen.findByText("pronto pra merge")).toBeInTheDocument();
+
+    // The author's AI starts working on the ready PR: the block says so on the next read.
+    live = { ...live, working: { author: true, reviewer: false } };
+    await tick(10_100);
+    expect(await screen.findByText("IA mexendo")).toBeInTheDocument();
+  });
+
+  it("before the first read, a ready PR whose author's AI is working already reads IA mexendo (the board's summary)", () => {
+    get.mockImplementation(() => new Promise(() => {})); // the live read never lands
+    renderApp(
+      <PrReviewBlocks card={{ id: "c1", prs: [PR], review: reviewOf({ phase: "ready", authorWorking: true }) }} onOpenPanel={() => {}} />,
+    );
+    expect(screen.getByText("IA mexendo")).toBeInTheDocument();
+  });
+
+  it("a closed review stops reading; a card that never had one never reads", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    live = { review: fullReview({ phase: "merged" }) };
+    const view = renderApp(<PrReviewBlocks card={{ id: "c1", prs: [PR], review: reviewOf({ phase: "merged" }) }} onOpenPanel={() => {}} />);
+    await waitFor(() => expect(reviewGets).toBe(1));
+    await tick(10_000);
+    expect(reviewGets).toBe(1);
+    view.unmount();
+
+    reviewGets = 0;
+    renderApp(<PrReviewBlocks card={{ id: "c1", prs: [PR] }} onOpenPanel={() => {}} />);
+    await tick(10_000);
+    expect(reviewGets).toBe(0);
+  });
+
+  it("a cancelled live review gives the block back to the board's summary", async () => {
+    live = { review: fullReview({ phase: "cancelled" }) };
+    renderApp(<PrReviewBlocks card={{ id: "c1", prs: [PR], review: reviewOf({ phase: "merged" }) }} onOpenPanel={() => {}} />);
+    await waitFor(() => expect(reviewGets).toBe(1));
+    expect(screen.getByText("mergeado")).toBeInTheDocument();
+  });
 
   it("renders nothing for a card with no PR", () => {
     const { container } = renderApp(<PrReviewBlocks card={{ id: "c1" }} onOpenPanel={() => {}} />);

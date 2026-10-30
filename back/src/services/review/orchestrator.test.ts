@@ -49,6 +49,14 @@ const resume = vi.fn(async (cardId: string) => {
   return await reopen?.(cardId);
 });
 const deliverSpy = vi.fn(async () => ({ merged: true }));
+/** O PR no GitHub, como `readPrState` o leria: o head (null = leitura que falhou) e o estado. */
+let prHeadNow: string | null = null;
+let prStateNow: "OPEN" | "MERGED" | "CLOSED" = "OPEN";
+const prHead = vi.fn(async (_cardId: string, _prUrl: string) => (prHeadNow ? { state: prStateNow, headSha: prHeadNow } : null));
+const afterMerged = vi.fn(async (_cardId: string, _prUrl: string, _base: string, _branch: string) => "deleted" as const);
+const prPeople = vi.fn(async (_cardId: string, _prUrl: string, people: { assignee?: string; reviewer?: string }) => ({
+  ...(people.assignee ? { assignee: "ok" as const } : {}), ...(people.reviewer ? { reviewer: "ok" as const } : {}),
+}));
 
 const USERS: Record<string, PublicUser> = {
   "u-autor": { id: "u-autor", username: "autor", role: "member", createdAt: "" },
@@ -76,6 +84,9 @@ async function load() {
   vi.doMock("../maestro/deliver.js", async () => ({
     ...(await vi.importActual<typeof import("../maestro/deliver.js")>("../maestro/deliver.js")),
     deliver: deliverSpy,
+    readPrState: prHead,
+    afterPrMerged: afterMerged,
+    setPrPeople: prPeople,
   }));
   vi.doMock("../../auth/users.js", async () => ({
     ...(await vi.importActual<typeof import("../../auth/users.js")>("../../auth/users.js")),
@@ -122,6 +133,11 @@ beforeEach(async () => {
   actor.mockClear();
   resume.mockClear();
   deliverSpy.mockClear();
+  prHead.mockClear();
+  prHeadNow = null;
+  prStateNow = "OPEN";
+  afterMerged.mockClear();
+  prPeople.mockClear();
 });
 afterEach(async () => {
   for (const m of [
@@ -290,6 +306,57 @@ describe("iniciar a revisão", () => {
     expect(twice.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     expect(String((twice.find((r) => r.status === "rejected") as PromiseRejectedResult).reason)).toMatch(/revisao_ativa/);
     expect((await o.registry.listAllCards()).filter((c) => c.reviewOf === other.id)).toHaveLength(1);
+  });
+});
+
+describe("os papéis no GitHub e o crédito do co-autor", () => {
+  /** Conexão GitHub própria e identidade git de uma pessoa (o que o vibehub guarda dela). */
+  async function identity(o: Loaded, userId: string, login: string, git?: { gitName: string; gitEmail: string }) {
+    const conn = await o.registry.addGithubConnection({ label: login, login });
+    const { setUserGit } = await import("../../auth/userGit.js");
+    await setUserGit(userId, { githubConnectionId: conn.id, ...(git ?? {}) });
+  }
+
+  it("ao iniciar, o PR ganha o responsável como assignee e o revisor como reviewer pedido, e a conversa conta", async () => {
+    const o = await load();
+    const { author } = await seed(o);
+    await identity(o, "u-autor", "autor-gh");
+    await identity(o, "u-revisor", "revisor-gh");
+    const review = await o.orch.startReview({
+      cardId: author.id, prNumber: 7, reviewerUserId: "u-revisor", authorUserId: "u-autor", mergerUserId: "u-merger", by: "u-autor",
+    });
+    expect(prPeople).toHaveBeenCalledWith(author.id, PR.url, { assignee: "autor-gh", reviewer: "revisor-gh" });
+    expect(review.log.some((e) => e.who === "system" && /assignee autor-gh.*reviewer revisor-gh/.test(e.text))).toBe(true);
+  });
+
+  it("responsável sem conexão GitHub própria: só o reviewer é pedido, e a conversa diz por quê", async () => {
+    const o = await load();
+    const { author } = await seed(o);
+    await identity(o, "u-revisor", "revisor-gh");
+    const review = await o.orch.startReview({
+      cardId: author.id, prNumber: 7, reviewerUserId: "u-revisor", authorUserId: "u-autor", mergerUserId: "u-merger", by: "u-autor",
+    });
+    expect(prPeople).toHaveBeenCalledWith(author.id, PR.url, { reviewer: "revisor-gh" });
+    expect(review.log.some((e) => /não tem conexão GitHub própria/.test(e.text))).toBe(true);
+  });
+
+  it("com co-autor, os commits da correção levam Co-authored-by com o nome e o e-mail git dele", async () => {
+    const o = await load();
+    const { author } = await seed(o);
+    await identity(o, "u-merger", "merger-gh", { gitName: "Bia Souza", gitEmail: "bia@acme.dev" });
+    const review = await o.orch.startReview({
+      cardId: author.id, prNumber: 7, reviewerUserId: "u-revisor", authorUserId: "u-autor", coauthorUserId: "u-merger",
+      mergerUserId: "u-merger", by: "u-autor",
+    });
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    expect(lastText()).toContain("Co-authored-by: Bia Souza <bia@acme.dev>");
+  });
+
+  it("sem co-autor, ou co-autor sem identidade git, nenhuma linha de crédito é pedida", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    expect(lastText()).not.toContain("Co-authored-by");
   });
 });
 
@@ -496,7 +563,7 @@ describe("resposta do autor", () => {
     expect((await o.store.getReview(review.id))?.round).toBe(2);
   });
 
-  it("resposta a sugestão ou a item fechado é ignorada com nota no log", async () => {
+  it("resposta a sugestão vale junto da rodada: a sugestão fecha com o commit, sem pesar na fase", async () => {
     const o = await load();
     const { author, review } = await started(o);
     await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER, SUGGESTION], headSha: SHA1, summary: "r1" });
@@ -504,13 +571,143 @@ describe("resposta do autor", () => {
       round: 1,
       items: [
         { id: "f1", status: "fixed", commit: "c1", reply: "feito" },
-        { id: "f2", status: "fixed", commit: "c2", reply: "também" },
+        { id: "f2", status: "fixed", commit: "c2", reply: "renomeei" },
       ],
       headSha: SHA2,
     });
-    expect(after.findings.find((f) => f.id === "f2")).toMatchObject({ status: "open" });
-    expect(after.findings.find((f) => f.id === "f2")?.authorReply).toBeUndefined();
-    expect(after.log.some((e) => e.text.includes("f2"))).toBe(true);
+    expect(after).toMatchObject({ round: 2, phase: "reviewing" });
+    expect(after.findings.find((f) => f.id === "f2")).toMatchObject({ status: "fixed", commit: "c2", authorReply: "renomeei" });
+    expect(after.log.find((e) => e.who === "author")?.items?.map((i) => i.id)).toEqual(["f1", "f2"]);
+  });
+
+  it("resposta a item fechado (corrigido, retirado) é ignorada com nota no log", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER, QUESTION], headSha: SHA1, summary: "r1" });
+    await o.orch.decideQuestion(review.id, "f2", "drop", "mussa");
+    const after = await o.orch.submitAuthorResponse(author.id, {
+      round: 1,
+      items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }, { id: "f2", status: "fixed", reply: "também" }],
+      headSha: SHA2,
+    });
+    expect(after.findings.find((f) => f.id === "f2")).toMatchObject({ status: "dropped" });
+    expect(after.log.some((e) => e.who === "system" && e.text.includes("f2"))).toBe(true);
+  });
+
+  it("depois do pronto, o autor fecha as sugestões que aplicou: corrigida, contestada ou não vai aplicar — sem abrir rodada", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    const ready = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 1, findings: [SUGGESTION, { severity: "suggestion", title: "extrair helper" }, { severity: "suggestion", title: "trocar lib" }],
+      headSha: SHA1, summary: "só sugestões",
+    });
+    expect(ready.phase).toBe("ready");
+    send.mockClear();
+    const after = await o.orch.submitAuthorResponse(author.id, {
+      round: 1,
+      items: [
+        { id: "f1", status: "fixed", commit: "8159653", reply: "renomeado" },
+        { id: "f2", status: "contested", reply: "o helper só tem um uso" },
+        { id: "f3", status: "wontfix", reply: "fora do escopo deste PR" },
+      ],
+      headSha: SHA2,
+    });
+    expect(after).toMatchObject({ phase: "ready", round: 1 });
+    expect(after.findings.map((f) => [f.id, f.status])).toEqual([["f1", "fixed"], ["f2", "contested"], ["f3", "wontfix"]]);
+    expect(after.findings[0]).toMatchObject({ commit: "8159653", authorReply: "renomeado" });
+    const said = after.log.filter((e) => e.who === "author");
+    expect(said).toHaveLength(1);
+    expect(said[0]!.items?.map((i) => [i.id, i.status])).toEqual([["f1", "fixed"], ["f2", "contested"], ["f3", "wontfix"]]);
+    // não abre rodada nem manda nada a ninguém: o push, se houve, a conferência do GitHub pega
+    expect(send).not.toHaveBeenCalled();
+
+    // a mesma resposta de novo não grava outra fala
+    const again = await o.orch.submitAuthorResponse(author.id, {
+      round: 1, items: [{ id: "f1", status: "fixed", commit: "8159653", reply: "renomeado" }], headSha: SHA2,
+    });
+    expect(again.log.filter((e) => e.who === "author")).toHaveLength(1);
+  });
+
+  it("wontfix só vale para sugestão, e contestar ou não aplicar exigem o motivo", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER, SUGGESTION], headSha: SHA1, summary: "r1" });
+    await expect(o.orch.submitAuthorResponse(author.id, {
+      round: 1, items: [{ id: "f1", status: "wontfix", reply: "não quero" }], headSha: SHA2,
+    })).rejects.toThrow(/wontfix.*sugestão/);
+    await expect(o.orch.submitAuthorResponse(author.id, {
+      round: 1, items: [{ id: "f2", status: "wontfix", reply: "  " }], headSha: SHA2,
+    })).rejects.toThrow(/exige uma resposta/);
+    expect((await o.store.getReview(review.id))).toMatchObject({ phase: "fixing", round: 1 });
+  });
+
+  it("resposta mal formada a um item que seria ignorado (fechado) não derruba as respostas válidas", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER, SUGGESTION], headSha: SHA1, summary: "r1" });
+    await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", reply: "ok" }], headSha: SHA2 });
+    const ready = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 2, findings: [], verdicts: [{ id: "f1", status: "fixed" }], headSha: SHA2, summary: "ok",
+    });
+    expect(ready.phase).toBe("ready");
+    const after = await o.orch.submitAuthorResponse(author.id, {
+      round: 2, items: [{ id: "f2", status: "fixed", reply: "renomeei" }, { id: "f1", status: "wontfix", reply: "" }], headSha: SHA3,
+    });
+    expect(after.findings.find((f) => f.id === "f2")).toMatchObject({ status: "fixed" });
+    expect(after.findings.find((f) => f.id === "f1")).toMatchObject({ status: "fixed" });
+  });
+
+  it("sugestão que o revisor já tinha respondido volta ao delta quando o autor responde de novo", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER, SUGGESTION], headSha: SHA1, summary: "r1" });
+    await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", reply: "ok" }], headSha: SHA2 });
+    await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 2, findings: [],
+      verdicts: [{ id: "f1", status: "open", reviewerReply: "ainda vaza" }, { id: "f2", status: "open", reviewerReply: "não aplicou" }],
+      headSha: SHA2, summary: "r2",
+    });
+    send.mockClear();
+    await o.orch.submitAuthorResponse(author.id, {
+      round: 2, items: [{ id: "f1", status: "fixed", reply: "agora sim" }, { id: "f2", status: "wontfix", reply: "fora do escopo" }], headSha: SHA3,
+    });
+    expect(lastText()).toContain("rodada 3 de 3");
+    expect(lastText()).toContain("nome de variável confuso");
+    expect(lastText()).toContain("fora do escopo");
+  });
+
+  it("fora da rodada, resposta só a itens que não esperam o autor fica registrada como ignorada", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", reply: "ok" }], headSha: SHA2 });
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 2, findings: [], verdicts: [{ id: "f1", status: "fixed" }], headSha: SHA2, summary: "ok" });
+    const after = await o.orch.submitAuthorResponse(author.id, { round: 2, items: [{ id: "f1", status: "fixed", reply: "de novo" }], headSha: SHA2 });
+    expect(after.log.at(-1)).toMatchObject({ who: "system" });
+    expect(after.log.at(-1)?.text).toMatch(/ignoradas: f1/);
+  });
+
+  it("revisão encerrada não aceita resposta a sugestão", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [SUGGESTION], headSha: SHA1, summary: "ok" });
+    await o.orch.markReviewMerged(review.id, "merger");
+    const after = await o.orch.submitAuthorResponse(author.id, {
+      round: 1, items: [{ id: "f1", status: "fixed", reply: "feito" }], headSha: SHA2, reviewId: review.id,
+    });
+    expect(after.findings[0]).toMatchObject({ status: "open" });
+  });
+
+  it("o delta mostra ao revisor as sugestões que o autor respondeu, pra conferir", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER, SUGGESTION], headSha: SHA1, summary: "r1" });
+    send.mockClear();
+    await o.orch.submitAuthorResponse(author.id, {
+      round: 1, items: [{ id: "f1", status: "fixed", reply: "feito" }, { id: "f2", status: "fixed", commit: "c2", reply: "renomeei" }], headSha: SHA2,
+    });
+    expect(lastText()).toContain("nome de variável confuso");
+    expect(lastText()).toContain("renomeei");
   });
 
   it("resposta a id desconhecido é ignorada com nota, sem derrubar o resto", async () => {
@@ -575,11 +772,14 @@ describe("decisão humana", () => {
         messageType: "info",
       }),
     ]);
-    // o aviso é do revisor humano: o card do autor não recebe
-    expect((await messagesOn(o, author.id)).some((e) => /dúvida/.test(e.text ?? ""))).toBe(false);
+    // o card do revisor fica escondido do board: o aviso vai também ao card do autor, onde as pessoas
+    // olham, dizendo quem decide
+    const onAuthor = (await messagesOn(o, author.id)).filter((e) => /dúvida/.test(e.text ?? ""));
+    expect(onAuthor).toEqual([expect.objectContaining({ text: "PR #7: 1 dúvida esperando a decisão de revisor no painel da revisão" })]);
     // o submit repetido (retry da IA) não duplica
     await o.orch.submitReviewerRound(review.reviewerCardId, payload);
     expect(await messagesOn(o, review.reviewerCardId)).toHaveLength(1);
+    expect((await messagesOn(o, author.id)).filter((e) => /dúvida/.test(e.text ?? ""))).toHaveLength(1);
   });
 
   it("submit sem dúvida pendente não avisa o revisor", async () => {
@@ -739,6 +939,127 @@ describe("decisão humana", () => {
   });
 });
 
+describe("dúvidas resolvidas pelas IAs (o autor corrige ou explica, o revisor confere)", () => {
+  /** Rodada 1 só com uma dúvida: a revisão fica esperando decisão. */
+  async function waitingDoubt(o: Loaded) {
+    const { author, review } = await started(o);
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [QUESTION], headSha: SHA1, summary: "uma dúvida" });
+    expect(after).toMatchObject({ phase: "reviewing", lastSubmitRound: 1 });
+    send.mockClear();
+    calls.length = 0;
+    return { author, review: after };
+  }
+
+  it("o autor responde a dúvida: a revisão vai à rodada seguinte e o revisor recebe a dúvida pra conferir", async () => {
+    const o = await load();
+    const { author, review } = await waitingDoubt(o);
+    const after = await o.orch.submitAuthorResponse(author.id, {
+      round: 1, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "a sessão agora renova no checkout" }], headSha: SHA2,
+    });
+    expect(after).toMatchObject({ phase: "reviewing", round: 2 });
+    expect(after.findings[0]).toMatchObject({ status: "fixed", authorReply: "a sessão agora renova no checkout" });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+    expect(lastText()).toContain("a sessão expira no meio do checkout?");
+    expect(lastText()).toContain("a sessão agora renova no checkout");
+  });
+
+  it("o revisor confere e dá fixed: a dúvida deixa de esperar gente e a revisão fica pronta", async () => {
+    const o = await load();
+    const { author, review } = await waitingDoubt(o);
+    await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", reply: "resolvido" }], headSha: SHA2 });
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 2, findings: [], verdicts: [{ id: "f1", status: "fixed", reviewerReply: "conferido" }], headSha: SHA2, summary: "ok",
+    });
+    expect(after.phase).toBe("ready");
+  });
+
+  it("o revisor mantém a dúvida aberta: ela volta a esperar a decisão humana", async () => {
+    const o = await load();
+    const { author, review } = await waitingDoubt(o);
+    await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "contested", reply: "não expira" }], headSha: SHA2 });
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 2, findings: [], verdicts: [{ id: "f1", status: "open", reviewerReply: "ainda não sei" }], headSha: SHA2, summary: "ok",
+    });
+    expect(after).toMatchObject({ phase: "reviewing", lastSubmitRound: 2 });
+  });
+
+  it("dúvida que um humano já decidiu não aceita resposta do autor", async () => {
+    const o = await load();
+    const { author, review } = await waitingDoubt(o);
+    await o.orch.decideQuestion(review.id, "f1", "accept_risk", "mussa");
+    send.mockClear();
+    const after = await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", reply: "x" }], headSha: SHA2 });
+    expect(after.findings[0]).toMatchObject({ status: "accepted_risk" });
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe("pedir ao autor aplicar as sugestões escolhidas", () => {
+  it("manda ao card do autor só as sugestões escolhidas, com o que fazer e como responder, e a conversa conta", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 1, findings: [SUGGESTION, { severity: "suggestion", title: "extrair helper", fix: "mover pra lib" }, { severity: "suggestion", title: "trocar lib" }],
+      headSha: SHA1, summary: "só sugestões",
+    });
+    send.mockClear();
+    calls.length = 0;
+    const after = await o.orch.requestSuggestions(review.id, ["f1", "f2"], "mussa");
+    expect(calls).toEqual([`actor:u-autor:${author.id}`, `send:${author.id}`]);
+    for (const piece of ["nome de variável confuso", "extrair helper", "mover pra lib", "vibehub_review_respond", "wontfix", `git push origin HEAD:${PR.branch}`, "mussa"]) {
+      expect(lastText()).toContain(piece);
+    }
+    expect(lastText()).not.toContain("trocar lib");
+    expect(after.log.at(-1)).toMatchObject({ who: "human", by: "mussa", items: [{ id: "f1" }, { id: "f2" }] });
+  });
+
+  it("'não fazer' tira a sugestão da lista por decisão de uma pessoa; 'fazer' vai ao autor, na mesma chamada", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 1, findings: [SUGGESTION, { severity: "suggestion", title: "extrair helper" }, { severity: "suggestion", title: "trocar lib" }],
+      headSha: SHA1, summary: "só sugestões",
+    });
+    send.mockClear();
+    const after = await o.orch.decideSuggestions(review.id, { apply: ["f2"], skip: ["f1", "f3"] }, "mussa");
+    expect(after.findings.map((f) => [f.id, f.status, f.humanDecision])).toEqual([
+      ["f1", "dropped", "drop"], ["f2", "open", undefined], ["f3", "dropped", "drop"],
+    ]);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![0]).toBe(author.id);
+    expect(lastText()).toContain("extrair helper");
+    expect(lastText()).not.toContain("trocar lib");
+    const human = after.log.filter((e) => e.who === "human");
+    expect(human.map((e) => e.text)).toEqual(["Não fazer as sugestões f1, f3.", "Pediu ao autor aplicar a sugestão f2."]);
+    // só 'não fazer': nada vai ao autor
+    send.mockClear();
+    const o2 = await o.orch.decideSuggestions(review.id, { skip: ["f2"] }, "mussa");
+    expect(o2.findings[1]).toMatchObject({ status: "dropped" });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("a mesma sugestão nos dois lados, ou envio ao autor que falha, não muda nada", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [SUGGESTION], headSha: SHA1, summary: "ok" });
+    await expect(o.orch.decideSuggestions(review.id, { apply: ["f1"], skip: ["f1"] }, "mussa")).rejects.toThrow(/sem_sugestao/);
+    sendFailure = new Error("card pausado");
+    await expect(o.orch.decideSuggestions(review.id, { apply: ["f1"] }, "mussa")).rejects.toThrow(/envio_falhou/);
+    expect((await o.store.getReview(review.id))?.findings[0]).toMatchObject({ status: "open" });
+  });
+
+  it("só sugestão em aberto pode ser pedida; nada escolhido ou revisão encerrada é recusado", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER, SUGGESTION], headSha: SHA1, summary: "r1" });
+    await expect(o.orch.requestSuggestions(review.id, ["f1"], "mussa")).rejects.toThrow(/sem_sugestao/);
+    await expect(o.orch.requestSuggestions(review.id, [], "mussa")).rejects.toThrow(/sem_sugestao/);
+    await o.orch.cancelReview(review.id, "mussa");
+    await expect(o.orch.requestSuggestions(review.id, ["f2"], "mussa")).rejects.toThrow(/revisao_encerrada/);
+  });
+});
+
 describe("tentar de novo e cancelar", () => {
   it("impasse por falha de relay sai com retry", async () => {
     const o = await load();
@@ -892,16 +1213,28 @@ describe("merge humano: push depois do pronto e mergeado", () => {
     expect(deliverSpy).not.toHaveBeenCalled();
   });
 
-  it("push depois do pronto na rodada 3 vira impasse, sem relay e sem retry", async () => {
+  it("push depois do pronto na rodada 3 ganha uma conferência extra do revisor, não um impasse", async () => {
     const o = await load();
-    const { author, review } = await readyAt(o, 3);
+    const { review } = await readyAt(o, 3);
     const after = await o.orch.reopenAfterHeadMoved(review.id, "u-merger");
-    expect(after).toMatchObject({ phase: "impasse", impasseReason: "push depois do pronto", round: 3 });
-    expect(send).not.toHaveBeenCalled();
-    const notices = await messagesOn(o, author.id);
-    expect(notices.at(-1)?.text).toMatch(/PR #7.*impasse.*push depois do pronto/i);
-    // não sobra rodada: "tentar de novo" não tem para onde devolver a vez (cancelar e pedir outra revisão)
-    await expect(o.orch.retryReview(review.id, "u-merger")).rejects.toThrow(/nada_a_tentar/);
+    expect(after).toMatchObject({ phase: "reviewing", round: 3, lastSubmitRound: 2 });
+    expect(after.impasseReason).toBeUndefined();
+    // o revisor recebe o delta da rodada 3 e pode submeter de novo nela
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(lastText()).toContain("rodada 3 de 3");
+    expect(after.log.at(-1)?.text).toMatch(/conferência extra/);
+    const checked = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 3, findings: [], headSha: SHA2, summary: "ok" });
+    expect(checked).toMatchObject({ phase: "ready", reviewedSha: SHA2 });
+  });
+
+  it("bloqueante achado na conferência extra da última rodada vira impasse (o teto de rodadas continua valendo)", async () => {
+    const o = await load();
+    const { review } = await readyAt(o, 3);
+    await o.orch.reopenAfterHeadMoved(review.id, "u-merger");
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 3, findings: [{ ...BLOCKER, introducedInRound: 3 }], headSha: SHA2, summary: "o push quebrou o login",
+    });
+    expect(after).toMatchObject({ phase: "impasse", impasseReason: "rodadas" });
   });
 
   it("reabrir só vale em ready: revisão que andou ou fechou no meio do merge fica como está", async () => {
@@ -926,6 +1259,345 @@ describe("merge humano: push depois do pronto e mergeado", () => {
     const again = await o.orch.markReviewMerged(review.id, "merger");
     expect(again.log).toHaveLength(merged.log.length);
     expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
+  /** Uma revisão em `ready` na rodada `round`, com SHA1 revisado; envios zerados e o orquestrador ligado. */
+  async function readyAt(o: Loaded, round: 1 | 3 = 1) {
+    const { author, review } = await started(o);
+    if (round === 3) {
+      await o.store.mutateReview(review.id, (r) => {
+        r.round = 3;
+      });
+    }
+    // Da rodada 2 em diante a lista é fechada: a sugestão só entra na rodada 1.
+    const ready = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round, findings: round === 1 ? [SUGGESTION] : [], headSha: SHA1, summary: "sem bloqueante",
+    });
+    expect(ready.phase).toBe("ready");
+    send.mockClear();
+    calls.length = 0;
+    return { author, review: ready, off: o.orch.startReviewOrchestrator({ graceMs: 0 }) };
+  }
+  const endTurn = async (o: Loaded, cardId: string) => {
+    await o.events.observeCardStatus(cardId, "waiting", "working");
+    await o.events.observeCardStatus(cardId, "working", "waiting");
+  };
+  /** Deixa o listener (folga 0) e a leitura do head assentarem. */
+  const settle = () => new Promise((r) => setTimeout(r, 40));
+
+  it("fim do turno do autor com push novo: a revisão volta ao revisor na rodada seguinte, sem clique de merge", async () => {
+    const o = await load();
+    const { author, review, off } = await readyAt(o);
+    try {
+      prHeadNow = SHA2;
+      await endTurn(o, author.id);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("reviewing"));
+      expect(prHead).toHaveBeenCalledWith(author.id, PR.url);
+      const after = (await o.store.getReview(review.id))!;
+      expect(after).toMatchObject({ round: 2, reviewedSha: SHA1, lastSubmitRound: 1 });
+      // o revisor recebe o delta desde o commit aprovado, dizendo que foi o autor que empurrou
+      await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+      expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+      expect(calls).toEqual([`actor:u-revisor:${review.reviewerCardId}`, `send:${review.reviewerCardId}`]);
+      for (const piece of ["O autor empurrou commits no PR #7", "rodada 2 de 3", `git diff ${SHA1}..HEAD`, "vibehub_review_submit"]) {
+        expect(lastText()).toContain(piece);
+      }
+      expect(lastText()).not.toContain("Merge recusado");
+      expect(after.log.at(-1)).toMatchObject({ who: "system" });
+      expect(after.log.at(-1)?.text).toMatch(/O autor empurrou depois do pronto \(head bbbbbbb\).*Rodada 2 de 3/);
+      expect(deliverSpy).not.toHaveBeenCalled();
+    } finally {
+      off();
+    }
+  });
+
+  it("vale com uma pessoa usando o card do autor (é ela quem mandou a IA mexer)", async () => {
+    const o = await load();
+    const { author, review, off } = await readyAt(o);
+    try {
+      await o.registry.markCardHumanActive(author.id);
+      prHeadNow = SHA2;
+      await endTurn(o, author.id);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("reviewing"));
+    } finally {
+      off();
+    }
+  });
+
+  it("head igual ao aprovado, ou leitura que falha: a revisão fica pronta e ninguém recebe nada", async () => {
+    const o = await load();
+    const { author, review, off } = await readyAt(o);
+    try {
+      prHeadNow = SHA1;
+      await endTurn(o, author.id);
+      await vi.waitFor(() => expect(prHead).toHaveBeenCalledTimes(1));
+      await settle();
+      prHeadNow = null;
+      await endTurn(o, author.id);
+      await vi.waitFor(() => expect(prHead).toHaveBeenCalledTimes(2));
+      await settle();
+      expect(await o.store.getReview(review.id)).toMatchObject({ phase: "ready", round: 1 });
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      off();
+    }
+  });
+
+  it("dois fins de turno com o mesmo push reabrem uma vez só", async () => {
+    const o = await load();
+    const { author, review, off } = await readyAt(o);
+    try {
+      prHeadNow = SHA2;
+      await endTurn(o, author.id);
+      await endTurn(o, author.id);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("reviewing"));
+      await settle();
+      expect((await o.store.getReview(review.id))?.round).toBe(2);
+      expect(send).toHaveBeenCalledTimes(1);
+    } finally {
+      off();
+    }
+  });
+
+  it("na rodada 3 o push depois do pronto volta ao revisor numa conferência extra (aplicar sugestões não trava o PR)", async () => {
+    const o = await load();
+    const { author, review, off } = await readyAt(o, 3);
+    try {
+      prHeadNow = SHA2;
+      await endTurn(o, author.id);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("reviewing"));
+      expect(await o.store.getReview(review.id)).toMatchObject({ round: 3, lastSubmitRound: 2 });
+      await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+      expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+    } finally {
+      off();
+    }
+  });
+
+  it("fim de turno do revisor não lê o PR; o do autor fora de ready lê, mas push em fixing é a resposta, não reabre", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      prHeadNow = SHA2;
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+      await endTurn(o, review.reviewerCardId);
+      await settle();
+      expect(prHead).not.toHaveBeenCalled();
+      // fixing: o autor corrige pela lista; o push dele é a resposta, não um push depois do pronto
+      await o.registry.markCardHumanActive(author.id);
+      await endTurn(o, author.id);
+      await vi.waitFor(() => expect(prHead).toHaveBeenCalledTimes(1));
+      await settle();
+      expect((await o.store.getReview(review.id))?.phase).toBe("fixing");
+    } finally {
+      off();
+    }
+  });
+
+  it("uma leitura velha (o head lido já é o aprovado) não reabre", async () => {
+    const o = await load();
+    const { review, off } = await readyAt(o);
+    off();
+    const after = await o.orch.reopenAfterHeadMoved(review.id, "teste", { cause: "push", headSha: SHA1 });
+    expect(after).toMatchObject({ phase: "ready", round: 1 });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("o delta lista as sugestões em aberto, e o fixed do revisor numa sugestão aplicada vale", async () => {
+    const o = await load();
+    const { author, review, off } = await readyAt(o);
+    try {
+      prHeadNow = SHA2;
+      await endTurn(o, author.id);
+      await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+      expect(lastText()).toContain("Sugestões (não bloqueiam)");
+      expect(lastText()).toContain("nome de variável confuso");
+      const after = await o.orch.submitReviewerRound(review.reviewerCardId, {
+        round: 2, findings: [], verdicts: [{ id: "f1", status: "fixed", reviewerReply: "renomeado no diff" }], headSha: SHA2, summary: "ok",
+      });
+      expect(after).toMatchObject({ phase: "ready", round: 2, reviewedSha: SHA2 });
+      expect(after.findings[0]).toMatchObject({ id: "f1", severity: "suggestion", status: "fixed", reviewerReply: "renomeado no diff" });
+    } finally {
+      off();
+    }
+  });
+});
+
+describe("o PR mudou no GitHub fora do painel (merge à mão, PR fechado)", () => {
+  const endTurn = async (o: Loaded, cardId: string) => {
+    await o.events.observeCardStatus(cardId, "waiting", "working");
+    await o.events.observeCardStatus(cardId, "working", "waiting");
+  };
+  async function readyReview(o: Loaded) {
+    const { author, review } = await started(o);
+    const ready = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [SUGGESTION], headSha: SHA1, summary: "ok" });
+    send.mockClear();
+    calls.length = 0;
+    return { author, review: ready };
+  }
+
+  it("mergeado direto no GitHub: no fim do turno do autor a revisão fecha como mergeada, o PR do card é marcado e a branch sai", async () => {
+    const o = await load();
+    const { author, review } = await readyReview(o);
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      prHeadNow = SHA2;
+      prStateNow = "MERGED";
+      await endTurn(o, author.id);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("merged"));
+      const after = (await o.store.getReview(review.id))!;
+      expect(after.log.at(-1)).toMatchObject({ who: "system" });
+      expect(after.log.at(-1)?.text).toMatch(/Mergeado em dev fora do painel/);
+      // o mesmo pós-merge do deliver: PR do card marcado e a branch fora do GitHub
+      await vi.waitFor(() => expect(afterMerged).toHaveBeenCalledWith(author.id, PR.url, "dev", PR.branch));
+      // o card do revisor sai junto, como no botão
+      await vi.waitFor(async () => expect((await o.registry.getCard(review.reviewerCardId))?.column).toBe("done"));
+      expect(send).not.toHaveBeenCalled();
+      expect(deliverSpy).not.toHaveBeenCalled();
+    } finally {
+      off();
+    }
+  });
+
+  it("mergeado no GitHub no meio da correção também fecha (qualquer fase aberta)", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    prHeadNow = SHA2;
+    prStateNow = "MERGED";
+    const after = await o.orch.syncReviewWithGithub(review.id);
+    expect(after?.phase).toBe("merged");
+    expect(afterMerged).toHaveBeenCalledWith(author.id, PR.url, "dev", PR.branch);
+  });
+
+  it("o head atual do PR fica gravado (o painel mostra revisado x atual); em fixing isso não reabre nada", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    expect((await o.store.getReview(review.id))?.prHeadSha).toBe(SHA1);
+    prHeadNow = SHA2;
+    const after = await o.orch.syncReviewWithGithub(review.id);
+    expect(after).toMatchObject({ phase: "fixing", prHeadSha: SHA2, reviewedSha: SHA1 });
+    const answered = await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", reply: "ok" }], headSha: SHA3 });
+    expect(answered.prHeadSha).toBe(SHA3);
+  });
+
+  it("leitura lenta do GitHub não sobrescreve o head mais novo que o autor gravou no meio", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    prHead.mockImplementationOnce(async () => {
+      // enquanto o gh pr view demora, o autor responde com o head novo
+      await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", reply: "ok" }], headSha: SHA3 });
+      return { state: "OPEN", headSha: SHA2 };
+    });
+    await o.orch.syncReviewWithGithub(review.id);
+    expect((await o.store.getReview(review.id))?.prHeadSha).toBe(SHA3);
+  });
+
+  it("PR fechado sem merge no GitHub: a revisão é cancelada e a branch fica", async () => {
+    const o = await load();
+    const { review } = await readyReview(o);
+    prHeadNow = SHA1;
+    prStateNow = "CLOSED";
+    const after = await o.orch.syncReviewWithGithub(review.id);
+    expect(after?.phase).toBe("cancelled");
+    expect(after?.log.at(-1)?.text).toMatch(/fechado no GitHub sem merge/);
+    expect(afterMerged).not.toHaveBeenCalled();
+    expect(await o.store.activeReviewFor(review.cardId, 7)).toBeUndefined();
+  });
+
+  it("com o merge do botão em andamento, a conferência do GitHub não fecha a revisão como 'fora do painel'", async () => {
+    const o = await load();
+    const { review } = await readyReview(o);
+    prHeadNow = SHA1;
+    prStateNow = "MERGED";
+    expect(o.orch.claimMerge(review.id)).toBe(true);
+    try {
+      expect((await o.orch.syncReviewWithGithub(review.id))?.phase).toBe("ready");
+      expect(afterMerged).not.toHaveBeenCalled();
+      // um segundo merge ao mesmo tempo não pega a vez
+      expect(o.orch.claimMerge(review.id)).toBe(false);
+    } finally {
+      o.orch.releaseMerge(review.id);
+    }
+    expect((await o.orch.syncReviewWithGithub(review.id))?.phase).toBe("merged");
+  });
+
+  it("revisão já encerrada não vai ao GitHub; leitura que falha não muda nada", async () => {
+    const o = await load();
+    const { review } = await readyReview(o);
+    prHeadNow = null;
+    expect((await o.orch.syncReviewWithGithub(review.id))?.phase).toBe("ready");
+    await o.orch.markReviewMerged(review.id, "merger");
+    prHead.mockClear();
+    prHeadNow = SHA2;
+    prStateNow = "CLOSED";
+    expect((await o.orch.syncReviewWithGithub(review.id))?.phase).toBe("merged");
+    expect(prHead).not.toHaveBeenCalled();
+  });
+
+  it("syncReviewSoon tem freio: duas leituras do painel no mesmo minuto vão ao GitHub uma vez só", async () => {
+    const o = await load();
+    const { review } = await readyReview(o);
+    prHeadNow = SHA1;
+    o.orch.syncReviewSoon(review);
+    o.orch.syncReviewSoon(review);
+    await vi.waitFor(() => expect(prHead).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(prHead).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("conversa das IAs: cada fala leva os achados de que trata", () => {
+  it("revisor, autor e humano: itens com a resposta daquele momento, e quem fez na fala humana", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    const r1 = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 1, findings: [BLOCKER, QUESTION], headSha: SHA1, summary: "um bloqueante e uma dúvida",
+    });
+    expect(r1.log.find((e) => e.who === "reviewer")).toMatchObject({
+      round: 1, text: "um bloqueante e uma dúvida",
+      items: [{ id: "f1", status: "open", isNew: true }, { id: "f2", status: "open", isNew: true }],
+    });
+
+    const decided = await o.orch.decideQuestion(review.id, "f2", "drop", "mussa");
+    expect(decided.log.at(-1)).toMatchObject({ who: "human", by: "mussa", items: [{ id: "f2", status: "dropped" }] });
+
+    const r2 = await o.orch.submitAuthorResponse(author.id, {
+      round: 1, items: [{ id: "f1", status: "fixed", commit: "c0ffee1", reply: "token fora do log" }], headSha: SHA2,
+    });
+    expect(r2.log.find((e) => e.who === "author")).toMatchObject({
+      round: 1, items: [{ id: "f1", status: "fixed", commit: "c0ffee1", reply: "token fora do log" }],
+    });
+
+    const r3 = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 2, findings: [], verdicts: [{ id: "f1", status: "open", reviewerReply: "ainda vaza no catch" }], headSha: SHA2, summary: "r2",
+    });
+    const second = r3.log.filter((e) => e.who === "reviewer").at(-1);
+    expect(second).toMatchObject({ round: 2, items: [{ id: "f1", status: "open", reply: "ainda vaza no catch" }] });
+    // a fala da rodada 1 do autor continua com a resposta de então, mesmo depois da rodada 2
+    expect(r3.log.find((e) => e.who === "author")?.items?.[0]?.reply).toBe("token fora do log");
+    // falas de sistema não levam itens
+    expect(r3.log.filter((e) => e.who === "system").every((e) => e.items === undefined)).toBe(true);
+  });
+
+  it("resposta longa é cortada com reticências e resposta vazia não vira item com reply", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    const after = await o.orch.submitAuthorResponse(author.id, {
+      round: 1, items: [{ id: "f1", status: "fixed", reply: "x".repeat(2000) }], headSha: SHA2,
+    });
+    const reply = after.log.find((e) => e.who === "author")?.items?.[0]?.reply ?? "";
+    expect(reply.length).toBe(600);
+    expect(reply.endsWith("…")).toBe(true);
+    const cancelled = await o.orch.cancelReview(review.id, "kim");
+    expect(cancelled.log.at(-1)).toMatchObject({ who: "human", by: "kim" });
+    expect(cancelled.log.at(-1)?.items).toBeUndefined();
   });
 });
 
@@ -1316,7 +1988,12 @@ describe("ferramentas MCP", () => {
     const responded = await call("vibehub_review_respond", {
       card: author.id, review: review.id, round: 1, headSha: SHA2, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }],
     });
-    expect(JSON.parse(responded.text)).toMatchObject({ review: review.id, phase: "reviewing", round: 2 });
+    expect(JSON.parse(responded.text)).toMatchObject({ review: review.id, phase: "reviewing", round: 2, answered: 1 });
+    // a mesma resposta de novo não muda nada: answered 0, mesmo com o status já igual ao enviado
+    const again = await call("vibehub_review_respond", {
+      card: author.id, review: review.id, round: 1, headSha: SHA2, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }],
+    });
+    expect(JSON.parse(again.text)).toMatchObject({ answered: 0 });
     expect(deliverSpy).not.toHaveBeenCalled();
   });
 });

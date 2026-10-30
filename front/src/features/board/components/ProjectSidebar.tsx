@@ -31,7 +31,7 @@ import {
 } from "@/features/board/lib/board";
 import { CardStateIcon } from "@/features/board/components/CardStateIcon";
 import { reviewPill } from "@/features/board/lib/review";
-import type { BadgeTone } from "@/components/ui/badge";
+import { BADGE_TEXT } from "@/components/ui/badge";
 import { useExpandedProjects } from "@/features/board/lib/sidebarExpanded";
 import { RecentCards } from "@/features/board/components/RecentCards";
 import { ShareDialog } from "@/features/board/components/ShareDialog";
@@ -983,7 +983,9 @@ function SidebarCard({
   // The PR line: the review's state under the card. A cancelled review is NO review (the server
   // never sends one on a card, and a stale cache must not bring the line back).
   const review = card.review && card.review.phase !== "cancelled" ? card.review : null;
-  const pill = reviewPill(review ?? undefined);
+  // A ready PR whose author's AI is working reads "IA mexendo" — the server's own rule (`isBusy`), sent
+  // on the card's summary: what it pushes goes back to the reviewer.
+  const pill = reviewPill(review ?? undefined, { authorWorking: review?.authorWorking === true });
 
   return (
     <>
@@ -1041,7 +1043,8 @@ function SidebarCard({
             }}
             className={cn(
               "flex w-full items-center gap-2 pb-1.5 pl-9 pr-3 text-left text-[11px] [-webkit-touch-callout:none] hover:underline",
-              PR_LINE_TONE[pill.tone],
+              // The colour of the review's pill: ready green, working orange, impasse blue, merged quiet.
+              BADGE_TEXT[pill.tone],
             )}
           >
             {/* The arrow takes the card's state-icon slot, so the line starts under the title. */}
@@ -1063,15 +1066,6 @@ function SidebarCard({
     </>
   );
 }
-
-/** The PR line takes the colour of the review's pill: ready green, working orange, impasse blue, merged quiet. */
-const PR_LINE_TONE: Record<BadgeTone, string> = {
-  ok: "text-emerald-400",
-  warn: "text-amber-400",
-  info: "text-sky-400",
-  critical: "text-destructive",
-  muted: "text-muted-foreground",
-};
 
 /* ------------------------------------------------------------- drag maths */
 

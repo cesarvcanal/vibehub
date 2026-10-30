@@ -530,7 +530,8 @@ export interface UploadResult {
 /** `cancelled` exists on the server but never reaches a card summary. */
 export type ReviewPhase = "reviewing" | "fixing" | "ready" | "impasse" | "merged" | "cancelled";
 export type FindingSeverity = "blocking" | "suggestion" | "question" | "refuted";
-export type FindingStatus = "open" | "fixed" | "contested" | "accepted_risk" | "dropped";
+/** `wontfix`: the author will not apply a SUGGESTION, and said why (suggestions only). */
+export type FindingStatus = "open" | "fixed" | "contested" | "accepted_risk" | "dropped" | "wontfix";
 
 /** What a board card carries about its review: the line of the block and of the sidebar. */
 export interface ReviewSummary {
@@ -544,6 +545,8 @@ export interface ReviewSummary {
    * review in `reviewing`, the line reads "aguardando decisão" instead of the AIs' round.
    */
   pendingQuestions?: number;
+  /** A `ready` review whose author's AI is in a turn right now (hooks or native chat): "IA mexendo". */
+  authorWorking?: boolean;
 }
 
 export interface FindingProof {
@@ -568,11 +571,25 @@ export interface Finding {
   humanDecision?: "keep" | "accept_risk" | "block" | "drop";
 }
 
+/** A finding a line of the conversation is about, with what that side said of it AT THAT moment. */
+export interface ReviewEventItem {
+  id: string;
+  status: FindingStatus;
+  reply?: string;
+  commit?: string;
+  /** The finding was born in this line (the reviewer's round that opened it). */
+  isNew?: boolean;
+}
+
 export interface ReviewEvent {
   at: number;
   round: number;
   who: "reviewer" | "author" | "system" | "human";
   text: string;
+  /** The findings this line is about. Absent on system lines and on lines written before the field. */
+  items?: ReviewEventItem[];
+  /** Who did it, on a human line (the username). */
+  by?: string;
 }
 
 /** `GET /api/cards/:id/review` — the whole review, as the panel reads it. */
@@ -590,6 +607,8 @@ export interface Review extends ReviewSummary {
   findings: Finding[];
   log: ReviewEvent[];
   reviewedSha?: string;
+  /** The PR's head the last time anybody saw it; not `reviewedSha` = the PR moved after the review. */
+  prHeadSha?: string;
   impasseReason?: string;
   approvePending?: boolean;
   /** The round the reviewer's AI last handed back: below `round`, the reviewer's turn is still open. */
@@ -598,8 +617,16 @@ export interface Review extends ReviewSummary {
   updatedAt: number;
 }
 
+/** Whether each side's AI is in a turn RIGHT NOW (the card's status), as `GET /cards/:id/review` reads it. */
+export interface ReviewWorking {
+  author: boolean;
+  reviewer: boolean;
+}
+
 export interface ReviewResponse {
   review: Review | null;
+  /** Absent when there is no review (and from a server that predates it: read as nobody working). */
+  working?: ReviewWorking;
 }
 
 /** Somebody who can take a role in a review. `canReview` = has a Claude account of their own. */

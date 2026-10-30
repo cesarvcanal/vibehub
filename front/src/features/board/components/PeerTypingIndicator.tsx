@@ -28,18 +28,25 @@ export function PeerTypingIndicator({ names, className }: { names: readonly stri
           data-testid="sdk-peer-typing"
           className={cn("flex items-center gap-2 px-1 text-xs text-muted-foreground", className)}
         >
-          <span className="flex items-end gap-[3px]" aria-hidden="true">
-            {[0, 200, 400].map((delay) => (
-              <span
-                key={delay}
-                className="h-1.5 w-1.5 animate-typing-dot rounded-full bg-gradient-to-b from-neutral-400 to-neutral-300 motion-reduce:animate-none dark:from-neutral-300 dark:to-neutral-500"
-                style={{ animationDelay: `${delay}ms` }}
-              />
-            ))}
-          </span>
+          <TypingDots />
           <span className="min-w-0 truncate">{label}…</span>
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** The three dots of "someone is typing" — the same in every conversation that shows one. */
+export function TypingDots() {
+  return (
+    <span className="flex items-end gap-[3px]" aria-hidden="true">
+      {[0, 200, 400].map((delay) => (
+        <span
+          key={delay}
+          className="h-1.5 w-1.5 animate-typing-dot rounded-full bg-gradient-to-b from-neutral-400 to-neutral-300 motion-reduce:animate-none dark:from-neutral-300 dark:to-neutral-500"
+          style={{ animationDelay: `${delay}ms` }}
+        />
+      ))}
+    </span>
   );
 }

@@ -5,11 +5,14 @@ import {
   REVIEW_MAX_ROUNDS,
   cardReviewKey,
   cardPeopleKey,
+  conversationRows,
   findingCounts,
   mergeFailure,
   pendingQuestions,
   reviewActions,
+  reviewIsOpen,
   reviewPill,
+  reviewTurn,
   startErrorCode,
   startErrorRoles,
   stuckItems,
@@ -42,6 +45,19 @@ describe("reviewPill", () => {
     expect(reviewPill(review({ phase: "ready" }))).toMatchObject({ key: "review.pill.ready", tone: "ok" });
     expect(reviewPill(review({ phase: "impasse" }))).toMatchObject({ key: "review.pill.impasse", tone: "info" });
     expect(reviewPill(review({ phase: "merged" }))).toMatchObject({ key: "review.pill.merged", tone: "muted" });
+  });
+
+  it("ready with the author's AI working reads 'IA mexendo' in the orange of work; no other phase changes", () => {
+    expect(reviewPill(review({ phase: "ready" }), { authorWorking: true })).toEqual({ key: "review.pill.authorWorking", tone: "warn" });
+    expect(reviewPill(review({ phase: "ready" }), { authorWorking: false })).toMatchObject({ key: "review.pill.ready" });
+    expect(reviewPill(review({ phase: "fixing", round: 2 }), { authorWorking: true })).toMatchObject({ key: "review.pill.round" });
+    expect(reviewPill(review({ phase: "impasse" }), { authorWorking: true })).toMatchObject({ key: "review.pill.impasse" });
+    expect(reviewPill(review({ phase: "merged" }), { authorWorking: true })).toMatchObject({ key: "review.pill.merged" });
+  });
+
+  it("reviewIsOpen: every phase but merged and cancelled (and no review at all)", () => {
+    for (const phase of ["reviewing", "fixing", "ready", "impasse"] as const) expect(reviewIsOpen(phase)).toBe(true);
+    for (const phase of ["merged", "cancelled", undefined] as const) expect(reviewIsOpen(phase)).toBe(false);
   });
 
   it("a cancelled review is no review — the server omits it, a stale cache must not show it", () => {
@@ -271,7 +287,7 @@ describe("reviewActions", () => {
   });
 
   it("nobody signed in can do anything", () => {
-    expect(reviewActions(full({ phase: "ready" }), null)).toEqual({ decide: false, retry: false, cancel: false, merge: false });
+    expect(reviewActions(full({ phase: "ready" }), null)).toEqual({ decide: false, retry: false, cancel: false, merge: false, request: false });
   });
 });
 
@@ -309,5 +325,54 @@ describe("mergeFailure", () => {
     expect(failed).toMatchObject({ kind: "refused", reason: "gate", message: "gate vermelho" });
     expect(mergeFailure(fail(500, { error: "boom" }))).toMatchObject({ kind: "refused", message: "boom" });
     expect(mergeFailure(fail(403, { error: "você não tem esse papel nesta revisão" }))).toMatchObject({ kind: "refused" });
+  });
+});
+
+describe("reviewTurn", () => {
+  const idle = { author: false, reviewer: false };
+  const base = { round: 1, findings: [] as Finding[] };
+
+  it("reviewing before the reviewer's round: the reviewer's turn, working or still to start", () => {
+    expect(reviewTurn({ ...base, phase: "reviewing" }, idle)).toEqual({ who: "reviewer", working: false });
+    expect(reviewTurn({ ...base, phase: "reviewing", round: 2, lastSubmitRound: 1 }, { author: false, reviewer: true }))
+      .toEqual({ who: "reviewer", working: true });
+  });
+
+  it("reviewing after the reviewer's round: only the doubts are left, and they are a person's", () => {
+    expect(reviewTurn({ ...base, phase: "reviewing", lastSubmitRound: 1 }, idle)).toEqual({ who: "person", why: "decision" });
+  });
+
+  it("fixing is the author's turn; a ready PR is the author's only while its AI works on it", () => {
+    expect(reviewTurn({ ...base, phase: "fixing" }, { author: true, reviewer: false }))
+      .toEqual({ who: "author", working: true, onReadyPr: false });
+    expect(reviewTurn({ ...base, phase: "ready" }, { author: true, reviewer: false }))
+      .toEqual({ who: "author", working: true, onReadyPr: true });
+    expect(reviewTurn({ ...base, phase: "ready" }, idle)).toEqual({ who: "person", why: "merge" });
+  });
+
+  it("impasse waits for a person; merged and cancelled for nobody", () => {
+    expect(reviewTurn({ ...base, phase: "impasse" }, idle)).toEqual({ who: "person", why: "impasse" });
+    expect(reviewTurn({ ...base, phase: "merged" }, idle)).toEqual({ who: "nobody" });
+    expect(reviewTurn({ ...base, phase: "cancelled" }, idle)).toEqual({ who: "nobody" });
+  });
+});
+
+describe("conversationRows", () => {
+  it("a divider before the first line of each round, then the lines in order", () => {
+    const log = [
+      { at: 1, round: 1, who: "system" as const, text: "início" },
+      { at: 2, round: 1, who: "reviewer" as const, text: "r1" },
+      { at: 3, round: 2, who: "author" as const, text: "a1" },
+      { at: 4, round: 2, who: "reviewer" as const, text: "r2" },
+    ];
+    expect(conversationRows(log).map((r) => (r.kind === "round" ? `#${r.round}` : r.event.text)))
+      .toEqual(["#1", "início", "r1", "#2", "a1", "r2"]);
+  });
+
+  it("an empty log has no rows, and every key is unique", () => {
+    expect(conversationRows([])).toEqual([]);
+    const same = [{ at: 5, round: 1, who: "system" as const, text: "x" }, { at: 5, round: 1, who: "system" as const, text: "x" }];
+    const keys = conversationRows(same).map((r) => r.key);
+    expect(new Set(keys).size).toBe(keys.length);
   });
 });
