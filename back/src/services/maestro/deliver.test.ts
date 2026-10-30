@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { execFileSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -83,6 +84,61 @@ describe("buildPushAndPrScript", () => {
     // git push is force-with-lease, and the PR targets the given branch
     expect(s).toContain("git push --force-with-lease origin 'card/fix-1'");
     expect(s).toContain("gh pr create --base 'dev' --head 'card/fix-1' --fill");
+  });
+});
+
+describe("forgetDeletedRemoteBranch — a branch the merge deleted on GitHub does not break the next push", () => {
+  /**
+   * Real git, the exact line the push script runs. The card pushed its branch, the merge deleted it
+   * on the remote (afterPrMerged), the card committed again: the local `origin/<branch>` still points
+   * at the old head, and `--force-with-lease` (which leases against it) refused with "stale info".
+   */
+  async function cardAfterMerge(remoteMoved: "deleted" | "moved") {
+    const root = await mkdtemp(join(tmpdir(), "vibehub-lease-"));
+    const sh = (cwd: string, script: string) =>
+      execFileSync("bash", ["-c", script], { cwd, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+    const commit = (m: string) => `git -c user.name=t -c user.email=t@t commit -q --allow-empty -m ${m}`;
+    sh(root, "git init -q --bare remote.git && git clone -q remote.git card 2>/dev/null");
+    const card = join(root, "card");
+    sh(card, `${commit("base")} && git push -q origin HEAD:main && git checkout -q -b card/x && ${commit("one")} && git push -q origin card/x`);
+    if (remoteMoved === "deleted") sh(root, "git --git-dir=remote.git update-ref -d refs/heads/card/x");
+    // someone else pushed to the branch: the lease must still protect it
+    else sh(root, `git clone -q -b card/x remote.git other 2>/dev/null && cd other && ${commit("theirs")} && git push -q origin card/x`);
+    sh(card, commit("two"));
+    const push = (guard: string) =>
+      sh(card, `${guard}\nif git push -q --force-with-lease origin 'card/x' 2>err.txt; then echo pushed; else cat err.txt; fi`);
+    return { root, push, remoteHead: () => sh(root, "git --git-dir=remote.git rev-parse --verify -q refs/heads/card/x || true").trim(), cardHead: () => sh(card, "git rev-parse HEAD").trim() };
+  }
+
+  it("without it the push is refused as stale (the bug), with it the branch goes up again", async () => {
+    const { deliver } = await load();
+    const bare = await cardAfterMerge("deleted");
+    expect(bare.push(":")).toMatch(/stale info/);
+
+    const fixed = await cardAfterMerge("deleted");
+    expect(fixed.push(deliver.forgetDeletedRemoteBranch("card/x"))).toContain("pushed");
+    expect(fixed.remoteHead()).toBe(fixed.cardHead());
+    await rm(bare.root, { recursive: true, force: true });
+    await rm(fixed.root, { recursive: true, force: true });
+  });
+
+  it("a branch that still exists on the remote keeps its lease: someone else's push is not overwritten", async () => {
+    const { deliver } = await load();
+    const repo = await cardAfterMerge("moved");
+    const theirs = repo.remoteHead();
+    expect(repo.push(deliver.forgetDeletedRemoteBranch("card/x"))).toMatch(/stale info/);
+    expect(repo.remoteHead()).toBe(theirs);
+    await rm(repo.root, { recursive: true, force: true });
+  });
+
+  it("runs before the push, on the quoted branch", async () => {
+    const { deliver } = await load();
+    const lines = deliver.buildPushAndPrScript("vibehub-runner", "card-1", TOKEN, "/work/scratch/x", "card/fix-1", "dev").split("\n");
+    const guard = lines.findIndex((l) => l.includes("git ls-remote --exit-code --heads origin 'card/fix-1'"));
+    const push = lines.findIndex((l) => l.includes("git push --force-with-lease origin 'card/fix-1'"));
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(push);
+    expect(lines[guard]).toContain("git update-ref -d 'refs/remotes/origin/card/fix-1'");
   });
 });
 
