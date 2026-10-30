@@ -32,11 +32,28 @@ export interface Finding {
   humanDecision?: "keep" | "accept_risk" | "block" | "drop";
 }
 
+/**
+ * Um achado citado numa fala, com o que aquele lado disse dele NAQUELE momento: o achado guarda só a
+ * última resposta de cada lado, e a conversa das IAs precisa da de cada rodada.
+ */
+export interface ReviewEventItem {
+  id: string;
+  status: FindingStatus;
+  reply?: string;
+  commit?: string;
+  /** O achado nasceu nesta fala (a rodada do revisor que o abriu). */
+  isNew?: boolean;
+}
+
 export interface ReviewEvent {
   at: number;
   round: number;
   who: "reviewer" | "author" | "system" | "human";
   text: string;
+  /** Os achados de que a fala trata. Ausente nas falas de sistema e nas gravadas antes deste campo. */
+  items?: ReviewEventItem[];
+  /** Quem fez, nas falas humanas (o username). */
+  by?: string;
 }
 
 export interface Review {

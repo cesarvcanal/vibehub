@@ -15,7 +15,7 @@ import { logger } from "../../utils/logger.js";
 import {
   MAX_ROUNDS, applyAuthorResponses, applyReviewerVerdicts, blockingOpen, normalizeSubmittedFindings, pendingQuestions,
   phaseAfterReviewerRound,
-  type Finding, type FindingStatus, type Review, type ReviewEvent, type ReviewPhase, type SubmittedFinding,
+  type Finding, type FindingStatus, type Review, type ReviewEvent, type ReviewEventItem, type ReviewPhase, type SubmittedFinding,
 } from "./model.js";
 import {
   activeReviewFor, getReview, insertReview, listReviewsForCards, mutateReview, reviewByReviewerCard,
@@ -76,8 +76,25 @@ type Decision = "block" | "drop" | "keep" | "accept_risk";
 
 /* ------------------------------------------------------------------ helpers */
 
-function note(r: Review, who: ReviewEvent["who"], text: string): void {
-  r.log.push({ at: Date.now(), round: r.round, who, text: oneLine(text, 400) });
+/** Teto de cada resposta citada numa fala: o bastante pra ler o argumento, sem virar página. */
+const REPLY_MAX = 600;
+
+/**
+ * Uma fala no log da revisão. `items` são os achados de que ela trata, com a resposta de cada um
+ * naquele momento (é o que a conversa das IAs mostra rodada a rodada); `by`, quem fez, numa fala humana.
+ */
+function note(r: Review, who: ReviewEvent["who"], text: string, extra: { items?: ReviewEventItem[]; by?: string } = {}): void {
+  const event: ReviewEvent = { at: Date.now(), round: r.round, who, text: oneLine(text, 400) };
+  const items = (extra.items ?? []).map((it) => {
+    const item: ReviewEventItem = { id: it.id, status: it.status };
+    if (it.reply !== undefined && it.reply.trim() !== "") item.reply = oneLine(it.reply, REPLY_MAX);
+    if (it.commit !== undefined && it.commit.trim() !== "") item.commit = oneLine(it.commit, 64);
+    if (it.isNew) item.isNew = true;
+    return item;
+  });
+  if (items.length) event.items = items;
+  if (extra.by) event.by = extra.by;
+  r.log.push(event);
 }
 
 function assertHeadSha(sha: string): string {
@@ -416,13 +433,19 @@ export async function submitReviewerRound(
       return (f.humanDecision === "block" || f.humanDecision === "keep") && v.status === "dropped";
     };
     const skipped = verdicts.filter(overridesHuman).map((v) => `${v.id} (${v.status})`);
-    const judged = applyReviewerVerdicts(r, verdicts.filter((v) => !overridesHuman(v)));
+    const applied = verdicts.filter((v) => !overridesHuman(v));
+    const judged = applyReviewerVerdicts(r, applied);
     const added = normalizeSubmittedFindings(payload.findings, r.round, r.findings);
     r.findings = [...judged, ...added];
     r.reviewedSha = headSha;
     r.lastSubmitRound = r.round;
     r.nudges = 0;
-    note(r, "reviewer", payload.summary || `Rodada ${r.round}: ${added.length} achado(s) novo(s), ${verdicts.length} veredito(s).`);
+    note(r, "reviewer", payload.summary || `Rodada ${r.round}: ${added.length} achado(s) novo(s), ${verdicts.length} veredito(s).`, {
+      items: [
+        ...applied.map((v) => ({ id: v.id, status: v.status, reply: v.reviewerReply })),
+        ...added.map((f) => ({ id: f.id, status: f.status, isNew: true })),
+      ],
+    });
     if (skipped.length) note(r, "system", `Vereditos ignorados (desfariam uma decisão humana): ${skipped.join(", ")}.`);
     const next = phaseAfterReviewerRound(r);
     r.phase = next.phase;
@@ -492,7 +515,9 @@ export async function submitAuthorResponse(
     r.nudges = 0;
     const fixed = allowed.filter((it) => it.status === "fixed").length;
     const contested = allowed.length - fixed;
-    note(r, "author", `${fixed} corrigido(s), ${contested} contestado(s); head ${headSha.slice(0, 7)}.`);
+    note(r, "author", `${fixed} corrigido(s), ${contested} contestado(s); head ${headSha.slice(0, 7)}.`, {
+      items: allowed.map((it) => ({ id: it.id, status: it.status, reply: it.reply, commit: it.commit })),
+    });
     if (ignored.length) {
       note(r, "system", `Respostas ignoradas (id desconhecido ou item que não espera resposta do autor): ${ignored.join(", ")}.`);
     }
@@ -536,7 +561,7 @@ export async function decideQuestion(reviewId: string, findingId: string, decisi
     else if (decision === "drop") f.status = "dropped";
     else if (f.status === "dropped" || f.status === "accepted_risk") f.status = "open";
     const said: Record<Decision, string> = { block: "bloqueia", keep: "mantém o bloqueio", drop: "retira", accept_risk: "aceita o risco" };
-    note(r, "human", `Decisão humana em ${findingId}: ${said[decision]}.`);
+    note(r, "human", `Decisão humana em ${findingId}: ${said[decision]}.`, { items: [{ id: f.id, status: f.status }], by });
 
     if (r.phase === "reviewing") {
       // No meio da rodada do revisor, quem fecha a fase é o submit dele.
@@ -599,7 +624,7 @@ export async function retryReview(reviewId: string, by: string): Promise<Review>
     r.nudges = 0;
     r.impasseReason = undefined;
     note(r, "human", side === "approve" ? "Tentar de novo: o pedido de Approve volta ao revisor." :
-      `Tentar de novo: a vez volta ao ${side === "reviewer" ? "revisor" : "autor"} (rodada ${r.round} de ${MAX_ROUNDS}).`);
+      `Tentar de novo: a vez volta ao ${side === "reviewer" ? "revisor" : "autor"} (rodada ${r.round} de ${MAX_ROUNDS}).`, { by });
   });
   logger.info({ audit: true, action: "review.retry", review: reviewId, side, by }, "PR review retried");
   if (side === "approve") await relayReview(after, "reviewer", reviewerApprovePrompt(after), { approve: true });
@@ -636,7 +661,7 @@ export async function cancelReview(reviewId: string, by: string): Promise<Review
     if (CLOSED.has(r.phase)) throw new Error(`revisao_encerrada: a revisão já está em ${r.phase}`);
     r.phase = "cancelled";
     r.approvePending = undefined;
-    note(r, "human", "Revisão cancelada.");
+    note(r, "human", "Revisão cancelada.", { by });
   });
   logger.info({ audit: true, action: "review.cancel", review: reviewId, by }, "PR review cancelled");
   await retireReviewerCard(after);
@@ -716,32 +741,6 @@ export async function reopenAfterHeadMoved(
 }
 
 /**
- * O merge humano saiu: a revisão fecha em `merged` (deixa de ser ativa), os dois cards recebem o
- * aviso e o card do revisor vai para `done`. Grava mesmo se a revisão foi cancelada durante o merge —
- * o PR foi mergeado, e é isso que o painel tem de dizer. Repetir não grava nada nem avisa de novo.
- */
-export async function markReviewMerged(reviewId: string, by: string): Promise<Review> {
-  let landed = false as boolean;
-  const after = await mutateReview(reviewId, (r) => {
-    if (r.phase === "merged") return;
-    r.phase = "merged";
-    r.approvePending = undefined;
-    r.impasseReason = undefined;
-    const head = r.reviewedSha ? ` (head ${r.reviewedSha.slice(0, 7)})` : "";
-    note(r, "human", `Mergeado em ${r.base} por ${by}${head}.`);
-    landed = true;
-  });
-  if (landed) {
-    logger.info({ audit: true, action: "review.merged", review: reviewId, by }, "PR review merged");
-    await announcePhase(after);
-    await retireReviewerCard(after);
-  }
-  return after;
-}
-
-/* ------------------------------------------------------------------ fim de turno */
-
-/**
  * O fim de turno do card do AUTOR com a revisão em `ready`: alguém mandou a IA dele mexer no PR
  * (aplicar as sugestões, corrigir mais alguma coisa) e ela pode ter empurrado. O head do PR no GitHub
  * é comparado com o commit aprovado e, se andou, a revisão volta ao revisor na hora
@@ -757,6 +756,32 @@ async function checkAuthorPush(cardId: string): Promise<void> {
     await reopenAfterHeadMoved(r.id, "fim do turno do autor", { cause: "push", headSha: head.headSha });
   }
 }
+
+/**
+ * O merge humano saiu: a revisão fecha em `merged` (deixa de ser ativa), os dois cards recebem o
+ * aviso e o card do revisor vai para `done`. Grava mesmo se a revisão foi cancelada durante o merge —
+ * o PR foi mergeado, e é isso que o painel tem de dizer. Repetir não grava nada nem avisa de novo.
+ */
+export async function markReviewMerged(reviewId: string, by: string): Promise<Review> {
+  let landed = false as boolean;
+  const after = await mutateReview(reviewId, (r) => {
+    if (r.phase === "merged") return;
+    r.phase = "merged";
+    r.approvePending = undefined;
+    r.impasseReason = undefined;
+    const head = r.reviewedSha ? ` (head ${r.reviewedSha.slice(0, 7)})` : "";
+    note(r, "human", `Mergeado em ${r.base} por ${by}${head}.`, { by });
+    landed = true;
+  });
+  if (landed) {
+    logger.info({ audit: true, action: "review.merged", review: reviewId, by }, "PR review merged");
+    await announcePhase(after);
+    await retireReviewerCard(after);
+  }
+  return after;
+}
+
+/* ------------------------------------------------------------------ fim de turno */
 
 /**
  * Por que este fim de turno NÃO conta como "terminou sem a ferramenta", ou null se conta. O fallback

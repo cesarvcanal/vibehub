@@ -1079,6 +1079,55 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
   });
 });
 
+describe("conversa das IAs: cada fala leva os achados de que trata", () => {
+  it("revisor, autor e humano: itens com a resposta daquele momento, e quem fez na fala humana", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    const r1 = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 1, findings: [BLOCKER, QUESTION], headSha: SHA1, summary: "um bloqueante e uma dúvida",
+    });
+    expect(r1.log.find((e) => e.who === "reviewer")).toMatchObject({
+      round: 1, text: "um bloqueante e uma dúvida",
+      items: [{ id: "f1", status: "open", isNew: true }, { id: "f2", status: "open", isNew: true }],
+    });
+
+    const decided = await o.orch.decideQuestion(review.id, "f2", "drop", "mussa");
+    expect(decided.log.at(-1)).toMatchObject({ who: "human", by: "mussa", items: [{ id: "f2", status: "dropped" }] });
+
+    const r2 = await o.orch.submitAuthorResponse(author.id, {
+      round: 1, items: [{ id: "f1", status: "fixed", commit: "c0ffee1", reply: "token fora do log" }], headSha: SHA2,
+    });
+    expect(r2.log.find((e) => e.who === "author")).toMatchObject({
+      round: 1, items: [{ id: "f1", status: "fixed", commit: "c0ffee1", reply: "token fora do log" }],
+    });
+
+    const r3 = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 2, findings: [], verdicts: [{ id: "f1", status: "open", reviewerReply: "ainda vaza no catch" }], headSha: SHA2, summary: "r2",
+    });
+    const second = r3.log.filter((e) => e.who === "reviewer").at(-1);
+    expect(second).toMatchObject({ round: 2, items: [{ id: "f1", status: "open", reply: "ainda vaza no catch" }] });
+    // a fala da rodada 1 do autor continua com a resposta de então, mesmo depois da rodada 2
+    expect(r3.log.find((e) => e.who === "author")?.items?.[0]?.reply).toBe("token fora do log");
+    // falas de sistema não levam itens
+    expect(r3.log.filter((e) => e.who === "system").every((e) => e.items === undefined)).toBe(true);
+  });
+
+  it("resposta longa é cortada com reticências e resposta vazia não vira item com reply", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    const after = await o.orch.submitAuthorResponse(author.id, {
+      round: 1, items: [{ id: "f1", status: "fixed", reply: "x".repeat(2000) }], headSha: SHA2,
+    });
+    const reply = after.log.find((e) => e.who === "author")?.items?.[0]?.reply ?? "";
+    expect(reply.length).toBe(600);
+    expect(reply.endsWith("…")).toBe(true);
+    const cancelled = await o.orch.cancelReview(review.id, "kim");
+    expect(cancelled.log.at(-1)).toMatchObject({ who: "human", by: "kim" });
+    expect(cancelled.log.at(-1)?.items).toBeUndefined();
+  });
+});
+
 describe("o card do revisor depois da revisão", () => {
   /** Entrar em `done` grava o "concluído" do card numa microtask: o teste espera por ele (e o disco fica quieto). */
   const concluded = async (o: Loaded, cardId: string) =>
