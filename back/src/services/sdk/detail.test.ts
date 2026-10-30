@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AGENT_TIMELINE_PROBE_JS,
+  DETAIL_TEXT_MAX,
   InvalidDetailIdError,
   TOOL_DETAIL_PROBE_JS,
   buildDetailProbeScript,
@@ -19,6 +20,7 @@ import { assertWorktreeRelativePath, buildFileDiffScript } from "../maestro/chan
 const SESSION = "11111111-2222-3333-4444-555555555555";
 const line = (o: object): string => JSON.stringify(o);
 let dir = "";
+const BG_DIR = (): string => join(dir, "bg", SESSION, "tasks");
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "vh-detail-"));
@@ -29,7 +31,22 @@ beforeAll(async () => {
     line({ type: "user", timestamp: "2026-10-19T20:41:07.000Z", message: { content: [{ type: "tool_result", tool_use_id: "toolu_bash1", content: "#510 a\n#511 b\n" }] }, toolUseResult: { stdout: "#510 a\n#511 b\n", stderr: "", interrupted: false } }),
     line({ type: "assistant", timestamp: "2026-10-19T20:47:50.000Z", message: { content: [{ type: "tool_use", id: "toolu_agent1", name: "Agent", input: { description: "Review PR 510", prompt: "Revise a #510", run_in_background: true } }] } }),
     line({ type: "user", timestamp: "2026-10-19T20:47:51.000Z", message: { content: [{ type: "tool_result", tool_use_id: "toolu_agent1", content: "Async agent launched successfully.\nagentId: a0abc123 (internal ID)" }] }, toolUseResult: { status: "async_launched", agentId: "a0abc123" } }),
+    // O que o Claude Code também grava e NÃO é a conversa: cópias da requisição sem timestamp nem
+    // `toolUseResult`. Não podem tomar o lugar da chamada/resultado de verdade.
+    line({ type: "api-request-blob", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_bash1", name: "Bash", input: { command: "gh pr list" } }] } }),
+    line({ type: "api-request-blob", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_bash1", content: "#510 a\n#511 b\n" }] } }),
+    // Comandos em segundo plano: o resultado só diz para onde a saída vai; a saída real está no arquivo.
+    line({ type: "assistant", timestamp: "2026-10-19T20:50:00.000Z", message: { content: [{ type: "tool_use", id: "toolu_bg1", name: "Bash", input: { command: "npm run dev", run_in_background: true } }] } }),
+    line({ type: "user", timestamp: "2026-10-19T20:50:01.000Z", message: { content: [{ type: "tool_result", tool_use_id: "toolu_bg1", content: `Command running in background with ID: bgtask01. Output is being written to: ${BG_DIR()}/bgtask01.output. You will be notified when it completes.` }] }, toolUseResult: { stdout: "", stderr: "", interrupted: false, backgroundTaskId: "bgtask01" } }),
+    line({ type: "assistant", timestamp: "2026-10-19T20:51:00.000Z", message: { content: [{ type: "tool_use", id: "toolu_bg2", name: "Bash", input: { command: "npm test", run_in_background: true } }] } }),
+    line({ type: "user", timestamp: "2026-10-19T20:51:01.000Z", message: { content: [{ type: "tool_result", tool_use_id: "toolu_bg2", content: `Command running in background with ID: bgtask02. Output is being written to: ${BG_DIR()}/bgtask02.output. You will be notified when it completes.` }] }, toolUseResult: { stdout: "", stderr: "", interrupted: false, backgroundTaskId: "bgtask02" } }),
+    line({ type: "queue-operation", operation: "enqueue", timestamp: "2026-10-19T20:53:00.000Z", content: "<task-notification>\n<task-id>bgtask02</task-id>\n<tool-use-id>toolu_bg2</tool-use-id>\n<status>completed</status>\n</task-notification>" }),
+    line({ type: "assistant", timestamp: "2026-10-19T20:52:00.000Z", message: { content: [{ type: "tool_use", id: "toolu_bg3", name: "Bash", input: { command: "sleep 999", run_in_background: true } }] } }),
+    line({ type: "user", timestamp: "2026-10-19T20:52:01.000Z", message: { content: [{ type: "tool_result", tool_use_id: "toolu_bg3", content: `Command running in background with ID: bgtask03. Output is being written to: ${BG_DIR()}/bgtask03.output.` }] }, toolUseResult: { stdout: "", stderr: "", interrupted: false, backgroundTaskId: "bgtask03" } }),
   ].join("\n");
+  await mkdir(BG_DIR(), { recursive: true });
+  await writeFile(join(BG_DIR(), "bgtask01.output"), "subindo\npronto na 5173\n");
+  await writeFile(join(BG_DIR(), "bgtask02.output"), "x".repeat(DETAIL_TEXT_MAX + 10) + "FIM\n");
   await writeFile(join(dir, `${SESSION}.jsonl`), main + "\n");
   const sub = join(dir, SESSION, "subagents");
   await mkdir(sub, { recursive: true });
@@ -75,6 +92,36 @@ describe("detalhe de uma ação, lido do transcript", () => {
     expect(() => buildDetailProbeScript("c", dir, "../../etc", "tool")).toThrow(InvalidDetailIdError);
     expect(() => buildDetailProbeScript("c", dir, "a'; rm -rf /", "agent")).toThrow(InvalidDetailIdError);
     expect(buildDetailProbeScript("runner", "/root/x", "toolu_ok123", "tool")).toMatch(/^docker exec 'runner' node -e /);
+  });
+
+  it("cópia da requisição no transcript não apaga o horário nem a saída estruturada", () => {
+    const d = parseToolDetail(probe(TOOL_DETAIL_PROBE_JS, "toolu_bash1"));
+    expect(d.structured).toMatchObject({ stdout: "#510 a\n#511 b\n" });
+    expect(d.startedAt).toBe(Date.parse("2026-10-19T20:41:06.000Z"));
+    expect(d.endedAt).toBe(Date.parse("2026-10-19T20:41:07.000Z"));
+  });
+
+  it("comando em segundo plano: a saída real vem do arquivo e acompanha enquanto roda", async () => {
+    const d = parseToolDetail(probe(TOOL_DETAIL_PROBE_JS, "toolu_bg1"));
+    expect(d.background).toEqual({ taskId: "bgtask01", status: "running", output: "subindo\npronto na 5173\n", outputLength: 23 });
+    await appendFile(join(BG_DIR(), "bgtask01.output"), "GET / 200\n");
+    expect(parseToolDetail(probe(TOOL_DETAIL_PROBE_JS, "toolu_bg1")).background?.output).toBe("subindo\npronto na 5173\nGET / 200\n");
+  });
+
+  it("comando em segundo plano já terminado: status da notificação e o FIM da saída quando é grande", () => {
+    const bg = parseToolDetail(probe(TOOL_DETAIL_PROBE_JS, "toolu_bg2")).background;
+    expect(bg?.status).toBe("completed");
+    expect(bg?.outputLength).toBe(DETAIL_TEXT_MAX + 14);
+    expect(bg?.output?.length).toBe(DETAIL_TEXT_MAX);
+    expect(bg?.output?.endsWith("FIM\n")).toBe(true);
+  });
+
+  it("comando em segundo plano sem o arquivo de saída: diz que sumiu, não inventa vazio", () => {
+    expect(parseToolDetail(probe(TOOL_DETAIL_PROBE_JS, "toolu_bg3")).background).toEqual({ taskId: "bgtask03", status: "running", missing: true });
+  });
+
+  it("comando comum não tem segundo plano", () => {
+    expect(parseToolDetail(probe(TOOL_DETAIL_PROBE_JS, "toolu_bash1")).background).toBeUndefined();
   });
 
   it("saída torta vira não achou", () => {
