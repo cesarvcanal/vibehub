@@ -35,7 +35,8 @@ beforeEach(async () => {
   runScript.mockResolvedValue({ stdout: "", stderr: "" });
   pipeCommand.mockClear();
 });
-afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+// reportState grava o evento needs_me fora do await (o card-events.json pode chegar junto do rm).
+afterEach(async () => { await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); });
 
 const card = (over: Record<string, unknown> = {}) => ({
   column: "waiting", status: null, openedAt: 1, pausedAt: null, ...over,
