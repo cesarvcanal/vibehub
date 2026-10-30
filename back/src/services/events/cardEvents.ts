@@ -281,6 +281,16 @@ function inOrder(cardId: string, work: () => Promise<unknown>): Promise<void> {
 }
 
 /**
+ * Resolves once every observer queued so far has run — and written. Their callers fire and forget
+ * (a card entering `done` is told on a microtask), so a write can land after the caller is long gone:
+ * whoever tears the data dir down (a test's cleanup) waits on this first, or the late
+ * `card-events.json` makes the `rm` fail with ENOTEMPTY.
+ */
+export function cardEventsSettled(): Promise<void> {
+  return observing;
+}
+
+/**
  * A card's status report, seen against the status it had: a turn that ENDS (working → waiting) is a
  * turn_finished, with what the agent declared about it; a turn that STARTS resolves everything the
  * card had open (whoever answered, the card moved on).

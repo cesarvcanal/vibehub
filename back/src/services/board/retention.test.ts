@@ -124,6 +124,7 @@ let dir = "";
 let runScript: ReturnType<typeof vi.fn>;
 let reg: typeof import("./registry.js");
 let retention: typeof import("./retention.js");
+let events: typeof import("../events/cardEvents.js");
 
 async function fresh() {
   vi.resetModules();
@@ -142,6 +143,7 @@ async function fresh() {
   });
   reg = await import("./registry.js");
   retention = await import("./retention.js");
+  events = await import("../events/cardEvents.js");
 }
 
 beforeEach(async () => {
@@ -149,6 +151,9 @@ beforeEach(async () => {
   await fresh();
 });
 afterEach(async () => {
+  // A card that entered `done` is announced on a microtask, and the announcement writes
+  // card-events.json after the test is over: wait for it, or the rm races it (ENOTEMPTY).
+  await events.cardEventsSettled();
   vi.restoreAllMocks();
   await rm(dir, { recursive: true, force: true });
 });
