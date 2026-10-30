@@ -1,14 +1,15 @@
 import { randomUUID } from "node:crypto";
 import {
   getCard, createReviewerCard, removeCard, updateCard, cardMoveEffect, isHumanActive, shareWith, markCardPrMerged,
+  listGithubConnections,
 } from "../board/registry.js";
 import { resumeCard } from "../board/workspace.js";
 import { recordCardActor } from "../board/actor.js";
 import { findUser } from "../../auth/users.js";
 import { cardLevel } from "../../auth/access.js";
-import { creatorAccountSlug } from "../../auth/userGit.js";
+import { creatorAccountSlug, getUserGit } from "../../auth/userGit.js";
 import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
-import { deleteMergedBranch, readPrState } from "../maestro/deliver.js";
+import { deleteMergedBranch, readPrState, setPrPeople } from "../maestro/deliver.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { eventsAfter, onCardEvent, recordMessage, type CardEvent, type Severity } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
@@ -117,10 +118,55 @@ function awaitingTool(r: Review, side: Side): boolean {
     : r.phase === "fixing" && r.lastRespondRound !== r.round;
 }
 
+/**
+ * A linha que dá ao CO-AUTOR o crédito no Git (`Co-authored-by: Nome <email>`), com a identidade git
+ * que ele tem no vibehub. Sem co-autor, co-autor igual ao autor ou sem nome/e-mail: nenhuma.
+ */
+async function coauthorTrailer(r: Review): Promise<string | undefined> {
+  if (!r.coauthorUserId || r.coauthorUserId === r.authorUserId) return undefined;
+  const git = await getUserGit(r.coauthorUserId);
+  return git?.gitName && git.gitEmail ? `Co-authored-by: ${git.gitName} <${git.gitEmail}>` : undefined;
+}
+
+/** A lista fechada ao autor, com a linha de crédito do co-autor quando há uma. */
+async function authorPrompt(r: Review): Promise<string> {
+  return authorFixPrompt(r, { coauthorTrailer: await coauthorTrailer(r) });
+}
+
 /** O texto que a vez deste lado pede: rodada 1 inteira, delta da 2 em diante, ou a lista do autor. */
-function promptFor(r: Review, side: Side): string {
-  if (side === "author") return authorFixPrompt(r);
+async function promptFor(r: Review, side: Side): Promise<string> {
+  if (side === "author") return await authorPrompt(r);
   return r.round <= 1 ? reviewerRoundPrompt(r) : reviewerDeltaPrompt(r);
+}
+
+/** O login GitHub da conexão PRÓPRIA de uma pessoa no vibehub; sem uma, undefined. */
+async function githubLogin(userId: string): Promise<string | undefined> {
+  const own = (await getUserGit(userId))?.githubConnectionId;
+  if (!own) return undefined;
+  return (await listGithubConnections()).find((c) => c.id === own)?.login;
+}
+
+/**
+ * Os papéis da revisão que o GitHub também tem, gravados no PR: o RESPONSÁVEL (quem corrige, commita
+ * e dá push) vira o assignee — o dono da entrega —, e o REVISOR vira o reviewer pedido. Co-autor e
+ * quem faz o merge não têm campo no PR (o co-autor ganha o crédito nos commits, pela linha
+ * Co-authored-by). A conversa conta o que saiu. Nunca lança: um PR sem os nomes não para a revisão.
+ */
+async function namePeopleOnGithub(r: Review): Promise<void> {
+  try {
+    const [assignee, reviewer] = await Promise.all([githubLogin(r.authorUserId), githubLogin(r.reviewerUserId)]);
+    const asked = { ...(assignee ? { assignee } : {}), ...(reviewer ? { reviewer } : {}) };
+    const done = await setPrPeople(r.cardId, r.prUrl, asked);
+    const parts: string[] = [];
+    if (assignee) parts.push(done.assignee === "ok" ? `assignee ${assignee} (o responsável)` : `assignee ${assignee} recusado pelo GitHub`);
+    if (reviewer) parts.push(done.reviewer === "ok" ? `reviewer ${reviewer} pedido` : `reviewer ${reviewer} recusado pelo GitHub`);
+    const missing = !assignee ? " O assignee não foi marcado: o responsável não tem conexão GitHub própria no vibehub." : "";
+    await mutateReview(r.id, (x) => {
+      note(x, "system", `No GitHub: ${parts.length ? parts.join(" e ") : "ninguém marcado"}.${missing}`);
+    });
+  } catch (err) {
+    logger.warn({ review: r.id, detail: (err as Error).message }, "could not name the review's people on GitHub");
+  }
 }
 
 /* ------------------------------------------------------------------ avisos */
@@ -266,7 +312,7 @@ export async function relayReview(
 async function dispatch(r: Review): Promise<Review> {
   if (r.phase === "fixing") {
     // O primeiro relay da rodada: o único que tira o card do autor de Paused.
-    await relayReview(r, "author", authorFixPrompt(r), { unpause: true });
+    await relayReview(r, "author", await authorPrompt(r), { unpause: true });
   } else if (r.phase === "ready") {
     await announcePhase(r);
     await relayReview(r, "reviewer", reviewerApprovePrompt(r), { approve: true });
@@ -380,6 +426,7 @@ export async function startReview(input: {
     return fresh;
   });
   await relayReview(review, "reviewer", reviewerRoundPrompt(review));
+  await namePeopleOnGithub(review);
   return (await getReview(review.id)) ?? review;
 }
 
@@ -682,7 +729,7 @@ export async function retryReview(reviewId: string, by: string): Promise<Review>
   });
   logger.info({ audit: true, action: "review.retry", review: reviewId, side, by }, "PR review retried");
   if (side === "approve") await relayReview(after, "reviewer", reviewerApprovePrompt(after), { approve: true });
-  else if (side) await relayReview(after, side, promptFor(after, side));
+  else if (side) await relayReview(after, side, await promptFor(after, side));
   return (await getReview(reviewId)) ?? after;
 }
 
@@ -962,7 +1009,7 @@ async function onTurnFinished(event: CardEvent): Promise<void> {
         action = "nudge";
       }
     });
-    if (action === "nudge") await relayReview(after, side, nudgePrefix(tool) + promptFor(after, side));
+    if (action === "nudge") await relayReview(after, side, nudgePrefix(tool) + (await promptFor(after, side)));
     else if (action === "impasse") await announcePhase(after);
   }
 }

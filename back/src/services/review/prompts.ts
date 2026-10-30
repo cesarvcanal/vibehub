@@ -211,8 +211,11 @@ export function reviewerDeltaPrompt(r: Review): string {
   ].join("\n");
 }
 
-/** A lista fechada para o autor: corrigir o que é bug no escopo, contestar só com prova. */
-export function authorFixPrompt(r: Review): string {
+/**
+ * A lista fechada para o autor: corrigir o que é bug no escopo, contestar só com prova. Com co-autor
+ * na revisão, `coauthorTrailer` é a linha `Co-authored-by: Nome <email>` que dá a ele o crédito no Git.
+ */
+export function authorFixPrompt(r: Review, opts: { coauthorTrailer?: string } = {}): string {
   const todo = r.findings.filter(actionableForAuthor);
   const waiting = pendingQuestions(r.findings);
   const suggestions = r.findings.filter((f) => f.severity === "suggestion" && f.status === "open");
@@ -239,6 +242,9 @@ export function authorFixPrompt(r: Review): string {
       : []),
     "",
     "Depois de corrigir:",
+    ...(opts.coauthorTrailer
+      ? [`Em cada commit desta correção, termine a mensagem com esta linha (o crédito do co-autor no Git): ${opts.coauthorTrailer}`]
+      : []),
     "1. Rode os testes do que você mexeu.",
     `2. Faça push na branch do PR: git push origin HEAD:${r.prBranch}`,
     "   Não use vibehub_deliver nesta revisão: o push é o git push acima, e o PR já existe. Se o push for recusado, " +

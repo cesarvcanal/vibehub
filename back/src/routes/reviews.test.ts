@@ -70,6 +70,7 @@ async function boot(): Promise<FastifyInstance> {
     deliver,
     readPrState,
     deleteMergedBranch,
+    setPrPeople: vi.fn(async () => ({})),
   }));
   const { buildServer } = await import("../index.js");
   const server = await buildServer();

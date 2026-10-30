@@ -686,6 +686,28 @@ describe("buildPrStateScript / parsePrState", () => {
   });
 });
 
+describe("buildPrPeopleScript / parsePrPeople (assignee e reviewer do PR)", () => {
+  it("marca o assignee e pede o reviewer em chamadas separadas, com o token do stdin", async () => {
+    const { deliver } = await load();
+    const script = deliver.buildPrPeopleScript("vibehub-runner", "c1", TOKEN, "/work/x", PR, { assignee: "wellesley-mussolini", reviewer: "albert-gh" });
+    expect(script).toContain(`gh pr edit '${PR}' --add-assignee 'wellesley-mussolini'`);
+    expect(script).toContain(`gh pr edit '${PR}' --add-reviewer 'albert-gh'`);
+    for (const line of script.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
+    // um só, quando só um é conhecido
+    const onlyReviewer = deliver.buildPrPeopleScript("vibehub-runner", "c1", TOKEN, "/work/x", PR, { reviewer: "albert-gh" });
+    expect(onlyReviewer).not.toContain("--add-assignee");
+    // login com caractere fora do padrão do GitHub é recusado antes de virar shell
+    expect(() => deliver.buildPrPeopleScript("vibehub-runner", "c1", TOKEN, "/work/x", PR, { reviewer: "a b;rm" })).toThrow(/login/);
+  });
+
+  it("lê o resultado de cada um", async () => {
+    const { deliver } = await load();
+    expect(deliver.parsePrPeople("__VIBEHUB_DELIVER__ people assignee ok\nnope\n__VIBEHUB_DELIVER__ people reviewer error"))
+      .toEqual({ assignee: "ok", reviewer: "failed" });
+    expect(deliver.parsePrPeople("")).toEqual({});
+  });
+});
+
 describe("deliver com revisão de PR ativa no card", () => {
   async function withActiveReview(phase: "reviewing" | "fixing" | "ready" | "merged" | "cancelled" = "reviewing") {
     const made = await makeCard();

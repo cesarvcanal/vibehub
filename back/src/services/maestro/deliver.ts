@@ -453,6 +453,75 @@ export async function deleteMergedBranch(
   }
 }
 
+/** A GitHub login: letters, digits and single hyphens, up to 39 characters. */
+const GITHUB_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+
+/** Who the PR names on GitHub: the assignee (who delivers it) and the reviewer asked to review it. */
+export interface PrPeople {
+  assignee?: string;
+  reviewer?: string;
+}
+
+/**
+ * Marks the PR's ASSIGNEE and asks for its REVIEWER on GitHub — one `gh pr edit` each, so the one
+ * GitHub refuses (a reviewer who is the PR's own author, a login without access) does not take the
+ * other with it. Emits `__VIBEHUB_DELIVER__ people <assignee|reviewer> <ok|error>`. PURE.
+ */
+export function buildPrPeopleScript(
+  containerName: string, cardId: string, token: string, cwd: string, prUrl: string, people: PrPeople,
+): string {
+  assertSafeRemotePath(cwd);
+  const steps: string[] = [];
+  for (const [role, flag] of [["assignee", "--add-assignee"], ["reviewer", "--add-reviewer"]] as const) {
+    const login = people[role];
+    if (!login) continue;
+    if (!GITHUB_LOGIN_RE.test(login)) throw new Error(`invalid GitHub login for the ${role}: '${login}'`);
+    steps.push(
+      `if OUT=$(gh pr edit ${shQuote(prUrl)} ${flag} ${shQuote(login)} 2>&1); then echo "${MARKER} people ${role} ok";` +
+        ` else printf '%s\\n' "$OUT"; echo "${MARKER} people ${role} error"; fi`,
+    );
+  }
+  const body = [...ghTokenPreamble(token), `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`, ...steps];
+  return dockerBashScript(containerName, body);
+}
+
+/** Parses the people marking: what was asked and how it went. PURE. */
+export function parsePrPeople(stdout: string): { assignee?: "ok" | "failed"; reviewer?: "ok" | "failed" } {
+  const out: { assignee?: "ok" | "failed"; reviewer?: "ok" | "failed" } = {};
+  for (const m of stdout.matchAll(new RegExp(`${MARKER} people (assignee|reviewer) (ok|error)`, "g"))) {
+    out[m[1] as "assignee" | "reviewer"] = m[2] === "ok" ? "ok" : "failed";
+  }
+  return out;
+}
+
+/**
+ * Names the PR's assignee and reviewer on GitHub, with the card's connection (see
+ * {@link buildPrPeopleScript}). Never throws: a PR that could not be marked costs a log line.
+ */
+export async function setPrPeople(
+  cardId: string, prUrl: string, people: PrPeople,
+): Promise<{ assignee?: "ok" | "failed"; reviewer?: "ok" | "failed" }> {
+  if (!people.assignee && !people.reviewer) return {};
+  try {
+    const card = await getCard(cardId);
+    const project = card ? await getProject(card.projectId) : undefined;
+    if (!card || !project) return {};
+    const { cwd } = cardWorkPaths(project, card);
+    const token = await cardConnectionToken(card, project);
+    const out = await hostExecutor().runScript(
+      buildPrPeopleScript(config.runner.container, card.id, token, cwd, prUrl, people), { timeoutMs: 60_000 },
+    );
+    const result = parsePrPeople(out.stdout);
+    if (Object.values(result).includes("failed")) {
+      logger.warn({ card: card.worktreeSlug, result, detail: cleanOutput(out.stdout) }, "could not name all the PR's people on GitHub");
+    }
+    return result;
+  } catch (err) {
+    logger.warn({ card: cardId, detail: (err as Error).message }, "could not name the PR's people on GitHub");
+    return {};
+  }
+}
+
 /**
  * The PR's CI as the gate: its verdict, or null when the PR has no CI checks (the local gate
  * decides). Checks still running past the wait are red — never merged on a guess.

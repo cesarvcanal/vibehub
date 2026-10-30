@@ -54,6 +54,9 @@ let prHeadNow: string | null = null;
 let prStateNow: "OPEN" | "MERGED" | "CLOSED" = "OPEN";
 const prHead = vi.fn(async (_cardId: string, _prUrl: string) => (prHeadNow ? { state: prStateNow, headSha: prHeadNow } : null));
 const deleteBranch = vi.fn(async (_cardId: string, _prUrl: string, _branch: string) => "deleted" as const);
+const prPeople = vi.fn(async (_cardId: string, _prUrl: string, people: { assignee?: string; reviewer?: string }) => ({
+  ...(people.assignee ? { assignee: "ok" as const } : {}), ...(people.reviewer ? { reviewer: "ok" as const } : {}),
+}));
 
 const USERS: Record<string, PublicUser> = {
   "u-autor": { id: "u-autor", username: "autor", role: "member", createdAt: "" },
@@ -83,6 +86,7 @@ async function load() {
     deliver: deliverSpy,
     readPrState: prHead,
     deleteMergedBranch: deleteBranch,
+    setPrPeople: prPeople,
   }));
   vi.doMock("../../auth/users.js", async () => ({
     ...(await vi.importActual<typeof import("../../auth/users.js")>("../../auth/users.js")),
@@ -133,6 +137,7 @@ beforeEach(async () => {
   prHeadNow = null;
   prStateNow = "OPEN";
   deleteBranch.mockClear();
+  prPeople.mockClear();
 });
 afterEach(async () => {
   for (const m of [
@@ -301,6 +306,57 @@ describe("iniciar a revisão", () => {
     expect(twice.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     expect(String((twice.find((r) => r.status === "rejected") as PromiseRejectedResult).reason)).toMatch(/revisao_ativa/);
     expect((await o.registry.listAllCards()).filter((c) => c.reviewOf === other.id)).toHaveLength(1);
+  });
+});
+
+describe("os papéis no GitHub e o crédito do co-autor", () => {
+  /** Conexão GitHub própria e identidade git de uma pessoa (o que o vibehub guarda dela). */
+  async function identity(o: Loaded, userId: string, login: string, git?: { gitName: string; gitEmail: string }) {
+    const conn = await o.registry.addGithubConnection({ label: login, login });
+    const { setUserGit } = await import("../../auth/userGit.js");
+    await setUserGit(userId, { githubConnectionId: conn.id, ...(git ?? {}) });
+  }
+
+  it("ao iniciar, o PR ganha o responsável como assignee e o revisor como reviewer pedido, e a conversa conta", async () => {
+    const o = await load();
+    const { author } = await seed(o);
+    await identity(o, "u-autor", "autor-gh");
+    await identity(o, "u-revisor", "revisor-gh");
+    const review = await o.orch.startReview({
+      cardId: author.id, prNumber: 7, reviewerUserId: "u-revisor", authorUserId: "u-autor", mergerUserId: "u-merger", by: "u-autor",
+    });
+    expect(prPeople).toHaveBeenCalledWith(author.id, PR.url, { assignee: "autor-gh", reviewer: "revisor-gh" });
+    expect(review.log.some((e) => e.who === "system" && /assignee autor-gh.*reviewer revisor-gh/.test(e.text))).toBe(true);
+  });
+
+  it("responsável sem conexão GitHub própria: só o reviewer é pedido, e a conversa diz por quê", async () => {
+    const o = await load();
+    const { author } = await seed(o);
+    await identity(o, "u-revisor", "revisor-gh");
+    const review = await o.orch.startReview({
+      cardId: author.id, prNumber: 7, reviewerUserId: "u-revisor", authorUserId: "u-autor", mergerUserId: "u-merger", by: "u-autor",
+    });
+    expect(prPeople).toHaveBeenCalledWith(author.id, PR.url, { reviewer: "revisor-gh" });
+    expect(review.log.some((e) => /não tem conexão GitHub própria/.test(e.text))).toBe(true);
+  });
+
+  it("com co-autor, os commits da correção levam Co-authored-by com o nome e o e-mail git dele", async () => {
+    const o = await load();
+    const { author } = await seed(o);
+    await identity(o, "u-merger", "merger-gh", { gitName: "Bia Souza", gitEmail: "bia@acme.dev" });
+    const review = await o.orch.startReview({
+      cardId: author.id, prNumber: 7, reviewerUserId: "u-revisor", authorUserId: "u-autor", coauthorUserId: "u-merger",
+      mergerUserId: "u-merger", by: "u-autor",
+    });
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    expect(lastText()).toContain("Co-authored-by: Bia Souza <bia@acme.dev>");
+  });
+
+  it("sem co-autor, ou co-autor sem identidade git, nenhuma linha de crédito é pedida", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    expect(lastText()).not.toContain("Co-authored-by");
   });
 });
 
