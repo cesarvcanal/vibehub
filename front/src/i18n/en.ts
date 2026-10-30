@@ -1451,7 +1451,7 @@ export const en: Record<string, string> = {
   "review.decide.hint.question": "Your call: Block makes the author fix it; Drop takes it off the list.",
   "review.decide.hint.stuck": "Your call: keep it blocking, or accept the risk and let the merge through.",
   "review.commits.reviewed": "reviewed commit",
-  "review.commits.moved": "· the PR moved after the review and is at",
+  "review.commits.moved": "the PR moved after the review and is at",
   "review.roles.reviewer.tag": "reviewer",
   "review.roles.coauthor.tag": "co-author",
   "review.impasse.rodadas": "Hit {max} rounds with an item still stuck",

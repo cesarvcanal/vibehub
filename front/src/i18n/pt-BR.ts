@@ -1463,7 +1463,7 @@ export const ptBR: Record<string, string> = {
   "review.decide.hint.question": "Sua decisão: Bloquear faz o autor corrigir; Descartar tira o item da lista.",
   "review.decide.hint.stuck": "Sua decisão: manter o bloqueio, ou aceitar o risco e liberar o merge.",
   "review.commits.reviewed": "commit revisado",
-  "review.commits.moved": "· o PR andou depois da revisão e está em",
+  "review.commits.moved": "o PR andou depois da revisão e está em",
   "review.roles.reviewer.tag": "reviewer",
   "review.roles.coauthor.tag": "co-author",
   "review.impasse.rodadas": "Bateu {max} rodadas com item travado",
