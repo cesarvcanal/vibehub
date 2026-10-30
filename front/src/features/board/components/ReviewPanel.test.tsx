@@ -145,33 +145,26 @@ describe("ReviewPanel — o que mostra", () => {
     expect(steps.map((s) => s.getAttribute("data-state"))).toEqual(["done", "current", "todo"]);
   });
 
-  it("o cabeçalho da lista conta pelos dados: 3 bloqueiam · 1 sugestão · 1 derrubado", async () => {
-    open("rev", review({
-      findings: [
-        finding({ id: "a", status: "fixed" }),
-        finding({ id: "b", status: "fixed" }),
-        finding({ id: "c", status: "contested" }),
-        finding({ id: "d", severity: "suggestion" }),
-        finding({ id: "e", severity: "refuted", status: "dropped" }),
-      ],
-    }));
-    await loaded();
-    expect(screen.getByText(/3 bloqueiam · 1 sugestão · 1 derrubado/)).toBeInTheDocument();
-  });
-
-  it("os plurais do cabeçalho concordam (1 bloqueia, 2 dúvidas, 2 sugestões)", async () => {
+  it("cada grupo diz em palavras o que aquele tipo é, com quantos tem e quantos estão em aberto", async () => {
     open("rev", review({
       phase: "reviewing",
       findings: [
         finding({ id: "a" }),
-        finding({ id: "b", severity: "suggestion" }),
+        finding({ id: "b", status: "fixed" }),
         finding({ id: "c", severity: "suggestion" }),
-        finding({ id: "d", severity: "question", humanDecision: "drop", status: "dropped" }),
-        finding({ id: "e", severity: "question", humanDecision: "drop", status: "dropped" }),
+        finding({ id: "d", severity: "refuted" }),
       ],
     }));
     await loaded();
-    expect(screen.getByText(/2 dúvidas · 1 bloqueia · 2 sugestões/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    const blocking = screen.getAllByTestId("finding-group").find((g) => g.getAttribute("data-severity") === "blocking")!;
+    expect(within(blocking).getByRole("heading")).toHaveTextContent("Bloqueiam o merge (2)");
+    expect(within(blocking).getByRole("heading")).toHaveTextContent("1 em aberto, 1 resolvido(s)");
+    expect(within(blocking).getByText(/Impedem o merge até serem corrigidos/)).toBeInTheDocument();
+    const suggestions = screen.getAllByTestId("finding-group").find((g) => g.getAttribute("data-severity") === "suggestion")!;
+    expect(within(suggestions).getByText(/Melhorias que não impedem o merge/)).toBeInTheDocument();
+    // nada de linha de contagem com pontinhos nem rótulo em caixa alta
+    expect(screen.queryByText(/ · /)).toBeNull();
   });
 
   it("cada achado mostra severidade, título, arquivo:linha, prova, status e commit curto", async () => {
@@ -188,7 +181,7 @@ describe("ReviewPanel — o que mostra", () => {
     await loaded();
 
     const row = screen.getByText("Aba volta e busca 2x").closest("[data-testid=finding]") as HTMLElement;
-    expect(within(row).getByText("BLOQUEIA")).toBeInTheDocument();
+    expect(within(row).getByText("bloqueia")).toBeInTheDocument();
     expect(within(row).getByText("src/useInvalidacao.ts:96")).toBeInTheDocument();
     expect(within(row).getByText("teste falha")).toBeInTheDocument();
     expect(within(row).getByText("useInvalidacao.test.ts:96")).toBeInTheDocument();
@@ -287,6 +280,23 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.getAllByTestId("finding-group").map((g) => g.getAttribute("data-severity"))).toEqual(["blocking", "suggestion"]);
     // A conversa continua montada (escondida): voltar a ela não perde a rolagem.
     expect(screen.getByTestId("review-conversation")).toBeInTheDocument();
+  });
+
+  it("fala que chega com o painel aberto entra animada; o histórico com que ele abriu fica parado", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const first = { at: 1, round: 1, who: "reviewer" as const, text: "primeira fala" };
+    open("aut", review({ phase: "fixing", log: [first] }));
+    await loaded();
+    const lines = () => screen.getAllByTestId("review-line");
+    expect(lines()[0]).not.toHaveAttribute("data-fresh");
+
+    current = review({ phase: "fixing", log: [first, { at: 2, round: 1, who: "author", text: "segunda fala" }] });
+    await tick(3_100);
+    await waitFor(() => expect(lines()).toHaveLength(2));
+    expect(lines()[0]).not.toHaveAttribute("data-fresh");
+    expect(lines()[1]).toHaveAttribute("data-fresh", "true");
+    expect(lines()[1].className).toContain("animate-in");
+    expect(lines()[1].className).toContain("motion-reduce:animate-none");
   });
 
   it("abre nos Achados quando quem olha tem uma decisão a tomar lá, e respeita a aba escolhida", async () => {
@@ -779,7 +789,8 @@ describe("ReviewPanel — dúvidas e impasse", () => {
     expect(screen.getAllByRole("radio", { name: /Manter o bloqueio/ })).toHaveLength(2);
     expect(screen.getAllByRole("radio", { name: /Aceitar o risco/ })).toHaveLength(2);
     expect(within(cardOf("Já corrigido")).queryByRole("radio")).toBeNull();
-    expect(within(cardOf("Só sugestão")).queryByRole("radio")).toBeNull();
+    // a sugestão não é item travado: só tem o "fazer / não fazer" dela
+    expect(within(cardOf("Só sugestão")).queryByRole("radio", { name: /Manter o bloqueio|Aceitar o risco/ })).toBeNull();
 
     await decide("Travado contestado", /Manter o bloqueio/);
     expect(post).toHaveBeenLastCalledWith("/reviews/r1/decide", { findingId: "b", decision: "keep" });
@@ -833,50 +844,58 @@ describe("ReviewPanel — dúvidas e impasse", () => {
   });
 });
 
-describe("ReviewPanel — escolher sugestões e pedir ao autor", () => {
+describe("ReviewPanel — sugestões: fazer ou não fazer", () => {
   const suggestions = [
     finding({ id: "s1", severity: "suggestion", title: "Renomear pump" }),
     finding({ id: "s2", severity: "suggestion", title: "Extrair helper" }),
     finding({ id: "s3", severity: "suggestion", title: "Já feita", status: "fixed" }),
   ];
+  const choices = (title: string) => screen.getByRole("radiogroup", { name: `O que fazer com: ${title}` });
 
-  it("marca as sugestões em aberto e pede ao autor só as marcadas", async () => {
-    post.mockImplementation(async () => ({ review: current }));
+  it("cada sugestão em aberto tem 'Fazer' e 'Não fazer', explicados; um confirmar manda as duas listas", async () => {
     open("mer", review({ phase: "ready", findings: suggestions }));
     await loaded();
     await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
-    const ask = screen.getByRole("button", { name: /Pedir ao autor aplicar/ });
-    expect(ask).toBeDisabled();
-    // só as em aberto podem ser escolhidas
-    expect(screen.getAllByRole("checkbox")).toHaveLength(2);
-    await userEvent.click(screen.getByRole("checkbox", { name: "Escolher: Extrair helper" }));
-    expect(screen.getByRole("button", { name: "Pedir ao autor aplicar (1)" })).toBeEnabled();
-    await userEvent.click(screen.getByRole("button", { name: "Pedir ao autor aplicar (1)" }));
-    expect(post).toHaveBeenLastCalledWith("/reviews/r1/suggestions", { findingIds: ["s2"] });
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Pedido enviado ao autor: 1 sugestão"));
+    // só as em aberto têm escolha
+    expect(screen.getAllByRole("radiogroup", { name: /O que fazer com/ })).toHaveLength(2);
+    expect(within(choices("Renomear pump")).getByText("A IA do autor aplica e o revisor confere.")).toBeInTheDocument();
+    expect(within(choices("Renomear pump")).getByText("Sai da lista; o PR segue sem ela.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Escolha fazer ou não fazer" })).toBeDisabled();
+
+    await userEvent.click(within(choices("Renomear pump")).getByRole("radio", { name: /Não fazer/ }));
+    await userEvent.click(within(choices("Extrair helper")).getByRole("radio", { name: /^Fazer/ }));
+    expect(within(choices("Extrair helper")).getByRole("radio", { name: /^Fazer/ })).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(screen.getByRole("button", { name: "Confirmar: 1 pra fazer, 1 pra não fazer" }));
+    expect(post).toHaveBeenLastCalledWith("/reviews/r1/suggestions", { apply: ["s2"], skip: ["s1"] });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Enviado: 1 pro autor fazer, 1 fora da lista"));
   });
 
-  it("'marcar todas' escolhe todas as em aberto", async () => {
+  it("clicar de novo na mesma escolha desfaz; 'marcar todas pra fazer' escolhe todas as em aberto", async () => {
     open("aut", review({ phase: "ready", findings: suggestions }));
     await loaded();
     await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
-    await userEvent.click(screen.getByRole("button", { name: "marcar todas" }));
-    await userEvent.click(screen.getByRole("button", { name: "Pedir ao autor aplicar (2)" }));
-    expect(post).toHaveBeenLastCalledWith("/reviews/r1/suggestions", { findingIds: ["s1", "s2"] });
+    const skip = within(choices("Renomear pump")).getByRole("radio", { name: /Não fazer/ });
+    await userEvent.click(skip);
+    await userEvent.click(skip);
+    expect(skip).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(screen.getByRole("button", { name: "marcar todas pra fazer" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirmar: 2 pra fazer, 0 pra não fazer" }));
+    expect(post).toHaveBeenLastCalledWith("/reviews/r1/suggestions", { apply: ["s1", "s2"], skip: [] });
   });
 
-  it("quem não tem papel na revisão, ou revisão encerrada, não escolhe sugestão", async () => {
+  it("quem não tem papel na revisão, ou revisão encerrada, não escolhe", async () => {
     open("co", review({ phase: "ready", findings: suggestions }));
     await loaded();
     await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
-    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(screen.queryByRole("radiogroup", { name: /O que fazer com/ })).toBeNull();
     cleanup();
     open("mer", review({ phase: "merged", findings: suggestions }));
     await loaded();
     await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
-    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(screen.queryByRole("radiogroup", { name: /O que fazer com/ })).toBeNull();
   });
 });
+
 
 describe("ReviewPanel — avisos", () => {
   it("impasse por rodadas diz em palavras", async () => {

@@ -46,7 +46,7 @@ export function PrReviewBlock({ cardId, pr, review: summary, authorWorking = fal
       <span className="min-w-0 truncate text-muted-foreground">
         {pr.branch} → {pr.base}
       </span>
-      <Badge tone={pill.tone} className="ml-auto shrink-0">
+      <Badge tone={pill.tone} className="ml-auto shrink-0 transition-colors duration-500">
         {t(pill.key, pill.vars)}
       </Badge>
     </>

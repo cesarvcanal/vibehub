@@ -324,10 +324,14 @@ export function reviewTurn(
   }
 }
 
-/** A row of the conversation: a "Rodada N" divider, or one line of the log (with a stable key). */
+/**
+ * A row of the conversation: a "Rodada N" divider, or one line of the log — with a stable key and the
+ * position in the log (`index`; a divider carries its first line's), which tells a line that arrived
+ * while the panel was open from one that was already there.
+ */
 export type ConversationRow =
-  | { kind: "round"; round: number; key: string }
-  | { kind: "line"; event: ReviewEvent; key: string };
+  | { kind: "round"; round: number; key: string; index: number }
+  | { kind: "line"; event: ReviewEvent; key: string; index: number };
 
 /**
  * The log as the conversation draws it: a "Rodada N" divider before the first line of each round —
@@ -339,9 +343,9 @@ export function conversationRows(log: ReviewEvent[]): ConversationRow[] {
   log.forEach((event, i) => {
     if (event.round !== round) {
       round = event.round;
-      rows.push({ kind: "round", round, key: `round-${round}-${i}` });
+      rows.push({ kind: "round", round, key: `round-${round}-${i}`, index: i });
     }
-    rows.push({ kind: "line", event, key: `${event.at}-${i}` });
+    rows.push({ kind: "line", event, key: `${event.at}-${i}`, index: i });
   });
   return rows;
 }

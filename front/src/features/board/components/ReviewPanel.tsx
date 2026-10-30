@@ -83,15 +83,15 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
   const act = useMutation({
     mutationFn: ({ path, body }: {
       path: string;
-      body?: { findingId: string; decision: Decision } | { findingIds: string[] };
+      body?: { findingId: string; decision: Decision } | { apply: string[]; skip: string[] };
     }) => {
       const url = `/reviews/${encodeURIComponent(review!.id)}/${path}`;
       return body === undefined ? post<{ review: Review }>(url) : post<{ review: Review }>(url, body);
     },
     onSuccess: (answer, { path, body }) => {
       apply(answer.review);
-      if (path === "suggestions" && body && "findingIds" in body) {
-        toast.success(translate("review.suggestions.sent", { n: body.findingIds.length }));
+      if (path === "suggestions" && body && "apply" in body) {
+        toast.success(translate("review.suggestions.sent", { apply: body.apply.length, skip: body.skip.length }));
       }
     },
     onError: (error) => {
@@ -207,7 +207,7 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
       onRetry={() => act.mutate({ path: "retry" })}
       onCancel={cancel}
       onDecide={(finding, decision) => act.mutate({ path: "decide", body: { findingId: finding.id, decision } })}
-      onRequestSuggestions={(findingIds) => act.mutate({ path: "suggestions", body: { findingIds } })}
+      onDecideSuggestions={(choice) => act.mutate({ path: "suggestions", body: choice })}
       onClose={onClose}
     />
   );

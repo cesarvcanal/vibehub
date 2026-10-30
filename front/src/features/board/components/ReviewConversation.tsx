@@ -25,6 +25,13 @@ import { cn } from "@/lib/utils";
 /** A bubble shows this many findings until "+N itens" is pressed: a round of 8 suggestions stays readable. */
 const ITEMS_SHOWN = 4;
 
+/**
+ * How something new comes in: a short fade and rise, the way a message lands in a chat app. Only
+ * what arrives while the panel is open — the history it opens on is already there, and stays still.
+ * Off for people who asked the system for less motion.
+ */
+export const ENTER = "animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out motion-reduce:animate-none";
+
 export interface ReviewConversationProps {
   review: Review;
   working: ReviewWorking;
@@ -41,6 +48,11 @@ export function ReviewConversation({ review, working, nameOf }: ReviewConversati
 
   // What sits at the bottom besides the lines: the "typing" row changes with the turn.
   const stick = useStickToBottom(`${review.log.length}:${turnKey(turn)}`);
+  // The log as it was when the panel opened: lines past it arrived live and come in animated. A log
+  // that shrank (another review on screen) is all "already there" again.
+  const openedWith = React.useRef(review.log.length);
+  if (review.log.length < openedWith.current) openedWith.current = review.log.length;
+  const fresh = (index: number) => index >= openedWith.current;
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -58,13 +70,14 @@ export function ReviewConversation({ review, working, nameOf }: ReviewConversati
         ) : (
           rows.map((row) =>
             row.kind === "round" ? (
-              <RoundDivider key={row.key} round={row.round} />
+              <RoundDivider key={row.key} round={row.round} fresh={fresh(row.index)} />
             ) : (
-              <Line key={row.key} event={row.event} findings={findings} names={names} />
+              <Line key={row.key} event={row.event} findings={findings} names={names} fresh={fresh(row.index)} />
             ),
           )
         )}
-        <TurnRow turn={turn} names={names} />
+        {/* Keyed by the turn: a change of turn mounts it again, so the new "typing" comes in animated. */}
+        <TurnRow key={turnKey(turn)} turn={turn} names={names} />
       </div>
       <JumpToLatest stick={stick} />
     </div>
@@ -79,10 +92,14 @@ function turnKey(turn: ReviewTurn): string {
   return "n";
 }
 
-function RoundDivider({ round }: { round: number }) {
+function RoundDivider({ round, fresh }: { round: number; fresh: boolean }) {
   const t = useT();
   return (
-    <div data-testid="review-round" className="flex items-center gap-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+    <div
+      data-testid="review-round"
+      data-fresh={fresh || undefined}
+      className={cn("flex items-center gap-2 py-1 text-[11px] font-medium text-muted-foreground", fresh && ENTER)}
+    >
       <span className="h-px flex-1 bg-border/60" />
       {t("review.conversation.round", { round })}
       <span className="h-px flex-1 bg-border/60" />
@@ -93,7 +110,15 @@ function RoundDivider({ round }: { round: number }) {
 type Names = { reviewer: string; author: string; merger: string };
 
 /** One line of the log: a bubble for each AI, a centred note for the server and for the people. */
-function Line({ event, findings, names }: { event: ReviewEvent; findings: Map<string, Finding>; names: Names }) {
+function Line({
+  event, findings, names, fresh,
+}: {
+  event: ReviewEvent;
+  findings: Map<string, Finding>;
+  names: Names;
+  /** Arrived while the panel was open: comes in animated. */
+  fresh: boolean;
+}) {
   const t = useT();
   const when = timeOf(event.at);
   if (event.who === "system" || event.who === "human") {
@@ -102,10 +127,12 @@ function Line({ event, findings, names }: { event: ReviewEvent; findings: Map<st
       <div
         data-testid="review-line"
         data-who={event.who}
+        data-fresh={fresh || undefined}
         title={when}
         className={cn(
           "mx-auto flex max-w-[92%] items-start gap-1.5 rounded-md px-2.5 py-1 text-center text-[11px] leading-snug",
           human ? "border border-amber-500/25 bg-amber-500/10 text-amber-200" : "text-muted-foreground",
+          fresh && ENTER,
         )}
       >
         {human ? <UserRound className="mt-px h-3 w-3 shrink-0" /> : <Info className="mt-px h-3 w-3 shrink-0 opacity-70" />}
@@ -118,7 +145,12 @@ function Line({ event, findings, names }: { event: ReviewEvent; findings: Map<st
   }
   const reviewer = event.who === "reviewer";
   return (
-    <div data-testid="review-line" data-who={event.who} className={cn("flex", reviewer ? "justify-start" : "justify-end")}>
+    <div
+      data-testid="review-line"
+      data-who={event.who}
+      data-fresh={fresh || undefined}
+      className={cn("flex", reviewer ? "justify-start" : "justify-end", fresh && ENTER)}
+    >
       <div
         className={cn(
           "max-w-[88%] space-y-1.5 rounded-lg border px-3 py-2 text-xs",
@@ -151,7 +183,7 @@ function Items({ items, findings }: { items: ReviewEventItem[]; findings: Map<st
               <div className="flex items-start gap-1.5">
                 <span
                   className={cn(
-                    "shrink-0 text-[10px] font-semibold uppercase",
+                    "shrink-0 text-[11px] font-semibold",
                     finding ? BADGE_TEXT[FINDING_SEVERITY_TONE[finding.severity]] : "text-muted-foreground",
                     finding?.severity === "refuted" && "line-through",
                   )}
@@ -196,7 +228,7 @@ function TurnRow({ turn, names }: { turn: ReviewTurn; names: Names }) {
         : turn.why === "merge" ? t("review.conversation.waiting.merge", { name: names.merger })
           : t("review.conversation.waiting.impasse");
     return (
-      <p data-testid="review-turn" data-who="person" className="py-1 text-center text-[11px] text-muted-foreground">
+      <p data-testid="review-turn" data-who="person" className={cn("py-1 text-center text-[11px] text-muted-foreground", ENTER)}>
         {text}
       </p>
     );
@@ -209,7 +241,12 @@ function TurnRow({ turn, names }: { turn: ReviewTurn; names: Names }) {
       : turn.onReadyPr ? t("review.conversation.typing.onReadyPr", { name })
         : t("review.conversation.typing.fixing", { name });
   return (
-    <div data-testid="review-turn" data-who={turn.who} data-working={turn.working} className={cn("flex", reviewer ? "justify-start" : "justify-end")}>
+    <div
+      data-testid="review-turn"
+      data-who={turn.who}
+      data-working={turn.working}
+      className={cn("flex", reviewer ? "justify-start" : "justify-end", ENTER)}
+    >
       <div
         className={cn(
           "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[11px]",

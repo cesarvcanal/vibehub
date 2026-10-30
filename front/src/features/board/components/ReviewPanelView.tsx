@@ -1,13 +1,13 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
-import { ExternalLink, FileDiff, Loader2, SquareTerminal, X } from "lucide-react";
+import { Check, ExternalLink, FileDiff, Loader2, SquareTerminal, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Finding, FindingSeverity, Review, ReviewPhase, ReviewWorking } from "@/api/types";
-import { ReviewConversation } from "@/features/board/components/ReviewConversation";
+import { ENTER, ReviewConversation } from "@/features/board/components/ReviewConversation";
 import { cardHref } from "@/features/board/lib/board";
 import {
-  FINDING_SEVERITY_TONE, FINDING_STATUS_TONE, IMPASSE_ROUNDS, REVIEW_MAX_ROUNDS, awaitingDecision, findingCounts, findingIsOpen,
+  FINDING_SEVERITY_TONE, FINDING_STATUS_TONE, IMPASSE_ROUNDS, REVIEW_MAX_ROUNDS, awaitingDecision, findingIsOpen,
   pendingQuestions, reviewIsOpen, reviewPill, reviewTurn, stuckItems, type ReviewActions,
 } from "@/features/board/lib/review";
 import { t as translate, useT } from "@/i18n";
@@ -53,8 +53,8 @@ export interface ReviewPanelViewProps {
   onRetry: () => void;
   onCancel: () => void;
   onDecide: (finding: Finding, decision: Decision) => void;
-  /** Ask the author's AI to apply these suggestions (ids of open suggestions). */
-  onRequestSuggestions: (findingIds: string[]) => void;
+  /** What to do with open suggestions: `apply` goes to the author's AI, `skip` leaves the list. */
+  onDecideSuggestions: (choice: { apply: string[]; skip: string[] }) => void;
   onClose: () => void;
   /** The tab to open on, instead of the one the review calls for (the Storybook tour shows each). */
   initialTab?: Tab;
@@ -62,7 +62,7 @@ export interface ReviewPanelViewProps {
 
 export function ReviewPanelView(props: ReviewPanelViewProps) {
   const {
-    review, working, nameOf, actions, busy, mergeBusy, notice, onMerge, onRetry, onCancel, onDecide, onRequestSuggestions, onClose,
+    review, working, nameOf, actions, busy, mergeBusy, notice, onMerge, onRetry, onCancel, onDecide, onDecideSuggestions, onClose,
     initialTab,
   } = props;
   const t = useT();
@@ -150,7 +150,7 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
           decisionsFor={decisionsFor}
           canRequest={actions.request}
           onDecide={onDecide}
-          onRequestSuggestions={onRequestSuggestions}
+          onDecideSuggestions={onDecideSuggestions}
         />
       </div>
     </PanelFrame>
@@ -217,7 +217,7 @@ function Header({
       <div className="flex items-center gap-2">
         <span className="font-semibold text-amber-400">PR #{review.prNumber}</span>
         <span className="min-w-0 truncate text-xs text-muted-foreground">→ {review.base}</span>
-        <Badge tone={pill.tone} className="ml-auto shrink-0">
+        <Badge tone={pill.tone} className="ml-auto shrink-0 transition-colors duration-500">
           {t(pill.key, "vars" in pill ? pill.vars : undefined)}
         </Badge>
         <CloseButton onClose={onClose} />
@@ -232,7 +232,8 @@ function Header({
             live ? "animate-pulse bg-amber-400" : turn.who === "person" ? "bg-sky-400" : "bg-muted-foreground/50",
           )}
         />
-        <span className="text-foreground/90">{stageText(review, working.author, t)}</span>
+        {/* Keyed by the sentence: when what is happening changes, the new sentence comes in. */}
+        <span key={stageText(review, working.author, t)} className={cn("text-foreground/90", ENTER)}>{stageText(review, working.author, t)}</span>
       </p>
       <dl data-testid="review-roles" className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]">
         <Role
@@ -351,26 +352,28 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
 const GROUPS: FindingSeverity[] = ["question", "blocking", "suggestion", "refuted"];
 
 function FindingsList({
-  review, busy, decisionsFor, canRequest, onDecide, onRequestSuggestions,
+  review, busy, decisionsFor, canRequest, onDecide, onDecideSuggestions,
 }: {
   review: Review;
   busy: boolean;
   decisionsFor: (f: Finding) => Decision[];
   canRequest: boolean;
   onDecide: (finding: Finding, decision: Decision) => void;
-  onRequestSuggestions: (findingIds: string[]) => void;
+  onDecideSuggestions: (choice: { apply: string[]; skip: string[] }) => void;
 }) {
   const t = useT();
-  // The suggestions a person picked to send to the author. Only open ones can be picked; one that
-  // stops being open (the author answered it) leaves the choice by itself.
-  const [picked, setPicked] = React.useState<Set<string>>(() => new Set());
+  // What the person chose for each open suggestion: do it (the author applies it) or not (it leaves
+  // the list). One confirm sends both. A suggestion that stops being open drops out of the choice.
+  const [choices, setChoices] = React.useState<Map<string, SuggestionChoice>>(() => new Map());
   const openSuggestions = review.findings.filter((f) => f.severity === "suggestion" && f.status === "open").map((f) => f.id);
-  const chosen = openSuggestions.filter((id) => picked.has(id));
-  const toggle = (id: string) =>
-    setPicked((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+  const chosen = (c: SuggestionChoice) => openSuggestions.filter((id) => choices.get(id) === c);
+  const apply = chosen("apply");
+  const skip = chosen("skip");
+  const choose = (id: string, c: SuggestionChoice) =>
+    setChoices((prev) => {
+      const next = new Map(prev);
+      if (next.get(id) === c) next.delete(id);
+      else next.set(id, c);
       return next;
     });
 
@@ -378,45 +381,51 @@ function FindingsList({
     return <p className="py-6 text-center text-xs text-muted-foreground">{t("review.list.empty")}</p>;
   }
   return (
-    <div className="space-y-3 py-1 pr-1">
-      <p className="text-[11px] text-muted-foreground">{countsText(findingCounts(review.findings), t)}</p>
+    <div className="space-y-4 py-1 pr-1">
       {GROUPS.map((severity) => {
         const items = review.findings.filter((f) => f.severity === severity);
         if (items.length === 0) return null;
         const open = items.filter(findingIsOpen).length;
-        const picking = severity === "suggestion" && canRequest && openSuggestions.length > 0;
+        const choosing = severity === "suggestion" && canRequest && openSuggestions.length > 0;
         return (
-          <section key={severity} data-testid="finding-group" data-severity={severity} className="space-y-1.5">
-            <h4 className="flex items-baseline justify-between pr-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-              {t(`review.group.${severity}`)}
-              <span className="font-normal normal-case tracking-normal">
-                {t("review.group.state", { open, done: items.length - open })}
-              </span>
-            </h4>
-            {picking ? (
-              <div data-testid="suggestions-request" className="space-y-1.5 rounded-md border border-primary/30 bg-primary/5 p-2">
-                <p className="text-[11px] text-foreground/90">{t("review.suggestions.hint")}</p>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    className="h-7 px-2.5 text-xs"
-                    disabled={busy || chosen.length === 0}
-                    onClick={() => {
-                      onRequestSuggestions(chosen);
-                      setPicked(new Set());
-                    }}
-                  >
-                    {t("review.suggestions.request", { n: chosen.length })}
-                  </Button>
-                  <button
-                    type="button"
-                    className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                    onClick={() => setPicked(chosen.length === openSuggestions.length ? new Set() : new Set(openSuggestions))}
-                  >
-                    {chosen.length === openSuggestions.length ? t("review.suggestions.clear") : t("review.suggestions.selectAll")}
-                  </button>
-                </div>
+          <section key={severity} data-testid="finding-group" data-severity={severity} className="space-y-2">
+            <header className="space-y-0.5 pr-1">
+              <h4 className="flex items-baseline justify-between gap-2 text-xs font-semibold">
+                <span>
+                  {t(`review.group.${severity}`)} <span className="font-normal text-muted-foreground">({items.length})</span>
+                </span>
+                <span className="text-[11px] font-normal text-muted-foreground">{t("review.group.state", { open, done: items.length - open })}</span>
+              </h4>
+              <p className="text-[11px] text-muted-foreground">{t(`review.group.${severity}.about`)}</p>
+            </header>
+            {choosing ? (
+              // Pinned while the list scrolls under it: with eight suggestions, the confirm must not
+              // end up above the fold of the choices it confirms.
+              <div
+                data-testid="suggestions-request"
+                className="sticky top-0 z-10 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md border border-border/60 bg-background/95 p-2 backdrop-blur"
+              >
+                <Button
+                  type="button"
+                  size="sm"
+                  className="h-7 px-2.5 text-xs"
+                  disabled={busy || apply.length + skip.length === 0}
+                  onClick={() => {
+                    onDecideSuggestions({ apply, skip });
+                    setChoices(new Map());
+                  }}
+                >
+                  {apply.length + skip.length === 0
+                    ? t("review.suggestions.confirm.none")
+                    : t("review.suggestions.confirm", { apply: apply.length, skip: skip.length })}
+                </Button>
+                <button
+                  type="button"
+                  className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                  onClick={() => setChoices(new Map(openSuggestions.map((id) => [id, "apply" as const])))}
+                >
+                  {t("review.suggestions.allApply")}
+                </button>
               </div>
             ) : null}
             <ul className="space-y-1.5">
@@ -427,7 +436,7 @@ function FindingsList({
                   busy={busy}
                   decisions={decisionsFor(f)}
                   onDecide={(d) => onDecide(f, d)}
-                  pick={picking && f.status === "open" ? { checked: picked.has(f.id), onToggle: () => toggle(f.id) } : undefined}
+                  suggestion={choosing && f.status === "open" ? { choice: choices.get(f.id) ?? null, onChoose: (c) => choose(f.id, c) } : undefined}
                 />
               ))}
             </ul>
@@ -437,6 +446,10 @@ function FindingsList({
     </div>
   );
 }
+
+/** What a person chose for a suggestion: the author applies it, or it leaves the list. */
+type SuggestionChoice = "apply" | "skip";
+const SUGGESTION_CHOICES: SuggestionChoice[] = ["apply", "skip"];
 
 /** What each decision means, said where it is chosen: the title, and the one line of what follows. */
 const CHOICES: Record<Decision, { title: string; desc: string }> = {
@@ -450,17 +463,19 @@ const CHOICES: Record<Decision, { title: string; desc: string }> = {
  * One finding, as a card that answers the questions a person has before deciding anything: WHAT it
  * is (title, severity, where it stands), WHERE (file:line), WHY the reviewer raised it (the proof and
  * its detail) and WHAT the reviewer proposes. The latest reply of each AI is folded under it (the
- * whole back-and-forth is in the conversation). A suggestion still open can be picked for the
- * author; a doubt or a stuck item waiting on this person shows the choices — pick one, then confirm.
+ * whole back-and-forth is in the conversation). An open suggestion this person can decide offers
+ * "do it" or "don't" (confirmed for the whole group at once); a doubt or a stuck item waiting on this
+ * person shows its choices — pick one, then confirm.
  */
 function FindingCard({
-  finding: f, decisions, busy, onDecide, pick,
+  finding: f, decisions, busy, onDecide, suggestion,
 }: {
   finding: Finding;
   decisions: Decision[];
   busy: boolean;
   onDecide: (decision: Decision) => void;
-  pick?: { checked: boolean; onToggle: () => void };
+  /** An open suggestion this person can decide: do it, or not. */
+  suggestion?: { choice: SuggestionChoice | null; onChoose: (choice: SuggestionChoice) => void };
 }) {
   const t = useT();
   const [open, setOpen] = React.useState(false);
@@ -481,30 +496,30 @@ function FindingCard({
       data-deciding={deciding || undefined}
       className={cn(
         "space-y-1.5 rounded-md border px-2.5 py-2 text-xs",
-        deciding ? "border-sky-500/50 bg-sky-500/5" : pick?.checked ? "border-primary/50 bg-primary/5" : "border-border/60 bg-card/40",
+        deciding ? "border-sky-500/50 bg-sky-500/5"
+          : suggestion?.choice === "apply" ? "border-emerald-500/40 bg-emerald-500/5"
+            : suggestion?.choice === "skip" ? "border-border/40 bg-card/20"
+              : "border-border/60 bg-card/40",
       )}
     >
       <div className="flex items-start gap-2">
-        {pick ? (
-          <input
-            type="checkbox"
-            aria-label={t("review.suggestions.pick", { title: f.title })}
-            checked={pick.checked}
-            onChange={pick.onToggle}
-            className="mt-0.5 h-3.5 w-3.5 shrink-0 cursor-pointer accent-primary"
-          />
-        ) : null}
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex flex-wrap items-center gap-1.5">
             <Badge tone={FINDING_SEVERITY_TONE[f.severity]} className="px-1.5 text-[10px] font-semibold">
               {t(`review.severity.${f.severity}`)}
             </Badge>
-            <Badge tone={FINDING_STATUS_TONE[f.status]} className="px-1.5 text-[10px]">
+            <Badge tone={FINDING_STATUS_TONE[f.status]} className="px-1.5 text-[10px] transition-colors duration-500">
               {t(`review.status.${f.status}`)}
             </Badge>
             {f.commit ? <code className="font-mono text-[10px] text-muted-foreground">{f.commit.slice(0, 7)}</code> : null}
           </div>
-          <p className={cn("break-words text-[13px] font-medium leading-snug", (refuted || closed) && "text-muted-foreground", refuted && "line-through")}>
+          <p
+            className={cn(
+              "break-words text-[13px] font-medium leading-snug",
+              (refuted || closed || suggestion?.choice === "skip") && "text-muted-foreground",
+              (refuted || suggestion?.choice === "skip") && "line-through",
+            )}
+          >
             {f.title}
           </p>
           <dl className="space-y-0.5 text-[11px]">
@@ -543,6 +558,32 @@ function FindingCard({
               ))}
             </ul>
           ) : null}
+        </div>
+      ) : null}
+
+      {suggestion ? (
+        <div role="radiogroup" aria-label={t("review.suggestions.legend", { title: f.title })} className="grid grid-cols-2 gap-1.5">
+          {SUGGESTION_CHOICES.map((c) => (
+            <button
+              key={c}
+              type="button"
+              role="radio"
+              aria-checked={suggestion.choice === c}
+              onClick={() => suggestion.onChoose(c)}
+              className={cn(
+                "rounded-md border px-2 py-1.5 text-left transition-colors",
+                suggestion.choice === c
+                  ? c === "apply" ? "border-emerald-400/70 bg-emerald-500/15 text-emerald-100" : "border-foreground/40 bg-muted/60 text-foreground"
+                  : "border-border/60 hover:bg-card/60",
+              )}
+            >
+              <span className="flex items-center gap-1 text-xs font-medium">
+                {suggestion.choice === c ? <Check aria-hidden className="h-3.5 w-3.5" /> : null}
+                {t(`review.suggestions.${c}.title`)}
+              </span>
+              <span className="block text-[11px] text-muted-foreground">{t(`review.suggestions.${c}.desc`)}</span>
+            </button>
+          ))}
         </div>
       ) : null}
 
@@ -616,7 +657,7 @@ function DecisionBanner({
   if (waiting === 0) return null;
   const impasse = review.phase === "impasse";
   return (
-    <div data-testid="decision-banner" role="status" className="shrink-0 space-y-1.5 rounded-md border border-sky-500/50 bg-sky-500/10 px-2.5 py-2 text-xs">
+    <div data-testid="decision-banner" role="status" className={cn("shrink-0 space-y-1.5 rounded-md border border-sky-500/50 bg-sky-500/10 px-2.5 py-2 text-xs", ENTER)}>
       <p className="font-semibold text-sky-200">
         {mine
           ? t(impasse ? "review.decision.stuck.mine" : "review.decision.mine", { n: waiting })
@@ -790,8 +831,3 @@ function impasseText(reason: string | undefined, t: typeof translate): string {
   return reason?.trim() || t("review.impasse.unknown");
 }
 
-/** "3 bloqueiam · 1 sugestão · 1 derrubado", from the data; zeros stay out. */
-function countsText(counts: ReturnType<typeof findingCounts>, t: typeof translate): string {
-  const parts = GROUPS.filter((severity) => counts[severity] > 0).map((severity) => t(`review.count.${severity}`, { n: counts[severity] }));
-  return parts.length > 0 ? parts.join(" · ") : t("review.list.empty");
-}
