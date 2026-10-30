@@ -113,6 +113,7 @@ describe("PrReviewBlock", () => {
 
   it.each([
     [{ phase: "reviewing", round: 1 }, "rodada 1/3"],
+    [{ phase: "reviewing", round: 1, pendingQuestions: 1 }, "aguardando decisão"],
     [{ phase: "ready", round: 2 }, "pronto pra merge"],
     [{ phase: "impasse", round: 3 }, "impasse"],
     [{ phase: "merged", round: 2 }, "mergeado"],

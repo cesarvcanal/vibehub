@@ -21,7 +21,7 @@ import {
 } from "./store.js";
 import {
   actionableForAuthor, approvePendingText, authorFixPrompt, headMovedPrefix, impasseText, nudgePrefix, oneLine,
-  phaseNoticeText, reviewerApprovePrompt, reviewerDeltaPrompt, reviewerRoundPrompt,
+  phaseNoticeText, questionNoticeText, reviewerApprovePrompt, reviewerDeltaPrompt, reviewerRoundPrompt,
 } from "./prompts.js";
 
 /**
@@ -125,6 +125,23 @@ async function notifyBoth(r: Review, key: string, text: string, severity: Severi
 export async function announcePhase(r: Review): Promise<void> {
   if (r.phase !== "ready" && r.phase !== "impasse" && r.phase !== "merged") return;
   await notifyBoth(r, `review:${r.id}:${r.phase}:${r.round}`, phaseNoticeText(r), r.phase === "impasse" ? "warning" : "info");
+}
+
+/**
+ * A rodada do revisor deixou dúvida sem decisão: ela segura o `ready` até o revisor HUMANO decidir no
+ * painel, e nada mais o chamaria. O aviso vai só ao card do revisor (o ator dele é o revisor), uma vez
+ * por rodada (`review:<id>:question:<rodada>:reviewer`). Nunca lança.
+ */
+async function announceQuestions(r: Review): Promise<void> {
+  if (pendingQuestions(r.findings).length === 0) return;
+  try {
+    await recordMessage({
+      cardId: r.reviewerCardId, type: "info", severity: "info", text: questionNoticeText(r),
+      idempotencyKey: `review:${r.id}:question:${r.round}:reviewer`,
+    });
+  } catch (err) {
+    logger.warn({ review: r.id, card: r.reviewerCardId, detail: (err as Error).message }, "could not record the review question notice");
+  }
 }
 
 /* ------------------------------------------------------------------ relays */
@@ -411,7 +428,9 @@ export async function submitReviewerRound(
     note(r, "system", outcomeNote(r));
     landed = true;
   });
-  return landed ? await dispatch(after) : after;
+  if (!landed) return after;
+  await announceQuestions(after);
+  return await dispatch(after);
 }
 
 /* ------------------------------------------------------------------ autor */
@@ -546,10 +565,14 @@ export async function decideQuestion(reviewId: string, findingId: string, decisi
 
 /**
  * "Tentar de novo" do painel: a saída de um impasse que não é de rodadas (envio que falhou, IA que
- * não respondeu) e do Approve que não chegou. Zera os lembretes, limpa o motivo e devolve a vez a quem
- * deve: `reviewing` se a rodada do revisor não foi entregue, senão `fixing`; em `ready` reenvia o
- * pedido de Approve. Não tira ninguém de Paused (quem pausou despausa e tenta de novo). Qualquer
- * outro estado lança `nada_a_tentar`. Quem pode é decisão da rota (Task 4).
+ * não respondeu), do Approve que não chegou e de uma vez parada. Zera os lembretes, limpa o motivo e
+ * devolve a vez a quem deve: `reviewing` se a rodada do revisor não foi entregue, senão `fixing`; em
+ * `ready` reenvia o pedido de Approve.
+ * Em `reviewing`/`fixing` esperando a ferramenta daquele lado, reenvia o texto da vez sem mudar a fase:
+ * o fim de turno que o orquestrador não julga (pessoa usando o card, agente que declarou needs_me) não
+ * tem prazo, e sem isto a única saída de uma IA parada seria cancelar a revisão inteira.
+ * Não tira ninguém de Paused (quem pausou despausa e tenta de novo). Qualquer outro estado (inclusive
+ * `reviewing` esperando a decisão humana das dúvidas) lança `nada_a_tentar`. Quem pode é a rota.
  */
 export async function retryReview(reviewId: string, by: string): Promise<Review> {
   let side = null as Side | "approve" | null;
@@ -561,10 +584,14 @@ export async function retryReview(reviewId: string, by: string): Promise<Review>
       // humano decide os itens, ou cancela e pede uma revisão nova.
       r.phase = r.lastSubmitRound !== r.round ? "reviewing" : "fixing";
       side = r.phase === "reviewing" ? "reviewer" : "author";
+    } else if (awaitingTool(r, "reviewer")) {
+      side = "reviewer";
+    } else if (awaitingTool(r, "author")) {
+      side = "author";
     } else {
       throw new Error(
         `nada_a_tentar: a revisão está em ${r.phase}${r.impasseReason ? ` (${r.impasseReason})` : ""}; ` +
-          "só impasse por falha/IA sem resposta ou Approve pendente têm o que tentar de novo",
+          "só impasse por falha/IA sem resposta, Approve pendente ou uma vez de IA parada têm o que tentar de novo",
       );
     }
     r.nudges = 0;

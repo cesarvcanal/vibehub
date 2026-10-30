@@ -530,6 +530,35 @@ describe("decisão humana", () => {
     expect(after.log.some((e) => e.who === "human")).toBe(true);
   });
 
+  it("submit que deixa dúvida pendente avisa o card do revisor, uma vez por rodada", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    const payload = { round: 1, findings: [BLOCKER, QUESTION], headSha: SHA1, summary: "um bloqueante e uma dúvida" };
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, payload);
+    // o bloqueante segue para o autor; a dúvida espera o revisor humano, que fica sabendo pelo card dele
+    expect(after.phase).toBe("fixing");
+    const notices = await messagesOn(o, review.reviewerCardId);
+    expect(notices).toEqual([
+      expect.objectContaining({
+        id: `message:${review.reviewerCardId}:review:${review.id}:question:1:reviewer`,
+        text: "PR #7: dúvida esperando sua decisão no painel",
+        messageType: "info",
+      }),
+    ]);
+    // o aviso é do revisor humano: o card do autor não recebe
+    expect((await messagesOn(o, author.id)).some((e) => /dúvida/.test(e.text ?? ""))).toBe(false);
+    // o submit repetido (retry da IA) não duplica
+    await o.orch.submitReviewerRound(review.reviewerCardId, payload);
+    expect(await messagesOn(o, review.reviewerCardId)).toHaveLength(1);
+  });
+
+  it("submit sem dúvida pendente não avisa o revisor", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER, SUGGESTION], headSha: SHA1, summary: "r1" });
+    expect((await messagesOn(o, review.reviewerCardId)).some((e) => /dúvida/.test(e.text ?? ""))).toBe(false);
+  });
+
   it("dúvida retirada pelo humano libera o ready; aceitar risco no impasse também", async () => {
     const o = await load();
     const { review } = await started(o);
@@ -698,8 +727,62 @@ describe("tentar de novo e cancelar", () => {
     expect(calls).toEqual([`actor:u-autor:${author.id}`, `send:${author.id}`]);
     expect(lastText()).toContain("token vaza no log");
     expect(after.log.some((e) => e.who === "human")).toBe(true);
-    // em fixing não há o que tentar
-    await expect(o.orch.retryReview(review.id, "u-autor")).rejects.toThrow(/nada_a_tentar/);
+    // em fixing, tentar de novo reenvia a lista (a IA do autor pode ter parado sem a ferramenta)
+    send.mockClear();
+    await expect(o.orch.retryReview(review.id, "u-autor")).resolves.toMatchObject({ phase: "fixing", round: 1 });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![0]).toBe(author.id);
+  });
+
+  it("retry em fixing com o autor parado reenvia a lista, zera os lembretes e não despausa", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    // um lembrete já gasto: a IA do autor terminou um turno sem responder
+    await o.store.mutateReview(review.id, (r) => {
+      r.nudges = 1;
+    });
+    send.mockClear();
+    calls.length = 0;
+    resume.mockClear();
+
+    const after = await o.orch.retryReview(review.id, "u-merger");
+    expect(after).toMatchObject({ phase: "fixing", round: 1, nudges: 0 });
+    expect(calls).toEqual([`actor:u-autor:${author.id}`, `send:${author.id}`]);
+    expect(lastText()).toContain("token vaza no log");
+    expect(lastText()).toContain("vibehub_review_respond");
+    expect(after.log.at(-1)).toMatchObject({ who: "human" });
+    expect(after.log.at(-1)?.text).toMatch(/autor/);
+    // o mesmo caminho do lembrete: não tira ninguém de Paused
+    expect(resume).not.toHaveBeenCalled();
+
+    // a pessoa pausou o card do autor: o reenvio é recusado e vira impasse com o motivo
+    await o.registry.applyOpenTerminal(author.id);
+    await o.registry.pauseCard(author.id, { effective: true });
+    const paused = await o.orch.retryReview(review.id, "u-merger");
+    expect(paused).toMatchObject({ phase: "impasse", impasseReason: expect.stringMatching(/paused/) });
+    expect(resume).not.toHaveBeenCalled();
+    expect((await o.registry.getCard(author.id))?.column).toBe("paused");
+  });
+
+  it("retry em reviewing reenvia a rodada ao revisor; esperando a decisão humana não há o que tentar", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    await o.store.mutateReview(review.id, (r) => {
+      r.nudges = 1;
+    });
+    const after = await o.orch.retryReview(review.id, "u-revisor");
+    expect(after).toMatchObject({ phase: "reviewing", round: 1, nudges: 0 });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+    expect(lastText()).toContain("/code-review high");
+
+    // a rodada do revisor pousou e só sobrou dúvida: a vez é do humano, que decide no painel
+    const waiting = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [QUESTION], headSha: SHA1, summary: "uma dúvida" });
+    expect(waiting).toMatchObject({ phase: "reviewing", lastSubmitRound: 1 });
+    send.mockClear();
+    await expect(o.orch.retryReview(review.id, "u-revisor")).rejects.toThrow(/nada_a_tentar/);
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("retry de um impasse sem a rodada do revisor devolve a vez ao revisor; impasse de rodadas não tem retry", async () => {

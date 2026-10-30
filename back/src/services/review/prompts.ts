@@ -282,6 +282,11 @@ export function approvePendingText(r: Review): string {
   return `PR #${r.prNumber}: Approve não publicado no GitHub — tente de novo pelo painel.`;
 }
 
+/** O aviso ao revisor humano de que a rodada deixou dúvida esperando a decisão dele no painel. */
+export function questionNoticeText(r: Review): string {
+  return `PR #${r.prNumber}: dúvida esperando sua decisão no painel`;
+}
+
 /** O motivo do impasse em palavras: "rodadas" é o código do modelo, o resto já vem escrito. */
 export function impasseText(reason: string | undefined): string {
   if (reason === "rodadas") {

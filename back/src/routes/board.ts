@@ -11,7 +11,7 @@ import { reportCardStatus } from "../services/board/status.js";
 import { purgeRemovedCards } from "../services/board/purge.js";
 import { runnerToken } from "../runtime/runner.js";
 import { listReviewsForCards } from "../services/review/store.js";
-import type { Review } from "../services/review/model.js";
+import { pendingQuestions, type Review } from "../services/review/model.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -29,8 +29,13 @@ function badRequest(err: unknown): { code: number; body: { error: string } } {
   return { code, body: { error: message } };
 }
 
-/** The PR review summary a board card carries: what the sidebar's "↳ PR #N · estado" line reads. */
-type BoardCard = registry.Card & { review?: Pick<Review, "id" | "prNumber" | "phase" | "round"> };
+/**
+ * The PR review summary a board card carries: what the sidebar's "↳ PR #N · estado" line reads.
+ * `pendingQuestions` (only when there is one) counts the doubts no human decided yet — the line reads
+ * "aguardando decisão" instead of the orange "rodada N/3" that means the AIs are on it.
+ */
+type ReviewSummary = Pick<Review, "id" | "prNumber" | "phase" | "round"> & { pendingQuestions?: number };
+type BoardCard = registry.Card & { review?: ReviewSummary };
 
 /**
  * Each card with the summary of its most recent review that was not cancelled (a merged one stays:
@@ -47,7 +52,11 @@ async function withReviewSummary(cards: registry.Card[]): Promise<BoardCard[]> {
   }
   return cards.map((c) => {
     const r = latest.get(c.id);
-    return r ? { ...c, review: { id: r.id, prNumber: r.prNumber, phase: r.phase, round: r.round } } : c;
+    if (!r) return c;
+    const waiting = pendingQuestions(r.findings).length;
+    const review: ReviewSummary = { id: r.id, prNumber: r.prNumber, phase: r.phase, round: r.round };
+    if (waiting > 0) review.pendingQuestions = waiting;
+    return { ...c, review };
   });
 }
 

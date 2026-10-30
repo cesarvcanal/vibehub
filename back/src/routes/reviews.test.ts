@@ -515,9 +515,10 @@ describe("decidir, tentar de novo e cancelar", () => {
     expect(res.json().review.phase).toBe("fixing");
   });
 
-  it("retry: revisor, merger ou owner; sem nada a tentar é 409", async () => {
+  it("retry: revisor, merger ou owner; esperando a decisão humana é 409; vez parada ou impasse reenviam", async () => {
     const w = await world();
-    const review = (await startReview(w)).json().review as { id: string };
+    // só dúvida, com a rodada do revisor entregue: a vez é do humano, não há o que tentar
+    const review = await withQuestion(w);
     const retry = async (as: Person) =>
       await app.inject({ method: "POST", url: `/api/reviews/${review.id}/retry`, headers: { cookie: as.cookie } });
     for (const who of [w.autor, w.leitor, w.outro]) expect((await retry(who)).statusCode).toBe(403);
@@ -526,6 +527,17 @@ describe("decidir, tentar de novo e cancelar", () => {
       expect(res.statusCode).toBe(409);
       expect(res.json().error).toMatch(/nada_a_tentar/);
     }
+    // a vez do revisor parada (a rodada não foi entregue): reenvia sem mudar a fase
+    await (await store()).mutateReview(review.id, (r) => {
+      r.lastSubmitRound = undefined;
+    });
+    send.mockClear();
+    const again = await retry(w.merger);
+    expect(again.statusCode).toBe(200);
+    expect(again.json().review.phase).toBe("reviewing");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+
     await (await store()).mutateReview(review.id, (r) => {
       r.phase = "impasse";
       r.impasseReason = "IA não respondeu";

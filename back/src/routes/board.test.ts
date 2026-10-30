@@ -319,6 +319,23 @@ describe("revisão de PR no board", () => {
     expect((await app.inject({ method: "GET", url: `/api/cards/${reviewerCard.id}`, headers: { cookie } })).statusCode).toBe(200);
   });
 
+  it("o resumo conta as dúvidas sem decisão humana (a linha diz 'aguardando decisão')", async () => {
+    const projectId = await makeProject();
+    const authorId = await makeCard(projectId, "login");
+    await review(authorId, projectId, {
+      id: "r-q", phase: "reviewing", createdAt: 1_000,
+      findings: [
+        { id: "f1", severity: "question", title: "expira?", status: "open", introducedInRound: 1 },
+        { id: "f2", severity: "question", title: "cache?", status: "dropped", introducedInRound: 1, humanDecision: "drop" },
+        { id: "f3", severity: "blocking", title: "vaza", status: "open", introducedInRound: 1 },
+      ],
+    } as never);
+    const listed = (await app.inject({ method: "GET", url: "/api/cards", headers: { cookie } })).json().cards[0];
+    expect(listed.review).toEqual({ id: "r-q", prNumber: 7, phase: "reviewing", round: 1, pendingQuestions: 1 });
+    const one = (await app.inject({ method: "GET", url: `/api/cards/${authorId}`, headers: { cookie } })).json().card;
+    expect(one.review).toEqual(listed.review);
+  });
+
   it("revisão cancelada some do resumo; mergeada continua (a linha diz mergeado)", async () => {
     const projectId = await makeProject();
     const authorId = await makeCard(projectId, "login");

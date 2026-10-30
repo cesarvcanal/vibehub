@@ -47,6 +47,19 @@ describe("reviewPill", () => {
   it("a cancelled review is no review — the server omits it, a stale cache must not show it", () => {
     expect(reviewPill(review({ phase: "cancelled" }))).toEqual({ key: "review.pill.none", tone: "muted" });
   });
+
+  it("reviewing with a doubt nobody decided reads 'aguardando decisão', in the blue of 'needs a person'", () => {
+    const waiting = { key: "review.pill.decision", tone: "info" };
+    // The card's summary carries the count; the panel's whole review counts from its findings.
+    expect(reviewPill(review({ phase: "reviewing", pendingQuestions: 1 }))).toEqual(waiting);
+    expect(reviewPill(full({ phase: "reviewing", round: 1, findings: [finding({ severity: "question" })] }))).toEqual(waiting);
+    // A doubt already decided waits for nobody.
+    expect(reviewPill(full({ phase: "reviewing", round: 1, findings: [finding({ severity: "question", humanDecision: "drop" })] })))
+      .toMatchObject({ key: "review.pill.round" });
+    expect(reviewPill(review({ phase: "reviewing", pendingQuestions: 0 }))).toMatchObject({ key: "review.pill.round" });
+    // While the author fixes the rest, the AIs are working: the round still reads.
+    expect(reviewPill(review({ phase: "fixing", pendingQuestions: 2 }))).toMatchObject({ key: "review.pill.round", tone: "warn" });
+  });
 });
 
 describe("visiblePrs", () => {
@@ -228,7 +241,15 @@ describe("reviewActions", () => {
     expect(reviewActions(full({ phase: "impasse", impasseReason: IMPASSE_HEAD_MOVED }), as("rev")).retry).toBe(false);
     expect(reviewActions(full({ phase: "ready", approvePending: true }), as("rev")).retry).toBe(true);
     expect(reviewActions(full({ phase: "ready" }), as("rev")).retry).toBe(false);
-    expect(reviewActions(full({ phase: "fixing", approvePending: true }), as("rev")).retry).toBe(false);
+  });
+
+  it("trying again also hands a stalled turn back: the reviewer's round not in yet, or the author fixing", () => {
+    expect(reviewActions(full({ phase: "fixing" }), as("mer")).retry).toBe(true);
+    expect(reviewActions(full({ phase: "reviewing", round: 1 }), as("rev")).retry).toBe(true);
+    expect(reviewActions(full({ phase: "reviewing", round: 2, lastSubmitRound: 1 }), as("own", true)).retry).toBe(true);
+    // The reviewer's round is in and only doubts are left: the turn is the human's (the server answers nada_a_tentar).
+    expect(reviewActions(full({ phase: "reviewing", round: 2, lastSubmitRound: 2 }), as("rev")).retry).toBe(false);
+    expect(reviewActions(full({ phase: "fixing" }), as("aut")).retry).toBe(false);
   });
 
   it("cancelling is for the reviewer, author, merger or an owner, while the review is active", () => {

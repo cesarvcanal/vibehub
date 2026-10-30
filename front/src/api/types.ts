@@ -539,6 +539,11 @@ export interface ReviewSummary {
   phase: ReviewPhase;
   /** 1-based; the server stops at 3. */
   round: number;
+  /**
+   * Doubts no human decided yet — only on a card's summary, and only when there is one. With the
+   * review in `reviewing`, the line reads "aguardando decisão" instead of the AIs' round.
+   */
+  pendingQuestions?: number;
 }
 
 export interface FindingProof {
@@ -587,6 +592,8 @@ export interface Review extends ReviewSummary {
   reviewedSha?: string;
   impasseReason?: string;
   approvePending?: boolean;
+  /** The round the reviewer's AI last handed back: below `round`, the reviewer's turn is still open. */
+  lastSubmitRound?: number;
   createdAt: number;
   updatedAt: number;
 }

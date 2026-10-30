@@ -134,6 +134,12 @@ describe("ProjectSidebar — a linha do PR embaixo do card", () => {
     expect(screen.getByRole("link", { name: "sem pr" }).parentElement?.querySelectorAll("a")).toHaveLength(1);
   });
 
+  it("dúvida esperando o revisor humano: a linha diz aguardando decisão, em azul", async () => {
+    renderSidebar([card("c1", "realtime", { id: "r1", prNumber: 552, phase: "reviewing", round: 1, pendingQuestions: 1 })]);
+    const line = await screen.findByRole("link", { name: "PR #552 · aguardando decisão" });
+    expect(line).toHaveClass("text-sky-400");
+  });
+
   it("revisão cancelada não deixa linha (o servidor nem manda, e cache velho não ressuscita)", async () => {
     renderSidebar([card("c1", "realtime", { id: "r1", prNumber: 552, phase: "cancelled", round: 2 })]);
     await screen.findByRole("link", { name: "realtime" });

@@ -113,6 +113,17 @@ describe("ReviewPanel — o que mostra", () => {
     expect(within(roles).getByText("Merge").parentElement).toHaveTextContent("kim");
   });
 
+  it("dúvida esperando o revisor humano: a pill diz aguardando decisão e a etapa diz de quem é a vez", async () => {
+    open("aut", review({
+      phase: "reviewing", round: 1, lastSubmitRound: 1,
+      findings: [finding({ id: "f1", severity: "question", title: "a sessão expira no checkout?" })],
+    }));
+    await loaded();
+    expect(screen.getByText("aguardando decisão")).toBeInTheDocument();
+    expect(screen.queryByText("rodada 1/3")).toBeNull();
+    expect(screen.getByText("Dúvida esperando a decisão do revisor humano.")).toBeInTheDocument();
+  });
+
   it("sem co-autor o papel mostra um traço", async () => {
     open("rev", review());
     await loaded();
@@ -777,6 +788,24 @@ describe("ReviewPanel — tentar de novo e cancelar", () => {
     await userEvent.click(screen.getByRole("button", { name: "Tentar de novo" }));
 
     expect(post).toHaveBeenCalledWith("/reviews/r1/retry");
+  });
+
+  it("tentar de novo aparece com a vez de uma IA parada (autor corrigindo, revisor sem a rodada) e manda o POST", async () => {
+    open("mer", review({ phase: "fixing" }));
+    await loaded();
+    await userEvent.click(screen.getByRole("button", { name: "Tentar de novo" }));
+    expect(post).toHaveBeenCalledWith("/reviews/r1/retry");
+    cleanup();
+
+    open("rev", review({ phase: "reviewing", round: 2, lastSubmitRound: 1 }));
+    await loaded();
+    expect(screen.getByRole("button", { name: "Tentar de novo" })).toBeInTheDocument();
+    cleanup();
+
+    // A rodada do revisor já entrou e só sobrou dúvida: a vez é de quem decide, não há o que tentar.
+    open("rev", review({ phase: "reviewing", round: 2, lastSubmitRound: 2, findings: [finding({ severity: "question" })] }));
+    await loaded();
+    expect(screen.queryByRole("button", { name: "Tentar de novo" })).toBeNull();
   });
 
   it("tentar de novo: não aparece em impasse por rodadas nem por push depois do pronto", async () => {

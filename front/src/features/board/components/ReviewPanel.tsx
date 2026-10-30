@@ -12,8 +12,8 @@ import type {
 } from "@/api/types";
 import { CARDS_PREFIX_KEY } from "@/features/board/api";
 import {
-  IMPASSE_ROUNDS, MERGE_CONFIRM_MS, REVIEW_MAX_ROUNDS, REVIEW_POLL_MS, cardPeopleKey, cardReviewKey, findingCounts, mergeFailure,
-  pendingQuestions, reviewActions, reviewIsWorking, reviewPill, stuckItems,
+  IMPASSE_ROUNDS, MERGE_CONFIRM_MS, REVIEW_MAX_ROUNDS, REVIEW_POLL_MS, awaitingDecision, cardPeopleKey, cardReviewKey, findingCounts,
+  mergeFailure, pendingQuestions, reviewActions, reviewIsWorking, reviewPill, stuckItems,
 } from "@/features/board/lib/review";
 import { useAuth } from "@/providers/auth";
 import { t as translate, useT } from "@/i18n";
@@ -29,7 +29,8 @@ import { t as translate, useT } from "@/i18n";
  *    gives up on the long request is not a refusal, and if the review turns `merged` meanwhile that
  *    is the success;
  *  - **decide** (a doubt: block/drop; a stuck item: keep/accept risk): the reviewer or an owner;
- *  - **try again** (an impasse that is a failure, or an Approve that never got out) and **cancel**.
+ *  - **try again** (an impasse that is a failure, an Approve that never got out, or an AI's turn that
+ *    stalled) and **cancel**.
  *
  * Who may do what is `reviewActions` (the server's own rules), so no button answers 403. While the
  * AIs work (`reviewing`/`fixing`) the review is re-read every 3 s; in every other phase it waits.
@@ -587,6 +588,7 @@ function VerdictBox({ tone, children }: { tone: "ok" | "muted"; children: React.
 function stageText(review: Review, t: typeof translate): string {
   switch (review.phase) {
     case "reviewing":
+      if (awaitingDecision(review)) return t("review.stage.decision");
       return review.round > 1
         ? t("review.stage.reviewing.next", { prev: review.round - 1 })
         : t("review.stage.reviewing.first");

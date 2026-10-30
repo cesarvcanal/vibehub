@@ -35,14 +35,29 @@ export interface ReviewPill {
 }
 
 /**
- * The pill of a PR's review. `reviewing` and `fixing` read the same — both are "the AIs are on it,
- * round N of 3"; the difference (whose turn) belongs to the panel. A cancelled review is NO review:
- * the server never sends one on a card, and a stale cache must not resurrect it. PURE.
+ * The review waits on the human reviewer: in `reviewing` with a doubt nobody decided. Those doubts
+ * hold the `ready` without spending a round, and nothing on the server calls anyone back for them.
+ * A card's summary carries the count (`pendingQuestions`); the panel's whole review counts its own
+ * findings. PURE.
  */
-export function reviewPill(review: ReviewSummary | undefined): ReviewPill {
+export function awaitingDecision(review: ReviewSummary & { findings?: Finding[] }): boolean {
+  if (review.phase !== "reviewing") return false;
+  const waiting = review.findings ? pendingQuestions(review.findings).length : review.pendingQuestions ?? 0;
+  return waiting > 0;
+}
+
+/**
+ * The pill of a PR's review. `reviewing` and `fixing` read the same — both are "the AIs are on it,
+ * round N of 3"; the difference (whose turn) belongs to the panel — except a `reviewing` that waits
+ * on a doubt only a person can decide ({@link awaitingDecision}): that one reads "aguardando decisão",
+ * in the blue of "needs a person", or it would look like the AIs working. A cancelled review is NO
+ * review: the server never sends one on a card, and a stale cache must not resurrect it. PURE.
+ */
+export function reviewPill(review: (ReviewSummary & { findings?: Finding[] }) | undefined): ReviewPill {
   switch (review?.phase) {
     case "reviewing":
     case "fixing":
+      if (awaitingDecision(review)) return { key: "review.pill.decision", tone: "info" };
       return { key: "review.pill.round", vars: { round: review.round, max: REVIEW_MAX_ROUNDS }, tone: "warn" };
     case "ready":
       return { key: "review.pill.ready", tone: "ok" };
@@ -162,12 +177,17 @@ export interface ReviewActions {
  *  - **merge**: the merger and nobody else (the owner's click is not the merger's), only in `ready`;
  *  - **decide** (questions, stuck items): the reviewer or an owner, while the review is open to it;
  *  - **retry**: the reviewer, the merger or an owner, for an impasse that is a FAILURE (not "rodadas",
- *    not a push after ready: those have no turn to hand back) or a `ready` whose Approve never got out;
+ *    not a push after ready: those have no turn to hand back), a `ready` whose Approve never got out,
+ *    or a turn an AI may have dropped — `fixing`, or `reviewing` before the reviewer's round is in
+ *    (after it, only doubts are left and the turn is the human's);
  *  - **cancel**: the reviewer, the author, the merger or an owner, while the review is active.
  * PURE.
  */
 export function reviewActions(
-  review: Pick<Review, "phase" | "reviewerUserId" | "authorUserId" | "mergerUserId" | "impasseReason" | "approvePending">,
+  review: Pick<
+    Review,
+    "phase" | "round" | "lastSubmitRound" | "reviewerUserId" | "authorUserId" | "mergerUserId" | "impasseReason" | "approvePending"
+  >,
   me: { id: string; isOwner: boolean } | null,
 ): ReviewActions {
   if (!me) return { decide: false, retry: false, cancel: false, merge: false };
@@ -177,10 +197,11 @@ export function reviewActions(
   const failedImpasse =
     phase === "impasse" && review.impasseReason !== IMPASSE_ROUNDS && review.impasseReason !== IMPASSE_HEAD_MOVED;
   const approveStuck = phase === "ready" && review.approvePending === true;
+  const turnOpen = phase === "fixing" || (phase === "reviewing" && review.lastSubmitRound !== review.round);
   return {
     merge: isMerger && phase === "ready",
     decide: (isReviewer || me.isOwner) && (reviewIsWorking(phase) || phase === "impasse"),
-    retry: (isReviewer || isMerger || me.isOwner) && (failedImpasse || approveStuck),
+    retry: (isReviewer || isMerger || me.isOwner) && (failedImpasse || approveStuck || turnOpen),
     cancel: (isReviewer || me.id === review.authorUserId || isMerger || me.isOwner) && isActive(phase),
   };
 }
