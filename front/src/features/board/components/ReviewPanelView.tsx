@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { Check, ExternalLink, FileDiff, Loader2, SquareTerminal, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { Finding, FindingSeverity, Review, ReviewPhase, ReviewWorking } from "@/api/types";
+import type { Finding, FindingSeverity, ReportedProblem, Review, ReviewPhase, ReviewWorking } from "@/api/types";
 import { ENTER, ReviewConversation } from "@/features/board/components/ReviewConversation";
 import { cardHref } from "@/features/board/lib/board";
 import {
@@ -41,6 +41,8 @@ export interface PanelNotice {
 export interface ReviewPanelViewProps {
   review: Review;
   working: ReviewWorking;
+  /** What the author's AI reported having found on the PR (`vibehub_pr_report`). */
+  reported?: ReportedProblem[];
   /** A user id to the name people know them by. */
   nameOf: (userId: string | undefined) => string;
   actions: ReviewActions;
@@ -62,8 +64,8 @@ export interface ReviewPanelViewProps {
 
 export function ReviewPanelView(props: ReviewPanelViewProps) {
   const {
-    review, working, nameOf, actions, busy, mergeBusy, notice, onMerge, onRetry, onCancel, onDecide, onDecideSuggestions, onClose,
-    initialTab,
+    review, working, reported = NOTHING_REPORTED, nameOf, actions, busy, mergeBusy, notice, onMerge, onRetry, onCancel, onDecide,
+    onDecideSuggestions, onClose, initialTab,
   } = props;
   const t = useT();
   const stuck = new Set(review.phase === "impasse" ? stuckItems(review.findings).map((f) => f.id) : []);
@@ -135,7 +137,7 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
         </TabButton>
         <TabButton active={tab === "findings"} onClick={() => setTab("findings")}>
           {t("review.tab.findings")}
-          <span className="rounded bg-muted px-1 text-[10px] tabular-nums text-muted-foreground">{review.findings.length}</span>
+          <span className="rounded bg-muted px-1 text-[10px] tabular-nums text-muted-foreground">{review.findings.length + reported.length}</span>
           {decisionsHere > 0 ? <span aria-label={t("review.tab.decisions", { n: decisionsHere })} className="h-1.5 w-1.5 rounded-full bg-sky-400" /> : null}
         </TabButton>
       </div>
@@ -146,6 +148,7 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
       <div role="tabpanel" hidden={tab !== "findings"} className={cn("min-h-0 flex-1 overflow-y-auto", tab !== "findings" && "hidden")}>
         <FindingsList
           review={review}
+          reported={reported}
           busy={busy}
           decisionsFor={decisionsFor}
           canRequest={actions.request}
@@ -352,9 +355,10 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
 const GROUPS: FindingSeverity[] = ["question", "blocking", "suggestion", "refuted"];
 
 function FindingsList({
-  review, busy, decisionsFor, canRequest, onDecide, onDecideSuggestions,
+  review, reported, busy, decisionsFor, canRequest, onDecide, onDecideSuggestions,
 }: {
   review: Review;
+  reported: ReportedProblem[];
   busy: boolean;
   decisionsFor: (f: Finding) => Decision[];
   canRequest: boolean;
@@ -377,7 +381,7 @@ function FindingsList({
       return next;
     });
 
-  if (review.findings.length === 0) {
+  if (review.findings.length === 0 && reported.length === 0) {
     return <p className="py-6 text-center text-xs text-muted-foreground">{t("review.list.empty")}</p>;
   }
   return (
@@ -443,7 +447,46 @@ function FindingsList({
           </section>
         );
       })}
+      {reported.length > 0 ? <ReportedGroup reported={reported} /> : null}
     </div>
+  );
+}
+
+const NOTHING_REPORTED: ReportedProblem[] = [];
+
+/**
+ * What the author's AI found on its own while working (`vibehub_pr_report`): before, it lived only in
+ * the card's chat and this panel read "all clear". Information, not a decision: nothing here holds the
+ * merge, and the reviewer gets the list to check the fixed ones.
+ */
+function ReportedGroup({ reported }: { reported: ReportedProblem[] }) {
+  const t = useT();
+  return (
+    <section data-testid="reported-group" className="space-y-2">
+      <header className="space-y-0.5 pr-1">
+        <h4 className="text-xs font-semibold">
+          {t("review.group.reported")} <span className="font-normal text-muted-foreground">({reported.length})</span>
+        </h4>
+        <p className="text-[11px] text-muted-foreground">{t("review.group.reported.about")}</p>
+      </header>
+      <ul className="space-y-1.5">
+        {reported.map((p) => (
+          <li key={p.id} data-testid="reported" data-kind={p.kind} className="space-y-1 rounded-md border border-border/60 bg-card/40 px-2.5 py-2 text-xs">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Badge tone={p.kind === "fixed" ? "ok" : "warn"} className="px-1.5 text-[10px] font-semibold">
+                {t(`review.reported.kind.${p.kind}`)}
+              </Badge>
+              {p.commit ? <code className="font-mono text-[10px] text-muted-foreground">{p.commit.slice(0, 7)}</code> : null}
+            </div>
+            <p className="break-words text-[13px] font-medium leading-snug">{p.title}</p>
+            <p className="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-foreground/80">{p.detail}</p>
+            {p.file ? (
+              <p className="break-all font-mono text-[11px] text-muted-foreground">{p.line !== undefined ? `${p.file}:${p.line}` : p.file}</p>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

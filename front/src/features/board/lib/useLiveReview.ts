@@ -1,11 +1,12 @@
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { get } from "@/lib/api";
-import type { Review, ReviewResponse, ReviewWorking } from "@/api/types";
+import type { ReportedProblem, Review, ReviewResponse, ReviewWorking } from "@/api/types";
 import { CARDS_PREFIX_KEY } from "@/features/board/api";
 import { REVIEW_IDLE_POLL_MS, REVIEW_POLL_MS, cardReviewKey, reviewIsOpen, reviewIsWorking } from "@/features/board/lib/review";
 
 const NOBODY_WORKING: ReviewWorking = { author: false, reviewer: false };
+const NOTHING_REPORTED: ReportedProblem[] = [];
 
 /**
  * The card's PR review as it stands NOW, for everything on screen that shows it: the block above the
@@ -49,6 +50,7 @@ export function useLiveReview(
   });
   const review = query.data?.review ?? null;
   const working = query.data?.working ?? NOBODY_WORKING;
+  const reported = query.data?.reported ?? NOTHING_REPORTED;
   const outdated = review !== null && opts.summaryId !== undefined && opts.summaryId !== review.id && !reviewIsOpen(review.phase);
   const { refetch } = query;
   React.useEffect(() => {
@@ -75,5 +77,5 @@ export function useLiveReview(
     [queryClient, cardId],
   );
 
-  return { query, review, working, apply, outdated };
+  return { query, review, working, reported, apply, outdated };
 }

@@ -1,7 +1,7 @@
 import * as React from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { ReviewPanelView, type ReviewPanelViewProps } from "@/features/board/components/ReviewPanelView";
-import type { Finding, Review, ReviewEvent, ReviewWorking } from "@/api/types";
+import type { Finding, ReportedProblem, Review, ReviewEvent, ReviewWorking } from "@/api/types";
 import type { ReviewActions } from "@/features/board/lib/review";
 
 /**
@@ -232,6 +232,38 @@ export const Mergeado: Story = {
       ...READY, phase: "merged",
       log: [...READY.log, line({ min: 88, round: 2, who: "human", by: "mussa", text: "Mergeado em main por mussa (head aaaaaaa)." })],
     },
+  },
+};
+
+/** What the author's AI found on its own while working (`vibehub_pr_report`), next to the reviewer's findings. */
+const REPORTED: ReportedProblem[] = [
+  {
+    id: "a1", kind: "fixed", title: "Push do deliver recusado com \"stale info\" depois do merge",
+    detail: "O merge apaga a branch no GitHub, mas o card guardava o origin/<branch> velho, e o --force-with-lease comparava com ele. Agora o deliver confere se a branch existe antes de empurrar.",
+    commit: "046cd151dd6f", file: "back/src/services/maestro/deliver.ts", line: 165, at: 1,
+  },
+  {
+    id: "a2", kind: "out_of_scope", title: "Teste de tempo instável no sdk-driver",
+    detail: "Falha também na main (run 41092695139) e passa ao rodar de novo. Não é deste PR: fica para o card do sdk-driver.",
+    file: "back/src/services/sdk/sdk-driver.test.ts", at: 2,
+  },
+];
+
+export const EncontradosPeloAutor: Story = {
+  name: "11. Encontrados pelo autor (além do que o revisor apontou)",
+  args: {
+    review: {
+      ...READY,
+      log: [
+        ...READY.log,
+        line({
+          min: 70, round: 2, who: "author",
+          text: "Relatei 2 problemas que encontrei no trabalho, além do que o revisor apontou (aba Achados): a1 corrigido neste PR (046cd15): Push do deliver recusado com \"stale info\" depois do merge; a2 fora do escopo (back/src/services/sdk/sdk-driver.test.ts): Teste de tempo instável no sdk-driver",
+        }),
+      ],
+    },
+    reported: REPORTED,
+    actions: { ...NO_ACTIONS, merge: true, cancel: true, request: true },
   },
 };
 

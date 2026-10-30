@@ -623,10 +623,29 @@ export interface ReviewWorking {
   reviewer: boolean;
 }
 
+/**
+ * What the author's AI found while working on the PR, beyond what the reviewer pointed out
+ * (`vibehub_pr_report`): a problem it fixed in this PR, or one it left out of scope. Kept on the
+ * card's PR; ids `a1`, `a2`… (the reviewer's are `f1`, `f2`…).
+ */
+export interface ReportedProblem {
+  id: string;
+  kind: "fixed" | "out_of_scope";
+  title: string;
+  detail: string;
+  /** Only on `fixed`: the commit of the fix. */
+  commit?: string;
+  file?: string;
+  line?: number;
+  at: number;
+}
+
 export interface ReviewResponse {
   review: Review | null;
   /** Absent when there is no review (and from a server that predates it: read as nobody working). */
   working?: ReviewWorking;
+  /** What the author reported on the review's PR. Absent from a server that predates it: nothing. */
+  reported?: ReportedProblem[];
 }
 
 /** Somebody who can take a role in a review. `canReview` = has a Claude account of their own. */
