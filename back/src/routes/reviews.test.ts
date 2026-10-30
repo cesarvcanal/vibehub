@@ -103,7 +103,8 @@ interface World {
  * O dono, um projeto com o card do autor (com o PR #7 gravado) e cinco membros:
  *  - autor: `work` no card; revisor e merger: `work` no projeto; leitor: `view` no card; outro: nada.
  *  - o revisor tem conta Claude própria (`mussa`); os outros não.
- *  - o projeto tem a conexão GitHub da org; o merger tem a dele; ninguém mais tem conexão própria.
+ *  - o projeto tem a conexão GitHub da org; o merger e o revisor têm a deles (o revisor publica
+ *    os reviews do PR na conta dele); ninguém mais tem conexão própria.
  */
 async function world(): Promise<World> {
   const ownerRes = await app.inject({
@@ -144,8 +145,10 @@ async function world(): Promise<World> {
   await reg.recordCardPr(cardId, PR);
   const org = await reg.addGithubConnection({ label: "org", login: "acme-bot" });
   const mine = await reg.addGithubConnection({ label: "merger", login: "merger-gh" });
+  const reviewerGh = await reg.addGithubConnection({ label: "revisor", login: "revisor-gh" });
   await reg.updateProject(projectId, { githubConnectionId: org.id });
   await (await import("../auth/userGit.js")).setUserGit(people.merger!.id, { githubConnectionId: mine.id });
+  await (await import("../auth/userGit.js")).setUserGit(people.revisor!.id, { githubConnectionId: reviewerGh.id });
   return {
     owner, autor: people.autor!, revisor: people.revisor!, merger: people.merger!, leitor: people.leitor!, outro: people.outro!,
     projectId, cardId, gh: { project: org.id, merger: mine.id },
@@ -252,6 +255,38 @@ describe("iniciar a revisão", () => {
     expect(res.json().error).toMatch(/revisor_sem_conta/);
   });
 
+  it("revisor sem conexão GitHub própria é recusado (os reviews do PR sairiam na conta de outra pessoa)", async () => {
+    const w = await world();
+    // "outro" alcança o projeto e tem conta Claude própria, mas nenhuma conexão GitHub dele
+    await app.inject({
+      method: "POST", url: `/api/projects/${w.projectId}/shares`, headers: { cookie: w.owner.cookie }, payload: { userId: w.outro.id, level: "work" },
+    });
+    await app.inject({
+      method: "PATCH", url: `/api/users/${w.outro.id}`, headers: { cookie: w.owner.cookie }, payload: { claudeAccountSlug: "mussa" },
+    });
+    const userGit = await import("../auth/userGit.js");
+    for (const githubConnectionId of [undefined, "conexao-que-sumiu"]) {
+      if (githubConnectionId) await userGit.setUserGit(w.outro.id, { githubConnectionId });
+      const res = await startReview(w, w.autor, { reviewerUserId: w.outro.id });
+      expect({ githubConnectionId, status: res.statusCode }).toEqual({ githubConnectionId, status: 400 });
+      expect(res.json().error).toMatch(/^revisor_sem_github/);
+    }
+    // nada começou: nem card de revisor, nem revisão, nem rodada 1
+    expect(send).not.toHaveBeenCalled();
+    expect(await (await store()).activeReviewFor(w.cardId)).toBeUndefined();
+    expect((await (await registry()).listAllCards()).filter((c) => c.reviewOf)).toEqual([]);
+  });
+
+  it("owner revisor sem conexão GitHub própria usa a do projeto, como no merge", async () => {
+    const w = await world();
+    await app.inject({
+      method: "PATCH", url: `/api/users/${w.owner.id}`, headers: { cookie: w.owner.cookie }, payload: { claudeAccountSlug: "mussa" },
+    });
+    const res = await startReview(w, w.autor, { reviewerUserId: w.owner.id });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().review.reviewerUserId).toBe(w.owner.id);
+  });
+
   it("member sem work recebe 403", async () => {
     const w = await world();
     const res = await startReview(w, w.leitor);
@@ -283,6 +318,8 @@ describe("iniciar a revisão", () => {
     await app.inject({
       method: "PATCH", url: `/api/users/${w.outro.id}`, headers: { cookie: w.owner.cookie }, payload: { claudeAccountSlug: "mussa" },
     });
+    const gh = await (await registry()).addGithubConnection({ label: "outro", login: "outro-gh" });
+    await (await import("../auth/userGit.js")).setUserGit(w.outro.id, { githubConnectionId: gh.id });
     const res = await startReview(w, w.autor, { reviewerUserId: w.outro.id });
     expect(res.statusCode).toBe(200);
     const reviewerCardId = res.json().review.reviewerCardId as string;

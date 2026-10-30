@@ -118,6 +118,19 @@ function submitCall(r: Review, extra: string): string {
   ].join("\n");
 }
 
+/**
+ * O que fazer quando o `gh pr review` falha. O GitHub recusa review (e Approve) do próprio PR, e a
+ * conta do revisor pode não ter permissão: a IA que parasse no erro terminaria o turno sem a
+ * ferramenta, e a revisão iria a impasse "IA não respondeu" a cada rodada. O registro no vibehub é o
+ * que leva o loop adiante; o GitHub é a vitrine.
+ */
+function ghReviewFallback(tool: string): string {
+  return (
+    "   Se o `gh pr review` falhar (ex.: o GitHub recusa review do próprio PR, ou a conta não tem permissão), não pare: " +
+    `chame ${tool} mesmo assim, com o erro no summary.`
+  );
+}
+
 function reviewerIdentity(): string {
   return "Você é o REVISOR deste PR. Não escreva no código do autor: não faça commit, não faça push, não chame vibehub_deliver.";
 }
@@ -137,6 +150,7 @@ export function reviewerRoundPrompt(r: Review): string {
     "4. Publique a rodada no GitHub, na sua conta, com a lista (severidade, arquivo:linha, prova, correção proposta):",
     `   - com algum blocking: gh pr review ${r.prNumber} --request-changes --body "<lista>"`,
     `   - sem blocking: gh pr review ${r.prNumber} --comment --body "<lista>"`,
+    ghReviewFallback(TOOL_SUBMIT),
     `5. ${submitCall(r, FINDING_FIELDS)}`,
   ].join("\n");
 }
@@ -177,6 +191,7 @@ export function reviewerDeltaPrompt(r: Review): string {
       "novo é recusado pelo servidor (a lista é fechada).",
     `5. Publique a rodada no GitHub: gh pr review ${r.prNumber} --request-changes --body "<vereditos>" se sobrar bloqueante ` +
       `aberto; senão gh pr review ${r.prNumber} --comment --body "<vereditos>".`,
+    ghReviewFallback(TOOL_SUBMIT),
     `6. ${submitCall(
       r,
       `verdicts: [{ id, status: "fixed" | "open" | "dropped", reviewerReply? }], findings: [] (ou só os novos com introducedInRound: ${r.round})`,
@@ -235,6 +250,7 @@ export function reviewerApprovePrompt(r: Review): string {
     `1. Aprove no GitHub, na sua conta: gh pr review ${r.prNumber} --approve --body "<resumo>"`,
     "   O resumo diz o que foi revisado, o que o autor corrigiu e as sugestões que ficaram.",
     ...(risks.length ? ["   Cite os riscos aceitos pelo revisor humano:", lines(risks, "")] : []),
+    ghReviewFallback("vibehub_report"),
     "2. NÃO mergeie. Não rode `gh pr merge` e não chame vibehub_deliver: o merge é o botão do responsável no vibehub.",
     `3. No fim, chame a ferramenta MCP vibehub_report com card: "${r.reviewerCardId}", state: "ready", ` +
       `summary: "PR #${r.prNumber} aprovado no GitHub".`,

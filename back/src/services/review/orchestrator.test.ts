@@ -194,6 +194,34 @@ describe("iniciar a revisão", () => {
     expect(review.log.length).toBeGreaterThan(0);
   });
 
+  it("os textos do revisor mandam chamar a ferramenta mesmo se o gh pr review falhar", async () => {
+    const o = await load();
+    const { author } = await seed(o);
+    const review = await o.orch.startReview({
+      cardId: author.id, prNumber: 7, reviewerUserId: "u-revisor", authorUserId: "u-autor", mergerUserId: "u-merger", by: "u-autor",
+    });
+    const round1 = lastText();
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    await o.orch.submitAuthorResponse(author.id, {
+      round: 1, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }], headSha: SHA2,
+    });
+    const delta = lastText();
+    expect(delta).toContain("rodada 2 de 3");
+    await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 2, findings: [], verdicts: [{ id: "f1", status: "fixed" }], headSha: SHA2, summary: "r2",
+    });
+    const approve = lastText();
+    expect(approve).toContain("--approve");
+
+    // o GitHub recusa review do próprio PR (ou falta permissão): a IA que parasse ali travaria a rodada
+    for (const text of [round1, delta]) {
+      expect(text).toContain("Se o `gh pr review` falhar");
+      expect(text).toContain("chame vibehub_review_submit mesmo assim, com o erro no summary");
+    }
+    expect(approve).toContain("Se o `gh pr review` falhar");
+    expect(approve).toContain("chame vibehub_report mesmo assim, com o erro no summary");
+  });
+
   it("revisor member sem work no card do revisor ganha um share work nele antes da rodada 1; owner não", async () => {
     const o = await load();
     const { author } = await seed(o);

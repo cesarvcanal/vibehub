@@ -112,6 +112,11 @@ describe("startErrorCode", () => {
       .toBe("papel_sem_work");
   });
 
+  it("revisor_sem_github is one of the codes (the reviews would go out on somebody else's account)", () => {
+    expect(startErrorCode({ response: { status: 400, data: { error: "revisor_sem_github: o revisor não tem uma conexão GitHub própria" } } }))
+      .toBe("revisor_sem_github");
+  });
+
   it("pr_mergeado is one of the codes", () => {
     expect(startErrorCode({ response: { status: 400, data: { error: "pr_mergeado: o PR #7 já foi mergeado" } } })).toBe("pr_mergeado");
   });

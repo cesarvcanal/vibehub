@@ -1348,6 +1348,7 @@ export const en: Record<string, string> = {
   "review.error.pr_mergeado": "That PR is already merged: there is nothing to review.",
   "review.error.revisao_ativa": "A review of this PR is already in progress.",
   "review.error.revisor_sem_conta": "The reviewer has no Claude account of their own in vibehub. Pick somebody else.",
+  "review.error.revisor_sem_github": "The reviewer has no GitHub connection of their own in vibehub: the PR reviews would go out on somebody else's account. Connect theirs or pick somebody else.",
   "review.error.papel_sem_work": "Read-only on this card: {who}. Whoever fixes and whoever merges must be able to work on it. Share it with work access and try again.",
   "review.error.papel_sem_work.generic": "Whoever fixes and whoever merges must be able to work on this card. Share it with work access and try again.",
   "review.error.pessoa_sem_acesso": "Cannot reach this card: {who}. Share the card with them or pick somebody else.",

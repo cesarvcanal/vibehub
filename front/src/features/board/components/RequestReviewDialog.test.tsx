@@ -236,6 +236,10 @@ describe("RequestReviewDialog", () => {
 
   it.each([
     ["revisor_sem_conta: o revisor não tem uma conta Claude própria no vibehub", /não tem uma conta Claude própria/],
+    [
+      "revisor_sem_github: o revisor não tem uma conexão GitHub própria no vibehub (os reviews do PR sairiam na conta de outra pessoa)",
+      /^O revisor não tem uma conexão GitHub própria no vibehub/,
+    ],
     ["revisao_ativa: já existe uma revisão em andamento do PR #553 neste card", /Já existe uma revisão em andamento/],
     ["sem_pr: o card não tem o PR #553", /O card não tem esse PR/],
     ["pr_mergeado: o PR #553 já foi mergeado", /^Esse PR já foi mergeado/],

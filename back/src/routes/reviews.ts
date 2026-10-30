@@ -18,7 +18,8 @@ import { logger } from "../utils/logger.js";
  * REVISÃO DE PR — a superfície HTTP do orquestrador e o ÚNICO caminho de merge de um PR revisado.
  *
  *  - quem escolhe os papéis: `GET /api/cards/:id/people` (member também chama: `GET /api/users` é do owner);
- *  - quem inicia: quem tem `work` no card do autor;
+ *  - quem inicia: quem tem `work` no card do autor; o revisor precisa de conexão GitHub própria
+ *    (`revisor_sem_github`), como o merger;
  *  - quem decide uma dúvida/item travado: o revisor humano (ou um owner);
  *  - quem tenta de novo: revisor, responsável pelo merge ou owner; quem cancela: esses e o autor;
  *  - quem MERGEIA: só o `mergerUserId`, só em `ready`, só se o head do PR ainda é o commit revisado,
@@ -63,12 +64,15 @@ async function cardPeople(card: registry.Card): Promise<Person[]> {
 }
 
 /**
- * A conexão GitHub com que o merge sai: a PRÓPRIA do merger, se ainda existe. Não há queda para a do
- * projeto — o merge tem de passar pela permissão do merger no GitHub (um 403 lá é a resposta certa) e
- * ficar na conta dele. A exceção é o owner sem conexão própria: ele opera com a do projeto, na mesma
- * precedência da identidade de um card (projeto, depois a primeira da instalação). Null = recusar.
+ * A conexão GitHub PRÓPRIA de quem tem um papel que sai na conta dele: o merger (o merge) e o revisor
+ * (os `gh pr review` do card do revisor). A própria, se ainda existe; não há queda para a do projeto —
+ * o merge tem de passar pela permissão do merger no GitHub (um 403 lá é a resposta certa), e um review
+ * na conta do projeto (que muitas vezes é a que abriu o PR) é recusado pelo GitHub como "review do
+ * próprio PR" e trava a revisão a cada rodada. A exceção é o owner sem conexão própria: ele opera
+ * com a do projeto, na mesma precedência da identidade de um card (projeto, depois a primeira da
+ * instalação). Null = recusar.
  */
-async function mergerConnection(user: PublicUser, card: registry.Card): Promise<string | null> {
+async function ownGithubConnection(user: PublicUser, card: registry.Card): Promise<string | null> {
   const [git, connections] = await Promise.all([getUserGit(user.id), registry.listGithubConnections()]);
   const own = git?.githubConnectionId;
   if (own && connections.some((c) => c.id === own)) return own;
@@ -146,6 +150,15 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
       }
       if (withoutWork.length) {
         return await reply.code(400).send({ error: `papel_sem_work: ${withoutWork.join(", ")} só tem leitura neste card` });
+      }
+      // Os reviews do PR saem do card do revisor, na identidade dele: sem conexão própria, iriam na do
+      // projeto (a regra do merger vale aqui também; owner sem conexão usa a do projeto). Revisor igual
+      // ao autor fica com a recusa própria, do `startReview`.
+      const reviewer = reaching.get(roles.reviewerUserId);
+      if (reviewer && reviewer.id !== roles.authorUserId && !(await ownGithubConnection(reviewer, card))) {
+        return await reply.code(400).send({
+          error: "revisor_sem_github: o revisor não tem uma conexão GitHub própria no vibehub (os reviews do PR sairiam na conta de outra pessoa)",
+        });
       }
       try {
         const review = await startReview({
@@ -226,7 +239,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
    * O MERGE. Só o responsável pelo merge (nem o owner: o clique dele é a autorização que a revisão
    * pediu), só em `ready`, e preso ao commit que o revisor aprovou: o deliver roda em modo só-merge
    * (sem push) e recusa `head_moved` quando o PR andou — aí a revisão volta à rodada seguinte, ou a
-   * impasse na última. O deliver recebe a conexão GitHub do merger (`mergerConnection`); sem uma,
+   * impasse na última. O deliver recebe a conexão GitHub do merger (`ownGithubConnection`); sem uma,
    * 400 `merger_sem_github` e nada roda. Uma recusa do GitHub (403) volta como veio, sem outra credencial.
    */
   app.post<{ Params: { id: string } }>("/api/reviews/:id/merge", { preHandler: requireSession }, async (req, reply) => {
@@ -247,7 +260,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     }
     const card = await registry.getCard(review.cardId);
     if (!card) return await reply.code(404).send({ error: "card not found" });
-    const connectionId = await mergerConnection(user, card);
+    const connectionId = await ownGithubConnection(user, card);
     if (!connectionId) {
       return await reply.code(400).send({
         error: "merger_sem_github: o responsável pelo merge não tem uma conexão GitHub própria no vibehub",
