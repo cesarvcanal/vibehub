@@ -8,6 +8,7 @@ import { findUser } from "../../auth/users.js";
 import { cardLevel } from "../../auth/access.js";
 import { creatorAccountSlug } from "../../auth/userGit.js";
 import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
+import { readPrHead } from "../maestro/deliver.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { eventsAfter, onCardEvent, recordMessage, type CardEvent, type Severity } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
@@ -34,6 +35,7 @@ import {
  *   turn_finished sem a ferramenta ──► um lembrete; no segundo, impasse "IA não respondeu"
  *   humano ──► decideQuestion | retryReview (impasse por falha, Approve pendente) | cancelReview
  *   botão de merge (rota) ──► markReviewMerged | head do PR andou: reopenAfterHeadMoved
+ *   fim de turno do autor em ready com o head do PR andado ──► reopenAfterHeadMoved (cause "push")
  *
  * As regras do jogo (prova, lista fechada, teto de rodadas) moram no modelo puro; aqui ficam a
  * persistência, quem pode chamar o quê e os relays. Três garantias atravessam o arquivo:
@@ -672,34 +674,43 @@ export async function closeReviewsOfRemovedCard(cardId: string, by?: string): Pr
 /* ------------------------------------------------------------------ merge humano */
 
 /**
- * O botão de merge achou o PR num commit que não é o revisado (push depois do `ready`). Numa mutação
- * só: com rodada sobrando, a revisão volta a `reviewing` na rodada seguinte e o revisor recebe o delta
- * (desde o `reviewedSha` aprovado) pelo mesmo relay das outras rodadas; na última, vira impasse
- * "push depois do pronto". Só age em `ready`: o merge leva minutos (o CI), e uma revisão que andou ou
- * foi cancelada nesse meio fica como está.
+ * O PR andou depois do `ready`: o botão de merge achou o PR num commit que não é o revisado
+ * (`cause: "merge"`), ou o turno do autor terminou com um push novo no PR (`cause: "push"`,
+ * {@link checkAuthorPush}). Numa mutação só: com rodada sobrando, a revisão volta a `reviewing` na
+ * rodada seguinte e o revisor recebe o delta (desde o `reviewedSha` aprovado) pelo mesmo relay das
+ * outras rodadas; na última, vira impasse "push depois do pronto". Só age em `ready`: o merge leva
+ * minutos (o CI), e uma revisão que andou ou foi cancelada nesse meio fica como está. `headSha` (o
+ * head lido) segura uma leitura velha: se a revisão já aprovou esse commit, não há o que reabrir.
  */
-export async function reopenAfterHeadMoved(reviewId: string, by: string): Promise<Review> {
+export async function reopenAfterHeadMoved(
+  reviewId: string, by: string, opts: { cause?: "merge" | "push"; headSha?: string } = {},
+): Promise<Review> {
+  const cause = opts.cause ?? "merge";
+  const head = opts.headSha?.toLowerCase();
   let outcome = null as "reopen" | "impasse" | null;
   const after = await mutateReview(reviewId, (r) => {
     if (r.phase !== "ready") return;
+    if (head && r.reviewedSha === head) return;
     const approved = r.reviewedSha ? ` (${r.reviewedSha.slice(0, 7)})` : "";
+    const why = cause === "push"
+      ? `O autor empurrou depois do pronto${head ? ` (head ${head.slice(0, 7)})` : ""}: ${HEAD_MOVED}; o PR não está mais no commit aprovado${approved}.`
+      : `Merge recusado: ${HEAD_MOVED}; o PR não está mais no commit aprovado${approved}.`;
     r.approvePending = undefined;
     r.nudges = 0;
     if (r.round < MAX_ROUNDS) {
       r.round += 1;
       r.phase = "reviewing";
-      note(r, "system", `Merge recusado: ${HEAD_MOVED}; o PR não está mais no commit aprovado${approved}. ` +
-        `Rodada ${r.round} de ${MAX_ROUNDS}: o revisor confere o que entrou.`);
+      note(r, "system", `${why} Rodada ${r.round} de ${MAX_ROUNDS}: o revisor confere o que entrou.`);
       outcome = "reopen";
     } else {
       r.phase = "impasse";
       r.impasseReason = HEAD_MOVED;
-      note(r, "system", `Impasse: ${HEAD_MOVED} na última rodada${approved}; cancele e peça uma revisão nova.`);
+      note(r, "system", `${why} Impasse: ${HEAD_MOVED} na última rodada; cancele e peça uma revisão nova.`);
       outcome = "impasse";
     }
   });
-  logger.info({ audit: true, action: "review.head_moved", review: reviewId, outcome, by }, "PR review: head moved after ready");
-  if (outcome === "reopen") await relayReview(after, "reviewer", headMovedPrefix(after) + reviewerDeltaPrompt(after));
+  logger.info({ audit: true, action: "review.head_moved", review: reviewId, cause, outcome, by }, "PR review: head moved after ready");
+  if (outcome === "reopen") await relayReview(after, "reviewer", headMovedPrefix(after, cause) + reviewerDeltaPrompt(after));
   else if (outcome === "impasse") await announcePhase(after);
   return (await getReview(reviewId)) ?? after;
 }
@@ -729,6 +740,23 @@ export async function markReviewMerged(reviewId: string, by: string): Promise<Re
 }
 
 /* ------------------------------------------------------------------ fim de turno */
+
+/**
+ * O fim de turno do card do AUTOR com a revisão em `ready`: alguém mandou a IA dele mexer no PR
+ * (aplicar as sugestões, corrigir mais alguma coisa) e ela pode ter empurrado. O head do PR no GitHub
+ * é comparado com o commit aprovado e, se andou, a revisão volta ao revisor na hora
+ * (`reopenAfterHeadMoved`), sem esperar alguém clicar em merge para descobrir. Vale para qualquer
+ * turno do autor, inclusive com uma pessoa usando o card (é justamente o caso). Nunca lança: uma
+ * leitura que falha deixa a revisão como está, e o merge ainda confere o head.
+ */
+async function checkAuthorPush(cardId: string): Promise<void> {
+  for (const r of await listReviewsForCards([cardId])) {
+    if (r.phase !== "ready" || !r.reviewedSha) continue;
+    const head = await readPrHead(r.cardId, r.prBranch, r.base);
+    if (!head || head.headSha === r.reviewedSha) continue;
+    await reopenAfterHeadMoved(r.id, "fim do turno do autor", { cause: "push", headSha: head.headSha });
+  }
+}
 
 /**
  * Por que este fim de turno NÃO conta como "terminou sem a ferramenta", ou null se conta. O fallback
@@ -793,8 +821,9 @@ async function onTurnFinished(event: CardEvent): Promise<void> {
 
 /**
  * Liga o orquestrador ao feed de eventos dos cards (uma vez, no boot). O listener não lança e não
- * bloqueia: só agenda o julgamento para depois de uma folga curta — a chamada da ferramenta que
- * chegou no mesmo turno ganha — e engole qualquer erro com um warn. Devolve o unsubscribe.
+ * bloqueia: só agenda o julgamento (e a conferência do push do autor depois do pronto) para depois de
+ * uma folga curta — a chamada da ferramenta que chegou no mesmo turno ganha — e engole qualquer erro
+ * com um warn. Devolve o unsubscribe.
  */
 export function startReviewOrchestrator(opts: { graceMs?: number } = {}): () => void {
   const graceMs = opts.graceMs ?? TURN_GRACE_MS;
@@ -807,6 +836,9 @@ export function startReviewOrchestrator(opts: { graceMs?: number } = {}): () => 
       if (stopped) return;
       void onTurnFinished(event).catch((err: unknown) => {
         logger.warn({ card: event.cardId, detail: (err as Error).message }, "PR review could not judge a finished turn");
+      });
+      void checkAuthorPush(event.cardId).catch((err: unknown) => {
+        logger.warn({ card: event.cardId, detail: (err as Error).message }, "PR review could not check the author's push");
       });
     }, graceMs);
     timer.unref?.();

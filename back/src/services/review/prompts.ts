@@ -266,15 +266,18 @@ export function nudgePrefix(tool: typeof TOOL_SUBMIT | typeof TOOL_RESPOND): str
 }
 
 /**
- * A linha que vai na frente do delta quando o merge humano foi recusado porque o PR andou depois do
- * `ready`: o revisor precisa saber que a rodada nova não veio de uma resposta do autor à lista.
+ * A linha que vai na frente do delta quando o PR andou depois do `ready`: o revisor precisa saber que a
+ * rodada nova não veio de uma resposta do autor à lista. `merge` = o merge humano foi recusado por
+ * isso; `push` = o turno do autor terminou com um push novo (alguém mandou a IA dele mexer no PR).
  */
-export function headMovedPrefix(r: Review): string {
+export function headMovedPrefix(r: Review, cause: "merge" | "push" = "merge"): string {
   const approved = r.reviewedSha ? ` (${r.reviewedSha.slice(0, 7)})` : "";
+  const what = cause === "push"
+    ? `O autor empurrou commits no PR #${r.prNumber} depois do pronto (push depois do pronto)`
+    : `Merge recusado pelo vibehub: push depois do pronto. O head do PR #${r.prNumber} mudou`;
   return (
-    `Merge recusado pelo vibehub: push depois do pronto. O head do PR #${r.prNumber} não é mais o commit que você ` +
-    `aprovou${approved}, então a revisão voltou para a rodada ${r.round}. Confira o que entrou desde então como uma ` +
-    "rodada nova, pelos passos abaixo.\n\n"
+    `${what}: o head não é mais o commit que você aprovou${approved}, então a revisão voltou para a rodada ` +
+    `${r.round}. Confira o que entrou desde então como uma rodada nova, pelos passos abaixo.\n\n`
   );
 }
 

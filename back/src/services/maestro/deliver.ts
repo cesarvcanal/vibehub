@@ -324,6 +324,38 @@ export async function cardConnectionToken(card: Card, project: Project): Promise
 }
 
 /**
+ * The head of the card's OPEN PR from `branch` to `base`, as GitHub has it now: what the PR review
+ * compares with the commit it approved when the author's turn ends. Read with the card's own
+ * connection (the actor's), through the same lookup the merge-only deliver does — nothing is pushed.
+ * Null when there is no open PR there or the lookup failed (logged): the caller leaves things as they
+ * are, and the merge button still checks the head before merging.
+ */
+export async function readPrHead(
+  cardId: string, branch: string, base: string,
+): Promise<{ prUrl: string; headSha: string } | null> {
+  try {
+    const card = await getCard(cardId);
+    const project = card ? await getProject(card.projectId) : undefined;
+    if (!card || !project) return null;
+    const { cwd } = cardWorkPaths(project, card);
+    const token = await cardConnectionToken(card, project);
+    const out = await hostExecutor().runScript(
+      buildResolvePrScript(config.runner.container, card.id, token, cwd, assertBranchName(branch), assertBranchName(base)),
+      { timeoutMs: 60_000 },
+    );
+    const found = parseResolvePr(out.stdout);
+    if (found.ok) return { prUrl: found.prUrl, headSha: found.headSha };
+    if (found.stage !== "nopr") {
+      logger.warn({ card: card.worktreeSlug, stage: found.stage, detail: cleanOutput(found.output) }, "could not read the PR head");
+    }
+    return null;
+  } catch (err) {
+    logger.warn({ card: cardId, detail: (err as Error).message }, "could not read the PR head");
+    return null;
+  }
+}
+
+/**
  * The PR's CI as the gate: its verdict, or null when the PR has no CI checks (the local gate
  * decides). Checks still running past the wait are red — never merged on a guess.
  */

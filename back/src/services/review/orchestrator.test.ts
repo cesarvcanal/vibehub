@@ -49,6 +49,10 @@ const resume = vi.fn(async (cardId: string) => {
   return await reopen?.(cardId);
 });
 const deliverSpy = vi.fn(async () => ({ merged: true }));
+/** O head do PR no GitHub, como `readPrHead` o leria: null = sem PR aberto ou leitura que falhou. */
+let prHeadNow: string | null = null;
+const prHead = vi.fn(async (_cardId: string, _branch: string, _base: string) =>
+  prHeadNow ? { prUrl: "https://github.com/acme/widgets/pull/7", headSha: prHeadNow } : null);
 
 const USERS: Record<string, PublicUser> = {
   "u-autor": { id: "u-autor", username: "autor", role: "member", createdAt: "" },
@@ -76,6 +80,7 @@ async function load() {
   vi.doMock("../maestro/deliver.js", async () => ({
     ...(await vi.importActual<typeof import("../maestro/deliver.js")>("../maestro/deliver.js")),
     deliver: deliverSpy,
+    readPrHead: prHead,
   }));
   vi.doMock("../../auth/users.js", async () => ({
     ...(await vi.importActual<typeof import("../../auth/users.js")>("../../auth/users.js")),
@@ -122,6 +127,8 @@ beforeEach(async () => {
   actor.mockClear();
   resume.mockClear();
   deliverSpy.mockClear();
+  prHead.mockClear();
+  prHeadNow = null;
 });
 afterEach(async () => {
   for (const m of [
@@ -925,6 +932,149 @@ describe("merge humano: push depois do pronto e mergeado", () => {
     expect(await o.store.activeReviewFor(author.id, 7)).toBeUndefined();
     const again = await o.orch.markReviewMerged(review.id, "merger");
     expect(again.log).toHaveLength(merged.log.length);
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
+  /** Uma revisão em `ready` na rodada `round`, com SHA1 revisado; envios zerados e o orquestrador ligado. */
+  async function readyAt(o: Loaded, round: 1 | 3 = 1) {
+    const { author, review } = await started(o);
+    if (round === 3) {
+      await o.store.mutateReview(review.id, (r) => {
+        r.round = 3;
+      });
+    }
+    // Da rodada 2 em diante a lista é fechada: a sugestão só entra na rodada 1.
+    const ready = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round, findings: round === 1 ? [SUGGESTION] : [], headSha: SHA1, summary: "sem bloqueante",
+    });
+    expect(ready.phase).toBe("ready");
+    send.mockClear();
+    calls.length = 0;
+    return { author, review: ready, off: o.orch.startReviewOrchestrator({ graceMs: 0 }) };
+  }
+  const endTurn = async (o: Loaded, cardId: string) => {
+    await o.events.observeCardStatus(cardId, "waiting", "working");
+    await o.events.observeCardStatus(cardId, "working", "waiting");
+  };
+  /** Deixa o listener (folga 0) e a leitura do head assentarem. */
+  const settle = () => new Promise((r) => setTimeout(r, 40));
+
+  it("fim do turno do autor com push novo: a revisão volta ao revisor na rodada seguinte, sem clique de merge", async () => {
+    const o = await load();
+    const { author, review, off } = await readyAt(o);
+    try {
+      prHeadNow = SHA2;
+      await endTurn(o, author.id);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("reviewing"));
+      expect(prHead).toHaveBeenCalledWith(author.id, PR.branch, "dev");
+      const after = (await o.store.getReview(review.id))!;
+      expect(after).toMatchObject({ round: 2, reviewedSha: SHA1, lastSubmitRound: 1 });
+      // o revisor recebe o delta desde o commit aprovado, dizendo que foi o autor que empurrou
+      await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+      expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+      expect(calls).toEqual([`actor:u-revisor:${review.reviewerCardId}`, `send:${review.reviewerCardId}`]);
+      for (const piece of ["O autor empurrou commits no PR #7", "rodada 2 de 3", `git diff ${SHA1}..HEAD`, "vibehub_review_submit"]) {
+        expect(lastText()).toContain(piece);
+      }
+      expect(lastText()).not.toContain("Merge recusado");
+      expect(after.log.at(-1)).toMatchObject({ who: "system" });
+      expect(after.log.at(-1)?.text).toMatch(/O autor empurrou depois do pronto \(head bbbbbbb\).*Rodada 2 de 3/);
+      expect(deliverSpy).not.toHaveBeenCalled();
+    } finally {
+      off();
+    }
+  });
+
+  it("vale com uma pessoa usando o card do autor (é ela quem mandou a IA mexer)", async () => {
+    const o = await load();
+    const { author, review, off } = await readyAt(o);
+    try {
+      await o.registry.markCardHumanActive(author.id);
+      prHeadNow = SHA2;
+      await endTurn(o, author.id);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("reviewing"));
+    } finally {
+      off();
+    }
+  });
+
+  it("head igual ao aprovado, ou leitura que falha: a revisão fica pronta e ninguém recebe nada", async () => {
+    const o = await load();
+    const { author, review, off } = await readyAt(o);
+    try {
+      prHeadNow = SHA1;
+      await endTurn(o, author.id);
+      await vi.waitFor(() => expect(prHead).toHaveBeenCalledTimes(1));
+      await settle();
+      prHeadNow = null;
+      await endTurn(o, author.id);
+      await vi.waitFor(() => expect(prHead).toHaveBeenCalledTimes(2));
+      await settle();
+      expect(await o.store.getReview(review.id)).toMatchObject({ phase: "ready", round: 1 });
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      off();
+    }
+  });
+
+  it("dois fins de turno com o mesmo push reabrem uma vez só", async () => {
+    const o = await load();
+    const { author, review, off } = await readyAt(o);
+    try {
+      prHeadNow = SHA2;
+      await endTurn(o, author.id);
+      await endTurn(o, author.id);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("reviewing"));
+      await settle();
+      expect((await o.store.getReview(review.id))?.round).toBe(2);
+      expect(send).toHaveBeenCalledTimes(1);
+    } finally {
+      off();
+    }
+  });
+
+  it("na rodada 3 o push depois do pronto vira impasse, com aviso e sem relay", async () => {
+    const o = await load();
+    const { author, review, off } = await readyAt(o, 3);
+    try {
+      prHeadNow = SHA2;
+      await endTurn(o, author.id);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("impasse"));
+      expect(await o.store.getReview(review.id)).toMatchObject({ impasseReason: "push depois do pronto", round: 3 });
+      await vi.waitFor(async () => expect((await messagesOn(o, author.id)).at(-1)?.text).toMatch(/impasse.*push depois do pronto/i));
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      off();
+    }
+  });
+
+  it("fim de turno do revisor, ou do autor fora de ready, não lê o head do PR", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      prHeadNow = SHA2;
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+      // fixing: o autor corrige pela lista; o push dele é a resposta, não um push depois do pronto
+      await o.registry.markCardHumanActive(author.id);
+      await endTurn(o, author.id);
+      await endTurn(o, review.reviewerCardId);
+      await settle();
+      expect(prHead).not.toHaveBeenCalled();
+      expect((await o.store.getReview(review.id))?.phase).toBe("fixing");
+    } finally {
+      off();
+    }
+  });
+
+  it("uma leitura velha (o head lido já é o aprovado) não reabre", async () => {
+    const o = await load();
+    const { review, off } = await readyAt(o);
+    off();
+    const after = await o.orch.reopenAfterHeadMoved(review.id, "teste", { cause: "push", headSha: SHA1 });
+    expect(after).toMatchObject({ phase: "ready", round: 1 });
     expect(send).not.toHaveBeenCalled();
   });
 });
