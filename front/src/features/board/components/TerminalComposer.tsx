@@ -20,6 +20,7 @@ import {
   applySlashPick, filterSlashCommands, slashQuery, type SlashCommandInfo,
 } from "@/features/board/lib/slashMenu";
 import { UltraFieldOverlay } from "@/features/board/components/UltraText";
+import { parseUploadPath, uploadImageUrl } from "@/features/board/lib/markdown";
 import { t as translate, useT } from "@/i18n";
 import { useReloadHold } from "@/lib/versionCheck";
 
@@ -392,9 +393,126 @@ function scheduleStoredWrite(cardId: string, draft: StoredDraft | null): void {
   }
 }
 
+/* ------------------------------------------------- uploads that a reload interrupted */
+
+export const PENDING_UPLOADS_KEY = "vibehub.composerPendingUploads";
+
+/** An image that has no runner path yet, with its bytes, so a reload can send it again. */
+interface StashedUpload {
+  id: string;
+  name: string;
+  dataUrl: string;
+}
+
+/**
+ * The images still going up, per card, in sessionStorage.
+ *
+ * A screenshot only exists in the browser until its upload lands, and an upload through the runner
+ * takes a second or two — an F5 in that window used to take the picture with it, with the clipboard
+ * long moved on. The bytes are kept here (data URL) until the chip gets its path, and a reload puts
+ * the chip back and sends it again. sessionStorage, not localStorage: it is per tab, it survives the
+ * F5 that matters, and a 10 MB image does not linger in every tab of the browser forever. A stash
+ * that does not fit (quota) is simply not kept — the upload in flight is unaffected.
+ */
+function readStashedUploads(): Record<string, StashedUpload[]> {
+  try {
+    const raw = sessionStorage.getItem(PENDING_UPLOADS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, StashedUpload[]>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeStashedUploads(all: Record<string, StashedUpload[]>): void {
+  try {
+    if (Object.keys(all).length === 0) sessionStorage.removeItem(PENDING_UPLOADS_KEY);
+    else sessionStorage.setItem(PENDING_UPLOADS_KEY, JSON.stringify(all));
+  } catch {
+    /* quota: this one image will not survive a reload, which is how it was before */
+  }
+}
+
+/** Keeps only the stashed uploads of a card that are still waiting for a path (`keep`). */
+function pruneStashedUploads(cardId: string, keep: ReadonlySet<string>): void {
+  // saveDraft runs per keystroke and a stash can be megabytes: only a card known to have one pays.
+  if (!cardsWithStash.has(cardId)) return;
+  const all = readStashedUploads();
+  const current = all[cardId];
+  if (!current) return;
+  const next = current.filter((s) => keep.has(s.id));
+  if (next.length === current.length) return;
+  if (next.length > 0) all[cardId] = next;
+  else {
+    delete all[cardId];
+    cardsWithStash.delete(cardId);
+  }
+  writeStashedUploads(all);
+}
+
+/** Cards with something in the stash, as far as this page knows (written here or read on load). */
+const cardsWithStash = new Set<string>();
+
+/**
+ * Stashes the bytes of a chip that just started uploading. Reading the file is async, so by the time
+ * it is read the upload may already have landed (or the chip been removed): the live draft is asked
+ * first, and only a chip still without a path is written.
+ */
+export async function stashUpload(cardId: string, id: string, name: string, file: Blob): Promise<void> {
+  let dataUrl: string;
+  try {
+    dataUrl = await blobToDataUrl(file);
+  } catch {
+    return;
+  }
+  const live = memoryDrafts.get(cardId)?.attachments.find((a) => a.id === id);
+  if (!live || live.status === "ready") return;
+  const all = readStashedUploads();
+  const list = (all[cardId] ?? []).filter((s) => s.id !== id);
+  all[cardId] = [...list, { id, name, dataUrl }];
+  cardsWithStash.add(cardId);
+  writeStashedUploads(all);
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error("could not read the file"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+/** `data:<type>;base64,<bytes>` back into a File. `null` for anything else. PURE, TOTAL. */
+export function dataUrlToFile(dataUrl: string, name: string): File | null {
+  const m = /^data:([^;,]*);base64,(.*)$/s.exec(String(dataUrl ?? ""));
+  if (!m) return null;
+  try {
+    const bin = atob(m[2] as string);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+    return new File([bytes], name, { type: m[1] || "application/octet-stream" });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The bytes of the chips a reload brought back, by attachment id — what the composer feeds to its
+ * upload queue on mount. Filled by `loadDraft` (stored layer only: a live draft has its own files).
+ */
+const resumedFiles = new Map<string, File>();
+
+/** The File behind a chip that came back from a reload mid-upload, if any. */
+export function resumedUploadFile(id: string): File | undefined {
+  return resumedFiles.get(id);
+}
+
 /** Remembers a card's unsent field. Called on every change — cheap, and the point of the feature. */
 export function saveDraft(cardId: string, text: string, attachments: readonly Attachment[]): void {
   const list = [...attachments];
+  pruneStashedUploads(cardId, new Set(list.filter((a) => a.status !== "ready").map((a) => a.id)));
+  for (const a of list) if (a.status === "ready") resumedFiles.delete(a.id);
   if (!text.trim() && list.length === 0) {
     clearDraft(cardId);
     return;
@@ -415,21 +533,51 @@ export function loadDraft(cardId: string): { text: string; attachments: Attachme
   // The disk is about to be read: what is still queued for it (a clear, most likely) goes first.
   flushDrafts();
   const stored = readStoredDrafts()[cardId];
-  if (!stored) return { text: "", attachments: [] };
+  // No `previewUrl` on the finished ones: a blob from a previous page load points at nothing. The
+  // chip shows the file from the runner instead (see `attachmentThumbUrl`).
+  const ready: Attachment[] = (stored && Array.isArray(stored.attachments) ? stored.attachments : [])
+    .filter((a) => a && typeof a.path === "string")
+    .map((a) => ({ id: a.id, name: a.name, path: a.path, status: "ready" as const }));
+  // The ones the reload caught mid-upload come back with their bytes, and go up again.
+  const readyIds = new Set(ready.map((a) => a.id));
+  const resumed: Attachment[] = [];
+  for (const s of readStashedUploads()[cardId] ?? []) {
+    if (!s || typeof s.id !== "string" || readyIds.has(s.id)) continue;
+    const file = dataUrlToFile(s.dataUrl, s.name);
+    if (!file) continue;
+    resumedFiles.set(s.id, file);
+    cardsWithStash.add(cardId);
+    resumed.push({ id: s.id, name: s.name, previewUrl: s.dataUrl, status: "uploading" });
+  }
+  if (!stored && resumed.length === 0) return { text: "", attachments: [] };
   return {
-    text: typeof stored.text === "string" ? stored.text : "",
-    // No `previewUrl`: a blob from a previous page load points at nothing. The chip falls back to
-    // the file's name, which is still enough to know what is attached.
-    attachments: (Array.isArray(stored.attachments) ? stored.attachments : [])
-      .filter((a) => a && typeof a.path === "string")
-      .map((a) => ({ id: a.id, name: a.name, path: a.path, status: "ready" as const })),
+    text: stored && typeof stored.text === "string" ? stored.text : "",
+    attachments: [...ready, ...resumed],
   };
+}
+
+/**
+ * What the chip shows: the local preview while there is one, else the file itself, read back from
+ * the runner — a draft restored after a reload has a path and no blob, and its name alone read as
+ * "the image is gone". PURE, TOTAL.
+ */
+export function attachmentThumbUrl(a: Attachment): string | undefined {
+  if (a.previewUrl) return a.previewUrl;
+  const upload = a.path ? parseUploadPath(a.path) : null;
+  return upload ? uploadImageUrl(upload.cardId, upload.file) : undefined;
 }
 
 /** Tests only: forget every draft, in both layers. */
 export function resetDraftsForTesting(): void {
   memoryDrafts.clear();
   sendsInFlight.clear();
+  resumedFiles.clear();
+  cardsWithStash.clear();
+  try {
+    sessionStorage.removeItem(PENDING_UPLOADS_KEY);
+  } catch {
+    /* nothing stored */
+  }
   pendingWrites.clear();
   if (flushTimer !== null) clearTimeout(flushTimer);
   flushTimer = null;
@@ -440,9 +588,19 @@ export function resetDraftsForTesting(): void {
   }
 }
 
+/** Tests only: what an F5 forgets — the memory layer — keeping what the browser stores. */
+export function simulateReloadForTesting(): void {
+  flushDrafts();
+  memoryDrafts.clear();
+  sendsInFlight.clear();
+  resumedFiles.clear();
+  cardsWithStash.clear();
+}
+
 /** Forgets a card's draft — on send, and when the card itself is gone. */
 export function clearDraft(cardId: string): void {
   memoryDrafts.delete(cardId);
+  pruneStashedUploads(cardId, new Set());
   scheduleStoredWrite(cardId, null);
 }
 
@@ -612,6 +770,13 @@ export function TerminalComposer({
     // The bytes belong to the chips that were on screen, not to the card that just arrived.
     filesRef.current.clear();
     queueRef.current = [];
+    // ...except the ones a reload interrupted: those come back with their bytes and go up again.
+    for (const a of draft.attachments) {
+      const file = a.status === "uploading" ? resumedUploadFile(a.id) : undefined;
+      if (!file) continue;
+      filesRef.current.set(a.id, file);
+      startUpload(a.id, file);
+    }
   }, [draftKey]);
 
   // Persisted on every change: what makes leaving the card safe. Uploads in flight are written too
@@ -870,12 +1035,12 @@ export function TerminalComposer({
     for (const file of files) {
       const id = nextAttachmentId();
       const previewUrl = typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : undefined;
+      const name = file.name || t("composer.pastedImage");
       filesRef.current.set(id, file);
-      setAttachments((prev) => [
-        ...prev,
-        { id, name: file.name || t("composer.pastedImage"), previewUrl, status: "uploading" },
-      ]);
+      setAttachments((prev) => [...prev, { id, name, previewUrl, status: "uploading" }]);
       startUpload(id, file);
+      // Until it lands, the picture only exists in this tab: an F5 must not take it along.
+      if (draftKey) void stashUpload(draftKey, id, name, file);
     }
   };
 
@@ -1511,10 +1676,10 @@ function AttachmentStrip({
             a.status === "error" ? "border-destructive/60" : "border-border/60",
           )}
         >
-          {a.previewUrl ? (
-            <img src={a.previewUrl} alt={a.name} className="h-full w-full object-cover" />
+          {attachmentThumbUrl(a) ? (
+            <img src={attachmentThumbUrl(a)} alt={a.name} className="h-full w-full object-cover" />
           ) : (
-            // Restored after a reload: the blob is gone, the file is not. Its name is the picture.
+            // No preview and no runner path to read it back from: its name is the picture.
             <div className="flex h-full w-full items-center justify-center px-1 text-center text-[9px] leading-tight text-muted-foreground">
               <span className="line-clamp-3 break-all">{a.name}</span>
             </div>

@@ -7,7 +7,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   DRAFT_WRITE_DELAY_MS,
   TerminalComposer,
+  PENDING_UPLOADS_KEY,
   appendFragment,
+  attachmentThumbUrl,
   barHeights,
   clearDraft,
   composeMessage,
@@ -20,6 +22,7 @@ import {
   pickAudioMimeType,
   resetDraftsForTesting,
   saveDraft,
+  simulateReloadForTesting,
   textAfterSend,
 } from "./TerminalComposer";
 import { get, post } from "@/lib/api";
@@ -187,6 +190,121 @@ describe("drafts", () => {
       // Nothing in memory now, so loadDraft falls through to the stored layer.
       expect(loadDraft("card-1").text).toBe("");
     });
+  });
+});
+
+describe("attachmentThumbUrl", () => {
+  const CARD = "240ce080-2d4e-41f2-985d-dbe44382e67d";
+
+  it("prefers the local preview while there is one", () => {
+    expect(attachmentThumbUrl({ id: "a", name: "x.png", previewUrl: "blob:x", status: "uploading" })).toBe("blob:x");
+  });
+
+  it("a draft restored after a reload shows the file from the runner, not just its name", () => {
+    expect(
+      attachmentThumbUrl({ id: "a", name: "image.png", path: `/work/.uploads/${CARD}/1793365269495-image.png`, status: "ready" }),
+    ).toBe(`/api/cards/${CARD}/uploads/1793365269495-image.png`);
+  });
+
+  it("nothing to show for a path that is not an upload, or no path at all", () => {
+    expect(attachmentThumbUrl({ id: "a", name: "x", path: "/etc/passwd", status: "ready" })).toBeUndefined();
+    expect(attachmentThumbUrl({ id: "a", name: "x", status: "error" })).toBeUndefined();
+  });
+});
+
+describe("TerminalComposer — an F5 does not lose a pasted image", () => {
+  const CARD = "240ce080-2d4e-41f2-985d-dbe44382e67d";
+  const PATH = `/work/.uploads/${CARD}/1793365577802-image.png`;
+
+  function paste(file = new File(["png-bytes"], "image.png", { type: "image/png" })) {
+    fireEvent.paste(screen.getByRole("textbox"), { clipboardData: { items: [], files: [file] } });
+  }
+
+  function stash(): Record<string, { id: string; name: string; dataUrl: string }[]> {
+    return JSON.parse(sessionStorage.getItem(PENDING_UPLOADS_KEY) ?? "{}");
+  }
+
+  it("a finished upload comes back after the reload AS AN IMAGE, read from the runner", async () => {
+    const { unmount } = renderComposer(
+      <TerminalComposer onSend={vi.fn()} cardId={CARD} onUploadImage={vi.fn(async () => PATH)} />,
+    );
+    paste();
+    await waitFor(() => expect(screen.getByTestId("composer-attachment").dataset.status).toBe("ready"));
+    unmount();
+    simulateReloadForTesting();
+
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId={CARD} onUploadImage={vi.fn()} />);
+    const chip = await screen.findByTestId("composer-attachment");
+    expect(chip.dataset.status).toBe("ready");
+    expect(chip.querySelector("img")).toHaveAttribute("src", `/api/cards/${CARD}/uploads/1793365577802-image.png`);
+  });
+
+  it("an F5 in the middle of the upload brings the picture back and sends it again", async () => {
+    // First page: the upload never answers before the reload.
+    const { unmount } = renderComposer(
+      <TerminalComposer onSend={vi.fn()} cardId={CARD} onUploadImage={vi.fn(() => new Promise<string>(() => {}))} />,
+    );
+    await userEvent.type(screen.getByRole("textbox"), "olha o modal");
+    paste();
+    await waitFor(() => expect(stash()[CARD]).toHaveLength(1));
+    unmount();
+    simulateReloadForTesting();
+
+    // Second page: the same chip, thumbnail already on screen, uploading again — this time it lands.
+    const onUploadImage = vi.fn(async (_file: File) => PATH);
+    const onSend = vi.fn();
+    renderComposer(<TerminalComposer onSend={onSend} cardId={CARD} onUploadImage={onUploadImage} />);
+    const chip = await screen.findByTestId("composer-attachment");
+    expect(chip.querySelector("img")?.getAttribute("src")).toMatch(/^data:image\/png;base64,/);
+    expect(screen.getByRole("textbox")).toHaveValue("olha o modal");
+    await waitFor(() => expect(onUploadImage).toHaveBeenCalledTimes(1));
+    const resent = onUploadImage.mock.calls[0]?.[0] as File;
+    expect(resent.name).toBe("image.png");
+    expect(resent.type).toBe("image/png");
+    const bytes = await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.readAsText(resent);
+    });
+    expect(bytes).toBe("png-bytes");
+
+    await waitFor(() => expect(screen.getByTestId("composer-attachment").dataset.status).toBe("ready"));
+    // Landed: the bytes leave the stash, the path is what the stored draft keeps now.
+    expect(stash()[CARD]).toBeUndefined();
+    await userEvent.type(screen.getByRole("textbox"), "{Enter}");
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith(`olha o modal ${PATH}`));
+  });
+
+  it("a picture removed before it landed does not come back on reload", async () => {
+    const { unmount } = renderComposer(
+      <TerminalComposer onSend={vi.fn()} cardId={CARD} onUploadImage={vi.fn(() => new Promise<string>(() => {}))} />,
+    );
+    paste();
+    await waitFor(() => expect(stash()[CARD]).toHaveLength(1));
+    await userEvent.click(screen.getByTestId("composer-attachment-remove"));
+    expect(stash()[CARD]).toBeUndefined();
+    unmount();
+    simulateReloadForTesting();
+
+    const onUploadImage = vi.fn();
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId={CARD} onUploadImage={onUploadImage} />);
+    expect(screen.queryByTestId("composer-attachment")).not.toBeInTheDocument();
+    expect(onUploadImage).not.toHaveBeenCalled();
+  });
+
+  it("an upload that lands before its bytes are even read is never stashed", async () => {
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId={CARD} onUploadImage={vi.fn(async () => PATH)} />);
+    paste();
+    await waitFor(() => expect(screen.getByTestId("composer-attachment").dataset.status).toBe("ready"));
+    await new Promise((r) => setTimeout(r, 20)); // let the FileReader finish
+    expect(stash()[CARD]).toBeUndefined();
+  });
+
+  it("a corrupt stash is ignored, not an exception", () => {
+    sessionStorage.setItem(PENDING_UPLOADS_KEY, "{nope");
+    expect(loadDraft(CARD).attachments).toEqual([]);
+    sessionStorage.setItem(PENDING_UPLOADS_KEY, JSON.stringify({ [CARD]: [{ id: "x", name: "a.png", dataUrl: "not-a-data-url" }] }));
+    expect(loadDraft(CARD).attachments).toEqual([]);
   });
 });
 
