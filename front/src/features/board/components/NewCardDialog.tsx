@@ -216,7 +216,7 @@ export function NewCardDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-h-[90vh] max-w-md overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{t("newCard.title")}</DialogTitle>
           <DialogDescription>

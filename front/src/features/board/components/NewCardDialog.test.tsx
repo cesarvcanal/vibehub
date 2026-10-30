@@ -46,6 +46,15 @@ function setup(overrides: Partial<React.ComponentProps<typeof NewCardDialog>> = 
 }
 
 describe("NewCardDialog", () => {
+  // With the options open the form is taller than a laptop screen: the dialog stops at 90% of the
+  // viewport and scrolls inside, so "Criar card" is never pushed off the bottom.
+  it("never grows past 90% of the viewport height, scrolling inside instead", () => {
+    setup();
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveClass("max-h-[90vh]");
+    expect(dialog).toHaveClass("overflow-y-auto");
+  });
+
   it("closes on submit instead of waiting for the server", async () => {
     // Creating a card can mean cloning a repository. Blocking on that turned "spin up four cards"
     // into four separate waits.
