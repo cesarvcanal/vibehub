@@ -44,6 +44,8 @@ function finding(overrides: Partial<Finding> = {}): Finding {
 
 /** What the server will answer to `GET /cards/c1/review`; the test can change it between polls. */
 let current: Review | null;
+/** Who the server says is working right now (the cards' status). */
+let working: { author: boolean; reviewer: boolean };
 let me: Who;
 let reviewGets = 0;
 
@@ -53,7 +55,7 @@ function serve() {
     if (url === "/setup/state") return setupState();
     if (url === "/cards/c1/review") {
       reviewGets += 1;
-      return { review: current };
+      return current ? { review: current, working } : { review: null };
     }
     if (url === "/cards/c1/people") {
       return { people: Object.values(USERS).map((u) => ({ id: u.id, username: u.username, canReview: true })) };
@@ -83,6 +85,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   setLanguage("pt-BR");
   reviewGets = 0;
+  working = { author: false, reviewer: false };
   me = "rev";
   current = null;
   serve();
@@ -494,7 +497,7 @@ describe("ReviewPanel — merge", () => {
   it.each([
     ["conexão perdida (504)", () => failure(504, "Gateway Time-out")],
     ["409 merging", () => failure(409, { error: "merge já em andamento", reason: "merging" })],
-  ])("depois de 16 min sem merged (%s) a espera acaba: leitura para, botão volta e o painel manda conferir no GitHub", async (_name, error) => {
+  ])("depois de 16 min sem merged (%s) a espera acaba: botão volta e o painel manda conferir no GitHub", async (_name, error) => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     post.mockRejectedValue(error());
     open("mer", review({ phase: "ready" }));
@@ -512,11 +515,10 @@ describe("ReviewPanel — merge", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Não deu pra confirmar o merge — confira no GitHub");
     expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeEnabled();
-    // E a leitura parou: nada de GET a cada 3 s pra sempre.
-    const seen = reviewGets;
-    await tick(30_000);
-    expect(reviewGets).toBe(seen);
     // Sem sucesso falso se um merged aparecer depois (ninguém está mais conferindo).
+    current = review({ phase: "merged" });
+    await tick(3_100);
+    expect(await screen.findByText("Mergeado na dev")).toBeInTheDocument();
     expect(toast.success).not.toHaveBeenCalled();
   });
 
@@ -940,9 +942,22 @@ describe("ReviewPanel — leitura periódica", () => {
     expect(await screen.findByText("pronto pra merge")).toBeInTheDocument();
   });
 
-  it("parada em ready, impasse ou mergeado não relê", async () => {
+  it("em ready e em impasse continua relendo a cada 3s: a revisão anda sozinha (push do autor, IA trabalhando)", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    for (const phase of ["ready", "impasse", "merged", "cancelled"] as const) {
+    for (const phase of ["ready", "impasse"] as const) {
+      reviewGets = 0;
+      open("rev", review({ phase }));
+      await loaded();
+      const seen = reviewGets;
+      await tick(9_100);
+      expect(reviewGets).toBeGreaterThanOrEqual(seen + 3);
+      cleanup();
+    }
+  });
+
+  it("mergeada ou cancelada não relê: acabou", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    for (const phase of ["merged", "cancelled"] as const) {
       reviewGets = 0;
       open("rev", review({ phase }));
       await loaded();
@@ -951,5 +966,71 @@ describe("ReviewPanel — leitura periódica", () => {
       expect(reviewGets).toBe(seen);
       cleanup();
     }
+  });
+
+  it("pronto, e a IA do autor começa a mexer no PR: a pill vira IA mexendo e o merge espera ela terminar", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    open("mer", review({ phase: "ready", round: 1 }));
+    await loaded();
+    expect(screen.getByText("pronto pra merge")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeEnabled();
+
+    working = { author: true, reviewer: false };
+    await tick(3_100);
+    expect(await screen.findByText("IA mexendo")).toBeInTheDocument();
+    expect(screen.queryByText("pronto pra merge")).toBeNull();
+    expect(screen.getByText(/A IA do autor está mexendo no PR/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeDisabled();
+    expect(screen.getByText(/Espere a IA do autor terminar/)).toBeInTheDocument();
+
+    // Terminou sem empurrar nada: volta a pronto e o merge libera.
+    working = { author: false, reviewer: false };
+    await tick(3_100);
+    expect(await screen.findByText("pronto pra merge")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeEnabled();
+    expect(screen.queryByText(/Espere a IA do autor terminar/)).toBeNull();
+  });
+
+  it("a IA do autor empurrou depois do pronto: o painel mostra a rodada 2 com o revisor conferindo, sem recarregar", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    open("rev", review({ phase: "ready", round: 1, lastSubmitRound: 1 }));
+    await loaded();
+    expect(screen.getByText("pronto pra merge")).toBeInTheDocument();
+
+    current = review({
+      phase: "reviewing", round: 2, lastSubmitRound: 1,
+      log: [{ at: 3, round: 2, who: "system", text: "O autor empurrou depois do pronto (head bbbbbbb). Rodada 2 de 3: o revisor confere o que entrou." }],
+    });
+    await tick(3_100);
+    expect(await screen.findByText("rodada 2/3")).toBeInTheDocument();
+    expect(screen.getByText("O revisor confere só o que mudou desde a rodada 1.")).toBeInTheDocument();
+    expect(screen.getByText(/O autor empurrou depois do pronto/)).toBeInTheDocument();
+  });
+
+  it("sugestão aplicada e conferida pelo revisor aparece corrigida na próxima leitura", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const suggestion = finding({ id: "f1", severity: "suggestion", title: "nome de variável confuso" });
+    open("rev", review({ phase: "reviewing", round: 2, findings: [suggestion] }));
+    await loaded();
+    const row = () => screen.getAllByTestId("finding").find((li) => li.textContent?.includes("nome de variável confuso"))!;
+    expect(row()).toHaveAttribute("data-status", "open");
+
+    current = review({ phase: "ready", round: 2, findings: [{ ...suggestion, status: "fixed", reviewerReply: "renomeado" }] });
+    await tick(3_100);
+    await waitFor(() => expect(row()).toHaveAttribute("data-status", "fixed"));
+    expect(within(row()).getByText("corrigido")).toBeInTheDocument();
+  });
+
+  it("quando a fase ou a rodada mudam, a lista de cards do board é relida (a linha da barra lateral acompanha)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const view = open("rev", review({ phase: "ready", round: 1 }));
+    await loaded();
+    const invalidate = vi.spyOn(view.queryClient, "invalidateQueries");
+    await tick(3_100);
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["board", "cards"] });
+
+    current = review({ phase: "reviewing", round: 2 });
+    await tick(3_100);
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["board", "cards"] }));
   });
 });

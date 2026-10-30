@@ -9,6 +9,7 @@ import {
   mergeFailure,
   pendingQuestions,
   reviewActions,
+  reviewIsOpen,
   reviewPill,
   startErrorCode,
   startErrorRoles,
@@ -42,6 +43,19 @@ describe("reviewPill", () => {
     expect(reviewPill(review({ phase: "ready" }))).toMatchObject({ key: "review.pill.ready", tone: "ok" });
     expect(reviewPill(review({ phase: "impasse" }))).toMatchObject({ key: "review.pill.impasse", tone: "info" });
     expect(reviewPill(review({ phase: "merged" }))).toMatchObject({ key: "review.pill.merged", tone: "muted" });
+  });
+
+  it("ready with the author's AI working reads 'IA mexendo' in the orange of work; no other phase changes", () => {
+    expect(reviewPill(review({ phase: "ready" }), { authorWorking: true })).toEqual({ key: "review.pill.authorWorking", tone: "warn" });
+    expect(reviewPill(review({ phase: "ready" }), { authorWorking: false })).toMatchObject({ key: "review.pill.ready" });
+    expect(reviewPill(review({ phase: "fixing", round: 2 }), { authorWorking: true })).toMatchObject({ key: "review.pill.round" });
+    expect(reviewPill(review({ phase: "impasse" }), { authorWorking: true })).toMatchObject({ key: "review.pill.impasse" });
+    expect(reviewPill(review({ phase: "merged" }), { authorWorking: true })).toMatchObject({ key: "review.pill.merged" });
+  });
+
+  it("reviewIsOpen: every phase but merged and cancelled (and no review at all)", () => {
+    for (const phase of ["reviewing", "fixing", "ready", "impasse"] as const) expect(reviewIsOpen(phase)).toBe(true);
+    for (const phase of ["merged", "cancelled", undefined] as const) expect(reviewIsOpen(phase)).toBe(false);
   });
 
   it("a cancelled review is no review — the server omits it, a stale cache must not show it", () => {

@@ -15,7 +15,10 @@ export const REVIEW_MAX_ROUNDS = 3;
  */
 export const MERGE_CONFIRM_MS = 16 * 60_000;
 
-/** How often the panel re-reads a review the AIs are still working on (or a merge is running on). */
+/**
+ * How often an OPEN review is re-read (every phase but merged/cancelled): the AIs' turns, a push after
+ * `ready` that sends it back to the reviewer, a merge running — the screen follows all of them.
+ */
 export const REVIEW_POLL_MS = 3_000;
 
 /** The two `impasseReason` values the server writes as codes/fixed texts: neither has a turn to hand back. */
@@ -50,16 +53,23 @@ export function awaitingDecision(review: ReviewSummary & { findings?: Finding[] 
  * The pill of a PR's review. `reviewing` and `fixing` read the same — both are "the AIs are on it,
  * round N of 3"; the difference (whose turn) belongs to the panel — except a `reviewing` that waits
  * on a doubt only a person can decide ({@link awaitingDecision}): that one reads "aguardando decisão",
- * in the blue of "needs a person", or it would look like the AIs working. A cancelled review is NO
- * review: the server never sends one on a card, and a stale cache must not resurrect it. PURE.
+ * in the blue of "needs a person", or it would look like the AIs working. A `ready` whose author's AI
+ * is working right now (`authorWorking`: someone sent it to touch the PR) reads "IA mexendo", in the
+ * orange of work: what it pushes sends the review back to the reviewer, so "pronto pra merge" would
+ * be a lie while it works. A cancelled review is NO review: the server never sends one on a card,
+ * and a stale cache must not resurrect it. PURE.
  */
-export function reviewPill(review: (ReviewSummary & { findings?: Finding[] }) | undefined): ReviewPill {
+export function reviewPill(
+  review: (ReviewSummary & { findings?: Finding[] }) | undefined,
+  live: { authorWorking?: boolean } = {},
+): ReviewPill {
   switch (review?.phase) {
     case "reviewing":
     case "fixing":
       if (awaitingDecision(review)) return { key: "review.pill.decision", tone: "info" };
       return { key: "review.pill.round", vars: { round: review.round, max: REVIEW_MAX_ROUNDS }, tone: "warn" };
     case "ready":
+      if (live.authorWorking) return { key: "review.pill.authorWorking", tone: "warn" };
       return { key: "review.pill.ready", tone: "ok" };
     // Blue = needs a person, the same colour the mockup gives it.
     case "impasse":
@@ -130,8 +140,9 @@ export function startErrorRoles(err: unknown): ReviewRole[] {
 /** The AIs are on it: the panel keeps reading. Every other phase waits for a person, or is over. */
 export const reviewIsWorking = (phase: ReviewPhase | undefined): boolean => phase === "reviewing" || phase === "fixing";
 
-/** Still going: it can be cancelled (`merged` and `cancelled` are closed — the server answers 409). */
-const isActive = (phase: ReviewPhase): boolean => phase !== "merged" && phase !== "cancelled";
+/** Still going: it can be cancelled (`merged` and `cancelled` are closed — the server answers 409). PURE. */
+export const reviewIsOpen = (phase: ReviewPhase | undefined): boolean =>
+  phase !== undefined && phase !== "merged" && phase !== "cancelled";
 
 /** How many findings of each severity, whatever their status: the header of the closed list. PURE. */
 export interface FindingCounts {
@@ -203,7 +214,7 @@ export function reviewActions(
     merge: isMerger && phase === "ready",
     decide: (isReviewer || me.isOwner) && (reviewIsWorking(phase) || phase === "impasse"),
     retry: (isReviewer || isMerger || me.isOwner) && (failedImpasse || approveStuck || turnOpen),
-    cancel: (isReviewer || me.id === review.authorUserId || isMerger || me.isOwner) && isActive(phase),
+    cancel: (isReviewer || me.id === review.authorUserId || isMerger || me.isOwner) && reviewIsOpen(phase),
   };
 }
 

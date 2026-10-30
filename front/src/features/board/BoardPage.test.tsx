@@ -1105,6 +1105,21 @@ describe("BoardPage — the PR line asks for the review panel", () => {
     expect(screen.getByTestId("url")).toHaveTextContent("?project=p1&card=c2&review=1");
   });
 
+  it("the line follows the card as the board polls: ready, then the author's AI works on it, then back to the reviewer", async () => {
+    const line = async () => await within(await screen.findByRole("navigation", { name: /projects/i })).findByRole("link", { name: /PR #552/ });
+    const at = (review: BoardCard["review"], status: BoardCard["status"] = null) =>
+      serve({ cards: [cards[0]!, { ...reviewed, review, status }, cards[2]!] });
+    at({ id: "r1", prNumber: 552, phase: "ready", round: 1 });
+    renderApp(<BoardPage />, { route: "/?project=p1" });
+    expect(await line()).toHaveTextContent("PR #552 · ready to merge");
+
+    at({ id: "r1", prNumber: 552, phase: "ready", round: 1 }, "working");
+    await waitFor(async () => expect(await line()).toHaveTextContent("PR #552 · AI working on it"), { timeout: 6_000 });
+
+    at({ id: "r1", prNumber: 552, phase: "reviewing", round: 2 }, "waiting");
+    await waitFor(async () => expect(await line()).toHaveTextContent("PR #552 · round 2/3"), { timeout: 6_000 });
+  });
+
   it("clicking it with the card already open keeps the card open — the card's own row toggles, this does not", async () => {
     const user = userEvent.setup();
     renderApp(<><Url /><BoardPage /></>, { route: "/?project=p1&card=c2" });

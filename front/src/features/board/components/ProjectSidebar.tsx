@@ -983,7 +983,8 @@ function SidebarCard({
   // The PR line: the review's state under the card. A cancelled review is NO review (the server
   // never sends one on a card, and a stale cache must not bring the line back).
   const review = card.review && card.review.phase !== "cancelled" ? card.review : null;
-  const pill = reviewPill(review ?? undefined);
+  // A ready PR whose author's AI is working reads "IA mexendo": what it pushes goes back to the reviewer.
+  const pill = reviewPill(review ?? undefined, { authorWorking: card.status === "working" });
 
   return (
     <>

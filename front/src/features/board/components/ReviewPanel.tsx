@@ -9,14 +9,14 @@ import { get, post } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
 import { cn } from "@/lib/utils";
 import type {
-  Finding, FindingSeverity, PeopleResponse, Person, Review, ReviewEvent, ReviewPhase, ReviewResponse,
+  Finding, FindingSeverity, PeopleResponse, Person, Review, ReviewEvent, ReviewPhase,
 } from "@/api/types";
-import { CARDS_PREFIX_KEY } from "@/features/board/api";
 import { cardHref } from "@/features/board/lib/board";
 import {
-  IMPASSE_ROUNDS, MERGE_CONFIRM_MS, REVIEW_MAX_ROUNDS, REVIEW_POLL_MS, awaitingDecision, cardPeopleKey, cardReviewKey, findingCounts,
-  mergeFailure, pendingQuestions, reviewActions, reviewIsWorking, reviewPill, stuckItems,
+  IMPASSE_ROUNDS, MERGE_CONFIRM_MS, REVIEW_MAX_ROUNDS, awaitingDecision, cardPeopleKey, cardReviewKey, findingCounts,
+  mergeFailure, pendingQuestions, reviewActions, reviewPill, stuckItems,
 } from "@/features/board/lib/review";
+import { useLiveReview } from "@/features/board/lib/useLiveReview";
 import { useAuth } from "@/providers/auth";
 import { t as translate, useT } from "@/i18n";
 
@@ -35,7 +35,9 @@ import { t as translate, useT } from "@/i18n";
  *    stalled) and **cancel**.
  *
  * Who may do what is `reviewActions` (the server's own rules), so no button answers 403. While the
- * AIs work (`reviewing`/`fixing`) the review is re-read every 3 s; in every other phase it waits.
+ * review is open it is re-read every 3 s ({@link useLiveReview}), whatever the phase: it moves on its
+ * own (an AI's turn, a push after `ready`), and the panel follows. With the author's AI working on a
+ * `ready` PR, the pill reads "IA mexendo" and the merge waits for it to finish.
  */
 
 /** The feed shows this many of the latest entries until "ver inteira" is pressed. */
@@ -94,13 +96,7 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
   /** The merge button is held: a request is open, or its result is unknown. Cancel and retry wait too. */
   const mergeBusy = mergeWait || unconfirmed;
 
-  const reviewQuery = useQuery({
-    queryKey: key,
-    queryFn: () => get<ReviewResponse>(`/cards/${encodeURIComponent(cardId)}/review`).then((r) => r.review),
-    refetchInterval: (query) =>
-      reviewIsWorking(query.state.data?.phase) || mergeBusy ? REVIEW_POLL_MS : false,
-  });
-  const review = reviewQuery.data ?? null;
+  const { query: reviewQuery, review, working, apply } = useLiveReview(cardId);
 
   // The review carries user ids; the roles read better as names. Same key and shape as the request dialog's.
   const people = useQuery({
@@ -108,11 +104,6 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
     queryFn: () => get<PeopleResponse>(`/cards/${encodeURIComponent(cardId)}/people`).then((r) => r.people),
   });
 
-  const apply = (next: Review) => {
-    qc.setQueryData(key, next);
-    // The block in the chat and the line in the sidebar read the card's summary of this review.
-    void qc.invalidateQueries({ queryKey: CARDS_PREFIX_KEY });
-  };
   const reread = () => void qc.invalidateQueries({ queryKey: key });
 
   /** Decide / retry / cancel: one POST each, the review that comes back is the new truth. */
@@ -229,7 +220,12 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
     act.mutate({ path: "cancel" });
   };
 
-  const pill = review.phase === "cancelled" ? { key: "review.pill.cancelled", tone: "muted" as const } : reviewPill(review);
+  // The author's AI is on a PR that was ready: what it pushes goes back to the reviewer, so the merge
+  // waits for it to finish instead of racing it.
+  const authorOnReadyPr = review.phase === "ready" && working.author;
+  const pill = review.phase === "cancelled"
+    ? { key: "review.pill.cancelled", tone: "muted" as const }
+    : reviewPill(review, { authorWorking: working.author });
 
   return (
     <PanelFrame
@@ -239,6 +235,11 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
       // must not end up below the fold of a long list.
       footer={
         <>
+          {authorOnReadyPr && actions.merge ? (
+            <p role="status" className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-300">
+              {t("review.merge.authorWorking")}
+            </p>
+          ) : null}
           {mergeNote?.kind === "head_moved" ? (
             <p role="status" className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-300">
               {t("review.merge.headMoved")}
@@ -266,7 +267,7 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
                 type="button"
                 size="sm"
                 className="h-8 bg-emerald-600 px-3 text-xs text-white hover:bg-emerald-500"
-                disabled={mergeBusy}
+                disabled={mergeBusy || authorOnReadyPr}
                 onClick={() => merge.mutate()}
               >
                 {mergeBusy ? (
@@ -333,7 +334,7 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
           </Badge>
         </div>
         <Steps round={review.round} phase={review.phase} label={t("review.steps.aria", { round: review.round, max: REVIEW_MAX_ROUNDS })} />
-        <p className="text-xs text-muted-foreground">{stageText(review, t)}</p>
+        <p className="text-xs text-muted-foreground">{stageText(review, working.author, t)}</p>
         <dl data-testid="review-roles" className="grid grid-cols-2 gap-1.5 text-xs">
           <Role label={t("review.roles.reviewer")} name={nameOf(review.reviewerUserId)} />
           <Role label={t("review.roles.author")} name={nameOf(review.authorUserId)} />
@@ -613,7 +614,7 @@ function VerdictBox({ tone, children }: { tone: "ok" | "muted"; children: React.
 const isOpen = (phase: ReviewPhase): boolean => phase !== "merged" && phase !== "cancelled";
 
 /** One sentence on whose turn it is. */
-function stageText(review: Review, t: typeof translate): string {
+function stageText(review: Review, authorWorking: boolean, t: typeof translate): string {
   switch (review.phase) {
     case "reviewing":
       if (awaitingDecision(review)) return t("review.stage.decision");
@@ -623,7 +624,7 @@ function stageText(review: Review, t: typeof translate): string {
     case "fixing":
       return t("review.stage.fixing");
     case "ready":
-      return t("review.stage.ready");
+      return authorWorking ? t("review.stage.authorWorking") : t("review.stage.ready");
     case "impasse":
       return t("review.stage.impasse");
     case "merged":
