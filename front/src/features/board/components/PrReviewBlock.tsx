@@ -98,7 +98,7 @@ export function PrReviewBlock({ cardId, pr, review: summary, authorWorking = fal
 
 /**
  * The blocks of a card: one per PR it has open, newest first (see {@link visiblePrs}). Renders
- * nothing for a card that never opened one — which is most of them.
+ * nothing for a card with no open PR — which is most of them; a merged one leaves.
  *
  * A card with a review reads it LIVE ({@link useLiveReview}, the same query the panel reads): the
  * board's summary only moves when the sidebar polls, and the block must follow the review as it goes
@@ -114,10 +114,11 @@ export function PrReviewBlocks({
 }) {
   const reviewed = card.review !== undefined && card.review.phase !== "cancelled";
   const live = useLiveReview(card.id, { enabled: reviewed });
-  const prs = visiblePrs(card);
-  if (prs.length === 0) return null;
   // A cancelled review is no review: the board's summary (the latest that was not cancelled) speaks then.
   const current = live.review && live.review.phase !== "cancelled" ? live.review : card.review;
+  // By the live review: a merge the server just saw takes the block away before the board polls.
+  const prs = visiblePrs({ prs: card.prs, review: current });
+  if (prs.length === 0) return null;
   // The server's rule either way: the live read's `working`, or the board summary's until it lands.
   const authorWorking = live.query.data ? live.working.author : card.review?.authorWorking === true;
   return (

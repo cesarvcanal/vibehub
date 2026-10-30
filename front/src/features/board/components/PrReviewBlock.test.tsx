@@ -206,9 +206,9 @@ describe("PrReviewBlocks", () => {
 
   it("a cancelled live review gives the block back to the board's summary", async () => {
     live = { review: fullReview({ phase: "cancelled" }) };
-    renderApp(<PrReviewBlocks card={{ id: "c1", prs: [PR], review: reviewOf({ phase: "merged" }) }} onOpenPanel={() => {}} />);
+    renderApp(<PrReviewBlocks card={{ id: "c1", prs: [PR], review: reviewOf({ phase: "ready" }) }} onOpenPanel={() => {}} />);
     await waitFor(() => expect(reviewGets).toBe(1));
-    expect(screen.getByText("mergeado")).toBeInTheDocument();
+    expect(screen.getByText("pronto pra merge")).toBeInTheDocument();
   });
 
   it("renders nothing for a card with no PR", () => {
@@ -242,18 +242,23 @@ describe("PrReviewBlocks", () => {
     expect(screen.getAllByTestId("pr-review-block").map((b) => b.getAttribute("data-pr"))).toEqual(["12"]);
   });
 
-  it("the PR of the current merged review stays, reading 'mergeado', with no way to ask again", () => {
+  it("the PR of the current merged review leaves too: no 'mergeado' block above the composer", () => {
     renderApp(
       <PrReviewBlocks
         card={{ id: "c1", prs: [{ ...prs[0], mergedAt: 400 }, prs[1]], review: reviewOf({ prNumber: 10, phase: "merged" }) }}
         onOpenPanel={() => {}}
       />,
     );
-    const [newer, older] = screen.getAllByTestId("pr-review-block");
-    expect(newer.getAttribute("data-pr")).toBe("12");
-    expect(older.getAttribute("data-pr")).toBe("10");
-    expect(within(older).getByText("mergeado")).toBeInTheDocument();
-    expect(within(older).queryByRole("button", { name: "Pedir revisão" })).toBeNull();
+    expect(screen.getAllByTestId("pr-review-block").map((b) => b.getAttribute("data-pr"))).toEqual(["12"]);
+    expect(screen.queryByText("mergeado")).toBeNull();
+  });
+
+  it("the live read saying merged takes the block away before the board polls again", async () => {
+    live = { review: fullReview({ phase: "merged" }) };
+    const { container } = renderApp(
+      <PrReviewBlocks card={{ id: "c1", prs: [PR], review: reviewOf({ phase: "ready" }) }} onOpenPanel={() => {}} />,
+    );
+    await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
 
   it("hands the card's actor to the dialog as the suggested author", async () => {

@@ -1,6 +1,6 @@
 import type { BadgeTone } from "@/components/ui/badge";
 import type {
-  Card, CardPr, Finding, FindingSeverity, FindingStatus, Review, ReviewEvent, ReviewPhase, ReviewSummary, ReviewWorking,
+  CardPr, Finding, FindingSeverity, FindingStatus, Review, ReviewEvent, ReviewPhase, ReviewSummary, ReviewWorking,
 } from "@/api/types";
 
 /**
@@ -89,15 +89,20 @@ export function reviewPill(
 }
 
 /**
- * The PRs of a card the chat has a block for, newest first. A PR the server saw MERGED (`mergedAt`)
- * is done and leaves — except the one the card's current review summary is about, once that review
- * is merged: it stays as the "mergeado" line until a newer review takes the summary. A PR closed
- * without a merge is not tracked and stays. PURE — never reorders the card's own list.
+ * The PRs of a card the chat has a block for, newest first: only the ones still OPEN. A merged PR is
+ * work done and leaves the screen (its review's history stays in the panel). Merged is either what
+ * the server saw (`mergedAt`) or what the review says (`phase: "merged"`): the review can know first
+ * — a live read lands before the board polls — and a PR recorded before `mergedAt` existed has only
+ * the review's word. A PR closed without a merge is not tracked and stays. PURE — never reorders the
+ * card's own list.
  */
-export function visiblePrs(card: Pick<Card, "prs" | "review">): CardPr[] {
-  const mergedReview = card.review?.phase === "merged" ? card.review.prNumber : null;
+export function visiblePrs(card: {
+  prs?: CardPr[];
+  review?: Pick<ReviewSummary, "prNumber" | "phase">;
+}): CardPr[] {
+  const mergedByReview = card.review?.phase === "merged" ? card.review.prNumber : null;
   return (card.prs ?? [])
-    .filter((pr) => pr.mergedAt === undefined || pr.number === mergedReview)
+    .filter((pr) => pr.mergedAt === undefined && pr.number !== mergedByReview)
     .sort((a, b) => b.openedAt - a.openedAt);
 }
 

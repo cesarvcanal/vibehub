@@ -30,7 +30,7 @@ import {
   splitSidebarCards,
 } from "@/features/board/lib/board";
 import { CardStateIcon } from "@/features/board/components/CardStateIcon";
-import { reviewPill } from "@/features/board/lib/review";
+import { reviewIsOpen, reviewPill } from "@/features/board/lib/review";
 import { BADGE_TEXT } from "@/components/ui/badge";
 import { useExpandedProjects } from "@/features/board/lib/sidebarExpanded";
 import { RecentCards } from "@/features/board/components/RecentCards";
@@ -980,9 +980,10 @@ function SidebarCard({
   const { point, openAt, openAtPoint, close } = useContextMenuPoint();
   const longPress = useLongPress(openAtPoint);
 
-  // The PR line: the review's state under the card. A cancelled review is NO review (the server
-  // never sends one on a card, and a stale cache must not bring the line back).
-  const review = card.review && card.review.phase !== "cancelled" ? card.review : null;
+  // The PR line: the review's state under the card, while there is something to follow. A cancelled
+  // review is NO review (the server never sends one on a card, and a stale cache must not bring the
+  // line back); a merged one is work done — the line leaves, as the PR's block in the chat does.
+  const review = card.review && reviewIsOpen(card.review.phase) ? card.review : null;
   // A ready PR whose author's AI is working reads "IA mexendo" — the server's own rule (`isBusy`), sent
   // on the card's summary: what it pushes goes back to the reviewer.
   const pill = reviewPill(review ?? undefined, { authorWorking: review?.authorWorking === true });

@@ -118,19 +118,21 @@ describe("ProjectSidebar — a linha do PR embaixo do card", () => {
     const fixing = await screen.findByRole("link", { name: "PR #552 · rodada 2/3" });
     const ready = screen.getByRole("link", { name: "PR #553 · pronto pra merge" });
     const impasse = screen.getByRole("link", { name: "PR #551 · impasse" });
-    const merged = screen.getByRole("link", { name: "PR #550 · mergeado" });
 
-    // Cor pela fase: pronto verde, em andamento laranja, impasse azul, mergeado apagado.
+    // Cor pela fase: pronto verde, em andamento laranja, impasse azul.
     expect(ready).toHaveClass("text-emerald-400");
     expect(fixing).toHaveClass("text-amber-400");
     expect(impasse).toHaveClass("text-sky-400");
-    expect(merged).toHaveClass("text-muted-foreground");
 
-    // Fica embaixo do próprio card, e só os cards com revisão ganham a linha.
+    // Mergeado é trabalho feito: o card fica, a linha do PR sai.
+    expect(screen.getByRole("link", { name: "antigo" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^PR #550/ })).toBeNull();
+
+    // Fica embaixo do próprio card, e só os cards com revisão em aberto ganham a linha.
     const title = screen.getByRole("link", { name: "realtime" });
     expect(title.compareDocumentPosition(fixing) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(title.parentElement).toBe(fixing.parentElement);
-    expect(screen.getAllByRole("link", { name: /^PR #/ })).toHaveLength(4);
+    expect(screen.getAllByRole("link", { name: /^PR #/ })).toHaveLength(3);
     expect(screen.getByRole("link", { name: "sem pr" }).parentElement?.querySelectorAll("a")).toHaveLength(1);
   });
 
