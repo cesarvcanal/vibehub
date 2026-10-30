@@ -97,9 +97,10 @@ export function statusHookReach(): boolean | null {
  * from the tmux session environment (set when the card is opened); the token is READ FROM THE FILE
  * at call time so it never gets baked into settings.json. PURE.
  */
-export function hookCommand(status: "working" | "waiting"): string {
+export function hookCommand(status: "working" | "waiting", opts: { asText?: boolean } = {}): string {
   return (
     `curl -s -m 3 -X POST "$VIBEHUB_STATUS_URL" -H "x-vibehub-token: $(cat /root/.vibehub-token)"` +
+    (opts.asText ? ` -H "accept: text/plain"` : "") +
     ` -H "content-type: application/json" -d "{\\"card\\":\\"$VIBEHUB_CARD_ID\\",\\"status\\":\\"${status}\\"}" || true`
   );
 }
@@ -129,7 +130,9 @@ export interface RunnerSettingsOpts {
  * status is corrected at the first real action after a resume.
  */
 export function runnerSettingsJson(opts: RunnerSettingsOpts = { autonomous: true }): string {
-  const hook = (status: "working" | "waiting") => [{ hooks: [{ type: "command", command: hookCommand(status) }] }];
+  const hook = (status: "working" | "waiting", asText = false) => [
+    { hooks: [{ type: "command", command: hookCommand(status, { asText }) }] },
+  ];
   return JSON.stringify(
     {
       env: { CLAUDE_CODE_FORCE_SESSION_PERSISTENCE: "1" },
@@ -140,7 +143,9 @@ export function runnerSettingsJson(opts: RunnerSettingsOpts = { autonomous: true
       enableAllProjectMcpServers: true,
       hooks: {
         SessionStart: hook("waiting"),
-        UserPromptSubmit: hook("working"),
+        // What UserPromptSubmit prints goes into the agent's context: asked as text, the route only
+        // speaks when the card was reopened out of `done` (routes/board.ts).
+        UserPromptSubmit: hook("working", true),
         PreToolUse: hook("working"),
         Stop: hook("waiting"),
         PermissionRequest: hook("waiting"),

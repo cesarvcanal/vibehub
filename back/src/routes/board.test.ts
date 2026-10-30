@@ -538,6 +538,61 @@ describe("status callback", () => {
     expect(current.column).toBe("working");
   });
 
+  it("o prompt que tira o card de done recebe, em texto, o aviso de que ele não está mais concluído", async () => {
+    const projectId = await makeProject();
+    const card = await makeCard(projectId);
+    await app.inject({ method: "PATCH", url: `/api/cards/${card}`, headers: { cookie }, payload: { column: "done" } });
+
+    const resposta = await app.inject({
+      method: "POST", url: "/api/runner/status",
+      headers: { "x-vibehub-token": RUNNER_TOKEN, accept: "text/plain" },
+      payload: { card, status: "working" },
+    });
+
+    expect(resposta.statusCode).toBe(200);
+    expect(resposta.body).toContain("Este card estava em Concluído");
+    expect(resposta.body).toContain("vibehub_move_cards");
+  });
+
+  it("chat nativo: o driver reabre o card antes do hook chegar, e o hook do prompt ainda recebe o aviso — uma vez só", async () => {
+    const projectId = await makeProject();
+    const card = await makeCard(projectId);
+    await app.inject({ method: "PATCH", url: `/api/cards/${card}`, headers: { cookie }, payload: { column: "done" } });
+    const emTexto = { "x-vibehub-token": RUNNER_TOKEN, accept: "text/plain" };
+
+    // o manager do chat nativo reporta `working` (syncBoardStatus) antes de o CLI disparar o UserPromptSubmit
+    const { reportCardStatus } = await import("../services/board/status.js");
+    await reportCardStatus(card, "working");
+    const hookDoPrompt = await app.inject({
+      method: "POST", url: "/api/runner/status", headers: emTexto, payload: { card, status: "working" },
+    });
+    const proximoPrompt = await app.inject({
+      method: "POST", url: "/api/runner/status", headers: emTexto, payload: { card, status: "working" },
+    });
+
+    expect(hookDoPrompt.body).toContain("Este card estava em Concluído");
+    expect(proximoPrompt.body).toBe("");
+  });
+
+  it("o prompt de um card que não estava em done recebe texto vazio — nada vai para o contexto do agente", async () => {
+    const projectId = await makeProject();
+    const card = await makeCard(projectId);
+    const emTexto = { "x-vibehub-token": RUNNER_TOKEN, accept: "text/plain" };
+
+    const primeiroPrompt = await app.inject({
+      method: "POST", url: "/api/runner/status", headers: emTexto, payload: { card, status: "working" },
+    });
+    // concluído no meio do turno: as ferramentas seguintes do mesmo turno não o reabrem, nem avisam
+    await app.inject({ method: "PATCH", url: `/api/cards/${card}`, headers: { cookie }, payload: { column: "done" } });
+    const mesmoTurno = await app.inject({
+      method: "POST", url: "/api/runner/status", headers: emTexto, payload: { card, status: "working" },
+    });
+
+    expect(primeiroPrompt.statusCode).toBe(200);
+    expect(primeiroPrompt.body).toBe("");
+    expect(mesmoTurno.body).toBe("");
+  });
+
   it("um card concluído no meio do turno fica em done até a pessoa abrir um turno novo", async () => {
     const projectId = await makeProject();
     const card = await makeCard(projectId);
