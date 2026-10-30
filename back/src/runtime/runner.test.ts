@@ -56,6 +56,13 @@ describe("runnerSettingsJson", () => {
     expect(s.hooks.SessionStart?.[0].hooks[0].command).toContain('\\"waiting\\"');
     expect(s.hooks.UserPromptSubmit?.[0].hooks[0].command).toContain('\\"working\\"');
   });
+  it("o hook do prompt pede o status em texto — o que ele imprime entra no contexto do agente; os outros, não", () => {
+    const s = JSON.parse(runnerSettingsJson()) as { hooks: Record<string, [{ hooks: [{ command: string }] }]> };
+    expect(s.hooks.UserPromptSubmit?.[0].hooks[0].command).toContain('-H "accept: text/plain"');
+    for (const hook of ["PreToolUse", "SessionStart", "Stop", "Notification", "PermissionRequest", "StopFailure"]) {
+      expect(s.hooks[hook]?.[0].hooks[0].command).not.toContain("text/plain");
+    }
+  });
   it("only bypasses permissions when the install chose autonomy", () => {
     const auto = JSON.parse(runnerSettingsJson({ autonomous: true })) as Record<string, unknown>;
     const asks = JSON.parse(runnerSettingsJson({ autonomous: false })) as Record<string, unknown>;

@@ -315,6 +315,11 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
 
   /* ---------------------------------------------------------- status callback */
 
+  const CARD_REOPENED_NOTICE =
+    "[vibehub] Este card estava em Concluído e foi reaberto: agora ele está em Trabalhando. " +
+    "Não diga que ele está concluído. Se esta mensagem pede para concluir, chame vibehub_move_cards " +
+    "com column 'done' no fim deste turno e confira com vibehub_list_terminals.";
+
   /**
    * PUBLIC — the runner's Claude Code hooks POST here on every prompt, stop and permission request.
    * It is authenticated by the service token planted in the runner, not by a session, because the
@@ -335,7 +340,14 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
     if (status !== "working" && status !== "waiting") {
       return await reply.code(400).send({ error: "status must be 'working' or 'waiting'" });
     }
-    const card = await reportCardStatus(String(body.card ?? ""), status);
+    const cardId = String(body.card ?? "");
+    const card = await reportCardStatus(cardId, status);
+    // The UserPromptSubmit hook asks for text: what it prints goes into the agent's context. A card
+    // that was reopened out of `done` (by this report or by the native-chat driver just before it)
+    // tells its agent once, from the board — not from the memory of a `vibehub_move_cards` turns ago.
+    if (req.headers.accept === "text/plain") {
+      return await reply.type("text/plain").send((await registry.takeReopenedNotice(cardId)) ? CARD_REOPENED_NOTICE : "");
+    }
     return await reply.send({ ok: true, applied: Boolean(card) });
   });
 }
