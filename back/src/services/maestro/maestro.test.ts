@@ -35,7 +35,8 @@ beforeEach(async () => {
   runScript.mockResolvedValue({ stdout: "", stderr: "" });
   pipeCommand.mockClear();
 });
-afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+// reportState grava o evento needs_me fora do await (o card-events.json pode chegar junto do rm).
+afterEach(async () => { await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); });
 
 const card = (over: Record<string, unknown> = {}) => ({
   column: "waiting", status: null, openedAt: 1, pausedAt: null, ...over,
@@ -201,6 +202,19 @@ describe("listTerminals", () => {
     const list = await maestro.listTerminals();
     expect(list.map((t) => t.title)).toEqual(["in the backlog", "being worked on"]);
     expect(list[0]?.situation).toBe("no session");
+  });
+
+  it("leaves REVIEWER cards out: the PR review drives them, not other cards", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const author = await registry.createCard({ projectId: p.id, title: "login" });
+    await registry.createAccount({ name: "Mussa" });
+    const reviewer = await registry.createReviewerCard({
+      authorCard: author, reviewerAccountSlug: "mussa", prBranch: "card/login", title: "Revisão PR #7 · login",
+    });
+    const list = await maestro.listTerminals();
+    expect(list.map((t) => t.cardId)).toEqual([author.id]);
+    expect(list.some((t) => t.cardId === reviewer.id)).toBe(false);
   });
 
   it("filters by project name", async () => {

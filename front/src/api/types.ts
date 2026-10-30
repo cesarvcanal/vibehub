@@ -421,8 +421,41 @@ export interface Card {
    * the agent registered none. The server prunes entries whose port stopped listening.
    */
   previews?: CardPreview[];
+  /**
+   * Who is working the card right now (the person its commits and pushes go out as). The PR-review
+   * dialog suggests them as the author, the one who fixes what the reviewer finds. Absent = nobody
+   * recorded yet.
+   */
+  actorUserId?: string;
+  /**
+   * The pull requests the card delivered, one per base branch (`dev`, `prod`…). The chat shows one
+   * block for each, with the "Pedir revisão" button. Absent = the card never opened a PR.
+   */
+  prs?: CardPr[];
+  /**
+   * Summary of the card's most recent review that was not cancelled — enough for the block and the
+   * sidebar line; the full thing is `GET /api/cards/:id/review`. Absent = never reviewed.
+   */
+  review?: ReviewSummary;
   createdAt: number;
   updatedAt?: number;
+}
+
+/** A pull request the card delivered — see `Card.prs`. */
+export interface CardPr {
+  number: number;
+  url: string;
+  /** The branch the PR targets. */
+  base: string;
+  /** The PR's head: the card's own branch at the time of the delivery. */
+  branch: string;
+  /** When this base first got a PR from the card (epoch ms). */
+  openedAt: number;
+  /**
+   * When the server saw the PR MERGED (epoch ms): `deliver` writes it on a successful merge. Absent =
+   * open, or closed without a merge (not tracked). A merged PR leaves the chat and cannot be reviewed.
+   */
+  mergedAt?: number;
 }
 
 /** One preview the agent announced on a card — see `Card.previews`. */
@@ -490,6 +523,104 @@ export interface RestartAllResult {
 export interface UploadResult {
   /** Path of the uploaded file *inside the runner*. */
   path: string;
+}
+
+/* --------------------------------------------------------------- PR review */
+
+/** `cancelled` exists on the server but never reaches a card summary. */
+export type ReviewPhase = "reviewing" | "fixing" | "ready" | "impasse" | "merged" | "cancelled";
+export type FindingSeverity = "blocking" | "suggestion" | "question" | "refuted";
+export type FindingStatus = "open" | "fixed" | "contested" | "accepted_risk" | "dropped";
+
+/** What a board card carries about its review: the line of the block and of the sidebar. */
+export interface ReviewSummary {
+  id: string;
+  prNumber: number;
+  phase: ReviewPhase;
+  /** 1-based; the server stops at 3. */
+  round: number;
+  /**
+   * Doubts no human decided yet — only on a card's summary, and only when there is one. With the
+   * review in `reviewing`, the line reads "aguardando decisão" instead of the AIs' round.
+   */
+  pendingQuestions?: number;
+}
+
+export interface FindingProof {
+  kind: "failing_test" | "rule" | "scenario";
+  ref: string;
+  detail?: string;
+}
+
+export interface Finding {
+  id: string;
+  severity: FindingSeverity;
+  title: string;
+  file?: string;
+  line?: number;
+  proof?: FindingProof;
+  fix?: string;
+  status: FindingStatus;
+  introducedInRound: number;
+  commit?: string;
+  authorReply?: string;
+  reviewerReply?: string;
+  humanDecision?: "keep" | "accept_risk" | "block" | "drop";
+}
+
+export interface ReviewEvent {
+  at: number;
+  round: number;
+  who: "reviewer" | "author" | "system" | "human";
+  text: string;
+}
+
+/** `GET /api/cards/:id/review` — the whole review, as the panel reads it. */
+export interface Review extends ReviewSummary {
+  cardId: string;
+  projectId: string;
+  prUrl: string;
+  prBranch: string;
+  base: string;
+  reviewerUserId: string;
+  authorUserId: string;
+  coauthorUserId?: string;
+  mergerUserId: string;
+  reviewerCardId: string;
+  findings: Finding[];
+  log: ReviewEvent[];
+  reviewedSha?: string;
+  impasseReason?: string;
+  approvePending?: boolean;
+  /** The round the reviewer's AI last handed back: below `round`, the reviewer's turn is still open. */
+  lastSubmitRound?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ReviewResponse {
+  review: Review | null;
+}
+
+/** Somebody who can take a role in a review. `canReview` = has a Claude account of their own. */
+export interface Person {
+  id: string;
+  username: string;
+  canReview: boolean;
+}
+
+/** `GET /api/cards/:id/people` — members can call it, unlike `GET /api/users`. */
+export interface PeopleResponse {
+  people: Person[];
+}
+
+/** `POST /api/cards/:id/review`. Leave `coauthorUserId` OUT when nobody is chosen: "" is refused. */
+export interface StartReviewBody {
+  prNumber: number;
+  reviewerUserId: string;
+  authorUserId: string;
+  coauthorUserId?: string;
+  mergerUserId: string;
 }
 
 /* --------------------------------------------------------------- outbox */

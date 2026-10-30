@@ -269,6 +269,27 @@ export interface Project {
   createdAt: number;
 }
 
+/**
+ * A pull request the card delivered, one per BASE branch: what the PR review starts from. Written by
+ * `deliver` through {@link recordCardPr}; never by an HTTP body.
+ */
+export interface CardPr {
+  number: number;
+  url: string;
+  /** The branch the PR targets (`dev`, `prod`, ...). The key: a card has at most one PR per base. */
+  base: string;
+  /** The PR's head: the card's own branch at the time of the delivery. */
+  branch: string;
+  /** When this base first got a PR from the card (epoch ms); a repeated delivery keeps it. */
+  openedAt: number;
+  /**
+   * When the PR was MERGED (epoch ms), set by `deliver` through {@link markCardPrMerged} on either
+   * merge path. Absent = not known to be merged (open, or closed without a merge — which is not
+   * tracked). It belongs to THIS PR: a new number in the same base slot starts without it.
+   */
+  mergedAt?: number;
+}
+
 export interface Card {
   id: string;
   projectId: string;
@@ -398,6 +419,19 @@ export interface Card {
    * Stored as `true` or ABSENT — never `false`.
    */
   locked?: boolean;
+  /**
+   * The pull requests this card delivered, one per base branch (see {@link CardPr}). Absent = the card
+   * never opened one (or predates the field). Written by `deliver`, never through the HTTP edit.
+   */
+  prs?: CardPr[];
+  /**
+   * REVIEWER CARD — the id of the author card whose PR this card reviews. Present = the card exists
+   * only to review: it is born from the PR's branch, on the reviewer's account, never pushes or
+   * delivers (`deliver` refuses it), and it is meant to stay off the board's listings. Set only by
+   * {@link createReviewerCard}, at creation; outside the HTTP edit and outside `UpdateCardInput` on
+   * purpose, so nobody can turn a card into one (or out of one) with a PATCH. Absent = a normal card.
+   */
+  reviewOf?: string;
   /**
    * DECLARED STATE reported by the agent through `vibehub_report` — its own judgement of where the
    * task stands ({@link DeclaredState}). ORTHOGONAL to `status`/`column`: reporting it never moves
@@ -679,7 +713,7 @@ const store = new JsonStore<BoardDoc>(
       config: doc?.config && typeof doc.config === "object" ? doc.config : {},
       accounts: Array.isArray(doc?.accounts) ? doc.accounts : [],
       projects: Array.isArray(doc?.projects) ? doc.projects : [],
-      cards: assignBrowserSlots(readModelPins(Array.isArray(doc?.cards) ? doc.cards : [])),
+      cards: assignBrowserSlots(readReviewFields(readModelPins(Array.isArray(doc?.cards) ? doc.cards : []))),
       mcps: Array.isArray(doc?.mcps) ? doc.mcps : [],
       mcpDrops: Array.isArray(doc?.mcpDrops)
         ? (doc.mcpDrops as unknown[]).map(parseMcpDrop).filter((d): d is McpDrop => d !== null)
@@ -703,6 +737,30 @@ function readModelPins(cards: Card[]): Card[] {
     if (pin) card.model = pin;
   }
   return cards;
+}
+
+/**
+ * The PR-review fields of a card read from disk: `prs` and `reviewOf` are optional (a board.json
+ * from before the review has neither), and one that is there but malformed — a hand edit — is
+ * dropped instead of reaching `card.prs.find`. Mutates and returns `cards`.
+ */
+function readReviewFields(cards: Card[]): Card[] {
+  for (const card of cards) {
+    if (card.prs !== undefined) {
+      const valid = Array.isArray(card.prs) ? card.prs.filter(isCardPr) : [];
+      // A merge mark that is not a time (a hand edit) is dropped; the PR itself stays.
+      for (const pr of valid) if (pr.mergedAt !== undefined && typeof pr.mergedAt !== "number") delete pr.mergedAt;
+      card.prs = valid.length > 0 ? valid : undefined;
+    }
+    if (card.reviewOf !== undefined && (typeof card.reviewOf !== "string" || !card.reviewOf)) card.reviewOf = undefined;
+  }
+  return cards;
+}
+
+function isCardPr(v: unknown): v is CardPr {
+  const pr = v as Partial<CardPr> | null;
+  return !!pr && typeof pr === "object" && Number.isInteger(pr.number) && typeof pr.url === "string"
+    && typeof pr.base === "string" && typeof pr.branch === "string" && typeof pr.openedAt === "number";
 }
 
 /**
@@ -1504,11 +1562,23 @@ export interface CreateCardInput {
 }
 
 /**
+ * What only the SERVER decides about a new card — the third argument of {@link createCard}, which no
+ * route fills from a request body (the second one, `fields`, is what the POST hands over). Kept apart
+ * from `UpdateCardInput` so `reviewOf` can never be set or cleared by an HTTP edit.
+ */
+interface ServerCardInit {
+  /** Makes this a REVIEWER card of that author card (see `Card.reviewOf`). The author must exist. */
+  reviewOf?: string;
+  /** The card's own branch, derived from its slug — which does not exist before the id is drawn. */
+  branchFor?: (worktreeSlug: string) => string;
+}
+
+/**
  * Creates a card at the TOP of the backlog — the card you just named is the one you are about to
  * look for, so it must be the first thing in the column rather than buried under everything jotted
  * down before it. Base inherited from the project, session/slug DERIVED.
  */
-export async function createCard(input: CreateCardInput, fields: UpdateCardInput = {}): Promise<Card> {
+export async function createCard(input: CreateCardInput, fields: UpdateCardInput = {}, server: ServerCardInit = {}): Promise<Card> {
   const title = String(input.title ?? "").trim();
   if (!title) throw new Error("title is required");
   return store.mutate((doc) => {
@@ -1536,7 +1606,16 @@ export async function createCard(input: CreateCardInput, fields: UpdateCardInput
     };
     // Optional fields (account, model, branch, imported session) go through the edit's validation,
     // in THIS mutation: one that is refused leaves no bare card behind. No model named = Opus.
-    const withModel = fields.model === undefined ? { ...fields, model: DEFAULT_CARD_MODEL } : fields;
+    let withModel = fields.model === undefined ? { ...fields, model: DEFAULT_CARD_MODEL } : fields;
+    if (server.branchFor) withModel = { ...withModel, branch: server.branchFor(card.worktreeSlug) };
+    if (server.reviewOf !== undefined) {
+      // Checked against the document, not against the card the caller holds: it may be gone by now
+      // (or be a reviewer itself, which would start a chain nobody asked for).
+      const author = doc.cards.find((c) => c.id === server.reviewOf);
+      if (!author) throw new Error("author card not found");
+      if (author.reviewOf) throw new Error("a reviewer card cannot be reviewed");
+      card.reviewOf = author.id;
+    }
     const { next, move } = validateCardPatch(doc, card, withModel);
     Object.assign(card, next);
     doc.cards.push(card);
@@ -1546,6 +1625,70 @@ export async function createCard(input: CreateCardInput, fields: UpdateCardInput
     if (move) placeCard(doc.cards, card, move.column, move.position);
     return card;
   });
+}
+
+/**
+ * Records the PR a delivery opened on the card, one per BASE: the same base again is the same slot,
+ * updated in place (a PR closed and reopened gets a new number) with the `openedAt` of the first
+ * record. A card deleted while its delivery ran is a no-op, not an error.
+ */
+export async function recordCardPr(cardId: string, pr: Omit<CardPr, "openedAt">): Promise<void> {
+  if (!Number.isInteger(pr.number) || pr.number <= 0) throw new Error("invalid PR number");
+  const url = String(pr.url ?? "").trim();
+  if (!url) throw new Error("PR url is required");
+  const base = assertBranchName(pr.base);
+  const branch = assertBranchName(pr.branch);
+  await store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    if (!card) return;
+    const prs = card.prs ?? [];
+    const known = prs.find((p) => p.base === base);
+    if (known) {
+      // A new number in the slot is a new PR: the merge mark was the old one's.
+      if (known.number !== pr.number) delete known.mergedAt;
+      known.number = pr.number;
+      known.url = url;
+      known.branch = branch;
+    } else {
+      prs.push({ number: pr.number, url, base, branch, openedAt: Date.now() });
+    }
+    card.prs = prs;
+  });
+}
+
+/**
+ * Marks the card's PR of `base` as merged at `at`. Only the PR the slot holds (`number`): a slot that
+ * moved on to another PR, a base without one, a card with no PRs at all or a card deleted meanwhile
+ * is a no-op — never an invented PR, never the wrong one marked. Best-effort by contract: `deliver`
+ * calls it after the merge, which already happened.
+ */
+export async function markCardPrMerged(cardId: string, base: string, number: number, at: number): Promise<void> {
+  await store.mutate((doc) => {
+    const pr = doc.cards.find((c) => c.id === cardId)?.prs?.find((p) => p.base === base && p.number === number);
+    if (pr) pr.mergedAt = at;
+  });
+}
+
+/**
+ * Creates the card that REVIEWS another card's PR. It reuses {@link createCard}, so every field goes
+ * through the same validation (an unknown account or a bad branch creates nothing):
+ *  - `base` = the PR's branch, so the worktree is cut from exactly what is being reviewed;
+ *  - `branch` = `review/<its own slug>`: a branch of its own, never the PR's (the reviewer pushes
+ *    nothing — `deliver` refuses a card with `reviewOf`);
+ *  - the reviewer's Claude account, the author's project, and `waiting` — it starts at once.
+ */
+export async function createReviewerCard(input: {
+  authorCard: Card;
+  reviewerAccountSlug: string;
+  prBranch: string;
+  title: string;
+}): Promise<Card> {
+  const { authorCard } = input;
+  return createCard(
+    { projectId: authorCard.projectId, title: input.title },
+    { base: input.prBranch, accountSlug: input.reviewerAccountSlug, column: "waiting" },
+    { reviewOf: authorCard.id, branchFor: (slug) => `review/${slug}` },
+  );
 }
 
 export interface UpdateCardInput {

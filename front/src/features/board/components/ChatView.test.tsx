@@ -101,6 +101,20 @@ describe("ChatView", () => {
     expect(onStatus).toHaveBeenCalledWith("open");
   });
 
+  it("o slot footer fica logo acima do composer (é onde o card põe o que é do card, não da conversa)", async () => {
+    renderChat({ footer: <div data-testid="chat-footer-slot">PR #553</div> });
+    await socket();
+
+    const footer = screen.getByTestId("chat-footer-slot");
+    expect(footer.nextElementSibling).toBe(screen.getByTestId("terminal-composer"));
+  });
+
+  it("sem footer não sobra nada no lugar dele", async () => {
+    renderChat();
+    await socket();
+    expect(screen.queryByTestId("chat-footer-slot")).toBeNull();
+  });
+
   /**
    * The handshake is not health: the back accepts the socket and closes it right away when it
    * cannot open the card's chat (card gone, transcript unreadable). Resetting the backoff on the

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useLocation } from "react-router-dom";
 import { BoardPage } from "@/features/board/BoardPage";
 import { renderApp } from "@/test/render";
 import { del, get, patch, post } from "@/lib/api";
@@ -1074,5 +1075,45 @@ describe("BoardPage — the terminal deck", () => {
     await user.click(screen.getByRole("button", { name: /delete project/i }));
 
     await waitFor(() => expect(livePanes()).toEqual([]));
+  });
+});
+
+describe("BoardPage — the PR line asks for the review panel", () => {
+  const reviewed: BoardCard = {
+    ...cards[1]!,
+    review: { id: "r1", prNumber: 552, phase: "fixing", round: 2 },
+  };
+
+  /** The URL the router holds. */
+  function Url() {
+    const { search } = useLocation();
+    return <output data-testid="url">{search}</output>;
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    serve({ cards: [cards[0]!, reviewed, cards[2]!] });
+  });
+
+  it("clicking it from the board opens the card with ?review=1 in the URL", async () => {
+    const user = userEvent.setup();
+    renderApp(<><Url /><BoardPage /></>, { route: "/?project=p1" });
+
+    await user.click(await within(await screen.findByRole("navigation", { name: /projects/i })).findByRole("link", { name: /PR #552/ }));
+
+    await waitFor(() => expect(activeTerminal()).toHaveTextContent("c2"));
+    expect(screen.getByTestId("url")).toHaveTextContent("?project=p1&card=c2&review=1");
+  });
+
+  it("clicking it with the card already open keeps the card open — the card's own row toggles, this does not", async () => {
+    const user = userEvent.setup();
+    renderApp(<><Url /><BoardPage /></>, { route: "/?project=p1&card=c2" });
+    await waitFor(() => expect(activeTerminal()).toHaveTextContent("c2"));
+
+    await user.click(await within(sidebar()).findByRole("link", { name: /PR #552/ }));
+
+    await waitFor(() => expect(screen.getByTestId("url")).toHaveTextContent("review=1"));
+    expect(screen.getByTestId("url")).toHaveTextContent("card=c2");
+    expect(activeTerminal()).toHaveTextContent("c2");
   });
 });

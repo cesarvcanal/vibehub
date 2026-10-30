@@ -113,6 +113,19 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(description).toContain("your own project");
   });
 
+  it("register the two PR-review tools, and neither one merges", () => {
+    const server = createMcpServer("test") as unknown as {
+      _registeredTools?: Record<string, { description?: string }>;
+    };
+    const tools = server._registeredTools ?? {};
+    for (const name of ["vibehub_review_submit", "vibehub_review_respond"]) {
+      const description = tools[name]?.description ?? "";
+      expect(description).toContain("never merges; the merge is a human button");
+      // Who may call it is part of the contract: the card says who it is.
+      expect(description).toContain("$VIBEHUB_CARD_ID");
+    }
+  });
+
   it("register the Cofre tools and instruct on using them for logins", () => {
     const server = createMcpServer("test") as unknown as {
       _registeredTools?: Record<string, unknown>;
