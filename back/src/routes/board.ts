@@ -13,6 +13,7 @@ import { runnerToken } from "../runtime/runner.js";
 import { listReviewsForCards } from "../services/review/store.js";
 import { pendingQuestions, type Review } from "../services/review/model.js";
 import { logger } from "../utils/logger.js";
+import { isBusy } from "../services/maestro/maestro.js";
 
 /**
  * BOARD — projects, cards, accounts, and the public status callback the runner's Claude hooks fire.
@@ -34,7 +35,7 @@ function badRequest(err: unknown): { code: number; body: { error: string } } {
  * `pendingQuestions` (only when there is one) counts the doubts no human decided yet — the line reads
  * "aguardando decisão" instead of the orange "rodada N/3" that means the AIs are on it.
  */
-type ReviewSummary = Pick<Review, "id" | "prNumber" | "phase" | "round"> & { pendingQuestions?: number };
+type ReviewSummary = Pick<Review, "id" | "prNumber" | "phase" | "round"> & { pendingQuestions?: number; authorWorking?: boolean };
 type BoardCard = registry.Card & { review?: ReviewSummary };
 
 /**
@@ -56,6 +57,8 @@ async function withReviewSummary(cards: registry.Card[]): Promise<BoardCard[]> {
     const waiting = pendingQuestions(r.findings).length;
     const review: ReviewSummary = { id: r.id, prNumber: r.prNumber, phase: r.phase, round: r.round };
     if (waiting > 0) review.pendingQuestions = waiting;
+    // Pronto, com a IA do autor num turno (hooks ou chat nativo): a linha diz "IA mexendo".
+    if (r.phase === "ready" && isBusy(c)) review.authorWorking = true;
     return { ...c, review };
   });
 }

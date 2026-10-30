@@ -984,7 +984,7 @@ function SidebarCard({
   // never sends one on a card, and a stale cache must not bring the line back).
   const review = card.review && card.review.phase !== "cancelled" ? card.review : null;
   // A ready PR whose author's AI is working reads "IA mexendo": what it pushes goes back to the reviewer.
-  const pill = reviewPill(review ?? undefined, { authorWorking: card.status === "working" });
+  const pill = reviewPill(review ?? undefined, { authorWorking: review?.authorWorking === true || card.status === "working" });
 
   return (
     <>

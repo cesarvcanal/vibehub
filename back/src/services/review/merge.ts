@@ -7,7 +7,7 @@ import { getSettings } from "../settings/settings.js";
 import { deliver, type DeliverResult } from "../maestro/deliver.js";
 import { logger } from "../../utils/logger.js";
 import type { Review, ReviewPhase } from "./model.js";
-import { markReviewMerged, reopenAfterHeadMoved } from "./orchestrator.js";
+import { claimMerge, markReviewMerged, releaseMerge, reopenAfterHeadMoved } from "./orchestrator.js";
 import { getReview } from "./store.js";
 
 /**
@@ -18,8 +18,8 @@ import { getReview } from "./store.js";
  *  - só o `mergerUserId`, só em `ready`, só com o commit revisado gravado;
  *  - o responsável precisa de `work` no card do autor (conferido de novo aqui: um share que caiu
  *    depois do início tira o merge também) e de uma conexão GitHub PRÓPRIA (`ownGithubConnection`);
- *  - um merge por vez por revisão (`merging`): um segundo clique, ou o deliver junto do botão, não
- *    dispara um segundo;
+ *  - um merge por vez por revisão (`claimMerge`): um segundo clique, ou o deliver junto do botão, não
+ *    dispara um segundo — e a conferência do GitHub não fecha por fora um merge que está saindo;
  *  - o deliver roda em modo só-merge, preso ao commit que o revisor aprovou: um PR que andou volta
  *    `head_moved` e a revisão é reaberta (rodada seguinte, ou impasse na última); CI vermelho volta
  *    `gate`; mergeado, a revisão fecha como no botão (avisos, card do revisor para `done`).
@@ -39,9 +39,6 @@ export type ReviewMergeOutcome =
     review?: Review;
     result?: DeliverResult;
   };
-
-/** Revisões com merge em andamento: um segundo pedido (outro clique, o deliver) não dispara um segundo deliver. */
-const merging = new Set<string>();
 
 /**
  * A conexão GitHub PRÓPRIA de quem tem um papel que sai na conta dele: o merger (o merge) e o revisor
@@ -91,8 +88,7 @@ export async function mergeReviewedPr(reviewId: string, userId: string): Promise
       error: "merger_sem_github: o responsável pelo merge não tem uma conexão GitHub própria no vibehub",
     };
   }
-  if (merging.has(review.id)) return { kind: "refused", status: 409, reason: "merging", error: "merge já em andamento" };
-  merging.add(review.id);
+  if (!claimMerge(review.id)) return { kind: "refused", status: 409, reason: "merging", error: "merge já em andamento" };
   try {
     // Relida com a trava na mão: um pedido anterior pode ter acabado (merged) entre a leitura e aqui.
     const now = await getReview(review.id);
@@ -124,6 +120,6 @@ export async function mergeReviewedPr(reviewId: string, userId: string): Promise
     logger.warn({ review: review.id, detail: (err as Error).message }, "PR review merge failed");
     return { kind: "refused", status: 500, error: (err as Error).message };
   } finally {
-    merging.delete(review.id);
+    releaseMerge(review.id);
   }
 }

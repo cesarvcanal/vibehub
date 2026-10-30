@@ -336,6 +336,16 @@ describe("revisão de PR no board", () => {
     expect(one.review).toEqual(listed.review);
   });
 
+  it("revisão pronta com a IA do autor num turno: o resumo leva authorWorking (a linha diz 'IA mexendo')", async () => {
+    const projectId = await makeProject();
+    const authorId = await makeCard(projectId, "login");
+    await review(authorId, projectId, { id: "r-ready", phase: "ready", createdAt: 1_000 });
+    const read = async () => (await app.inject({ method: "GET", url: "/api/cards", headers: { cookie } })).json().cards[0].review;
+    expect(await read()).toEqual({ id: "r-ready", prNumber: 7, phase: "ready", round: 1 });
+    await (await registry()).applyCardStatus(authorId, "working");
+    expect(await read()).toEqual({ id: "r-ready", prNumber: 7, phase: "ready", round: 1, authorWorking: true });
+  });
+
   it("revisão cancelada some do resumo; mergeada continua (a linha diz mergeado)", async () => {
     const projectId = await makeProject();
     const authorId = await makeCard(projectId, "login");

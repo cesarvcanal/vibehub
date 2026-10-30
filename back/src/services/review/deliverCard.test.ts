@@ -122,6 +122,20 @@ describe("deliverCard — o vibehub_deliver com revisão de PR ativa", () => {
     });
   });
 
+  it("entregar pra outra base com a revisão ativa: recusa antes de qualquer script (não abre um PR solto sem revisão)", async () => {
+    const { deliverCard, card } = await cardUnderReview("ready", "u-m");
+    const out = await deliverCard(card.id, { branch: "prod", authorized: true });
+    expect(deliver).not.toHaveBeenCalled();
+    expect(out).toMatchObject({ merged: false, reason: "review_active", branch: "prod" });
+    expect(out.output).toMatch(/PR #7 pra dev/);
+  });
+
+  it("sem branch, a entrega vai pra base da revisão (não pra base do projeto)", async () => {
+    const { deliverCard, card } = await cardUnderReview("fixing", "u-a");
+    await deliverCard(card.id, { authorized: true });
+    expect(deliver).toHaveBeenCalledWith(card.id, expect.objectContaining({ branch: "dev", pushOnly: true }));
+  });
+
   it("push que falha volta como veio, sem tentar merge", async () => {
     const { deliverCard, card } = await cardUnderReview("ready", "u-m");
     deliverAnswer = { merged: false, reason: "push_failed", branch: "dev", cardBranch: "card/x", output: "rejected" };

@@ -23,7 +23,15 @@ export async function deliverCard(cardId: string, opts: Pick<DeliverOpts, "branc
   const review = opts.authorized === true ? await activeReviewFor(cardId) : undefined;
   if (!review) return await deliver(cardId, opts);
 
-  const pushed = await deliver(cardId, { branch: opts.branch, by: opts.by, pushOnly: true });
+  // A entrega é do PR em revisão: outra base abriria um PR novo, solto, que ninguém revisou.
+  const target = opts.branch ?? review.base;
+  if (target !== review.base) {
+    return {
+      merged: false, reason: "review_active", branch: target, cardBranch: review.prBranch,
+      output: `o PR #${review.prNumber} pra ${review.base} está em revisão: entregar pra ${target} fica para depois do merge dele. Nada foi feito.`,
+    };
+  }
+  const pushed = await deliver(cardId, { branch: review.base, by: opts.by, pushOnly: true });
   if (pushed.reason !== "pushed") return pushed;
   const card = await getCard(cardId);
   const merger = (await findUser(review.mergerUserId))?.username ?? review.mergerUserId;

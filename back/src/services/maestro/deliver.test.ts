@@ -628,6 +628,15 @@ describe("a branch do card sai do GitHub depois do merge (o trabalho já está n
     expect(await deliver.deliver(card.id, { branch: "dev", authorized: true })).toMatchObject({ merged: true, headBranch: "kept" });
   });
 
+  it("branch que uma pessoa nomeou (não é a card/<slug> do vibehub, ex.: dev) nunca é apagada", async () => {
+    const { deliver, registry, card } = await makeCard();
+    await registry.updateCard(card.id, { branch: "dev" });
+    wireDelete("__VIBEHUB_DELIVER__ branch deleted");
+    const out = await deliver.deliver(card.id, { branch: "prod", authorized: true });
+    expect(out).toMatchObject({ merged: true, headBranch: "kept", cardBranch: "dev" });
+    expect(deleteScript()).toBeUndefined();
+  });
+
   it("falha ao apagar não desfaz o merge: volta merged, com a branch marcada como falha", async () => {
     const { deliver, card } = await makeCard();
     wireDelete("boom\n__VIBEHUB_DELIVER__ branch error delete");
@@ -649,6 +658,8 @@ describe("buildDeleteBranchScript / parseDeleteBranch", () => {
     const { deliver } = await load();
     const script = deliver.buildDeleteBranchScript("vibehub-runner", "c1", TOKEN, "/work/x", PR, "card/the-fix-ab12");
     expect(script).toContain("defaultBranchRef");
+    // sem conseguir ler a branch padrão, não apaga nada (a trava não pode falhar aberta)
+    expect(script).toContain('if [ -z "$DEF" ]; then');
     expect(script).toContain("gh pr list --repo 'acme/repo' --head 'card/the-fix-ab12' --state open");
     expect(script).toContain("gh api -X DELETE 'repos/acme/repo/git/refs/heads/card/the-fix-ab12'");
     for (const line of script.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);

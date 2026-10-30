@@ -429,6 +429,8 @@ export function buildDeleteBranchScript(
     ...ghTokenPreamble(token),
     `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
     `DEF=$(gh repo view ${shQuote(repo)} --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null)`,
+    // Without the default branch in hand the guard cannot be checked: nothing is deleted.
+    `if [ -z "$DEF" ]; then echo "${MARKER} error repo"; exit 0; fi`,
     `if [ "$DEF" = ${shQuote(branch)} ]; then echo "${MARKER} branch kept"; exit 0; fi`,
     `if ! OPEN=$(gh pr list --repo ${shQuote(repo)} --head ${shQuote(branch)} --state open --json number --jq length 2>&1); then`,
     `  printf '%s\\n' "$OPEN"; echo "${MARKER} error list"; exit 0;`,
@@ -569,7 +571,9 @@ async function rememberPr(card: Card, prUrl: string, base: string, branch: strin
  * (made by hand, outside the panel):
  *  - the card's PR is marked merged, so the chat stops offering a review of it and the review refuses
  *    to start one;
- *  - the PR's branch leaves GitHub ({@link deleteMergedBranch}: the work is in the base now).
+ *  - the PR's branch leaves GitHub ({@link deleteMergedBranch}: the work is in the base now) — but
+ *    ONLY the branch vibehub itself made for the card (`card/<slug>`). A branch a person named (a
+ *    card patched to work on `dev`, say) is somebody's long-lived branch, never deleted from here.
  * Best-effort like {@link rememberPr}: the merge is DONE, and a note about it that could not be
  * written must not turn it into a failure. Returns what became of the branch.
  */
@@ -584,6 +588,8 @@ export async function afterPrMerged(
       logger.warn({ card: cardId, detail: (err as Error).message }, "could not mark the PR as merged on the card");
     }
   }
+  const card = await getCard(cardId);
+  if (!card || branch !== `card/${card.worktreeSlug}`) return "kept";
   return await deleteMergedBranch(cardId, prUrl, branch, connectionId);
 }
 

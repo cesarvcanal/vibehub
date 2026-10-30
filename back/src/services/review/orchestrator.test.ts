@@ -641,6 +641,41 @@ describe("resposta do autor", () => {
     expect((await o.store.getReview(review.id))).toMatchObject({ phase: "fixing", round: 1 });
   });
 
+  it("resposta mal formada a um item que seria ignorado (fechado) não derruba as respostas válidas", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER, SUGGESTION], headSha: SHA1, summary: "r1" });
+    await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", reply: "ok" }], headSha: SHA2 });
+    const ready = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 2, findings: [], verdicts: [{ id: "f1", status: "fixed" }], headSha: SHA2, summary: "ok",
+    });
+    expect(ready.phase).toBe("ready");
+    const after = await o.orch.submitAuthorResponse(author.id, {
+      round: 2, items: [{ id: "f2", status: "fixed", reply: "renomeei" }, { id: "f1", status: "wontfix", reply: "" }], headSha: SHA3,
+    });
+    expect(after.findings.find((f) => f.id === "f2")).toMatchObject({ status: "fixed" });
+    expect(after.findings.find((f) => f.id === "f1")).toMatchObject({ status: "fixed" });
+  });
+
+  it("sugestão que o revisor já tinha respondido volta ao delta quando o autor responde de novo", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER, SUGGESTION], headSha: SHA1, summary: "r1" });
+    await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", reply: "ok" }], headSha: SHA2 });
+    await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 2, findings: [],
+      verdicts: [{ id: "f1", status: "open", reviewerReply: "ainda vaza" }, { id: "f2", status: "open", reviewerReply: "não aplicou" }],
+      headSha: SHA2, summary: "r2",
+    });
+    send.mockClear();
+    await o.orch.submitAuthorResponse(author.id, {
+      round: 2, items: [{ id: "f1", status: "fixed", reply: "agora sim" }, { id: "f2", status: "wontfix", reply: "fora do escopo" }], headSha: SHA3,
+    });
+    expect(lastText()).toContain("rodada 3 de 3");
+    expect(lastText()).toContain("nome de variável confuso");
+    expect(lastText()).toContain("fora do escopo");
+  });
+
   it("revisão encerrada não aceita resposta a sugestão", async () => {
     const o = await load();
     const { author, review } = await started(o);
@@ -1313,6 +1348,23 @@ describe("o PR mudou no GitHub fora do painel (merge à mão, PR fechado)", () =
     expect(after?.log.at(-1)?.text).toMatch(/fechado no GitHub sem merge/);
     expect(afterMerged).not.toHaveBeenCalled();
     expect(await o.store.activeReviewFor(review.cardId, 7)).toBeUndefined();
+  });
+
+  it("com o merge do botão em andamento, a conferência do GitHub não fecha a revisão como 'fora do painel'", async () => {
+    const o = await load();
+    const { review } = await readyReview(o);
+    prHeadNow = SHA1;
+    prStateNow = "MERGED";
+    expect(o.orch.claimMerge(review.id)).toBe(true);
+    try {
+      expect((await o.orch.syncReviewWithGithub(review.id))?.phase).toBe("ready");
+      expect(afterMerged).not.toHaveBeenCalled();
+      // um segundo merge ao mesmo tempo não pega a vez
+      expect(o.orch.claimMerge(review.id)).toBe(false);
+    } finally {
+      o.orch.releaseMerge(review.id);
+    }
+    expect((await o.orch.syncReviewWithGithub(review.id))?.phase).toBe("merged");
   });
 
   it("revisão já encerrada não vai ao GitHub; leitura que falha não muda nada", async () => {

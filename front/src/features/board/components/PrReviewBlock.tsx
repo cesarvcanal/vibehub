@@ -118,7 +118,7 @@ export function PrReviewBlocks({
   if (prs.length === 0) return null;
   // A cancelled review is no review: the board's summary (the latest that was not cancelled) speaks then.
   const current = live.review && live.review.phase !== "cancelled" ? live.review : card.review;
-  const authorWorking = live.query.data ? live.working.author : card.status === "working";
+  const authorWorking = live.query.data ? live.working.author : card.review?.authorWorking === true || card.status === "working";
   return (
     <>
       {prs.map((pr) => (

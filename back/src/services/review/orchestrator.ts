@@ -562,20 +562,26 @@ export async function submitAuthorResponse(
     throw new Error(`status inválido (${bad.map((it) => it.id).join(", ")}): o autor responde fixed, contested ou wontfix`);
   }
   const headSha = assertHeadSha(payload.headSha);
-  // As recusas valem antes da mutação: uma resposta mal formada não muda nada.
-  applyAuthorResponses(review, payload.items.filter((it) => review.findings.some((f) => f.id === it.id)));
-
   const fresh = (r: Review) => r.phase === "fixing" && payload.round === r.round && r.lastRespondRound !== payload.round;
+  // Na rodada vale o que bloqueia e as sugestões; fora dela, só as sugestões. O resto vai ao log.
+  const answerableIn = (r: Review) => {
+    const round = fresh(r);
+    const known = new Map(r.findings.map((f) => [f.id, f]));
+    return (it: AuthorAnswer) => {
+      const f = known.get(it.id);
+      return !!f && (answerableSuggestion(f) || (round && actionableForAuthor(f)));
+    };
+  };
+  // As recusas valem antes da mutação, e só sobre o que ela vai aceitar: uma resposta mal formada a
+  // um item que seria ignorado não derruba as outras.
+  applyAuthorResponses(review, payload.items.filter(answerableIn(review)));
+
   let opened = false as boolean;
   const after = await mutateReview(review.id, (r) => {
     if (CLOSED.has(r.phase)) return;
     const round = fresh(r);
     const known = new Map(r.findings.map((f) => [f.id, f]));
-    // Na rodada vale o que bloqueia e as sugestões; fora dela, só as sugestões.
-    const answerable = (it: AuthorAnswer) => {
-      const f = known.get(it.id);
-      return !!f && (answerableSuggestion(f) || (round && actionableForAuthor(f)));
-    };
+    const answerable = answerableIn(r);
     // Fora da rodada, a mesma resposta de novo não grava outra fala.
     const changed = (it: AuthorAnswer) => {
       const f = known.get(it.id)!;
@@ -837,9 +843,11 @@ export async function reopenAfterHeadMoved(
  */
 export async function syncReviewWithGithub(reviewId: string): Promise<Review | undefined> {
   const r = await getReview(reviewId);
-  if (!r || CLOSED.has(r.phase)) return r;
+  // Com o merge do botão em andamento, o PR aparece MERGED antes de o botão fechar a revisão: é ele
+  // quem fecha (com o nome de quem mergeou), não esta conferência.
+  if (!r || CLOSED.has(r.phase) || merging.has(r.id)) return r;
   const pr = await readPrState(r.cardId, r.prUrl);
-  if (!pr) return r;
+  if (!pr || merging.has(r.id)) return r;
   if (pr.state === "MERGED") {
     const after = await markReviewMerged(r.id, "GitHub", { outsidePanel: { headSha: pr.headSha } });
     await afterPrMerged(r.cardId, r.prUrl, r.base, r.prBranch);
@@ -859,6 +867,20 @@ export async function syncReviewWithGithub(reviewId: string): Promise<Review | u
     return await reopenAfterHeadMoved(r.id, "fim do turno do autor", { cause: "push", headSha: pr.headSha });
   }
   return seen;
+}
+
+/** Revisões com merge em andamento (o botão, ou o deliver do responsável): um por vez. */
+const merging = new Set<string>();
+
+/** Pega a vez do merge desta revisão; false = já há um em andamento. Devolva com {@link releaseMerge}. */
+export function claimMerge(reviewId: string): boolean {
+  if (merging.has(reviewId)) return false;
+  merging.add(reviewId);
+  return true;
+}
+
+export function releaseMerge(reviewId: string): void {
+  merging.delete(reviewId);
 }
 
 /** De quanto em quanto tempo, no máximo, o painel aberto faz o servidor conferir o PR no GitHub. */

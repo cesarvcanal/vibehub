@@ -156,15 +156,24 @@ export function reviewerRoundPrompt(r: Review): string {
   ].join("\n");
 }
 
+/** Os achados que o autor respondeu depois da última fala do revisor: o que o revisor ainda não conferiu. */
+function answeredSinceReviewer(r: Review): Set<string> {
+  const lastReviewer = r.log.map((e) => e.who).lastIndexOf("reviewer");
+  const ids = new Set<string>();
+  for (const e of r.log.slice(lastReviewer + 1)) {
+    if (e.who === "author") for (const it of e.items ?? []) ids.add(it.id);
+  }
+  return ids;
+}
+
 /** Rodada 2+: só o diff desde a rodada anterior, contra a lista fechada. */
 export function reviewerDeltaPrompt(r: Review): string {
   const judged = r.findings.filter(underReview);
   const humanBlocked = judged.filter((f) => f.humanDecision === "block" || f.humanDecision === "keep");
   const waiting = pendingQuestions(r.findings);
-  // As sugestões em aberto, e as que o autor respondeu e o revisor ainda não conferiu.
-  const suggestions = r.findings.filter(
-    (f) => f.severity === "suggestion" && (f.status === "open" || (f.authorReply !== undefined && f.reviewerReply === undefined)),
-  );
+  // As sugestões em aberto, e as que o autor respondeu depois da última fala do revisor (ele ainda não conferiu).
+  const answered = answeredSinceReviewer(r);
+  const suggestions = r.findings.filter((f) => f.severity === "suggestion" && (f.status === "open" || answered.has(f.id)));
   const since = r.reviewedSha
     ? `git diff ${r.reviewedSha}..HEAD`
     : "o PR inteiro (não há sha da rodada anterior)";

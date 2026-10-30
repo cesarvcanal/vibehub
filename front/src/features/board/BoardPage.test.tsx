@@ -1118,7 +1118,11 @@ describe("BoardPage — the PR line asks for the review panel", () => {
 
     at({ id: "r1", prNumber: 552, phase: "reviewing", round: 2 }, "waiting");
     await waitFor(async () => expect(await line()).toHaveTextContent("PR #552 · round 2/3"), { timeout: 6_000 });
-  });
+
+    // A native-chat card mid-turn may not report the hook status: the server's summary says it.
+    at({ id: "r1", prNumber: 552, phase: "ready", round: 2, authorWorking: true }, null);
+    await waitFor(async () => expect(await line()).toHaveTextContent("PR #552 · AI working on it"), { timeout: 6_000 });
+  }, 30_000);
 
   it("clicking it with the card already open keeps the card open — the card's own row toggles, this does not", async () => {
     const user = userEvent.setup();
