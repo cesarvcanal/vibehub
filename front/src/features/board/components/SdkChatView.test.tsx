@@ -14,7 +14,7 @@ import { get } from "@/lib/api";
 import { LinkifiedText, Markdown } from "@/features/board/components/ChatView";
 import { resetDraftsForTesting } from "@/features/board/components/TerminalComposer";
 import { ME_KEY } from "@/providers/auth";
-import { fleetPropsEqual } from "@/features/board/components/SdkDetail";
+import { ACTION_POLL_MS, fleetPropsEqual } from "@/features/board/components/SdkDetail";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -4647,6 +4647,77 @@ describe("SdkChatView — o detalhe de cada ação", () => {
     ws.deliver({ type: "detail", req: "tool", id: "n1", nonce: ask.nonce, data: { found: false } } as never);
     expect(await within(dialog).findByTestId("sdk-detail-pending")).toHaveTextContent("Still running");
     expect(within(dialog).queryByTestId("sdk-detail-missing")).toBeNull();
+  });
+
+  it("comando em segundo plano: mostra a saída real e acompanha ao vivo até a tarefa terminar", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready" });
+      ws.deliver({ type: "tool_use", id: "g1", name: "Bash", input: { command: "npm run dev", run_in_background: true } });
+      ws.deliver({ type: "tool_result", id: "g1", toolResult: { background: true } });
+      fireEvent.click(screen.getByTestId("sdk-tool"));
+      const dialog = await screen.findByTestId("sdk-detail");
+      await waitFor(() => expect(detailAsks(ws).some((f) => f.id === "g1")).toBe(true));
+      const base = { found: true, by: "main", name: "Bash", input: { command: "npm run dev", run_in_background: true }, text: "Command running in background with ID: bx1.", structured: { stdout: "", stderr: "", backgroundTaskId: "bx1" }, result: { lines: 1 } };
+      ws.deliver({ type: "detail", req: "tool", id: "g1", nonce: detailAsks(ws).at(-1)!.nonce, data: { ...base, background: { taskId: "bx1", status: "running", output: "subindo\n", outputLength: 8 } } } as never);
+      expect(await within(dialog).findByText("subindo")).toBeInTheDocument();
+      expect(within(dialog).getByTestId("sdk-detail-status")).toHaveAttribute("data-status", "running");
+      expect(within(dialog).getByTestId("sdk-detail-bg")).toHaveAttribute("data-bg-status", "running");
+      expect(within(dialog).queryByText("The command finished without printing anything.")).toBeNull();
+
+      // Rodando em segundo plano: pede de novo sozinho e a saída cresce na tela.
+      const asked = detailAsks(ws).filter((f) => f.id === "g1").length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(ACTION_POLL_MS + 100); });
+      await waitFor(() => expect(detailAsks(ws).filter((f) => f.id === "g1").length).toBeGreaterThan(asked));
+      ws.deliver({ type: "detail", req: "tool", id: "g1", nonce: detailAsks(ws).at(-1)!.nonce, data: { ...base, background: { taskId: "bx1", status: "completed", output: "subindo\npronto\n", outputLength: 15 } } } as never);
+      expect(await within(dialog).findByText("pronto")).toBeInTheDocument();
+      await waitFor(() => expect(within(dialog).getByTestId("sdk-detail-status")).toHaveAttribute("data-status", "ok"));
+
+      // Terminou: para de pedir.
+      const done = detailAsks(ws).filter((f) => f.id === "g1").length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(ACTION_POLL_MS * 3); });
+      expect(detailAsks(ws).filter((f) => f.id === "g1").length).toBe(done);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sondagem que falhou ou não achou ainda: continua carregando e pede de novo, nunca desiste", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready" });
+      ws.deliver({ type: "tool_use", id: "f1", name: "Bash", input: { command: "ls" } });
+      ws.deliver({ type: "tool_result", id: "f1", toolResult: { lines: 1 } });
+      fireEvent.click(screen.getByTestId("sdk-tool"));
+      const dialog = await screen.findByTestId("sdk-detail");
+      await waitFor(() => expect(detailAsks(ws).some((f) => f.id === "f1")).toBe(true));
+      ws.deliver({ type: "detail", req: "tool", id: "f1", nonce: detailAsks(ws).at(-1)!.nonce, error: "probe-failed" } as never);
+      expect(await within(dialog).findByTestId("sdk-detail-loading")).toBeInTheDocument();
+      expect(within(dialog).queryByTestId("sdk-detail-missing")).toBeNull();
+
+      let asked = detailAsks(ws).filter((f) => f.id === "f1").length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(ACTION_POLL_MS + 100); });
+      await waitFor(() => expect(detailAsks(ws).filter((f) => f.id === "f1").length).toBeGreaterThan(asked));
+      ws.deliver({ type: "detail", req: "tool", id: "f1", nonce: detailAsks(ws).at(-1)!.nonce, data: { found: false } } as never);
+      await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+      expect(within(dialog).queryByTestId("sdk-detail-missing")).toBeNull();
+      expect(within(dialog).getByTestId("sdk-detail-loading")).toBeInTheDocument();
+
+      asked = detailAsks(ws).filter((f) => f.id === "f1").length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(ACTION_POLL_MS + 100); });
+      await waitFor(() => expect(detailAsks(ws).filter((f) => f.id === "f1").length).toBeGreaterThan(asked));
+      ws.deliver({ type: "detail", req: "tool", id: "f1", nonce: detailAsks(ws).at(-1)!.nonce, data: { found: true, by: "main", name: "Bash", input: { command: "ls" }, structured: { stdout: "README.md\n", stderr: "" }, result: { lines: 1 } } } as never);
+      expect(await within(dialog).findByText("README.md")).toBeInTheDocument();
+      expect(within(dialog).queryByTestId("sdk-detail-loading")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reabrir o modal mostra na hora o detalhe que já veio, sem 'Carregando' de novo", async () => {

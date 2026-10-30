@@ -24,6 +24,7 @@ import {
   toolStatus,
   useDetail,
   type AgentTimelineData,
+  type BackgroundOutputData,
   type CardChangesData,
   type DiffRow,
   type FileDiffData,
@@ -92,12 +93,20 @@ function StatusPill({ status }: { status: ToolStatus }) {
   );
 }
 
-function CodeBlock({ text, start = 1, numbered = true, tone, path }: { text: string; start?: number; numbered?: boolean; tone?: "error"; path?: string }) {
+function CodeBlock({ text, start = 1, numbered = true, tone, path, follow }: { text: string; start?: number; numbered?: boolean; tone?: "error"; path?: string; follow?: boolean }) {
   const code = text.replace(/\n$/, "");
   const lines = code.split("\n");
   const tokens = useCodeTokens(code, path);
+  // Saída ao vivo: acompanha o fim como um terminal, a menos que a pessoa tenha subido para ler.
+  const box = React.useRef<HTMLDivElement>(null);
+  const pinned = React.useRef(true);
+  React.useLayoutEffect(() => {
+    if (follow && pinned.current && box.current) box.current.scrollTop = box.current.scrollHeight;
+  }, [follow, code]);
   return (
     <div
+      ref={box}
+      onScroll={follow ? (e) => { const el = e.currentTarget; pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24; } : undefined}
       className={cn(
         "max-h-[46vh] overflow-auto rounded-md border border-border/70 bg-card font-mono text-xs leading-relaxed",
         tone === "error" && "border-red-500/40 bg-red-500/5",
@@ -407,18 +416,25 @@ function ActionView({
   const t = useT();
   const row = rows.find((r) => r.kind === "tool" && r.id === view.id) as ToolRow | undefined;
   const rowStatus: ToolStatus | null = row ? (row.name === "Agent" || row.name === "Task" ? agentStatus(row, tasks[row.id]) : toolStatus(row)) : null;
-  // Enquanto a ação roda (ou o transcript ainda não tem o resultado dela), o detalhe é pedido de
-  // novo: a saída aparece sozinha quando o comando termina, sem fechar e abrir o modal.
+  // Enquanto houver o que esperar, o detalhe é pedido de novo, sem prazo: a ação rodando (ou o
+  // transcript ainda sem o resultado), um comando em segundo plano vivo, ou o detalhe que ainda não
+  // veio (sondagem falhou, sem conexão, ação da tela que o transcript ainda não gravou). Abrir o
+  // modal é querer ver — "não deu para ler" não é resposta. Um pedido por vez por aba (no back).
   const [waiting, setWaiting] = React.useState(false);
   const { data, loading, error } = useDetail<ToolDetailData>("tool", { id: view.id }, view.id, rowStatus === "running" || waiting ? ACTION_POLL_MS : undefined, rowStatus ?? "");
   const detail = data && data.found ? data : null;
   // Rodando e ainda sem resultado — ou nem gravada no transcript ainda: é espera, não "sem saída".
   const pendingResult = detail !== null ? !detailHasResult(detail) : rowStatus === "running" && data !== null;
-  React.useEffect(() => setWaiting(pendingResult), [pendingResult]);
+  const background = detail?.background;
+  const backgroundRunning = background?.status === "running";
+  const retrying = !detail && !pendingResult && (error !== null || (row !== undefined && data !== null && !data.found));
+  React.useEffect(() => setWaiting(pendingResult || backgroundRunning || retrying), [pendingResult, backgroundRunning, retrying]);
   const name = detail?.name || row?.name || "?";
   const input = detail?.input ?? row?.input;
   const result = detail?.result ?? row?.result;
-  const status: ToolStatus = rowStatus ?? (result ? (result.isError ? "error" : "ok") : pendingResult ? "running" : "unknown");
+  const status: ToolStatus = background
+    ? backgroundRunning ? "running" : background.status === "failed" ? "error" : "ok"
+    : rowStatus ?? (result ? (result.isError ? "error" : "ok") : pendingResult ? "running" : "unknown");
   const headline = toolHeadline(name, input);
   const seq = actionSequence(view, rows);
   const at = seq.indexOf(view.id);
@@ -426,7 +442,7 @@ function ActionView({
     ? t("sdk.detail.bySubagent", { name: detail?.agentDescription || (row?.parent ? agentName((rows.find((r) => r.id === row.parent) as ToolRow | undefined)?.input) : "") })
     : t("sdk.detail.byMain");
   const duration = detail?.startedAt && detail.endedAt ? formatDuration(detail.endedAt - detail.startedAt) : "";
-  const resultLine = toolResultLine(name, result);
+  const resultLine = background ? backgroundLine(background, t) : toolResultLine(name, result);
   return (
     <>
       <div className="shrink-0 border-b border-border/70 px-5 pb-3 pt-4">
@@ -459,10 +475,10 @@ function ActionView({
             {status === "running" || status === "unknown" ? t("sdk.detail.stillRunning") : t("sdk.detail.resultPending")}
           </div>
         ) : null}
-        {loading && !detail ? (
-          <div data-testid="sdk-detail-loading" className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />{t("sdk.detail.loading")}</div>
+        {(loading || retrying) && !detail && !pendingResult ? (
+          <div data-testid="sdk-detail-loading" className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />{error === "offline" ? t("sdk.detail.offlineRetry") : t("sdk.detail.loading")}</div>
         ) : null}
-        {!loading && !detail && !pendingResult ? (
+        {!loading && !retrying && !detail && !pendingResult ? (
           <div data-testid="sdk-detail-missing" className="text-xs italic text-muted-foreground">{error === "offline" ? t("sdk.detail.offline") : error ? t("sdk.detail.failedToLoad") : t("sdk.detail.notFound")}</div>
         ) : null}
       </div>
@@ -481,6 +497,32 @@ function ActionView({
   );
 }
 
+function backgroundLine(bg: BackgroundOutputData, t: Translate): string {
+  return bg.status === "running" ? t("sdk.detail.bg.running")
+    : bg.status === "completed" ? t("sdk.detail.bg.completed")
+    : bg.status === "failed" ? t("sdk.detail.bg.failed")
+    : t("sdk.detail.bg.stopped");
+}
+
+/** A saída de um comando em segundo plano: o arquivo da tarefa, ao vivo enquanto ela roda. */
+function BackgroundOutput({ bg }: { bg: BackgroundOutputData }) {
+  const t = useT();
+  const running = bg.status === "running";
+  const output = bg.output ?? "";
+  const cut = typeof bg.outputLength === "number" && bg.outputLength > output.length;
+  return (
+    <Section
+      label={<span data-testid="sdk-detail-bg" data-bg-status={bg.status} className="flex items-center gap-1.5">{t("sdk.detail.output")}<span className="font-normal">· {running ? t("sdk.detail.bg.live") : backgroundLine(bg, t)}</span></span>}
+      aside={cut ? <span>{t("sdk.detail.bg.tail")}</span> : null}
+    >
+      {output.trim() ? <CodeBlock text={output} numbered={false} follow={running} /> : null}
+      {bg.missing ? <div className="text-[13px] italic text-muted-foreground">{t("sdk.detail.bg.missing")}</div>
+        : running ? <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />{t("sdk.detail.bg.waiting")}</div>
+        : !output.trim() ? <div className="text-[13px] italic text-muted-foreground">{t("sdk.detail.noOutput")}</div> : null}
+    </Section>
+  );
+}
+
 function ActionBody({ name, input, detail, row, onOpenAgent }: { name: string; input: unknown; detail: ToolDetailData | null; row?: ToolRow; onOpenAgent: (id: string) => void }) {
   const t = useT();
   const file = field(input, "file_path") || field(input, "notebook_path") || field(input, "path");
@@ -494,7 +536,7 @@ function ActionBody({ name, input, detail, row, onOpenAgent }: { name: string; i
             <pre className="whitespace-pre-wrap break-all rounded-md border border-border/70 bg-card px-3 py-2 font-mono text-xs"><span className="select-none text-muted-foreground">$ </span>{command}</pre>
           </Section>
         ) : null}
-        {out ? (
+        {detail?.background ? <BackgroundOutput bg={detail.background} /> : out ? (
           <>
             <Section label={t("sdk.detail.output")}>
               {out.stdout.trim() ? <CodeBlock text={out.stdout} /> : <div className="text-[13px] italic text-muted-foreground">{t("sdk.detail.noOutput")}</div>}
