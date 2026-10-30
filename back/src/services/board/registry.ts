@@ -1683,11 +1683,11 @@ export async function markCardPrMerged(cardId: string, base: string, number: num
  * Records what the card's AI found while working on a PR ({@link CardPr.reported}, rules in
  * `applyReportedProblems`). `prNumber` absent = the card's newest PR not known to be merged. A merged
  * PR takes no new report (the work is done; a new problem belongs to a new PR), and a card with no
- * open PR has nowhere to report — deliver first. Returns the PR and its whole list.
+ * open PR has nowhere to report — deliver first. Returns the PR, its whole list and what this call wrote.
  */
 export async function reportCardPrProblems(
   cardId: string, prNumber: number | undefined, items: ReportedProblemInput[],
-): Promise<{ pr: CardPr; reported: ReportedProblem[] }> {
+): Promise<{ pr: CardPr; reported: ReportedProblem[]; touched: ReportedProblem[] }> {
   return store.mutate((doc) => {
     const card = doc.cards.find((c) => c.id === cardId);
     if (!card) throw new Error(`card not found: ${cardId}`);
@@ -1701,8 +1701,10 @@ export async function reportCardPrProblems(
         : "o card não tem PR aberto: entregue com vibehub_deliver antes de relatar");
     }
     if (pr.mergedAt !== undefined) throw new Error(`o PR #${pr.number} já foi mergeado: relate no PR novo`);
-    pr.reported = applyReportedProblems(pr.reported ?? [], items, Date.now());
-    return { pr: { ...pr }, reported: pr.reported };
+    const now = Date.now();
+    pr.reported = applyReportedProblems(pr.reported ?? [], items, now);
+    // What THIS call wrote: every item it touched carries its timestamp.
+    return { pr: { ...pr }, reported: pr.reported, touched: pr.reported.filter((p) => p.at === now) };
   });
 }
 

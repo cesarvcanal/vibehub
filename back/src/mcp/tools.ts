@@ -10,7 +10,8 @@ import { relayCardActor, actAsParticipant } from "../services/board/actor.js";
 import { announcePreview } from "../services/preview/announce.js";
 import { recordLearning } from "../services/brain/learn.js";
 import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX } from "./cardMove.js";
-import { submitReviewerRound, submitAuthorResponse, reviewToolAnswer, HEAD_SHA_RE } from "../services/review/orchestrator.js";
+import { submitReviewerRound, submitAuthorResponse, reviewToolAnswer, reportAuthorProblems, HEAD_SHA_RE } from "../services/review/orchestrator.js";
+import { REPORTED_MAX } from "../services/review/reported.js";
 import { MAX_ROUNDS } from "../services/review/model.js";
 
 /**
@@ -485,6 +486,44 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         // O que ESTA chamada registrou: os itens da fala do autor gravada agora (repetida não grava).
         const answered = after.log.filter((e) => e.who === "author" && e.at >= since).reduce((n, e) => n + (e.items?.length ?? 0), 0);
         return ok({ ...reviewToolAnswer(after, "author", a.round), answered });
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_pr_report",
+    {
+      description:
+        "PR, author side: report what YOU found while working on your PR, beyond what a reviewer pointed out — a problem " +
+        "you found and fixed in this PR (`fixed`, with the `commit`), or one you found and left out of scope " +
+        "(`out_of_scope`, the `detail` says why it is not this PR's). It is recorded on your card's PR and shown on the " +
+        "review panel (and the reviewer gets it to check the fixed ones); with a review running, the review's " +
+        "conversation gets your line too. Use it every time — a problem told only in the chat leaves the panel saying " +
+        "everything is fine. Call it from your own card (`card` = YOUR OWN $VIBEHUB_CARD_ID) after the PR exists " +
+        "(vibehub_deliver opened it); `pr` absent = your newest open PR. Same `title` again (or the `id`) updates that " +
+        "item, so calling twice is harmless. This never merges and never opens a review round. Returns the PR, the " +
+        "items this call recorded and the whole list, or { error }.",
+      inputSchema: {
+        card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this terminal"),
+        pr: z.number().int().positive().optional().describe("the PR number; absent = your card's newest open PR"),
+        items: z.array(z.object({
+          id: z.string().regex(/^a\d+$/).optional().describe("an item already reported (a1, a2, ...), to update it"),
+          kind: z.enum(["fixed", "out_of_scope"]).describe("fixed = found and fixed in this PR; out_of_scope = found, not this PR's"),
+          title: z.string().min(1).max(200).describe("the problem, in one line"),
+          detail: z.string().min(1).max(2000).describe("what happened, why, and what was done (or why it is left for later)"),
+          commit: z.string().max(80).optional().describe("required for fixed: the commit of the fix"),
+          file: z.string().max(300).optional(),
+          line: z.number().int().positive().optional(),
+        })).min(1).max(REPORTED_MAX),
+      },
+    },
+    async (a) => {
+      try {
+        const out = await reportAuthorProblems(a.card, a.pr, a.items);
+        const recorded = out.reported.filter((p) => out.touched.includes(p.id)).map((p) => p.id);
+        return ok({ pr: out.prNumber, ...(out.review ? { review: out.review } : {}), recorded, reported: out.reported });
       } catch (e) {
         return fail(e);
       }

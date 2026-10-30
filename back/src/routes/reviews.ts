@@ -5,7 +5,7 @@ import { creatorAccountSlug } from "../auth/userGit.js";
 import { listUsers, type PublicUser } from "../auth/users.js";
 import * as registry from "../services/board/registry.js";
 import {
-  cancelReview, decideQuestion, decideSuggestions, retryReview, startReview, syncReviewSoon,
+  cancelReview, decideQuestion, decideSuggestions, reportedOf, retryReview, startReview, syncReviewSoon,
 } from "../services/review/orchestrator.js";
 import { mergeReviewedPr, ownGithubConnection } from "../services/review/merge.js";
 import { isBusy } from "../services/maestro/maestro.js";
@@ -95,7 +95,8 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * A revisão do card: a ativa, ou a última (de qualquer fase) — o painel mostra o histórico. Junto,
-   * `working`: se a IA do autor e a do revisor estão trabalhando agora (ausente quando não há revisão).
+   * `working`: se a IA do autor e a do revisor estão trabalhando agora (ausente quando não há revisão), e
+ * `reported`: o que a IA do autor relatou ter encontrado no PR da revisão.
    * Uma revisão aberta é conferida no GitHub em segundo plano, no máximo uma vez por minuto
    * (`syncReviewSoon`): é o que faz um merge feito direto no GitHub aparecer no painel sozinho.
    */
@@ -103,7 +104,9 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     const review = (await activeReviewFor(req.params.id)) ?? newest(await listReviewsForCards([req.params.id]));
     if (!review) return await reply.send({ review: null });
     syncReviewSoon(review);
-    return await reply.send({ review, working: await sidesWorking(review) });
+    // `reported`: o que a IA do autor encontrou no trabalho (vibehub_pr_report), guardado no PR do card.
+    const [working, reported] = await Promise.all([sidesWorking(review), reportedOf(review)]);
+    return await reply.send({ review, working, reported });
   });
 
   app.post<{ Params: { id: string }; Body: StartBody }>(

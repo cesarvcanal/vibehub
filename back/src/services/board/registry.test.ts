@@ -681,6 +681,7 @@ describe("board registry (persisted)", () => {
       const first = await reg.reportCardPrProblems(author.id, undefined, [found]);
       expect(first.pr.number).toBe(8);
       expect(first.reported.map((p) => p.id)).toEqual(["a1"]);
+      expect(first.touched.map((p) => p.id)).toEqual(["a1"]);
       // pedindo o número, vai para aquele
       await reg.reportCardPrProblems(author.id, AUTHOR_PR.number, [{ kind: "out_of_scope", title: "teste instável", detail: "fica para outro card" }]);
       const prs = (await reg.getCard(author.id))?.prs;
