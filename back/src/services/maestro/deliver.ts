@@ -161,8 +161,11 @@ function dockerBashScript(containerName: string, body: string[]): string {
  * network failure changes nothing (the push then fails as it would). PURE.
  */
 export function forgetDeletedRemoteBranch(branch: string): string {
+  // The FULL ref: a bare name is a pattern matched against the END of every ref, so another branch
+  // like `feature/<branch>` would answer "exists" and keep the stale ref.
+  const remote = shQuote(`refs/heads/${branch}`);
   const tracking = shQuote(`refs/remotes/origin/${branch}`);
-  return `git ls-remote --exit-code --heads origin ${shQuote(branch)} >/dev/null 2>&1; if [ $? -eq 2 ]; then git update-ref -d ${tracking}; fi`;
+  return `git ls-remote --exit-code origin ${remote} >/dev/null 2>&1; if [ $? -eq 2 ]; then git update-ref -d ${tracking}; fi`;
 }
 
 /**
