@@ -160,6 +160,7 @@ export function reviewerDeltaPrompt(r: Review): string {
   const judged = r.findings.filter(underReview);
   const humanBlocked = judged.filter((f) => f.humanDecision === "block" || f.humanDecision === "keep");
   const waiting = pendingQuestions(r.findings);
+  const suggestions = r.findings.filter((f) => f.severity === "suggestion" && f.status === "open");
   const since = r.reviewedSha
     ? `git diff ${r.reviewedSha}..HEAD`
     : "o PR inteiro (não há sha da rodada anterior)";
@@ -184,6 +185,12 @@ export function reviewerDeltaPrompt(r: Review): string {
       : []),
     ...(waiting.length
       ? ["   Esperando o revisor humano (não dê veredito):", lines(waiting, "")]
+      : []),
+    ...(suggestions.length
+      ? [
+        "   Sugestões em aberto (não bloqueiam): dê fixed só às que o diff aplicou de verdade; as outras, deixe fora dos vereditos.",
+        lines(suggestions, ""),
+      ]
       : []),
     "   Vereditos possíveis, e só estes: fixed (corrigido de verdade, conferido no diff), open (continua; diga o porquê em " +
       "reviewerReply), dropped (você aceita a contestação do autor).",

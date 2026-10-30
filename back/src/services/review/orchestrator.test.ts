@@ -1077,6 +1077,25 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
     expect(after).toMatchObject({ phase: "ready", round: 1 });
     expect(send).not.toHaveBeenCalled();
   });
+
+  it("o delta lista as sugestões em aberto, e o fixed do revisor numa sugestão aplicada vale", async () => {
+    const o = await load();
+    const { author, review, off } = await readyAt(o);
+    try {
+      prHeadNow = SHA2;
+      await endTurn(o, author.id);
+      await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+      expect(lastText()).toContain("Sugestões em aberto");
+      expect(lastText()).toContain("nome de variável confuso");
+      const after = await o.orch.submitReviewerRound(review.reviewerCardId, {
+        round: 2, findings: [], verdicts: [{ id: "f1", status: "fixed", reviewerReply: "renomeado no diff" }], headSha: SHA2, summary: "ok",
+      });
+      expect(after).toMatchObject({ phase: "ready", round: 2, reviewedSha: SHA2 });
+      expect(after.findings[0]).toMatchObject({ id: "f1", severity: "suggestion", status: "fixed", reviewerReply: "renomeado no diff" });
+    } finally {
+      off();
+    }
+  });
 });
 
 describe("conversa das IAs: cada fala leva os achados de que trata", () => {
