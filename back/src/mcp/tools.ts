@@ -462,8 +462,8 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "wontfix is for suggestions only) — in the fixing round AND later, also after the review is ready " +
         "(e.g. you were asked to apply them): that closes them on the panel without opening a round. " +
         "Answers to closed items are ignored. Calling twice is harmless. This never merges; the merge is a human button " +
-        "(the merger's). Returns the review's phase, `next` and `answered` (how many items now carry the " +
-        "status you sent), or { error }.",
+        "(the merger's). Returns the review's phase, `next` and `answered` (how many items this call " +
+        "recorded; a repeated answer records nothing), or { error }.",
       inputSchema: {
         card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this (author) terminal"),
         review: z.string().optional().describe("the review id from the prompt"),
@@ -480,8 +480,10 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     async (a) => {
       try {
         const { card, review, ...payload } = a;
+        const since = Date.now();
         const after = await submitAuthorResponse(card, { ...payload, reviewId: review });
-        const answered = a.items.filter((it) => after.findings.find((f) => f.id === it.id)?.status === it.status).length;
+        // O que ESTA chamada registrou: os itens da fala do autor gravada agora (repetida não grava).
+        const answered = after.log.filter((e) => e.who === "author" && e.at >= since).reduce((n, e) => n + (e.items?.length ?? 0), 0);
         return ok({ ...reviewToolAnswer(after, "author", a.round), answered });
       } catch (e) {
         return fail(e);

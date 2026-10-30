@@ -589,10 +589,12 @@ export async function submitAuthorResponse(
     };
     const allowed = payload.items.filter((it) => answerable(it) && (round || changed(it)));
     const ignored = payload.items.filter((it) => !answerable(it)).map((it) => it.id);
-    if (!round && allowed.length === 0) return;
-    r.findings = applyAuthorResponses(r, allowed);
-    r.prHeadSha = headSha;
-    note(r, "author", `${round ? "" : "Sugestões respondidas: "}${answerCounts(allowed)}; head ${headSha.slice(0, 7)}.`, { items: allowed });
+    if (!round && allowed.length === 0 && ignored.length === 0) return;
+    if (allowed.length || round) {
+      r.findings = applyAuthorResponses(r, allowed);
+      r.prHeadSha = headSha;
+      note(r, "author", `${round ? "" : "Sugestões respondidas: "}${answerCounts(allowed)}; head ${headSha.slice(0, 7)}.`, { items: allowed });
+    }
     if (ignored.length) {
       note(r, "system", round
         ? `Respostas ignoradas (id desconhecido ou item que não espera resposta do autor): ${ignored.join(", ")}.`
@@ -743,6 +745,7 @@ export async function cancelReview(reviewId: string, by: string): Promise<Review
     r.approvePending = undefined;
     note(r, "human", "Revisão cancelada.", { by });
   });
+  lastGithubSync.delete(reviewId);
   logger.info({ audit: true, action: "review.cancel", review: reviewId, by }, "PR review cancelled");
   await retireReviewerCard(after);
   return after;
@@ -764,6 +767,7 @@ async function cancelBySystem(
     cancelled = true;
   });
   if (cancelled) logger.info({ audit: true, action: "review.cancel", review: reviewId, ...audit }, "PR review cancelled");
+  lastGithubSync.delete(reviewId);
   return { review, cancelled };
 }
 
@@ -790,9 +794,10 @@ export async function closeReviewsOfRemovedCard(cardId: string, by?: string): Pr
 /**
  * O PR andou depois do `ready`: o botão de merge achou o PR num commit que não é o revisado
  * (`cause: "merge"`), ou o turno do autor terminou com um push novo no PR (`cause: "push"`,
- * {@link checkAuthorPush}). Numa mutação só: com rodada sobrando, a revisão volta a `reviewing` na
- * rodada seguinte e o revisor recebe o delta (desde o `reviewedSha` aprovado) pelo mesmo relay das
- * outras rodadas; na última, vira impasse "push depois do pronto". Só age em `ready`: o merge leva
+ * {@link checkAuthorPush}). Numa mutação só, a revisão volta a `reviewing` e o revisor recebe o delta
+ * (desde o `reviewedSha` aprovado) pelo mesmo relay das outras rodadas: na rodada seguinte, ou — sem
+ * rodada sobrando — numa conferência extra da última (um bloqueante achado ali vira impasse pelo teto
+ * de rodadas, como sempre). Só age em `ready`: o merge leva
  * minutos (o CI), e uma revisão que andou ou foi cancelada nesse meio fica como está. `headSha` (o
  * head lido) segura uma leitura velha: se a revisão já aprovou esse commit, não há o que reabrir.
  */
@@ -801,7 +806,7 @@ export async function reopenAfterHeadMoved(
 ): Promise<Review> {
   const cause = opts.cause ?? "merge";
   const head = opts.headSha?.toLowerCase();
-  let outcome = null as "reopen" | "impasse" | null;
+  let reopened = false as boolean;
   const after = await mutateReview(reviewId, (r) => {
     if (r.phase !== "ready") return;
     if (head && r.reviewedSha === head) return;
@@ -811,21 +816,21 @@ export async function reopenAfterHeadMoved(
       : `Merge recusado: ${HEAD_MOVED}; o PR não está mais no commit aprovado${approved}.`;
     r.approvePending = undefined;
     r.nudges = 0;
+    r.phase = "reviewing";
     if (r.round < MAX_ROUNDS) {
       r.round += 1;
-      r.phase = "reviewing";
       note(r, "system", `${why} Rodada ${r.round} de ${MAX_ROUNDS}: o revisor confere o que entrou.`);
-      outcome = "reopen";
     } else {
-      r.phase = "impasse";
-      r.impasseReason = HEAD_MOVED;
-      note(r, "system", `${why} Impasse: ${HEAD_MOVED} na última rodada; cancele e peça uma revisão nova.`);
-      outcome = "impasse";
+      // Sem rodada sobrando, o revisor ainda confere o que entrou (aplicar sugestões depois do pronto
+      // não pode travar o PR): a última rodada reabre para ele. Se achar bloqueante, o teto de rodadas
+      // vale como sempre — impasse.
+      r.lastSubmitRound = r.round - 1;
+      note(r, "system", `${why} Rodada ${r.round} de ${MAX_ROUNDS} (conferência extra): o revisor confere o que entrou.`);
     }
+    reopened = true;
   });
-  logger.info({ audit: true, action: "review.head_moved", review: reviewId, cause, outcome, by }, "PR review: head moved after ready");
-  if (outcome === "reopen") await relayReview(after, "reviewer", headMovedPrefix(after, cause) + reviewerDeltaPrompt(after));
-  else if (outcome === "impasse") await announcePhase(after);
+  logger.info({ audit: true, action: "review.head_moved", review: reviewId, cause, reopened, by }, "PR review: head moved after ready");
+  if (reopened) await relayReview(after, "reviewer", headMovedPrefix(after, cause) + reviewerDeltaPrompt(after));
   return (await getReview(reviewId)) ?? after;
 }
 
@@ -841,7 +846,7 @@ export async function reopenAfterHeadMoved(
  *    o clique de merge para descobrir. Em `fixing`, push é a resposta à lista: nada muda.
  * Só revisão aberta vai ao GitHub. Nunca lança: uma leitura que falha deixa a revisão como está.
  */
-export async function syncReviewWithGithub(reviewId: string): Promise<Review | undefined> {
+export async function syncReviewWithGithub(reviewId: string, by = "conferência do GitHub"): Promise<Review | undefined> {
   const r = await getReview(reviewId);
   // Com o merge do botão em andamento, o PR aparece MERGED antes de o botão fechar a revisão: é ele
   // quem fecha (com o nome de quem mergeou), não esta conferência.
@@ -860,11 +865,13 @@ export async function syncReviewWithGithub(reviewId: string): Promise<Review | u
     if (cancelled) await retireReviewerCard(after);
     return after;
   }
+  // O `gh pr view` leva segundos: se nesse meio alguém gravou um head (o autor ao responder), o dele é
+  // o mais novo — a leitura daqui não o sobrescreve.
   const seen = r.prHeadSha === pr.headSha ? r : await mutateReview(r.id, (x) => {
-    if (!CLOSED.has(x.phase)) x.prHeadSha = pr.headSha;
+    if (!CLOSED.has(x.phase) && x.prHeadSha === r.prHeadSha) x.prHeadSha = pr.headSha;
   });
   if (seen.phase === "ready" && seen.reviewedSha && pr.headSha !== seen.reviewedSha) {
-    return await reopenAfterHeadMoved(r.id, "fim do turno do autor", { cause: "push", headSha: pr.headSha });
+    return await reopenAfterHeadMoved(r.id, by, { cause: "push", headSha: pr.headSha });
   }
   return seen;
 }
@@ -898,7 +905,7 @@ export function syncReviewSoon(r: Review): void {
     return;
   }
   if (!claimGithubSync(r.id)) return;
-  void syncReviewWithGithub(r.id).catch((err: unknown) => {
+  void syncReviewWithGithub(r.id, "painel aberto").catch((err: unknown) => {
     logger.warn({ review: r.id, detail: (err as Error).message }, "PR review could not sync with GitHub");
   });
 }
@@ -922,7 +929,7 @@ async function checkAuthorPush(cardId: string): Promise<void> {
     if (CLOSED.has(r.phase)) continue;
     if (r.phase === "ready") lastGithubSync.set(r.id, Date.now());
     else if (!claimGithubSync(r.id)) continue;
-    await syncReviewWithGithub(r.id);
+    await syncReviewWithGithub(r.id, "fim do turno do autor");
   }
 }
 
@@ -949,6 +956,7 @@ export async function markReviewMerged(
     }
     landed = true;
   });
+  lastGithubSync.delete(reviewId);
   if (landed) {
     logger.info({ audit: true, action: "review.merged", review: reviewId, by }, "PR review merged");
     await announcePhase(after);

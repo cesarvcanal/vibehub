@@ -676,6 +676,17 @@ describe("resposta do autor", () => {
     expect(lastText()).toContain("fora do escopo");
   });
 
+  it("fora da rodada, resposta só a itens que não esperam o autor fica registrada como ignorada", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", reply: "ok" }], headSha: SHA2 });
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 2, findings: [], verdicts: [{ id: "f1", status: "fixed" }], headSha: SHA2, summary: "ok" });
+    const after = await o.orch.submitAuthorResponse(author.id, { round: 2, items: [{ id: "f1", status: "fixed", reply: "de novo" }], headSha: SHA2 });
+    expect(after.log.at(-1)).toMatchObject({ who: "system" });
+    expect(after.log.at(-1)?.text).toMatch(/ignoradas: f1/);
+  });
+
   it("revisão encerrada não aceita resposta a sugestão", async () => {
     const o = await load();
     const { author, review } = await started(o);
@@ -1078,16 +1089,28 @@ describe("merge humano: push depois do pronto e mergeado", () => {
     expect(deliverSpy).not.toHaveBeenCalled();
   });
 
-  it("push depois do pronto na rodada 3 vira impasse, sem relay e sem retry", async () => {
+  it("push depois do pronto na rodada 3 ganha uma conferência extra do revisor, não um impasse", async () => {
     const o = await load();
-    const { author, review } = await readyAt(o, 3);
+    const { review } = await readyAt(o, 3);
     const after = await o.orch.reopenAfterHeadMoved(review.id, "u-merger");
-    expect(after).toMatchObject({ phase: "impasse", impasseReason: "push depois do pronto", round: 3 });
-    expect(send).not.toHaveBeenCalled();
-    const notices = await messagesOn(o, author.id);
-    expect(notices.at(-1)?.text).toMatch(/PR #7.*impasse.*push depois do pronto/i);
-    // não sobra rodada: "tentar de novo" não tem para onde devolver a vez (cancelar e pedir outra revisão)
-    await expect(o.orch.retryReview(review.id, "u-merger")).rejects.toThrow(/nada_a_tentar/);
+    expect(after).toMatchObject({ phase: "reviewing", round: 3, lastSubmitRound: 2 });
+    expect(after.impasseReason).toBeUndefined();
+    // o revisor recebe o delta da rodada 3 e pode submeter de novo nela
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(lastText()).toContain("rodada 3 de 3");
+    expect(after.log.at(-1)?.text).toMatch(/conferência extra/);
+    const checked = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 3, findings: [], headSha: SHA2, summary: "ok" });
+    expect(checked).toMatchObject({ phase: "ready", reviewedSha: SHA2 });
+  });
+
+  it("bloqueante achado na conferência extra da última rodada vira impasse (o teto de rodadas continua valendo)", async () => {
+    const o = await load();
+    const { review } = await readyAt(o, 3);
+    await o.orch.reopenAfterHeadMoved(review.id, "u-merger");
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 3, findings: [{ ...BLOCKER, introducedInRound: 3 }], headSha: SHA2, summary: "o push quebrou o login",
+    });
+    expect(after).toMatchObject({ phase: "impasse", impasseReason: "rodadas" });
   });
 
   it("reabrir só vale em ready: revisão que andou ou fechou no meio do merge fica como está", async () => {
@@ -1214,16 +1237,16 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
     }
   });
 
-  it("na rodada 3 o push depois do pronto vira impasse, com aviso e sem relay", async () => {
+  it("na rodada 3 o push depois do pronto volta ao revisor numa conferência extra (aplicar sugestões não trava o PR)", async () => {
     const o = await load();
     const { author, review, off } = await readyAt(o, 3);
     try {
       prHeadNow = SHA2;
       await endTurn(o, author.id);
-      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("impasse"));
-      expect(await o.store.getReview(review.id)).toMatchObject({ impasseReason: "push depois do pronto", round: 3 });
-      await vi.waitFor(async () => expect((await messagesOn(o, author.id)).at(-1)?.text).toMatch(/impasse.*push depois do pronto/i));
-      expect(send).not.toHaveBeenCalled();
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("reviewing"));
+      expect(await o.store.getReview(review.id)).toMatchObject({ round: 3, lastSubmitRound: 2 });
+      await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+      expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
     } finally {
       off();
     }
@@ -1336,6 +1359,19 @@ describe("o PR mudou no GitHub fora do painel (merge à mão, PR fechado)", () =
     expect(after).toMatchObject({ phase: "fixing", prHeadSha: SHA2, reviewedSha: SHA1 });
     const answered = await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", reply: "ok" }], headSha: SHA3 });
     expect(answered.prHeadSha).toBe(SHA3);
+  });
+
+  it("leitura lenta do GitHub não sobrescreve o head mais novo que o autor gravou no meio", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    prHead.mockImplementationOnce(async () => {
+      // enquanto o gh pr view demora, o autor responde com o head novo
+      await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", reply: "ok" }], headSha: SHA3 });
+      return { state: "OPEN", headSha: SHA2 };
+    });
+    await o.orch.syncReviewWithGithub(review.id);
+    expect((await o.store.getReview(review.id))?.prHeadSha).toBe(SHA3);
   });
 
   it("PR fechado sem merge no GitHub: a revisão é cancelada e a branch fica", async () => {
@@ -1828,7 +1864,12 @@ describe("ferramentas MCP", () => {
     const responded = await call("vibehub_review_respond", {
       card: author.id, review: review.id, round: 1, headSha: SHA2, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }],
     });
-    expect(JSON.parse(responded.text)).toMatchObject({ review: review.id, phase: "reviewing", round: 2 });
+    expect(JSON.parse(responded.text)).toMatchObject({ review: review.id, phase: "reviewing", round: 2, answered: 1 });
+    // a mesma resposta de novo não muda nada: answered 0, mesmo com o status já igual ao enviado
+    const again = await call("vibehub_review_respond", {
+      card: author.id, review: review.id, round: 1, headSha: SHA2, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }],
+    });
+    expect(JSON.parse(again.text)).toMatchObject({ answered: 0 });
     expect(deliverSpy).not.toHaveBeenCalled();
   });
 });
