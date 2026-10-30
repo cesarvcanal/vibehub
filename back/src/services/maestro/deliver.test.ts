@@ -93,8 +93,15 @@ describe("forgetDeletedRemoteBranch — a branch the merge deleted on GitHub doe
    * on the remote (afterPrMerged), the card committed again: the local `origin/<branch>` still points
    * at the old head, and `--force-with-lease` (which leases against it) refused with "stale info".
    */
+  // Cleaned after EACH test, passed or failed: a failed assertion must not leave repositories in /tmp.
+  const roots: string[] = [];
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
   async function cardAfterMerge(remoteMoved: "deleted" | "moved", opts: { alsoOnRemote?: string } = {}) {
     const root = await mkdtemp(join(tmpdir(), "vibehub-lease-"));
+    roots.push(root);
     const sh = (cwd: string, script: string) =>
       execFileSync("bash", ["-c", script], { cwd, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
     const commit = (m: string) => `git -c user.name=t -c user.email=t@t commit -q --allow-empty -m ${m}`;
@@ -109,7 +116,7 @@ describe("forgetDeletedRemoteBranch — a branch the merge deleted on GitHub doe
     sh(card, commit("two"));
     const push = (guard: string) =>
       sh(card, `${guard}\nif git push -q --force-with-lease origin 'card/x' 2>err.txt; then echo pushed; else cat err.txt; fi`);
-    return { root, push, remoteHead: () => sh(root, "git --git-dir=remote.git rev-parse --verify -q refs/heads/card/x || true").trim(), cardHead: () => sh(card, "git rev-parse HEAD").trim() };
+    return { push, remoteHead: () => sh(root, "git --git-dir=remote.git rev-parse --verify -q refs/heads/card/x || true").trim(), cardHead: () => sh(card, "git rev-parse HEAD").trim() };
   }
 
   it("without it the push is refused as stale (the bug), with it the branch goes up again", async () => {
@@ -120,8 +127,6 @@ describe("forgetDeletedRemoteBranch — a branch the merge deleted on GitHub doe
     const fixed = await cardAfterMerge("deleted");
     expect(fixed.push(deliver.forgetDeletedRemoteBranch("card/x"))).toContain("pushed");
     expect(fixed.remoteHead()).toBe(fixed.cardHead());
-    await rm(bare.root, { recursive: true, force: true });
-    await rm(fixed.root, { recursive: true, force: true });
   });
 
   it("asks for the EXACT branch: another one whose name ends in it (feature/card/x) does not keep the stale ref", async () => {
@@ -129,7 +134,6 @@ describe("forgetDeletedRemoteBranch — a branch the merge deleted on GitHub doe
     const repo = await cardAfterMerge("deleted", { alsoOnRemote: "feature/card/x" });
     expect(repo.push(deliver.forgetDeletedRemoteBranch("card/x"))).toContain("pushed");
     expect(repo.remoteHead()).toBe(repo.cardHead());
-    await rm(repo.root, { recursive: true, force: true });
   });
 
   it("a branch that still exists on the remote keeps its lease: someone else's push is not overwritten", async () => {
@@ -138,7 +142,6 @@ describe("forgetDeletedRemoteBranch — a branch the merge deleted on GitHub doe
     const theirs = repo.remoteHead();
     expect(repo.push(deliver.forgetDeletedRemoteBranch("card/x"))).toMatch(/stale info/);
     expect(repo.remoteHead()).toBe(theirs);
-    await rm(repo.root, { recursive: true, force: true });
   });
 
   it("runs before the push, on the quoted branch", async () => {
