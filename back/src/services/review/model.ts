@@ -78,6 +78,11 @@ export interface Review {
   findings: Finding[];
   log: ReviewEvent[];
   reviewedSha?: string;
+  /**
+   * O head do PR na última vez que alguém o viu (o revisor ao submeter, o autor ao responder, a
+   * conferência do GitHub). Diferente de `reviewedSha` = o PR andou depois da revisão: o painel mostra.
+   */
+  prHeadSha?: string;
   impasseReason?: string;
   /**
    * `ready`, mas o pedido de Approve não chegou ao card do revisor: o PR segue com o

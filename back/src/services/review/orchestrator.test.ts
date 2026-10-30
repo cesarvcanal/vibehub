@@ -1235,6 +1235,18 @@ describe("o PR mudou no GitHub fora do painel (merge à mão, PR fechado)", () =
     expect(deleteBranch).toHaveBeenCalledWith(author.id, PR.url, PR.branch);
   });
 
+  it("o head atual do PR fica gravado (o painel mostra revisado x atual); em fixing isso não reabre nada", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    expect((await o.store.getReview(review.id))?.prHeadSha).toBe(SHA1);
+    prHeadNow = SHA2;
+    const after = await o.orch.syncReviewWithGithub(review.id);
+    expect(after).toMatchObject({ phase: "fixing", prHeadSha: SHA2, reviewedSha: SHA1 });
+    const answered = await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", reply: "ok" }], headSha: SHA3 });
+    expect(answered.prHeadSha).toBe(SHA3);
+  });
+
   it("PR fechado sem merge no GitHub: a revisão é cancelada e a branch fica", async () => {
     const o = await load();
     const { review } = await readyReview(o);

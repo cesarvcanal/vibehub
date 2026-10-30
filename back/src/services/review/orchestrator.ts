@@ -440,6 +440,7 @@ export async function submitReviewerRound(
     const added = normalizeSubmittedFindings(payload.findings, r.round, r.findings);
     r.findings = [...judged, ...added];
     r.reviewedSha = headSha;
+    r.prHeadSha = headSha;
     r.lastSubmitRound = r.round;
     r.nudges = 0;
     note(r, "reviewer", payload.summary || `Rodada ${r.round}: ${added.length} achado(s) novo(s), ${verdicts.length} veredito(s).`, {
@@ -536,6 +537,7 @@ export async function submitAuthorResponse(
     const allowed = payload.items.filter(changes);
     if (allowed.length === 0) return;
     r.findings = applyAuthorResponses(r, allowed);
+    r.prHeadSha = headSha;
     note(r, "author", `Sugestões respondidas: ${answerCounts(allowed)}; head ${headSha.slice(0, 7)}.`, {
       items: allowed.map((it) => ({ id: it.id, status: it.status, reply: it.reply, commit: it.commit })),
     });
@@ -564,6 +566,7 @@ async function answerFixingRound(
     const allowed = items.filter(counts);
     const ignored = items.filter((it) => !counts(it)).map((it) => it.id);
     r.findings = applyAuthorResponses(r, allowed);
+    r.prHeadSha = headSha;
     r.lastRespondRound = r.round;
     r.nudges = 0;
     note(r, "author", `${answerCounts(allowed)}; head ${headSha.slice(0, 7)}.`, {
@@ -833,10 +836,13 @@ export async function syncReviewWithGithub(reviewId: string): Promise<Review | u
     }
     return after;
   }
-  if (r.phase === "ready" && r.reviewedSha && pr.headSha !== r.reviewedSha) {
+  const seen = r.prHeadSha === pr.headSha ? r : await mutateReview(r.id, (x) => {
+    if (!CLOSED.has(x.phase)) x.prHeadSha = pr.headSha;
+  });
+  if (seen.phase === "ready" && seen.reviewedSha && pr.headSha !== seen.reviewedSha) {
     return await reopenAfterHeadMoved(r.id, "fim do turno do autor", { cause: "push", headSha: pr.headSha });
   }
-  return r;
+  return seen;
 }
 
 /** De quanto em quanto tempo, no máximo, o painel aberto faz o servidor conferir o PR no GitHub. */
