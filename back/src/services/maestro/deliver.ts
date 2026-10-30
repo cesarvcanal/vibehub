@@ -11,6 +11,8 @@ import { getSettings } from "../settings/settings.js";
 import { assertGhToken } from "../accounts/token.js";
 import { runGate, cleanOutput, type GateResult } from "./gate.js";
 import { activeReviewFor } from "../review/store.js";
+import type { Review } from "../review/model.js";
+import { findUser } from "../../auth/users.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -506,6 +508,65 @@ async function rememberMerged(card: Card, prUrl: string, base: string): Promise<
   }
 }
 
+/** Where the review stands, in the words the refusal of a merge needs. PURE. */
+function reviewStage(r: Review): string {
+  switch (r.phase) {
+    case "reviewing":
+      return r.lastSubmitRound === r.round ? "esperando o revisor humano decidir as dúvidas" : "com o revisor conferindo";
+    case "fixing":
+      return "com o autor corrigindo bloqueante em aberto";
+    case "impasse":
+      return "em impasse (precisa de uma pessoa no painel)";
+    default:
+      return "pronta para o merge";
+  }
+}
+
+/**
+ * An AUTHORIZED delivery of a card whose PR is under review, after the push. The merge of a reviewed PR
+ * is the review's: only its merger, only in `ready`, through the same path as the panel's button
+ * (`mergeReviewedPr`: merge-only, pinned to the commit the reviewer approved, the review closed as
+ * merged). So:
+ *  - the order came from the merger (the card's actor), the review is ready and is about this PR →
+ *    that path; a push that brought commits the reviewer has not seen comes back `head_moved`, with
+ *    the review back at the reviewer;
+ *  - anybody else, or a review that is not ready → `review_active`, saying who merges and where the
+ *    review stands. The push already happened either way: the PR has the commits.
+ */
+async function mergeUnderReview(
+  card: Card, review: Review,
+  ctx: { prUrl: string; target: string; source: string; lock: { locked?: true }; by?: string },
+): Promise<DeliverResult> {
+  const base = { prUrl: ctx.prUrl, merged: false as const, branch: ctx.target, cardBranch: ctx.source, ...ctx.lock };
+  const merger = (await findUser(review.mergerUserId))?.username ?? review.mergerUserId;
+  const pushed = "O push foi feito: o PR já tem estes commits.";
+  const ordered = card.actorUserId === review.mergerUserId;
+  const samePr = prNumberFromUrl(ctx.prUrl) === review.prNumber;
+  if (!ordered || !samePr || review.phase !== "ready") {
+    const who = `o merge é de ${merger}, pelo botão "Mergear na ${review.base}" no painel da revisão, ou por este deliver ` +
+      `quando a ordem vier de ${merger} com a revisão pronta`;
+    logger.info(
+      { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "review_active", phase: review.phase, by: ctx.by },
+      "deliver pushed but did not merge: the card's PR is under review",
+    );
+    return { ...base, reason: "review_active", output: `revisão do PR #${review.prNumber} ${reviewStage(review)}: ${who}. ${pushed}` };
+  }
+  const { mergeReviewedPr } = await import("../review/merge.js");
+  const outcome = await mergeReviewedPr(review.id, review.mergerUserId);
+  if (outcome.kind === "merged") {
+    return { ...base, merged: true, reason: "merged", headBranch: outcome.result.headBranch };
+  }
+  if (outcome.reason === "head_moved") {
+    const round = outcome.review?.round ?? review.round + 1;
+    return {
+      ...base, reason: "head_moved",
+      output: `o push trouxe commits que o revisor ainda não viu: a revisão voltou pra rodada ${round} e o merge sai quando ela ficar pronta de novo`,
+    };
+  }
+  if (outcome.reason === "gate") return { ...base, reason: "gate", output: outcome.error };
+  return { ...base, reason: "review_active", output: outcome.error };
+}
+
 /**
  * Delivers a card: push → PR → gate → (authorized) merge. The gate always runs before the merge, so
  * an unauthorized call still comes back with the truth ("green, ready — say the word"). Merging
@@ -553,19 +614,6 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
       "merge-only refused on a locked card: the PR is not to the card's own base",
     );
     return { merged: false, reason: "locked", branch: target, cardBranch: source, locked: true };
-  }
-  // A PR under review merges only through the merger's button (merge-only). Any other authorized
-  // merge — an agent passing on a "sobe pra dev", the author's own card — is refused before a single
-  // script runs. Without `authorized` the delivery goes on: the author pushing fixes IS the review.
-  if (opts.authorized === true && !mergeOnly && (await activeReviewFor(card.id))) {
-    logger.info(
-      { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "review_active", by: opts.by },
-      "deliver refused to merge: the card has a PR review in progress",
-    );
-    return {
-      merged: false, reason: "review_active", branch: target, cardBranch: source, ...lock,
-      output: "este card tem uma revisão de PR em andamento: o merge é o botão do responsável no painel da revisão",
-    };
   }
   const { cwd } = cardWorkPaths(project, card);
   const container = config.runner.container;
@@ -615,6 +663,14 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     }
     prUrl = pr.prUrl;
     await rememberPr(card, prUrl, target, source);
+    // A PR under review: the push above already took the fix to the PR — that is how the author
+    // answers a review, and it happens whoever asked. The MERGE is the review's (see mergeUnderReview).
+    if (opts.authorized === true) {
+      const review = await activeReviewFor(card.id);
+      if (review) {
+        return await mergeUnderReview(card, review, { prUrl, target, source, lock, by: opts.by });
+      }
+    }
   }
 
   // (c) the gate — the PR's CI when it has one, the local gate otherwise. A gate that errors

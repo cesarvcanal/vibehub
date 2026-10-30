@@ -318,7 +318,12 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "operation, not part of this. A LOCKED card answers { reason: 'locked', locked: true }: the " +
         "PR goes to that card's own base whatever `branch` said, and it is NEVER merged from here — " +
         "say so plainly ('o PR está aberto em <base>; o merge é de quem revisa') instead of " +
-        "retrying, and do not go around it with git or gh by hand.",
+        "retrying, and do not go around it with git or gh by hand. A card whose PR is under REVIEW: " +
+        "the push always happens (it is how the author delivers a fix), and the merge goes through only " +
+        "when the order came from the review's merger and the review is ready — the same merge as the " +
+        "panel's button, which also closes the review. Otherwise 'review_active' says who merges and " +
+        "where the review stands; 'head_moved' = the push brought commits the reviewer has not seen and " +
+        "the review went back to them. Never merge a reviewed PR any other way (gh pr merge, the GitHub API).",
       inputSchema: {
         card: z.string().describe("id of the card to deliver (from vibehub_list_terminals)"),
         branch: z.string().optional().describe("target branch for the PR / merge. Absent = the project's base branch."),

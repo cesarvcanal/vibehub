@@ -1,18 +1,13 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { requireSession, requestUser } from "../auth/session.js";
 import { cardLevel, requireCardAccess, requireCardWork } from "../auth/access.js";
-import { creatorAccountSlug, getUserGit } from "../auth/userGit.js";
+import { creatorAccountSlug } from "../auth/userGit.js";
 import { listUsers, type PublicUser } from "../auth/users.js";
 import * as registry from "../services/board/registry.js";
-import { resolveIdentity } from "../services/github/identity.js";
-import { getSettings } from "../services/settings/settings.js";
-import { deliver } from "../services/maestro/deliver.js";
-import {
-  cancelReview, decideQuestion, markReviewMerged, reopenAfterHeadMoved, retryReview, startReview, syncReviewSoon,
-} from "../services/review/orchestrator.js";
+import { cancelReview, decideQuestion, retryReview, startReview, syncReviewSoon } from "../services/review/orchestrator.js";
+import { mergeReviewedPr, ownGithubConnection } from "../services/review/merge.js";
 import { activeReviewFor, getReview, listReviewsForCards } from "../services/review/store.js";
 import type { Review } from "../services/review/model.js";
-import { logger } from "../utils/logger.js";
 
 /**
  * REVISÃO DE PR — a superfície HTTP do orquestrador e o ÚNICO caminho de merge de um PR revisado.
@@ -63,25 +58,6 @@ async function cardPeople(card: registry.Card): Promise<Person[]> {
   );
 }
 
-/**
- * A conexão GitHub PRÓPRIA de quem tem um papel que sai na conta dele: o merger (o merge) e o revisor
- * (os `gh pr review` do card do revisor). A própria, se ainda existe; não há queda para a do projeto —
- * o merge tem de passar pela permissão do merger no GitHub (um 403 lá é a resposta certa), e um review
- * na conta do projeto (que muitas vezes é a que abriu o PR) é recusado pelo GitHub como "review do
- * próprio PR" e trava a revisão a cada rodada. A exceção é o owner sem conexão própria: ele opera
- * com a do projeto, na mesma precedência da identidade de um card (projeto, depois a primeira da
- * instalação). Null = recusar.
- */
-async function ownGithubConnection(user: PublicUser, card: registry.Card): Promise<string | null> {
-  const [git, connections] = await Promise.all([getUserGit(user.id), registry.listGithubConnections()]);
-  const own = git?.githubConnectionId;
-  if (own && connections.some((c) => c.id === own)) return own;
-  if (user.role !== "owner") return null;
-  const project = await registry.getProject(card.projectId);
-  if (!project) return null;
-  return resolveIdentity({ actor: git, project, settings: await getSettings(), connections }).connectionId ?? null;
-}
-
 /** A revisão mais recente da lista (empate: a inserida depois). */
 function newest(list: Review[]): Review | undefined {
   return list.reduce<Review | undefined>((latest, r) => (!latest || r.createdAt >= latest.createdAt ? r : latest), undefined);
@@ -105,9 +81,6 @@ async function fail(reply: FastifyReply, err: unknown, conflict: RegExp | null =
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
-
-/** Revisões com merge em andamento: um segundo clique não dispara um segundo deliver. */
-const merging = new Set<string>();
 
 export async function reviewRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>("/api/cards/:id/people", { preHandler: requireCardAccess }, async (req, reply) => {
@@ -258,64 +231,17 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
    * (sem push) e recusa `head_moved` quando o PR andou — aí a revisão volta à rodada seguinte, ou a
    * impasse na última. O deliver recebe a conexão GitHub do merger (`ownGithubConnection`); sem uma,
    * 400 `merger_sem_github` e nada roda. Uma recusa do GitHub (403) volta como veio, sem outra credencial.
+   * As regras moram em `mergeReviewedPr` (services/review/merge.ts): o `vibehub_deliver` do responsável
+   * pelo merge passa pelo mesmo caminho.
    */
   app.post<{ Params: { id: string } }>("/api/reviews/:id/merge", { preHandler: requireSession }, async (req, reply) => {
     const found = await reviewFor(req.params.id, await requestUser(req), (r, u) => u.id === r.mergerUserId, reply);
     if (!found) return;
-    const { review, user } = found;
-    if (review.phase !== "ready") {
-      return await reply.code(409).send({
-        error: `a revisão está em ${review.phase}: o merge só sai em ready`, reason: "not_ready", phase: review.phase,
-      });
-    }
-    if (!review.reviewedSha) {
-      return await reply.code(409).send({ error: "a revisão não tem o commit revisado", reason: "not_ready", phase: review.phase });
-    }
-    // Acesso conferido de novo no clique: um share que caiu depois do início tira o merge também.
-    if ((await cardLevel(user, review.cardId)) !== "work") {
-      return await reply.code(403).send({ error: "o responsável pelo merge precisa de acesso de trabalho ao card do autor" });
-    }
-    const card = await registry.getCard(review.cardId);
-    if (!card) return await reply.code(404).send({ error: "card not found" });
-    const connectionId = await ownGithubConnection(user, card);
-    if (!connectionId) {
-      return await reply.code(400).send({
-        error: "merger_sem_github: o responsável pelo merge não tem uma conexão GitHub própria no vibehub",
-        reason: "merger_sem_github",
-      });
-    }
-    if (merging.has(review.id)) return await reply.code(409).send({ error: "merge já em andamento", reason: "merging" });
-    merging.add(review.id);
-    try {
-      // Relida com a trava na mão: um clique anterior pode ter acabado (merged) entre a leitura e aqui.
-      const now = await getReview(review.id);
-      if (now?.phase !== "ready" || now.reviewedSha !== review.reviewedSha) {
-        return await reply.code(409).send({
-          error: `a revisão está em ${now?.phase ?? "?"}: o merge só sai em ready`, reason: "not_ready", phase: now?.phase,
-        });
-      }
-      // A conexão vai explícita: o ator do card (o autor) não muda, e uma mensagem no card durante o
-      // merge não troca a credencial debaixo dele.
-      const result = await deliver(review.cardId, {
-        authorized: true, mergeOnly: true, expectedHeadSha: review.reviewedSha, branch: review.base, connectionId, by: user.username,
-      });
-      logger.info(
-        { audit: true, action: "review.merge", review: review.id, merged: result.merged, reason: result.reason, by: user.username },
-        result.merged ? "PR review merged by its merger" : "PR review merge did not happen",
-      );
-      if (result.merged) return await reply.send({ review: await markReviewMerged(review.id, user.username), result });
-      if (result.reason === "head_moved") {
-        const after = await reopenAfterHeadMoved(review.id, user.username);
-        return await reply.code(409).send({ error: result.output ?? "o PR andou depois do pronto", reason: "head_moved", review: after, result });
-      }
-      return await reply.code(409).send({
-        error: result.output ?? `merge não feito: ${result.reason}`, reason: result.reason, review: (await getReview(review.id)) ?? review, result,
-      });
-    } catch (err) {
-      logger.warn({ review: review.id, detail: (err as Error).message }, "PR review merge failed");
-      return await reply.code(500).send({ error: (err as Error).message });
-    } finally {
-      merging.delete(review.id);
-    }
+    const outcome = await mergeReviewedPr(found.review.id, found.user.id);
+    if (outcome.kind === "merged") return await reply.send({ review: outcome.review, result: outcome.result });
+    const { status, error, reason, phase, review, result } = outcome;
+    return await reply.code(status).send({
+      error, ...(reason ? { reason } : {}), ...(phase ? { phase } : {}), ...(review ? { review } : {}), ...(result ? { result } : {}),
+    });
   });
 }

@@ -445,7 +445,9 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         "Returns { prUrl, merged, reason } ('merged', 'gate' = checks red, 'unauthorized' = PR " +
         "prepared but not told to merge, 'locked' = merge belongs to the reviewer). Pass " +
         "`authorized:true` ONLY when the user explicitly named where to ship ('sobe pra dev'); a " +
-        "merge is a deploy, never a default.",
+        "merge is a deploy, never a default. A PR under review: the push always happens; the merge only " +
+        "when you are the review's merger and it is ready ('review_active' otherwise, naming who merges; " +
+        "'head_moved' = new commits went back to the reviewer).",
       inputSchema: {
         cardId: z.string().describe("id of the card to deliver (from vibehub_list_terminals)"),
         branch: z.string().optional().describe("target branch. Absent = the project's base branch."),
