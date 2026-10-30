@@ -20,6 +20,7 @@ import { logger } from "../../utils/logger.js";
 import { isAtomicWriteTmp } from "../../store/atomicWrite.js";
 import { forgetCardActor } from "./actor.js";
 import { CARD_ID_RE } from "./cardId.js";
+import { closeReviewsOfRemovedCard } from "../review/orchestrator.js";
 
 /**
  * CARD PURGE — deleting a card ERASES the card, not the tile that showed it.
@@ -109,10 +110,38 @@ export async function purgeCard(cardId: string, by?: string): Promise<PurgeRepor
   // The card is off the board, its slot held there until its browser is known to be down.
   await releaseSlotIfBrowserStopped(card, steps);
 
+  // Its PR reviews: an active one is cancelled now that no relay can reach the card.
+  let reviewerCards: string[] = [];
+  await step(steps, "reviews", async () => {
+    reviewerCards = await closeReviewsOfRemovedCard(card.id, by);
+  });
+
   // 3. ERASE.
   await eraseEverything(card, steps, by);
 
+  // 4. Its REVIEWER cards go with it: hidden from the board, nobody else would ever delete them.
+  if (reviewerCards.length > 0) await purgeReviewerCards(reviewerCards, steps, by);
+
   return finishReport(card, steps, by);
+}
+
+/**
+ * The reviewer cards of a purged author card, each through the same full purge. One that survived in
+ * part fails this step by name (the orphan sweep collects what it left); one already gone is fine.
+ */
+async function purgeReviewerCards(ids: readonly string[], steps: PurgeStep[], by?: string): Promise<void> {
+  await step(steps, "reviewer-cards", async () => {
+    let purged = 0;
+    const partial: string[] = [];
+    for (const id of ids) {
+      const report = await purgeCard(id, by);
+      if (!report) continue;
+      purged += 1;
+      if (report.incomplete.length > 0) partial.push(`${report.card} (${report.incomplete.join(", ")})`);
+    }
+    if (partial.length > 0) throw new Error(`reviewer card(s) purged in part: ${partial.join("; ")}`);
+    return purged ? `${purged} reviewer card(s) purged` : undefined;
+  });
 }
 
 /**
@@ -694,6 +723,10 @@ export async function purgeRemovedCards(
     const steps: PurgeStep[] = [];
     await stopEverything(card, steps, by);
     await releaseSlotIfBrowserStopped(card, steps);
+    // Its PR reviews are cancelled; its reviewer cards are in the same project, so in `cards` too.
+    await step(steps, "reviews", async () => {
+      await closeReviewsOfRemovedCard(card.id, by);
+    });
     await eraseEverything(card, steps, by, project);
     reports.push(finishReport(card, steps, by));
   }

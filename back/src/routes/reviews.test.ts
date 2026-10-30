@@ -195,7 +195,9 @@ afterEach(async () => {
   for (const m of [
     "../runtime/runner.js", "../services/board/workspace.js", "../services/maestro/maestro.js", "../services/maestro/deliver.js",
   ]) vi.doUnmock(m);
-  await rm(dir, { recursive: true, force: true });
+  // Fechar uma revisão manda o card do revisor pra done, e o "concluído" dele é gravado numa
+  // microtask: uma escrita dessas pode chegar junto do rm.
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 });
 
 describe("iniciar a revisão", () => {

@@ -606,8 +606,28 @@ export async function retryReview(reviewId: string, by: string): Promise<Review>
 }
 
 /**
+ * A revisão fechou (`merged` ou `cancelled`): o card do revisor vai para `done`, a mesma escrita do
+ * arrastar no board. Escondido do board, ninguém o veria nem apagaria, e cada revisão deixaria uma
+ * worktree (mais o que a IA instalou para testar) no runner; em `done`, a hibernação e a retenção
+ * cuidam dele como de qualquer card. O histórico da revisão (achados e conversa) mora no store das
+ * revisões, não no card. Nunca lança: um card que sumiu, ou uma escrita que falhou, custa a faxina,
+ * não o fechamento da revisão.
+ */
+async function retireReviewerCard(r: Review): Promise<void> {
+  try {
+    const card = await getCard(r.reviewerCardId);
+    if (!card || card.column === "done") return;
+    await updateCard(card.id, { column: "done" });
+    logger.info({ review: r.id, card: card.worktreeSlug, phase: r.phase }, "reviewer card moved to done");
+  } catch (err) {
+    logger.warn({ review: r.id, card: r.reviewerCardId, detail: (err as Error).message }, "could not move the reviewer card to done");
+  }
+}
+
+/**
  * Cancela a revisão, de qualquer fase ativa. `cancelled` não é ativa (`activeReviewFor`), então o
- * mesmo PR pode ser revisado de novo. O card do revisor fica como está (o histórico não some).
+ * mesmo PR pode ser revisado de novo. O card do revisor vai para `done` (`retireReviewerCard`); o
+ * histórico fica na revisão.
  */
 export async function cancelReview(reviewId: string, by: string): Promise<Review> {
   const after = await mutateReview(reviewId, (r) => {
@@ -617,7 +637,36 @@ export async function cancelReview(reviewId: string, by: string): Promise<Review
     note(r, "human", "Revisão cancelada.");
   });
   logger.info({ audit: true, action: "review.cancel", review: reviewId, by }, "PR review cancelled");
+  await retireReviewerCard(after);
   return after;
+}
+
+/**
+ * Um card saiu do board (o botão de excluir, a retenção de `done`, o projeto excluído). Toda revisão
+ * ATIVA em que ele é o autor ou o revisor é cancelada: sem o card, nenhum relay chega e o "tentar de
+ * novo" não teria para onde ir. Devolve os cards de revisor das revisões em que ele era o AUTOR, de
+ * qualquer fase, para quem exclui levá-los junto: sem o autor, o card do revisor é só uma worktree
+ * escondida. Idempotente.
+ */
+export async function closeReviewsOfRemovedCard(cardId: string, by?: string): Promise<string[]> {
+  const asAuthor = await listReviewsForCards([cardId]);
+  const asReviewer = await reviewByReviewerCard(cardId);
+  for (const r of [...asAuthor, ...(asReviewer ? [asReviewer] : [])]) {
+    if (CLOSED.has(r.phase)) continue;
+    const side = r.cardId === cardId ? "autor" : "revisor";
+    let cancelled = false as boolean;
+    await mutateReview(r.id, (x) => {
+      if (CLOSED.has(x.phase)) return;
+      x.phase = "cancelled";
+      x.approvePending = undefined;
+      note(x, "system", `Revisão cancelada: o card do ${side} foi excluído.`);
+      cancelled = true;
+    });
+    if (cancelled) {
+      logger.info({ audit: true, action: "review.cancel", review: r.id, reason: `${side} card removed`, card: cardId, by }, "PR review cancelled");
+    }
+  }
+  return [...new Set(asAuthor.map((r) => r.reviewerCardId))].filter((id) => id !== cardId);
 }
 
 /* ------------------------------------------------------------------ merge humano */
@@ -656,9 +705,9 @@ export async function reopenAfterHeadMoved(reviewId: string, by: string): Promis
 }
 
 /**
- * O merge humano saiu: a revisão fecha em `merged` (deixa de ser ativa) e os dois cards recebem o
- * aviso. Grava mesmo se a revisão foi cancelada durante o merge — o PR foi mergeado, e é isso que o
- * painel tem de dizer. Repetir não grava nada nem avisa de novo.
+ * O merge humano saiu: a revisão fecha em `merged` (deixa de ser ativa), os dois cards recebem o
+ * aviso e o card do revisor vai para `done`. Grava mesmo se a revisão foi cancelada durante o merge —
+ * o PR foi mergeado, e é isso que o painel tem de dizer. Repetir não grava nada nem avisa de novo.
  */
 export async function markReviewMerged(reviewId: string, by: string): Promise<Review> {
   let landed = false as boolean;
@@ -674,6 +723,7 @@ export async function markReviewMerged(reviewId: string, by: string): Promise<Re
   if (landed) {
     logger.info({ audit: true, action: "review.merged", review: reviewId, by }, "PR review merged");
     await announcePhase(after);
+    await retireReviewerCard(after);
   }
   return after;
 }

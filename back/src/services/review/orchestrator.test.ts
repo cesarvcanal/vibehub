@@ -128,7 +128,9 @@ afterEach(async () => {
     "../maestro/maestro.js", "../board/actor.js", "../board/workspace.js", "../maestro/deliver.js",
     "../../auth/users.js", "../../auth/userGit.js",
   ]) vi.doUnmock(m);
-  await rm(dir, { recursive: true, force: true });
+  // Fechar uma revisão manda o card do revisor pra done, e o "concluído" dele é gravado numa
+  // microtask: uma escrita dessas pode chegar junto do rm.
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 });
 
 async function seed(o: Loaded) {
@@ -924,6 +926,77 @@ describe("merge humano: push depois do pronto e mergeado", () => {
     const again = await o.orch.markReviewMerged(review.id, "merger");
     expect(again.log).toHaveLength(merged.log.length);
     expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe("o card do revisor depois da revisão", () => {
+  /** Entrar em `done` grava o "concluído" do card numa microtask: o teste espera por ele (e o disco fica quieto). */
+  const concluded = async (o: Loaded, cardId: string) =>
+    await vi.waitFor(async () =>
+      expect((await o.events.eventsAfter(0)).events.some((e) => e.kind === "concluded" && e.cardId === cardId)).toBe(true));
+
+  it("mergeado manda o card do revisor pra done (a retenção recolhe a worktree)", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    await o.registry.applyOpenTerminal(review.reviewerCardId);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "ok" });
+    expect((await o.registry.getCard(review.reviewerCardId))?.column).toBe("waiting");
+
+    await o.orch.markReviewMerged(review.id, "merger");
+    await concluded(o, review.reviewerCardId);
+    const card = await o.registry.getCard(review.reviewerCardId);
+    expect(card).toMatchObject({ column: "done", reviewOf: review.cardId });
+    expect(card?.doneAt).toBeGreaterThan(0);
+    // repetir não mexe (nem lança)
+    await expect(o.orch.markReviewMerged(review.id, "merger")).resolves.toMatchObject({ phase: "merged" });
+    expect((await o.registry.getCard(review.reviewerCardId))?.doneAt).toBe(card?.doneAt);
+  });
+
+  it("cancelado manda o card do revisor pra done; o do autor fica onde está", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.cancelReview(review.id, "u-autor");
+    await concluded(o, review.reviewerCardId);
+    expect((await o.registry.getCard(review.reviewerCardId))?.column).toBe("done");
+    expect((await o.registry.getCard(author.id))?.column).toBe(author.column);
+  });
+
+  it("card do revisor que sumiu não impede de cancelar nem de marcar mergeado", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    await o.registry.removeCard(review.reviewerCardId);
+    await expect(o.orch.cancelReview(review.id, "u-autor")).resolves.toMatchObject({ phase: "cancelled" });
+    await expect(o.orch.markReviewMerged(review.id, "merger")).resolves.toMatchObject({ phase: "merged" });
+  });
+
+  it("card excluído: revisão ativa em que ele é autor ou revisor é cancelada; devolve os cards de revisor do autor", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    // uma revisão antiga do mesmo card, já mergeada, também deixou um card de revisor
+    const old = await o.store.mutateReview(review.id, (r) => {
+      r.phase = "merged";
+    });
+    const current = await o.orch.startReview({
+      cardId: author.id, prNumber: 7, reviewerUserId: "u-revisor", authorUserId: "u-autor", mergerUserId: "u-merger", by: "u-autor",
+    });
+
+    const reviewerCards = await o.orch.closeReviewsOfRemovedCard(author.id, "u-owner");
+    expect(reviewerCards.sort()).toEqual([old.reviewerCardId, current.reviewerCardId].sort());
+    expect(await o.store.getReview(current.id)).toMatchObject({ phase: "cancelled" });
+    expect((await o.store.getReview(current.id))?.log.at(-1)?.text).toMatch(/excluído/);
+    // a mergeada fica como está: o histórico não muda
+    expect(await o.store.getReview(old.id)).toMatchObject({ phase: "merged" });
+    // de novo: nada a cancelar
+    await expect(o.orch.closeReviewsOfRemovedCard(author.id, "u-owner")).resolves.toHaveLength(2);
+
+    // o card do revisor excluído sozinho: a revisão dele é cancelada, e não há card de revisor a levar junto
+    const other = await o.registry.createCard({ projectId: author.projectId, title: "Outro" });
+    await o.registry.recordCardPr(other.id, { ...PR, number: 8, url: "https://github.com/acme/widgets/pull/8" });
+    const third = await o.orch.startReview({
+      cardId: other.id, prNumber: 8, reviewerUserId: "u-revisor", authorUserId: "u-autor", mergerUserId: "u-merger", by: "u-autor",
+    });
+    await expect(o.orch.closeReviewsOfRemovedCard(third.reviewerCardId, "u-owner")).resolves.toEqual([]);
+    expect(await o.store.getReview(third.id)).toMatchObject({ phase: "cancelled" });
   });
 });
 
