@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
-  getCard, createReviewerCard, removeCard, updateCard, cardMoveEffect, isHumanActive, shareWith,
+  getCard, createReviewerCard, removeCard, updateCard, cardMoveEffect, isHumanActive, shareWith, markCardPrMerged,
 } from "../board/registry.js";
 import { resumeCard } from "../board/workspace.js";
 import { recordCardActor } from "../board/actor.js";
@@ -8,7 +8,7 @@ import { findUser } from "../../auth/users.js";
 import { cardLevel } from "../../auth/access.js";
 import { creatorAccountSlug } from "../../auth/userGit.js";
 import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
-import { readPrHead } from "../maestro/deliver.js";
+import { deleteMergedBranch, readPrState } from "../maestro/deliver.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { eventsAfter, onCardEvent, recordMessage, type CardEvent, type Severity } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
@@ -35,7 +35,8 @@ import {
  *   turn_finished sem a ferramenta ──► um lembrete; no segundo, impasse "IA não respondeu"
  *   humano ──► decideQuestion | retryReview (impasse por falha, Approve pendente) | cancelReview
  *   botão de merge (rota) ──► markReviewMerged | head do PR andou: reopenAfterHeadMoved
- *   fim de turno do autor em ready com o head do PR andado ──► reopenAfterHeadMoved (cause "push")
+ *   o PR no GitHub (fim de turno do autor; painel aberto, com freio) ──► syncReviewWithGithub:
+ *     mergeado fora do painel → merged | fechado sem merge → cancelled | push depois do pronto → reopen
  *
  * As regras do jogo (prova, lista fechada, teto de rodadas) moram no modelo puro; aqui ficam a
  * persistência, quem pode chamar o quê e os relays. Três garantias atravessam o arquivo:
@@ -741,19 +742,78 @@ export async function reopenAfterHeadMoved(
 }
 
 /**
- * O fim de turno do card do AUTOR com a revisão em `ready`: alguém mandou a IA dele mexer no PR
- * (aplicar as sugestões, corrigir mais alguma coisa) e ela pode ter empurrado. O head do PR no GitHub
- * é comparado com o commit aprovado e, se andou, a revisão volta ao revisor na hora
- * (`reopenAfterHeadMoved`), sem esperar alguém clicar em merge para descobrir. Vale para qualquer
- * turno do autor, inclusive com uma pessoa usando o card (é justamente o caso). Nunca lança: uma
- * leitura que falha deixa a revisão como está, e o merge ainda confere o head.
+ * O PR no GitHub, conferido contra a revisão: o que aconteceu lá FORA do painel, que nenhum clique
+ * contou para cá.
+ *  - MERGED: mergeado à mão, ou por uma IA pela API — a revisão fecha como mergeada (o mesmo
+ *    `markReviewMerged` do botão: aviso nos dois cards, card do revisor para `done`), o PR do card
+ *    ganha `mergedAt` e a branch dele sai do GitHub (o trabalho já está na base).
+ *  - CLOSED sem merge: a revisão é cancelada (não há mais o que revisar nem mergear).
+ *  - OPEN com o head diferente do aprovado, em `ready`: alguém mandou a IA do autor mexer no PR e
+ *    ela empurrou — a revisão volta ao revisor na hora ({@link reopenAfterHeadMoved}), sem esperar
+ *    o clique de merge para descobrir. Em `fixing`, push é a resposta à lista: nada muda.
+ * Só revisão aberta vai ao GitHub. Nunca lança: uma leitura que falha deixa a revisão como está.
  */
+export async function syncReviewWithGithub(reviewId: string): Promise<Review | undefined> {
+  const r = await getReview(reviewId);
+  if (!r || CLOSED.has(r.phase)) return r;
+  const pr = await readPrState(r.cardId, r.prUrl);
+  if (!pr) return r;
+  if (pr.state === "MERGED") {
+    const after = await markReviewMerged(r.id, "GitHub", { outsidePanel: { headSha: pr.headSha } });
+    try {
+      await markCardPrMerged(r.cardId, r.base, r.prNumber, Date.now());
+    } catch (err) {
+      logger.warn({ review: r.id, detail: (err as Error).message }, "could not mark the card's PR as merged");
+    }
+    await deleteMergedBranch(r.cardId, r.prUrl, r.prBranch);
+    return after;
+  }
+  if (pr.state === "CLOSED") {
+    let closed = false as boolean;
+    const after = await mutateReview(r.id, (x) => {
+      if (CLOSED.has(x.phase)) return;
+      x.phase = "cancelled";
+      x.approvePending = undefined;
+      note(x, "system", `PR #${x.prNumber} fechado no GitHub sem merge: revisão cancelada.`);
+      closed = true;
+    });
+    if (closed) {
+      logger.info({ audit: true, action: "review.cancel", review: r.id, reason: "PR closed on GitHub" }, "PR review cancelled");
+      await retireReviewerCard(after);
+    }
+    return after;
+  }
+  if (r.phase === "ready" && r.reviewedSha && pr.headSha !== r.reviewedSha) {
+    return await reopenAfterHeadMoved(r.id, "fim do turno do autor", { cause: "push", headSha: pr.headSha });
+  }
+  return r;
+}
+
+/** De quanto em quanto tempo, no máximo, o painel aberto faz o servidor conferir o PR no GitHub. */
+export const GITHUB_SYNC_MS = 60_000;
+const lastGithubSync = new Map<string, number>();
+
+/**
+ * O painel leu a revisão: confere o PR no GitHub em segundo plano, no máximo uma vez por
+ * {@link GITHUB_SYNC_MS} por revisão — o painel relê a cada 3 s e um `gh` por leitura seria
+ * desperdício. É o que pega um merge feito direto no GitHub mesmo sem nenhum turno do autor.
+ */
+export function syncReviewSoon(r: Review): void {
+  if (CLOSED.has(r.phase)) return;
+  const now = Date.now();
+  if (now - (lastGithubSync.get(r.id) ?? 0) < GITHUB_SYNC_MS) return;
+  lastGithubSync.set(r.id, now);
+  void syncReviewWithGithub(r.id).catch((err: unknown) => {
+    logger.warn({ review: r.id, detail: (err as Error).message }, "PR review could not sync with GitHub");
+  });
+}
+
+/** O fim de turno do card do AUTOR: cada revisão aberta dele é conferida no GitHub. Nunca lança. */
 async function checkAuthorPush(cardId: string): Promise<void> {
   for (const r of await listReviewsForCards([cardId])) {
-    if (r.phase !== "ready" || !r.reviewedSha) continue;
-    const head = await readPrHead(r.cardId, r.prBranch, r.base);
-    if (!head || head.headSha === r.reviewedSha) continue;
-    await reopenAfterHeadMoved(r.id, "fim do turno do autor", { cause: "push", headSha: head.headSha });
+    if (CLOSED.has(r.phase)) continue;
+    lastGithubSync.set(r.id, Date.now());
+    await syncReviewWithGithub(r.id);
   }
 }
 
@@ -762,15 +822,22 @@ async function checkAuthorPush(cardId: string): Promise<void> {
  * aviso e o card do revisor vai para `done`. Grava mesmo se a revisão foi cancelada durante o merge —
  * o PR foi mergeado, e é isso que o painel tem de dizer. Repetir não grava nada nem avisa de novo.
  */
-export async function markReviewMerged(reviewId: string, by: string): Promise<Review> {
+export async function markReviewMerged(
+  reviewId: string, by: string, opts: { outsidePanel?: { headSha: string } } = {},
+): Promise<Review> {
   let landed = false as boolean;
   const after = await mutateReview(reviewId, (r) => {
     if (r.phase === "merged") return;
     r.phase = "merged";
     r.approvePending = undefined;
     r.impasseReason = undefined;
-    const head = r.reviewedSha ? ` (head ${r.reviewedSha.slice(0, 7)})` : "";
-    note(r, "human", `Mergeado em ${r.base} por ${by}${head}.`, { by });
+    if (opts.outsidePanel) {
+      // Ninguém clicou no botão: o PR apareceu mergeado no GitHub (à mão, ou por uma IA pela API).
+      note(r, "system", `Mergeado em ${r.base} fora do painel, direto no GitHub (head ${opts.outsidePanel.headSha.slice(0, 7)}).`);
+    } else {
+      const head = r.reviewedSha ? ` (head ${r.reviewedSha.slice(0, 7)})` : "";
+      note(r, "human", `Mergeado em ${r.base} por ${by}${head}.`, { by });
+    }
     landed = true;
   });
   if (landed) {

@@ -8,7 +8,7 @@ import { resolveIdentity } from "../services/github/identity.js";
 import { getSettings } from "../services/settings/settings.js";
 import { deliver } from "../services/maestro/deliver.js";
 import {
-  cancelReview, decideQuestion, markReviewMerged, reopenAfterHeadMoved, retryReview, startReview,
+  cancelReview, decideQuestion, markReviewMerged, reopenAfterHeadMoved, retryReview, startReview, syncReviewSoon,
 } from "../services/review/orchestrator.js";
 import { activeReviewFor, getReview, listReviewsForCards } from "../services/review/store.js";
 import type { Review } from "../services/review/model.js";
@@ -119,10 +119,13 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
   /**
    * A revisão do card: a ativa, ou a última (de qualquer fase) — o painel mostra o histórico. Junto,
    * `working`: se a IA do autor e a do revisor estão trabalhando agora (ausente quando não há revisão).
+   * Uma revisão aberta é conferida no GitHub em segundo plano, no máximo uma vez por minuto
+   * (`syncReviewSoon`): é o que faz um merge feito direto no GitHub aparecer no painel sozinho.
    */
   app.get<{ Params: { id: string } }>("/api/cards/:id/review", { preHandler: requireCardAccess }, async (req, reply) => {
     const review = (await activeReviewFor(req.params.id)) ?? newest(await listReviewsForCards([req.params.id]));
     if (!review) return await reply.send({ review: null });
+    syncReviewSoon(review);
     return await reply.send({ review, working: await sidesWorking(review) });
   });
 

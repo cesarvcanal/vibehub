@@ -27,6 +27,10 @@ const send = vi.fn(async (cardId: string, _text: string, opts: SendOpts = {}): P
 /** O ator do card do autor no instante em que o deliver rodou (o token do merge sai dele). */
 let actorAtDeliver: string | undefined;
 let deliverResult: DeliverResult = { merged: true, reason: "merged", branch: "dev", cardBranch: "card/x" };
+/** O PR no GitHub, como `readPrState` o leria (null = leitura que falhou). */
+let prState: { state: "OPEN" | "MERGED" | "CLOSED"; headSha: string } | null = null;
+const readPrState = vi.fn(async () => prState);
+const deleteMergedBranch = vi.fn(async () => "deleted" as const);
 const deliver = vi.fn(async (cardId: string, _opts: DeliverOpts = {}): Promise<DeliverResult> => {
   actorAtDeliver = (await (await import("../services/board/registry.js")).getCard(cardId))?.actorUserId;
   return deliverResult;
@@ -64,6 +68,8 @@ async function boot(): Promise<FastifyInstance> {
   vi.doMock("../services/maestro/deliver.js", async () => ({
     ...(await vi.importActual<typeof import("../services/maestro/deliver.js")>("../services/maestro/deliver.js")),
     deliver,
+    readPrState,
+    deleteMergedBranch,
   }));
   const { buildServer } = await import("../index.js");
   const server = await buildServer();
@@ -186,6 +192,9 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "vibehub-review-routes-"));
   send.mockClear();
   deliver.mockClear();
+  readPrState.mockClear();
+  deleteMergedBranch.mockClear();
+  prState = null;
   actorAtDeliver = undefined;
   deliverResult = { prUrl: PR.url, merged: true, reason: "merged", branch: "dev", cardBranch: PR.branch };
   app = await boot();
@@ -377,6 +386,36 @@ describe("GET da revisão: quem está trabalhando agora", () => {
     await reg.applyCardStatus(review.reviewerCardId, "working");
     await reg.applyCardStatus(w.cardId, "waiting");
     expect(await read()).toMatchObject({ review: { id: review.id }, working: { author: false, reviewer: true } });
+  });
+});
+
+describe("GET da revisão confere o PR no GitHub (merge feito fora do painel)", () => {
+  it("o PR mergeado direto no GitHub aparece mergeado na próxima leitura, e o freio segura o gh por um minuto", async () => {
+    const w = await world();
+    const ready = await readyReview(w);
+    prState = { state: "MERGED", headSha: SHA1 };
+    const read = async () =>
+      (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review`, headers: { cookie: w.autor.cookie } })).json();
+
+    // A leitura responde na hora com o que tem; a conferência roda em segundo plano.
+    expect((await read()).review.phase).toBe("ready");
+    await vi.waitFor(async () => expect((await read()).review.phase).toBe("merged"));
+    expect((await read()).review.log.at(-1).text).toMatch(/fora do painel/);
+    await vi.waitFor(() => expect(deleteMergedBranch).toHaveBeenCalledTimes(1));
+    // Várias leituras em seguida: uma ida só ao GitHub.
+    expect(readPrState).toHaveBeenCalledTimes(1);
+    expect(ready.id).toBeTruthy();
+  });
+
+  it("sem revisão, ou revisão encerrada, a leitura não vai ao GitHub", async () => {
+    const w = await world();
+    await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review`, headers: { cookie: w.autor.cookie } });
+    const id = (await startReview(w)).json().review.id as string;
+    await app.inject({ method: "POST", url: `/api/reviews/${id}/cancel`, headers: { cookie: w.autor.cookie } });
+    readPrState.mockClear();
+    await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review`, headers: { cookie: w.autor.cookie } });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(readPrState).not.toHaveBeenCalled();
   });
 });
 

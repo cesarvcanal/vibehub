@@ -336,33 +336,54 @@ function repoOfPr(prUrl: string): string | null {
 }
 
 /**
- * The head of the card's OPEN PR from `branch` to `base`, as GitHub has it now: what the PR review
- * compares with the commit it approved when the author's turn ends. Read with the card's own
- * connection (the actor's), through the same lookup the merge-only deliver does — nothing is pushed.
- * Null when there is no open PR there or the lookup failed (logged): the caller leaves things as they
- * are, and the merge button still checks the head before merging.
+ * Reads a PR's STATE and head, by its URL: `__VIBEHUB_DELIVER__ prstate <OPEN|MERGED|CLOSED> <sha>`,
+ * or `__VIBEHUB_DELIVER__ error view`. What the PR review checks to notice what happened on GitHub
+ * outside the panel (a merge by hand, a closed PR, a push after ready). PURE.
  */
-export async function readPrHead(
-  cardId: string, branch: string, base: string,
-): Promise<{ prUrl: string; headSha: string } | null> {
+export function buildPrStateScript(containerName: string, cardId: string, token: string, cwd: string, prUrl: string): string {
+  assertSafeRemotePath(cwd);
+  const body = [
+    ...ghTokenPreamble(token),
+    `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
+    `if ! J=$(gh pr view ${shQuote(prUrl)} --json state,headRefOid --jq '.state + " " + .headRefOid' 2>&1); then`,
+    `  printf '%s\\n' "$J"; echo "${MARKER} error view"; exit 0;`,
+    `fi`,
+    `echo "${MARKER} prstate $J"`,
+  ];
+  return dockerBashScript(containerName, body);
+}
+
+export type PrState = "OPEN" | "MERGED" | "CLOSED";
+
+/** Parses the PR state lookup. PURE. */
+export function parsePrState(
+  stdout: string,
+): { ok: true; state: PrState; headSha: string } | { ok: false; stage: string; output: string } {
+  const m = new RegExp(`${MARKER} prstate (OPEN|MERGED|CLOSED) ([0-9a-fA-F]{40,64})\\b`).exec(stdout);
+  if (m) return { ok: true, state: m[1] as PrState, headSha: m[2]!.toLowerCase() };
+  const err = new RegExp(`${MARKER} error (\\S+)`).exec(stdout);
+  const output = stdout.replace(new RegExp(`${MARKER} (prstate|error).*`, "g"), "").trimEnd();
+  return { ok: false, stage: err?.[1] ?? "unknown", output };
+}
+
+/**
+ * A PR as GitHub has it now — state and head — read with the card's own connection (the actor's).
+ * Null when the lookup failed (logged): the caller leaves things as they are.
+ */
+export async function readPrState(cardId: string, prUrl: string): Promise<{ state: PrState; headSha: string } | null> {
   try {
     const card = await getCard(cardId);
     const project = card ? await getProject(card.projectId) : undefined;
     if (!card || !project) return null;
     const { cwd } = cardWorkPaths(project, card);
     const token = await cardConnectionToken(card, project);
-    const out = await hostExecutor().runScript(
-      buildResolvePrScript(config.runner.container, card.id, token, cwd, assertBranchName(branch), assertBranchName(base)),
-      { timeoutMs: 60_000 },
-    );
-    const found = parseResolvePr(out.stdout);
-    if (found.ok) return { prUrl: found.prUrl, headSha: found.headSha };
-    if (found.stage !== "nopr") {
-      logger.warn({ card: card.worktreeSlug, stage: found.stage, detail: cleanOutput(found.output) }, "could not read the PR head");
-    }
+    const out = await hostExecutor().runScript(buildPrStateScript(config.runner.container, card.id, token, cwd, prUrl), { timeoutMs: 60_000 });
+    const found = parsePrState(out.stdout);
+    if (found.ok) return { state: found.state, headSha: found.headSha };
+    logger.warn({ card: card.worktreeSlug, stage: found.stage, detail: cleanOutput(found.output) }, "could not read the PR state");
     return null;
   } catch (err) {
-    logger.warn({ card: cardId, detail: (err as Error).message }, "could not read the PR head");
+    logger.warn({ card: cardId, detail: (err as Error).message }, "could not read the PR state");
     return null;
   }
 }

@@ -663,6 +663,19 @@ describe("buildDeleteBranchScript / parseDeleteBranch", () => {
   });
 });
 
+describe("buildPrStateScript / parsePrState", () => {
+  it("lê o estado e o head do PR pela URL, com o token do stdin", async () => {
+    const { deliver } = await load();
+    const script = deliver.buildPrStateScript("vibehub-runner", "c1", TOKEN, "/work/x", PR);
+    expect(script).toContain(`gh pr view '${PR}' --json state,headRefOid`);
+    for (const line of script.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
+    const sha = "b".repeat(40);
+    expect(deliver.parsePrState(`__VIBEHUB_DELIVER__ prstate MERGED ${sha}`)).toEqual({ ok: true, state: "MERGED", headSha: sha });
+    expect(deliver.parsePrState(`__VIBEHUB_DELIVER__ prstate OPEN ${sha.toUpperCase()}`)).toEqual({ ok: true, state: "OPEN", headSha: sha });
+    expect(deliver.parsePrState("denied\n__VIBEHUB_DELIVER__ error view")).toMatchObject({ ok: false, stage: "view" });
+  });
+});
+
 describe("deliver com revisão de PR ativa no card", () => {
   async function withActiveReview(phase: "reviewing" | "fixing" | "ready" | "merged" | "cancelled" = "reviewing") {
     const made = await makeCard();

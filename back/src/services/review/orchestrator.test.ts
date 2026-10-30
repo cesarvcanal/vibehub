@@ -49,10 +49,11 @@ const resume = vi.fn(async (cardId: string) => {
   return await reopen?.(cardId);
 });
 const deliverSpy = vi.fn(async () => ({ merged: true }));
-/** O head do PR no GitHub, como `readPrHead` o leria: null = sem PR aberto ou leitura que falhou. */
+/** O PR no GitHub, como `readPrState` o leria: o head (null = leitura que falhou) e o estado. */
 let prHeadNow: string | null = null;
-const prHead = vi.fn(async (_cardId: string, _branch: string, _base: string) =>
-  prHeadNow ? { prUrl: "https://github.com/acme/widgets/pull/7", headSha: prHeadNow } : null);
+let prStateNow: "OPEN" | "MERGED" | "CLOSED" = "OPEN";
+const prHead = vi.fn(async (_cardId: string, _prUrl: string) => (prHeadNow ? { state: prStateNow, headSha: prHeadNow } : null));
+const deleteBranch = vi.fn(async (_cardId: string, _prUrl: string, _branch: string) => "deleted" as const);
 
 const USERS: Record<string, PublicUser> = {
   "u-autor": { id: "u-autor", username: "autor", role: "member", createdAt: "" },
@@ -80,7 +81,8 @@ async function load() {
   vi.doMock("../maestro/deliver.js", async () => ({
     ...(await vi.importActual<typeof import("../maestro/deliver.js")>("../maestro/deliver.js")),
     deliver: deliverSpy,
-    readPrHead: prHead,
+    readPrState: prHead,
+    deleteMergedBranch: deleteBranch,
   }));
   vi.doMock("../../auth/users.js", async () => ({
     ...(await vi.importActual<typeof import("../../auth/users.js")>("../../auth/users.js")),
@@ -129,6 +131,8 @@ beforeEach(async () => {
   deliverSpy.mockClear();
   prHead.mockClear();
   prHeadNow = null;
+  prStateNow = "OPEN";
+  deleteBranch.mockClear();
 });
 afterEach(async () => {
   for (const m of [
@@ -968,7 +972,7 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
       prHeadNow = SHA2;
       await endTurn(o, author.id);
       await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("reviewing"));
-      expect(prHead).toHaveBeenCalledWith(author.id, PR.branch, "dev");
+      expect(prHead).toHaveBeenCalledWith(author.id, PR.url);
       const after = (await o.store.getReview(review.id))!;
       expect(after).toMatchObject({ round: 2, reviewedSha: SHA1, lastSubmitRound: 1 });
       // o revisor recebe o delta desde o commit aprovado, dizendo que foi o autor que empurrou
@@ -1050,19 +1054,21 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
     }
   });
 
-  it("fim de turno do revisor, ou do autor fora de ready, não lê o head do PR", async () => {
+  it("fim de turno do revisor não lê o PR; o do autor fora de ready lê, mas push em fixing é a resposta, não reabre", async () => {
     const o = await load();
     const { author, review } = await started(o);
     const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
     try {
       prHeadNow = SHA2;
       await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
-      // fixing: o autor corrige pela lista; o push dele é a resposta, não um push depois do pronto
-      await o.registry.markCardHumanActive(author.id);
-      await endTurn(o, author.id);
       await endTurn(o, review.reviewerCardId);
       await settle();
       expect(prHead).not.toHaveBeenCalled();
+      // fixing: o autor corrige pela lista; o push dele é a resposta, não um push depois do pronto
+      await o.registry.markCardHumanActive(author.id);
+      await endTurn(o, author.id);
+      await vi.waitFor(() => expect(prHead).toHaveBeenCalledTimes(1));
+      await settle();
       expect((await o.store.getReview(review.id))?.phase).toBe("fixing");
     } finally {
       off();
@@ -1095,6 +1101,90 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
     } finally {
       off();
     }
+  });
+});
+
+describe("o PR mudou no GitHub fora do painel (merge à mão, PR fechado)", () => {
+  const endTurn = async (o: Loaded, cardId: string) => {
+    await o.events.observeCardStatus(cardId, "waiting", "working");
+    await o.events.observeCardStatus(cardId, "working", "waiting");
+  };
+  async function readyReview(o: Loaded) {
+    const { author, review } = await started(o);
+    const ready = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [SUGGESTION], headSha: SHA1, summary: "ok" });
+    send.mockClear();
+    calls.length = 0;
+    return { author, review: ready };
+  }
+
+  it("mergeado direto no GitHub: no fim do turno do autor a revisão fecha como mergeada, o PR do card é marcado e a branch sai", async () => {
+    const o = await load();
+    const { author, review } = await readyReview(o);
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      prHeadNow = SHA2;
+      prStateNow = "MERGED";
+      await endTurn(o, author.id);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("merged"));
+      const after = (await o.store.getReview(review.id))!;
+      expect(after.log.at(-1)).toMatchObject({ who: "system" });
+      expect(after.log.at(-1)?.text).toMatch(/Mergeado em dev fora do painel/);
+      await vi.waitFor(() => expect(deleteBranch).toHaveBeenCalledWith(author.id, PR.url, PR.branch));
+      expect((await o.registry.getCard(author.id))?.prs?.find((p) => p.number === 7)?.mergedAt).toBeGreaterThan(0);
+      // o card do revisor sai junto, como no botão
+      await vi.waitFor(async () => expect((await o.registry.getCard(review.reviewerCardId))?.column).toBe("done"));
+      expect(send).not.toHaveBeenCalled();
+      expect(deliverSpy).not.toHaveBeenCalled();
+    } finally {
+      off();
+    }
+  });
+
+  it("mergeado no GitHub no meio da correção também fecha (qualquer fase aberta)", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    prHeadNow = SHA2;
+    prStateNow = "MERGED";
+    const after = await o.orch.syncReviewWithGithub(review.id);
+    expect(after?.phase).toBe("merged");
+    expect(deleteBranch).toHaveBeenCalledWith(author.id, PR.url, PR.branch);
+  });
+
+  it("PR fechado sem merge no GitHub: a revisão é cancelada e a branch fica", async () => {
+    const o = await load();
+    const { review } = await readyReview(o);
+    prHeadNow = SHA1;
+    prStateNow = "CLOSED";
+    const after = await o.orch.syncReviewWithGithub(review.id);
+    expect(after?.phase).toBe("cancelled");
+    expect(after?.log.at(-1)?.text).toMatch(/fechado no GitHub sem merge/);
+    expect(deleteBranch).not.toHaveBeenCalled();
+    expect(await o.store.activeReviewFor(review.cardId, 7)).toBeUndefined();
+  });
+
+  it("revisão já encerrada não vai ao GitHub; leitura que falha não muda nada", async () => {
+    const o = await load();
+    const { review } = await readyReview(o);
+    prHeadNow = null;
+    expect((await o.orch.syncReviewWithGithub(review.id))?.phase).toBe("ready");
+    await o.orch.markReviewMerged(review.id, "merger");
+    prHead.mockClear();
+    prHeadNow = SHA2;
+    prStateNow = "CLOSED";
+    expect((await o.orch.syncReviewWithGithub(review.id))?.phase).toBe("merged");
+    expect(prHead).not.toHaveBeenCalled();
+  });
+
+  it("syncReviewSoon tem freio: duas leituras do painel no mesmo minuto vão ao GitHub uma vez só", async () => {
+    const o = await load();
+    const { review } = await readyReview(o);
+    prHeadNow = SHA1;
+    o.orch.syncReviewSoon(review);
+    o.orch.syncReviewSoon(review);
+    await vi.waitFor(() => expect(prHead).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(prHead).toHaveBeenCalledTimes(1);
   });
 });
 
