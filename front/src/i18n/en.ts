@@ -1369,6 +1369,8 @@ export const en: Record<string, string> = {
   "review.panel.cancelled": "Review cancelled",
   "review.panel.merged": "Merged into {base}",
   "review.panel.github": "Open on GitHub",
+  "review.panel.reviewerSession": "Open the reviewer's session",
+  "review.panel.diff": "View diff",
   "review.stage.reviewing.first": "The reviewer is reading the PR.",
   "review.stage.reviewing.next": "The reviewer is checking only what changed since round {prev}.",
   "review.stage.fixing": "The author is fixing the list.",

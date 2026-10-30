@@ -283,6 +283,28 @@ describe("ReviewPanel — o que mostra", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("abre a sessão do revisor (o card escondido) e o diff do PR numa aba nova", async () => {
+    open("rev", review({ projectId: "p1", reviewerCardId: "rc1" }));
+    await loaded();
+    // O card do revisor não está no board: este link é o único caminho até o terminal dele.
+    const session = screen.getByRole("link", { name: "Abrir sessão do revisor" });
+    expect(session).toHaveAttribute("href", "/?project=p1&card=rc1");
+    const diff = screen.getByRole("link", { name: "Ver diff" });
+    expect(diff).toHaveAttribute("href", "https://github.com/acme/erp/pull/553/files");
+    expect(diff).toHaveAttribute("target", "_blank");
+    expect(diff).toHaveAttribute("rel", "noreferrer");
+  });
+
+  it("revisão encerrada não leva mais à sessão do revisor (o card dele vai pra done e some); o diff fica", async () => {
+    for (const phase of ["merged", "cancelled"] as const) {
+      open("rev", review({ phase }));
+      await loaded();
+      expect(screen.queryByRole("link", { name: "Abrir sessão do revisor" })).toBeNull();
+      expect(screen.getByRole("link", { name: "Ver diff" })).toBeInTheDocument();
+      cleanup();
+    }
+  });
+
   it("sem revisão no card diz isso, sem botão nenhum de ação", async () => {
     open("rev", null);
     expect(await screen.findByText("Este card ainda não tem revisão de PR.")).toBeInTheDocument();

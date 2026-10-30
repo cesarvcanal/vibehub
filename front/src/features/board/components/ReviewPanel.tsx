@@ -1,7 +1,8 @@
 import * as React from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ExternalLink, Loader2, X } from "lucide-react";
+import { ExternalLink, FileDiff, Loader2, SquareTerminal, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { get, post } from "@/lib/api";
@@ -11,6 +12,7 @@ import type {
   Finding, FindingSeverity, PeopleResponse, Person, Review, ReviewEvent, ReviewPhase, ReviewResponse,
 } from "@/api/types";
 import { CARDS_PREFIX_KEY } from "@/features/board/api";
+import { cardHref } from "@/features/board/lib/board";
 import {
   IMPASSE_ROUNDS, MERGE_CONFIRM_MS, REVIEW_MAX_ROUNDS, REVIEW_POLL_MS, awaitingDecision, cardPeopleKey, cardReviewKey, findingCounts,
   mergeFailure, pendingQuestions, reviewActions, reviewIsWorking, reviewPill, stuckItems,
@@ -294,6 +296,29 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
             >
               <ExternalLink className="h-3.5 w-3.5" />
               {t("review.panel.github")}
+            </a>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            {/* The reviewer's card is off the board: this is the one way to its terminal, to unstick
+                an AI caught in a menu or an error loop. A closed review sends it to done (and the
+                retention erases it), so the link goes with the review. */}
+            {isOpen(review.phase) ? (
+              <Link
+                to={cardHref(review.projectId, review.reviewerCardId)}
+                className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <SquareTerminal className="h-3.5 w-3.5" />
+                {t("review.panel.reviewerSession")}
+              </Link>
+            ) : null}
+            <a
+              href={`${review.prUrl}/files`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <FileDiff className="h-3.5 w-3.5" />
+              {t("review.panel.diff")}
             </a>
           </div>
         </>
@@ -583,6 +608,9 @@ function VerdictBox({ tone, children }: { tone: "ok" | "muted"; children: React.
     </div>
   );
 }
+
+/** Still going: the reviewer's card is alive (a closed review sends it to done). */
+const isOpen = (phase: ReviewPhase): boolean => phase !== "merged" && phase !== "cancelled";
 
 /** One sentence on whose turn it is. */
 function stageText(review: Review, t: typeof translate): string {
