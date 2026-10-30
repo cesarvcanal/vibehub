@@ -207,7 +207,12 @@ function Header({
         <span className="text-foreground/90">{stageText(review, working.author, t)}</span>
       </p>
       <dl data-testid="review-roles" className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]">
-        <Role label={t("review.roles.reviewer")} hint={t("review.roles.reviewer.hint")} name={nameOf(review.reviewerUserId)} />
+        <Role
+          label={t("review.roles.reviewer")}
+          hint={t("review.roles.reviewer.hint")}
+          name={nameOf(review.reviewerUserId)}
+          tag={t("review.roles.reviewer.tag")}
+        />
         <Role
           label={t("review.roles.author")}
           hint={t("review.roles.author.hint")}
@@ -215,7 +220,12 @@ function Header({
           tag={t("review.roles.assignee")}
         />
         {review.coauthorUserId ? (
-          <Role label={t("review.roles.coauthor")} hint={t("review.roles.coauthor.hint")} name={nameOf(review.coauthorUserId)} />
+          <Role
+            label={t("review.roles.coauthor")}
+            hint={t("review.roles.coauthor.hint")}
+            name={nameOf(review.coauthorUserId)}
+            tag={t("review.roles.coauthor.tag")}
+          />
         ) : null}
         <Role label={t("review.roles.merger")} hint={t("review.roles.merger.hint")} name={nameOf(review.mergerUserId)} />
       </dl>

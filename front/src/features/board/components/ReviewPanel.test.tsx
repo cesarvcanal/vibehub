@@ -111,12 +111,14 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.getByText("rodada 2/3")).toBeInTheDocument();
     const roles = screen.getByTestId("review-roles");
     expect(within(roles).getByText("Revisor").parentElement).toHaveTextContent("mussa");
-    expect(within(roles).getByText("Corrige e commita").parentElement).toHaveTextContent("albert");
+    expect(within(roles).getByText("Responsável").parentElement).toHaveTextContent("albert");
     expect(within(roles).getByText("Co-autor").parentElement).toHaveTextContent("bia");
     expect(within(roles).getByText("Faz o merge").parentElement).toHaveTextContent("kim");
-    // Quem corrige é o assignee do PR no GitHub: o papel diz isso, e passar o mouse explica.
-    expect(within(roles).getByText("Corrige e commita").parentElement).toHaveTextContent("assignee");
-    expect(within(roles).getByText("Corrige e commita").parentElement).toHaveAttribute("title", expect.stringMatching(/assignee/));
+    // Cada papel traz o nome que o GitHub dá a ele, e passar o mouse explica o que faz.
+    expect(within(roles).getByText("Responsável").parentElement).toHaveTextContent("assignee");
+    expect(within(roles).getByText("Responsável").parentElement).toHaveAttribute("title", expect.stringMatching(/committer e o pusher/));
+    expect(within(roles).getByText("Revisor").parentElement).toHaveTextContent("reviewer");
+    expect(within(roles).getByText("Co-autor").parentElement).toHaveAttribute("title", expect.stringMatching(/Co-authored-by/));
   });
 
   it("dúvida esperando o revisor humano: a pill diz aguardando decisão e a etapa diz de quem é a vez", async () => {
