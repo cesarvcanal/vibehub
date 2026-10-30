@@ -111,9 +111,12 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.getByText("rodada 2/3")).toBeInTheDocument();
     const roles = screen.getByTestId("review-roles");
     expect(within(roles).getByText("Revisor").parentElement).toHaveTextContent("mussa");
-    expect(within(roles).getByText("Corrige").parentElement).toHaveTextContent("albert");
+    expect(within(roles).getByText("Corrige e commita").parentElement).toHaveTextContent("albert");
     expect(within(roles).getByText("Co-autor").parentElement).toHaveTextContent("bia");
-    expect(within(roles).getByText("Merge").parentElement).toHaveTextContent("kim");
+    expect(within(roles).getByText("Faz o merge").parentElement).toHaveTextContent("kim");
+    // Quem corrige é o assignee do PR no GitHub: o papel diz isso, e passar o mouse explica.
+    expect(within(roles).getByText("Corrige e commita").parentElement).toHaveTextContent("assignee");
+    expect(within(roles).getByText("Corrige e commita").parentElement).toHaveAttribute("title", expect.stringMatching(/assignee/));
   });
 
   it("dúvida esperando o revisor humano: a pill diz aguardando decisão e a etapa diz de quem é a vez", async () => {
@@ -127,10 +130,10 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.getByText("Dúvida esperando a decisão do revisor humano.")).toBeInTheDocument();
   });
 
-  it("sem co-autor o papel mostra um traço", async () => {
+  it("sem co-autor o papel não aparece", async () => {
     open("rev", review());
     await loaded();
-    expect(within(screen.getByTestId("review-roles")).getByText("Co-autor").parentElement).toHaveTextContent("—");
+    expect(within(screen.getByTestId("review-roles")).queryByText("Co-autor")).toBeNull();
   });
 
   it("a barra tem 3 segmentos, os da rodada e antes preenchidos", async () => {
@@ -166,7 +169,7 @@ describe("ReviewPanel — o que mostra", () => {
       ],
     }));
     await loaded();
-    expect(screen.getByText(/1 bloqueia · 2 sugestões · 2 dúvidas/)).toBeInTheDocument();
+    expect(screen.getByText(/1 bloqueia · 2 dúvidas · 2 sugestões/)).toBeInTheDocument();
   });
 
   it("cada achado mostra severidade, título, arquivo:linha, prova, status e commit curto", async () => {
@@ -235,6 +238,7 @@ describe("ReviewPanel — o que mostra", () => {
       findings: [finding({ authorReply: "Contesto: já está no padrão.", reviewerReply: "Conferindo contra o guia." })],
     }));
     await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
     expect(screen.queryByText("Contesto: já está no padrão.")).toBeNull();
 
     await userEvent.click(screen.getByRole("button", { name: /respostas/ }));
@@ -249,32 +253,28 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.queryByRole("button", { name: /respostas/ })).toBeNull();
   });
 
-  it("Conversa das IAs mostra as 5 últimas e 'ver inteira' abre todas", async () => {
-    const log = Array.from({ length: 8 }, (_, i) => ({
-      at: i + 1, round: 1, who: (i % 2 ? "author" : "reviewer") as "author" | "reviewer", text: `fala ${i + 1}`,
+  it("abre na conversa; a aba Achados mostra a lista agrupada e as duas ficam montadas", async () => {
+    open("aut", review({
+      findings: [finding({ id: "f1", title: "Bloqueio A" }), finding({ id: "f2", severity: "suggestion", title: "Sugestão B" })],
+      log: [{ at: 1, round: 1, who: "reviewer", text: "achei duas coisas" }],
     }));
-    open("rev", review({ log }));
     await loaded();
+    expect(screen.getByRole("tab", { name: /Conversa/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("log")).toHaveTextContent("achei duas coisas");
 
-    const feed = screen.getByTestId("review-feed");
-    expect(within(feed).getByText("Conversa das IAs")).toBeInTheDocument();
-    expect(within(feed).queryByText("fala 3")).toBeNull();
-    for (const n of [4, 5, 6, 7, 8]) expect(within(feed).getByText(`fala ${n}`)).toBeInTheDocument();
-    expect(within(feed).getAllByText("revisor").length).toBeGreaterThan(0);
-    expect(within(feed).getAllByText("autor").length).toBeGreaterThan(0);
-
-    await userEvent.click(within(feed).getByRole("button", { name: "ver inteira" }));
-
-    for (const n of [1, 2, 3, 4, 5, 6, 7, 8]) expect(within(feed).getByText(`fala ${n}`)).toBeInTheDocument();
-    await userEvent.click(within(feed).getByRole("button", { name: "ver só as últimas" }));
-    expect(within(feed).queryByText("fala 3")).toBeNull();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    expect(screen.getByRole("tab", { name: /Achados/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getAllByTestId("finding-group").map((g) => g.getAttribute("data-severity"))).toEqual(["blocking", "suggestion"]);
+    // A conversa continua montada (escondida): voltar a ela não perde a rolagem.
+    expect(screen.getByTestId("review-conversation")).toBeInTheDocument();
   });
 
-  it("com 5 falas ou menos não há 'ver inteira'", async () => {
-    open("rev", review({ log: [{ at: 1, round: 1, who: "system", text: "Rodada 1 de 3" }] }));
+  it("abre nos Achados quando quem olha tem uma decisão a tomar lá, e respeita a aba escolhida", async () => {
+    open("rev", review({ phase: "reviewing", lastSubmitRound: 2, findings: [finding({ id: "q1", severity: "question", title: "dúvida" })] }));
     await loaded();
-    expect(within(screen.getByTestId("review-feed")).getByText("sistema")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "ver inteira" })).toBeNull();
+    await waitFor(() => expect(screen.getByRole("tab", { name: /Achados/ })).toHaveAttribute("aria-selected", "true"));
+    await userEvent.click(screen.getByRole("tab", { name: /Conversa/ }));
+    expect(screen.getByRole("tab", { name: /Conversa/ })).toHaveAttribute("aria-selected", "true");
   });
 
   it("Abrir no GitHub leva ao PR e fechar chama onClose", async () => {

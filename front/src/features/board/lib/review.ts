@@ -1,5 +1,5 @@
 import type { BadgeTone } from "@/components/ui/badge";
-import type { Card, CardPr, Finding, Review, ReviewPhase, ReviewSummary } from "@/api/types";
+import type { Card, CardPr, Finding, Review, ReviewEvent, ReviewPhase, ReviewSummary, ReviewWorking } from "@/api/types";
 
 /**
  * PR review — the rules the block in the chat, its dialog and (next) the panel and the sidebar line
@@ -252,4 +252,63 @@ export function mergeFailure(err: unknown): MergeFailure {
   if (status === 409 && body.reason === "merging") return { kind: "running" };
   const message = (typeof response?.data === "string" ? response.data : body.error ?? "").trim();
   return { kind: "refused", reason: body.reason, message, review: body.review };
+}
+
+/* ------------------------------------------------------------------ the conversation */
+
+/**
+ * Whose move it is RIGHT NOW, and whether that side's AI is actually in a turn — the one sentence the
+ * panel leads with and the "digitando…" of the conversation:
+ *  - `reviewer`: `reviewing` before the reviewer's round is in (after it, only doubts are left);
+ *  - `author`: `fixing`, or a `ready` PR the author's AI is working on (`onReadyPr`: what it pushes
+ *    sends the review back to the reviewer);
+ *  - `person`: a doubt to decide, an impasse, or a ready PR waiting for its merge;
+ *  - `nobody`: merged or cancelled.
+ * PURE.
+ */
+export type ReviewTurn =
+  | { who: "reviewer"; working: boolean }
+  | { who: "author"; working: boolean; onReadyPr: boolean }
+  | { who: "person"; why: "decision" | "impasse" | "merge" }
+  | { who: "nobody" };
+
+export function reviewTurn(
+  review: Pick<Review, "phase" | "round" | "lastSubmitRound" | "findings">,
+  working: ReviewWorking,
+): ReviewTurn {
+  switch (review.phase) {
+    case "reviewing":
+      if (review.lastSubmitRound !== review.round) return { who: "reviewer", working: working.reviewer };
+      return { who: "person", why: "decision" };
+    case "fixing":
+      return { who: "author", working: working.author, onReadyPr: false };
+    case "ready":
+      return working.author ? { who: "author", working: true, onReadyPr: true } : { who: "person", why: "merge" };
+    case "impasse":
+      return { who: "person", why: "impasse" };
+    default:
+      return { who: "nobody" };
+  }
+}
+
+/** A row of the conversation: a "Rodada N" divider, or one line of the log (with a stable key). */
+export type ConversationRow =
+  | { kind: "round"; round: number; key: string }
+  | { kind: "line"; event: ReviewEvent; key: string };
+
+/**
+ * The log as the conversation draws it: a "Rodada N" divider before the first line of each round —
+ * the way a chat app marks a new day — then the lines in the order they happened. PURE.
+ */
+export function conversationRows(log: ReviewEvent[]): ConversationRow[] {
+  const rows: ConversationRow[] = [];
+  let round: number | null = null;
+  log.forEach((event, i) => {
+    if (event.round !== round) {
+      round = event.round;
+      rows.push({ kind: "round", round, key: `round-${round}-${i}` });
+    }
+    rows.push({ kind: "line", event, key: `${event.at}-${i}` });
+  });
+  return rows;
 }

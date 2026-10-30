@@ -1,27 +1,19 @@
 import * as React from "react";
-import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ExternalLink, FileDiff, Loader2, SquareTerminal, X } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Loader2 } from "lucide-react";
 import { get, post } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
-import { cn } from "@/lib/utils";
-import type {
-  Finding, FindingSeverity, PeopleResponse, Person, Review, ReviewEvent, ReviewPhase,
-} from "@/api/types";
-import { cardHref } from "@/features/board/lib/board";
-import {
-  IMPASSE_ROUNDS, MERGE_CONFIRM_MS, REVIEW_MAX_ROUNDS, awaitingDecision, cardPeopleKey, cardReviewKey, findingCounts,
-  mergeFailure, pendingQuestions, reviewActions, reviewPill, stuckItems,
-} from "@/features/board/lib/review";
+import type { PeopleResponse, Person, Review, ReviewPhase } from "@/api/types";
+import { PanelFrame, ReviewPanelView, type Decision, type PanelNotice } from "@/features/board/components/ReviewPanelView";
+import { MERGE_CONFIRM_MS, cardPeopleKey, cardReviewKey, mergeFailure, reviewActions } from "@/features/board/lib/review";
 import { useLiveReview } from "@/features/board/lib/useLiveReview";
 import { useAuth } from "@/providers/auth";
 import { t as translate, useT } from "@/i18n";
 
 /**
  * The follow-up panel of a PR's review, the column to the right of the card (like the browser's).
+ * This half READS and ACTS; what it looks like is {@link ReviewPanelView}.
  *
  * It READS one thing — the card's review (`GET /api/cards/:id/review`, the active one or the last)
  * — and offers the human moves the server allows, to the people the server lets make them:
@@ -40,9 +32,6 @@ import { t as translate, useT } from "@/i18n";
  * `ready` PR, the pill reads "IA mexendo" and the merge waits for it to finish.
  */
 
-/** The feed shows this many of the latest entries until "ver inteira" is pressed. */
-const FEED_TAIL = 5;
-
 /** Where the review stood when a banner was raised: the banner is about THAT state and goes with it. */
 type Stamp = { phase: ReviewPhase; round: number };
 
@@ -58,23 +47,6 @@ type MergeNote =
   | { kind: "expired"; at: Stamp | null }
   | { kind: "head_moved"; at: Stamp | null }
   | { kind: "refused"; message: string; at: Stamp | null };
-
-type Decision = "block" | "drop" | "keep" | "accept_risk";
-
-const SEVERITY_TONE: Record<FindingSeverity, string> = {
-  blocking: "border-destructive/40 bg-destructive/10 text-destructive",
-  suggestion: "border-border/60 bg-card/40 text-muted-foreground",
-  question: "border-sky-500/30 bg-sky-500/10 text-sky-400",
-  refuted: "border-border/60 bg-card/40 text-muted-foreground",
-};
-
-const STATUS_TONE: Record<Finding["status"], string> = {
-  open: "text-amber-400",
-  fixed: "text-emerald-400",
-  contested: "text-sky-400",
-  accepted_risk: "text-muted-foreground",
-  dropped: "text-muted-foreground",
-};
 
 export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () => void }) {
   const t = useT();
@@ -207,445 +179,44 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
     );
   }
 
-  const actions = reviewActions(review, user ? { id: user.id, isOwner } : null);
   const nameOf = (id: string | undefined) => (id ? (people.data ?? []).find((p: Person) => p.id === id)?.username ?? id : "—");
-  const counts = findingCounts(review.findings);
-  const stuck = new Set(review.phase === "impasse" ? stuckItems(review.findings).map((f) => f.id) : []);
-  const pending = new Set(pendingQuestions(review.findings).map((f) => f.id));
-  const busy = act.isPending;
-
-  const decide = (finding: Finding, decision: Decision) => act.mutate({ path: "decide", body: { findingId: finding.id, decision } });
   const cancel = () => {
     if (!window.confirm(t("review.cancel.confirm", { num: review.prNumber }))) return;
     act.mutate({ path: "cancel" });
   };
 
-  // The author's AI is on a PR that was ready: what it pushes goes back to the reviewer, so the merge
-  // waits for it to finish instead of racing it.
-  const authorOnReadyPr = review.phase === "ready" && working.author;
-  const pill = review.phase === "cancelled"
-    ? { key: "review.pill.cancelled", tone: "muted" as const }
-    : reviewPill(review, { authorWorking: working.author });
-
   return (
-    <PanelFrame
-      label={t("review.panel.aria", { n: review.prNumber })}
+    <ReviewPanelView
+      review={review}
+      working={working}
+      nameOf={nameOf}
+      actions={reviewActions(review, user ? { id: user.id, isOwner } : null)}
+      busy={act.isPending}
+      mergeBusy={mergeBusy}
+      notice={noticeOf(mergeNote, t)}
+      onMerge={() => merge.mutate()}
+      onRetry={() => act.mutate({ path: "retry" })}
+      onCancel={cancel}
+      onDecide={(finding, decision) => act.mutate({ path: "decide", body: { findingId: finding.id, decision } })}
       onClose={onClose}
-      // Pinned under the scrolling list: the merge button is what the whole review is FOR, and it
-      // must not end up below the fold of a long list.
-      footer={
-        <>
-          {authorOnReadyPr && actions.merge ? (
-            <p role="status" className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-300">
-              {t("review.merge.authorWorking")}
-            </p>
-          ) : null}
-          {mergeNote?.kind === "head_moved" ? (
-            <p role="status" className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-300">
-              {t("review.merge.headMoved")}
-            </p>
-          ) : null}
-          {mergeNote?.kind === "unconfirmed" ? (
-            <p role="status" className="rounded-md border border-border/60 bg-card/40 px-2.5 py-1.5 text-xs text-muted-foreground">
-              {t(mergeNote.cause === "lost" ? "review.merge.lost" : "review.merge.running")}
-            </p>
-          ) : null}
-          {mergeNote?.kind === "expired" ? (
-            <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive">
-              {t("review.merge.expired")}
-            </p>
-          ) : null}
-          {mergeNote?.kind === "refused" ? (
-            <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive">
-              {mergeNote.message}
-            </p>
-          ) : null}
-
-          <div className="flex flex-wrap items-center gap-2">
-            {actions.merge ? (
-              <Button
-                type="button"
-                size="sm"
-                className="h-8 bg-emerald-600 px-3 text-xs text-white hover:bg-emerald-500"
-                disabled={mergeBusy || authorOnReadyPr}
-                onClick={() => merge.mutate()}
-              >
-                {mergeBusy ? (
-                  <>
-                    <Loader2 className="animate-spin" /> {t("review.merge.pending")}
-                  </>
-                ) : (
-                  t("review.merge", { base: review.base })
-                )}
-              </Button>
-            ) : null}
-            {actions.retry ? (
-              <Button type="button" variant="outline" size="sm" className="h-8 px-3 text-xs" disabled={busy || mergeBusy} onClick={() => act.mutate({ path: "retry" })}>
-                {t("review.retry")}
-              </Button>
-            ) : null}
-            {actions.cancel ? (
-              <Button type="button" variant="ghost" size="sm" className="h-8 px-3 text-xs text-muted-foreground" disabled={busy || mergeBusy} onClick={cancel}>
-                {t("review.cancel")}
-              </Button>
-            ) : null}
-            <a
-              href={review.prUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              {t("review.panel.github")}
-            </a>
-          </div>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            {/* The reviewer's card is off the board: this is the one way to its terminal, to unstick
-                an AI caught in a menu or an error loop. A closed review sends it to done (and the
-                retention erases it), so the link goes with the review. */}
-            {isOpen(review.phase) ? (
-              <Link
-                to={cardHref(review.projectId, review.reviewerCardId)}
-                className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-              >
-                <SquareTerminal className="h-3.5 w-3.5" />
-                {t("review.panel.reviewerSession")}
-              </Link>
-            ) : null}
-            <a
-              href={`${review.prUrl}/files`}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <FileDiff className="h-3.5 w-3.5" />
-              {t("review.panel.diff")}
-            </a>
-          </div>
-        </>
-      }
-    >
-      <section className="space-y-2 rounded-md border border-border/60 bg-card/40 p-2.5">
-        <div className="flex items-center gap-2">
-          <span className="font-semibold text-amber-400">PR #{review.prNumber}</span>
-          <span className="min-w-0 truncate text-xs text-muted-foreground">→ {review.base}</span>
-          <Badge tone={pill.tone} className="ml-auto shrink-0">
-            {t(pill.key, "vars" in pill ? pill.vars : undefined)}
-          </Badge>
-        </div>
-        <Steps round={review.round} phase={review.phase} label={t("review.steps.aria", { round: review.round, max: REVIEW_MAX_ROUNDS })} />
-        <p className="text-xs text-muted-foreground">{stageText(review, working.author, t)}</p>
-        <dl data-testid="review-roles" className="grid grid-cols-2 gap-1.5 text-xs">
-          <Role label={t("review.roles.reviewer")} name={nameOf(review.reviewerUserId)} />
-          <Role label={t("review.roles.author")} name={nameOf(review.authorUserId)} />
-          <Role label={t("review.roles.coauthor")} name={nameOf(review.coauthorUserId)} />
-          <Role label={t("review.roles.merger")} name={nameOf(review.mergerUserId)} />
-        </dl>
-      </section>
-
-      {review.phase === "impasse" ? (
-        <p role="status" className="rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 py-1.5 text-xs text-sky-300">
-          {impasseText(review.impasseReason, t)}
-        </p>
-      ) : null}
-      {review.approvePending ? (
-        <p role="status" className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-300">
-          {t("review.approvePending")}
-        </p>
-      ) : null}
-
-      <section className="space-y-1.5 rounded-md border border-border/60 bg-card/40 p-2.5">
-        <h4 className="text-xs font-semibold">
-          {t("review.list.title")} <span className="font-normal text-muted-foreground">· {countsText(counts, t)}</span>
-        </h4>
-        {review.findings.length === 0 ? (
-          <p className="text-xs text-muted-foreground">{t("review.list.empty")}</p>
-        ) : (
-          <ul className="divide-y divide-border/50">
-            {review.findings.map((f) => (
-              <FindingRow
-                key={f.id}
-                finding={f}
-                busy={busy}
-                // Doubts wait for the human reviewer; in an impasse the stuck items wait for the same person.
-                decisions={
-                  !actions.decide
-                    ? []
-                    : pending.has(f.id)
-                      ? ["block", "drop"]
-                      : stuck.has(f.id)
-                        ? f.severity === "blocking" ? ["keep", "accept_risk"] : ["accept_risk"]
-                        : []
-                }
-                onDecide={(decision) => decide(f, decision)}
-              />
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <Feed log={review.log} />
-
-      <Verdict review={review} />
-    </PanelFrame>
+    />
   );
 }
 
-/** The column: the way out on top, the scrollable body, and the pinned footer (the human moves). */
-function PanelFrame({
-  label, onClose, footer, children,
-}: {
-  label: string;
-  onClose: () => void;
-  footer?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  const t = useT();
-  return (
-    <section
-      aria-label={label}
-      data-testid="review-panel"
-      className="flex min-h-[220px] min-w-0 flex-1 flex-col gap-2 rounded-md border border-border/60 bg-card/30 p-2.5 text-sm"
-    >
-      <div className="flex shrink-0 items-center justify-end">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6 text-muted-foreground"
-          aria-label={t("common.close")}
-          title={t("common.close")}
-          onClick={onClose}
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">{children}</div>
-      {footer ? <div className="flex shrink-0 flex-col gap-2 border-t border-border/50 pt-2">{footer}</div> : null}
-    </section>
-  );
-}
-
-/** Three segments, one per round: the ones behind are done, the one in play is lit, the rest wait. */
-function Steps({ round, phase, label }: { round: number; phase: Review["phase"]; label: string }) {
-  const over = phase === "ready" || phase === "merged";
-  return (
-    <div data-testid="review-steps" role="img" aria-label={label} className="grid grid-cols-3 gap-1">
-      {Array.from({ length: REVIEW_MAX_ROUNDS }, (_, i) => {
-        const state = i + 1 < round || (over && i + 1 === round) ? "done" : i + 1 === round ? "current" : "todo";
-        return (
-          <div
-            key={i}
-            data-testid="review-step"
-            data-state={state}
-            className={cn(
-              "h-1.5 rounded-full",
-              state === "done" ? "bg-emerald-500/70" : state === "current" ? "bg-amber-400" : "bg-border/70",
-            )}
-          />
-        );
-      })}
-    </div>
-  );
-}
-
-function Role({ label, name }: { label: string; name: string }) {
-  return (
-    <div className="min-w-0 rounded-md bg-background/40 px-2 py-1">
-      <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</dt>
-      <dd className="truncate font-medium">{name}</dd>
-    </div>
-  );
-}
-
-/**
- * One finding of the closed list. Struck through when the verification refuted it; the replies of the
- * two AIs sit folded under the row, and the human's buttons (when they have any) under those.
- */
-function FindingRow({
-  finding: f, decisions, busy, onDecide,
-}: {
-  finding: Finding;
-  decisions: Decision[];
-  busy: boolean;
-  onDecide: (decision: Decision) => void;
-}) {
-  const t = useT();
-  const [open, setOpen] = React.useState(false);
-  const replies = [
-    f.authorReply ? { who: "author" as const, text: f.authorReply } : null,
-    f.reviewerReply ? { who: "reviewer" as const, text: f.reviewerReply } : null,
-  ].filter((r): r is { who: "author" | "reviewer"; text: string } => r !== null);
-  const refuted = f.severity === "refuted";
-
-  return (
-    <li data-testid="finding" data-severity={f.severity} data-status={f.status} className="space-y-1 py-2 text-xs first:pt-0 last:pb-0">
-      <div className="flex items-start gap-2">
-        <span className={cn("shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold", SEVERITY_TONE[f.severity])}>
-          {t(`review.severity.${f.severity}`)}
-        </span>
-        <div className="min-w-0 flex-1 space-y-0.5">
-          <p className={cn("break-words font-medium", refuted && "text-muted-foreground line-through")}>{f.title}</p>
-          {f.file ? (
-            <p className="break-all font-mono text-[11px] text-muted-foreground">{f.line !== undefined ? `${f.file}:${f.line}` : f.file}</p>
-          ) : null}
-          {f.proof ? (
-            <p className="text-[11px] text-muted-foreground">
-              <span>{t(`review.proof.${f.proof.kind}`)}</span> <span className="break-all font-mono">{f.proof.ref}</span>
-            </p>
-          ) : null}
-        </div>
-        <div className="flex shrink-0 flex-col items-end gap-0.5">
-          <span className={cn("text-[11px] font-medium", STATUS_TONE[f.status])}>{t(`review.status.${f.status}`)}</span>
-          {f.commit ? <code className="font-mono text-[10px] text-muted-foreground">{f.commit.slice(0, 7)}</code> : null}
-        </div>
-      </div>
-
-      {replies.length > 0 ? (
-        <div>
-          <button
-            type="button"
-            aria-expanded={open}
-            onClick={() => setOpen((v) => !v)}
-            className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-          >
-            {t("review.replies", { n: replies.length })}
-          </button>
-          {open ? (
-            <ul className="mt-1 space-y-1 border-l border-border/60 pl-2">
-              {replies.map((r) => (
-                <li key={r.who} className="break-words text-[11px]">
-                  <span className="font-semibold">{t(`review.reply.${r.who}`)}</span> <span>{r.text}</span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
-      ) : null}
-
-      {decisions.length > 0 ? (
-        <div className="flex flex-wrap gap-1.5 pt-0.5">
-          {decisions.map((d) => (
-            <Button
-              key={d}
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-7 px-2 text-xs"
-              disabled={busy}
-              onClick={() => onDecide(d)}
-            >
-              {t(`review.decide.${d}`)}
-            </Button>
-          ))}
-        </div>
-      ) : null}
-    </li>
-  );
-}
-
-/** "Conversa das IAs": the latest entries, and the whole of it on request. */
-function Feed({ log }: { log: ReviewEvent[] }) {
-  const t = useT();
-  const [all, setAll] = React.useState(false);
-  const shown = all ? log : log.slice(-FEED_TAIL);
-  return (
-    <section data-testid="review-feed" className="space-y-1.5 rounded-md border border-border/60 bg-card/40 p-2.5">
-      <h4 className="flex items-center justify-between text-xs font-semibold">
-        {t("review.feed.title")}
-        {log.length > FEED_TAIL ? (
-          <button
-            type="button"
-            onClick={() => setAll((v) => !v)}
-            className="text-[11px] font-normal text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-          >
-            {all ? t("review.feed.last") : t("review.feed.all")}
-          </button>
-        ) : null}
-      </h4>
-      {shown.length === 0 ? (
-        <p className="text-xs text-muted-foreground">{t("review.feed.empty")}</p>
-      ) : (
-        <ul className="space-y-1">
-          {shown.map((e, i) => (
-            <li key={`${e.at}-${i}`} className="break-words text-xs">
-              <b className="mr-1 font-semibold">{t(`review.feed.who.${e.who}`)}</b>
-              <span className="text-muted-foreground">{e.text}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-/** Where the review ended up, when it did: ready to merge, merged, or called off. */
-function Verdict({ review }: { review: Review }) {
-  const t = useT();
-  if (review.phase === "merged") return <VerdictBox tone="ok">{t("review.panel.merged", { base: review.base })}</VerdictBox>;
-  if (review.phase === "cancelled") return <VerdictBox tone="muted">{t("review.panel.cancelled")}</VerdictBox>;
-  if (review.phase !== "ready") return null;
-
-  const blocking = review.findings.filter((f) => f.severity === "blocking");
-  const resolved = blocking.filter((f) => f.status !== "open" && f.status !== "contested").length;
-  const suggestions = review.findings.filter((f) => f.severity === "suggestion" && f.status === "open").length;
-  return (
-    <VerdictBox tone="ok">
-      {blocking.length > 0 ? t("review.verdict.ready", { resolved, total: blocking.length }) : t("review.verdict.readyNone")}
-      {suggestions > 0 ? ` ${t("review.verdict.suggestions", { n: suggestions })}` : ""}
-    </VerdictBox>
-  );
-}
-
-function VerdictBox({ tone, children }: { tone: "ok" | "muted"; children: React.ReactNode }) {
-  return (
-    <div
-      data-testid="review-verdict"
-      className={cn(
-        "rounded-md border px-2.5 py-2 text-xs",
-        tone === "ok" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" : "border-border/60 bg-card/40 text-muted-foreground",
-      )}
-    >
-      {children}
-    </div>
-  );
-}
-
-/** Still going: the reviewer's card is alive (a closed review sends it to done). */
-const isOpen = (phase: ReviewPhase): boolean => phase !== "merged" && phase !== "cancelled";
-
-/** One sentence on whose turn it is. */
-function stageText(review: Review, authorWorking: boolean, t: typeof translate): string {
-  switch (review.phase) {
-    case "reviewing":
-      if (awaitingDecision(review)) return t("review.stage.decision");
-      return review.round > 1
-        ? t("review.stage.reviewing.next", { prev: review.round - 1 })
-        : t("review.stage.reviewing.first");
-    case "fixing":
-      return t("review.stage.fixing");
-    case "ready":
-      return authorWorking ? t("review.stage.authorWorking") : t("review.stage.ready");
-    case "impasse":
-      return t("review.stage.impasse");
-    case "merged":
-      return t("review.stage.merged");
+/** The merge banner in words: where the last click left things. */
+function noticeOf(note: MergeNote | null, t: typeof translate): PanelNotice | null {
+  switch (note?.kind) {
+    case "head_moved":
+      return { tone: "warn", text: t("review.merge.headMoved") };
+    case "unconfirmed":
+      return { tone: "muted", text: t(note.cause === "lost" ? "review.merge.lost" : "review.merge.running") };
+    case "expired":
+      return { tone: "error", text: t("review.merge.expired") };
+    case "refused":
+      return { tone: "error", text: note.message };
     default:
-      return t("review.stage.cancelled");
+      return null;
   }
-}
-
-/** "rodadas" is the model's code; every other reason is already written for people and shown as it is. */
-function impasseText(reason: string | undefined, t: typeof translate): string {
-  if (reason === IMPASSE_ROUNDS) return t("review.impasse.rodadas", { max: REVIEW_MAX_ROUNDS });
-  return reason?.trim() || t("review.impasse.unknown");
-}
-
-/** "3 bloqueiam · 1 sugestão · 1 derrubado", from the data; zeros stay out. */
-function countsText(counts: ReturnType<typeof findingCounts>, t: typeof translate): string {
-  const parts = (["blocking", "suggestion", "question", "refuted"] as const)
-    .filter((severity) => counts[severity] > 0)
-    .map((severity) => t(`review.count.${severity}`, { n: counts[severity] }));
-  return parts.length > 0 ? parts.join(" · ") : t("review.list.empty");
 }
 
 /** The words for a merge the server refused: its own text for the codes with one, the server's otherwise. */
