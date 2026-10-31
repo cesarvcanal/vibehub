@@ -1562,7 +1562,7 @@ export function TerminalComposer({
   );
 }
 
-/** Stops the agent's turn: a 36px square beside the field on a desktop, a 44px circle in the phone's bar. */
+/** The chat's way of stopping the agent, handed to the composer, which owns where the button sits. */
 interface ComposerInterrupt {
   /** true while the agent is working — the only time the button is on screen. */
   active: boolean;
@@ -1573,6 +1573,7 @@ interface ComposerInterrupt {
   testId?: string;
 }
 
+/** Stops the agent's turn: a 36px square beside the field on a desktop, a 44px circle in the phone's bar. */
 function StopButton({ interrupt, mobile }: { interrupt: ComposerInterrupt; mobile: boolean }) {
   const t = useT();
   return (

@@ -1074,6 +1074,18 @@ export function CardTerminalView({
     </div>
   );
 
+  // A phone with the review or the browser open: that pane takes the card and the chat sits under
+  // it, invisible. Whatever had the keyboard in there lets go, so typing never lands in a pane
+  // nobody can see.
+  const mainCovered = isMobile && (browserOpen || reviewOpen);
+  const mainPaneRef = React.useRef<HTMLDivElement | null>(null);
+  React.useEffect(() => {
+    const el = mainPaneRef.current;
+    if (!mainCovered || !el) return;
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && el.contains(focused)) focused.blur();
+  }, [mainCovered]);
+
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
       {/* The card bar. One row from `md` up; two rows on a phone, where one row overlapped itself. */}
@@ -1170,15 +1182,22 @@ export function CardTerminalView({
         //
         // On a PHONE they do not stack: two panes in one screen height left the chat a strip and
         // the review's conversation a sliver. The open pane takes the whole card and its own X
-        // brings the chat back. The chat is only hidden, never unmounted — its socket, draft and
-        // scroll are exactly where they were.
+        // brings the chat back. The chat is only covered, never unmounted — its socket, draft and
+        // scroll are exactly where they were — and covered the way the deck hides its panes:
+        // `visibility` over the same box, never `display: none`, or the terminal's fit would
+        // measure zero and shrink the agent's pty to a sliver (TerminalDeck, note 1).
         <div
           data-testid="card-workarea"
-          className={cn("flex min-h-0 flex-1 flex-col", (browserOpen || reviewOpen) && "lg:flex-row lg:gap-2")}
+          className={cn("relative flex min-h-0 flex-1 flex-col", (browserOpen || reviewOpen) && "lg:flex-row lg:gap-2")}
         >
           <div
+            ref={mainPaneRef}
             data-testid="card-main-pane"
-            className={cn("flex min-h-0 min-w-0 flex-1 flex-col", isMobile && (browserOpen || reviewOpen) && "hidden")}
+            aria-hidden={mainCovered || undefined}
+            className={cn(
+              "flex min-h-0 min-w-0 flex-1 flex-col",
+              mainCovered && "pointer-events-none invisible absolute inset-0",
+            )}
           >
             {mode === "chat" && features.data === undefined ? (
               /* The install flag is not here yet (cold cache). WHICH chat this install uses is that

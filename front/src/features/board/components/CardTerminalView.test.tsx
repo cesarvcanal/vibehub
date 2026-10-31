@@ -1560,17 +1560,24 @@ describe("CardTerminalView — the PR blocks above the composer", () => {
       ]);
       const main = await screen.findByTestId("card-main-pane");
       const xterm = await screen.findByTestId("xterm");
-      expect(main).not.toHaveClass("hidden");
+      expect(main).not.toHaveClass("invisible");
 
       await userEvent.click(within(await screen.findByTestId("pr-review-block")).getByRole("button", { name: /PR #553/ }));
       await screen.findByTestId("review-panel");
       // Stacked under the chat, both were a sliver of the screen. Hidden — not unmounted: the same
       // terminal element is still there, socket and all.
-      expect(main).toHaveClass("hidden");
       expect(main).toContainElement(xterm);
+      // …and hidden with VISIBILITY over the same box, never `display: none`: a zero-sized pane
+      // makes the fit addon resize the agent's pty to a sliver (see TerminalDeck's note 1).
+      expect(main).toHaveClass("invisible", "absolute", "inset-0", "pointer-events-none");
+      expect(main).not.toHaveClass("hidden");
+      expect(main).toHaveAttribute("aria-hidden", "true");
+      expect(screen.getByTestId("card-workarea")).toHaveClass("relative");
 
       await userEvent.click(screen.getByRole("button", { name: "close-review" }));
-      expect(main).not.toHaveClass("hidden");
+      expect(main).not.toHaveClass("invisible");
+      expect(main).not.toHaveClass("absolute");
+      expect(main).not.toHaveAttribute("aria-hidden");
       expect(screen.getByTestId("xterm")).toBe(xterm);
     } finally {
       window.matchMedia = original;
@@ -1583,7 +1590,7 @@ describe("CardTerminalView — the PR blocks above the composer", () => {
     ]);
     await userEvent.click(within(await screen.findByTestId("pr-review-block")).getByRole("button", { name: /PR #553/ }));
     await screen.findByTestId("review-panel");
-    expect(screen.getByTestId("card-main-pane")).not.toHaveClass("hidden");
+    expect(screen.getByTestId("card-main-pane")).not.toHaveClass("invisible");
   });
 });
 
