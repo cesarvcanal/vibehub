@@ -35,7 +35,14 @@ const card: BoardCard = {
   preparedAt: 1,
 };
 
-function Seeded({ children }: { children: React.ReactNode }) {
+/** The same card with a PR under review: the block above the composer opens the review panel. */
+const reviewed: BoardCard = {
+  ...card,
+  prs: [{ number: 218, url: "https://github.com/cesarvcanal/vibehub/pull/218", base: "main", branch: "card/feat-responsividade-9344", openedAt: 1 }],
+  review: { id: "r1", prNumber: 218, phase: "reviewing", round: 1 },
+};
+
+function Seeded({ card, children }: { card: BoardCard; children: React.ReactNode }) {
   const client = useQueryClient();
   const [ready] = React.useState(() => {
     client.setQueryData(cardsKey(project.id), [card]);
@@ -50,8 +57,8 @@ const meta: Meta<typeof CardTerminalView> = {
   title: "Board/Card",
   component: CardTerminalView,
   decorators: [
-    (Story) => (
-      <Seeded>
+    (Story, { parameters }) => (
+      <Seeded card={(parameters.card as BoardCard | undefined) ?? card}>
         {/* The page's own box: the full viewport height, the padding the board screen gives it. */}
         <div className="-m-4 flex h-[100dvh] flex-col p-2 md:p-4">
           <Story />
@@ -65,3 +72,6 @@ const meta: Meta<typeof CardTerminalView> = {
 export default meta;
 
 export const ChatNativo: StoryObj<typeof CardTerminalView> = {};
+
+/** Click "PR #218" above the composer: on a phone the panel takes the whole card; X brings the chat back. */
+export const PrEmRevisao: StoryObj<typeof CardTerminalView> = { parameters: { card: reviewed } };

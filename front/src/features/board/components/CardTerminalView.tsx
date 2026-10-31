@@ -1167,11 +1167,19 @@ export function CardTerminalView({
       ) : (
         // Terminal LEFT, browser RIGHT, half each. Chromium is landscape and a browser stacked under
         // a terminal wastes the width; on a narrow screen the two stack instead.
+        //
+        // On a PHONE they do not stack: two panes in one screen height left the chat a strip and
+        // the review's conversation a sliver. The open pane takes the whole card and its own X
+        // brings the chat back. The chat is only hidden, never unmounted — its socket, draft and
+        // scroll are exactly where they were.
         <div
           data-testid="card-workarea"
           className={cn("flex min-h-0 flex-1 flex-col", (browserOpen || reviewOpen) && "lg:flex-row lg:gap-2")}
         >
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div
+            data-testid="card-main-pane"
+            className={cn("flex min-h-0 min-w-0 flex-1 flex-col", isMobile && (browserOpen || reviewOpen) && "hidden")}
+          >
             {mode === "chat" && features.data === undefined ? (
               /* The install flag is not here yet (cold cache). WHICH chat this install uses is that
                  flag, so guessing would mount the WRONG view: the legacy chat flashed in, took the
