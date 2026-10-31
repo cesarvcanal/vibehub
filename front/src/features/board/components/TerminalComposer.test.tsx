@@ -762,6 +762,38 @@ describe("TerminalComposer", () => {
     await waitFor(() => expect(onSend).toHaveBeenCalledWith("here /work/.uploads/c1/shot.png"));
   });
 
+  it("Enter during an upload that then FAILS keeps the message — it does not go out without its image", async () => {
+    // Produção, 2026-10-31: uploads que travavam ganharam prazo (uploadWatchdog), então agora eles
+    // FALHAM onde antes giravam pra sempre. Quem apertou Enter mandou "texto + imagem": a mensagem
+    // espera no campo, com a imagem em erro e o Retry, em vez de sair pela metade.
+    const onSend = vi.fn();
+    let land = (_path: string | null): void => undefined;
+    const onUploadImage = vi.fn(() => new Promise<string | null>((resolve) => (land = resolve)));
+    renderComposer(<TerminalComposer onSend={onSend} onUploadImage={onUploadImage} />);
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "olha o layout");
+    fireEvent.paste(box, {
+      clipboardData: { items: [], files: [new File(["x"], "img_3664.png", { type: "image/png" })] },
+    });
+    await screen.findByTestId("composer-attachment");
+    await userEvent.type(box, "{Enter}");
+    expect(screen.getByTestId("composer-waiting-upload")).toBeInTheDocument();
+
+    await act(async () => land(null));
+    await waitFor(() => expect(screen.getByTestId("composer-attachment").dataset.status).toBe("error"));
+    expect(onSend).not.toHaveBeenCalled();
+    expect(box).toHaveValue("olha o layout");
+    expect(screen.queryByTestId("composer-waiting-upload")).not.toBeInTheDocument();
+
+    // Retry lands it; the next Enter sends both.
+    onUploadImage.mockImplementationOnce(async () => "/work/.uploads/c1/img_3664.png");
+    await userEvent.click(screen.getByTestId("composer-attachment-retry"));
+    await waitFor(() => expect(screen.getByTestId("composer-attachment").dataset.status).toBe("ready"));
+    expect(onSend).not.toHaveBeenCalled(); // a retry is not a send
+    await userEvent.type(box, "{Enter}");
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("olha o layout /work/.uploads/c1/img_3664.png"));
+  });
+
   it("an image that failed to upload can be dropped, and never joins the message", async () => {
     const onSend = vi.fn();
     const onUploadImage = vi.fn(async () => null);

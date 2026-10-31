@@ -740,6 +740,12 @@ export function TerminalComposer({
    * sent without its picture: it goes the moment the last upload lands (see the effect below).
    */
   const [sendWhenReady, setSendWhenReady] = React.useState(false);
+  /**
+   * The chips that were still going up when that Enter was pressed. One of them failing means the
+   * message the person wrote — words AND picture — can no longer go as written: it stays in the
+   * field with the chip's Retry instead of leaving without its image.
+   */
+  const waitedOnRef = React.useRef<ReadonlySet<string>>(new Set());
   const ref = React.useRef<HTMLTextAreaElement | null>(null);
 
   /**
@@ -948,6 +954,7 @@ export function TerminalComposer({
     if (isEmptyDraft(text, attachments)) return;
     // An upload still in flight: remember the intent instead of sending the text without its image.
     if (hasPendingUpload(attachments)) {
+      waitedOnRef.current = new Set(attachments.filter((a) => a.status === "uploading").map((a) => a.id));
       setSendWhenReady(true);
       return;
     }
@@ -992,6 +999,7 @@ export function TerminalComposer({
     if (!sendWhenReady || sending) return;
     if (hasPendingUpload(attachments)) return;
     setSendWhenReady(false);
+    if (attachments.some((a) => a.status === "error" && waitedOnRef.current.has(a.id))) return;
     if (isEmptyDraft(text, attachments)) return;
     void deliver(text, attachments);
   }, [sendWhenReady, sending, attachments, text, deliver]);

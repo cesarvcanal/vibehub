@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/providers/auth";
 import { useIsMobile } from "@/lib/useIsMobile";
 import { apiErrorMessage } from "@/lib/apiError";
+import { UploadStalledError } from "@/features/board/lib/uploadWatchdog";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -609,7 +610,11 @@ export function CardTerminalView({
         const { path } = await boardApi.uploadCardImage(cardId, file);
         return path;
       } catch (error) {
-        toast.error(apiErrorMessage(error, translate("cardView.uploadError")));
+        toast.error(
+          error instanceof UploadStalledError
+            ? translate("cardView.uploadStalled")
+            : apiErrorMessage(error, translate("cardView.uploadError")),
+        );
         return null;
       } finally {
         if (pending !== null) toast.dismiss(pending);
@@ -1190,7 +1195,7 @@ export function CardTerminalView({
               <SdkChatView
                 cardId={cardId}
                 active={active}
-                onUploadImage={uploadImage}
+                onUploadImage={uploadAttachment}
                 onStatus={setConnection}
                 terminalWorking={working}
                 footer={prBlocks}
@@ -1202,7 +1207,7 @@ export function CardTerminalView({
                 cardId={cardId}
                 active={active}
                 working={working}
-                onUploadImage={uploadImage}
+                onUploadImage={uploadAttachment}
                 onStatus={setConnection}
                 onOpenTerminal={() => switchMode("terminal")}
                 footer={prBlocks}
