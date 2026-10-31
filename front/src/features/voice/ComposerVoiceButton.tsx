@@ -24,8 +24,8 @@ export function useVoiceCallControl(): VoiceCallControl | null {
 
 /**
  * Starts the call (or, pressed, ends it). `column` is the desktop seat: OUTSIDE the field, beside
- * the dictation mic and drawn like it. `corner` is the phone's: inside the field, where the send
- * arrow lives (see {@link ComposerVoiceButton}).
+ * the dictation mic and drawn like it. `corner` is the phone's: in the field's bottom bar, where
+ * the send arrow lives (see {@link ComposerVoiceButton}).
  */
 export function VoiceChatButton({
   control,
@@ -55,7 +55,7 @@ export function VoiceChatButton({
           ? control.inCall
             ? "h-9 w-9 rounded-md bg-sky-500 text-white hover:bg-sky-600"
             : "h-9 w-9 rounded-md text-sky-500 hover:border-sky-500/50 hover:bg-sky-500/10 hover:text-sky-600"
-          : "absolute bottom-1.5 right-1.5 h-11 w-11 rounded-full bg-sky-500 text-white shadow-sm shadow-sky-500/30 hover:bg-sky-600",
+          : "h-11 w-11 rounded-full bg-sky-500 text-white shadow-sm shadow-sky-500/30 hover:bg-sky-600",
       )}
     >
       <AudioLines className={placement === "column" ? "h-4 w-4" : "h-5 w-5"} />
@@ -103,7 +103,7 @@ export function ComposerVoiceButton({
       disabled={sending || empty}
       aria-busy={sending || undefined}
       onClick={onSend}
-      className="absolute bottom-1.5 right-1.5 h-11 w-11 shrink-0 rounded-full"
+      className="h-11 w-11 shrink-0 rounded-full"
     >
       {sending ? <Loader2 className="h-5 w-5 animate-spin" /> : <ArrowUp className="h-5 w-5" />}
     </Button>

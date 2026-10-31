@@ -110,13 +110,13 @@ describe("composer voice button — voice mode on", () => {
     expect(screen.queryByTestId("composer-send")).not.toBeInTheDocument();
   });
 
-  it("phone: IN the field's corner, which gets room for it", async () => {
+  it("phone: in the field's bar, in the send arrow's seat — never over the text", async () => {
     setViewport(true);
     server({ voice: true });
     renderInApp(<TerminalComposer onSend={vi.fn()} cardId="card-1" />);
     const voice = await screen.findByRole("button", { name: /talk by voice/i });
-    expect(screen.getByRole("textbox").parentElement).toContainElement(voice);
-    expect(screen.getByRole("textbox").className).toContain("pr-14");
+    expect(screen.getByTestId("composer-toolbar")).toContainElement(voice);
+    expect(screen.getByRole("textbox").parentElement).not.toContainElement(voice);
   });
 
   it.each([false, true])("starts the call in this chat — no navigation — and sends nothing (mobile=%s)", async (mobile) => {

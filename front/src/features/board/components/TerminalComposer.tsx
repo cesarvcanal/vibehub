@@ -1303,7 +1303,6 @@ export function TerminalComposer({
   const voiceStatus = useVoiceStatus(inRouter && Boolean(cardId) && voiceCall !== null);
   const voiceReady =
     voiceCall !== null && inRouter && Boolean(cardId) && Boolean(voiceStatus.data?.enabled && voiceStatus.data.available);
-  const cornerButton = isMobile;
 
   return (
     <div
@@ -1346,17 +1345,26 @@ export function TerminalComposer({
       {menuOpen ? (
         <SlashMenu commands={matches} highlight={Math.min(highlight, matches.length - 1)} onPick={pickCommand} />
       ) : null}
-
-      {/* The field and its buttons, all sharing the field's BOTTOM edge.
+      {/* DESKTOP: the field and its buttons side by side, all sharing the field's BOTTOM edge.
           They used to be centred, and the microphone came out visibly low: the right column is two
           seats tall (the stop's seat is reserved even while empty), so centring a 102px column
           against a field that starts at 96px pushes the mic below the middle — and the taller the
-          field grows, the further the buttons drift from the line being typed. There is no
-          one-line case to centre for either: the field is three rows at its smallest. Anchoring
-          everything to the bottom puts the mic level with the last line of text and keeps it there
-          whether the stop button is showing or not, which is where every phone puts them. */}
-      <div data-testid="composer-row" className="flex items-end gap-2">
-      {onUploadImage ? <AttachControl mobile={isMobile} onPick={upload} /> : null}
+          field grows, the further the buttons drift from the line being typed. Anchoring everything
+          to the bottom puts the mic level with the last line of text.
+
+          PHONE: one box, the text on top across the WHOLE width and a bar of buttons under it —
+          "+" at the left; stop, microphone and send at the right. The "+" and the microphone used
+          to be 48px circles either side of the field, which on a 390px screen left the text about
+          three quarters of the width and wrapped every sentence into a tall, narrow column. */}
+      <div
+        data-testid="composer-row"
+        className={cn(
+          isMobile
+            ? "flex flex-col rounded-2xl border border-border bg-card focus-within:ring-1 focus-within:ring-primary/50"
+            : "flex items-end gap-2",
+        )}
+      >
+      {!isMobile && onUploadImage ? <AttachControl mobile={false} onPick={upload} /> : null}
       <div className="relative min-w-0 flex-1">
         <textarea
           ref={ref}
@@ -1430,7 +1438,7 @@ export function TerminalComposer({
             upload(imageFiles(e.dataTransfer));
           }}
           placeholder={placeholder ?? t("composer.placeholder")}
-          rows={3}
+          rows={isMobile ? 2 : 3}
           aria-label={t(isMobile ? "composer.ariaMobile" : "composer.aria")}
           /*
            * `text-base` below `md` is not a type choice, it is the iOS keyboard fix: Safari zooms
@@ -1439,17 +1447,19 @@ export function TerminalComposer({
            * the 14px it always had.
            */
           className={cn(
-            "max-h-48 min-h-24 w-full resize-none overflow-y-auto rounded-md border border-border bg-card px-3 py-2 text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 md:text-sm",
-            // Room for the send button that sits in the corner, so no line ever runs under it.
-            cornerButton && "pr-14",
+            "block max-h-48 w-full resize-none overflow-y-auto px-3 py-2 text-base text-foreground placeholder:text-muted-foreground focus:outline-none md:text-sm",
+            // On a phone the BOX is the field (border, background, focus ring), so the text runs
+            // edge to edge and the buttons sit in its bottom bar. The desktop field is its own box.
+            isMobile
+              ? "min-h-14 bg-transparent"
+              : "min-h-24 rounded-md border border-border bg-card focus:ring-1 focus:ring-primary/50",
           )}
         />
         {/* `ultrathink` / `ultracode` in colour, over the grey letters the field already drew.
             The CLI answers these two words with a rainbow and a sweep, and until now that only
             happened inside the terminal — you typed a reserved word up here and nothing said it
-            had been read. The padding override matches the field's, or the mirror wraps somewhere
-            the field does not. */}
-        <UltraFieldOverlay target={ref} text={text} className={cn(cornerButton && "pr-14")} />
+            had been read. */}
+        <UltraFieldOverlay target={ref} text={text} />
         {/* While recording with nothing typed, the empty field is where the voice goes: the bars
             live there rather than crowding the microphone. They vanish the moment there is text. */}
         {recordingNow && !text ? (
@@ -1468,44 +1478,81 @@ export function TerminalComposer({
           </div>
         ) : null}
 
-        {/* The phone's send. IN the field's bottom-right corner rather than a fourth circle in the
-            row, because a 390px screen has no width left after the "+", the microphone and
-            something worth reading — and that corner is where a thumb already goes to send. */}
-        {isMobile && voiceReady && voiceCall ? (
-          <ComposerVoiceButton
-            control={voiceCall}
-            empty={isEmptyDraft(text, attachments)}
-            sending={sending}
-            busy={recording !== "idle"}
-            voice={!editing}
-            onSend={send}
-          />
-        ) : isMobile ? (
-          <Button
-            type="button"
-            size="icon"
-            data-testid="composer-send"
-            aria-label={t("composer.send")}
-            title={t("composer.send")}
-            disabled={sending || isEmptyDraft(text, attachments)}
-            onClick={send}
-            className="absolute bottom-1.5 right-1.5 h-11 w-11 shrink-0 rounded-full"
-          >
-            <ArrowUp className="h-5 w-5" />
-          </Button>
-        ) : null}
       </div>
 
-      {cardId || interrupt ? (
+      {isMobile ? (
+        /* The phone's bar, inside the box. The send sits at the far right, where a thumb already
+           goes to send; the stop lights up to the LEFT of the microphone, so neither of them moves
+           when the agent starts or stops. A recording pill takes the room the bar has to spare. */
+        <div data-testid="composer-toolbar" className="flex items-center gap-1.5 px-1.5 pb-1.5">
+          {onUploadImage ? <AttachControl mobile onPick={upload} /> : null}
+          <div className="ml-auto flex min-w-0 items-center gap-1.5">
+            {interrupt ? (
+              <div
+                data-testid="composer-interrupt-slot"
+                className={cn("shrink-0", !interrupt.active && "hidden")}
+              >
+                {interrupt.active ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    data-testid={interrupt.testId ?? "composer-interrupt"}
+                    aria-label={t("composer.interrupt")}
+                    title={t("composer.interrupt")}
+                    disabled={interrupt.disabled}
+                    onClick={interrupt.onInterrupt}
+                    className="h-11 w-11 shrink-0 rounded-full text-muted-foreground hover:border-destructive/50 hover:bg-destructive/10 hover:text-destructive"
+                  >
+                    <Square className="h-3.5 w-3.5" />
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+            {cardId ? (
+              <VoiceControl
+                state={recording}
+                available={canRecord && !voiceCall?.inCall}
+                levels={levels}
+                mobile
+                elapsed={formatElapsed(elapsedMs)}
+                onStart={() => void startRecording()}
+                onFinish={finishRecording}
+                onCancel={cancelRecording}
+              />
+            ) : null}
+            {voiceReady && voiceCall ? (
+              <ComposerVoiceButton
+                control={voiceCall}
+                empty={isEmptyDraft(text, attachments)}
+                sending={sending}
+                busy={recording !== "idle"}
+                voice={!editing}
+                onSend={send}
+              />
+            ) : (
+              <Button
+                type="button"
+                size="icon"
+                data-testid="composer-send"
+                aria-label={t("composer.send")}
+                title={t("composer.send")}
+                disabled={sending || isEmptyDraft(text, attachments)}
+                onClick={send}
+                className="h-11 w-11 shrink-0 rounded-full"
+              >
+                <ArrowUp className="h-5 w-5" />
+              </Button>
+            )}
+          </div>
+        </div>
+      ) : cardId || interrupt ? (
         /* The right column: stop above microphone, always in the same two seats. The stop slot is
            reserved even while empty so the mic never moves and the button never lands on top of
            anything — it simply lights up in its place when the agent starts working. */
         <div className="flex shrink-0 flex-col items-end gap-1.5">
           {interrupt ? (
-            <div
-              data-testid="composer-interrupt-slot"
-              className="h-12 w-12 shrink-0 md:h-9 md:w-9"
-            >
+            <div data-testid="composer-interrupt-slot" className="h-9 w-9 shrink-0">
               {interrupt.active ? (
                 <Button
                   type="button"
@@ -1516,7 +1563,7 @@ export function TerminalComposer({
                   title={t("composer.interrupt")}
                   disabled={interrupt.disabled}
                   onClick={interrupt.onInterrupt}
-                  className="h-12 w-12 shrink-0 rounded-full text-muted-foreground hover:border-destructive/50 hover:bg-destructive/10 hover:text-destructive md:h-9 md:w-9 md:rounded-md"
+                  className="h-9 w-9 shrink-0 rounded-md text-muted-foreground hover:border-destructive/50 hover:bg-destructive/10 hover:text-destructive"
                 >
                   <Square className="h-3.5 w-3.5" />
                 </Button>
@@ -1525,10 +1572,10 @@ export function TerminalComposer({
           ) : null}
           {cardId ? (
             <div className="flex items-end gap-1.5">
-              {/* The desktop's voice conversation: to the mic's left, drawn like it, so the column
-                  keeps its height and the field its corner. Gone while the mic is taken (its
-                  recording pill needs the room) or a sent message is being edited. */}
-              {!isMobile && voiceReady && voiceCall && !editing && recording === "idle" ? (
+              {/* The voice conversation: to the mic's left, drawn like it, so the column keeps its
+                  height. Gone while the mic is taken (its recording pill needs the room) or a sent
+                  message is being edited. */}
+              {voiceReady && voiceCall && !editing && recording === "idle" ? (
                 <VoiceChatButton control={voiceCall} disabled={sending} placement="column" />
               ) : null}
               <VoiceControl
@@ -1536,7 +1583,7 @@ export function TerminalComposer({
                 // A call holds the microphone: dictation waits (never two grants at once).
                 available={canRecord && !voiceCall?.inCall}
                 levels={levels}
-                mobile={isMobile}
+                mobile={false}
                 elapsed={formatElapsed(elapsedMs)}
                 onStart={() => void startRecording()}
                 onFinish={finishRecording}
@@ -1619,14 +1666,14 @@ function AttachControl({ mobile, onPick }: { mobile: boolean; onPick: (files: Fi
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
-            variant="outline"
+            variant={mobile ? "ghost" : "outline"}
             size="icon"
             data-testid="composer-attach"
             aria-label={t("composer.attachMenu")}
             title={t("composer.attach")}
             className={cn(
               "shrink-0 rounded-full text-muted-foreground",
-              mobile ? "h-12 w-12" : "h-9 w-9 md:rounded-md",
+              mobile ? "h-11 w-11" : "h-9 w-9 md:rounded-md",
             )}
           >
             <Plus className="h-4 w-4" />
@@ -1795,7 +1842,7 @@ function VoiceControl({
   state: RecordingState;
   available: boolean;
   levels: number[];
-  /** A phone: 48px targets, and the level bars move into the field instead of into the button. */
+  /** A phone: 44px targets, and the level bars move into the field instead of into the button. */
   mobile: boolean;
   /** `m:ss` since the recording started. */
   elapsed: string;
@@ -1811,7 +1858,7 @@ function VoiceControl({
         role="status"
         className={cn(
           "flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-card/60 px-3 text-muted-foreground",
-          mobile ? "h-12 rounded-full" : "h-9",
+          mobile ? "h-11 rounded-full" : "h-9",
         )}
       >
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1832,7 +1879,7 @@ function VoiceControl({
         aria-label={t("composer.recording")}
         className={cn(
           "flex shrink-0 items-center border border-destructive/40 bg-destructive/5",
-          mobile ? "rec-ring h-12 gap-1.5 rounded-full pl-1 pr-1" : "h-9 gap-1 rounded-full px-1",
+          mobile ? "rec-ring h-11 gap-1 rounded-full pl-0.5 pr-0.5" : "h-9 gap-1 rounded-full px-1",
         )}
       >
         <button
@@ -1843,7 +1890,7 @@ function VoiceControl({
           onClick={onCancel}
           className={cn(
             "flex items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-            mobile ? "h-10 w-10" : "h-7 w-7",
+            mobile ? "h-9 w-9" : "h-7 w-7",
           )}
         >
           <X className={mobile ? "h-4 w-4" : "h-3.5 w-3.5"} />
@@ -1884,7 +1931,7 @@ function VoiceControl({
           onClick={onFinish}
           className={cn(
             "flex items-center justify-center rounded-full bg-destructive text-destructive-foreground transition-opacity hover:opacity-90",
-            mobile ? "h-10 w-10" : "h-7 w-7",
+            mobile ? "h-9 w-9" : "h-7 w-7",
           )}
         >
           <Check className={mobile ? "h-4 w-4" : "h-3.5 w-3.5"} />
@@ -1896,12 +1943,15 @@ function VoiceControl({
   return (
     <Button
       type="button"
-      variant="outline"
+      variant={mobile ? "ghost" : "outline"}
       size="icon"
       data-testid="composer-mic"
       aria-label={t("composer.record")}
       title={available ? t("composer.recordHint") : t("composer.voiceUnavailable")}
-      className="h-12 w-12 shrink-0 rounded-full text-muted-foreground md:h-9 md:w-9 md:rounded-md"
+      className={cn(
+        "shrink-0 text-muted-foreground",
+        mobile ? "h-11 w-11 rounded-full" : "h-9 w-9 rounded-md",
+      )}
       disabled={!available}
       onClick={onStart}
     >
