@@ -44,7 +44,7 @@ import { useReloadHold } from "@/lib/versionCheck";
  * iOS keyboard's return key is a line break to everyone who owns one, and binding it to "send" meant
  * a message went out every time someone tried to start a paragraph — there was no way to write two
  * lines at all. So below `md` the return key breaks the line, like the keyboard says it does, and
- * the send button appears in the field's bottom-right corner, where every phone keeps it.
+ * the send button sits at the right end of the bar under the text, where every phone keeps it.
  *
  * Everything that arrives from somewhere other than the keyboard lands the same way — appended, not
  * sent. A RECORDING is transcribed and its text appended. Speak three times and you get one
@@ -105,17 +105,10 @@ export interface TerminalComposerProps {
    * hands the composer its interrupt and the composer owns the geometry: the slot is ALWAYS
    * reserved (so nothing jumps and nothing is covered) and the button fills it only while the
    * agent's turn is running (`active`). Each chat keeps its own way of stopping — the handler is
-   * the view's, only the seat is the composer's.
+   * the view's, only the seat is the composer's. On a phone it sits in the field's bar, to the
+   * left of the microphone, so it shows only while active and still moves nothing.
    */
-  interrupt?: {
-    /** true while the agent is working — the only time the button is on screen. */
-    active: boolean;
-    onInterrupt: () => void;
-    /** A stop already in flight (the transcript chat's Escape round-trip). */
-    disabled?: boolean;
-    /** Lets each chat keep its own test id (`chat-stop`, `sdk-interrupt`). */
-    testId?: string;
-  };
+  interrupt?: ComposerInterrupt;
   /**
    * EDIT MODE (the native chat's "editar mensagem"): non-null puts the field into editing — the
    * original message replaces the draft (which is stashed), an indicator above the field says so,
@@ -1290,19 +1283,35 @@ export function TerminalComposer({
     if (!el) return;
     el.style.height = "auto";
     if (el.scrollHeight > 0) el.style.height = `${el.scrollHeight}px`;
-  }, [text]);
+    // `isMobile` too: rotating or resizing across the breakpoint changes the rows and the padding.
+  }, [text, isMobile]);
 
   const recordingNow = recording === "recording";
   // The voice call (GPT-Live) exists only on a card's composer inside a chat that HOSTS it (the
   // native chat provides the control: the call happens right here, in this thread), and only when
   // the server has the mode on with a key. On a desktop it sits OUTSIDE the field, beside the
-  // dictation mic; on a phone it shares the field's corner with the send arrow. Off — the default —
+  // dictation mic; on a phone it takes the send arrow's seat in the field's bar. Off — the default —
   // and the composer is exactly what it was.
   const inRouter = useInRouterContext();
   const voiceCall = useVoiceCallControl();
   const voiceStatus = useVoiceStatus(inRouter && Boolean(cardId) && voiceCall !== null);
   const voiceReady =
     voiceCall !== null && inRouter && Boolean(cardId) && Boolean(voiceStatus.data?.enabled && voiceStatus.data.available);
+
+  // The dictation mic (or its recording strip): beside the field on a desktop, in its bar on a phone.
+  const dictation = cardId ? (
+    <VoiceControl
+      state={recording}
+      // A call holds the microphone: dictation waits (never two grants at once).
+      available={canRecord && !voiceCall?.inCall}
+      levels={levels}
+      mobile={isMobile}
+      elapsed={formatElapsed(elapsedMs)}
+      onStart={() => void startRecording()}
+      onFinish={finishRecording}
+      onCancel={cancelRecording}
+    />
+  ) : null;
 
   return (
     <div
@@ -1360,7 +1369,8 @@ export function TerminalComposer({
         data-testid="composer-row"
         className={cn(
           isMobile
-            ? "flex flex-col rounded-2xl border border-border bg-card focus-within:ring-1 focus-within:ring-primary/50"
+            ? // The ring follows the TEXT's focus: tapping "+" or the mic is not "writing here".
+              "flex flex-col rounded-2xl border border-border bg-card has-[textarea:focus]:ring-1 has-[textarea:focus]:ring-primary/50"
             : "flex items-end gap-2",
         )}
       >
@@ -1447,19 +1457,20 @@ export function TerminalComposer({
            * the 14px it always had.
            */
           className={cn(
-            "block max-h-48 w-full resize-none overflow-y-auto px-3 py-2 text-base text-foreground placeholder:text-muted-foreground focus:outline-none md:text-sm",
+            "block w-full resize-none overflow-y-auto px-3 py-2 text-base text-foreground placeholder:text-muted-foreground focus:outline-none md:text-sm",
             // On a phone the BOX is the field (border, background, focus ring), so the text runs
             // edge to edge and the buttons sit in its bottom bar. The desktop field is its own box.
             isMobile
-              ? "min-h-14 bg-transparent"
-              : "min-h-24 rounded-md border border-border bg-card focus:ring-1 focus:ring-primary/50",
+              // max-h-36 plus the bar is the 192px the phone's composer always topped out at.
+              ? "max-h-36 min-h-14 bg-transparent"
+              : "max-h-48 min-h-24 rounded-md border border-border bg-card focus:ring-1 focus:ring-primary/50",
           )}
         />
         {/* `ultrathink` / `ultracode` in colour, over the grey letters the field already drew.
             The CLI answers these two words with a rainbow and a sweep, and until now that only
             happened inside the terminal — you typed a reserved word up here and nothing said it
             had been read. */}
-        <UltraFieldOverlay target={ref} text={text} />
+        <UltraFieldOverlay target={ref} text={text} className={cn(isMobile && "border-0")} />
         {/* While recording with nothing typed, the empty field is where the voice goes: the bars
             live there rather than crowding the microphone. They vanish the moment there is text. */}
         {recordingNow && !text ? (
@@ -1484,43 +1495,20 @@ export function TerminalComposer({
         /* The phone's bar, inside the box. The send sits at the far right, where a thumb already
            goes to send; the stop lights up to the LEFT of the microphone, so neither of them moves
            when the agent starts or stops. A recording pill takes the room the bar has to spare. */
-        <div data-testid="composer-toolbar" className="flex items-center gap-1.5 px-1.5 pb-1.5">
+        <div
+          data-testid="composer-toolbar"
+          className="flex items-center gap-1.5 px-1.5 pb-1.5"
+          // The bar is part of the box: a tap in its empty space is a tap in the field.
+          onPointerDown={(e) => {
+            if ((e.target as Element).closest("button")) return;
+            e.preventDefault();
+            ref.current?.focus();
+          }}
+        >
           {onUploadImage ? <AttachControl mobile onPick={upload} /> : null}
           <div className="ml-auto flex min-w-0 items-center gap-1.5">
-            {interrupt ? (
-              <div
-                data-testid="composer-interrupt-slot"
-                className={cn("shrink-0", !interrupt.active && "hidden")}
-              >
-                {interrupt.active ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    data-testid={interrupt.testId ?? "composer-interrupt"}
-                    aria-label={t("composer.interrupt")}
-                    title={t("composer.interrupt")}
-                    disabled={interrupt.disabled}
-                    onClick={interrupt.onInterrupt}
-                    className="h-11 w-11 shrink-0 rounded-full text-muted-foreground hover:border-destructive/50 hover:bg-destructive/10 hover:text-destructive"
-                  >
-                    <Square className="h-3.5 w-3.5" />
-                  </Button>
-                ) : null}
-              </div>
-            ) : null}
-            {cardId ? (
-              <VoiceControl
-                state={recording}
-                available={canRecord && !voiceCall?.inCall}
-                levels={levels}
-                mobile
-                elapsed={formatElapsed(elapsedMs)}
-                onStart={() => void startRecording()}
-                onFinish={finishRecording}
-                onCancel={cancelRecording}
-              />
-            ) : null}
+            {interrupt?.active ? <StopButton interrupt={interrupt} mobile /> : null}
+            {dictation}
             {voiceReady && voiceCall ? (
               <ComposerVoiceButton
                 control={voiceCall}
@@ -1553,21 +1541,7 @@ export function TerminalComposer({
         <div className="flex shrink-0 flex-col items-end gap-1.5">
           {interrupt ? (
             <div data-testid="composer-interrupt-slot" className="h-9 w-9 shrink-0">
-              {interrupt.active ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  data-testid={interrupt.testId ?? "composer-interrupt"}
-                  aria-label={t("composer.interrupt")}
-                  title={t("composer.interrupt")}
-                  disabled={interrupt.disabled}
-                  onClick={interrupt.onInterrupt}
-                  className="h-9 w-9 shrink-0 rounded-md text-muted-foreground hover:border-destructive/50 hover:bg-destructive/10 hover:text-destructive"
-                >
-                  <Square className="h-3.5 w-3.5" />
-                </Button>
-              ) : null}
+              {interrupt.active ? <StopButton interrupt={interrupt} mobile={false} /> : null}
             </div>
           ) : null}
           {cardId ? (
@@ -1578,23 +1552,46 @@ export function TerminalComposer({
               {voiceReady && voiceCall && !editing && recording === "idle" ? (
                 <VoiceChatButton control={voiceCall} disabled={sending} placement="column" />
               ) : null}
-              <VoiceControl
-                state={recording}
-                // A call holds the microphone: dictation waits (never two grants at once).
-                available={canRecord && !voiceCall?.inCall}
-                levels={levels}
-                mobile={false}
-                elapsed={formatElapsed(elapsedMs)}
-                onStart={() => void startRecording()}
-                onFinish={finishRecording}
-                onCancel={cancelRecording}
-              />
+              {dictation}
             </div>
           ) : null}
         </div>
       ) : null}
       </div>
     </div>
+  );
+}
+
+/** Stops the agent's turn: a 36px square beside the field on a desktop, a 44px circle in the phone's bar. */
+interface ComposerInterrupt {
+  /** true while the agent is working — the only time the button is on screen. */
+  active: boolean;
+  onInterrupt: () => void;
+  /** A stop already in flight (the transcript chat's Escape round-trip). */
+  disabled?: boolean;
+  /** Lets each chat keep its own test id (`chat-stop`, `sdk-interrupt`). */
+  testId?: string;
+}
+
+function StopButton({ interrupt, mobile }: { interrupt: ComposerInterrupt; mobile: boolean }) {
+  const t = useT();
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="icon"
+      data-testid={interrupt.testId ?? "composer-interrupt"}
+      aria-label={t("composer.interrupt")}
+      title={t("composer.interrupt")}
+      disabled={interrupt.disabled}
+      onClick={interrupt.onInterrupt}
+      className={cn(
+        "shrink-0 text-muted-foreground hover:border-destructive/50 hover:bg-destructive/10 hover:text-destructive",
+        mobile ? "h-11 w-11 rounded-full" : "h-9 w-9 rounded-md",
+      )}
+    >
+      <Square className="h-3.5 w-3.5" />
+    </Button>
   );
 }
 

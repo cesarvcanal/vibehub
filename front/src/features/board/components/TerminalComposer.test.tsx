@@ -1071,6 +1071,36 @@ describe("TerminalComposer — voice input", () => {
     expect(screen.getByTestId("composer-mic-finish")).toBeInTheDocument();
   });
 
+  it("phone: the recording strip lives in the field's bar, and the send stays where it was", async () => {
+    serveVoice(true);
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query === MOBILE_QUERY,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+    try {
+      const user = userEvent.setup();
+      renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
+      await waitFor(() => expect(screen.getByTestId("composer-mic")).toBeEnabled());
+      await user.click(screen.getByTestId("composer-mic"));
+
+      const strip = await screen.findByTestId("composer-mic-recording");
+      const bar = screen.getByTestId("composer-toolbar");
+      expect(bar).toContainElement(strip);
+      expect(bar).toContainElement(screen.getByTestId("composer-send"));
+      // With nothing typed, the voice shows IN the empty field too.
+      expect(screen.getByTestId("composer-field-bars")).toBeInTheDocument();
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
   it("discards a cancelled recording without uploading anything", async () => {
     serveVoice(true);
     const user = userEvent.setup();
@@ -1269,6 +1299,55 @@ describe("TerminalComposer — on a phone", () => {
     });
     await screen.findByTestId("composer-attachment");
     expect(screen.getByTestId("composer-send")).toBeEnabled();
+  });
+
+  it("keeps the ultrathink colours ON the letters: the mirror has no border when the field has none", async () => {
+    renderComposer(<TerminalComposer onSend={vi.fn()} />);
+    await userEvent.type(screen.getByRole("textbox"), "ultrathink nisso");
+    // The phone's field lost its 1px border (the box around it is the border now); a mirror that
+    // kept one would paint every colour one pixel down and right of its letter.
+    expect(screen.getByTestId("composer-ultra-mirror").className).toContain("border-0");
+  });
+
+  it("grows no taller on a phone than before the bar moved in: max-h-36 for the text", () => {
+    expect(screen.queryByRole("textbox")).toBeNull();
+    renderComposer(<TerminalComposer onSend={vi.fn()} />);
+    const field = screen.getByRole("textbox");
+    expect(field.className).toContain("max-h-36");
+    expect(field.className).not.toContain("max-h-48");
+  });
+
+  it("lights the box's ring for the TEXT's focus, not for a button in the bar", () => {
+    renderComposer(<TerminalComposer onSend={vi.fn()} />);
+    const row = screen.getByTestId("composer-row");
+    expect(row.className).toContain("has-[textarea:focus]:ring-1");
+    expect(row.className).not.toContain("focus-within:");
+  });
+
+  it("a tap on the bar's empty space puts the caret in the field; a tap on a button does not", () => {
+    renderComposer(<TerminalComposer onSend={vi.fn()} onUploadImage={vi.fn(async () => "/x.png")} />);
+    const field = screen.getByRole("textbox");
+    fireEvent.pointerDown(screen.getByTestId("composer-toolbar"));
+    expect(field).toHaveFocus();
+
+    field.blur();
+    fireEvent.pointerDown(screen.getByTestId("composer-attach"));
+    expect(field).not.toHaveFocus();
+  });
+
+  it("shows the stop only while the agent works — in the bar, left of the mic", async () => {
+    const { rerender } = renderComposer(
+      <TerminalComposer onSend={vi.fn()} cardId="c1" interrupt={{ active: false, onInterrupt: vi.fn() }} />,
+    );
+    await screen.findByTestId("composer-mic");
+    // A bar has no "seat" to reserve: the stop appears to the LEFT, so mic and send never move.
+    expect(screen.queryByTestId("composer-interrupt")).toBeNull();
+    expect(screen.queryByTestId("composer-interrupt-slot")).toBeNull();
+
+    rerender(<TerminalComposer onSend={vi.fn()} cardId="c1" interrupt={{ active: true, onInterrupt: vi.fn() }} />);
+    const stop = screen.getByTestId("composer-interrupt");
+    expect(screen.getByTestId("composer-toolbar")).toContainElement(stop);
+    expect(stop.compareDocumentPosition(screen.getByTestId("composer-mic")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("keeps the send button out of the text, and off the desktop entirely", () => {

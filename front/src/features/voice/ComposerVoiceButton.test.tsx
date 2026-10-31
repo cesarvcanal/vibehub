@@ -11,7 +11,7 @@ import { get } from "@/lib/api";
 
 /**
  * The card composer's voice button while the voice mode is on. Desktop: outside the field, beside
- * the dictation mic. Phone: the field's corner — EMPTY draft → blue "talk by voice", TEXT → the send
+ * the dictation mic. Phone: the send arrow's seat in the field's bar — EMPTY draft → blue "talk by voice", TEXT → the send
  * arrow. Either way the call starts RIGHT HERE (the chat hosting the composer provides the control)
  * — no page change. Off, or in a composer no chat hosts a call in, the composer is what it was.
  */
@@ -92,13 +92,12 @@ describe("composer voice button — voice mode on", () => {
     expect(screen.getByRole("button", { name: "Record a message" })).not.toBe(voice);
   });
 
-  it("desktop: OUTSIDE the field, beside the mic — the field keeps no corner padding", async () => {
+  it("desktop: OUTSIDE the field, beside the mic", async () => {
     server({ voice: true });
     renderInApp(<TerminalComposer onSend={vi.fn()} cardId="card-1" />);
     const voice = await screen.findByRole("button", { name: /talk by voice/i });
     expect(screen.getByRole("textbox").parentElement).not.toContainElement(voice);
     expect(voice.parentElement).toContainElement(screen.getByRole("button", { name: "Record a message" }));
-    expect(screen.getByRole("textbox").className).not.toContain("pr-14");
   });
 
   it("desktop: typing keeps the voice button and adds no send arrow (Enter sends)", async () => {
@@ -152,7 +151,7 @@ describe("composer voice button — voice mode on", () => {
     expect(screen.getByRole("button", { name: "Record a message" })).toBeDisabled();
   });
 
-  it("phone, during a call: the corner is the send arrow (the call's controls are in its strip)", async () => {
+  it("phone, during a call: the bar's seat is the send arrow (the call's controls are in its strip)", async () => {
     setViewport(true);
     server({ voice: true });
     call = control(true);
@@ -223,13 +222,12 @@ describe("composer voice button — voice mode on", () => {
 });
 
 describe("composer voice button — voice mode off (regression)", () => {
-  it("desktop keeps no corner button at all", async () => {
+  it("desktop keeps no voice or send button at all", async () => {
     server({ voice: false });
     renderInApp(<TerminalComposer onSend={vi.fn()} cardId="card-1" />);
     await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/voice/live"));
     expect(screen.queryByTestId("composer-voice")).not.toBeInTheDocument();
     expect(screen.queryByTestId("composer-send")).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox").className).not.toContain("pr-14");
   });
 
   it("phone keeps its disabled send arrow on an empty field", async () => {

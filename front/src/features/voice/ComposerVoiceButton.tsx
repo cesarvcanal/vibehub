@@ -24,7 +24,7 @@ export function useVoiceCallControl(): VoiceCallControl | null {
 
 /**
  * Starts the call (or, pressed, ends it). `column` is the desktop seat: OUTSIDE the field, beside
- * the dictation mic and drawn like it. `corner` is the phone's: in the field's bottom bar, where
+ * the dictation mic and drawn like it. `bar` is the phone's: in the field's bottom bar, where
  * the send arrow lives (see {@link ComposerVoiceButton}).
  */
 export function VoiceChatButton({
@@ -34,7 +34,7 @@ export function VoiceChatButton({
 }: {
   control: VoiceCallControl;
   disabled: boolean;
-  placement: "column" | "corner";
+  placement: "column" | "bar";
 }) {
   const t = useT();
   const label = control.inCall ? t("voice.call.end") : t("composer.voiceChat");
@@ -64,7 +64,7 @@ export function VoiceChatButton({
 }
 
 /**
- * The phone's corner button: with an EMPTY draft and no call it starts a voice call (blue
+ * The phone's send seat in the field's bar: with an EMPTY draft and no call it starts a voice call (blue
  * waveform); the moment there is something to send — or a call is already up, whose controls live
  * in the call strip — it is the send arrow. What a click does is decided by the state at click
  * time, so an empty field can never "send", and text can never start a call.
@@ -90,7 +90,7 @@ export function ComposerVoiceButton({
   const t = useT();
 
   if (empty && voice && !control.inCall) {
-    return <VoiceChatButton control={control} disabled={busy || sending} placement="corner" />;
+    return <VoiceChatButton control={control} disabled={busy || sending} placement="bar" />;
   }
 
   return (

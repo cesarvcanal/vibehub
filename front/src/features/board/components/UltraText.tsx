@@ -100,7 +100,7 @@ export function UltraFieldOverlay({
   /** The textarea being mirrored. */
   target: React.RefObject<HTMLTextAreaElement | null>;
   text: string;
-  /** Padding overrides that must match the field's own (the phone's room for the send button). */
+  /** Box overrides that must match the field's own (the phone's field has no border). */
   className?: string;
 }) {
   const mirror = React.useRef<HTMLDivElement | null>(null);
