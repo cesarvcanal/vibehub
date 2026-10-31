@@ -33,6 +33,7 @@ import type {
   UploadResult,
 } from "@/api/types";
 import { t } from "@/i18n";
+import { uploadWithWatchdog } from "@/features/board/lib/uploadWatchdog";
 
 /**
  * The board's data layer: query keys plus one function per route.
@@ -487,11 +488,24 @@ export const boardApi = {
    * Uploads an image so the agent can read it. The running server takes JSON `{ name, content }`
    * with base64 content (the doc says multipart); it answers with the path INSIDE the runner, which
    * is what gets typed into the prompt.
+   *
+   * Under the upload watchdog: a request on a dead connection used to spin the chip forever (see
+   * `uploadWatchdog`). Silence is abandoned and the image sent again; past the last try it rejects,
+   * and the chip turns into an error with Retry.
    */
-  uploadCardImage: async (id: string, file: File): Promise<UploadResult> => {
-    const content = await blobToBase64(file);
-    return await post<UploadResult>(`/cards/${encodeURIComponent(id)}/upload`, { name: file.name, content });
-  },
+  uploadCardImage: (id: string, file: File): Promise<UploadResult> =>
+    uploadWithWatchdog(async ({ signal, onProgress }) => {
+      const content = await blobToBase64(file);
+      onProgress(false);
+      return await post<UploadResult>(
+        `/cards/${encodeURIComponent(id)}/upload`,
+        { name: file.name, content },
+        {
+          signal,
+          onUploadProgress: (e) => onProgress(e.total !== undefined && e.total > 0 && e.loaded >= e.total),
+        },
+      );
+    }),
 
   /**
    * Sends a chat message: the server types it at the prompt of the SAME tmux session the terminal
