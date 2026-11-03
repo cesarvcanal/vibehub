@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
-import { Check, ExternalLink, FileDiff, Loader2, SquareTerminal, X } from "lucide-react";
+import { Check, ChevronRight, ExternalLink, FileDiff, Loader2, SquareTerminal, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Finding, FindingSeverity, Review, ReviewPhase, ReviewWorking } from "@/api/types";
@@ -135,7 +135,7 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
         </TabButton>
         <TabButton active={tab === "findings"} onClick={() => setTab("findings")}>
           {t("review.tab.findings")}
-          <span className="rounded bg-muted px-1 text-[10px] tabular-nums text-muted-foreground">{review.findings.length}</span>
+          <span className="rounded bg-muted px-1 text-[10px] tabular-nums text-muted-foreground">{review.findings.filter(findingIsOpen).length}</span>
           {decisionsHere > 0 ? <span aria-label={t("review.tab.decisions", { n: decisionsHere })} className="h-1.5 w-1.5 rounded-full bg-sky-400" /> : null}
         </TabButton>
       </div>
@@ -377,15 +377,23 @@ function FindingsList({
       return next;
     });
 
+  // What still needs someone is the list; what was settled (fixed, not to be done, dropped, risk
+  // accepted, won't fix) leaves it for "Resolvidos", folded at the bottom: the list never reads stale.
+  const pending = review.findings.filter(findingIsOpen);
+  const resolved = review.findings.filter((f) => !findingIsOpen(f));
+  const [showResolved, setShowResolved] = React.useState(false);
+
   if (review.findings.length === 0) {
     return <p className="py-6 text-center text-xs text-muted-foreground">{t("review.list.empty")}</p>;
   }
   return (
     <div className="space-y-4 py-1 pr-1">
+      {pending.length === 0 ? (
+        <p className="py-4 text-center text-xs text-muted-foreground">{t("review.list.allResolved")}</p>
+      ) : null}
       {GROUPS.map((severity) => {
-        const items = review.findings.filter((f) => f.severity === severity);
+        const items = pending.filter((f) => f.severity === severity);
         if (items.length === 0) return null;
-        const open = items.filter(findingIsOpen).length;
         const choosing = severity === "suggestion" && canRequest && openSuggestions.length > 0;
         return (
           <section key={severity} data-testid="finding-group" data-severity={severity} className="space-y-2">
@@ -394,7 +402,6 @@ function FindingsList({
                 <span>
                   {t(`review.group.${severity}`)} <span className="font-normal text-muted-foreground">({items.length})</span>
                 </span>
-                <span className="text-[11px] font-normal text-muted-foreground">{t("review.group.state", { open, done: items.length - open })}</span>
               </h4>
               <p className="text-[11px] text-muted-foreground">{t(`review.group.${severity}.about`)}</p>
             </header>
@@ -443,6 +450,26 @@ function FindingsList({
           </section>
         );
       })}
+      {resolved.length > 0 ? (
+        <section className="space-y-2 border-t border-border/50 pt-3">
+          <button
+            type="button"
+            aria-expanded={showResolved}
+            onClick={() => setShowResolved((v) => !v)}
+            className="flex w-full items-center gap-1 text-xs font-semibold text-muted-foreground hover:text-foreground"
+          >
+            <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", showResolved && "rotate-90")} />
+            {t("review.list.resolved", { n: resolved.length })}
+          </button>
+          {showResolved ? (
+            <ul data-testid="findings-resolved" className="space-y-1.5 opacity-80">
+              {resolved.map((f) => (
+                <FindingCard key={f.id} finding={f} busy={busy} decisions={decisionsFor(f)} onDecide={(d) => onDecide(f, d)} />
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
     </div>
   );
 }
