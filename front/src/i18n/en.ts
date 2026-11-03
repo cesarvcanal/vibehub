@@ -790,6 +790,8 @@ export const en: Record<string, string> = {
   "composer.nothingSaid": "Nothing was said in that recording.",
   "composer.transcribeError": "Could not transcribe that recording",
   "composer.cannotRecord": "This browser cannot record audio.",
+  "composer.micNeedsHttps": "The microphone only works over HTTPS — this page was opened over http.",
+  "composer.openInHttps": "Open in HTTPS",
   "composer.micBlocked": "Could not reach the microphone — is permission blocked?",
   "composer.transcribingShort": "transcribing…",
   "composer.discard": "Discard recording",

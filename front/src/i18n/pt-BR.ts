@@ -791,6 +791,8 @@ export const ptBR: Record<string, string> = {
   "composer.nothingSaid": "Não foi dito nada nessa gravação.",
   "composer.transcribeError": "Não deu pra transcrever essa gravação",
   "composer.cannotRecord": "Este navegador não grava áudio.",
+  "composer.micNeedsHttps": "O microfone só funciona em HTTPS — esta página foi aberta por http.",
+  "composer.openInHttps": "Abrir em HTTPS",
   "composer.micBlocked": "Não deu pra acessar o microfone — a permissão está bloqueada?",
   "composer.transcribingShort": "transcrevendo…",
   "composer.discard": "Descartar a gravação",
