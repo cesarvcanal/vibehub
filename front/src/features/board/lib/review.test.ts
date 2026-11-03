@@ -369,6 +369,26 @@ describe("conversationRows", () => {
       .toEqual(["#1", "início", "r1", "#2", "a1", "r2"]);
   });
 
+  it("an AI line with findings becomes its summary, then its findings as one group of messages, in order", () => {
+    const log = [
+      { at: 1, round: 1, who: "reviewer" as const, text: "achei duas coisas", items: [{ id: "f1", status: "open" as const, isNew: true }, { id: "f2", status: "open" as const, isNew: true }] },
+      { at: 2, round: 1, who: "author" as const, text: "corrigi", items: [{ id: "f1", status: "fixed" as const, reply: "feito", commit: "abc1234" }] },
+    ];
+    const rows = conversationRows(log);
+    expect(rows.map((r) => (r.kind === "round" ? `#${r.round}` : r.kind === "items" ? `${r.event.who}:${r.event.items!.map((it) => it.id).join(",")}` : r.event.text)))
+      .toEqual(["#1", "achei duas coisas", "reviewer:f1,f2", "corrigi", "author:f1"]);
+    // The summary and its findings are the same line: same index, so they animate (or not) together.
+    expect(rows.filter((r) => r.kind !== "round").map((r) => r.index)).toEqual([0, 0, 1, 1]);
+    const keys = rows.map((r) => r.key);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("system and human lines are not split: no findings group follows them", () => {
+    const log = [{ at: 1, round: 1, who: "human" as const, by: "albert", text: "Decisão humana em f6: retira.", items: [{ id: "f6", status: "dropped" as const }] }];
+    const rows = conversationRows(log);
+    expect(rows.map((r) => r.kind)).toEqual(["round", "line"]);
+  });
+
   it("an empty log has no rows, and every key is unique", () => {
     expect(conversationRows([])).toEqual([]);
     const same = [{ at: 5, round: 1, who: "system" as const, text: "x" }, { at: 5, round: 1, who: "system" as const, text: "x" }];

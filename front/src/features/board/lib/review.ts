@@ -337,11 +337,16 @@ export function reviewTurn(
  */
 export type ConversationRow =
   | { kind: "round"; round: number; key: string; index: number }
-  | { kind: "line"; event: ReviewEvent; key: string; index: number };
+  | { kind: "line"; event: ReviewEvent; key: string; index: number }
+  /** The findings of an AI line, drawn right after its summary as one group of messages, one per finding. */
+  | { kind: "items"; event: ReviewEvent; key: string; index: number };
 
 /**
  * The log as the conversation draws it: a "Rodada N" divider before the first line of each round —
- * the way a chat app marks a new day — then the lines in the order they happened. PURE.
+ * the way a chat app marks a new day — then the lines in the order they happened. An AI line that is
+ * about findings is split the way a person would type it: the summary first, then its findings, one
+ * message each, so each subject reads on its own instead of in one long bubble. Both rows share the
+ * line's `index` (they arrived together). PURE.
  */
 export function conversationRows(log: ReviewEvent[]): ConversationRow[] {
   const rows: ConversationRow[] = [];
@@ -352,6 +357,9 @@ export function conversationRows(log: ReviewEvent[]): ConversationRow[] {
       rows.push({ kind: "round", round, key: `round-${round}-${i}`, index: i });
     }
     rows.push({ kind: "line", event, key: `${event.at}-${i}`, index: i });
+    if ((event.who === "reviewer" || event.who === "author") && event.items?.length) {
+      rows.push({ kind: "items", event, key: `${event.at}-${i}-items`, index: i });
+    }
   });
   return rows;
 }

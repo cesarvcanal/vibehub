@@ -17,13 +17,11 @@ import { cn } from "@/lib/utils";
  * new line scrolls into view when the reader is already at the bottom; a reader who scrolled up to
  * read the history is left there and gets the "jump to latest" arrow instead of being yanked down.
  *
- * Each AI line carries the findings it is about (`ReviewEvent.items`), with the reply of THAT round,
- * so a finding's back-and-forth reads in order: the reviewer opens it, the author answers, the
- * reviewer accepts it or keeps it open.
+ * Each AI line carries the findings it is about (`ReviewEvent.items`), with the reply of THAT round.
+ * They are not packed into the line's bubble: the summary comes first, then one message per finding
+ * ({@link conversationRows}), so each subject is read on its own — the reviewer opens it, the author
+ * answers, the reviewer accepts it or keeps it open.
  */
-
-/** A bubble shows this many findings until "+N itens" is pressed: a round of 8 suggestions stays readable. */
-const ITEMS_SHOWN = 4;
 
 /**
  * How something new comes in: a short fade and rise, the way a message lands in a chat app. Only
@@ -71,8 +69,10 @@ export function ReviewConversation({ review, working, nameOf }: ReviewConversati
           rows.map((row) =>
             row.kind === "round" ? (
               <RoundDivider key={row.key} round={row.round} fresh={fresh(row.index)} />
+            ) : row.kind === "items" ? (
+              <ItemLines key={row.key} event={row.event} findings={findings} names={names} fresh={fresh(row.index)} />
             ) : (
-              <Line key={row.key} event={row.event} findings={findings} names={names} fresh={fresh(row.index)} />
+              <Line key={row.key} event={row.event} names={names} fresh={fresh(row.index)} />
             ),
           )
         )}
@@ -111,10 +111,9 @@ type Names = { reviewer: string; author: string; merger: string };
 
 /** One line of the log: a bubble for each AI, a centred note for the server and for the people. */
 function Line({
-  event, findings, names, fresh,
+  event, names, fresh,
 }: {
   event: ReviewEvent;
-  findings: Map<string, Finding>;
   names: Names;
   /** Arrived while the panel was open: comes in animated. */
   fresh: boolean;
@@ -145,72 +144,137 @@ function Line({
   }
   const reviewer = event.who === "reviewer";
   return (
+    <Bubble testId="review-line" reviewer={reviewer} fresh={fresh} first>
+      <p className={cn("text-[11px] font-semibold", reviewer ? "text-sky-300" : "text-emerald-300")}>
+        {t(reviewer ? "review.conversation.reviewer" : "review.conversation.author", { name: reviewer ? names.reviewer : names.author })}
+      </p>
+      <p className="whitespace-pre-wrap break-words leading-relaxed">{event.text}</p>
+      <p className="text-right text-[10px] text-muted-foreground">{when}</p>
+    </Bubble>
+  );
+}
+
+/** An AI's bubble, on its side: the reviewer on the left, the author on the right. */
+function Bubble({
+  testId, reviewer, fresh, first, status, children,
+}: {
+  testId: string;
+  reviewer: boolean;
+  fresh: boolean;
+  /** The line's summary, which the findings follow: its corner points at the side it came from. */
+  first?: boolean;
+  status?: string;
+  children: React.ReactNode;
+}) {
+  return (
     <div
-      data-testid="review-line"
-      data-who={event.who}
+      data-testid={testId}
+      data-who={reviewer ? "reviewer" : "author"}
+      data-status={status}
       data-fresh={fresh || undefined}
       className={cn("flex", reviewer ? "justify-start" : "justify-end", fresh && ENTER)}
     >
       <div
         className={cn(
           "max-w-[88%] space-y-1.5 rounded-lg border px-3 py-2 text-xs",
-          reviewer ? "rounded-tl-sm border-sky-500/30 bg-sky-500/10" : "rounded-tr-sm border-emerald-500/30 bg-emerald-500/10",
+          reviewer ? "border-sky-500/30 bg-sky-500/10" : "border-emerald-500/30 bg-emerald-500/10",
+          first && (reviewer ? "rounded-tl-sm" : "rounded-tr-sm"),
         )}
       >
-        <p className={cn("text-[11px] font-semibold", reviewer ? "text-sky-300" : "text-emerald-300")}>
-          {t(reviewer ? "review.conversation.reviewer" : "review.conversation.author", { name: reviewer ? names.reviewer : names.author })}
-        </p>
-        <p className="whitespace-pre-wrap break-words leading-relaxed">{event.text}</p>
-        {event.items?.length ? <Items items={event.items} findings={findings} /> : null}
-        <p className="text-right text-[10px] text-muted-foreground">{when}</p>
+        {children}
       </div>
     </div>
   );
 }
 
-/** The findings a line is about: what it is, where it stands after this line, and what was said of it. */
-function Items({ items, findings }: { items: ReviewEventItem[]; findings: Map<string, Finding> }) {
+/**
+ * The findings an AI line is about, one message each, as a single list: a screen reader announces
+ * the group that arrived, not a run of loose pieces.
+ */
+function ItemLines({
+  event, findings, names, fresh,
+}: {
+  event: ReviewEvent;
+  findings: Map<string, Finding>;
+  names: Names;
+  fresh: boolean;
+}) {
   const t = useT();
-  const [all, setAll] = React.useState(false);
-  const shown = all ? items : items.slice(0, ITEMS_SHOWN);
+  const reviewer = event.who === "reviewer";
   return (
-    <div className="space-y-1">
-      <ul className="space-y-1 border-l border-border/60 pl-2">
-        {shown.map((item) => {
-          const finding = findings.get(item.id);
-          return (
-            <li key={item.id} data-testid="review-line-item" data-status={item.status} className="space-y-0.5">
-              <div className="flex items-start gap-1.5">
-                <span
-                  className={cn(
-                    "shrink-0 text-[11px] font-semibold",
-                    finding ? BADGE_TEXT[FINDING_SEVERITY_TONE[finding.severity]] : "text-muted-foreground",
-                    finding?.severity === "refuted" && "line-through",
-                  )}
-                >
-                  {finding ? t(`review.severity.${finding.severity}`) : item.id}
-                </span>
-                <span className="min-w-0 flex-1 break-words">{finding?.title ?? item.id}</span>
-                <Badge tone={item.isNew ? "muted" : FINDING_STATUS_TONE[item.status]} className="shrink-0 px-1 py-0 text-[10px] font-normal">
-                  {item.isNew ? t("review.conversation.newItem") : t(`review.status.${item.status}`)}
-                </Badge>
-              </div>
-              {item.reply ? <p className="break-words text-[11px] italic text-muted-foreground">“{item.reply}”</p> : null}
-              {item.commit ? <code className="font-mono text-[10px] text-muted-foreground">{item.commit.slice(0, 7)}</code> : null}
-            </li>
-          );
-        })}
-      </ul>
-      {items.length > ITEMS_SHOWN ? (
+    <ul
+      data-testid="review-line-items"
+      aria-label={t("review.conversation.items", { name: reviewer ? names.reviewer : names.author })}
+      className="flex flex-col gap-2"
+    >
+      {(event.items ?? []).map((item, j) => (
+        <li key={`${item.id}-${j}`}>
+          <ItemLine reviewer={reviewer} item={item} finding={findings.get(item.id)} fresh={fresh} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Past this many characters, what was said of a finding comes clamped, with "ver mais". */
+const SAID_CLAMP_CHARS = 240;
+
+/**
+ * One finding an AI line is about, as a message of its own: what it is and where it stands after
+ * this line, where in the code, then what was said of it — the author's answer, the reviewer's
+ * verdict, or, on the finding the reviewer just opened, how to fix it. The status and the reply are
+ * the line's own (`ReviewEventItem`); the file, line and fix come from the finding, which the server
+ * writes once when the reviewer opens it and never changes, so an old bubble reads as it did.
+ */
+function ItemLine({
+  reviewer, item, finding, fresh,
+}: {
+  reviewer: boolean;
+  item: ReviewEventItem;
+  finding: Finding | undefined;
+  fresh: boolean;
+}) {
+  const t = useT();
+  const [open, setOpen] = React.useState(false);
+  const where = finding?.file ? (finding.line ? `${finding.file}:${finding.line}` : finding.file) : null;
+  const said = item.reply ?? (item.isNew ? finding?.fix : undefined);
+  const long = (said?.length ?? 0) > SAID_CLAMP_CHARS;
+  return (
+    <Bubble testId="review-line-item" reviewer={reviewer} fresh={fresh} status={item.status}>
+      <div className="flex items-center gap-1.5">
+        <span
+          className={cn(
+            "text-[11px] font-semibold",
+            finding ? BADGE_TEXT[FINDING_SEVERITY_TONE[finding.severity]] : "text-muted-foreground",
+            finding?.severity === "refuted" && "line-through",
+          )}
+        >
+          {finding ? t(`review.severity.${finding.severity}`) : item.id}
+        </span>
+        {finding ? <span className="font-mono text-[10px] text-muted-foreground">{item.id}</span> : null}
+        <Badge tone={item.isNew ? "muted" : FINDING_STATUS_TONE[item.status]} className="ml-auto shrink-0 px-1 py-0 text-[10px] font-normal">
+          {item.isNew ? t("review.conversation.newItem") : t(`review.status.${item.status}`)}
+        </Badge>
+      </div>
+      {finding ? <p className="break-words font-medium leading-snug">{finding.title}</p> : null}
+      {where ? <code className="block break-all font-mono text-[10px] text-muted-foreground">{where}</code> : null}
+      {said ? (
+        <p data-testid="review-line-said" className={cn("whitespace-pre-wrap break-words leading-relaxed text-foreground/90", long && !open && "line-clamp-4")}>
+          {item.isNew && !item.reply ? <span className="text-muted-foreground">{t("review.conversation.fix")} </span> : null}
+          {said}
+        </p>
+      ) : null}
+      {long ? (
         <button
           type="button"
-          onClick={() => setAll((v) => !v)}
+          onClick={() => setOpen((v) => !v)}
           className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
         >
-          {all ? t("review.conversation.less") : t("review.conversation.more", { n: items.length - ITEMS_SHOWN })}
+          {open ? t("review.conversation.less") : t("review.conversation.more")}
         </button>
       ) : null}
-    </div>
+      {item.commit ? <code className="block font-mono text-[10px] text-muted-foreground">{t("review.conversation.commit", { sha: item.commit.slice(0, 7) })}</code> : null}
+    </Bubble>
   );
 }
 

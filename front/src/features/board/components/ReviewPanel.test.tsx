@@ -38,6 +38,11 @@ function review(overrides: Partial<Review> = {}): Review {
     findings: [], log: [], createdAt: 1, updatedAt: 2, ...overrides,
   };
 }
+/** Os achados resolvidos ficam recolhidos em "Resolvidos", na aba Achados: abre os dois. */
+async function openResolved() {
+  await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+  await userEvent.click(screen.getByRole("button", { name: /Resolvidos/ }));
+}
 function finding(overrides: Partial<Finding> = {}): Finding {
   return { id: "f1", severity: "blocking", title: "Aba volta e busca 2x", status: "open", introducedInRound: 1, ...overrides };
 }
@@ -145,7 +150,7 @@ describe("ReviewPanel — o que mostra", () => {
     expect(steps.map((s) => s.getAttribute("data-state"))).toEqual(["done", "current", "todo"]);
   });
 
-  it("cada grupo diz em palavras o que aquele tipo é, com quantos tem e quantos estão em aberto", async () => {
+  it("cada grupo diz em palavras o que aquele tipo é e quantos estão pendentes", async () => {
     open("rev", review({
       phase: "reviewing",
       findings: [
@@ -158,8 +163,7 @@ describe("ReviewPanel — o que mostra", () => {
     await loaded();
     await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
     const blocking = screen.getAllByTestId("finding-group").find((g) => g.getAttribute("data-severity") === "blocking")!;
-    expect(within(blocking).getByRole("heading")).toHaveTextContent("Bloqueiam o merge (2)");
-    expect(within(blocking).getByRole("heading")).toHaveTextContent("1 em aberto, 1 resolvido(s)");
+    expect(within(blocking).getByRole("heading")).toHaveTextContent("Bloqueiam o merge (1)");
     expect(within(blocking).getByText(/Impedem o merge até serem corrigidos/)).toBeInTheDocument();
     const suggestions = screen.getAllByTestId("finding-group").find((g) => g.getAttribute("data-severity") === "suggestion")!;
     expect(within(suggestions).getByText(/Melhorias que não impedem o merge/)).toBeInTheDocument();
@@ -179,6 +183,7 @@ describe("ReviewPanel — o que mostra", () => {
       ],
     }));
     await loaded();
+    await openResolved();
 
     const row = screen.getByText("Aba volta e busca 2x").closest("[data-testid=finding]") as HTMLElement;
     expect(within(row).getByText("bloqueia")).toBeInTheDocument();
@@ -203,6 +208,7 @@ describe("ReviewPanel — o que mostra", () => {
       findings: [finding({ id: "s1", severity: "suggestion", status: "wontfix", title: "trocar a lib", authorReply: "fora do escopo" })],
     }));
     await loaded();
+    await openResolved();
     expect(within(screen.getByTestId("finding")).getByText("não vai aplicar")).toBeInTheDocument();
     const commits = screen.getByTestId("review-commits");
     expect(commits).toHaveTextContent("commit revisado aaaaaaa");
@@ -224,6 +230,7 @@ describe("ReviewPanel — o que mostra", () => {
       findings: statuses.map(([status], i) => finding({ id: `s${i}`, title: `item ${status}`, status, severity: "suggestion" })),
     }));
     await loaded();
+    await openResolved();
     for (const [status, label] of statuses) {
       const row = screen.getByText(`item ${status}`).closest("[data-testid=finding]") as HTMLElement;
       expect(within(row).getByText(label)).toBeInTheDocument();
@@ -238,6 +245,7 @@ describe("ReviewPanel — o que mostra", () => {
       ],
     }));
     await loaded();
+    await openResolved();
 
     const row = screen.getByText("Link abrir entrada").closest("[data-testid=finding]") as HTMLElement;
     expect(within(row).getByText("derrubado")).toBeInTheDocument();
@@ -280,6 +288,75 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.getAllByTestId("finding-group").map((g) => g.getAttribute("data-severity"))).toEqual(["blocking", "suggestion"]);
     // A conversa continua montada (escondida): voltar a ela não perde a rolagem.
     expect(screen.getByTestId("review-conversation")).toBeInTheDocument();
+  });
+
+  it("cada achado de uma fala da IA vira uma mensagem própria, depois do resumo, do lado de quem falou", async () => {
+    open("aut", review({
+      findings: [
+        finding({ id: "f1", title: "Bloqueio A", file: "src/a.ts", line: 12, fix: "valide antes de gravar" }),
+        finding({ id: "f2", severity: "suggestion", title: "Sugestão B" }),
+      ],
+      log: [
+        { at: 1, round: 1, who: "reviewer", text: "achei duas coisas", items: [{ id: "f1", status: "open", isNew: true }, { id: "f2", status: "open", isNew: true }] },
+        { at: 2, round: 1, who: "author", text: "corrigi o bloqueio", items: [{ id: "f1", status: "fixed", reply: "validação no service", commit: "abc1234def" }] },
+      ],
+    }));
+    await loaded();
+    const lines = screen.getAllByTestId("review-line");
+    expect(lines.map((l) => l.textContent)).toEqual([expect.stringContaining("achei duas coisas"), expect.stringContaining("corrigi o bloqueio")]);
+    // O resumo não carrega mais a lista: ela está nas mensagens seguintes.
+    expect(lines[0]).not.toHaveTextContent("Bloqueio A");
+
+    const items = screen.getAllByTestId("review-line-item");
+    expect(items.map((i) => i.getAttribute("data-who"))).toEqual(["reviewer", "reviewer", "author"]);
+    expect(items[0]).toHaveTextContent("Bloqueio A");
+    expect(items[0]).toHaveTextContent("src/a.ts:12");
+    expect(items[0]).toHaveTextContent("Como corrigir: valide antes de gravar");
+    expect(items[1]).toHaveTextContent("Sugestão B");
+    expect(items[2]).toHaveTextContent("validação no service");
+    expect(items[2]).toHaveTextContent("commit abc1234");
+    expect(items[2]).toHaveAttribute("data-status", "fixed");
+    // A ordem na conversa: resumo, achados dele, resumo do autor, achado dele.
+    const order = screen.getAllByTestId(/^review-line(-item)?$/).map((el) => el.getAttribute("data-testid"));
+    expect(order).toEqual(["review-line", "review-line-item", "review-line-item", "review-line", "review-line-item"]);
+    // Os achados de uma fala formam uma lista: o leitor de tela anuncia o grupo, não pedaços soltos.
+    const groups = screen.getAllByRole("list", { name: /Achados/ });
+    expect(groups).toHaveLength(2);
+    expect(within(groups[0]).getAllByRole("listitem")).toHaveLength(2);
+  });
+
+  it("achado que o painel não conhece mostra o id uma vez só", async () => {
+    open("aut", review({
+      findings: [],
+      log: [{ at: 1, round: 1, who: "author", text: "respondi", items: [{ id: "f9", status: "fixed", reply: "ok" }] }],
+    }));
+    await loaded();
+    const item = screen.getByTestId("review-line-item");
+    expect(item.textContent!.match(/f9/g)).toHaveLength(1);
+  });
+
+  it("texto longo de um achado vem recolhido, com ver mais / ver menos", async () => {
+    const long = "passo ".repeat(80).trim();
+    open("aut", review({
+      findings: [finding({ id: "f1", fix: long })],
+      log: [{ at: 1, round: 1, who: "reviewer", text: "um achado", items: [{ id: "f1", status: "open", isNew: true }] }],
+    }));
+    await loaded();
+    const said = screen.getByTestId("review-line-said");
+    expect(said.className).toContain("line-clamp-4");
+    await userEvent.click(screen.getByRole("button", { name: "ver mais" }));
+    expect(said.className).not.toContain("line-clamp-4");
+    await userEvent.click(screen.getByRole("button", { name: "ver menos" }));
+    expect(said.className).toContain("line-clamp-4");
+  });
+
+  it("texto curto de um achado não oferece ver mais", async () => {
+    open("aut", review({
+      findings: [finding({ id: "f1", fix: "curto" })],
+      log: [{ at: 1, round: 1, who: "reviewer", text: "um achado", items: [{ id: "f1", status: "open", isNew: true }] }],
+    }));
+    await loaded();
+    expect(screen.queryByRole("button", { name: "ver mais" })).toBeNull();
   });
 
   it("fala que chega com o painel aberto entra animada; o histórico com que ele abriu fica parado", async () => {
@@ -744,6 +821,48 @@ describe("ReviewPanel — dúvidas e impasse", () => {
     expect(screen.getByRole("tab", { name: /Achados/ })).toHaveAttribute("aria-selected", "true");
   });
 
+  it("achado resolvido sai da lista de pendentes e vai para 'Resolvidos', recolhido; o contador da aba conta só o pendente", async () => {
+    open("rev", review({
+      phase: "reviewing",
+      findings: [
+        finding({ id: "f1", title: "Ainda aberto" }),
+        finding({ id: "f2", title: "Já corrigido", status: "fixed" }),
+        finding({ id: "f3", severity: "suggestion", title: "Não vai fazer", status: "dropped", humanDecision: "drop" }),
+        finding({ id: "f4", severity: "suggestion", title: "Autor recusou", status: "wontfix" }),
+        finding({ id: "f5", title: "Contestado", status: "contested" }),
+      ],
+    }));
+    await loaded();
+    const tab = screen.getByRole("tab", { name: /Achados/ });
+    expect(tab).toHaveTextContent("2");
+    await userEvent.click(tab);
+
+    const pending = screen.getAllByTestId("finding-group");
+    expect(pending.map((g) => g.getAttribute("data-severity"))).toEqual(["blocking"]);
+    expect(screen.getByText("Ainda aberto")).toBeInTheDocument();
+    expect(screen.getByText("Contestado")).toBeInTheDocument();
+    expect(screen.queryByText("Já corrigido")).toBeNull();
+    expect(screen.queryByText("Não vai fazer")).toBeNull();
+
+    const toggle = screen.getByRole("button", { name: /Resolvidos \(3\)/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const resolved = screen.getByTestId("findings-resolved");
+    expect(within(resolved).getByText("Já corrigido")).toBeInTheDocument();
+    expect(within(resolved).getByText("Não vai fazer")).toBeInTheDocument();
+    expect(within(resolved).getByText("Autor recusou")).toBeInTheDocument();
+  });
+
+  it("tudo resolvido: diz que não há pendência, e o histórico fica em 'Resolvidos'", async () => {
+    open("rev", review({ phase: "ready", findings: [finding({ id: "f1", status: "fixed" })] }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    expect(screen.queryAllByTestId("finding-group")).toHaveLength(0);
+    expect(screen.getByText("Nada pendente: todos os achados foram resolvidos.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Resolvidos \(1\)/ })).toBeInTheDocument();
+  });
+
   it("dúvida já decidida não pede decisão de novo, e o aviso some", async () => {
     open("rev", review({ phase: "reviewing", findings: [doubt({ humanDecision: "block" })] }));
     await loaded();
@@ -788,6 +907,8 @@ describe("ReviewPanel — dúvidas e impasse", () => {
     // Um par de escolhas por item travado (aberto ou contestado), nenhum nos outros.
     expect(screen.getAllByRole("radio", { name: /Manter o bloqueio/ })).toHaveLength(2);
     expect(screen.getAllByRole("radio", { name: /Aceitar o risco/ })).toHaveLength(2);
+    // O corrigido saiu para "Resolvidos" e lá não pede decisão.
+    await openResolved();
     expect(within(cardOf("Já corrigido")).queryByRole("radio")).toBeNull();
     // a sugestão não é item travado: só tem o "fazer / não fazer" dela
     expect(within(cardOf("Só sugestão")).queryByRole("radio", { name: /Manter o bloqueio|Aceitar o risco/ })).toBeNull();
@@ -1153,6 +1274,9 @@ describe("ReviewPanel — leitura periódica", () => {
 
     current = review({ phase: "ready", round: 2, findings: [{ ...suggestion, status: "fixed", reviewerReply: "renomeado" }] });
     await tick(3_100);
+    // Corrigida, ela sai da lista de pendentes e vai para "Resolvidos".
+    await waitFor(() => expect(screen.queryByText("nome de variável confuso")).toBeNull());
+    await openResolved();
     await waitFor(() => expect(row()).toHaveAttribute("data-status", "fixed"));
     expect(within(row()).getByText("corrigido")).toBeInTheDocument();
   });
