@@ -383,6 +383,7 @@ export const en: Record<string, string> = {
   "cardView.imageTooBig": "That image is over 10 MB.",
   "cardView.uploadingImage": "Uploading image…",
   "cardView.uploadError": "Could not upload the image",
+  "cardView.uploadStalled": "The connection dropped while sending the image. Tap Retry on it.",
   "cardView.openCardList": "Open the card list",
   "cardView.back": "Back to the board",
   "cardView.cardTitle": "Card title",

@@ -384,6 +384,7 @@ export const ptBR: Record<string, string> = {
   "cardView.imageTooBig": "Essa imagem passa de 10 MB.",
   "cardView.uploadingImage": "Enviando a imagem…",
   "cardView.uploadError": "Não deu pra enviar a imagem",
+  "cardView.uploadStalled": "A conexão caiu enquanto a imagem subia. Toque em tentar de novo nela.",
   "cardView.openCardList": "Abrir a lista de cards",
   "cardView.back": "Voltar ao quadro",
   "cardView.cardTitle": "Título do card",

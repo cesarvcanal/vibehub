@@ -71,13 +71,26 @@ vi.mock("@/features/board/components/ReviewPanel", () => ({
 
 // The native (SDK) chat also owns a websocket and has its own test file; here the only question is
 // WHICH of the two chats got mounted — the bug was the legacy one flashing in on a beta card.
+// The upload handler it was given is kept, so a test can attach an image the way its composer does.
+const sdkChatUpload: { current?: (file: File) => Promise<string | null> } = {};
 vi.mock("@/features/board/components/SdkChatView", () => ({
-  SdkChatView: ({ cardId, footer }: { cardId: string; footer?: ReactNode }) => (
-    <div data-testid="sdk-chat" data-card={cardId}>
-      {footer}
-      <div data-testid="sdk-composer-stub" />
-    </div>
-  ),
+  SdkChatView: ({
+    cardId,
+    footer,
+    onUploadImage,
+  }: {
+    cardId: string;
+    footer?: ReactNode;
+    onUploadImage?: (file: File) => Promise<string | null>;
+  }) => {
+    sdkChatUpload.current = onUploadImage;
+    return (
+      <div data-testid="sdk-chat" data-card={cardId}>
+        {footer}
+        <div data-testid="sdk-composer-stub" />
+      </div>
+    );
+  },
 }));
 
 const mockGet = vi.mocked(get);
@@ -347,6 +360,43 @@ describe("CardTerminalView — which chat the Chat tab mounts (the INSTALL flag,
     serveSession({ situation: "stopped" });
     renderWithCache([card({ openedAt: 10 })], testQueryClient(), "terminal");
     expect(await screen.findByTestId("claude-stopped-banner")).toBeInTheDocument();
+  });
+
+  it("an image attached in the native chat says nothing while it goes up — the chip's spinner is the whole story", async () => {
+    // Produção, 2026-10-31: "Uploading image…" ficou no topo da tela junto com o spinner do chip, e
+    // os dois giraram pra sempre. O composer já desenha a espera em cima da miniatura; o toast é do
+    // terminal cru, onde não há miniatura nenhuma.
+    serveFeaturesOn();
+    vi.mocked(toast.loading).mockClear();
+    mockPost.mockImplementation((url: string) =>
+      url === "/cards/c1/upload"
+        ? Promise.resolve({ path: "/work/.uploads/c1/1-a.png" })
+        : Promise.resolve({ card: card({ openedAt: 10 }) }),
+    );
+    renderWithCache([card({ openedAt: 10 })], testQueryClient(), "chat");
+    await screen.findByTestId("sdk-chat");
+    const upload = sdkChatUpload.current;
+    expect(upload).toBeTypeOf("function");
+    const path = await upload?.(new File(["x"], "a.png", { type: "image/png" }));
+    expect(path).toBe("/work/.uploads/c1/1-a.png");
+    expect(toast.loading).not.toHaveBeenCalled();
+  });
+
+  it("an upload whose connection died says SO, in the person's language — not a raw English error", async () => {
+    serveFeaturesOn();
+    vi.mocked(toast.error).mockClear();
+    const { UploadStalledError } = await import("@/features/board/lib/uploadWatchdog");
+    mockPost.mockImplementation((url: string) =>
+      url === "/cards/c1/upload"
+        ? Promise.reject(new UploadStalledError())
+        : Promise.resolve({ card: card({ openedAt: 10 }) }),
+    );
+    renderWithCache([card({ openedAt: 10 })], testQueryClient(), "chat");
+    await screen.findByTestId("sdk-chat");
+    const path = await sdkChatUpload.current?.(new File(["x"], "a.png", { type: "image/png" }));
+    expect(path).toBeNull(); // the chip turns into an error with Retry
+    expect(mockPost.mock.calls.filter(([url]) => url === "/cards/c1/upload")).toHaveLength(2); // tried again once
+    expect(toast.error).toHaveBeenCalledWith("The connection dropped while sending the image. Tap Retry on it.");
   });
 
   it("with the install flag on, ANY card opens the Chat tab in the NATIVE chat — no per-card opt-in", async () => {
