@@ -1210,6 +1210,17 @@ export function TerminalComposer({
   const startRecording = React.useCallback(async () => {
     if (recording !== "idle" || !cardRef.current) return;
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      // Over plain http the browser hides the microphone API altogether, so no permission prompt
+      // ever shows up. That is the address's fault, not the phone's, and the fix is one tap away.
+      if (!window.isSecureContext) {
+        toast.error(translate("composer.micNeedsHttps"), {
+          action: {
+            label: translate("composer.openInHttps"),
+            onClick: () => window.location.assign(window.location.href.replace(/^http:/, "https:")),
+          },
+        });
+        return;
+      }
       toast.error(translate("composer.cannotRecord"));
       return;
     }

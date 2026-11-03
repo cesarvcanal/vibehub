@@ -1023,6 +1023,39 @@ describe("TerminalComposer — voice input", () => {
     );
   });
 
+  it("on plain http says the microphone needs HTTPS and offers to reopen there", async () => {
+    // Over http the browser hides mediaDevices entirely: no permission prompt ever appears, so
+    // "this browser cannot record" blames the phone for what is the address.
+    serveVoice(true);
+    vi.stubGlobal("navigator", { ...navigator, mediaDevices: undefined });
+    vi.stubGlobal("isSecureContext", false);
+    const user = userEvent.setup();
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
+
+    await waitFor(() => expect(screen.getByTestId("composer-mic")).toBeEnabled());
+    await user.click(screen.getByTestId("composer-mic"));
+
+    const { toast } = await import("sonner");
+    expect(toast.error).toHaveBeenCalledWith(
+      "The microphone only works over HTTPS — this page was opened over http.",
+      expect.objectContaining({ action: expect.objectContaining({ label: "Open in HTTPS" }) }),
+    );
+  });
+
+  it("keeps blaming the browser when the page is secure and it still has no recorder", async () => {
+    serveVoice(true);
+    vi.stubGlobal("MediaRecorder", undefined);
+    vi.stubGlobal("isSecureContext", true);
+    const user = userEvent.setup();
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
+
+    await waitFor(() => expect(screen.getByTestId("composer-mic")).toBeEnabled());
+    await user.click(screen.getByTestId("composer-mic"));
+
+    const { toast } = await import("sonner");
+    expect(toast.error).toHaveBeenCalledWith("This browser cannot record audio.");
+  });
+
   it("keeps the placeholder empty even once recording is configured", async () => {
     serveVoice(true);
     renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
