@@ -29,13 +29,15 @@ export const QUESTION_DRAFTS_MAX = 50;
 /** Depois disso o rascunho sai: a pergunta já encerrou há muito (o prazo do cartão é 30 min). */
 export const QUESTION_DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-interface StoredQuestionDraft extends QuestionDraft {
-  /** Última gravação (epoch ms) — a ordem da poda. */
+interface StoredQuestionDraft {
+  picked: string[][];
+  other: string[];
+  /** Quando a pessoa fez a mudança (epoch ms) — a ordem da poda, e o que decide contra a versão do servidor. */
   at: number;
 }
 
 /** A memória da aba: vale primeiro, e é o que sobra com o localStorage bloqueado. */
-const memory = new Map<string, QuestionDraft>();
+const memory = new Map<string, StoredQuestionDraft>();
 
 function keyOf(cardId: string, questionId: string): string {
   return `${cardId}:${questionId}`;
@@ -89,16 +91,19 @@ export function pruneQuestionDrafts<T extends { at: number }>(drafts: Record<str
   return Object.fromEntries(kept);
 }
 
-/** O rascunho deste cartão: o da aba, ou o do disco (depois de um F5), ou nada. */
-export function readQuestionDraft(cardId: string, questionId: string): QuestionDraft | undefined {
+/** O rascunho deste cartão, com o horário da última mudança: o da aba, ou o do disco (depois de um F5), ou nada. */
+export function readQuestionDraft(cardId: string, questionId: string): (QuestionDraft & { at: number }) | undefined {
   const key = keyOf(cardId, questionId);
   const live = memory.get(key);
   if (live) return live;
-  const stored = readStored()[key];
-  return stored ? { picked: stored.picked, other: stored.other } : undefined;
+  return readStored()[key];
 }
 
-/** Grava o rascunho de agora. Vazio = a pessoa desmarcou e apagou tudo: a entrada sai. */
+/**
+ * Grava o rascunho de agora. `draft.at` é QUANDO a pessoa mudou (ausente = agora): regravar o mesmo
+ * conteúdo não o rejuvenesce — senão um rascunho velho passaria por novo diante do servidor. Vazio =
+ * a pessoa desmarcou e apagou tudo: a entrada sai.
+ */
 export function writeQuestionDraft(cardId: string, questionId: string, draft: QuestionDraft, now: number = Date.now()): void {
   const key = keyOf(cardId, questionId);
   const stored = readStored();
@@ -107,8 +112,9 @@ export function writeQuestionDraft(cardId: string, questionId: string, draft: Qu
     if (!(key in stored)) return;
     delete stored[key];
   } else {
-    memory.set(key, draft);
-    stored[key] = { picked: draft.picked, other: draft.other, at: now };
+    const entry: StoredQuestionDraft = { picked: draft.picked, other: draft.other, at: draft.at ?? now };
+    memory.set(key, entry);
+    stored[key] = entry;
   }
   writeStored(pruneQuestionDrafts(stored, now));
 }

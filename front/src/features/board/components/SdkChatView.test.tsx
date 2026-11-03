@@ -658,7 +658,7 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
       await userEvent.click(screen.getAllByRole("button", { name: "Mussa" })[0]!);
       await userEvent.type(screen.getAllByTestId("sdk-question-other")[1]!, "albert revisa");
       await waitFor(() =>
-        expect(drafts().at(-1)).toEqual({ type: "question_draft", id: "q_peer", picked: [["Mussa"], []], other: ["", "albert revisa"] }),
+        expect(drafts().at(-1)).toEqual({ type: "question_draft", id: "q_peer", picked: [["Mussa"], []], other: ["", "albert revisa"], at: expect.any(Number) }),
       );
       expect(drafts().length).toBeLessThan("albert revisa".length + 1); // não é um frame por tecla
       expect(ws.sent.map((x) => JSON.parse(x)).some((f) => f.type === "question_answer")).toBe(false);
@@ -3897,6 +3897,83 @@ describe("SdkChatView — quem escreve e quem está digitando", () => {
     expect(ws.typingSent).toEqual([true]);
     await userEvent.type(screen.getByRole("textbox"), "{Enter}");
     await waitFor(() => expect(ws.typingSent).toEqual([true, false]));
+  });
+
+  /**
+   * O RASCUNHO DE QUALQUER PESSOA SOBREVIVE (produção, 2026-11-03): o servidor guarda o que cada um
+   * marcou e devolve no attach — inclusive o MEU, para o aparelho ou a aba que não o tinha.
+   */
+  describe("cartão de pergunta — o que foi marcado volta de onde estiver", () => {
+    const Q = {
+      type: "user_question" as const,
+      id: "q_back",
+      questions: [
+        { question: "Como marcamos o trucado?", options: [{ label: "Tipo no cadastro" }, { label: "Faixa de capacidade" }] },
+        { question: "Produto sem peso?", options: [{ label: "Bloqueia" }, { label: "Avisa" }] },
+      ],
+    };
+
+    it("o MEU rascunho guardado no servidor volta para o cartão vazio (outro aparelho, navegador limpo)", async () => {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      await signedIn();
+      ws.deliver({ type: "ready" });
+      ws.deliver(Q);
+      ws.deliver({ type: "peer_question_draft", id: "q_back", name: "operator", picked: [["Faixa de capacidade"], []], other: ["", "pela placa"], at: 5_000, away: true });
+      expect(screen.getByRole("button", { name: "Faixa de capacidade" })).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getAllByTestId("sdk-question-other")[1]).toHaveValue("pela placa");
+      // o que veio do servidor não volta para ele
+      expect(ws.sent.map((x) => JSON.parse(x)).filter((f) => f.type === "question_draft")).toEqual([]);
+    });
+
+    it("a versão do servidor MAIS VELHA que a daqui não atropela o que foi marcado aqui", async () => {
+      localStorage.setItem("vibehub.questionDrafts", JSON.stringify({
+        "c1:q_back": { picked: [["Tipo no cadastro"], []], other: ["", ""], at: 9_000 },
+      }));
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      await signedIn();
+      ws.deliver({ type: "ready" });
+      ws.deliver(Q);
+      ws.deliver({ type: "peer_question_draft", id: "q_back", name: "operator", picked: [["Faixa de capacidade"], []], other: ["", ""], at: 5_000 });
+      expect(screen.getByRole("button", { name: "Tipo no cadastro" })).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByRole("button", { name: "Faixa de capacidade" })).toHaveAttribute("aria-pressed", "false");
+      // e a daqui, mais nova, vai ao servidor com o horário dela
+      const sent = ws.sent.map((x) => JSON.parse(x)).filter((f) => f.type === "question_draft");
+      expect(sent.at(-1)).toMatchObject({ picked: [["Tipo no cadastro"], []], at: 9_000 });
+    });
+
+    it("a versão do servidor MAIS NOVA (feita em outro aparelho) substitui a velha daqui", async () => {
+      localStorage.setItem("vibehub.questionDrafts", JSON.stringify({
+        "c1:q_back": { picked: [["Tipo no cadastro"], []], other: ["", ""], at: 1_000 },
+      }));
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      await signedIn();
+      ws.deliver({ type: "ready" });
+      ws.deliver(Q);
+      ws.deliver({ type: "peer_question_draft", id: "q_back", name: "operator", picked: [["Faixa de capacidade"], ["Avisa"]], other: ["", ""], at: 7_000 });
+      expect(screen.getByRole("button", { name: "Faixa de capacidade" })).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByRole("button", { name: "Avisa" })).toHaveAttribute("aria-pressed", "true");
+    });
+
+    it("quem fechou a aba continua com as marcações na tela, mas não aparece como 'respondendo'", async () => {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      await signedIn();
+      ws.deliver({ type: "ready" });
+      ws.deliver(Q);
+      ws.deliver({ type: "peer_question_draft", id: "q_back", name: "albert", picked: [["Tipo no cadastro"], []], other: ["", "a space tem os pesos"], away: true });
+      expect(screen.queryByTestId("sdk-question-peer-presence")).toBeNull();
+      expect(screen.getByRole("button", { name: "Tipo no cadastro" })).toHaveAttribute("data-peer-picked", "true");
+      expect(screen.getByTestId("sdk-question-peer-draft")).toHaveTextContent("a space tem os pesos");
+      ws.deliver({ type: "peer_question_draft", id: "q_back", name: "albert", picked: [["Tipo no cadastro"], []], other: ["", "a space tem os pesos"] });
+      expect(screen.getByTestId("sdk-question-peer-presence")).toHaveTextContent("Albert");
+    });
   });
 });
 

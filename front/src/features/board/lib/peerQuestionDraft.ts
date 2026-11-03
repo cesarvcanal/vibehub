@@ -17,6 +17,10 @@
 export interface QuestionDraft {
   picked: string[][];
   other: string[];
+  /** Quando a pessoa fez esta mudança (epoch ms): entre duas versões do mesmo rascunho, a mais nova vence. */
+  at?: number;
+  /** A pessoa fechou a aba: o que ela marcou continua valendo, só não está respondendo agora. */
+  away?: boolean;
 }
 
 /** `id da pergunta → nome de quem escreve → rascunho`. */
@@ -33,11 +37,14 @@ export function isEmptyDraft(draft: QuestionDraft): boolean {
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : []);
 
 /** O frame recebido, conferido. `null` quando falta o essencial. PURE. */
-export function readPeerQuestionDraft(frame: { id?: unknown; name?: unknown; picked?: unknown; other?: unknown }):
+export function readPeerQuestionDraft(frame: { id?: unknown; name?: unknown; picked?: unknown; other?: unknown; at?: unknown; away?: unknown }):
   { id: string; name: string; draft: QuestionDraft } | null {
   if (typeof frame.id !== "string" || frame.id === "" || typeof frame.name !== "string" || frame.name === "") return null;
   const picked = Array.isArray(frame.picked) ? frame.picked.map(strings) : [];
-  return { id: frame.id, name: frame.name, draft: { picked, other: strings(frame.other) } };
+  const draft: QuestionDraft = { picked, other: strings(frame.other) };
+  if (typeof frame.at === "number" && Number.isFinite(frame.at)) draft.at = frame.at;
+  if (frame.away === true) draft.away = true;
+  return { id: frame.id, name: frame.name, draft };
 }
 
 /**

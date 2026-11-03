@@ -52,6 +52,13 @@ describe("applyPeerQuestionDraft / peerDraftsOf — o que os outros estão respo
 });
 
 describe("readPeerQuestionDraft — o frame conferido", () => {
+  it("lê o horário da mudança e se a pessoa saiu (aba fechada / antes de um deploy)", () => {
+    expect(readPeerQuestionDraft({ id: "q1", name: "albert", picked: [["A"]], other: [""], at: 5, away: true })?.draft)
+      .toEqual({ picked: [["A"]], other: [""], at: 5, away: true });
+    expect(readPeerQuestionDraft({ id: "q1", name: "albert", picked: [], other: [], at: "x", away: "sim" })?.draft)
+      .toEqual({ picked: [], other: [] });
+  });
+
   it("lê o frame e descarta o que não é texto", () => {
     expect(readPeerQuestionDraft({ id: "q1", name: "albert", picked: [["A", 3]], other: ["oi", null] })).toEqual({
       id: "q1", name: "albert", draft: { picked: [["A"]], other: ["oi"] },

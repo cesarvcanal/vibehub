@@ -568,7 +568,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
    * aparece na tela de quem mais estiver no card, em tempo real (ver lib/peerQuestionDraft.ts).
    */
   const draftSender = React.useMemo(
-    () => createDraftSender((id, draft) => sendFrame({ type: "question_draft", id, picked: draft.picked, other: draft.other })),
+    () => createDraftSender((id, draft) => sendFrame({
+      type: "question_draft", id, picked: draft.picked, other: draft.other, ...(draft.at !== undefined ? { at: draft.at } : {}),
+    })),
     [sendFrame],
   );
   React.useEffect(() => () => draftSender.dispose(), [cardId, draftSender]);
@@ -2253,7 +2255,16 @@ const SdkChatRow = React.memo(function SdkChatRow({
   const diff = React.useMemo(() => (row.kind === "tool" ? toolDiff(row.name, row.input) : null), [row]);
 
   if (row.kind === "question") {
-    return <SdkQuestionCard cardId={cardId ?? ""} row={row} onAnswer={onAnswer} peers={peerDraftsOf(peerDrafts, viewer)} onDraft={onDraft} />;
+    return (
+      <SdkQuestionCard
+        cardId={cardId ?? ""}
+        row={row}
+        onAnswer={onAnswer}
+        peers={peerDraftsOf(peerDrafts, viewer)}
+        own={viewer ? peerDrafts?.[viewer] : undefined}
+        onDraft={onDraft}
+      />
+    );
   }
 
   if (row.kind === "tool") {
@@ -2577,6 +2588,7 @@ function SdkQuestionCard({
   row,
   onAnswer,
   peers = [],
+  own,
   onDraft,
 }: {
   /** O card da conversa: o rascunho guardado é por card + pergunta (lib/questionDraftStore.ts). */
@@ -2585,28 +2597,53 @@ function SdkQuestionCard({
   onAnswer?: (id: string, answers: SdkQuestionAnswer[]) => void;
   /** Quem MAIS está respondendo este cartão agora, e o quê (lib/peerQuestionDraft.ts). */
   peers?: Array<{ name: string; draft: QuestionDraft }>;
+  /** O rascunho DESTA pessoa guardado no servidor — feito em outro aparelho, ou antes de o navegador perdê-lo. */
+  own?: QuestionDraft;
   /** Conta às outras abas o que esta pessoa já marcou e escreveu. */
   onDraft?: (id: string, draft: QuestionDraft) => void;
 }) {
   const t = useT();
   // O que já estava marcado e escrito volta depois de um reconnect, de um F5 e do deploy que recarrega
   // a aba — e continua guardado depois do clique em "Responder" (ver lib/questionDraftStore.ts).
-  const [picked, setPicked] = React.useState<string[][]>(() => readQuestionDraft(cardId, row.id)?.picked ?? row.questions.map(() => []));
-  const [other, setOther] = React.useState<string[]>(() => readQuestionDraft(cardId, row.id)?.other ?? row.questions.map(() => ""));
+  const [initial] = React.useState(() => readQuestionDraft(cardId, row.id));
+  const [picked, setPicked] = React.useState<string[][]>(() => initial?.picked ?? row.questions.map(() => []));
+  const [other, setOther] = React.useState<string[]>(() => initial?.other ?? row.questions.map(() => ""));
+  // QUANDO esta pessoa mudou o rascunho pela última vez (o do disco traz o seu). Contra a versão do
+  // servidor, a mais nova vence: o que foi feito em outro aparelho não é atropelado por um velho daqui.
+  const changedAt = React.useRef(initial?.at ?? 0);
+  const touch = (): void => { changedAt.current = Date.now(); };
   React.useEffect(() => {
-    writeQuestionDraft(cardId, row.id, { picked, other });
+    writeQuestionDraft(cardId, row.id, { picked, other, at: changedAt.current || undefined });
   }, [cardId, row.id, picked, other]);
+  // O MEU rascunho guardado no servidor (o deploy, a aba fechada, o outro aparelho): volta para o
+  // cartão quando é mais novo que o daqui — ou quando aqui não há nada.
+  const adopted = React.useRef<QuestionDraft | null>(null);
+  React.useEffect(() => {
+    if (!own || isEmptyDraft(own)) return;
+    const localEmpty = picked.every((sel) => sel.length === 0) && other.every((text) => text.trim() === "");
+    if (!localEmpty && (own.at ?? 0) <= changedAt.current) return;
+    changedAt.current = own.at ?? changedAt.current;
+    adopted.current = own;
+    setPicked(row.questions.map((_, i) => [...(own.picked[i] ?? [])]));
+    setOther(row.questions.map((_, i) => own.other[i] ?? ""));
+    // Só a chegada de uma versão nova decide; o estado de agora é lido, não observado.
+  }, [own]);
   // O MESMO rascunho, para quem mais está no card — duas pessoas respondendo a mesma pergunta cada
   // uma de um jeito era o problema: só a primeira resposta vale. Ao montar, só sai se já houver
   // algo (o cartão que volta depois de um reconnect reanuncia o que tinha); vazio de nascença, não.
+  // O que acabou de vir do servidor não volta para ele.
   const pending = row.outcome === "pending";
   const announced = React.useRef(false);
   React.useEffect(() => {
     if (!pending) return;
-    const draft = { picked, other };
+    const draft: QuestionDraft = { picked, other, ...(changedAt.current ? { at: changedAt.current } : {}) };
     if (!announced.current) {
       announced.current = true;
       if (isEmptyDraft(draft)) return;
+    }
+    if (adopted.current) {
+      adopted.current = null;
+      return;
     }
     onDraft?.(row.id, draft);
   }, [pending, row.id, picked, other, onDraft]);
@@ -2630,6 +2667,7 @@ function SdkQuestionCard({
       submit(answersFrom(row.questions.map((_, i) => (i === 0 ? [label] : [])), other.map(() => "")));
       return;
     }
+    touch();
     setPicked((prev) =>
       prev.map((sel, i) => {
         if (i !== qi) return sel;
@@ -2669,11 +2707,16 @@ function SdkQuestionCard({
 
   /** Copia para o MEU cartão o que a outra pessoa marcou e escreveu nesta pergunta ("Usar esta"). */
   const adopt = (qi: number, draft: QuestionDraft): void => {
+    touch();
     if (!single) setPicked((prev) => prev.map((sel, i) => (i === qi ? [...(draft.picked[qi] ?? [])] : sel)));
     setOther((prev) => prev.map((v, i) => (i === qi ? draft.other[qi] ?? "" : v)));
   };
   const mine = !isEmptyDraft({ picked, other });
   const peerNames = peers.map((p) => peerDisplayName(p.name)).join(", ");
+  // "Respondendo" é quem está com o card aberto agora. Quem fechou a aba (ou estava aqui antes de um
+  // deploy) segue com as marcações visíveis e indo para a IA — só não aparece como presente.
+  const present = peers.filter((p) => !p.draft.away);
+  const presentNames = present.map((p) => peerDisplayName(p.name)).join(", ");
 
   return (
     <div
@@ -2684,19 +2727,19 @@ function SdkQuestionCard({
       <div className="flex items-center gap-1.5 font-medium text-sky-500">
         <CircleHelp className="h-3.5 w-3.5 shrink-0" />
         {t("sdk.questionTitle")}
-        {peers.length > 0 ? (
+        {present.length > 0 ? (
           // QUEM MAIS está respondendo, no canto do cabeçalho: avatar na cor da pessoa e os mesmos
           // pontinhos do "está digitando" — presença, não alarme.
           <span data-testid="sdk-question-peer-presence" className="ml-auto flex min-w-0 items-center gap-1.5 font-normal">
             <span className="flex -space-x-1">
-              {peers.map((p) => <PeerAvatar key={p.name} name={p.name} />)}
+              {present.map((p) => <PeerAvatar key={p.name} name={p.name} />)}
             </span>
-            <span className={cn("truncate", peers.length === 1 ? peerTone(peers[0]!.name).text : "text-muted-foreground")}>{t("sdk.questionPeerAnswering", { names: peerNames })}</span>
+            <span className={cn("truncate", present.length === 1 ? peerTone(present[0]!.name).text : "text-muted-foreground")}>{t("sdk.questionPeerAnswering", { names: presentNames })}</span>
             <span className="flex items-end gap-[2px]" aria-hidden="true">
               {[0, 200, 400].map((delay) => (
                 <span
                   key={delay}
-                  className={cn("h-1 w-1 animate-typing-dot rounded-full motion-reduce:animate-none", peers.length === 1 ? peerTone(peers[0]!.name).dot : "bg-muted-foreground")}
+                  className={cn("h-1 w-1 animate-typing-dot rounded-full motion-reduce:animate-none", present.length === 1 ? peerTone(present[0]!.name).dot : "bg-muted-foreground")}
                   style={{ animationDelay: `${delay}ms` }}
                 />
               ))}
@@ -2743,7 +2786,11 @@ function SdkQuestionCard({
             aria-label={t("sdk.questionOther")}
             placeholder={t("sdk.questionOther")}
             value={other[qi] ?? ""}
-            onChange={(e) => setOther((prev) => prev.map((v, i) => (i === qi ? e.target.value : v)))}
+            onChange={(e) => {
+              touch();
+              const value = e.target.value;
+              setOther((prev) => prev.map((v, i) => (i === qi ? value : v)));
+            }}
             onKeyDown={(e) => {
               if (e.key !== "Enter") return;
               e.preventDefault();

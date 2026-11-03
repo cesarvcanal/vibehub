@@ -20,14 +20,14 @@ describe("questionDraftStore", () => {
   it("o rascunho volta depois do F5 (a memória da aba some, o disco fica)", () => {
     writeQuestionDraft("c1", "q_1_1", DRAFT);
     forgetQuestionDraftMemoryForTesting();
-    expect(readQuestionDraft("c1", "q_1_1")).toEqual(DRAFT);
+    expect(readQuestionDraft("c1", "q_1_1")).toMatchObject(DRAFT);
   });
 
   it("o mesmo id de pergunta em dois cards são dois rascunhos", () => {
     writeQuestionDraft("c1", "q_1_1", DRAFT);
     writeQuestionDraft("c2", "q_1_1", { picked: [["Tipo no cadastro"], []], other: ["", ""] });
     forgetQuestionDraftMemoryForTesting();
-    expect(readQuestionDraft("c1", "q_1_1")).toEqual(DRAFT);
+    expect(readQuestionDraft("c1", "q_1_1")).toMatchObject(DRAFT);
     expect(readQuestionDraft("c2", "q_1_1")?.picked[0]).toEqual(["Tipo no cadastro"]);
   });
 
@@ -37,6 +37,15 @@ describe("questionDraftStore", () => {
     forgetQuestionDraftMemoryForTesting();
     expect(readQuestionDraft("c1", "q_1_1")).toBeUndefined();
     expect(localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("guarda QUANDO a pessoa mudou: regravar com o horário da mudança não rejuvenesce o rascunho", () => {
+    writeQuestionDraft("c1", "q_1_1", { ...DRAFT, at: 1_000 }, 5_000);
+    writeQuestionDraft("c1", "q_1_1", { ...DRAFT, at: 1_000 }, 9_000);
+    forgetQuestionDraftMemoryForTesting();
+    expect(readQuestionDraft("c1", "q_1_1")?.at).toBe(1_000);
+    writeQuestionDraft("c1", "q_1_2", DRAFT, 7_000); // sem horário = agora
+    expect(readQuestionDraft("c1", "q_1_2")?.at).toBe(7_000);
   });
 
   it("cartão nunca tocado não grava nada", () => {
@@ -50,14 +59,14 @@ describe("questionDraftStore", () => {
     writeQuestionDraft("c1", "q_new", DRAFT, now);
     forgetQuestionDraftMemoryForTesting();
     expect(readQuestionDraft("c1", "q_old")).toBeUndefined();
-    expect(readQuestionDraft("c1", "q_new")).toEqual(DRAFT);
+    expect(readQuestionDraft("c1", "q_new")).toMatchObject(DRAFT);
   });
 
   it("acima do teto, os mais antigos saem primeiro", () => {
     for (let i = 0; i <= QUESTION_DRAFTS_MAX; i++) writeQuestionDraft("c1", `q_${i}`, DRAFT, 1_000 + i);
     forgetQuestionDraftMemoryForTesting();
     expect(readQuestionDraft("c1", "q_0")).toBeUndefined();
-    expect(readQuestionDraft("c1", `q_${QUESTION_DRAFTS_MAX}`)).toEqual(DRAFT);
+    expect(readQuestionDraft("c1", `q_${QUESTION_DRAFTS_MAX}`)).toMatchObject(DRAFT);
     expect(Object.keys(JSON.parse(localStorage.getItem(KEY)!))).toHaveLength(QUESTION_DRAFTS_MAX);
   });
 
@@ -77,13 +86,13 @@ describe("questionDraftStore", () => {
     }));
     expect(readQuestionDraft("c1", "q_1_1")).toBeUndefined();
     expect(readQuestionDraft("c1", "q_1_2")).toBeUndefined();
-    expect(readQuestionDraft("c1", "q_1_3")).toEqual({ picked: [["ok"]], other: [""] });
+    expect(readQuestionDraft("c1", "q_1_3")).toEqual({ picked: [["ok"]], other: [""], at: 1 });
   });
 
   it("localStorage bloqueado: a memória da aba ainda segura o rascunho", () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("QuotaExceededError"); });
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("SecurityError"); });
     expect(() => writeQuestionDraft("c1", "q_1_1", DRAFT)).not.toThrow();
-    expect(readQuestionDraft("c1", "q_1_1")).toEqual(DRAFT);
+    expect(readQuestionDraft("c1", "q_1_1")).toMatchObject(DRAFT);
   });
 });
