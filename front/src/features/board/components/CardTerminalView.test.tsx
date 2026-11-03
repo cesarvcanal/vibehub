@@ -1541,6 +1541,57 @@ describe("CardTerminalView — the PR blocks above the composer", () => {
     expect(screen.queryByTestId("review-panel")).toBeNull();
     expect(screen.getByTestId("xterm")).toBeInTheDocument();
   });
+
+  it("on a phone the panel takes the whole card, and its close brings the chat back as it was", async () => {
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query === MOBILE_QUERY,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+    try {
+      renderWithCache([
+        card({ openedAt: 10, prs: [PR], review: { id: "r1", prNumber: 553, phase: "fixing", round: 2 } }),
+      ]);
+      const main = await screen.findByTestId("card-main-pane");
+      const xterm = await screen.findByTestId("xterm");
+      expect(main).not.toHaveClass("invisible");
+
+      await userEvent.click(within(await screen.findByTestId("pr-review-block")).getByRole("button", { name: /PR #553/ }));
+      await screen.findByTestId("review-panel");
+      // Stacked under the chat, both were a sliver of the screen. Hidden — not unmounted: the same
+      // terminal element is still there, socket and all.
+      expect(main).toContainElement(xterm);
+      // …and hidden with VISIBILITY over the same box, never `display: none`: a zero-sized pane
+      // makes the fit addon resize the agent's pty to a sliver (see TerminalDeck's note 1).
+      expect(main).toHaveClass("invisible", "absolute", "inset-0", "pointer-events-none");
+      expect(main).not.toHaveClass("hidden");
+      expect(main).toHaveAttribute("aria-hidden", "true");
+      expect(screen.getByTestId("card-workarea")).toHaveClass("relative");
+
+      await userEvent.click(screen.getByRole("button", { name: "close-review" }));
+      expect(main).not.toHaveClass("invisible");
+      expect(main).not.toHaveClass("absolute");
+      expect(main).not.toHaveAttribute("aria-hidden");
+      expect(screen.getByTestId("xterm")).toBe(xterm);
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
+  it("on a desktop the panel is a column beside the chat — the chat stays on screen", async () => {
+    renderWithCache([
+      card({ openedAt: 10, prs: [PR], review: { id: "r1", prNumber: 553, phase: "fixing", round: 2 } }),
+    ]);
+    await userEvent.click(within(await screen.findByTestId("pr-review-block")).getByRole("button", { name: /PR #553/ }));
+    await screen.findByTestId("review-panel");
+    expect(screen.getByTestId("card-main-pane")).not.toHaveClass("invisible");
+  });
 });
 
 describe("CardTerminalView — ?review=1 opens the panel", () => {

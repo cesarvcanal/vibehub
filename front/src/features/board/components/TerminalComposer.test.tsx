@@ -1071,6 +1071,36 @@ describe("TerminalComposer — voice input", () => {
     expect(screen.getByTestId("composer-mic-finish")).toBeInTheDocument();
   });
 
+  it("phone: the recording strip lives in the field's bar, and the send stays where it was", async () => {
+    serveVoice(true);
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query === MOBILE_QUERY,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+    try {
+      const user = userEvent.setup();
+      renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
+      await waitFor(() => expect(screen.getByTestId("composer-mic")).toBeEnabled());
+      await user.click(screen.getByTestId("composer-mic"));
+
+      const strip = await screen.findByTestId("composer-mic-recording");
+      const bar = screen.getByTestId("composer-toolbar");
+      expect(bar).toContainElement(strip);
+      expect(bar).toContainElement(screen.getByTestId("composer-send"));
+      // With nothing typed, the voice shows IN the empty field too.
+      expect(screen.getByTestId("composer-field-bars")).toBeInTheDocument();
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
   it("discards a cancelled recording without uploading anything", async () => {
     serveVoice(true);
     const user = userEvent.setup();
@@ -1179,21 +1209,56 @@ describe("TerminalComposer — on a phone", () => {
     expect(field.className).toContain("md:text-sm");
   });
 
-  it("gives the microphone a 48px target on a phone and 36px on a desktop", async () => {
-    renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
+  it("gives the microphone a 44px target on a phone and 36px on a desktop", async () => {
+    const { unmount } = renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
     const mic = await screen.findByTestId("composer-mic");
-    expect(mic.className).toContain("h-12");
-    expect(mic.className).toContain("w-12");
-    expect(mic.className).toContain("md:h-9");
+    expect(mic.className).toContain("h-11");
+    expect(mic.className).toContain("w-11");
+    unmount();
+
+    setViewport(false);
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
+    expect((await screen.findByTestId("composer-mic")).className).toContain("h-9");
   });
 
-  it("lines the buttons up with the BOTTOM of the field, so the mic stops sitting low", () => {
+  it("gives the text the WHOLE width: the buttons live in a bar under it, not beside it", async () => {
+    renderComposer(
+      <TerminalComposer
+        onSend={vi.fn()}
+        cardId="c1"
+        onUploadImage={vi.fn(async () => "/x.png")}
+        interrupt={{ active: true, onInterrupt: vi.fn() }}
+      />,
+    );
+    // The "+" and the mic used to be 48px circles either side of the field: on a 390px screen
+    // that left the text three quarters of the width and wrapped every sentence into a column.
+    const row = screen.getByTestId("composer-row");
+    expect(row.className).toContain("flex-col");
+    const bar = screen.getByTestId("composer-toolbar");
+    const field = screen.getByRole("textbox");
+    expect(bar).not.toContainElement(field);
+    expect(field.parentElement).not.toContainElement(screen.getByTestId("composer-attach"));
+    for (const id of ["composer-attach", "composer-interrupt", "composer-send"]) {
+      expect(bar).toContainElement(screen.getByTestId(id));
+    }
+    expect(bar).toContainElement(await screen.findByTestId("composer-mic"));
+    // Send last, at the far right where the thumb goes; stop before the mic, so neither moves.
+    const order = Array.from(bar.querySelectorAll("[data-testid]")).map((el) => el.getAttribute("data-testid"));
+    expect(order.at(-1)).toBe("composer-send");
+    expect(order.indexOf("composer-interrupt")).toBeLessThan(order.indexOf("composer-mic"));
+    // Two rows to start with, not three: the box already has a bar of buttons under the text.
+    expect(field).toHaveAttribute("rows", "2");
+  });
+
+  it("desktop: lines the buttons up with the BOTTOM of the field, so the mic stops sitting low", () => {
+    setViewport(false);
     renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" interrupt={{ active: false, onInterrupt: vi.fn() }} />);
     // Centring was the bug: the right column is two seats tall (the stop keeps its seat even while
     // empty), so a centred column against a three-row field pushes the microphone below the middle
     // — and drifts further as the field grows. The bottom edge is the one that never moves.
     expect(screen.getByTestId("composer-row").className).toContain("items-end");
     expect(screen.getByTestId("composer-row").className).not.toContain("items-center");
+    expect(screen.queryByTestId("composer-toolbar")).toBeNull();
   });
 
   it("the return key breaks the line — it does NOT send", async () => {
@@ -1236,16 +1301,64 @@ describe("TerminalComposer — on a phone", () => {
     expect(screen.getByTestId("composer-send")).toBeEnabled();
   });
 
-  it("keeps the send button clear of the text, and off the desktop entirely", () => {
+  it("keeps the ultrathink colours ON the letters: the mirror has no border when the field has none", async () => {
+    renderComposer(<TerminalComposer onSend={vi.fn()} />);
+    await userEvent.type(screen.getByRole("textbox"), "ultrathink nisso");
+    // The phone's field lost its 1px border (the box around it is the border now); a mirror that
+    // kept one would paint every colour one pixel down and right of its letter.
+    expect(screen.getByTestId("composer-ultra-mirror").className).toContain("border-0");
+  });
+
+  it("grows no taller on a phone than before the bar moved in: max-h-36 for the text", () => {
+    expect(screen.queryByRole("textbox")).toBeNull();
+    renderComposer(<TerminalComposer onSend={vi.fn()} />);
+    const field = screen.getByRole("textbox");
+    expect(field.className).toContain("max-h-36");
+    expect(field.className).not.toContain("max-h-48");
+  });
+
+  it("lights the box's ring for the TEXT's focus, not for a button in the bar", () => {
+    renderComposer(<TerminalComposer onSend={vi.fn()} />);
+    const row = screen.getByTestId("composer-row");
+    expect(row.className).toContain("has-[textarea:focus]:ring-1");
+    expect(row.className).not.toContain("focus-within:");
+  });
+
+  it("a tap on the bar's empty space puts the caret in the field; a tap on a button does not", () => {
+    renderComposer(<TerminalComposer onSend={vi.fn()} onUploadImage={vi.fn(async () => "/x.png")} />);
+    const field = screen.getByRole("textbox");
+    fireEvent.pointerDown(screen.getByTestId("composer-toolbar"));
+    expect(field).toHaveFocus();
+
+    field.blur();
+    fireEvent.pointerDown(screen.getByTestId("composer-attach"));
+    expect(field).not.toHaveFocus();
+  });
+
+  it("shows the stop only while the agent works — in the bar, left of the mic", async () => {
+    const { rerender } = renderComposer(
+      <TerminalComposer onSend={vi.fn()} cardId="c1" interrupt={{ active: false, onInterrupt: vi.fn() }} />,
+    );
+    await screen.findByTestId("composer-mic");
+    // A bar has no "seat" to reserve: the stop appears to the LEFT, so mic and send never move.
+    expect(screen.queryByTestId("composer-interrupt")).toBeNull();
+    expect(screen.queryByTestId("composer-interrupt-slot")).toBeNull();
+
+    rerender(<TerminalComposer onSend={vi.fn()} cardId="c1" interrupt={{ active: true, onInterrupt: vi.fn() }} />);
+    const stop = screen.getByTestId("composer-interrupt");
+    expect(screen.getByTestId("composer-toolbar")).toContainElement(stop);
+    expect(stop.compareDocumentPosition(screen.getByTestId("composer-mic")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("keeps the send button out of the text, and off the desktop entirely", () => {
     const { unmount } = renderComposer(<TerminalComposer onSend={vi.fn()} />);
-    // The button sits IN the field's corner, so the field reserves the room.
-    expect(screen.getByRole("textbox").className).toContain("pr-14");
+    // The button sits in the bar UNDER the text, so no line ever runs beneath it.
+    expect(screen.getByRole("textbox").parentElement).not.toContainElement(screen.getByTestId("composer-send"));
     unmount();
 
     setViewport(false);
     renderComposer(<TerminalComposer onSend={vi.fn()} />);
     expect(screen.queryByTestId("composer-send")).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox").className).not.toContain("pr-14");
   });
 });
 
