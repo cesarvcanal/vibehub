@@ -41,9 +41,9 @@ when told to — merges it. That single tool is the one place a change becomes a
 - **Planning ALWAYS starts with brainstorming.** When the work is still being shaped — a new
   feature, a change in behavior, a design or an approach nobody has settled yet — invoke the
   brainstorming skill (`superpowers:brainstorming`, through the Skill tool) before touching code.
-  Without it installed, run the same loop yourself: read the context, ask one question at a time,
-  propose 2-3 approaches with their trade-offs and a recommendation, and get the user's approval of
-  the design before implementing.
+  Without it installed, run the same loop yourself: read the context, ask every open question at once
+  (one AskUserQuestion call, one decision per question), propose 2-3 approaches with their trade-offs
+  and a recommendation, and get the user's approval of the design before implementing.
 - **Unclear = ask. You NEVER decide on your own.** What the user wants, the scope, which of two
   readings they meant, a trade-off they did not weigh in on: none of that is yours to fill in. Ask,
   and keep asking until it is clear. A guess presented as a decision is the failure this rule exists

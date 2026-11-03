@@ -250,6 +250,11 @@ export interface DriverSession {
    * (produção, 2026-11-03). Fechar a aba NÃO apaga — só a pergunta encerrada (`forgetQuestionDrafts`).
    */
   questionDrafts: Map<string, Map<string, StoredQuestionDraft>>;
+  /**
+   * Cartões de pergunta ÓRFÃOS ainda abertos (de um driver que morreu: o deploy). Contam como decisão
+   * pendente igual às do driver vivo — o card acende o "precisa de você" até alguém responder.
+   */
+  orphanAsks: Set<string>;
   /** Quantas abas abertas de cada pessoa estão mexendo em cada cartão — 0 = ela saiu ("ausente"). */
   draftLive: Map<string, Map<string, number>>;
   /** Os rascunhos guardados em disco já entraram em `questionDrafts`. */
@@ -506,7 +511,7 @@ function syncBoardStatus(session: DriverSession, opts: { force?: boolean } = {})
  */
 function syncAwaitingDecision(session: DriverSession, opts: { force?: boolean } = {}): void {
   if (session.closed && !opts.force) return;
-  const awaiting = session.openAsks.size > 0 && !session.closed;
+  const awaiting = (session.openAsks.size > 0 || session.orphanAsks.size > 0) && !session.closed;
   if (session.awaitingDecision === awaiting) return;
   session.awaitingDecision = awaiting;
   void registry.setCardAwaitingDecision(session.cardId, awaiting ? Date.now() : null)
@@ -1089,6 +1094,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     openAsks: new Set(),
     awaitingDecision: false,
     questionDrafts: new Map(),
+    orphanAsks: new Set(),
     draftLive: new Map(),
     draftsLoaded: Promise.resolve(),
     questionCards: new Map(),
@@ -1105,6 +1111,13 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
   // Um carimbo de "espera decisão" que sobrou de um driver que não pôde apagá-lo (o back caiu no
   // meio de uma pergunta): este driver nasce sem nenhuma pendente.
   void registry.setCardAwaitingDecision(opts.cardId, null).catch(() => { /* best-effort */ });
+  // …exceto o cartão órfão ainda aberto (o deploy pegou o agente esperando): ele segue pedindo a pessoa.
+  void orphanQuestions(session).then((open) => {
+    for (const id of open.keys()) {
+      if (!session.settledOrphans.has(id)) session.orphanAsks.add(id);
+    }
+    syncAwaitingDecision(session);
+  }).catch(() => { /* sem leitura, sem carimbo: o caminho de antes */ });
   // Conversa que entrou pela aba Terminal: a corrente aberta do driver está num ponto que já não é o
   // fim do arquivo. Seguir dela órfã o turno do terminal, e turno órfão não tem ponto de volta — era
   // por isso que editar aquela mensagem não rebobinava. O driver só MARCA; religa no próximo envio.
@@ -1518,6 +1531,7 @@ async function orphanQuestions(session: DriverSession): Promise<Map<string, Orph
 /** Encerra um cartão em todas as abas e no histórico (o F5 lê a mesma coisa). */
 function settleQuestionCard(session: DriverSession, result: Extract<DriverEvent, { type: "question_result" }>): void {
   forgetQuestionDrafts(session, result.id);
+  if (session.orphanAsks.delete(result.id)) syncAwaitingDecision(session);
   broadcast(session, result);
   void appendHistory(session.cardId, { ...result, at: Date.now() });
   void observeDriverEvent(session.cardId, result);

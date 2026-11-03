@@ -86,6 +86,7 @@ function sweep(b: Proc, settings: { sdkDriver: boolean; sdkAutoResume: boolean }
     stopping: () => false,
     reportIdle: (cardId) => { void import("../board/agentState.js").then((a) => a.reportCardStatusFromDriver(cardId, "waiting")); },
     awaitingAnswer: resume.awaitingAnswerInHistory,
+    markAwaitingDecision: (cardId) => registry.setCardAwaitingDecision(cardId, Date.now()),
     wait: async () => undefined,
   });
 }
@@ -241,6 +242,7 @@ describe("deploy com o agente esperando resposta num cartão", () => {
     expect(history.some((e) => e.type === "question_result")).toBe(false);
     expect((history.at(-1) as { text?: string }).text).toBe(b.resume.NOTE_AWAITING_ANSWER);
     expect((await b.registry.getCard(cardId))?.status).toBe("waiting");
+    expect((await b.registry.getCard(cardId))?.awaitingDecisionAt).toBeTruthy(); // "precisa de você"
 
     // A pessoa responde o MESMO cartão: o driver novo sobe e recebe as escolhas como mensagem.
     const session = b.manager.ensureDriverSession({ cardId, label: "a28f", command: { file: "docker", args: ["exec"] } });
@@ -256,5 +258,7 @@ describe("deploy com o agente esperando resposta num cartão", () => {
       expect(answer).toContain("Faixa de capacidade, pela placa");
       expect(answer).toContain("Bloqueia o envio");
     });
+    // respondido, o card apaga o "precisa de você"
+    await vi.waitFor(async () => expect((await b.registry.getCard(cardId))?.awaitingDecisionAt ?? null).toBeNull());
   });
 });

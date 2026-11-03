@@ -533,6 +533,13 @@ describe("pergunta órfã — o cartão sobreviveu ao driver que o abriu", () =>
     });
   });
 
+  it("a órfã aberta conta como decisão pendente até ser respondida (revisão #222, f1)", async () => {
+    const { successor, socket } = await orphanedCard();
+    await vi.waitFor(() => expect(successor.awaitingDecision).toBe(true));
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "question_answer", id: "q_3_1791402112898", answers: [{ selected: ["No item"] }, { selected: ["72h corridas"] }] })));
+    await vi.waitFor(() => expect(successor.awaitingDecision).toBe(false));
+  });
+
   it("o clique numa pergunta órfã chega ao modelo como mensagem — nunca 'no pending question'", async () => {
     const { successor, socket } = await orphanedCard();
     socket.emit("message", Buffer.from(JSON.stringify({

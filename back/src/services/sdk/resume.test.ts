@@ -110,6 +110,7 @@ function deps(over: Partial<ResumeDeps> = {}, settings: Settings = settingsWith(
     stopping: () => false,
     reportIdle: () => undefined,
     awaitingAnswer: awaitingAnswerInHistory,
+    markAwaitingDecision: async () => undefined,
     wait: async () => undefined,
     appendNote: async (cardId, text, extra) => {
       const { appendHistory } = await import("./history.js");
@@ -353,15 +354,17 @@ async function historyWith(events: Array<Record<string, unknown>>): Promise<void
 describe("resumeInterruptedTurns — o turno parado numa pergunta", () => {
   it("O CASO REAL: o cartão esperando resposta fica aberto — nada de retomada nem de pergunta refeita", async () => {
     const idle: string[] = [];
+    const awaiting: string[] = [];
     await historyWith([
       { type: "user", text: "vamos fechar o trucado", at: 5 },
       { type: "user_question", id: "q_1_1", questions: QUESTIONS, at: 10 },
     ]);
     await writeInflightMarker(CARD, { startedAt: 5, preview: "vamos fechar o trucado", attempts: 0 });
-    const summary = await resumeInterruptedTurns(deps({ reportIdle: (id) => idle.push(id) }));
+    const summary = await resumeInterruptedTurns(deps({ reportIdle: (id) => idle.push(id), markAwaitingDecision: async (id) => { awaiting.push(id); } }));
     expect(summary).toEqual({ resumed: [], noted: [CARD] });
     expect(spawned).toHaveLength(0);
     expect(installed).toBe(0);
+    expect(awaiting).toEqual([CARD]); // revisão #222, f1: o card acende o "precisa de você"
     const history = await readHistory(CARD);
     // o cartão segue pendente: nenhum question_result o encerrou
     expect(history.some((e) => e.type === "question_result")).toBe(false);
@@ -404,6 +407,19 @@ describe("resumeInterruptedTurns — o turno parado numa pergunta", () => {
     const note = (await readHistory(CARD)).at(-1) as { text?: string; lostBackground?: string[] };
     expect(note.text).toBe(NOTE_AWAITING_ANSWER);
     expect(note.lostBackground).toEqual(["suíte do back"]);
+  });
+
+  it("subagentes em paralelo que morreram com o reinício vão na nota (revisão #222, f2)", async () => {
+    await historyWith([
+      { type: "tool_use", id: "t_agent", name: "Agent", input: { description: "auditar o estoque" }, at: 6 },
+      { type: "tool_use", id: "t_done", name: "Task", input: { description: "já voltou" }, at: 7 },
+      { type: "tool_result", id: "t_done", toolResult: { lines: 1 }, at: 8 },
+      { type: "user_question", id: "q_1_1", questions: QUESTIONS, at: 10 },
+    ]);
+    await writeInflightMarker(CARD, { startedAt: 5, attempts: 0 });
+    await resumeInterruptedTurns(deps());
+    const note = (await readHistory(CARD)).at(-1) as { lostBackground?: string[] };
+    expect(note.lostBackground).toEqual(["subagente: auditar o estoque"]);
   });
 
   it("openQuestionIds — pura: aberta desde o início do turno, sem resultado", () => {
