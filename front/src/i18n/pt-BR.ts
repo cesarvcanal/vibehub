@@ -540,7 +540,7 @@ export const ptBR: Record<string, string> = {
   "sdk.questionSuperseded": "Você respondeu por mensagem — o agente seguiu por ela.",
   "sdk.questionPeerAnswering": "{names} respondendo",
   "sdk.questionPeerUse": "Usar esta",
-  "sdk.questionPeerClash": "Você e {names} estão respondendo. Só a primeira resposta enviada vale.",
+  "sdk.questionPeerClash": "Você e {names} estão respondendo. Todas as respostas vão para a IA, que pergunta de novo se elas se contradisserem.",
   "sdk.questionCancelled.stop": "Cancelada: {name} parou o turno antes de alguém responder.",
   "sdk.questionCancelled.stop.anon": "Cancelada: o turno foi parado antes de alguém responder.",
   "sdk.questionCancelled.send_now": "Cancelada: {name} mandou uma mensagem com \"enviar agora\", que parou o turno.",

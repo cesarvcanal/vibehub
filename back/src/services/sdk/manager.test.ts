@@ -2272,6 +2272,102 @@ describe("attachSocket — rascunho do cartão de pergunta em tempo real", () =>
 });
 
 /**
+ * DUAS PESSOAS, UMA PERGUNTA — TODAS AS RESPOSTAS VALEM (produção, 2026-11-03): César e Albert
+ * respondiam o mesmo cartão; a primeira resposta enviada fechava a pergunta e o que o outro tinha
+ * escrito se perdia. Agora a resposta leva junto o que os outros já marcaram/escreveram, com o nome,
+ * e quem envia DEPOIS vira mensagem para a IA comparar — se contradizer, ela pergunta de novo.
+ */
+describe("attachSocket — respostas de várias pessoas ao mesmo cartão", () => {
+  const CESAR = { kind: "user" as const, name: "cesar" };
+  const ALBERT = { kind: "user" as const, name: "albert" };
+  const emit = (event: object) => spawned[0]!.stdout.emit("data", line(event as never));
+  const draft = (id: string, picked: string[][], other: string[]): Buffer =>
+    Buffer.from(JSON.stringify({ type: "question_draft", id, picked, other }));
+  const answer = (id: string, selected: string[][]): Buffer =>
+    Buffer.from(JSON.stringify({ type: "question_answer", id, answers: selected.map((s) => ({ selected: s })) }));
+  type Written = { type: string; id?: string; text?: string; answers?: { selected: string[] }[] };
+  const written = (): Written[] => spawned[0]!.stdin.written.map((w) => JSON.parse(w) as Written);
+  const QUESTIONS = [
+    { question: "Produto sem peso: o que acontece?", options: [{ label: "Bloqueia" }, { label: "Avisa" }] },
+    { question: "O limite de paletes continua?", options: [{ label: "Não" }, { label: "Sim" }] },
+  ];
+
+  it("a resposta enviada leva junto o rascunho do outro, com nome e o pedido de analisar", () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    const albert = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    attachSocket(session, albert as never, ALBERT);
+    emit({ type: "user_question", id: "q1", questions: QUESTIONS });
+    albert.emit("message", draft("q1", [[], ["Sim"]], ["a space tem os pesos", "10 pallets"]));
+    cesar.emit("message", answer("q1", [["Bloqueia"], ["Não"]]));
+    const sent = written().find((c) => c.type === "question_answer")!;
+    expect(sent.answers![0]!.selected).toEqual([
+      "cesar: Bloqueia",
+      "albert: a space tem os pesos",
+      expect.stringMatching(/pessoas diferentes.*contradit/),
+    ]);
+    expect(sent.answers![1]!.selected.slice(0, 2)).toEqual(["cesar: Não", "albert: Sim, 10 pallets"]);
+  });
+
+  it("sem rascunho de outra pessoa a resposta vai intacta (o próprio rascunho não duplica)", () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    emit({ type: "user_question", id: "q1", questions: QUESTIONS });
+    cesar.emit("message", draft("q1", [["Bloqueia"], []], ["", ""]));
+    cesar.emit("message", answer("q1", [["Bloqueia"], ["Não"]]));
+    expect(written().find((c) => c.type === "question_answer")!.answers).toEqual([
+      { selected: ["Bloqueia"] }, { selected: ["Não"] },
+    ]);
+  });
+
+  it("quem responde DEPOIS da pergunta fechada vira mensagem para a IA comparar — não se perde", () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    const albert = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    attachSocket(session, albert as never, ALBERT);
+    emit({ type: "user_question", id: "q1", questions: QUESTIONS });
+    cesar.emit("message", answer("q1", [["Bloqueia"], ["Não"]]));
+    emit({ type: "question_result", id: "q1", answers: [{ selected: ["Bloqueia"] }, { selected: ["Não"] }] });
+    albert.emit("message", answer("q1", [["Avisa"], ["Sim"]]));
+    const late = written().filter((c) => c.type === "question_answer");
+    expect(late).toHaveLength(1);
+    const msg = written().find((c) => c.type === "user")!;
+    expect(msg.text).toContain("albert");
+    expect(msg.text).toContain("cesar");
+    expect(msg.text).toContain("«O limite de paletes continua?» → Sim");
+    expect(msg.text).toMatch(/contradit/);
+    expect(session.activeTurns).toBe(1);
+  });
+
+  it("a corrida: a segunda resposta antes do resultado do driver também vira mensagem", () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    const albert = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    attachSocket(session, albert as never, ALBERT);
+    emit({ type: "user_question", id: "q1", questions: QUESTIONS });
+    cesar.emit("message", answer("q1", [["Bloqueia"], ["Não"]]));
+    albert.emit("message", answer("q1", [["Avisa"], ["Sim"]]));
+    expect(written().filter((c) => c.type === "question_answer")).toHaveLength(1);
+    expect(written().find((c) => c.type === "user")!.text).toContain("«Produto sem peso: o que acontece?» → Avisa");
+  });
+
+  it("pergunta encerrada sem resposta (prazo/mensagem) segue o caminho de sempre", () => {
+    const session = ensure();
+    const albert = fakeSocket();
+    attachSocket(session, albert as never, ALBERT);
+    emit({ type: "user_question", id: "q1", questions: QUESTIONS });
+    emit({ type: "question_result", id: "q1", timedOut: true });
+    albert.emit("message", answer("q1", [["Avisa"], ["Sim"]]));
+    expect(written().some((c) => c.type === "user")).toBe(false);
+    expect(written().filter((c) => c.type === "question_answer")).toHaveLength(1);
+  });
+});
+
+/**
  * A MENSAGEM DE UMA PESSOA NA TELA DAS OUTRAS (produção, 2026-10-08): o Albert digitou — o
  * "está digitando…" apareceu para os outros —, deu Enter, e a mensagem não apareceu para ninguém
  * além dele até um F5. O turno ia para o driver e para o disco, mas o envio nunca era repassado às
