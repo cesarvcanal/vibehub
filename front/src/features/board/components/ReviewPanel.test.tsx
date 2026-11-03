@@ -309,8 +309,46 @@ describe("ReviewPanel — o que mostra", () => {
     expect(items[2]).toHaveTextContent("commit abc1234");
     expect(items[2]).toHaveAttribute("data-status", "fixed");
     // A ordem na conversa: resumo, achados dele, resumo do autor, achado dele.
-    const order = screen.getAllByTestId(/^review-line/).map((el) => el.getAttribute("data-testid"));
+    const order = screen.getAllByTestId(/^review-line(-item)?$/).map((el) => el.getAttribute("data-testid"));
     expect(order).toEqual(["review-line", "review-line-item", "review-line-item", "review-line", "review-line-item"]);
+    // Os achados de uma fala formam uma lista: o leitor de tela anuncia o grupo, não pedaços soltos.
+    const groups = screen.getAllByRole("list", { name: /Achados/ });
+    expect(groups).toHaveLength(2);
+    expect(within(groups[0]).getAllByRole("listitem")).toHaveLength(2);
+  });
+
+  it("achado que o painel não conhece mostra o id uma vez só", async () => {
+    open("aut", review({
+      findings: [],
+      log: [{ at: 1, round: 1, who: "author", text: "respondi", items: [{ id: "f9", status: "fixed", reply: "ok" }] }],
+    }));
+    await loaded();
+    const item = screen.getByTestId("review-line-item");
+    expect(item.textContent!.match(/f9/g)).toHaveLength(1);
+  });
+
+  it("texto longo de um achado vem recolhido, com ver mais / ver menos", async () => {
+    const long = "passo ".repeat(80).trim();
+    open("aut", review({
+      findings: [finding({ id: "f1", fix: long })],
+      log: [{ at: 1, round: 1, who: "reviewer", text: "um achado", items: [{ id: "f1", status: "open", isNew: true }] }],
+    }));
+    await loaded();
+    const said = screen.getByTestId("review-line-said");
+    expect(said.className).toContain("line-clamp-4");
+    await userEvent.click(screen.getByRole("button", { name: "ver mais" }));
+    expect(said.className).not.toContain("line-clamp-4");
+    await userEvent.click(screen.getByRole("button", { name: "ver menos" }));
+    expect(said.className).toContain("line-clamp-4");
+  });
+
+  it("texto curto de um achado não oferece ver mais", async () => {
+    open("aut", review({
+      findings: [finding({ id: "f1", fix: "curto" })],
+      log: [{ at: 1, round: 1, who: "reviewer", text: "um achado", items: [{ id: "f1", status: "open", isNew: true }] }],
+    }));
+    await loaded();
+    expect(screen.queryByRole("button", { name: "ver mais" })).toBeNull();
   });
 
   it("fala que chega com o painel aberto entra animada; o histórico com que ele abriu fica parado", async () => {
