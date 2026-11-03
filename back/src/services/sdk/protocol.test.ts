@@ -650,6 +650,14 @@ describe("buildOrphanAnswerText", () => {
     expect(text).toContain("«B?» → sim");
     expect(buildOrphanAnswerText(null, [{ selected: ["x"] }])).toContain("pergunta 1 → x");
   });
+
+  it("o reinício que deixou o cartão de pé matou o segundo plano: o modelo fica sabendo o quê", () => {
+    const text = buildOrphanAnswerText([{ question: "A?", options: [] }], [{ selected: ["sim"] }], ["suíte do back"]);
+    expect(text).toContain("«A?» → sim");
+    expect(text).toContain("- suíte do back");
+    expect(text).toMatch(/não vai chegar/);
+    expect(buildOrphanAnswerText([{ question: "A?", options: [] }], [{ selected: ["sim"] }])).not.toMatch(/segundo plano/);
+  });
 });
 
 describe("mergePeerAnswers / buildLateAnswerText — várias pessoas no mesmo cartão", () => {
@@ -700,6 +708,12 @@ describe("parseQuestionDraftFrame — o rascunho efêmero do cartão de pergunta
     expect(parseQuestionDraftFrame(`{"type":"question_draft","id":"q1","picked":[["A","B"],[]],"other":["","oi"]}`)).toEqual({
       id: "q1", picked: [["A", "B"], []], other: ["", "oi"],
     });
+  });
+
+  it("lê o horário da mudança (a mais nova vence); horário inválido é ignorado", () => {
+    expect(parseQuestionDraftFrame(`{"type":"question_draft","id":"q1","picked":[],"other":[],"at":1793740462180}`)?.at).toBe(1793740462180);
+    expect(parseQuestionDraftFrame(`{"type":"question_draft","id":"q1","picked":[],"other":[],"at":"ontem"}`)).not.toHaveProperty("at");
+    expect(parseQuestionDraftFrame(`{"type":"question_draft","id":"q1","picked":[],"other":[],"at":-1}`)).not.toHaveProperty("at");
   });
 
   it("não é rascunho: outro tipo, texto solto, JSON quebrado", () => {

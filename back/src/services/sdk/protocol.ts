@@ -521,13 +521,22 @@ export function buildSupersedeText(original: string, text: string): string {
  * `questions` null = the card's text is gone from the history; the answers still go. pt-BR for the
  * same reason as the supersede wrapper: it is the user's own speech act. PURE.
  */
-export function buildOrphanAnswerText(questions: UserQuestionItem[] | null, answers: UserQuestionAnswer[]): string {
+export function buildOrphanAnswerText(
+  questions: UserQuestionItem[] | null,
+  answers: UserQuestionAnswer[],
+  lostBackground: readonly string[] = [],
+): string {
   const lines = answerLines(questions, answers);
-  return (
+  const text =
     `[resposta às suas perguntas — o processo reiniciou antes de a resposta chegar à ferramenta, ` +
     `então ela vem por mensagem; siga com estas escolhas:]\n\n` +
-    lines.join("\n")
-  );
+    lines.join("\n");
+  if (lostBackground.length === 0) return text;
+  // O reinício que deixou o cartão de pé também matou o que rodava em segundo plano — o aviso de
+  // término disso nunca vai chegar, e o agente ficaria esperando por ele.
+  const list = lostBackground.slice(0, 8).map((t) => `- ${t}`).join("\n");
+  return `${text}\n\nO reinício também encerrou o que estava rodando em segundo plano — o resultado disso não vai ` +
+    `chegar:\n${list}\nConfira o estado atual, rode de novo o que ainda for necessário e siga até o fim.`;
 }
 
 /** O pedido que acompanha respostas de pessoas diferentes ao mesmo cartão. */
@@ -727,7 +736,13 @@ export function parseTypingFrame(raw: string): boolean | null {
  * frame do tipo certo mas malformado ainda é rascunho — sai com o id vazio e o manager o ignora,
  * nunca vira mensagem para a IA. `null` = não é rascunho. PURE.
  */
-export interface QuestionDraft { id: string; picked: string[][]; other: string[] }
+export interface QuestionDraft {
+  id: string;
+  picked: string[][];
+  other: string[];
+  /** Quando a pessoa fez a mudança (epoch ms, relógio do navegador): entre duas versões, a mais nova vence. */
+  at?: number;
+}
 
 /** O AskUserQuestion manda até 4 perguntas por cartão; folga para o que vier depois. */
 const DRAFT_MAX_QUESTIONS = 8;
@@ -738,7 +753,7 @@ export const QUESTION_DRAFT_MAX_TEXT = 4_000;
 export function parseQuestionDraftFrame(raw: string): QuestionDraft | null {
   const trimmed = raw.trim();
   if (!trimmed.startsWith("{")) return null;
-  let parsed: { type?: unknown; id?: unknown; picked?: unknown; other?: unknown };
+  let parsed: { type?: unknown; id?: unknown; picked?: unknown; other?: unknown; at?: unknown };
   try {
     parsed = JSON.parse(trimmed) as typeof parsed;
   } catch {
@@ -752,7 +767,8 @@ export function parseQuestionDraftFrame(raw: string): QuestionDraft | null {
     ? parsed.picked.slice(0, DRAFT_MAX_QUESTIONS).map((sel) => strings(sel, DRAFT_MAX_PICKS, DRAFT_MAX_LABEL).filter((l) => l !== ""))
     : [];
   const other = strings(parsed.other, DRAFT_MAX_QUESTIONS, QUESTION_DRAFT_MAX_TEXT);
-  return { id, picked, other };
+  const at = typeof parsed.at === "number" && Number.isFinite(parsed.at) && parsed.at > 0 ? parsed.at : undefined;
+  return { id, picked, other, ...(at !== undefined ? { at } : {}) };
 }
 
 /** Nada marcado, nada escrito: o rascunho some (a pessoa desfez tudo). PURE. */

@@ -41,8 +41,9 @@ import { logger } from "../../utils/logger.js";
  *     a segunda atualização seguida largava a tarefa pela metade); o que não avança é o loop de
  *     verdade — a retomada que morre ao chegar — e esse para com a linha de sistema e o estado
  *     parado explícito. O teto cobre o caso que avança E derruba o painel a cada volta.
- *  4. o turno estava PARADO num cartão de pergunta (sem segundo plano): nada a retomar — só a linha, e
- *     o cartão fica aberto para a pessoa responder (a resposta vai como mensagem; ver manager.ts).
+ *  4. o turno estava PARADO num cartão de pergunta: nada a retomar — só a linha, e o cartão fica
+ *     aberto para a pessoa responder (a resposta vai como mensagem, com o segundo plano que morreu;
+ *     ver manager.ts).
  *
  * Melhor esforço por card: um card que falha não impede os outros, e falha alguma derruba o boot.
  *
@@ -179,7 +180,8 @@ export interface ResumeDeps {
   commandFor: typeof sdkDriverCommand;
   ensureSession: typeof ensureDriverSession;
   inject: typeof injectSystemTurn;
-  appendNote: (cardId: string, text: string) => Promise<void>;
+  /** `lostBackground`: o segundo plano que morreu, gravado na nota para ir junto da resposta do cartão. */
+  appendNote: (cardId: string, text: string, extra?: { lostBackground?: string[] }) => Promise<void>;
   readMarker: typeof readInflightMarker;
   /** A identidade deste processo: o marcador que ela assina é um turno vivo DAQUI, não um órfão. */
   selfOwner: string;
@@ -206,7 +208,8 @@ const realDeps: ResumeDeps = {
   commandFor: sdkDriverCommand,
   ensureSession: ensureDriverSession,
   inject: injectSystemTurn,
-  appendNote: (cardId, text) => appendHistory(cardId, { type: "system_note", text, at: Date.now() }),
+  appendNote: (cardId, text, extra) =>
+    appendHistory(cardId, { type: "system_note", text, ...(extra?.lostBackground?.length ? { lostBackground: extra.lostBackground } : {}), at: Date.now() }),
   readMarker: readInflightMarker,
   selfOwner: INFLIGHT_OWNER,
   ownerAlive: isInflightOwnerAlive,
@@ -356,13 +359,14 @@ async function resumeCard(
       logger.info({ audit: true, action: "sdk.resume.background_stale", card: card.worktreeSlug }, "long-lived background work ended by the restart — noted, not resumed");
       return "noted";
     }
-    if (!marker.background?.tasks.length && await awaitingAnswer(cardId, marker, deps)) {
+    if (await awaitingAnswer(cardId, marker, deps)) {
       // Parado num cartão de pergunta, o turno não tem o que retomar: ele espera a pessoa. A retomada
       // fechava o cartão ("respondeu por mensagem") e o agente perguntava de novo num cartão em
       // branco — o que já estava marcado se perdia (produção, 2026-11-03). Aberto, o clique vai ao
-      // modelo como mensagem (a resposta da órfã, manager.ts). Com segundo plano morto junto, retoma:
-      // o agente precisa saber o que morreu.
-      await deps.appendNote(cardId, texts.awaitingAnswer);
+      // modelo como mensagem (a resposta da órfã, manager.ts) — com o que os outros marcaram e, se o
+      // reinício matou algo em segundo plano, com a lista do que morreu (gravada nesta nota).
+      const lostBackground = marker.background?.tasks ?? [];
+      await deps.appendNote(cardId, texts.awaitingAnswer, lostBackground.length ? { lostBackground } : undefined);
       await deps.clearMarker(cardId);
       logger.info({ audit: true, action: "sdk.resume.awaiting_answer", card: card.worktreeSlug }, "interrupted sdk turn was waiting on a question card — left open, not resumed");
       return "noted";

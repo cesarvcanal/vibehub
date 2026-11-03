@@ -6,6 +6,7 @@ import type { Card, Project } from "./registry.js";
 import { cardWorkPaths, purgeCardWorkspace, killCardSessionOrThrow, CARD_BRANCH_PREFIX } from "./workspace.js";
 import { cardsWithPending, purgeCardQueue } from "./outbox.js";
 import { removeHistory, SDK_HISTORY_DIR } from "../sdk/history.js";
+import { removeQuestionDrafts, SDK_QUESTION_DRAFTS_DIR } from "../sdk/questionDrafts.js";
 import { clearInflightMarker, SDK_INFLIGHT_DIR } from "../sdk/inflight.js";
 import { removeCardCatalog, SDK_CATALOG_DIR } from "../sdk/catalog.js";
 import { removeProvenance, PROVENANCE_DIR } from "../chat/provenance.js";
@@ -187,6 +188,9 @@ async function eraseEverything(card: Card, steps: PurgeStep[], by?: string, proj
   });
   await step(steps, "provenance", async () => {
     await removeProvenance(card.id);
+  });
+  await step(steps, "question-drafts", async () => {
+    await removeQuestionDrafts(card.id);
   });
   await step(steps, "inflight", async () => {
     await clearInflightMarker(card.id);
@@ -539,6 +543,7 @@ const DATA_DIRS: ReadonlyArray<{ dir: string; suffix: string }> = [
   { dir: PROVENANCE_DIR, suffix: ".ndjson" },
   { dir: SDK_INFLIGHT_DIR, suffix: ".json" },
   { dir: SDK_CATALOG_DIR, suffix: ".json" },
+  { dir: SDK_QUESTION_DRAFTS_DIR, suffix: ".json" },
 ];
 
 /**

@@ -31,6 +31,7 @@ import {
   stopCardDriver,
 } from "./manager.js";
 import { readInflightMarker } from "./inflight.js";
+import { loadQuestionDrafts, questionDraftsSettled } from "./questionDrafts.js";
 import { BTW_COMMAND } from "./protocol.js";
 import { createMirrorState, driverKeysFor, forgetDriverKeys, mirrorNewEvents } from "./mirror.js";
 import { notifyCardSessionKill } from "../board/workspace.js";
@@ -147,7 +148,7 @@ afterEach(async () => {
   // recriaria o diretório no meio da remoção — o ENOTEMPTY intermitente). `rewindHistory` com um
   // texto que não existe não escreve nada: ele só entra na fila e espera a vez, que é o que
   // precisamos. Um flake de ORDEM é pior que lento — ele muda de teste a cada rodada.
-  await Promise.all([rewindHistory(CARD, ""), rewindHistory(CARD2, "")]);
+  await Promise.all([rewindHistory(CARD, ""), rewindHistory(CARD2, ""), questionDraftsSettled(CARD), questionDraftsSettled(CARD2)]);
   config.dataDir = savedDataDir;
   await rm(dir, { recursive: true, force: true });
   vi.useRealTimers();
@@ -510,6 +511,27 @@ describe("pergunta órfã — o cartão sobreviveu ao driver que o abriu", () =>
     spawned[1]!.stdout.emit("data", line({ type: "ready" }));
     return { successor, socket };
   }
+
+  it("a resposta da órfã leva junto o que os OUTROS marcaram antes do reinício, com o nome", async () => {
+    const first = ensure();
+    const albert = fakeSocket();
+    attachSocket(first, albert as never, { kind: "user", name: "albert" });
+    spawned[0]!.stdout.emit("data", line({ type: "user_question", id: "q_3_1791402112898", questions: QUESTIONS }));
+    albert.emit("message", Buffer.from(JSON.stringify({ type: "question_draft", id: "q_3_1791402112898", picked: [["No cabeçalho"], []], other: ["", ""] })));
+    await vi.waitFor(async () => expect((await readHistory(CARD)).some((e) => e.type === "user_question")).toBe(true));
+    await questionDraftsSettled(CARD);
+    resetSdkSessionsForTesting(); // o deploy
+    const successor = ensure();
+    const socket = fakeSocket();
+    attachSocket(successor, socket as never, { kind: "user", name: "cesar" });
+    spawned[1]!.stdout.emit("data", line({ type: "ready" }));
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "question_answer", id: "q_3_1791402112898", answers: [{ selected: ["No item"] }, { selected: ["72h corridas"] }] })));
+    await vi.waitFor(() => {
+      const text = spawned[1]!.stdin.written.map((w) => JSON.parse(w) as { type: string; text?: string }).find((f) => f.type === "user")?.text ?? "";
+      expect(text).toContain("cesar: No item");
+      expect(text).toContain("albert: No cabeçalho");
+    });
+  });
 
   it("o clique numa pergunta órfã chega ao modelo como mensagem — nunca 'no pending question'", async () => {
     const { successor, socket } = await orphanedCard();
@@ -2244,7 +2266,7 @@ describe("attachSocket — rascunho do cartão de pergunta em tempo real", () =>
     expect(draftFrames(albert)).toEqual([]);
   });
 
-  it("a aba que fecha tira o rascunho dela da tela dos outros", () => {
+  it("a aba que fecha NÃO apaga o que a pessoa marcou: os outros a veem como ausente", () => {
     const session = ensure();
     const cesar = fakeSocket();
     const albert = fakeSocket();
@@ -2252,8 +2274,86 @@ describe("attachSocket — rascunho do cartão de pergunta em tempo real", () =>
     attachSocket(session, albert as never, ALBERT);
     cesar.emit("message", draft("q1", [[]], ["meio"]));
     cesar.emit("close");
-    expect(draftFrames(albert).at(-1)).toEqual({ type: "peer_question_draft", id: "q1", name: "cesar", picked: [], other: [] });
-    expect(session.questionDrafts.size).toBe(0);
+    expect(draftFrames(albert).at(-1)).toEqual({ type: "peer_question_draft", id: "q1", name: "cesar", picked: [[]], other: ["meio"], away: true });
+    expect(session.questionDrafts.get("q1")?.get("cesar")).toMatchObject({ other: ["meio"] });
+    // quem chega depois também vê — como ausente
+    const late = fakeSocket();
+    attachSocket(session, late as never, ALBERT);
+    expect(draftFrames(late)).toEqual([{ type: "peer_question_draft", id: "q1", name: "cesar", picked: [[]], other: ["meio"], away: true }]);
+  });
+
+  it("com outra aba da mesma pessoa ainda no cartão, fechar uma não a deixa ausente", () => {
+    const session = ensure();
+    const cesarA = fakeSocket();
+    const cesarB = fakeSocket();
+    const albert = fakeSocket();
+    attachSocket(session, cesarA as never, CESAR);
+    attachSocket(session, cesarB as never, CESAR);
+    attachSocket(session, albert as never, ALBERT);
+    cesarA.emit("message", draft("q1", [["A"]], [""]));
+    cesarB.emit("message", draft("q1", [["A"]], ["mais"]));
+    cesarA.emit("close");
+    expect(draftFrames(albert).some((f) => (f as { away?: boolean }).away)).toBe(false);
+  });
+
+  it("O CASO REAL (produção, 2026-11-03): o que cada pessoa marcou sobrevive ao reinício do back", async () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    const albert = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    attachSocket(session, albert as never, ALBERT);
+    cesar.emit("message", draft("q1", [["Faixa de capacidade"], []], ["pela placa", ""]));
+    albert.emit("message", draft("q1", [[], ["Bloqueia"]], ["", ""]));
+    await questionDraftsSettled(CARD);
+    // o deploy: o processo morre com tudo o que tinha em memória
+    resetSdkSessionsForTesting();
+    const next = ensure();
+    await next.draftsLoaded;
+    const back = fakeSocket();
+    attachSocket(next, back as never, CESAR);
+    expect(draftFrames(back)).toEqual([
+      { type: "peer_question_draft", id: "q1", name: "cesar", picked: [["Faixa de capacidade"], []], other: ["pela placa", ""], away: true },
+      { type: "peer_question_draft", id: "q1", name: "albert", picked: [[], ["Bloqueia"]], other: ["", ""], away: true },
+    ]);
+  });
+
+  it("a aba que já estava conectada recebe o que o disco tinha assim que a leitura termina", async () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    cesar.emit("message", draft("q1", [["A"]], [""]));
+    await questionDraftsSettled(CARD);
+    resetSdkSessionsForTesting();
+    const next = ensure();
+    const early = fakeSocket();
+    attachSocket(next, early as never, ALBERT); // antes de a leitura terminar
+    await next.draftsLoaded;
+    expect(draftFrames(early)).toEqual([{ type: "peer_question_draft", id: "q1", name: "cesar", picked: [["A"]], other: [""], away: true }]);
+  });
+
+  it("a versão mais NOVA vence: a aba que volta com um rascunho velho recebe o novo, e o velho não grava", async () => {
+    const session = ensure();
+    const phone = fakeSocket();
+    const laptop = fakeSocket();
+    attachSocket(session, phone as never, CESAR);
+    attachSocket(session, laptop as never, CESAR);
+    phone.emit("message", Buffer.from(JSON.stringify({ type: "question_draft", id: "q1", picked: [["Novo"]], other: [""], at: 2_000 })));
+    laptop.emit("message", Buffer.from(JSON.stringify({ type: "question_draft", id: "q1", picked: [["Velho"]], other: [""], at: 1_000 })));
+    expect(session.questionDrafts.get("q1")?.get("cesar")).toEqual({ picked: [["Novo"]], other: [""], at: 2_000 });
+    expect(draftFrames(laptop).at(-1)).toEqual({ type: "peer_question_draft", id: "q1", name: "cesar", picked: [["Novo"]], other: [""], at: 2_000 });
+    await questionDraftsSettled(CARD);
+    expect((await loadQuestionDrafts(CARD)).get("q1")?.get("cesar")?.picked).toEqual([["Novo"]]);
+  });
+
+  it("a pergunta encerrada sai do disco também", async () => {
+    const session = ensure();
+    const cesar = fakeSocket();
+    attachSocket(session, cesar as never, CESAR);
+    emit({ type: "user_question", id: "q1", questions: [{ question: "Como?", options: [{ label: "A" }] }] });
+    cesar.emit("message", draft("q1", [["A"]], [""]));
+    emit({ type: "question_result", id: "q1", answers: [{ selected: ["A"] }] });
+    await questionDraftsSettled(CARD);
+    expect((await loadQuestionDrafts(CARD)).size).toBe(0);
   });
 
   it("socket sem autor e frame malformado não anunciam nada (e não viram mensagem)", () => {

@@ -78,7 +78,7 @@ function sweep(b: Proc, settings: { sdkDriver: boolean; sdkAutoResume: boolean }
     commandFor: async () => ({ file: "docker", args: ["exec"] }),
     ensureSession: manager.ensureDriverSession,
     inject: manager.injectSystemTurn,
-    appendNote: (cardId, text) => import("./history.js").then((h) => h.appendHistory(cardId, { type: "system_note", text, at: Date.now() })),
+    appendNote: (cardId, text, extra) => import("./history.js").then((h) => h.appendHistory(cardId, { type: "system_note", text, ...(extra?.lostBackground ? { lostBackground: extra.lostBackground } : {}), at: Date.now() })),
     readMarker: inflight.readInflightMarker,
     selfOwner: inflight.INFLIGHT_OWNER,
     ownerAlive: inflight.isInflightOwnerAlive,

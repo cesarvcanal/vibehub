@@ -111,9 +111,9 @@ function deps(over: Partial<ResumeDeps> = {}, settings: Settings = settingsWith(
     reportIdle: () => undefined,
     awaitingAnswer: awaitingAnswerInHistory,
     wait: async () => undefined,
-    appendNote: async (cardId, text) => {
+    appendNote: async (cardId, text, extra) => {
       const { appendHistory } = await import("./history.js");
-      await appendHistory(cardId, { type: "system_note", text, at: Date.now() });
+      await appendHistory(cardId, { type: "system_note", text, ...(extra?.lostBackground ? { lostBackground: extra.lostBackground } : {}), at: Date.now() });
     },
     ...over,
   };
@@ -395,11 +395,15 @@ describe("resumeInterruptedTurns — o turno parado numa pergunta", () => {
     expect(summary.resumed).toEqual([CARD]);
   });
 
-  it("com trabalho em segundo plano morto junto, retoma: o agente precisa saber o que morreu", async () => {
+  it("com segundo plano morto junto, o cartão também fica aberto — e a nota guarda o que morreu", async () => {
     await historyWith([{ type: "user_question", id: "q_1_1", questions: QUESTIONS, at: 10 }]);
     await writeInflightMarker(CARD, { startedAt: 5, attempts: 0, background: { tasks: ["suíte do back"], since: Date.now(), idle: false } });
     const summary = await resumeInterruptedTurns(deps());
-    expect(summary.resumed).toEqual([CARD]);
+    expect(summary.noted).toEqual([CARD]);
+    expect(spawned).toHaveLength(0);
+    const note = (await readHistory(CARD)).at(-1) as { text?: string; lostBackground?: string[] };
+    expect(note.text).toBe(NOTE_AWAITING_ANSWER);
+    expect(note.lostBackground).toEqual(["suíte do back"]);
   });
 
   it("openQuestionIds — pura: aberta desde o início do turno, sem resultado", () => {
@@ -418,9 +422,9 @@ describe("resumeInterruptedTurns — o turno parado numa pergunta", () => {
     expect(summary.resumed).toEqual([CARD]);
   });
 
-  it("depois da nota, o clique no cartão chega ao modelo como a resposta da órfã", async () => {
+  it("depois da nota, o clique no cartão chega ao modelo como a resposta da órfã — com o segundo plano que morreu", async () => {
     await historyWith([{ type: "user_question", id: "q_1_1", questions: QUESTIONS, at: 10 }]);
-    await writeInflightMarker(CARD, { startedAt: 5, attempts: 0 });
+    await writeInflightMarker(CARD, { startedAt: 5, attempts: 0, background: { tasks: ["suíte do back"], since: Date.now(), idle: false } });
     await resumeInterruptedTurns(deps());
     const session = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
     const socket = Object.assign(new EventEmitter(), { readyState: 1, send: () => undefined, close: () => undefined });
@@ -428,7 +432,9 @@ describe("resumeInterruptedTurns — o turno parado numa pergunta", () => {
     socket.emit("message", Buffer.from(JSON.stringify({ type: "question_answer", id: "q_1_1", answers: [{ selected: ["Faixa de capacidade"] }] })));
     await vi.waitFor(() => {
       const frames = spawned[0]!.stdin.written.map((w) => JSON.parse(w) as { type: string; text?: string });
-      expect(frames.some((f) => f.type === "user" && f.text?.includes("Faixa de capacidade"))).toBe(true);
+      const answer = frames.find((f) => f.type === "user")?.text ?? "";
+      expect(answer).toContain("Faixa de capacidade");
+      expect(answer).toContain("- suíte do back");
     });
   });
 });

@@ -201,7 +201,7 @@ describe("card lifecycle routes", () => {
     expect(res.json().incomplete).not.toContain("runner");
     expect(res.json().steps.map((s: { name: string }) => s.name)).toEqual(
       // "reviews": the card's active PR review is cancelled once the card is off the board.
-      ["sessions", "previews", "browser", "board", "reviews", "runner", "chat-history", "provenance", "inflight", "catalog", "outbox"],
+      ["sessions", "previews", "browser", "board", "reviews", "runner", "chat-history", "provenance", "question-drafts", "inflight", "catalog", "outbox"],
     );
     expect((await app.inject({ method: "GET", url: `/api/cards/${id}`, headers: { cookie } })).statusCode).toBe(404);
   });
