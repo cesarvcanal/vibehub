@@ -664,6 +664,42 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
       expect(ws.sent.map((x) => JSON.parse(x)).some((f) => f.type === "question_answer")).toBe(false);
     });
 
+    /**
+     * METADE DE CADA UM (produção, 2026-11-03): Albert respondeu a primeira pergunta, eu a segunda — o
+     * cartão inteiro tinha resposta, mas "Responder" seguia travado porque só contava o que EU marquei.
+     * O back já junta os rascunhos dos outros no que vai ao modelo (`mergePeerAnswers`).
+     */
+    it("\"Responder\" libera quando cada pergunta tem resposta de alguém, mesmo metade minha e metade da outra pessoa", async () => {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready" });
+      ws.deliver(MULTI);
+      const send = screen.getByTestId("sdk-question-send");
+      ws.deliver({ type: "peer_question_draft", id: "q_peer", name: "albert", picked: [[], []], other: ["o caminhão define", ""] });
+      expect(send).toBeDisabled(); // a segunda ainda sem resposta de ninguém
+
+      await userEvent.click(screen.getAllByRole("button", { name: "Mussa" })[1]!);
+      expect(send).toBeEnabled();
+      await userEvent.click(send);
+      const frame = ws.sent.map((s) => JSON.parse(s)).find((f) => f.type === "question_answer");
+      // vai o que EU marquei; a parte do Albert o back acrescenta com o nome dele
+      expect(frame).toEqual({ type: "question_answer", id: "q_peer", answers: [{ selected: [] }, { selected: ["Mussa"] }] });
+    });
+
+    it("rascunho da outra pessoa que ela apagou não libera mais o \"Responder\"", async () => {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready" });
+      ws.deliver(MULTI);
+      ws.deliver({ type: "peer_question_draft", id: "q_peer", name: "albert", picked: [["Albert"], []], other: ["", ""] });
+      await userEvent.click(screen.getAllByRole("button", { name: "Mussa" })[1]!);
+      expect(screen.getByTestId("sdk-question-send")).toBeEnabled();
+      ws.deliver({ type: "peer_question_draft", id: "q_peer", name: "albert", picked: [[], []], other: ["", "  "] });
+      expect(screen.getByTestId("sdk-question-send")).toBeDisabled();
+    });
+
     it("a pergunta respondida (por quem for) tira o aviso", async () => {
       renderSdkChat();
       const ws = await socket();
