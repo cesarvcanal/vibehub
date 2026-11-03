@@ -57,6 +57,7 @@ import {
   type PeerQuestionDrafts,
   type QuestionDraft,
 } from "@/features/board/lib/peerQuestionDraft";
+import { forgetQuestionDraftMemoryForTesting, readQuestionDraft, writeQuestionDraft } from "@/features/board/lib/questionDraftStore";
 import { nextIdentity, type ViewerIdentity } from "@/features/board/lib/viewerIdentity";
 import { PeerTypingIndicator } from "@/features/board/components/PeerTypingIndicator";
 import { SdkAgentCard } from "@/features/board/components/SdkAgentCard";
@@ -1460,6 +1461,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
               <SdkFleet rows={entry.rows} tasks={state.agentTasks} children={split.children} />
             ) : (
               <SdkChatRow
+                cardId={cardId}
                 row={entry.row}
                 answered={replies.get(entry.id)}
                 aiming={replyTo?.rowId === entry.id}
@@ -2203,6 +2205,7 @@ function StreamingMarkdown({ text }: { text: string }) {
  * same stable handlers — has nothing new to draw.
  */
 const SdkChatRow = React.memo(function SdkChatRow({
+  cardId,
   row,
   answered,
   aiming = false,
@@ -2217,6 +2220,8 @@ const SdkChatRow = React.memo(function SdkChatRow({
   retrying = false,
   answerOf,
 }: {
+  /** The conversation's card — a question card keeps its draft per card (lib/questionDraftStore.ts). */
+  cardId?: string;
   row: SdkRow;
   /** The explicit reply this row's question already received — what it shows it got. */
   answered?: string;
@@ -2248,7 +2253,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
   const diff = React.useMemo(() => (row.kind === "tool" ? toolDiff(row.name, row.input) : null), [row]);
 
   if (row.kind === "question") {
-    return <SdkQuestionCard row={row} onAnswer={onAnswer} peers={peerDraftsOf(peerDrafts, viewer)} onDraft={onDraft} />;
+    return <SdkQuestionCard cardId={cardId ?? ""} row={row} onAnswer={onAnswer} peers={peerDraftsOf(peerDrafts, viewer)} onDraft={onDraft} />;
   }
 
   if (row.kind === "tool") {
@@ -2551,16 +2556,11 @@ const SdkChatRow = React.memo(function SdkChatRow({
 });
 
 /**
- * O RASCUNHO DE CADA CARTÃO, por id de pergunta — num mapa do MÓDULO, como o do composer. Todo
- * (re)connect limpa a tela e o replay redesenha o cartão do disco: ele desmonta e remonta, e o que a
- * pessoa já tinha marcado e escrito morava no estado local dele. Um deploy no meio de três perguntas
- * apagava tudo (produção, 2026-10-07). O id vem do histórico, igual antes e depois do reconnect.
+ * Test hook: esquece a memória da aba dos rascunhos de cartão — o que um F5 apaga. O disco
+ * (localStorage, lib/questionDraftStore.ts) o setup dos testes já limpa a cada teste.
  */
-const questionDrafts = new Map<string, { picked: string[][]; other: string[] }>();
-
-/** Test hook: esquece os rascunhos de cartão (todo teste reusa os mesmos ids). */
 export function resetQuestionDraftsForTesting(): void {
-  questionDrafts.clear();
+  forgetQuestionDraftMemoryForTesting();
 }
 
 /**
@@ -2573,11 +2573,14 @@ export function resetQuestionDraftsForTesting(): void {
  * again (the driver is still waiting — the timeout is 30 minutes).
  */
 function SdkQuestionCard({
+  cardId,
   row,
   onAnswer,
   peers = [],
   onDraft,
 }: {
+  /** O card da conversa: o rascunho guardado é por card + pergunta (lib/questionDraftStore.ts). */
+  cardId: string;
   row: Extract<SdkRow, { kind: "question" }>;
   onAnswer?: (id: string, answers: SdkQuestionAnswer[]) => void;
   /** Quem MAIS está respondendo este cartão agora, e o quê (lib/peerQuestionDraft.ts). */
@@ -2586,14 +2589,13 @@ function SdkQuestionCard({
   onDraft?: (id: string, draft: QuestionDraft) => void;
 }) {
   const t = useT();
-  const [picked, setPicked] = React.useState<string[][]>(() => questionDrafts.get(row.id)?.picked ?? row.questions.map(() => []));
-  const [other, setOther] = React.useState<string[]>(() => questionDrafts.get(row.id)?.other ?? row.questions.map(() => ""));
-  // Guardado também DEPOIS do clique: o "respondida" da tela é otimista, e se o fio cair junto com o
-  // driver antes da confirmação o replay redesenha o cartão pendente — com o que já estava marcado.
-  // Cada entrada é um punhado de rótulos por pergunta da sessão: não há o que limpar.
+  // O que já estava marcado e escrito volta depois de um reconnect, de um F5 e do deploy que recarrega
+  // a aba — e continua guardado depois do clique em "Responder" (ver lib/questionDraftStore.ts).
+  const [picked, setPicked] = React.useState<string[][]>(() => readQuestionDraft(cardId, row.id)?.picked ?? row.questions.map(() => []));
+  const [other, setOther] = React.useState<string[]>(() => readQuestionDraft(cardId, row.id)?.other ?? row.questions.map(() => ""));
   React.useEffect(() => {
-    questionDrafts.set(row.id, { picked, other });
-  }, [row.id, picked, other]);
+    writeQuestionDraft(cardId, row.id, { picked, other });
+  }, [cardId, row.id, picked, other]);
   // O MESMO rascunho, para quem mais está no card — duas pessoas respondendo a mesma pergunta cada
   // uma de um jeito era o problema: só a primeira resposta vale. Ao montar, só sai se já houver
   // algo (o cartão que volta depois de um reconnect reanuncia o que tinha); vazio de nascença, não.

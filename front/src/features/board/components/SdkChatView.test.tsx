@@ -733,6 +733,40 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
     expect(screen.getAllByTestId("sdk-question-other")[1]).toHaveValue("72h pulando domingo");
   });
 
+  /**
+   * O DEPLOY RECARREGA A ABA (produção, 2026-11-03): a versão nova faz a aba recarregar sozinha
+   * (lib/versionCheck.ts) e a memória do módulo morre com o F5. Quatro perguntas marcadas = zero.
+   */
+  it("o que foi marcado e escrito no cartão sobrevive ao F5 (a recarga da versão nova)", async () => {
+    const view = renderSdkChat();
+    const first = await socket();
+    first.accept();
+    first.deliver({ type: "ready" });
+    const MULTI = {
+      type: "user_question" as const,
+      id: "q_5_1793740462180",
+      questions: [
+        { question: "Como marcamos o trucado?", options: [{ label: "Tipo no cadastro" }, { label: "Faixa de capacidade" }] },
+        { question: "Produto sem peso?", options: [{ label: "Bloqueia o envio" }, { label: "Avisa e deixa seguir" }] },
+      ],
+    };
+    first.deliver(MULTI);
+    await userEvent.click(screen.getByRole("button", { name: "Faixa de capacidade" }));
+    await userEvent.type(screen.getAllByTestId("sdk-question-other")[0]!, "pela");
+
+    view.unmount();
+    resetQuestionDraftsForTesting(); // o F5: a memória da aba some, o localStorage fica
+
+    renderSdkChat();
+    const second = FakeSocket.instances.at(-1) as FakeSocket;
+    second.accept();
+    second.deliver(MULTI); // o replay redesenha o cartão do disco
+    second.deliver({ type: "ready" });
+
+    expect(screen.getByRole("button", { name: "Faixa de capacidade" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getAllByTestId("sdk-question-other")[0]).toHaveValue("pela");
+  });
+
   /** Achado F3 da revisão do PR #98: a resposta saiu, o driver morreu antes de recebê-la. */
   it("respondeu e o fio caiu antes da confirmação: o cartão volta pendente COM o que foi marcado", async () => {
     renderSdkChat();
