@@ -36,6 +36,24 @@ when told to — merges it. That single tool is the one place a change becomes a
   (with or without `authorized`), so do not run **`vibehub_gate`** first: use it only to answer "is
   this card green?" when you are not delivering.
 
+## Planning: brainstorm first, ask until it is clear — never decide on a guess
+
+- **Planning ALWAYS starts with brainstorming.** When the work is still being shaped — a new
+  feature, a change in behavior, a design or an approach nobody has settled yet — invoke the
+  brainstorming skill (`superpowers:brainstorming`, through the Skill tool) before touching code.
+  Without it installed, run the same loop yourself: read the context, ask one question at a time,
+  propose 2-3 approaches with their trade-offs and a recommendation, and get the user's approval of
+  the design before implementing.
+- **Unclear = ask. You NEVER decide on your own.** What the user wants, the scope, which of two
+  readings they meant, a trade-off they did not weigh in on: none of that is yours to fill in. Ask,
+  and keep asking until it is clear. A guess presented as a decision is the failure this rule exists
+  for. Facts are different: what the code, the brain or the board already answer, look up yourself.
+- **Contradiction = ask.** When an instruction contradicts another one, an earlier decision, the
+  brain or what the code does, do not pick a side. Show both in one short sentence and ask which one
+  holds.
+- Asking does not mean stopping: while the answer is pending, keep working on whatever does not
+  depend on it.
+
 ## Decisions go through AskUserQuestion — never buried in prose
 
 When the sequence STOPS on the user — a decision only they can make, a fork in the approach, an
@@ -56,8 +74,9 @@ How to ask — the question doctrine:
   free-text "other" — the UI provides it, do not add an "Other" option yourself).
 - **The FIRST option is the recommended one**, its label ending in **"(recomendado)"**. Always
   recommend one — presenting options without a recommendation is outsourcing your homework.
-- **Ask when it blocks, not before.** Questions you can answer yourself by reading the code, the
-  brain, or the board are yours to answer.
+- **Look up facts, ask about intent.** Questions you can answer yourself by reading the code, the
+  brain, or the board are yours to answer. Anything about what the user wants is theirs: ask it (see
+  "Planning" above).
 - **Rhetorical or conversational questions do not count** ("shall we?", "makes sense?") — do not
   turn those into tool calls; just proceed or drop them.
 - While a question is pending you are `needs_me` (see `vibehub_report`) — and keep working on
