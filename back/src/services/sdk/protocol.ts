@@ -402,6 +402,12 @@ export interface UserControl {
    * em sdk-driver.mjs). Ausente = o envio de sempre, que dobra no turno em andamento.
    */
   now?: true;
+  /**
+   * Só o back põe isto (o navegador não tem como: `parseSdkClientFrame` monta o controle do zero). A
+   * mensagem NÃO libera os cartões de pergunta abertos — é a resposta tardia de outra pessoa a um
+   * cartão já fechado (`buildLateAnswerText`), e a pergunta que o agente fez depois segue de pé.
+   */
+  keepQuestions?: true;
 }
 /**
  * Stop the running turn. `reason` is the front saying WHY it stopped — today only `"edit"`: the
@@ -414,7 +420,16 @@ export interface InterruptControl { type: "interrupt"; reason?: "edit" }
 /** The human's answer to a `permission_request` — `id` pairs it with the awaiting call. */
 export interface PermissionDecisionControl { type: "permission_decision"; id: string; allow: boolean }
 /** The human's answer to a `user_question` — one entry per question, in order. */
-export interface QuestionAnswerControl { type: "question_answer"; id: string; answers: UserQuestionAnswer[] }
+export interface QuestionAnswerControl {
+  type: "question_answer";
+  id: string;
+  answers: UserQuestionAnswer[];
+  /**
+   * Só o back põe isto: o que vai ao MODELO quando outras pessoas também responderam o cartão
+   * (`mergePeerAnswers`). `answers` segue limpo — é o que volta no `question_result` e o cartão desenha.
+   */
+  forModel?: UserQuestionAnswer[];
+}
 /**
  * The user EDITED a message he already sent — a REWIND of the conversation when that is safe.
  *
@@ -507,15 +522,7 @@ export function buildSupersedeText(original: string, text: string): string {
  * same reason as the supersede wrapper: it is the user's own speech act. PURE.
  */
 export function buildOrphanAnswerText(questions: UserQuestionItem[] | null, answers: UserQuestionAnswer[]): string {
-  const lines: string[] = [];
-  answers.forEach((answer, i) => {
-    const chosen = (Array.isArray(answer?.selected) ? answer.selected : [])
-      .map((s) => (typeof s === "string" ? s.trim() : ""))
-      .filter((s) => s !== "");
-    if (chosen.length === 0) return;
-    const question = questions?.[i]?.question;
-    lines.push(`- ${question ? `«${question}»` : `pergunta ${i + 1}`} → ${chosen.join(", ")}`);
-  });
+  const lines = answerLines(questions, answers);
   return (
     `[resposta às suas perguntas — o processo reiniciou antes de a resposta chegar à ferramenta, ` +
     `então ela vem por mensagem; siga com estas escolhas:]\n\n` +
@@ -534,46 +541,8 @@ function cleanChoices(list: readonly unknown[] | undefined): string[] {
     .filter((s) => s !== "");
 }
 
-/**
- * DUAS PESSOAS, UMA PERGUNTA (produção, 2026-11-03): a resposta enviada leva junto o que as OUTRAS
- * pessoas já marcaram/escreveram no cartão (os rascunhos que a tela mostra), cada escolha com o nome
- * de quem a fez, e o pedido de analisar tudo e perguntar de novo se não fechar. Sem rascunho alheio
- * em pergunta nenhuma, devolve `answers` intacto. PURE.
- */
-export function mergePeerAnswers(
-  answers: UserQuestionAnswer[],
-  sender: string | undefined,
-  drafts: ReadonlyMap<string, Pick<QuestionDraft, "picked" | "other">> | undefined,
-): UserQuestionAnswer[] {
-  const peers = [...(drafts ?? [])].filter(([name]) => name !== sender);
-  if (peers.length === 0) return answers;
-  let merged = false;
-  const out = answers.map((answer, i) => {
-    const peerLines = peers.flatMap(([name, draft]) => {
-      const chosen = [...cleanChoices(draft.picked[i]), ...cleanChoices([draft.other[i]])];
-      return chosen.length > 0 ? [`${name}: ${chosen.join(", ")}`] : [];
-    });
-    if (peerLines.length === 0) return answer;
-    merged = true;
-    const own = cleanChoices(answer?.selected);
-    return {
-      selected: [...(own.length > 0 ? [`${sender ?? "quem enviou"}: ${own.join(", ")}`] : []), ...peerLines, MULTI_ANSWER_NOTE],
-    };
-  });
-  return merged ? out : answers;
-}
-
-/**
- * A RESPOSTA QUE CHEGA DEPOIS: outra pessoa respondeu o cartão que a primeira resposta já fechou. Não
- * se perde — vai ao modelo como mensagem, citando cada pergunta, para ele comparar com a anterior e
- * perguntar de novo se as duas não combinarem. PURE.
- */
-export function buildLateAnswerText(
-  questions: UserQuestionItem[] | null,
-  answers: UserQuestionAnswer[],
-  by: string | undefined,
-  firstBy: string | null | undefined,
-): string {
+/** Cada pergunta respondida citada ao lado do escolhido — o corpo das respostas que viram mensagem. */
+function answerLines(questions: UserQuestionItem[] | null, answers: UserQuestionAnswer[]): string[] {
   const lines: string[] = [];
   answers.forEach((answer, i) => {
     const chosen = cleanChoices(answer?.selected);
@@ -581,14 +550,69 @@ export function buildLateAnswerText(
     const question = questions?.[i]?.question;
     lines.push(`- ${question ? `«${question}»` : `pergunta ${i + 1}`} → ${chosen.join(", ")}`);
   });
+  return lines;
+}
+
+/**
+ * DUAS PESSOAS, UMA PERGUNTA (produção, 2026-11-03): o que vai ao MODELO quando a resposta enviada
+ * encontra rascunhos de OUTRAS pessoas no cartão (os que a tela mostra) — cada escolha com o nome de
+ * quem a fez e o pedido de analisar tudo e perguntar de novo se não fechar. Rascunho igual ao que foi
+ * enviado não conta como outra opinião. Null = nenhuma outra opinião: vai a resposta de sempre. PURE.
+ */
+export function mergePeerAnswers(
+  answers: UserQuestionAnswer[],
+  sender: string | undefined,
+  drafts: ReadonlyMap<string, Pick<QuestionDraft, "picked" | "other">> | undefined,
+): UserQuestionAnswer[] | null {
+  const peers = [...(drafts ?? [])].filter(([name]) => name !== sender);
+  if (peers.length === 0) return null;
+  const count = Math.max(answers.length, ...peers.map(([, d]) => Math.max(d.picked.length, d.other.length)));
+  let merged = false;
+  const out: UserQuestionAnswer[] = [];
+  for (let i = 0; i < count; i++) {
+    const own = cleanChoices(answers[i]?.selected);
+    const same = (chosen: string[]): boolean =>
+      chosen.length === own.length && chosen.every((c) => own.includes(c));
+    const peerLines = peers.flatMap(([name, draft]) => {
+      const chosen = [...cleanChoices(draft.picked[i]), ...cleanChoices([draft.other[i]])];
+      return chosen.length > 0 && !same(chosen) ? [`${name}: ${chosen.join(", ")}`] : [];
+    });
+    if (peerLines.length === 0) {
+      out.push({ selected: [...(answers[i]?.selected ?? [])] });
+      continue;
+    }
+    merged = true;
+    out.push({
+      selected: [...(own.length > 0 ? [`${sender ?? "quem enviou"}: ${own.join(", ")}`] : []), ...peerLines, MULTI_ANSWER_NOTE],
+    });
+  }
+  return merged ? out : null;
+}
+
+/**
+ * A RESPOSTA QUE CHEGA DEPOIS: outra pessoa respondeu o cartão que a primeira resposta já fechou. Não
+ * se perde — vai ao modelo como mensagem (`sent`), citando cada pergunta, para ele comparar com a
+ * anterior e perguntar de novo se as duas não combinarem. `shown` é a linha da conversa: só o que a
+ * pessoa escolheu, sem a instrução ao modelo. Null = nada escolhido, nada a mandar. PURE.
+ */
+export function buildLateAnswerText(
+  questions: UserQuestionItem[] | null,
+  answers: UserQuestionAnswer[],
+  by: string | undefined,
+  firstBy: string | null | undefined,
+): { shown: string; sent: string } | null {
+  const lines = answerLines(questions, answers);
+  if (lines.length === 0) return null;
   const who = by ?? "outra pessoa";
   const first = firstBy ? ` (a de ${firstBy})` : "";
-  return (
-    `[${who} também respondeu à sua pergunta, depois que a primeira resposta${first} já tinha seguido:]\n\n` +
-    lines.join("\n") +
-    `\n\nAnalise junto com a resposta anterior. Se combinarem, siga considerando as duas. Se forem ` +
-    `contraditórias ou confusas, pergunte de novo com AskUserQuestion antes de seguir.`
-  );
+  return {
+    shown: `Também respondi ao cartão de pergunta:\n\n${lines.join("\n")}`,
+    sent:
+      `[${who} também respondeu à sua pergunta, depois que a primeira resposta${first} já tinha seguido:]\n\n` +
+      lines.join("\n") +
+      `\n\nAnalise junto com a resposta anterior. Se combinarem, siga considerando as duas. Se forem ` +
+      `contraditórias ou confusas, pergunte de novo com AskUserQuestion antes de seguir.`,
+  };
 }
 
 /**

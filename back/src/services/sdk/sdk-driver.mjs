@@ -251,10 +251,10 @@ function waitQuestion(id, timeoutMs = QUESTION_TIMEOUT_MS) {
   });
 }
 
-function resolveQuestion(id, answers) {
+function resolveQuestion(id, answers, forModel) {
   const deliver = pendingQuestions.get(id);
   if (!deliver) return false;
-  deliver({ answers, timedOut: false });
+  deliver({ answers, forModel, timedOut: false });
   return true;
 }
 
@@ -330,7 +330,7 @@ async function canUseTool(toolName, input) {
   }
   const id = `q_${++questionSeq}_${Date.now()}`;
   emit({ type: "user_question", id, questions });
-  const { answers, timedOut, superseded } = await waitQuestion(id);
+  const { answers, forModel, timedOut, superseded } = await waitQuestion(id);
   if (!answers) {
     emit({ type: "question_result", id, timedOut: !!timedOut, superseded: !!superseded });
     return { behavior: "deny", message: timedOut
@@ -339,8 +339,11 @@ async function canUseTool(toolName, input) {
         ? QUESTION_SUPERSEDED_MESSAGE
         : "The question was cancelled (the turn was interrupted)." };
   }
+  // O cartão desenha `answers` (o que a pessoa marcou); o modelo lê `forModel` quando o back juntou
+  // as respostas de outras pessoas ao mesmo cartão (ver `mergePeerAnswers` em protocol.ts).
   emit({ type: "question_result", id, answers });
-  return { behavior: "allow", updatedInput: { questions: input.questions, answers: buildAskUserAnswers(questions, answers) } };
+  const toModel = Array.isArray(forModel) ? forModel : answers;
+  return { behavior: "allow", updatedInput: { questions: input.questions, answers: buildAskUserAnswers(questions, toModel) } };
 }
 
 // PreToolUse hook — mirror of `sdkGateAction` in protocol.ts. "same-as-terminal": everything is
@@ -1792,7 +1795,8 @@ rl.on("line", (line) => {
       await reauthIfChanged();
       if (control.now === true) await sendUserNow(control.text);
       else sendUser(control.text);
-      supersedePendingQuestions();
+      // A resposta tardia a um cartão já fechado (o back marca) não leva a pergunta seguinte junto.
+      if (control.keepQuestions !== true) supersedePendingQuestions();
     });
     return;
   }
@@ -1831,7 +1835,7 @@ rl.on("line", (line) => {
     return;
   }
   if (control && control.type === "question_answer" && typeof control.id === "string" && Array.isArray(control.answers)) {
-    if (!resolveQuestion(control.id, control.answers)) {
+    if (!resolveQuestion(control.id, control.answers, Array.isArray(control.forModel) ? control.forModel : undefined)) {
       emit({ type: "error", message: `no pending question with id ${control.id}` });
     }
     return;

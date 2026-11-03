@@ -2285,85 +2285,108 @@ describe("attachSocket — respostas de várias pessoas ao mesmo cartão", () =>
     Buffer.from(JSON.stringify({ type: "question_draft", id, picked, other }));
   const answer = (id: string, selected: string[][]): Buffer =>
     Buffer.from(JSON.stringify({ type: "question_answer", id, answers: selected.map((s) => ({ selected: s })) }));
-  type Written = { type: string; id?: string; text?: string; answers?: { selected: string[] }[] };
+  type Answers = { selected: string[] }[];
+  type Written = { type: string; id?: string; text?: string; keepQuestions?: boolean; answers?: Answers; forModel?: Answers };
   const written = (): Written[] => spawned[0]!.stdin.written.map((w) => JSON.parse(w) as Written);
   const QUESTIONS = [
     { question: "Produto sem peso: o que acontece?", options: [{ label: "Bloqueia" }, { label: "Avisa" }] },
     { question: "O limite de paletes continua?", options: [{ label: "Não" }, { label: "Sim" }] },
   ];
-
-  it("a resposta enviada leva junto o rascunho do outro, com nome e o pedido de analisar", () => {
+  const two = () => {
     const session = ensure();
     const cesar = fakeSocket();
     const albert = fakeSocket();
     attachSocket(session, cesar as never, CESAR);
     attachSocket(session, albert as never, ALBERT);
     emit({ type: "user_question", id: "q1", questions: QUESTIONS });
+    return { session, cesar, albert };
+  };
+
+  it("o modelo lê junto o rascunho do outro, com nome; o cartão segue com a resposta limpa", () => {
+    const { cesar, albert } = two();
     albert.emit("message", draft("q1", [[], ["Sim"]], ["a space tem os pesos", "10 pallets"]));
     cesar.emit("message", answer("q1", [["Bloqueia"], ["Não"]]));
     const sent = written().find((c) => c.type === "question_answer")!;
-    expect(sent.answers![0]!.selected).toEqual([
+    // O que volta no question_result e o cartão desenha: só o que quem enviou marcou.
+    expect(sent.answers).toEqual([{ selected: ["Bloqueia"] }, { selected: ["Não"] }]);
+    expect(sent.forModel![0]!.selected).toEqual([
       "cesar: Bloqueia",
       "albert: a space tem os pesos",
       expect.stringMatching(/pessoas diferentes.*contradit/),
     ]);
-    expect(sent.answers![1]!.selected.slice(0, 2)).toEqual(["cesar: Não", "albert: Sim, 10 pallets"]);
+    expect(sent.forModel![1]!.selected.slice(0, 2)).toEqual(["cesar: Não", "albert: Sim, 10 pallets"]);
   });
 
-  it("sem rascunho de outra pessoa a resposta vai intacta (o próprio rascunho não duplica)", () => {
-    const session = ensure();
-    const cesar = fakeSocket();
-    attachSocket(session, cesar as never, CESAR);
-    emit({ type: "user_question", id: "q1", questions: QUESTIONS });
+  it("sem outra opinião (só o próprio rascunho, ou rascunho igual ao enviado) não há forModel", () => {
+    const { cesar, albert } = two();
     cesar.emit("message", draft("q1", [["Bloqueia"], []], ["", ""]));
+    albert.emit("message", draft("q1", [["Bloqueia"], ["Não"]], ["", ""]));
     cesar.emit("message", answer("q1", [["Bloqueia"], ["Não"]]));
-    expect(written().find((c) => c.type === "question_answer")!.answers).toEqual([
-      { selected: ["Bloqueia"] }, { selected: ["Não"] },
-    ]);
+    expect(written().find((c) => c.type === "question_answer")).not.toHaveProperty("forModel");
   });
 
-  it("quem responde DEPOIS da pergunta fechada vira mensagem para a IA comparar — não se perde", () => {
-    const session = ensure();
-    const cesar = fakeSocket();
-    const albert = fakeSocket();
-    attachSocket(session, cesar as never, CESAR);
-    attachSocket(session, albert as never, ALBERT);
-    emit({ type: "user_question", id: "q1", questions: QUESTIONS });
+  it("quem responde DEPOIS da pergunta fechada vira mensagem para a IA comparar — não se perde", async () => {
+    const { session, cesar, albert } = two();
     cesar.emit("message", answer("q1", [["Bloqueia"], ["Não"]]));
     emit({ type: "question_result", id: "q1", answers: [{ selected: ["Bloqueia"] }, { selected: ["Não"] }] });
     albert.emit("message", answer("q1", [["Avisa"], ["Sim"]]));
-    const late = written().filter((c) => c.type === "question_answer");
-    expect(late).toHaveLength(1);
+    expect(written().filter((c) => c.type === "question_answer")).toHaveLength(1);
     const msg = written().find((c) => c.type === "user")!;
     expect(msg.text).toContain("albert");
     expect(msg.text).toContain("cesar");
     expect(msg.text).toContain("«O limite de paletes continua?» → Sim");
     expect(msg.text).toMatch(/contradit/);
     expect(session.activeTurns).toBe(1);
+    // A conversa mostra só o que o Albert escolheu, em nome dele; o que o modelo leu fica em `sent`.
+    await vi.waitFor(async () => {
+      const row = (await readHistory(CARD)).find((e) => e.type === "user") as { text: string; sent?: string; from?: { name: string } };
+      expect(row.from?.name).toBe("albert");
+      expect(row.text).not.toMatch(/AskUserQuestion/);
+      expect(row.text).toContain("→ Sim");
+      expect(row.sent).toBe(msg.text);
+    });
+  });
+
+  it("a resposta tardia não libera a pergunta que o agente fez depois", () => {
+    const { cesar, albert } = two();
+    cesar.emit("message", answer("q1", [["Bloqueia"], ["Não"]]));
+    emit({ type: "question_result", id: "q1", answers: [{ selected: ["Bloqueia"] }, { selected: ["Não"] }] });
+    emit({ type: "user_question", id: "q2", questions: [{ question: "E agora?", options: [{ label: "A" }] }] });
+    albert.emit("message", answer("q1", [["Avisa"], ["Sim"]]));
+    expect(written().find((c) => c.type === "user")!.keepQuestions).toBe(true);
   });
 
   it("a corrida: a segunda resposta antes do resultado do driver também vira mensagem", () => {
-    const session = ensure();
-    const cesar = fakeSocket();
-    const albert = fakeSocket();
-    attachSocket(session, cesar as never, CESAR);
-    attachSocket(session, albert as never, ALBERT);
-    emit({ type: "user_question", id: "q1", questions: QUESTIONS });
+    const { cesar, albert } = two();
     cesar.emit("message", answer("q1", [["Bloqueia"], ["Não"]]));
     albert.emit("message", answer("q1", [["Avisa"], ["Sim"]]));
     expect(written().filter((c) => c.type === "question_answer")).toHaveLength(1);
     expect(written().find((c) => c.type === "user")!.text).toContain("«Produto sem peso: o que acontece?» → Avisa");
   });
 
+  it("a mesma pessoa de novo (duas abas, duplo clique) e a resposta vazia não viram turno", () => {
+    const { session, cesar, albert } = two();
+    cesar.emit("message", answer("q1", [["Bloqueia"], ["Não"]]));
+    cesar.emit("message", answer("q1", [["Avisa"], ["Sim"]]));
+    albert.emit("message", answer("q1", [[" "], []]));
+    expect(written().some((c) => c.type === "user")).toBe(false);
+    expect(session.activeTurns).toBe(0);
+  });
+
   it("pergunta encerrada sem resposta (prazo/mensagem) segue o caminho de sempre", () => {
-    const session = ensure();
-    const albert = fakeSocket();
-    attachSocket(session, albert as never, ALBERT);
-    emit({ type: "user_question", id: "q1", questions: QUESTIONS });
+    const { albert } = two();
     emit({ type: "question_result", id: "q1", timedOut: true });
     albert.emit("message", answer("q1", [["Avisa"], ["Sim"]]));
     expect(written().some((c) => c.type === "user")).toBe(false);
     expect(written().filter((c) => c.type === "question_answer")).toHaveLength(1);
+  });
+
+  it("a resposta escrita que o driver recusou (o prazo venceu antes) não vira base de comparação", () => {
+    const { cesar, albert } = two();
+    cesar.emit("message", answer("q1", [["Bloqueia"], ["Não"]]));
+    emit({ type: "question_result", id: "q1", timedOut: true });
+    albert.emit("message", answer("q1", [["Avisa"], ["Sim"]]));
+    expect(written().some((c) => c.type === "user")).toBe(false);
   });
 });
 

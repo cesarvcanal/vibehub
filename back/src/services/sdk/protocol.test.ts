@@ -21,6 +21,8 @@ import {
   parseWorkflowFeedFrame,
   buildSupersedeText,
   buildOrphanAnswerText,
+  buildLateAnswerText,
+  mergePeerAnswers,
   interruptNote,
   NOTE_TURN_INTERRUPTED,
   NOTE_TURN_INTERRUPTED_EDIT,
@@ -647,6 +649,19 @@ describe("buildOrphanAnswerText", () => {
     expect(text).not.toContain("«A?»");
     expect(text).toContain("«B?» → sim");
     expect(buildOrphanAnswerText(null, [{ selected: ["x"] }])).toContain("pergunta 1 → x");
+  });
+});
+
+describe("mergePeerAnswers / buildLateAnswerText — várias pessoas no mesmo cartão", () => {
+  it("rascunho do outro numa pergunta além das respondidas também entra", () => {
+    const merged = mergePeerAnswers([{ selected: ["A"] }], "cesar", new Map([["albert", { picked: [[], ["B"]], other: [] }]]));
+    expect(merged).toHaveLength(2);
+    expect(merged![0]).toEqual({ selected: ["A"] });
+    expect(merged![1]!.selected[0]).toBe("albert: B");
+  });
+
+  it("sem nada escolhido não há mensagem", () => {
+    expect(buildLateAnswerText(null, [{ selected: [" "] }], "albert", "cesar")).toBeNull();
   });
 });
 
