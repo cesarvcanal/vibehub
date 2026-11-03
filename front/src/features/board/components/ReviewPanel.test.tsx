@@ -282,6 +282,37 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.getByTestId("review-conversation")).toBeInTheDocument();
   });
 
+  it("cada achado de uma fala da IA vira uma mensagem própria, depois do resumo, do lado de quem falou", async () => {
+    open("aut", review({
+      findings: [
+        finding({ id: "f1", title: "Bloqueio A", file: "src/a.ts", line: 12, fix: "valide antes de gravar" }),
+        finding({ id: "f2", severity: "suggestion", title: "Sugestão B" }),
+      ],
+      log: [
+        { at: 1, round: 1, who: "reviewer", text: "achei duas coisas", items: [{ id: "f1", status: "open", isNew: true }, { id: "f2", status: "open", isNew: true }] },
+        { at: 2, round: 1, who: "author", text: "corrigi o bloqueio", items: [{ id: "f1", status: "fixed", reply: "validação no service", commit: "abc1234def" }] },
+      ],
+    }));
+    await loaded();
+    const lines = screen.getAllByTestId("review-line");
+    expect(lines.map((l) => l.textContent)).toEqual([expect.stringContaining("achei duas coisas"), expect.stringContaining("corrigi o bloqueio")]);
+    // O resumo não carrega mais a lista: ela está nas mensagens seguintes.
+    expect(lines[0]).not.toHaveTextContent("Bloqueio A");
+
+    const items = screen.getAllByTestId("review-line-item");
+    expect(items.map((i) => i.getAttribute("data-who"))).toEqual(["reviewer", "reviewer", "author"]);
+    expect(items[0]).toHaveTextContent("Bloqueio A");
+    expect(items[0]).toHaveTextContent("src/a.ts:12");
+    expect(items[0]).toHaveTextContent("Como corrigir: valide antes de gravar");
+    expect(items[1]).toHaveTextContent("Sugestão B");
+    expect(items[2]).toHaveTextContent("validação no service");
+    expect(items[2]).toHaveTextContent("commit abc1234");
+    expect(items[2]).toHaveAttribute("data-status", "fixed");
+    // A ordem na conversa: resumo, achados dele, resumo do autor, achado dele.
+    const order = screen.getAllByTestId(/^review-line/).map((el) => el.getAttribute("data-testid"));
+    expect(order).toEqual(["review-line", "review-line-item", "review-line-item", "review-line", "review-line-item"]);
+  });
+
   it("fala que chega com o painel aberto entra animada; o histórico com que ele abriu fica parado", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const first = { at: 1, round: 1, who: "reviewer" as const, text: "primeira fala" };

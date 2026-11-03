@@ -1,6 +1,6 @@
 import type { BadgeTone } from "@/components/ui/badge";
 import type {
-  CardPr, Finding, FindingSeverity, FindingStatus, Review, ReviewEvent, ReviewPhase, ReviewSummary, ReviewWorking,
+  CardPr, Finding, FindingSeverity, FindingStatus, Review, ReviewEvent, ReviewEventItem, ReviewPhase, ReviewSummary, ReviewWorking,
 } from "@/api/types";
 
 /**
@@ -337,11 +337,16 @@ export function reviewTurn(
  */
 export type ConversationRow =
   | { kind: "round"; round: number; key: string; index: number }
-  | { kind: "line"; event: ReviewEvent; key: string; index: number };
+  | { kind: "line"; event: ReviewEvent; key: string; index: number }
+  /** One finding of an AI line, drawn as its own message right after the line's summary. */
+  | { kind: "item"; event: ReviewEvent; item: ReviewEventItem; key: string; index: number };
 
 /**
  * The log as the conversation draws it: a "Rodada N" divider before the first line of each round —
- * the way a chat app marks a new day — then the lines in the order they happened. PURE.
+ * the way a chat app marks a new day — then the lines in the order they happened. An AI line that is
+ * about several findings is split the way a person would type it: the summary first, then one
+ * message per finding, so each subject reads on its own instead of in one long bubble. The messages
+ * of a line share its `index` (they arrived together). PURE.
  */
 export function conversationRows(log: ReviewEvent[]): ConversationRow[] {
   const rows: ConversationRow[] = [];
@@ -351,7 +356,14 @@ export function conversationRows(log: ReviewEvent[]): ConversationRow[] {
       round = event.round;
       rows.push({ kind: "round", round, key: `round-${round}-${i}`, index: i });
     }
-    rows.push({ kind: "line", event, key: `${event.at}-${i}`, index: i });
+    const split = (event.who === "reviewer" || event.who === "author") && event.items?.length;
+    if (!split) {
+      rows.push({ kind: "line", event, key: `${event.at}-${i}`, index: i });
+      return;
+    }
+    const { items, ...summary } = event;
+    rows.push({ kind: "line", event: summary, key: `${event.at}-${i}`, index: i });
+    items!.forEach((item, j) => rows.push({ kind: "item", event, item, key: `${event.at}-${i}-${item.id}-${j}`, index: i }));
   });
   return rows;
 }
