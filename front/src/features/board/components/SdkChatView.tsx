@@ -2656,7 +2656,11 @@ function SdkQuestionCard({
       return { selected: [...(pickedNow[i] ?? []), ...(text !== "" ? [text] : [])] };
     });
 
-  const complete = row.questions.every((_, i) => (picked[i]?.length ?? 0) > 0 || (other[i] ?? "").trim() !== "");
+  // Respondida por ALGUÉM: metade minha e metade de outra pessoa já fecha o cartão — o back junta os
+  // rascunhos dos outros no que vai ao modelo (mergePeerAnswers), com o nome de cada um.
+  const hasAnswer = (draft: Pick<QuestionDraft, "picked" | "other">, i: number): boolean =>
+    (draft.picked[i]?.length ?? 0) > 0 || (draft.other[i] ?? "").trim() !== "";
+  const complete = row.questions.every((_, i) => hasAnswer({ picked, other }, i) || peers.some((p) => hasAnswer(p.draft, i)));
 
   const submit = (answers: SdkQuestionAnswer[]): void => onAnswer?.(row.id, answers);
 
