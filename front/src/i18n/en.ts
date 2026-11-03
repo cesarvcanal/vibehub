@@ -539,7 +539,7 @@ export const en: Record<string, string> = {
   "sdk.questionSuperseded": "You answered with a message — the agent followed it.",
   "sdk.questionPeerAnswering": "{names} answering",
   "sdk.questionPeerUse": "Use this",
-  "sdk.questionPeerClash": "You and {names} are answering. Only the first answer sent counts.",
+  "sdk.questionPeerClash": "You and {names} are answering. Every answer goes to the AI, which asks again if they conflict.",
   "sdk.questionCancelled.stop": "Cancelled: {name} stopped the turn before anyone answered.",
   "sdk.questionCancelled.stop.anon": "Cancelled: the turn was stopped before anyone answered.",
   "sdk.questionCancelled.send_now": "Cancelled: {name} sent a message with \"send now\", which stopped the turn.",

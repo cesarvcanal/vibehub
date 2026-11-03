@@ -17,7 +17,7 @@ import { readCardChanges, readCardFileDiff } from "../maestro/changes.js";
 import { mergeTaskEvent, taskSnapshot, toolResultEvent, type AgentTaskEvent, type RawTaskEvent, type RawToolResultEvent } from "./toolResult.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
-  NOTE_CONVERSATION_CLEARED, buildOrphanAnswerText, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseQuestionDraftFrame, isEmptyQuestionDraft, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
+  NOTE_CONVERSATION_CLEARED, buildLateAnswerText, buildOrphanAnswerText, mergePeerAnswers, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseQuestionDraftFrame, isEmptyQuestionDraft, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
   type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type QuestionDraft, type StopHow, type UserQuestionItem,
   type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest, type ResultEvent,
 } from "./protocol.js";
@@ -248,6 +248,12 @@ export interface DriverSession {
    * toque. Sai quando a pergunta encerra (`forgetQuestionDrafts`).
    */
   questionDrafts: Map<string, Map<string, Pick<QuestionDraft, "picked" | "other">>>;
+  /**
+   * OS CARTÕES DESTE DRIVER e onde cada um está. Uma segunda resposta a um cartão já respondido vira
+   * mensagem para o modelo comparar (`answerLate`), em vez de morrer como "no pending question". Só
+   * memória, com teto (`QUESTION_CARDS_MAX`).
+   */
+  questionCards: Map<string, QuestionCard>;
   /**
    * AS DECISÕES QUE O TURNO ESPERA AGORA — os ids de `user_question` e `permission_request` que este
    * driver abriu e que ainda não voltaram (`question_result` / `permission`). Não vazio = o turno
@@ -517,6 +523,26 @@ function disableNagle(socket: WebSocket): void {
 
 /** Cartões de pergunta com rascunho guardado, no máximo — o mais antigo sai primeiro. */
 const QUESTION_DRAFTS_MAX = 20;
+/** Cartões deste driver lembrados para a resposta tardia, no máximo — o mais antigo sai primeiro. */
+const QUESTION_CARDS_MAX = 50;
+
+/**
+ * Um cartão de pergunta deste driver. `state`: "open" = ninguém respondeu; "answered" = uma resposta
+ * foi ao driver (`by` = quem, null sem nome); "closed" = encerrou SEM resposta (prazo, mensagem,
+ * parada) — aí não há com o que comparar, e a resposta tardia segue o caminho de sempre.
+ */
+interface QuestionCard {
+  questions: UserQuestionItem[];
+  state: "open" | "answered" | "closed";
+  by?: string | null;
+}
+
+/** Abre espaço para mais uma chave: o mais antigo sai quando o mapa está no teto. */
+function makeRoom(map: Map<string, unknown>, max: number): void {
+  if (map.size < max) return;
+  const oldest = map.keys().next().value;
+  if (oldest !== undefined) map.delete(oldest);
+}
 
 /** A pergunta encerrou: o rascunho de ninguém importa mais (a tela já desenha o cartão respondido). */
 function forgetQuestionDrafts(session: DriverSession, questionId: string): void {
@@ -800,6 +826,8 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   }
   if (event.type === "user_question") {
     session.ownQuestions.add(event.id);
+    makeRoom(session.questionCards, QUESTION_CARDS_MAX);
+    session.questionCards.set(event.id, { questions: event.questions, state: "open" });
     // Uma pergunta NOVA é onde a conversa está: a órfã de antes do reinício já não é o que o agente
     // espera (em geral é a mesma, refeita pela retomada). Respondida a nova pelo clique, a velha
     // ficava cobrando na bandeja — só uma mensagem a varria.
@@ -807,6 +835,13 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   }
   if (event.type === "question_result") {
     forgetQuestionDrafts(session, event.id);
+    const card = session.questionCards.get(event.id);
+    if (card) {
+      // O VEREDITO É DO DRIVER: sem respostas, o cartão encerrou sem nada a comparar — mesmo que uma
+      // resposta tenha sido escrita no stdin (o prazo ou uma mensagem chegou antes dela).
+      if (!event.answers?.length) card.state = "closed";
+      else if (card.state === "open") { card.state = "answered"; card.by = null; }
+    }
     const unanswered = !event.answers?.length && !event.timedOut && !event.superseded;
     if (unanswered && session.stopCause) {
       event.cancelledHow = session.stopCause.how;
@@ -1006,6 +1041,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     openAsks: new Set(),
     awaitingDecision: false,
     questionDrafts: new Map(),
+    questionCards: new Map(),
     settledOrphans: new Set(),
     answeringOrphans: new Set(),
     orphansSwept: false,
@@ -1324,6 +1360,23 @@ export function handleClientFrame(
     void answerOrphanQuestion(session, control);
     return { kind: "ignored" };
   }
+  if (control.type === "question_answer") {
+    const card = session.questionCards.get(control.id);
+    if (card?.state === "answered") {
+      answerLate(session, card, control, origin);
+      return { kind: "ignored" };
+    }
+    if (card?.state === "open") {
+      // O modelo lê junto o que os outros já marcaram/escreveram neste cartão, com o nome; o cartão
+      // segue desenhando só o que quem enviou marcou.
+      const forModel = mergePeerAnswers(control.answers, origin?.name, session.questionDrafts.get(control.id));
+      if (writeToDriver(session, { ...control, ...(forModel ? { forModel } : {}) })) {
+        card.state = "answered";
+        card.by = origin?.name ?? null;
+      }
+      return { kind: "ignored" };
+    }
+  }
   if (control.type === "interrupt") noteStop(session, origin, control.reason === "edit" ? "edit" : "stop");
   writeToDriver(session, control);
   if (control.type === "interrupt") {
@@ -1342,6 +1395,29 @@ export function handleClientFrame(
     if (session.activeTurns > 0) session.pendingInterruptNote = interruptNote(control);
   }
   return { kind: "ignored" };
+}
+
+/**
+ * OUTRA PESSOA JÁ RESPONDEU ESTE CARTÃO: a resposta não se perde — vira um turno para o modelo
+ * comparar com a anterior (e perguntar de novo se não combinarem). Não libera a pergunta que o
+ * agente fez depois (`keepQuestions`). A mesma pessoa de novo (duas abas, duplo clique) e uma
+ * resposta vazia não viram nada. A conversa mostra só o que a pessoa escolheu; `sent` guarda o que
+ * o modelo leu.
+ */
+function answerLate(session: DriverSession, card: QuestionCard, control: QuestionAnswerControl, origin?: MessageOrigin): void {
+  if ((origin?.name ?? null) === card.by) return;
+  const late = buildLateAnswerText(card.questions, control.answers, origin?.name, card.by);
+  if (!late || !canAcceptTurn(session)) return;
+  if (!writeToDriver(session, { type: "user", text: late.sent, keepQuestions: true })) return;
+  session.activeTurns += 1;
+  syncBoardStatus(session);
+  clearIdleTimer(session);
+  noteChatActivity(session);
+  noteDriverEventFor(session.cardId, { type: "user", text: late.sent });
+  const line: HistoryEvent = { type: "user", text: late.shown, sent: late.sent, at: Date.now(), from: origin };
+  void appendHistoryReported(session.cardId, line);
+  relayToPeers(session, undefined, line);
+  markPersonTurn(session, { startedAt: Date.now(), preview: inflightPreview(late.shown), attempts: 0 });
 }
 
 /**
@@ -1950,7 +2026,7 @@ export function attachSocket(
 
   // O RASCUNHO DO CARTÃO DE PERGUNTA: como a digitação, vai às OUTRAS abas — mas com o conteúdo,
   // para que duas pessoas no mesmo card vejam uma o que a outra está respondendo antes de alguém
-  // mandar (só a primeira resposta vale). Fica guardado enquanto a pergunta está aberta, para quem
+  // mandar (as respostas de todos vão juntas ao modelo, ver `mergePeerAnswers`). Fica guardado enquanto a pergunta está aberta, para quem
   // abrir o card depois; nunca vai ao driver nem ao histórico.
   const draftedHere = new Set<string>();
   const relayDraft = (id: string, name: string, draft: Pick<QuestionDraft, "picked" | "other">): void => {
@@ -1972,10 +2048,7 @@ export function attachSocket(
     } else {
       if (!byName) {
         // Teto de memória: um cartão esquecido aberto não acumula para sempre.
-        if (session.questionDrafts.size >= QUESTION_DRAFTS_MAX) {
-          const oldest = session.questionDrafts.keys().next().value;
-          if (oldest !== undefined) session.questionDrafts.delete(oldest);
-        }
+        makeRoom(session.questionDrafts, QUESTION_DRAFTS_MAX);
         byName = new Map();
         session.questionDrafts.set(draft.id, byName);
       }
